@@ -19,101 +19,1311 @@
     "rule": "A task reaches done ONLY via reviewer gate (harness-reviewer) checking all six levels evidenced or justified 'n/a: <reason>'. The implementing agent NEVER writes its own done. Any Validate failure → status back to doing with the failure recorded."
   },
   "tasks": [
-    { "id": "D1",  "lane": "L-DEPLOY",   "wave": 0, "task_order": 97, "status": "review", "title": "loom-risingwave can never deploy: livenessInitialDelay=150 > ACA cap 60 (loom-risingwave-aca.bicep:255) — ≤60 + startupProbe pattern; targeted module redeploy (what-if first); app Running", "depends_on": [], "validation": { "V1": "what-if 3 Creates/274 Ignore zero preflight errors; apply Succeeded, pgWire endpoint out", "V2": "n/a: no BFF route touched (/api/streaming-sql honest-gates on LOOM_RISINGWAVE_URL)", "V3": "n/a: infra-only; console env arrives with Wave-1 admin-plane deploy", "V4": "LIVE: provisioningState Succeeded, runningStatus Running, revision 0000001 Healthy, port-seal selftest green", "V5": "n/a: no doc mentions probes; module header updated in-PR", "V6": "fix IS bicep defaults+clamps + from-source image; no new env/gate" }, "evidence": ["PR #3054 OPEN — checks frozen by GitHub Actions major_outage (verified githubstatus 17:54Z); merge owed on recovery", "TWO defects: probe caps (liveness 150>60, readiness failureThreshold 30>10) + entrypoint port-seal scanned whole netns (ACA injects platform agent listeners) — scoped to engine-owned socket inodes, mutation-proved", "image via ACR task cj32d under #2603 lease, re-locked; cosign-UNSIGNED until next green full-app-deploy", "AcrPull + KV-Secrets-User grants were MISSING live — created with orchestrator guid seeds", "deploy slot FREED for D2", "reviewer PASS 6/6 — mutation proof independently REPRODUCED (filter deleted → selftest exit 1); verdict done-pending-merge: flip on #3054 green+merge (branch BEHIND, update-branch owed)", "reviewer-noted residual (non-blocker): double-forked engine descendant escapes ppid scan — whole-netns scan impossible on ACA; minimal viable scoping", "CI CAUGHT WHAT THE REVIEWER MISSED (#2945 class): PR changed bicep but NOT apps/fiab-console/deploy-templates/main.json — the SHIPPING artifact would have carried liveness 150 + failureThreshold 30. Fixed 3eb5ffc2 (bicep 0.45.15, guard byte-identical PASS). SAME GAP found+fixed on #3052 (D3) and #3057 (D2). PROCESS FIX: every reviewer of a bicep-touching PR must check template regen"] },
-    { "id": "D3",  "lane": "L-DEPLOY",   "wave": 0, "task_order": 96, "status": "review", "title": "3 degraded apps: loom-wrangler-host DOWN (:v0.1 unpullable), loom-script-runner + loom-migrate Failed/stale-revision — build/push missing image or fix AcrPull; re-provision; all 3 Running on current revisions", "depends_on": [], "validation": { "V1": "az receipts: 3 UAMIs had ZERO role assignments before; AcrPull created under bicep's exact guid() names; each --d3fix1 revision Provisioned/Running", "V2": "n/a: no BFF route", "V3": "ui-verify /admin/migrate run 31123017609 queued in outage; attempt-2 blocking suites passed", "V4": "all 3 apps Succeeded/Running latestReady --d3fix1 (estate remediation live); PR #3052 open (ordering fix)", "V5": "n/a: existing docs correct, nothing contradicted", "V6": "images in build matrix + grants in bicep (skip_role_grants=false default) + ordering race closed by #3052 + hand-grants name-exact idempotent" }, "evidence": ["ROOT CAUSE: all 3 pull UAMIs (uami-loom-{wrangler,script-runner,migrate}-centralus) had zero role assignments — bicep grants (admin-plane/main.bicep ~6064/6156/6209) never applied since no admin-plane deploy succeeded post-rename; script-runner's June revision worked via LEGACY unsuffixed UAMI that still holds AcrPull", "wrangler :v0.1 image EXISTS since run 31066164706 (08-06) — auth was the sole live blocker", "grants created via az rest under deterministic guid names (what-if proved Create ×3) — no D8 RoleAssignmentExists trap", "PR #3052: +dependsOn [scriptRunnerAcrPull]/[wranglerAcrPull] — checks frozen in outage; merge owed", "FOLLOW-UP (post admin-plane deploy): live LOOM_WRANGLER_ENDPOINT targets STRAY out-of-band app loom-wrangler-h2 — next deploy re-points it, THEN delete the stray (never before)", "gh API rate-limiting observed — possibly aggravated by parallel finishline agents", "reviewer PASS 6/6 — done-pending-merge (#3052); flag: image builder run 31066164706 overall-failed (job-level success), undisclosed in claim but artifact real+pulling; wrangler UX unchanged until admin-plane deploy re-points endpoint off stray"] },
-    { "id": "D15", "lane": "L-DEPLOY",   "wave": 0, "task_order": 95, "status": "review", "title": "Day-one scoring lies both ways: optIn not carried into EDITABLE_ENV (env-config.ts add()); derived-but-unset counts configured (env-config-pane.tsx:121-140); readiness blocked+canAutoResolve→ready without probe (readiness.ts:331-334) — add 'opt-in' status; count derived only when value present; consult probe. Honest 100%", "depends_on": [], "validation": { "V1": "probe path = real self-audit chain, unit-tested vs REAL gate registry (fail/warn/pass pinned)", "V2": "additive payload (editable[].optIn, +'opt-in' status); minted-session receipt owed with V3", "V3": "OWED post-merge: loom-ui-verify /admin/env-config + /admin/readiness", "V4": "OWED post-merge: build-marker past merge SHA (baseline live=7e9289cc)", "V5": "in-PR: docs/fiab/admin/env-config.md status table + deploy-readiness-100pct.md D15 amendment", "V6": "no new env/gates/bicep; lib/gates untouched" }, "evidence": ["PR #3051 (fix/finishline-d15-honest-scoring @2e5fd699) OPEN — 30 checks queued, zero started (Actions outage; do NOT --admin, checks never ran)", "sites: env-config.ts:115 add() carries optIn + envVarStatus():181/isConfiguredStatus():194; env-config-pane.tsx:127-160 (+opt-in badge :250, derived-unset warning :467); readiness.ts:347-356 probe-consulted (svc-dab-runtime/svc-udf-function/svc-monitor-alerts)", "local gates: tsc clean; 41/41 target specs + 370-test seam, exit 0", "post-merge steps recorded in PR; reviewer gate AFTER live receipts", "#3034 corroborated: 3 instant-fail invalid-YAML workflows on every push (D13 evidence)"] },
-    { "id": "D9",  "lane": "L-SUPPLY",   "wave": 0, "task_order": 94, "status": "review", "title": "loom-uat CVE-2025-68121 (Go stdlib in @esbuild/linux-x64) blocks full-app-deploy; loom-uat:latest unsigned+vulnerable — vite 6→7 + vitest 3→4 root fix OR strip native esbuild binary from uat layer; green run closes #3024; consolidate dupes #3005/#3036", "depends_on": [], "validation": { "V1": "local Dockerfile.uat build + trivy exact gate flags → exit 0; in-image go1.26.4; playwright --list 784 tests exit 0; full vitest 14766 tests exit 0; tsc 0", "V2": "n/a: no BFF route", "V3": "n/a: no UI touched", "V4": "OWED: merge (outage) then GREEN full-app-deploy dispatch (orchestrator-owned) — closes #3024/#3036", "V5": "n/a: doc-of-record is pnpm-workspace.yaml comment block, rewritten in-PR", "V6": "fix in tree/lockfile — every builder inherits; diff is evidence" }, "evidence": ["CHOSE (a)-minimal: vite override ^6.4.3→^7.3.6 both override homes + lockfile regen, vitest UNTOUCHED — vitest 3.2.7 declares vite '^5||^6||^7.0.0-0'; audit's vitest 3→4 migration unnecessary", "(b) disproved-of-need not invalid: entrypoint never imports vite/esbuild (playwright via babel) — stripping safe but (a) removes artifact from lockfile entirely", "SCANNER HONESTY: trivy 0.69 gobinary parser can't parse go1.26 binaries (A/B proved: old binary reproduces CI CRITICAL, new num=0) — green rests on independently verified toolchain; disclosed in PR + #3036; HIGH CVE-2026-39822 (fixed 1.26.5) will surface when parser catches up", "PR #3055 (8a87a51c, 3 files, lockfile diff vite/esbuild-only) — checks queued in outage", "#3005 closed as dupe of #3036 (tracker); #3024 canonical, closes only on green run", "reviewer PASS 5/5 — registry-verified dep ranges + independently downloaded binaries (0.28.1=go1.26.4, 0.25.12=go1.23.12); lockfile diff 535 lines ALL vite/esbuild-family; verdict done-pending-merge+dispatch; minor wrinkle: 1378-vs-1391 file count untidy, not fabrication"] },
-    { "id": "E1",  "lane": "L-EVALS",    "wave": 0, "task_order": 93, "status": "review", "title": "Eval gate red: grounding judge scores ZERO questions (no judge deployment / daily cap) → passRate uncomputable → #2994 honest predicate fails run 31095470421 — resolve LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT chain + cap; green copilot-quality-evals run", "depends_on": [], "validation": { "V1": "live scoped execution 18:06Z: 12/12 Q, grounding judged=11 deferred=0, passRate 0.667 real — cap=5000 provably in force (ledger stood at 500)", "V2": "n/a: no BFF route", "V3": "n/a: CI gate + infra defaults", "V4": "live job env read back (cap=5000, secretRef intact); post-merge workflow run URL OWED (outage); dispatch 31121441209 queued as receipt", "V5": "in-PR: runbook + README + ws-copilot-cost spec", "V6": "fresh deploys emit judge chain + cap via copilot-evaluator-job.bicep; compiled-template sync guard byte-identical" }, "evidence": ["ROOT CAUSE 1: daily cap 500 exhausted by 05:50 daily (27-31 full 153-question passes/day; cancel-in-progress cancels workflow but ORPHANED job execution keeps judging) — chain itself healthy ('' → LOOM_AOAI_STRONG_DEPLOYMENT=strong gpt-4.1 live)", "ROOT CAUSE 2 (found mid-task): internal-token rotation drift — console loom-internal-token rotated 64-char, job + GitHub secret stale 36-char guid; ACA replica kept old value until cycling ~15:20 then 153/153 401 bad_internal_token; synced console→job+GitHub+2 stale siblings (asset-reconciler, cost-anomaly-monitor) boolean-verified, never printed; filed #3056", "PR #3053 (1a23a485): cap 500→5000 (bicep+fallback+script+regenerated template), orphan stop on cancelled(), R7 truth-ups; predicate + floors UNTOUCHED — checks frozen in outage", "FORWARD CORRECTION (re-scopes E2): last fully-judged artifact shows data-agent 0.1, eventstream 0.333, rbac 0.417 vs 0.4 floor — gate stays red on THREE genuine failures, not rbac-only (audit computed from deterministic rates)", "#3056 WILL RE-DETONATE on next admin-plane deploy (bicep guid overwrites rotated value) — added to OP-13 watch", "reviewer PASS 6/6 — sync guard REPRODUCED locally (bicep 0.45.15 byte-identical), execution fyr5hdm confirmed via ARM, corpus sums to exactly 153, exec counts/day measured (27/31/22/14); verdict done-pending-merge", "reviewer notes for E2: in-code fallback cap stays 500 when env unset (disclosed); post-deploy 401 on eval-probe = #3056 re-detonation, not regression; baseline E2 from JUDGED rates"] },
-    { "id": "C9",  "lane": "L-TRUTH",    "wave": 0, "task_order": 92, "status": "done", "title": "Verify-then-close wave: #2642 (Redis — deadline retracted), #3003 (ACR pool — builds green 3x, finish guard part 2), #2991 scope confirm, #2671 (1 thrift bump left), R2 verification comments for #2678/#2996/#2997/#2988; release PR #3045 merged by orchestrator", "depends_on": [], "validation": { "V1": "live measurements per issue (az redis, run conclusions, ancestry+401 probes)", "V2": "n/a: verification task", "V3": "n/a: verification task", "V4": "the live measurements ARE V4; #3003+#2991 closed, #2988/96/97 re-verified", "V5": "n/a: no code shipped", "V6": "n/a: no code shipped" }, "evidence": ["#3003 CLOSED (3 green runs, pools Succeeded, part-2 moot)", "#2991 CLOSED (file:line scope confirmed, run 31015620546 green)", "#2642 OPEN retitled (live P1 cache unmigrated — merged-not-deployed)", "#2671 OPEN retitled (lockstep arrow/parquet/datafusion/deltalake majors, parquet<59 pins thrift ^0.17)", "#2678 REOPENED (console env not applied, identifierUris empty)", "#2988/#2996/#2997 stay closed (ancestry vs live 7e9289cc + unauth-401)", "reviewer PASS 6/6, receipts independently reproduced"] },
-    { "id": "D2",  "lane": "L-UNITY",    "wave": 1, "task_order": 84, "status": "review", "title": "loom-unity Commercial producer — AUDIT PREMISE STALE (#3013 wired modules 08-05 20:58, pre-audit; params 234/256; workflow comment TRUE). Real defects: wrong Commercial privatelink zone (+ducklake, #3039 fossil family); classpath patch inert (v0.5.1 override never shipped — #3060 Gov exposure); authorizer key never rendered", "depends_on": ["D1"], "validation": { "V1": "psql-loom-unity Ready (PG16, Entra-only, PE-only; B2s→B1ms→D2ds_v5 capacity fallback R6-classified); what-if clean pre-apply; A-record in CORRECTED zone proves DNS e2e", "V2": "OSS-UC routes honest-gate (OssUcNotConfiguredError) while LOOM_UNITY_URL unset live (measured); auto-detect keeps Databricks UC", "V3": "n/a: console surface activates when admin-plane deploys env (attended deploy)", "V4": "loom-unity--0000002 Healthy/Running, boot v0.5.1 db=postgres/entra, auto-bind HTTP 201, enforced=true sealed=false; AcrPull exact guid seed; ACR lease re-locked", "V5": "in-PR: docs/fiab/deployment/commercial.md 'Loom Unity on Commercial' section", "V6": "default-ON loomBackends.unity='enabled'; ORPHAN_ALLOWLIST stale entries removed MUTATION-PROVED; entrypoint test mutation-proved 26/26; Dockerfile build-time class-load assertion" }, "evidence": ["PR #3057 (3 commits: zone+guard+docs / classpath / authorizer key) — checks frozen in outage; receipts comment issuecomment-5208737295", "zone fix covers ducklake too (orchestrator hands ducklake zone to unity — unity-only fix would be inert in-band)", "#3060 filed: Gov catalog runs with #1603 v0.5.1 override INERT — Gov image re-roll owed (L-GOV)", "NO Entra unseal operator gate — MSAL app existed, audience pinned at deploy, catalog never sealed", "OWED: post-merge full-app-deploy (image producer); bootstrap dispatch no-op-unseal check (D11); attended deploy wires Console LOOM_UNITY_* (merged-in-bicep, not deployed); in-VNet enforcement probe (Actions-blocked); next in-band apply will what-if SKU downshift D2ds_v5→B2s (converges or D6 capacity territory)", "deploy slot FREED", "reviewer PASS 6/6 — entrypoint mutation proof REPRODUCED (26/26 → 25/1 exact test); bicep-sync guard re-proven live (mutated invocation → red naming the module); all live az claims re-measured; fabrication scan clean", "reviewer: Commercial fossil zone privatelink.postgres.database.windows.net still live alongside correct zone + no ducklake Postgres yet — falls to #3039/attended deploy, NOT this PR"] },
-    { "id": "D4",  "lane": "L-DEPLOY",   "wave": 1, "task_order": 83, "status": "review", "title": "Brownfield idempotency: APIM zone re-link Conflict + A-record [0]-on-empty-array; VPN gateway created under DIFFERENT name (MultipleGatewaysOfTypeVpnUseSameVnet) — adopt-existing (R5) in both modules; what-if clean on live estate", "depends_on": ["D1"], "validation": { "V1": "full-template what-if vs live estate Succeeded: zone NoChange, link-apim-console NoChange (no 2nd-link Create), vpngw-loom-centralus Ignore, 10 Creates audited clean", "V2": "n/a: no BFF", "V3": "n/a: no UI", "V4": "merged-not-deployed once PR lands; attended deploy owed (OP-13)", "V5": "in-PR: docs/fiab/deployment/brownfield.md estate-owned-singletons", "V6": "adopt-existing is DEFAULT; no opt-in" }, "evidence": ["PR #3058 (bundled d4/d5/d6 + compiled-template sync, 4 commits) — checks frozen in outage", "AUDIT CORRECTED (D4b): not 'record set empty' — APIM PremiumV2 Internal reports privateIPAddresses:null deterministically in steady state; live record set holds hand-created 10.0.4.4 that a PUT-empty would have WIPED — fix skips-not-wipes (apim-gateway-dns-a.bicep runtime-guarded child)", "existing link is link-apim-console (measured); vpn adopt via existingGatewayName; discovery preflight-brownfield-adopt.mjs +12 tests wired BOTH workflow modes (what-if previews same inputs as apply)"] },
-    { "id": "D5",  "lane": "L-DEPLOY",   "wave": 1, "task_order": 82, "status": "review", "title": "Purview blocked by tenant policy RequestDisallowedByPolicy (managed storage must be publicNetworkAccess=Disabled) — policy-aware Purview storage config + R5 policy discovery in preflight", "depends_on": ["D1"], "validation": { "V1": "A/B via az deployment group validate (real RP preflight): NotSpecified → 21010/RequestDisallowedByPolicy BYTE-IDENTICAL to failed leaf; Disabled → Succeeded; what-if shows Purview Modify NotSpecified→Disabled", "V2": "n/a: no BFF", "V3": "n/a: no UI", "V4": "merged-not-deployed once PR lands; attended deploy owed (OP-13)", "V5": "in-PR: brownfield.md Purview row + failure-recovery.md RequestDisallowedByPolicy row", "V6": "catalog.bicep default Disabled — complies by default, no opt-in" }, "evidence": ["policy = StorageAccount_PublicNetwork_Modify in MG assignment MCAPSGovDeployPolicies; deny fires at Purview RP preflight over managed storage (catalog nested deployment, zero failed inner ops)", "AUDIT CORRECTED: checkPolicyRestrictions from the deploy identity CANNOT see the policy (measured empty) — script renders empty as 'not proof of no policies' and defers to RP preflight (R7); honest preflight = what-if/validate", "taxonomy signal config.disallowed-by-policy names the policy assignment; no DNS zones added (Gov empty-zone hazard avoided)"] },
-    { "id": "D6",  "lane": "L-DEPLOY",   "wave": 1, "task_order": 81, "status": "review", "title": "DuckLake Postgres CapacityNotAvailable (centralus zone) AND classifier classed whole run 'defect' — per-leaf classification (capacity=retry w/ zone/SKU fallback), not whole-run classing", "depends_on": ["D1"], "validation": { "V1": "corpus: CapacityNotAvailable matched NO taxonomy signal, concatenated classify → defect (audit verified by test); new capacity class retryable/300s/exit-18", "V2": "n/a: no BFF", "V3": "n/a: no UI", "V4": "merged-not-deployed once PR lands; attended deploy proves per-leaf retry live (OP-13)", "V5": "in-PR: failure-recovery.md nine classes + per-leaf retry + preflight table", "V6": "default behavior; workflow --class-allow +capacity" }, "evidence": ["MUTATION-PROVED: classifyLeaves reverted to whole-input → 3 tests red (leaf-keeps-own-class; capacity+defect names defect AND reports capacity retryable; unknown leaf fails closed) → restored, classify 50/50 retry 30/30", "decideRetryForLeaves: retry only when EVERY leaf retryable+allowed; refusal names blocking AND blocked-retryable; effectiveBackoffBase = longest leaf-class backoff; artifact leafClasses[]", "AUDIT DEVIATION disclosed: zone/SKU fallback implemented as bounded time-based retry + no zone pin + SKU lever in remediation (deploy-retry cannot vary template params per attempt)", "Gov untested, declared in PR (discovery steps Commercial-only)", "template-sync guard caught the #2945 inert-fix class after bicep edits — main.json regenerated; vitest/tsc for TS twin NOT run locally (no node_modules in worktree) — CI must cover", "reviewer PASS 7/7 (bundle) — mutation proof independently REPRODUCED (3 named tests red under whole-input revert, 80/80 restored); live spot-checks all match (link-apim-console, vpngw Succeeded, 10.0.4.4 record, APIM privateIPAddresses null via raw ARM GET); fabrication scan CLEAN"] },
-    { "id": "D11", "lane": "L-DEPLOY",   "wave": 1, "task_order": 80, "status": "todo", "title": "Post-deploy bootstrap stale (last success 07-19) — dispatch after D1-D3 (grants, UC enable, Delta Sharing, iceberg-catalog); verify grants live. NOTE: does NOT produce loom-unity (see D2)", "depends_on": ["D1", "D2", "D3"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "G2",  "lane": "L-GOV",      "wave": 1, "task_order": 79, "status": "todo", "title": "4 Gov workflows NEVER run once: gov-build-images, gov-provision-dataplane-images (= #3012 Gov image lane → Gov fedlake/trino NOT deployed), gov-provision-streaming-migrate, gov-workspace-identity — green first runs", "depends_on": ["D9"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["from D2: #3060 — Gov unity catalog runs with the #1603 v0.5.1 security override INERT (classpath patch hit wrong module in every shipped image); Gov image re-roll owed once the image lane first-runs", "D2 reviewer: Gov catalog CANNOT be on the Entra-Postgres path today (plugin ClassNotFound would prevent boot) — it's on another store (H2/EmptyDir lineage); the #3060 re-roll needs a DATA/STORE-CUTOVER step to fresh LU-1 Postgres, existing contents won't migrate; zone bug is a NO-OP in Gov (suffixes coincide)"] },
-    { "id": "D7",  "lane": "L-DEPLOY",   "wave": 2, "task_order": 70, "status": "todo", "title": "#3028 keep_resources=false default TEARS DOWN admin RG; #3029 omitted region silently targets eastus2; #3022 what-if previews different template than apply + schedule auto-upgrades deployAppsEnabled — safe-by-default inputs + mutation-proved refusal guards; then re-enable schedules (#2775)", "depends_on": ["D4", "D5", "D6"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "D8",  "lane": "L-DEPLOY",   "wave": 2, "task_order": 69, "status": "todo", "title": "#3039/#3046/#3038 residue: DNS-migration step-9 wipes PE zone-group (caused live A-record outage); RoleAssignmentExists from guid-seed rename (ae75c3c5) permanent until old assignment deleted/adopted — fix script (remove-by-zone-id + terminal verify); #3038 closes ONLY on green deploy-fiab run", "depends_on": ["D7"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "D10", "lane": "L-DEPLOY",   "wave": 2, "task_order": 68, "status": "review", "title": "Inert deploy plumbing: #3014 assertPlanIsDeployable zero production callers; #3015 wizard uses weaker scanner than /api/deploy/discovery; #3016 adopt-bag discarded by every tier except copy-paste; #3017 Gov deploys no classified retry + guard scope by filename — wire + guard-that-callers-exist + mutation-prove each", "depends_on": [], "validation": { "V1": "n/a-with-reason: transport/gate fixes — first real-Azure receipt = next deploy; functional tests capture ARM PUT body/orchestrator payload/dispatch-refusal per tier", "V2": "functional vitest vs real handlers (401/400/422/503/202 structured); live minted-session probe OWED post-roll", "V3": "visible changes post-roll (honest scan counter, adopt picks carried/refused) — loom-ui-verify receipt OWED", "V4": "merged-not-deployed; Commercial roll + Gov whatif-only gcch dispatch OWED on Actions thaw", "V5": "in-PR: brownfield.md, failure-recovery.md, discovery-and-adoption.md to measured state", "V6": "default behavior, zero opt-ins, no new env/bicep (adopt param existed, now receives values)" }, "evidence": ["PR #3062 (4 commits, one per defect) — checks frozen in outage; MERGE ORDER: #3058 FIRST, then rebase #3062's doc hunks (shared brownfield/failure-recovery docs)", "#3014 REAL: gate now ahead of every tier in POST /api/setup/deploy; mutation: caller removed → 422 tests red + mutant fell through to LIVE ARM attempt; HONEST SCOPE: evaluateFitness still has zero producers (enforcing would brick brownfield) — pinned test documents, follow-up on #3014", "#3015 WORSE than audit: wizard called discover-services (no ARG options + subsSeen coverage LIE); scan-services had zero UI callers — rewired onto lib/deploy/discovery-scanner, dead route deleted", "#3016 WORSE: route ignored the wizard's entire DeploymentPlan; #3013's plan-to-arm serializers had zero callers and its claimed guard check-plan-transport.mjs DOESN'T EXIST — new adopt-bag threading tiers 0/1/3; tier 2 dispatch honestly refuses meaningful bags (no declared input, cap 10) → copy-paste fallback", "#3017 SPLIT: retry half real (gcch/gcc/il5/deploy-gov wrapped in deploy-retry.mjs; gcch notifier read a file nothing produced); guard half STALE — already fixed by #3018/b625e03c, untouched; mutation proof found a hole in own draft guard (block-level stayed green on one-branch-bare mutant) → rewritten line-anchored, red on exact branch", "NEW FIND filed as issue: azure-mgmt-resource >=23.2.0 pin breaks under v24 (Deployment model import removed, 4 tests fail on fresh resolve)", "local: tsc 0; vitest 426/0; node --test 1079/0; pytest 6/6; 7 guards OK; 4 workflows parse clean", "ORCHESTRATOR-INLINE REVIEW PASS (structural): 4 commits match claimed SHAs; deploy/route.ts imports+calls validatePlan (:452) and assertPlanIsDeployable (:464) with deriveAdoptBag (:420) — gate genuinely at the submit choke point ahead of every tier; dead scan-services/route.ts DELETED (-144); 3 new test files present. NOT re-run inline: mutation proofs + full suites (budget)"] },
-    { "id": "D13", "lane": "L-DEPLOY",   "wave": 2, "task_order": 67, "status": "review", "title": "#3025 MSAL rotation traps (stale ROTATED marker; runbook names wrong identity); #3034 3 workflows invalid-YAML never executed; #3027 check-licenses SKIP exits 0; #3042 first failing guard hides the rest (~30 guards; prove 2-at-once visible) — each with mutation proof", "depends_on": [], "validation": { "V1": "all 4 families mutation-proved locally: msal guard R1-R4 red-on-mutant; actionlint hard-fail + liveness probe, synthetic mutant red non-baselinable; check-licenses bare tree exit 2 (was 0) + Windows spawn fixed; 2 simultaneous mutants BOTH visible in one batch run; node --test 1074/0", "V2": "n/a: CI-only", "V3": "n/a: CI-only", "V4": "OWED on Actions recovery: guardrails green on PR; 2-mutant branch showing both red in CI; actionlint red on invalid-workflow branch; first dispatches of revived probes", "V5": "docs/fiab/runbooks/secret-rotation.md §2 fixed in-PR", "V6": "guards default-on, no opt-ins" }, "evidence": ["corroborated by D15 agent: 3 instant-fail invalid-YAML workflows on every push (#3034)", "from D9 agent: copilot-auto-fix.yml + csa-loom-spark-livy-probe.yml PRE-EXISTING workflow-file failures on every branch — fold into workflow hygiene", "PR #3061 (4 commits, one per family) — checks frozen in outage", "PREMISES CORRECTED: LOOM_MSAL_SECRET_ROTATED exists NOWHERE in repo (live marker hand-set, 2 rotations stale); guard steps = 75 not ~30 (now 77 with if !cancelled())", "#3034 measured: exactly 3 files fail parse (copilot-auto-fix.yml body string; spark-livy-probe + byte-identical probe2 heredocs) — extracted to scripts, 115/115 parse; BONUS: check-workflow-unset-vars was silently TRUNCATING those 3 files, now 777 steps/115 files", "#3056 deliberately NOT folded into #3025 (different fix class: transactional multi-holder rotation + bicep-guid ownership) — stays with E1 lane", "LIVE stale marker untouched until next rotation/bootstrap run", "ORCHESTRATOR-INLINE REVIEW PASS (agent gate died on API spend limit, redone inline): YAML parse REPRODUCED exactly (main 115 files/3 FAIL = the 3 named; head 115/0 FAIL); baseline 45→42 confirmed; guardrails 77 named steps/0 guarded on main → 79/79 guarded at head (broader than the claimed 77); BOTH new guards wired at loom-guardrails.yml:490,499 with --self-test invoked BEFORE the real run; check-licenses exit(2) CANNOT-RUN + exit(0) only via explicit LOOM_LICENSE_SCAN_ALLOW_SKIP. NOT re-run inline: the 4 mutation proofs + node --test 1074 (budget) — structural claims all reproduce"] },
-    { "id": "D14", "lane": "L-SUPPLY",   "wave": 2, "task_order": 66, "status": "review", "title": "#2682 ACR mirror + hub coordinates — AUDIT PARTLY STALE: a mirror step already existed in BOTH cloud lanes and the live estate already pulls a mirrored image. Genuinely missing: digest pinning, a single source of truth, any guard, and the s3-gateway half", "depends_on": ["D9"], "validation": { "V1": "PASS live: loom-airflow Succeeded/Running rev --xltnh1g on <acr>/apache/airflow:2.10.5-python3.12", "V2": "n/a: no route changed", "V3": "OWED post-roll: GET /api/admin/gates → svc-s3-gateway.status must be 'configured', NOT 'opt-in'", "V4": "merged-not-deployed (and not yet merged); full-app-deploy-commercial has failed its last 4 runs (D9) — dispatched nothing", "V5": "docs/fiab/deployment/upstream-image-mirror.md + mkdocs nav + THIRD_PARTY_LICENSES (airflow/curl notes CORRECTED — they claimed a docker.io pull that is no longer true)", "V6": "THE POINT: no bicepparam change needed. Compiled shipped template shows ZERO public-registry refs, 11 ACR-composed s3proxy refs, 7 LOOM_S3_GATEWAY_URL, 219 params (under the 256 cap)" }, "evidence": ["PR #3067 (b85afa5f)", "mirror mechanism: platform/fiab/images/upstream-images.json = one source of truth; scripts/ci/mirror-upstream-images.sh = one implementation BOTH clouds call; imports by @digest, MCR fallback ALSO by digest, then READS THE DIGEST BACK OUT OF ACR and fails on mismatch; empty manifest exits 1", "KILLED a public-pull fallback: loom-memory-consolidate-job.bicep:58 had `empty(acr) ? publicRef : acrRef` — ternary deleted, acrLoginServer now required", "GUARD MIR0 mutation-proved AND one mutant caught a real bug IN THE GUARD: first cut used src.includes(scriptPath), which the surrounding COMMENT satisfied (prose-matching blindness class) → Gov lane dropping the mirror step initially PASSED. Fixed to strip comments and require a real `bash …` run step; re-mutated → FAIL", "s3-gateway DEFAULT-ON restored (D16 half): audit line numbers 104/256 were STALE — real entry is data-plane.ts:307-330. optIn:true deleted; removed from core.ts opt-in-by-design list; gates registry autoResolveNote rewritten; check-env-sync allowlist entry REMOVED and env-sync still green, which PROVES the var is genuinely bicep-emitted; modules restored ACR-only", "hub coordinates threaded END TO END (#2682 task 2, the actual root cause): flat params + hubCoordinates → topologyManifest.hub.keyVaultId → write-tenant-topology.sh → HUB_COORDINATE_KEYS → HUB_COORD_PARAM → deploy-fiab-commercial HUB_PARAMS", "template sync regenerated + check-deploy-template-sync PASS byte-identical (the #2945 guard that failed 3 PRs today)", "build-time images (6 OSS engines + 11 bases + MCR) inventoried but DELIBERATELY not repointed — mirroring them requires the mirror to finish before the FIRST build of a from-scratch deploy, a new failure mode on a currently-P0-fragile path", "tsc/vitest NOT run (no node_modules in the isolated worktree; installing risks corrupting main's tree) — CI is the gate", "Gov: gov-provision-dataplane-images.yml runs the identical shared script so Gov can no longer silently drift — but that workflow has NEVER RUN ONCE (G2). Authored, run owed"] },
-    { "id": "C18", "lane": "L-DEPLOY",   "wave": 2, "task_order": 39, "status": "todo", "title": "D14-found: three MCR refs float ':latest' on DEPLOY paths — dab-runtime.bicep:36, presidio-sidecar.bicep, deploy-planner/container-instances.bicep:19. LIC0-exempt but still unpinned drift on a deploy path. Pin them (operator asked whether to — OP-17)", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["found while inventorying upstream images for D14"] },
-    { "id": "G3",  "lane": "L-GOV",      "wave": 2, "task_order": 65, "status": "todo", "title": "RED Gov workflows: deploy-gov (16d), gov-provision-dbx-sql-invnet (never green), gov-provision-dbx-sql, gov-provision-graph-grants — green each", "depends_on": ["G2"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "G4",  "lane": "L-GOV",      "wave": 2, "task_order": 64, "status": "todo", "title": "#2874 Gov bicep-drift what-if fails before any verdict (weekly red 07-27, 08-03) — drift check produces verdicts", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "E2",  "lane": "L-EVALS",    "wave": 2, "task_order": 63, "status": "review", "title": "Surfaces below floor — CORRECTED TWICE. Audit said 'rbac only'; the E1 re-scope said 'three incl. rbac'. BOTH WRONG: measured over 6 run artifacts, rbac = 0.417 ABOVE the 0.40 floor. Real failures: data-agent (below in 3/3) and eventstream (below in 2/3). No floor lowered", "depends_on": ["E1"], "validation": { "V1": "6 live artifacts (gh run download) + 153-row offline harness on the SHIPPED modules; live scoped execution OWED (AI Search + Cosmos are publicNetworkAccess:Disabled and Actions was down)", "V2": "n/a: no BFF route", "V3": "n/a: no console surface", "V4": "OWED: loom-docs reindex then copilot-quality-evals on main — that ONE run closes V1+V4 and produces the AFTER numbers for E2/E3/E4", "V5": "copilot-retrieval-remediation.md §11-12, content/evals/README.md, eval-floors.json _meta", "V6": "no new opt-in/env/gate; corpus-stats default-ON with an honest null fallback" }, "evidence": ["PR #3069 (3 commits e2/e3/e4), MERGEABLE, no textual conflict with #3053 (its hunks ~25/~266 vs ours ~335/~363)", "data-agent ROOT CAUSE was NOT retrieval (hit-rate 0.90) — productFidelityAvg 1.889/5. Every fact in its gold doc sits in an H3 under Fabric's '## Real feature inventory', and the chunker emitted only `title › innermost-heading`, so answer prompt AND judge saw it with NO product label; classifyExcerptProvenance returned 'unlabelled' → judge was told 'may describe either product' for the surface's ENTIRE gold document. evaluator-core's own header had LOGGED this and deferred it as harmless — it was the whole failure. Fixed with full title›H2›H3 ancestry; corpus-wide unlabelled 1711→1249", "offline (real ranker + real chunker, 153 rows @ top-8): 0.797→0.889 overall; eventstream 0.750→0.917, rbac 0.917→1.000, kql 0.882→1.000"] },
-    { "id": "E3",  "lane": "L-EVALS",    "wave": 2, "task_order": 62, "status": "review", "title": "#2970 FALSIFIED — stage-1 recall is 0.967 at the shipped window of 100; the document was ALREADY in the window. Real cause: rankChunks builds BM25 stats over the CANDIDATE WINDOW, where every candidate matches so df/size→1 and IDF collapses for all query terms at once. Corpus-wide stats recover the ENTIRE gap", "depends_on": ["E1"], "validation": { "V1": "new --stage1 two-stage simulation measuring recall per question; corpus-wide stats 0.797→0.889 at w=100, identical to full-corpus", "V2": "n/a", "V3": "n/a", "V4": "OWED with E2", "V5": "§11.5 documents the residual honestly", "V6": "default-ON" }, "evidence": ["the tell was already visible: window-local BM25 is NON-MONOTONIC in width (400 < 200)", "harness re-validation: the ~2x optimism was STRUCTURAL (full-corpus assumed stage 1 perfect) — now labelled 'inf (upper bound)'. It STILL does not perfectly track live (live 0.750 vs model 0.797 at w=100) and §11.5 SAYS SO rather than smoothing it", "OPERATOR ASK: #2970 should be re-titled or closed with the correction — its stated hypothesis (searchMode/queryType/window) is measurably NOT the cause and will send the next investigation down the same path"] },
-    { "id": "E4",  "lane": "L-EVALS",    "wave": 2, "task_order": 61, "status": "review", "title": "Floors ratcheted from measured data (retrievalHitRate = min over 6 runs − 0.05, cap 0.95); ${s.surface} bash bad-substitution fixed; TWO MORE gates-that-cannot-fail found", "depends_on": ["E1"], "validation": { "V1": "ratchet computed from 6 real run artifacts", "V2": "n/a", "V3": "n/a", "V4": "OWED with E2", "V5": "eval-floors.json _meta.ratchetBasis records the refusals", "V6": "no new opt-in" }, "evidence": ["ratchet: cost 0.50→0.95, data-agent→0.83, lakehouse→0.77, report→0.78, health→0.66, kql-database→0.65, rbac→0.61, deploy-planner→0.56, help→0.55, eventstream→0.52. NO FLOOR LOWERED", "groundingAvg and passRate ratchets correctly REFUSED (3/6 runs judge-less; window mixes predicates per #2992) — refusal recorded in _meta.ratchetBasis rather than guessed", "GATE THAT COULD NOT FAIL #1: the ${s.surface} backtick→bash-command-substitution bug reproduced — 'bad substitution', EXIT 0, receipt blank for the workflow's ENTIRE LIFE", "GATE THAT COULD NOT FAIL #2: run 31115406603 returned 401 on EVERY probe, scored 0 questions on all 10 surfaces, and CONCLUDED SUCCESS because --strict-missing was schedule-only. Now fails loudly", "the 401s are the SAME internal-token-mismatch class as E1's #3056 — this change makes it fail loudly but does NOT fix the auth (separate live defect)"] },
-    { "id": "C1",  "lane": "L-PRODUCT-A","wave": 2, "task_order": 60, "status": "review", "title": "loom-apex Phase E: catalog re-grade + ADVERSARIAL-REVIEW.md (was ABSENT) + FRESH0 re-baseline. OUTCOME: all 142 item types = UNKNOWN, not exercised — 0 click-walks possible", "depends_on": [], "validation": { "V1": "n/a: audit task", "V2": "n/a: audit task", "V3": "MEASURED ZERO — 0/142 click-walked; 127/127 static routes probed HTTP 200 with a discriminating 404 control; OWED: gh workflow run loom-ui-verify.yml --ref main -f target_route=/catalog -f extra_projects=uat", "V4": "n/a: no deploy", "V5": "the artifacts ARE the deliverable (PHASE-E-REGRADE.md, ADVERSARIAL-REVIEW.md, FRESH0 re-baseline)", "V6": "n/a" }, "evidence": ["PR #3066 (4 files) — CI status genuinely UNKNOWN (Actions degraded + API rate limit); explicitly NOT read as green", "ALL 142 item types graded UNKNOWN — not exercised. Static ceilings only (never grades): 73 A-candidate, 37 B-candidate, 18 C-candidate, 14 need parity docs. Per G1, ZERO catalog surfaces are currently eligible for A/A+", "ADVERSARIAL-REVIEW: 15 claims, default REFUTED — 5 survive, 6 refuted, 2 partial, 1 unverifiable, 1 self-audit. Refuted: A6 zero-gates (and the INSTRUMENT is untrustworthy per D15); Phase C Loom Unity (Gov auth still disabled + Commercial had no producer); 'catalog is A/A+' (33/142 disqualified on paper alone); G1 receipts as currently operable; Phase E ran OUT OF SEQUENCE (PRP.md:159 says LAST) so its headline deliverable was unachievable by construction", "SURVIVED: A1 chunk-skew live (?dpl=7e9289cc0a51 matches live SHA), A2 error boundaries real, A7 reconcile done, A3 verified 1-of-5", "R15 SELF-AUDIT (kept in the record): 3 of its OWN measurements were hollow first — dead provisioner regex (would have implied 141 broken types), an /api/items/ column mistaken for backend proof, and a mutation proof reading tail's exit code instead of node's", "competitive red-team panel declared OWED not written — with 0/142 exercised it would be unfalsifiable opinion that future PRPs would cite as fact"] },
-    { "id": "C13", "lane": "L-PRODUCT-A","wave": 2, "task_order": 55, "status": "todo", "title": "BLOCKER FOR ALL V3 RECEIPTS: loom-ui-verify last green 2026-08-04T01:02:35Z — all 3 dispatches on 08-06 FAILED ('Failed to resolve action download info: Service Unavailable'; one hung 79min then cancelled). Anything closed on a G1 basis since 08-04 LACKS its stated evidence. Repair the verify harness, then re-run the owed receipts across every lane", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["found by C1 while attempting the Phase-E click-walk", "partly Actions-incident-driven; confirm whether it is fully external before declaring it fixed"] },
-    { "id": "C14", "lane": "L-PRODUCT-B","wave": 3, "task_order": 43, "status": "review", "title": "14 parity docs (172 MISSING rows, ZERO A-grade — real counts, not engineered) + 9 of 29 editor tests (87 cases) + root loading.tsx. MEASUREMENT CORRECTION for C1: 5 of the 14 were NAMING MISMATCHES not missing work (sql-lab-duckdb.md, data-contracts.md, data-quality-run-results.md, feature-store.md, lakebase.md existed) — but none carried a source-UI inventory, so each new doc is still a genuine deliverable", "depends_on": [], "validation": { "V1": "n/a: docs + unit tests, no backend exercised (fetch mocked by design)", "V2": "n/a: no BFF route added or changed", "V3": "OWED for all 14 — gh workflow run loom-ui-verify.yml --ref main -f target_route=/items/<slug>/<id>; BLOCKED by C13 (ui-verify red since 08-04) + the Actions incident. Each doc names what its walk must settle. Not faked", "V4": "n/a: no deploy", "V5": "the 14 parity docs ARE the deliverable", "V6": "n/a: no new config/env/gate" }, "evidence": ["PR #3071 (4 commits: docs / fix / tests / loading.tsx). CI checks ABSENT not green (incident + API rate limit while polling)", "worst coverage: databricks-pipeline 11 built/29 ❌; data-contract 9/21; digital-twin 11/21; ai-red-team 8/19; analysis-board 16/17", "MEASURED CORRECTION: Azure ships NO relational synthetic-data generator (Foundry's two wizards emit Q&A/tool-call JSONL) — the premise that synthetic-data is fully Loom-native was wrong; only the tabular half is", "tests written for 9: ducklake-catalog, ai-red-team (ASR/refusal not swapped), data-contract (derive-MERGE preserves annotations), data-quality (no_rules ≠ pass), synthetic-data (the PII→synthetic GUARANTEE), feature-table (timestamp-key gate — relax it and every training set leaks), fusion-sheet, notepad, analysis-board", "20 tests remain: agent-flow, data-api-builder, data-marketplace, batch-pool, mapping-dataflow, activation-sync, transformation-project, linked-service, integration-runtime, logic-app, model-serving-endpoint, fine-tuning-job, postgres-flexible-server, azure-cosmos-account, loom-app, workshop-app, slate-app, health-check, workspace-monitor, digital-twin (largest/highest-value remaining)", "local: tsc clean, check-no-raw-px at baseline, 13 spec files / 123 tests green exit 0"] },
-    { "id": "C19", "lane": "L-PRODUCT-B","wave": 2, "task_order": 38, "status": "todo", "title": "USER-HARM DATA LOSS (found by C14, pinned as DOCUMENTED DEFECT specs so a fix cannot land silently): fusion-sheet, notepad and analysis-board all `catch { /* keep empty */ }` on a failed read, render BLANK, and then Save PATCHes the emptiness over the user's real content. Fix all three + sweep for the pattern", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["C14 pinned failing-by-design specs labelled DOCUMENTED DEFECT rather than fixing silently", "same three editors ALSO bypass ItemEditorChrome entirely — no ribbon, command search, details panel, Copilot entry, or dirty state"] },
-    { "id": "C20", "lane": "L-PRODUCT-B","wave": 2, "task_order": 37, "status": "todo", "title": "SWEEP for the apex-A3 silent-failure class: C14 found ducklake-catalog rendered 'Reading the DuckLake catalog…' FOREVER on a 500/403 — no error, no retry, asserting an in-progress read that had already FAILED (R7). Identical to the bug fixed in s3-gateway and pinned by its test, never propagated. C14 fixed+mutation-proved this one; sweep every useQuery + throwing-fetcher consumer with no isError branch", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["guard-adoption-gap class: the correct pattern existed and was tested in ONE place, siblings never adopted it"] },
-    { "id": "C22", "lane": "L-PRODUCT-B","wave": 2, "task_order": 35, "status": "todo", "title": "ROUTE-LEVEL AUTH TESTS MISSING on admin collection routes (found by the orchestrator while clearing the route-toolkit ratchet). Measured: deleting the capability gate from app/api/admin/env-config/route.ts leaves check-route-guards GREEN — route-guards' remit is authorization on [id] routes only, so collection routes (GET list / POST create) have NO CI control on their 401/403. env-config.test.ts covers the LIB, not the handler. Add route-level auth contract tests for admin/collection handlers, and consider widening route-guards' scope", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["found by mutation while adding TOUCH_EXEMPT entries for #3064 and #3051 — the exemptions themselves are justified (both prologues are correct, one is STRICTER than withSession), but the mutation exposed that nothing watches them", "GOOD CONTRAST: #3064's workspaces route IS pinned — create-wizard-contract.test.ts:129 goes red on a dropped 401 (mutation-proved). That is the pattern to replicate"] },
-    { "id": "C21", "lane": "L-DEPLOY", "wave": 2, "task_order": 36, "status": "todo", "title": "C14-found: G2 breached on 9 of 14 audited surfaces — only sql-lab, ducklake-catalog, s3-gateway and feature-table use the shared HonestGate with Fix-it. Folds into C15 (G2 Fix-it coverage ~131/160 gates). ALSO: ai-red-team's attack-success rate is computed from PLAINTEXT PROBES ONLY (no PyRIT converters, no composition, no multi-turn) and the surface presents the number without that caveat — a 0% score has NOT shown a deployment is safe", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["the ai-red-team caveat is a safety-signal integrity issue, not cosmetic", "fusion-sheet also has no keyboard nav, no undo, hard-coded 20x10 grid — a spreadsheet you must click every cell of"] },
-    { "id": "C15", "lane": "L-DEPLOY",   "wave": 2, "task_order": 42, "status": "todo", "title": "C1-found: G2 Fix-it coverage NOT universal — ~160 GATE_META entries vs 131 fixit: declarations in lib/gates/registry/*.ts (regex-approx); G2 demands universal. ALSO: FRESH0 is warn-only in CI (loom-guardrails.yml:202) — --strict exits 1 (mutation-proved) but runs boundary-only, so drift never blocks a PR", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["from C1 Phase-E adversarial pass", "pipeline/top-tabs.tsx:19 still overflow:hidden (body now auto at :33) — A5 fix looks attempted; only a browser settles the geometry"] },
-    { "id": "C7",  "lane": "L-PRODUCT-B","wave": 2, "task_order": 59, "status": "review", "title": "C7 — 4 of 5 items STALE (shipped July via #2036/#2046, never struck from OPEN-REGISTER §P2). REAL defect: FGC-31 workspace wizard EXISTED but was never mounted on /workspaces, and POST /api/workspaces dropped 4 of its 5 fields (provisionBackingRg opt-in was a NO-OP = auto-bind violation)", "depends_on": [], "validation": { "V1": "real Cosmos create + applyWorkspaceBindings (capacity/Purview/identity/RG), no mocks; live-estate receipt OWED (needs roll)", "V2": "6-test contract spec drives the real POST (201+persisted, 401, 400 missing-name, 400 unknown-domain); check-route-guards exit 0 across 1426 routes", "V3": "OWED: gh workflow run loom-ui-verify.yml --ref main -f target_route=/workspaces (input confirmed present) + narrow-width and first-open passes", "V4": "OWED: merged is not deployed", "V5": "in-PR: docs/fiab/parity/workspace-create.md re-baselined 13 rows zero ❌ + workspace-create-settings.md", "V6": "no new env (check-env-sync 0), no new gate, no bicep; wizard preselects seeded default domain + server falls back to DEFAULT_DOMAIN_ID so a fresh tenant cannot dead-end" }, "evidence": ["STALE with receipts: OBO halves + MANIFEST swaps = e648555b (#2036); Weave DAX/lakehouse-KQL/medallion adapters = edcfaa43 (#2046); W1 ADX connector = REPORT_CONN_TYPES:179 + executor:1936. Nothing descoped — proven stale, not narrowed", "THREE copies of the wizard existed; the ORPHAN in lib/panes/workspaces.tsx (exported, imported by nothing) is what the earlier audit graded → produced the false 'still a single-step Dialog'. Orphan DELETED", "PR #3064 (fix: full body parse, provisionBackingRg threaded into applyWorkspaceBindings, workspace.create SIEM audit, wizard mounted on /workspaces, free-text capacity/domain fallbacks removed per no-freeform-config)", "PR #3065 (docs-only ROOT-CAUSE fix: strikes the 4 drained items in the register with commit+file:line and corrects the FGC-31 mis-grade in PRP-AUDIT-2026-07-09.md — left open they would be copied into a FOURTH audit)", "MUTATION PROOF: reverting the route to the old narrow parse turns 4 of 6 contract tests red; restored 6/6", "local gates: tsc clean; vitest 16/16 no exit-1-despite-passes; check-route-guards/check-env-sync/check-no-raw-px all exit 0", "reviewer PASS 6/6 — NO WORK SKIPPED: all 4 STALE items verified shipped at LINE level (commits e648555b/edcfaa43/f8419d60 exist with matching diffstats); orphan confirmed (zero repo-wide imports of panes/workspaces); dropped-fields confirmed verbatim at merge-base route.ts:69; mutation proof REPRODUCED (4 failed/2 passed, assertions prove the test observes the dropped fields); parity docs 13✅/1⚠/ZERO❌", "reviewer's strongest evidence: applyWorkspaceBindings ALREADY accepted provisionBackingRg (:44) and ALREADY called tryProvisionBackingRg (:116) — capability fully built, route never invoked it = genuine dead no-op (inert-feature class)", "reviewer nits (non-blocking): test count was 18 not 16 (under-claimed); stale comments at get-data-gallery.tsx:144,:532 still call adx 'forward-compat' contradicting the code (pre-existing on main)", "reviewer: NO live-browser G1 receipt — tsc+vitest only, insufficient per ux-baseline G1; blocked by C13 (ui-verify down since 08-04)"] },
-    { "id": "C2",  "lane": "L-PRODUCT-B","wave": 2, "task_order": 58, "status": "todo", "title": "apex Phase B residue: B-N14b NL governance copilot, B-N14c contract-validating copilots, B-N14e agent-designer publish, B-N19c' signed evidence on access-review close, B-N19d scheduled insight digests, embedding-pipeline item type (pgvector client exists, item type doesn't)", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "C4",  "lane": "L-PRODUCT-B","wave": 2, "task_order": 57, "status": "todo", "title": "B-FP' foundry widget-catalog last-mile + WS-4.4 sync-backfill; B-U12 px→tokens; B-R10-17 monolith decomposition + typed client-map", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "D17", "lane": "L-DEPLOY",   "wave": 3, "task_order": 50, "status": "todo", "title": "R8 docs: greenfield + brownfield walkthroughs complete/true + wizard agreement; t169 RG/CAF layout. Clean-sub acceptance runs (Commercial AND Gov) are OPERATOR-GATED — see operator_queue", "depends_on": ["D7", "D8"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "C3",  "lane": "L-PLATFORM", "wave": 3, "task_order": 49, "status": "review", "title": "B-FN Functions→ACA jobs — CORRECTED after reviewer FAIL. Load-bearing claim is now FunctionExecutionCount (2026-07-25→08-06, P1D Total): errorCode=Success, 13/13 datapoints with EXPLICIT total:0.0, absent=0, SUM=0 for ALL SEVEN. Scoped separately: func-rptsub additionally indexes nothing. Estate is NOT uniform and the docs now say so", "depends_on": [], "validation": { "V1": "PASS: live cron execution + real Cosmos read (log TEXT unverifiable from workstation — private-link DNS; UNKNOWN not fail)", "V2": "n/a: no BFF logic changed", "V3": "n/a: platform task", "V4": "PASS for the job (reviewer confirmed triggerType:Schedule, execution at 21:45:00→21:45:30Z on a tick, genuinely unattended); bicep half MERGED-NOT-DEPLOYED — admin-plane deploy required for LOOM_REPORT_RENDERER_URL + the env rename", "V5": "docs synthetic transcript REPLACED with the real per-app table incl. the 400 and the two indexed apps", "V6": "PASS: existing reportSubscriptionsEnabled flag, no new opt-in" }, "evidence": ["PR #3068 corrected in c180862f — agent reproduced EVERY reviewer finding independently and found 3 MORE affected files than the reviewer named (8 total, incl. Dockerfile, run-logger.ts, deploy-report-subscriptions-job.sh)", "ORCHESTRATOR VERIFIED INLINE: false universal gone (0 grep hits); 'seals the' mechanism gone from the PR's files (remaining hits are unrelated pre-existing files); 'NO ROOT CAUSE IS ASSERTED HERE' present in the canonical bicep header; docs carry real-transcript markers (Bad Request / isDisabled / secretExpiryMonitor)", "canonical corrected wording NAMES the trap for the next engineer: 'function list alone would MISLEAD anyone who re-ran it' + names the 2 indexed ENABLED apps and the 400, and records that the 400 is the CONTROL validating the four genuine empties", "AGENT FELL INTO THE SAME TRAP TWICE and caught itself: re-measuring with 2>&1 folded an az CLI SyntaxWarning into the JSON, jq choked, script printed ERR for all seven — it nearly reported 'metrics unavailable'. Separating stderr fixed it. BOTH instances recorded in the PR comment", "mechanism REPLACED with an explicit refusal: 'Two hosts index fine under the same Azure Policy regime, so a policy-seals-the-data-plane explanation would not account for its own variance. What is established is the outcome — zero executions — not the mechanism'", "item 4 applied (agent-claimed, not orchestrator-verified in isolation): bootstrap verification now ::error:: + exit 1 when the job is absent or console env unwired (was warn-only)", "both hazards recorded in docs §1 and §5, with double-execution flagged as making the removal follow-up MORE urgent than 'cleanup' implies", "re-validated by agent: template sync PASS byte-identical (bicep 0.45.15), tsc clean, 22/22 vitest, staleness guard clean, both workflows parse, bash -n clean", "check-deploy-staleness.mjs verified correctly scoped to func-rptsub — left alone"] },
-    { "id": "C5",  "lane": "L-UNITY",    "wave": 3, "task_order": 48, "status": "todo", "title": "Loom Unity tail: LU-7 Trino OPA compile, LU-11 foreign catalogs, LU-12 metric-views semantic tier", "depends_on": ["D2"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "C6",  "lane": "L-PRODUCT-B","wave": 3, "task_order": 47, "status": "todo", "title": "Help depth D3-D5 residual guides (18 item guides + 15 app tutorials baseline 07-24, some closed since — RE-INVENTORY first). help-D6 visual captures OPERATOR-GATED — see operator_queue", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "C8",  "lane": "L-PRODUCT-A","wave": 3, "task_order": 46, "status": "todo", "title": "#2626 OpenLineage DRIVEN receipt (real backed pipeline + Spark batch on estate); #2581 semantic-model 3-tab scripted spec; #2622 residual (try/finally in shortcut-credentials.ts + drop KNOWN_UNAUDITED — operator file access; file unity-audit-guard.test.ts 81s-timeout issue); #2583 close after console roll", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "C10", "lane": "L-PLATFORM", "wave": 3, "task_order": 45, "status": "todo", "title": "June harness real residue: PP solution import/export (audit-T28/task-015), scale-by-SKU verify EVERY resource (task-020), mirroring-wizard backend consumption (persist connectionId + KV creds)", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "P2-DOCS", "lane": "L-TRUTH", "wave": 3, "task_order": 44, "status": "review", "title": "Docs currency batch + D17 R8 deploy docs — 8 P2 items measured against CODE, plus wizard↔docs drift both directions", "depends_on": [], "validation": { "V1": "n/a: docs task", "V2": "n/a: docs task", "V3": "n/a: docs task", "V4": "n/a: docs ship with the merge", "V5": "THIS TASK IS V5 — per-item claimed→measured→action tables are the evidence", "V6": "n/a" }, "evidence": ["PR #3070 (4 commits, 18 files, docs only, zero product code)", "item 2: all 4 foundry-parity ❌ were actually SHIPPED (phase4/object-explorer-panel.tsx; WS-4.4 object-dataset-sync.ts; agent-flow-run.ts:96-142; SpindleEvalsPanel) — corrected in place with originals struck through", "item 3: the PARITY-MATRIX was ALREADY RIGHT (ca1e411d) — staleness had MIGRATED to 4 sibling docs still calling tier-router 'a safe no-op'; found 3 more stale rows en route (derived props F→shipped WS-4.2; object security D→shipped AND enforced in BFF routes WS-4.3; object sync C→B+)", "item 4: fabric-parity F1-F4 CLOSED by re-running each finding's OWN command; F5 confirmed valid a 4th time", "item 5: 11/12 grades left _TBD_ DELIBERATELY with the reason (G1 grading pass never ran) — refused to fabricate; named C1 as the producer", "item 7: OPEN-REGISTER operator-P1 verdict table landed HONESTLY as 'goal NOT MET, NOT MEASURED' rather than invented", "D17: wizard has 8 steps + a dynamic multi-sub-choice; docs covered ONE — full rail now documented from RAIL_STEPS:191-201; brownfield.md CONTRADICTED ITSELF on dlz-attach (§3a 'declares param adopt' vs hub 'reads zero EXISTING_*' — measured 57); EXISTING_* table wrong in ALL 7 rows; clean-sub acceptance procedure written under an explicit 'Status: NOT RUN' banner", "guards: docs-hygiene PASS (it CAUGHT a live hostname the agent had pasted), docs-deploy-refs/parity-freshness/learn-doc-registry PASS; mkdocs --strict abort is 3 PRE-EXISTING material/search warnings, reproduced on unmodified mkdocs.yml"] },
-    { "id": "C16", "lane": "L-PRODUCT-B","wave": 2, "task_order": 41, "status": "todo", "title": "DOCS-RIGHT/CODE-WRONG defects found by P2-DOCS (flagged, deliberately not papered over): (1) RequestAccessInline has ZERO importers (AG-13) — this also STRANDS AG-2: no non-admin can request an access package at all; (2) /api/access-requests/bulk-decision has ZERO UI callers (AG-14); (3) t169 function-RG split not built (grep returns only the plan item)", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["these are inert-feature class: the capability exists but nothing reaches it — same shape as C7's provisionBackingRg and C3's Function Apps"] },
-    { "id": "C17", "lane": "L-PLATFORM", "wave": 2, "task_order": 40, "status": "todo", "title": "no-vaporware §Bicep-sync + deploy-integrity R3 VIOLATION (found by P2-DOCS): access-governance-sweeper is ABSENT from platform bicep — LOOM_SWEEPER_TOKEN is set NOWHERE in platform/, scripts/, or .github/. Expiry auto-revoke is therefore admin-button-only. Fix belongs with C3's Functions→ACA migration (sweeper is one of its 5 remaining)", "depends_on": ["C3"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["a scheduled governance control that never runs = the same class as C3's inert Function Apps"] },
-    { "id": "C11", "lane": "L-DEFERRED", "wave": 3, "task_order": 20, "status": "todo", "title": "Deferred programs — SCHEDULE, don't lose: bridge-services (4 services, zero code), geo-graph-ml GEO-2/3/4 (Esri license operator-gated), domain-mesh #1483 verification (~16 items, verify owed), EH Phases 2-4 (RE-SCOPE first — halves shipped), SVC-3/4/6/7/9/10, W4/W12/W14-W17/W22, T97 SHIR, T100/T101 reports, t169 RG/CAF. Planning only until unblocked", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "C12", "lane": "L-DEFERRED", "wave": 3, "task_order": 19, "status": "todo", "title": "ux-fabric-a W5/W6 + ux-fidelity checklist gate; GOV-3 / model-strategy §7 / TPM raises are OPERATOR decisions — see operator_queue", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "G1",  "lane": "L-GOV",      "wave": 2, "task_order": 90, "status": "operator", "title": "#2643 Gov loom-unity auth DISABLED live (anonymous read+mutate+SAS since 07-15). Code fixed (#2974/#3002); gov-uc-purview-wire.yml dispatch IN FLIGHT (run started 2026-08-06T16:12:38Z) — VERIFY on completion by live measurement, close #2643 only then; if failed, needs new 3.5-4.5h operator window or interim IP-restrict", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["gov-uc-purview-wire run in_progress at init (2026-08-06T16:12:38Z)", "run 31118998951 CANCELLED ~20min in — G1 back to needing an operator window (or interim IP-restrict)"] },
-    { "id": "D12", "lane": "L-DEPLOY",   "wave": 2, "task_order": 89, "status": "operator", "title": "#2958 attended re-apply: MSAL inline-vs-KV-ref decision (only outage-class risk), re-apply data-plane grants for 3 changed identities, accept loom-mcp /data blip — OPERATOR-ATTENDED dispatch (newest comment supersedes body)", "depends_on": ["D7"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "D16", "lane": "L-SUPPLY",   "wave": 2, "task_order": 88, "status": "operator", "title": "s3-gateway opt-in VIOLATES default-ON (pulled in #2640 for anonymous docker.io pull; spec contradicts own VALUE_HINT) — restore default-ON via D14 mirror. svc-postgres opt-in = cost carve-out: OPERATOR RULING required (default-ON or policy-accepted opt-in)", "depends_on": ["D14"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "G5",  "lane": "L-GOV",      "wave": 2, "task_order": 87, "status": "operator", "title": "#2698 residue: operator grants — Gov SP UAA on admin RG (#2330, HIGHEST LEVERAGE), PG quota, tenant consent/PATs; 9 services needing real Gov provisioning; Gov console ~5 days behind", "depends_on": [], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": [] },
-    { "id": "D18", "lane": "L-DEPLOY",   "wave": 1, "task_order": 78, "status": "todo", "title": "#2678 residual (from C9 reopen): apply the #3012 trino/iceberg console env bindings — LOOM_TRINO_* vars + real catalog URL on Console (placeholder 0.0.0.0 live, env pass predates 12:19Z app deploy); then G1 SHOW-CATALOGS + no-bearer-401 receipt. Audience registration decision is OP-11 (operator)", "depends_on": ["D1"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["seeded from C9 sweep 2026-08-06"] },
-    { "id": "D19", "lane": "L-DEPLOY",   "wave": 2, "task_order": 65, "status": "todo", "title": "#2642 residual (from C9 sweep): live Commercial Redis P1 → AMR migration (template migrated in #2851/#2940 = merged-not-deployed; live cache still classic Premium P1); Gov forward path is a 2028-horizon operator decision", "depends_on": ["D7"], "validation": { "V1": "pending", "V2": "pending", "V3": "pending", "V4": "pending", "V5": "pending", "V6": "pending" }, "evidence": ["seeded from C9 sweep 2026-08-06"] }
+    {
+      "id": "D1",
+      "lane": "L-DEPLOY",
+      "wave": 0,
+      "task_order": 97,
+      "status": "review",
+      "title": "loom-risingwave can never deploy: livenessInitialDelay=150 > ACA cap 60 (loom-risingwave-aca.bicep:255) — ≤60 + startupProbe pattern; targeted module redeploy (what-if first); app Running",
+      "depends_on": [],
+      "validation": {
+        "V1": "what-if 3 Creates/274 Ignore zero preflight errors; apply Succeeded, pgWire endpoint out",
+        "V2": "n/a: no BFF route touched (/api/streaming-sql honest-gates on LOOM_RISINGWAVE_URL)",
+        "V3": "n/a: infra-only; console env arrives with Wave-1 admin-plane deploy",
+        "V4": "LIVE: provisioningState Succeeded, runningStatus Running, revision 0000001 Healthy, port-seal selftest green",
+        "V5": "n/a: no doc mentions probes; module header updated in-PR",
+        "V6": "fix IS bicep defaults+clamps + from-source image; no new env/gate"
+      },
+      "evidence": [
+        "PR #3054 OPEN — checks frozen by GitHub Actions major_outage (verified githubstatus 17:54Z); merge owed on recovery",
+        "TWO defects: probe caps (liveness 150>60, readiness failureThreshold 30>10) + entrypoint port-seal scanned whole netns (ACA injects platform agent listeners) — scoped to engine-owned socket inodes, mutation-proved",
+        "image via ACR task cj32d under #2603 lease, re-locked; cosign-UNSIGNED until next green full-app-deploy",
+        "AcrPull + KV-Secrets-User grants were MISSING live — created with orchestrator guid seeds",
+        "deploy slot FREED for D2",
+        "reviewer PASS 6/6 — mutation proof independently REPRODUCED (filter deleted → selftest exit 1); verdict done-pending-merge: flip on #3054 green+merge (branch BEHIND, update-branch owed)",
+        "reviewer-noted residual (non-blocker): double-forked engine descendant escapes ppid scan — whole-netns scan impossible on ACA; minimal viable scoping",
+        "CI CAUGHT WHAT THE REVIEWER MISSED (#2945 class): PR changed bicep but NOT apps/fiab-console/deploy-templates/main.json — the SHIPPING artifact would have carried liveness 150 + failureThreshold 30. Fixed 3eb5ffc2 (bicep 0.45.15, guard byte-identical PASS). SAME GAP found+fixed on #3052 (D3) and #3057 (D2). PROCESS FIX: every reviewer of a bicep-touching PR must check template regen"
+      ]
+    },
+    {
+      "id": "D3",
+      "lane": "L-DEPLOY",
+      "wave": 0,
+      "task_order": 96,
+      "status": "review",
+      "title": "3 degraded apps: loom-wrangler-host DOWN (:v0.1 unpullable), loom-script-runner + loom-migrate Failed/stale-revision — build/push missing image or fix AcrPull; re-provision; all 3 Running on current revisions",
+      "depends_on": [],
+      "validation": {
+        "V1": "az receipts: 3 UAMIs had ZERO role assignments before; AcrPull created under bicep's exact guid() names; each --d3fix1 revision Provisioned/Running",
+        "V2": "n/a: no BFF route",
+        "V3": "ui-verify /admin/migrate run 31123017609 queued in outage; attempt-2 blocking suites passed",
+        "V4": "all 3 apps Succeeded/Running latestReady --d3fix1 (estate remediation live); PR #3052 open (ordering fix)",
+        "V5": "n/a: existing docs correct, nothing contradicted",
+        "V6": "images in build matrix + grants in bicep (skip_role_grants=false default) + ordering race closed by #3052 + hand-grants name-exact idempotent"
+      },
+      "evidence": [
+        "ROOT CAUSE: all 3 pull UAMIs (uami-loom-{wrangler,script-runner,migrate}-centralus) had zero role assignments — bicep grants (admin-plane/main.bicep ~6064/6156/6209) never applied since no admin-plane deploy succeeded post-rename; script-runner's June revision worked via LEGACY unsuffixed UAMI that still holds AcrPull",
+        "wrangler :v0.1 image EXISTS since run 31066164706 (08-06) — auth was the sole live blocker",
+        "grants created via az rest under deterministic guid names (what-if proved Create ×3) — no D8 RoleAssignmentExists trap",
+        "PR #3052: +dependsOn [scriptRunnerAcrPull]/[wranglerAcrPull] — checks frozen in outage; merge owed",
+        "FOLLOW-UP (post admin-plane deploy): live LOOM_WRANGLER_ENDPOINT targets STRAY out-of-band app loom-wrangler-h2 — next deploy re-points it, THEN delete the stray (never before)",
+        "gh API rate-limiting observed — possibly aggravated by parallel finishline agents",
+        "reviewer PASS 6/6 — done-pending-merge (#3052); flag: image builder run 31066164706 overall-failed (job-level success), undisclosed in claim but artifact real+pulling; wrangler UX unchanged until admin-plane deploy re-points endpoint off stray"
+      ]
+    },
+    {
+      "id": "D15",
+      "lane": "L-DEPLOY",
+      "wave": 0,
+      "task_order": 95,
+      "status": "review",
+      "title": "Day-one scoring lies both ways: optIn not carried into EDITABLE_ENV (env-config.ts add()); derived-but-unset counts configured (env-config-pane.tsx:121-140); readiness blocked+canAutoResolve→ready without probe (readiness.ts:331-334) — add 'opt-in' status; count derived only when value present; consult probe. Honest 100%",
+      "depends_on": [],
+      "validation": {
+        "V1": "probe path = real self-audit chain, unit-tested vs REAL gate registry (fail/warn/pass pinned)",
+        "V2": "additive payload (editable[].optIn, +'opt-in' status); minted-session receipt owed with V3",
+        "V3": "OWED post-merge: loom-ui-verify /admin/env-config + /admin/readiness",
+        "V4": "OWED post-merge: build-marker past merge SHA (baseline live=7e9289cc)",
+        "V5": "in-PR: docs/fiab/admin/env-config.md status table + deploy-readiness-100pct.md D15 amendment",
+        "V6": "no new env/gates/bicep; lib/gates untouched"
+      },
+      "evidence": [
+        "PR #3051 (fix/finishline-d15-honest-scoring @2e5fd699) OPEN — 30 checks queued, zero started (Actions outage; do NOT --admin, checks never ran)",
+        "sites: env-config.ts:115 add() carries optIn + envVarStatus():181/isConfiguredStatus():194; env-config-pane.tsx:127-160 (+opt-in badge :250, derived-unset warning :467); readiness.ts:347-356 probe-consulted (svc-dab-runtime/svc-udf-function/svc-monitor-alerts)",
+        "local gates: tsc clean; 41/41 target specs + 370-test seam, exit 0",
+        "post-merge steps recorded in PR; reviewer gate AFTER live receipts",
+        "#3034 corroborated: 3 instant-fail invalid-YAML workflows on every push (D13 evidence)"
+      ]
+    },
+    {
+      "id": "D9",
+      "lane": "L-SUPPLY",
+      "wave": 0,
+      "task_order": 94,
+      "status": "review",
+      "title": "loom-uat CVE-2025-68121 (Go stdlib in @esbuild/linux-x64) blocks full-app-deploy; loom-uat:latest unsigned+vulnerable — vite 6→7 + vitest 3→4 root fix OR strip native esbuild binary from uat layer; green run closes #3024; consolidate dupes #3005/#3036",
+      "depends_on": [],
+      "validation": {
+        "V1": "local Dockerfile.uat build + trivy exact gate flags → exit 0; in-image go1.26.4; playwright --list 784 tests exit 0; full vitest 14766 tests exit 0; tsc 0",
+        "V2": "n/a: no BFF route",
+        "V3": "n/a: no UI touched",
+        "V4": "OWED: merge (outage) then GREEN full-app-deploy dispatch (orchestrator-owned) — closes #3024/#3036",
+        "V5": "n/a: doc-of-record is pnpm-workspace.yaml comment block, rewritten in-PR",
+        "V6": "fix in tree/lockfile — every builder inherits; diff is evidence"
+      },
+      "evidence": [
+        "CHOSE (a)-minimal: vite override ^6.4.3→^7.3.6 both override homes + lockfile regen, vitest UNTOUCHED — vitest 3.2.7 declares vite '^5||^6||^7.0.0-0'; audit's vitest 3→4 migration unnecessary",
+        "(b) disproved-of-need not invalid: entrypoint never imports vite/esbuild (playwright via babel) — stripping safe but (a) removes artifact from lockfile entirely",
+        "SCANNER HONESTY: trivy 0.69 gobinary parser can't parse go1.26 binaries (A/B proved: old binary reproduces CI CRITICAL, new num=0) — green rests on independently verified toolchain; disclosed in PR + #3036; HIGH CVE-2026-39822 (fixed 1.26.5) will surface when parser catches up",
+        "PR #3055 (8a87a51c, 3 files, lockfile diff vite/esbuild-only) — checks queued in outage",
+        "#3005 closed as dupe of #3036 (tracker); #3024 canonical, closes only on green run",
+        "reviewer PASS 5/5 — registry-verified dep ranges + independently downloaded binaries (0.28.1=go1.26.4, 0.25.12=go1.23.12); lockfile diff 535 lines ALL vite/esbuild-family; verdict done-pending-merge+dispatch; minor wrinkle: 1378-vs-1391 file count untidy, not fabrication"
+      ]
+    },
+    {
+      "id": "E1",
+      "lane": "L-EVALS",
+      "wave": 0,
+      "task_order": 93,
+      "status": "review",
+      "title": "Eval gate red: grounding judge scores ZERO questions (no judge deployment / daily cap) → passRate uncomputable → #2994 honest predicate fails run 31095470421 — resolve LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT chain + cap; green copilot-quality-evals run",
+      "depends_on": [],
+      "validation": {
+        "V1": "live scoped execution 18:06Z: 12/12 Q, grounding judged=11 deferred=0, passRate 0.667 real — cap=5000 provably in force (ledger stood at 500)",
+        "V2": "n/a: no BFF route",
+        "V3": "n/a: CI gate + infra defaults",
+        "V4": "live job env read back (cap=5000, secretRef intact); post-merge workflow run URL OWED (outage); dispatch 31121441209 queued as receipt",
+        "V5": "in-PR: runbook + README + ws-copilot-cost spec",
+        "V6": "fresh deploys emit judge chain + cap via copilot-evaluator-job.bicep; compiled-template sync guard byte-identical"
+      },
+      "evidence": [
+        "ROOT CAUSE 1: daily cap 500 exhausted by 05:50 daily (27-31 full 153-question passes/day; cancel-in-progress cancels workflow but ORPHANED job execution keeps judging) — chain itself healthy ('' → LOOM_AOAI_STRONG_DEPLOYMENT=strong gpt-4.1 live)",
+        "ROOT CAUSE 2 (found mid-task): internal-token rotation drift — console loom-internal-token rotated 64-char, job + GitHub secret stale 36-char guid; ACA replica kept old value until cycling ~15:20 then 153/153 401 bad_internal_token; synced console→job+GitHub+2 stale siblings (asset-reconciler, cost-anomaly-monitor) boolean-verified, never printed; filed #3056",
+        "PR #3053 (1a23a485): cap 500→5000 (bicep+fallback+script+regenerated template), orphan stop on cancelled(), R7 truth-ups; predicate + floors UNTOUCHED — checks frozen in outage",
+        "FORWARD CORRECTION (re-scopes E2): last fully-judged artifact shows data-agent 0.1, eventstream 0.333, rbac 0.417 vs 0.4 floor — gate stays red on THREE genuine failures, not rbac-only (audit computed from deterministic rates)",
+        "#3056 WILL RE-DETONATE on next admin-plane deploy (bicep guid overwrites rotated value) — added to OP-13 watch",
+        "reviewer PASS 6/6 — sync guard REPRODUCED locally (bicep 0.45.15 byte-identical), execution fyr5hdm confirmed via ARM, corpus sums to exactly 153, exec counts/day measured (27/31/22/14); verdict done-pending-merge",
+        "reviewer notes for E2: in-code fallback cap stays 500 when env unset (disclosed); post-deploy 401 on eval-probe = #3056 re-detonation, not regression; baseline E2 from JUDGED rates"
+      ]
+    },
+    {
+      "id": "C9",
+      "lane": "L-TRUTH",
+      "wave": 0,
+      "task_order": 92,
+      "status": "done",
+      "title": "Verify-then-close wave: #2642 (Redis — deadline retracted), #3003 (ACR pool — builds green 3x, finish guard part 2), #2991 scope confirm, #2671 (1 thrift bump left), R2 verification comments for #2678/#2996/#2997/#2988; release PR #3045 merged by orchestrator",
+      "depends_on": [],
+      "validation": {
+        "V1": "live measurements per issue (az redis, run conclusions, ancestry+401 probes)",
+        "V2": "n/a: verification task",
+        "V3": "n/a: verification task",
+        "V4": "the live measurements ARE V4; #3003+#2991 closed, #2988/96/97 re-verified",
+        "V5": "n/a: no code shipped",
+        "V6": "n/a: no code shipped"
+      },
+      "evidence": [
+        "#3003 CLOSED (3 green runs, pools Succeeded, part-2 moot)",
+        "#2991 CLOSED (file:line scope confirmed, run 31015620546 green)",
+        "#2642 OPEN retitled (live P1 cache unmigrated — merged-not-deployed)",
+        "#2671 OPEN retitled (lockstep arrow/parquet/datafusion/deltalake majors, parquet<59 pins thrift ^0.17)",
+        "#2678 REOPENED (console env not applied, identifierUris empty)",
+        "#2988/#2996/#2997 stay closed (ancestry vs live 7e9289cc + unauth-401)",
+        "reviewer PASS 6/6, receipts independently reproduced"
+      ]
+    },
+    {
+      "id": "D2",
+      "lane": "L-UNITY",
+      "wave": 1,
+      "task_order": 84,
+      "status": "review",
+      "title": "loom-unity Commercial producer — AUDIT PREMISE STALE (#3013 wired modules 08-05 20:58, pre-audit; params 234/256; workflow comment TRUE). Real defects: wrong Commercial privatelink zone (+ducklake, #3039 fossil family); classpath patch inert (v0.5.1 override never shipped — #3060 Gov exposure); authorizer key never rendered",
+      "depends_on": [
+        "D1"
+      ],
+      "validation": {
+        "V1": "psql-loom-unity Ready (PG16, Entra-only, PE-only; B2s→B1ms→D2ds_v5 capacity fallback R6-classified); what-if clean pre-apply; A-record in CORRECTED zone proves DNS e2e",
+        "V2": "OSS-UC routes honest-gate (OssUcNotConfiguredError) while LOOM_UNITY_URL unset live (measured); auto-detect keeps Databricks UC",
+        "V3": "n/a: console surface activates when admin-plane deploys env (attended deploy)",
+        "V4": "loom-unity--0000002 Healthy/Running, boot v0.5.1 db=postgres/entra, auto-bind HTTP 201, enforced=true sealed=false; AcrPull exact guid seed; ACR lease re-locked",
+        "V5": "in-PR: docs/fiab/deployment/commercial.md 'Loom Unity on Commercial' section",
+        "V6": "default-ON loomBackends.unity='enabled'; ORPHAN_ALLOWLIST stale entries removed MUTATION-PROVED; entrypoint test mutation-proved 26/26; Dockerfile build-time class-load assertion"
+      },
+      "evidence": [
+        "PR #3057 (3 commits: zone+guard+docs / classpath / authorizer key) — checks frozen in outage; receipts comment issuecomment-5208737295",
+        "zone fix covers ducklake too (orchestrator hands ducklake zone to unity — unity-only fix would be inert in-band)",
+        "#3060 filed: Gov catalog runs with #1603 v0.5.1 override INERT — Gov image re-roll owed (L-GOV)",
+        "NO Entra unseal operator gate — MSAL app existed, audience pinned at deploy, catalog never sealed",
+        "OWED: post-merge full-app-deploy (image producer); bootstrap dispatch no-op-unseal check (D11); attended deploy wires Console LOOM_UNITY_* (merged-in-bicep, not deployed); in-VNet enforcement probe (Actions-blocked); next in-band apply will what-if SKU downshift D2ds_v5→B2s (converges or D6 capacity territory)",
+        "deploy slot FREED",
+        "reviewer PASS 6/6 — entrypoint mutation proof REPRODUCED (26/26 → 25/1 exact test); bicep-sync guard re-proven live (mutated invocation → red naming the module); all live az claims re-measured; fabrication scan clean",
+        "reviewer: Commercial fossil zone privatelink.postgres.database.windows.net still live alongside correct zone + no ducklake Postgres yet — falls to #3039/attended deploy, NOT this PR"
+      ]
+    },
+    {
+      "id": "D4",
+      "lane": "L-DEPLOY",
+      "wave": 1,
+      "task_order": 83,
+      "status": "review",
+      "title": "Brownfield idempotency: APIM zone re-link Conflict + A-record [0]-on-empty-array; VPN gateway created under DIFFERENT name (MultipleGatewaysOfTypeVpnUseSameVnet) — adopt-existing (R5) in both modules; what-if clean on live estate",
+      "depends_on": [
+        "D1"
+      ],
+      "validation": {
+        "V1": "full-template what-if vs live estate Succeeded: zone NoChange, link-apim-console NoChange (no 2nd-link Create), vpngw-loom-centralus Ignore, 10 Creates audited clean",
+        "V2": "n/a: no BFF",
+        "V3": "n/a: no UI",
+        "V4": "merged-not-deployed once PR lands; attended deploy owed (OP-13)",
+        "V5": "in-PR: docs/fiab/deployment/brownfield.md estate-owned-singletons",
+        "V6": "adopt-existing is DEFAULT; no opt-in"
+      },
+      "evidence": [
+        "PR #3058 (bundled d4/d5/d6 + compiled-template sync, 4 commits) — checks frozen in outage",
+        "AUDIT CORRECTED (D4b): not 'record set empty' — APIM PremiumV2 Internal reports privateIPAddresses:null deterministically in steady state; live record set holds hand-created 10.0.4.4 that a PUT-empty would have WIPED — fix skips-not-wipes (apim-gateway-dns-a.bicep runtime-guarded child)",
+        "existing link is link-apim-console (measured); vpn adopt via existingGatewayName; discovery preflight-brownfield-adopt.mjs +12 tests wired BOTH workflow modes (what-if previews same inputs as apply)"
+      ]
+    },
+    {
+      "id": "D5",
+      "lane": "L-DEPLOY",
+      "wave": 1,
+      "task_order": 82,
+      "status": "review",
+      "title": "Purview blocked by tenant policy RequestDisallowedByPolicy (managed storage must be publicNetworkAccess=Disabled) — policy-aware Purview storage config + R5 policy discovery in preflight",
+      "depends_on": [
+        "D1"
+      ],
+      "validation": {
+        "V1": "A/B via az deployment group validate (real RP preflight): NotSpecified → 21010/RequestDisallowedByPolicy BYTE-IDENTICAL to failed leaf; Disabled → Succeeded; what-if shows Purview Modify NotSpecified→Disabled",
+        "V2": "n/a: no BFF",
+        "V3": "n/a: no UI",
+        "V4": "merged-not-deployed once PR lands; attended deploy owed (OP-13)",
+        "V5": "in-PR: brownfield.md Purview row + failure-recovery.md RequestDisallowedByPolicy row",
+        "V6": "catalog.bicep default Disabled — complies by default, no opt-in"
+      },
+      "evidence": [
+        "policy = StorageAccount_PublicNetwork_Modify in MG assignment MCAPSGovDeployPolicies; deny fires at Purview RP preflight over managed storage (catalog nested deployment, zero failed inner ops)",
+        "AUDIT CORRECTED: checkPolicyRestrictions from the deploy identity CANNOT see the policy (measured empty) — script renders empty as 'not proof of no policies' and defers to RP preflight (R7); honest preflight = what-if/validate",
+        "taxonomy signal config.disallowed-by-policy names the policy assignment; no DNS zones added (Gov empty-zone hazard avoided)"
+      ]
+    },
+    {
+      "id": "D6",
+      "lane": "L-DEPLOY",
+      "wave": 1,
+      "task_order": 81,
+      "status": "review",
+      "title": "DuckLake Postgres CapacityNotAvailable (centralus zone) AND classifier classed whole run 'defect' — per-leaf classification (capacity=retry w/ zone/SKU fallback), not whole-run classing",
+      "depends_on": [
+        "D1"
+      ],
+      "validation": {
+        "V1": "corpus: CapacityNotAvailable matched NO taxonomy signal, concatenated classify → defect (audit verified by test); new capacity class retryable/300s/exit-18",
+        "V2": "n/a: no BFF",
+        "V3": "n/a: no UI",
+        "V4": "merged-not-deployed once PR lands; attended deploy proves per-leaf retry live (OP-13)",
+        "V5": "in-PR: failure-recovery.md nine classes + per-leaf retry + preflight table",
+        "V6": "default behavior; workflow --class-allow +capacity"
+      },
+      "evidence": [
+        "MUTATION-PROVED: classifyLeaves reverted to whole-input → 3 tests red (leaf-keeps-own-class; capacity+defect names defect AND reports capacity retryable; unknown leaf fails closed) → restored, classify 50/50 retry 30/30",
+        "decideRetryForLeaves: retry only when EVERY leaf retryable+allowed; refusal names blocking AND blocked-retryable; effectiveBackoffBase = longest leaf-class backoff; artifact leafClasses[]",
+        "AUDIT DEVIATION disclosed: zone/SKU fallback implemented as bounded time-based retry + no zone pin + SKU lever in remediation (deploy-retry cannot vary template params per attempt)",
+        "Gov untested, declared in PR (discovery steps Commercial-only)",
+        "template-sync guard caught the #2945 inert-fix class after bicep edits — main.json regenerated; vitest/tsc for TS twin NOT run locally (no node_modules in worktree) — CI must cover",
+        "reviewer PASS 7/7 (bundle) — mutation proof independently REPRODUCED (3 named tests red under whole-input revert, 80/80 restored); live spot-checks all match (link-apim-console, vpngw Succeeded, 10.0.4.4 record, APIM privateIPAddresses null via raw ARM GET); fabrication scan CLEAN"
+      ]
+    },
+    {
+      "id": "D11",
+      "lane": "L-DEPLOY",
+      "wave": 1,
+      "task_order": 80,
+      "status": "todo",
+      "title": "Post-deploy bootstrap stale (last success 07-19) — dispatch after D1-D3 (grants, UC enable, Delta Sharing, iceberg-catalog); verify grants live. NOTE: does NOT produce loom-unity (see D2)",
+      "depends_on": [
+        "D1",
+        "D2",
+        "D3"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "G2",
+      "lane": "L-GOV",
+      "wave": 1,
+      "task_order": 79,
+      "status": "todo",
+      "title": "4 Gov workflows NEVER run once: gov-build-images, gov-provision-dataplane-images (= #3012 Gov image lane → Gov fedlake/trino NOT deployed), gov-provision-streaming-migrate, gov-workspace-identity — green first runs",
+      "depends_on": [
+        "D9"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "from D2: #3060 — Gov unity catalog runs with the #1603 v0.5.1 security override INERT (classpath patch hit wrong module in every shipped image); Gov image re-roll owed once the image lane first-runs",
+        "D2 reviewer: Gov catalog CANNOT be on the Entra-Postgres path today (plugin ClassNotFound would prevent boot) — it's on another store (H2/EmptyDir lineage); the #3060 re-roll needs a DATA/STORE-CUTOVER step to fresh LU-1 Postgres, existing contents won't migrate; zone bug is a NO-OP in Gov (suffixes coincide)"
+      ]
+    },
+    {
+      "id": "D7",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 70,
+      "status": "todo",
+      "title": "#3028 keep_resources=false default TEARS DOWN admin RG; #3029 omitted region silently targets eastus2; #3022 what-if previews different template than apply + schedule auto-upgrades deployAppsEnabled — safe-by-default inputs + mutation-proved refusal guards; then re-enable schedules (#2775)",
+      "depends_on": [
+        "D4",
+        "D5",
+        "D6"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "D8",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 69,
+      "status": "todo",
+      "title": "#3039/#3046/#3038 residue: DNS-migration step-9 wipes PE zone-group (caused live A-record outage); RoleAssignmentExists from guid-seed rename (ae75c3c5) permanent until old assignment deleted/adopted — fix script (remove-by-zone-id + terminal verify); #3038 closes ONLY on green deploy-fiab run",
+      "depends_on": [
+        "D7"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "D10",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 68,
+      "status": "review",
+      "title": "Inert deploy plumbing: #3014 assertPlanIsDeployable zero production callers; #3015 wizard uses weaker scanner than /api/deploy/discovery; #3016 adopt-bag discarded by every tier except copy-paste; #3017 Gov deploys no classified retry + guard scope by filename — wire + guard-that-callers-exist + mutation-prove each",
+      "depends_on": [],
+      "validation": {
+        "V1": "n/a-with-reason: transport/gate fixes — first real-Azure receipt = next deploy; functional tests capture ARM PUT body/orchestrator payload/dispatch-refusal per tier",
+        "V2": "functional vitest vs real handlers (401/400/422/503/202 structured); live minted-session probe OWED post-roll",
+        "V3": "visible changes post-roll (honest scan counter, adopt picks carried/refused) — loom-ui-verify receipt OWED",
+        "V4": "merged-not-deployed; Commercial roll + Gov whatif-only gcch dispatch OWED on Actions thaw",
+        "V5": "in-PR: brownfield.md, failure-recovery.md, discovery-and-adoption.md to measured state",
+        "V6": "default behavior, zero opt-ins, no new env/bicep (adopt param existed, now receives values)"
+      },
+      "evidence": [
+        "PR #3062 (4 commits, one per defect) — checks frozen in outage; MERGE ORDER: #3058 FIRST, then rebase #3062's doc hunks (shared brownfield/failure-recovery docs)",
+        "#3014 REAL: gate now ahead of every tier in POST /api/setup/deploy; mutation: caller removed → 422 tests red + mutant fell through to LIVE ARM attempt; HONEST SCOPE: evaluateFitness still has zero producers (enforcing would brick brownfield) — pinned test documents, follow-up on #3014",
+        "#3015 WORSE than audit: wizard called discover-services (no ARG options + subsSeen coverage LIE); scan-services had zero UI callers — rewired onto lib/deploy/discovery-scanner, dead route deleted",
+        "#3016 WORSE: route ignored the wizard's entire DeploymentPlan; #3013's plan-to-arm serializers had zero callers and its claimed guard check-plan-transport.mjs DOESN'T EXIST — new adopt-bag threading tiers 0/1/3; tier 2 dispatch honestly refuses meaningful bags (no declared input, cap 10) → copy-paste fallback",
+        "#3017 SPLIT: retry half real (gcch/gcc/il5/deploy-gov wrapped in deploy-retry.mjs; gcch notifier read a file nothing produced); guard half STALE — already fixed by #3018/b625e03c, untouched; mutation proof found a hole in own draft guard (block-level stayed green on one-branch-bare mutant) → rewritten line-anchored, red on exact branch",
+        "NEW FIND filed as issue: azure-mgmt-resource >=23.2.0 pin breaks under v24 (Deployment model import removed, 4 tests fail on fresh resolve)",
+        "local: tsc 0; vitest 426/0; node --test 1079/0; pytest 6/6; 7 guards OK; 4 workflows parse clean",
+        "ORCHESTRATOR-INLINE REVIEW PASS (structural): 4 commits match claimed SHAs; deploy/route.ts imports+calls validatePlan (:452) and assertPlanIsDeployable (:464) with deriveAdoptBag (:420) — gate genuinely at the submit choke point ahead of every tier; dead scan-services/route.ts DELETED (-144); 3 new test files present. NOT re-run inline: mutation proofs + full suites (budget)"
+      ]
+    },
+    {
+      "id": "D13",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 67,
+      "status": "review",
+      "title": "#3025 MSAL rotation traps (stale ROTATED marker; runbook names wrong identity); #3034 3 workflows invalid-YAML never executed; #3027 check-licenses SKIP exits 0; #3042 first failing guard hides the rest (~30 guards; prove 2-at-once visible) — each with mutation proof",
+      "depends_on": [],
+      "validation": {
+        "V1": "all 4 families mutation-proved locally: msal guard R1-R4 red-on-mutant; actionlint hard-fail + liveness probe, synthetic mutant red non-baselinable; check-licenses bare tree exit 2 (was 0) + Windows spawn fixed; 2 simultaneous mutants BOTH visible in one batch run; node --test 1074/0",
+        "V2": "n/a: CI-only",
+        "V3": "n/a: CI-only",
+        "V4": "OWED on Actions recovery: guardrails green on PR; 2-mutant branch showing both red in CI; actionlint red on invalid-workflow branch; first dispatches of revived probes",
+        "V5": "docs/fiab/runbooks/secret-rotation.md §2 fixed in-PR",
+        "V6": "guards default-on, no opt-ins"
+      },
+      "evidence": [
+        "corroborated by D15 agent: 3 instant-fail invalid-YAML workflows on every push (#3034)",
+        "from D9 agent: copilot-auto-fix.yml + csa-loom-spark-livy-probe.yml PRE-EXISTING workflow-file failures on every branch — fold into workflow hygiene",
+        "PR #3061 (4 commits, one per family) — checks frozen in outage",
+        "PREMISES CORRECTED: LOOM_MSAL_SECRET_ROTATED exists NOWHERE in repo (live marker hand-set, 2 rotations stale); guard steps = 75 not ~30 (now 77 with if !cancelled())",
+        "#3034 measured: exactly 3 files fail parse (copilot-auto-fix.yml body string; spark-livy-probe + byte-identical probe2 heredocs) — extracted to scripts, 115/115 parse; BONUS: check-workflow-unset-vars was silently TRUNCATING those 3 files, now 777 steps/115 files",
+        "#3056 deliberately NOT folded into #3025 (different fix class: transactional multi-holder rotation + bicep-guid ownership) — stays with E1 lane",
+        "LIVE stale marker untouched until next rotation/bootstrap run",
+        "ORCHESTRATOR-INLINE REVIEW PASS (agent gate died on API spend limit, redone inline): YAML parse REPRODUCED exactly (main 115 files/3 FAIL = the 3 named; head 115/0 FAIL); baseline 45→42 confirmed; guardrails 77 named steps/0 guarded on main → 79/79 guarded at head (broader than the claimed 77); BOTH new guards wired at loom-guardrails.yml:490,499 with --self-test invoked BEFORE the real run; check-licenses exit(2) CANNOT-RUN + exit(0) only via explicit LOOM_LICENSE_SCAN_ALLOW_SKIP. NOT re-run inline: the 4 mutation proofs + node --test 1074 (budget) — structural claims all reproduce"
+      ]
+    },
+    {
+      "id": "D14",
+      "lane": "L-SUPPLY",
+      "wave": 2,
+      "task_order": 66,
+      "status": "review",
+      "title": "#2682 ACR mirror + hub coordinates — AUDIT PARTLY STALE: a mirror step already existed in BOTH cloud lanes and the live estate already pulls a mirrored image. Genuinely missing: digest pinning, a single source of truth, any guard, and the s3-gateway half",
+      "depends_on": [
+        "D9"
+      ],
+      "validation": {
+        "V1": "PASS live: loom-airflow Succeeded/Running rev --xltnh1g on <acr>/apache/airflow:2.10.5-python3.12",
+        "V2": "n/a: no route changed",
+        "V3": "OWED post-roll: GET /api/admin/gates → svc-s3-gateway.status must be 'configured', NOT 'opt-in'",
+        "V4": "merged-not-deployed (and not yet merged); full-app-deploy-commercial has failed its last 4 runs (D9) — dispatched nothing",
+        "V5": "docs/fiab/deployment/upstream-image-mirror.md + mkdocs nav + THIRD_PARTY_LICENSES (airflow/curl notes CORRECTED — they claimed a docker.io pull that is no longer true)",
+        "V6": "THE POINT: no bicepparam change needed. Compiled shipped template shows ZERO public-registry refs, 11 ACR-composed s3proxy refs, 7 LOOM_S3_GATEWAY_URL, 219 params (under the 256 cap)"
+      },
+      "evidence": [
+        "PR #3067 (b85afa5f)",
+        "mirror mechanism: platform/fiab/images/upstream-images.json = one source of truth; scripts/ci/mirror-upstream-images.sh = one implementation BOTH clouds call; imports by @digest, MCR fallback ALSO by digest, then READS THE DIGEST BACK OUT OF ACR and fails on mismatch; empty manifest exits 1",
+        "KILLED a public-pull fallback: loom-memory-consolidate-job.bicep:58 had `empty(acr) ? publicRef : acrRef` — ternary deleted, acrLoginServer now required",
+        "GUARD MIR0 mutation-proved AND one mutant caught a real bug IN THE GUARD: first cut used src.includes(scriptPath), which the surrounding COMMENT satisfied (prose-matching blindness class) → Gov lane dropping the mirror step initially PASSED. Fixed to strip comments and require a real `bash …` run step; re-mutated → FAIL",
+        "s3-gateway DEFAULT-ON restored (D16 half): audit line numbers 104/256 were STALE — real entry is data-plane.ts:307-330. optIn:true deleted; removed from core.ts opt-in-by-design list; gates registry autoResolveNote rewritten; check-env-sync allowlist entry REMOVED and env-sync still green, which PROVES the var is genuinely bicep-emitted; modules restored ACR-only",
+        "hub coordinates threaded END TO END (#2682 task 2, the actual root cause): flat params + hubCoordinates → topologyManifest.hub.keyVaultId → write-tenant-topology.sh → HUB_COORDINATE_KEYS → HUB_COORD_PARAM → deploy-fiab-commercial HUB_PARAMS",
+        "template sync regenerated + check-deploy-template-sync PASS byte-identical (the #2945 guard that failed 3 PRs today)",
+        "build-time images (6 OSS engines + 11 bases + MCR) inventoried but DELIBERATELY not repointed — mirroring them requires the mirror to finish before the FIRST build of a from-scratch deploy, a new failure mode on a currently-P0-fragile path",
+        "tsc/vitest NOT run (no node_modules in the isolated worktree; installing risks corrupting main's tree) — CI is the gate",
+        "Gov: gov-provision-dataplane-images.yml runs the identical shared script so Gov can no longer silently drift — but that workflow has NEVER RUN ONCE (G2). Authored, run owed"
+      ]
+    },
+    {
+      "id": "C18",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 39,
+      "status": "todo",
+      "title": "D14-found: three MCR refs float ':latest' on DEPLOY paths — dab-runtime.bicep:36, presidio-sidecar.bicep, deploy-planner/container-instances.bicep:19. LIC0-exempt but still unpinned drift on a deploy path. Pin them (operator asked whether to — OP-17)",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "found while inventorying upstream images for D14"
+      ]
+    },
+    {
+      "id": "G3",
+      "lane": "L-GOV",
+      "wave": 2,
+      "task_order": 65,
+      "status": "todo",
+      "title": "RED Gov workflows: deploy-gov (16d), gov-provision-dbx-sql-invnet (never green), gov-provision-dbx-sql, gov-provision-graph-grants — green each",
+      "depends_on": [
+        "G2"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "G4",
+      "lane": "L-GOV",
+      "wave": 2,
+      "task_order": 64,
+      "status": "todo",
+      "title": "#2874 Gov bicep-drift what-if fails before any verdict (weekly red 07-27, 08-03) — drift check produces verdicts",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "E2",
+      "lane": "L-EVALS",
+      "wave": 2,
+      "task_order": 63,
+      "status": "review",
+      "title": "Surfaces below floor — CORRECTED TWICE. Audit said 'rbac only'; the E1 re-scope said 'three incl. rbac'. BOTH WRONG: measured over 6 run artifacts, rbac = 0.417 ABOVE the 0.40 floor. Real failures: data-agent (below in 3/3) and eventstream (below in 2/3). No floor lowered",
+      "depends_on": [
+        "E1"
+      ],
+      "validation": {
+        "V1": "6 live artifacts (gh run download) + 153-row offline harness on the SHIPPED modules; live scoped execution OWED (AI Search + Cosmos are publicNetworkAccess:Disabled and Actions was down)",
+        "V2": "n/a: no BFF route",
+        "V3": "n/a: no console surface",
+        "V4": "OWED: loom-docs reindex then copilot-quality-evals on main — that ONE run closes V1+V4 and produces the AFTER numbers for E2/E3/E4",
+        "V5": "copilot-retrieval-remediation.md §11-12, content/evals/README.md, eval-floors.json _meta",
+        "V6": "no new opt-in/env/gate; corpus-stats default-ON with an honest null fallback"
+      },
+      "evidence": [
+        "PR #3069 (3 commits e2/e3/e4), MERGEABLE, no textual conflict with #3053 (its hunks ~25/~266 vs ours ~335/~363)",
+        "data-agent ROOT CAUSE was NOT retrieval (hit-rate 0.90) — productFidelityAvg 1.889/5. Every fact in its gold doc sits in an H3 under Fabric's '## Real feature inventory', and the chunker emitted only `title › innermost-heading`, so answer prompt AND judge saw it with NO product label; classifyExcerptProvenance returned 'unlabelled' → judge was told 'may describe either product' for the surface's ENTIRE gold document. evaluator-core's own header had LOGGED this and deferred it as harmless — it was the whole failure. Fixed with full title›H2›H3 ancestry; corpus-wide unlabelled 1711→1249",
+        "offline (real ranker + real chunker, 153 rows @ top-8): 0.797→0.889 overall; eventstream 0.750→0.917, rbac 0.917→1.000, kql 0.882→1.000"
+      ]
+    },
+    {
+      "id": "E3",
+      "lane": "L-EVALS",
+      "wave": 2,
+      "task_order": 62,
+      "status": "review",
+      "title": "#2970 FALSIFIED — stage-1 recall is 0.967 at the shipped window of 100; the document was ALREADY in the window. Real cause: rankChunks builds BM25 stats over the CANDIDATE WINDOW, where every candidate matches so df/size→1 and IDF collapses for all query terms at once. Corpus-wide stats recover the ENTIRE gap",
+      "depends_on": [
+        "E1"
+      ],
+      "validation": {
+        "V1": "new --stage1 two-stage simulation measuring recall per question; corpus-wide stats 0.797→0.889 at w=100, identical to full-corpus",
+        "V2": "n/a",
+        "V3": "n/a",
+        "V4": "OWED with E2",
+        "V5": "§11.5 documents the residual honestly",
+        "V6": "default-ON"
+      },
+      "evidence": [
+        "the tell was already visible: window-local BM25 is NON-MONOTONIC in width (400 < 200)",
+        "harness re-validation: the ~2x optimism was STRUCTURAL (full-corpus assumed stage 1 perfect) — now labelled 'inf (upper bound)'. It STILL does not perfectly track live (live 0.750 vs model 0.797 at w=100) and §11.5 SAYS SO rather than smoothing it",
+        "OPERATOR ASK: #2970 should be re-titled or closed with the correction — its stated hypothesis (searchMode/queryType/window) is measurably NOT the cause and will send the next investigation down the same path"
+      ]
+    },
+    {
+      "id": "E4",
+      "lane": "L-EVALS",
+      "wave": 2,
+      "task_order": 61,
+      "status": "review",
+      "title": "Floors ratcheted from measured data (retrievalHitRate = min over 6 runs − 0.05, cap 0.95); ${s.surface} bash bad-substitution fixed; TWO MORE gates-that-cannot-fail found",
+      "depends_on": [
+        "E1"
+      ],
+      "validation": {
+        "V1": "ratchet computed from 6 real run artifacts",
+        "V2": "n/a",
+        "V3": "n/a",
+        "V4": "OWED with E2",
+        "V5": "eval-floors.json _meta.ratchetBasis records the refusals",
+        "V6": "no new opt-in"
+      },
+      "evidence": [
+        "ratchet: cost 0.50→0.95, data-agent→0.83, lakehouse→0.77, report→0.78, health→0.66, kql-database→0.65, rbac→0.61, deploy-planner→0.56, help→0.55, eventstream→0.52. NO FLOOR LOWERED",
+        "groundingAvg and passRate ratchets correctly REFUSED (3/6 runs judge-less; window mixes predicates per #2992) — refusal recorded in _meta.ratchetBasis rather than guessed",
+        "GATE THAT COULD NOT FAIL #1: the ${s.surface} backtick→bash-command-substitution bug reproduced — 'bad substitution', EXIT 0, receipt blank for the workflow's ENTIRE LIFE",
+        "GATE THAT COULD NOT FAIL #2: run 31115406603 returned 401 on EVERY probe, scored 0 questions on all 10 surfaces, and CONCLUDED SUCCESS because --strict-missing was schedule-only. Now fails loudly",
+        "the 401s are the SAME internal-token-mismatch class as E1's #3056 — this change makes it fail loudly but does NOT fix the auth (separate live defect)"
+      ]
+    },
+    {
+      "id": "C1",
+      "lane": "L-PRODUCT-A",
+      "wave": 2,
+      "task_order": 60,
+      "status": "review",
+      "title": "loom-apex Phase E: catalog re-grade + ADVERSARIAL-REVIEW.md (was ABSENT) + FRESH0 re-baseline. OUTCOME: all 142 item types = UNKNOWN, not exercised — 0 click-walks possible",
+      "depends_on": [],
+      "validation": {
+        "V1": "n/a: audit task",
+        "V2": "n/a: audit task",
+        "V3": "MEASURED ZERO — 0/142 click-walked; 127/127 static routes probed HTTP 200 with a discriminating 404 control; OWED: gh workflow run loom-ui-verify.yml --ref main -f target_route=/catalog -f extra_projects=uat",
+        "V4": "n/a: no deploy",
+        "V5": "the artifacts ARE the deliverable (PHASE-E-REGRADE.md, ADVERSARIAL-REVIEW.md, FRESH0 re-baseline)",
+        "V6": "n/a"
+      },
+      "evidence": [
+        "PR #3066 (4 files) — CI status genuinely UNKNOWN (Actions degraded + API rate limit); explicitly NOT read as green",
+        "ALL 142 item types graded UNKNOWN — not exercised. Static ceilings only (never grades): 73 A-candidate, 37 B-candidate, 18 C-candidate, 14 need parity docs. Per G1, ZERO catalog surfaces are currently eligible for A/A+",
+        "ADVERSARIAL-REVIEW: 15 claims, default REFUTED — 5 survive, 6 refuted, 2 partial, 1 unverifiable, 1 self-audit. Refuted: A6 zero-gates (and the INSTRUMENT is untrustworthy per D15); Phase C Loom Unity (Gov auth still disabled + Commercial had no producer); 'catalog is A/A+' (33/142 disqualified on paper alone); G1 receipts as currently operable; Phase E ran OUT OF SEQUENCE (PRP.md:159 says LAST) so its headline deliverable was unachievable by construction",
+        "SURVIVED: A1 chunk-skew live (?dpl=7e9289cc0a51 matches live SHA), A2 error boundaries real, A7 reconcile done, A3 verified 1-of-5",
+        "R15 SELF-AUDIT (kept in the record): 3 of its OWN measurements were hollow first — dead provisioner regex (would have implied 141 broken types), an /api/items/ column mistaken for backend proof, and a mutation proof reading tail's exit code instead of node's",
+        "competitive red-team panel declared OWED not written — with 0/142 exercised it would be unfalsifiable opinion that future PRPs would cite as fact"
+      ]
+    },
+    {
+      "id": "C13",
+      "lane": "L-PRODUCT-A",
+      "wave": 2,
+      "task_order": 55,
+      "status": "todo",
+      "title": "BLOCKER FOR ALL V3 RECEIPTS: loom-ui-verify last green 2026-08-04T01:02:35Z — all 3 dispatches on 08-06 FAILED ('Failed to resolve action download info: Service Unavailable'; one hung 79min then cancelled). Anything closed on a G1 basis since 08-04 LACKS its stated evidence. Repair the verify harness, then re-run the owed receipts across every lane",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "found by C1 while attempting the Phase-E click-walk",
+        "partly Actions-incident-driven; confirm whether it is fully external before declaring it fixed"
+      ]
+    },
+    {
+      "id": "C14",
+      "lane": "L-PRODUCT-B",
+      "wave": 3,
+      "task_order": 43,
+      "status": "review",
+      "title": "14 parity docs (172 MISSING rows, ZERO A-grade — real counts, not engineered) + 9 of 29 editor tests (87 cases) + root loading.tsx. MEASUREMENT CORRECTION for C1: 5 of the 14 were NAMING MISMATCHES not missing work (sql-lab-duckdb.md, data-contracts.md, data-quality-run-results.md, feature-store.md, lakebase.md existed) — but none carried a source-UI inventory, so each new doc is still a genuine deliverable",
+      "depends_on": [],
+      "validation": {
+        "V1": "n/a: docs + unit tests, no backend exercised (fetch mocked by design)",
+        "V2": "n/a: no BFF route added or changed",
+        "V3": "OWED for all 14 — gh workflow run loom-ui-verify.yml --ref main -f target_route=/items/<slug>/<id>; BLOCKED by C13 (ui-verify red since 08-04) + the Actions incident. Each doc names what its walk must settle. Not faked",
+        "V4": "n/a: no deploy",
+        "V5": "the 14 parity docs ARE the deliverable",
+        "V6": "n/a: no new config/env/gate"
+      },
+      "evidence": [
+        "PR #3071 (4 commits: docs / fix / tests / loading.tsx). CI checks ABSENT not green (incident + API rate limit while polling)",
+        "worst coverage: databricks-pipeline 11 built/29 ❌; data-contract 9/21; digital-twin 11/21; ai-red-team 8/19; analysis-board 16/17",
+        "MEASURED CORRECTION: Azure ships NO relational synthetic-data generator (Foundry's two wizards emit Q&A/tool-call JSONL) — the premise that synthetic-data is fully Loom-native was wrong; only the tabular half is",
+        "tests written for 9: ducklake-catalog, ai-red-team (ASR/refusal not swapped), data-contract (derive-MERGE preserves annotations), data-quality (no_rules ≠ pass), synthetic-data (the PII→synthetic GUARANTEE), feature-table (timestamp-key gate — relax it and every training set leaks), fusion-sheet, notepad, analysis-board",
+        "20 tests remain: agent-flow, data-api-builder, data-marketplace, batch-pool, mapping-dataflow, activation-sync, transformation-project, linked-service, integration-runtime, logic-app, model-serving-endpoint, fine-tuning-job, postgres-flexible-server, azure-cosmos-account, loom-app, workshop-app, slate-app, health-check, workspace-monitor, digital-twin (largest/highest-value remaining)",
+        "local: tsc clean, check-no-raw-px at baseline, 13 spec files / 123 tests green exit 0"
+      ]
+    },
+    {
+      "id": "C19",
+      "lane": "L-PRODUCT-B",
+      "wave": 2,
+      "task_order": 38,
+      "status": "todo",
+      "title": "USER-HARM DATA LOSS (found by C14, pinned as DOCUMENTED DEFECT specs so a fix cannot land silently): fusion-sheet, notepad and analysis-board all `catch { /* keep empty */ }` on a failed read, render BLANK, and then Save PATCHes the emptiness over the user's real content. Fix all three + sweep for the pattern",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "C14 pinned failing-by-design specs labelled DOCUMENTED DEFECT rather than fixing silently",
+        "same three editors ALSO bypass ItemEditorChrome entirely — no ribbon, command search, details panel, Copilot entry, or dirty state"
+      ]
+    },
+    {
+      "id": "C20",
+      "lane": "L-PRODUCT-B",
+      "wave": 2,
+      "task_order": 37,
+      "status": "todo",
+      "title": "SWEEP for the apex-A3 silent-failure class: C14 found ducklake-catalog rendered 'Reading the DuckLake catalog…' FOREVER on a 500/403 — no error, no retry, asserting an in-progress read that had already FAILED (R7). Identical to the bug fixed in s3-gateway and pinned by its test, never propagated. C14 fixed+mutation-proved this one; sweep every useQuery + throwing-fetcher consumer with no isError branch",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "guard-adoption-gap class: the correct pattern existed and was tested in ONE place, siblings never adopted it"
+      ]
+    },
+    {
+      "id": "C22",
+      "lane": "L-PRODUCT-B",
+      "wave": 2,
+      "task_order": 35,
+      "status": "todo",
+      "title": "ROUTE-LEVEL AUTH TESTS MISSING on admin collection routes (found by the orchestrator while clearing the route-toolkit ratchet). Measured: deleting the capability gate from app/api/admin/env-config/route.ts leaves check-route-guards GREEN — route-guards' remit is authorization on [id] routes only, so collection routes (GET list / POST create) have NO CI control on their 401/403. env-config.test.ts covers the LIB, not the handler. Add route-level auth contract tests for admin/collection handlers, and consider widening route-guards' scope",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "found by mutation while adding TOUCH_EXEMPT entries for #3064 and #3051 — the exemptions themselves are justified (both prologues are correct, one is STRICTER than withSession), but the mutation exposed that nothing watches them",
+        "GOOD CONTRAST: #3064's workspaces route IS pinned — create-wizard-contract.test.ts:129 goes red on a dropped 401 (mutation-proved). That is the pattern to replicate"
+      ]
+    },
+    {
+      "id": "C21",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 36,
+      "status": "todo",
+      "title": "C14-found: G2 breached on 9 of 14 audited surfaces — only sql-lab, ducklake-catalog, s3-gateway and feature-table use the shared HonestGate with Fix-it. Folds into C15 (G2 Fix-it coverage ~131/160 gates). ALSO: ai-red-team's attack-success rate is computed from PLAINTEXT PROBES ONLY (no PyRIT converters, no composition, no multi-turn) and the surface presents the number without that caveat — a 0% score has NOT shown a deployment is safe",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "the ai-red-team caveat is a safety-signal integrity issue, not cosmetic",
+        "fusion-sheet also has no keyboard nav, no undo, hard-coded 20x10 grid — a spreadsheet you must click every cell of"
+      ]
+    },
+    {
+      "id": "C15",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 42,
+      "status": "todo",
+      "title": "C1-found: G2 Fix-it coverage NOT universal — ~160 GATE_META entries vs 131 fixit: declarations in lib/gates/registry/*.ts (regex-approx); G2 demands universal. ALSO: FRESH0 is warn-only in CI (loom-guardrails.yml:202) — --strict exits 1 (mutation-proved) but runs boundary-only, so drift never blocks a PR",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "from C1 Phase-E adversarial pass",
+        "pipeline/top-tabs.tsx:19 still overflow:hidden (body now auto at :33) — A5 fix looks attempted; only a browser settles the geometry"
+      ]
+    },
+    {
+      "id": "C7",
+      "lane": "L-PRODUCT-B",
+      "wave": 2,
+      "task_order": 59,
+      "status": "review",
+      "title": "C7 — 4 of 5 items STALE (shipped July via #2036/#2046, never struck from OPEN-REGISTER §P2). REAL defect: FGC-31 workspace wizard EXISTED but was never mounted on /workspaces, and POST /api/workspaces dropped 4 of its 5 fields (provisionBackingRg opt-in was a NO-OP = auto-bind violation)",
+      "depends_on": [],
+      "validation": {
+        "V1": "real Cosmos create + applyWorkspaceBindings (capacity/Purview/identity/RG), no mocks; live-estate receipt OWED (needs roll)",
+        "V2": "6-test contract spec drives the real POST (201+persisted, 401, 400 missing-name, 400 unknown-domain); check-route-guards exit 0 across 1426 routes",
+        "V3": "OWED: gh workflow run loom-ui-verify.yml --ref main -f target_route=/workspaces (input confirmed present) + narrow-width and first-open passes",
+        "V4": "OWED: merged is not deployed",
+        "V5": "in-PR: docs/fiab/parity/workspace-create.md re-baselined 13 rows zero ❌ + workspace-create-settings.md",
+        "V6": "no new env (check-env-sync 0), no new gate, no bicep; wizard preselects seeded default domain + server falls back to DEFAULT_DOMAIN_ID so a fresh tenant cannot dead-end"
+      },
+      "evidence": [
+        "STALE with receipts: OBO halves + MANIFEST swaps = e648555b (#2036); Weave DAX/lakehouse-KQL/medallion adapters = edcfaa43 (#2046); W1 ADX connector = REPORT_CONN_TYPES:179 + executor:1936. Nothing descoped — proven stale, not narrowed",
+        "THREE copies of the wizard existed; the ORPHAN in lib/panes/workspaces.tsx (exported, imported by nothing) is what the earlier audit graded → produced the false 'still a single-step Dialog'. Orphan DELETED",
+        "PR #3064 (fix: full body parse, provisionBackingRg threaded into applyWorkspaceBindings, workspace.create SIEM audit, wizard mounted on /workspaces, free-text capacity/domain fallbacks removed per no-freeform-config)",
+        "PR #3065 (docs-only ROOT-CAUSE fix: strikes the 4 drained items in the register with commit+file:line and corrects the FGC-31 mis-grade in PRP-AUDIT-2026-07-09.md — left open they would be copied into a FOURTH audit)",
+        "MUTATION PROOF: reverting the route to the old narrow parse turns 4 of 6 contract tests red; restored 6/6",
+        "local gates: tsc clean; vitest 16/16 no exit-1-despite-passes; check-route-guards/check-env-sync/check-no-raw-px all exit 0",
+        "reviewer PASS 6/6 — NO WORK SKIPPED: all 4 STALE items verified shipped at LINE level (commits e648555b/edcfaa43/f8419d60 exist with matching diffstats); orphan confirmed (zero repo-wide imports of panes/workspaces); dropped-fields confirmed verbatim at merge-base route.ts:69; mutation proof REPRODUCED (4 failed/2 passed, assertions prove the test observes the dropped fields); parity docs 13✅/1⚠/ZERO❌",
+        "reviewer's strongest evidence: applyWorkspaceBindings ALREADY accepted provisionBackingRg (:44) and ALREADY called tryProvisionBackingRg (:116) — capability fully built, route never invoked it = genuine dead no-op (inert-feature class)",
+        "reviewer nits (non-blocking): test count was 18 not 16 (under-claimed); stale comments at get-data-gallery.tsx:144,:532 still call adx 'forward-compat' contradicting the code (pre-existing on main)",
+        "reviewer: NO live-browser G1 receipt — tsc+vitest only, insufficient per ux-baseline G1; blocked by C13 (ui-verify down since 08-04)"
+      ]
+    },
+    {
+      "id": "C2",
+      "lane": "L-PRODUCT-B",
+      "wave": 2,
+      "task_order": 58,
+      "status": "todo",
+      "title": "apex Phase B residue: B-N14b NL governance copilot, B-N14c contract-validating copilots, B-N14e agent-designer publish, B-N19c' signed evidence on access-review close, B-N19d scheduled insight digests, embedding-pipeline item type (pgvector client exists, item type doesn't)",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "C4",
+      "lane": "L-PRODUCT-B",
+      "wave": 2,
+      "task_order": 57,
+      "status": "todo",
+      "title": "B-FP' foundry widget-catalog last-mile + WS-4.4 sync-backfill; B-U12 px→tokens; B-R10-17 monolith decomposition + typed client-map",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "D17",
+      "lane": "L-DEPLOY",
+      "wave": 3,
+      "task_order": 50,
+      "status": "todo",
+      "title": "R8 docs: greenfield + brownfield walkthroughs complete/true + wizard agreement; t169 RG/CAF layout. Clean-sub acceptance runs (Commercial AND Gov) are OPERATOR-GATED — see operator_queue",
+      "depends_on": [
+        "D7",
+        "D8"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "C3",
+      "lane": "L-PLATFORM",
+      "wave": 3,
+      "task_order": 49,
+      "status": "review",
+      "title": "B-FN Functions→ACA jobs — CORRECTED after reviewer FAIL. Load-bearing claim is now FunctionExecutionCount (2026-07-25→08-06, P1D Total): errorCode=Success, 13/13 datapoints with EXPLICIT total:0.0, absent=0, SUM=0 for ALL SEVEN. Scoped separately: func-rptsub additionally indexes nothing. Estate is NOT uniform and the docs now say so",
+      "depends_on": [],
+      "validation": {
+        "V1": "PASS: live cron execution + real Cosmos read (log TEXT unverifiable from workstation — private-link DNS; UNKNOWN not fail)",
+        "V2": "n/a: no BFF logic changed",
+        "V3": "n/a: platform task",
+        "V4": "PASS for the job (reviewer confirmed triggerType:Schedule, execution at 21:45:00→21:45:30Z on a tick, genuinely unattended); bicep half MERGED-NOT-DEPLOYED — admin-plane deploy required for LOOM_REPORT_RENDERER_URL + the env rename",
+        "V5": "docs synthetic transcript REPLACED with the real per-app table incl. the 400 and the two indexed apps",
+        "V6": "PASS: existing reportSubscriptionsEnabled flag, no new opt-in"
+      },
+      "evidence": [
+        "PR #3068 corrected in c180862f — agent reproduced EVERY reviewer finding independently and found 3 MORE affected files than the reviewer named (8 total, incl. Dockerfile, run-logger.ts, deploy-report-subscriptions-job.sh)",
+        "ORCHESTRATOR VERIFIED INLINE: false universal gone (0 grep hits); 'seals the' mechanism gone from the PR's files (remaining hits are unrelated pre-existing files); 'NO ROOT CAUSE IS ASSERTED HERE' present in the canonical bicep header; docs carry real-transcript markers (Bad Request / isDisabled / secretExpiryMonitor)",
+        "canonical corrected wording NAMES the trap for the next engineer: 'function list alone would MISLEAD anyone who re-ran it' + names the 2 indexed ENABLED apps and the 400, and records that the 400 is the CONTROL validating the four genuine empties",
+        "AGENT FELL INTO THE SAME TRAP TWICE and caught itself: re-measuring with 2>&1 folded an az CLI SyntaxWarning into the JSON, jq choked, script printed ERR for all seven — it nearly reported 'metrics unavailable'. Separating stderr fixed it. BOTH instances recorded in the PR comment",
+        "mechanism REPLACED with an explicit refusal: 'Two hosts index fine under the same Azure Policy regime, so a policy-seals-the-data-plane explanation would not account for its own variance. What is established is the outcome — zero executions — not the mechanism'",
+        "item 4 applied (agent-claimed, not orchestrator-verified in isolation): bootstrap verification now ::error:: + exit 1 when the job is absent or console env unwired (was warn-only)",
+        "both hazards recorded in docs §1 and §5, with double-execution flagged as making the removal follow-up MORE urgent than 'cleanup' implies",
+        "re-validated by agent: template sync PASS byte-identical (bicep 0.45.15), tsc clean, 22/22 vitest, staleness guard clean, both workflows parse, bash -n clean",
+        "check-deploy-staleness.mjs verified correctly scoped to func-rptsub — left alone"
+      ]
+    },
+    {
+      "id": "C5",
+      "lane": "L-UNITY",
+      "wave": 3,
+      "task_order": 48,
+      "status": "todo",
+      "title": "Loom Unity tail: LU-7 Trino OPA compile, LU-11 foreign catalogs, LU-12 metric-views semantic tier",
+      "depends_on": [
+        "D2"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "C6",
+      "lane": "L-PRODUCT-B",
+      "wave": 3,
+      "task_order": 47,
+      "status": "todo",
+      "title": "Help depth D3-D5 residual guides (18 item guides + 15 app tutorials baseline 07-24, some closed since — RE-INVENTORY first). help-D6 visual captures OPERATOR-GATED — see operator_queue",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "C8",
+      "lane": "L-PRODUCT-A",
+      "wave": 3,
+      "task_order": 46,
+      "status": "todo",
+      "title": "#2626 OpenLineage DRIVEN receipt (real backed pipeline + Spark batch on estate); #2581 semantic-model 3-tab scripted spec; #2622 residual (try/finally in shortcut-credentials.ts + drop KNOWN_UNAUDITED — operator file access; file unity-audit-guard.test.ts 81s-timeout issue); #2583 close after console roll",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "C10",
+      "lane": "L-PLATFORM",
+      "wave": 3,
+      "task_order": 45,
+      "status": "todo",
+      "title": "June harness real residue: PP solution import/export (audit-T28/task-015), scale-by-SKU verify EVERY resource (task-020), mirroring-wizard backend consumption (persist connectionId + KV creds)",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "P2-DOCS",
+      "lane": "L-TRUTH",
+      "wave": 3,
+      "task_order": 44,
+      "status": "review",
+      "title": "Docs currency batch + D17 R8 deploy docs — 8 P2 items measured against CODE, plus wizard↔docs drift both directions",
+      "depends_on": [],
+      "validation": {
+        "V1": "n/a: docs task",
+        "V2": "n/a: docs task",
+        "V3": "n/a: docs task",
+        "V4": "n/a: docs ship with the merge",
+        "V5": "THIS TASK IS V5 — per-item claimed→measured→action tables are the evidence",
+        "V6": "n/a"
+      },
+      "evidence": [
+        "PR #3070 (4 commits, 18 files, docs only, zero product code)",
+        "item 2: all 4 foundry-parity ❌ were actually SHIPPED (phase4/object-explorer-panel.tsx; WS-4.4 object-dataset-sync.ts; agent-flow-run.ts:96-142; SpindleEvalsPanel) — corrected in place with originals struck through",
+        "item 3: the PARITY-MATRIX was ALREADY RIGHT (ca1e411d) — staleness had MIGRATED to 4 sibling docs still calling tier-router 'a safe no-op'; found 3 more stale rows en route (derived props F→shipped WS-4.2; object security D→shipped AND enforced in BFF routes WS-4.3; object sync C→B+)",
+        "item 4: fabric-parity F1-F4 CLOSED by re-running each finding's OWN command; F5 confirmed valid a 4th time",
+        "item 5: 11/12 grades left _TBD_ DELIBERATELY with the reason (G1 grading pass never ran) — refused to fabricate; named C1 as the producer",
+        "item 7: OPEN-REGISTER operator-P1 verdict table landed HONESTLY as 'goal NOT MET, NOT MEASURED' rather than invented",
+        "D17: wizard has 8 steps + a dynamic multi-sub-choice; docs covered ONE — full rail now documented from RAIL_STEPS:191-201; brownfield.md CONTRADICTED ITSELF on dlz-attach (§3a 'declares param adopt' vs hub 'reads zero EXISTING_*' — measured 57); EXISTING_* table wrong in ALL 7 rows; clean-sub acceptance procedure written under an explicit 'Status: NOT RUN' banner",
+        "guards: docs-hygiene PASS (it CAUGHT a live hostname the agent had pasted), docs-deploy-refs/parity-freshness/learn-doc-registry PASS; mkdocs --strict abort is 3 PRE-EXISTING material/search warnings, reproduced on unmodified mkdocs.yml"
+      ]
+    },
+    {
+      "id": "C16",
+      "lane": "L-PRODUCT-B",
+      "wave": 2,
+      "task_order": 41,
+      "status": "todo",
+      "title": "DOCS-RIGHT/CODE-WRONG defects found by P2-DOCS (flagged, deliberately not papered over): (1) RequestAccessInline has ZERO importers (AG-13) — this also STRANDS AG-2: no non-admin can request an access package at all; (2) /api/access-requests/bulk-decision has ZERO UI callers (AG-14); (3) t169 function-RG split not built (grep returns only the plan item)",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "these are inert-feature class: the capability exists but nothing reaches it — same shape as C7's provisionBackingRg and C3's Function Apps"
+      ]
+    },
+    {
+      "id": "C17",
+      "lane": "L-PLATFORM",
+      "wave": 2,
+      "task_order": 40,
+      "status": "todo",
+      "title": "no-vaporware §Bicep-sync + deploy-integrity R3 VIOLATION (found by P2-DOCS): access-governance-sweeper is ABSENT from platform bicep — LOOM_SWEEPER_TOKEN is set NOWHERE in platform/, scripts/, or .github/. Expiry auto-revoke is therefore admin-button-only. Fix belongs with C3's Functions→ACA migration (sweeper is one of its 5 remaining)",
+      "depends_on": [
+        "C3"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "a scheduled governance control that never runs = the same class as C3's inert Function Apps"
+      ]
+    },
+    {
+      "id": "C11",
+      "lane": "L-DEFERRED",
+      "wave": 3,
+      "task_order": 20,
+      "status": "todo",
+      "title": "Deferred programs — SCHEDULE, don't lose: bridge-services (4 services, zero code), geo-graph-ml GEO-2/3/4 (Esri license operator-gated), domain-mesh #1483 verification (~16 items, verify owed), EH Phases 2-4 (RE-SCOPE first — halves shipped), SVC-3/4/6/7/9/10, W4/W12/W14-W17/W22, T97 SHIR, T100/T101 reports, t169 RG/CAF. Planning only until unblocked",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "C12",
+      "lane": "L-DEFERRED",
+      "wave": 3,
+      "task_order": 19,
+      "status": "todo",
+      "title": "ux-fabric-a W5/W6 + ux-fidelity checklist gate; GOV-3 / model-strategy §7 / TPM raises are OPERATOR decisions — see operator_queue",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "G1",
+      "lane": "L-GOV",
+      "wave": 2,
+      "task_order": 90,
+      "status": "operator",
+      "title": "#2643 Gov loom-unity auth DISABLED live (anonymous read+mutate+SAS since 07-15). Code fixed (#2974/#3002); gov-uc-purview-wire.yml dispatch IN FLIGHT (run started 2026-08-06T16:12:38Z) — VERIFY on completion by live measurement, close #2643 only then; if failed, needs new 3.5-4.5h operator window or interim IP-restrict",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "gov-uc-purview-wire run in_progress at init (2026-08-06T16:12:38Z)",
+        "run 31118998951 CANCELLED ~20min in — G1 back to needing an operator window (or interim IP-restrict)"
+      ]
+    },
+    {
+      "id": "D12",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 89,
+      "status": "operator",
+      "title": "#2958 attended re-apply: MSAL inline-vs-KV-ref decision (only outage-class risk), re-apply data-plane grants for 3 changed identities, accept loom-mcp /data blip — OPERATOR-ATTENDED dispatch (newest comment supersedes body)",
+      "depends_on": [
+        "D7"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "D16",
+      "lane": "L-SUPPLY",
+      "wave": 2,
+      "task_order": 88,
+      "status": "operator",
+      "title": "s3-gateway opt-in VIOLATES default-ON (pulled in #2640 for anonymous docker.io pull; spec contradicts own VALUE_HINT) — restore default-ON via D14 mirror. svc-postgres opt-in = cost carve-out: OPERATOR RULING required (default-ON or policy-accepted opt-in)",
+      "depends_on": [
+        "D14"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "G5",
+      "lane": "L-GOV",
+      "wave": 2,
+      "task_order": 87,
+      "status": "operator",
+      "title": "#2698 residue: operator grants — Gov SP UAA on admin RG (#2330, HIGHEST LEVERAGE), PG quota, tenant consent/PATs; 9 services needing real Gov provisioning; Gov console ~5 days behind",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": []
+    },
+    {
+      "id": "D18",
+      "lane": "L-DEPLOY",
+      "wave": 1,
+      "task_order": 78,
+      "status": "todo",
+      "title": "#2678 residual (from C9 reopen): apply the #3012 trino/iceberg console env bindings — LOOM_TRINO_* vars + real catalog URL on Console (placeholder 0.0.0.0 live, env pass predates 12:19Z app deploy); then G1 SHOW-CATALOGS + no-bearer-401 receipt. Audience registration decision is OP-11 (operator)",
+      "depends_on": [
+        "D1"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "seeded from C9 sweep 2026-08-06"
+      ]
+    },
+    {
+      "id": "D19",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 65,
+      "status": "todo",
+      "title": "#2642 residual (from C9 sweep): live Commercial Redis P1 → AMR migration (template migrated in #2851/#2940 = merged-not-deployed; live cache still classic Premium P1); Gov forward path is a 2028-horizon operator decision",
+      "depends_on": [
+        "D7"
+      ],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "seeded from C9 sweep 2026-08-06"
+      ]
+    }
   ],
   "operator_queue": [
-    { "id": "OP-1", "task": "G1", "ask": "gov-uc-purview-wire.yml dispatched 2026-08-06T16:12Z and RUNNING (3.5-4.5h). No action needed unless it fails — then either a new attended window (skip_purview=true narrows; JWKS egress risk) or interim IP-restrict on Gov loom-unity." },
-    { "id": "OP-2", "task": "D12", "ask": "#2958 attended re-apply window: decide MSAL inline-vs-KV-ref, then attended dispatch re-applying data-plane grants for the 3 changed identities; accept the loom-mcp /data blip during it." },
-    { "id": "OP-3", "task": "D17", "ask": "Clean-sub acceptance runs, Commercial AND Gov (fresh subscription, three-step path per no-vaporware). Needs an operator-provided clean sub + attended window." },
-    { "id": "OP-4", "task": "D16", "ask": "svc-postgres default-ON vs policy-accepted opt-in — cost ruling. s3-gateway returns to default-ON automatically once D14 (ACR mirror) lands; no ruling needed there." },
-    { "id": "OP-5", "task": "C12", "ask": "GOV-3, model-strategy §7, and TPM-raise decisions." },
-    { "id": "OP-6", "task": "G5", "ask": "#2330 Gov SP UAA grant on the Gov admin RG (highest-leverage single grant); Gov PG quota increase; tenant consent/PATs for the remaining Gov services." },
-    { "id": "OP-7", "task": "C11", "ask": "Esri license decision (gates geo-graph-ml GEO-2/3/4)." },
-    { "id": "OP-8", "task": "C6", "ask": "Help-program D6 visual captures (screenshots/recordings) — operator-produced per privacy workflow." },
-    { "id": "OP-9", "task": "C1", "ask": "loom-apex operator items 1-7, VERBATIM from PRPs/active/loom-apex/PRP.md:180-186 — (1) Entra CA exclusion for svc-loom-synthetic@limitlessdata.ai → V1 login probe online; (2) I6/I7 enforce flip after I9 sign-off + clean-shadow window (~08-05) — ** THIS WINDOW HAS PASSED, needs a fresh decision, not a silent roll-forward **; (3) S2 FIC flip on the prod app reg; (4) Visual-tutorial capture runs + privacy review (D6) — ** quantified: 0/159 published (items 0/142, features 0/17) **; (5) RisingWave image-tag confirm + Trino Helm install (opt-ins); (6) Esri license for GEO-2; (7) the 10 operator actions in PRPs/active/loom-apex/research/gates-zero.md." },
-    { "id": "OP-10", "task": "C8", "ask": "#2622 residual needs operator file access: try/finally inside shortcut-credentials.ts + drop KNOWN_UNAUDITED." },
-    { "id": "OP-11", "task": "D18", "ask": "#2678: audience-registration decision (options a/b/c in the reopen comment) — api://5c59f3f3-… is not a registered App ID URI (identifierUris empty); pick registration vs alternative audience vs managed-identity path." },
-    { "id": "OP-12", "task": "C11", "ask": "#2671: thrift fix requires a lockstep arrow/parquet/datafusion/deltalake major migration in loom-directlake with a real cargo build — no cargo on the dev host and no CI compiles that crate. Decide: add a Rust CI lane, or park until one exists." },
-    { "id": "OP-13", "task": "D4", "ask": "ATTENDED D4-D6 proving deploy (after #3058 merges): dispatch deploy-fiab-commercial.yml attended with run_mode=full region=centralus keep_resources=true allow_existing_hub=true. Expect: discovery prints ADOPT of vpngw-loom-centralus + link-apim-console; zero leaves of the four fixed classes; DuckLake either provisions or visibly per-leaf-retries as capacity (~300s). Watch: apim-gateway-dns-a no-ops with recordAuthored=false and live 10.0.4.4 survives; catalog green with managed-RG storage PNA=Disabled. Close D4/D5/D6 only on that run. ALSO WATCH (#3056): the admin-plane deploy's bicep guid for loom-internal-token will OVERWRITE the rotated 64-char secret and re-break the evaluator/reconciler/cost-monitor consumers — re-sync or land the #3056 fix first. REVIEWER ADDITIONS: (a) the 10.0.4.4 APIM A record may be PERMANENTLY manual — PremiumV2 never reports privateIPAddresses, so the 'next reconcile authors it' path may never fire; (b) capacity retries × ~40-60min/attempt will hit the 120m wall-clock before max-attempts 4 — expect 'wall-clock budget exhausted' if centralus stays short; (c) a red DISCOVERY step (exit 3) = RBAC read gap on the deploy identity, NOT a regression of these fixes." },
-    { "id": "OP-14", "task": "E1", "ask": "#3056 (internal-token rotation drift) needs an owner — broke 3 consumers on 2026-08-06 and re-detonates on the next admin-plane deploy. Also FYI: judge cap now 5000/day (worst-case ~20-25M gpt-4.1 tokens/day if fully consumed; realistic burn far lower) — override via functionAppsConfig.copilotEvalJudgeDailyCap if you want a different ceiling." },
-    { "id": "OP-15", "task": "D2", "ask": "Minor grant: the deploy identity lacks Microsoft.Resources/tags/write on ACR acrloomk6mvh5sm6z7do, so #2603 firewall leases run in legacy-fallback (unleased) mode — grant Tag Contributor on the registry to make leases race-free." },
-    { "id": "OP-16", "task": "D13", "ask": "Three D13 decisions: (1) retire csa-loom-spark-probe2.yml (byte-identical duplicate of the livy probe, kept dispatchable for now)? (2) #3025 context: accumulated unexpired Entra credentials on the MSAL app (07-19/07-23/08-03, all --append) need a deliberate keep-or-clean decision. (3) #3034 item 5 (zero-jobs symptom-level check) not built — parse-level hard-fail covers the known cause; want the symptom-level watcher as its own item?" },
-    { "id": "OP-17", "task": "C18", "ask": "D14 asks: pin the 3 MCR ':latest' refs on deploy paths (dab-runtime.bicep:36, presidio-sidecar.bicep, deploy-planner/container-instances.bicep:19)? LIC0-exempt but unpinned drift on a deploy path." },
-    { "id": "OP-18", "task": "E3", "ask": "#2970 should be RE-TITLED or closed with the correction: its stated hypothesis (AI Search searchMode/queryType/window) is measurably NOT the cause (stage-1 recall is 0.967 at the shipped window). The real cause was window-local BM25 IDF collapse in rankChunks. Left as-is, the title will send the next investigation down the same wrong path." },
-    { "id": "OP-19", "task": "C3", "ask": "TWO Function-App asks. (a) CHEAP MITIGATION, needn't wait for the removal PR: disable the two ENABLED function definitions on func-secexp (timer 0 0 6 * * *) and func-cpeval (0 0 7 * * *) — they are IDENTICAL to their live ACA job crons (loom-secret-expiry-monitor 0 6 * * *, loom-copilot-evaluator 0 7 * * *), so if those hosts ever recover the work runs TWICE. (b) SEVEN Function Apps remain provisioned and BILLING while executing nothing (FunctionExecutionCount sum=0 over 13 days); 5 are superseded by live ACA replacements. Approve teardown? Removal was deliberately deferred so it pairs with proof in a reviewable commit." }
+    {
+      "id": "OP-1",
+      "task": "G1",
+      "ask": "gov-uc-purview-wire.yml dispatched 2026-08-06T16:12Z and RUNNING (3.5-4.5h). No action needed unless it fails — then either a new attended window (skip_purview=true narrows; JWKS egress risk) or interim IP-restrict on Gov loom-unity."
+    },
+    {
+      "id": "OP-2",
+      "task": "D12",
+      "ask": "#2958 attended re-apply window: decide MSAL inline-vs-KV-ref, then attended dispatch re-applying data-plane grants for the 3 changed identities; accept the loom-mcp /data blip during it."
+    },
+    {
+      "id": "OP-3",
+      "task": "D17",
+      "ask": "Clean-sub acceptance runs, Commercial AND Gov (fresh subscription, three-step path per no-vaporware). Needs an operator-provided clean sub + attended window."
+    },
+    {
+      "id": "OP-4",
+      "task": "D16",
+      "ask": "svc-postgres default-ON vs policy-accepted opt-in — cost ruling. s3-gateway returns to default-ON automatically once D14 (ACR mirror) lands; no ruling needed there."
+    },
+    {
+      "id": "OP-5",
+      "task": "C12",
+      "ask": "GOV-3, model-strategy §7, and TPM-raise decisions."
+    },
+    {
+      "id": "OP-6",
+      "task": "G5",
+      "ask": "#2330 Gov SP UAA grant on the Gov admin RG (highest-leverage single grant); Gov PG quota increase; tenant consent/PATs for the remaining Gov services."
+    },
+    {
+      "id": "OP-7",
+      "task": "C11",
+      "ask": "Esri license decision (gates geo-graph-ml GEO-2/3/4)."
+    },
+    {
+      "id": "OP-8",
+      "task": "C6",
+      "ask": "Help-program D6 visual captures (screenshots/recordings) — operator-produced per privacy workflow."
+    },
+    {
+      "id": "OP-9",
+      "task": "C1",
+      "ask": "loom-apex operator items 1-7, VERBATIM from PRPs/active/loom-apex/PRP.md:180-186 — (1) Entra CA exclusion for svc-loom-synthetic@limitlessdata.ai → V1 login probe online; (2) I6/I7 enforce flip after I9 sign-off + clean-shadow window (~08-05) — ** THIS WINDOW HAS PASSED, needs a fresh decision, not a silent roll-forward **; (3) S2 FIC flip on the prod app reg; (4) Visual-tutorial capture runs + privacy review (D6) — ** quantified: 0/159 published (items 0/142, features 0/17) **; (5) RisingWave image-tag confirm + Trino Helm install (opt-ins); (6) Esri license for GEO-2; (7) the 10 operator actions in PRPs/active/loom-apex/research/gates-zero.md."
+    },
+    {
+      "id": "OP-10",
+      "task": "C8",
+      "ask": "#2622 residual needs operator file access: try/finally inside shortcut-credentials.ts + drop KNOWN_UNAUDITED."
+    },
+    {
+      "id": "OP-11",
+      "task": "D18",
+      "ask": "#2678: audience-registration decision (options a/b/c in the reopen comment) — api://5c59f3f3-… is not a registered App ID URI (identifierUris empty); pick registration vs alternative audience vs managed-identity path."
+    },
+    {
+      "id": "OP-12",
+      "task": "C11",
+      "ask": "#2671: thrift fix requires a lockstep arrow/parquet/datafusion/deltalake major migration in loom-directlake with a real cargo build — no cargo on the dev host and no CI compiles that crate. Decide: add a Rust CI lane, or park until one exists."
+    },
+    {
+      "id": "OP-13",
+      "task": "D4",
+      "ask": "ATTENDED D4-D6 proving deploy (after #3058 merges): dispatch deploy-fiab-commercial.yml attended with run_mode=full region=centralus keep_resources=true allow_existing_hub=true. Expect: discovery prints ADOPT of vpngw-loom-centralus + link-apim-console; zero leaves of the four fixed classes; DuckLake either provisions or visibly per-leaf-retries as capacity (~300s). Watch: apim-gateway-dns-a no-ops with recordAuthored=false and live 10.0.4.4 survives; catalog green with managed-RG storage PNA=Disabled. Close D4/D5/D6 only on that run. ALSO WATCH (#3056): the admin-plane deploy's bicep guid for loom-internal-token will OVERWRITE the rotated 64-char secret and re-break the evaluator/reconciler/cost-monitor consumers — re-sync or land the #3056 fix first. REVIEWER ADDITIONS: (a) the 10.0.4.4 APIM A record may be PERMANENTLY manual — PremiumV2 never reports privateIPAddresses, so the 'next reconcile authors it' path may never fire; (b) capacity retries × ~40-60min/attempt will hit the 120m wall-clock before max-attempts 4 — expect 'wall-clock budget exhausted' if centralus stays short; (c) a red DISCOVERY step (exit 3) = RBAC read gap on the deploy identity, NOT a regression of these fixes."
+    },
+    {
+      "id": "OP-14",
+      "task": "E1",
+      "ask": "#3056 (internal-token rotation drift) needs an owner — broke 3 consumers on 2026-08-06 and re-detonates on the next admin-plane deploy. Also FYI: judge cap now 5000/day (worst-case ~20-25M gpt-4.1 tokens/day if fully consumed; realistic burn far lower) — override via functionAppsConfig.copilotEvalJudgeDailyCap if you want a different ceiling."
+    },
+    {
+      "id": "OP-15",
+      "task": "D2",
+      "ask": "Minor grant: the deploy identity lacks Microsoft.Resources/tags/write on ACR acrloomk6mvh5sm6z7do, so #2603 firewall leases run in legacy-fallback (unleased) mode — grant Tag Contributor on the registry to make leases race-free."
+    },
+    {
+      "id": "OP-16",
+      "task": "D13",
+      "ask": "Three D13 decisions: (1) retire csa-loom-spark-probe2.yml (byte-identical duplicate of the livy probe, kept dispatchable for now)? (2) #3025 context: accumulated unexpired Entra credentials on the MSAL app (07-19/07-23/08-03, all --append) need a deliberate keep-or-clean decision. (3) #3034 item 5 (zero-jobs symptom-level check) not built — parse-level hard-fail covers the known cause; want the symptom-level watcher as its own item?"
+    },
+    {
+      "id": "OP-17",
+      "task": "C18",
+      "ask": "D14 asks: pin the 3 MCR ':latest' refs on deploy paths (dab-runtime.bicep:36, presidio-sidecar.bicep, deploy-planner/container-instances.bicep:19)? LIC0-exempt but unpinned drift on a deploy path."
+    },
+    {
+      "id": "OP-18",
+      "task": "E3",
+      "ask": "#2970 should be RE-TITLED or closed with the correction: its stated hypothesis (AI Search searchMode/queryType/window) is measurably NOT the cause (stage-1 recall is 0.967 at the shipped window). The real cause was window-local BM25 IDF collapse in rankChunks. Left as-is, the title will send the next investigation down the same wrong path."
+    },
+    {
+      "id": "OP-19",
+      "task": "C3",
+      "ask": "TWO Function-App asks. (a) CHEAP MITIGATION, needn't wait for the removal PR: disable the two ENABLED function definitions on func-secexp (timer 0 0 6 * * *) and func-cpeval (0 0 7 * * *) — they are IDENTICAL to their live ACA job crons (loom-secret-expiry-monitor 0 6 * * *, loom-copilot-evaluator 0 7 * * *), so if those hosts ever recover the work runs TWICE. (b) SEVEN Function Apps remain provisioned and BILLING while executing nothing (FunctionExecutionCount sum=0 over 13 days); 5 are superseded by live ACA replacements. Approve teardown? Removal was deliberately deferred so it pairs with proof in a reviewable commit."
+    }
   ],
   "meta": {
     "merge_queue": {
-      "state_at_2026-08-06T21:25Z": "GitHub incident 'Incident with Actions' OPEN since 15:22Z. GitHub's own 20:34Z update: WEBHOOKS THROTTLED TO ~15% — 'many events such as pushes and PRs' never trigger runs. Actions API surface is being LOAD-SHED (actions/runs 403s, run cancel 502s) while PR/GraphQL APIs work normally. Core rate limit is HEALTHY (4868/5000) — the 403s are service-side shedding, not our quota.",
-      "CORRECTION": "Earlier assumption that the backlog 'will drain on its own' is WRONG for the re-pushed PRs. Runs created at 17:04Z are queued and will drain. But pushes made during the throttle window (the D1/D2/D3 template regens) had their webhooks DROPPED — those check runs were never created and never will be. Those PRs MUST be explicitly re-triggered (empty commit, or close+reopen) once Actions recovers. Do not mistake 'zero checks' for 'checks passed'.",
-      "blockers_removed_2026-08-06T21:20Z": [
-        "DISABLED 3 permanently-failing workflows (copilot-auto-fix.yml, csa-loom-spark-livy-probe.yml, csa-loom-spark-probe2.yml) — invalid YAML, cannot succeed, fired 24x today burning throttled webhook budget. RE-ENABLE (gh workflow enable <file>) once D13's PR #3061 lands and fixes them.",
-        "CANCELLED 4 non-essential queued runs (Copilot Auto-merge x2, CodeQL scan liveness, acr-firewall-sweeper) to free constrained capacity for PR checks; 3 more cancels returned 502 (service degraded) and were left."
+      "state_at_2026-08-07T00:30Z": "ACTIONS RECOVERED (GitHub deployed fixes ~23:13Z). MERGED SO FAR: #3059 ledger, #3055 (D9 loom-uat CVE — unblocks full-app-deploy which P2-DOCS measured at 13 consecutive failures / 47 days undeployed), #3054 (D1 risingwave probe + netns port-seal, 38 checks green).",
+      "webhook_drop_confirmed_and_repaired": "9 PRs had ZERO check runs (dropped webhooks during the ~15% throttle). Re-triggered via close+reopen: 3052 3057 3058 3061 3062 3065 3067 3068 3071. Checks now running. LESSON: absent checks are NOT pass — always re-trigger after a webhook-throttled incident.",
+      "route_toolkit_ratchet": "The boy-scout ratchet fires on any PR touching a baselined route. Cleared on #3064 and #3051 with TOUCH_EXEMPT entries (codemod SKIPPED both — #3064 returns 401 via a local err() helper; #3051 gates on enforceCapability(Admin) which is STRICTER than withSession: 401/403 + fails closed + PDP on PUT). #3062 has the same on setup/discover-services — handed back to the D10 agent with the pattern.",
+      "do_not": "Do NOT --admin-merge a CODE PR whose required checks are absent or pending — that is merging untested code. --admin is ONLY for draining strict-mode BEHIND staleness once the PR's own checks are green (#3055 and #3054 both qualified). Then WATCH main's next run.",
+      "evals_gate_circularity": "'Run + gate Copilot quality evals' is a required check that fires on docs/PRPs/content changes. It is legitimately RED until E1 (#3053, judge fix) AND E2 (#3069, data-agent + eventstream surfaces) land — so it currently blocks the docs PRs (#3066 C1, #3070 P2-DOCS) for reasons they neither cause nor can fix. MERGE ORDER CONSEQUENCE: land #3053 then #3069 BEFORE the docs PRs.",
+      "order": [
+        "DONE #3055",
+        "DONE #3054",
+        "#3052 D3",
+        "#3053 E1",
+        "#3057 D2",
+        "#3058 D4-D6",
+        "#3062 D10 (AFTER #3058 — shared docs)",
+        "#3061 D13",
+        "#3064/#3065 C7",
+        "#3067 D14",
+        "#3068 C3",
+        "#3069 E2-E4",
+        "#3066 C1 + #3070 P2-DOCS + #3071 C14 (after the evals gate can go green)"
       ],
-      "do_not": "Do NOT --admin-merge the CODE PRs while they show zero/pending checks — that is merging untested code (gates-that-cannot-fail class). #3059 (ledger) WAS admin-merged legitimately: docs-only, path-filtered, zero REQUIRED checks by design. Do NOT poll the Actions API while it is shedding — it adds load and returns misleading 403s.",
-      "order": ["#3054 D1 (update-branch, BEHIND)", "#3051 D15", "#3052 D3", "#3055 D9", "#3053 E1", "#3057 D2", "#3058 D4-D6", "#3062 D10 (AFTER #3058 — shared docs, rebase doc hunks)", "#3061 D13"],
-      "template_sync_lesson": "#2945 class: ANY PR touching platform/fiab/bicep/** must regenerate apps/fiab-console/deploy-templates/main.json (az bicep build, pinned 0.45.15) and pass scripts/ci/check-deploy-template-sync.mjs. CI caught this on D1/D2/D3 after their reviewers passed them — reviewers must now check it explicitly."
+      "template_sync_lesson": "#2945 class: ANY PR touching platform/fiab/bicep/** must regenerate apps/fiab-console/deploy-templates/main.json (az bicep build, pinned 0.45.15) and pass scripts/ci/check-deploy-template-sync.mjs. CI caught this on D1/D2/D3 after their reviewers passed them — reviewers must check it explicitly.",
+      "post_merge_owed": "After the queue drains: dispatch full-app-deploy-commercial (D9's V4 — closes #3024/#3036), loom-ui-verify receipts for D15/C7/C14 (BLOCKED by C13 — ui-verify red since 08-04), an admin-plane deploy (C3's bicep half + D14's s3-gateway + D2's console LOOM_UNITY_* wiring), and re-enable the 3 workflows disabled tonight once #3061 lands."
     },
-    "created_at": "2026-08-06T00:00:00Z",
-    "last_updated": "2026-08-06T00:00:00Z",
-    "last_agent": "harness-initializer",
-    "initializer_verification": [
-      "Seed commit 49f38c08 merged to main as PR #3049 (fbe51385); PRP + AUDIT present in tree; June ledger archived at .harness/archive/2026-06-05/ — verified by git ls-tree.",
-      "AUDIT coverage check: 17 D-rows, 5 G-rows, 4 E-rows, 12 C-rows + P2-docs = 39 items; all carried into tasks[] (D-rows as tasks, G5/D12/D16/G1 as operator). No row dropped.",
-      "Live signals at init: gov-uc-purview-wire IN FLIGHT (16:12:38Z); main red on deploy-staleness, acr-firewall-sweeper, loom-synthetic-monitor, Trivy, copilot-quality-evals, release-please — all match AUDIT claims (D9/E1/G-band).",
-      "Open PRs at init: #3045 (release 0.88.1 — merge under standing approval), #3048 (claude-settings schema — unrelated, left alone).",
-      "Wave 0 statuses set to doing; agents spawned by orchestrator session 1."
+    "state_at_2026-08-06T21:25Z": "GitHub incident 'Incident with Actions' OPEN since 15:22Z. GitHub's own 20:34Z update: WEBHOOKS THROTTLED TO ~15% — 'many events such as pushes and PRs' never trigger runs. Actions API surface is being LOAD-SHED (actions/runs 403s, run cancel 502s) while PR/GraphQL APIs work normally. Core rate limit is HEALTHY (4868/5000) — the 403s are service-side shedding, not our quota.",
+    "CORRECTION": "Earlier assumption that the backlog 'will drain on its own' is WRONG for the re-pushed PRs. Runs created at 17:04Z are queued and will drain. But pushes made during the throttle window (the D1/D2/D3 template regens) had their webhooks DROPPED — those check runs were never created and never will be. Those PRs MUST be explicitly re-triggered (empty commit, or close+reopen) once Actions recovers. Do not mistake 'zero checks' for 'checks passed'.",
+    "blockers_removed_2026-08-06T21:20Z": [
+      "DISABLED 3 permanently-failing workflows (copilot-auto-fix.yml, csa-loom-spark-livy-probe.yml, csa-loom-spark-probe2.yml) — invalid YAML, cannot succeed, fired 24x today burning throttled webhook budget. RE-ENABLE (gh workflow enable <file>) once D13's PR #3061 lands and fixes them.",
+      "CANCELLED 4 non-essential queued runs (Copilot Auto-merge x2, CodeQL scan liveness, acr-firewall-sweeper) to free constrained capacity for PR checks; 3 more cancels returned 502 (service degraded) and were left."
     ],
-    "hazards": "Never git stash (repo-global). Every parallel agent in its OWN worktree; never pnpm install at repo root; junction node_modules or isolated store. Gov via GitHub Actions ONLY. Never print full ARM ids. Always what-if before estate deploys; ONE estate deploy at a time (L-DEPLOY owns the slot). deploy-fiab-commercial stays DISABLED between attended dispatches until D7 lands. vitest IS a required gate. bash -e masks later guards (#3042). Newest issue comments override bodies: #3039 #2958 #2642 #2671 #2643 #2583."
-  }
+    "do_not": "Do NOT --admin-merge the CODE PRs while they show zero/pending checks — that is merging untested code (gates-that-cannot-fail class). #3059 (ledger) WAS admin-merged legitimately: docs-only, path-filtered, zero REQUIRED checks by design. Do NOT poll the Actions API while it is shedding — it adds load and returns misleading 403s.",
+    "order": [
+      "#3054 D1 (update-branch, BEHIND)",
+      "#3051 D15",
+      "#3052 D3",
+      "#3055 D9",
+      "#3053 E1",
+      "#3057 D2",
+      "#3058 D4-D6",
+      "#3062 D10 (AFTER #3058 — shared docs, rebase doc hunks)",
+      "#3061 D13"
+    ],
+    "template_sync_lesson": "#2945 class: ANY PR touching platform/fiab/bicep/** must regenerate apps/fiab-console/deploy-templates/main.json (az bicep build, pinned 0.45.15) and pass scripts/ci/check-deploy-template-sync.mjs. CI caught this on D1/D2/D3 after their reviewers passed them — reviewers must now check it explicitly."
+  },
+  "created_at": "2026-08-06T00:00:00Z",
+  "last_updated": "2026-08-06T00:00:00Z",
+  "last_agent": "harness-initializer",
+  "initializer_verification": [
+    "Seed commit 49f38c08 merged to main as PR #3049 (fbe51385); PRP + AUDIT present in tree; June ledger archived at .harness/archive/2026-06-05/ — verified by git ls-tree.",
+    "AUDIT coverage check: 17 D-rows, 5 G-rows, 4 E-rows, 12 C-rows + P2-docs = 39 items; all carried into tasks[] (D-rows as tasks, G5/D12/D16/G1 as operator). No row dropped.",
+    "Live signals at init: gov-uc-purview-wire IN FLIGHT (16:12:38Z); main red on deploy-staleness, acr-firewall-sweeper, loom-synthetic-monitor, Trivy, copilot-quality-evals, release-please — all match AUDIT claims (D9/E1/G-band).",
+    "Open PRs at init: #3045 (release 0.88.1 — merge under standing approval), #3048 (claude-settings schema — unrelated, left alone).",
+    "Wave 0 statuses set to doing; agents spawned by orchestrator session 1."
+  ],
+  "hazards": "Never git stash (repo-global). Every parallel agent in its OWN worktree; never pnpm install at repo root; junction node_modules or isolated store. Gov via GitHub Actions ONLY. Never print full ARM ids. Always what-if before estate deploys; ONE estate deploy at a time (L-DEPLOY owns the slot). deploy-fiab-commercial stays DISABLED between attended dispatches until D7 lands. vitest IS a required gate. bash -e masks later guards (#3042). Newest issue comments override bodies: #3039 #2958 #2642 #2671 #2643 #2583."
 }
