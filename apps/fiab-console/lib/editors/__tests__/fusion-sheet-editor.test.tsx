@@ -195,34 +195,76 @@ describe('FusionSheetEditor — persistence contract', () => {
   });
 });
 
-describe('FusionSheetEditor — DOCUMENTED DEFECT: a failed load looks like an empty sheet', () => {
+describe('FusionSheetEditor — FIXED (C19): a failed load is never mistaken for an empty sheet', () => {
   /**
-   * This spec asserts the CURRENT behaviour, which is WRONG, and says so.
+   * C14 pinned this as a DOCUMENTED DEFECT: the load was wrapped in
+   * `catch { /* keep empty *\/ }`, so a 500 / 403 / network failure rendered an
+   * empty grid visually identical to a genuinely empty sheet — and Save then
+   * PATCHed `{cells:{}}` over the user's real persisted cells. A transient
+   * backend error silently destroyed work.
    *
-   * fusion-sheet-editor.tsx:40-49 wraps the load in `catch { /* keep empty *\/ }`.
-   * A 500 / 403 / network failure therefore renders an empty grid that is
-   * visually identical to a genuinely empty sheet — and because Save then
-   * PATCHes `{cells:{}}`, a user who starts typing overwrites their real
-   * persisted cells with nothing.
+   * C19 fixed it with `useItemDocState` (lib/editors/use-item-doc-state.tsx),
+   * which makes the failure an EXPLICIT status and refuses to save while the
+   * stored content is unknown. The C14 assertions below are inverted, as their
+   * comment instructed — the defect is gone, so the specs now pin the fix.
    *
-   * Pinned here rather than left untested so that (a) the defect is executable
-   * rather than only prose in the parity doc, and (b) whoever fixes it gets a
-   * RED test telling them to invert this assertion — the fix cannot land
-   * silently.
-   *
-   * See docs/fiab/parity/fusion-sheet.md row U6. Same class in analysis-board
-   * (U6) and notepad (U5/U6); already fixed in s3-gateway (apex A3) and
-   * ducklake-catalog (C14).
+   * See docs/fiab/parity/fusion-sheet.md row U6.
    */
-  it('CURRENT (defective): a 500 on load renders a blank grid with no error surface', async () => {
+  it('renders an honest error MessageBar + Retry — not a blank grid — when the load 500s', async () => {
     installFetch(() => new Response('boom', { status: 500 }));
     const { container } = renderEditor();
 
-    await waitFor(() => expect(screen.getByText('Fusion sheet')).toBeInTheDocument());
-    // Grid is empty and there is no error anywhere. When U6 is fixed, invert
-    // this to expect an honest error MessageBar + Retry.
+    await waitFor(() =>
+      expect(screen.getByText('Could not read this fusion sheet')).toBeInTheDocument(),
+    );
+    // R7: the message reports what was actually observed (the status code),
+    // never an invented cause.
+    expect(screen.getByText(/HTTP 500/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    // The grid still renders around the error — the surface is not replaced.
     expect(shown(container, 'A1')).toBe('');
-    expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/could not/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Fusion sheet')).toBeInTheDocument();
+  });
+
+  it('DATA-LOSS GUARD: Save is disabled after a failed load, so a blank grid cannot overwrite real cells', async () => {
+    const calls = installFetch(() => new Response('boom', { status: 500 }));
+    renderEditor();
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not read this fusion sheet')).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    // And even if the disabled attribute were bypassed, NO PATCH is issued.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.some((c) => c.init?.method === 'PATCH')).toBe(false);
+  });
+
+  it('recovers on Retry: a successful re-read restores the cells and re-enables Save', async () => {
+    let attempt = 0;
+    const calls: Call[] = [];
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.toString?.() ?? input);
+      calls.push({ url, init });
+      if (url.includes('/api/cosmos-items/fusion-sheet/')) {
+        attempt += 1;
+        return (attempt === 1
+          ? new Response('boom', { status: 500 })
+          : new Response(JSON.stringify({ state: { cells: { A1: '42' } } }), {
+              status: 200, headers: { 'content-type': 'application/json' },
+            })) as any;
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }) as any;
+    });
+
+    const { container } = renderEditor();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(shown(container, 'A1')).toBe('42'));
+    expect(screen.queryByText('Could not read this fusion sheet')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

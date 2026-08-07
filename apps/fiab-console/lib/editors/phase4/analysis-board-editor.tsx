@@ -10,7 +10,7 @@
  * No Fabric — Azure Data Explorer. UI-render E2E pending browser-tool recovery;
  * the compiler (16 tests) + run route are the verified backend.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Button, Input, Dropdown, Option, Field, Badge, Spinner,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -21,11 +21,15 @@ import {
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { useItemDocState, ItemLoadErrorBar } from '../use-item-doc-state';
 import {
   normalizeBoard, compileBoardToKql, BOARD_STEP_TYPES, BOARD_STEP_LABELS,
   FILTER_OPS, FILTER_OP_KQL, AGG_FNS,
   type AnalysisBoard, type BoardStep,
 } from '../analysis-board-model';
+
+/** Stable identity for the "no board yet" state (see fusion-sheet's EMPTY_CELLS). */
+const EMPTY_BOARD: AnalysisBoard = { source: { kind: 'table', table: '' }, steps: [] };
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, padding: tokens.spacingVerticalL, minWidth: 0 },
@@ -51,28 +55,29 @@ function blankStep(type: BoardStep['type']): BoardStep {
 
 export function AnalysisBoardEditor({ id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [board, setBoard] = useState<AnalysisBoard>({ source: { kind: 'table', table: '' }, steps: [] });
   const [addType, setAddType] = useState<BoardStep['type']>('filter');
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState<string | null>(null);
   const [result, setResult] = useState<{ columns: string[]; rows: unknown[][]; rowCount: number; executionMs: number } | null>(null);
   const [runMsg, setRunMsg] = useState<{ intent: 'error' | 'warning' | 'success'; text: string } | null>(null);
 
-  // Load persisted board.
-  useEffect(() => {
-    if (!id || id === 'new') return;
-    void (async () => {
-      try {
-        const r = await clientFetch(`/api/cosmos-items/analysis-board/${encodeURIComponent(id)}`);
-        const j = await r.json().catch(() => ({}));
-        if (j?.state?.board) setBoard(normalizeBoard(j.state.board));
-      } catch { /* keep default */ }
-    })();
-  }, [id]);
+  // C19 data-loss fix. The previous load was `catch { /* keep default */ }`, so
+  // a 500/403/network failure rendered the blank default board — and Save then
+  // PATCHed that blank board over the user's real steps.
+  const doc = useItemDocState<AnalysisBoard>({
+    slug: 'analysis-board',
+    id,
+    empty: EMPTY_BOARD,
+    select: (d) => {
+      const b = (d as { state?: { board?: unknown } } | undefined)?.state?.board;
+      return b ? normalizeBoard(b) : undefined;
+    },
+    toPatchBody: (board) => ({ state: { board } }),
+  });
+  const { state: board, setState: setBoard, load, canSave, saving, saveMessage, save } = doc;
 
   const compiled = useMemo(() => compileBoardToKql(board), [board]);
 
-  const patch = useCallback((next: AnalysisBoard) => setBoard(next), []);
+  const patch = useCallback((next: AnalysisBoard) => setBoard(next), [setBoard]);
   const setStep = (i: number, step: BoardStep) => patch({ ...board, steps: board.steps.map((x, xi) => (xi === i ? step : x)) });
   const removeStep = (i: number) => patch({ ...board, steps: board.steps.filter((_, xi) => xi !== i) });
   const moveStep = (i: number, dir: -1 | 1) => {
@@ -82,17 +87,6 @@ export function AnalysisBoardEditor({ id }: { item: FabricItemType; id: string }
     [steps[i], steps[j]] = [steps[j], steps[i]];
     patch({ ...board, steps });
   };
-
-  const save = useCallback(async () => {
-    if (!id || id === 'new') return;
-    setBusy(true); setSaved(null);
-    try {
-      const r = await clientFetch(`/api/items/analysis-board/${encodeURIComponent(id)}`, {
-        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: { board } }),
-      });
-      setSaved(r.ok ? 'Saved.' : 'Save failed.');
-    } catch { setSaved('Save failed.'); } finally { setBusy(false); }
-  }, [id, board]);
 
   const run = useCallback(async () => {
     setBusy(true); setRunMsg(null); setResult(null);
@@ -114,10 +108,14 @@ export function AnalysisBoardEditor({ id }: { item: FabricItemType; id: string }
         <Subtitle2>Analysis board</Subtitle2>
         <Badge appearance="tint" color="brand">Contour-parity</Badge>
         <span className={s.spacer} />
-        <Button onClick={save} disabled={busy}>Save</Button>
+        {load.status === 'loading' && <Spinner size="tiny" label="Reading the board…" labelPosition="after" />}
+        {/* Save is DISABLED while the stored board is unknown; `save()` also
+            refuses independently so a programmatic call cannot bypass it. */}
+        <Button onClick={() => void save()} disabled={busy || saving || !canSave}>Save</Button>
         <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} onClick={run} disabled={busy}>Run</Button>
-        {saved && <Caption1>{saved}</Caption1>}
+        {saveMessage && <Caption1>{saveMessage}</Caption1>}
       </div>
+      <ItemLoadErrorBar load={load} subject="analysis board" />
       <Body1>Compose a point-and-click analysis over Azure Data Explorer — each step is a real query operator. No Microsoft Fabric.</Body1>
 
       {/* Source */}

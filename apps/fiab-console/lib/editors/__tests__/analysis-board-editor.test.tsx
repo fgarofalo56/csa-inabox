@@ -201,3 +201,59 @@ describe('AnalysisBoardEditor — persistence contract', () => {
     });
   });
 });
+
+describe('AnalysisBoardEditor — FIXED (C19): a failed load is never mistaken for a blank board', () => {
+  /**
+   * `analysis-board` carried the same silent-failure defect C14 pinned in
+   * fusion-sheet and notepad (docs/fiab/parity/analysis-board.md row U6): the
+   * load was `catch { /* keep default *\/ }`, so a 500 / 403 / network failure
+   * rendered the DEFAULT blank board — and Save then PATCHed that blank board
+   * over the user's real source + steps.
+   *
+   * C19 fixed it with `useItemDocState` (lib/editors/use-item-doc-state.tsx).
+   */
+  it('renders an honest error MessageBar + Retry when the load 500s', async () => {
+    installFetch({ load: () => new Response('boom', { status: 500 }) as any });
+    renderEditor();
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not read this analysis board')).toBeInTheDocument(),
+    );
+    // R7: reports the observed status, never an invented cause.
+    expect(screen.getByText(/HTTP 500/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    // The board surface stays up around the error.
+    expect(screen.getByText('Analysis board')).toBeInTheDocument();
+  });
+
+  it('DATA-LOSS GUARD: Save is disabled after a failed load and issues no PATCH', async () => {
+    const calls = installFetch({ load: () => new Response('boom', { status: 500 }) as any });
+    renderEditor();
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not read this analysis board')).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.some((c) => c.init?.method === 'PATCH')).toBe(false);
+  });
+
+  it('an {ok:false} 200 envelope is ALSO treated as a failed read, not as an empty board', async () => {
+    // The BFF answers some failures 200 + {ok:false}. Reading only res.ok would
+    // let that through as "successfully read, no board" — and overwrite it.
+    installFetch({
+      load: () =>
+        new Response(JSON.stringify({ ok: false, error: 'Cosmos partition unavailable' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        }) as any,
+    });
+    renderEditor();
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not read this analysis board')).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Cosmos partition unavailable/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+});

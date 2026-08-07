@@ -7,16 +7,20 @@
  * cycle detection, Excel-style errors). Persistence via PATCH state.cells.
  * Fluent v9 + Loom tokens. Azure-native — no Fabric.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Button, Input, Badge, makeStyles, tokens,
+  Subtitle2, Body1, Caption1, Button, Input, Badge, Spinner, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { clientFetch } from '@/lib/client-fetch';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { evaluateSheet, indexToCol } from '../fusion-sheet-engine';
+import { useItemDocState, ItemLoadErrorBar } from '../use-item-doc-state';
 
 const ROWS = 20;
 const COLS = 10;
+
+/** Stable identity for the "no cells" state — a fresh `{}` each render would
+ *  make the hook's `empty` a new object on every pass. */
+const EMPTY_CELLS: Record<string, string> = {};
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minWidth: 0 },
@@ -32,21 +36,25 @@ const useStyles = makeStyles({
 
 export function FusionSheetEditor({ id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [cells, setCells] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const [saved, setSaved] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!id || id === 'new') return;
-    void (async () => {
-      try {
-        const r = await clientFetch(`/api/cosmos-items/fusion-sheet/${encodeURIComponent(id)}`);
-        const j = await r.json().catch(() => ({}));
-        if (j?.state?.cells && typeof j.state.cells === 'object') setCells(j.state.cells);
-      } catch { /* keep empty */ }
-    })();
-  }, [id]);
+  // C19 data-loss fix. The previous load was `catch { /* keep empty */ }`, so a
+  // 500/403/network failure rendered a grid indistinguishable from an empty
+  // sheet — and Save then PATCHed `{cells:{}}` over the user's real cells.
+  // useItemDocState makes the failure an explicit state AND refuses to save
+  // while the stored content is unknown.
+  const doc = useItemDocState<Record<string, string>>({
+    slug: 'fusion-sheet',
+    id,
+    empty: EMPTY_CELLS,
+    select: (d) => {
+      const cells = (d as { state?: { cells?: unknown } } | undefined)?.state?.cells;
+      return cells && typeof cells === 'object' ? (cells as Record<string, string>) : undefined;
+    },
+    toPatchBody: (cells) => ({ state: { cells } }),
+  });
+  const { state: cells, setState: setCells, load, canSave, saving, saveMessage, save } = doc;
 
   const evaluated = useMemo(() => evaluateSheet(cells), [cells]);
 
@@ -58,17 +66,7 @@ export function FusionSheetEditor({ id }: { item: FabricItemType; id: string }) 
       return next;
     });
     setEditing(null);
-  }, [editing, draft]);
-
-  const save = useCallback(async () => {
-    setSaved(null);
-    try {
-      const r = await clientFetch(`/api/items/fusion-sheet/${encodeURIComponent(id)}`, {
-        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: { cells } }),
-      });
-      setSaved(r.ok ? 'Saved.' : 'Save failed.');
-    } catch { setSaved('Save failed.'); }
-  }, [id, cells]);
+  }, [editing, draft, setCells]);
 
   return (
     <div className={s.wrap}>
@@ -76,9 +74,14 @@ export function FusionSheetEditor({ id }: { item: FabricItemType; id: string }) 
         <Subtitle2>Fusion sheet</Subtitle2>
         <Badge appearance="tint" color="brand">Preview</Badge>
         <span className={s.spacer} />
-        <Button appearance="primary" onClick={save}>Save</Button>
-        {saved && <Caption1>{saved}</Caption1>}
+        {load.status === 'loading' && <Spinner size="tiny" label="Reading the sheet…" labelPosition="after" />}
+        {/* Save is DISABLED while the stored cells are unknown — the visible half
+            of the data-loss guard. `save()` refuses independently, so a
+            programmatic call cannot route around this. */}
+        <Button appearance="primary" onClick={() => void save()} disabled={!canSave || saving}>Save</Button>
+        {saveMessage && <Caption1>{saveMessage}</Caption1>}
       </div>
+      <ItemLoadErrorBar load={load} subject="fusion sheet" />
       <Body1>Type a value, or start with = for a formula — SUM, AVG, MIN, MAX, COUNT, IF, ROUND, ABS, CONCAT over cells and A1:B3 ranges. Click a cell to edit; Enter commits.</Body1>
       <div className={s.gridWrap}>
         <table className={s.grid} aria-label="Fusion sheet grid">
