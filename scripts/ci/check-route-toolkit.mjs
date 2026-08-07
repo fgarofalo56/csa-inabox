@@ -84,6 +84,29 @@ const TOUCH_EXEMPT = new Map([
   // Deleting the 401 line leaves route-guards green — measured — so the
   // contract test, not route-guards, is what watches this file.
   ['apps/fiab-console/app/api/workspaces/route.ts', '#3064: BFF field-drop fix (provisionBackingRg was inert); codemod skips both handlers — 401 returned via local err() helper, not the literal guard shape; 401 pinned by create-wizard-contract.test.ts:129'],
+  // FINISHLINE D15 (#3051) touched this route ONLY to carry the new first-class
+  // 'opt-in' env status through the response payload (day-one scoring was
+  // lying in BOTH directions: policy opt-ins scored unconfigured forever, and
+  // derived-but-unset counted as configured). The auth prologue is UNTOUCHED.
+  //
+  // THE CODEMOD DECLINES BOTH HANDLERS — `--file=app/api/admin/env-config/
+  // route.ts` reports "0 handlers across 0 files; 2 skipped", both
+  // "getSession() without the exact 401 guard". That is because this route's
+  // prologue is STRICTER than the one withSession replaces: it runs
+  // `enforceCapability(session, CAP, 'Admin')` (lib/auth/feature-gate.ts),
+  // which returns 401 when unauthenticated (:156), 403 when the caller lacks
+  // the capability (:173), and FAILS CLOSED to 403 on a Cosmos error (:134) —
+  // and PUT additionally runs a PDP check. Replacing a capability gate with a
+  // bare signed-in check would be a security REGRESSION, not a migration.
+  //
+  // HONEST COVERAGE NOTE (measured, not assumed): nothing currently pins this
+  // route's 401/403 in CI. check-route-guards does NOT cover it — its remit is
+  // authorization on routes that point-read/write by an [id] from the URL, and
+  // this is a collection route; deleting `if (gate) return gate;` leaves
+  // route-guards GREEN (measured). lib/admin/__tests__/env-config.test.ts
+  // exercises the LIB, not the handler. Tracked as a follow-up: add a
+  // route-level 401/403 contract test for this handler.
+  ['apps/fiab-console/app/api/admin/env-config/route.ts', '#3051: opt-in status payload; codemod skips both handlers — prologue is enforceCapability(Admin) (401/403, fails closed), STRICTER than the withSession shape; NO route-level auth test yet (follow-up)'],
   // #2622 touched this route ONLY to swap ten raw `executeStatement(...)` calls
   // for the AUDITED `ucSql(...)` wrapper, so the UC ABAC column-mask + row-filter
   // DDL it issues finally produces a Loom Unity audit row. Same arguments, same
