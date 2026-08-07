@@ -304,13 +304,26 @@ Ordered by operator-visible impact.
 |---|---|---|
 | `iceberg-catalog` | ✅ deployed (`loom-unity:089fb622`), Healthy, **ScaledToZero**, ephemeral H2 | ❌ **not deployed** |
 | `loom-trino` | ✅ deployed (`loom-trino:v0.1`), Healthy, ScaledToZero | ❌ **not deployed** |
-| `loom-unity` | ✅ deployed, Healthy, Running, **Postgres + Entra** | ⚠️ deployed on `h2-ephemeral`, **no auth env vars**, internal-only |
+| `loom-unity` | ✅ deployed, Healthy, Running, **Postgres + Entra** | ⚠️ deployed on `h2-ephemeral`, no auth env vars, internal-only |
 | Console federation env | ✅ all 13 vars wired | ❌ absent |
 
-**Gov has no external-engine federation at all.** Per `deploy-integrity.md` R4 a
+**Provenance.** The Commercial column is measured directly (`az containerapp
+show` / `revision list`, 2026-08-07). The Gov column is NOT: this lane holds no
+Gov credential and Gov receipts must come from GitHub Actions, never local az.
+What this lane independently corroborated through Actions is the *cause*:
+
+- `gov-build-images.yml` — **never run** (zero runs in the API).
+- `deploy-gov.yml` — **failed** its last two runs, most recent **2026-07-21**.
+
+So the Gov image producer has never executed and the Gov deploy path has been
+red for over two weeks. The per-app Gov states above are carried from the
+L-GOV lane's reading and are marked as such rather than restated as this lane's
+own measurement.
+
+**Gov has no external-engine federation.** Per `deploy-integrity.md` R4 a
 Commercial-only result is not a completed result. Gov additionally carries the
 `#3060` exposure (v0.5.1 classpath override inert in the Gov image) and #2643
-(auth disabled live). Gov receipts must come from GitHub Actions, never local az.
+(auth disabled live). Closing this needs L-GOV (ledger G2/G3), not this lane.
 
 ## Verification receipt
 
