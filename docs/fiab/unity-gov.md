@@ -42,6 +42,28 @@ stands up a **fresh, empty** Postgres; that is correct behaviour, not data loss,
 but any catalog objects created since the last restart are gone and must be
 re-registered. Plan the flip as a cutover with re-registration, not as a migration.
 
+### Gov deploy-lane run history (measured 2026-08-07)
+
+Every lane that could produce or deploy the components above. "NEVER RUN" is the
+loudest form of `deploy-integrity.md` R3, not a silent pass.
+
+| Workflow | History | Why it matters here |
+|---|---|---|
+| `gov-build-images` | **NEVER RUN** | the only from-scratch producer of `loom-unity` (its app list defaults to `loom-console,loom-uat,loom-unity`) |
+| `gov-provision-dataplane-images` | **NEVER RUN** | produces `loom-duckdb` **and** `loom-trino` |
+| `gov-provision-trino` | **NEVER RUN** | the only out-of-band producer of the Trino Container App |
+| `gov-provision-streaming-migrate` | **NEVER RUN** | loom-migrate / loom-risingwave |
+| `gov-workspace-identity` | **NEVER RUN** | — |
+| `deploy-fiab-il5` | **NEVER RUN** | the IL5 boundary has no observed deploy at all, so its param-bag defect (fixed 2026-08-07) was never empirically hit |
+| `deploy-fiab-gcch` | failing daily → 2026-08-03 | root cause was the **missing brownfield path**, not a broken deploy — fixed by `allow_existing_hub` |
+| `gov-uc-purview-wire` | last success 2026-07-15; failed 2026-08-06 | owns the #2643 auth fix; needs an attended window |
+| `deploy-gov` | failure 2026-07-21 (last run) | — |
+
+**GCC (as distinct from GCC-High)** is a separate, tracked gap: `gcc.bicepparam`
+never sets `deployAppsEnabled`, which defaults false, so that boundary deploys
+zero Container Apps — no catalog, no Trino, no Iceberg. Tracked with an owner in
+**#3078**; not flipped blind because there is no GCC image producer yet.
+
 ## Why this exists — the Gov gap
 
 CSA Loom's Unified Catalog talks to **Databricks Unity Catalog** over the

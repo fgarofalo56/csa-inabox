@@ -200,26 +200,42 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
-  // ── THESE KEYS MUST BE PRESENT (measured 2026-08-06, FINISHLINE L-GOV) ──────
+  // ── THESE KEYS MUST BE PRESENT (measured 2026-08-06; CORRECTED 2026-08-07) ──
   // A .bicepparam object assignment REPLACES the template default, it does not
   // merge — and main.bicep forwards this bag to admin-plane VERBATIM (no union).
   // admin-plane/main.bicep reads these five with a PLAIN `.` (no `.?`):
-  //   mcpBridge  — inside the UNCONDITIONAL `apps` array literal
+  //   mcpBridge  — inside the `apps` array literal passed to appDeployments
   //   maf / setupOrchestrator / scriptRunner / wrangler — module call sites
-  // The compiled artifact proves it:
+  // Compiled artifact:
   //   /resources/adminPlane/.../resources/appDeployments
-  //     condition: containerPlatform=='containerApps' && deployAppsEnabled  (BOTH true here)
+  //     condition: and(equals(containerPlatform,'containerApps'), deployAppsEnabled)
   //     .../apps/value[2]/image:
   //       "[format('loom-mcp-bridge:{0}', parameters('appImageTags').mcpBridge)]"
-  // so an ARM deploy with this file aborts on "property 'mcpBridge' doesn't
-  // exist" before touching a resource. main.bicep's own default carries all five
-  // with a comment recording this exact failure; this file dropped them.
   //
-  // WHY IT WENT UNNOTICED: the live Commercial lane (deploy-fiab-commercial.yml)
-  // uses params/commercial.bicepparam, which does NOT assign appImageTags and so
-  // inherits the complete default. THIS file is the one no-vaporware.md names as
-  // the canonical FROM-SCRATCH path ("-p params/commercial-full.bicepparam"), so
-  // the greenfield acceptance run was the path that could not work.
+  // SEVERITY FOR *THIS* FILE: **LATENT — never fired, and cannot fire on either
+  // current invocation.** An earlier revision of this comment claimed the
+  // from-scratch path "could not work". That was WRONG and is corrected here,
+  // because a false cause committed as a comment is exactly deploy-integrity R7.
+  // All five derefs are gated on `deployAppsEnabled`:
+  //   appDeployments      condition above → mcpBridge
+  //   copilotMafActive / scriptRunnerActive / wranglerActive /
+  //   setupOrchestratorActive  (admin-plane L688/691/724/740) → the other four
+  // This file declares `param deployAppsEnabled = true` below, so the keys WOULD
+  // be required by any apps-enabled invocation — but every known invocation
+  // overrides it to false on the command line:
+  //   .github/workflows/bicep-whatif.yml:291     --parameters deployAppsEnabled=false
+  //   .github/workflows/loom-drift-check.yml:147 --parameters deployAppsEnabled=false
+  // and no-vaporware.md's from-scratch PHASE 1 also specifies
+  // `deployAppsEnabled=false` (phase 2 brings the apps up via
+  // full-app-deploy-commercial.yml, and the live lane
+  // deploy-fiab-commercial.yml uses params/commercial.bicepparam, which does not
+  // assign appImageTags at all and so inherits the complete default).
+  // EMPIRICAL: bicep-whatif ran commercial-full SUCCESS on 2026-08-07.
+  //
+  // The keys are stated anyway — a param file that only works because every
+  // caller happens to disable the app tier is one `deployAppsEnabled=true` away
+  // from aborting, and this file's own declaration is already `true`.
+  // Guarded by scripts/ci/check-appimagetags-coverage.mjs.
   // Guarded by scripts/ci/check-appimagetags-coverage.mjs.
   mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')
   setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.1')

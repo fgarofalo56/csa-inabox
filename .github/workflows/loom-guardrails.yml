@@ -252,15 +252,32 @@ jobs:
       # file that omits a key the template dereferences with a plain `.` makes
       # that boundary's ARM deployment abort on "the language expression
       # property '<key>' doesn't exist" BEFORE a single resource is touched.
-      # Measured 2026-08-06: il5, commercial-full and tenant-dmlz were each
-      # missing the same five keys, i.e. the entire IL5 boundary AND the
-      # from-scratch path no-vaporware.md names ("-p params/commercial-full")
-      # could not deploy, while the live Commercial lane was fine because
-      # params/commercial.bicepparam happens to carry them. Nothing measured it:
-      # `bicep build-params` type-checks the file in isolation and appImageTags
-      # is an untyped `object`, so the omission is invisible until ARM evaluates
-      # it in a real deployment. This derives the required key set from the
-      # SHIPPED artifact, so it tracks the template instead of a stale list.
+      #
+      # Measured 2026-08-06, CORRECTED 2026-08-07: il5, commercial-full and
+      # tenant-dmlz were each missing the same five keys. All five derefs are
+      # gated on `deployAppsEnabled` (the appDeployments condition, and
+      # admin-plane L688/691/724/740), so severity differs per file and an
+      # earlier revision of this comment overstated it:
+      #   il5           — declares deployAppsEnabled=true and deploy-fiab-il5.yml
+      #                   passes no override, so it WOULD abort on its first
+      #                   apps-enabled run. Never observed: that lane has NEVER
+      #                   RUN (zero runs).
+      #   tenant-dmlz   — same shape, and no automated caller at all
+      #                   (operator/manual only).
+      #   commercial-full — LATENT, not broken. Every known invocation overrides
+      #                   deployAppsEnabled=false (bicep-whatif.yml:291,
+      #                   loom-drift-check.yml:147), and no-vaporware.md's
+      #                   from-scratch PHASE 1 does too. bicep-whatif ran it
+      #                   SUCCESS on 2026-08-07. The earlier claim that "the
+      #                   from-scratch path could not deploy" was FALSE.
+      # The live Commercial lane was never exposed at all: it uses
+      # params/commercial.bicepparam, which does not assign appImageTags.
+      #
+      # Nothing measured any of it: `bicep build-params` type-checks the file in
+      # isolation and appImageTags is an untyped `object`, so the omission is
+      # invisible until ARM evaluates it in a real deployment. This guard derives
+      # the required key set from the SHIPPED artifact, so it tracks the template
+      # instead of a stale list.
       - name: appimagetags-coverage (every boundary's param bag carries every plainly-read image tag)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-appimagetags-coverage.mjs
