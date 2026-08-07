@@ -1533,6 +1533,18 @@
       "dispatch_plan_correction": "Step 6 needs allow_existing_hub=true — that input did not exist before PR #3074.",
       "still_UNKNOWN_gov_az_forbidden": "Whether loom-unity:v0.1 resolves in the Gov ACR; whether live Gov unity is really h2-ephemeral; whether the sub has PG quota; whether a stale privatelink.postgres.* zone sits on the Gov hub VNet; whether the CAE can reach login.microsoftonline.us:443. Each has its resolving workflow named in the #3074 body.",
       "ledger_format_hazard": "The agent deliberately did NOT edit state.json: writing it reformatted all 41 tasks (972-line diff) — a merge-conflict hazard while other lanes edit it. Findings went to the PR body/comment and docs/fiab/unity-gov.md instead. NOTE FOR FUTURE: the orchestrator should own all state.json writes."
+    },
+    "gov_measured_2026-08-07": {
+      "access": "Operator authorized a Gov device login (overriding the Actions-only rule). Session isolated in AZURE_CONFIG_DIR=temp/azgov so Commercial lanes were undisturbed. Authenticated as frgarofa@FedAIRS.onmicrosoft.us, Owner on USGOV FedCiv ATU FFL - ALZ.",
+      "GRANT_MADE": "csa-loom-gov-deploy (appId c63f4919, objectId bc4f5085 — matches the runbook's 'bc4f5085-…') held ONLY subscription Contributor. GRANTED 'Role Based Access Control Administrator' scoped to rg-csa-loom-admin-usgovvirginia, VERIFIED present. DELIBERATE DEVIATION: the runbook asked for User Access Administrator; RBAC Administrator gives the same missing capability (Microsoft.Authorization/roleAssignments/write) but CANNOT escalate privileges, and matches the precedent already set for the Console UAMI on the same RG.",
+      "AUDIT_ROW_MISLABELED": "'#2330' is a MERGED PR, not an open issue. The real constraint lives in docs/fiab/gov-replacements/gov-89-92-gap-and-operator-runbook.md:119. That mislabel is why it looked unresolvable.",
+      "CLI_DEFECT": "`az role assignment create` fails against Gov ARM with MissingSubscription regardless of explicit --scope, --subscription, or role-definition id. Completed via a direct ARM REST PUT to management.usgovcloudapi.net. Use az rest for Gov RBAC.",
+      "UNKNOWNS_NOW_RESOLVED": [
+        "h2-ephemeral CONFIRMED DEFINITIVELY: ZERO postgres flexible-servers exist in rg-csa-loom-admin-usgovvirginia, and loom-unity's env is literally just LOOM_UNITY_PORT + LOOM_UNITY_DB_LOCAL. No durable store exists to migrate FROM.",
+        "Gov ACR image DOES exist: acrloomdcmt6cqoezlgs.azurecr.us/loom-unity:3afa25cc (ACR data plane firewalled, so build date unverified — #3060's inert-override question stays OPEN).",
+        "Gov federation surface: ONLY loom-unity runs. NO loom-trino, NO iceberg-catalog in the Gov admin RG — consistent with G2's never-run image lane.",
+        "#2643 SEVERITY RE-SCOPED (measured): loom-unity has ingress.external=FALSE, fqdn *.internal.*, allowInsecure=false. The missing auth is real — there is NO auth env var of any kind — but the blast radius is VNET-INTERNAL, not public internet. Still a genuine exposure to anything inside the VNet; NOT an internet-facing anonymous-write surface."
+      ]
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
