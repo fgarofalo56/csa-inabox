@@ -1,106 +1,102 @@
 # FINISHLINE session notes
 
-## Session 1 — 2026-08-06 (initializer + Wave 0 + Wave 1/2 entries)
+## Session 1 — 2026-08-06/07 (initializer → Wave 0/1/2 → Actions incident → merge queue)
 
-**Initializer verification pass (measured, not assumed):**
-- Seed 49f38c08 merged as PR #3049 → main fbe51385. PRP + AUDIT in tree; June
-  ledger archived to `.harness/archive/2026-06-05/`.
-- `state.json` seeded: 39 AUDIT rows → agent tasks + operator-status tasks, with
-  a 10-entry operator_queue (now 16).
-- Live cross-check at init: `gov-uc-purview-wire` (G1) was IN FLIGHT, then
-  **CANCELLED** ~20 min in (run 31118998951) — G1 remains operator-gated.
-- Release PR #3045 merged (0.88.1) under standing approval.
+### What is merged to main
 
-## THE BLOCKER THAT SHAPED THIS SESSION
+| PR | What |
+|---|---|
+| #3050 | ledger seed (39 AUDIT rows → PIV tasks) |
+| #3045 | release 0.88.1 (standing approval) |
+| #3059 | Wave-0 ledger update |
+| **#3055** | **D9 — loom-uat CVE-2025-68121 root fix** (vite ^7; unblocks `full-app-deploy-commercial`, measured at 13 consecutive failures / 47 days undeployed) |
+| **#3054** | **D1 — risingwave probe caps + netns port-seal scoping** (app Running live for the first time ever) |
 
-**GitHub Actions has been in a major outage since ~16:55Z** (githubstatus:
-`Actions = major_outage`, confirmed repeatedly through 20:00Z+). Every PR's
-required checks are QUEUED, none started. Nothing was `--admin`-merged past
-them: these checks are not stale, they never ran. **10 PRs are queued.**
+`#3072` is release-please 0.88.2, cut from the above.
 
-## STATE: 9 tasks implemented + reviewer-verified in one session
+### THE INCIDENT (shaped most of this session)
 
-| Task | Status | PR | Reviewer verdict |
-|---|---|---|---|
-| C9 verify-then-close | **done** | — | PASS 6/6, receipts reproduced |
-| D1 risingwave | review | #3054 | PASS 6/6, mutation proof re-run |
-| D3 degraded apps | review | #3052 | PASS 6/6, cross-checked to the digit |
-| D9 uat CVE | review | #3055 | PASS 5/5, binaries downloaded + verified |
-| E1 eval judge | review | #3053 | PASS 6/6, bicep recompiled byte-identical |
-| D2 loom-unity | review | #3057 | PASS 6/6, mutation proof re-run |
-| D4+D5+D6 brownfield | review | #3058 | PASS 7/7, mutation proof re-run |
-| D15 honest scoring | review | #3051 | post-merge receipts owed |
-| D13 workflow hygiene | review | #3061 | PASS (orchestrator-inline; agent gate died on API spend limit) |
-| D10 inert plumbing | review | #3062 | PASS structural (orchestrator-inline) |
-| ledger | — | #3059 | — |
+GitHub "Incident with Actions", opened 15:22Z. Its 20:34Z update is the load-bearing
+detail: **webhooks throttled to ~15%**, so pushes and PRs often never created runs
+at all. Separately the Actions **API surface was load-shed** (`actions/runs` 403,
+run-cancel 502) while PR/GraphQL APIs worked. Recovery began ~23:13Z.
 
-**Live estate wins (verified by az, not by merge):** loom-risingwave Running for
-the first time ever; loom-wrangler-host + loom-script-runner + loom-migrate all
-Running; loom-unity Healthy/Running on Commercial with Entra auth + postgres +
-console principal auto-bound; eval judge scoring again (cap 500→5000).
+**Do not mistake absent checks for passing checks.** Nine PRs had ZERO check runs;
+they were repaired by close+reopen. If a future incident throttles webhooks, that
+re-trigger is mandatory.
 
-## AUDIT CORRECTIONS FOUND BY MEASUREMENT (do not re-litigate)
+**Blockers removed by the orchestrator:**
+- **Disabled 3 permanently-failing workflows** — `copilot-auto-fix.yml`,
+  `csa-loom-spark-livy-probe.yml`, `csa-loom-spark-probe2.yml`. Invalid YAML means
+  GitHub records a failed run on EVERY push (it must parse each file to decide
+  triggering) — 24 today. **#3061 fixes all three; re-enable with
+  `gh workflow enable <file>` once it lands.** All three are dispatch/label-gated,
+  so no scheduled monitoring was lost. `copilot-auto-fix` has NEVER executed, so its
+  5-layer defense-in-depth is untested — watch its first labelled run.
+  `csa-loom-spark-probe2.yml` differs from the livy probe by ONE line (`name:`) →
+  retire candidate (OP-16).
+- Cancelled 4 non-essential queued runs to free constrained capacity.
 
-- **D2 premise was STALE**: #3013 (c74d7fea, 08-05) already wired the unity
-  modules; params are 234/256, not capped; the workflow comment is TRUE. The
-  real defects were a wrong Commercial privatelink zone, an inert classpath
-  patch (v0.5.1 override never shipped → **#3060**, Gov exposure), and an
-  unrendered authorizer key.
-- **D4b**: not "empty record set" — APIM PremiumV2 reports `privateIPAddresses:
-  null` deterministically; the live 10.0.4.4 record would have been WIPED.
-- **D5**: the deny fires at Purview RP preflight over managed storage and is
-  INVISIBLE to the deploy identity's policy API — honest preflight is
-  what-if/validate itself.
-- **E1**: root cause was the daily judge cap, not the deployment chain; and the
-  gate will stay red on **three** surfaces (data-agent 0.1, eventstream 0.333,
-  rbac 0.417), not rbac-only. **E2 re-scoped.**
-- **D10 ×2 "real but worse"**: the wizard called an even weaker route with a
-  coverage-counting lie; the deploy route ignored the wizard's whole plan, and
-  #3013's claimed transport guard doesn't exist. #3017's guard half was already
-  fixed by #3018.
-- **D13**: `LOOM_MSAL_SECRET_ROTATED` exists NOWHERE in the repo (live marker
-  hand-set, 2 rotations stale); masked guard steps were 75, not ~30.
+### EVERY post-recovery CI failure was a real guard catching a real gap
 
-## NEW ISSUES FILED THIS SESSION
+None flaky, none incident debris:
+- **route-toolkit** boy-scout ratchet ×4 — #3064/#3051 cleared with mutation-verified
+  TOUCH_EXEMPT; #3062 MIGRATED cleanly; #3068 handed back.
+- **deploy-paths-coverage** (#3067) — `full-app-deploy-commercial` now deploys from
+  the new mirror manifest but its WATCHED entry doesn't watch those paths. A mirror
+  change could go undeployed unnoticed. *This program's target class.*
+- **file-size monolith-creep** (#3069) — real split requested, not an allowlist entry.
+- **vitest failure-taxonomy** (#3058) — the new `capacity` retryable class trips a
+  deliberation gate. Extend the exhaustive set WITH justification; never soften
+  deep-equal to `.includes()`.
+- **deploy-template-sync** (#3054/#3052/#3057) — compiled ARM artifact not
+  regenerated, caught AFTER reviewers passed those PRs.
 
-- **#3056** internal-token rotation drift (broke 3 consumers; re-detonates on
-  the next admin-plane deploy — on OP-13's watch list).
-- **#3060** Gov unity catalog runs with the #1603 v0.5.1 override INERT.
-- **#3063** `azure-mgmt-resource>=23.2.0` breaks under v24 (latent CI break).
-- **#2678 REOPENED** (env bindings never applied) → new task D18.
+### C22 — found by mutation, then INDEPENDENTLY CORROBORATED
 
-## RESUME TRAIL — do this first next session
+While justifying a TOUCH_EXEMPT I claimed `check-route-guards` protected the
+workspaces route. It does not: its remit is authorization on routes taking an `[id]`
+from the URL, so on a **collection** route you can delete the 401 entirely and it
+stays GREEN. The D10 agent reproduced this independently (auth removed → contract
+test 5/5 red, route-guards 0 violations across 1424 routes). **Admin/collection
+routes have no CI control on their 401/403.** Task C22.
 
-1. **Check the outage**: `curl -s https://www.githubstatus.com/api/v2/status.json`.
-2. **Merge queue, IN THIS ORDER** (#3058 before #3062 — they share
-   `brownfield.md` + `failure-recovery.md`; rebase #3062's doc hunks):
-   #3054 (needs update-branch, BEHIND) · #3051 · #3052 · #3055 · #3053 ·
-   #3057 · #3058 · #3062 · #3061 · #3059 (ledger).
-   Checks green → `--squash`. WATCH main's run after each.
-3. **Owed live receipts** (the difference between review and done):
-   - D15: build-marker past merge SHA, then `gh workflow run loom-ui-verify.yml
-     --ref main -f target_route=/admin/env-config` and `/admin/readiness`.
-   - D9: green `full-app-deploy-commercial` → closes #3024/#3036.
-   - D2: full-app-deploy (image producer) + bootstrap (unseal must no-op) +
-     attended deploy wires Console `LOOM_UNITY_*`.
-   - D13: guardrails green in CI + a 2-mutant branch showing BOTH red.
-   - D10: Commercial roll + Gov `whatif-only` gcch dispatch.
-   - D3: ui-verify run 31123017609 (queued) for `/admin/migrate`.
-4. **Then Wave 2**: D7+D8 (need D4-D6 merged), D14, G2/G3/G4, E2 (re-scoped to
-   3 surfaces), C1, C7.
+### Evals-gate circularity (governs merge order)
 
-## OPERATOR QUEUE (16 items — see `state.json.operator_queue`)
+"Run + gate Copilot quality evals" is a required check firing on docs/PRPs/content
+changes. It is legitimately RED until **#3053 (E1 judge)** and **#3069 (E2 surfaces)**
+land — and it currently blocks **#3057, #3061, #3065, #3066, #3070**. So:
+
+**MERGE ORDER: #3053 → #3069 → everything else.**
+
+### Open PRs (13)
+
+3053 E1 · 3057 D2 · 3058 D4-D6 · 3061 D13 · 3062 D10 · 3064+3065 C7 · 3066 C1 ·
+3067 D14 · 3068 C3 · 3069 E2-E4 · 3070 P2-DOCS · 3071 C14 · 3073 C19 · 3072 release
+
+### Owed after the queue drains
+
+1. `full-app-deploy-commercial` dispatch (D9's V4 — closes #3024/#3036).
+2. **C13 first**: `loom-ui-verify` has been red since 2026-08-04, so EVERY V3 receipt
+   in this program is blocked. Anything closed on a G1 basis since 08-04 lacks its
+   stated evidence.
+3. An admin-plane deploy (C3's bicep half, D14's s3-gateway default-ON, D2's console
+   `LOOM_UNITY_*` wiring).
+4. Re-enable the 3 disabled workflows once #3061 lands.
+
+### Operator queue — 19 items in `state.json.operator_queue`
 
 Highest leverage: **OP-13** (attended D4-D6 proving deploy, with the #3056
-token-overwrite watch), **OP-1** (G1 Gov unity auth still DISABLED live —
-needs a real 3.5-4.5h window or interim IP-restrict), **OP-6/#2330** (Gov SP
-UAA grant), **OP-11** (#2678 audience registration a/b/c), **OP-4** (svc-postgres
-cost ruling), **OP-16** (three D13 decisions).
+token-overwrite watch) · **OP-1** (#2643 Gov unity auth still DISABLED live) ·
+**OP-19** (disable the 2 enabled Function timers duplicating live ACA crons — cheap
+double-execution mitigation; plus 7 Function Apps billing while executing nothing) ·
+**OP-6/#2330** (Gov SP UAA grant) · **OP-18** (#2970 must be re-titled — its stated
+hypothesis is falsified) · **OP-16** (3 D13 decisions).
 
-## HAZARDS CONFIRMED THIS SESSION
+### Hazards confirmed this session
 
-Never `git stash` (repo-global). Every agent in its OWN worktree. `git show
-<ref>:<path>` needs `MSYS_NO_PATHCONV=1` in Git Bash. `json.load` needs
-`encoding='utf-8'` (cp1252 crash). Direct push to main is rule-blocked — ledger
-goes through a PR. Deploy identity lacks `tags/write` on the ACR, so #2603
-leases run unleased (OP-15).
+Never `git stash`. Every agent in its OWN worktree. `git show <ref>:<path>` needs
+`MSYS_NO_PATHCONV=1`. `json.load` needs `encoding='utf-8'`. Junctions: `cmd //c mklink`
+is mangled — use PowerShell `New-Item -ItemType Junction`. Direct push to main is
+rule-blocked. Never run a `--family=` codemod (scope creep); use `--file=`.
+`--admin` ONLY to drain strict BEHIND-staleness on a PR whose own checks are green.
