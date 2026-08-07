@@ -50,13 +50,13 @@
  *   { ok: false, error, code?, missing?, hint? }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import {
   acquireCredentials,
   scanForAdoptionCandidates,
 } from '@/lib/deploy/discovery-scanner';
 import type { ServiceDiscovery } from '@/lib/deploy/discovery-model';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -162,9 +162,7 @@ function recommend(
   return { recommendation: 'new', recommendedCandidate: null };
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   // Same gate as POST /api/setup/deploy — this builds a subscription-scoped
   // deployment plan, so it's an admin-tier action.
@@ -251,4 +249,4 @@ export async function GET(req: NextRequest) {
     credentialTier: outcome.result.credentialTier,
     services,
   });
-}
+});
