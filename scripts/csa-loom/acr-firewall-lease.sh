@@ -225,26 +225,38 @@ _lease_open_firewall() {
 }
 
 # Read the firewall state. Prints "<pna>\t<da>" on success; returns 1 when the
-# registry could not be READ, with the az error on stderr.
+# registry could not be READ, with the az error captured in _LEASE_READ_ERROR.
 #
 # Deliberately NOT `2>/dev/null` (deploy-integrity R7): swallowing stderr turns
 # an RBAC denial, a throttle and a genuine answer into the same empty string,
 # and the caller then states one of them as fact. That is the "the tag does not
 # exist" incident verbatim. Here, unreadable is its own outcome and it is never
 # reported as "locked".
+#
+# TWO SCALAR READS, not one `--query "[a, b]"`. A combined array projection would
+# depend on how `-o tsv` joins an array, which is a formatting BELIEF this code
+# has no way to verify offline — and an unverified belief about a tool's output
+# is how a checker ends up measuring nothing. Two scalar reads use the exact
+# shape `_lease_acr_q` has used against real ACRs since #2603.
 _lease_read_firewall() {
-  local out rc pna da
+  local pna da rc
+  _LEASE_READ_ERROR=""
   # shellcheck disable=SC2086
-  out="$(az acr show --name "$_LEASE_ACR" $_LEASE_SUB_ARG \
-    --query "[publicNetworkAccess, networkRuleSet.defaultAction]" -o tsv 2>&1)"
+  pna="$(az acr show --name "$_LEASE_ACR" $_LEASE_SUB_ARG --query "publicNetworkAccess" -o tsv 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    _LEASE_READ_ERROR="$(printf '%s' "$out" | tr -d '\r' | tr '\n' ' ' | cut -c1-300)"
+    _LEASE_READ_ERROR="$(printf '%s' "$pna" | tr -d '\r' | tr '\n' ' ' | cut -c1-300)"
     return 1
   fi
-  out="$(printf '%s' "$out" | tr -d '\r' | head -1)"
-  pna="$(printf '%s' "$out" | cut -f1)"
-  da="$(printf '%s' "$out" | cut -f2)"
+  # shellcheck disable=SC2086
+  da="$(az acr show --name "$_LEASE_ACR" $_LEASE_SUB_ARG --query "networkRuleSet.defaultAction" -o tsv 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _LEASE_READ_ERROR="$(printf '%s' "$da" | tr -d '\r' | tr '\n' ' ' | cut -c1-300)"
+    return 1
+  fi
+  pna="$(printf '%s' "$pna" | tr -d '\r' | head -1)"
+  da="$(printf '%s' "$da" | tr -d '\r' | head -1)"
   if [ -z "$pna" ] && [ -z "$da" ]; then
     _LEASE_READ_ERROR="az acr show returned no publicNetworkAccess / defaultAction for '$_LEASE_ACR'"
     return 1

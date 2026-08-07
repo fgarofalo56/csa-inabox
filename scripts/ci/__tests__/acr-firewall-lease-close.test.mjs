@@ -19,14 +19,25 @@
  * re-implementation of it, and not a grep for the string "verify". The stub
  * records every invocation so the assertions can check what was actually
  * called. Per the FIXTURES-THAT-MODEL-THE-CODE lesson, the stub imitates `az`'s
- * OUTPUT CONTRACT (`--query "[publicNetworkAccess, networkRuleSet.defaultAction]"
- * -o tsv` → two tab-separated fields) rather than the script's expectations.
+ * OUTPUT CONTRACT — one scalar per `--query publicNetworkAccess` /
+ * `--query networkRuleSet.defaultAction`, which is the exact shape the lease
+ * script has used against real ACRs since #2603 — rather than the script's
+ * expectations. (`scripts/ci/test-acr-firewall-lease.sh` stubs `az` the same
+ * way; keeping both on one contract is what stops a fixture from agreeing with
+ * a bug.)
  *
  * MUTATION-PROVEN: restoring either `|| true` in `_lease_close_firewall`, or
- * deleting the `acr_lease_verify_locked` call, turns the "still open" and
- * "write fails" cases RED. The CONTROL cases (a genuine lock, and a lock that
- * lands only on the second attempt) stay green, so a close that simply always
- * fails cannot pass this file either.
+ * deleting the `acr_lease_verify_locked` call, turns 6 of the 10 cases below
+ * RED. The CONTROL cases (a genuine lock, and a lock that lands only on the
+ * second attempt) stay green, so a close that simply always fails cannot pass
+ * this file either.
+ *
+ * WHY A SECOND SUITE. `scripts/ci/test-acr-firewall-lease.sh` already covers the
+ * lease SEMANTICS (#2603 ownership, stale takeover, degraded mode) — and it
+ * passes 35/35 against the UN-verified close. Measured, not assumed: its stub
+ * always applies the write, so the registry really does end up locked and the
+ * missing read-back is structurally invisible to it. This file exists for the
+ * one thing that suite cannot see — a write that does not take.
  *
  * Run: node --test scripts/ci/__tests__/acr-firewall-lease-close.test.mjs
  */
@@ -56,10 +67,11 @@ function runClose({ showSequence, updateFails = false }) {
   const calls = join(dir, 'calls.log');
   writeFileSync(counter, '0');
 
-  // The stub answers the two shapes the script uses: `az acr update …` (a
-  // write) and `az acr show … --query "[publicNetworkAccess, …]" -o tsv`.
-  // Tag reads (`--query tags.…`) return empty, which is what a registry with no
-  // lease tags genuinely returns.
+  // The stub answers the shapes the script uses: `az acr update …` (a write) and
+  // two SCALAR `az acr show … --query <prop> -o tsv` reads. Tag reads
+  // (`--query tags.…`) return empty, which is what a registry with no lease tags
+  // genuinely returns. One `showSequence` entry feeds ONE close attempt (both of
+  // its reads), so a case reads the way a real attempt does.
   const az = `#!/usr/bin/env bash
 echo "$@" >> ${JSON.stringify(calls)}
 if [ "$2" = "update" ]; then
@@ -67,16 +79,19 @@ if [ "$2" = "update" ]; then
 fi
 if [ "$2" = "show" ]; then
   case "$*" in
-    *publicNetworkAccess,*)
+    *--query\\ publicNetworkAccess*|*--query\\ networkRuleSet.defaultAction*)
       n=$(cat ${JSON.stringify(counter)})
-      i=$((n + 1)); echo "$i" > ${JSON.stringify(counter)}
+      # advance one "attempt" per PAIR of reads (pna then defaultAction)
+      case "$*" in *publicNetworkAccess*) i=$((n + 1)); echo "$i" > ${JSON.stringify(counter)} ;; *) i=$n ;; esac
       case "$i" in
 ${showSequence
   .map((v, i) => {
     const last = i === showSequence.length - 1 ? '|*' : '';
-    return v === 'ERROR'
-      ? `        ${i + 1}${last}) echo "(ResourceNotFound) registry not found" >&2; exit 1 ;;`
-      : `        ${i + 1}${last}) printf '%b\\n' ${JSON.stringify(v)}; exit 0 ;;`;
+    if (v === 'ERROR') {
+      return `        ${i + 1}${last}) echo "(ResourceNotFound) registry not found" >&2; exit 1 ;;`;
+    }
+    const [pna, da] = v.split('\t');
+    return `        ${i + 1}${last}) case "$*" in *publicNetworkAccess*) printf '%s\\n' ${JSON.stringify(pna)} ;; *) printf '%s\\n' ${JSON.stringify(da)} ;; esac; exit 0 ;;`;
   })
   .join('\n')}
       esac
