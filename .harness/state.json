@@ -663,20 +663,25 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 38,
-      "status": "todo",
-      "title": "USER-HARM DATA LOSS (found by C14, pinned as DOCUMENTED DEFECT specs so a fix cannot land silently): fusion-sheet, notepad and analysis-board all `catch { /* keep empty */ }` on a failed read, render BLANK, and then Save PATCHes the emptiness over the user's real content. Fix all three + sweep for the pattern",
+      "status": "review",
+      "title": "USER-HARM DATA LOSS — FIXED. Blast radius was FAR wider than the 3 reported editors: also graph-editors VectorStoreEditor AND two SHARED HOOKS — useItemState in phase4/shared.tsx (~25 adopters) and useGeoItemState (3 editors), both of which captured the error but never blocked save",
       "depends_on": [],
       "validation": {
-        "V1": "pending",
-        "V2": "pending",
-        "V3": "pending",
-        "V4": "pending",
-        "V5": "pending",
-        "V6": "pending"
+        "V1": "n/a: no backend/route touched",
+        "V2": "n/a: no route changed",
+        "V3": "OWED, not faked — loom-ui-verify red since 08-04 (C13); command recorded in the PR and in the parity docs' Verification sections",
+        "V4": "NOT merged and not deployed — all 30 checks still pending after ~17min (incident backlog), then gh rate-limited. Agent explicitly refuses to read absent checks as pass. Local: tsc clean, lib/editors 190 files/1233 tests green, full console vitest exit 0",
+        "V5": "parity U5/U6 rows flipped for the 3 editors; docs/fiab/ux-standards.md gains §6.4.1 'A failed read is not empty content' + an editor-checklist row",
+        "V6": "default behaviour, no opt-in, no new env or gate"
       },
       "evidence": [
-        "C14 pinned failing-by-design specs labelled DOCUMENTED DEFECT rather than fixing silently",
-        "same three editors ALSO bypass ItemEditorChrome entirely — no ribbon, command search, details panel, Copilot entry, or dirty state"
+        "PR #3073, stacked on #3071 (merged C14's branch in so its DOCUMENTED DEFECT specs existed and could be INVERTED rather than collided with)",
+        "PRIMITIVE lib/editors/use-item-doc-state.tsx — useItemDocState with explicit ItemLoadStatus (new|loading|loaded|absent|error). The 'absent' state is the load-bearing insight: a successfully-read BRAND-NEW item legitimately has no state, so 'is the state empty?' can NEVER substitute for 'did the read fail?'. Plus <ItemLoadErrorBar> reporting only the OBSERVED status (R7)",
+        "THE GUARD IS INSIDE save(): canPersistItemState(status) returns false BEFORE issuing any request. Disabling the button is NOT the guard — the refusal in the function is, so keyboard/programmatic paths cannot route around it. Test 'editing after a failed load STILL cannot save' simulates the exact harm (blank surface → user types → Save) and asserts no PATCH was issued",
+        "apex-A3 class also fixed: admin/catalog/page.tsx (failed read rendered 'No tables published yet'), streaming-sql-editor ('Not deployed' → 'Status unknown'), sql-lab-editor ('Synapse Serverless' → 'Engine unknown') — each was an R7 false claim",
+        "MUTATION RECEIPTS — 2 of 4 mutants found REAL HOLES IN ITS OWN GUARD: M1 reintroducing the bug PASSED at first because Rule 1 required a literal PATCH, which primitive-adopters no longer have — i.e. ADOPTING THE SAFE HOOK TURNED THE GUARD OFF; M3 removing the save-guard PASSED at first because the identifier survived in a JSDoc line (the #2977 prose-matching class again). Both fixed → RED. M2/M4 red as expected",
+        "the guard found 46 PRE-EXISTING occurrences across 30 file/rule pairs — 15 in files the agent's own grep sweep MISSED. Recorded as a shrink-only per-file ratchet (editor-read-failure-baseline.json). The rule was NOT weakened to make the tree pass; every fixed file is absent from the baseline and locked at zero",
+        "DESCOPED (declared): ItemEditorChrome adoption for the 3 editors (secondary, would have delayed the data-loss fix) and the 46 baselined occurrences (visible, non-growable, each closeable by deleting its baseline entry)"
       ]
     },
     {
