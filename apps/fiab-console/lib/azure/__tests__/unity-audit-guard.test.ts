@@ -38,6 +38,9 @@ import {
   OUTBOUND_BASELINE,
   CHOKEPOINT_FILES,
   KNOWN_UNAUDITED,
+  MASK_BUDGET_BYTES,
+  maskedBytes,
+  resetMaskedBytes,
 } from '../../../../../scripts/ci/check-unity-audit-chokepoint.mjs';
 
 /**
@@ -50,9 +53,9 @@ import {
  * below is mutated against the same bytes CI sees, and the pass assertion is
  * the real one.
  *
- * ## The budget this file has to respect (#2944)
+ * ## The budget this file has to respect (#2944, #2959, #2622-residual)
  *
- * Every attack below runs `analyzeUnityChokepoint` over ~5,345 real files, and
+ * Every attack below runs `analyzeUnityChokepoint` over ~5,470 real files, and
  * it does so as STRAIGHT-LINE SYNCHRONOUS CPU. That is the one shape vitest
  * cannot survive in quantity: a worker reports results with a birpc call whose
  * reply arrives as an IPC message, readable only when the event loop reaches its
@@ -68,14 +71,31 @@ import {
  * That is not hypothetical here — this file WAS the whole problem: 31 whole-tree
  * scans, 108,699 ms on CI, the only file over 60 s out of 1,354 and 4.6x the next
  * slowest, which is what turned `loom-roll-and-validate` red at 537e1411 (#2949).
- * #2944 fixed it in the GUARD, by short-circuiting its two whole-tree loops
- * before they mask, so a scan is ~0.25 s instead of ~3 s and this file is ~12 s.
+ * #2944/#2959 fixed it in the GUARD, by short-circuiting its two whole-tree loops
+ * before they mask.
  *
- * IF YOU ADD AN ATTACK HERE, add it to an EXISTING whole-tree scan wherever the
- * payloads are independent (planted files always are — `analyzeUnityChokepoint`
- * accumulates into one array with no early return and no cap, so N rogue files
- * in one scan report exactly as N scans of one rogue file would). Adding scans
- * is what put this file over the cliff twice already.
+ * ## WHAT THE NUMBERS ACTUALLY ARE NOW — measured 2026-08-08, bare node
+ *
+ *     readSources()                 597-748 ms   (once, cached below)
+ *     one whole-tree scan           176-184 ms   <- NOT the ~2-3 s the older
+ *                                                   comments in this file said
+ *     31 scans + 34 copies + read       6.1 s    upper bound for this whole file
+ *     headroom to the 60 s cliff       53.9 s    ~338 more scans would fit
+ *
+ * The prose that used to live here priced a scan at 1.2-3 s and told the next
+ * author that "adding scans is what put this file over the cliff twice already".
+ * After #2959 that is off by a factor of ~14, and it was load-bearing prose: the
+ * ROUND 6 block below deliberately traded REAL-TREE coverage for a synthetic map
+ * to dodge a cost that no longer exists. Both are corrected in this pass.
+ *
+ * ## The control that replaced the warning (#2622 residual)
+ *
+ * A comment saying "please do not add scans" is a CONVENTION, and this whole file
+ * is built on the premise that a convention is not a choke point. The cost model
+ * is now a RATCHET: `MASK_BUDGET_BYTES` caps the bytes one whole-tree scan may
+ * hand to `maskSource`, asserted by 'stays inside the masking budget' below.
+ * Bytes, not milliseconds — deterministic, and identical on a laptop and on a
+ * shared CI runner.
  */
 let CACHED: Map<string, string> | null = null;
 function realSources(): Map<string, string> {
@@ -97,6 +117,42 @@ describe('unity-audit-chokepoint guard — the real tree', () => {
     for (const r of [...CHOKEPOINT_FILES.keys(), ...KNOWN_UNAUDITED.keys()]) {
       expect(OUTBOUND_BASELINE.has(r), `${r} has no OUTBOUND_BASELINE entry`).toBe(true);
     }
+  });
+
+  /**
+   * THE COST RATCHET (#2622 residual). Twice, a whole-tree loop asked an
+   * expensive question before a cheap one, masked the entire tree, and pushed
+   * this spec past vitest's 60 s birpc deadline — failing the run, and the roll,
+   * with every test still passing (#2949 pinned the Commercial console that way).
+   *
+   * Both times the only defence afterwards was a comment telling the next author
+   * not to add scans. This is that warning made mechanical.
+   *
+   * Measured with the pre-#2959 order restored in a scratch copy of the guard:
+   * 99.12 MB masked and 2,259 ms per scan, versus 3.74 MB / 184 ms shipped — and
+   * `analyzeUnityChokepoint` returned the IDENTICAL empty failure list in both.
+   * That equality is the reason this assertion has to exist separately: a 26x
+   * cost regression cannot be seen by any correctness check in this file.
+   *
+   * Counted in BYTES, not milliseconds, so it is deterministic and a slow shared
+   * CI runner can never make it flaky.
+   */
+  it('stays inside the masking budget — one whole-tree scan (the 60s birpc cliff)', () => {
+    const s = realSources();
+    resetMaskedBytes();
+    expect(analyzeUnityChokepoint(s)).toEqual([]);
+    const used = maskedBytes();
+
+    // Non-vacuity: a scan that masked NOTHING would pass a ceiling trivially,
+    // and would mean the meter (or the scan) had stopped working.
+    expect(used, 'the scan masked nothing — the meter is not wired').toBeGreaterThan(100_000);
+    expect(
+      used,
+      `one whole-tree scan masked ${(used / 1e6).toFixed(2)} MB, over the ${(MASK_BUDGET_BYTES / 1e6).toFixed(1)} MB `
+        + 'ratchet. Something now masks a file before deciding it is irrelevant — the exact defect that took this '
+        + 'spec to 108.7s and turned loom-roll-and-validate red (#2949). Find the whole-tree loop you just made '
+        + 'unconditional; do NOT raise this ceiling to go green.',
+    ).toBeLessThanOrEqual(MASK_BUDGET_BYTES);
   });
 });
 
@@ -492,11 +548,14 @@ describe('TRANSPORT VOCABULARY — one definition, two consumers', () => {
       expect(found, `${t.id} walked past the scan`)
         .toMatch(new RegExp(`rogue-transport-${i}\\.ts: references a Unity Catalog`));
     });
-    // Budget kept generous but no longer enormous: this is now a single
-    // whole-tree scan (~2s), not nine. It stays well above that so a slow
-    // runner is never mistaken for a hang, and far below the 60s RPC deadline
-    // the old shape kept flirting with.
-  }, 60_000);
+    // Budget: this is ONE whole-tree scan, measured at ~0.18 s (2026-08-08), so
+    // 20 s is ~100x headroom — enough that a heavily loaded shared runner is
+    // never mistaken for a hang, and tight enough to actually mean something.
+    // It was 60 s, chosen when a scan was priced at ~2 s; that is a timeout the
+    // birpc deadline would have hit first, i.e. it could never have fired.
+    // The real protection against this file drifting back over the cliff is the
+    // `MASK_BUDGET_BYTES` ratchet at the top, not this number.
+  }, 20_000);
 
   it('does NOT count transport-shaped PROSE or a doc comment as a call', () => {
     // env-checks/data-plane.ts really says "present a valid LOOM_INTERNAL_TOKEN
@@ -543,10 +602,12 @@ describe('masking', () => {
  * third and fourth transport could not be added with a weaker assertion.
  *
  * Every attack below is ONE whole-tree scan for the whole block, not one per
- * case — see the note on the TRANSPORTS test above: a spec file that runs past
- * 60s fails the run on vitest's birpc `onTaskUpdate` deadline while every test
- * still passes (PR #2785). Independent planted files assert the same thing in
- * one scan as in N.
+ * case. Independent planted files assert the same thing in one scan as in N, so
+ * grouping costs no coverage. (Originally a budget decision, when a spec file
+ * past 60 s of synchronous CPU failed the run on vitest's birpc `onTaskUpdate`
+ * deadline with every test still passing — PR #2785. Post-#2959 a scan is
+ * ~0.18 s and this file's upper bound is 6.1 s, so the grouping now stands on
+ * readability; `MASK_BUDGET_BYTES` is what holds the cost line.)
  */
 describe('ROUND 5 — every audited transport must record from its finally', () => {
   /**
@@ -616,8 +677,10 @@ describe('ROUND 5 — the SQL half is AUDITED, not merely ratcheted', () => {
 
   // The NEGATIVE half — a raw executeStatement( coming back to any of these
   // three — is `#19 — ratchets SQL exits in EVERY pinned governance file`
-  // above: one scan, all three files. Not repeated here, because a whole-tree
-  // scan is ~1.2s and this file has a 60s birpc cliff (see PR #2785).
+  // above: one scan, all three files. Kept there rather than duplicated here
+  // because the payloads are independent, so one scan of N asserts exactly what
+  // N scans of one would. (The original reason given was cost; a scan is ~0.18 s
+  // as of 2026-08-08, so grouping is now a readability choice, not a budget one.)
 
   it('CONTROL — the SAME edit through the AUDITED wrapper passes', () => {
     // Without this, a ratchet that simply banned all SQL from these files would
@@ -672,9 +735,9 @@ export async function rogueAssign(host: string, token: string, ws: string, ms: s
  * an audited FACADE plus an IMPORT choke point — and the import choke point is
  * the half that matters, because a facade nobody is obliged to use is a comment.
  *
- * Every attack below is one whole-tree scan for the block (see the note on the
- * TRANSPORTS test: a spec file past 60s fails the run on vitest's birpc
- * deadline while every test still passes).
+ * Every attack below is one whole-tree scan for the block. As of the #2622
+ * residual pass the check-8 attack scans the REAL tree again rather than the
+ * synthetic map it was cut down to — see the note inside it.
  */
 describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
   it('is wired: the facade is an audited transport and the raw module stays declared', () => {
@@ -689,61 +752,61 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
   });
 
   it('fails on the pre-#2622 import AND on every evasion a name scan invites', () => {
-    // ## Why this scans a SYNTHETIC map and not the real tree
+    // ## Why this scans the REAL tree (restored, #2622 residual)
     //
-    // Every other attack in this file mutates the whole tree, and each of those
-    // passes costs ~1.5-2.5s. This file already sits at the vitest birpc
-    // `onTaskUpdate` cliff — measured at 81s on the round-6 author's machine
-    // BEFORE this block existed, and at 59.9s GREEN / 62.9s RED on CI in PR
-    // #2785 — so a spec that runs past 60s fails the whole RUN while every test
-    // still passes. Adding scans to this file is therefore not free, and check 8
-    // does not need them: it is a PER-FILE import scan whose behaviour does not
-    // depend on how many other files are present.
+    // This block originally scanned a synthetic 6-file map. The stated reason was
+    // cost: "this file already sits at the vitest birpc cliff — measured at 81s
+    // …so adding scans is not free". That was true when it was written and is not
+    // true now — #2959 took a whole-tree scan from ~2.3 s to ~0.18 s, and this
+    // file's measured upper bound is 6.1 s against a 60 s deadline.
     //
-    // What the real tree WOULD add — proof that check 8 does not false-positive
-    // across the shipped sources — is already asserted by 'passes on the shipped
-    // sources' at the top of this file, which now runs check 8 too. So the real
-    // bytes of `shortcut-engines.ts` are used for the REGRESSION case (the exact
-    // import this PR replaced), and everything else is planted alongside it.
-    const real = realSources();
+    // So the trade is reversed: the real tree is affordable and strictly
+    // stronger. The planted rogues below now have to be found among 5,470 real
+    // files rather than 5, which is the configuration CI actually runs, and the
+    // two NEGATIVE assertions (the legitimate `getKeyVaultSecret` /
+    // `keyVaultConfigGate` imports must NOT be flagged) are now made against
+    // every real importer in the repo instead of one hand-built file.
+    //
+    // `MASK_BUDGET_BYTES` is what keeps this honest from here: if a future change
+    // makes a scan expensive again, the budget test above goes red immediately
+    // instead of this file silently drifting back over the cliff.
+    const s = realSources();
     const engines = 'lib/azure/shortcut-engines.ts';
-    expect(real.has(engines)).toBe(true);
+    expect(s.has(engines)).toBe(true);
 
-    const s = new Map<string, string>([
-      // (0) THE REGRESSION — the EXACT import this PR replaced, prepended to the
-      //     REAL file. If check 8 could not fail on this, the facade would be
-      //     decorative: it would exist, and nothing would oblige anyone to route
-      //     through it.
-      [engines, [
-        'import {',
-        '  getKeyVaultSecret,',
-        '  keyVaultConfigGate,',
-        '  ensureUcAwsStorageCredential,',
-        '  ensureUcGcpStorageCredential,',
-        '  ensureUcExternalLocation,',
-        '  deleteUcExternalLocation,',
-        '  deleteUcStorageCredential,',
-        "} from './shortcut-credentials';",
-        real.get(engines)!,
-      ].join('\n')],
-      // (a) a RENAMED named import — the EXPORTED name is what is matched.
-      ['lib/azure/rogue-sec-a.ts',
-        "import { ensureUcExternalLocation as mk } from './shortcut-credentials';\nexport const go = mk;\n"],
-      // (b) a NAMESPACE import — hands over EVERY export at once, so it can
-      //     never be allowlisted by name.
-      ['lib/azure/rogue-sec-b.ts',
-        "import * as creds from './shortcut-credentials';\nexport const go = creds;\n"],
-      // (c) a DYNAMIC import — same, deferred.
-      ['lib/azure/rogue-sec-c.ts',
-        "export async function go() { const m = await import('./shortcut-credentials'); return m; }\n"],
-      // (d) a BRAND-NEW un-audited export added to the unreadable file and
-      //     consumed elsewhere. A denylist of today's five would say NOTHING
-      //     about this; the allowlist denies it by default. This is the whole
-      //     reason check 8 is stated in the affirmative.
-      ['app/api/rogue-sec/route.ts',
-        "import { rotateUcStorageCredential } from '@/lib/azure/shortcut-credentials';\n"
-        + 'export async function POST() { await rotateUcStorageCredential(); return new Response(); }\n'],
-    ]);
+    // (0) THE REGRESSION — the EXACT import this PR replaced, prepended to the
+    //     REAL file. If check 8 could not fail on this, the facade would be
+    //     decorative: it would exist, and nothing would oblige anyone to route
+    //     through it.
+    s.set(engines, [
+      'import {',
+      '  getKeyVaultSecret,',
+      '  keyVaultConfigGate,',
+      '  ensureUcAwsStorageCredential,',
+      '  ensureUcGcpStorageCredential,',
+      '  ensureUcExternalLocation,',
+      '  deleteUcExternalLocation,',
+      '  deleteUcStorageCredential,',
+      "} from './shortcut-credentials';",
+      s.get(engines)!,
+    ].join('\n'));
+    // (a) a RENAMED named import — the EXPORTED name is what is matched.
+    s.set('lib/azure/rogue-sec-a.ts',
+      "import { ensureUcExternalLocation as mk } from './shortcut-credentials';\nexport const go = mk;\n");
+    // (b) a NAMESPACE import — hands over EVERY export at once, so it can
+    //     never be allowlisted by name.
+    s.set('lib/azure/rogue-sec-b.ts',
+      "import * as creds from './shortcut-credentials';\nexport const go = creds;\n");
+    // (c) a DYNAMIC import — same, deferred.
+    s.set('lib/azure/rogue-sec-c.ts',
+      "export async function go() { const m = await import('./shortcut-credentials'); return m; }\n");
+    // (d) a BRAND-NEW un-audited export added to the unreadable file and
+    //     consumed elsewhere. A denylist of today's five would say NOTHING
+    //     about this; the allowlist denies it by default. This is the whole
+    //     reason check 8 is stated in the affirmative.
+    s.set('app/api/rogue-sec/route.ts',
+      "import { rotateUcStorageCredential } from '@/lib/azure/shortcut-credentials';\n"
+      + 'export async function POST() { await rotateUcStorageCredential(); return new Response(); }\n');
 
     const found = analyzeUnityChokepoint(s).join('\n');
     for (const sym of [
@@ -756,7 +819,9 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
       expect(found, `${sym} walked past the import choke point`)
         .toMatch(new RegExp(`shortcut-engines\\.ts: imports \`${sym}\` from `));
     }
-    // …and the two non-catalog exports in the SAME statement are NOT flagged.
+    // …and the two non-catalog exports are NOT flagged — asserted here against
+    // EVERY real importer in the tree (the facade, and both lakehouse routes),
+    // not just the one synthetic file that used to stand in for them.
     expect(found).not.toMatch(/imports `getKeyVaultSecret`/);
     expect(found).not.toMatch(/imports `keyVaultConfigGate`/);
     expect(found, 'a renamed import walked past').toMatch(/rogue-sec-a\.ts: imports `ensureUcExternalLocation`/);
