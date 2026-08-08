@@ -22,6 +22,37 @@ const FIXTURES = path.join(__dirname, 'fixtures');
 const DISCOVERY_COMMERCIAL = path.join(FIXTURES, 'discovery-commercial');
 const DISCOVERY_GOV = path.join(FIXTURES, 'discovery-gov');
 
+/**
+ * Every host a GOVERNMENT render is permitted to emit: the sovereign authority
+ * host, plus the v1.0 issuer host the Gov fixture publishes. Deliberately an
+ * ALLOW-LIST — see the reasoning at its use site.
+ */
+const GOV_ALLOWED_HOSTS = new Set(['login.microsoftonline.us', 'sovereign-sts.invalid']);
+
+/** Every `https://host` the render emitted, parsed — never substring-matched. */
+export function renderedHosts(stdout) {
+  return [...stdout.matchAll(/https:\/\/([^/\s]+)/g)].map((m) => m[1]);
+}
+
+/**
+ * Assert every rendered host is EXACTLY one of `allowed`.
+ *
+ * Shared by the Gov sovereignty test and the lookalike test below, so the
+ * lookalike cases exercise the real predicate rather than a re-implementation
+ * of it that could drift into being correct while the real one is not.
+ */
+function assertHostsAllowed(stdout, allowed) {
+  const hosts = renderedHosts(stdout);
+  assert.ok(hosts.length > 0, 'expected the render to emit at least one URL');
+  for (const host of hosts) {
+    assert.ok(
+      allowed.has(host),
+      `render emitted a host outside the sovereign boundary: ${host} `
+        + `(allowed: ${[...allowed].join(', ')})`,
+    );
+  }
+}
+
 function render(env) {
   return spawnSync('sh', [SCRIPT], {
     env: {
@@ -208,39 +239,30 @@ test('LU-2: the sovereign authority host flows into every derived Entra URL (Gov
     govIssuers,
     'https://sovereign-sts.invalid/tenant-guid/,https://login.microsoftonline.us/tenant-guid/v2.0',
   );
-  assert.doesNotMatch(govIssuers, /sts\.windows\.net/);
-  assert.doesNotMatch(govIssuers, /login\.microsoftonline\.com/);
-  // Assert on the PARSED hosts, not on a substring of the whole render.
-  // Earlier revisions used doesNotMatch(/login\.microsoftonline\.com/) and then
-  // !includes('login.microsoftonline.com'); CodeQL flagged both
-  // (js/regex/missing-regexp-anchor, then js/incomplete-url-substring-sanitization)
-  // because a bare hostname substring-checked against a URL is the shape of a
-  // broken sanitizer. Both were false positives HERE - the intent is absence,
-  // not validation - but rather than suppress the rule, extract every URL the
-  // entrypoint rendered and compare its host EXACTLY. That is structurally
-  // unambiguous and a strictly stronger guarantee: it would also catch a
-  // sovereign-boundary leak like `login.microsoftonline.us.evil.example`,
-  // which a substring check would have happily accepted.
+  // Assert on the PARSED hosts, never on a substring of the whole render.
+  // A bare hostname matched against a URL is the shape of a broken sanitizer
+  // (CodeQL: js/regex/missing-regexp-anchor, js/incomplete-url-substring-sanitization),
+  // and the shape is flagged because it is genuinely wrong: an unanchored
+  // pattern matches anywhere, so arbitrary labels may precede or follow it.
   //
-  // WHAT CHANGED (F1/RC-9): this used to require EVERY rendered host to equal
-  // the authority host. That premise does not survive v1.0 issuers — a tenant's
-  // v1 issuer host is never its authority host (Commercial's is
-  // `sts.windows.net`, not `login.microsoftonline.com`), so the rule would have
-  // banned the very issuer that fixes the live 401. The structural check is kept
-  // exactly as designed; only the predicate changes, from "equals the authority
-  // host" to "is not a COMMERCIAL host". That is the property the test was
-  // actually written to defend, and it still catches
-  // `login.microsoftonline.us.evil.example` because the comparison is on the
-  // PARSED host, not a substring.
-  const COMMERCIAL_HOSTS = new Set(['login.microsoftonline.com', 'sts.windows.net']);
-  const renderedHosts = [...r.stdout.matchAll(/https:\/\/([^/\s]+)/g)].map((m) => m[1]);
-  assert.ok(renderedHosts.length > 0, 'expected the Gov render to emit at least one URL');
-  for (const host of renderedHosts) {
-    assert.ok(
-      !COMMERCIAL_HOSTS.has(host),
-      `Gov render leaked a COMMERCIAL Entra host: ${host}`,
-    );
-  }
+  // THIS MUST BE AN ALLOW-LIST, AND THAT IS NOT A STYLE CHOICE.
+  //
+  // A previous revision of this test used a DENY-list — `!COMMERCIAL_HOSTS.has(host)`
+  // — with a comment claiming it "still catches login.microsoftonline.us.evil.example
+  // because the comparison is on the PARSED host". That claim was FALSE, and
+  // measuring it is what caught it:
+  //
+  //     ACCEPTED  login.microsoftonline.us.evil.example
+  //     ACCEPTED  evil.login.microsoftonline.us
+  //     ACCEPTED  login.microsoftonline.com.evil.example   <-- a COMMERCIAL lookalike
+  //     REJECTED  login.microsoftonline.com
+  //
+  // A deny-list cannot catch a lookalike by construction: the lookalike is not
+  // the denied string, so it passes. Parsing the host correctly does not help —
+  // it is the PREDICATE that was wrong, not the parsing. Only enumerating what
+  // is ALLOWED rejects everything else, which is what a sovereignty boundary
+  // needs.
+  assertHostsAllowed(r.stdout, GOV_ALLOWED_HOSTS);
   // The authority-derived URLs (authorize/token) must still be sovereign — those
   // ARE built from the authority host, so the original exact-match still applies
   // to them.
@@ -529,12 +551,66 @@ test('RC-9: no cloud-specific issuer hostname is baked into the script', () => {
   // egress diagnostic. Neither constructs an issuer. `sts.windows.*` has no
   // legitimate reason to appear in code at all: it is purely an issuer host, and
   // a literal one is exactly the mistake this fix replaced.
+  // `includes`, not a constructed RegExp. Building one from a hostname needs the
+  // dots escaped (an unescaped `.` matches any character, so the rule stops
+  // stating what it means) and the escaper itself then has to handle backslashes
+  // — CodeQL flagged both on the previous version (js/incomplete-hostname-regexp,
+  // js/incomplete-sanitization). A literal substring search needs no escaping at
+  // all and is exactly the question being asked: does this text appear in the
+  // source?
   for (const host of ['sts.windows.net', 'sts.windows.us']) {
-    assert.doesNotMatch(
-      src,
-      new RegExp(host.replace(/\./g, '\\.')),
+    assert.ok(
+      !src.includes(host),
       `'${host}' is hardcoded in entrypoint CODE. Issuer values must come from the `
         + 'tenant OIDC discovery documents, so no cloud is special-cased.',
+    );
+  }
+});
+
+
+test('RC-9: a LOOKALIKE host is rejected, not merely a known-bad one', { skip: !shAvailable }, () => {
+  // The property the sovereignty check exists for, pinned explicitly rather than
+  // implied by a comment.
+  //
+  // MEASURED BEFORE THIS FIX, with the deny-list predicate this test replaced:
+  //     ACCEPTED  login.microsoftonline.us.evil.example
+  //     ACCEPTED  evil.login.microsoftonline.us
+  //     ACCEPTED  login.microsoftonline.com.evil.example
+  // All three now REJECT. So this is a live fix, not defence-in-depth: the check
+  // had stopped doing the job it was kept for, and its comment asserted
+  // otherwise.
+  //
+  // Driven through a POISONED FIXTURE — a real render whose discovery document
+  // publishes the lookalike — so the whole path is exercised: fetch, verbatim
+  // extraction, render, and the host predicate. Asserting on the predicate alone
+  // would prove only that a Set works.
+  for (const evil of [
+    'login.microsoftonline.us.evil.example',   // suffix: the classic boundary escape
+    'evil.login.microsoftonline.us',           // prefix
+    'login.microsoftonline.com.evil.example',  // a COMMERCIAL lookalike
+  ]) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'loom-evil-'));
+    writeFileSync(path.join(dir, 'v1.json'), JSON.stringify({ issuer: `https://${evil}/tenant-guid/` }));
+    writeFileSync(
+      path.join(dir, 'v2.json'),
+      JSON.stringify({ issuer: 'https://login.microsoftonline.us/tenant-guid/v2.0' }),
+    );
+
+    const r = render({
+      LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid',
+      LOOM_UNITY_ENTRA_CLIENT_ID: 'client-guid',
+      LOOM_UNITY_AUTHORITY_HOST: 'login.microsoftonline.us',
+      LOOM_UNITY_DISCOVERY_DOC_DIR: dir,
+    });
+    assert.equal(r.status, 0, r.stderr);
+
+    // The render SUCCEEDS — the entrypoint trusts whatever the tenant publishes,
+    // which is correct; a compromised discovery document is a different threat.
+    // What must hold is that this TEST refuses to call such a render sovereign.
+    assert.throws(
+      () => assertHostsAllowed(r.stdout, GOV_ALLOWED_HOSTS),
+      /outside the sovereign boundary/,
+      `lookalike host '${evil}' was accepted as sovereign`,
     );
   }
 });

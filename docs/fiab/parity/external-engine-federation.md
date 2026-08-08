@@ -344,9 +344,30 @@ every call or open the door. `LOOM_UNITY_ALLOWED_ISSUERS` still overrides
 everything, which is how an air-gapped deployment pins issuers without reaching
 an IdP.
 
-Mutation-proved both ways: reintroducing a hardcoded Commercial issuer fails 6
-tests (including the Gov sovereignty guard), and removing the fail-closed branch
-fails exactly the two fail-closed tests.
+Mutation-proved three ways: reintroducing a hardcoded Commercial issuer fails 6
+tests (including the Gov sovereignty guard); removing the fail-closed branch
+fails exactly the two fail-closed tests; and reverting the sovereignty predicate
+to a deny-list fails exactly the lookalike test.
+
+**A defect found in the sovereignty test itself, while fixing this.** CodeQL
+flagged the test's hostname regexes as unanchored, which prompted measuring what
+the check actually admitted. The predicate had been a DENY-list
+(`!COMMERCIAL_HOSTS.has(host)`), and it accepted every lookalike:
+
+```
+ACCEPTED  login.microsoftonline.us.evil.example
+ACCEPTED  evil.login.microsoftonline.us
+ACCEPTED  login.microsoftonline.com.evil.example   <- a COMMERCIAL lookalike
+REJECTED  login.microsoftonline.com
+```
+
+The comment above it claimed the opposite — that it "still catches
+login.microsoftonline.us.evil.example because the comparison is on the PARSED
+host". Parsing was never the issue; the predicate was. **A deny-list cannot catch
+a lookalike by construction**: the lookalike is not the denied string, so it
+passes. It is now an ALLOW-LIST, with the three lookalikes pinned as explicit
+rejections driven through poisoned discovery fixtures. This was a real
+regression in a sovereignty guard, not a lint tidy-up.
 
 **This fix is NOT console code.** It is `apps/loom-unity/bin/loom-entrypoint.sh`,
 baked into the `loom-unity` image that BOTH `loom-unity` and `iceberg-catalog`
