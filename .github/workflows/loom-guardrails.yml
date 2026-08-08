@@ -21,6 +21,14 @@ on:
 
 permissions:
   contents: read
+  # prp-freshness re-counts two PRP facts that are PR STATES (#2389, #2392) via
+  # `gh pr view`, which needs pull-requests:read. Without it `gh` 403s.
+  # That mattered the moment FRESH0 stopped being warn-only: for its entire
+  # warn-only life those two facts had NEVER been measured in CI — the 403 was
+  # swallowed into the literal string 'UNKNOWN', compared unequal to 'MERGED',
+  # emitted a ::warning:: nobody read, and exited 0. A gate that cannot reach
+  # its own evidence has verified nothing (`gates_that_measure_nothing`).
+  pull-requests: read
 
 concurrency:
   group: loom-guardrails-${{ github.ref }}

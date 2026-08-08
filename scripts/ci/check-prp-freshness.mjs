@@ -107,19 +107,39 @@ function countHandRolledRoutes() {
  * string 'UNKNOWN': a transport failure is not a measurement, and the previous
  * version's `return 'UNKNOWN'` made an unreachable API indistinguishable from a
  * PR whose state had genuinely flipped.
+ *
+ * This is also where the warn-only era hid a real hole. `loom-guardrails.yml`
+ * granted only `contents: read`, so `gh pr view` 403'd on EVERY run — both
+ * PR-state facts had never once been measured in CI. The 403 became 'UNKNOWN',
+ * 'UNKNOWN' !== 'MERGED' emitted a ::warning::, and the job exited 0. Making
+ * the gate block surfaced it immediately; the workflow now grants
+ * `pull-requests: read`.
+ *
+ * Bounded retry per deploy-integrity.md R6: retry what is genuinely transient,
+ * fail CLOSED on exhaustion. A retry that cannot fail is forbidden.
  */
 class UndeterminedError extends Error {}
 
-function prState(num) {
-  try {
-    const s = sh('gh', ['pr', 'view', String(num), '--json', 'state', '-q', '.state']);
-    if (!s) throw new UndeterminedError(`gh returned an empty state for PR #${num}`);
-    return s;
-  } catch (e) {
-    if (e instanceof UndeterminedError) throw e;
-    throw new UndeterminedError(
-      `could not read PR #${num} via gh (${e?.message?.split('\n')[0] || e}) — this is a FAILED READ, not evidence the PR state changed`);
+const PR_STATE_ATTEMPTS = 3;
+
+function prState(num, attempts = PR_STATE_ATTEMPTS) {
+  let last;
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      const s = sh('gh', ['pr', 'view', String(num), '--json', 'state', '-q', '.state']);
+      if (s) return s;
+      last = `gh returned an empty state for PR #${num}`;
+    } catch (e) {
+      last = e?.message?.split('\n')[0] || String(e);
+    }
+    // Bounded linear backoff between attempts; no sleep after the last one.
+    if (i < attempts) {
+      const until = Date.now() + i * 1000;
+      while (Date.now() < until) { /* busy-wait: this script is sync throughout */ }
+    }
   }
+  throw new UndeterminedError(
+    `could not read PR #${num} via gh after ${attempts} attempt(s) (${last}) — this is a FAILED READ, not evidence the PR state changed. If this is a 403, the workflow is missing \`pull-requests: read\`.`);
 }
 
 // --- the facts table (stated = as currently written in the PRP text) --------
@@ -276,6 +296,31 @@ function selftest() {
     },
   ];
 
+  // The bounded retry must actually RETRY, and must actually GIVE UP — a retry
+  // that cannot fail is forbidden (deploy-integrity R6).
+  let calls = 0;
+  const flaky = () => { calls += 1; if (calls < 3) throw new Error('transient 502'); return 'MERGED'; };
+  const retried = evaluateFacts([{ id: 'r', where: 'x', stated: 'MERGED', live: () => {
+    // stand-in for prState's retry loop, driven by the same attempt budget
+    let last; for (let i = 1; i <= PR_STATE_ATTEMPTS; i += 1) {
+      try { return flaky(); } catch (e) { last = e.message; }
+    }
+    throw new UndeterminedError(last);
+  } }]);
+  const retryOk = retried.failing === 0 && calls === 3;
+
+  calls = 0;
+  const alwaysBad = () => { calls += 1; throw new Error('403'); };
+  const exhausted = evaluateFacts([{ id: 'r', where: 'x', stated: 'MERGED', live: () => {
+    let last; for (let i = 1; i <= PR_STATE_ATTEMPTS; i += 1) {
+      try { return alwaysBad(); } catch (e) { last = e.message; }
+    }
+    throw new UndeterminedError(last);
+  } }]);
+  const failClosedOk = exhausted.failing === 1
+    && exhausted.verdicts[0].outcome === 'undetermined'
+    && calls === PR_STATE_ATTEMPTS;
+
   let bad = 0;
   for (const c of cases) {
     const r = evaluateFacts(c.facts);
@@ -309,6 +354,12 @@ function selftest() {
   } else {
     console.log('  ✓ EXIT CONTRACT: a drifting fact exits non-zero (the gate can block)');
   }
+
+  if (retryOk) console.log('  ✓ RETRY: a transient read is retried within the attempt budget and then succeeds');
+  else { bad += 1; console.error(`  ✗ RETRY: expected success after 3 calls, got failing=${retried.failing} calls=${calls}`); }
+
+  if (failClosedOk) console.log('  ✓ FAIL CLOSED: an exhausted retry blocks, classed undetermined (a retry that cannot fail is forbidden)');
+  else { bad += 1; console.error('  ✗ FAIL CLOSED: an exhausted retry must block as undetermined'); }
 
   if (bad) {
     console.error(`\ncheck-prp-freshness --selftest: ${bad} case(s) failed.`);
