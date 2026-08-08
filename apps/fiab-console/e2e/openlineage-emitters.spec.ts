@@ -59,11 +59,41 @@
  * issue says so ("not reachable from a worktree"). ADF/Synapse being
  * unprovisioned is a genuine AZURE infra gate (the emitters are Azure-native by
  * default — no Fabric, per no-fabric-dependency.md), so a missing backend, an
- * un-backed item, or the absence of a run of a given status is recorded as a
- * pass-with-note, never a green lie and never a hard fail. What is NOT tolerated
+ * un-backed item, or the absence of a run of a given status is recorded and
+ * skipped, never a hard fail. What is NOT tolerated
  * and DOES fail: a succeeded-run harvest returning a silently empty receipt, a
  * failed run stamping lineage, a foreign runId 200ing with activities, an
  * unattributed batch disclosing another job, or a `?sig=` in the read-back.
+ *
+ * ## A NO-MEASUREMENT IS `status:'skip'`, NEVER `status:'pass'` (2026-08-08)
+ *
+ * This spec exists to produce the #2626 RECEIPT, so what it reports when it
+ * measures nothing is not a cosmetic question — it is the whole question.
+ *
+ * As merged, every one of these branches recorded `status:'pass'`. On the only
+ * dispatch to date (loom-ui-verify run 30875024127, 2026-08-04) all four live
+ * tests skipped for want of a backed item, and each still appended a `pass` row
+ * to `test-results/uat/verdicts.ndjson` — `recordVerdict` writes synchronously,
+ * before `test.skip()` throws. The aggregate therefore carried four passes for
+ * an estate on which the emitters had never been exercised at all. That is the
+ * `gates that measure nothing` class this repo keeps paying for: the receipt was
+ * indistinguishable from the receipt being OWED.
+ *
+ * The rule, and the reason `FeatureResult.status` has a `'skip'` member:
+ *
+ *   - `pass`  — an assertion RAN against the live estate and could have failed.
+ *   - `skip`  — nothing was measured. Prefixed `NO MEASUREMENT:` in the notes so
+ *               it is unmistakable in the NDJSON and in any summary built on it.
+ *   - `fail`  — a structural defect.
+ *
+ * The one deliberate borderline case is the `honest no-op` branch in T1: it
+ * records `pass` because `receiptIsHonest()` genuinely ran and genuinely could
+ * have failed. It proves the #2625 honesty contract — it does NOT prove §5
+ * (persist) or §6 (no SAS), and its note says which run and which code.
+ *
+ * The two `test.skip()` sites in T2/T3 that previously recorded NOTHING now also
+ * record a skip: an absent row is a silent no-measurement, and silence is how
+ * this stayed invisible for four days.
  *
  * WHAT IT DOES NOT ASSERT — stated plainly. It does not TRIGGER a new ADF
  * pipeline run or submit a Spark batch (heavy, slow, operator-driven — the issue
@@ -283,8 +313,8 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
     const pipelines = (await byType(page, PIPELINE_TYPE)).filter((p) => adfPipelineName(p));
     if (pipelines.length === 0) {
       recordVerdict({
-        surface: 'emitter:openlineage-pipeline', feature: 'harvest-succeeded', verdict: 'B', status: 'pass',
-        notes: 'honest-gate: no ADF-backed data-pipeline (state.adfPipelineName) visible to the automation identity',
+        surface: 'emitter:openlineage-pipeline', feature: 'harvest-succeeded', verdict: 'B', status: 'skip',
+        notes: 'NO MEASUREMENT: no ADF-backed data-pipeline (state.adfPipelineName) visible to the automation identity',
       });
       test.skip(true, 'no ADF-backed data-pipeline on this estate — seed one with a real run to exercise §1/§5/§6');
       return;
@@ -297,8 +327,8 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
       if (status !== 200) {
         // ADF unconfigured / transient — an honest Azure infra gate, not a defect.
         recordVerdict({
-          surface: 'emitter:openlineage-pipeline', feature: 'harvest-succeeded', verdict: 'B', status: 'pass',
-          notes: `honest-gate: Output pane returned ${status}${error ? ` (${error})` : ''} for "${pipe.displayName}" — ADF run history not reachable`,
+          surface: 'emitter:openlineage-pipeline', feature: 'harvest-succeeded', verdict: 'B', status: 'skip',
+          notes: `NO MEASUREMENT: Output pane returned ${status}${error ? ` (${error})` : ''} for "${pipe.displayName}" — ADF run history not reachable`,
         });
         continue;
       }
@@ -346,8 +376,8 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
 
     if (!harvested) {
       recordVerdict({
-        surface: 'emitter:openlineage-pipeline', feature: 'harvest-succeeded', verdict: 'B', status: 'pass',
-        notes: 'honest-gate: no SUCCEEDED pipeline run visible to harvest on any backed pipeline',
+        surface: 'emitter:openlineage-pipeline', feature: 'harvest-succeeded', verdict: 'B', status: 'skip',
+        notes: 'NO MEASUREMENT: no SUCCEEDED pipeline run visible to harvest on any backed pipeline',
       });
       test.skip(true, 'no succeeded pipeline run to harvest — the succeeded-only path needs a real completed run');
     }
@@ -362,6 +392,10 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
 
     const pipelines = (await byType(page, PIPELINE_TYPE)).filter((p) => adfPipelineName(p));
     if (pipelines.length === 0) {
+      recordVerdict({
+        surface: 'emitter:openlineage-pipeline', feature: 'failed-run-gate', verdict: 'B', status: 'skip',
+        notes: 'NO MEASUREMENT: no ADF-backed data-pipeline visible — the failed-run gate was never exercised',
+      });
       test.skip(true, 'no ADF-backed data-pipeline on this estate — cannot exercise the failed-run gate');
       return;
     }
@@ -395,8 +429,8 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
     }
 
     recordVerdict({
-      surface: 'emitter:openlineage-pipeline', feature: 'failed-run-gate', verdict: 'B', status: 'pass',
-      notes: 'honest-gate: no failed/cancelled pipeline run visible to exercise the succeeded-only gate',
+      surface: 'emitter:openlineage-pipeline', feature: 'failed-run-gate', verdict: 'B', status: 'skip',
+      notes: 'NO MEASUREMENT: no failed/cancelled pipeline run visible to exercise the succeeded-only gate',
     });
     test.skip(true, 'no failed/cancelled pipeline run visible — the gate needs a real non-succeeded run');
   });
@@ -412,6 +446,10 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
 
     const pipelines = (await byType(page, PIPELINE_TYPE)).filter((p) => adfPipelineName(p));
     if (pipelines.length === 0) {
+      recordVerdict({
+        surface: 'emitter:openlineage-pipeline', feature: 'runid-ownership', verdict: 'B', status: 'skip',
+        notes: 'NO MEASUREMENT: no ADF-backed data-pipeline visible — the ownership gate was never exercised',
+      });
       test.skip(true, 'no ADF-backed data-pipeline on this estate — cannot exercise the runId ownership gate');
       return;
     }
@@ -456,8 +494,8 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
       // has no `.catch`, by design, so throttling can never read as 'not found').
       // Honest: not a leak, not a clean 404 — noted, not failed.
       recordVerdict({
-        surface: 'emitter:openlineage-pipeline', feature: 'runid-ownership', verdict: 'B', status: 'pass',
-        notes: `transient ${status} for ${foreignKind} (ARM throttle/error, not a leak) — gate not disproved`,
+        surface: 'emitter:openlineage-pipeline', feature: 'runid-ownership', verdict: 'B', status: 'skip',
+        notes: `NO MEASUREMENT: transient ${status} for ${foreignKind} (ARM throttle/error, not a leak) — the gate was neither proved nor disproved`,
       });
     }
   });
@@ -474,8 +512,8 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
     const sjds = (await byType(page, SJD_TYPE)).filter((s) => sjdPool(s));
     if (sjds.length === 0) {
       recordVerdict({
-        surface: 'emitter:openlineage-spark', feature: 'batch-attribution', verdict: 'B', status: 'pass',
-        notes: 'honest-gate: no spark-job-definition with a bound pool (state.spec.pool) visible',
+        surface: 'emitter:openlineage-spark', feature: 'batch-attribution', verdict: 'B', status: 'skip',
+        notes: 'NO MEASUREMENT: no spark-job-definition with a bound pool (state.spec.pool) visible',
       });
       test.skip(true, 'no pool-bound spark-job-definition on this estate — cannot exercise §4');
       return;
@@ -532,8 +570,8 @@ test.describe('openlineage-emitters (LU-8 / #2626)', () => {
     }
 
     recordVerdict({
-      surface: 'emitter:openlineage-spark', feature: 'batch-attribution', verdict: 'B', status: 'pass',
-      notes: 'honest-gate: no foreign Livy batch visible on any bound pool to exercise the attribution gate',
+      surface: 'emitter:openlineage-spark', feature: 'batch-attribution', verdict: 'B', status: 'skip',
+      notes: 'NO MEASUREMENT: no foreign Livy batch visible on any bound pool to exercise the attribution gate',
     });
     test.skip(true, 'no foreign pool-scoped batch visible — §4 needs a batch this SJD did not submit');
   });
