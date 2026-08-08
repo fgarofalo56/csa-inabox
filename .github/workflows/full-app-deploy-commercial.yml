@@ -1060,26 +1060,23 @@ jobs:
     with:
       boundary: Commercial
       region: ${{ needs.resolve.outputs.region }}
-      # NOT `needs.resolve.outputs.admin_sub` (#3090 sweep). The resolve job
-      # reads the subscription id with `az account show` and validates it is
-      # non-empty before emitting it — that guard works, and the step passes.
-      # But the VALUE equals the AZURE_SUBSCRIPTION_ID repo secret, and GitHub
-      # refuses to propagate a job output that matches a registered secret:
+      # admin_subscription is DELIBERATELY NOT PASSED (#3090 sweep). It used to
+      # be `needs.resolve.outputs.admin_sub`, and that could never work: the
+      # value equals the AZURE_SUBSCRIPTION_ID secret, and GitHub refuses to
+      # propagate a job output matching a registered secret —
       #
       #   ##[warning]Skip output 'admin_sub' since it may contain secret.
       #
-      # So the output arrived EMPTY at this call and the bootstrap died on
-      # `'admin_subscription' is REQUIRED (no estate default)` — measured on
-      # runs 31143181962 and 31230846894, in both cases AFTER every image and
-      # roll job had succeeded. The producer-side guard was checking the right
-      # thing at the wrong boundary: the value was scrubbed in transit, not
-      # unread.
+      # — so the bootstrap received "" and died on `'admin_subscription' is
+      # REQUIRED (no estate default)` AFTER every image and roll job had
+      # succeeded (runs 31143181962, 31230846894). The resolve job's own guard
+      # ("Not emitting a blank admin_sub…") was checking the right thing at the
+      # wrong boundary: the value was scrubbed in transit, not unread.
       #
-      # The secret is directly available here (and `secrets: inherit` already
-      # passes the rest), so route around the output entirely — this is the
-      # same expression every other job in this workflow uses for the
-      # subscription.
-      admin_subscription: ${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}
+      # `secrets` is not a valid context inside a reusable-workflow `with:`
+      # block, so the fallback lives in the CALLEE, which has the secret via
+      # `secrets: inherit`. Omitting the input selects it.
+      dlz_domain: single
 
   # E4 (loom-next-level ws-copilot-cost): fire a post-deploy Copilot quality
   # eval run so EVERY roll re-baselines quality against the freshly-staged
