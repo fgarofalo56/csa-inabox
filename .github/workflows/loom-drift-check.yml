@@ -163,6 +163,11 @@ jobs:
             # before it is emitted: this repo, and the drift issue, are public.
             echo "::group::Re-running the what-if with --debug to recover ARM's details[]"
             set +e
+            # $EXTRA_PARAMS and $VALIDATION_ARGS are multi-word argument lists
+            # and MUST word-split — the same intentional pattern as the primary
+            # what-if above. Directive placed immediately before the command so
+            # shellcheck scopes it to this invocation only.
+            # shellcheck disable=SC2086
             az deployment sub what-if \
               --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }}-diag \
               --location "$LOCATION" \
@@ -441,6 +446,11 @@ jobs:
             # before it is emitted: this repo, and the drift issue, are public.
             echo "::group::Re-running the what-if with --debug to recover ARM's details[]"
             set +e
+            # $EXTRA_PARAMS and $VALIDATION_ARGS are multi-word argument lists
+            # and MUST word-split — the same intentional pattern as the primary
+            # what-if above. Directive placed immediately before the command so
+            # shellcheck scopes it to this invocation only.
+            # shellcheck disable=SC2086
             az deployment sub what-if \
               --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }}-diag \
               --location "$LOCATION" \
