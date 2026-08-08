@@ -30,7 +30,7 @@ import {
   TabList, Tab, type SelectTabData, type SelectTabEvent,
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Textarea, Input, Dropdown, Option, Field,
+  Textarea, Input, Dropdown, Option, Field, Checkbox,
   MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
 } from '@fluentui/react-components';
 import {
@@ -73,6 +73,22 @@ interface AccessRequest {
   deniedAtTier?: ApprovalTier;
 }
 
+/**
+ * AG-14 — the per-id result set POST /api/access-requests/bulk-decision returns.
+ * The route applies each decision by REUSING the real per-request handler, so
+ * every leg runs the same approver check, real RBAC grant, ledger write,
+ * notification and audit entry as a single decision — a leg the caller may not
+ * approve comes back as a 403 in `results`, never as a silent success.
+ */
+interface BulkDecisionResult {
+  ok: boolean;
+  decision: 'approved' | 'denied';
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: { id: string; ok: boolean; status: number; error?: string }[];
+}
+
 const SCOPE_TYPES = ['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection'];
 
 const useStyles = makeStyles({
@@ -97,6 +113,21 @@ const useStyles = makeStyles({
   nameCell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, overflowWrap: 'anywhere' },
   rowActions: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'flex-end' },
   expandBtn: { minWidth: 'auto' },
+  // AG-14 bulk action bar — sits above the table only when rows are selected.
+  bulkBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap', minWidth: 0,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    marginBottom: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  bulkErrors: {
+    margin: 0,
+    paddingLeft: tokens.spacingHorizontalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+  },
   detail: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalM,
@@ -149,9 +180,15 @@ export function AccessRequestInboxEditor() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [counts, setCounts] = useState<Record<string, number>>({});
+  // AG-14 — bulk approve/deny selection. Open tiers only; History is read-only.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   // Decision dialog state.
   const [dlg, setDlg] = useState<{ req: AccessRequest; decision: 'approved' | 'denied' } | null>(null);
+  // AG-14 — bulk dialog state. `bulk` holds the decision being applied to every
+  // selected id; it and `dlg` are mutually exclusive.
+  const [bulk, setBulk] = useState<{ decision: 'approved' | 'denied'; ids: string[] } | null>(null);
+  const [bulkResult, setBulkResult] = useState<BulkDecisionResult | null>(null);
   const [reason, setReason] = useState('');
   const [scopeType, setScopeType] = useState('adls-container');
   const [scopeRef, setScopeRef] = useState('');
@@ -251,6 +288,56 @@ export function AccessRequestInboxEditor() {
     } finally { setBusy(false); }
   }, [dlg, reason, isFinalTier, scopeType, scopeRef, load, view, loadCounts]);
 
+  // ── AG-14 bulk approve/deny ────────────────────────────────────────────────
+  // Selection is per-view and clears whenever the tier tab or the row set
+  // changes, so a stale id from another tier can never ride along in a bulk POST.
+  const selectable = view !== 'history';
+  useEffect(() => { setSelected(new Set()); }, [view]);
+
+  const toggleRow = useCallback((id: string) => setSelected((prev) => {
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  }), []);
+
+  const allSelected = requests.length > 0 && selected.size === requests.length;
+  const someSelected = selected.size > 0 && !allSelected;
+  const toggleAll = useCallback(() => {
+    setSelected((prev) => (prev.size === requests.length ? new Set() : new Set(requests.map((r) => r.id))));
+  }, [requests]);
+
+  const openBulk = (decision: 'approved' | 'denied') => {
+    setBulk({ decision, ids: [...selected] });
+    setReason('');
+    setBulkResult(null);
+    setDlgError(null);
+  };
+
+  const submitBulk = useCallback(async () => {
+    if (!bulk) return;
+    setBusy(true); setDlgError(null); setBulkResult(null);
+    try {
+      const r = await clientFetch('/api/access-requests/bulk-decision', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ids: bulk.ids,
+          decision: bulk.decision,
+          ...(reason.trim() ? { reason: reason.trim() } : {}),
+        }),
+      });
+      const j: BulkDecisionResult & { error?: string } = await r.json();
+      if (r.status >= 400 && j?.error) { setDlgError(j.error); return; }
+      // Always surface the per-id outcome — a partial success is the common case
+      // (an approver may not hold rights on every selected request) and must
+      // never read as a clean pass.
+      setBulkResult(j);
+      setSelected(new Set());
+      await Promise.all([load(view), loadCounts()]);
+    } catch (e: any) {
+      setDlgError(e?.message || String(e));
+    } finally { setBusy(false); }
+  }, [bulk, reason, load, view, loadCounts]);
+
   const tabs = useMemo(() => TIER_SEQUENCE.map((t) => ({ value: t as ViewKey, label: TIER_LABEL[t] })), []);
 
   return (
@@ -294,9 +381,42 @@ export function AccessRequestInboxEditor() {
         )}
 
         {!loading && requests.length > 0 && (
-          <Table aria-label="Access requests" size="medium">
+          <>
+            {/* AG-14 — bulk action bar. Appears only once rows are selected, so the
+                default inbox is unchanged; every leg still runs the real
+                per-request decision handler server-side. */}
+            {selectable && selected.size > 0 && (
+              <div className={s.bulkBar}>
+                <Text weight="semibold">{selected.size} selected</Text>
+                <Button
+                  appearance="primary"
+                  icon={<CheckmarkCircle20Regular />}
+                  onClick={() => openBulk('approved')}
+                >
+                  Approve selected
+                </Button>
+                <Button
+                  appearance="secondary"
+                  icon={<DismissCircle20Regular />}
+                  onClick={() => openBulk('denied')}
+                >
+                  Deny selected
+                </Button>
+                <Button appearance="transparent" onClick={() => setSelected(new Set())}>Clear</Button>
+              </div>
+            )}
+            <Table aria-label="Access requests" size="medium">
             <TableHeader>
               <TableRow>
+                {selectable && (
+                  <TableHeaderCell style={{ width: 36 }}>
+                    <Checkbox
+                      aria-label="Select all requests in this tier"
+                      checked={allSelected ? true : someSelected ? 'mixed' : false}
+                      onChange={toggleAll}
+                    />
+                  </TableHeaderCell>
+                )}
                 <TableHeaderCell style={{ width: 36 }} />
                 <TableHeaderCell>Asset</TableHeaderCell>
                 <TableHeaderCell>Requester</TableHeaderCell>
@@ -313,6 +433,15 @@ export function AccessRequestInboxEditor() {
                 return (
                   <Fragment key={r.id}>
                     <TableRow>
+                      {selectable && (
+                        <TableCell>
+                          <Checkbox
+                            aria-label={`Select request for ${r.assetName}`}
+                            checked={selected.has(r.id)}
+                            onChange={() => toggleRow(r.id)}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell>
                         <Button
                           className={s.expandBtn}
@@ -362,7 +491,7 @@ export function AccessRequestInboxEditor() {
                     </TableRow>
                     {open && (
                       <TableRow key={`${r.id}-detail`}>                        <TableCell />
-                        <TableCell colSpan={6}>
+                        <TableCell colSpan={selectable ? 7 : 6}>
                           <div className={s.detail}>
                             <div className={s.detailRow}>
                               <span className={s.kv}>
@@ -427,6 +556,7 @@ export function AccessRequestInboxEditor() {
               })}
             </TableBody>
           </Table>
+          </>
         )}
       </div>
 
@@ -505,6 +635,93 @@ export function AccessRequestInboxEditor() {
               >
                 {dlg?.decision === 'approved' ? (isFinalTier ? 'Approve & grant' : 'Approve') : 'Deny'}
               </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* AG-14 — bulk decision dialog. Stays open after submit so the per-id
+          outcome is always read: a partial success must never look like a clean
+          pass. */}
+      <Dialog open={!!bulk} onOpenChange={(_, d) => { if (!d.open) { setBulk(null); setBulkResult(null); } }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>
+              {bulk?.decision === 'approved'
+                ? `Approve ${bulk?.ids.length} request${bulk?.ids.length === 1 ? '' : 's'}`
+                : `Deny ${bulk?.ids.length} request${bulk?.ids.length === 1 ? '' : 's'}`}
+            </DialogTitle>
+            <DialogContent>
+              <div className={s.dialogFields}>
+                <MessageBar intent={bulk?.decision === 'approved' ? 'info' : 'warning'} layout="multiline">
+                  <MessageBarBody>
+                    Each request is decided through the <strong>same per-request handler</strong> as a
+                    single decision — the approver check, the real Azure RBAC grant, the entitlement-ledger
+                    write and the audit entry all run per leg. Requests you are not an approver for are
+                    reported below and left untouched.
+                  </MessageBarBody>
+                </MessageBar>
+
+                {dlgError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody><MessageBarTitle>Bulk action failed</MessageBarTitle>{dlgError}</MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {bulkResult && (
+                  <MessageBar intent={bulkResult.failed === 0 ? 'success' : 'warning'} layout="multiline">
+                    <MessageBarBody>
+                      <MessageBarTitle>
+                        {bulkResult.succeeded} of {bulkResult.total} {bulkResult.decision}
+                      </MessageBarTitle>
+                      {bulkResult.failed > 0 && (
+                        <ul className={s.bulkErrors}>
+                          {bulkResult.results.filter((x) => !x.ok).slice(0, 10).map((x) => (
+                            <li key={x.id}>
+                              <span className={s.mono}>{x.id.slice(0, 8)}</span> — {x.error || `HTTP ${x.status}`}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {!bulkResult && (
+                  <Field
+                    label={bulk?.decision === 'denied' ? 'Reason (required)' : 'Note (optional)'}
+                    required={bulk?.decision === 'denied'}
+                  >
+                    <Textarea
+                      value={reason}
+                      onChange={(_, d) => setReason(d.value)}
+                      placeholder={bulk?.decision === 'denied'
+                        ? 'Why are these requests denied? Applied to every selected request.'
+                        : 'Optional context for the audit trail'}
+                      rows={3}
+                    />
+                  </Field>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                appearance="secondary"
+                onClick={() => { setBulk(null); setBulkResult(null); }}
+                disabled={busy}
+              >
+                {bulkResult ? 'Done' : 'Cancel'}
+              </Button>
+              {!bulkResult && (
+                <Button
+                  appearance="primary"
+                  onClick={submitBulk}
+                  disabled={busy || (bulk?.decision === 'denied' && !reason.trim())}
+                  icon={busy ? <Spinner size="tiny" /> : undefined}
+                >
+                  {bulk?.decision === 'approved' ? 'Approve all' : 'Deny all'}
+                </Button>
+              )}
             </DialogActions>
           </DialogBody>
         </DialogSurface>

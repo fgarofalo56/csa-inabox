@@ -22,6 +22,7 @@ import {
 import { Open20Regular, LockClosed24Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { EmptyState } from '@/lib/components/empty-state';
+import { RequestAccessInline } from '@/lib/components/access/request-access-inline';
 import { getItemTypeIcon } from '@/lib/components/item-type-icon';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 
@@ -34,6 +35,12 @@ interface AppManifest {
 }
 
 const useStyles = makeStyles({
+  // 403 boundary: the EmptyState illustration plus the inline access-package
+  // request affordance, centred as one unit (web3-ui.md — tokens, never px).
+  denied: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    gap: tokens.spacingVerticalL, minWidth: 0,
+  },
   meta: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalL },
   group: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalXL },
   tile: {
@@ -86,8 +93,18 @@ export default function LoomAppConsumerPage(props: { params: Promise<{ id: strin
         <div className={s.center}><Spinner label="Opening app…" labelPosition="after" /></div>
       ) : error ? (
         error.status === 403 ? (
-          <EmptyState icon={<LockClosed24Regular />} title="You don't have access to this app"
-            body="You're not a member of any audience for this app. Ask the app owner to add you to an audience." />
+          // AG-13/AG-2 — a 403 must never be a dead end. Before this wiring the
+          // body read "Ask the app owner to add you to an audience", which is an
+          // out-of-band action with no in-product path: the ONLY package-listing
+          // surface was /admin/access-packages (tenant-admin gated), so a
+          // non-admin could not request an access package at all.
+          // RequestAccessInline discovers the package(s) that grant THIS app and
+          // opens the real F16 approval spine in a click.
+          <div className={s.denied}>
+            <EmptyState icon={<LockClosed24Regular />} title="You don't have access to this app"
+              body="You're not a member of any audience for this app. Request access below, or ask the app owner to add you to an audience." />
+            <RequestAccessInline resourceType="loom-app" resourceRef={id} resourceName={app?.displayName} />
+          </div>
         ) : error.status === 404 ? (
           <EmptyState title="App not found" body="This app doesn't exist or you don't have access to its workspace." />
         ) : (
