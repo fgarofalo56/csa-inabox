@@ -201,14 +201,28 @@ claims to have done.
 
 | | Commercial | Gov (GCC / GCC-High / IL5) |
 |---|---|---|
-| Bicep emits `LOOM_TRINO_POLICY_URL` + the dedicated pull secret | ✅ same `admin-plane/main.bicep` path | ✅ same path — Gov params set `containerPlatform='containerApps'` + `deployAppsEnabled=true`, so `trinoEngineActive` is true |
-| Compiler / route / UI | ✅ cloud-agnostic (no cloud-specific host on any path) | ✅ same code |
-| Entrypoint fetch + refresh loop | ⚠️ needs a **loom-trino image rebuild** to ship | ⚠️ same, and Gov image production is the known gap (`gov-build-images`, `gov-provision-trino.yml` have never run) |
-| Live verification | **OWED** | **OWED** — Gov is Actions-only, never local `az` |
+| Bicep emits `LOOM_TRINO_POLICY_URL` + the dedicated pull secret | ✅ same `admin-plane/main.bicep` path — **MEASURED live**: `loom-trino` carries `LOOM_TRINO_POLICY_URL`, `LOOM_TRINO_POLICY_TOKEN` and `LOOM_TRINO_POLICY_REFRESH_SECONDS` | ✅ same path — Gov params set `containerPlatform='containerApps'` + `deployAppsEnabled=true`, so `trinoEngineActive` is true. **Not independently verified** |
+| Compiler / route / UI | ✅ cloud-agnostic (no cloud-specific host on any path) | ✅ same code — this change adds no env var, no bicep and no cloud-specific branch |
+| Entrypoint fetch + refresh loop shipped in the image | ✅ **MEASURED, and it corrects the previous OWED note**: the entrypoint read out of the deployed `loom-trino:v0.1` image is byte-consistent with `main` (378 lines, 4 × `LOOM_TRINO_POLICY_URL`, 5 × `fetch_policy`). The image rebuild this doc previously said was owed has happened | ❌ **`gov-provision-trino.yml` has NEVER run** (measured: zero runs). Gov engine production remains the gap — G2 lane |
+| Live verification | ⚠️ **PARTIAL** — see below | **OWED** — Gov is Actions-only, never local `az` |
 
-Nothing here is Commercial-only by design. The Gov lag is **image production**,
-not design, and is tracked by the G2 lane (four never-run Gov workflows, plus
-`gov-provision-trino.yml`).
+Nothing here is Commercial-only by design. The Gov lag is **image/engine
+production**, not design, and is tracked by the G2 lane.
+
+**What "partial" means on Commercial, precisely.** The routes are live and
+deny-by-default (`GET /api/catalog/unity/foreign-catalogs` and
+`GET /api/governance/policy-code/engine-rules?format=rules` both return
+`{"ok":false,"error":"unauthenticated"}` with HTTP 401 — the structured envelope,
+not a 404, so the surfaces exist in the shipped image). What is NOT proven is an
+authenticated end-to-end pass: no session-bearing receipt was captured for this
+change, and **`loom-trino` runs at `minReplicas: 0` with its single revision
+holding 0 replicas**, so the engine is not currently running and therefore not
+currently fetching. A scale-to-zero engine enforces only while it is up; the
+`lastFetch` receipt is consequently absent or stale between queries, and
+`trinoEnforcementStatus` will honestly report `never-fetched` / `stale` rather
+than claiming enforcement. That is the correct behaviour, but it means "the
+engine is enforcing version X" is a claim that can only be made about a window
+in which the engine was awake.
 
 **Gov Loom Unity durability caveat, stated because it changes what a reader
 should expect:** Gov `loom-unity` currently runs on `h2-ephemeral` — no Postgres
@@ -216,7 +230,8 @@ is provisioned in that boundary — so its catalog metadata does not survive a
 restart. The Trino engine rules published by this change live in **Cosmos**, not
 in the Unity metastore, so they are durable in Gov regardless; but any Gov
 catalog/schema/table those rules *reference* is only as durable as that store
-until the LU-1 Postgres cutover lands there.
+until the LU-1 Postgres cutover lands there. The same applies on Commercial
+while `LOOM_UNITY_DB_LOCAL=1` (RC-2).
 
 ---
 
@@ -261,32 +276,62 @@ exposed. Absent evidence is not neutral, and it was treated as such.
 
 ---
 
-## 6. Known follow-ups (tracked, NOT silently deferred)
+## 6. Follow-ups — CLOSED (2026-08-08, FINISHLINE C5)
 
-Each of these was found by security review, is non-blocking on the default
-shipped posture, and is scoped to a follow-up PR rather than expanding this one:
+All four items below were recorded by the #3080 security review as "tracked,
+NOT silently deferred". They are now closed, each with a regression that was
+**proven to fail against the shipped code** before the fix was restored (the
+`gates that cannot fail` lesson applied to tests: a green assertion is worth
+nothing until it has been seen red for the right reason).
 
-1. **Reconcile-path group-provider signal is inverted (fail-SAFE).** On the
-   reconcile path the observed `trinoGroupProvider` reaches
-   `buildTrinoRulesDocument`, which does not read it, while the artifact comes
-   from `compileAll(...)` where the option is undefined → always `false`. Effect:
-   the reconcile-path artifact permanently warns that a group rule "will not
-   match" **even when a group file is published**. Same "asserts a state the
-   code did not establish" class as the R7 defect, but in the conservative
-   direction — it over-warns, never under-warns. The engine-rules route (the
-   path that actually serves the engine) is correctly wired.
-2. **The STORED rego carries no catalog floor.** `publishTrinoEngineRules`
-   calls `buildTrinoRego` without a catalog list, so the persisted artifact
-   self-discloses "carries NO catalog floor". `access-control.name=opa` is not
-   the shipped posture, so this is artifact hygiene rather than an enforcement
-   gap. Related: `additionalImpersonatedUsers` is honoured by the file document,
-   ignored by the rego, and passed by no call site — wire it or remove it.
-3. **`storedRules.catalogs = []` now has a test** (added with the compile-option
-   regression) — previously the one unwitnessed part of the version fix.
-4. **`schemas: [{ owner: true }]`** is the most permissive line in the document
-   and deserves its reason stated inline: pre-LU-7 there was no `schemas`
-   section at all, and per the Trino docs "if no rules are provided at all, then
-   access is granted", so this is equivalent to the prior posture rather than a
-   widening; table-level ownership still comes from the `tables` rules, where
-   the per-governed-table catch-all denies it.
+1. **Reconcile-path group-provider signal — FIXED, and the write-up was
+   partly wrong.** The claim was "the reconcile-path artifact permanently warns
+   that a group rule will not match even when a group file is published". The
+   artifact does — but `reconcilePolicyCode` **never surfaces
+   `artifact.warnings` on its receipt at all** (it forwards only
+   `resolveTrinoGroupMemberships` warnings), so that half was *invisible*, not
+   misleading. The operator-visible defect was one call site over:
+   `/api/admin/policy-code` compiled with `compileAll(set)` — **no options
+   whatsoever** — and that response *does* carry `artifacts[].warnings`. So the
+   surface an admin reads to learn what is enforced was the least accurate of
+   the three, and it warned about a control that was actually in force, while
+   also resolving 2-part refs against the hardcoded `iceberg` default instead of
+   `LOOM_TRINO_ICEBERG_CATALOG`.
+   **Fix:** `lib/governance/policy-code/compile-options.ts` — one shared async
+   reader (`resolveCompileOptions`) that resolves the UC variant, the env-derived
+   Trino options, and the OBSERVED group-provider state. Reconcile and both
+   admin-route handlers now consume it. Three hand-copied option literals became
+   one reader, which is the only shape that cannot drift.
+2. **The STORED rego carried no catalog floor — FIXED.** `publishTrinoEngineRules`
+   called `buildTrinoRego` with no catalog list, so every persisted artifact took
+   the no-floor branch (`default catalog_ok := true`) and was strictly **more
+   permissive** than the file document it claims equivalence with. The floor is
+   now rendered from the catalogs the **engine itself last reported**
+   (`lastFetch.catalogRules`, newly persisted by the serve path alongside the
+   existing `lastFetch.catalogs`) — observed state, never a guess. When the
+   engine has never fetched there is no observation, so the module keeps its
+   honest "carries NO catalog floor" self-disclosure rather than inventing a
+   list. Pre-upgrade documents fall back to the bare catalog names.
+3. **`additionalImpersonatedUsers` was honoured by the file document and
+   silently dropped by the rego — FIXED.** The two artifacts would have
+   disagreed about who may be impersonated, silently, and only for the option's
+   user. `buildTrinoRego` now reads it too. It is still passed by no call site;
+   it is kept rather than removed because equivalence between the two artifacts
+   is the contract that makes emitting both meaningful.
+4. **`schemas: [{ owner: true }]` reason stated inline — already closed in
+   #3080** (`compilers/trino.ts`, above the return). Verified, not rebuilt.
+
+### Regression proof (not just "the tests are green")
+
+With the three fixes reverted to the shipped code, the new spec
+(`__tests__/trino-followups.test.ts`) fails 3 of 11 — the stored-rego floor (two
+cases) and the rego impersonation set. The group-provider case is asserted as an
+explicit **A/B of the old and new expressions** (`compileAll(set)` vs
+`compileAll(set, await resolveCompileOptions(tenantId))`), because the old
+expression is what the admin route actually ran; mutating
+`resolveCompileOptions` to ignore the published group file turns 2 more red.
+The first draft of that test asserted on the reconcile receipt and passed
+against the broken code — it was vacuous, which is how the correction in item 1
+was found.
+
 

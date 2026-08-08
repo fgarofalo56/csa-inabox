@@ -72,6 +72,14 @@ export interface TrinoEngineRulesDoc {
     version: string;
     /** Catalogs the engine reported it had wired at fetch time. */
     catalogs: string[];
+    /**
+     * The SAME catalog list with the access level the serve path derived for
+     * each one, so the stored rego can be rendered with the identical floor the
+     * engine is served. Optional because documents published before this field
+     * existed will not carry it — a reader must treat its absence as "not
+     * observed", never as "no catalogs".
+     */
+    catalogRules?: Array<{ name: string; allow: 'all' | 'read-only' | 'none' }>;
     /** The caller the route authenticated (workload identity oid, or a session UPN). */
     by: string;
   };
@@ -155,12 +163,29 @@ export async function publishTrinoEngineRules(args: PublishTrinoRulesArgs): Prom
   // — misleading to anyone inspecting what the engine should be running. The
   // section is emptied and the reason is carried on the type.
   const storedRules: TrinoRulesDocument = { ...rules, catalogs: [] };
+  // The stored REGO, unlike the stored rules, is a self-contained artifact: a
+  // deployment running `access-control.name=opa` loads it as-is. Rendering it
+  // with no catalog list made it strictly MORE PERMISSIVE than the file document
+  // it claims equivalence with — a caller naming an un-wired catalog fell
+  // straight through to the table rules — and the module said so in a comment
+  // nobody reads at 3am.
+  //
+  // The floor is taken from the catalogs the ENGINE itself last reported, which
+  // is the same list the serve path renders around. That is OBSERVED state, not
+  // a guess: when the engine has never fetched, there is no observation, so the
+  // module keeps its honest "carries NO catalog floor" self-disclosure rather
+  // than inventing a list. `catalogRules` is preferred over the bare `catalogs`
+  // names because it carries the per-catalog access level the serve path
+  // derived — re-deriving it here would be a second copy of that rule, which is
+  // precisely the drift shape this module has already been bitten by twice.
+  const observedCatalogs = prior?.lastFetch?.catalogRules
+    ?? prior?.lastFetch?.catalogs?.map((name) => ({ name, allow: 'read-only' as const }));
   const doc: TrinoEngineRulesDoc = {
     id: trinoRulesDocId(tenantId),
     tenantId,
     kind: TRINO_RULES_DOC_KIND,
     rules: storedRules,
-    rego: buildTrinoRego(set, docOptions),
+    rego: buildTrinoRego(set, observedCatalogs?.length ? { ...docOptions, catalogs: observedCatalogs } : docOptions),
     groupFile: buildTrinoGroupFile(set, memberships),
     // Hashed over the POLICY sections only, so the publisher and the engine —
     // which sees a different catalog list — agree. See `rulesVersion`.
