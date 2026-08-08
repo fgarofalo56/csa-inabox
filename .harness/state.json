@@ -361,7 +361,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 69,
-      "status": "in_progress",
+      "status": "review",
       "title": "#3039/#3046/#3038 residue: DNS-migration step-9 wipes PE zone-group (caused live A-record outage); RoleAssignmentExists from guid-seed rename (ae75c3c5) permanent until old assignment deleted/adopted — fix script (remove-by-zone-id + terminal verify); #3038 closes ONLY on green deploy-fiab run",
       "depends_on": [
         "D7"
@@ -374,9 +374,10 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [],
+      "evidence": "ROOT CAUSE measured from the VENDOR's semantics, not inferred. 'az network private-endpoint dns-zone-group add|remove --zone-name' selects the config BY ITS NAME, never by the zone id - and 'add' REPLACES when the name matches, appending only when it does not. The script passed namespace.replace('.','-') for both, byte-identical to the config name the bicep creates (databricks.bicep:135). So step 2 REPLACED the stale config instead of appending - dual-registration NEVER HAPPENED and step 3's verify still passed - and step 9 then removed the only remaining config, the KEEP one, leaving the group EMPTY, which deregisters the A record from every zone. Nothing ran after step 9, so it EXITED 0. ORCHESTRATOR CORROBORATION: Learn confirms --zone-name is 'Name of the resource that is unique within a resource group', DISTINCT from --private-dns-zone ('Name or ID of the private dns zone') - the selector is the CONFIG name. REPRODUCED with no estate touched: a fake az implementing those semantics, driven against the UNMODIFIED origin/main script, ends with 'AFTER group configs: []', 'A record in keep zone: []', 'exit code: 0' - every step reported OK. SECOND WIPE VECTOR, same class: networking-client.ts::createPrivateDnsZoneGroup PUT a single-config body to /privateDnsZoneGroups/default - a full replace that silently dropped every other config. Now merges, and THROWS if it cannot read the group rather than clobbering ('couldn't read' != 'nothing there').",
       "agent": "a04de2e2747e8ebf9",
-      "dispatched": "2026-08-08"
+      "dispatched": "2026-08-08",
+      "pr": 3128
     },
     {
       "id": "D10",
@@ -478,7 +479,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 39,
-      "status": "in_progress",
+      "status": "review",
       "title": "D14-found: three MCR refs float ':latest' on DEPLOY paths — dab-runtime.bicep:36, presidio-sidecar.bicep, deploy-planner/container-instances.bicep:19. LIC0-exempt but still unpinned drift on a deploy path. Pin them (operator asked whether to — OP-17)",
       "depends_on": [],
       "validation": {
@@ -489,11 +490,10 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "found while inventorying upstream images for D14"
-      ],
+      "evidence": "PREMISE CONFIRMED and the count was a FLOOR: audit named 3 floating refs, there are 4. ROOT CAUSE: MIR0 (check-upstream-image-mirror.mjs, #2682) deliberately skips mcr.microsoft.com because the ACR-mirror rule genuinely does not apply to Microsoft first-party - but the skip was TOTAL. One 'continue' at line 167 meant NO MCR ref was checked for ANYTHING: not mirroring, not a digest, not a floating tag. The 4th is deploy/bicep/DLZ/modules/data-api-builder.bicep:39, which docs/tutorials/11-data-api-builder tells an operator to deploy BY HAND - CI never touches it, so nothing had ever looked. The 3 named ones are baked verbatim into the shipped ARM artifact deploy-templates/main.json (11500/59755/62487), and dabRuntimeEnabled + mlWorkspaceEnabled both default TRUE, so two are on the DEFAULT path. Found 3 MORE mutable refs a ':latest' framing misses: cbl-mariner/busybox:2.0 (x2) and azure-functions/python:4-python3.11 are ROLLING tags MCR republishes in place. OUTCOME 11 of 13 refs now carry an inline @sha256. The AML curated-environment image is a VERSION TAG only (20250224.v1): Learn documents AML's image field only as 'Name of the image' and no page says a digest is accepted; a wrong guess breaks a default-ON path untestable without a live AML deploy. Recorded under an inlineDigest:false escape hatch requiring a written reason, and labelled as the weaker outcome in code, manifest and PR. The pins DO NOT move the running bytes - ':latest' and the version tags resolved to identical digests on 2026-08-08. GUARD MCR0 keyed on the SAFE property (a digest is present and matches the registry of record), never on ':latest' - because the moment someone writes ':2.0.9' the ':latest' token is gone and a grep guard goes quiet on exactly the files it just policed. Decisive mutant: a NEW mcr/pause:3.9 - respectable version tag, no digest - which a ':latest' grep PASSES and MCR0 FAILS. 6 mutants RED, 2 clean runs GREEN.",
       "agent": "a04de2e2747e8ebf9",
-      "dispatched": "2026-08-08"
+      "dispatched": "2026-08-08",
+      "pr": 3123
     },
     {
       "id": "G3",
@@ -1632,7 +1632,12 @@
       "step2_roll": "Roll BOTH container apps (loom-unity AND iceberg-catalog) onto the new tag. Rolling only one leaves the pair split.",
       "step3_verify": "Re-run loom-ui-verify with extra_projects=external-engine-federation. Grade stays D until an AUTHENTICATED catalog read returns 200. Expect RC-2 (DB_LOCAL=1 scale-to-zero) and RC-8 (~23s cold start vs 10s client timeout) to remain as constraints, not new defects.",
       "gov": "Per cloud-parity.md the same build must run for the Gov boundary; gov-build-images is now GREEN on its first-ever run so that path exists. gov-provision-trino has still NEVER run."
-    }
+    },
+    "d8_test_modeled_the_code": {
+      "finding": "THE OLD D8 TEST SUITE WAS GREEN THROUGHOUT THE LIVE OUTAGE because its fake az filtered 'remove' by privateDnsZoneId - IT IMPLEMENTED THE FIX THE SCRIPT DID NOT HAVE. Textbook fixtures-that-model-the-code: the test encoded the author's intent instead of the vendor's behaviour, so it could never fail. Rewritten against the CLI's real semantics, 24 tests.",
+      "second_order": "One rewritten test found a SEPARATE latent defect: the verify extractor was keyed on step.id, so any NEW verify step would silently fall through to the wrong shape and be UNABLE TO FAIL. Now keyed on an explicit verifyKind; unknown kind = hard stop."
+    },
+    "mir0_interpolation_hole": "OUT OF SCOPE, reported not fixed: presidio-sidecar.bicep composes ${acrLoginServer}/presidio/analyzer:2.2.358 - a THIRD-PARTY image with NO entry in upstream-images.json, so nothing imports it and the Container App could not pull. MIR0's regex skips any literal containing '${' - which is PRECISELY the composition pattern MIR0 rule 5 INSTRUCTS modules to use, so interpolated ACR refs to third-party repos are invisible to it. Presidio is hard-disabled today (presidioImagesImported=false) so nothing is broken, but the hole is real. Belongs to the MIR0 owner."
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
