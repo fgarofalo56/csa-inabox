@@ -916,7 +916,7 @@
       "lane": "L-DEPLOY",
       "wave": 3,
       "task_order": 50,
-      "status": "todo",
+      "status": "review",
       "title": "R8 docs: greenfield + brownfield walkthroughs complete/true + wizard agreement; t169 RG/CAF layout. Clean-sub acceptance runs (Commercial AND Gov) are OPERATOR-GATED — see operator_queue",
       "depends_on": [
         "D7",
@@ -930,7 +930,10 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": "TEN documented claims contradicted the code, all re-measured. The pages existed and read as AUTHORITATIVE. Highlights: greenfield said 'no classified retry on any Gov deploy path' while brownfield said the OPPOSITE ON THE SAME BRANCH (deploy-retry.mjs is invoked by gcch x2, gcc, il5 and deploy-gov); greenfield claimed gov-build-images 'has never been executed' (it has, twice, successfully); brownfield claimed 'zero ^param existing remain; 216 params' when it is 1 (existingVpnGatewayName:996) and 222 - AND ITS OWN RE-MEASURE BLOCK SHIPPED '# expect 0', a doc supplying a check that contradicts its own body two sections earlier; commercial.md / gcc.md / gcc-high.md each published a SINGLE 'az deployment sub create' with no deployAppsEnabled=false, no image phase and no bootstrap - ON A FRESH EMPTY ACR THOSE COMMANDS CANNOT PRODUCE A WORKING CONSOLE; gcc-high.md published a LOCAL Azure Government az path, contradicting the Actions-only rule stated on greenfield.",
+      "pr": 3143,
+      "merged": "2026-08-08 (#3143)",
+      "dangling_issue_ref": "#3143 WAS NEVER ALLOCATED. Six deploy workflows carry a forward reference to it. Opening this PR PROVED it - GitHub assigned 3143 to the PR itself. The real fix is #3140."
     },
     {
       "id": "C3",
@@ -1768,7 +1771,14 @@
       "run": "31251849951 full-app-deploy-commercial (region=centralus EXPLICIT, skip_supply_chain=false)",
       "purpose": "Produces the receipt #3140 owes - a green post-deploy-bootstrap proving DLZ discovery works live. The #3140 lane could make NO live Azure call (its identity got NoValidSubscriptionsInQueryRequest), so its mutation proof stubs az and the RG name came from a prior run's log. WHETHER THE DEPLOY SP HOLDS READER ON THE DLZ SUBSCRIPTION is the one thing only a real run settles.",
       "also_carries": "Everything merged after 2bc3489e: C17 access sweeper, C21 ai-red-team safety scoring, #3122 token ownership, C15 FRESH0, C20 silent-failure sweep, #3139 sovereign guards, F1 RC-9 console side, #3140 DLZ discovery."
-    }
+    },
+    "wizard_cannot_deploy_brownfield_2026-08-08": {
+      "severity": "BLOCKING — brownfield is a first-class supported path under deploy-integrity R4, and the wizard cannot deploy one.",
+      "mechanism": "planBlockers() blocks every 'adopt' that has no fitness verdict; the Deploy button is gated on planBlockers; recommendFor() picks 'adopt' BY DEFAULT. And the fitness evaluation that would clear the blocker IS NEVER CALLED. ORCHESTRATOR-VERIFIED: every reference to evaluateFitness and applyFitness in apps/fiab-console is inside __tests__/ - ZERO PRODUCTION CALLERS. The blocker also names a 'validation step' that does not exist. This is the INERT-FEATURE / guard-adoption-gap class: correct logic, fully unit-tested, wired to nothing.",
+      "doc_was_right_for_the_wrong_reason": "index.md's 'use the CLI for brownfield' advice was RIGHT FOR THE WRONG REASON - it cited #3016 (fixed); the real cause is #3014 (unfixed). Fixing the stated reason would have DELETED a warning that still needs to be there."
+    },
+    "image_tag_reality_2026-08-08": "CORRECTS MY BRIEF TO THE D17 LANE. I said the federation apps are SHA-pinned. What is true: bicep sets the tag from '${appImageTags.?unity ?? 'v0.1'}' (admin-plane/main.bicep:5929 and :6327) - so the DEFAULT is the MUTABLE v0.1 - while the LIVE apps carry whatever tag was last rolled (089fb622 before my roll, 36b765e4 now). Container Apps pins the DIGEST at revision creation, so rebuilding a tag never lands without a new revision - which is why my first v0.1 build changed nothing. CONSEQUENCE: a future admin-plane deploy would set both apps back to v0.1. The RC-9 fix survives that ONLY because I also rebuilt v0.1 from main (run 31248782695) - LUCK, NOT DESIGN. If anyone rebuilds v0.1 from an older commit, RC-9 regresses silently. iceberg-catalog is additionally create-only-if-absent, so an existing one is frozen permanently.",
+    "d17_reported_not_fixed": "registry.bicep sets publicNetworkAccess:'Disabled' but NOT defaultAction:'Deny', while the ACR lease's lock check requires BOTH; the loom-unity/iceberg roll gap; a residual DLZ_SUB admin-sub fallback INSIDE the bootstrap; six workflows' dangling #3143 comments; and a FALSE in-repo comment claiming loom-unity is 'deployed out-of-band, not by admin-plane'."
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
