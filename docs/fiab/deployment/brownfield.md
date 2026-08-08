@@ -9,9 +9,38 @@ Brownfield is a **first-class supported path**, not a variation on greenfield.
 It is verified independently (`deploy-integrity.md` R4): greenfield working
 proves nothing about brownfield.
 
-> **Read [Greenfield](greenfield.md) first if you have not.** Brownfield is
-> greenfield plus a decision per service. The three-phase shape (infra →
-> images → bootstrap) is identical, and every phase-1 caveat still applies.
+**This page is self-contained.** You do not need to read
+[Greenfield](greenfield.md) to follow it. Brownfield is greenfield plus a
+decision per service, and the phase shape is identical — it is restated here so
+you can run this page end to end.
+
+### The phase shape (identical to greenfield)
+
+CSA Loom deploys in **three phases**, and the split is not optional: the same
+deployment that needs to pull images also creates the container registry
+**empty**.
+
+| Phase | What it does |
+|---|---|
+| **1 — Infrastructure** | `az deployment sub create` with **`deployAppsEnabled=false`**. Hub VNet, Private DNS, ACR, Container Apps Environment, Key Vault and every Azure backing service — **but no Container Apps**. This is where your adopt/create decisions take effect. |
+| **2 — Images + apps** | `gh workflow run full-app-deploy-commercial.yml -f enable_apps_after=true`. Opens the private ACR, builds every image server-side with `az acr build`, re-locks the registry, brings the Container Apps up — and **chains phase 3**. |
+| **3 — Post-deploy bootstrap** | The grants Bicep cannot make: MSAL app registration + admin consent, Synapse SQL admin, Purview roles, Databricks SCIM, the Spark private-endpoint fix. **Sign-in does not work until this runs.** |
+
+> **Why phase 1 must set `deployAppsEnabled=false`.** With `true` on a brand-new
+> registry, ARM tries to create Container Apps referencing
+> `<newacr>.azurecr.io/loom-console:<tag>` before any image exists, and the
+> deploy fails with a manifest/pull error. That failure is **expected, not a
+> bug** — the image build is a required phase. Every parameter file sets
+> `deployAppsEnabled = true` for the steady-state case, so phase 1 overrides it
+> on the command line.
+
+Brownfield adds **one** step to that shape: after phase 2, grant the Console
+managed identity its roles on the resources you adopted, in *their*
+subscriptions — see [step 6](#step-6--grant-the-console-identity-on-what-you-adopted).
+
+Resource-group names, the teardown blast radius and CAF tags are common to both
+paths and live on
+[**Resource-group layout, naming and tags**](resource-groups.md).
 
 ## Verification status (`deploy-integrity.md` R4)
 
@@ -71,19 +100,26 @@ regions, SKUs and network configuration, and writes nothing.
 
 ### From the Console wizard
 
-Open `/setup` → step **Scan & choose**. The wizard queries Resource Graph across
-the tenant and returns, per service: the candidates it found, a recommendation,
-and the reason Loom wants that service.
+Open `/setup`. The scan runs across the **Analysis scope** step (which
+subscriptions Loom may read) and the **Reuse or deploy** step (the per-service
+decision). The wizard queries Resource Graph across the scopes you consent to
+and returns, per service, the candidates it found, a recommendation, and the
+reason Loom wants that service.
 
-> **The wizard now runs on the SAME scanner as `/api/deploy/discovery`
-> (#3015 — merged, not deployed until the next roll).** `GET
-> /api/setup/discover-services` delegates to `lib/deploy/discovery-scanner`:
-> three-step coverage establishment, real `$top`/`$skipToken` paging,
-> `allowPartialScopes`, and a per-subscription ledger returned alongside the
-> service rows. The scoped *Analysis scope → Reuse or deploy* steps use
-> `POST /api/setup/estate-scan`, which shares the same coverage probe. The old
-> weaker route (`POST /api/setup/scan-services`, the no-op `top` key, no
-> paging, no ledger) is deleted. Details in
+> **Step names.** Earlier revisions of this page and of
+> [Discovery and adoption](discovery-and-adoption.md) said to open a step called
+> **"Scan & choose"**. There is no such step. The wizard rail is
+> *Cloud boundary · Deployment mode · Subscription & region · Domain name ·
+> Capacity sizing · **Analysis scope** · **Reuse or deploy** · Review & deploy*.
+
+> **The wizard runs on the same scanner as `/api/deploy/discovery` (#3015,
+> landed in #3062 — merged 2026-08-07, and merged is not deployed).** The scoped
+> steps use `POST /api/setup/estate-scan`, which shares the coverage probe and
+> returns a per-subscription ledger. `GET /api/setup/discover-services` (used by
+> the read-only networking panel on the review step) delegates to
+> `lib/deploy/discovery-scanner`. The old weaker route
+> (`POST /api/setup/scan-services`) is **deleted** — the directory no longer
+> exists. Details in
 > [Discovery and adoption](discovery-and-adoption.md#2-the-part-that-matters-most-coverage).
 
 > **`/setup` no longer redirects away when a hub exists.** An earlier version of
@@ -91,7 +127,52 @@ and the reason Loom wants that service.
 > `scripts/ci/check-setup-entrypoints.mjs` fails the build if `redirect(`
 > reappears in `app/setup/page.tsx`. The invariant it was standing in for lives
 > where it belongs: `POST /api/setup/deploy` rejects `topology='tenant'` when a
-> hub is already present.
+> hub is already present, with a 409 that names `/admin` → *Add landing zone* as
+> the alternative.
+
+#### BLOCKING DEFECT: the wizard cannot deploy a plan containing an `adopt` decision
+
+**Use the CLI for brownfield today.** Not as a preference — the wizard's Deploy
+button is disabled for any plan with an adopt decision, and it will not become
+enabled by anything you can do in the UI.
+
+Measured on this branch, 2026-08-08:
+
+- `lib/deploy/plan-model.ts` → `planBlockers()` pushes a blocker for **every**
+  `adopt` decision that carries no `fitness` verdict:
+  `"<service>: adoption has not been validated yet — run the validation step."`
+- `lib/panes/setup-wizard.tsx` gates the review step's Deploy button on exactly
+  that: `nextDisabled={!!planner.plan && planBlockers(planner.plan).length > 0}`.
+- `evaluateFitness()` (`lib/deploy/fitness.ts`) and `applyFitness()`
+  (`lib/deploy/plan-builder.ts`) have **zero production callers** — grep returns
+  only their own definitions and tests. Nothing ever attaches a verdict.
+
+So the blocker can never clear, and the remediation text points at a
+"validation step" the product does not have.
+
+**It is the default, not an opt-in.** `recommendFor()` in
+`lib/deploy/plan-builder.ts` returns `adopt` whenever exactly one candidate is
+found, and `adopt-required` for a tenant singleton that already exists. A tenant
+with one existing Purview therefore gets an adopt decision **automatically**,
+and its plan is undeployable from the UI without the operator choosing anything.
+
+Re-measure before trusting this:
+
+```bash
+grep -n 'planBlockers' apps/fiab-console/lib/panes/setup-wizard.tsx
+grep -rn 'evaluateFitness\|applyFitness' apps/fiab-console --include=*.ts --include=*.tsx | grep -v __tests__
+```
+
+If the second command shows a caller outside `fitness.ts` / `plan-builder.ts`,
+an evaluator has landed and this section is stale.
+
+> **An earlier version of this documentation gave the right advice for the wrong
+> reason.** [`index.md`](index.md) told readers to drive brownfield from the CLI
+> because of **#3016** — the adopt bag not reaching the deploy. #3016 is fixed
+> (see [below](#fixed--the-deploy-no-longer-discards-your-brownfield-picks-3016)).
+> The reason the advice still holds is this fitness blocker, which is the
+> **#3014 follow-up** and is *not* fixed. Same conclusion, different cause —
+> recorded because acting on the wrong cause would have removed the warning.
 
 ### From the CLI (works on any estate)
 
@@ -532,9 +613,25 @@ az deployment sub create -l eastus2 \
 > `loomFirewallEnabled=false` are still here because those are *skip* decisions
 > — "deploy nothing and bind nothing" — which is a different answer from *adopt*.
 
-Then the phase-2 and phase-3 steps are identical to
-[greenfield](greenfield.md#phase-2-build-the-images-and-bring-the-apps-up-1525-min),
-plus one brownfield-only step:
+Phase 2 and phase 3 are then exactly as described in
+[the phase shape](#the-phase-shape-identical-to-greenfield) — one dispatch:
+
+```bash
+gh workflow run full-app-deploy-commercial.yml -f enable_apps_after=true
+```
+
+Leave `region` empty; the workflow discovers the admin plane from Resource Graph
+(#3029). Phase 3 (the post-deploy bootstrap) is a **chained job** of that
+workflow, so it runs automatically. If the run goes red, check which job failed
+before re-running everything —
+`gh run view <run-id> --json jobs --jq '.jobs[] | select(.conclusion=="failure") | .name'` —
+because a bootstrap-leg failure means the images and apps already deployed.
+
+### Step 6 — grant the Console identity on what you adopted
+
+This is the one step brownfield adds that greenfield does not have. Adoption
+suppresses the *provisioning* module — and, for some services, the module that
+would have granted the roles. Run this after phase 2:
 
 ```bash
 # Grant the Console managed identity the per-service roles on the resources you
@@ -543,10 +640,21 @@ source temp/<name>.byo-exports.sh   # or export them again
 bash scripts/csa-loom/grant-navigator-rbac.sh
 ```
 
-> `grant-navigator-rbac.sh` covers AI Search, APIM, AOAI, Cosmos, Event Hubs,
-> Synapse and Data Factory. It does **not** grant ADX/Kusto, Databricks, Stream
-> Analytics or Maps on an adopted resource — grant those manually (the role per
-> service is in [Discovery and adoption](discovery-and-adoption.md#9-what-loom-changes-about-an-adopted-resource)).
+**What it covers, and what it does not.** `grant-navigator-rbac.sh` grants AI
+Search, APIM, AOAI, Cosmos, Event Hubs, Synapse and Data Factory. It does
+**not** grant ADX/Kusto, Databricks, Stream Analytics or Maps on an adopted
+resource — grant those by hand (the role per service is in
+[Discovery and adoption](discovery-and-adoption.md#9-what-loom-changes-about-an-adopted-resource)).
+The ADX case is the one that most often looks like a product bug rather than a
+missing grant — see [the ADX grant caveat](#the-adx-grant-caveat).
+
+**If it fails:**
+
+| Failure | Class | Remediation |
+|---|---|---|
+| `AuthorizationFailed` writing a role assignment | permission | The identity running the script needs `Microsoft.Authorization/roleAssignments/write` at the adopted resource's scope. Grant **User Access Administrator** there, or have the resource owner run the emitted `az role assignment create` |
+| `RoleAssignmentExists` | config | Already granted. Safe to ignore — the script is idempotent |
+| The script skips a service silently | config | The corresponding `EXISTING_*` variable is not exported in this shell. `source` the exports file again and re-run |
 
 ---
 
@@ -630,17 +738,36 @@ These are decisions with specific technical reasons, not gaps.
 
 The decision model, the `EXISTING_*` mechanism and the adoption table are
 identical — `gcc.bicepparam`, `gcc-high.bicepparam` and `il5.bicepparam` all
-read the `EXISTING_*` variables. Two Gov-specific differences:
+read the `EXISTING_*` variables (57–58 reads each, the same 13 services). Four
+Gov-specific differences:
 
 1. **Everything runs through GitHub Actions.** There is no local-CLI Gov path;
    set the `EXISTING_*` values as repository or environment variables consumed
    by the deploy workflow, not as shell exports on a workstation.
-2. **Azure Maps is unavailable in GCC-High / IL5**, so the Maps decision does
+2. **A green Gov run may have deployed nothing.** The Gov lanes skip silently
+   when their secrets are absent, default to `run_mode=whatif-only`, and default
+   to `keep_resources=false` (which tears down and skips the bootstrap). Read
+   [Greenfield → when a green Gov run means nothing](greenfield.md#when-a-green-gov-run-means-nothing)
+   **before** interpreting a Gov brownfield result.
+3. **Azure Maps is unavailable in GCC-High / IL5**, so the Maps decision does
    not arise. Purview is not in the IL5 audit scope; IL5 uses the Atlas-on-AKS
    catalog instead.
+4. **Unity Catalog is not available in Azure Government.** Loom Unity is
+   therefore not a parity checkbox in Gov — it is the catalog story
+   (`cloud-parity.md`). Note that it has no automated roll path on either cloud;
+   see [Greenfield](greenfield.md#what-phase-2-does-not-update--loom-unity-iceberg-and-trino).
 
-Gov brownfield has **not been verified end-to-end**. It is declared untested
-here rather than implied working.
+**Per-cloud verification status for brownfield:**
+
+| Cloud | Status |
+|---|---|
+| **Commercial** | Template-level only (see the table at the top of this page) |
+| **GCC** | **Not verified.** The lane's most recent runs conclude `success` with the deploy job `skipped` |
+| **GCC-High / IL4** | **Not verified.** No Gov brownfield deploy has been run |
+| **DoD IL5** | **Never executed** |
+
+Gov brownfield has **not been verified end-to-end** on any boundary. It is
+declared untested here rather than implied working.
 
 ---
 
@@ -662,14 +789,17 @@ shipped behaviour.
 
 | Capability | Evidence on this branch |
 |---|---|
-| One `adopt` object parameter replacing 36 `existing*` scalars | `main.bicep:504` `param adopt object = {}`; **zero** `^param existing` declarations remain; the template is at **216** params, down from 251 (cap 256) |
-| Adoption always suppresses creation | `main.bicep:567-583`, one `var provision<Svc> = <enableFlag> && adoptMode(adopt, '<key>') == 'create'` per service — the class A / class B split is gone |
-| Every emitter writes the bag, not the scalars | `byo-wizard.sh:364`, `scan-and-deploy.sh`, `lib/setup/adopt-bag.ts` (`deriveAdoptBag`, consumed by every tier of `app/api/setup/deploy/route.ts`), `lib/setup/service-choices-to-params.ts:79` |
+| One `adopt` object parameter replacing 36 `existing*` scalars | `main.bicep` declares `param adopt object = {}`; the 36 per-service `existing*` scalars are gone. **One `^param existing` declaration remains** — `existingVpnGatewayName`, added deliberately by #3058 for the VPN-gateway singleton (see [estate-owned singletons](#estate-owned-singletons--auto-adopted-by-the-deploy-no-input-needed)). Measured 2026-08-08: **222** total params, cap 256 |
+| Adoption always suppresses creation | one `var provision<Svc> = <enableFlag> && adoptMode(adopt, '<key>') == 'create'` per service — the class A / class B split is gone |
+| Every emitter writes the bag, not the scalars | `byo-wizard.sh`, `scan-and-deploy.sh`, `lib/setup/adopt-bag.ts` (`deriveAdoptBag`, consumed by every tier of `app/api/setup/deploy/route.ts`), `lib/setup/service-choices-to-params.ts` |
 | One adoption catalog, guarded | `lib/deploy/adoption-catalog.ts`; `scripts/ci/check-adoption-catalog-sync.mjs` runs in `loom-guardrails.yml` |
 | `/setup` reachable on an estate that already has a hub | the redirect is removed; `scripts/ci/check-setup-entrypoints.mjs` fails the build if `redirect(` reappears |
-| Failure classification + bounded retry | `lib/deploy/failure-taxonomy.json` + `scripts/ci/deploy-retry.mjs` — on the Commercial AND Gov deploy workflows (#3017; the Gov wiring is merged, not deployed — first Gov run owed on Actions). Guard: `scripts/ci/__tests__/gov-deploy-retry-wiring.test.mjs` |
+| Failure classification + bounded retry, **including on Gov** | `lib/deploy/failure-taxonomy.json` + `scripts/ci/deploy-retry.mjs`. Measured 2026-08-08: invoked by `deploy-fiab-commercial.yml`, `deploy-fiab-gcch.yml`, `deploy-fiab-gcc.yml`, `deploy-fiab-il5.yml` and `deploy-gov.yml`. Guard: `scripts/ci/__tests__/gov-deploy-retry-wiring.test.mjs`. **No Gov run has exercised it yet** — wired is not proven (`deploy-integrity.md` R2) |
 
-### Fixed on this branch — the deploy no longer discards your brownfield picks (#3016 — merged, not deployed until the next roll)
+### Fixed — the deploy no longer discards your brownfield picks (#3016)
+
+**Landed in #3062, merged 2026-08-07. Merged is not deployed** — until the next
+apply, the estate still behaves as it did before.
 
 The wizard's adopt-or-create plan (and the legacy `serviceChoices` /
 `existing*` fields) now derive ONE adopt bag —
@@ -715,24 +845,48 @@ pins each tier and goes red if one stops consuming the bag.
 
 | Gap | Effect | Tracked |
 |---|---|---|
-| `evaluateFitness` has no production producer | The `assertPlanIsDeployable` gate is wired at the deploy submit (see §Step 4), but nothing evaluates a live resource and attaches the verdict — an un-evaluated adoption passes the gate un-checked | **#3014** (follow-up) |
+| **`evaluateFitness` has no production producer — and this DISABLES the wizard's Deploy button on every adopt plan** | Not merely "un-checked adoptions pass the gate". Because `planBlockers()` treats a missing verdict as blocking and the review step gates Deploy on it, a brownfield plan cannot be submitted from the UI at all. Full measurement: [above](#blocking-defect-the-wizard-cannot-deploy-a-plan-containing-an-adopt-decision). **Use the CLI.** | **#3014** (follow-up) |
 | GitHub-dispatch tier cannot carry the adopt bag | Brownfield submits fall through to the copy-paste gate when only the dispatch tier is available; needs a `plan_json` input on the deploy workflows | **#3016** (follow-up) |
-| Purview managed storage rejected by tenant policy (`RequestDisallowedByPolicy`); APIM private-DNS re-link `Conflict`; VPN gateway created under a different name than the existing one | A brownfield re-apply fails on ARM leaves that adoption should have suppressed. **Fixed in the tree, NOT yet deployed** — PR #3058 merged 2026-08-07 (adopt-existing singletons + policy-compliant Purview managed storage + per-ARM-leaf classification); it remains what you hit on the estate until the next apply | **#3038** (merged, not deployed) |
+| Purview managed storage rejected by tenant policy (`RequestDisallowedByPolicy`); APIM private-DNS re-link `Conflict`; VPN gateway created under a different name than the existing one | A brownfield re-apply fails on ARM leaves that adoption should have suppressed. **Fixed in the tree, NOT yet deployed** — PR #3058 merged 2026-08-07; it remains what you hit on the estate until the next apply | **#3038** (merged, not deployed) |
 | No networking / Log Analytics / ACR / Key Vault adoption | You cannot bring your own VNet, subnets, DNS zones, firewall, workspace or registry (class C above) | — |
-| `EXISTING_STORAGE` / `_POSTGRES` / `_KEYVAULT` / `_FIREWALL` have no parameter consumer | Setting them does nothing at deploy time | — |
+| `EXISTING_STORAGE` / `_POSTGRES` / `_KEYVAULT` / `_FIREWALL` have no parameter consumer | Setting them does nothing at deploy time. The wizard's review step also collects a **storage** choice (`existingLoomStorageAccount`) which the deploy route declares and never reads — same class of dead input | — |
 | `dlz-attach` adoption is unexercised | The parameter file folds all 13 services, but that topology skips the admin plane and no adopt deploy has been run on it | — |
+| No automated roll for `loom-unity` / `iceberg-catalog` / `loom-trino` | Not brownfield-specific, but it bites a brownfield estate first because you re-apply more often. See [Greenfield → what phase 2 does not update](greenfield.md#what-phase-2-does-not-update--loom-unity-iceberg-and-trino) | — |
 
 ### How to re-measure this section
 
-Every row above is a command, not an opinion. Re-run these before trusting it:
+Every row above is a command, not an opinion. Re-run these before trusting it,
+and note the **expected** value — a bare command with no expectation is not a
+check:
 
 ```bash
-grep -c '^param existing' platform/fiab/bicep/main.bicep        # expect 0
-grep -c '^param ' platform/fiab/bicep/main.bicep                # expect < 256
-grep -rn 'assertPlanIsDeployable' apps/fiab-console --include=*.ts | grep -v __tests__   # expect fitness.ts + the deploy route
-grep -n 'deriveAdoptBag' apps/fiab-console/app/api/setup/deploy/route.ts                 # expect the one choke-point call
-grep -c 'deploy-retry' .github/workflows/deploy-fiab-gcch.yml   # expect >0 (#3017)
+# Exactly ONE remains: existingVpnGatewayName (the #3058 VPN singleton).
+grep -n '^param existing' platform/fiab/bicep/main.bicep
+
+# Must stay under the ARM 256-param cap. Measured 2026-08-08: 222.
+grep -c '^param ' platform/fiab/bicep/main.bicep
+
+# Expect fitness.ts + the deploy route (the GATE is wired).
+grep -rn 'assertPlanIsDeployable' apps/fiab-console --include=*.ts | grep -v __tests__
+
+# Expect ZERO hits outside fitness.ts / plan-builder.ts — the EVALUATOR is not
+# wired, which is what disables the wizard's Deploy button on any adopt plan.
+grep -rn 'evaluateFitness\|applyFitness' apps/fiab-console --include=*.ts --include=*.tsx | grep -v __tests__
+
+# Expect the one choke-point call.
+grep -n 'deriveAdoptBag' apps/fiab-console/app/api/setup/deploy/route.ts
+
+# Expect > 0 on every Gov lane (#3017, landed in #3062).
+grep -c 'deploy-retry' .github/workflows/deploy-fiab-gcch.yml \
+  .github/workflows/deploy-fiab-gcc.yml .github/workflows/deploy-fiab-il5.yml
 ```
+
+> **An earlier revision of this block said `grep -c '^param existing' … # expect 0`.**
+> That expectation now **fails** — #3058 deliberately reintroduced one such
+> parameter for the VPN-gateway singleton, and the same page documents it two
+> sections earlier. A doc that supplies a check which contradicts its own body
+> is worse than one that omits the check, so the expectation is corrected rather
+> than deleted.
 
 ---
 

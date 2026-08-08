@@ -28,7 +28,7 @@ is already in your subscriptions.
 
 </div>
 
-Two supporting references, used by both paths:
+Three supporting references, used by both paths:
 
 <div class="grid cards" markdown>
 
@@ -37,6 +37,12 @@ Two supporting references, used by both paths:
     What Loom scans, what it uses each service for, what it **changes** about a
     service you let it adopt, and how to supply existing-infrastructure values
     by hand.
+
+-   :material-folder-network: [**Resource-group layout, naming and tags**](resource-groups.md)
+
+    The naming **contract**, the `single`/`default` trap that broke the
+    post-deploy bootstrap, the `rg-csa-loom-` teardown blast radius, CAF tags,
+    and the not-built function-RG split (t169).
 
 -   :material-lifebuoy: [**Failure recovery**](failure-recovery.md)
 
@@ -55,44 +61,72 @@ Two supporting references, used by both paths:
 ## The in-Console setup wizard, step by step
 
 `deploy-integrity.md` **R8** requires the wizard and the docs to agree — a wizard
-step with no doc is drift, and a defect. This is the missing walkthrough: the
-`/setup` rail, in the order it runs, measured against
-`apps/fiab-console/lib/panes/setup-wizard.tsx` (`RAIL_STEPS`, `:191-201`) on
-2026-08-06.
+step with no doc is drift, and a defect. This is that walkthrough: the `/setup`
+rail, in the order it runs, measured against
+`apps/fiab-console/lib/panes/setup-wizard.tsx` (`RAIL_STEPS`) on 2026-08-08.
 
 | # | Step (rail label) | What you decide | Notes |
 |---|---|---|---|
-| 1 | **Cloud boundary** | Commercial · GCC · GCC-High / IL4 · IL5 | Selects the boundary parameter file. GCC is M365 GCC identity over Azure Public; GCC-High and IL5 are Azure Government |
+| 1 | **Cloud boundary** | Commercial · GCC · GCC-High / IL4 · IL5 | Selects the boundary parameter file *and* the workflow the deploy dispatches to. GCC is M365 GCC identity over Azure Public; GCC-High and IL5 are Azure Government |
 | 2 | **Deployment mode** | single-sub or multi-sub | Single-sub puts the Admin Plane and one Data Landing Zone in the same subscription |
-| 2b | **Deploy new, or wire existing?** | *only when mode = multi-sub* — deploy a new DLZ, or wire already-deployed DLZs into this Admin Plane (RBAC + env, no re-deploy) | A **dynamic** sub-step inserted after *Deployment mode*; it is not in the static rail, which is why it is easy to miss when reading the code |
+| 2b | **Deploy new, or wire existing?** | *only when mode = multi-sub* — deploy a new DLZ, or wire already-deployed DLZs into this Admin Plane (RBAC + env, no re-deploy) | A **dynamic** sub-step inserted after *Deployment mode*; it is not in the static rail. The *wire-existing* branch **skips steps 4–7 entirely** and goes straight to Review |
 | 3 | **Subscription & region** | The deploy target | Region choice is load-bearing — see the region-caveat table in [Greenfield](greenfield.md#phase-1--infrastructure-4090-min) |
-| 4 | **Domain name** | The landing-zone name | Becomes `rg-csa-loom-dlz-<domain>-<location>` — see [resource-group layout](greenfield.md#resource-group-layout-and-naming) |
-| 5 | **Capacity sizing** | Compute equivalence (F-SKU class) | Presented as an equivalence panel, not raw SKUs |
-| 6 | **Analysis scope** | Which subscriptions Loom may **read** | Read-only. The step's own words: *"Before deploying anything, Loom can look at what you already have and offer to use it instead of deploying a duplicate."* This is the R5 multi-subscription analysis |
-| 7 | **Reuse or deploy** ("Scan & choose") | **adopt / create / skip, per service** | The brownfield decision step — full reference in [Brownfield](brownfield.md#step-2--choose-adopt-or-create-per-service) |
-| 8 | **Review & deploy** | Confirm the plan and launch | Produces the reviewable adopt-or-create plan |
+| 4 | **Domain name** | The landing-zone name, plus an optional **vanity URL** | Becomes `rg-csa-loom-dlz-<domain>-<location>` — see [resource-group layout](resource-groups.md) |
+| 5 | **Capacity sizing** | Compute equivalence (F-SKU class, F2–F512) | Presented as an equivalence panel, not raw SKUs |
+| 6 | **Analysis scope** | Which subscriptions Loom may **read** | Read-only. This is the R5 multi-subscription analysis |
+| 7 | **Reuse or deploy** | **adopt / create / skip, per service** | The brownfield decision step — full reference in [Brownfield](brownfield.md#step-2--choose-adopt-or-create-per-service) |
+| 8 | **Review & deploy** | Confirm the plan and launch. Also carries the Entra identity card, the deployment diagram, a bicep preview, a read-only networking scan panel, and a vCPU quota preflight | The **Deploy** button lives here |
 
 Three transient steps (`intro`, `deploying`, `done`) bracket the rail and carry
 no decisions.
 
-> ### Two things the wizard does that the steps above do not tell you
+> ### Two constraints the step list does not show
 >
-> 1. **Its scanner is not the good scanner (#3015).** Step 6/7 call
->    `POST /api/setup/scan-services`, which truncates silently past 1000 resources
->    and cannot distinguish "no Reader on that subscription" from "that
->    subscription is empty". The honest scanner — coverage probe, per-subscription
->    `scanned` / `no-access` / `truncated` ledger, real paging — is
->    `POST /api/deploy/discovery`. Details and the workaround:
->    [Brownfield → step 1](brownfield.md#step-1--the-multi-subscription-analysis).
-> 2. **Your step-7 decisions may not reach the deploy (#3016).** Of the four
->    deploy tiers, only the copy-paste `az` fallback carries the adopt bag today.
->    **Until that lands, drive a brownfield install from the CLI, not the wizard**
->    — [Brownfield → open](brownfield.md#open--the-deploy-still-discards-your-brownfield-picks-3016).
+> Both are measured against the code on 2026-08-08, not inferred.
 >
-> Fixes for both are **in flight in PR #3062, which is OPEN — not merged, not
-> deployed** (checked 2026-08-06). Re-check with
-> `gh pr view 3062 --json state,mergedAt` before assuming either is resolved;
-> per `deploy-integrity.md` R2 a merge is not a fix.
+> 1. **The wizard is first-install-only.** It never submits a `topology`, so
+>    `POST /api/setup/deploy` falls back to `topology='tenant'` and returns
+>    **409** when a hub already exists in the tenant — pointing you at
+>    `/admin` → *Add landing zone* (`topology=dlz-attach`) instead. That is the
+>    correct invariant (a second Console can never be stamped), but it means the
+>    wizard is not the tool for reconciling an existing estate. Use
+>    `deploy-fiab-commercial.yml` with `allow_existing_hub=true` for that —
+>    [Brownfield → adopting into an existing hub](brownfield.md#adopting-into-an-existing-loom-hub).
+> 2. **A plan containing any `adopt` decision cannot be deployed from the
+>    wizard.** The Deploy button is gated on `planBlockers()`, which blocks every
+>    adopt decision that has no fitness verdict — and no production code path
+>    ever attaches one. So **drive a brownfield install from the CLI**, and note
+>    that `recommendFor()` picks `adopt` *by default* whenever one candidate is
+>    found, so this is the default outcome on a brownfield tenant, not an opt-in.
+>    Measurement and re-measure commands:
+>    [Brownfield → blocking defect](brownfield.md#blocking-defect-the-wizard-cannot-deploy-a-plan-containing-an-adopt-decision).
+>
+> **Corrections to an earlier version of this box**, recorded rather than
+> silently rewritten:
+>
+> - It said the wizard calls `POST /api/setup/scan-services` and that the good
+>   scanner is elsewhere. **That route no longer exists** — the directory is
+>   deleted. The wizard's scan runs on `POST /api/setup/estate-scan`, which
+>   shares the coverage probe (#3015).
+> - It said "**PR #3062, which is OPEN — not merged, not deployed**". #3062
+>   **merged 2026-08-07**. Per `deploy-integrity.md` R2 that still is not
+>   "deployed" — check `curl -s https://<your-console-hostname>/build-marker.txt`
+>   against `origin/main` before relying on any of it.
+> - It attributed the "use the CLI for brownfield" advice to **#3016**. #3016 is
+>   fixed. The advice still holds, for the **#3014** fitness reason above.
+
+### Wizard steps that have no walkthrough yet
+
+Named here rather than left as silent drift (R8). Each is implemented in the
+wizard and undocumented in the walkthroughs:
+
+`intro` hero · the *Deploy new vs wire-existing* multi-sub sub-step (including
+`POST /api/setup/wire-existing`, which does RBAC + env patching and no deploy) ·
+the vanity-URL field · the capacity-equivalence panel · the storage /
+organizational-visuals choice on the review step (whose
+`existingLoomStorageAccount` value the deploy route declares but never reads) ·
+the Entra identity card · the in-wizard quota preflight · the deployment
+diagram · deploy-run streaming and re-attach.
 
 ## Deployment paths
 
@@ -289,12 +323,19 @@ consolidation is behaviorally inert.
 
 **The rule:** new deploy-time settings land as a property on one of these
 bags (or as a nested-module param) — **never** as a new top-level `param` in
-`admin-plane/main.bicep` or the top-level `main.bicep` (at 248 params
-itself). To add a setting: add a typed property to the matching `*ConfigT`
-type, add the shim `var` with its default, and wire the value from the
-caller's bag literal. CI enforces headroom via
-`scripts/ci/check-bicep-param-cap.mjs` (warn ≥ 240, fail ≥ 250 on the
+`admin-plane/main.bicep` or the top-level `main.bicep`. To add a setting: add a
+typed property to the matching `*ConfigT` type, add the shim `var` with its
+default, and wire the value from the caller's bag literal. CI enforces headroom
+via `scripts/ci/check-bicep-param-cap.mjs` (warn ≥ 240, fail ≥ 250 on the
 admin-plane module).
+
+Re-measure rather than trusting a published number — these drift with every
+merge. Measured 2026-08-08: the top-level `main.bicep` is at **222**.
+
+```bash
+grep -c '^param ' platform/fiab/bicep/main.bicep
+grep -c '^param ' platform/fiab/bicep/modules/admin-plane/main.bicep
+```
 
 ## Where to next
 
