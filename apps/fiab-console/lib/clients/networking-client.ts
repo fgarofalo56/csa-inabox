@@ -454,17 +454,61 @@ export async function deletePrivateEndpoint(peName: string): Promise<void> {
 }
 
 /** Register the PE's FQDN in a hub private DNS zone (so the FQDN resolves to the
- * PE private IP). `dnsZoneId` is the ARM id of the privatelink.* zone. */
+ * PE private IP). `dnsZoneId` is the ARM id of the privatelink.* zone.
+ *
+ * MERGES — never replaces (#3046, FINISHLINE D8). ARM's
+ * `.../privateDnsZoneGroups/default` PUT is a FULL REPLACE of
+ * `privateDnsZoneConfigs`, so the previous single-config body silently dropped
+ * every other config the endpoint carried. A private endpoint deregisters its A
+ * record from any zone that leaves the list, so dropping a config is a live DNS
+ * outage for whatever that config served — the same defect class as the DNS
+ * migration script's step 9, which took the estate down on 2026-08-06.
+ * deploy-integrity.md R5: never destroy wiring you did not create.
+ *
+ * If the existing group cannot be READ, this throws rather than PUTting a
+ * single-config body. "I could not read it" is not "there is nothing there"
+ * (R7). */
 export async function createPrivateDnsZoneGroup(peName: string, dnsZoneId: string, configName = 'default'): Promise<void> {
   const cfg = readNetworkingConfig();
+  const url = `${peBase(cfg, peName)}/privateDnsZoneGroups/default?api-version=${PE_API}`;
+
+  // Read what is already bound. A 404 is a genuine absence (no group yet); any
+  // other failure is UNKNOWN and must not be treated as empty.
+  let existing: Array<{ name: string; properties: { privateDnsZoneId: string } }> = [];
+  try {
+    const current = await armGet<any>(url);
+    existing = (current?.properties?.privateDnsZoneConfigs || [])
+      .filter((c: any) => c?.name && c?.properties?.privateDnsZoneId)
+      .map((c: any) => ({ name: String(c.name), properties: { privateDnsZoneId: String(c.properties.privateDnsZoneId) } }));
+  } catch (e) {
+    if (!(e instanceof NetworkingArmError && e.status === 404)) {
+      throw new NetworkingArmError(
+        `Could not read the existing private DNS zone group on "${peName}", so it is UNKNOWN which zones it ` +
+          `already registers. Refusing to PUT — the PUT replaces the whole config list and would silently ` +
+          `deregister every zone it did not know about (#3046). Underlying error: ${(e as Error).message}`,
+        e instanceof NetworkingArmError ? e.status : 0,
+      );
+    }
+  }
+
+  const already = existing.find(
+    (c) => c.properties.privateDnsZoneId.toLowerCase() === dnsZoneId.toLowerCase(),
+  );
+  if (already) return; // idempotent — the zone is already bound, nothing to change.
+
+  // A config name must be unique within the group; ARM would reject a duplicate,
+  // and reusing one would repoint someone else's config at our zone.
+  let name = configName;
+  for (let i = 2; existing.some((c) => c.name.toLowerCase() === name.toLowerCase()); i += 1) {
+    name = `${configName}-${i}`;
+  }
+
   const body = {
     properties: {
-      privateDnsZoneConfigs: [
-        { name: configName, properties: { privateDnsZoneId: dnsZoneId } },
-      ],
+      privateDnsZoneConfigs: [...existing, { name, properties: { privateDnsZoneId: dnsZoneId } }],
     },
   };
-  await armPut<any>(`${peBase(cfg, peName)}/privateDnsZoneGroups/default?api-version=${PE_API}`, body);
+  await armPut<any>(url, body);
 }
 
 /** Stable PE name for a workspace's inbound-protection endpoint. */
@@ -900,7 +944,9 @@ export async function ensureManagedPeDnsZoneGroup(
         }
       }
     }
-  } catch { /* zone-group list failed — fall through to the attach attempt */ }
+  } catch { /* the zone-group LIST failed. That is "unknown", not "not attached" — so we do not
+               conclude anything here. createPrivateDnsZoneGroup below re-reads the group and
+               THROWS rather than PUTting a single-config body over wiring it could not see (#3046). */ }
   // Resolve the zone's ARM id from the live private DNS zones the Console
   // identity can read (hub networking RG preferred when the zone exists twice).
   const zones = await listPrivateDnsZones();
