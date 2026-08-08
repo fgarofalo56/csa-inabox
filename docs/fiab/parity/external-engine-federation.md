@@ -58,6 +58,100 @@ real metastore, zero errors) — the auth chain is closed. The **Iceberg** read
 still does not, and that is the row this doc grades, so the grade stays **D**
 (RC-12).
 
+## RC-12 — the two live Iceberg statuses, MEASURED (2026-08-08)
+
+The live console measured two different upstream statuses from one freshly
+restarted `iceberg-catalog`:
+
+```
+GET /api/catalog/iceberg/config?warehouse=loom   ->  upstream 403  (243ms)
+GET /api/catalog/iceberg/namespaces              ->  upstream 500  (539ms)
+```
+
+The working hypothesis was **"authorized principal, ABSENT OBJECT"** — provision
+the `loom` warehouse and both clear. **That premise is falsified.** Every line
+below was measured in Docker against the real `apps/loom-unity` image, with the
+Console's true credential shape (a Microsoft Entra **app-only** token: `sub` =
+the managed identity's object id, and **no `email` claim**), plus the bare
+upstream image as a control. Reproduce with:
+
+```bash
+bash apps/loom-unity/tests/authz/iceberg-e2e.sh     # 17/17 PASS
+```
+
+| # | Call | Principal | Status | What it means |
+|---|---|---|---|---|
+| C | `/v1/config?warehouse=loom` | RAW Entra bearer, never exchanged | **403** | **This is the live 403.** Upstream `AuthDecorator` rejects any bearer whose `iss` is not its own `internal` issuer. Nothing to do with the warehouse. |
+| D | `/v1/config?warehouse=loom` | Console, exchanged | **200** | An exchanged token reads the handshake fine. |
+| E | `/v1/config?warehouse=<absent>` | Console, exchanged | **200** | **The premise, falsified directly.** `config()` never looks the catalog up — upstream's own source carries `// TODO: check catalog exists`. An absent warehouse cannot produce a 403. |
+| G | `/v1/namespaces` (unprefixed) | admin | **500** | **Half of the live 500.** There is no such route: upstream's are `/v1/catalogs/{catalog}/…`. Because `UnityAccessDecorator` is bound as a **route decorator over the whole `/api/2.1/unity-catalog/` prefix**, an unmatched path still enters it, `findServiceMethod` returns null, and it dies `"Couldn't unwrap service."` — a 500, not a 404. The Loom client sent exactly this path. |
+| H | `/v1/catalogs/loom/namespaces` | admin (metastore OWNER) | **500** | **The other half, and the worse one.** Even the CORRECT route fails, for *every* principal: `{"error":{"message":"Authorization filter not initialized — ensure the request goes through UnityAccessDecorator.","code":500}}` |
+| I | `/v1/catalogs/unity/namespaces` on **bare `unitycatalog/unitycatalog:v0.5.0`** | anonymous | **200** | **The control that names the cause.** `{"namespaces":[["default"]]}`. The regression arrives with the **v0.5.1 `unitycatalog-server` overlay** this image applies (Dockerfile, for upstream #1603). v0.5.1 added `@ResponseAuthorizeFilter` + `AuthorizedService.applyResponseFilter`, and `IcebergRestCatalogService.listNamespaces` calls `SchemaService.listSchemas` **in-process** — under the Iceberg route's context, which carries no `ResultFilter`. |
+| J | `/v1/catalogs/loom/namespaces/default` | Console, exchanged | **200** | ✅ |
+| K | `/v1/catalogs/loom/namespaces/default/tables` | Console, exchanged | **200** | ✅ **An authenticated Iceberg read, as the Console's own principal, against a warehouse the platform provisioned by itself.** |
+
+### Corrections to earlier reasoning in this lane, recorded so they are not repeated
+
+- **"403 = absent object" is wrong** (row E). It is an unexchanged bearer (row C).
+- **"Every Iceberg route requires metastore OWNER, and OWNER is not grantable"**
+  is a correct reading of the source (`@AuthorizeExpression("#authorize(#principal,
+  #metastore, OWNER)")`, `UnityAccessUtil.initializeAdmin`, and `OWNER` absent
+  from the OpenAPI `Privilege` enum in `api/all.yaml`) but it does **not** predict
+  behaviour: measured, a merely-exchanged principal — bound or not, granted or not —
+  reads these routes (rows D/E/J/K). Worth knowing: on this build the Iceberg
+  surface is effectively **authentication**-gated, not authorization-gated.
+- **The sibling `authz-e2e.sh` could never have caught this.** It mints every
+  token with `email=admin` (the `test-idp.py` default), which resolves to the
+  bootstrap admin user. The real Console has no `email` claim at all. The harness
+  now supports `email=` to omit the claim, and `iceberg-e2e.sh` uses it.
+
+### What this lane changed
+
+1. **The warehouse is auto-provisioned** (`apps/loom-unity/bin/loom-entrypoint.sh`).
+   `data-plane/iceberg-catalog-aca.bicep` had always emitted
+   `LOOM_ICEBERG_WAREHOUSE` and **nothing read it** — `grep -ci warehouse` over the
+   entrypoint returned **0**. The entrypoint now creates the catalog *and* a
+   `default` namespace and grants the Console every privilege the API can express,
+   using the server's own admin token, on **every boot** and idempotently
+   (`auto-bind-by-default.md` §1/§3/§5).
+2. **The client speaks the Iceberg REST spec** (`lib/azure/iceberg-catalog-client.ts`).
+   It performs the `/v1/config` handshake, applies the server's `prefix` override
+   (`catalogs/<warehouse>`), and drops the memoized prefix on 404/500 so a
+   re-provisioned catalog re-handshakes rather than wedging.
+3. **`/api/catalog/iceberg/namespaces` serves real rows** by falling back to the
+   Unity schemas API on the same server when the image returns the exact
+   `Authorization filter not initialized` signature — disclosed as `via:
+   "unity-schemas"` in the response, keyed to that string alone so no other 500 is
+   masked.
+
+### Residual — stated, not rounded up
+
+- **The native IRC LIST-namespaces route is still broken** in the shipped image.
+  The Console works around it; an **external engine calling the catalog directly**
+  (Trino, Spark, DuckDB) still gets a 500 on that one route. Every other Iceberg
+  route works. Fixing it properly means either an upstream fix or narrowing the
+  v0.5.1 overlay — neither is done here.
+- **RC-2 durability.** `admin-plane/main.bicep` invokes
+  `data-plane/iceberg-catalog-aca.bicep` with **no `catalogDbUrl`**, so the app
+  runs `LOOM_UNITY_DB_LOCAL=1` — ephemeral H2 in `/tmp` — **and** `minReplicas: 0`.
+  Its sibling `loom-unity` does get the Entra-only Postgres store
+  (`loomUnityPostgres`). Measured: the auto-bind makes the *warehouse* survive a
+  restart (re-created on the next boot, idempotently — the second boot logs
+  `present name=loom … nothing to create`), but **table registrations an external
+  engine makes do not**. Concrete path to close it: `loom-unity-postgres.bicep`
+  already takes an `additionalAdministrators` array and emits `jdbcUrl`, so wiring
+  the Console UAMI as a second Entra administrator + a second database and passing
+  `catalogConfig.catalogDbUrl` is the change — **not made here**, because it is an
+  infra change to a working durable store that this lane could not deploy or
+  verify.
+- **Gov: untested.** `data-plane/iceberg-catalog-aca.bicep` derives its authority
+  host from `environment().authentication.loginEndpoint`, so it is boundary-neutral
+  by construction, and everything this lane changed is in the image entrypoint and
+  the console client — no Commercial-only branch. But per `cloud-parity.md` §4 that
+  is an argument, not a receipt: **no Gov run was made**, and
+  `gov-provision-trino.yml` has still never run.
+
+
 ## What the browser run PROVED — first working federation behaviour
 
 Run [31238543755](https://github.com/fgarofalo56/csa-inabox/actions/runs/31238543755),

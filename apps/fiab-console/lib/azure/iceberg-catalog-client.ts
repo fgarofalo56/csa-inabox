@@ -189,6 +189,88 @@ export function assertTableName(table: string): string {
   return t;
 }
 
+/**
+ * Insert the Iceberg REST Catalog **`prefix`** into a `/v1/...` sub-path.
+ *
+ * PURE, so the routing decision is assertable offline — the alternative is a
+ * decision only exercisable against a live catalog, i.e. one nobody notices has
+ * gone wrong. It went wrong for the entire life of this client.
+ *
+ * The Iceberg REST spec defines `prefix` as a path element between `/v1/` and
+ * the resource: `GET /v1/{prefix}/namespaces`. A server returns it from the
+ * `/v1/config` handshake in `overrides.prefix`, and a conforming client MUST
+ * apply it to every subsequent request.
+ *
+ * MEASURED (upstream `IcebergRestCatalogService`, read at BOTH tags this image
+ * ships — v0.5.0 base + the v0.5.1 server overlay, see apps/loom-unity/Dockerfile):
+ *
+ *   PREFIX_BASE = "catalogs/"
+ *   config()  -> ConfigResponse.withOverride("prefix", PREFIX_BASE + catalog)
+ *   @Get("/v1/catalogs/{catalog}/namespaces")
+ *   @Get("/v1/catalogs/{catalog}/namespaces/{namespace}/tables")
+ *   @Get("/v1/catalogs/{catalog}/namespaces/{namespace}/tables/{table}")
+ *
+ * There is **no `/v1/namespaces` route on this server at all** — which is what
+ * this client called until now. And the miss does not surface as a 404: the
+ * `UnityAccessDecorator` is bound as a ROUTE DECORATOR over the whole
+ * `/api/2.1/unity-catalog/` prefix (`UnityCatalogServer`), so an unmatched path
+ * under it still enters the decorator, `findServiceMethod` returns null, and the
+ * request dies on `RuntimeException("Couldn't unwrap service.")` — an opaque
+ * **HTTP 500**. That is exactly the 500 the live Commercial console measured on
+ * `GET /api/catalog/iceberg/namespaces`, and it is why it looked like a server
+ * fault rather than a client one.
+ */
+export function ircPathWithPrefix(subPath: string, prefix: string): string {
+  const sub = subPath.startsWith('/') ? subPath : `/${subPath}`;
+  const p = String(prefix ?? '').replace(/^\/+|\/+$/g, '');
+  // Only `/v1/*` resources are prefixed. `/v1/config` is the handshake that
+  // PRODUCES the prefix, so it is never itself prefixed (see icebergFetchRaw).
+  if (!p || !sub.startsWith('/v1/')) return sub;
+  return `/v1/${p}${sub.slice('/v1'.length)}`;
+}
+
+/**
+ * Resolved IRC prefix, cached per (base, mount-prefix, warehouse).
+ *
+ * The handshake is one extra round trip on a cold path, not per call. The cache
+ * is cleared whenever a prefixed call comes back 404/500 so a catalog that was
+ * re-provisioned, renamed, or restarted onto a different warehouse RE-HANDSHAKES
+ * rather than repeating a stale path — `.claude/rules/auto-bind-by-default.md` §3
+ * (a stale binding is repaired automatically, never shown to the user).
+ */
+const ircPrefixCache = new Map<string, string>();
+
+/** Test seam + self-heal hook — drop every memoized IRC prefix. */
+export function resetIcebergPrefixCache(): void {
+  ircPrefixCache.clear();
+}
+
+function ircPrefixCacheKey(warehouse: string): string {
+  return `${icebergCatalogBase()}|${icebergCatalogPrefix()}|${warehouse}`;
+}
+
+/**
+ * Perform the `/v1/config?warehouse=<wh>` handshake and return the server's
+ * `prefix` override (`''` when the server declares none — a plain Polaris-shaped
+ * catalog, which is legal).
+ *
+ * FAILS LOUD, never guesses. If the handshake cannot be completed the error
+ * propagates with its real status, so the caller reports "the catalog refused
+ * the handshake (HTTP 403)" instead of fabricating a path and reporting the
+ * unrelated 500 that path produces. Inventing `catalogs/<warehouse>` here would
+ * be a message asserting something the code never established
+ * (`.claude/rules/deploy-integrity.md` R7).
+ */
+export async function resolveIrcPrefix(warehouse = icebergWarehouse()): Promise<string> {
+  const key = ircPrefixCacheKey(warehouse);
+  const hit = ircPrefixCache.get(key);
+  if (hit !== undefined) return hit;
+  const cfg = await ircFetchRaw<IrcConfig>('/v1/config', { query: { warehouse } });
+  const prefix = String(cfg?.overrides?.prefix ?? cfg?.defaults?.prefix ?? '');
+  ircPrefixCache.set(key, prefix);
+  return prefix;
+}
+
 /** Build the absolute upstream URL for an IRC sub-path (`/v1/...`). */
 export function ircUrl(subPath: string, query?: Record<string, string | undefined>): string {
   const sub = subPath.startsWith('/') ? subPath : `/${subPath}`;
@@ -261,12 +343,15 @@ export async function icebergAuthHeader(): Promise<Record<string, string>> {
 }
 
 /**
- * Perform one IRC call with Entra auth injected. Throws {@link IcebergCatalogError}
- * (503 when the catalog is unwired, 502 when unreachable, upstream status
- * otherwise) so BFF routes map it to a structured envelope. Never returns a
- * fabricated body.
+ * Perform one IRC call with Entra auth injected, at the LITERAL sub-path — no
+ * `prefix` resolution. Used for the `/v1/config` handshake itself (which is what
+ * produces the prefix) and as the transport under {@link ircFetch}.
+ *
+ * Throws {@link IcebergCatalogError} (503 when the catalog is unwired, 502 when
+ * unreachable, upstream status otherwise) so BFF routes map it to a structured
+ * envelope. Never returns a fabricated body.
  */
-export async function ircFetch<T = unknown>(
+export async function ircFetchRaw<T = unknown>(
   subPath: string,
   init: { method?: string; body?: unknown; query?: Record<string, string | undefined> } = {},
 ): Promise<T> {
@@ -308,6 +393,30 @@ export async function ircFetch<T = unknown>(
   return (body ?? {}) as T;
 }
 
+/**
+ * Perform one IRC **resource** call: handshake for the server's `prefix`, apply
+ * it per the Iceberg REST spec, then call. Every `/v1/*` operation other than
+ * the handshake itself goes through here.
+ *
+ * On a 404/500 the memoized prefix is dropped so the NEXT call re-handshakes —
+ * the self-healing half of `auto-bind-by-default.md` §3. Those two statuses are
+ * precisely the ones a stale prefix produces on this server (a renamed/absent
+ * warehouse, or a path that no longer matches a route).
+ */
+export async function ircFetch<T = unknown>(
+  subPath: string,
+  init: { method?: string; body?: unknown; query?: Record<string, string | undefined> } = {},
+): Promise<T> {
+  const prefix = await resolveIrcPrefix();
+  try {
+    return await ircFetchRaw<T>(ircPathWithPrefix(subPath, prefix), init);
+  } catch (e) {
+    const status = e instanceof IcebergCatalogError ? e.status : 0;
+    if (status === 404 || status === 500) resetIcebergPrefixCache();
+    throw e;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Typed IRC operations
 // ─────────────────────────────────────────────────────────────────────────────
@@ -341,9 +450,14 @@ export interface IrcLoadTableResult {
   config?: Record<string, string>;
 }
 
-/** `GET /v1/config?warehouse=<wh>` — the catalog handshake every engine makes. */
+/**
+ * `GET /v1/config?warehouse=<wh>` — the catalog handshake every engine makes.
+ *
+ * Deliberately on {@link ircFetchRaw}: this call is what PRODUCES the `prefix`,
+ * so prefixing it would ask for `/v1/<prefix>/config`, a route no IRC server has.
+ */
 export function getCatalogConfig(warehouse = icebergWarehouse()): Promise<IrcConfig> {
-  return ircFetch<IrcConfig>('/v1/config', { query: { warehouse } });
+  return ircFetchRaw<IrcConfig>('/v1/config', { query: { warehouse } });
 }
 
 /** `GET /v1/namespaces` (optionally under `parent`). */
@@ -362,6 +476,121 @@ export function createNamespace(
   // Round-trip through encodeNamespace purely for validation (throws on bad input).
   encodeNamespace(levels);
   return ircFetch('/v1/namespaces', { method: 'POST', body: { namespace: levels, properties } });
+}
+
+/**
+ * The exact upstream failure the LIST-namespaces workaround below is keyed to.
+ *
+ * Deliberately an EXACT signature, not "any 500". A broad catch would silently
+ * mask an unrelated server fault behind a fallback that appeared to work —
+ * which is the failure mode this program keeps paying for. Anything that is not
+ * this defect propagates untouched.
+ */
+const LIST_NS_DEFECT = 'Authorization filter not initialized';
+
+/** True when an error is the measured upstream LIST-namespaces defect. */
+export function isListNamespacesDefect(e: unknown): boolean {
+  return e instanceof IcebergCatalogError
+    && e.status === 500
+    && String(e.message || '').includes(LIST_NS_DEFECT);
+}
+
+/**
+ * `GET /v1/{prefix}/namespaces` — with a disclosed fallback to the Unity
+ * Catalog schemas API on the SAME server when the shipped image cannot serve it.
+ *
+ * MEASURED, in Docker against the real `apps/loom-unity` image (authorization
+ * enabled, warehouse provisioned, namespace present, every principal tried
+ * INCLUDING the server's own metastore-OWNER service token):
+ *
+ *   GET <irc>/v1/catalogs/loom/namespaces
+ *     -> 500 {"error":{"message":"Authorization filter not initialized —
+ *             ensure the request goes through UnityAccessDecorator.", ... }}
+ *
+ * and the CONTROL, the identical call against the BARE upstream
+ * `unitycatalog/unitycatalog:v0.5.0` image with no Loom overlay:
+ *
+ *   -> 200 {"namespaces":[["default"]],"next-page-token":null}
+ *
+ * So the 500 is a regression Loom imports with the v0.5.1 `unitycatalog-server`
+ * overlay its Dockerfile applies (to fix upstream #1603): v0.5.1 added
+ * `@ResponseAuthorizeFilter` + `AuthorizedService.applyResponseFilter`, and
+ * `IcebergRestCatalogService.listNamespaces` calls `SchemaService.listSchemas`
+ * IN-PROCESS, so it runs under the Iceberg route's request context — which
+ * carries no `RESULT_FILTER` attribute — and `applyResponseFilter` throws
+ * INTERNAL. Every OTHER Iceberg route was measured working on the same image
+ * (namespace GET, table list, table load, register: 200).
+ *
+ * An Iceberg namespace on this server IS a Unity Catalog schema — upstream's own
+ * implementation of this route is literally `listSchemas(catalog)` mapped to
+ * `Namespace.of(...)`. So the fallback reads the SAME rows from the SAME server
+ * with the SAME credential; it is not an approximation and it is not mock data.
+ * It is reported through `via` so a caller can never mistake it for the native
+ * path (`.claude/rules/deploy-integrity.md` R7 — never assert what you did not do).
+ */
+export async function listNamespacesResolved(
+  parent?: string,
+): Promise<IrcNamespaceList & { via: 'irc' | 'unity-schemas' }> {
+  try {
+    const r = await listNamespaces(parent);
+    return { ...r, via: 'irc' };
+  } catch (e) {
+    if (!isListNamespacesDefect(e)) throw e;
+    // Nested namespaces do not exist on this server (upstream returns an empty
+    // list for any `parent`), so the fallback matches that behaviour exactly
+    // rather than inventing children.
+    if (parent) return { namespaces: [], via: 'unity-schemas' };
+    return { ...(await listNamespacesViaUnitySchemas()), via: 'unity-schemas' };
+  }
+}
+
+/**
+ * Read the warehouse's namespaces from the Unity Catalog schemas API on the same
+ * catalog server, in the IRC response shape. Same base, same injected bearer,
+ * same audit chokepoint as every other call here.
+ */
+async function listNamespacesViaUnitySchemas(): Promise<IrcNamespaceList> {
+  const warehouse = icebergWarehouse();
+  const ucPath = `/api/2.1/unity-catalog/schemas?catalog_name=${encodeURIComponent(warehouse)}`;
+  const url = `${icebergCatalogBase()}${ucPath}`;
+
+  const t0 = Date.now();
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url, {
+      method: 'GET',
+      headers: { accept: 'application/json', ...(await icebergAuthHeader()) },
+    });
+  } catch (e) {
+    recordDatabricksUnityAccess({ path: ucPath, method: 'GET', status: 0, durationMs: Date.now() - t0, error: e });
+    throw new IcebergCatalogError(
+      `Iceberg REST Catalog unreachable at ${icebergCatalogBase()}: ${(e as Error)?.message || String(e)}`,
+      502,
+      'unreachable',
+    );
+  }
+  recordDatabricksUnityAccess({ path: ucPath, method: 'GET', status: res.status, durationMs: Date.now() - t0 });
+
+  const text = await res.text();
+  let body: { schemas?: Array<{ name?: string }> } = {};
+  if (text) {
+    try { body = JSON.parse(text); } catch { body = {}; }
+  }
+  if (!res.ok) {
+    throw new IcebergCatalogError(
+      `Listing namespaces for warehouse "${warehouse}" failed (HTTP ${res.status}). The Iceberg `
+      + 'LIST-namespaces route is unavailable on this catalog image and the Unity Catalog schemas '
+      + 'API refused as well, so no namespace list could be obtained.',
+      res.status,
+      'namespace_list_failed',
+    );
+  }
+  return {
+    namespaces: (body.schemas || [])
+      .map((s) => String(s?.name ?? ''))
+      .filter(Boolean)
+      .map((n) => [n]),
+  };
 }
 
 /** `GET /v1/namespaces/{ns}/tables`. */

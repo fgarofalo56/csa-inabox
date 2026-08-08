@@ -27,7 +27,7 @@ import {
   icebergCatalogConfigGate,
   icebergWarehouse,
   listNamespaceGrants,
-  listNamespaces,
+  listNamespacesResolved,
   listTables,
   logIcebergAccess,
   namespaceToDotted,
@@ -110,7 +110,10 @@ export const GET = withTenantAdmin(async (req, { session }) => {
       warehouse,
     };
     try {
-      const nsList = await listNamespaces();
+      // Uses the resolved variant so the surface still lists namespaces when the
+      // catalog image returns its known LIST-namespaces 500 (see
+      // iceberg-catalog-client.listNamespacesResolved for the measurement).
+      const nsList = await listNamespacesResolved();
       const found = (nsList.namespaces || []).map((levels) => namespaceToDotted(levels)).slice(0, limit);
       namespaces.push(...found);
       await logIcebergAccess({
