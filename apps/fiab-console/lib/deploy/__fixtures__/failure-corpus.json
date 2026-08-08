@@ -204,6 +204,24 @@
       "source": "deploy-fiab-commercial run 31202584780, nested 'app-deployments' deployment, 2026-08-07",
       "input": "ContainerAppSecretInUse: Container App 'loom-console' has an active revision referencing a secret you are trying to delete. Please add secrets: loom-internal-token,airflow-admin-password,loom-dataverse-client-secret,cosmos-vcore-conn or deactive the revisions: loom-console--0000593 referencing this secret.",
       "expect": { "class": "config", "signalId": "config.container-app-secret-in-use", "retryable": false }
+    },
+    {
+      "name": "config — the REAL az wording for a missing manifest (classified `unknown` before #3090, so nothing could honestly establish absence)",
+      "source": "az acr repository show --image on an absent tag; the message scripts/ci/test-resolve-acr-digest.sh has stubbed verbatim since #2980",
+      "input": "ResourceNotFoundError: The manifest 'v0.1' does not exist for the repository 'loom-console' in the registry 'acrloomxyz'.",
+      "expect": { "class": "config", "signalId": "config.image-tag-absent", "retryable": false }
+    },
+    {
+      "name": "R7 — a correlation id that merely CONTAINS '404' establishes nothing (the false-MISSING the shell regex produced)",
+      "source": "#3090: scripts/ci/{assert-acr-image-tags,resolve-acr-digest}.sh matched a bare `404` alternation, so any az error carrying those three digits read as ABSENT. Both now delegate to this table; this case is what stops the loose pattern coming back.",
+      "input": "ERROR: An unexpected error occurred while processing the request. Correlation id: 404abc12-3456-7890-abcd-ef0123456789",
+      "expect": { "class": "unknown", "signalId": null, "retryable": false }
+    },
+    {
+      "name": "R7 — the #3090 condition itself: a per-ref data-plane denial is UNREACHABLE, never absent",
+      "source": "deploy-fiab-commercial run 31213089184, 2026-08-07 — 15 refs read fine and 4 (including loom-console:03bab987…, the tag the LIVE console was running) were reported MISSING",
+      "input": "denied: client with IP '20.29.127.164' is not allowed access. Refer to https://aka.ms/acr/firewall for details.",
+      "expect": { "class": "config", "signalId": "config.acr-unreachable", "retryable": false }
     }
   ]
 }

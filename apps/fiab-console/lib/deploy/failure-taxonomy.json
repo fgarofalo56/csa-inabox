@@ -293,10 +293,11 @@
         "tagnotfound",
         "the specified tag does not exist",
         "was not found in the registry",
+        "does not exist for the repository",
         "repository name not known to registry"
       ],
       "not": ["denied: requested access", "unauthorized: authentication required", "not allowed access"],
-      "observed": "The registry ANSWERED and the answer was 'no such tag'. This signal is the ONLY basis on which any CSA Loom code may state that an image tag does not exist. scripts/ci/assert-acr-image-tags.sh encodes the same split (it treats a not-found signature as READABLE-and-absent and everything else as UNPROVEN), and the first draft of scripts/ci/roll-gate-decision.mjs matched 'the tag does not exist' when az actually emits 'the SPECIFIED tag does not exist' — hence the verbatim string here.",
+      "observed": "The registry ANSWERED and the answer was 'no such tag'. This signal is the ONLY basis on which any CSA Loom code may state that an image tag does not exist. The first draft of scripts/ci/roll-gate-decision.mjs matched 'the tag does not exist' when az actually emits 'the SPECIFIED tag does not exist' — hence the verbatim strings here. 'does not exist for the repository' was added for #3090: it is the wording az ACTUALLY emits for a missing manifest (`ResourceNotFoundError: The manifest 'v0.1' does not exist for the repository 'loom-console' in the registry '<acr>'`), and config.resource-not-found deliberately excludes it via `not: [\"in the registry\"]` — so until this string was listed here the real absence message classified as `unknown` and NOTHING in the repo could honestly establish absence. NOTE: this comment used to claim scripts/ci/assert-acr-image-tags.sh 'encodes the same split'. That claim was FALSE — that script mapped any unclassified per-ref failure to MISSING whenever a follow-up `az acr repository list` happened to succeed, which is what produced the false-MISSING verdicts in #3090. Both shell checkers now delegate to THIS table instead of re-implementing a regex.",
       "remediationKind": "operator-action",
       "remediation": "The registry answered and the tag is genuinely absent. The image build for this SHA has not finished, or built a different app subset. Wait for the producing build workflow, or dispatch with a tag that exists. Do NOT roll — a revision that cannot pull its image is worse than no roll."
     },
