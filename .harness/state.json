@@ -304,7 +304,7 @@
       "lane": "L-GOV",
       "wave": 1,
       "task_order": 79,
-      "status": "in_progress",
+      "status": "review",
       "title": "4 Gov workflows NEVER run once: gov-build-images, gov-provision-dataplane-images (= #3012 Gov image lane → Gov fedlake/trino NOT deployed), gov-provision-streaming-migrate, gov-workspace-identity — green first runs",
       "depends_on": [
         "D9"
@@ -317,12 +317,10 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "from D2: #3060 — Gov unity catalog runs with the #1603 v0.5.1 security override INERT (classpath patch hit wrong module in every shipped image); Gov image re-roll owed once the image lane first-runs",
-        "D2 reviewer: Gov catalog CANNOT be on the Entra-Postgres path today (plugin ClassNotFound would prevent boot) — it's on another store (H2/EmptyDir lineage); the #3060 re-roll needs a DATA/STORE-CUTOVER step to fresh LU-1 Postgres, existing contents won't migrate; zone bug is a NO-OP in Gov (suffixes coincide)"
-      ],
+      "evidence": "PREMISE SUBSTANTIALLY STALE. gov-build-images: never dispatched, NO defect - GREEN on first-ever run (loom-unity 31239350207, loom-console 31239653478), full supply chain build->tag verify->Trivy CRITICAL->cosign sign+verify->ACR re-lock; console built on a NON-deploy-referenced tag so no live Gov pull was re-armed. gov-workspace-identity: never dispatched, NO defect - GREEN first-ever run (31239339295). gov-provision-dataplane-images: PREMISE FALSE - already succeeded 2026-08-07, never was a never-run. gov-provision-streaming-migrate: never dispatched AND a real bug - failed first dispatch (31239331967) bare exit 3; fixed in PR #3126, MERGED-NOT-DEPLOYED.",
       "agent": "a1e313ba6742f7a45",
-      "dispatched": "2026-08-08"
+      "dispatched": "2026-08-08",
+      "pr": 3127
     },
     {
       "id": "D7",
@@ -502,7 +500,7 @@
       "lane": "L-GOV",
       "wave": 2,
       "task_order": 65,
-      "status": "in_progress",
+      "status": "review",
       "title": "RED Gov workflows: deploy-gov (16d), gov-provision-dbx-sql-invnet (never green), gov-provision-dbx-sql, gov-provision-graph-grants — green each",
       "depends_on": [
         "G2"
@@ -515,16 +513,17 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [],
+      "evidence": "deploy-gov: BROKEN TEMPLATE - deploy/bicep/gov/main.bicep had 7 compile errors and had NEVER compiled. ORCHESTRATOR VERIFIED INDEPENDENTLY on origin/main: 7 errors (BCP036 x1, BCP120 x3, BCP139 x3). This is deploy-integrity R1 P0 - the Gov deploy path was structurally incapable of running. Fixed in PR #3124, az bicep build now exits 0. MERGED-NOT-DEPLOYED. gov-provision-dbx-sql-invnet: BLOCKER MOVED, not cleared. The 8 historical AuthorizationFailed roleAssignments/write failures are GONE (RBAC Administrator grant worked) - re-measured with apply=true: that step SUCCEEDS, image builds, in-VNet job runs. Now fails because Gov Databricks returns TEMPORARILY_UNAVAILABLE from /api/2.0/sql/warehouses on ALL 8 list + 8 create attempts over ~6 min. 16 responses in 6 minutes is NOT transient - plausibly a cloud-parity section-3 case (supply the Azure-native equivalent). UNRESOLVED, operator decision. NOTE: an earlier apply=false run reported SUCCESS while SKIPPING the failing step - a green run of nothing.",
       "agent": "a1e313ba6742f7a45",
-      "dispatched": "2026-08-08"
+      "dispatched": "2026-08-08",
+      "pr": 3124
     },
     {
       "id": "G4",
       "lane": "L-GOV",
       "wave": 2,
       "task_order": 64,
-      "status": "in_progress",
+      "status": "review",
       "title": "#2874 Gov bicep-drift what-if fails before any verdict (weekly red 07-27, 08-03) — drift check produces verdicts",
       "depends_on": [],
       "validation": {
@@ -535,9 +534,10 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [],
+      "evidence": "#2874 title read '? unmanaged delta(s)' - an UNKNOWN wearing the sentence-shape of a FINDING. Truth: zero resources compared; Gov has had NO drift coverage since 07-27. Fixed: status=CouldNotEvaluate, count is the literal string 'unknown', title says NOT EVALUATED, body says 'not a drift finding, and not a clean bill of health'. Re-runs what-if with --debug to mine ARM's hidden details[], fully redacted (public repo). ALWAYS exits non-zero - fails closed. Verified against the real #2874 error text; leak check clean. MERGED-NOT-DEPLOYED.",
       "agent": "a1e313ba6742f7a45",
-      "dispatched": "2026-08-08"
+      "dispatched": "2026-08-08",
+      "pr": 3125
     },
     {
       "id": "E2",
@@ -1610,6 +1610,14 @@
       "disproved": "Hypothesis 'missing LOOM_ICEBERG_CATALOG_AUDIENCE causes the federation 502' was DISPROVED by measurement before being reported: the documented fallback resolves to the same audience Trino/Unity use. Recorded so it is not re-raised.",
       "latent_security": "iceberg-catalog-client.ts:212-213 - when neither a pre-shared token nor an audience resolves, the hop proceeds UNAUTHENTICATED by design (internal ingress = perimeter). A misconfiguration therefore degrades to anonymous access rather than failing closed. Same posture class as #2643 (Gov unity anonymous read+mutate since 07-15). Routed to F1 for the parity doc; NOT yet fixed.",
       "release_pr_block": "#3072 BLOCKED by two NEVER-REPORTED required checks (guardrails, vitest node 20). Root cause was the webhook-drop class, NOT path filtering - loom-guardrails.yml has 'on: pull_request' with no paths filter. close+reopen re-triggered both; guardrails then SUCCESS. Absent checks are not passing checks."
+    },
+    "gov_disabled_lanes_2026-08-08": {
+      "finding": "BIGGEST DEFECT WAS NOT ON THE TASK LIST. deploy-fiab-gcch failed 12 CONSECUTIVE scheduled runs (07-23 -> 08-03) and was then DISABLED RATHER THAN FIXED. deploy-fiab-gcc was 'SUCCESS daily' while deploying ZERO Container Apps (#3078) and is now disabled too. Disabling a red lane does not fix it - it REMOVES THE SIGNAL, the exact incident deploy-integrity.md was written for.",
+      "verified_independently": "Orchestrator confirmed via gh api actions/workflows: EXACTLY THREE workflows are non-active repo-wide - csa-loom-spark-probe2.yml, deploy-fiab-gcc.yml, deploy-fiab-gcch.yml. Only visible via the API; gh run list shows an old result and looks quiet.",
+      "why_not_auto_reenabled": "Both are NIGHTLY VALIDATE-AND-TEARDOWN rings (cron 08:00/10:00 UTC; schedule sets no inputs so keep_resources is falsy and the teardown step RUNS). Re-enabling re-arms a daily teardown that targets RGs BY NAME - the #3028 hazard class. Agent correctly declined to flip it; orchestrator concurs. OPERATOR DECISION. The gcch guard defect was already fixed 08-07 (#3079) but has NEVER EXECUTED - it was disabled before the fix landed, so the fix is unproven.",
+      "unreached": "gov-provision-trino STILL NEVER RUN. Gov Iceberg/Trino federation remains unexercised - the exact inversion cloud-parity.md names, since Unity Catalog does not exist in Azure Government and this IS the sovereign catalog product. NOT addressed this pass.",
+      "easy_to_misread": "#3078 needs a COMMERCIAL-CLOUD image producer. GCC is AzureCloud+eastus, NOT Gov cloud - the green Gov image lane does NOT unblock it.",
+      "shell_bug": "streaming-migrate's honest-skip branch was UNREACHABLE CODE: VAR=\"${VAR:-$(az ... 2>/dev/null)}\" under set -euo pipefail aborts the step with az's exit code, message already destroyed by 2>/dev/null. The correct 'UAMIs don't exist yet, skip with remediation' branch sat three lines below and could never run. Its two what-ifs also ended in '|| true', so the step COULD NOT fail for its actual purpose but COULD die on an incidental lookup."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
