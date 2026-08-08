@@ -1752,6 +1752,13 @@
       "finding": "RC-9 CANNOT BE DEPLOYED BY ANY EXISTING AUTOMATED PATH. full-app-deploy-commercial BUILDS the loom-unity image but its own comment at :478 says 'loom-unity - deployed out-of-band, not by admin-plane', and loom-roll-and-validate only rolls the CONSOLE (no app-name input). So a first-class capability's deploy is manual - an auto-bind/deploy-integrity gap in its own right.",
       "measured": "Both federation apps run a SHA-PINNED tag, not a floating one: loom-unity and iceberg-catalog BOTH run <acr>/loom-unity:089fb622 (revisions loom-unity--0000002 and iceberg-catalog--0000001, both Running). My first build used tag_override=v0.1, which neither app references - so it would have changed nothing. Rebuilt as :36b765e4 (main's short SHA) for traceability, run 31250432268.",
       "az_context_gotcha": "Local az had drifted to a different subscription and reported 'ResourceGroupNotFound' for the admin RG - which reads exactly like the RG being gone. It is NOT: the admin plane lives in the FedCiv ATU FFL - DMLZ subscription. Probe with 'az group exists' across accounts before believing a not-found."
+    },
+    "rc9_ROLLED_2026-08-08": {
+      "image": "Built loom-unity:36b765e4 (main's short SHA) via build-fiab-images-acr-tasks run 31250432268. FULL SUPPLY CHAIN VERIFIED FROM THE RUN'S OWN STEPS: Resolve ACR + filter apps SUCCESS, Acquire ACR firewall lease SUCCESS, Build via ACR Tasks SUCCESS, Trivy gate (fail on CRITICAL CVEs) SUCCESS, Cosign sign (keyless OIDC) SUCCESS, Release lease / re-lock SUCCESS. skip_supply_chain was FALSE. ACR CONFIRMED BACK AT publicNetworkAccess=Disabled / defaultAction=Deny.",
+      "roll": "Rolled BOTH apps (rolling one would leave the pair split): loom-unity 0000002 -> loom-unity--0000003, iceberg-catalog 0000001 -> iceberg-catalog--0000002. VERIFIED AFTER: both run <acr>/loom-unity:36b765e4, both Running.",
+      "why_manual": "No automated path exists - full-app-deploy-commercial BUILDS this image but its comment at :478 says loom-unity is 'deployed out-of-band, not by admin-plane', and loom-roll-and-validate only rolls the console. Recorded as an auto-bind/deploy-integrity gap in rc9_roll_blocked_2026-08-08.",
+      "revert_path": "If needed: az containerapp update -n <app> -g rg-csa-loom-admin-centralus --image <acr>/loom-unity:089fb622 (the prior tag, both apps).",
+      "measurement": "loom-ui-verify run 31250866889 dispatched with extra_projects=external-engine-federation. GRADE STAYS D UNTIL AN AUTHENTICATED CATALOG READ RETURNS 200 - the run's result decides it, not the roll."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
