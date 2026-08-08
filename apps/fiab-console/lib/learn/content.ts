@@ -5,10 +5,11 @@
  * SOURCE OF TRUTH: the authoritative per-item Learn content now lives on
  * each catalog entry's `learnContent` field in
  * `lib/catalog/fabric-item-types.ts` (overview + titled getting-started
- * steps + docsUrl). `getLearn()` reads that first so every one of the 117
+ * steps + docsUrl). `getLearn()` reads that first so every one of the 142
  * catalog item types (the full `FABRIC_ITEM_TYPES` set — keep this count in
  * sync with `FABRIC_ITEM_TYPES.length`) renders real guidance (A+ docs
- * criterion).
+ * criterion). Count re-measured 2026-08-08: 142 slugs across
+ * `lib/catalog/item-types/*.ts` (was documented as 117 — stale).
  *
  * This REGISTRY remains for one reason: the legacy entries below carry a
  * `tip` callout that the catalog shape doesn't model. When both exist, the
