@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "12064113427198830104"
+      "templateHash": "13680777448369137085"
     }
   },
   "definitions": {
@@ -1095,6 +1095,13 @@
       "defaultValue": false,
       "metadata": {
         "description": "Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric \"fabric-devops-pipelines\" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com."
+      }
+    },
+    "loomInternalTokenValue": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "#3056 — the LIVE value of the estate's shared internal trust token (the `loom-internal-token` Container Apps secret on loom-console). The ESTATE owns it; this deployment only ADOPTS it, so a redeploy re-applies the value the estate already had instead of minting a new one and stranding the jobs + the LOOM_INTERNAL_TOKEN GitHub secret. Resolve it with scripts/csa-loom/resolve-internal-token.sh (ARM control-plane read — no VNet, no Key Vault data plane) and pass it on EVERY deploy of an estate that already has a console. Empty = greenfield, bicep mints one. Threaded to admin-plane/main.bicep loomInternalTokenValue. See docs/fiab/runbooks/internal-token-ownership.md."
       }
     },
     "adopt": {
@@ -2239,6 +2246,9 @@
           "loomPipelineCiEnabled": {
             "value": "[parameters('loomPipelineCiEnabled')]"
           },
+          "loomInternalTokenValue": {
+            "value": "[parameters('loomInternalTokenValue')]"
+          },
           "existingAiSearchService": {
             "value": "[variables('existingAiSearchService')]"
           },
@@ -2518,7 +2528,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "973611794418992369"
+              "templateHash": "18016421778574184282"
             }
           },
           "definitions": {
@@ -4683,6 +4693,13 @@
                 "description": "Random per-deployment seed used to derive service-auth secrets (internal token, builtin-MCP key) and the SESSION_SECRET FALLBACK when neither a Key-Vault-backed secret nor an explicit LOOM_SESSION_SECRET is available. Defaults to newGuid() so these are UNPREDICTABLE (never guid(resourceGroup().id, <public-const>), which is offline-derivable from the sub id + RG name — a session/impersonation forgery vector). NOT assignable from a .bicepparam (keeps newGuid() valid; BCP065). Trade-off: on the fallback path secrets rotate per redeploy (users re-auth after a console update) — set LOOM_SESSION_SECRET or run the bootstrap (KV-backed path) for stability. rel-T10/T10b."
               }
             },
+            "loomInternalTokenValue": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "#3056 — the LIVE value of the estate's shared internal trust token (the `loom-internal-token` Container Apps secret on loom-console). The ESTATE owns this value; bicep only ADOPTS it. Every deploy path resolves it with scripts/csa-loom/resolve-internal-token.sh (an ARM control-plane read that needs no VNet and no Key Vault data plane) and passes it here, so a redeploy re-applies what the estate already had and CANNOT invalidate a working estate. Empty (the greenfield case — no console to read) => bicep mints one from loomGeneratedSecretSeed, which keeps day-one zero-touch. NEVER pass a fresh value here to \"rotate\": rotate by writing the live console secret, then redeploy (the deploy adopts it). Leaving this empty on an estate that ALREADY has a console re-mints the token and strands every other holder — that is exactly the 2026-08-06/07/08 outage. See docs/fiab/runbooks/internal-token-ownership.md."
+              }
+            },
             "loomMsalAppReg": {
               "type": "object",
               "defaultValue": {
@@ -4948,7 +4965,7 @@
             "wsIdentityRg": "[coalesce(tryGet(parameters('workspaceIdentityConfig'), 'wsIdentityRg'), '')]",
             "wsIdentityShadowSample": "[coalesce(tryGet(parameters('workspaceIdentityConfig'), 'wsIdentityShadowSample'), '')]",
             "loomConsoleTelemetryEnabled": true,
-            "loomInternalToken": "[guid(parameters('loomGeneratedSecretSeed'), 'loom-maf-internal-token-v1')]",
+            "loomInternalToken": "[if(empty(parameters('loomInternalTokenValue')), guid(parameters('loomGeneratedSecretSeed'), 'loom-maf-internal-token-v1'), parameters('loomInternalTokenValue'))]",
             "loomIqMcpToken": "[guid(parameters('loomGeneratedSecretSeed'), 'loom-iq-mcp-token-v1')]",
             "loomCiToken": "[guid(parameters('loomGeneratedSecretSeed'), 'loom-ci-token-v1')]",
             "setupOrchestratorActive": "[and(and(and(and(parameters('setupOrchestratorEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), not(equals(parameters('boundary'), 'GCC-High'))), not(equals(parameters('boundary'), 'IL5')))]",

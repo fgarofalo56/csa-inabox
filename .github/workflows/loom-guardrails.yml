@@ -257,6 +257,25 @@ jobs:
       - name: deploy-template-sync (the compiled ARM template that SHIPS must match its bicep — #2945)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-template-sync.mjs
+      # INTERNAL-TOKEN SINGLE WRITER (#3056). `LOOM_INTERNAL_TOKEN` had TWO
+      # writers and no owner, and it broke the estate three times in two days.
+      # bicep derived it from `loomGeneratedSecretSeed`, whose ARM default
+      # compiles to `"defaultValue": "[newGuid()]"` — so EVERY deploy minted a
+      # brand-new token, the console and jobs agreed with each other, and every
+      # holder outside that deployment (the consumer jobs on the next deploy,
+      # the LOOM_INTERNAL_TOKEN repo secret, any rotated value) was silently
+      # invalidated. Container Apps does not restart replicas on a secret write,
+      # so it detonated hours later: 153/153 eval probes 401'd (2026-08-06) and
+      # #2929's reindex rejected with the same single root.
+      #
+      # The estate now OWNS the value and every deploy lane ADOPTS it. This
+      # guard refuses the change that would re-introduce the second writer;
+      # loom-internal-token-drift.yml catches divergence on the live estate.
+      # They are complements — this one cannot see a hand-run `az deployment`,
+      # and that one cannot run on a PR.
+      - name: internal-token single writer (a deploy must never re-mint the trust token — #3056)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-internal-token-single-writer.mjs
       # CLOUD PARITY (.claude/rules/cloud-parity.md). A .bicepparam object
       # assignment REPLACES the template default — it does not merge — and
       # main.bicep forwards `appImageTags` to admin-plane VERBATIM. So a param

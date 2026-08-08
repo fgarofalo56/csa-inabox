@@ -153,6 +153,57 @@ describe('buildDlzDeploymentParameters — adopt bag (#3016)', () => {
   });
 });
 
+describe('buildDlzDeploymentParameters — internal trust token ownership (#3056)', () => {
+  const base = {
+    boundary: 'Commercial',
+    location: 'eastus2',
+    capacitySku: 'F8',
+    domainName: 'va',
+  };
+
+  // WHY THIS IS A TEST AND NOT A COMMENT. This tier submits the compiled
+  // main.json at subscription scope, and `loomInternalToken` was derived from
+  // `loomGeneratedSecretSeed`, whose ARM default is `newGuid()` — a fresh random
+  // value on EVERY deployment. A wizard-driven attach therefore re-minted the
+  // trust token onto the console serving the wizard and stranded the consumer
+  // jobs + the LOOM_INTERNAL_TOKEN GitHub secret. Container Apps does not
+  // restart replicas on a secret write, so it detonated hours later: 153/153
+  // eval probes 401'd on 2026-08-06.
+  it('adopts the live token on dlz-attach (the estate this console already belongs to)', () => {
+    const p = buildDlzDeploymentParameters({
+      ...base,
+      topology: 'dlz-attach',
+      targetSubscriptionId: SUB,
+      internalTokenValue: 'live-estate-token-value',
+    });
+    expect(p.loomInternalTokenValue).toEqual({ value: 'live-estate-token-value' });
+  });
+
+  it('does NOT leak this estate token into a fresh tenant install (a different estate)', () => {
+    const p = buildDlzDeploymentParameters({
+      ...base,
+      topology: 'tenant',
+      internalTokenValue: 'live-estate-token-value',
+    });
+    expect(p.loomInternalTokenValue).toBeUndefined();
+  });
+
+  it('emits nothing when the console has no token in env (greenfield params unchanged)', () => {
+    expect(
+      buildDlzDeploymentParameters({ ...base, topology: 'dlz-attach', targetSubscriptionId: SUB })
+        .loomInternalTokenValue,
+    ).toBeUndefined();
+    expect(
+      buildDlzDeploymentParameters({
+        ...base,
+        topology: 'dlz-attach',
+        targetSubscriptionId: SUB,
+        internalTokenValue: '   ',
+      }).loomInternalTokenValue,
+    ).toBeUndefined();
+  });
+});
+
 describe('resolveDlzTemplateSource', () => {
   it('returns null when the env is unset (→ honest gate)', () => {
     expect(resolveDlzTemplateSource()).toBeNull();

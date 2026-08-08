@@ -199,6 +199,16 @@ jobs:
             fi
           fi
 
+      # #3056 — adopt the estate's LIVE internal trust token instead of letting
+      # bicep re-mint it (`loomGeneratedSecretSeed` defaults to `newGuid()`, so
+      # every deploy rotated it and stranded every holder outside the
+      # deployment). On the IL5 AKS boundary the console is not a Container App,
+      # so the resolver honestly reports greenfield and warns rather than
+      # inventing a value — UNVERIFIED here, see
+      # docs/fiab/runbooks/internal-token-ownership.md.
+      - name: Adopt the estate's live internal trust token (never re-mint it)
+        run: bash scripts/csa-loom/resolve-internal-token.sh --export > /dev/null
+
       - name: Bicep what-if (IL5 params)
         run: |
           az deployment sub what-if \
@@ -209,6 +219,7 @@ jobs:
             --parameters platform/fiab/bicep/params/il5.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
             --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
+            ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
             --parameters topology="$CSA_LOOM_TOPOLOGY" \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
@@ -342,6 +353,7 @@ jobs:
               --parameters "$GITHUB_WORKSPACE/platform/fiab/bicep/params/il5.bicepparam" \
               --parameters adminEntraGroupId="$FIAB_GOV_ADMIN_GROUP_ID" \
               --parameters loomTenantAdminGroupId="$FIAB_GOV_ADMIN_GROUP_ID" \
+              ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
               --parameters topology="$CSA_LOOM_TOPOLOGY" \
               --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
           else
