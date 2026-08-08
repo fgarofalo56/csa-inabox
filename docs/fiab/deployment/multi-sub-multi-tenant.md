@@ -67,6 +67,31 @@ This deploys:
 3. DLZ "Procurement" into sub-C with `10.2.0.0/16`
 4. VNet peering between hub (sub-A) and each spoke (sub-B, sub-C)
 
+## Post-deploy bootstrap on a multi-subscription estate
+
+`csa-loom-post-deploy-bootstrap.yml` **discovers** the landing zone rather than
+being told where it is: it reads Azure Resource Graph across every subscription
+the deploy identity can see, resolves the
+`rg-csa-loom-dlz-<domain>-<region>` group together with its subscription and the
+Synapse / Databricks workspaces inside it, and only then runs the grants. Passing
+`dlz_subscription` / `dlz_domain` is optional.
+
+Two consequences specific to this topology:
+
+- **The deploy identity needs Reader on each DLZ subscription.** Resource Graph
+  returns only subscriptions it can read, so a landing zone it cannot see is
+  reported as *not found*. The bootstrap's own "Grant Console UAMI Reader on the
+  DLZ subscription" step covers the Console's identity, not the deploy SP's.
+- **More than one landing zone in the same region is ambiguous by design.** The
+  bootstrap wires exactly one, so it stops and names the candidates rather than
+  picking. Run it once per landing zone with `-f dlz_domain=<domain>` (and
+  `-f dlz_subscription=<sub>` if two domains collide across subscriptions).
+
+`dlz_domain` used to default to `single`, which is the single-subscription
+shape. On this topology that produced a resource-group name that does not exist
+and the bootstrap failed with `(ResourceGroupNotFound)` after the rest of the
+deploy had gone green (#3143).
+
 ## Adding a new DLZ via Console (after initial deploy)
 
 1. Open Loom Console → Setup Wizard route (`/setup`)

@@ -377,7 +377,12 @@ jobs:
         run: |
           ADMIN_SUB=$(az account show --query id -o tsv)
           echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
-          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-$ADMIN_SUB}" >> "$GITHUB_OUTPUT"
+          # dlz_sub ONLY when a DISTINCT DLZ subscription was named (#3143) —
+          # same reasoning as deploy-fiab-commercial.yml. Defaulting to
+          # $ADMIN_SUB asserted a single-subscription layout the deploy had not
+          # established, and now that the callee DISCOVERS the landing zone that
+          # assertion would narrow discovery to the wrong subscription.
+          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-}" >> "$GITHUB_OUTPUT"
           echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
 
       - name: Note dry-run completion

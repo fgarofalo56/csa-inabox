@@ -136,6 +136,12 @@ export const WATCHED = [
       // #2681 — the bootstrap resolves the estate's Entra app registration
       // through this script when unsealing the DEFAULT-ON loom-unity catalog.
       'scripts/csa-loom/resolve-msal-client-id.sh',
+      // #3143 — every DLZ-scoped coordinate the bootstrap uses (subscription,
+      // resource group, Synapse + Databricks workspace names) now comes from
+      // this resolver instead of from an assumed `single` domain. Listed by
+      // hand: extractDeploySources() recognises `bash X.sh` and not
+      // `node X.mjs`, so this one is invisible to the coverage guard.
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
       'scripts/csa-loom/grant-synapse-rbac-invnet-job.sh',
       'scripts/csa-loom/grant-uami-graph-roles.sh',
       'scripts/csa-loom/patch-navigator-env.sh',

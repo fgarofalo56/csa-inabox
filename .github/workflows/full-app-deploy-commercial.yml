@@ -1076,7 +1076,21 @@ jobs:
       # `secrets` is not a valid context inside a reusable-workflow `with:`
       # block, so the fallback lives in the CALLEE, which has the secret via
       # `secrets: inherit`. Omitting the input selects it.
-      dlz_domain: single
+      #
+      # dlz_domain / dlz_subscription are DELIBERATELY NOT PASSED either (#3143).
+      # This used to say `dlz_domain: single`, and on the live Commercial estate
+      # that is simply not the domain — the landing zone is
+      # `rg-csa-loom-dlz-default-centralus`, in a different subscription from the
+      # admin plane. Every run therefore reached ARM with a resource group that
+      # does not exist and died on `(ResourceGroupNotFound)` AFTER 25 of 27 jobs
+      # had gone green (run 31243230253), so the whole day-one wiring — MSAL app
+      # registration, Purview roles, Synapse grants, Databricks SCIM, the Synapse
+      # managed private endpoint — never ran as part of the deploy.
+      #
+      # The callee now DISCOVERS the landing zone from Azure Resource Graph
+      # (deploy-integrity.md R5, auto-bind-by-default.md §5) and fails closed
+      # when it cannot resolve exactly one. Passing a hardcoded guess here would
+      # override that discovery with the same wrong answer, so nothing is passed.
 
   # E4 (loom-next-level ws-copilot-cost): fire a post-deploy Copilot quality
   # eval run so EVERY roll re-baselines quality against the freshly-staged

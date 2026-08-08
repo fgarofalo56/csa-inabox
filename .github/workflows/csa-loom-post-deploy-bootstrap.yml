@@ -29,15 +29,15 @@ on:
         required: false
         default: ''
       dlz_subscription:
-        description: 'Subscription id holding the Data Landing Zone. Empty → single-sub (equals admin_subscription).'
+        description: 'OPTIONAL OVERRIDE. Subscription id holding the Data Landing Zone. Empty (the default) → DISCOVERED from Azure Resource Graph by the "Discover the Data Landing Zone" step, which spans every subscription the deploy identity can read, so a cross-subscription DLZ needs nothing passed. Supply it only to disambiguate an estate with several.'
         type: string
         required: false
         default: ''
       dlz_domain:
-        description: 'DLZ domain segment for rg-csa-loom-dlz-<dlz_domain>-<region>. Defaults to "single".'
+        description: 'OPTIONAL OVERRIDE. The <domain> segment of rg-csa-loom-dlz-<domain>-<region>. Empty (the default) → DISCOVERED. It used to default to "single", which is one estate shape out of several and produced a resource group that does not exist on every multi-sub / dlz-attach estate (#3143).'
         type: string
         required: false
-        default: single
+        default: ''
   workflow_dispatch:
     inputs:
       boundary:
@@ -51,7 +51,7 @@ on:
           - GCC-High
           - IL5
       region:
-        description: 'Azure region the deploy landed in (e.g. eastus2, centralus, usgovvirginia). REQUIRED — every RG / workspace / UAMI name below DERIVES from this (rg-csa-loom-admin-<region>, syn-loom-default-<region>, apim-csa-loom-<region>, uami-loom-console-<region>, …). NO default: a public repo must not ship an estate region as a default.'
+        description: 'Azure region the deploy landed in (e.g. eastus2, centralus, usgovvirginia). REQUIRED — every RG / workspace / UAMI name below DERIVES from this (rg-csa-loom-admin-<region>, apim-csa-loom-<region>, uami-loom-console-<region>, …). NO default: a public repo must not ship an estate region as a default.'
         type: string
         required: true
       admin_subscription:
@@ -59,13 +59,13 @@ on:
         type: string
         required: true
       dlz_subscription:
-        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → single-sub: DLZ shares the admin subscription. Set it for any cross-sub deploy.'
+        description: 'OPTIONAL OVERRIDE. Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Leave EMPTY: it is discovered from Azure Resource Graph, cross-subscription included. Supply it only to pick between several landing zones.'
         type: string
         required: false
       dlz_domain:
-        description: 'DLZ domain segment for the DLZ resource-group name: rg-csa-loom-dlz-<dlz_domain>-<region>. Defaults to "single" (the single-sub / single-DLZ convention).'
+        description: 'OPTIONAL OVERRIDE. The <domain> segment of rg-csa-loom-dlz-<domain>-<region>. Leave EMPTY: it is discovered. An override that matches no existing group fails the run rather than rebuilding a name ARM will reject.'
         type: string
-        default: single
+        default: ''
         required: false
 
 # NOTE: no id-token permission — every login step uses secret-based
@@ -85,16 +85,40 @@ env:
   # first step) — no estate region default ships in a public repo.
   REGION: ${{ inputs.region }}
   # ADMIN (hub) sub holds the Console UAMI / KV / APIM / Purview / Foundry.
-  # DLZ sub holds Synapse / Databricks / ADLS. They are the SAME in single-sub.
-  # dlz_subscription empty → single-sub: DLZ shares the admin subscription.
   ADMIN_SUB: ${{ inputs.admin_subscription || (inputs.boundary == 'Commercial' && secrets.AZURE_SUBSCRIPTION_ID || secrets.AZURE_GOV_SUBSCRIPTION_ID) }}
+  # ── DLZ COORDINATES ARE DISCOVERED, NOT ASSUMED (#3143) ────────────────────
+  # DLZ_SUB / DLZ_RG / DLZ_DOMAIN / SYNAPSE_WS / DBX_WS below are PRE-DISCOVERY
+  # PLACEHOLDERS. The "Discover the Data Landing Zone" step (before any consumer)
+  # reads Azure Resource Graph across every subscription this identity can see
+  # and OVERWRITES all five in $GITHUB_ENV; if it cannot resolve exactly one, it
+  # fails the job rather than letting a guessed name reach ARM.
+  #
+  # They used to be the whole answer, and the answer was wrong on every estate
+  # that is not single-sub: `dlz_domain` defaulted to `single`, so a multi-sub /
+  # dlz-attach estate got `rg-csa-loom-dlz-single-<region>`, which does not
+  # exist. Measured on the live Commercial estate (run 31243230253): 25 of 27
+  # jobs green, then `(ResourceGroupNotFound) Resource group
+  # 'rg-csa-loom-dlz-single-centralus' could not be found` — the real group is
+  # `rg-csa-loom-dlz-default-centralus`, in a DIFFERENT subscription. So the
+  # deploy's day-one wiring never ran as part of the deploy on that shape.
+  #
+  # DLZ_SUB keeps the admin-sub fallback because the `if: always()` cleanup steps
+  # reference it; on the success path discovery has already replaced it.
   DLZ_SUB: ${{ inputs.dlz_subscription || inputs.admin_subscription || (inputs.boundary == 'Commercial' && secrets.AZURE_SUBSCRIPTION_ID || secrets.AZURE_GOV_SUBSCRIPTION_ID) }}
   # SUB kept as an alias of the ADMIN sub for the many steps that scope grants /
   # role assignments to the admin plane (Cost/Security/Monitor, APIM, Reader, …).
   # The "Resolve deploy coordinates" step re-points SUB to the admin sub at runtime.
   SUB: ${{ inputs.admin_subscription || (inputs.boundary == 'Commercial' && secrets.AZURE_SUBSCRIPTION_ID || secrets.AZURE_GOV_SUBSCRIPTION_ID) }}
   ADMIN_RG: rg-csa-loom-admin-${{ inputs.region }}
-  DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'single' }}-${{ inputs.region }}
+  # EMPTY unless an operator pinned dlz_domain explicitly. Empty is honest: an
+  # unresolved group name is better than a plausible one that does not exist,
+  # and every consumer runs after discovery has set the real value.
+  DLZ_RG: ${{ inputs.dlz_domain && format('rg-csa-loom-dlz-{0}-{1}', inputs.dlz_domain, inputs.region) || '' }}
+  DLZ_DOMAIN: ${{ inputs.dlz_domain }}
+  # The Loom naming convention, kept ONLY as the pre-discovery placeholder. Note
+  # that the RG's domain segment and the workspaces' are NOT the same string:
+  # main.bicep's single-sub branch stamps `domainName: 'default'` into
+  # `rg-csa-loom-dlz-single-<loc>`. Discovery reads both from the estate.
   SYNAPSE_WS: syn-loom-default-${{ inputs.region }}
   DBX_WS: adb-loom-default-${{ inputs.region }}
   APIM_NAME: apim-csa-loom-${{ inputs.region }}
@@ -176,7 +200,7 @@ jobs:
           if [ -z "${{ inputs.admin_subscription }}" ]; then
             echo "::notice::admin_subscription input was empty (GitHub scrubs a job output that matches a registered secret) — using the boundary's subscription secret instead."
           fi
-          echo "boundary=${{ inputs.boundary }} region=${{ inputs.region }} admin_sub set dlz_sub='${{ inputs.dlz_subscription }}' dlz_domain='${{ inputs.dlz_domain }}'"
+          echo "boundary=${{ inputs.boundary }} region=${{ inputs.region }} admin_sub set; dlz coordinates are DISCOVERED (overrides supplied: dlz_subscription=${{ inputs.dlz_subscription && 'yes' || 'no' }} dlz_domain='${{ inputs.dlz_domain }}')"
 
       - name: Azure login (Commercial — limitlessdata_deploy SP)
         if: inputs.boundary == 'Commercial'
@@ -231,6 +255,57 @@ jobs:
           az account show --query "{user:user.name, sub:id}" -o table
           echo "Acting as Synapse initial admin"
 
+      # Discovery needs Azure Resource Graph. Install the extension UP FRONT and
+      # FAIL CLOSED: `az graph query` would otherwise dynamic-install on first
+      # use and write a banner to stderr, and this repo has already shipped one
+      # probe that read that banner as its answer (deploy-fiab-gcch, 2026-08-08).
+      # No `|| true` — an install that did not happen must not look like one that did.
+      - name: Pre-install the resource-graph CLI extension
+        run: |
+          set -e
+          az extension add --name resource-graph --upgrade --only-show-errors -o none
+          echo "resource-graph version: $(az extension show --name resource-graph --query version -o tsv | tr -d '\r')"
+
+      - name: Discover the Data Landing Zone (subscription + domain + workspaces)
+        # deploy-integrity.md R5 (DISCOVER, never assume) + auto-bind-by-default.md
+        # §5 (a value the platform can determine must not be asked for).
+        #
+        # Reads Resource Graph across EVERY subscription this identity can see —
+        # which is what makes a cross-subscription landing zone visible at all,
+        # since the login above targets the ADMIN subscription — and writes
+        # DLZ_SUB / DLZ_RG / DLZ_DOMAIN / SYNAPSE_WS / DBX_WS into $GITHUB_ENV for
+        # every step below. `dlz_subscription` / `dlz_domain` are passed through
+        # only when an operator supplied them, and they NARROW the discovered set
+        # rather than bypassing it: an override naming a group that does not exist
+        # now fails here instead of reaching ARM as `(ResourceGroupNotFound)`.
+        #
+        # Fails closed on zero candidates, on more than one, and on an unreadable
+        # estate — three distinct exit codes and three distinct messages, because
+        # "I could not determine" is not "it is not there".
+        #
+        # Subscription ids reach $GITHUB_ENV (a file), never the log.
+        # Decision logic is mutation-proved in
+        # scripts/csa-loom/__tests__/resolve-dlz-coordinates.test.mjs.
+        env:
+          INPUT_DLZ_SUBSCRIPTION: ${{ inputs.dlz_subscription }}
+          INPUT_DLZ_DOMAIN: ${{ inputs.dlz_domain }}
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/resolve-dlz-coordinates.mjs \
+            --region "$REGION" \
+            --admin-subscription "$ADMIN_SUB" \
+            ${INPUT_DLZ_SUBSCRIPTION:+--dlz-subscription "$INPUT_DLZ_SUBSCRIPTION"} \
+            ${INPUT_DLZ_DOMAIN:+--dlz-domain "$INPUT_DLZ_DOMAIN"} \
+            --github-env "$GITHUB_ENV"
+          # MASK THE DISCOVERED SUBSCRIPTION ID. It used to arrive from the
+          # AZURE_SUBSCRIPTION_ID secret and GitHub masked it automatically
+          # (`dlz_sub=***` in every log). A discovered value is not a registered
+          # secret, so without this the existing `echo …$DLZ_SUB…` further down
+          # would start printing it in clear — a log-hygiene regression caused by
+          # the fix, not by the bug.
+          DISCOVERED_SUB="$(grep '^DLZ_SUB=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          if [ -n "$DISCOVERED_SUB" ]; then echo "::add-mask::$DISCOVERED_SUB"; fi
+
       - name: Resolve deploy coordinates (region-correct Console UAMI principal/client + Databricks host)
         # Region-parameterize the OLD eastus2 hardcodes. The env: block derives every
         # RG / workspace name from the `region` input; this step resolves the values
@@ -243,7 +318,7 @@ jobs:
         # so every downstream grant targets the identity this deploy actually created.
         run: |
           set -uo pipefail
-          echo "region=$REGION  admin_sub=$ADMIN_SUB  dlz_sub=$DLZ_SUB  admin_rg=$ADMIN_RG  dlz_rg=$DLZ_RG"
+          echo "region=$REGION  admin_rg=$ADMIN_RG  dlz_rg=$DLZ_RG  dlz_domain=$DLZ_DOMAIN  synapse=$SYNAPSE_WS  databricks=$DBX_WS"
           # --- Console UAMI (admin sub) ---
           az account set --subscription "$ADMIN_SUB" 2>/dev/null || true
           UAMI_NAME="uami-loom-console-$REGION"
@@ -948,7 +1023,7 @@ jobs:
           chmod +x scripts/csa-loom/wire-spark-telemetry.sh
           REGION="$REGION" ADMIN_SUB="$ADMIN_SUB" DLZ_SUB="$DLZ_SUB" \
           ADMIN_RG="$ADMIN_RG" DLZ_RG="$DLZ_RG" SYNAPSE_WS="$SYNAPSE_WS" \
-          LOOM_DLZ_DOMAIN="${{ inputs.dlz_domain || 'single' }}" KV_TOGGLE_PUBLIC=1 \
+          LOOM_DLZ_DOMAIN="$DLZ_DOMAIN" KV_TOGGLE_PUBLIC=1 \
             bash scripts/csa-loom/wire-spark-telemetry.sh \
             || echo "::warning::Spark→LA telemetry wiring incomplete — Spark job/pipeline runs may not emit to Log Analytics. See docs/fiab/compute-tiers-and-telemetry.md."
 
