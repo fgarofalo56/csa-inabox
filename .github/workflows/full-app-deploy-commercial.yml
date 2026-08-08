@@ -86,7 +86,11 @@ jobs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
       acr_login_server: ${{ steps.acr.outputs.acr_login_server }}
       rg: ${{ steps.acr.outputs.rg }}
-      admin_sub: ${{ steps.acr.outputs.admin_sub }}
+      # NO `admin_sub` OUTPUT (#3090 sweep). Its value equals the
+      # AZURE_SUBSCRIPTION_ID secret, so GitHub scrubs it in transit
+      # ("Skip output 'admin_sub' since it may contain secret") and every
+      # consumer receives "". An output that can never carry a value is a trap
+      # for the next author — consumers take the secret directly instead.
       region: ${{ steps.acr.outputs.region }}
       contract_refs: ${{ steps.contract.outputs.contract_refs }}
     steps:
@@ -178,29 +182,38 @@ jobs:
             echo "::error::Registry coordinates came back empty or null (acr=$ACR rg=$RG server=$SERVER). Not proceeding blind."
             exit 1
           fi
-          # Coordinates for the chained post-deploy bootstrap (rel-T34).
+          # SANITY-CHECK the deploy identity's subscription context (rel-T34).
           #
-          # ADMIN_SUB is READ below. It must be ASSIGNED here, and it must be
-          # assigned BEFORE the outputs block: #3013 rewrote this step to
-          # discover the RG/ACR via Resource Graph, declared ACR/RG/SERVER/
-          # REGION, and dropped the `az account show` that used to produce
-          # ADMIN_SUB inline -- while leaving the reader on the line below.
-          # With `set -u` that is an unbound variable, so the step died at the
-          # very first output and took the ENTIRE app-image path with it
+          # This used to be emitted as the `admin_sub` job output for the
+          # chained post-deploy bootstrap. It is NOT any more: the value equals
+          # the AZURE_SUBSCRIPTION_ID secret, so GitHub scrubs it in transit
+          # ("Skip output 'admin_sub' since it may contain secret") and the
+          # bootstrap received "" — dying on `'admin_subscription' is REQUIRED`
+          # after every image and roll job had already succeeded (runs
+          # 31143181962, 31230846894). The bootstrap now takes the secret
+          # directly. What survives here is the CHECK, which is still worth
+          # having: a login that cannot name its own subscription is broken, and
+          # failing here is far cheaper than failing 40 minutes downstream.
+          #
+          # ADMIN_SUB must be ASSIGNED before it is read: #3013 rewrote this
+          # step to discover the RG/ACR via Resource Graph and dropped the
+          # `az account show` that produced it -- while leaving the reader in
+          # place. With `set -u` that is an unbound variable, so the step died
+          # at the very first output and took the ENTIRE app-image path with it
           # (runs 31049648941, 31063434824, 31065363893).
           if ! ADMIN_SUB=$(az account show --query id -o tsv 2>&1); then
-            echo "::error::Resolved the registry ($ACR in $RG) but could NOT read the current subscription id, which the chained post-deploy bootstrap needs. This is not a missing subscription -- it is an unreadable one. Raw error: $ADMIN_SUB"
+            echo "::error::Resolved the registry ($ACR in $RG) but could NOT read the current subscription id. This is not a missing subscription -- it is an unreadable one, and it means this login is not usable for the deploy that follows. Raw error: $ADMIN_SUB"
             exit 1
           fi
           ADMIN_SUB=$(echo "$ADMIN_SUB" | tr -d '\r')
           if [[ -z "$ADMIN_SUB" ]]; then
-            echo "::error::az account show returned success but an EMPTY subscription id. Not emitting a blank admin_sub for the bootstrap to fail on later."
+            echo "::error::az account show returned success but an EMPTY subscription id. The deploy identity has no usable subscription context; refusing to continue."
             exit 1
           fi
           echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
           echo "acr_login_server=$SERVER" >> "$GITHUB_OUTPUT"
           echo "rg=$RG" >> "$GITHUB_OUTPUT"
-          echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
+          echo "admin_sub_verified=yes" >> "$GITHUB_OUTPUT"
           echo "region=$REGION" >> "$GITHUB_OUTPUT"
           echo "::notice::ACR=$ACR login=$SERVER rg=$RG region=$REGION"
 
@@ -1047,7 +1060,26 @@ jobs:
     with:
       boundary: Commercial
       region: ${{ needs.resolve.outputs.region }}
-      admin_subscription: ${{ needs.resolve.outputs.admin_sub }}
+      # NOT `needs.resolve.outputs.admin_sub` (#3090 sweep). The resolve job
+      # reads the subscription id with `az account show` and validates it is
+      # non-empty before emitting it — that guard works, and the step passes.
+      # But the VALUE equals the AZURE_SUBSCRIPTION_ID repo secret, and GitHub
+      # refuses to propagate a job output that matches a registered secret:
+      #
+      #   ##[warning]Skip output 'admin_sub' since it may contain secret.
+      #
+      # So the output arrived EMPTY at this call and the bootstrap died on
+      # `'admin_subscription' is REQUIRED (no estate default)` — measured on
+      # runs 31143181962 and 31230846894, in both cases AFTER every image and
+      # roll job had succeeded. The producer-side guard was checking the right
+      # thing at the wrong boundary: the value was scrubbed in transit, not
+      # unread.
+      #
+      # The secret is directly available here (and `secrets: inherit` already
+      # passes the rest), so route around the output entirely — this is the
+      # same expression every other job in this workflow uses for the
+      # subscription.
+      admin_subscription: ${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}
 
   # E4 (loom-next-level ws-copilot-cost): fire a post-deploy Copilot quality
   # eval run so EVERY roll re-baselines quality against the freshly-staged
