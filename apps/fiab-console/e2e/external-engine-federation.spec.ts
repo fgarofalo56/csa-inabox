@@ -206,11 +206,34 @@ test('Iceberg REST Catalog: namespaces list resolves (or reports the pre-fix 403
   // surfaces the upstream body verbatim, so THIS is the diagnostic. Capture it.
   const UPSTREAM_AUTH_REFUSAL = /Unsupported requested token type|Invalid issuer|rejected the token exchange|UNAUTHENTICATED|INVALID_ARGUMENT/i;
 
-  let verdict: 'working' | 'pre-fix-403' | 'auth-upstream' | 'gated' | 'regressed';
+  // An EMPTY catalog is not a BROKEN catalog, and conflating them would hide the
+  // real defect behind a green run (or vice versa).
+  //
+  // `iceberg-catalog` runs on an ephemeral H2 DB (RC-2) and re-seeds from the
+  // image on every restart, so after any scale-to-zero or roll it holds no
+  // warehouse at all. Measured 2026-08-08, immediately after the RC-9 roll:
+  //
+  //   GET /v1/config?warehouse=loom   -> upstream 403
+  //   GET /v1/namespaces              -> upstream 500
+  //
+  // Two DIFFERENT upstream statuses on the same freshly-restarted server, with
+  // the token exchange now succeeding (the Unity path reads 200 through the same
+  // credential). That pattern is what a MISSING WAREHOUSE looks like — the
+  // warehouse name `loom` is correct, but nothing ever creates the object it
+  // names — not what a broken transport or a refused identity looks like.
+  //
+  // So this is recorded as its own verdict rather than as `regressed`. Calling it
+  // a regression would point the next reader at the auth layer that now demonstrably
+  // works; calling it `working` would be a lie. Naming it lands the finding where
+  // it belongs: provisioning (auto-bind-by-default), not authentication.
+  const UPSTREAM_EMPTY_CATALOG = res.status() === 500 || res.status() === 404;
+
+  let verdict: 'working' | 'pre-fix-403' | 'auth-upstream' | 'empty-catalog' | 'gated' | 'regressed';
   if (res.status() === 200) verdict = 'working';
   else if (res.status() === 403 && /returned HTTP 403/i.test(bodyText)) verdict = 'pre-fix-403';
   else if (res.status() === 503 && body?.gated === true) verdict = 'gated';
   else if (res.status() === 502 && UPSTREAM_AUTH_REFUSAL.test(bodyText)) verdict = 'auth-upstream';
+  else if (UPSTREAM_EMPTY_CATALOG) verdict = 'empty-catalog';
   else verdict = 'regressed';
 
   test.info().annotations.push({
@@ -253,6 +276,21 @@ Upstream said: ${bodyText.slice(0, 600)}
       + `(#3118); (3) the catalog derives only the v2.0 issuer while Entra mints v1.0 tokens `
       + `for an app with requestedAccessTokenVersion=null — fixed in the loom-unity ENTRYPOINT, `
       + `which needs an IMAGE REBUILD, not a console roll.`,
+    );
+  } else if (verdict === 'empty-catalog') {
+    // A REAL failure — federation still does not work — but a provisioning one,
+    // not an auth one. Fail with that distinction in the message so nobody
+    // re-opens the token exchange, which this same run proves is healthy.
+    throw new Error(
+      `The catalog ACCEPTED the credential and then had nothing to serve `
+      + `(upstream ${res.status()}).\n\nUpstream said: ${bodyText.slice(0, 400)}\n\n`
+      + `This is NOT the auth chain — RC-1/RC-7/RC-9 are all deployed and the sibling `
+      + `Unity read returns 200 through the same exchanged credential. It is RC-2 + RC-12: `
+      + `iceberg-catalog runs an EPHEMERAL H2 database that re-seeds from the image on every `
+      + `restart, and nothing ever provisions the '${'loom'}' warehouse the client asks for. `
+      + `Confirm by listing the catalogs on the iceberg-catalog host: an empty list is this `
+      + `diagnosis, a populated one refutes it. The fix is persistence (LOOM_UNITY_DB_URL) `
+      + `plus warehouse auto-provisioning, NOT a change to the token path.`,
     );
   } else if (verdict === 'regressed') {
     throw new Error(
