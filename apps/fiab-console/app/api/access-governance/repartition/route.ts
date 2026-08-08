@@ -23,10 +23,12 @@
  *   3. POST /api/access-governance/backfill → seed the entitlement ledger.
  * Running step 3 before step 2 completes would seed the ledger from requests
  * the inbox still cannot show.
+ *
+ * Route-toolkit: withTenantAdmin (R3).
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { NextResponse } from 'next/server';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { accessRequestWorkflowContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   repartitionAccessRequests, tenantFingerprint,
@@ -38,19 +40,15 @@ import crypto from 'node:crypto';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-
+export const POST = withTenantAdmin(async (req, { session: s }) => {
   const body = await req.json().catch(() => ({} as any));
   const dryRun = body?.confirm !== true;
 
-  const targetTenantId = tenantScopeId(s!);
+  const targetTenantId = tenantScopeId(s);
   // tenantScopeId falls back to `oid` when the session carries no `tid`. Moving
   // every document onto ONE user's oid would re-create the very defect this
   // migration exists to undo, so refuse rather than proceed on that fallback.
-  if (!s!.claims.tid) {
+  if (!s.claims.tid) {
     return NextResponse.json(
       {
         ok: false,
@@ -84,7 +82,7 @@ export async function POST(req: NextRequest) {
           `scanned ${result.scanned}, needed ${result.needingMigration}, moved ${result.moved}, ` +
           `already-migrated ${result.alreadyMigrated}, failed ${result.failed.length}, ` +
           `residual ${result.residual}.`,
-        upn: s!.claims.upn || s!.claims.oid,
+        upn: s.claims.upn || s.claims.oid,
         at: new Date().toISOString(),
       });
     }
@@ -96,4 +94,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

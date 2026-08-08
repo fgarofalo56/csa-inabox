@@ -23,7 +23,7 @@
  * where every row was hard-coded `pending` regardless of the real outcome.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   accessRequestWorkflowContainer,
   accessRequestsContainer,
@@ -63,9 +63,7 @@ function mapWorkflowStatus(status: AccessRequestDoc['status']): DisplayStatus {
   }
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session: s }) => {
   const oid = s.claims.oid;
 
   try {
@@ -128,4 +126,4 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

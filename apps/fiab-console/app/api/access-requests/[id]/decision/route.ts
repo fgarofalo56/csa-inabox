@@ -36,12 +36,18 @@
  * own rows. That accident, not a check, was what stopped one user actioning
  * another's request; it also meant the only person who COULD action a request
  * was its requester (self-approval). Both are now explicit:
- *   1. separation of duties — a requester never actions their own request,
- *   2. approval authority   — tenant admin / capability / named approver,
+ *   1. approval authority   — tenant admin / capability / named approver,
+ *      enforced STRUCTURALLY by the `withApprovalAuthority` wrapper so there is
+ *      no returned-value gate to drop;
+ *   2. separation of duties — a requester never actions their own request
+ *      (needs the loaded doc, so it runs right after the point read);
  *   3. `actorMayApprove`    — per-stage named-approver enforcement (unchanged).
+ *
+ * Route-toolkit: withApprovalAuthority (R3).
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withApprovalAuthority } from '@/lib/api/route-toolkit';
 import {
   accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
 } from '@/lib/azure/cosmos-client';
@@ -54,9 +60,7 @@ import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 import { recordAssignment } from '@/lib/access/assignment-ledger';
 import { effectiveStages, nextStage, actorMayApprove } from '@/lib/access/approval-policy';
-import {
-  resolveApprovalAuthority, checkSelfApproval, ACCESS_APPROVALS_CAPABILITY,
-} from '@/lib/access/approval-authority';
+import { checkSelfApproval } from '@/lib/access/approval-authority';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { computeExpiry } from '@/lib/access/expiry';
 
@@ -65,11 +69,8 @@ export const dynamic = 'force-dynamic';
 
 const SCOPE_TYPES = new Set<AccessScopeType>(['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection']);
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { id } = await ctx.params;
+export const POST = withApprovalAuthority<{ id: string }>(async (req, { session: s, params }) => {
+  const { id } = params;
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
 
   const body = await req.json().catch(() => ({} as any));
@@ -104,32 +105,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
 
-    // ── Separation of duties. Absolute, and checked FIRST so it holds even for
-    // a tenant admin: nobody actions their own request. Before the partition
-    // fix this was the ONLY thing that could happen, because the oid-keyed
-    // point read could only ever find the caller's own documents.
+    // ── Separation of duties. Absolute — it holds even for a tenant admin, so
+    // it is checked here rather than folded into the wrapper's authority test.
+    // It needs the loaded document (the requester's identity), which is why it
+    // cannot live in `withApprovalAuthority`. Before the partition fix, a
+    // self-approval was the ONLY decision that could ever succeed, because the
+    // oid-keyed point read could only find the caller's own documents.
     const sod = checkSelfApproval(s, doc);
     if (!sod.allowed) {
       return NextResponse.json(
         { ok: false, error: sod.reason, code: 'self_approval_forbidden', remediation: sod.remediation },
-        { status: 403 },
-      );
-    }
-
-    // ── Approval authority. The widened (tenant) partition means this route can
-    // now reach another user's request, so the authority that the oid partition
-    // used to imply has to be asserted explicitly.
-    const authority = await resolveApprovalAuthority(s);
-    if (!authority.allowed) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: 'forbidden',
-          code: authority.indeterminate ? 'authority_indeterminate' : 'not_an_approver',
-          capability: ACCESS_APPROVALS_CAPABILITY,
-          reason: authority.reason,
-          remediation: authority.remediation,
-        },
         { status: 403 },
       );
     }
@@ -295,4 +280,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

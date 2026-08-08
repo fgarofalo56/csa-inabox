@@ -36,6 +36,7 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { requireTenantAdmin, enforceCapability, type FeatureRole } from '@/lib/auth/feature-gate';
 import { denyIfNoDlzAccess, type DlzPane } from '@/lib/auth/dlz-gate';
+import { resolveApprovalAuthority, approvalAuthorityDenied } from '@/lib/access/approval-authority';
 import { apiUnauthorized, apiNotFound, apiServerError } from './respond';
 import { backendGateResponse, type GateEnvelopeOpts } from './gate-envelope';
 
@@ -242,6 +243,40 @@ export function withCapability<P = Record<string, string>>(
   return withSession<P>(async (req, sctx) => {
     const gate = await enforceCapability(sctx.session, capabilityId, requiredRole);
     if (gate) return gate;
+    return handler(req, sctx);
+  });
+}
+
+/**
+ * Require a signed-in session AND F16 access-approval authority. Composes on
+ * `withSession` (401 first), then runs `resolveApprovalAuthority` — tenant
+ * admin, `governance.access-approvals` capability holder, or a principal named
+ * as an approver on an enabled approval policy — and short-circuits with the
+ * honest 403 (reason + remediation, and `authority_indeterminate` when the
+ * policy lookup itself failed) when none of those hold.
+ *
+ * WHY A WRAPPER RATHER THAN AN INLINE CHECK. The access-request inbox and
+ * decision routes previously had NO authorization: the container's partition
+ * key happened to be the caller's own `oid`, so a caller could only ever reach
+ * their own documents. Fixing the partition key (so approvers can see requests
+ * at all) removed that accident. Expressing the replacement as a wrapper makes
+ * it structural — there is no `if (gate) return gate;` line to delete, which is
+ * the exact failure shape check-route-guards.mjs exists to catch.
+ *
+ *   export const GET = withApprovalAuthority(async (req, { session }) => { … });
+ *
+ * NOTE: this grants the right to REVIEW the tenant's requests. It is not the
+ * whole authorization story for acting on one — separation of duties
+ * (`checkSelfApproval`) and per-stage named-approver enforcement
+ * (`actorMayApprove`) need the loaded document, so the decision route runs them
+ * after its point read.
+ */
+export function withApprovalAuthority<P = Record<string, string>>(
+  handler: SessionHandler<P>,
+): RouteHandler<P> {
+  return withSession<P>(async (req, sctx) => {
+    const authority = await resolveApprovalAuthority(sctx.session);
+    if (!authority.allowed) return approvalAuthorityDenied(authority);
     return handler(req, sctx);
   });
 }

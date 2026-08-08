@@ -39,6 +39,7 @@
  * not claim the caller is not an approver, because we did not establish that.
  */
 import type { SessionPayload } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
 import { isTenantAdmin, checkCapability } from '@/lib/auth/feature-gate';
 import { approvalPoliciesContainer } from '@/lib/azure/cosmos-client';
 import { tenantScopeId } from '@/lib/auth/session';
@@ -140,6 +141,25 @@ export async function resolveApprovalAuthority(
       'are named as an approver on no enabled approval policy.',
     remediation: REMEDIATION,
   };
+}
+
+/**
+ * The canonical 403 for a caller without approval authority. Shared by the
+ * `withApprovalAuthority` wrapper and the decision route so both emit
+ * byte-identical envelopes, and so the UI has one shape to render.
+ */
+export function approvalAuthorityDenied(authority: ApprovalAuthority): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: 'forbidden',
+      code: authority.indeterminate ? 'authority_indeterminate' : 'not_an_approver',
+      capability: ACCESS_APPROVALS_CAPABILITY,
+      reason: authority.reason,
+      remediation: authority.remediation,
+    },
+    { status: 403 },
+  );
 }
 
 /**
