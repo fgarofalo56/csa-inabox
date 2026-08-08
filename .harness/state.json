@@ -1085,7 +1085,7 @@
       "lane": "L-PLATFORM",
       "wave": 3,
       "task_order": 45,
-      "status": "in_progress",
+      "status": "done",
       "title": "June harness real residue: PP solution import/export (audit-T28/task-015), scale-by-SKU verify EVERY resource (task-020), mirroring-wizard backend consumption (persist connectionId + KV creds)",
       "depends_on": [],
       "validation": {
@@ -1098,7 +1098,16 @@
       },
       "evidence": [],
       "agent": "a6a17c2b9bd8116d2",
-      "dispatched": "2026-08-08 session-3"
+      "dispatched": "2026-08-08 session-3",
+      "pr": 3146,
+      "item3_HELD": "MIRRORING-WIZARD CONSUMPTION - HELD, the inert-feature class exactly. MEASURED: mirror-engine.ts had ZERO references to connectionId/loadConnection/secretRef; MirrorSource had no credential field; sourceFromState() never read state.connectionId; getPool() used only the Console UAMI token. The wizard collected a Key Vault-backed connection, /sources persisted the connectionId, and EXACTLY ONE surface consumed it - the schema-browse /tables route, with its own PRIVATE COPY of the logic. NET EFFECT: a source reachable only by the operator's stored SQL login could have its tables BROWSED but NEVER REPLICATED.",
+      "item2_MIXED": "SCALE-BY-SKU - MIXED. All five behaviours task-020 named are already built and real (AI Search immutable-SKU 409, APIM 409/ServiceLocked, ADX/Synapse ARM PATCH, Databricks clusters/edit) - FALSIFIED. BUT 'verify EVERY resource' surfaced a real one: /api/admin/scaling/aks is complete and real with ZERO CALLERS (ORCHESTRATOR-VERIFIED on origin/main - the only hit is the route file itself). AKS IS THE GCC-HIGH/IL5 CONTAINER PLATFORM, so a sovereign deployment had NO WAY TO SCALE ITS COMPUTE PLANE while Commercial did - a cloud-parity.md violation found only because the item said EVERY resource.",
+      "item1_HELD": "POWER PLATFORM SOLUTION IMPORT/EXPORT - HELD. Zero occurrences of ImportSolution/ExportSolution/StageSolution. The navigator carried a literal 'tracked for a follow-up... Open the maker portal' row - the deep-link-as-parity shortcut ui-parity.md rejects.",
+      "near_miss_caught": "After the first fix the agent audited every runMirrorSnapshot caller - THERE ARE FOUR AND IT HAD FIXED ONE. mirrored-database/[id]/state/route.ts is a SECOND Start path on the same item reading the same connectionId; the bug would have survived on whichever path the UI called. Fixed, and withSourceAuth now lives in the shared module so both use one function.",
+      "filed_not_guessed": "The CDC connector plane has the IDENTICAL bug (wizard collects and persists a KV secretRef; connectorToEngineSource() drops it). Filed as #3149 rather than fixed - it needs a new KvSecretPurpose (a security-policy change) and a design decision about credential shape, and guessing inside the KV policy module is the wrong move.",
+      "vacuous_test_caught": "Had to set LOOM_BRONZE_URL in the fixture after finding the engine gates BEFORE any driver call - without it EVERY ASSERTION PASSED VACUOUSLY.",
+      "verification": "tsc clean; 577 files / 6189 tests green; CI 35/35. MUTATION-TESTED: stripping the credential threading turns all 5 credential-carrying tests RED while the 3 UAMI-default tests correctly stay GREEN. CI caught two ratchets the change tripped (route-toolkit, file-size) - FIXED AT THE CAUSE, NO BASELINES BUMPED. All 71 guards run locally and independently (bash -e masks later steps): 71/71.",
+      "not_done": "Build + test only - NOT live in either boundary. No deploy dispatched, no browser E2E receipt (G1); all three surfaces need a click-walk after a roll. Operator-gated: the Dataverse Application-User SP registration for item 1 - a genuine Microsoft platform restriction (a managed identity CANNOT be a Dataverse Application User), named precisely in the gate."
     },
     {
       "id": "P2-DOCS",
