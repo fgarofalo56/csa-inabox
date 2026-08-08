@@ -318,13 +318,18 @@ export function postgresQueryGate(): { missing: string; detail: string } | null 
 /**
  * List user tables in a PostgreSQL database (schema.table), excluding the
  * system schemas — used by the mirror engine to enumerate what to snapshot.
+ * `auth` carries an explicit stored-connection login when the mirror is bound
+ * to one; omitted, the Console UAMI's Entra token is used (unchanged default).
  */
-export async function listPostgresTables(fqdn: string, database: string): Promise<Array<{ schema: string; table: string }>> {
+export async function listPostgresTables(
+  fqdn: string, database: string, auth?: PgExplicitAuth,
+): Promise<Array<{ schema: string; table: string }>> {
   const res = await executePostgresQuery(
     fqdn, database,
     "SELECT table_schema, table_name FROM information_schema.tables " +
     "WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') " +
     'ORDER BY table_schema, table_name',
+    auth,
   );
   const iS = res.columns.indexOf('table_schema');
   const iT = res.columns.indexOf('table_name');
@@ -332,17 +337,36 @@ export async function listPostgresTables(fqdn: string, database: string): Promis
 }
 
 /**
- * Execute a SQL statement against a PostgreSQL flexible server over the real
- * `pg` wire protocol, authenticating with a Microsoft Entra access token (no
- * stored password). Returns columns + rows. Throws PostgresError on failure
- * (surfaced verbatim by the route). Caller-authorized — the editor's Query tab
- * runs arbitrary SQL the same way the T-SQL editor does.
+ * An explicit PostgreSQL login resolved from a stored Loom Connection's Key
+ * Vault secret. Held only for the duration of a single call — never persisted,
+ * never logged.
  */
-export async function executePostgresQuery(fqdn: string, database: string, sql: string): Promise<PgQueryResult> {
-  const user = process.env.LOOM_POSTGRES_AAD_USER;
-  if (!user) throw new PostgresError('LOOM_POSTGRES_AAD_USER is not set; cannot authenticate to PostgreSQL.', 503);
-  const tok = await credential.getToken(pgAadScope());
-  if (!tok?.token) throw new PostgresError('Failed to acquire an Entra token for PostgreSQL.', 401);
+export interface PgExplicitAuth { user: string; password: string }
+
+/**
+ * Execute a SQL statement against a PostgreSQL flexible server over the real
+ * `pg` wire protocol. Authenticates with an explicit stored-connection login
+ * when `auth` is supplied, otherwise with a Microsoft Entra access token for
+ * the Console identity (no stored password). Returns columns + rows. Throws
+ * PostgresError on failure (surfaced verbatim by the route). Caller-authorized
+ * — the editor's Query tab runs arbitrary SQL the same way the T-SQL editor does.
+ */
+export async function executePostgresQuery(
+  fqdn: string, database: string, sql: string, auth?: PgExplicitAuth,
+): Promise<PgQueryResult> {
+  let user: string;
+  let password: string;
+  if (auth) {
+    user = auth.user;
+    password = auth.password;
+  } else {
+    const aadUser = process.env.LOOM_POSTGRES_AAD_USER;
+    if (!aadUser) throw new PostgresError('LOOM_POSTGRES_AAD_USER is not set; cannot authenticate to PostgreSQL.', 503);
+    const tok = await credential.getToken(pgAadScope());
+    if (!tok?.token) throw new PostgresError('Failed to acquire an Entra token for PostgreSQL.', 401);
+    user = aadUser;
+    password = tok.token;
+  }
 
   // Lazy import so the driver only loads on this path (Node runtime only).
   const { Client } = await import('pg');
@@ -351,7 +375,7 @@ export async function executePostgresQuery(fqdn: string, database: string, sql: 
     port: 5432,
     database: database || 'postgres',
     user,
-    password: tok.token,
+    password,
     ssl: { rejectUnauthorized: true },
     statement_timeout: 30_000,
     connectionTimeoutMillis: 20_000,

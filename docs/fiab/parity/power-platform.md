@@ -77,7 +77,7 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ (exists, incomplet
 | C5 | **Delete** app | Delete action in navigator | ✅ built | `DELETE …/apps/{name}` |
 | C6 | **Share** app (add users/groups, co-owner, security roles) | none (admin Share is a documented core admin op) | ❌ MISSING | none |
 | C7 | **Edit** canvas app (Studio designer) | Deep-link to make.powerapps studio only | ❌ MISSING (authoring) | none |
-| C8 | **Export / Import** app package (.msapp / solution) | none | ❌ MISSING | none |
+| C8 | **Export / Import** app package (.msapp / solution) | Covered for the **solution** path via I5 (`SolutionsAlmPanel`) — an app packaged in a solution exports/imports there. The standalone **.msapp** package format is not exposed by the Power Apps REST surface Loom authenticates with. | ⚠️ partial | `/api/powerplatform/solutions` (solution path); no REST for .msapp |
 | C9 | Conditional-access / allowed-apps governance | none | ❌ MISSING | none |
 | C10 | Bind a Loom item to a real (env, appId, appType) | Bind / re-bind flow persisted to item state | ✅ built (Loom-specific) | `POST /api/items/power-app/{id}/state` |
 
@@ -93,7 +93,7 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ (exists, incomplet
 | D6 | **Delete** flow | Delete action in navigator | ✅ built | `DELETE …/flows/{name}` |
 | D7 | **Edit** flow (designer canvas) | Deep-link to make.powerautomate only | ❌ MISSING (authoring) | none |
 | D8 | Flow **owners / run-only users / connections** management | none | ❌ MISSING | none |
-| D9 | Export / import flow (package/solution) | none | ❌ MISSING | none |
+| D9 | Export / import flow (package/solution) | Covered for the **solution** path via I5 (`SolutionsAlmPanel`) — a flow packaged in a solution exports/imports there. The legacy standalone flow **package (.zip)** export is a maker-portal-only affordance. | ⚠️ partial | `/api/powerplatform/solutions` (solution path) |
 | D10 | Desktop flows / process mining | none | ❌ MISSING | none |
 | D11 | Resubmit / cancel a specific run | none (runs are read-only) | ❌ MISSING | none |
 
@@ -154,14 +154,14 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ (exists, incomplet
 | I2 | Honest infra-gate when SP not configured | Whole-tree + per-editor MessageBar naming `LOOM_UAMI_CLIENT_ID` + allow-group | ✅ built (gate) | n/a |
 | I3 | Dataverse sub-gate (UAMI ≠ Dataverse App User) without gating the tree | Tables-only sub-gate naming `LOOM_DATAVERSE_CLIENT_ID/_SECRET` | ✅ built (gate) | n/a |
 | I4 | Real 401/403 remediation hints surfaced | `hint`/`endpoint` plumbed through every route | ✅ built | n/a |
-| I5 | Solutions / ALM (managed/unmanaged, import/export) | Honest ⚠️ row → maker (client `listSolutions` exists, no navigator group) | ⚠️ partial | partial |
+| I5 | Solutions / ALM (managed/unmanaged, import/export) | **`SolutionsAlmPanel`** on the environment editor — solutions grid (name / unique name / Managed badge / version / installed), **Export** managed **and** unmanaged .zip, **Import** wizard (choose .zip → `StageSolution` validation findings shown BEFORE apply → async import with live progress polling), activate-processes / overwrite-unmanaged / import-as-holding options, **Publish all**, **Delete** | ✅ built | `/api/powerplatform/solutions` → Dataverse `ExportSolution`, `ExportSolutionAsync`, `DownloadSolutionExportData`, `StageSolution`, `ImportSolutionAsync`, `importjobs`, `asyncoperations`, `PublishAllXml`, `DELETE solutions({id})` |
 
 ---
 
 ## Tally
 
-- **built ✅:** 28
-- **partial ⚠️ (incl. honest gates that still leave authoring missing):** 5 (A11 capacity, E7 data-read-only, I5 solutions, B2 DLP gate, I2/I3 gates count as built)
+- **built ✅:** 29 *(+I5 Solutions ALM — audit-T28 / task-015, built 2026-08-08)*
+- **partial ⚠️ (incl. honest gates that still leave authoring missing):** 4 (A11 capacity, E7 data-read-only, B2 DLP gate, I2/I3 gates count as built)
 - **gated ⚠️ (honest infra-gate, no function by design):** 2 (B2 DLP, plus the global config gate I2 which is built)
 - **MISSING ❌:** 38
 

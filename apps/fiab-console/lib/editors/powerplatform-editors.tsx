@@ -38,6 +38,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
+import { SolutionsAlmPanel } from '@/lib/components/powerplatform/solutions-alm-panel';
 import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
 import { PowerAutomateDesignerTab, NewFlowAuthor } from '@/lib/power-platform/power-automate-editor';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
@@ -676,6 +677,9 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
               If a field shows "—", the UAMI SP lacks the property scope (add the SP to Power Platform Admins role for the tenant
               to widen the view).
             </Caption1>
+            {/* Solution ALM — audit-T28 / parity row I5. Built in-Loom on the real
+                Dataverse Web API rather than deep-linked to the maker portal. */}
+            <SolutionsAlmPanel envId={current.name} />
           </>
         )}
       </div>
