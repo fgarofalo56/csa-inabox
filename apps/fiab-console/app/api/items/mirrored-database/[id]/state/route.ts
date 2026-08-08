@@ -14,6 +14,11 @@ import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { runMirrorSnapshot, type MirrorSource, type MirrorTableSpec, type MirrorTableResult } from '@/lib/azure/mirror-engine';
+// This is the SECOND Start path for `mirrored-database` (the other is
+// /[id]/lifecycle). Both must bind the operator's stored connection credential
+// — fixing only one would leave the "collected but never consumed" bug alive on
+// whichever path the UI happens to call.
+import { withSourceAuth } from '@/lib/azure/connection-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,7 +74,11 @@ export const POST = withSession(async (req, { session: s, params }) => {
     }
 
     // ---- start: run the real Azure-native mirror ----
-    const src = sourceFromState(state);
+    // Bind the mirror's stored Loom Connection (Key Vault-backed) so the engine
+    // reads the source as the identity the operator configured, not the UAMI.
+    const { src, descriptor: sourceAuth } = await withSourceAuth(
+      s.claims.oid, sourceFromState(state), state.connectionId ? String(state.connectionId) : undefined,
+    );
     // Per-table watermarks from the prior run let the SQL family sync only the
     // changes since last Start (incremental); the first run has none → snapshot.
     const prevTableStatus = (Array.isArray(state.tablesStatus) ? state.tablesStatus : []) as MirrorTableResult[];
@@ -84,14 +93,15 @@ export const POST = withSession(async (req, { session: s, params }) => {
         mirroringStatus,
         lastStateChange: new Date().toISOString(),
         tablesStatus: run.tables,
-        lastRun: { at: new Date().toISOString(), status: run.status, engine: run.engine, cdcName: run.cdcName, basePath: run.basePath, note: run.note, error: run.error, gate: run.gate, changeFeed: run.changeFeed },
+        // `sourceAuth` is the NON-SECRET descriptor — no credential material here.
+        lastRun: { at: new Date().toISOString(), status: run.status, engine: run.engine, cdcName: run.cdcName, basePath: run.basePath, note: run.note, error: run.error, gate: run.gate, changeFeed: run.changeFeed, sourceAuth },
       },
       updatedAt: new Date().toISOString(),
     };
     await items.item(existing.id, workspaceId).replace(next);
 
     if (run.status === 'Gated') {
-      return NextResponse.json({ ok: false, action, status: { mirroringStatus }, gate: run.gate, note: run.note }, { status: 200 });
+      return NextResponse.json({ ok: false, action, status: { mirroringStatus }, gate: run.gate, note: run.note, sourceAuth }, { status: 200 });
     }
     return NextResponse.json({
       ok: run.ok,
@@ -104,6 +114,8 @@ export const POST = withSession(async (req, { session: s, params }) => {
       basePath: run.basePath,
       note: run.note,
       error: run.error,
+      // Which identity read the source. Non-secret by construction.
+      sourceAuth,
     });
   } catch (e: any) { return apiServerError(e); }
 });

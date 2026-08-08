@@ -181,6 +181,15 @@ export default function ScalingPage() {
   const [foundrySel, setFoundrySel] = useState<Record<string, { vmSize?: string; minNodeCount?: number; maxNodeCount?: number }>>({});
   const [foundryState, setFoundryState] = useState<Record<string, { applying?: boolean; error?: string; ok?: string }>>({});
 
+  // AKS agent pools — the GCC-High / IL5 container platform. Commercial / GCC
+  // run Container Apps, where this card renders its honest 503 gate. Wiring it
+  // here closes a cloud-parity gap: /api/admin/scaling/aks was fully built and
+  // real but had ZERO callers, so a sovereign (AKS) deployment had no way to
+  // scale its compute plane from Loom while a Commercial one did.
+  const [aksData, setAksData] = useState<any>(null);
+  const [aksSel, setAksSel] = useState<Record<string, { count?: number }>>({});
+  const [aksState, setAksState] = useState<Record<string, { applying?: boolean; error?: string; ok?: string }>>({});
+
   // MCP container app — Azure Files mount (persistence). Deploy path, not a SKU dial.
   const [mcpData, setMcpData] = useState<any>(null);
   const [mcpSel, setMcpSel] = useState<{ mountPath?: string; accessMode?: 'ReadWrite' | 'ReadOnly' }>({});
@@ -212,6 +221,7 @@ export default function ScalingPage() {
     jsonGet('/api/admin/scaling/cosmos').then(when(setCosmosData));
     jsonGet('/api/admin/scaling/container-apps').then(when(setAcaData));
     jsonGet('/api/admin/scaling/foundry-compute').then(when(setFoundryData));
+    jsonGet('/api/admin/scaling/aks').then(when(setAksData));
     jsonGet('/api/admin/mcp-servers/deploy').then(when(setMcpData));
 
     // Utilization: fire separately so a Monitor timeout never delays the SKU dials.
@@ -591,6 +601,66 @@ export default function ScalingPage() {
     },
   ];
 
+  /**
+   * AKS agent (node) pools. `count` is the node count the ARM PATCH sets; the
+   * route rejects anything outside 0-1000 so the input is bounded here too.
+   * Pools on autoscale show their min/max so the operator sees why a manual
+   * count may be overridden by the cluster autoscaler.
+   */
+  const aksColumns: LoomColumn<any>[] = [
+    {
+      key: 'name', label: 'Node pool', width: 280,
+      render: (p) => (
+        <div className={styles.resourceCell}>
+          <Caption1><strong>{p.name}</strong></Caption1>
+          <Caption1 className={styles.subtle}>
+            {p.vmSize || 'unknown vmSize'} · {p.mode || 'User'} · {p.provisioningState || 'unknown'}
+            {p.enableAutoScaling ? ` · autoscale ${p.minCount ?? '?'}-${p.maxCount ?? '?'}` : ''}
+          </Caption1>
+        </div>
+      ),
+    },
+    {
+      key: 'config', label: 'Node count', width: 420, sortable: false, filterable: false,
+      render: (p) => {
+        const sel = aksSel[p.name] || {};
+        return (
+          <div className={styles.controlRow}>
+            <div className={styles.cellStack}>
+              <Caption1 className={styles.fieldLabel}>nodes</Caption1>
+              <Input type="number" className={styles.numNarrow}
+                value={String(sel.count ?? p.count ?? 0)}
+                onChange={(_, d) => setAksSel({ ...aksSel, [p.name]: { count: parseInt(d.value, 10) || 0 } })} />
+            </div>
+            <Caption1 className={styles.subtle}>current: {p.count ?? '—'}</Caption1>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
+      render: (p) => {
+        const sel = aksSel[p.name] || {};
+        const st = aksState[p.name] || {};
+        return (
+          <div className={styles.applyCell}>
+            <Button appearance="primary" disabled={st.applying}
+              onClick={async () => {
+                setAksState({ ...aksState, [p.name]: { applying: true } });
+                try {
+                  await jsonPost('/api/admin/scaling/aks', { pool: p.name, count: sel.count ?? p.count ?? 0 });
+                  setAksState({ ...aksState, [p.name]: { ok: 'Node pool scale submitted' } });
+                } catch (e: any) { setAksState({ ...aksState, [p.name]: { error: e.message } }); }
+              }}>
+              {st.applying ? 'Applying…' : 'Apply'}
+            </Button>
+            {statusCell(st)}
+          </div>
+        );
+      },
+    },
+  ];
+
   const foundryColumns: LoomColumn<any>[] = [
     {
       key: 'name', label: 'Compute', width: 260,
@@ -933,6 +1003,32 @@ export default function ScalingPage() {
               noFilters
               ariaLabel="Cosmos DB containers"
               empty="No Cosmos containers."
+            />
+          }
+        />
+
+        {/* AKS node pools — the GCC-High / IL5 container platform */}
+        <ServiceCard
+          title="Kubernetes node pools (AKS)"
+          subtitle="Agent-pool node count for the sovereign (GCC-High / IL5) container platform."
+          icon={<Server24Regular />}
+          accent={tokens.colorPaletteBlueForeground2}
+          loading={!aksData}
+          gateMessage={
+            aksData && !aksData.ok
+              ? { title: 'AKS not configured', body: `${aksData.error}${aksData.hint ? ' — ' + aksData.hint : ''}` }
+              : undefined
+          }
+          utilization={utilData?.['microsoft.containerservice/managedclusters']}
+          utilizationLoading={utilLoading}
+          controls={
+            <LoomDataTable
+              columns={aksColumns}
+              rows={aksData?.pools || []}
+              getRowId={(r) => r.name}
+              noFilters
+              ariaLabel="AKS node pools"
+              empty="No AKS agent pools."
             />
           }
         />
