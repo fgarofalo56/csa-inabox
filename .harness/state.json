@@ -1331,7 +1331,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 93,
-      "status": "in_progress",
+      "status": "review",
       "title": "ACR re-lock reports SUCCESS while leaving the registry publicly OPEN. Measured 2026-08-07 after run 31143181962: the 'Re-lock ACR (private endpoint only)' job concluded success, yet az acr show read publicNetworkAccess=Enabled/defaultAction=Allow on three probes over a minute (ruling out the known 30-90s propagation lag). Orchestrator re-locked by hand. Add verify-after-write that FAILS the job if the registry is not Disabled/Deny afterwards",
       "depends_on": [],
       "validation": {
@@ -1342,12 +1342,16 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "LIKELY ROOT CAUSE from D7: full-app-deploy's concurrency group was keyed on inputs.region||'auto', so two runs landed in different groups and RACED for the same ACR firewall lease — one run's re-lock could be undone by the other's open. D7 made the group a constant, which should prevent recurrence, but the re-lock step still has no verify-after-write and would still report success on a no-op.",
-        "SECURITY: this left the Commercial ACR publicly reachable for an unknown window while CI reported green."
-      ],
+      "evidence": "PR #3119. PREMISE PARTIALLY HELD - and the surviving half is worse than the ticket said. The script-level defect was already fixed by #3111 (ea83f943, this same program); the agent RE-PROVED it by reverting _lease_close_firewall to fire-and-forget: 8/10 cases go RED. But the FIX'S OWN GUARD WAS BLIND - it passed 10/10 green on a tree containing THREE live '|| true's. That green run IS the false success C24 names, one layer up from where the ticket pointed. Four live call sites still discarded the verdict.",
       "agent": "ab51c8a90451e7f4a",
-      "dispatched": "2026-08-08"
+      "dispatched": "2026-08-08",
+      "pr": 3119,
+      "root_cause": "Guard tested each PHYSICAL LINE for both invocation and discard, and scanned only .github/workflows/*.yml. Three blind spots: (1) console-bluegreen-roll.yml:269 '|| true' on a shell CONTINUATION line - the if:always() safety-net release, which fires precisely when the build died before its inline release, i.e. the likeliest path to a registry left OPEN; (2) deploy-loom-uat-job.sh:133 and provision-gh-runner.sh:140 - EXIT traps in scripts/ which the scan never walked, in a quoted form the regex could not match; (3) preflight-image-tags.sh:164 '>/dev/null 2>&1 || warn', downgrading a failed re-lock to a warning AND swallowing the concrete remediation (R6/R7).",
+      "subtle_finding": "Deleting '|| true' from those traps would have been COSMETIC: a bare non-zero command in a bash EXIT trap does NOT change exit status. ORCHESTRATOR RE-DERIVED THIS INDEPENDENTLY: 'cleanup(){ false; }; trap cleanup EXIT; exit 0' exits 0. Traps now capture $? and exit 1 on a failed re-lock.",
+      "reviewer": "PASS. Orchestrator did NOT take the report on trust: (a) re-derived the EXIT-trap semantics from scratch; (b) re-ran the load-bearing mutation independently - reintroduced a continuation-line '|| true' on the release call -> guard 11 pass/1 fail; clean tree 12/12. Blind spot real, fix genuinely closes it.",
+      "self_caught": "Agent's M4 initially PASSED against its own patch: first regex was '2>\\s*(&1\\s*)?/dev/null', which does not match '>/dev/null 2>&1'. The guard being written to fix the bug class HAD the bug class. Caught only by mutating instead of reasoning. Scanner now self-checks it finds >=15 call sites across both file kinds, so a scanner matching nothing cannot pass the assertions beneath it.",
+      "unverified": "Gov runtime behaviour NOT verified (no local Gov az by policy; Gov call sites were already clean of discards and are covered by the hardened static guard). Per R2: merged-not-deployed until a Commercial or Gov build next exercises a release step. ACR final measured state: LOCKED (publicNetworkAccess=Disabled, defaultAction=Deny), lease free; all agent testing used stub az, zero Azure state changed.",
+      "no_defect": "Sweep path checked as instructed - NO defect. acr-firewall-sweep-all.sh hardened by #2836; acr_lease_sweep propagates close failure; no ACR firewall toggle exists outside the lease script (genuine single choke point); no continue-on-error on any release/sweep step."
     },
     {
       "id": "C25",
