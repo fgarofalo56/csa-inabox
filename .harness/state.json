@@ -976,7 +976,7 @@
       "lane": "L-UNITY",
       "wave": 3,
       "task_order": 48,
-      "status": "todo",
+      "status": "done",
       "title": "Loom Unity tail: LU-7 Trino OPA compile, LU-11 foreign catalogs, LU-12 metric-views semantic tier",
       "depends_on": [
         "D2"
@@ -989,7 +989,16 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "pr": 3142,
+      "merged": "2026-08-08 (#3142)",
+      "premise_stale": "LU-7, LU-11 and LU-12 WERE ALL ALREADY BUILT, MERGED AND DEPLOYED - PR #3080 landed them 2026-08-07. ORCHESTRATOR-VERIFIED: b04cb122 IS an ancestor of the live SHA. Nothing was rebuilt. LU-7 Trino OPA: compilers/trino.ts emits both file-rules and rego; LOOM_TRINO_POLICY_URL/_TOKEN/_REFRESH_SECONDS all live on loom-trino. LU-11 foreign catalogs: /api/catalog/unity/foreign-catalogs live (401, structured envelope), trino-catalogs.ts, Federation tab on /catalog/unity. LU-12 metric-views: uc-overlay/model.ts has vector-index + metric-view securables; compile/run/DAX/YAML/DDL predates #3080.",
+      "real_defects_found": "#3080's OWN security-review follow-ups: three real, one already closed. (1) THE OBSERVABLE DEFECT WAS NOT WHERE THE NOTE SAID. The note blamed the reconcile-path artifact for over-warning - it does, but reconcilePolicyCode NEVER SURFACES artifact.warnings at all, so that half was INVISIBLE, not misleading. The real exposure was one call site over: /api/admin/policy-code called compileAll(set) with NO OPTIONS (orchestrator-verified on main, route.ts:40 and :74). THE SURFACE AN ADMIN READS TO LEARN WHAT IS ENFORCED WAS THE LEAST ACCURATE OF THE THREE PRODUCERS - warning about a group control that was actually IN FORCE, and resolving 2-part refs against the hardcoded 'iceberg' default. Fixed with one shared resolveCompileOptions consumed by all three call sites. (2) The stored rego carried NO CATALOG FLOOR, so every persisted artifact was STRICTLY MORE PERMISSIVE than the file document it claims equivalence with. Now rendered from the catalogs the engine itself last reported (new lastFetch.catalogRules); with no fetch on record it keeps its honest self-disclosure rather than inventing a list. (3) additionalImpersonatedUsers was honored by the file doc and SILENTLY DROPPED by the rego - the two artifacts disagreed about WHO MAY BE IMPERSONATED. Fixed.",
+      "self_caught": "The agent's FIRST DRAFT of the group-provider test asserted on the reconcile receipt and PASSED AGAINST THE BROKEN CODE - vacuous. Discarding it is how it found correction #1. Regressions proven RED first: reverting to shipped code fails 3/11; mutating resolveCompileOptions turns 2 more red.",
+      "own_inference_overruled": "The parity doc said a loom-trino IMAGE REBUILD WAS OWED. It is not - the agent read the entrypoint OUT OF THE DEPLOYED IMAGE via an ACR task: 378 lines, 4x LOOM_TRINO_POLICY_URL, 5x fetch_policy, byte-consistent with main. ITS OWN INITIAL INFERENCE FROM ACR TAG TIMESTAMPS SAID THE OPPOSITE AND WAS WRONG - the v0.1 tag had been re-pointed. Measuring image CONTENT overruled timestamp inference.",
+      "operator_question": "loom-trino sits at minReplicas:0 with 0 replicas - THE ENGINE IS NOT RUNNING, so it is not fetching. A scale-to-zero engine enforces ONLY WHILE AWAKE; trinoEnforcementStatus will honestly report never-fetched/stale between queries. WORTH AN OPERATOR CALL whether that is the intended posture for a GOVERNANCE engine.",
+      "not_verified": "No authenticated E2E, no browser walk (G1). Touched UI surface is the /admin/policy-code compiled preview. Gov: no env var, no bicep, no cloud-specific branch - identical on both, but DECLARED UNTESTED on Gov. gov-provision-trino.yml has NEVER run - Gov engine production remains the real parity gap (G2's lane).",
+      "meta_lesson": "The inherited follow-up list was written confidently and was WRONG ABOUT WHERE ITS OWN DEFECT SURFACED. Second stale premise in this lane. TREAT TRACKED FOLLOW-UP NOTES AS CLAIMS TO RE-VERIFY, NOT AS WORK ORDERS."
     },
     {
       "id": "C6",
