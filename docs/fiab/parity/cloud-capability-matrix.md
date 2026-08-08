@@ -119,8 +119,9 @@ subscription rights.
 2. **`#2330` — Gov SP UAA grant on the Gov admin RG.** Named here for
    completeness; not re-measured this session.
 
-3. **Synthetic-journeys Conditional Access exclusion** for
-   `svc-loom-synthetic@limitlessdata.ai` (tenant admin). Documented in
+3. **Synthetic-journeys Conditional Access exclusion** for the synthetic-monitor
+   service account (`svc-loom-synthetic@contoso.gov` — placeholder domain;
+   substitute your own tenant's). Requires a tenant admin. Documented in
    `gov-build-images`' own summary: building the `loom-uat` image does not make
    the Journeys tab populate until a tenant admin scopes the CA exclusion.
    Nothing in this repo can automate it.
