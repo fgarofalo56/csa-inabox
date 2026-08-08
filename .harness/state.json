@@ -1094,7 +1094,7 @@
       "lane": "L-PLATFORM",
       "wave": 2,
       "task_order": 40,
-      "status": "review",
+      "status": "done",
       "title": "no-vaporware §Bicep-sync + deploy-integrity R3 VIOLATION (found by P2-DOCS): access-governance-sweeper is ABSENT from platform bicep — LOOM_SWEEPER_TOKEN is set NOWHERE in platform/, scripts/, or .github/. Expiry auto-revoke is therefore admin-button-only. Fix belongs with C3's Functions→ACA migration (sweeper is one of its 5 remaining)",
       "depends_on": [
         "C3"
@@ -1759,6 +1759,11 @@
       "why_manual": "No automated path exists - full-app-deploy-commercial BUILDS this image but its comment at :478 says loom-unity is 'deployed out-of-band, not by admin-plane', and loom-roll-and-validate only rolls the console. Recorded as an auto-bind/deploy-integrity gap in rc9_roll_blocked_2026-08-08.",
       "revert_path": "If needed: az containerapp update -n <app> -g rg-csa-loom-admin-centralus --image <acr>/loom-unity:089fb622 (the prior tag, both apps).",
       "measurement": "loom-ui-verify run 31250866889 dispatched with extra_projects=external-engine-federation. GRADE STAYS D UNTIL AN AUTHENTICATED CATALOG READ RETURNS 200 - the run's result decides it, not the roll."
+    },
+    "verification_deploy_2026-08-08": {
+      "run": "31251849951 full-app-deploy-commercial (region=centralus EXPLICIT, skip_supply_chain=false)",
+      "purpose": "Produces the receipt #3140 owes - a green post-deploy-bootstrap proving DLZ discovery works live. The #3140 lane could make NO live Azure call (its identity got NoValidSubscriptionsInQueryRequest), so its mutation proof stubs az and the RG name came from a prior run's log. WHETHER THE DEPLOY SP HOLDS READER ON THE DLZ SUBSCRIPTION is the one thing only a real run settles.",
+      "also_carries": "Everything merged after 2bc3489e: C17 access sweeper, C21 ai-red-team safety scoring, #3122 token ownership, C15 FRESH0, C20 silent-failure sweep, #3139 sovereign guards, F1 RC-9 console side, #3140 DLZ discovery."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
