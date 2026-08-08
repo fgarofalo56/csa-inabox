@@ -21,8 +21,7 @@
  * lib/access/sweep-auth.ts — C17 replaced the never-set LOOM_SWEEPER_TOKEN.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { accessPackagesContainer, accessAssignmentsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import { getGroupTransitiveMembers, getGroupsByIds } from '@/lib/azure/graph-identity-client';
 import { enforceAccessGrant, type AccessScopeType, type AccessPermission } from '@/lib/azure/access-policy-client';
@@ -60,99 +59,107 @@ function toScopeType(rt: string): AccessScopeType {
   return SCOPE_TYPES.has(rt as AccessScopeType) ? (rt as AccessScopeType) : (inferScopeType(rt) as AccessScopeType);
 }
 
-export async function POST(req: NextRequest) {
-  const sysOk = isSweepSystemCaller(req);
-  const session = getSession();
-  if (!sysOk) { const gate = requireTenantAdmin(session); if (gate) return gate; }
-
+/** The reconcile itself — identical work for the system caller and an admin. */
+async function runGroupSync(req: NextRequest, by: string): Promise<Response> {
   if (!groupSyncEnabled()) {
     return NextResponse.json({ ok: false, gated: true, ...GATE }, { status: 200 });
   }
 
   const dryRun = req.nextUrl.searchParams.get('dryRun') === '1';
-  const by = sysOk ? 'system:group-sync' : (session?.claims.upn || session?.claims.oid || 'admin');
 
-  try {
-    const pkgC = await accessPackagesContainer();
-    const { resources: pkgs } = await pkgC.items
-      .query<AccessPackage>({ query: 'SELECT * FROM c WHERE c.enabled = true AND IS_DEFINED(c.groupTargets) AND ARRAY_LENGTH(c.groupTargets) > 0' })
-      .fetchAll();
-    if (!pkgs || pkgs.length === 0) {
-      return NextResponse.json({ ok: true, groupTargetedPackages: 0, granted: 0, revoked: 0, note: 'No group-targeted packages to reconcile.' });
-    }
+  const pkgC = await accessPackagesContainer();
+  const { resources: pkgs } = await pkgC.items
+    .query<AccessPackage>({ query: 'SELECT * FROM c WHERE c.enabled = true AND IS_DEFINED(c.groupTargets) AND ARRAY_LENGTH(c.groupTargets) > 0' })
+    .fetchAll();
+  if (!pkgs || pkgs.length === 0) {
+    return NextResponse.json({ ok: true, groupTargetedPackages: 0, granted: 0, revoked: 0, note: 'No group-targeted packages to reconcile.' });
+  }
 
-    const ledger = await accessAssignmentsContainer();
-    const groupNames = new Map<string, string>();
-    let granted = 0, revoked = 0; const warnings: string[] = []; const plan: any[] = [];
+  const ledger = await accessAssignmentsContainer();
+  const groupNames = new Map<string, string>();
+  let granted = 0, revoked = 0; const warnings: string[] = []; const plan: any[] = [];
 
-    for (const pkg of pkgs) {
-      for (const groupId of pkg.groupTargets || []) {
-        // LIVE group membership (Graph read-only). A Graph failure is an honest
-        // gate — surface it rather than silently reconcile against nothing.
-        let members: GroupMember[];
-        try {
-          const hits = await getGroupTransitiveMembers(groupId, 500);
-          members = hits.map((m) => ({ id: m.id, upn: m.upn || m.mail || m.displayName, type: m.type === 'group' ? 'Group' : m.type === 'spn' ? 'ServicePrincipal' : 'User' }));
-          if (!groupNames.has(groupId)) {
-            const g = (await getGroupsByIds([groupId]))[0];
-            if (g) groupNames.set(groupId, g.displayName);
-          }
-        } catch (e: any) {
-          if (e?.name === 'GraphIdentityNotConfiguredError') {
-            return NextResponse.json({ ok: false, gated: true, ...GATE }, { status: 200 });
-          }
-          warnings.push(`group ${groupId}: ${e?.message || e}`);
+  for (const pkg of pkgs) {
+    for (const groupId of pkg.groupTargets || []) {
+      // LIVE group membership (Graph read-only). A Graph failure is an honest
+      // gate — surface it rather than silently reconcile against nothing.
+      let members: GroupMember[];
+      try {
+        const hits = await getGroupTransitiveMembers(groupId, 500);
+        members = hits.map((m) => ({ id: m.id, upn: m.upn || m.mail || m.displayName, type: m.type === 'group' ? 'Group' : m.type === 'spn' ? 'ServicePrincipal' : 'User' }));
+        if (!groupNames.has(groupId)) {
+          const g = (await getGroupsByIds([groupId]))[0];
+          if (g) groupNames.set(groupId, g.displayName);
+        }
+      } catch (e: any) {
+        if (e?.name === 'GraphIdentityNotConfiguredError') {
+          return NextResponse.json({ ok: false, gated: true, ...GATE }, { status: 200 });
+        }
+        warnings.push(`group ${groupId}: ${e?.message || e}`);
+        continue;
+      }
+      const source = `group:${groupId}` as const;
+      for (const grant of pkg.grants as PackageGrant[]) {
+        const { resources: existing } = await ledger.items
+          .query<AccessAssignment>({
+            query: 'SELECT * FROM c WHERE c.source = @s AND c.resourceRef = @r',
+            parameters: [{ name: '@s', value: source }, { name: '@r', value: grant.resourceRef }],
+          })
+          .fetchAll();
+        const delta = diffGroupMembership(members, existing || []);
+        if (dryRun) {
+          plan.push({ packageId: pkg.id, groupId, resourceRef: grant.resourceRef, toGrant: delta.toGrant.length, toRevoke: delta.toRevoke.length });
           continue;
         }
-        const source = `group:${groupId}` as const;
-        for (const grant of pkg.grants as PackageGrant[]) {
-          const { resources: existing } = await ledger.items
-            .query<AccessAssignment>({
-              query: 'SELECT * FROM c WHERE c.source = @s AND c.resourceRef = @r',
-              parameters: [{ name: '@s', value: source }, { name: '@r', value: grant.resourceRef }],
-            })
-            .fetchAll();
-          const delta = diffGroupMembership(members, existing || []);
-          if (dryRun) {
-            plan.push({ packageId: pkg.id, groupId, resourceRef: grant.resourceRef, toGrant: delta.toGrant.length, toRevoke: delta.toRevoke.length });
-            continue;
-          }
-          const scopeType = toScopeType(grant.resourceType);
-          const permission = (grant.permission as AccessPermission) || 'read';
-          // Joiners → real grant + ledger row.
-          for (const m of delta.toGrant) {
-            try {
-              const res = await enforceAccessGrant({ principalId: m.id, principalName: m.upn, principalType: m.type, scopeType, scopeRef: grant.resourceRef, permission });
-              if (res.status === 'active') {
-                await recordAssignment({
-                  principalId: m.id, principalUpn: m.upn, principalType: m.type,
-                  tenantId: pkg.tenantId, resourceType: grant.resourceType, resourceRef: grant.resourceRef, resourceName: grant.resourceName,
-                  role: res.roleName || grant.role, permission, source, sourceRef: pkg.id, grantedBy: by, roleAssignmentId: res.roleAssignmentId,
-                });
-                granted++;
-              } else if (res.status === 'error') {
-                warnings.push(`grant ${m.id}@${grant.resourceRef}: ${res.detail || 'error'}`);
-              }
-            } catch (e: any) { warnings.push(`grant ${m.id}@${grant.resourceRef}: ${e?.message || e}`); }
-          }
-          // Leavers → real revoke.
-          for (const a of delta.toRevoke) {
-            const r = await revokeAssignment(a, by);
-            if (r.revoked) revoked++;
-            warnings.push(...r.warnings);
-          }
+        const scopeType = toScopeType(grant.resourceType);
+        const permission = (grant.permission as AccessPermission) || 'read';
+        // Joiners → real grant + ledger row.
+        for (const m of delta.toGrant) {
+          try {
+            const res = await enforceAccessGrant({ principalId: m.id, principalName: m.upn, principalType: m.type, scopeType, scopeRef: grant.resourceRef, permission });
+            if (res.status === 'active') {
+              await recordAssignment({
+                principalId: m.id, principalUpn: m.upn, principalType: m.type,
+                tenantId: pkg.tenantId, resourceType: grant.resourceType, resourceRef: grant.resourceRef, resourceName: grant.resourceName,
+                role: res.roleName || grant.role, permission, source, sourceRef: pkg.id, grantedBy: by, roleAssignmentId: res.roleAssignmentId,
+              });
+              granted++;
+            } else if (res.status === 'error') {
+              warnings.push(`grant ${m.id}@${grant.resourceRef}: ${res.detail || 'error'}`);
+            }
+          } catch (e: any) { warnings.push(`grant ${m.id}@${grant.resourceRef}: ${e?.message || e}`); }
+        }
+        // Leavers → real revoke.
+        for (const a of delta.toRevoke) {
+          const r = await revokeAssignment(a, by);
+          if (r.revoked) revoked++;
+          warnings.push(...r.warnings);
         }
       }
     }
+  }
 
-    if (dryRun) return NextResponse.json({ ok: true, dryRun: true, groupTargetedPackages: pkgs.length, plan });
+  if (dryRun) return NextResponse.json({ ok: true, dryRun: true, groupTargetedPackages: pkgs.length, plan });
 
-    if (granted || revoked) {
-      const al = await auditLogContainer();
-      await al.items.create({ id: crypto.randomUUID(), itemId: 'group-sync', itemType: 'access-governance', action: 'group-sync', summary: `Group sync reconciled ${pkgs.length} package(s): ${granted} granted, ${revoked} revoked.`, upn: by, at: new Date().toISOString() });
-    }
-    return NextResponse.json({ ok: true, groupTargetedPackages: pkgs.length, granted, revoked, ...(warnings.length ? { warnings: warnings.slice(0, 20) } : {}), by });
-  } catch (e: any) {
+  if (granted || revoked) {
+    const al = await auditLogContainer();
+    await al.items.create({ id: crypto.randomUUID(), itemId: 'group-sync', itemType: 'access-governance', action: 'group-sync', summary: `Group sync reconciled ${pkgs.length} package(s): ${granted} granted, ${revoked} revoked.`, upn: by, at: new Date().toISOString() });
+  }
+  return NextResponse.json({ ok: true, groupTargetedPackages: pkgs.length, granted, revoked, ...(warnings.length ? { warnings: warnings.slice(0, 20) } : {}), by });
+}
+
+/** Human-admin path — session (401) + tenant-admin (403) through the toolkit. */
+const adminGroupSync = withTenantAdmin(async (req: NextRequest, { session }) =>
+  runGroupSync(req, session.claims.upn || session.claims.oid),
+);
+
+export async function POST(req: NextRequest) {
+  // Auth mirrors the expiry sweep: the scheduled ACA job presents the
+  // deploy-minted internal token; a human admin goes through the toolkit.
+  if (!isSweepSystemCaller(req)) return adminGroupSync(req, { params: Promise.resolve({}) });
+  try {
+    return await runGroupSync(req, 'system:group-sync');
+  } catch (e) {
     return apiServerError(e);
   }
 }
