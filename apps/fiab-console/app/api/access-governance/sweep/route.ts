@@ -8,9 +8,14 @@
  *
  * Idempotent (an already-expired row is never re-processed) and audited. Supports
  * ?dryRun=1 (report what WOULD expire, revoke nothing). Runs day-one via the
- * admin "Run sweep" button (tenant-admin session); the timer Function
- * (azure-functions/access-governance-sweeper) calls it on a schedule with the
- * shared system token (LOOM_SWEEPER_TOKEN).
+ * admin "Run sweep" button (tenant-admin session), AND on a schedule from the
+ * in-VNet `loom-access-sweep` Container App Job
+ * (modules/admin-plane/access-governance-sweeper-job.bicep), which presents the
+ * deploy-minted shared internal token.
+ *
+ * C17: the machine path used to require LOOM_SWEEPER_TOKEN, which the deploy set
+ * NOWHERE — so the schedule never ran and expiry auto-revoke was
+ * admin-button-only. See lib/access/sweep-auth.ts for the measurement and fix.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -20,6 +25,7 @@ import type { AccessAssignment } from '@/lib/types/access-assignment';
 import { revokeAccessGrant, revokeStructuredGrant, type AccessScopeType, type AccessPermission } from '@/lib/azure/access-policy-client';
 import { expireAssignment } from '@/lib/access/assignment-ledger';
 import { selectExpired } from '@/lib/access/expiry';
+import { isSweepSystemCaller } from '@/lib/access/sweep-auth';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -27,10 +33,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  // Auth: the timer Function presents the shared system token; a human admin uses
-  // their session. Either satisfies the guard.
-  const sysToken = req.headers.get('x-loom-system-token');
-  const sysOk = !!sysToken && !!process.env.LOOM_SWEEPER_TOKEN && sysToken === process.env.LOOM_SWEEPER_TOKEN;
+  // Auth: the scheduled ACA job presents the deploy-minted internal token; a
+  // human admin uses their session. Either satisfies the guard.
+  const sysOk = isSweepSystemCaller(req);
   const session = getSession();
   if (!sysOk) {
     const gate = requireTenantAdmin(session);

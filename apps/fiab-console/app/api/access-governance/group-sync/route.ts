@@ -16,7 +16,9 @@
  * `graph-group-sync`); the rest of access-governance stays day-one-ON. Real
  * backends only — no mock members.
  *
- * Auth mirrors the expiry sweep: system token (timer Function) OR tenant admin.
+ * Auth mirrors the expiry sweep: the deploy-minted internal token (the scheduled
+ * `loom-access-group-sync` ACA job) OR a tenant admin. See
+ * lib/access/sweep-auth.ts — C17 replaced the never-set LOOM_SWEEPER_TOKEN.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -31,6 +33,7 @@ import type { AccessPackage, PackageGrant } from '@/lib/types/access-package';
 import type { AccessAssignment } from '@/lib/types/access-assignment';
 import { inferScopeType } from '@/lib/types/access-request-workflow';
 import { apiServerError } from '@/lib/api/respond';
+import { isSweepSystemCaller } from '@/lib/access/sweep-auth';
 import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
@@ -58,8 +61,7 @@ function toScopeType(rt: string): AccessScopeType {
 }
 
 export async function POST(req: NextRequest) {
-  const sysToken = req.headers.get('x-loom-system-token');
-  const sysOk = !!sysToken && !!process.env.LOOM_SWEEPER_TOKEN && sysToken === process.env.LOOM_SWEEPER_TOKEN;
+  const sysOk = isSweepSystemCaller(req);
   const session = getSession();
   if (!sysOk) { const gate = requireTenantAdmin(session); if (gate) return gate; }
 

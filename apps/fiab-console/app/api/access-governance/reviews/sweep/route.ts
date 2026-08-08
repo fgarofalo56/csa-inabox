@@ -7,12 +7,16 @@
  * hash-chained evidence record (B-N19c'). Idempotent (a closed campaign is never
  * re-processed) and audited. ?dryRun=1 reports what WOULD close, revokes nothing.
  *
- * Auth mirrors the W3 expiry sweep: the timer Function presents the shared system
- * token (LOOM_SWEEPER_TOKEN) and runs WITHOUT a browser session; a human admin is
- * gated through the shared route-toolkit (`withTenantAdmin`, which supplies the
- * canonical 401/403 envelopes + the try/catch→apiServerError wrapper). Runs
- * day-one via the admin "Run review sweep" button and on a schedule from
- * azure-functions/access-governance-sweeper.
+ * Auth mirrors the W3 expiry sweep: the scheduled `loom-access-review-sweep` ACA
+ * job presents the deploy-minted shared internal token and runs WITHOUT a browser
+ * session; a human admin is gated through the shared route-toolkit
+ * (`withTenantAdmin`, which supplies the canonical 401/403 envelopes + the
+ * try/catch→apiServerError wrapper). Runs day-one via the admin "Run review
+ * sweep" button and on a schedule from
+ * modules/admin-plane/access-governance-sweeper-job.bicep.
+ *
+ * C17: the machine path used to require LOOM_SWEEPER_TOKEN, which the deploy set
+ * NOWHERE — see lib/access/sweep-auth.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
@@ -22,6 +26,7 @@ import { isOverdue, selectAutoRevoke } from '@/lib/access/access-reviews';
 import { closeCampaign } from '@/lib/access/close-campaign';
 import { apiServerError } from '@/lib/api/respond';
 import type { EvidenceActor } from '@/lib/access/evidence-store';
+import { isSweepSystemCaller } from '@/lib/access/sweep-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,8 +69,7 @@ const adminSweep = withTenantAdmin(async (req: NextRequest, { session }) =>
 );
 
 export async function POST(req: NextRequest) {
-  const sysToken = req.headers.get('x-loom-system-token');
-  const sysOk = !!sysToken && !!process.env.LOOM_SWEEPER_TOKEN && sysToken === process.env.LOOM_SWEEPER_TOKEN;
+  const sysOk = isSweepSystemCaller(req);
   if (!sysOk) return adminSweep(req, { params: Promise.resolve({}) });
   try {
     return await runSweep(req, 'system:review-sweeper', { upn: 'system:review-sweeper' });
