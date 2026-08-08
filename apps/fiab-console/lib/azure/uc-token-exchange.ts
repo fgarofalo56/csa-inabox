@@ -82,8 +82,28 @@ const REQUESTED_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
  */
 const TTL_MS = 5 * 60_000;
 
-/** How long to wait on the exchange before failing closed. */
-const TIMEOUT_MS = 10_000;
+/**
+ * How long to wait on the exchange before failing closed.
+ *
+ * 45s, not 10s (F1). The exchange targets Container Apps that scale to zero, so
+ * the FIRST call after any idle period pays a JVM cold start. Measured
+ * 2026-08-07 against `iceberg-catalog` at 0 replicas:
+ *
+ *   502 in 10,865ms — "token exchange could not reach … timed out after 10000ms"
+ *
+ * — twice in a row, while the revision was still `Activating`. It reached
+ * `RunningAtMaxScale` about 60s in, after which the same call answered in 440ms.
+ * So a 10s ceiling in front of a ~23s cold start is a GUARANTEED first-call
+ * failure, reported with an error that reads like a network fault rather than a
+ * cold start.
+ *
+ * This is a bound, not tolerance: it still fails closed, and it stays well under
+ * the Front Door 30s edge timeout FOR THE WARM PATH, which is the only path a
+ * user waits on interactively. The real fix for the latency is `minReplicas: 1`
+ * on the engines (issue #3110); until that lands, this stops the platform
+ * turning a slow start into a false "unreachable".
+ */
+const TIMEOUT_MS = 45_000;
 
 interface CacheEntry {
   token: string;
