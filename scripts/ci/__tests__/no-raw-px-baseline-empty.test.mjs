@@ -65,32 +65,30 @@ test('the guard reports a clean tree against the real repo', () => {
 });
 
 test('the guard still FAILS CLOSED on a raw-px violation (fail-closed, not just quiet)', (t) => {
-  // Plant a synthetic violation inside the real scope, run the guard, remove it.
-  // Using the real tree (not a fixture) is deliberate: it also proves the file
+  // Plant a violation by EDITING AN EXISTING FILE IN PLACE, then restore it.
+  // Using the real tree (not a fixture) is deliberate — it also proves the file
   // discovery + scope globs still reach lib/components at all.
-  const victim = path.join(
-    REPO_ROOT, 'apps', 'fiab-console', 'lib', 'components', '__rawpx_guard_probe__.tsx',
-  );
-  const original = fs.existsSync(victim) ? fs.readFileSync(victim, 'utf8') : null;
-  t.after(() => {
-    if (original === null) { try { fs.unlinkSync(victim); } catch { /* already gone */ } }
-    else fs.writeFileSync(victim, original);
-  });
+  //
+  // The first version of this test CREATED and then deleted a probe file
+  // (`lib/components/__rawpx_guard_probe__.tsx`, staged with `git add -N` so the
+  // guard's `git ls-files` would see it). Under `node --test scripts/ci/__tests__/*`
+  // — which is how the REQUIRED guardrails job runs these — files execute in
+  // parallel, and `check-insecure-randomness.mjs` enumerates the same tree via
+  // git and then reads each hit. It listed the probe, the probe vanished, and it
+  // died with ENOENT: a sibling suite went red for a file it had no interest in.
+  // A test that reddens an unrelated guard is worse than no test.
+  //
+  // Editing an existing file has no create/delete window, so no enumerate-then-
+  // read race is possible. `check-no-raw-px.mjs` is run by no other suite (only
+  // this one and the guardrails workflow), so the transient raw px cannot make
+  // anything else fail either.
+  const victim = path.join(REPO_ROOT, 'apps', 'fiab-console', 'lib', 'components', 'loom-logo.tsx');
+  const original = fs.readFileSync(victim, 'utf8');
+  t.after(() => fs.writeFileSync(victim, original));
 
-  fs.writeFileSync(victim, [
-    "'use client';",
-    'export function Probe() {',
-    "  return <div style={{ padding: 16, gap: 12 }}>probe</div>;",
-    '}',
-    '',
-  ].join('\n'));
-
-  // The guard enumerates lib/components via `git ls-files`, so an untracked
-  // probe would be invisible. Stage it (index only — never committed; the
-  // t.after above restores the worktree and we reset the index here).
-  const add = spawnSync('git', ['add', '-N', victim], { cwd: REPO_ROOT, encoding: 'utf8' });
-  assert.equal(add.status, 0, `git add -N failed: ${add.stderr}`);
-  t.after(() => { spawnSync('git', ['reset', '--', victim], { cwd: REPO_ROOT, encoding: 'utf8' }); });
+  const TOKEN = 'marginTop: tokens.spacingVerticalXXS }}>';
+  assert.ok(original.includes(TOKEN), 'the mutation anchor moved — update this test, do not delete it');
+  fs.writeFileSync(victim, original.replace(TOKEN, 'marginTop: 3 }}>'));
 
   const r = spawnSync(process.execPath, [SCRIPT], { cwd: REPO_ROOT, encoding: 'utf8' });
   assert.equal(
@@ -98,7 +96,7 @@ test('the guard still FAILS CLOSED on a raw-px violation (fail-closed, not just 
     `guard must exit 1 on a planted raw-px violation, got ${r.status}.\n${r.stdout}${r.stderr}`,
   );
   assert.match(r.stderr, /FAIL — NEW raw-px/);
-  assert.match(r.stderr, /__rawpx_guard_probe__/);
+  assert.match(r.stderr, /loom-logo\.tsx/);
 });
 
 test('--update-baseline emits {} — nothing left to grandfather', () => {
