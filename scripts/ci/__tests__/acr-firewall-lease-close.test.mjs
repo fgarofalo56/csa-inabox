@@ -206,22 +206,139 @@ test('close actually ISSUES both writes and then READS the registry back', () =>
 
 // ── The call sites must not discard the verdict ──────────────────────────────
 
-test('no workflow appends `|| true` to an acr-firewall-lease release/sweep', () => {
-  // The script can only fail loudly if the caller lets it. Two workflows used to
-  // swallow it (gov-console-roll, gov-provision-dbx-sql-invnet) — with the
-  // verified close in place, that `|| true` would restore the whole defect.
-  const wfDir = resolve(HERE, '..', '..', '..', '.github', 'workflows');
-  const offenders = [];
-  for (const f of readdirSync(wfDir).filter((n) => n.endsWith('.yml'))) {
-    const body = readFileSync(join(wfDir, f), 'utf8');
-    for (const line of body.split('\n')) {
-      if (!/acr-firewall-lease\.sh\s+(release|sweep)/.test(line)) continue;
-      if (/\|\|\s*true/.test(line) || /2>\s*\/dev\/null/.test(line)) offenders.push(`${f}: ${line.trim()}`);
+/**
+ * Every place that invokes `acr-firewall-lease.sh release|sweep`, as ONE
+ * LOGICAL SHELL COMMAND.
+ *
+ * WHY THIS IS NOT A PER-LINE GREP ANY MORE (FINISHLINE C24, second pass). The
+ * original version of this check tested each physical line for BOTH the
+ * invocation and the `|| true`. Three real call sites were invisible to it, and
+ * all three were genuinely discarding the verdict:
+ *
+ *   1. console-bluegreen-roll.yml — the `if: always()` SAFETY-NET release, with
+ *      `|| true` on the shell CONTINUATION line:
+ *          bash …/acr-firewall-lease.sh release \
+ *            --acr "…" || true
+ *      Two physical lines, so neither matched both halves of the rule. This was
+ *      the highest-value site in the repo to get wrong: it runs exactly when the
+ *      build died before its inline release.
+ *   2/3. deploy-loom-uat-job.sh and provision-gh-runner.sh — `|| true` inside an
+ *      EXIT trap. Invisible twice over: the scan only walked
+ *      `.github/workflows/*.yml`, and the invocation is written
+ *      `bash "$SCRIPT_DIR/acr-firewall-lease.sh" release`, whose closing quote
+ *      defeats `acr-firewall-lease\.sh\s+(release|sweep)`.
+ *
+ * That is the guard-keyed-to-one-spelling failure this repo keeps repeating: the
+ * rule matched the shape of the examples in front of it rather than the property
+ * it means to enforce. So: scan workflows AND scripts, accept the quoted form,
+ * and join continuations before testing.
+ */
+function leaseCallSites() {
+  const root = resolve(HERE, '..', '..', '..');
+  const files = [];
+  const walk = (dir, filter) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === '__tests__') continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p, filter);
+      else if (filter(e.name)) files.push(p);
+    }
+  };
+  walk(join(root, '.github', 'workflows'), (n) => n.endsWith('.yml') || n.endsWith('.yaml'));
+  walk(join(root, 'scripts'), (n) => n.endsWith('.sh'));
+
+  // `.sh` optionally followed by a closing quote, then the subcommand.
+  const INVOKE = /acr-firewall-lease\.sh["']?\s+(release|sweep)\b/;
+  const sites = [];
+  for (const p of files) {
+    // The lease script itself documents these strings; it is not a call site.
+    if (p.endsWith('acr-firewall-lease.sh')) continue;
+    const lines = readFileSync(p, 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!INVOKE.test(lines[i])) continue;
+      if (/^\s*#/.test(lines[i])) continue; // a comment describing the rule
+      let logical = lines[i];
+      let k = i;
+      while (/\\\s*$/.test(logical) && k + 1 < lines.length) {
+        k += 1;
+        logical = `${logical.replace(/\\\s*$/, '')} ${lines[k].trim()}`;
+      }
+      sites.push({ file: p.slice(root.length + 1).replace(/\\/g, '/'), line: i + 1, logical });
     }
   }
+  return sites;
+}
+
+test('the call-site scan actually FINDS the known release/sweep invocations', () => {
+  // A scanner that matches nothing passes every assertion below it. Pin that it
+  // sees both spellings (bare and quoted) and both file kinds.
+  const sites = leaseCallSites();
+  assert.ok(sites.length >= 15, `expected the repo's release/sweep call sites, found ${sites.length}`);
+  assert.ok(
+    sites.some((s) => s.file.startsWith('.github/workflows/')),
+    'must scan workflows',
+  );
+  assert.ok(
+    sites.some((s) => s.file.startsWith('scripts/')),
+    'must scan scripts/ too — two `|| true` sites hid there',
+  );
+  assert.ok(
+    sites.some((s) => /acr-firewall-lease\.sh"\s+release/.test(s.logical)),
+    'must match the quoted `"$SCRIPT_DIR/acr-firewall-lease.sh" release` form',
+  );
+});
+
+test('no call site discards the verified-close verdict (`|| true` / output suppression)', () => {
+  // The script can only fail loudly if the caller lets it. A discard here is not
+  // a style nit — it is the C24 defect restored: a green step, or a script
+  // exiting 0, over a registry that was never confirmed re-locked.
+  //
+  // Suppressing the OUTPUT is its own defect even when the exit code is kept:
+  // `release` prints the concrete hand-remediation (deploy-integrity R6), and
+  // preflight-image-tags.sh used `>/dev/null 2>&1` to throw exactly that away.
+  // Match every spelling — `2>/dev/null`, `>/dev/null 2>&1`, `&>/dev/null` —
+  // because keying a rule to the one spelling in front of you is how the
+  // previous version of this guard missed three live call sites.
+  const DISCARD = [
+    /\|\|\s*true/, // exit code thrown away
+    /2>\s*\/dev\/null/, // stderr thrown away
+    />\s*\/dev\/null\s+2>&1/, // stdout+stderr thrown away
+    /&>\s*\/dev\/null/, // bash shorthand for the same
+  ];
+  const offenders = leaseCallSites()
+    .filter((s) => DISCARD.some((re) => re.test(s.logical)))
+    .map((s) => `${s.file}:${s.line}: ${s.logical.trim()}`);
   assert.deepEqual(
     offenders,
     [],
     `these call sites discard the verified-close verdict:\n  ${offenders.join('\n  ')}`,
   );
+});
+
+test('no workflow step containing a release/sweep is marked continue-on-error', () => {
+  // `continue-on-error: true` discards the verdict just as thoroughly as
+  // `|| true`, and the original guard never looked for it at all.
+  const wfDir = resolve(HERE, '..', '..', '..', '.github', 'workflows');
+  const offenders = [];
+  for (const f of readdirSync(wfDir).filter((n) => n.endsWith('.yml'))) {
+    const lines = readFileSync(join(wfDir, f), 'utf8').split('\n');
+    // Split into steps on `- name:` / `- uses:` list items.
+    let start = 0;
+    const steps = [];
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/^\s*-\s+(name|uses):/.test(lines[i])) {
+        steps.push([start, i]);
+        start = i;
+      }
+    }
+    steps.push([start, lines.length]);
+    for (const [a, b] of steps) {
+      const body = lines.slice(a, b).join('\n');
+      if (!/acr-firewall-lease\.sh["']?\s+(release|sweep)\b/.test(body)) continue;
+      if (/^\s*continue-on-error:\s*true/m.test(body)) {
+        offenders.push(`${f}: step at line ${a + 1}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `these release/sweep steps are continue-on-error:\n  ${offenders.join('\n  ')}`);
 });

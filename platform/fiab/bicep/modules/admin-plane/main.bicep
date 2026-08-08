@@ -5479,14 +5479,34 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           copilotMafActive ? [
             { name: 'LOOM_MAF_ENDPOINT', value: copilotMaf!.outputs.mafInternalEndpoint }
           ] : [],
-          // Shared internal trust token — wired when ANY token-authenticated path
-          // is active: the MAF tier, the IQ MCP external-agent path, OR the
-          // deployment-pipeline CI path. It authenticates the VNet-internal MAF /
-          // setup-orchestrator / topology callbacks; the two external paths below
-          // now get their OWN dedicated secret and no longer fall back to this.
-          (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
+          // Shared internal trust token — ALWAYS wired. It authenticates the
+          // VNet-internal callbacks from the MAF tier, the setup-orchestrator,
+          // topology register-domain AND the always-deployed scheduled jobs
+          // (cost-anomaly-monitor, copilot-evaluator, asset-reconciler,
+          // lineage-extractor, report-subscriptions), each of which is handed
+          // `internalToken: loomInternalToken` UNCONDITIONALLY below. The two
+          // EXTERNAL paths get their own dedicated secret and no longer fall
+          // back to this.
+          //
+          // Until 2026-08-07 this was gated on
+          // `(copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled)`,
+          // which was wrong TWICE over:
+          //   1. FUNCTIONAL — with all three off, bicep still handed the token to
+          //      those jobs, but the Console never learned to accept it.
+          //      isValidInternalToken() does `if (!expected) return false`
+          //      (lib/auth/internal-token.ts:45), so EVERY one of those internal
+          //      callbacks failed closed on an otherwise healthy estate.
+          //   2. DEPLOY — the matching secret was gated on the same expression,
+          //      so the DECLARED SECRET SET VARIED BETWEEN RUNS of the same
+          //      template. When a run resolved all three false while a live
+          //      revision still referenced the secret, ARM refused the whole
+          //      app-deployments module with ContainerAppSecretInUse (which is
+          //      ARM protecting the running app — see the secrets concat below).
+          // The token is deterministic and always computable, so there is no
+          // reason to make either the env or the secret conditional.
+          [
             { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }
-          ] : [],
+          ],
           // Dedicated per-service Bearer for the IQ MCP external-agent path
           // (rel-T10/B3). Set → isValidIqToken accepts ONLY this token, never the
           // shared internal one, so a leak of the token handed to Agent 365 /
@@ -5557,6 +5577,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // so the Console authenticates the managed webserver. Unused when the
             // host is off (LOOM_AIRFLOW_ENDPOINT is '' → the editor honest-gates).
             { name: 'loom-airflow-admin-password', value: airflowAdminPassword }
+            // MIGRATION ALIAS (2026-08-07) — the pre-rename name of the secret
+            // directly above. Live consoles provisioned before the
+            // `airflow-admin-password` → `loom-airflow-admin-password` rename
+            // still have revisions whose LOOM_AIRFLOW_PASSWORD binds the OLD
+            // name, and ARM refuses to delete a secret an active revision
+            // references (ContainerAppSecretInUse) — so a bare rename against a
+            // live app is un-deployable. Declaring BOTH names with the SAME
+            // value is the documented migration order (add the new name, keep
+            // the old until no revision references it):
+            // https://learn.microsoft.com/azure/container-apps/manage-secrets
+            // The env above binds the NEW name only; this entry exists purely so
+            // the old revision keeps resolving until it is superseded.
+            // SAFE TO DELETE once every estate (Commercial + Gov) has rolled a
+            // revision that no longer references it — tracked for cleanup.
+            { name: 'airflow-admin-password', value: airflowAdminPassword }
           ],
           // N7a streaming tier root credential — the SAME Key Vault secret the
           // engine resolves, so the two never drift. Present only when the tier
@@ -5571,6 +5606,26 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             msalSecretKvBacked
               ? { name: 'loom-msal-client-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/loom-msal-client-secret', identity: identity.outputs.uamiConsoleId }
               : { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
+            // MIGRATION ALIAS (2026-08-07) — the pre-consolidation dedicated
+            // Dataverse secret. Dataverse now deliberately re-uses the MSAL Web
+            // App SP credential (UAMIs cannot be Dataverse Application Users), so
+            // the LOOM_DATAVERSE_CLIENT_SECRET env above binds
+            // `loom-msal-client-secret` and this dedicated secret is no longer
+            // referenced by NEW revisions. It is still referenced by live
+            // revisions provisioned before that consolidation, and ARM refuses to
+            // delete a secret an active revision references
+            // (ContainerAppSecretInUse), so it is declared here from the SAME
+            // source as the MSAL secret — identical value, no divergence, and
+            // no new literal in the template.
+            //
+            // NOTE this does NOT touch `loom-msal-client-secret` itself: it adds
+            // a second ACA secret entry resolving the same Key Vault URI (or the
+            // same param on the BYO path). The rotation-drift hazard in #3056 is
+            // unchanged by this entry — it neither introduces nor widens it.
+            // SAFE TO DELETE once no revision references it — tracked for cleanup.
+            msalSecretKvBacked
+              ? { name: 'loom-dataverse-client-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/loom-msal-client-secret', identity: identity.outputs.uamiConsoleId }
+              : { name: 'loom-dataverse-client-secret', value: loomMsalClientSecret }
           ] : [],
           !empty(effectiveMapsAccount) ? [
             // Read from KV at deploy time. The azure-maps module wrote the
@@ -5597,12 +5652,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           // Shared internal trust token for the VNet-internal callbacks: the
           // MAF → Console tool-dispatch (GCC-High / IL5), the setup-orchestrator,
-          // and topology register-domain. Same deterministic value every
-          // first-party internal app gets. NOT the Bearer for the external IQ /
-          // CI paths — those get their own dedicated secrets below (rel-T10/B3).
-          (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
+          // topology register-domain, and every always-deployed scheduled job.
+          // Same deterministic value every first-party internal app gets. NOT the
+          // Bearer for the external IQ / CI paths — those get their own dedicated
+          // secrets below (rel-T10/B3).
+          //
+          // ALWAYS declared (see the matching LOOM_INTERNAL_TOKEN env above for
+          // the full 2026-08-07 rationale): a secret whose PRESENCE depends on a
+          // runtime-resolved expression makes the template non-idempotent, and
+          // ARM rejects the whole module with ContainerAppSecretInUse the moment
+          // a live revision still references what this run decided to drop.
+          [
             { name: 'loom-internal-token', value: loomInternalToken }
-          ] : [],
+          ],
           // LU-7 — the DEDICATED secret the loom-trino engine presents when it
           // pulls its governance-compiled authorization from
           // /api/governance/policy-code/engine-rules. Same deterministic value

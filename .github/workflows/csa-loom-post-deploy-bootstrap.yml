@@ -24,9 +24,10 @@ on:
         type: string
         required: true
       admin_subscription:
-        description: 'Subscription id holding the ADMIN plane (Console UAMI, Key Vault, APIM, Purview, Foundry). REQUIRED.'
+        description: 'Subscription id holding the ADMIN plane (Console UAMI, Key Vault, APIM, Purview, Foundry). Empty → falls back to the boundary subscription secret (AZURE_SUBSCRIPTION_ID / AZURE_GOV_SUBSCRIPTION_ID), because a caller CANNOT pass this through a job output: GitHub scrubs outputs matching a registered secret (#3090).'
         type: string
-        required: true
+        required: false
+        default: ''
       dlz_subscription:
         description: 'Subscription id holding the Data Landing Zone. Empty → single-sub (equals admin_subscription).'
         type: string
@@ -86,12 +87,12 @@ env:
   # ADMIN (hub) sub holds the Console UAMI / KV / APIM / Purview / Foundry.
   # DLZ sub holds Synapse / Databricks / ADLS. They are the SAME in single-sub.
   # dlz_subscription empty → single-sub: DLZ shares the admin subscription.
-  ADMIN_SUB: ${{ inputs.admin_subscription }}
-  DLZ_SUB: ${{ inputs.dlz_subscription || inputs.admin_subscription }}
+  ADMIN_SUB: ${{ inputs.admin_subscription || (inputs.boundary == 'Commercial' && secrets.AZURE_SUBSCRIPTION_ID || secrets.AZURE_GOV_SUBSCRIPTION_ID) }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || inputs.admin_subscription || (inputs.boundary == 'Commercial' && secrets.AZURE_SUBSCRIPTION_ID || secrets.AZURE_GOV_SUBSCRIPTION_ID) }}
   # SUB kept as an alias of the ADMIN sub for the many steps that scope grants /
   # role assignments to the admin plane (Cost/Security/Monitor, APIM, Reader, …).
   # The "Resolve deploy coordinates" step re-points SUB to the admin sub at runtime.
-  SUB: ${{ inputs.admin_subscription }}
+  SUB: ${{ inputs.admin_subscription || (inputs.boundary == 'Commercial' && secrets.AZURE_SUBSCRIPTION_ID || secrets.AZURE_GOV_SUBSCRIPTION_ID) }}
   ADMIN_RG: rg-csa-loom-admin-${{ inputs.region }}
   DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'single' }}-${{ inputs.region }}
   SYNAPSE_WS: syn-loom-default-${{ inputs.region }}
@@ -143,16 +144,38 @@ jobs:
         # Hard gate — NOT masked. Enforces the rel-T34 required-ness for BOTH the
         # manual dispatch AND workflow_call callers: region + admin_subscription
         # MUST be supplied (a public repo ships no estate region/sub as a default).
+        #
+        # #3090 — VALIDATE THE RESOLVED VALUE, NOT THE RAW INPUT. This checked
+        # `inputs.admin_subscription` and failed every chained call from
+        # full-app-deploy-commercial.yml with "'admin_subscription' is REQUIRED",
+        # because the CALLER routed the subscription through a job output whose
+        # value equals the AZURE_SUBSCRIPTION_ID secret — and GitHub scrubs those
+        # in transit ("Skip output 'admin_sub' since it may contain secret"). The
+        # input really was empty; the caller really did read it correctly. Both
+        # sides were right and the value still did not arrive.
+        #
+        # The workflow-level env above now falls back to the boundary's
+        # subscription secret (available here via `secrets: inherit`), so this
+        # gate asserts on $ADMIN_SUB — what the run will actually USE. That keeps
+        # the rel-T34 promise ("no estate default ships in a public repo": the
+        # fallback is an operator-supplied secret, not a literal) while removing
+        # a failure mode neither caller nor callee could see.
         run: |
           set -e
           FAIL=0
           if [ -z "${{ inputs.region }}" ]; then echo "::error::'region' is REQUIRED (no estate default)."; FAIL=1; fi
-          if [ -z "${{ inputs.admin_subscription }}" ]; then echo "::error::'admin_subscription' is REQUIRED (no estate default)."; FAIL=1; fi
+          if [ -z "${ADMIN_SUB}" ]; then
+            echo "::error::No admin subscription is available: the 'admin_subscription' input is empty AND no subscription secret is configured for boundary '${{ inputs.boundary }}' (Commercial → AZURE_SUBSCRIPTION_ID, Gov → AZURE_GOV_SUBSCRIPTION_ID). Supply the input or configure the secret."
+            FAIL=1
+          fi
           case "${{ inputs.boundary }}" in
             Commercial|GCC|GCC-High|IL5) : ;;
             *) echo "::error::'boundary' must be one of Commercial | GCC | GCC-High | IL5 (got '${{ inputs.boundary }}')."; FAIL=1 ;;
           esac
           [ "$FAIL" = "0" ] || exit 1
+          if [ -z "${{ inputs.admin_subscription }}" ]; then
+            echo "::notice::admin_subscription input was empty (GitHub scrubs a job output that matches a registered secret) — using the boundary's subscription secret instead."
+          fi
           echo "boundary=${{ inputs.boundary }} region=${{ inputs.region }} admin_sub set dlz_sub='${{ inputs.dlz_subscription }}' dlz_domain='${{ inputs.dlz_domain }}'"
 
       - name: Azure login (Commercial — limitlessdata_deploy SP)

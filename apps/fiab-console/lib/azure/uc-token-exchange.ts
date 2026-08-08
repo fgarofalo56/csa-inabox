@@ -38,18 +38,39 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 /**
  * Upstream's token-exchange endpoint (unity-CONTROL, not unity-catalog) and the
- * three form params it expects.
+ * FOUR form params it requires.
  *
- * These four values are byte-identical to the ones the live harness uses against
- * the real image (`apps/loom-unity/tests/authz/authz-e2e.sh`, cases 5 and 7, also
- * landing with #2638) — the harness that produced the measured table above. That
- * is the independent check that this client talks to the right endpoint with the
- * right grant, rather than a plausible-looking guess at the upstream contract.
+ * These values are byte-identical to the ones the live harness uses against the
+ * real image (`apps/loom-unity/tests/authz/authz-e2e.sh`, cases 5 and 7, lines
+ * 136-139 and 154-157, also landing with #2638) — the harness that produced the
+ * measured table above. That is the independent check that this client talks to
+ * the right endpoint with the right grant, rather than a plausible-looking guess
+ * at the upstream contract.
+ *
+ * REQUESTED_TOKEN_TYPE was MISSING here until F1, and its absence made the whole
+ * exchange non-functional against a real server — for the Unity path as well as
+ * the Iceberg one. Measured live on 2026-08-07, warm, both paths:
+ *
+ *   HTTP 400 {"error_code":"INVALID_ARGUMENT",
+ *             "message":"Unsupported requested token type: null"}
+ *
+ * The header above this constant used to say "the three form params it expects"
+ * in one line and "these four values are byte-identical to the live harness" in
+ * the next. The prose had counted the harness correctly; the code implemented one
+ * fewer. Nothing caught it, because every unit test doubled the exchange endpoint
+ * with a stub that returned an access_token for ANY request body — so the tests
+ * modelled the CODE, not the server, and #2679 shipped an exchange that had never
+ * completed against a live catalog once. That is why
+ * `/api/catalog/unity/capabilities` still hedged with "Not yet confirmed against a
+ * live catalog": it never had been.
+ *
+ * The test that pins this now asserts the request BODY, param by param.
  */
 const EXCHANGE_PATH = '/api/1.0/unity-control/auth/tokens';
 
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:id_token';
+const REQUESTED_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
 
 /**
  * How long a minted internal token is reused.
@@ -61,8 +82,28 @@ const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:id_token';
  */
 const TTL_MS = 5 * 60_000;
 
-/** How long to wait on the exchange before failing closed. */
-const TIMEOUT_MS = 10_000;
+/**
+ * How long to wait on the exchange before failing closed.
+ *
+ * 45s, not 10s (F1). The exchange targets Container Apps that scale to zero, so
+ * the FIRST call after any idle period pays a JVM cold start. Measured
+ * 2026-08-07 against `iceberg-catalog` at 0 replicas:
+ *
+ *   502 in 10,865ms — "token exchange could not reach … timed out after 10000ms"
+ *
+ * — twice in a row, while the revision was still `Activating`. It reached
+ * `RunningAtMaxScale` about 60s in, after which the same call answered in 440ms.
+ * So a 10s ceiling in front of a ~23s cold start is a GUARANTEED first-call
+ * failure, reported with an error that reads like a network fault rather than a
+ * cold start.
+ *
+ * This is a bound, not tolerance: it still fails closed, and it stays well under
+ * the Front Door 30s edge timeout FOR THE WARM PATH, which is the only path a
+ * user waits on interactively. The real fix for the latency is `minReplicas: 1`
+ * on the engines (issue #3110); until that lands, this stops the platform
+ * turning a slow start into a false "unreachable".
+ */
+const TIMEOUT_MS = 45_000;
 
 interface CacheEntry {
   token: string;
@@ -266,8 +307,11 @@ export async function exchangeForInternalUcToken(
 
   const run = (async () => {
     // Form-encoded per RFC 8693 (the upstream endpoint reads form params).
+    // All FOUR params — `requested_token_type` is required; omitting it is
+    // answered 400 "Unsupported requested token type: null".
     const body = new URLSearchParams({
       grant_type: GRANT_TYPE,
+      requested_token_type: REQUESTED_TOKEN_TYPE,
       subject_token_type: SUBJECT_TOKEN_TYPE,
       subject_token: subjectToken,
     });

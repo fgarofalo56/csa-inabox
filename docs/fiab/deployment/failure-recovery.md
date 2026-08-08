@@ -193,6 +193,7 @@ This is the **brownfield class**. Most of these mean *something already exists*
 | `VnetAddressRangeInUse` | The hub CIDR collides, or the hardcoded `10.100.0.0/16` DLZ spoke CIDR does | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not settable from the root template today — see [Brownfield class C](brownfield.md#class-c-no-adoption-path-exists-today) |
 | `StorageAccountAlreadyTaken` | Storage account names are globally unique | Change the deployment name prefix |
 | `RoleAssignmentExists` | Re-deploy over existing grants. ARM enforces uniqueness on the **(scope, principalId, roleDefinitionId) triple**, not on the assignment name — so an assignment created under any other name blocks the template's deterministic `guid()` name forever | Delete the conflicting assignment and let the template recreate it under its own name. **See [Identifying a `RoleAssignmentExists` blocker](#identifying-a-roleassignmentexists-blocker) below — three distinct causes, three different judgements.** `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled — a workaround, not a fix |
+| `RoleAssignmentExists` | Re-deploy over existing grants. ARM enforces uniqueness on the **(scope, principalId, roleDefinitionId) triple**, not on the assignment name — so an assignment created under any other name blocks the template's deterministic `guid()` name forever | Delete the conflicting assignment and let the template recreate it under its own name. **Two traps, both measured on centralus 2026-08-07 (#3038):** (1) ARM prints the existing id with the **dashes stripped** — searching the literal 32-char string returns EMPTY from every `az role assignment list`; re-insert the 8-4-4-4-12 dashes first. (2) Check `createdOn` before assuming a seed change — the centralus blocker was **hand-made a month earlier** by `az role assignment create` (which mints a random guid), not orphaned by a rename. Identify the principal/role/scope and confirm it is the same grant the template makes before deleting anything. `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled — a workaround, not a fix |
 | `InvalidTemplateDeployment` on Container Apps in IL4/IL5 | Container Apps is not available at that impact level | Set `containerPlatform = 'aks'` in the parameter file |
 | `MANIFEST_UNKNOWN` / image pull failure on a Container App | Phase 1 ran with `deployAppsEnabled=true` against an **empty** ACR | Re-run phase 1 with `deployAppsEnabled=false`, then run the image phase. See [Greenfield](greenfield.md#the-shape-of-a-greenfield-deploy) |
 | `ResourceGroupNotFound` early in the app-deploy workflow | The workflow's `region` input does not match the region the estate is in, so it resolved `rg-csa-loom-admin-<wrong-region>` | Pass `-f region=<your-region>` explicitly |
@@ -545,12 +546,71 @@ the pattern; the last row is **still open**.
 | `full-app-deploy-commercial.yml` — roll loop | `container app <app> not found in <rg> — skipping` | An auth failure or throttle on `az containerapp show` read as "not found". The roll could then report success having rolled only a subset | **Fixed.** Absence is claimed only when ARM answered `ResourceNotFound`; otherwise the step errors with `Could not establish whether container app <app> exists` |
 | `deploy-fiab-commercial.yml` / `-gcc` / `-gcch` — failure notification | A comment on issue **#279** saying `Check workflow logs` | #279 is a **closed** roadmap issue with 289 comments. Nobody was watching it. This was the literal mechanism by which weeks of deploy failure stayed invisible | **Fixed.** `.github/scripts/deploy-notify-failure.mjs` opens/updates one dedicated OPEN issue per failing workflow. A hard-coded issue number in a deploy workflow is now a merge-blocking guard failure |
 | `loom-roll-and-validate.yml` when its upstream build fails | The run records **`skipped`** | A skipped roll caused by an upstream failure is a failure. Nothing goes red at the roll level and the estate simply never advances | **Open** — not addressed by the failure engine |
+| `deploy-fiab-commercial.yml` / `full-app-deploy-commercial.yml` / `loom-roll-and-validate.yml` — image preflight | `image-preflight: MISSING in <acr>: loom-console:03bab987… loom-duckdb:v0.1 …` | The per-ref lookup failed for a network/throttle reason and the code convicted the ref anyway, because a **separate** `az acr repository list` call happened to succeed (`# Registry IS readable, so a non-404 failure on this one ref is still a miss`). "Another call worked" is not evidence about this ref. On run `31213089184` fifteen refs resolved with digests and four were declared MISSING — one of them the image the **live console was running**. A different random subset failed every run, and the printed remediation told the operator to rebuild images that were fine | **Fixed (#3090).** One shared three-state checker; absence is claimed only when the canonical taxonomy returns `config.image-tag-absent` |
+
+### Image existence: the three states (#3090)
+
+There is now exactly **one** checker — `scripts/ci/resolve-acr-digest.sh` — and
+`scripts/ci/assert-acr-image-tags.sh` is its multi-ref wrapper and lease holder.
+Both the deploy preflight and the roll's unskippable image gate call it. It
+classifies with the **canonical failure taxonomy**
+(`apps/fiab-console/lib/deploy/failure-taxonomy.json`), not a local regex.
+
+| State | Established by | Exit | What it means | What you do |
+|---|---|---|---|---|
+| **EXISTS** | `az acr repository show` returned a manifest digest | `0` | The tag is in the registry | Proceed |
+| **ABSENT** | The registry **answered**, and the taxonomy matched `config.image-tag-absent` | `3` | The tag genuinely is not there | Run the producer workflow named in the error, then re-run |
+| **UNPROVEN** | The lookup itself failed — firewall, RBAC, throttle, token, or an answer the taxonomy does not recognise | `4` | **Nothing is known about the tag** | Fix *reachability*. Do **not** rebuild the image on this verdict |
+
+Two rules follow, and both are enforced by
+`scripts/ci/test-assert-acr-image-tags.sh`:
+
+- **A failed lookup is never absence.** Only a positive
+  `config.image-tag-absent` match may produce a MISSING verdict. A throttle, a
+  denial, or an error whose correlation id merely contains `404` is UNPROVEN.
+- **UNPROVEN is not a pass either.** The deploy preflight refuses on `4` — it
+  will not adopt a live estate on an unverified tag. (The roll gate is the one
+  documented exception: it warns and proceeds, because the post-roll
+  build-marker assertion is the definitive check and a locked registry must not
+  permanently block an emergency roll.)
+
+Callers branch on the **exit code**, never on the message text. The roll gate
+used to `grep -q 'could not READ registry'`, which meant a reworded message
+silently turned "unproven" into "refuse to roll".
+
+**Why the lease is mandatory.** Repository/tag/manifest enumeration is an ACR
+**data-plane** operation; the ARM management API covers registry create/update
+only, so there is no control-plane alternative the firewall does not gate. Every
+Loom ACR sits at `publicNetworkAccess=Disabled` + `defaultAction=Deny` **at
+rest** (#2603) and every one of these lanes runs on a GitHub-hosted runner
+outside the VNet. So without the shared firewall lease every lookup fails by
+construction. The preflight therefore **fails closed** when it cannot take the
+lease, rather than probing anyway and classifying the wreckage:
+
+```
+image-preflight: could NOT acquire the ACR firewall lease on '<acr>' …
+  the existence of <refs> is UNPROVEN — NOT disproven. Refusing to probe anyway …
+  grant the deploy identity 'Tag Contributor' (Microsoft.Resources/tags/write) on the registry
+```
+
+If you see that, the deploy identity is missing `Microsoft.Resources/tags/write`
+on the registry — the lease is recorded as ARM tags, so it cannot be taken. Grant
+**Tag Contributor** (or Contributor) on the ACR. Until then the lease runs in the
+degraded "unleased" mode described in `docs/fiab/acr-firewall-lease.md`, in which
+`acr-firewall-sweeper` (every 15 minutes) sees an open registry with no recorded
+holder and re-locks it — potentially mid-lookup.
+
+To check an image by hand without disturbing anything, run the probe from inside
+the VNet: dispatch `.github/workflows/loom-aca-runner-smoke.yml`.
+
 
 **The reference shape:** the roll's manifest-digest read uses
 `scripts/ci/resolve-acr-digest.sh`, which keeps three states apart — digest
 resolved, genuinely absent (`REFUSING TO ROLL — the registry answered NOT FOUND
 on every attempt`), and unreadable (`could not READ … This is NOT proof the tag
-is missing`).
+is missing`). Since #3090 that script is *the* shared image-state checker: the
+deploy preflight and the roll's image gate both go through it, so there is no
+second dialect to drift.
 
 ---
 

@@ -127,10 +127,26 @@ bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscriptio
 # build. `release` re-locks only if this process is still the recorded holder,
 # and re-locks unconditionally when nobody is (fail closed).
 uat_cleanup() {
+  # Preserve whatever exit status the script was already terminating with, so a
+  # successful re-lock never masks a failed build.
+  local rc=$?
   if [ -f "$APP_DIR/.dockerignore.bak" ]; then
     mv "$APP_DIR/.dockerignore.bak" "$APP_DIR/.dockerignore" || true
   fi
-  bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB" || true
+  # C24 (#3088): NO `|| true`. `release` VERIFIES the registry reads back
+  # publicNetworkAccess=Disabled + defaultAction=Deny and exits non-zero when it
+  # cannot confirm that; discarding the verdict restores the whole defect — a
+  # script that exits 0 over a publicly reachable registry.
+  #
+  # MEASURED: a bare non-zero command in an EXIT trap does NOT change the
+  # script's exit status (bash 5.3: `cleanup(){ false; }; trap cleanup EXIT;
+  # exit 0` still exits 0). So deleting `|| true` alone would have been
+  # cosmetic — the failure has to be turned into an explicit `exit`.
+  if ! bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"; then
+    echo "[deploy-loom-uat-job] ERROR: could NOT verify $ACR_NAME re-locked — it may be PUBLICLY REACHABLE. See the remediation above; the scheduled acr-firewall-sweeper will retry." >&2
+    exit 1
+  fi
+  exit "$rc"
 }
 trap uat_cleanup EXIT
 
