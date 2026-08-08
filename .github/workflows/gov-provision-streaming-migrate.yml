@@ -335,26 +335,122 @@ jobs:
         if: ${{ env.MODE != 'build-only' }}
         run: |
           set -euo pipefail
-          MIG_ID="${MIG_ID:-$(az identity show -n "uami-loom-migrate-$LOCATION" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r')}"
-          RW_ID="${RW_ID:-$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r')}"
-          RW_CID="${RW_CID:-$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query clientId -o tsv 2>/dev/null | tr -d '\r')}"
+          # MEASURED (run 31239331967, the first dispatch this workflow ever
+          # had): `VAR="${VAR:-$(az … 2>/dev/null | tr -d '\r')}"` under
+          # `set -euo pipefail` ABORTS THE WHOLE STEP with the az exit code when
+          # the lookup fails — the assignment inherits the substitution's status
+          # — and `2>/dev/null` has already destroyed the reason. Reproduced
+          # locally: the construct exits 3 having printed nothing.
+          #
+          # The consequence is worse than a bad message: the `if [ -z "$MIG_ID" ]`
+          # honest-skip immediately below was UNREACHABLE. The author wrote the
+          # correct behaviour for a not-yet-provisioned estate — skip with a
+          # named remediation — and the shell killed the step before it could
+          # ever run. That is why this lane's only run ended in a bare
+          # "Process completed with exit code 3".
+          #
+          # Look each identity up in a form that can report "absent" as a VALUE
+          # rather than as a fatal signal, and that distinguishes absent from
+          # unreadable (deploy-integrity R7).
+          lookup() {
+            local what="$1" name="$2" field="$3" out rc
+            set +e
+            out=$(az identity show -n "$name" -g "$RG" --query "$field" -o tsv 2>&1)
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then printf '%s' "$out" | tr -d '\r'; return 0; fi
+            if printf '%s' "$out" | grep -qiE "was not found|ResourceNotFound|could not be found"; then
+              return 0   # genuinely absent -> empty value, handled below
+            fi
+            echo "::error::could NOT read $what ('$name') in $RG — its existence is UNPROVEN, not disproven. Azure said:" >&2
+            printf '%s\n' "$out" >&2
+            return 1
+          }
+          MIG_ID="${MIG_ID:-$(lookup 'loom-migrate UAMI' "uami-loom-migrate-$LOCATION" id)}"
+          RW_ID="${RW_ID:-$(lookup 'loom-risingwave UAMI' "uami-loom-risingwave-$LOCATION" id)}"
+          RW_CID="${RW_CID:-$(lookup 'loom-risingwave UAMI clientId' "uami-loom-risingwave-$LOCATION" clientId)}"
           if [ -z "$MIG_ID" ] || [ -z "$RW_ID" ]; then
             echo "::notice::UAMIs do not exist yet (mode=whatif). Skipping what-if — re-dispatch with mode=build-and-deploy to provision them first."
             exit 0
           fi
-          az deployment group what-if -g "$RG" \
+
+          # deploy-integrity R1/R7 (FINISHLINE G2). This step used to end both
+          # what-ifs in `2>&1 | tail -30 || true`, which DISCARDED the verdict:
+          # an ARM error and a clean preview were indistinguishable, so the
+          # "What-if both deployments" step could not fail for the reason it
+          # exists. Meanwhile the KV lookup below carried `2>/dev/null` inside a
+          # `$( )` under `set -euo pipefail`, so when `az keyvault show` returned
+          # non-zero the assignment aborted the whole step with a bare
+          # "Process completed with exit code 3" and NO message at all — the
+          # error text having been thrown away. Measured on run 31239331967
+          # (2026-08-08), the first dispatch this workflow ever had.
+          # Both halves are now fail-closed and self-explaining.
+          WHATIF_FAILED=0
+          run_whatif() {
+            local label="$1"; shift
+            echo "::group::what-if — $label"
+            set +e
+            local out; out=$("$@" --mode Incremental 2>&1); local rc=$?
+            set -e
+            printf '%s\n' "$out" | tail -60
+            echo "::endgroup::"
+            if [ $rc -ne 0 ]; then
+              echo "::error::what-if FAILED for $label (exit $rc). This is not a preview of no-change — nothing was predicted. Azure's output is in the group above."
+              WHATIF_FAILED=1
+            fi
+          }
+
+          run_whatif "loom-migrate" \
+            az deployment group what-if -g "$RG" \
             -f platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep \
             -p location="$LOCATION" \
                migrateConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$MIG_ID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-migrate:$IMAGE_TAG\",\"minReplicas\":0,\"maxReplicas\":2}" \
-               complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-migrate\"}" \
-            --mode Incremental 2>&1 | tail -30 || true
-          RW_SECRET_URI="${RW_SECRET_URI:-$(az keyvault show -n "${KV:-}" -g "$RG" --query properties.vaultUri -o tsv 2>/dev/null | tr -d '\r')secrets/loom-risingwave-root-password}"
-          az deployment group what-if -g "$RG" \
-            -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
-            -p location="$LOCATION" \
-               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
-               complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-risingwave\"}" \
-            --mode Incremental 2>&1 | tail -30 || true
+               complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-migrate\"}"
+
+          # The RisingWave what-if needs the root-credential URI. In
+          # mode=whatif the credential step has not run, so RW_SECRET_URI is
+          # unset and we must resolve the vault URI here. Classify the lookup
+          # rather than swallowing it: "vault absent" (expected on a
+          # not-yet-provisioned estate) and "cannot read the vault" (a real
+          # blocker, usually a missing role on the deploy SP) are DIFFERENT
+          # findings and previously both vanished into exit code 3.
+          if [ -z "${RW_SECRET_URI:-}" ]; then
+            if [ -z "${KV:-}" ]; then
+              echo "::warning::no Key Vault was discovered for this estate, so the RisingWave root-credential URI cannot be resolved. Skipping the loom-risingwave what-if — it would preview against a placeholder. Re-dispatch with mode=build-and-deploy to provision the vault and the credential."
+            else
+              set +e
+              KV_OUT=$(az keyvault show -n "$KV" -g "$RG" --query properties.vaultUri -o tsv 2>&1)
+              KV_RC=$?
+              set -e
+              KV_URI=$(printf '%s' "$KV_OUT" | tr -d '\r')
+              if [ $KV_RC -ne 0 ]; then
+                KV_URI=""
+                if printf '%s' "$KV_OUT" | grep -qiE "was not found|ResourceNotFound|could not be found"; then
+                  echo "::warning::Key Vault '$KV' does not exist in $RG yet. Skipping the loom-risingwave what-if. Re-dispatch with mode=build-and-deploy to provision it."
+                else
+                  echo "::error::could NOT read Key Vault '$KV' in $RG — so the RisingWave credential URI is UNRESOLVED, not absent. This is a blocker, not a skip. Azure said:"
+                  printf '%s\n' "$KV_OUT"
+                  echo "::error::If this is an authorization failure, the Gov deploy SP needs 'Key Vault Reader' on that vault (control-plane read only — the secret VALUE is never read here)."
+                  exit 1
+                fi
+              fi
+              [ -n "$KV_URI" ] && RW_SECRET_URI="${KV_URI}secrets/loom-risingwave-root-password"
+            fi
+          fi
+
+          if [ -n "${RW_SECRET_URI:-}" ]; then
+            run_whatif "loom-risingwave" \
+              az deployment group what-if -g "$RG" \
+              -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
+              -p location="$LOCATION" \
+                 risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
+                 complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-risingwave\"}"
+          fi
+
+          if [ "$WHATIF_FAILED" -ne 0 ]; then
+            echo "::error::at least one what-if could not be evaluated — this run predicts NOTHING about the resulting estate. Failing closed."
+            exit 1
+          fi
 
       # ── IMAGE PREFLIGHT (blocking) ─────────────────────────────────────────
       # Re-asserted immediately before the deploy steps, not only after the
