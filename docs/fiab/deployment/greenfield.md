@@ -206,8 +206,30 @@ gh workflow run csa-loom-post-deploy-bootstrap.yml \
 
 `region` and `admin_subscription` are **required** — every resource group,
 workspace and managed-identity name derives from them; there are no estate
-defaults. For a multi-subscription topology also pass `dlz_subscription` and
-`dlz_domain`.
+defaults.
+
+> **The Data Landing Zone is DISCOVERED, not supplied.** `dlz_subscription` and
+> `dlz_domain` are optional overrides. The workflow reads Azure Resource Graph
+> across every subscription the deploy identity can see and resolves the
+> `rg-csa-loom-dlz-<domain>-<region>` group, its subscription, and the Synapse /
+> Databricks workspaces inside it — so a **multi-subscription** estate needs
+> nothing extra passed. It fails, loudly and with three distinct messages, when
+> it finds none, finds more than one, or cannot read the estate at all; a
+> failure to determine is never reported as an absence.
+>
+> `dlz_domain` used to default to `single`, which is one estate shape out of
+> several. On any multi-sub / `dlz-attach` estate that produced a resource group
+> that does not exist and the bootstrap died on `(ResourceGroupNotFound)` — after
+> the rest of the deploy had gone green (#3143). Supply the overrides only to
+> pick between several landing zones; an override that matches nothing now fails
+> at discovery rather than reaching ARM.
+>
+> If discovery reports **no landing zone**, check in this order: was a DLZ ever
+> deployed in that region (a hub-only `topology=tenant` deploy stamps none until
+> `dlz-attach` runs); does the deploy identity hold **Reader on the DLZ
+> subscription** (Resource Graph returns only subscriptions it can read, so a
+> cross-sub DLZ silently drops out); and only then, is the group under a
+> non-standard name.
 
 This performs: the MSAL app registration with the Console's Front Door redirect
 URI, its Graph permission grants and admin consent (**the Global Administrator

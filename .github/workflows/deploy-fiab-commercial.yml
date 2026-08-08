@@ -1012,7 +1012,16 @@ jobs:
           # literal), so it flows safely into the reusable workflow's `with:`.
           ADMIN_SUB=$(az account show --query id -o tsv)
           echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
-          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-$ADMIN_SUB}" >> "$GITHUB_OUTPUT"
+          # dlz_sub is emitted ONLY when a DISTINCT DLZ subscription was named
+          # (#3143). It used to default to `$ADMIN_SUB`, which turned "I do not
+          # know where the DLZ is" into the ASSERTION "the DLZ is in the admin
+          # subscription" — false on every cross-subscription estate, including
+          # this one. The callee now DISCOVERS the landing zone and treats a
+          # supplied subscription as a NARROWING filter, so an admin-sub default
+          # here would filter discovery down to the wrong subscription and make
+          # it fail closed on an estate that is perfectly healthy. Empty = let it
+          # look everywhere it can read.
+          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-}" >> "$GITHUB_OUTPUT"
           echo "region=${{ steps.reconcile.outputs.region }}" >> "$GITHUB_OUTPUT"
 
       - name: Post-provision validation (from inside cluster)
