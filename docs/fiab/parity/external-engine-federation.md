@@ -25,7 +25,11 @@ grounded in current docs, not memory:
 
 **Grade: D (Stubbed→Functional, data path broken at time of grading).** NOT A+.
 
-Of 58 inventory rows: **21 built ✅**, **12 honest-gate ⚠️**, **25 MISSING ❌**.
+Of 58 inventory rows: **18 built ✅**, **14 honest-gate ⚠️**, **26 MISSING ❌**.
+
+*(Re-graded 2026-08-07 after the post-deploy walk. Was 21/12/25. Four rows moved
+DOWN — not because anything regressed, but because the walk measured what the
+first grade had inferred. See RC-7.)*
 
 The headline is not the row count. It is that **the primary discovery path was
 returning HTTP 403 on the live estate** — measured, warm, reproducible — so a
@@ -119,6 +123,88 @@ derives its accepted audiences as `api://<client-id>,<client-id>`, so a **user's
 sign-in token for the console is also a valid catalog bearer**. Sign-in identity
 and API audience should not be the same app registration.
 
+### RC-7 — the token exchange itself never worked. **Fixed in PR #3116; not deployed.**
+
+RC-1 was real and its fix is LIVE (`loom-console:249669de`). Taking the receipt
+it enabled immediately exposed the layer underneath. Measured warm, minted
+session, 2026-08-07:
+
+```
+GET /api/catalog/iceberg/namespaces  ->  502 in 440ms
+"Loom Unity rejected the token exchange (HTTP 400).
+ {"error_code":"INVALID_ARGUMENT","message":"Unsupported requested token type: null"}"
+```
+
+The client sent THREE form params where the server requires FOUR — it omitted
+`requested_token_type`. This was never Iceberg-specific; the same client backs
+the Unity path, which fails identically:
+
+```
+GET /api/catalog/metastores  ->  200, but:
+"workspace loom-unity...unreachable: 400 ... Unsupported requested token type: null"
+unity: []
+```
+
+So **#2679's exchange had not once completed against a live catalog, for either
+path.** Every capability whose backend is the OSS-UC server — catalog browse,
+grants, securables, foreign catalogs, Iceberg discovery — has been non-functional
+live for as long as `authMode=entra` has been on, while the surfaces above them
+rendered cleanly with empty results.
+
+That last clause is the important one, and it is why four rows moved down in this
+re-grade. `/api/catalog/metastores` answers **200**. A grader reading status codes
+sees health; only reading the body shows `unity: []` beside an error array. This
+is `ux-baseline.md` G1's stated failure mode word for word — "Browse pages
+rendered fine with 0-counts because the data path was dead."
+
+Nothing caught it because every unit test doubled the exchange endpoint with a
+stub that returned an `access_token` for ANY request body. The fixtures modelled
+the code, not the server. `scripts/ci/check-uc-token-exchange-params.mjs` now
+diffs the client against `apps/loom-unity/tests/authz/authz-e2e.sh` — the only
+artifact in the repo that has actually run against the real image.
+
+### RC-8 — the exchange timeout is shorter than the cold start it must survive.
+
+`TIMEOUT_MS = 10_000` in `uc-token-exchange.ts`, against Container Apps that
+scale to zero and take ~23s to become `Running`. Measured, first call after
+scale-down:
+
+```
+GET /api/catalog/iceberg/namespaces  ->  502 in 10,865ms
+"token exchange could not reach ...:  timed out after 10000ms"
+```
+
+So the FIRST authenticated call after any idle period fails, with an error that
+reads like a network fault rather than a cold start. Two consecutive attempts
+failed this way before the app finished activating. Fixing RC-7 alone leaves this
+in place. Either raise the exchange timeout above the cold-start budget, or hold
+`minReplicas: 1` (RC-3), or both — but a 10s ceiling in front of a 23s cold start
+is a guaranteed first-call failure.
+
+## What the live walk can and cannot demonstrate
+
+Stated plainly, because RC-2 (the amnesiac catalog) bounds it:
+
+**Meaningful today.** Auth posture end-to-end (401 unauthenticated / exchange /
+audience / audit rows); every read path's real status and body; cold-vs-warm
+timings; the browser surfaces, their empty and error states, narrow-width
+behaviour and first-open cleanliness; and the negative results above, which are
+the most valuable output of this pass.
+
+**NOT meaningful until RC-2 is fixed.** Any assertion that a registered namespace
+or table PERSISTS. `iceberg-catalog` runs on an ephemeral H2 dir and scales to
+zero, so a register-then-browse walk only proves anything *within a single warm
+window* — and the moment it scales down the catalog is empty again. A green
+"registered a catalog and browsed it" receipt would therefore be true and
+misleading at the same time. The spec deliberately does not claim it.
+
+**NOT reachable at all today.** A federated query returning REAL ROWS, and the
+cross-engine zero-copy read of a Loom Delta table. Both require the exchange
+(RC-7, fix merged not deployed) AND a mounted catalog (`catalogs: []`, row 3.2)
+AND storage credentials (`LOOM_LAKE_ACCOUNT` empty, §4). Three independent
+blockers, none of them in the console code this lane can fix. Claiming a row
+receipt before those land would be fabrication.
+
 ## Feature inventory vs Loom coverage
 
 Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
@@ -167,7 +253,7 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 | 3.6 | Query directly against object storage | ✅ | Trino Iceberg/Delta over ADLS is the design |
 | 3.7 | Foreign catalog appears in Catalog Explorer | ⚠️ | Federation pane lists *candidates*, not mounted catalogs |
 | 3.8 | Browse foreign schemas/tables | ❌ | nothing mounted to browse |
-| 3.9 | Grant privileges on foreign tables | ⚠️ | `/catalog/permissions` fans out UC grants; untested on foreign objects |
+| 3.9 | Grant privileges on foreign tables | ❌ | No foreign catalogs exist AND the UC grant fan-out is non-functional live (RC-7). Was ⚠️ on an untested assumption |
 | 3.10 | Foreign tables read-only | ✅ | inherent |
 | 3.11 | Materialized views over foreign tables | ❌ | absent |
 
@@ -236,13 +322,13 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 
 | # | UC capability | Loom | Note |
 |---|---|---|---|
-| 8.1 | Catalog Explorer | ✅ | `/catalog/browse` |
-| 8.2 | Catalog Details tab | ✅ | `/catalog/unity?tab=explore` |
+| 8.1 | Catalog Explorer | ⚠️ | Surface renders, but `/api/catalog/metastores` returns `unity: []` with `unityWorkspaceErrors` — the OSS-UC data path is dead (RC-7). This is the ux-baseline G1 failure mode verbatim: a page that renders fine with 0-counts |
+| 8.2 | Catalog Details tab | ⚠️ | Same: renders over an empty result set while the exchange fails (RC-7) |
 | 8.3 | Foreign catalog shows its Connection | ⚠️ | Federation pane shows candidate sources |
 | 8.4 | Schema Overview | ✅ | |
 | 8.5 | Sample data tab | ✅ | type-badged previews |
 | 8.6 | Table Details | ✅ | |
-| 8.7 | Permissions tab | ✅ | `/catalog/permissions` (**exceeds**: one Loom role fans out to UC GRANTs + OneLake roles) |
+| 8.7 | Permissions tab | ⚠️ | Design still **exceeds** UC (one Loom role fans out to UC GRANTs + OneLake roles), but every UC-side GRANT rides the broken exchange, so the fan-out cannot complete live (RC-7) |
 | 8.8 | Lineage tab | ✅ | `/catalog/lineage` |
 | 8.9 | Insights (usage trends) | ❌ | absent |
 | 8.10 | Connections management | ✅ | `/connections` |
@@ -271,8 +357,11 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 
 Ordered by operator-visible impact.
 
-1. **Deploy the RC-1 fix** (rebuild + roll loom-console). Until then the whole
-   surface is inert. *Merged, not deployed.*
+1. **Deploy the RC-7 fix** (PR #3116 — the missing `requested_token_type`).
+   RC-1 is now LIVE and did its job; RC-7 is the blocker underneath it, and it
+   gates EVERY OSS-UC capability, not just Iceberg. *Merged, not deployed.*
+1b. **Raise the exchange timeout above the cold-start budget** (RC-8) — 10s in
+   front of a ~23s cold start fails the first call after every idle period.
 2. **Give `iceberg-catalog` the Postgres store** (RC-2). Pass `unityPostgresFqdn`
    to the iceberg-catalog module exactly as `loom-unity-app.bicep` does. Until
    then the catalog silently forgets everything on scale-to-zero — the worst
@@ -339,6 +428,8 @@ The spec reports a deliberate three-way verdict on the data path — `working` /
 RC-1 fix is recorded honestly instead of being smoothed into a pass or thrown as
 a false regression.
 
-**This surface is NOT A+ and this doc does not claim it is.** 25 ❌ is the real
-count. A+ requires, at minimum: RC-1 deployed, RC-2 durable, RC-4 unblocked,
-credential vending built, and Gov at parity.
+**This surface is NOT A+ and this doc does not claim it is.** 26 ❌ is the real
+count, and the re-grade moved rows DOWN, not up. A+ requires, at minimum: RC-7 deployed (RC-1 already is), RC-8 raised, RC-2
+durable, RC-4 unblocked, credential vending built, and Gov at parity. No
+authenticated catalog read has yet succeeded on this estate — until one does,
+no grade above D is defensible.

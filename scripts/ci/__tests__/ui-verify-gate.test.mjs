@@ -418,3 +418,71 @@ test('WIRING: login-health-verdict.sh records the verdict it now promises', () =
   const src = readFileSync(resolve(HERE, '..', 'login-health-verdict.sh'), 'utf8');
   assert.match(src, /verdict=\$\{VERDICT\}" >> "\$GITHUB_OUTPUT/);
 });
+
+
+/**
+ * Extract one `- name: …` step block from the workflow by its `id:`.
+ * Deliberately string-based, like the rest of this file: it must fail if the
+ * step is renamed or its id removed, not silently match nothing.
+ *
+ * COMMENTS ARE STRIPPED. This file's steps carry long comment blocks that QUOTE
+ * the very strings under test — the publish-version step's comment says
+ * `continue-on-error: true` four times while describing the #2875 defect it
+ * fixed. A naive substring check reads that prose as configuration and fails on
+ * a correct file. (It did, on the first version of this helper.)
+ */
+function stepBlockById(id) {
+  const steps = WORKFLOW.split(/^      - name: /m).slice(1);
+  const found = steps.find((b) => new RegExp(`^\\s*id:\\s*${id}\\s*$`, 'm').test(b));
+  assert.ok(found, `no step with \`id: ${id}\` found in loom-ui-verify.yml`);
+  return found;
+}
+
+/** The same block with comment-only lines removed — prose is not configuration. */
+function stepConfigById(id) {
+  return stepBlockById(id)
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+}
+
+test('WIRING: the independent suites are not SKIPPED by a base-suite failure (F1)', () => {
+  // `verify` is the base smoke suite. On run 31229730356 a single unrelated
+  // probe in it flaked ("MIP sensitivity labels -> 503", while the other three
+  // governance probes returned 200). That failed the step — and GitHub then
+  // SKIPPED every later step, so the `external-engine-federation` receipt the
+  // run had been dispatched to collect never executed at all.
+  //
+  // Each independent suite must therefore carry `!cancelled()`, so an unrelated
+  // failure upstream cannot make its result unobtainable. That is ORDERING, not
+  // tolerance — the companion test below pins the difference.
+  for (const stepId of ['extra_projects', 'publish_version', 'receipt']) {
+    const block = stepConfigById(stepId);
+    assert.ok(
+      /if:\s*\$\{\{[^}]*!\s*cancelled\(\)/.test(block),
+      `step '${stepId}' must carry \`if: \${{ !cancelled() && ... }}\` so a failure in the `
+        + `base verify suite cannot SKIP it. Without that, one unrelated flake makes an `
+        + `independent receipt unobtainable for every change.`,
+    );
+  }
+});
+
+test('WIRING: !cancelled() did NOT become continue-on-error (tolerance stays out)', () => {
+  // The distinction that matters, and the one this file exists to defend.
+  // `!cancelled()` makes a step RUN after an earlier failure; `continue-on-error`
+  // makes its OWN failure invisible. The first adds signal, the second destroys
+  // it (#2787, #2875). Only the first is permitted, and every browser step must
+  // still reach the always() gate.
+  for (const stepId of ['verify_project', 'extra_projects', 'publish_version', 'receipt']) {
+    assert.doesNotMatch(
+      stepConfigById(stepId),
+      /continue-on-error:\s*(true|'true'|"true")/,
+      `step '${stepId}' must NOT carry continue-on-error — its failure has to reach the job conclusion.`,
+    );
+    assert.match(
+      WORKFLOW,
+      new RegExp(`steps\\.${stepId}\\.outcome`),
+      `the always() gate must still consume steps.${stepId}.outcome, or '${stepId}' stops blocking.`,
+    );
+  }
+});

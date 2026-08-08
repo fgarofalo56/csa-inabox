@@ -118,6 +118,9 @@ jobs:
       - name: unity-audit-chokepoint (every Unity Catalog call is audited — loom-apex LU-3)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-unity-audit-chokepoint.mjs
+      - name: uc-token-exchange-params (client matches the live authz harness — F1)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-uc-token-exchange-params.mjs
       - name: breaker-coverage (unbounded-fetch ratchet — loom-next-level CH1)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-breaker-coverage.mjs
