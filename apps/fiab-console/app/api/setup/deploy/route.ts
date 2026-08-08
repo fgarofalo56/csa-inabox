@@ -713,6 +713,15 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
       // actually runs. Only when it carries an adopt/skip decision, so a
       // greenfield submit's parameters are byte-identical to before.
       adopt: adoptMeaningful ? (adoptBag as Record<string, unknown>) : undefined,
+      // #3056 — a dlz-attach deploy re-renders the console this request is being
+      // served BY. Without this it would re-mint LOOM_INTERNAL_TOKEN (bicep
+      // derived it from loomGeneratedSecretSeed = newGuid(), i.e. a new value on
+      // every deployment) and strand the consumer jobs + the GitHub Actions
+      // secret — the same split that 401'd 153/153 eval probes on 2026-08-06.
+      // Our own env holds the estate's live value, so we hand it back and the
+      // deploy ADOPTS it. buildDlzDeploymentParameters ignores this for a
+      // `tenant` install, which is a different estate.
+      internalTokenValue: process.env.LOOM_INTERNAL_TOKEN,
     });
     const submitted = await submitDlzDeployment({
       subscriptionId: body.subscriptionId!,

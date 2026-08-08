@@ -307,6 +307,16 @@ export const WATCHED = [
       // nothing, the apply blanks sign-in and RE-SEALS a working catalog — so a
       // commit touching it without a subsequent successful run is drift.
       'scripts/csa-loom/resolve-msal-client-id.sh',
+      // #3056 — the same shape as resolve-msal-client-id.sh above, for the
+      // shared internal trust token. This lane now resolves the estate's LIVE
+      // `loom-internal-token` and passes it as `loomInternalTokenValue` so the
+      // apply ADOPTS it. If this script starts returning nothing, the apply
+      // MINTS a fresh token instead (bicep derives it from loomGeneratedSecretSeed,
+      // whose ARM default is newGuid()), stranding every consumer job and the
+      // LOOM_INTERNAL_TOKEN Actions secret — which is exactly how 153/153 eval
+      // probes 401'd on 2026-08-06. A commit touching it without a subsequent
+      // successful run IS drift.
+      'scripts/csa-loom/resolve-internal-token.sh',
     ],
     maxDays: 7,
   },

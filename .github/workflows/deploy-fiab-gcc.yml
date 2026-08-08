@@ -194,6 +194,14 @@ jobs:
             fi
           fi
 
+      # #3056 — adopt the estate's LIVE internal trust token instead of letting
+      # bicep re-mint it. `loomGeneratedSecretSeed` defaults to `newGuid()`, so
+      # every deploy used to rotate this secret and strand every holder outside
+      # the deployment. Resolves empty on greenfield (bicep mints — correct);
+      # the value is masked and only a fingerprint reaches the log.
+      - name: Adopt the estate's live internal trust token (never re-mint it)
+        run: bash scripts/csa-loom/resolve-internal-token.sh --export > /dev/null
+
       - name: Bicep what-if
         run: |
           az deployment sub what-if \
@@ -204,6 +212,7 @@ jobs:
             --parameters platform/fiab/bicep/params/gcc.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
             --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
+            ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
@@ -236,6 +245,7 @@ jobs:
               --parameters "$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc.bicepparam" \
               --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
               --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
+              ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
               --parameters topology="$CSA_LOOM_TOPOLOGY" \
               --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
           else

@@ -93,6 +93,24 @@ export interface DlzDeployInputs {
    * duplicate. Emitted only when supplied, so a greenfield submit is unchanged.
    */
   adopt?: Record<string, unknown>;
+  /**
+   * #3056 — the estate's LIVE shared internal trust token, so a dlz-attach
+   * deploy ADOPTS it instead of re-minting it.
+   *
+   * This tier is a FIFTH writer of `LOOM_INTERNAL_TOKEN`: it submits the
+   * compiled `main.json` at subscription scope, and `loomInternalToken` was
+   * derived from `loomGeneratedSecretSeed`, whose default is `newGuid()` — a
+   * fresh random value on every deployment. A wizard-driven attach therefore
+   * re-minted the token onto the very console running the wizard, stranding the
+   * consumer jobs and the `LOOM_INTERNAL_TOKEN` GitHub secret exactly the way
+   * the CI deploy paths did on 2026-08-06/07/08.
+   *
+   * The caller supplies `process.env.LOOM_INTERNAL_TOKEN` — the console's own
+   * live value. Only emitted for `dlz-attach`, where the target estate IS the
+   * one this console already belongs to; a fresh `tenant` install is a
+   * different estate and must mint its own token rather than inherit ours.
+   */
+  internalTokenValue?: string;
 }
 
 /**
@@ -178,6 +196,16 @@ export function buildDlzDeploymentParameters(inp: DlzDeployInputs): ArmParameter
   // fallback. Absent/empty emits nothing (adoptMode() defaults to 'create').
   if (inp.adopt && Object.keys(inp.adopt).length > 0) {
     p.adopt = { value: inp.adopt };
+  }
+  // #3056 — a dlz-attach deploy targets the estate this console ALREADY belongs
+  // to, so it must re-apply the live internal trust token rather than let bicep
+  // mint a new one (loomGeneratedSecretSeed = newGuid() → a different value on
+  // every deployment, which strands the consumer jobs and the GitHub secret).
+  // Deliberately NOT emitted for a `tenant` install: that is a different estate
+  // and inheriting this one's internal token would silently share a trust
+  // secret across two deployments.
+  if (inp.topology === 'dlz-attach' && inp.internalTokenValue && inp.internalTokenValue.trim()) {
+    p.loomInternalTokenValue = { value: inp.internalTokenValue.trim() };
   }
   return p;
 }

@@ -1,0 +1,214 @@
+name: loom-internal-token-drift
+
+# #3056 — detect divergence of the shared internal trust token BEFORE it
+# detonates.
+#
+# ── WHAT THIS WATCHES ─────────────────────────────────────────────────────────
+# `LOOM_INTERNAL_TOKEN` is held in four places and, until this workflow existed,
+# NOTHING compared them:
+#
+#   * the `loom-internal-token` Container Apps secret on `loom-console`
+#     (the OWNER of record — see docs/fiab/runbooks/internal-token-ownership.md)
+#   * the same-named secret on every consumer Container Apps JOB
+#     (loom-copilot-evaluator, loom-asset-reconciler, loom-cost-anomaly-monitor)
+#   * the `LOOM_INTERNAL_TOKEN` GitHub Actions secret used by loom-docs-reindex,
+#     copilot-quality-evals, csa-loom-skill-learner, csa-loom-memory-consolidate
+#     and csa-loom-spark-keepwarm
+#   * opt-in sibling apps (loom-copilot-maf, the setup orchestrator)
+#
+# ── WHY IT IS NOT OPTIONAL ────────────────────────────────────────────────────
+# The only detector the estate had was a 401 storm in an unrelated gate. That is
+# how a mismatch introduced by a deploy went unnoticed until 153/153 eval probes
+# failed (2026-08-06), and it is the single root that #2929's
+# `reindex rejected (HTTP 401)`, the zero-row eval sweeps, and the #3090
+# residual all shared. Container Apps does NOT restart replicas on a secret
+# write, so a mismatch sits LATENT for hours and then detonates when the console
+# revision happens to cycle — the drift is measurable in seconds, long before
+# anything goes red.
+#
+# ── SECRET HYGIENE ────────────────────────────────────────────────────────────
+# Only sha256 fingerprints (first 12 hex chars) are ever computed, compared or
+# printed. No holder's value reaches a log, an output, or an artifact. The
+# GitHub secret cannot be read back by anyone, so its fingerprint is derived
+# in-job from the value the runner is handed and masked immediately.
+#
+# ── HONEST SCOPE (cloud-parity.md) ────────────────────────────────────────────
+# Commercial: all four holder classes compared.
+# Gov:        console + jobs only. The repo's `LOOM_INTERNAL_TOKEN` secret
+#             addresses the COMMERCIAL console (see console-bluegreen-roll.yml),
+#             so comparing it against the Gov estate would manufacture a false
+#             drift. The Gov lane says so in its own log rather than implying
+#             coverage it does not have.
+#
+# No `continue-on-error`, no `|| true`, no `2>/dev/null`: a drift guard whose
+# result is discarded is the `gates_that_cannot_fail` defect wearing a new hat.
+
+on:
+  schedule:
+    # Every 6 hours. A deploy-induced divergence is then at most ~6 h from being
+    # named, versus the ~2 days it took when a 401 storm was the only detector.
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which live estate(s) to check.'
+        type: choice
+        default: both
+        options: [both, commercial, gov]
+  workflow_call:
+    # Called at the TAIL of a deploy so a clobber is caught by the run that
+    # caused it, not six hours later.
+    inputs:
+      cloud:
+        type: string
+        default: commercial
+    secrets:
+      # Declaring ANY secret on workflow_call makes this the closed set actionlint
+      # (and Actions) will resolve — an undeclared `secrets.X` elsewhere in the
+      # file then silently reads empty. Both clouds' credentials are therefore
+      # declared here, all optional: a caller that only checks Commercial simply
+      # omits the Gov ones and the Gov job precheck reports NO coverage rather
+      # than a pass.
+      AZURE_CLIENT_ID: { required: false }
+      AZURE_CLIENT_SECRET: { required: false }
+      AZURE_TENANT_ID: { required: false }
+      AZURE_SUBSCRIPTION_ID: { required: false }
+      AZURE_GOV_CLIENT_ID: { required: false }
+      AZURE_GOV_CLIENT_SECRET: { required: false }
+      AZURE_GOV_TENANT_ID: { required: false }
+      AZURE_GOV_SUBSCRIPTION_ID: { required: false }
+      LOOM_INTERNAL_TOKEN: { required: false }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loom-internal-token-drift-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  commercial:
+    name: internal-token convergence — Commercial
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.cloud == 'both' || inputs.cloud == 'commercial' || inputs.cloud == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ESTATE: commercial
+      ADMIN_RG: rg-csa-loom-admin-centralus
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Fingerprint the GitHub Actions secret
+        id: ghfp
+        env:
+          TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            # UNSET is a real, distinct fact — not "it matches". The collector
+            # records it as `unknown`, which fails the verdict, because a repo
+            # secret the consuming workflows need is missing.
+            echo "::warning::LOOM_INTERNAL_TOKEN repo secret is not set — the reindex / eval / keep-warm workflows cannot authenticate at all."
+            echo "fingerprint=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FP=$(printf '%s' "$TOKEN" | sha256sum | cut -c1-12)
+          # The fingerprint is NOT the secret, but mask the value itself so no
+          # later step can echo it by accident.
+          echo "::add-mask::$TOKEN"
+          echo "GitHub Actions secret fingerprint: $FP (len ${#TOKEN})"
+          echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
+
+      - name: Collect holder fingerprints
+        env:
+          # Passed through `env:` rather than interpolated into the script body:
+          # a `${{ }}` expression expanded inside a run block is textual
+          # substitution into shell source, which is the standard Actions script
+          # injection shape. A fingerprint is not a secret, but the safe form
+          # costs nothing and keeps the pattern consistent.
+          GITHUB_SECRET_FINGERPRINT: ${{ steps.ghfp.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          bash scripts/csa-loom/collect-internal-token-fingerprints.sh > holders.json
+          echo "--- collected (fingerprints only) ---"
+          cat holders.json
+
+      - name: Verdict
+        run: node scripts/ci/internal-token-drift-verdict.mjs holders.json
+
+  gov:
+    name: internal-token convergence — Gov (console + jobs only)
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.cloud == 'both' || inputs.cloud == 'gov'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ESTATE: gov
+      ADMIN_RG: rg-csa-loom-admin-usgovvirginia
+      # The repo's LOOM_INTERNAL_TOKEN addresses the Commercial console, so it is
+      # deliberately NOT compared here — a comparison would invent a drift that
+      # does not exist. Stated in the log rather than silently skipped.
+      GITHUB_SECRET_EXPECTED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gov configured?
+        id: precheck
+        env:
+          GOV_SUB: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GOV_SUB:-}" ]; then
+            echo "::notice::Gov credentials are not configured on this repo — the Gov estate was NOT checked. This lane reports NO Gov coverage rather than a Gov pass."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Azure login (Gov)
+        if: steps.precheck.outputs.configured == 'true'
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        if: steps.precheck.outputs.configured == 'true'
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Collect holder fingerprints
+        if: steps.precheck.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/csa-loom/collect-internal-token-fingerprints.sh > holders.json
+          echo "--- collected (fingerprints only; GitHub secret deliberately out of scope) ---"
+          cat holders.json
+
+      - name: Verdict
+        if: steps.precheck.outputs.configured == 'true'
+        run: node scripts/ci/internal-token-drift-verdict.mjs holders.json

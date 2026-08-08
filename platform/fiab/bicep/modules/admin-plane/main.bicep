@@ -681,10 +681,40 @@ var loomConsoleTelemetryEnabled = true
 
 // Shared internal trust token for the VNet-internal service-to-service
 // callbacks (MAF → Console tool-dispatch, setup-orchestrator → Console,
-// topology register-domain). Deterministic on loomGeneratedSecretSeed so the
-// value injected into every first-party internal app matches without a
-// round-trip. NEVER handed to a third party — internal-network use only.
-var loomInternalToken = guid(loomGeneratedSecretSeed, 'loom-maf-internal-token-v1')
+// topology register-domain) and every always-deployed scheduled job.
+// NEVER handed to a third party — internal-network use only.
+//
+// OWNERSHIP (#3056 — the LIVE ESTATE owns this value; bicep ADOPTS it).
+// -------------------------------------------------------------------
+// This var used to be `guid(loomGeneratedSecretSeed, …)` and its comment
+// claimed the value was "deterministic … so the two match". That claim was
+// FALSE across deployments and it broke the estate three times in two days.
+// `loomGeneratedSecretSeed` defaults to `newGuid()` (see its @description), so
+// the compiled template carries `"defaultValue": "[newGuid()]"` and ARM
+// re-evaluates it on EVERY deployment. The value was therefore deterministic
+// only WITHIN one deployment — the console and the jobs matched each other, and
+// every holder OUTSIDE that deployment (the `LOOM_INTERNAL_TOKEN` GitHub
+// Actions secret, any operator-rotated value) was silently invalidated by every
+// single admin-plane deploy. Container Apps does not restart replicas on a
+// secret write, so the mismatch detonated hours later when the console revision
+// happened to cycle: 153/153 eval probes 401'd on 2026-08-06, and #2929's
+// `reindex rejected (HTTP 401)` had the same single root.
+//
+// The fix is ONE writer: the value that is ALREADY LIVE on the estate.
+//   - Every deploy path resolves the running console's `loom-internal-token`
+//     Container Apps secret (an ARM CONTROL-plane read — no VNet, no Key Vault
+//     data plane, so it works from a hosted runner) and passes it here as
+//     `loomInternalTokenValue`. A redeploy then re-applies the value the estate
+//     already had: it CANNOT invalidate a working estate.
+//   - Only when there is nothing to adopt — a genuinely greenfield estate with
+//     no console — does bicep mint one. That keeps day-one zero-touch.
+// Rotation, when an operator wants it, is a write to the live console secret
+// (the shared `scripts/csa-loom/resolve-internal-token.sh --rotate` path);
+// the NEXT deploy adopts it instead of overwriting it. bicep is never the
+// rotator. See docs/fiab/runbooks/internal-token-ownership.md.
+var loomInternalToken = empty(loomInternalTokenValue)
+  ? guid(loomGeneratedSecretSeed, 'loom-maf-internal-token-v1')
+  : loomInternalTokenValue
 
 // Per-service Bearer secrets for the EXTERNALLY-handed token paths (rel-T10/B3
 // isolation). Each is a DISTINCT deterministic value derived from the same
@@ -1898,6 +1928,10 @@ param loomSessionSecret string = ''
 @description('Random per-deployment seed used to derive service-auth secrets (internal token, builtin-MCP key) and the SESSION_SECRET FALLBACK when neither a Key-Vault-backed secret nor an explicit LOOM_SESSION_SECRET is available. Defaults to newGuid() so these are UNPREDICTABLE (never guid(resourceGroup().id, <public-const>), which is offline-derivable from the sub id + RG name — a session/impersonation forgery vector). NOT assignable from a .bicepparam (keeps newGuid() valid; BCP065). Trade-off: on the fallback path secrets rotate per redeploy (users re-auth after a console update) — set LOOM_SESSION_SECRET or run the bootstrap (KV-backed path) for stability. rel-T10/T10b.')
 @secure()
 param loomGeneratedSecretSeed string = newGuid()
+
+@description('#3056 — the LIVE value of the estate\'s shared internal trust token (the `loom-internal-token` Container Apps secret on loom-console). The ESTATE owns this value; bicep only ADOPTS it. Every deploy path resolves it with scripts/csa-loom/resolve-internal-token.sh (an ARM control-plane read that needs no VNet and no Key Vault data plane) and passes it here, so a redeploy re-applies what the estate already had and CANNOT invalidate a working estate. Empty (the greenfield case — no console to read) => bicep mints one from loomGeneratedSecretSeed, which keeps day-one zero-touch. NEVER pass a fresh value here to "rotate": rotate by writing the live console secret, then redeploy (the deploy adopts it). Leaving this empty on an estate that ALREADY has a console re-mints the token and strands every other holder — that is exactly the 2026-08-06/07/08 outage. See docs/fiab/runbooks/internal-token-ownership.md.')
+@secure()
+param loomInternalTokenValue string = ''
 
 @description('Entra app-registration (MSAL) provisioning config — passed as ONE object to stay under the 256-param ARM limit (this module is already near it). Fields: enabled (bool, default true — provision the app reg + client secret + stable SESSION_SECRET in Key Vault by default, opt-out; OFF runs the Console unauth / BYO via loomMsalClientId); scriptIdentityId (UAMI with Graph app-admin + KV Secrets Officer for the in-bicep deploymentScript — empty → the post-deploy bootstrap workflow provisions the app reg, the default push-button path); scriptIdentityClientId; scriptSubnetId (VNet-inject the script to reach the PE-locked KV); consoleHosts (comma-separated redirect-URI hosts, no scheme — localhost is always added; the bootstrap adds the runtime FQDN).')
 param loomMsalAppReg object = {

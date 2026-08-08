@@ -481,6 +481,10 @@ param setupTemplateUri string = ''
 @description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric "fabric-devops-pipelines" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com.')
 param loomPipelineCiEnabled bool = false
 
+@description('#3056 — the LIVE value of the estate\'s shared internal trust token (the `loom-internal-token` Container Apps secret on loom-console). The ESTATE owns it; this deployment only ADOPTS it, so a redeploy re-applies the value the estate already had instead of minting a new one and stranding the jobs + the LOOM_INTERNAL_TOKEN GitHub secret. Resolve it with scripts/csa-loom/resolve-internal-token.sh (ARM control-plane read — no VNet, no Key Vault data plane) and pass it on EVERY deploy of an estate that already has a console. Empty = greenfield, bicep mints one. Threaded to admin-plane/main.bicep loomInternalTokenValue. See docs/fiab/runbooks/internal-token-ownership.md.')
+@secure()
+param loomInternalTokenValue string = ''
+
 // ---------- ADOPT-OR-CREATE: the operator's per-service decision ----------
 // ONE object param carrying the whole adoption plan, keyed by the service key in
 // `apps/fiab-console/lib/deploy/adoption-catalog.ts`. It REPLACES the 36
@@ -1190,6 +1194,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     setupOrchestratorEnabled: setupOrchestratorEnabled
     setupTemplateUri: setupTemplateUri
     loomPipelineCiEnabled: loomPipelineCiEnabled
+    // #3056 — adopt the estate's LIVE internal trust token rather than minting a
+    // new one on every deploy. Empty only on a genuinely greenfield estate.
+    loomInternalTokenValue: loomInternalTokenValue
     existingAiSearchService: existingAiSearchService
     existingAiSearchRg: existingAiSearchRg
     existingApimName: existingApimName

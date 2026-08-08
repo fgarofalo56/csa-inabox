@@ -557,6 +557,41 @@ jobs:
           fi
           echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured and loom-unity deploys SEALED until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
 
+      # ── ADOPT THE ESTATE'S LIVE INTERNAL TRUST TOKEN (#3056) ──────────────
+      # Exactly the same durability problem the MSAL step above solves, for the
+      # secret that broke the estate THREE times in two days.
+      #
+      # `loomInternalToken` used to be minted here every single deploy:
+      # `guid(loomGeneratedSecretSeed, …)` where loomGeneratedSecretSeed
+      # defaults to `newGuid()`, which the compiled template carries as
+      # `"defaultValue": "[newGuid()]"` — ARM re-evaluates it on EVERY
+      # deployment. The console and the consumer jobs matched each other (same
+      # deployment), and every holder OUTSIDE the deployment — the
+      # `LOOM_INTERNAL_TOKEN` repo secret, any operator-rotated value — was
+      # silently invalidated. Container Apps does not restart replicas on a
+      # secret write, so the split sat latent and detonated when the console
+      # revision cycled: 153/153 eval probes 401'd, #2929's reindex started
+      # rejecting, and the #3090 residual would not clear.
+      #
+      # The estate now OWNS the value and this deploy ADOPTS it, so a redeploy
+      # re-applies what was already live and cannot invalidate a working estate.
+      # Greenfield (no console to read) resolves empty and bicep mints one —
+      # day-one stays zero-touch. The value is masked and never printed; only a
+      # sha256 fingerprint reaches the log.
+      - name: Adopt the estate's live internal trust token (never re-mint it)
+        run: |
+          set -euo pipefail
+          # AZURE_LOCATION is read from the SHELL at runtime rather than through
+          # a step-level `env:` template expression, for the same reason the MSAL
+          # step above does it that way: the reconcile step may have re-pinned the
+          # region into $GITHUB_ENV, and an expression resolved against the
+          # workflow-level value would look at the wrong resource group.
+          export ADMIN_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          # The script appends LOOM_INTERNAL_TOKEN to $GITHUB_ENV itself (masked
+          # first). Its stdout is the `export …` form for shell callers, which we
+          # discard here precisely so the value is not re-echoed into this log.
+          bash scripts/csa-loom/resolve-internal-token.sh --export > /dev/null
+
       # ── ONE PARAMETER SOURCE FOR THE WHAT-IF AND THE APPLY (refs #3022) ──
       #
       # These two commands used to be two hand-maintained copies of the same
@@ -678,6 +713,15 @@ jobs:
           echo "LOOM_ADMIN_ENTRA_GROUP_ID=$ADMIN_ENTRA_GROUP_ID" >> "$GITHUB_ENV"
           echo "LOOM_TENANT_ADMIN_GROUP_ID=$TENANT_ADMIN_GROUP"  >> "$GITHUB_ENV"
           add --parameters "loomVanityDomain=$CSA_LOOM_VANITY_DOMAIN"
+          # #3056 — adopt, never re-mint. Empty ONLY on a greenfield estate with
+          # no console to read; passing it empty on an estate that already has
+          # one is what re-mints the token and strands every other holder.
+          if [ -n "${LOOM_INTERNAL_TOKEN:-}" ]; then
+            add --parameters "loomInternalTokenValue=$LOOM_INTERNAL_TOKEN"
+            echo "::notice::Adopting the estate's existing internal trust token (fingerprint $(printf '%s' "$LOOM_INTERNAL_TOKEN" | sha256sum | cut -c1-12)) — this deploy re-applies it rather than minting a new one (#3056)."
+          else
+            echo "::warning::No live internal trust token was resolved for this estate — bicep will MINT one on this deploy. That is correct for a greenfield install; on an estate that already has a console it means the adopt step could not read the secret, and every other holder (the consumer jobs, the LOOM_INTERNAL_TOKEN repo secret) will be stranded. Check the adopt step above before trusting this run."
+          fi
           if [ -n "${CSA_LOOM_TOPOLOGY:-}" ]; then
             add --parameters "topology=$CSA_LOOM_TOPOLOGY"
           fi
