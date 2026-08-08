@@ -47,16 +47,40 @@ identical).
 
 ## Deploy
 
-Use `gcc.bicepparam`:
+**This page is a boundary reference, not a walkthrough.** Follow
+[**Greenfield**](greenfield.md) or [**Brownfield**](brownfield.md) and substitute
+`gcc.bicepparam`.
+
+GCC subscriptions are in **Azure Commercial**, so the local `az` path is
+available (unlike GCC-High / IL5, which are Actions-only). The install is still
+**three phases**. Phase 1:
 
 ```bash
 az deployment sub create \
   --name csa-loom-gcc-$(date +%s) \
-  --location eastus \
+  --location <region> \
   --template-file platform/fiab/bicep/main.bicep \
   --parameters platform/fiab/bicep/params/gcc.bicepparam \
-  --parameters adminEntraGroupId=<group-guid>
+  --parameters adminEntraGroupId=<group-guid> \
+  --parameters deployAppsEnabled=false
 ```
+
+then the image + app phase, then the post-deploy bootstrap with
+`-f boundary=GCC`.
+
+> **`deployAppsEnabled=false` on phase 1 is not optional** — the registry is
+> created empty, so Container Apps cannot be created in the same pass. An
+> earlier version of this page omitted it, and omitted the image and bootstrap
+> phases entirely; the published command could not have produced a working
+> Console on a fresh subscription.
+
+> **The CI lane for this boundary is not a health signal.**
+> `deploy-fiab-gcc.yml` concludes `success` while **skipping its entire deploy**
+> when the `AZURE_GCC_*` secrets are absent — measured on its most recent run
+> (2026-08-08): `Deploy + validate CSA Loom in GCC -> skipped`,
+> `Post-deploy bootstrap (GCC) -> skipped`. See
+> [when a green Gov run means nothing](greenfield.md#when-a-green-gov-run-means-nothing).
+> No GCC install has been verified end to end.
 
 `gcc.bicepparam` sets:
 - `fabricEnabled = false` (no F-SKU)

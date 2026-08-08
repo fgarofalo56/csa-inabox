@@ -25,7 +25,7 @@ it (**#3015 — merged, not deployed until the next roll**):
 |---|---|---|
 | `POST /api/deploy/discovery` | `lib/deploy/discovery-scanner` | explicit subscription list (consented) |
 | `POST /api/setup/estate-scan` (wizard *Analysis scope → Reuse or deploy*) | `lib/setup/estate-scan` (shares `COVERAGE_QUERY` with the discovery scanner) | explicit subscription list (consented) |
-| `GET /api/setup/discover-services` (wizard *Scan & choose* / networking panel) | `lib/deploy/discovery-scanner` — the SAME module as `/api/deploy/discovery` | everything the identity can see |
+| `GET /api/setup/discover-services` (the read-only networking panel on the wizard's *Review & deploy* step) | `lib/deploy/discovery-scanner` — the SAME module as `/api/deploy/discovery` | everything the identity can see |
 
 The previous wizard-side scanners are gone: `GET /api/setup/scan-services`
 (sent the no-op `top` key, no paging, no ledger, zero UI callers) is deleted,

@@ -30,10 +30,10 @@ FedRAMP High + DoD IL4 + ITAR-eligible.
 
 | Item | Notes |
 |---|---|
-| Azure Government subscription | `az cloud set --name AzureUSGovernment` |
+| Azure Government subscription | Deployed to via GitHub Actions only — see [Deploy](#deploy--actions-only) |
 | Region | `usgovvirginia` recommended (most services + AOAI chat models) + `usgovarizona` for OpenAI embeddings |
 | Microsoft 365 GCC-High tenant | Identity provider |
-| `az` + `azd` CLI | Same as Commercial |
+| `AZURE_GOV_*` repository secrets | The deploy identity. **Missing secrets do not fail the workflow — they make it skip and report success** |
 | AOAI quota in usgovvirginia | gpt-4o + gpt-4.1 + o3-mini + gpt-5.1 |
 | AOAI quota in usgovarizona | text-embedding-3-large (Standard mode is usgovarizona-only) |
 
@@ -62,29 +62,54 @@ Per [Per-boundary dispatch matrix](../architecture.md):
 | OpenAI Batch API | **Not in Gov** (use synchronous calls or provisioned throughput) |
 | OpenAI Content Safety | **Not in Gov** (use self-hosted Presidio) |
 
-## Pre-deploy: authenticate against Azure Gov
+## Deploy — Actions only
+
+**There is no local-CLI deployment path for GCC-High.** All Azure Government
+deployment and verification runs through GitHub Actions; running Azure
+Government `az` commands from a workstation is prohibited. The workflows carry
+the Gov login endpoints and the `AzureUSGovernment` cloud switch internally.
+
+> **An earlier version of this page published `az cloud set --name AzureUSGovernment`
+> + `az login` + a single `az deployment sub create` as the GCC-High procedure.**
+> That contradicted the Actions-only rule stated in
+> [Greenfield](greenfield.md#azure-government-gcc-high--il4-and-dod-il5), and it
+> also omitted `deployAppsEnabled=false`, the image phase and the bootstrap
+> phase — so even setting the boundary rule aside, it could not have produced a
+> working Console on a fresh subscription. It is corrected here rather than
+> quietly removed.
+
+The full walkthrough, including the three ways a green Gov run can mean nothing,
+is in [**Greenfield → Azure Government**](greenfield.md#azure-government-gcc-high--il4-and-dod-il5).
+Brownfield adoption on this boundary is in
+[**Brownfield → Azure Government**](brownfield.md#azure-government-brownfield).
 
 ```bash
-az cloud set --name AzureUSGovernment
-az login
-az account set --subscription <YOUR-GOV-SUB-ID>
+# 1. Build the app images into the sovereign ACR.
+gh workflow run gov-build-images.yml -f boundary=GCC-High
 
-azd auth login
-azd env set AZURE_CLOUD AzureUSGovernment
+# 2. Provision + bootstrap. All three inputs differ from the defaults, and all
+#    three matter: whatif-only provisions nothing, and keep_resources=false
+#    tears the estate down and skips the post-deploy bootstrap.
+gh workflow run deploy-fiab-gcch.yml \
+  -f run_mode=full \
+  -f topology=tenant \
+  -f keep_resources=true
 ```
 
-## Deploy
+The deploy requires manual approval on the `gcc-high-deploy` environment
+protection rule before it touches the Gov subscription.
 
-Use `gcc-high.bicepparam`:
+**Verification is also Actions-only:**
 
 ```bash
-az deployment sub create \
-  --name csa-loom-gcch-$(date +%s) \
-  --location usgovvirginia \
-  --template-file platform/fiab/bicep/main.bicep \
-  --parameters platform/fiab/bicep/params/gcc-high.bicepparam \
-  --parameters adminEntraGroupId=<gov-group-guid>
+gh workflow run gov-verify-facts.yml
+gh workflow run gov-gates.yml
 ```
+
+Prerequisite: the `AZURE_GOV_CLIENT_ID` / `_SECRET` / `_TENANT_ID` /
+`_SUBSCRIPTION_ID` repository secrets. **If any is missing, the workflow warns,
+skips every downstream job, and still concludes `success`** — see
+[when a green Gov run means nothing](greenfield.md#when-a-green-gov-run-means-nothing).
 
 `gcc-high.bicepparam` sets:
 - `environment = 'AzureUSGovernment'`
@@ -127,12 +152,20 @@ param complianceTags = {
 
 ## Validation
 
+Gov verification is Actions-only (`gov-verify-facts.yml` / `gov-gates.yml`,
+above). A health probe from a machine that can reach the Gov console:
+
 ```bash
-# Console URL from azd output
-curl -i https://<your-gov-console-url>/api/health
+curl -i https://<your-gov-console-hostname>/api/health
 ```
 
-Then sign in via browser using your GCC-High M365 identity.
+Then sign in via browser using your GCC-High M365 identity. A `curl` 200 is not
+a verification receipt — a deploy is verified by a live in-browser walk.
+
+Compare the result against the recorded **Gov readiness ceiling**, not against
+Commercial: the Gov ceiling is infrastructure-bound and legitimately lower, so a
+Gov estate reporting fewer green capabilities than Commercial is not necessarily
+broken.
 
 ## ITAR considerations
 

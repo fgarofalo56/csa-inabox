@@ -20,15 +20,30 @@ proves nothing about brownfield, and the two are verified independently
 R4 requires each cloud to be verified independently. This page states where that
 has happened and where it has not.
 
+Re-measured **2026-08-08**. Every row is `gh run list` output, not an estimate.
+
 | Cloud | Status of this walkthrough |
 |---|---|
-| **Azure Commercial** | **Verified in part.** The three-phase path is the one CI exercises: `full-app-deploy-commercial.yml` and `deploy-fiab-commercial.yml` both run regularly (most recent runs include failures — check `gh run list` before assuming the lane is healthy). Template validation passes for `commercial-full.bicepparam`. **A from-scratch phase-1 → phase-2 → phase-3 run into a clean, empty subscription has not been performed for this revision of the doc.** |
-| **Azure Government — GCC-High / IL4** | **Not verified for this revision.** `deploy-fiab-gcch.yml` exists and runs, but its three most recent runs all ended `failure` (2026-08-01, -02, -03). The workflow-input semantics below are read from the workflow definition, not from a successful run. |
+| **Azure Commercial** | **Verified in part, and the app lane is RED right now.** `full-app-deploy-commercial.yml`'s three most recent completed runs all ended `failure` (all 2026-08-08). All three failed **at the chained post-deploy-bootstrap leg, after every image and Container App had already deployed** — see [phase 2](#phase-2--build-the-images-and-bring-the-apps-up-1525-min). Template validation passes for `commercial-full.bicepparam`. **A from-scratch phase-1 → phase-2 → phase-3 run into a clean, empty subscription has not been performed for this revision.** |
+| **Azure Government — GCC-High / IL4** | **Partly exercised.** `deploy-fiab-gcch.yml`'s most recent run (2026-08-08) ended `success` — but its `build-gov-images` and `post-deploy-bootstrap` jobs were both **skipped**, so that green proves the what-if/validate path only. The three runs before it ended `failure`. Read [when a green Gov run means nothing](#when-a-green-gov-run-means-nothing) before you interpret any Gov result. |
 | **DoD IL5** | **Never executed.** `gh run list --workflow deploy-fiab-il5.yml` returns nothing. |
-| **Gov image build** | **Never executed.** `gh run list --workflow gov-build-images.yml` returns nothing. |
+| **Gov image build** | **Now executed — two `success` runs on 2026-08-08.** An earlier revision of this page said "never executed"; that is no longer true. It is still unexercised as part of an end-to-end from-scratch Gov install. |
 
 Where a step below has never been run, it says so inline. Do not read the
-absence of a warning as a claim of success — read the table above.
+absence of a warning as a claim of success — read the table above, and re-run
+the measurement yourself:
+
+```bash
+for wf in full-app-deploy-commercial deploy-fiab-commercial deploy-fiab-gcch \
+          deploy-fiab-gcc deploy-fiab-il5 gov-build-images csa-loom-post-deploy-bootstrap; do
+  echo "== $wf"
+  gh run list --workflow "$wf.yml" --limit 3 \
+    --json conclusion,createdAt --jq '.[] | "\(.conclusion // "in-progress")  \(.createdAt)"'
+done
+```
+
+A workflow that prints nothing has **never run**. That is the loudest signal on
+this page, not a quiet pass (`deploy-integrity.md` R3).
 
 ---
 
@@ -183,30 +198,105 @@ gh workflow run full-app-deploy-commercial.yml \
 
 This opens the ACR, builds every app image **server-side** (`az acr build` is the
 only mechanism that reaches a registry with public network access disabled),
-re-locks the registry to its private endpoint, scans and signs the images, and
-rolls the Container Apps onto them.
+re-locks the registry to its private endpoint, scans and signs the images, rolls
+the Container Apps onto them — **and then runs phase 3 for you**.
+
+> **Phase 3 is CHAINED into this workflow.** `full-app-deploy-commercial.yml`
+> declares a `post-deploy-bootstrap` job that calls
+> `csa-loom-post-deploy-bootstrap.yml` as a reusable workflow, gated
+> `if: inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success'`.
+> So with `enable_apps_after=true` the bootstrap runs automatically and you do
+> **not** normally dispatch phase 3 by hand. The standalone dispatch documented
+> in [phase 3](#phase-3--post-deploy-bootstrap-1015-min--required-to-sign-in)
+> exists to **re-run or repair** the bootstrap; it is idempotent, so running it
+> again is safe.
+>
+> The chained call deliberately does **not** pass `admin_subscription` — a job
+> output whose value equals a registered secret is scrubbed in transit, so it
+> would arrive empty. The reusable workflow falls back to the boundary
+> subscription secret instead. A **manual** dispatch has no such fallback, which
+> is why `admin_subscription` is `required: true` on the dispatch form.
+
+> **A red run here does NOT mean no images were built.** All three of this
+> workflow's most recent failures (2026-08-08) failed at the
+> `Post-deploy bootstrap (Commercial)` job — i.e. the build, the registry
+> re-lock and the Container App roll had all already succeeded. Check **which
+> job** failed before you re-run the whole thing:
+>
+> ```bash
+> gh run view <run-id> --json jobs \
+>   --jq '.jobs[] | select(.conclusion=="failure") | .name'
+> ```
+>
+> If the failing job is the bootstrap, re-dispatch **phase 3 alone** rather than
+> rebuilding every image.
 
 > **`region` is optional here and is best left EMPTY (#3029).** The workflow's
-> `region` input no longer defaults to `eastus2` — that default pointed run
-> `31028909702` at `rg-csa-loom-admin-eastus2`, which does not exist, and the
-> run died reporting an unrelated registry-name error. With the field empty the
-> `resolve` job asks Resource Graph which `rg-csa-loom-admin-*`/`acrloom*`
-> exists in the subscription and targets that, failing loudly if there are none
-> or more than one. Supply a region only to disambiguate a subscription that
-> holds several admin planes.
+> `region` input has **no default** — an earlier `eastus2` default pointed run
+> `31028909702` at `rg-csa-loom-admin-eastus2`, which does not exist, and the run
+> died reporting an unrelated registry-name error. With the field empty the
+> `resolve` job asks Resource Graph which `rg-csa-loom-admin-*`/`acrloom*` exists
+> in the subscription and targets that, failing loudly if there are none or more
+> than one. Supply a region only to disambiguate a subscription that holds
+> several admin planes.
+
+#### The ACR firewall lease — one build at a time, and it needs a specific role
+
+The registry rests locked (`publicNetworkAccess: 'Disabled'` in
+`platform/fiab/bicep/modules/admin-plane/registry.bicep`). To build into it the
+workflow takes a **firewall lease** — a mutual exclusion implemented as tags on
+the registry resource (`scripts/csa-loom/acr-firewall-lease.sh`).
+
+| Fact | Value | Why it matters to you |
+|---|---|---|
+| Lease TTL | 75 min (`LOOM_ACR_LEASE_TTL_MINUTES`) | The lease covers the whole build matrix |
+| Bounded acquire wait | 25 min (`LOOM_ACR_LEASE_WAIT_MINUTES`), then **fails closed** | A second dispatch inside the window dies with `[acr-lease] TIMED OUT after 25m … holder = run <id>` |
+| Permission to take a lease | `Microsoft.Resources/tags/write` on the registry | Included in **Contributor**; otherwise grant **Tag Contributor** scoped to the ACR |
+
+**Do not dispatch this workflow twice concurrently.** The `concurrency` group is
+a constant for exactly this reason; a second run cannot get the lease, and its
+roll step would otherwise run against a half-built registry.
+
+If the deploy identity lacks `Microsoft.Resources/tags/write`, the lease cannot
+be taken. By default the script then falls back to **unleased (legacy) mode**
+rather than failing — so builds still work, but the mutual exclusion that
+prevents two runs from fighting over the registry is **not in effect**. Grant
+the role rather than relying on the fallback:
+
+```bash
+az role assignment create \
+  --assignee <deploy-identity-object-id> \
+  --role "Tag Contributor" \
+  --scope <acr-resource-id>
+```
+
+> **Known gap — a from-scratch registry is not left in the state the lease check
+> expects.** `registry.bicep` sets `publicNetworkAccess: 'Disabled'` but does
+> **not** set `networkRuleSet.defaultAction: 'Deny'`, while the lease's
+> lock-verification requires **both**. `defaultAction=Deny` is only ever
+> established imperatively, by the lease's own close step. So on an estate that
+> has never taken and released a lease, the verification can report the registry
+> as publicly reachable even though bicep considers it hardened. Compare
+> `keyvault.bicep` and `catalog.bicep`, which do set both. This is a real
+> inconsistency, recorded here rather than smoothed over; it does not block the
+> build.
 
 ### Phase 3 — post-deploy bootstrap (10–15 min) — **required to sign in**
+
+**On Commercial this already ran** as a chained job of phase 2. Dispatch it
+standalone only to **re-run or repair** it — for example when phase 2 failed at
+the bootstrap leg, or when the estate predates the DLZ-discovery fix below:
 
 ```bash
 gh workflow run csa-loom-post-deploy-bootstrap.yml \
   -f boundary=Commercial \
-  -f region=eastus2 \
-  -f admin_subscription=<YOUR-SUBSCRIPTION-ID>
+  -f region=<region> \
+  -f admin_subscription=<subscription-id>
 ```
 
-`region` and `admin_subscription` are **required** — every resource group,
-workspace and managed-identity name derives from them; there are no estate
-defaults.
+`region` and `admin_subscription` are **required** on a manual dispatch — every
+resource group, workspace and managed-identity name derives from them, and no
+estate defaults ship in a public repo. The workflow is idempotent.
 
 > **The Data Landing Zone is DISCOVERED, not supplied.** `dlz_subscription` and
 > `dlz_domain` are optional overrides. The workflow reads Azure Resource Graph
@@ -220,9 +310,16 @@ defaults.
 > `dlz_domain` used to default to `single`, which is one estate shape out of
 > several. On any multi-sub / `dlz-attach` estate that produced a resource group
 > that does not exist and the bootstrap died on `(ResourceGroupNotFound)` — after
-> the rest of the deploy had gone green (#3143). Supply the overrides only to
-> pick between several landing zones; an override that matches nothing now fails
-> at discovery rather than reaching ARM.
+> 25 of 27 jobs had gone green (**#3143**, fixed in PR **#3140**). Supply the
+> overrides only to pick between several landing zones; an override that matches
+> nothing now fails at discovery rather than reaching ARM. The naming trap that
+> caused it is explained in
+> [Resource-group layout](resource-groups.md#the-single--default-trap--read-this-before-you-construct-a-name-by-hand).
+>
+> **If your estate predates 2026-08-08 and is multi-subscription, this phase
+> probably never ran.** Day-one wiring (MSAL app registration, Purview roles,
+> Synapse SQL grants, Databricks SCIM, the Spark private-endpoint fix) would be
+> absent. Dispatch it standalone using the command above.
 >
 > If discovery reports **no landing zone**, check in this order: was a DLZ ever
 > deployed in that region (a hub-only `topology=tenant` deploy stamps none until
@@ -231,10 +328,63 @@ defaults.
 > cross-sub DLZ silently drops out); and only then, is the group under a
 > non-standard name.
 
+> **Residual gap worth knowing.** The callers stopped asserting "the DLZ is in
+> the admin subscription", but the reusable workflow's own `DLZ_SUB` environment
+> variable still falls back to `admin_subscription`, and the callers always pass
+> that. Discovery overwrites it on the success path, so the grants land
+> correctly — but a few late steps that read the raw variable (the Iceberg lake
+> lookup among them) still carry the admin-subscription assumption. Verify those
+> resources exist after a cross-subscription install rather than assuming.
+
 This performs: the MSAL app registration with the Console's Front Door redirect
 URI, its Graph permission grants and admin consent (**the Global Administrator
 step**), Synapse SQL admin for the Console UAMI, the Purview data-plane roles,
-the Databricks SCIM service principal, and the Spark private-endpoint fix.
+the Databricks SCIM service principal, the Spark private-endpoint fix, and the
+Loom Unity unseal (below).
+
+### What phase 2 does NOT update — Loom Unity, Iceberg and Trino
+
+This is a genuine gap, not a caveat, and it is stated here because it changes
+what a re-deploy means.
+
+`full-app-deploy-commercial.yml` **builds** `loom-unity` and `loom-trino` in its
+image matrix. It does **not roll** them. Its roll step names six apps —
+`loom-console`, `loom-mcp`, `loom-setup-orchestrator`, `loom-activator`,
+`loom-mirroring`, `loom-direct-lake-shim` — and that set is mirrored and
+asserted both ways by `scripts/ci/deploy-image-roles.mjs`. No workflow anywhere
+issues `az containerapp update --image` against `loom-unity`,
+`iceberg-catalog`, or `loom-trino` on Commercial.
+
+| App | Built by | Rolled by | Net effect |
+|---|---|---|---|
+| `loom-unity` | `full-app-deploy-commercial.yml`, `build-fiab-images-acr-tasks.yml`, `gov-build-images.yml` | **nothing** | A rebuilt image never reaches the running revision |
+| `iceberg-catalog` (runs the `loom-unity` image) | — | **nothing**; created by the bootstrap **only if absent** | An existing one is frozen on whatever digest it first pulled |
+| `loom-trino` | `full-app-deploy-commercial.yml`, `build-fiab-images-acr-tasks.yml` | **nothing on Commercial** (Gov has `gov-provision-trino.yml`) | Commercial has *less* of a path than Gov here |
+
+The mechanism: the image tag is the **mutable** `v0.1`
+(`appImageTags.?unity ?? 'v0.1'` in the admin-plane module — not a SHA), and
+Container Apps pins the **digest** at revision-creation time. Re-pushing
+`loom-unity:v0.1` therefore changes nothing until something forces a new
+revision. `full-app-deploy-commercial.yml` deliberately does not run a full
+`az deployment sub create`, so the only re-render path today is a full
+admin-plane deploy.
+
+On a **greenfield** install this is invisible — every app is created once, from
+the images you just built, so it is correct on day one. It bites on the **second
+and every later** deploy. Per `cloud-parity.md` it matters more than it looks:
+Unity Catalog is not available in Azure Government, so Loom Unity *is* the
+catalog story for sovereign customers, and an un-rollable catalog is a
+sovereign-customer problem first.
+
+Until a roll path exists, re-render those apps with a full admin-plane deploy
+(the phase-1 command with `deployAppsEnabled=true`), and what-if first.
+
+> A code comment in `full-app-deploy-commercial.yml` still says loom-unity is
+> "deployed out-of-band, not by admin-plane". **That comment is false.**
+> `admin-plane/main.bicep` deploys it (`module loomUnity … = if (loomUnityActive)`)
+> and `commercial.bicepparam` declares its `appImageTags` key. It is recorded
+> here rather than left to mislead the next reader.
+
 
 ### Phase 4 — verify
 
@@ -337,18 +487,37 @@ a Gov acceptance run is also the first run of those lanes.
 ## Status: what this page does not yet cover
 
 `deploy-integrity.md` R8 requires the docs and the deploy to agree. The
-greenfield-relevant disagreements, measured on this branch on 2026-08-05:
+greenfield-relevant disagreements, **re-measured on this branch on 2026-08-08**:
 
 | Gap | Effect on a greenfield deploy | Tracked |
 |---|---|---|
-| No classified retry on any Gov deploy path | GCC-High / IL5 failures are unclassified; you triage by hand from [Failure recovery](failure-recovery.md) | **#3017** |
-| The CI failure-handling guard is scoped by **filename** (`/(^\|[-_])(deploy\|build\|roll\|rollback)/i`) | 13 `gov-provision-*` workflows that mutate Azure are invisible to it, so a hand-rolled retry loop can land there unnoticed | **#3017** |
+| No automated roll path for `loom-unity` / `iceberg-catalog` / `loom-trino` on Commercial | Correct on day one; every later deploy leaves them on their original digest — see [above](#what-phase-2-does-not-update--loom-unity-iceberg-and-trino) | — |
+| `registry.bicep` sets `publicNetworkAccess=Disabled` but not `networkRuleSet.defaultAction=Deny`, which the lease's lock check requires | A from-scratch registry can fail the lock verification it should pass | — |
 | Resource-provider registration is emitted, not performed, on the local-CLI path | Register up front or hit a mid-deploy `MissingSubscriptionRegistration` | — |
-| `gov-build-images.yml`, `deploy-fiab-il5.yml` have never run | The Gov image phase and the whole IL5 path are unexercised | — |
+| `deploy-fiab-il5.yml` has never run | The whole IL5 path is unexercised | — |
+| The bootstrap's `DLZ_SUB` env still falls back to the admin subscription | A few late steps carry the admin-sub assumption on a cross-sub estate | **#3143** (follow-up) |
+
+**Two rows that used to be on this list have been removed because they are no
+longer true.** They are recorded here so the correction is visible rather than
+silent:
+
+- *"No classified retry on any Gov deploy path (#3017)."* **False as of #3062.**
+  Measured: `deploy-fiab-gcch.yml` invokes `scripts/ci/deploy-retry.mjs` twice,
+  and `deploy-fiab-gcc.yml`, `deploy-fiab-il5.yml` and `deploy-gov.yml` each
+  invoke it too. Re-measure with
+  `grep -c 'deploy-retry' .github/workflows/deploy-fiab-gcch.yml` (expect > 0).
+  No Gov run has yet *exercised* the retry, which is a different and weaker
+  claim than "it is not wired".
+- *"The CI failure-handling guard is scoped by filename, so 13 `gov-provision-*`
+  workflows are invisible to it."* **False.** `scripts/ci/check-deploy-failure-handling.mjs`
+  now scopes by **what a workflow does** — any `az` command is treated as
+  mutating unless provably read-only — with the filename pattern kept only as an
+  OR arm, and an anti-collapse ratchet (`assertDiscoveryHealthy`) that exits 1 if
+  the behavioural arm ever stops contributing workflows the filename arm misses.
+  (The count was also wrong: the code records 11 `gov-provision-*`, not 13.)
 
 Greenfield does **not** cover adopting anything that already exists — that is
-[Brownfield](brownfield.md), which carries its own status list, including four
-open defects.
+[Brownfield](brownfield.md), which carries its own status list.
 
 ---
 
@@ -360,9 +529,40 @@ workstation, so the Gov path has no local-CLI form. The workflows carry the Gov
 login endpoints and the `AzureUSGovernment` cloud switch internally.
 
 Prerequisite: the `AZURE_GOV_CLIENT_ID` / `_SECRET` / `_TENANT_ID` /
-`_SUBSCRIPTION_ID` repository secrets must be configured. If any is missing the
-workflow emits a warning and skips rather than failing — see
+`_SUBSCRIPTION_ID` repository secrets must be configured — see
 [secrets bootstrap](../runbooks/secrets-bootstrap.md).
+
+### When a green Gov run means nothing
+
+This is the single most important thing to know before you read a Gov result.
+**A Gov deploy workflow can conclude `success` having changed nothing at all**,
+in three distinct ways. Check which one you are in before believing a green
+tick:
+
+| Mode | Cause | How to spot it | Fix |
+|---|---|---|---|
+| **Secrets absent → whole deploy skipped** | The `precheck` job emits `::warning::AZURE_GOV_* secrets not configured — skipping` and sets `configured=false`; every downstream job is gated `if: needs.precheck.outputs.configured == 'true'`. A `::warning::` does not fail a job, so the run is **green**. Identical logic in `deploy-fiab-gcc.yml`, `deploy-fiab-gcch.yml` and `deploy-fiab-il5.yml` | The deploy job shows `skipped` | Configure the secrets |
+| **`run_mode=whatif-only`** — *the default* | The `Provision`, `Smoke test` and `Teardown` steps are all gated `if: schedule || inputs.run_mode == 'full'`. A dispatch that changes nothing else validates Bicep and auth and **provisions nothing**, then logs "dry-run completion" | Run title / the `Note dry-run completion` step | Dispatch with `run_mode=full` |
+| **`keep_resources=false`** — *the default* | On a `full` run the `Teardown` step fires on success and destroys what was just built, and `post-deploy-bootstrap` is gated on `inputs.keep_resources` so it never runs | The `Teardown` step ran; the bootstrap job shows `skipped` | Dispatch with `keep_resources=true` |
+
+Verify with the job list, not the conclusion:
+
+```bash
+gh run view <run-id> --json jobs --jq '.jobs[] | "\(.name) -> \(.conclusion)"'
+```
+
+**Measured 2026-08-08.** `deploy-fiab-gcc.yml`'s most recent run concluded
+`success` with `Deploy + validate CSA Loom in GCC -> skipped` and
+`Post-deploy bootstrap (GCC) -> skipped` — mode 1, live, today. This is the
+explanation for a lane that reports success daily while deploying zero Container
+Apps (**#3078**). `deploy-fiab-gcch.yml`'s most recent run concluded `success`
+with the deploy job green but `build-gov-images` and `post-deploy-bootstrap`
+both `skipped` — mode 2.
+
+> `deploy-gov.yml` is the exception: it has no `precheck` gate and fails closed
+> when secrets are absent — though incidentally, via the login step erroring,
+> rather than by an explicit check. It is also a different template lineage
+> (`deploy/bicep/gov/main.bicep`) and is not a sibling of the three Loom lanes.
 
 ### GCC-High / IL4
 
@@ -377,28 +577,34 @@ gh workflow run deploy-fiab-gcch.yml \
 |---|---|
 | `run_mode=full` | `whatif-only` (the default) validates Bicep and auth and **provisions nothing**. A `whatif-only` run that succeeds has deployed nothing. |
 | `topology=tenant` | First-run hub install. |
-| `keep_resources=true` | **Mandatory for a real install.** With `false` this workflow is the nightly validate-and-teardown ring: it provisions, smokes, and then destroys the estate. `true` also chains the post-deploy bootstrap (phase 3) automatically. |
+| `keep_resources=true` | **Mandatory for a real install.** With `false` (the default) this workflow is the nightly validate-and-teardown ring: it provisions, smokes, and then destroys the estate. `true` also chains the post-deploy bootstrap (phase 3) automatically. |
+
+**All three matter, and all three differ from the defaults.** A dispatch that
+changes only `run_mode` still tears the estate down.
+
+> **On a `schedule` trigger the bootstrap can never run.** The
+> `post-deploy-bootstrap` job is gated on `inputs.keep_resources`, and a
+> scheduled run supplies no inputs. So the nightly ring has never performed
+> Gov day-one wiring, by construction.
 
 The workflow requires manual approval on the `gcc-high-deploy` environment
 protection rule before it touches the Gov subscription.
 
-> **This lane is currently red.** `deploy-fiab-gcch.yml`'s three most recent
-> runs all ended `failure` — 2026-08-01, 2026-08-02, 2026-08-03. Check
-> `gh run list --workflow deploy-fiab-gcch.yml` before you dispatch, and expect
-> to be debugging the lane rather than following a known-good procedure.
+> **Lane health, measured 2026-08-08.** The most recent run concluded `success`
+> (validate path only — see the table above); the three before it ended
+> `failure`. Check `gh run list --workflow deploy-fiab-gcch.yml` before you
+> dispatch.
 >
-> **There is also no failure classification on this path (#3017).**
-> `deploy-fiab-gcch.yml` does not invoke `scripts/ci/deploy-retry.mjs` — the
-> eight-class taxonomy, bounded retry and `deploy-failure.json` artifact
-> described in [Failure recovery](failure-recovery.md) are wired into the
-> **Commercial** workflows only. A Gov deploy that hits a throttle or an Entra
-> replication lag fails outright, unclassified, and you classify by hand.
+> **Classified retry IS wired on this lane** (`scripts/ci/deploy-retry.mjs`,
+> landed in #3062) — an earlier revision of this page said it was not. What has
+> **not** happened is a Gov run that exercised it. Merged is not proven
+> (`deploy-integrity.md` R2).
 
 **The Gov image phase.** `deploy-fiab-gcch.yml` runs an image-build job before
 the deploy, because `gcc-high.bicepparam` sets `deployAppsEnabled=true` and the
-Container Apps pull from the sovereign ACR. On a genuinely from-scratch Gov
-subscription there is no ACR yet, so that job warns and exits 0, and the images
-must be built in a separate pass:
+Container Apps pull from the sovereign ACR. That job is itself gated on
+`run_mode=full` (or a schedule). On a genuinely from-scratch Gov subscription
+there is no ACR yet, so the images must be built in a separate pass:
 
 ```bash
 gh workflow run gov-build-images.yml -f boundary=GCC-High
@@ -407,10 +613,11 @@ gh workflow run gov-build-images.yml -f boundary=GCC-High
 then re-dispatch `deploy-fiab-gcch.yml`. This is the Gov equivalent of the
 Commercial phase-1/phase-2 split.
 
-> **`gov-build-images.yml` has never been executed.** As of 2026-08-05,
-> `gh run list --workflow gov-build-images.yml` returns nothing. Its own header
-> says so. Treat your first dispatch as the test of that lane, not as a
-> known-good step, and read its output rather than assuming success.
+> **`gov-build-images.yml` has now run** — two `success` runs on 2026-08-08. An
+> earlier revision of this page said it had never been executed; that is no
+> longer true. It has still not been exercised as part of an end-to-end
+> from-scratch Gov install, so treat the *sequence* as untested even though the
+> workflow itself is not.
 
 ### DoD IL5
 
@@ -453,70 +660,28 @@ Key Vault, the Container Apps Environment, and the Azure Firewall instance are
 **always created new** — they are never adopted, for reasons documented in
 [Brownfield → what is not adoptable](brownfield.md#what-loom-will-not-adopt-and-why).
 
-### Resource-group layout and naming
+### Resource-group layout, naming and tags
 
-Loom's resource-group names are a **contract**, not a convention: bicep modules
-resolve cross-scope references by constructing these strings, so renaming a
-resource group out of band breaks the next deploy. Measured from
-`platform/fiab/bicep/main.bicep` on 2026-08-06:
+A deploy stamps **one** resource group for the admin plane
+(`rg-csa-loom-admin-<location>`) and **one per Data Landing Zone**
+(`rg-csa-loom-dlz-<domain>-<location>`, or `rg-csa-loom-dlz-single-<location>` in
+single-subscription mode). Those names are a **contract** — bicep constructs
+them as strings to resolve cross-scope references, so renaming one out of band
+breaks the next deploy.
 
-| Resource group | Name pattern | Where it is constructed |
-|---|---|---|
-| Admin Plane (hub) | `rg-csa-loom-admin-<location>` | `main.bicep:1063` — overridable **only** on a hub-attach, via `hubCoordinates.adminPlaneRgName`, when `deployAdminPlane` is false |
-| Data Landing Zone (named domain) | `rg-csa-loom-dlz-<domain>-<location>` | `main.bicep:1598`, and every cross-scope `resourceGroup(subId, …)` reference (`:1734`, `:1795`, `:1829`, `:1847`) |
-| Data Landing Zone (single-sub) | `rg-csa-loom-dlz-single-<location>` | `main.bicep:1604`, `:1614` |
-| DLZ being attached (`dlz-attach`) | `rg-csa-loom-dlz-<attachDomainName>-<location>` | `main.bicep:1870`, `:1877` |
+Three things you need before you size RBAC or plan a teardown:
 
-`<location>` is the Azure region short name (`centralus`, `eastus2`, …) and
-`<domain>` is the landing-zone domain name you supply — so a two-domain
-Commercial estate in `eastus2` has `rg-csa-loom-admin-eastus2`,
-`rg-csa-loom-dlz-finance-eastus2` and `rg-csa-loom-dlz-hr-eastus2`.
+- the **`single` / `default` naming trap** that broke the post-deploy bootstrap,
+- the **`rg-csa-loom-` teardown blast radius**,
+- how to add your own **CAF tags** via `complianceTags`.
 
-> **The teardown step keys off this prefix.** `deploy-fiab-commercial.yml` in
-> `full` mode with `keep_resources=false` enumerates `rg-csa-loom-*` **across the
-> subscription** and deletes every match. Anything you name with that prefix is
-> in the blast radius; anything Loom needs that you name differently is outside
-> the deploy's reach. Since #3028 that path is no longer reachable by accident:
-> `keep_resources` defaults to `true`, and the teardown additionally requires
-> `confirm_teardown_rg` to equal `rg-csa-loom-admin-<region>` exactly — a run
-> that would tear down without the typed confirmation is refused before any ARM
-> call.
+All three, with the measurement commands, are on the dedicated page:
+[**Resource-group layout, naming and tags**](resource-groups.md).
 
-**Tags.** Every resource group carries the `complianceTags` object
-(`main.bicep:346`, applied at `:1090`, `:1616`, `:1872` and threaded into the
-admin-plane and DLZ modules). It is a **required parameter with no default** —
-each boundary parameter file supplies it. Commercial
-(`params/commercial-full.bicepparam:377`):
-
-```bicep
-param complianceTags = {
-  Environment: 'Commercial'
-  CSA_Loom: 'true'
-  FedRAMP_Level: 'High'
-  Data_Classification: 'Standard'
-}
-```
-
-Edit that block to add your own CAF tags (cost centre, owner, application) —
-they propagate to every resource group the deploy creates.
-
-> #### Not implemented: the CAF function-RG split (t169)
->
-> A planned re-layout — `docs/fiab/prp/audit-wave13b-deploy-unblock.md` item
-> **t169** — would split the admin mega-RG into function resource groups
-> (`rg-loom-console` / `-network` / `-shared-data` / `-governance` /
-> `-observability` / `-ai`) with per-DLZ tiers (`-core` / `-compute` / `-storage`
-> / `-streaming`) and CAF naming + tags on each.
->
-> **It is not built.** Measured 2026-08-06:
-> `grep -rn "rg-loom-console\|rg-loom-network\|rg-loom-shared-data\|rg-loom-governance\|rg-loom-observability"`
-> across `**/*.bicep` and `**/*.md` returns **one** hit — the plan item itself.
-> The admin plane is one resource group and each DLZ is one resource group, as
-> tabulated above.
->
-> This is stated so you size RBAC and policy scoping against what deploys today.
-> If your governance model needs finer resource-group boundaries, that constraint
-> is real and current; t169 is tracked as forward work (FINISHLINE `C11`).
+That page also records that the planned **CAF function-RG split (t169)** —
+`rg-loom-console` / `-network` / `-shared-data` / `-governance` /
+`-observability` / `-ai` plus per-DLZ tiers — is **not built**, so you scope
+policy against one admin RG and one RG per DLZ, not against the plan.
 
 ---
 
@@ -537,18 +702,46 @@ az deployment operation sub list --name <deployment-name> \
 Then look the ARM code up in [**Failure recovery**](failure-recovery.md), which
 is keyed to the same eight classifications the platform's failure engine uses.
 
-The two greenfield-specific failures worth knowing in advance:
+The greenfield-specific failures worth knowing in advance:
 
 | What you see | Class | What it means |
 |---|---|---|
 | `MANIFEST_UNKNOWN` / image pull failure on a Container App | **config** | You ran phase 1 with `deployAppsEnabled=true` against an empty ACR. Re-run phase 1 with `false`, then phase 2. |
 | `QuotaExceeded` on `standardDDSv5Family` (or another VM family) during the image build | **quota** | The ACR-task agent pool has no cores. This is deterministic — retrying cannot help. Raise the quota or use the poolless build. |
+| `[acr-lease] TIMED OUT after 25m … holder = run <id>` | **config** | A second `full-app-deploy-commercial` dispatch is racing the first for the ACR firewall lease. Wait for the holder to finish; do not cancel it mid-push. |
+| `could not write the lease tags on ACR …` / `Microsoft.Resources/tags/write` | **permission** | Grant the deploy identity **Tag Contributor** (or Contributor) scoped to the registry. |
+| `(ResourceGroupNotFound) rg-csa-loom-dlz-…` during the bootstrap | **config** | The landing zone is not where the name was constructed. On a current build the bootstrap discovers it; if you pinned `dlz_domain`/`dlz_subscription`, drop the overrides and let discovery run. See [the naming trap](resource-groups.md#the-single--default-trap--read-this-before-you-construct-a-name-by-hand). |
+| `'admin_subscription' is REQUIRED (no estate default)` | **config** | A manual bootstrap dispatch omitted `admin_subscription`. It is `required: true` on the dispatch form; only the chained caller may omit it. |
+
+---
+
+## Deploying greenfield from the Console wizard
+
+This page is the **CLI + workflow** path, and it is the one that is exercised.
+The Console also ships a `/setup` wizard whose all-`create` plan is the
+greenfield path through the UI; its step-by-step walkthrough is in
+[Deployment → the in-Console setup wizard](index.md#the-in-console-setup-wizard-step-by-step).
+
+Two constraints that follow from the code and are easy to hit:
+
+1. **The wizard is first-install-only.** It never submits a `topology`, so the
+   deploy route defaults to `topology='tenant'` and returns **409** when a hub
+   already exists in the tenant, directing you to
+   `/admin` → *Add landing zone* (`topology=dlz-attach`) instead. That is the
+   correct invariant — a second Console can never be stamped — but it means the
+   wizard is not the tool for reconciling an existing estate.
+2. **A plan containing any `adopt` decision cannot be deployed from the
+   wizard today.** That is a brownfield concern; it is documented, with the
+   measurement, in
+   [Brownfield → the wizard cannot deploy an adopt plan](brownfield.md#blocking-defect-the-wizard-cannot-deploy-a-plan-containing-an-adopt-decision).
+   A pure greenfield plan (every service `create`) is unaffected.
 
 ---
 
 ## Next
 
 - [**Brownfield deployment**](brownfield.md) — deploying into an estate that already has services Loom can use
+- [**Resource-group layout, naming and tags**](resource-groups.md) — the naming contract, the teardown blast radius, CAF tags, and t169
 - [**Discovery and adoption**](discovery-and-adoption.md) — what Loom can find, and how to supply values by hand
 - [**Failure recovery**](failure-recovery.md) — the failure taxonomy and remediations
 - [**Upgrade lifecycle**](upgrade.md)

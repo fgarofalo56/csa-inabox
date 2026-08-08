@@ -25,16 +25,40 @@ opt-in for Direct Lake parity (see below).
 
 ## Deploy
 
-Use `commercial.bicepparam`:
+**This page is a boundary reference, not a walkthrough.** The runnable,
+verified procedures are:
+
+- [**Greenfield**](greenfield.md) — empty subscription to working Console
+- [**Brownfield**](brownfield.md) — adopting existing Azure infrastructure
+
+A Commercial install is **three phases**, and a single `az deployment sub create`
+is not one of them. Phase 1 uses `commercial.bicepparam` (or
+`commercial-full.bicepparam`) with **`deployAppsEnabled=false`**:
 
 ```bash
 az deployment sub create \
   --name csa-loom-commercial-$(date +%s) \
-  --location eastus2 \
+  --location <region> \
   --template-file platform/fiab/bicep/main.bicep \
   --parameters platform/fiab/bicep/params/commercial.bicepparam \
-  --parameters adminEntraGroupId=<group-guid>
+  --parameters adminEntraGroupId=<group-guid> \
+  --parameters deployAppsEnabled=false
 ```
+
+then `gh workflow run full-app-deploy-commercial.yml -f enable_apps_after=true`
+for the images, apps and the chained post-deploy bootstrap.
+
+> **`deployAppsEnabled=false` on phase 1 is not optional.** The deploy creates
+> the container registry **empty**. With `true`, ARM tries to create Container
+> Apps referencing `<newacr>.azurecr.io/loom-console:<tag>` before any image
+> exists and the deploy fails with a manifest/pull error. That is expected, not
+> a bug — the image build is a required phase.
+>
+> An earlier version of this page published the command above **without**
+> `deployAppsEnabled=false` and without the image or bootstrap phases. Followed
+> literally on a fresh subscription it could not have produced a working
+> Console. It is corrected rather than quietly dropped.
+
 
 ## What's deployed differently from Gov
 
