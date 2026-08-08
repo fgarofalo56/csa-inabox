@@ -334,7 +334,7 @@ jobs:
       # 4. Node.js + pnpm setup
       # -----------------------------------------------------------------------
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
