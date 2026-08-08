@@ -844,6 +844,61 @@ export function securableRawImports(src) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Bytes handed to {@link maskSource} since the last {@link resetMaskedBytes}.
+ *
+ * ## Why this meter exists (issue #2622 residual, after #2944/#2959)
+ *
+ * Masking is the guard's ONLY superlinear-in-tree-size cost: {@link maskSource}
+ * does `src.split('')`, allocating one single-character string per source byte.
+ * Twice now, a whole-tree loop asked an expensive question before a cheap one
+ * and masked ~56 MB to answer something true of ~14 files — and both times the
+ * bill was not paid by the guard but by its SPEC, which runs 31 whole-tree
+ * scans and dies on vitest's 60 s birpc `onTaskUpdate` deadline with every test
+ * still passing (#2949 pinned the Commercial console at 898b6daa that way).
+ *
+ * After #2959 the file's defence against a third occurrence was a COMMENT
+ * telling the next author not to add scans. That is a convention, and this file
+ * is built on the premise that a convention is not a choke point. The meter
+ * turns the cost model into a ratchet ({@link MASK_BUDGET_BYTES}) that a
+ * reordered condition trips in CI instead of six weeks later on a red roll.
+ *
+ * Counted in BYTES rather than milliseconds deliberately: it is deterministic,
+ * identical on a laptop and on a shared CI runner, and it measures the root
+ * cause rather than a symptom that a faster runner can mask.
+ */
+let MASKED_BYTES = 0;
+
+/** Bytes masked since the last reset. See {@link MASK_BUDGET_BYTES}. */
+export function maskedBytes() { return MASKED_BYTES; }
+
+/** Zero the meter. Call immediately before the scan being measured. */
+export function resetMaskedBytes() { MASKED_BYTES = 0; }
+
+/**
+ * Ceiling on the bytes ONE whole-tree {@link analyzeUnityChokepoint} may mask.
+ *
+ * MEASURED on the shipped tree (5,470 files, 57.7 MB of source):
+ *
+ *   shipped (post-#2959)      3.74 MB masked   184 ms/scan
+ *   pre-#2959 order restored  99.12 MB masked  2,259 ms/scan
+ *
+ * — and `analyzeUnityChokepoint` returned the IDENTICAL empty failure list in
+ * both. That is the whole point of this ratchet: a 26x cost regression is
+ * invisible to every other check in this file, because the guard's CORRECTNESS
+ * is unchanged. It surfaces six weeks later as a red roll nobody can explain.
+ *
+ * 8 MB is ~2.1x current headroom: generous enough that adding a legitimate
+ * per-file check never trips it, tight enough that reinstating a mask-the-world
+ * loop (the ONLY defect this has ever had, twice) misses by 12x.
+ *
+ * A ratchet, in the idiom of {@link OUTBOUND_BASELINE} and
+ * {@link SQL_EXIT_BASELINES}: it may go DOWN freely. Raising it means
+ * re-measuring the spec's total synchronous CPU against the 60 s deadline and
+ * recording the new numbers here.
+ */
+export const MASK_BUDGET_BYTES = 8_000_000;
+
+/**
  * Replace comments — and, when `strings` is true, string/template literal
  * BODIES — with spaces of the SAME length, so brace matching cannot be fooled
  * by a `{` in a doc comment or a template string, while every index still maps
@@ -851,6 +906,7 @@ export function securableRawImports(src) {
  * specifier match like `from '…'` still has its quotes.
  */
 export function maskSource(src, { strings = true } = {}) {
+  MASKED_BYTES += src.length;
   const out = src.split('');
   let i = 0;
   const n = src.length;
