@@ -52,14 +52,45 @@ because the workflow was disabled before it landed.
 
 | Lane | Before this session | After |
 | --- | --- | --- |
-| `gov-build-images` | **never run** | ✅ **SUCCESS** — first-ever run ([31239350207](https://github.com/fgarofalo56/csa-inabox/actions/runs/31239350207)). Build → deploy-tag verify → Trivy CRITICAL → cosign sign+verify → ACR re-lock, all green. |
+| `gov-build-images` | **never run** | ✅ **SUCCESS** — first-ever run ([31239350207](https://github.com/fgarofalo56/csa-inabox/actions/runs/31239350207), `loom-unity`). Build → deploy-tag verify → Trivy CRITICAL → cosign sign+verify → ACR re-lock, all green. The `loom-console` branch (S3 agent pool + Copilot-corpus staging — the one genuinely different code path) proven separately on a **non-deploy-referenced tag** so no live pull was re-armed: [31239653478](https://github.com/fgarofalo56/csa-inabox/actions/runs/31239653478) ✅. |
 | `gov-workspace-identity` | **never run** | ✅ **SUCCESS** — first-ever run ([31239339295](https://github.com/fgarofalo56/csa-inabox/actions/runs/31239339295)). Only defect was that nobody had dispatched it. |
 | `gov-provision-dataplane-images` | claimed never-run | ✅ Already SUCCESS 2026-08-07 — **that premise was stale.** |
 | `gov-provision-streaming-migrate` | **never run** | ❌ Failed on first dispatch ([31239331967](https://github.com/fgarofalo56/csa-inabox/actions/runs/31239331967)) with a bare `exit code 3`. Root cause found and fixed; **not yet re-dispatched**. |
-| `gov-provision-dbx-sql-invnet` | 8 failures, never green | Re-measured this session (last failure 07-21 was `AuthorizationFailed` on `roleAssignments/write`, predating the RBAC Administrator grant). |
+| `gov-provision-dbx-sql-invnet` | 8 failures, never green | ⚠️ **Failure class CHANGED — the RBAC blocker is cleared.** See below. |
 | `gov-provision-trino` | **never run** | Still never run — Gov Iceberg/Trino federation is unexercised. |
 | `gov-uc-purview-wire` | — | failure 2026-08-06. |
 | `gov-gates` | — | success 2026-07-30. |
+
+### `gov-provision-dbx-sql-invnet` — the blocker moved, and that matters
+
+Its 8 historical failures (all 2026-07-21) were
+`AuthorizationFailed … Microsoft.Authorization/roleAssignments/write` on the ACR
+scope. Re-measured today with `apply=true`
+([31240115395](https://github.com/fgarofalo56/csa-inabox/actions/runs/31240115395)):
+
+- role assignment **succeeded** (only a benign Graph-API lookup warning)
+- `loom-dbx-init` image **built** on the Gov ACR
+- the in-VNet Container App job **created, started, and ran**
+
+So the RBAC Administrator grant **cleared the original blocker**. This is why
+the brief's instruction to re-measure rather than trust an old blocker matters —
+reporting "still blocked on RBAC" would have been false.
+
+The run still failed, but on something entirely different: the Gov Databricks
+workspace returned `TEMPORARILY_UNAVAILABLE` from
+`/api/2.0/sql/warehouses` on **all 8 list attempts and all 8 create attempts**
+over ~6 minutes, then failed closed with `NO_WAREHOUSE_ID`.
+
+Note the workflow behaved *correctly* here — it retried with backoff, failed
+closed, and reported the API's own text (deploy-integrity **R6**). The remaining
+question is a backing-service one, not a code one: 16 consecutive
+`TEMPORARILY_UNAVAILABLE` responses over six minutes is not a transient, and
+suggests **Databricks SQL warehouses may not be serviceable on this Gov
+workspace**. If that is confirmed, it is a `cloud-parity.md` §3 case — the cloud
+genuinely lacks the dependency, so Loom must supply the Azure-native/OSS
+equivalent rather than treat it as a Gov-only gap. **Unresolved; needs an
+operator decision.**
+
 
 ## Capability parity
 
@@ -101,13 +132,16 @@ historical blockers are therefore suspect and were re-measured rather than
 believed:
 
 - `gov-build-images` — previously assumed blocked; **succeeded on its first-ever
-  run today, including the ACR firewall lease and role-dependent steps.**
+  run today**, including the ACR firewall lease and role-dependent steps, for
+  both the simple app path and the console path.
 - `gov-provision-dbx-sql-invnet` — its 07-21 failure was
-  `AuthorizationFailed … roleAssignments/write` on the ACR scope, which is
-  precisely what that grant addresses.
+  `AuthorizationFailed … roleAssignments/write` on the ACR scope. **Re-measured
+  today: that step now succeeds.** The lane fails later and for an unrelated
+  reason (see above).
 
 The general lesson, recorded so the next session does not repeat it: **"this
 has always been blocked in Gov" is a claim with a timestamp.** Re-measure it.
+Two of the four premises this lane was handed were already stale.
 
 ## Method
 
