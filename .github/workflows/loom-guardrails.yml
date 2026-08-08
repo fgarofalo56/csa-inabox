@@ -190,6 +190,20 @@ jobs:
       - name: deploy-failure-handling (classified retries + true error messages — deploy-integrity R6/R7)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-failure-handling.mjs
+      # Container Apps that share ONE image repository must be rolled TOGETHER.
+      # loom-unity and iceberg-catalog both run the `loom-unity` repository
+      # (admin-plane/main.bicep :6676 and :6190 are the SAME image expression),
+      # and reconcile-policy.mjs::resolveRunningImageTags groups the live estate
+      # BY REPOSITORY — so a repo found at two tags resolves to UNKNOWN and
+      # decideDeployApps() then refuses deployAppsEnabled while anything is
+      # unknown. A half-roll therefore does not merely split a pair, it freezes
+      # estate-wide config reconciliation. This guard reads the app→repository
+      # mapping straight out of bicep and fails if the roll registry in
+      # scripts/ci/roll-plan.mjs omits any app sharing a targeted repository.
+      # It reports unresolvable module calls rather than counting them absent.
+      - name: roll-atomicity (apps sharing an image repository roll together)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-roll-atomicity.mjs
       # ARM enforces role-assignment uniqueness on the (scope, principalId,
       # roleDefinitionId) TRIPLE, not on the assignment NAME — so two names for
       # one triple is `RoleAssignmentExists` on every future reconcile of an

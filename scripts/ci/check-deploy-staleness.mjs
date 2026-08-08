@@ -386,6 +386,42 @@ export const WATCHED = [
     ],
     maxDays: 21,
   },
+  // ── The data-plane catalog roll (loom-unity / iceberg-catalog / loom-trino) ─
+  // Registered here the day the lane was authored, deliberately, because R3
+  // says a deploy path that has NEVER run is the loudest case of drift and not
+  // a silent pass. This entry therefore reads NEVER RUN from its first commit
+  // until an operator dispatches it. That is the intended reading, not a
+  // regression: before this lane existed those three apps had no roll path at
+  // all and nothing anywhere said so.
+  //
+  // It blocks no pull request — deploy-staleness.yml is schedule + dispatch and
+  // is deliberately not a required check (see its header).
+  //
+  // WHY THESE PATHS, and why NOT apps/loom-unity/** or apps/loom-trino/**:
+  // this lane does not BUILD an image, it rolls an already-published tag onto
+  // the Container Apps. A commit under apps/loom-unity is drift for the lane
+  // that builds it (gov-uc-purview-wire.yml, which watches that directory), not
+  // for this one. Listing it here would mark this entry stale on a change
+  // another lane already deployed — cry-wolf, the failure mode this whole file
+  // is about.
+  //
+  // roll-plan.mjs IS listed and has to be listed BY HAND: it is the registry
+  // that decides WHICH apps roll and from WHICH image repository, and it is
+  // read as a module rather than executed as a script, so no mechanical shape
+  // detects it (the same reason platform/fiab/images/upstream-images.json is
+  // listed by hand above). Add a fourth app to ROLL_TARGETS and the last
+  // successful run rolled a DIFFERENT set of apps than main describes — drift
+  // that would otherwise be invisible.
+  {
+    workflow: 'loom-dataplane-roll.yml',
+    why: 'The ONLY roll path for loom-unity, iceberg-catalog and loom-trino — the Loom Unity catalog, its Iceberg REST endpoint and the Trino federation engine. Databricks Unity Catalog does not exist in Azure Government, so in a sovereign boundary these three ARE the catalog and federation story (cloud-parity.md). Before this lane they had no automated roll at all: full-app-deploy-commercial.yml builds the loom-unity and loom-trino images but rolls neither, and loom-roll-and-validate.yml is hard-wired to a single fixed APP_NAME. Stale here means a fix merged into the catalog image cannot reach the estate, which is exactly the state PR #3150 (the Iceberg warehouse auto-bind, which lives in the loom-unity entrypoint) was in.',
+    paths: [
+      '.github/workflows/loom-dataplane-roll.yml',
+      'scripts/ci/resolve-acr-digest.sh',
+      'scripts/ci/roll-plan.mjs',
+    ],
+    maxDays: 14,
+  },
 ];
 
 /**
