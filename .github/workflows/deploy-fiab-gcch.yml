@@ -142,6 +142,20 @@ jobs:
       # enforced at the CI layer. topology=tenant is rejected when an Admin Plane
       # (hub) RG already exists in the target sub; dlz-attach must name a NEW
       # subscription via target_subscription.
+      # Remove the CAUSE of the stderr banner, not just its effect. When
+      # `az graph query` runs without the extension present, the CLI
+      # dynamic-installs it and prints a preview banner; installing it
+      # explicitly first means that banner never fires during the probe. The
+      # stream separation in the guard below is the belt — this is the braces.
+      # Fail-closed: no `|| true`. If the extension cannot be installed, the
+      # hub-existence probe cannot run, and that must stop the deploy rather
+      # than proceed on an unverifiable answer.
+      - name: Pre-install the resource-graph CLI extension
+        run: |
+          set -e
+          az extension add --name resource-graph --upgrade --only-show-errors -o none
+          echo "resource-graph version: $(az extension show --name resource-graph --query version -o tsv | tr -d '\r')"
+
       - name: Topology guard
         id: topology_guard
         env:
@@ -182,15 +196,36 @@ jobs:
               exit 1
             }
             SCOPE_SUB=$(printf '%s' "$SCOPE_SUB" | tr -d '\r\n')
-            if ! HUB_PROBE_RAW=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>&1); then
-              echo "::error::Could NOT read the target subscription to determine whether a CSA Loom hub already exists, so the answer is UNKNOWN — not 'none'. Refusing rather than risk stamping a second Console. Resolve the read (Reader on the subscription for the Gov deploy SP, and the resource-graph CLI extension) and re-run. Detail: ${HUB_PROBE_RAW:-<no output>}"
+            # STREAM SEPARATION (2026-08-08). The previous form captured with
+            # `2>&1`, which merged az's stderr INTO the numeric capture. The
+            # Azure CLI writes its preview-extension banner to stderr, so on a
+            # runner where `resource-graph` dynamic-installs, EXISTING became
+            # "WARNING: Preview version …3" — non-numeric — and the guard below
+            # refused. The guard was RIGHT to refuse an unparseable answer; the
+            # bug was upstream, in contaminating the channel it reads.
+            #
+            # The fix is NOT `2>/dev/null`. Discarding stderr is the construct
+            # that turned a permission denial into a false "the tag does not
+            # exist" (R7) and made streaming-migrate's honest-skip unreachable.
+            # stderr is redirected to a FILE, kept, and surfaced in BOTH failure
+            # messages — so the number is clean AND the diagnosis survives.
+            HUB_PROBE_ERR=$(mktemp)
+            if ! HUB_PROBE_RAW=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>"$HUB_PROBE_ERR"); then
+              HUB_PROBE_STDERR=$(head -c 2000 "$HUB_PROBE_ERR" | tr -d '\r')
+              rm -f "$HUB_PROBE_ERR"
+              echo "::error::Could NOT read the target subscription to determine whether a CSA Loom hub already exists, so the answer is UNKNOWN — not 'none'. Refusing rather than risk stamping a second Console. Resolve the read (Reader on the subscription for the Gov deploy SP, and the resource-graph CLI extension) and re-run. Detail: ${HUB_PROBE_STDERR:-<no stderr>}"
               exit 1
             fi
+            HUB_PROBE_STDERR=$(head -c 2000 "$HUB_PROBE_ERR" | tr -d '\r')
+            rm -f "$HUB_PROBE_ERR"
             EXISTING=$(printf '%s' "$HUB_PROBE_RAW" | tr -d '\r\n')
             # Second, independent gate: even a zero-exit az must return a NUMBER.
+            # Kept FATAL and kept strict — it is what caught the contamination in
+            # the first place. Any tolerance added here must be for a KNOWN shape
+            # only; an unrecognised value still refuses.
             case "$EXISTING" in
               ''|*[!0-9]*)
-                echo "::error::The hub-existence probe exited 0 but returned a non-numeric result (${EXISTING:-<empty>}), so whether a hub exists is UNVERIFIED. Refusing."; exit 1 ;;
+                echo "::error::The hub-existence probe exited 0 but returned a non-numeric result (${EXISTING:-<empty>}), so whether a hub exists is UNVERIFIED. Refusing. az stderr was: ${HUB_PROBE_STDERR:-<empty>}"; exit 1 ;;
             esac
             if [ "$EXISTING" != "0" ]; then
               # CLOUD PARITY (.claude/rules/cloud-parity.md) + deploy-integrity R4:
