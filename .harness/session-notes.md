@@ -4,120 +4,107 @@
 
 ### THE NUMBER THAT MATTERS
 
-Main advanced to **`d7d681b9`**; the estate is at **`10365e76`**. Release
-**0.89.0** (#3072), C24 (#3119), C23 (#3120) and the Gov PRs are **merged, not
-deployed**. Nothing below is claimed as live unless it says "verified live".
+**21 PRs merged.** The estate is still at **`10365e76`**. Everything below is
+**merged, not deployed** — the deploy that would carry it has been **queued
+~100 minutes** behind this program's own CI (all `ubuntu-latest`, no
+concurrency group holding it, no self-hosted dependency; I cancelled 16 queued
+dependabot runs to free capacity and stopped adding load).
 
-### VERIFIED LIVE this session
+### THE THREE SECURITY FINDINGS (each verified independently, not taken on report)
 
-- **D18** — the #3012 trino/iceberg console env IS deployed. The
-  `https://0.0.0.0:3000/...` placeholder is gone; `LOOM_TRINO_*` and
-  `LOOM_UNITY_*` are all present. Measured with `az containerapp show`, not
-  inferred from bicep. `LOOM_TRINO_POLICY_TOKEN` is a **secretRef** — its empty
-  `value` is ACA's rendering, not a gap.
-- **D11** — post-deploy bootstrap **SUCCESS** (run 31239422563), first since
-  07-19, and verified **non-hollow**: 22+ steps actually executed including the
-  cross-sub DLZ Reader grant and the Synapse managed PE.
+1. **A dead endpoint scored a PERFECT safety result.** `ai-red-team`
+   `run/route.ts:91-95` caught a thrown model call and returned
+   `verdict:'refused'`, which renders as success — so a deployment where every
+   probe errored reported **100% refusal / 0% attack success**. Fixed (#3130).
+2. **`semantic-model/[id]/model` PATCH had NO authorization** while its four
+   siblings each call `authorizeItemWorkspace`. It doesn't even take
+   `session`/`params`, and reaches XMLA TMSL writes on the shared AAS database —
+   a read-only Viewer could author what POST/PUT/DELETE refuse. Four more
+   unauthorized handlers alongside it, found *by the fixed checker* (#3134).
+3. **Expiry auto-revoke never ran on any estate.** `LOOM_SWEEPER_TOKEN` had zero
+   hits in `platform/`/`scripts/`/`.github/` and the routes fail closed without
+   it, so time-bound access stayed live as a real ARM role assignment **and** a
+   data-plane grant while the ledger showed it as time-bounded (#3129).
 
-### THE FEDERATION 502 IS ROOT-CAUSED (RC-9)
+### TWO AUDIT PREMISES FALSIFIED — both were real results
 
-```
-{"error_code":"UNAUTHENTICATED","message":"Invalid issuer"}
-```
-The catalog rejects **its own tenant's tokens**. The entrypoint's
-`allowed-issuers` carries the **v2.0 form only**, but the Console app
-registration has `requestedAccessTokenVersion: null` → Entra emits **v1.0**
-tokens whose issuer is `https://sts.windows.net/{tenant}/`.
-Re-measured independently: `az ad app show → requestedAccessTokenVersion=None`.
+- **"160 gates vs 131 Fix-its" does not exist.** It is 131:131, and
+  `types.ts` declares `fixit: GateFixit` **non-optional**, so a gate without one
+  cannot compile. The real breach is 74 bare remediation bars — and **59 should
+  be REMOVED under auto-bind, not given a button** (issue #3133).
+- **#3056 was not a rotation clobbering a stable value.**
+  `loomGeneratedSecretSeed` defaults to `newGuid()` with no parent passing it, so
+  ARM re-mints it **every deploy**. Bicep *was* the rotator. That is why both of
+  my re-syncs were correct and temporary.
 
-**Fix lives in `apps/loom-unity/bin/loom-entrypoint.sh`** — baked into the
-`loom-unity` IMAGE that BOTH `loom-unity` and `iceberg-catalog` run. It needs an
-**image rebuild + a roll of both apps**. That is a DIFFERENT path from the
-console rolls; a console roll will NOT carry it.
+### FEDERATION (RC-9) — root-caused, fixed, still grade D
 
-**Do NOT hardcode the issuer.** Measured: the tenant's own discovery document is
-authoritative for both forms —
-`…/.well-known/openid-configuration` → `https://sts.windows.net/<tenant>/`, and
-`…/v2.0/.well-known/openid-configuration` → `https://login.microsoftonline.com/<tenant>/v2.0`.
-Deriving them at the per-cloud authority host (`login.microsoftonline.us` in
-Gov) yields the correct **Gov** issuer without anyone knowing what it is —
-cloud-parity by construction instead of a hostname table. Must **fail closed**
-if discovery is unreachable.
+`"Invalid issuer"`: the catalog rejected **its own tenant's** v1.0 tokens
+against a v2.0-only allow-list. Issuers are now **derived from the tenant's own
+discovery document** at the per-cloud authority host, so **the Gov issuer comes
+out correct without this repo knowing what it is**. Fails closed. Merged #3121.
 
-**Do NOT set `requestedAccessTokenVersion: 2`** as the fix — it changes token
-shape for every consumer of that app registration including console sign-in, and
-MSAL breakage has already caused one production outage here.
+**Still owed: the 200.** Needs the **`loom-unity` IMAGE** rebuilt + a roll of
+**both** `loom-unity` and `iceberg-catalog` — a console roll will NOT carry it.
+Plan is in `meta.rc9_roll_plan_2026-08-08`.
 
-Federation grade stays **D** (19 ✅ / 13 ⚠️ / 27 ❌). No authenticated catalog
-read has returned 200 on this estate.
+### SOVEREIGN LANES
 
-### GOV: THE BIGGEST DEFECT WAS NOT ON THE TASK LIST
+**`deploy-fiab-gcch` is GREEN on whatif** (run 31245000009) — first green in
+16+ days — with Provision/Smoke/**Teardown** skipped. Both lanes remain
+`disabled_manually`; the cron never armed.
 
-**`deploy-fiab-gcc` and `deploy-fiab-gcch` are `disabled_manually`.** gcch failed
-**12 consecutive** scheduled runs (07-23 → 08-03) and was then *disabled rather
-than fixed*; gcc was "SUCCESS daily" while deploying **zero Container Apps**
-(#3078). Verified independently: exactly **three** workflows are non-active
-repo-wide. **Only visible via `gh api .../actions/workflows`** — `gh run list`
-shows an old result and looks quiet.
-
-**`deploy/bicep/gov/main.bicep` had 7 compile errors and had NEVER compiled**
-(verified on origin/main: BCP036 ×1, BCP120 ×3, BCP139 ×3). The Gov deploy path
-was structurally incapable of running. R1 P0.
-
-Both GCC lanes were left **disabled on purpose** — they are nightly
-validate-and-**teardown** rings that target RGs by name (#3028 hazard). I proved
-the fix executes by enabling → dispatching `whatif-only` (teardown is gated off
-that) → **re-disabling immediately**, so the cron stays off. Re-enabling is an
-operator decision.
-
-`gov-provision-trino` **still never run** — Gov Iceberg/Trino federation is
-unexercised, the exact inversion `cloud-parity.md` names.
+**GCC's earlier green was HOLLOW** — `deploy-fiab-gcc.yml:125` ran
+`2>/dev/null || echo "0"`, so any az failure read as "no existing hub" and the
+guard passed. Fixed in #3139 but **never exercised live**, so GCC must not be
+re-enabled on any existing receipt. Its cycle was deliberately deferred: at
+07:36Z there were only 23 minutes to its 08:00Z cron, and a mis-step there
+arms an unattended sovereign **teardown** ring.
 
 ### DO-NOT-REPEAT (measured this session)
 
-- **A green `guardrails` step can still hide a broken guard.** C24's guard passed
-  10/10 on a tree containing three live `|| true`s. Guards that scan
-  *per-physical-line* miss shell **continuation lines**, and a scan limited to
-  `.github/workflows/` never sees `scripts/`.
-- **A bare non-zero command in a bash EXIT trap does NOT change exit status**
-  (`cleanup(){ false; }; trap cleanup EXIT; exit 0` → 0). Deleting `|| true`
-  there is cosmetic; capture `$?` and `exit 1`.
-- **`VAR="${VAR:-$(az … 2>/dev/null)}"` under `set -euo pipefail` aborts the
-  step** with az's code, message already destroyed — which made
-  streaming-migrate's honest-skip branch **unreachable code**.
-- **`{ __proto__: true }` in an object literal is prototype-SETTER syntax** and
-  creates no own key. A fixture built that way tests nothing — use `JSON.parse`.
-- **Absent checks are not passing checks, again.** #3072 sat BLOCKED on two
-  required checks that never reported; `loom-guardrails` has no path filter, so
-  it was the webhook-drop class. close+reopen re-triggered both.
-- **Secondary rate limits are separate from core.** A 403 on `/actions/runs`
-  while core showed 4747/5000 — 8 agents plus orchestrator polling. Back off on
-  Actions polling, not on everything.
-- **Check which branch you are on before reading the ledger.** The ledger lives
-  on `harness/finishline-s1-b`; a stray checkout of `…-wave0` showed a stale
-  41-task file and briefly looked like data loss.
-- **A stale `.git/index.lock` will be your own timed-out command.** Worktrees
-  have their own index files, so a 0-byte lock on the MAIN repo that has not
-  moved in minutes is orphaned — but confirm mtime is static first.
+- **Ask the right SCOPE.** A **branch**-scoped CodeQL query returned zero while
+  **PR**-scoped had 5 high alerts. The clean answer was the one that lied.
+- **A deny-list cannot catch a lookalike.** The sovereignty check ACCEPTED
+  `login.microsoftonline.us.evil.example`, `evil.login.microsoftonline.us` and a
+  Commercial lookalike — while a comment above it asserted the opposite. Use an
+  allow-list and drive it through poisoned fixtures.
+- **A fix's own explanatory COMMENT can keep its guard quiet** after the fix is
+  removed (C20 M1b). Blank comments length-preservingly before matching. The
+  inverse now exists too: `deploy-fiab-gcc.yml:146` carries the literal unsafe
+  pattern *in a comment documenting its removal*, so a count-based guard would
+  read that file as unfixed.
+- **A bare non-zero command in a bash EXIT trap does NOT change exit status.**
+- **`VAR="${VAR:-$(az … 2>/dev/null)}"` under `set -euo pipefail`** aborts the
+  step and destroys the message — it made an honest-skip branch unreachable.
+- **Guards that scan per-physical-line miss shell continuations**, and one that
+  only walks `.github/workflows/` never sees `scripts/`.
+- **Secondary rate limits are endpoint-specific.** HTTP 403 on
+  `actions/runs/{id}/jobs` while core sat at ~4880/5000. Workaround that held:
+  `commits/{sha}/check-runs` + `check-runs/{id}/annotations`.
+- **Verify a reported PR number.** One lane reported a PR it had never created;
+  the number belonged to another lane.
+- **Check which branch the ledger is on** (`harness/finishline-s1-b`) — a stray
+  checkout showed a stale 41-task file and briefly looked like data loss.
 
 ### OPERATOR QUEUE (highest leverage first)
 
-1. **Re-enable `deploy-fiab-gcc` + `deploy-fiab-gcch`** (repo Actions admin) —
-   accepting that both resume a **daily teardown ring** into sovereign estates.
-   The gcch guard fix (#3079) landed 08-07 but has **never executed**.
+1. **Re-enable `deploy-fiab-gcch`** — now backed by a green whatif; an empty
+   `CSA_LOOM_TARGET_SUBSCRIPTION` is correct for that path. **Do NOT re-enable
+   `deploy-fiab-gcc`** until its own cycle is green.
 2. **Gov Databricks SQL warehouses** — `TEMPORARILY_UNAVAILABLE` on all 8 list +
-   8 create attempts over ~6 minutes. Sixteen responses in six minutes is not
-   transient; plausibly a `cloud-parity.md` §3 case needing an Azure-native/OSS
-   equivalent. The old RBAC blocker is genuinely **cleared**.
-3. **#3078 needs a COMMERCIAL-cloud image producer** — GCC is `AzureCloud`+eastus,
-   not Gov. The green Gov image lane does **not** unblock it. Easy to misread.
-4. **Tag Contributor on the ACR** for the deploy identity (OP-15).
-5. **#2643** Gov unity auth window · **#2330** Gov SP UAA grant (not re-measured)
-   · seven idle Function Apps · svc-postgres cost ruling.
+   8 create attempts over ~6 min. Not transient; likely a `cloud-parity.md` §3
+   case. The old RBAC blocker is genuinely cleared.
+3. **The D8 `--apply`** against the real stale `privatelink.azuredatabricks.net`
+   zone — the only honest live proof of that destructive path. #3038 closes only
+   on a green `deploy-fiab-commercial` after it.
+4. **#3078 needs a COMMERCIAL-cloud image producer** (GCC is `AzureCloud`+eastus).
+5. **59 auto-bind gate removals** (#3133) · ACR Tag Contributor (OP-15) · #2643 ·
+   #2330 · seven idle Function Apps · svc-postgres cost ruling.
 
 ### IN FLIGHT
 
-Eight lanes: F1 (federation, reworking RC-9 to discovery-derived issuers),
-#3056 (token single-writer), C22 (route-guard enforcement), C20 (silent-failure
-sweep), C15+C21 (G2 Fix-it coverage), C17+C16 (inert features), C18+D8 (floating
-`:latest` + PE zone-group). Gov PRs #3124 #3125 #3126 #3127 awaiting checks.
+`#3122` (token ownership) rebased twice onto main with the template regenerated
+at pinned bicep **0.45.15** — checks running. Deploy run **31243230253** queued.
+`gov-provision-trino` **still never run**.
+
