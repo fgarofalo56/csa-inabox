@@ -61,7 +61,8 @@ vi.mock('@/lib/ingest/contract-enforcement', () => ({
   enforceOrPassThrough: vi.fn(async (_c: unknown, rows: unknown[]) => ({ rows, quarantined: 0 })),
 }));
 
-import { runMirrorSnapshot, type MirrorSource } from '../mirror-engine';
+import { runMirrorSnapshot, MIRROR_PG_FAMILY, type MirrorSource } from '../mirror-engine';
+import { withSourceAuth, PG_SOURCE_TYPES } from '../connection-auth';
 
 const SQL_AUTH = { user: 'loom_reader', password: 'p@ss' };
 const PG_AUTH = { user: 'pguser', password: 'pgpass' };
@@ -151,5 +152,23 @@ describe('mirror engine consumes MirrorSource.pgAuth (PostgreSQL family)', () =>
   it('still runs as the Console UAMI when no connection is bound', async () => {
     await runMirrorSnapshot('m7', 'ws1', pgBase, []);
     for (const call of h.executePostgresQuery.mock.calls) expect(call[3]).toBeUndefined();
+  });
+});
+
+describe('PG_SOURCE_TYPES stays in sync with the engine', () => {
+  it('matches MIRROR_PG_FAMILY exactly', () => {
+    // `connection-auth` deliberately duplicates this set rather than importing
+    // the engine (which would drag mssql/ADLS/Spark into every route that only
+    // needs to resolve a credential). This test is what makes the duplication
+    // safe: add a PG source type to the engine and forget this set, and
+    // `withSourceAuth` would hand a PostgreSQL mirror a TDS credential.
+    expect([...PG_SOURCE_TYPES].sort()).toEqual([...MIRROR_PG_FAMILY].sort());
+  });
+
+  it('withSourceAuth routes by source family without touching Key Vault when unbound', async () => {
+    const pg = await withSourceAuth('t', { sourceType: 'AzurePostgreSql' });
+    const sql = await withSourceAuth('t', { sourceType: 'AzureSqlDatabase' });
+    expect(pg.descriptor.identity).toBe('uami');
+    expect(sql.descriptor.identity).toBe('uami');
   });
 });

@@ -129,6 +129,43 @@ export async function resolveSqlAuthDescribed(
 }
 
 /**
+ * Attach a mirror's stored source credential to a MirrorSource.
+ *
+ * Lives HERE, not in a route, because `mirrored-database` has TWO Start paths
+ * (`/[id]/lifecycle` and `/[id]/state`) that both build a MirrorSource from the
+ * same item state. A per-route copy is how the original bug survived in the
+ * first place, and how the fix would have half-landed: one route credential-
+ * aware, its sibling still silently running as the Console UAMI.
+ *
+ * `sourceType` selects the family, so a PostgreSQL mirror gets `pgAuth` and a
+ * SQL-family mirror gets `auth` — never both, and never the wrong one.
+ *
+ * The resolved secret rides on the returned object for the duration of ONE
+ * request. Persist the `descriptor`, never the source.
+ */
+export async function withSourceAuth<T extends { sourceType: string }>(
+  tenantId: string,
+  src: T,
+  connectionId?: string,
+): Promise<{ src: T & { auth?: SqlExplicitAuth; pgAuth?: PgExplicitAuth }; descriptor: ConnectionAuthDescriptor }> {
+  if (!connectionId) return { src, descriptor: UAMI_AUTH };
+  if (PG_SOURCE_TYPES.has(src.sourceType)) {
+    const { auth, descriptor } = await resolvePgAuthDescribed(tenantId, connectionId);
+    return { src: { ...src, pgAuth: auth }, descriptor };
+  }
+  const { auth, descriptor } = await resolveSqlAuthDescribed(tenantId, connectionId);
+  return { src: { ...src, auth }, descriptor };
+}
+
+/**
+ * PostgreSQL mirror source types. Duplicated as a literal rather than imported
+ * from `mirror-engine` on purpose: importing the engine here would pull its
+ * mssql / ADLS / Spark native chain into every route that only needs to resolve
+ * a credential. Kept in sync with `MIRROR_PG_FAMILY`, and asserted by a test.
+ */
+export const PG_SOURCE_TYPES = new Set(['AzurePostgreSql']);
+
+/**
  * Resolve the PostgreSQL auth for a stored connection. PostgreSQL flexible
  * server accepts either an Entra token (the UAMI default) or a plain
  * user/password login, so a `sql-password` connection maps directly.

@@ -28,11 +28,10 @@ import {
   runMirrorSnapshot, restartMirrorSnapshot, getMirrorStatus,
   type MirrorSource, type MirrorTableSpec, type MirrorTableResult,
 } from '@/lib/azure/mirror-engine';
-import {
-  resolveSqlAuthDescribed, resolvePgAuthDescribed, UAMI_AUTH,
-  type ConnectionAuthDescriptor,
-} from '@/lib/azure/connection-auth';
-import { MIRROR_PG_FAMILY } from '@/lib/azure/mirror-engine';
+// `withSourceAuth` is SHARED with the sibling /[id]/state Start path — a
+// per-route copy is how the original "collected but never consumed" bug
+// survived, and how this fix would have half-landed.
+import { withSourceAuth } from '@/lib/azure/connection-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,34 +57,6 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
       return m === 'snapshot' || m === 'incremental' || m === 'continuous' ? m : undefined;
     })(),
   };
-}
-
-/**
- * Attach the mirror's stored source credential to the MirrorSource.
- *
- * This is the step that was MISSING: the mirroring wizard collects a Loom
- * Connection and `/sources` persists its `connectionId` on the item, but
- * `sourceFromState()` never read it, `MirrorSource` had no field for it, and
- * the engine contained zero references to it. Every Start/Restart therefore
- * ran as the Console UAMI and silently ignored the credential the operator
- * configured — a source reachable only by a stored SQL login could have its
- * tables browsed (that route did resolve the connection) but never replicated.
- *
- * The resolved secret lives only on the in-memory MirrorSource for the duration
- * of this request. It is never written back to item state and never returned in
- * the response — only the non-secret `ConnectionAuthDescriptor` is, so the
- * receipt can state WHICH identity read the source without exposing anything.
- */
-async function withSourceAuth(
-  tenantId: string, src: MirrorSource, connectionId?: string,
-): Promise<{ src: MirrorSource; descriptor: ConnectionAuthDescriptor }> {
-  if (!connectionId) return { src, descriptor: UAMI_AUTH };
-  if (MIRROR_PG_FAMILY.has(src.sourceType)) {
-    const { auth, descriptor } = await resolvePgAuthDescribed(tenantId, connectionId);
-    return { src: { ...src, pgAuth: auth }, descriptor };
-  }
-  const { auth, descriptor } = await resolveSqlAuthDescribed(tenantId, connectionId);
-  return { src: { ...src, auth }, descriptor };
 }
 
 export const POST = withSession(async (req, { session: s, params }) => {
