@@ -779,10 +779,37 @@ jobs:
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
           DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
-          ACR=$(az acr list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-                  --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r')
+          # R7 (#3090): the discovery read is CAPTURED, not discarded. This was
+          # `2>/dev/null | tr -d '\r'` followed by `[ -z "$ACR" ] && exit 0`,
+          # which collapsed an RBAC denial, a throttle, an unselected
+          # subscription and a genuinely-empty resource group into the same
+          # empty string — and then stated "from-scratch deploy, nothing live to
+          # adopt" as FACT and SKIPPED the whole image gate with exit 0. That is
+          # the fail-OPEN twin of the false-MISSING defect: on a scheduled
+          # deploy against the LIVE estate, an unreadable control plane silently
+          # disabled the preflight entirely.
+          #
+          # `az acr list` on a resource group that does not exist EXITS NON-ZERO
+          # (ResourceGroupNotFound); an existing-but-empty RG exits 0 with `[]`.
+          # So the two facts are genuinely distinguishable and are now kept apart.
+          set +e
+          ACR_OUT=$(az acr list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+                      --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>&1)
+          ACR_RC=$?
+          set -e
+          if [ $ACR_RC -ne 0 ]; then
+            if node scripts/ci/deploy-classify.mjs --text "$ACR_OUT" \
+                 --assert-signal config.resource-group-not-found >/dev/null 2>&1; then
+              echo "::notice::image-preflight: ARM answered ResourceGroupNotFound for $RG — this is a from-scratch deploy with no live estate to adopt. Skipping (the two-phase image path creates it next)."
+              exit 0
+            fi
+            echo "::error::image-preflight: could NOT enumerate registries in $RG, so it is NOT established whether this estate has an ACR — and nothing whatsoever is established about the image tags this deploy will pull. Refusing to treat an unreadable control plane as 'from-scratch, nothing to adopt' and skip the gate. $(node scripts/ci/deploy-classify.mjs --text "$ACR_OUT" --query)"
+            exit 1
+          fi
+          ACR=$(printf '%s' "$ACR_OUT" | tr -d '\r' | head -1)
+          [ "$ACR" = "None" ] && ACR=""
           if [ -z "$ACR" ]; then
-            echo "::notice::image-preflight: no ACR in $RG yet — from-scratch deploy, nothing live to adopt. Skipping."
+            echo "::notice::image-preflight: ARM ANSWERED and $RG contains no acrloom* registry — from-scratch deploy, nothing live to adopt. Skipping."
             exit 0
           fi
           # reconcile-resolve.mjs exported the running pins into $GITHUB_ENV, so

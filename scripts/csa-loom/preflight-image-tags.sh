@@ -188,18 +188,63 @@ if ! data_plane_up; then
 fi
 
 FAILED=0
+UNPROVEN_REFS=()
+REPO_ROOT_PF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RESOLVER_PF="$REPO_ROOT_PF/ci/resolve-acr-digest.sh"
+if [ ! -f "$RESOLVER_PF" ]; then
+  err "the shared image-state checker $RESOLVER_PF is missing. Refusing to fall back to an inline lookup — an unclassified lookup is exactly what #3090 was."
+  exit 1
+fi
+
+# #3090 — THIS LOOP USED TO CONVICT TAGS IT COULD NOT READ, ON THE PATH THAT
+# GATES LIVE GOV CONTAINER APP ADOPTION. It was:
+#
+#   DIGEST="$(az acr repository show … --query digest -o tsv 2>/dev/null | tr -d '\r' || true)"
+#   if [[ -z "$DIGEST" ]]; then … "${REPO}:${TAG} does not exist" …
+#
+# `2>/dev/null` + `|| true` + an emptiness test: a per-repo AcrPull denial, a
+# throttle, or the lease lapsing mid-loop all rendered as "does not exist" — and
+# the remediation then sent the operator to rebuild an image that was fine. The
+# show-tags fallback discarded ITS stderr too, so an unreadable repository
+# printed "<none — the repository itself is empty or absent>", a second
+# unestablished absence claim inside the first one.
+#
+# Absence now comes only from the shared three-state checker (exit 3 = the
+# registry ANSWERED; exit 4 = it did not). Unproven is a hard stop with its own
+# wording — on this path an unverifiable tag must never be adopted either, but
+# it must not be described as missing.
 for ENTRY in "${ADOPTED[@]}"; do
   APP="${ENTRY##*@}"
   REF="${ENTRY%@*}"
   REPO="${REF%%:*}"
   TAG="${REF##*:}"
-  DIGEST="$(az acr repository show -n "$ACR" --image "${REPO}:${TAG}" --query digest -o tsv 2>/dev/null | tr -d '\r' || true)"
-  if [[ -z "$DIGEST" ]]; then
-    FAILED=1
-    AVAILABLE="$(az acr repository show-tags -n "$ACR" --repository "$REPO" --top 10 --orderby time_desc -o tsv 2>/dev/null | tr -d '\r' | paste -sd, - || true)"
-    err "IMAGE PREFLIGHT FAILED — ${ACR_LOGIN}/${REPO}:${TAG} does not exist, but Container App '${APP}' is LIVE in ${RG} and this deploy would repoint it at that tag. The running revision would be replaced by one that cannot pull its image (the app goes DOWN). Tags present for '${REPO}': ${AVAILABLE:-<none — the repository itself is empty or absent>}. REMEDIATION: run .github/workflows/gov-build-images.yml (inputs: apps=${REPO}, tag=${TAG}) against this estate first, then re-run this deploy."
-  else
+  set +e
+  DIGEST="$(bash "$RESOLVER_PF" --acr "$ACR" --image "${REPO}:${TAG}")"
+  RC=$?
+  set -e
+  DIGEST="$(printf '%s' "$DIGEST" | tr -d '\r' | head -1)"
+  if [[ $RC -eq 0 && -n "$DIGEST" ]]; then
     note "preflight OK — ${REPO}:${TAG} resolves to ${DIGEST} (Container App '${APP}' can be adopted safely)."
+    continue
+  fi
+  FAILED=1
+  if [[ $RC -eq 3 ]]; then
+    # The registry ANSWERED. Only now may the tag list be quoted as evidence —
+    # and its own read is captured, so an unreadable listing says so.
+    set +e
+    AVAIL_OUT="$(az acr repository show-tags -n "$ACR" --repository "$REPO" --top 10 --orderby time_desc -o tsv 2>&1)"
+    AVAIL_RC=$?
+    set -e
+    if [[ $AVAIL_RC -eq 0 ]]; then
+      AVAILABLE="$(printf '%s' "$AVAIL_OUT" | tr -d '\r' | paste -sd, -)"
+      AVAILABLE="${AVAILABLE:-<none — the registry answered with an empty tag list>}"
+    else
+      AVAILABLE="<could not be read: $(printf '%s' "$AVAIL_OUT" | tr -d '\r' | tr '\n' ' ' | cut -c1-160)>"
+    fi
+    err "IMAGE PREFLIGHT FAILED — the registry ANSWERED and ${ACR_LOGIN}/${REPO}:${TAG} does not exist, but Container App '${APP}' is LIVE in ${RG} and this deploy would repoint it at that tag. The running revision would be replaced by one that cannot pull its image (the app goes DOWN). Tags present for '${REPO}': ${AVAILABLE}. REMEDIATION: run .github/workflows/gov-build-images.yml (inputs: apps=${REPO}, tag=${TAG}) against this estate first, then re-run this deploy."
+  else
+    UNPROVEN_REFS+=("${REPO}:${TAG}")
+    err "IMAGE PREFLIGHT UNPROVEN — could NOT read ${ACR_LOGIN}/${REPO}:${TAG}, so its existence is UNPROVEN, NOT disproven (resolver exit $RC; its per-attempt evidence is above). Container App '${APP}' is LIVE in ${RG} and this deploy would repoint it, so this is still a hard stop — but nothing here says the tag is missing and you must NOT rebuild it on the strength of this message. REMEDIATION: fix registry ACCESS (the ACR firewall lease, the private endpoint, or AcrPull on this principal) and re-run."
   fi
 done
 
@@ -207,6 +252,9 @@ release_lease
 trap - EXIT
 
 if [[ "$FAILED" != "0" ]]; then
+  if (( ${#UNPROVEN_REFS[@]} > 0 )); then
+    err "SUMMARY: ${#UNPROVEN_REFS[@]} tag(s) could not be READ (${UNPROVEN_REFS[*]}). That is 'unknown', not 'missing' — do not rebuild them on the strength of this run."
+  fi
   exit 1
 fi
 
