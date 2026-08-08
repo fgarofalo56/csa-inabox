@@ -162,7 +162,7 @@ export function HealthPane() {
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXL, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 120 }}>
-            <div style={{ fontSize: 48, fontWeight: 700, lineHeight: 1, color: scoreColor(report.score) }}>{report.score}</div>
+            <div style={{ fontSize: tokens.fontSizeHero900, fontWeight: tokens.fontWeightBold, lineHeight: 1, color: scoreColor(report.score) }}>{report.score}</div>
             <Caption1>Health score</Caption1>
           </div>
           <Divider vertical style={{ height: 64 }} />

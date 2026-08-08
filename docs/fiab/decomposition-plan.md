@@ -181,6 +181,35 @@ block; `JSX` = the tab body / dialog):
 Slices 2 and 6 are adjacent but disjoint: the scheduled-refresh state is
 261–268 and the Tables-tab XMLA state starts at 276. Do not merge them.
 
+**Status re-measured 2026-08-08 (FINISHLINE C4) — slices 2-8 NOT started.**
+C4 carried `B-R10-17`; the **R15-17** half (typed client-route map + `clientFetch`
+typed overload + known-route guard) shipped, the **R10-14** decomposition half was
+deliberately scoped OUT rather than started and abandoned half-done. Measured
+state for whoever picks it up:
+
+| File | LOC | Ceiling | Headroom |
+|------|-----|---------|----------|
+| `phase3/semantic-model-editor.tsx` | 2,490 | 2,500 | **10** |
+| `notebook-editor.tsx` | 3,489 | 3,500 | 11 |
+| `foundry-sub-editors.tsx` | 3,298 | 3,300 | 2 |
+
+`lib/editors/__tests__/semantic-model-hook-order.test.ts` is **green (3/3)**, so
+the golden fixture is consistent with the file as it stands — a slice can start
+from here without first reconciling drift.
+
+Note the headroom column: all three sit within ~10 LOC of their ratchet. That is
+by design (each ceiling was re-baselined DOWN after its slice) but it means any
+slice that adds even a short header comment to the parent must land the
+extraction in the SAME commit, or `check-file-size` fails. Per the ratchet's own
+rules the answer is to compact, never to raise the ceiling.
+
+The reason this was scoped out rather than attempted: the hook-order constraint
+above makes a slice a genuine behavioural risk (the first attempt at slice 1
+silently moved a 17-`useState` run 70 hook positions and reset every draft on
+tab switch), and it needs a browser E2E receipt per G1 that this lane could not
+obtain. A half-landed slice would leave the editor in exactly the intermediate
+state the constraint exists to prevent.
+
 Only after those does the `useSemanticModel()` reducer/context step become
 worthwhile — the per-cluster hooks are its natural inputs. R18's shared
 `lib/editors/use-editor-state.ts` is the intended home for the *document*

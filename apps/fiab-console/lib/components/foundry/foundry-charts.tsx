@@ -258,7 +258,7 @@ export function StatTile({ label, value, sub }: { label: string; value: string; 
       }}
     >
       <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600, color: tokens.colorNeutralForeground1 }}>{value}</div>
+      <div style={{ fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1 }}>{value}</div>
       {sub && <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>{sub}</div>}
     </div>
   );

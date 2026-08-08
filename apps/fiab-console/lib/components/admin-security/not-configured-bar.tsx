@@ -61,7 +61,7 @@ export function NotConfiguredBar({ surface, hint, rawError, portalLink, portalLa
         {Array.isArray(hint?.rolesRequired) && hint.rolesRequired.length > 0 && (
           <>
             <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}><strong>Roles required:</strong></Caption1>
-            <ul style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalSNudge, paddingLeft: 18 }}>
+            <ul style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalSNudge, paddingLeft: tokens.spacingHorizontalXL }}>
               {hint.rolesRequired.map((r) => (
                 <li key={r.name}>
                   <code>{r.name}</code>

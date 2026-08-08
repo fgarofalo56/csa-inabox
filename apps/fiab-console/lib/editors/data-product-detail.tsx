@@ -771,7 +771,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     if (loadErr) {
       return (
         <EmptyState
-          icon={<DatabaseRegular style={{ fontSize: 44 }} />}
+          icon={<DatabaseRegular />}
           title="Couldn't open this data product"
           body={loadErr}
           primaryAction={{ label: 'Browse the marketplace', href: '/marketplace' }}
@@ -782,7 +782,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     if (!product) {
       return (
         <EmptyState
-          icon={<DatabaseRegular style={{ fontSize: 44 }} />}
+          icon={<DatabaseRegular />}
           title="Data product not found"
           body="This data product may have been deleted, or you may not have access to it. Browse the marketplace to find published data products, or create a new one."
           primaryAction={{ label: 'Browse the marketplace', href: '/marketplace' }}
