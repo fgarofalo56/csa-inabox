@@ -97,7 +97,23 @@ test('the drift gate FAILS when the generated map is stale', (t) => {
   const dts = path.join(CONSOLE_ROOT, 'lib', 'api-routes.generated.d.ts');
   const original = fs.readFileSync(dts, 'utf8');
   t.after(() => fs.writeFileSync(dts, original));
-  fs.writeFileSync(dts, original.replace("  | '/api/loom/workspaces'\n", ''));
+
+  // `\r?\n`, never a bare `\n`. The generated file is committed with LF but
+  // git checks it out CRLF on Windows (`core.autocrlf`), so an LF-only needle
+  // matched NOTHING: `replace` returned the input unchanged, the file was
+  // rewritten byte-identical, and this test then demanded the gate fail at a
+  // staleness that had never been introduced. The gate was right; the proof
+  // was broken — `--check` normalises line endings before comparing (`norm`),
+  // which is exactly why the drift gate itself stayed green on the same tree.
+  const mutated = original.replace(/ {2}\| '\/api\/loom\/workspaces'\r?\n/, '');
+
+  // The mutation must be CONFIRMED, not assumed. A mutation-based proof whose
+  // mutation silently no-ops is the "gate that measures nothing" shape: every
+  // assertion below would still run, against an unmodified file. This line is
+  // what makes the decay loud instead of platform-dependent.
+  assert.notEqual(mutated, original, 'the staleness mutation did not land — this proof would assert nothing');
+  fs.writeFileSync(dts, mutated);
+
   const r = spawnSync(process.execPath, [GEN, '--check'], { cwd: REPO_ROOT, encoding: 'utf8' });
   assert.equal(r.status, 1, 'a stale map must fail the drift gate');
   assert.match(r.stderr, /STALE/);
