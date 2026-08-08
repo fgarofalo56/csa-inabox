@@ -1031,7 +1031,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 3,
       "task_order": 47,
-      "status": "in_progress",
+      "status": "review",
       "title": "Help depth D3-D5 residual guides (18 item guides + 15 app tutorials baseline 07-24, some closed since — RE-INVENTORY first). help-D6 visual captures OPERATOR-GATED — see operator_queue",
       "depends_on": [],
       "validation": {
@@ -1044,7 +1044,14 @@
       },
       "evidence": [],
       "agent": "a5176bf37e2f9f131",
-      "dispatched": "2026-08-08 session-3"
+      "dispatched": "2026-08-08 session-3",
+      "pr": 3148,
+      "premise_fully_stale": "33 OF 33 WERE ALREADY DONE. Both halves of the 2026-07-24 baseline - 18 item guides AND 15 app tutorials - were closed by the intervening loom-apex D1/D2/D4 waves. TRUE OUTSTANDING COUNT: ZERO. MEASURED at e73d976c (= origin/main): editor guides 142/142/142 - catalog slugs, files on disk and EDITOR_DOC_SLUGS are IDENTICAL SETS, with all four cross-checks empty (no dead links, no unregistered docs, no missing guides, no orphans). App tutorials 29/29/29 across CATALOG_META, Learning Hub cards and bundle REGISTRY. Every guide is in mkdocs nav; all 49 USE_CASES docPaths resolve. Truth audit: 15 user-facing numeric claims, ALL TRUE.",
+      "delivered": "docs/fiab/help-inventory-2026-08-08.md (corrected inventory, in nav) + docs/fiab/governance/access-requests.md (the ONE genuinely missing user guide), both linked.",
+      "docs_false_corrected": "parity/access-requests.md rows 4+5 claimed BUILT - now marked missing with root cause. It pointed at lib/types/access-request.ts for the tiers; that file has ZERO tier constants (they are in access-request-workflow.ts). It named Cosmos 'access-requests' (PK /tenantId) as the store; the F16 container is 'access-request-workflow' - 'access-requests' is the MARKETPLACE container, PK /dataProductId. lib/learn/content.ts said '117 catalog item types' with a keep-in-sync instruction; actual is 142.",
+      "self_caught": "THREE false findings caught in its own work before shipping: five 'dead links' actually resolve via README.md; three 'undocumented' admin routes are redirect() stubs; and it first called access-requests 'mentioned in no document' - a parity doc existed and its grep had been TRUNCATED WITH head -5. That last one is the UNKNOWN-as-NEGATIVE class.",
+      "operator_gated": "help-D6 captures NOT attempted. Precise state: 121 of 142 editor guides have a landing screenshot; the other 21 fall back to the intended placeholder. EDITOR_STEP_IMAGE_COUNTS is EMPTY - no slug has a multi-step capture.",
+      "flagged_not_fixed": "mkdocs.yml has ZERO fiab/parity/ references - THE ENTIRE PARITY CORPUS IS NAV-ORPHANED, reachable only by direct URL. Pre-existing and systemic."
     },
     {
       "id": "C8",
@@ -1846,6 +1853,13 @@
         "C6": "Help depth — RE-INVENTORY FIRST against the stale 07-24 baseline"
       },
       "not_dispatched": "C11 and C12 are explicitly DEFERRED programs (planning only, by design). D19 (Redis P1 -> AMR) is an operator cost/timing decision with a 2028-horizon Gov path. Neither is agent work."
+    },
+    "f16_cross_user_approval_broken": {
+      "status": "CONFIRMED BY TWO INDEPENDENT LANES (C16 adjacent finding + C6) and ORCHESTRATOR-VERIFIED. Fix lane dispatched.",
+      "defect": "Requests are written under the REQUESTER's Entra oid; the inbox query and decision route read under the SIGNED-IN APPROVER's oid. Different people -> different partition key -> the approver's inbox returns ZERO ROWS and a decision POST 404s BEFORE any approver logic runs. Multi-tier approval - the entire point of F16 - cannot work across users.",
+      "verified": "access-requests/route.ts:39 '{ name: '@t', value: s.claims.oid }' and [id]/decision/route.ts:65 'const tenantId = s.claims.oid'. Meanwhile 81 route files adopt tenantScopeId(), whose own comment says it exists so state written by one user 'resolves for any grantee in the same tenant'. GUARD-ADOPTION-GAP CLASS.",
+      "why_ci_missed_it": "The unit test's fixture sets the doc's tenantId EQUAL TO THE APPROVER's oid - modelling the code's assumption rather than what the creating routes write. FIXTURES-THAT-MODEL-THE-CODE class.",
+      "not_yet_reproduced": "INFERRED from code by both lanes; NOT reproduced live. The fix lane must establish it for real before fixing, and must sequence a repartition with access-governance/backfill."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
