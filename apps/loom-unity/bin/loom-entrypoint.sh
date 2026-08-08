@@ -266,7 +266,45 @@ render_server() {
   if [ -n "${tenant}" ]; then
     if [ -z "${authz_url}" ]; then authz_url="https://${authority}/${tenant}/oauth2/v2.0/authorize"; fi
     if [ -z "${token_url}" ]; then token_url="https://${authority}/${tenant}/oauth2/v2.0/token"; fi
-    if [ -z "${issuers}" ]; then issuers="https://${authority}/${tenant}/v2.0"; fi
+    # BOTH Entra issuer forms for THIS tenant — v2.0 and, on Commercial, v1.0.
+    #
+    # Deriving only the v2.0 issuer made the catalog reject every real token it
+    # was ever sent. Microsoft Entra emits the token version the RESOURCE app
+    # asks for, not the one the client wants: "The values of null and 1 result
+    # in v1.0 tokens, and the value of 2 results in v2.0 tokens", and
+    # "Resources always own their tokens ... and are the only applications that
+    # can change their token details."
+    #   https://learn.microsoft.com/entra/identity-platform/access-tokens#token-formats
+    #
+    # The Loom Console app registration has requestedAccessTokenVersion = null,
+    # so every token minted for api://<client-id> is v1.0, whose issuer is
+    # https://sts.windows.net/<tenant>/ — NOT the v2.0 form derived here.
+    #   https://learn.microsoft.com/troubleshoot/entra/entra-id/app-integration/troubleshooting-signature-validation-errors
+    #
+    # Measured live 2026-08-07, after the token-exchange body was fixed:
+    #   HTTP 401 {"error_code":"UNAUTHENTICATED","message":"Invalid issuer"}
+    #
+    # Accepting both is not a widening of trust: both URIs name the SAME pinned
+    # tenant GUID and the same signing keys, and the audience check is unchanged.
+    # Adding the v1 form is also safe if the deployment later flips the app to
+    # requestedAccessTokenVersion=2 — the v2 entry already covers that case.
+    #
+    # SOVEREIGN CLOUDS: the v1 form is added ONLY for the Commercial authority.
+    # Microsoft's docs establish `https://sts.windows.net/<tenant>/` as the v1
+    # issuer for Entra ID, but do NOT establish the equivalent for Azure
+    # Government, and this lane has no Gov estate to measure it against. Guessing
+    # it would either be inert or — worse — put a Commercial STS hostname into a
+    # sovereign deployment's trusted-issuer list, which the Gov sovereignty test
+    # in tests/entrypoint.test.mjs exists to prevent. Gov keeps the v2-only
+    # default; set LOOM_UNITY_ALLOWED_ISSUERS explicitly there once its issuer is
+    # measured. Not currently a live Gov gap: Gov runs neither iceberg-catalog
+    # nor trino, and its loom-unity has authorization disabled (#2643).
+    if [ -z "${issuers}" ]; then
+      issuers="https://${authority}/${tenant}/v2.0"
+      if [ "${authority}" = "login.microsoftonline.com" ]; then
+        issuers="${issuers},https://sts.windows.net/${tenant}/"
+      fi
+    fi
   fi
   if [ -z "${audiences}" ] && [ -n "${client_id}" ]; then
     audiences="api://${client_id},${client_id}"

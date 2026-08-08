@@ -29,19 +29,29 @@
  *       behind it refuses. Measured and recorded with the precise upstream
  *       status, never smoothed into "renders fine".
  *
- * Mode (b) is not hypothetical. Measured on the live Commercial console on
- * 2026-08-07, BEFORE the fix that lands with this spec:
+ * Mode (b) is not hypothetical, and it has had THREE distinct causes so far.
+ * Each was only visible once the one in front of it was fixed:
  *
- *   GET /api/catalog/iceberg/namespaces  →  403 "Iceberg REST Catalog returned
- *   HTTP 403" in ~307ms, warm, reproducible.
+ *   1. 403 "Iceberg REST Catalog returned HTTP 403" (~307ms warm) — the client
+ *      sent the RAW Entra token. The catalog is the loom-unity image, whose
+ *      AuthDecorator rejects any bearer whose `iss` is not its own `internal`
+ *      issuer, so a byte-exact audience is still refused. FIXED (#3102, live).
+ *   2. 502 -> upstream 400 {"message":"Unsupported requested token type: null"}
+ *      — the exchange omitted `requested_token_type`; the server requires four
+ *      form params and the client sent three. Not Iceberg-specific: the Unity
+ *      path failed identically, so the exchange had never once completed
+ *      against a live catalog. FIXED (#3118, live).
+ *   3. 502 -> upstream 401 {"message":"Invalid issuer"} — CURRENT. The catalog
+ *      derives its allowed issuer as the v2.0 form only, but Entra emits the
+ *      token version the RESOURCE app requests, and the Console app
+ *      registration has requestedAccessTokenVersion=null => v1.0 tokens, whose
+ *      iss is https://sts.windows.net/<tenant>/. Fix is in the loom-unity
+ *      ENTRYPOINT, so it needs an IMAGE REBUILD, not a console roll.
  *
- * Root cause: `iceberg-catalog-client.ts` sent the RAW Entra token upstream. The
- * catalog is the loom-unity image, whose AuthDecorator rejects any bearer whose
- * `iss` is not its own `internal` issuer — so a byte-exact audience is still
- * answered 403. The sibling Unity path has exchanged the token for a
- * server-minted internal one since #2679; the Iceberg path never adopted the
- * helper. The unit fixture even pinned the bug: a test named "sends the
- * server-minted bearer upstream" asserted `Bearer tok-api://…/.default`.
+ * The pattern is worth stating plainly: every one of these was invisible until
+ * the previous layer was removed, and every one of them was hidden from unit
+ * tests because the fixtures doubled the upstream server with a stub that
+ * accepted anything. Only a live authenticated call surfaced them.
  *
  * ## DEPLOY GATING — read before judging a red run
  *
@@ -51,7 +61,14 @@
  *
  *   'working'        — namespaces listed. The fix is deployed and correct.
  *   'pre-fix-403'    — the exact pre-fix signature. NOT a spec failure; it means
- *                      the image predates the fix. Annotated, not thrown.
+ *                      the console image predates the #3102 fix.
+ *   'auth-upstream'  — a 502 whose upstream body names a token/issuer refusal
+ *                      (400 "requested token type", 401 "Invalid issuer"). The
+ *                      BFF and transport are healthy; the CATALOG is refusing.
+ *                      Recorded with the exact upstream text, because that text
+ *                      is the only thing that has ever identified these causes —
+ *                      loom-unity scales to zero, so there is frequently no
+ *                      server-side log for the failing call at all.
  *   'regressed'      — anything else. Thrown.
  *
  * Reporting 'pre-fix-403' as a pass would be dishonest; reporting it as a
@@ -62,7 +79,17 @@ import { test, expect, type Page, type APIResponse } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// NOTE: `_lib/uat` is imported DYNAMICALLY, inside the test that needs it.
+// Its module top-level does `if (!SECRET) throw`, so a static import makes the
+// whole spec file fail to COLLECT when SESSION_SECRET is absent —
+// `playwright test --list` reports "Total: 0 tests in 0 files" rather than
+// naming the cause. A dynamic import turns that into one failing test with a
+// readable message, and keeps the file listable without a secret.
+
 const RECEIPT_DIR = path.resolve(__dirname, '..', 'test-results', 'receipts');
+
+/** Workspaces this spec created, torn down in afterAll. */
+const createdWorkspaces: string[] = [];
 
 /** Engines can cold-start from scale-to-zero; that is slower than the 30s default. */
 const ENGINE_TIMEOUT_MS = 180_000;
@@ -77,6 +104,51 @@ interface Measurement {
 }
 const measurements: Measurement[] = [];
 
+/**
+ * Persist the measurements collected so far.
+ *
+ * Called after EVERY measurement, not once in afterAll, and it MERGES with
+ * whatever is already on disk. Both properties are needed:
+ *
+ *  - Playwright starts a FRESH WORKER PROCESS for each retry, so module-scoped
+ *    state does not survive. This project carries `retries: 2`.
+ *  - `afterAll` runs per worker. Run 31238543755 wrote
+ *    `{"capturedAt":"…","measurements":[]}` — an empty receipt — because the
+ *    last worker to exit was a retry whose module had been freshly imported and
+ *    whose surviving tests had already been recorded elsewhere. The timings
+ *    this spec exists to capture were silently lost, and the file still LOOKED
+ *    like a valid receipt.
+ *
+ * Merging on every write means a receipt exists even if a later test crashes the
+ * worker outright.
+ */
+function persistMeasurements(): void {
+  try {
+    fs.mkdirSync(RECEIPT_DIR, { recursive: true });
+    const file = path.join(RECEIPT_DIR, 'external-engine-federation-timings.json');
+    let prior: Measurement[] = [];
+    try {
+      const existing = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (Array.isArray(existing?.measurements)) prior = existing.measurements;
+    } catch { /* no prior file, or unreadable — start fresh */ }
+
+    // De-dup on the full tuple so retries of the same call do not inflate the
+    // receipt, while genuinely repeated calls (cold + warm) both survive.
+    const seen = new Set<string>();
+    const merged = [...prior, ...measurements].filter((m) => {
+      const k = `${m.label}|${m.method}|${m.path}|${m.status}|${m.ms}|${m.note ?? ''}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    fs.writeFileSync(file, JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      measurements: merged,
+    }, null, 2));
+  } catch { /* a receipt-write failure must never fail the measurement itself */ }
+}
+
 async function timedGet(page: Page, url: string, label: string, timeout = ENGINE_TIMEOUT_MS): Promise<{ res: APIResponse; ms: number; body: any }> {
   const t0 = Date.now();
   const res = await page.request.get(url, { timeout, failOnStatusCode: false });
@@ -86,15 +158,16 @@ async function timedGet(page: Page, url: string, label: string, timeout = ENGINE
   measurements.push({ label, method: 'GET', path: url, status: res.status(), ms });
   // eslint-disable-next-line no-console
   console.log(`[F1] ${label}: ${res.status()} in ${ms}ms — ${url}`);
+  persistMeasurements();
   return { res, ms, body };
 }
 
 test.afterAll(async () => {
-  fs.mkdirSync(RECEIPT_DIR, { recursive: true });
-  fs.writeFileSync(
-    path.join(RECEIPT_DIR, 'external-engine-federation-timings.json'),
-    JSON.stringify({ capturedAt: new Date().toISOString(), measurements }, null, 2),
-  );
+  if (createdWorkspaces.length) {
+    const { cleanupWorkspaces } = await import('./_lib/uat');
+    await cleanupWorkspaces(createdWorkspaces).catch(() => { /* best-effort */ });
+  }
+  persistMeasurements();
 });
 
 // ---------------------------------------------------------------------------
@@ -124,20 +197,38 @@ test('Iceberg REST Catalog: namespaces list resolves (or reports the pre-fix 403
   const cold = await timedGet(page, '/api/catalog/iceberg/namespaces', 'iceberg-namespaces-coldstart');
   const { res, body, ms } = await timedGet(page, '/api/catalog/iceberg/namespaces', 'iceberg-namespaces');
 
-  let verdict: 'working' | 'pre-fix-403' | 'gated' | 'regressed';
+  const bodyText = JSON.stringify(body ?? '');
+
+  // The upstream refusal text is the ONLY thing that has ever identified these
+  // causes. loom-unity and iceberg-catalog both scale to zero, so there is
+  // frequently no server-side log for the failing call — `az containerapp logs
+  // show` came back empty while the call was demonstrably failing. The console
+  // surfaces the upstream body verbatim, so THIS is the diagnostic. Capture it.
+  const UPSTREAM_AUTH_REFUSAL = /Unsupported requested token type|Invalid issuer|rejected the token exchange|UNAUTHENTICATED|INVALID_ARGUMENT/i;
+
+  let verdict: 'working' | 'pre-fix-403' | 'auth-upstream' | 'gated' | 'regressed';
   if (res.status() === 200) verdict = 'working';
-  else if (res.status() === 403 && /returned HTTP 403/i.test(JSON.stringify(body ?? ''))) verdict = 'pre-fix-403';
+  else if (res.status() === 403 && /returned HTTP 403/i.test(bodyText)) verdict = 'pre-fix-403';
   else if (res.status() === 503 && body?.gated === true) verdict = 'gated';
+  else if (res.status() === 502 && UPSTREAM_AUTH_REFUSAL.test(bodyText)) verdict = 'auth-upstream';
   else verdict = 'regressed';
 
   test.info().annotations.push({
     type: 'federation-verdict',
-    description: `iceberg-namespaces verdict=${verdict} status=${res.status()} warmMs=${ms} coldStatus=${cold.res.status()} coldMs=${cold.ms} body=${JSON.stringify(body ?? '').slice(0, 300)}`,
+    description: `iceberg-namespaces verdict=${verdict} status=${res.status()} warmMs=${ms} coldStatus=${cold.res.status()} coldMs=${cold.ms}`,
+  });
+  // The upstream text, UNTRUNCATED-ish and on its own annotation, so it is
+  // readable in the run summary without opening a trace zip.
+  test.info().annotations.push({
+    type: 'federation-upstream-body',
+    description: bodyText.slice(0, 1000),
   });
   measurements.push({
     label: 'iceberg-namespaces-verdict', method: 'GET',
-    path: '/api/catalog/iceberg/namespaces', status: res.status(), ms, note: verdict,
+    path: '/api/catalog/iceberg/namespaces', status: res.status(), ms,
+    note: `${verdict}: ${bodyText.slice(0, 400)}`,
   });
+  persistMeasurements();
 
   if (verdict === 'working') {
     expect(Array.isArray(body.namespaces)).toBe(true);
@@ -146,15 +237,32 @@ test('Iceberg REST Catalog: namespaces list resolves (or reports the pre-fix 403
       expect(Array.isArray(ns.levels)).toBe(true);
       expect(typeof ns.name).toBe('string');
     }
+  } else if (verdict === 'auth-upstream') {
+    // A REAL failure — the federation path does not work — but a precisely
+    // identified one, and NOT a console-code regression. Fail with the upstream
+    // text in the message so the next reader gets the cause, not just a status.
+    throw new Error(
+      `The catalog REFUSED the console's credential. The BFF and transport are healthy; `
+      + `the upstream rejected the token.
+
+Upstream said: ${bodyText.slice(0, 600)}
+
+`
+      + `Known causes, in the order they were found and fixed: (1) raw Entra token instead of `
+      + `the exchanged internal token (#3102); (2) exchange missing requested_token_type `
+      + `(#3118); (3) the catalog derives only the v2.0 issuer while Entra mints v1.0 tokens `
+      + `for an app with requestedAccessTokenVersion=null — fixed in the loom-unity ENTRYPOINT, `
+      + `which needs an IMAGE REBUILD, not a console roll.`,
+    );
   } else if (verdict === 'regressed') {
     throw new Error(
       `Iceberg REST Catalog returned an UNEXPECTED status ${res.status()}. `
-      + `Expected 200 (fix deployed), 403 with the pre-fix signature (image predates the fix), `
-      + `or a 503 honest gate. Body: ${JSON.stringify(body ?? '').slice(0, 400)}`,
+      + `Expected 200 (working), 403 with the pre-fix signature, a 503 honest gate, `
+      + `or a 502 naming an upstream auth refusal. Body: ${bodyText.slice(0, 400)}`,
     );
   }
   // 'pre-fix-403' and 'gated' fall through deliberately — both are HONEST states
-  // of a console image that predates or does not deploy the catalog.
+  // of a console image that predates the fix or does not deploy the catalog.
 });
 
 // ---------------------------------------------------------------------------
@@ -236,14 +344,23 @@ test('SQL Lab exposes the engine picker and the Federated SQL (Trino) option', a
   page.on('pageerror', (e) => errors.push(String(e)));
 
   // A FRESHLY CREATED item — the clean-first-open pass (ux-baseline.md §6).
-  const create = await page.request.post('/api/items', {
-    data: { type: 'sql-lab', name: `f1-federation-${Date.now()}` },
-    failOnStatusCode: false,
-    timeout: 60_000,
-  });
-  test.skip(!create.ok(), `could not create a sql-lab item to walk (HTTP ${create.status()})`);
-  const created = await create.json();
-  const id = created?.id ?? created?.item?.id;
+  //
+  // Uses the SHARED createWorkspace/createItem helpers. The first version of
+  // this test POSTed to `/api/items` with `{type,name}`, which does not exist —
+  // that route has only a GET, so the live call returned 405. Worse, the failure
+  // was swallowed: a `test.skip(!create.ok())` turned MY OWN wrong endpoint into
+  // a silent skip, so run 31238543755 reported "1 skipped" and the engine picker
+  // — the single control this entire lane is about — went unverified while
+  // looking like a deliberate exclusion. A skip that reads as a pass is the
+  // failure mode this program exists to kill, and I shipped one.
+  //
+  // The real contract is POST /api/workspaces then
+  // POST /api/workspaces/<id>/items with {itemType, displayName}. The helpers
+  // assert on it, so a broken create now FAILS here instead of skipping.
+  const { createWorkspace, createItem } = await import('./_lib/uat');
+  const wsId = await createWorkspace(page, `f1-fed-${Date.now()}`);
+  createdWorkspaces.push(wsId);
+  const id = await createItem(page, wsId, 'sql-lab', `f1-federation-${Date.now()}`);
   expect(id, 'item create returned no id').toBeTruthy();
 
   const t0 = Date.now();

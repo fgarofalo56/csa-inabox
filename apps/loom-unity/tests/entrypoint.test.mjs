@@ -156,7 +156,12 @@ test('LU-2: an Entra tenant + client id turn authorization ON and derive issuer/
   assert.match(r.stdout, /server\.authorization-url=https:\/\/login\.microsoftonline\.com\/tenant-guid\/oauth2\/v2\.0\/authorize/);
   assert.match(r.stdout, /server\.token-url=https:\/\/login\.microsoftonline\.com\/tenant-guid\/oauth2\/v2\.0\/token/);
   // Upstream v0.5.1 REQUIRES both when authorization is enabled (exact match).
-  assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.com\/tenant-guid\/v2\.0/);
+  // BOTH issuer forms for this tenant — v2.0 AND v1.0 (F1). Entra emits the
+  // version the RESOURCE app requests, and the Console app registration has
+  // requestedAccessTokenVersion=null => v1.0 tokens, whose iss is
+  // https://sts.windows.net/<tenant>/. Deriving only the v2.0 form made the
+  // catalog answer every real token 401 "Invalid issuer".
+  assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.com\/tenant-guid\/v2\.0,https:\/\/sts\.windows\.net\/tenant-guid\//);
   assert.match(r.stdout, /server\.audiences=api:\/\/client-guid,client-guid/);
   assert.doesNotMatch(r.stderr, /SECURITY WARNING/);
 });
@@ -168,7 +173,11 @@ test('LU-2: the sovereign authority host flows into every derived Entra URL (Gov
     LOOM_UNITY_AUTHORITY_HOST: 'login.microsoftonline.us',
   });
   assert.equal(r.status, 0, r.stderr);
+  // Gov stays v2-ONLY. The v1 issuer for Azure Government is not established by
+  // Microsoft's docs and this lane cannot measure it, so the Commercial STS
+  // hostname must NOT leak into a sovereign deployment's trusted issuers (F1).
   assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.us\/tenant-guid\/v2\.0/);
+  assert.doesNotMatch(r.stdout, /server\.allowed-issuers=[^\n]*sts\.windows\.net/);
   // Assert on the PARSED hosts, not on a substring of the whole render.
   // Earlier revisions used doesNotMatch(/login\.microsoftonline\.com/) and then
   // !includes('login.microsoftonline.com'); CodeQL flagged both
