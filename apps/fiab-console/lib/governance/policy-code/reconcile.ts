@@ -111,17 +111,9 @@ export async function reconcilePolicyCode(
   const at = new Date().toISOString();
   const mode: PolicyReconcileReceipt['mode'] = opts.apply ? 'apply' : 'dry-run';
 
-  // Resolve backend variants (OSS vs Databricks UC; tenant id for ADX FQNs).
-  let ucVariant: 'databricks' | 'oss' = 'databricks';
-  try {
-    const { resolveUcBackend } = await import('@/lib/azure/uc-backend');
-    ucVariant = resolveUcBackend();
-  } catch {
-    /* default databricks */
-  }
-  // Backend-resolution options for the one-pass compile. The Trino half comes
-  // from the SHARED reader (`trinoCompileOptionsFromEnv`) that the engine-rules
-  // route also uses — never a hand-copied literal.
+  // Backend-resolution options for the one-pass compile, from the SHARED
+  // reader every compile call site now uses — never a hand-copied literal.
+  // `compile-options.ts` records the three defects this shape caused.
   //
   // `trinoDefaultCatalog` is the sharp edge: a 2-part `schema.table` resource
   // resolves against the deployment's lake catalog, so omitting it here made
@@ -133,12 +125,16 @@ export async function reconcilePolicyCode(
   // governed one table while the document an admin inspects named another. The
   // knob is optional and no bicep module sets it today, which is exactly why it
   // would have sat there undetected.
-  const { trinoCompileOptionsFromEnv } = await import('./compilers/trino');
-  const compileOpts: CompileOptions = {
-    ucVariant,
-    tenantId: opts.tenantId,
-    ...trinoCompileOptionsFromEnv(),
-  };
+  //
+  // `trinoGroupProvider` is the second one, and it is why this is now resolved
+  // BEFORE the compile rather than inside `reconcileTrino`: it is OBSERVED from
+  // the published group file, and it must reach the COMPILER — the only thing
+  // that reads it, and the only producer of `artifact.warnings`. Handing it only
+  // to the document builders (which do not read it) made the reconcile-path
+  // artifact warn that every group-keyed rule "will not match" even when a group
+  // file WAS published — asserting a state the code never established.
+  const { resolveCompileOptions } = await import('./compile-options');
+  const compileOpts: CompileOptions = await resolveCompileOptions(opts.tenantId);
   const compiled = compileAll(set, compileOpts);
 
   const snapshot = await loadSnapshot(opts.tenantId);

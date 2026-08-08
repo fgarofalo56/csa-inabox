@@ -179,6 +179,12 @@ async function serve(
       at: new Date().toISOString(),
       version,
       catalogs: docOptions.catalogs.map((c) => c.name),
+      // The access level this path derived per catalog, persisted so the
+      // PUBLISH path can render the stored rego with the identical catalog
+      // floor instead of re-deriving it (a second copy of that rule is the
+      // drift shape this surface has already been bitten by) or omitting it
+      // (which left the stored module more permissive than the file document).
+      catalogRules: docOptions.catalogs,
       by: caller.who,
     }).catch((e) => {
       // eslint-disable-next-line no-console

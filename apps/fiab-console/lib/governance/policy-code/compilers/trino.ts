@@ -818,11 +818,19 @@ export function buildTrinoRego(set: PolicyCodeSet, opts: TrinoDocumentOptions = 
   // document's `impersonation` section. Trino asks the OPA authorizer via the
   // `ImpersonateUser` operation; with no rule it is denied, which is both the
   // correct default and the pre-LU-7 posture.
-  const impersonatedUsers = [...new Set(
-    set.statements.flatMap((st) => (st.resources.some((r) => r.backend === 'trino')
+  // `additionalImpersonatedUsers` is honoured HERE as well as in the file
+  // document. It was previously read only by `buildImpersonationRules`, so a
+  // deployment that supplied it got one impersonation set in the file document
+  // and a strictly narrower one in the rego — the two artifacts this module
+  // claims are equivalent would have disagreed about who may be impersonated,
+  // silently, and only for the option's user. Equivalence is the whole contract
+  // of emitting both, so both sides read the same inputs.
+  const impersonatedUsers = [...new Set([
+    ...set.statements.flatMap((st) => (st.resources.some((r) => r.backend === 'trino')
       ? st.principals.filter((p) => p.kind === 'user').map(trinoUserName).filter(Boolean)
       : [])),
-  )].sort();
+    ...(opts.additionalImpersonatedUsers || []).map((u) => String(u || '').trim()).filter(Boolean),
+  ])].sort();
   const regoSessionUser = (opts.trinoSessionUser || TRINO_SESSION_USER_DEFAULT).trim() || TRINO_SESSION_USER_DEFAULT;
   L.push('# Impersonation — the mapped session user may become a POLICY-NAMED');
   L.push('# principal, never an arbitrary identity. An empty set denies it.');
