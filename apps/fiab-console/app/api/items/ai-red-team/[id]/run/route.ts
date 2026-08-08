@@ -16,7 +16,6 @@
  * loadOwnedItem / updateOwnedItem (route-guards).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { chatCompletion, CsError, CsNotConfiguredError, type AccountSelector } from '@/lib/azure/foundry-cs-client';
 import { aoaiChatJson, NoAoaiDeploymentError } from '@/lib/azure/aoai-chat-client';
 import { moderateContent } from '@/lib/azure/foundry-client';
@@ -25,7 +24,8 @@ import {
   type RedTeamCategory, type RedTeamResultRow, type RedTeamVerdict,
 } from '@/lib/foundry/red-team';
 import { normalizeTechniques } from '@/lib/foundry/red-team-techniques';
-import { loadOwnedItem, updateOwnedItem, jerr } from '../../../_lib/item-crud';
+import { updateOwnedItem } from '../../../_lib/item-crud';
+import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,12 +62,14 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T, i: number) =
   return out;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const itemId = (await ctx.params).id;
-  const item = await loadOwnedItem(itemId, ITEM_TYPE, session.claims.oid);
-  if (!item) return jerr('ai-red-team item not found', 404);
+// R3 route-toolkit: `withWorkspaceOwner` runs the identical
+// getSession -> 401 / loadOwnedItem -> 404 prologue this route hand-rolled, but
+// as CONTROL FLOW rather than a returned value the caller must remember to
+// short-circuit on. The codemod skipped this file because the hand-rolled
+// version answered 401/404 through `jerr()` instead of the canonical
+// apiUnauthorized()/apiNotFound() envelopes; migrating by hand adopts those.
+export const POST = withWorkspaceOwner(ITEM_TYPE, async (req: NextRequest, { session, params, item }) => {
+  const itemId = params.id;
   const state = (item.state || {}) as Record<string, any>;
 
   const body = await req.json().catch(() => ({}));
@@ -150,4 +152,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }).catch(() => {});
 
   return NextResponse.json({ ok: true, run });
-}
+});
