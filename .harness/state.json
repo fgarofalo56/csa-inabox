@@ -282,7 +282,7 @@
       "lane": "L-DEPLOY",
       "wave": 1,
       "task_order": 80,
-      "status": "todo",
+      "status": "done",
       "title": "Post-deploy bootstrap stale (last success 07-19) — dispatch after D1-D3 (grants, UC enable, Delta Sharing, iceberg-catalog); verify grants live. NOTE: does NOT produce loom-unity (see D2)",
       "depends_on": [
         "D1",
@@ -297,7 +297,7 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": "RESOLVED 2026-08-08. Run 31239422563 SUCCESS - the first bootstrap success since 2026-07-19. The 08-07 failure (31228411608) was an ORCHESTRATOR INPUT ERROR, not a code defect: it was dispatched with single-sub defaults and died on ResourceGroupNotFound 'rg-csa-loom-dlz-single-centralus'. Discovered the real coordinates via az graph: the Databricks workspace lives in rg-csa-loom-dlz-DEFAULT-centralus, and admin vs DLZ are in DIFFERENT SUBSCRIPTIONS - so dlz_domain=default and an explicit dlz_subscription were both required. SUCCESS VERIFIED NON-HOLLOW (per the 'green run of nothing' class): 22+ steps all executed, including MSAL app registration, 'Unseal Loom Unity + wire the Console', Purview Data Map roles, governance taxonomy seed, subscription RBAC, tenant-root Reader, CROSS-SUB DLZ Reader, Synapse Spark abfss fix, DLZ private-endpoint A-records into hub DNS, AOAI+Foundry private endpoints, DNS Private Resolver, Synapse RBAC in-VNET, and a Synapse managed PE to the default lake."
     },
     {
       "id": "G2",
@@ -1337,7 +1337,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 93,
-      "status": "review",
+      "status": "done",
       "title": "ACR re-lock reports SUCCESS while leaving the registry publicly OPEN. Measured 2026-08-07 after run 31143181962: the 'Re-lock ACR (private endpoint only)' job concluded success, yet az acr show read publicNetworkAccess=Enabled/defaultAction=Allow on three probes over a minute (ruling out the known 30-90s propagation lag). Orchestrator re-locked by hand. Add verify-after-write that FAILS the job if the registry is not Disabled/Deny afterwards",
       "depends_on": [],
       "validation": {
@@ -1357,7 +1357,8 @@
       "reviewer": "PASS. Orchestrator did NOT take the report on trust: (a) re-derived the EXIT-trap semantics from scratch; (b) re-ran the load-bearing mutation independently - reintroduced a continuation-line '|| true' on the release call -> guard 11 pass/1 fail; clean tree 12/12. Blind spot real, fix genuinely closes it.",
       "self_caught": "Agent's M4 initially PASSED against its own patch: first regex was '2>\\s*(&1\\s*)?/dev/null', which does not match '>/dev/null 2>&1'. The guard being written to fix the bug class HAD the bug class. Caught only by mutating instead of reasoning. Scanner now self-checks it finds >=15 call sites across both file kinds, so a scanner matching nothing cannot pass the assertions beneath it.",
       "unverified": "Gov runtime behaviour NOT verified (no local Gov az by policy; Gov call sites were already clean of discards and are covered by the hardened static guard). Per R2: merged-not-deployed until a Commercial or Gov build next exercises a release step. ACR final measured state: LOCKED (publicNetworkAccess=Disabled, defaultAction=Deny), lease free; all agent testing used stub az, zero Azure state changed.",
-      "no_defect": "Sweep path checked as instructed - NO defect. acr-firewall-sweep-all.sh hardened by #2836; acr_lease_sweep propagates close failure; no ACR firewall toggle exists outside the lease script (genuine single choke point); no continue-on-error on any release/sweep step."
+      "no_defect": "Sweep path checked as instructed - NO defect. acr-firewall-sweep-all.sh hardened by #2836; acr_lease_sweep propagates close failure; no ACR firewall toggle exists outside the lease script (genuine single choke point); no continue-on-error on any release/sweep step.",
+      "merged": "2026-08-08 (#3119, d7d681b9)"
     },
     {
       "id": "C25",
