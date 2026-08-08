@@ -1852,7 +1852,26 @@ module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for
 // attaches can assign the apps UAMI its data-plane roles (see the module
 // header for the exact allowed-role ABAC constraint). Shipped imperatively
 // 2026-07-18; encoded here for from-scratch parity.
-module adminAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = if (deployAdminPlane) {
+//
+// COLLISION GATING (2026-08-07). ARM enforces uniqueness on the (scope,
+// principalId, roleDefinitionId) TRIPLE, and workspace-rbac.bicep grants the
+// SAME RBAC-Admin role to the SAME Console UAMI at `loomDlzRg` — which is
+// `useSingleDlz ? singleDlzRg.name : adminPlaneRgName` (see the admin-plane
+// params above). So exactly one of the two may exist per scope:
+//
+//   useSingleDlz = true  → workspaceRbac lands on singleDlzRg
+//                          ⇒ admin RG is free  → deploy adminAppResourcesRbac
+//                          ⇒ singleDlz RG taken → SKIP singleDlzAppResourcesRbac
+//   useSingleDlz = false → workspaceRbac lands on adminPlaneRgName
+//                          ⇒ admin RG taken    → SKIP adminAppResourcesRbac
+//                          (per-domain DLZ RGs are untouched by workspaceRbac,
+//                           so the multi-DLZ loop below still deploys)
+//
+// In every skipped case the roles are NOT lost — workspace-rbac.bicep carries
+// them in its union ABAC condition. Before this gating the app-resources leaf
+// failed RoleAssignmentExists on EVERY deploy in BOTH topologies; it only ever
+// "worked" because the grant was created imperatively on 2026-07-18.
+module adminAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = if (deployAdminPlane && useSingleDlz) {
   name: 'admin-app-resources-rbac'
   scope: resourceGroup(adminPlaneRgName)
   params: {
@@ -1861,7 +1880,12 @@ module adminAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = if
   }
 }
 
-module singleDlzAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = if (useSingleDlz) {
+// Intentionally NEVER deployed: when useSingleDlz is true, loomDlzRg IS
+// singleDlzRg, so workspace-rbac.bicep already holds the only RBAC-Admin
+// assignment ARM permits at this scope (with the app-resources roles folded
+// into its condition). Kept as a documented no-op rather than deleted so the
+// dead-end is explicit and nobody re-adds the colliding grant.
+module singleDlzAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = if (false) {
   name: 'dlz-single-app-resources-rbac'
   scope: singleDlzRg
   params: {
