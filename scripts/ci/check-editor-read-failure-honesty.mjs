@@ -40,13 +40,15 @@
  *          content is unknown), or, if you own the fetch, set an explicit error
  *          status in the catch and gate the write on it.
  *
- *   RULE 2 (R7 false claim). A useQuery whose queryFn can THROW, in a file with
- *          NO error branch at all (`isError` / `q.error` / `status === 'error'`).
- *          Such a component silently renders its loading or empty branch
- *          forever after a failure.
- *          Fix: render an honest error surface (MessageBar + Retry) — see
- *          s3-gateway-editor.tsx, ducklake-catalog-editor.tsx, or
- *          <ItemLoadErrorBar>.
+ *   RULE 2 (R7 false claim). A useQuery whose queryFn can THROW, with NO error
+ *          branch bound to THAT query (`q.isError` / `q.error` /
+ *          `q.status === 'error'`, a destructured error member that is actually
+ *          used, or the query passed to `<QueryErrorBar query={…}>`). Such a
+ *          component silently renders its loading or empty branch forever after
+ *          a failure.
+ *          Fix: render the shared
+ *          `apps/fiab-console/lib/components/ui/query-error-bar.tsx` —
+ *          `<QueryErrorBar query={q} subject="…" endpoint="…" />`.
  *
  *   RULE 3 (chokepoint teeth). `useItemDocState.save()` and
  *          `phase4/shared.tsx`'s `useItemState.save()` must both consult
@@ -54,30 +56,61 @@
  *          from the primitive would silently re-open the hole for every
  *          adopter at once, and RULES 1-2 would not notice.
  *
- * WHY RULE 2 DERIVES ITS "THROWING FETCHER" SET RATHER THAN LISTING IT
- *   A hand-written list of throwing fetchers is a fixture that models the code
- *   instead of reading it, and drifts the first time someone adds a `throw`.
- *   Instead the guard READS lib/api/workspaces.ts and treats every exported
- *   function that delegates to its throwing `fetchJson` as throwing, and it
- *   resolves locally-defined fetchers by looking for `throw` in their body.
+ * HOW RULE 2 RESOLVES ITS "THROWING FETCHER" SET (rewritten, C20 sweep)
+ *   Never a hand-kept list — that is a fixture modelling the code instead of
+ *   reading it. The resolver READS the queryFn: an inline arrow body, a local
+ *   definition, or a symbol followed through `@/`-alias and relative imports,
+ *   bounded in depth, honouring try/catch (a swallowing catch means the fetcher
+ *   does NOT throw). The FIRST version derived only from lib/api/workspaces.ts
+ *   and matched `queryFn:` up to the first comma — it saw 8 of the 46 queries
+ *   whose fetcher can throw, and reported OK. It is now 43 of 46, and a
+ *   self-check FAILS THE BUILD (exit 2) if that ratio collapses, so a broken
+ *   resolver can never again present itself as a clean tree.
+ *
+ * KEYED ON THE SAFE PATTERN, DELIBERATELY
+ *   "Handled" is defined by the presence of an error branch, never by the
+ *   absence of some unsafe token. A rule keyed to the unsafe pattern goes quiet
+ *   on exactly the files that adopt the fix — this repo has already paid for
+ *   that lesson (`csa_loom_guard_keyed_to_the_unsafe_pattern`).
  *
  * ALLOWLIST
  *   RULE 1 has NO allowlist — a catch that discards a read error in a file that
  *   can overwrite that same state is exactly the harm.
- *   RULE 2 entries live in ALLOWLIST_RULE2 and must carry a reason.
+ *   RULE 2 entries live in ALLOWLIST_RULE2 and must carry a MEASURED reason.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { join, relative, sep, dirname, resolve } from 'node:path';
 
 const REPO = process.cwd();
 const CONSOLE_DIR = join(REPO, 'apps', 'fiab-console');
 const SCAN_ROOTS = [join(CONSOLE_DIR, 'lib'), join(CONSOLE_DIR, 'app')];
 
-/** RULE 2 exemptions. Each MUST say why the component cannot mislead. */
+/**
+ * RULE 2 exemptions. Each MUST state the MEASURED reason the component cannot
+ * mislead — not "this one is hard". An entry whose real reason is "I did not
+ * want to fix it" is a defect, and the guard prints these reasons on failure so
+ * they stay under review.
+ */
 const ALLOWLIST_RULE2 = new Map([
-  // (empty — every current consumer either has an error branch or a
-  //  non-throwing fetcher. Add entries here ONLY with a real reason.)
+  ['apps/fiab-console/lib/components/ui/use-runtime-flag.ts',
+    'DELIBERATE FAIL-OPEN, and an error branch would be the BUG. This is the '
+    + 'client half of the FLAG0 kill-switch substrate: `loom_default_on_opt_out` '
+    + 'requires that while loading, on any fetch error, and for an unknown id, '
+    + 'the DEFAULT is returned — the kill-switch subsystem may only revert a '
+    + 'surface an admin explicitly turned OFF, never gate one because a fetch '
+    + 'failed. MEASURED: the hook renders NOTHING (it returns a boolean), so it '
+    + 'makes no claim a user can read; rendering an error here would let a '
+    + '/api/runtime-flags blip take down every flagged surface at once.'],
+  ['apps/fiab-console/app/workspaces/[id]/page.tsx',
+    'WorkspaceMembers only. MEASURED: its queryFn returns [] for every non-OK '
+    + 'HTTP (the route is owner-scoped, so 401/404 is the NORMAL case for a '
+    + 'non-owner), so only a transport rejection reaches the error path — and '
+    + 'both outcomes render `null`: the decorative avatar strip is simply '
+    + 'absent. An absent decoration asserts nothing, so there is no R7 false '
+    + 'claim to correct, and an error bar in the workspace header would fire '
+    + 'for every non-owner. The page-level `wsQ` DOES carry a full error branch '
+    + 'for the read that actually matters.'],
 ]);
 
 const rel = (p) => relative(REPO, p).split(sep).join('/');
@@ -132,6 +165,43 @@ function blockAt(src, from) {
 
 /** Strip comments so "is this block empty?" is a question about CODE. */
 const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+/**
+ * Blank comments to SPACES, preserving length and newlines, so byte offsets and
+ * line numbers computed on the original still hold.
+ *
+ * RULE 2 needs this for the same reason RULE 3 does. Found by mutation M1b: a
+ * full revert of the powerplatform fix — bar deleted, `!itemQ.isError` guard
+ * deleted — left the guard GREEN, because the explanatory comment above the
+ * bind banner still contained the string `itemQ.isError`. A rule satisfied by a
+ * COMMENT measures nothing, and this one is especially treacherous: the more
+ * carefully a fix is documented, the more likely its own comment keeps the
+ * guard quiet after the fix is removed.
+ */
+function blankComments(s) {
+  const out = s.split('');
+  let i = 0;
+  while (i < out.length) {
+    const c = s[i];
+    if (c === '"' || c === "'" || c === '`') {
+      const q = c; i++;
+      while (i < s.length) { if (s[i] === '\\') { i += 2; continue; } if (s[i] === q) { i++; break; } i++; }
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '/') {
+      while (i < s.length && s[i] !== '\n') { out[i] = ' '; i++; }
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '*') {
+      const end = s.indexOf('*/', i + 2);
+      const stop = end < 0 ? s.length : end + 2;
+      for (; i < stop; i++) if (s[i] !== '\n') out[i] = ' ';
+      continue;
+    }
+    i++;
+  }
+  return out.join('');
+}
 
 /** The `try` block that a `catch` at `catchIdx` belongs to. */
 function tryBlockFor(src, catchIdx) {
@@ -240,128 +310,397 @@ for (const file of files) {
 }
 
 // ---------------------------------------------------------------------------
-// RULE 2 — useQuery + a THROWING queryFn + no error branch anywhere in the file.
+// RULE 2 — useQuery + a THROWING queryFn + no error branch bound to THAT query.
+//
+// ## Why this was rewritten (FINISHLINE C20 sweep)
+//
+// The first version derived its throwing-fetcher set from lib/api/workspaces.ts
+// alone and matched `queryFn:` with `/([^,\n]+)/`. Measured against all 49
+// useQuery consumers in this app, that saw 8 of the 46 whose fetcher can throw.
+// It was blind to:
+//
+//   * `queryFn: async () => { …; throw new Error(...) }` — an INLINE arrow. Ten
+//     admin panels (copilot-quality, prompt-registry, search-quality,
+//     tier-routing, token-budget, user-data-function) use exactly this shape, so
+//     deleting their error branch would NOT have failed CI.
+//   * a fetcher imported from anywhere other than workspaces.ts — including
+//     `clientFetch` itself, which rejects on transport failure and on its 20s
+//     timeout, and is what makes ~all of these fetchers throwing.
+//
+// So it enforced the rule on a sixth of its subject and reported OK. This
+// version RESOLVES the queryFn: inline bodies, local definitions, and imported
+// symbols followed through `@/`-alias and relative specifiers, bounded in depth.
+//
+// ## It is keyed on the SAFE pattern, deliberately
+//
+// "Handled" is: an error member OF THIS QUERY is referenced, or this query is
+// passed to `<QueryErrorBar query={…}>` (the shared honest-error surface in
+// lib/components/ui/query-error-bar.tsx). Keying on the safe pattern is what
+// stops the next variant of the BUG walking past — and this repo has already
+// been bitten the other way, by a rule keyed to the unsafe token that went
+// quiet on precisely the files that adopted the fix.
+//
+// ## try/catch is honoured
+//
+// A body whose fetch sits inside a try with a swallowing catch does NOT throw
+// (e.g. `getWorkspaceAdminStatus`, and the `/api/auth/me` query on
+// app/workspaces/page.tsx). Those are correctly NOT flagged. A catch that
+// rethrows still counts as throwing.
 // ---------------------------------------------------------------------------
 
-/**
- * Exported functions of lib/api/workspaces.ts that delegate to its throwing
- * `fetchJson`. DERIVED by reading the file, never a hand-kept list.
- */
-function throwingSharedFetchers() {
-  const p = join(CONSOLE_DIR, 'lib', 'api', 'workspaces.ts');
-  let src;
-  try { src = readFileSync(p, 'utf8'); } catch { return new Set(); }
-  if (!/function fetchJson[\s\S]{0,600}?throw new Error/.test(src)) {
-    // fetchJson stopped throwing — the derivation's premise is gone. Fail loud
-    // rather than silently exempting every consumer (an UNKNOWN reported as a
-    // negative is the class this repo keeps re-learning).
-    console.error(
-      'check-editor-read-failure-honesty: lib/api/workspaces.ts no longer has a throwing '
-      + 'fetchJson. This guard derived its throwing-fetcher set from that fact. '
-      + 'Re-derive it before this guard can be trusted.',
-    );
-    process.exit(2);
+const srcCache = new Map();
+function readSrc(p) {
+  if (!srcCache.has(p)) {
+    try { srcCache.set(p, readFileSync(p, 'utf8')); } catch { srcCache.set(p, null); }
   }
-  const out = new Set();
-  const re = /export\s+async\s+function\s+([A-Za-z0-9_]+)\s*\(/g;
+  return srcCache.get(p);
+}
+
+/** Resolve `sym` imported by `file` to the file that defines it. */
+function resolveImportedFrom(file, sym) {
+  const src = readSrc(file);
+  if (!src) return null;
+  const re = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
   let m;
   while ((m = re.exec(src))) {
-    const blk = blockAt(src, m.index + m[0].length - 1);
-    if (blk && /\bfetchJson[<(]/.test(blk.body)) out.add(m[1]);
+    const bound = m[1].split(',').map((x) => x.trim().split(/\s+as\s+/).pop().trim());
+    if (!bound.includes(sym)) continue;
+    const spec = m[2];
+    let base;
+    if (spec.startsWith('@/')) base = join(CONSOLE_DIR, spec.slice(2));
+    else if (spec.startsWith('.')) base = resolve(dirname(file), spec);
+    else return null; // node_modules — out of scope, treated as non-throwing
+    for (const cand of [`${base}.ts`, `${base}.tsx`, join(base, 'index.ts'), join(base, 'index.tsx')]) {
+      if (existsSync(cand)) return cand;
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Remove `try { … } catch (…) { … }` whose catch does NOT rethrow, so a
+ * swallowed rejection is not counted as a throw. Runs to a fixed point for
+ * nested try blocks.
+ */
+function stripSwallowedTries(body) {
+  let out = body;
+  for (let pass = 0; pass < 6; pass++) {
+    const re = /\btry\s*\{/g;
+    let m; let changed = false;
+    while ((m = re.exec(out))) {
+      const tryBlk = blockAt(out, m.index + m[0].length - 1);
+      if (!tryBlk) continue;
+      const after = out.slice(tryBlk.close + 1);
+      const cm = /^\s*catch\s*(?:\([^)]*\)\s*)?\{/.exec(after);
+      if (!cm) continue;
+      const catchStart = tryBlk.close + 1 + cm.index + cm[0].length - 1;
+      const catchBlk = blockAt(out, catchStart);
+      if (!catchBlk) continue;
+      if (/\bthrow\b/.test(stripComments(catchBlk.body))) continue; // rethrows — keep
+      out = out.slice(0, m.index) + ' '.repeat(catchBlk.close + 1 - m.index) + out.slice(catchBlk.close + 1);
+      changed = true;
+      break;
+    }
+    if (!changed) break;
   }
   return out;
 }
 
-const SHARED_THROWERS = throwingSharedFetchers();
-if (SHARED_THROWERS.size === 0) {
-  console.error('check-editor-read-failure-honesty: derived ZERO throwing shared fetchers — the derivation is broken.');
-  process.exit(2);
+/**
+ * Identifiers this body CALLS (keywords filtered).
+ *
+ * The generic-argument clause is load-bearing: without it `fetchJson<T>(…)`
+ * does not match `name\s*\(`, and since `lib/api/workspaces.ts` reaches its
+ * throwing `fetchJson` through exactly that call shape, EVERY consumer of
+ * getItem / listItems / listFolders / listTaskFlows / listWorkspacesWithCounts
+ * resolved as non-throwing and was silently exempted. Measured: 24/46 before
+ * this clause, 44/46 after.
+ */
+const CALL_KEYWORDS = new Set([
+  'async', 'if', 'for', 'while', 'switch', 'catch', 'return', 'await', 'function',
+  'typeof', 'new', 'super', 'Boolean', 'String', 'Number', 'Array', 'Object', 'JSON',
+]);
+function calledIdentifiers(body) {
+  return [...new Set(
+    [...body.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:<[^<>()]*>)?\s*\(/g)]
+      .map((x) => x[1])
+      .filter((n) => !CALL_KEYWORDS.has(n)),
+  )];
 }
 
 /**
- * Every `useQuery` in the file, as { varName | destructured, fnExpr, line }.
+ * Locate a top-level definition of `sym` in `src`; returns its BODY or null.
  *
- * The variable matters: an earlier draft of this guard asked only "does the
- * file mention `.error` anywhere?", which any unrelated `compiled.error` /
- * `j.error` / `st.error` satisfied — so the rule passed on files that plainly
- * had the bug. A guard whose verdict does not change when the subject breaks
- * is measuring nothing; this version binds the error branch to the QUERY.
+ * The return-type skip is load-bearing. `async function fetchOverview():
+ * Promise<{ ok: boolean; tiles?: OverviewTiles }> { … }` has a `{` inside its
+ * RETURN TYPE, and simply taking "the next `{`" hands back the type literal as
+ * the body — so the function reads as calling nothing and resolves as
+ * non-throwing. That silently exempted every consumer of clientFetch-based
+ * fetchers (fetchOverview, fetchFlags, getJson, getFocus, fetchRum), i.e. the
+ * guard would have reported OK while not looking at them at all.
  */
+function definitionBody(src, sym) {
+  const defRe = new RegExp(
+    `(?:export\\s+)?(?:async\\s+)?function\\s+${sym}\\s*[(<]`
+    + `|(?:export\\s+)?const\\s+${sym}\\s*(?::[^=\\n]*)?=\\s*(?:async\\s*)?[(<]`,
+  );
+  const d = defRe.exec(src);
+  if (d === null) return null;
+
+  // Walk to the end of the parameter list.
+  const paren = src.indexOf('(', d.index);
+  if (paren < 0) return null;
+  let i = paren; let depth = 0;
+  for (; i < src.length; i++) {
+    const c = src[i];
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) { i++; break; } }
+    else if (c === '"' || c === "'" || c === '`') {
+      const q = c; i++;
+      while (i < src.length) { if (src[i] === '\\') { i += 2; continue; } if (src[i] === q) break; i++; }
+    }
+  }
+
+  // Skip an arrow and/or a return-type annotation, including `Promise<{…}>`
+  // and a bare `{…}` object type, so we land on the real body brace.
+  while (i < src.length && /\s/.test(src[i])) i++;
+  if (src[i] === '=' && src[i + 1] === '>') i += 2;
+  while (i < src.length && /\s/.test(src[i])) i++;
+  if (src[i] === ':') {
+    i++;
+    let d2 = 0; let typeStart = true;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (c === '<' || c === '(' || c === '[') { d2++; typeStart = false; continue; }
+      if (c === '>' || c === ')' || c === ']') { d2--; typeStart = false; continue; }
+      if (c === '{') {
+        if (d2 > 0 || typeStart) {
+          const blk = blockAt(src, i);
+          if (!blk) return null;
+          i = blk.close; typeStart = false; continue;
+        }
+        break; // depth-0 `{` after a complete type → the body
+      }
+      if (c === '=' && src[i + 1] === '>') { i += 1; typeStart = true; continue; }
+      if (/\S/.test(c)) typeStart = '|&,:.'.includes(c);
+    }
+    while (i < src.length && /\s/.test(src[i])) i++;
+  }
+  if (src[i] !== '{') {
+    // Expression-bodied arrow (`const f = async () => fetchJson(...)`) — no
+    // block to read; hand back the rest of the statement.
+    const nl = src.indexOf('\n', i);
+    return src.slice(i, nl < 0 ? src.length : nl);
+  }
+  const blk = blockAt(src, i);
+  return blk ? blk.body : null;
+}
+
+/** Does calling `sym` (defined in, or imported by, `file`) reject/throw? */
+function symbolThrows(file, sym, depth = 0, seen = new Set()) {
+  if (depth > 4) return false;
+  const key = `${file}#${sym}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  const src = readSrc(file);
+  if (!src) return false;
+  const body = definitionBody(src, sym);
+  if (body === null) {
+    const other = resolveImportedFrom(file, sym);
+    return other ? symbolThrows(other, sym, depth + 1, seen) : false;
+  }
+  return bodyThrows(file, body, depth, seen);
+}
+
+/** Does this function body reject/throw, directly or via what it calls? */
+function bodyThrows(file, rawBody, depth = 0, seen = new Set()) {
+  const body = stripSwallowedTries(stripComments(rawBody));
+  if (/\bthrow\b/.test(body)) return true;
+  if (depth > 4) return false;
+  for (const name of calledIdentifiers(body)) {
+    const src = readSrc(file);
+    if (src && definitionBody(src, name) !== null) {
+      if (symbolThrows(file, name, depth + 1, seen)) return true;
+      continue;
+    }
+    const other = resolveImportedFrom(file, name);
+    if (other && symbolThrows(other, name, depth + 1, seen)) return true;
+  }
+  return false;
+}
+
+/** Every `useQuery` in the file, with its args and assignment target. */
 function findQueries(src) {
   const out = [];
   const re = /(?:const|let)\s+(\{[^}]*\}|[A-Za-z_$][A-Za-z0-9_$]*)\s*(?::[^=]*)?=\s*useQuery\s*[<(]/g;
   let m;
   while ((m = re.exec(src))) {
     const target = m[1];
-    const open = src.indexOf('(', m.index + m[0].length - 1 === m.index ? m.index : m.index);
-    const argsStart = src.indexOf('useQuery', m.index) + 'useQuery'.length;
-    const paren = src.indexOf('(', argsStart);
-    const args = paren < 0 ? '' : (blockCallArgs(src, paren) ?? '');
+    const paren = src.indexOf('(', src.indexOf('useQuery', m.index) + 'useQuery'.length);
     out.push({
       destructured: target.startsWith('{') ? target : null,
       varName: target.startsWith('{') ? null : target,
-      args,
+      args: paren < 0 ? '' : (blockCallArgs(src, paren) ?? ''),
       line: lineOf(src, m.index),
       index: m.index,
     });
-    void open;
   }
   return out;
 }
 
-/** Does THIS query have an honest error branch? */
-function queryHandlesError(src, q) {
-  if (q.destructured) {
-    // `const { data, isLoading, error } = useQuery(...)` — the destructured
-    // name must then actually be referenced somewhere.
-    const names = q.destructured.replace(/[{}]/g, '').split(',').map((x) => x.split(':').pop().trim());
-    for (const n of names) {
-      if (n === 'isError' || n === 'error' || n === 'isLoadingError' || n === 'status') {
-        const useRe = new RegExp(`\\b${n}\\b`, 'g');
-        // Referenced more than the destructuring site itself?
-        if ((src.match(useRe) || []).length > 1) return true;
+/**
+ * Value of object property `name` in `args`, brace/paren/string aware — so an
+ * INLINE `queryFn: async () => { … }` is captured whole instead of being cut at
+ * the first comma, which is what made the previous version blind to it.
+ */
+function objectProp(args, name) {
+  const re = new RegExp(`(^|[\\s{,])${name}\\s*:`, 'g');
+  let m;
+  while ((m = re.exec(args))) {
+    let i = m.index + m[0].length;
+    while (i < args.length && /\s/.test(args[i])) i++;
+    const start = i;
+    let depth = 0;
+    for (; i < args.length; i++) {
+      const c = args[i];
+      if (c === '(' || c === '[' || c === '{') depth++;
+      else if (c === ')' || c === ']' || c === '}') { if (depth === 0) break; depth--; }
+      else if (c === ',' && depth === 0) break;
+      else if (c === '"' || c === "'" || c === '`') {
+        const q = c; i++;
+        while (i < args.length) {
+          if (args[i] === '\\') { i += 2; continue; }
+          if (args[i] === q) break;
+          i++;
+        }
       }
+    }
+    return args.slice(start, i).trim();
+  }
+  return null;
+}
+
+/**
+ * Identifiers passed as `query={…}` to a <QueryErrorBar> in this file. This is
+ * the SAFE-pattern half of the key: adopting the shared honest-error surface is
+ * what satisfies the rule, so a future variant of the bug cannot satisfy it by
+ * merely avoiding whatever token an unsafe-pattern rule looked for.
+ */
+function queriesGivenToErrorBar(src) {
+  const out = new Set();
+  const re = /<QueryErrorBar\b/g;
+  let m;
+  while ((m = re.exec(src))) {
+    // The element text up to its closing `>` (attribute values are brace-matched).
+    let i = m.index; let depth = 0; let end = -1;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      else if (c === '>' && depth === 0) { end = i; break; }
+    }
+    if (end < 0) continue;
+    const el = src.slice(m.index, end);
+    const qp = /query\s*=\s*\{/.exec(el);
+    if (!qp) continue;
+    const blk = blockAt(el, qp.index + qp[0].length - 1);
+    if (!blk) continue;
+    for (const id of blk.body.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) out.add(id[0]);
+  }
+  return out;
+}
+
+/** Does THIS query have an honest error branch bound to it? */
+function queryHandlesError(src, q, errorBarQueries) {
+  if (q.destructured) {
+    const names = q.destructured.replace(/[{}]/g, '').split(',')
+      .map((x) => x.trim()).filter(Boolean)
+      .map((x) => ({ from: x.split(':')[0].trim(), local: x.split(':').pop().trim() }));
+    for (const n of names) {
+      if (!['isError', 'error', 'isLoadingError', 'status'].includes(n.from)) continue;
+      if (errorBarQueries.has(n.local)) return true;
+      // Referenced somewhere OTHER than its own destructuring, and not merely
+      // re-declared (`catch (error)` / `const error =`) — a bystander binding of
+      // a common name like `error` must not satisfy the rule for this query.
+      const useRe = new RegExp(`\\b${n.local}\\b`, 'g');
+      let m; let real = 0;
+      while ((m = useRe.exec(src))) {
+        if (m.index > q.index && m.index < q.index + q.destructured.length + 40) continue;
+        const before = src.slice(Math.max(0, m.index - 24), m.index);
+        if (/\bcatch\s*\($/.test(before) || /\b(?:const|let|var)\s+$/.test(before)) continue;
+        real++;
+      }
+      if (real > 0) return true;
     }
     return false;
   }
   const v = q.varName;
-  const re = new RegExp(`\\b${v}\\s*\\.\\s*(isError|error|isLoadingError)\\b|\\b${v}\\s*\\.\\s*status\\s*===\\s*['"]error['"]`);
+  if (errorBarQueries.has(v)) return true;
+  const re = new RegExp(
+    `\\b${v}\\s*\\.\\s*(isError|error|isLoadingError)\\b`
+    + `|\\b${v}\\s*\\.\\s*status\\s*===\\s*['"]error['"]`,
+  );
   return re.test(src);
 }
 
+let rule2Queries = 0;
+let rule2Throwing = 0;
+
 for (const file of files) {
-  const src = readFileSync(file, 'utf8');
-  if (!/\buseQuery\s*[<(]/.test(src)) continue;
+  const raw = readFileSync(file, 'utf8');
+  if (!/\buseQuery\s*[<(]/.test(raw)) continue;
   const relPath = rel(file);
   if (ALLOWLIST_RULE2.has(relPath)) continue;
+  // Comments blanked (length- and line-preserving) — a rule that a COMMENT can
+  // satisfy measures nothing. See blankComments() and mutation M1b.
+  const src = blankComments(raw);
+  const errorBarQueries = queriesGivenToErrorBar(src);
 
   for (const q of findQueries(src)) {
-    if (queryHandlesError(src, q)) continue;
-    const mm = /queryFn\s*:\s*([^,\n]+)/.exec(q.args);
-    if (!mm) continue;
-    const expr = mm[1].trim();
-    const names = [...expr.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)].map((x) => x[1]);
-    const bare = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(expr) ? [expr] : [];
-    let thrower = null;
-    for (const name of [...names, ...bare]) {
-      if (SHARED_THROWERS.has(name)) { thrower = name; break; }
-      const defRe = new RegExp(`(?:async\\s+function\\s+${name}\\s*\\(|const\\s+${name}\\s*=\\s*async\\s*\\()`);
-      const d = defRe.exec(src);
-      if (!d) continue;
-      const blk = blockAt(src, d.index + d[0].length - 1);
-      if (blk && /\bthrow\b/.test(blk.body)) { thrower = name; break; }
+    rule2Queries++;
+    const expr = objectProp(q.args, 'queryFn');
+    if (!expr) continue;
+
+    // Resolve the fetcher: an inline function body, or a named symbol.
+    let throwing = false;
+    let label = expr.slice(0, 40).replace(/\s+/g, ' ');
+    const inline = /=>|^\s*(?:async\s+)?function\b/.test(expr);
+    if (inline) {
+      // Analyse the WHOLE arrow text, never "the block after `=>`": a
+      // `queryFn: () => getJson(\`/api/x?y=${z}\`)` has its first `{` inside a
+      // template placeholder, so brace-matching from the arrow returns `z` as
+      // the "body" and the fetcher resolves as non-throwing. Two of the four
+      // finops queries were exempted exactly that way.
+      throwing = bodyThrows(file, expr);
+      label = 'inline queryFn';
+    } else {
+      const bare = expr.replace(/[<(].*$/s, '').trim();
+      if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(bare)) {
+        throwing = symbolThrows(file, bare);
+        label = bare;
+      }
     }
-    if (!thrower) continue;
+    if (!throwing) {
+      if (process.env.LOOM_READ_HONESTY_DEBUG) {
+        console.error(`[debug] NOT-THROWING ${relPath}:${q.line} queryFn=${expr.slice(0, 70).replace(/\s+/g, ' ')}`);
+      }
+      continue;
+    }
+    rule2Throwing++;
+    if (queryHandlesError(src, q, errorBarQueries)) continue;
+
     violations.push({
       rule: 2,
       file: relPath,
       line: q.line,
       msg:
-        `useQuery's fetcher \`${thrower}\` can THROW, but this query (\`${q.varName || q.destructured}\`) `
-        + 'has no error branch. A failed read therefore leaves the loading or empty branch on '
-        + 'screen, asserting something the code never established (deploy-integrity.md R7). '
-        + 'Fix: render an honest error MessageBar + Retry — see s3-gateway-editor.tsx or '
-        + 'ItemLoadErrorBar in lib/editors/use-item-doc-state.tsx.',
+        `useQuery's fetcher (\`${label}\`) can THROW, but this query `
+        + `(\`${q.varName || q.destructured}\`) has no error branch. A failed read therefore `
+        + 'leaves the loading or empty branch on screen, asserting something the code never '
+        + 'established (deploy-integrity.md R7). '
+        + 'Fix: render the shared <QueryErrorBar query={…} subject="…" /> from '
+        + 'lib/components/ui/query-error-bar.tsx — see s3-gateway-editor.tsx or assets/page.tsx.',
     });
   }
 }
@@ -483,9 +822,40 @@ if (failures.length || stale.length || rule3.length) {
   process.exit(1);
 }
 
+/**
+ * SELF-CHECK — replaces the old "is fetchJson still throwing?" premise check.
+ *
+ * RULE 2's whole force comes from the resolver actually recognising throwing
+ * fetchers. If a refactor breaks resolution the rule passes on every file — an
+ * UNKNOWN reported as a negative, the failure this repo keeps re-learning, and
+ * the exact way the FIRST version of this rule enforced itself on a sixth of
+ * its subject while printing OK.
+ *
+ * MEASURED 2026-08-08: 43 of the 46 inspected useQuery consumers have a fetcher
+ * that can throw. The 3 that cannot are deliberate and were each read:
+ *   getWorkspaceAdminStatus  — try/catch → fail-closed default
+ *   app/workspaces/page.tsx `me` — try/catch → `{}`
+ *   rum-panel `fetchRum`     — catches into a structured FetchState.error
+ *
+ * So the floor is 85%: a resolver regression that loses more than ~4 queries
+ * FAILS THE BUILD instead of quietly exempting them.
+ */
+const RESOLVER_FLOOR = 0.85;
+if (rule2Queries === 0 || rule2Throwing < Math.floor(rule2Queries * RESOLVER_FLOOR)) {
+  console.error(
+    'check-editor-read-failure-honesty: RULE 2 resolved only '
+    + `${rule2Throwing} throwing fetcher(s) across ${rule2Queries} useQuery consumer(s) `
+    + `(floor ${Math.floor(rule2Queries * RESOLVER_FLOOR)}). That is far below the measured `
+    + 'baseline of 43/46, so the RESOLVER — not the codebase — has almost certainly broken. '
+    + 'Refusing to report OK on a check that is no longer looking. '
+    + 'Re-run with LOOM_READ_HONESTY_DEBUG=1 to list what it failed to resolve.',
+  );
+  process.exit(2);
+}
+
 const total = violations.length;
 console.log(
   `check-editor-read-failure-honesty: OK (${files.length} files scanned, `
-  + `${SHARED_THROWERS.size} throwing shared fetchers derived, 3 chokepoints intact, `
+  + `${rule2Throwing}/${rule2Queries} useQuery fetchers resolved as throwing, 3 chokepoints intact, `
   + `${total} baselined occurrence(s) — none new)`,
 );

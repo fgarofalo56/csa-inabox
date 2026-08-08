@@ -63,6 +63,7 @@ import { useStyles } from './styles';
 import { DetailsPanel } from '@/lib/components/shared/details-panel';
 import { ItemTabStrip, ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 
 // ----- KQL Database -----
 // Ribbon is built inside the editor via useMemo. Every action is wired to a
@@ -314,12 +315,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   // The workspace item record (for workspaceId, needed by "Create dashboard").
   // Reads from the React Query cache page.tsx already populated (same key), so
   // it does NOT fire an extra network request in normal use.
-  const { data: itemRecord } = useQuery<WorkspaceItem>({
+  const itemRecordQ = useQuery<WorkspaceItem>({
     queryKey: ['item', 'kql-database', id],
     queryFn: () => getItem('kql-database', id),
     enabled: !!(id && id !== 'new'),
     staleTime: 60_000,
   });
+  const itemRecord = itemRecordQ.data;
 
   // ── 5.2 — Query → Dashboard conversion wizard (ribbon + result context). ──
   const [tileWizardOpen, setTileWizardOpen] = useState(false);
@@ -1281,6 +1283,18 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       }
       main={
         <div className={s.pad}>
+          {/* C20 sweep — a failed read leaves `itemRecord` undefined, and
+              `createDashboardFromTable` then silently redirects to a BLANK
+              /items/kql-dashboard/new (its `!wsId` branch is commented "item
+              not loaded" — conflating a FAILED read with an unfinished one).
+              The header also falls back to a generic name. Say what happened
+              instead of acting on an absence that was never established. R7. */}
+          <QueryErrorBar
+            query={itemRecordQ}
+            subject="this KQL database’s workspace record"
+            endpoint={`/api/cosmos-items/kql-database/${id}`}
+            reassurance="Until it loads, “Create dashboard” cannot bind the new dashboard to this database’s workspace."
+          />
           <TeachingBanner
             surfaceKey="kql-database-editor"
             title="Analyze your data"

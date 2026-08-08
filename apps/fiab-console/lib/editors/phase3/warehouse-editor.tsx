@@ -67,6 +67,7 @@ import { SqlMigrationWizard } from '../sql-migration-wizard';
 // N3 — the shared Connect tab (ADBC / Arrow Flight SQL / JDBC).
 import { ConnectTab } from '@/lib/components/shared/connect-tab';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { useStyles } from './styles';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
 
@@ -679,6 +680,18 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
+          {/* C20 sweep — `getItem` failing makes `bundleContent` undefined, so
+              the persisted DDL, dbt medallion models and starter queries all
+              vanish and `hasBundle` goes false: a fully built-out warehouse
+              renders as a bare query tab with no explanation. The host page
+              returns <Editor/> BEFORE its own q.error branch, so this is the
+              only place the failure can be told. R7. */}
+          <QueryErrorBar
+            query={itemQ}
+            subject="this warehouse"
+            endpoint={`/api/cosmos-items/warehouse/${id}`}
+            reassurance="The saved DDL, dbt models and starter queries are not shown because the record could not be read — they have not been lost."
+          />
           <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as WarehouseEditorTab)}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>

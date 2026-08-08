@@ -60,6 +60,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { DeltaPreviewGrid, type ColStat } from '../components/delta-preview-grid';
 import {
   useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph,
@@ -1007,6 +1008,22 @@ export function LakehouseEditor({ item, id }: Props) {
         }
         main={
           <>
+            {/* C20 sweep — the item record IS this lakehouse's content. When
+                `getItem` fails, `lhContent` / `seededTableInfo` / the bundle
+                folders + Delta tables + shortcuts all read as ABSENT, so a
+                fully-populated lakehouse renders identically to an empty one
+                and nothing says why. The host page CANNOT cover this: it
+                returns <Editor/> BEFORE its own q.error branch (see
+                app/items/[type]/[id]/page.tsx — "the editor reads the SAME
+                ['item', type, id] query and renders its own inline
+                loading/error/gate state"), a delegation this editor never
+                honored. deploy-integrity.md R7. */}
+            <QueryErrorBar
+              query={itemQ}
+              subject="this lakehouse"
+              endpoint={`/api/cosmos-items/lakehouse/${id}`}
+              reassurance="Folders, Delta tables and shortcuts are not shown because the record could not be read — this does not mean the lakehouse is empty."
+            />
             <TeachingBanner
               surfaceKey="lakehouse-analyze"
               title="Analyze your data"

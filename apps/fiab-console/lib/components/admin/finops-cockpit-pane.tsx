@@ -29,6 +29,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { clientFetch } from '@/lib/client-fetch';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { FocusCostPanel } from '@/lib/components/finops/focus-cost-panel';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
@@ -75,6 +76,37 @@ async function getJson(url: string, timeout = 90_000): Promise<any> {
   const res = await clientFetch(url, { cache: 'no-store' }, timeout);
   const json = await res.json().catch(() => ({}));
   return { ...json, status: res.status };
+}
+
+/**
+ * C20 sweep — a read failure on this pane had TWO shapes and NEITHER was told:
+ *
+ *   1. `getJson` REJECTS (clientFetch transport failure / the 90s timeout) →
+ *      `data` is undefined.
+ *   2. `getJson` RESOLVES with a non-2xx (it deliberately merges `status`
+ *      rather than throwing) → `data` carries no `rows` / `points` / `feed`.
+ *
+ * Both fell through to `(…rows || []).length ? <chart/> : "No breakdown data."`
+ * — i.e. a 500 or a timeout rendered a confident statement about the
+ * customer's Azure SPEND that the code never established (deploy-integrity.md
+ * R7). This normalises both into the shape <QueryErrorBar> consumes, so the
+ * pane reports what it actually knows.
+ *
+ * `gate` is deliberately NOT a failure: an honest infra gate is a successful
+ * read of a not-yet-configured backend and keeps its own GateBar.
+ */
+function readState(q: { isError: boolean; error: unknown; data: any; refetch: () => unknown }) {
+  const status = typeof q.data?.status === 'number' ? q.data.status : null;
+  const httpFailed = status !== null && status >= 400;
+  return {
+    isError: q.isError || httpFailed,
+    error: q.isError
+      ? q.error
+      : httpFailed
+        ? new Error(q.data?.error || `Cost Management returned HTTP ${status}.`)
+        : null,
+    refetch: q.refetch,
+  };
 }
 
 function GateBar({ gate }: { gate?: { message?: string } }) {
@@ -257,7 +289,11 @@ export function FinopsCockpitPane() {
               </Tooltip>
             )}
           </div>
+          <QueryErrorBar query={readState(forecastQ)} subject="the spend forecast"
+            endpoint="/api/admin/finops/forecast"
+            reassurance="This says nothing about your actual spend — the read did not complete." />
           {forecastQ.isLoading ? <Spinner label="Loading forecast…" /> :
+            readState(forecastQ).isError ? null :
             forecastQ.data?.gate ? <GateBar gate={forecastQ.data.gate} /> :
             forecastRows.length ? (
               <LoomChart type="area" rows={forecastRows} title={`Daily spend + forecast (${currency})`} height={280} />
@@ -270,6 +306,9 @@ export function FinopsCockpitPane() {
             <Subtitle2>Cost anomalies</Subtitle2>
             <Link href="docs/fiab/runbooks/cost-anomaly.md">Runbook →</Link>
           </div>
+          <QueryErrorBar query={readState(anomaliesQ)} subject="the cost-anomaly feed"
+            endpoint="/api/admin/finops/anomalies"
+            reassurance="An empty feed below would be misleading — no anomaly evaluation was read." />
           {anomaliesQ.data?.gate && <GateBar gate={anomaliesQ.data.gate} />}
           <div className={styles.splitWrap}>
             <SplitPane direction="horizontal" defaultSize="55%" minSize={280} storageKey="finops-anomalies" dividerLabel="Resize anomaly feed">
@@ -317,7 +356,11 @@ export function FinopsCockpitPane() {
               {DIMENSIONS.map((x) => <Option key={x} value={x}>{x}</Option>)}
             </Dropdown>
           </div>
+          <QueryErrorBar query={readState(breakdownQ)} subject="the spend breakdown"
+            endpoint="/api/admin/finops/breakdown"
+            reassurance="This says nothing about whether there is spend to break down — the read did not complete." />
           {breakdownQ.isLoading ? <Spinner label="Loading breakdown…" /> :
+            readState(breakdownQ).isError ? null :
             breakdownQ.data?.gate ? <GateBar gate={breakdownQ.data.gate} /> :
             (breakdownQ.data?.rows || []).length ? (
               <LoomChart type="bar" height={300}
@@ -336,6 +379,9 @@ export function FinopsCockpitPane() {
             <Button appearance="primary" icon={<Add20Regular />} onClick={() => setBudgetDialog({ open: true, editing: null })}
               disabled={!subscriptions.length}>New budget</Button>
           </div>
+          <QueryErrorBar query={readState(budgetsQ)} subject="your cost budgets"
+            endpoint="/api/admin/finops/budgets"
+            reassurance="Existing budgets are unchanged — they could not be listed." />
           {budgetsQ.data?.gate && <GateBar gate={budgetsQ.data.gate} />}
           {budgetsQ.isLoading ? <Spinner label="Loading budgets…" /> :
             budgets.length ? (

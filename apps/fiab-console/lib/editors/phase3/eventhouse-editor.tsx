@@ -38,6 +38,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ResultChart } from './kql-results';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { useStyles } from './styles';
 import { DetailsPanel } from '@/lib/components/shared/details-panel';
 import { ItemTabStrip, ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
@@ -766,12 +767,13 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   // the new kql-dashboard lands in the same workspace as this eventhouse. Reads
   // from the React Query cache page.tsx already seeded (same ['item','eventhouse',id]
   // key), so it does NOT fire an extra network request in normal use.
-  const { data: itemRecord } = useQuery<WorkspaceItem>({
+  const itemRecordQ = useQuery<WorkspaceItem>({
     queryKey: ['item', 'eventhouse', id],
     queryFn: () => getItem('eventhouse', id),
     enabled: !!(id && id !== 'new'),
     staleTime: 60_000,
   });
+  const itemRecord = itemRecordQ.data;
   const [state, setState] = useState<EventhouseState | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -1526,6 +1528,18 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
+        {/* C20 sweep — when this read fails `itemRecord` is undefined, so
+            `createDashboard` silently falls into the `!wsId` branch and dumps
+            the user into a BLANK /items/kql-dashboard/new with no workspace
+            binding. Its comment says "item not loaded", conflating a failed
+            read with an unfinished one — the unknown-as-negative class. Say
+            what actually happened instead. R7. */}
+        <QueryErrorBar
+          query={itemRecordQ}
+          subject="this eventhouse’s workspace record"
+          endpoint={`/api/cosmos-items/eventhouse/${id}`}
+          reassurance="Until it loads, “New dashboard” cannot bind the new dashboard to this eventhouse’s workspace."
+        />
         {/* Teaching banner (SC-6) — Fabric's RTI "analyze" guidance, keyed per
             surface with a persistent dismiss. */}
         <TeachingBanner

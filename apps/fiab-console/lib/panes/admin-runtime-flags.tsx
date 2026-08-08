@@ -25,6 +25,7 @@ import {
 import { ToggleLeft24Regular, ShieldTask24Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { EmptyState } from '@/lib/components/empty-state';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 
 interface FlagState {
@@ -70,7 +71,8 @@ export function AdminRuntimeFlagsPane() {
   const s = useStyles();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flipError, setFlipError] = useState<string | null>(null);
-  const { data, isLoading, refetch } = useQuery({ queryKey: ['admin-runtime-flags'], queryFn: fetchFlags });
+  const q = useQuery({ queryKey: ['admin-runtime-flags'], queryFn: fetchFlags });
+  const { data, isLoading, refetch } = q;
 
   const flip = async (id: string, enabled: boolean) => {
     setBusyId(id);
@@ -104,6 +106,22 @@ export function AdminRuntimeFlagsPane() {
       </MessageBar>
     );
   }
+  // C20 sweep — `fetchFlags` merges `status` for a non-2xx, so the branch below
+  // covered a RESOLVED failure; a REJECTED one (clientFetch transport failure /
+  // timeout) arrived as `data === undefined` and rendered the Cosmos
+  // remediation copy — asserting a CAUSE the code never established (R7). A
+  // timeout is not a missing LOOM_COSMOS_ENDPOINT.
+  if (q.isError) {
+    return (
+      <QueryErrorBar
+        query={q}
+        subject="runtime flags"
+        endpoint="/api/admin/runtime-flags"
+        reassurance="Every flag keeps its current value; this failure only means the list could not be read."
+      />
+    );
+  }
+
   if (!data?.ok) {
     return (
       <MessageBar intent="error" layout="multiline">

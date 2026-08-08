@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   Handle, Position, useNodesState, useEdgesState, useReactFlow, addEdge,
@@ -781,6 +782,16 @@ export function TaskFlowsPane({ workspaceId }: TaskFlowsPaneProps): JSX.Element 
       {flowsQ.error && (
         <MessageBar intent="error"><MessageBarBody>Failed to load task flows: {(flowsQ.error as Error).message}</MessageBarBody></MessageBar>
       )}
+      {/* C20 sweep — `flowsQ` (declared one line above `itemsQ`) had this error
+          branch; its sibling did not. `listItems` THROWS, and `items` feeds the
+          canvas step-linking Dropdown: a failed read rendered an EMPTY item
+          picker, so a step looked un-linkable and the user could not tell
+          whether the workspace had no items or the read had failed (R7). */}
+      <QueryErrorBar
+        query={itemsQ}
+        subject="this workspace’s items"
+        endpoint={`/api/workspaces/${workspaceId}/items`}
+        reassurance="Steps can still be arranged, but the item picker is empty because the list could not be read — not because the workspace is empty." />
 
       {!flowsQ.isLoading && flows.length === 0 && (
         <div className={s.empty}>
