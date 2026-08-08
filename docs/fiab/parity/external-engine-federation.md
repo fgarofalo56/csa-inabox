@@ -446,7 +446,7 @@ sent back to the token path, which this same measurement proves healthy.
 The grade stays **D** because the *Iceberg* read still does not return 200, and
 that is the row this doc is about.
 
-### RC-12 — the `loom` warehouse is never provisioned (leading hypothesis, NOT yet confirmed)
+### RC-12 — the `loom` warehouse is never provisioned (confirmed in code)
 
 Measured 2026-08-08, warm, minted session, immediately after the RC-9 roll:
 
@@ -474,13 +474,41 @@ the value is right, the OBJECT it names was never provisioned. Under
 `auto-bind-by-default.md` §1 creating that backing object is the platform's job,
 so this is a provisioning defect, not a configuration one.
 
-**Stated as a hypothesis, because it is one.** Confirming it needs a catalog
-listing against the `iceberg-catalog` host specifically, and no console route
-exposes that — `/api/catalog/browse?source=unity-catalog` reads `LOOM_UNITY_URL`
-(the Postgres-backed sibling, which DOES hold a metastore), not
-`LOOM_ICEBERG_CATALOG_URL`. An empty list on the Iceberg host confirms this
-diagnosis; a populated one refutes it. That probe is the next step and is
-deliberately not asserted here as fact.
+**CONFIRMED IN CODE — nothing anywhere provisions this warehouse.** The live
+state could not be read directly (no console route lists catalogs on the
+`iceberg-catalog` host; `/api/catalog/browse?source=unity-catalog` reads
+`LOOM_UNITY_URL`, the Postgres-backed sibling that DOES hold a metastore). But
+the question is answerable by absence, and the absence is total:
+
+```bash
+# The entrypoint that boots BOTH catalog apps never mentions a warehouse:
+grep -c warehouse apps/loom-unity/bin/loom-entrypoint.sh            # -> 0
+
+# Its auto-bind creates a USER, not a CATALOG:
+console_bind_plan() -> "bind:<principal-id>"
+# and the boot log confirms exactly that scope:
+#   auto-bind: registered the Console principal ... as an ENABLED Unity Catalog user (HTTP 201)
+
+# createCatalog() exists, but is only ever called against Databricks / UC
+# workspace hosts -- never against LOOM_ICEBERG_CATALOG_URL:
+grep -rn "createCatalog" apps/fiab-console/lib/azure/unity-catalog-client.ts
+```
+
+So the `loom` warehouse can only exist if someone created it by hand — and per
+RC-2 the ephemeral H2 database would discard it on the next restart regardless.
+The auto-bind that DOES run registers the Console as a catalog *user*, which is
+why the credential is accepted (200 on the Unity path) while the warehouse lookup
+is not (403 on `/v1/config?warehouse=loom`). Those two facts together are
+consistent only with "authorized principal, absent object".
+
+What remains genuinely unverified is the live catalog listing itself. The code
+evidence is strong enough to act on; a read-only listing against the Iceberg host
+would close it completely, and building that probe is the cheapest next step.
+
+**The fix is provisioning, and it must land WITH persistence.** Creating a
+warehouse into an ephemeral database solves nothing past the next scale-to-zero,
+so RC-12 and RC-2 are one piece of work, not two.
+
 
 ### RC-13 — there is NO automated path to roll the two catalog apps
 
