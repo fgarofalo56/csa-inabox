@@ -1728,7 +1728,15 @@
       "next_step": "After the image lands: roll BOTH loom-unity AND iceberg-catalog onto it. Rolling only one leaves the pair split.",
       "then": "Re-run loom-ui-verify with extra_projects=external-engine-federation. Grade stays D until an AUTHENTICATED catalog read returns 200."
     },
-    "gcc_cycle_2026-08-08": "Deferred cycle EXECUTED once the 08:00Z cron had passed (23h of margin). enable -> dispatch whatif-only (run 31248754470) -> disable, all within ~14s. VERIFIED AFTER: exactly 3 workflows non-active repo-wide; deploy-fiab-gcc and deploy-fiab-gcch both disabled_manually. The cron did not arm. This is the receipt GCC needed, since its previous SUCCESS was the hollow 2>/dev/null || echo \"0\" green."
+    "gcc_cycle_2026-08-08": "Deferred cycle EXECUTED once the 08:00Z cron had passed (23h of margin). enable -> dispatch whatif-only (run 31248754470) -> disable, all within ~14s. VERIFIED AFTER: exactly 3 workflows non-active repo-wide; deploy-fiab-gcc and deploy-fiab-gcch both disabled_manually. The cron did not arm. This is the receipt GCC needed, since its previous SUCCESS was the hollow 2>/dev/null || echo \"0\" green.",
+    "gcc_third_hollow_green_2026-08-08": {
+      "finding": "GCC'S WHATIF 'SUCCESS' IS HOLLOW AGAIN - A THIRD TIME, AND THIS IS THE REAL ROOT CAUSE OF #3078. Run 31248754470 completed/success with THREE jobs: 'Verify GCC secrets are configured' SUCCESS, 'Deploy + validate CSA Loom in GCC' SKIPPED, 'Post-deploy bootstrap (GCC)' SKIPPED. deploy-fiab-gcc.yml:65-67 - when AZURE_GCC_* secrets are absent it echoes 'configured=false' plus a ::warning:: and the job SUCCEEDS; :75 gates the deploy job on needs.precheck.outputs.configured == 'true', so it is skipped; the RUN THEN REPORTS SUCCESS HAVING DONE NOTHING.",
+      "explains_3078": "This explains '#3078: deploy-fiab-gcc was SUCCESS daily while deploying ZERO Container Apps'. It was not deploying zero apps because of a bug in the deploy - IT WAS SKIPPING THE DEPLOY ENTIRELY because its secrets are not configured, and calling that success. The daily green was never a deploy at all.",
+      "my_receipt_proves_nothing": "CONSEQUENCE FOR MY OWN CLAIM: the GCC enable->whatif->disable cycle I ran does NOT verify the #3139 guard fix. The guard never executed. GCC REMAINS UNVERIFIED. I am recording this rather than letting a green run stand as a receipt - which is exactly the mistake the hollow-green class punishes.",
+      "gcch_contrast": "gcch's green IS real: its cycle-2 run executed Pre-install resource-graph, Topology guard, and Bicep what-if, with only Provision/Smoke/Teardown skipped. So AZURE_GCCH_* secrets ARE configured and AZURE_GCC_* are not.",
+      "the_defect": "A lane that cannot do its job must NOT report success. A ::warning:: plus exit 0 is the gates-that-cannot-fail pattern: it is structurally incapable of signalling the one condition that matters. Either the precheck fails closed, or the run is marked neutral/skipped - never green.",
+      "operator_item": "Configure AZURE_GCC_* secrets (see docs/fiab/runbooks/secrets-bootstrap.md), AND change the lane to stop reporting success when it skips."
+    }
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
