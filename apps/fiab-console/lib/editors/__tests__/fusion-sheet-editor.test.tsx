@@ -26,19 +26,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const COLS = 10; // must track fusion-sheet-editor.tsx's COLS constant
+const COLS = 10; // the MINIMUM viewport width (fusion-sheet-editor.tsx MIN_COLS)
 
-/** Resolve an A1-style ref to its <td> in the rendered grid. */
+/** Resolve an A1-style ref to its <td> in the rendered grid.
+ *  Column count is READ FROM THE DOM rather than mirrored from a constant: the
+ *  grid viewport now grows to cover whatever the sheet stores, so a hard-coded
+ *  COLS would silently address the wrong cell the moment it did. */
 function cell(container: HTMLElement, ref: string): HTMLElement {
   const m = /^([A-Z]+)(\d+)$/.exec(ref);
   if (!m) throw new Error(`bad ref ${ref}`);
   const col = m[1].split('').reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
   const row = Number(m[2]) - 1;
+  const firstRow = container.querySelector('tbody tr');
+  const cols = firstRow ? firstRow.querySelectorAll('td').length : 0;
+  if (!cols) throw new Error('grid rendered no columns');
   const tds = container.querySelectorAll('tbody tr td');
-  const td = tds[row * COLS + col] as HTMLElement | undefined;
+  const td = tds[row * cols + col] as HTMLElement | undefined;
   if (!td) throw new Error(`no cell rendered at ${ref}`);
   return td;
 }
+
+/** The focusable gridcell inside a cell (absent while that cell is in edit mode). */
+const gridcell = (container: HTMLElement, ref: string) =>
+  container.querySelector<HTMLElement>(`[data-cell="${ref}"]`);
 
 const shown = (container: HTMLElement, ref: string) => cell(container, ref).textContent?.trim() ?? '';
 
@@ -266,5 +276,125 @@ describe('FusionSheetEditor — FIXED (C19): a failed load is never mistaken for
     await waitFor(() => expect(shown(container, 'A1')).toBe('42'));
     expect(screen.queryByText('Could not read this fusion sheet')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+});
+
+// ── C14 — keyboard, undo, and the hard-coded viewport ────────────────────────
+// As shipped, every cell was a bare `<div onClick>`: not focusable, no role, and
+// therefore unreachable by keyboard at all. There was no undo on a surface whose
+// entire purpose is destructive edits to a data grid, and the grid was a fixed
+// 20x10 — so stored cells outside that box were invisible while still being
+// saved and evaluated. Each spec below goes red against that version.
+
+describe('FusionSheetEditor — keyboard access (WCAG 2.1.1)', () => {
+  it('cells are focusable gridcells with a roving tabindex, not click-only divs', async () => {
+    installFetch(okCells({ A1: '1' }));
+    const { container } = renderEditor();
+    await waitFor(() => expect(shown(container, 'A1')).toBe('1'));
+
+    const a1 = gridcell(container, 'A1');
+    const b1 = gridcell(container, 'B1');
+    expect(a1, 'A1 must render a focusable gridcell').toBeTruthy();
+    expect(a1!.getAttribute('role')).toBe('gridcell');
+    // Exactly ONE tab stop for the whole grid — the anchor.
+    expect(a1!.getAttribute('tabindex')).toBe('0');
+    expect(b1!.getAttribute('tabindex')).toBe('-1');
+    expect(container.querySelectorAll('[data-cell][tabindex="0"]').length).toBe(1);
+    // And it is announced by reference + content.
+    expect(a1!.getAttribute('aria-label')).toContain('A1');
+  });
+
+  it('arrow keys move the anchor and cannot escape the grid', async () => {
+    installFetch(okCells({}));
+    const { container } = renderEditor();
+    await waitFor(() => expect(gridcell(container, 'A1')).toBeTruthy());
+
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'ArrowRight' });
+    await waitFor(() => expect(gridcell(container, 'B1')!.getAttribute('tabindex')).toBe('0'));
+    fireEvent.keyDown(gridcell(container, 'B1')!, { key: 'ArrowDown' });
+    await waitFor(() => expect(gridcell(container, 'B2')!.getAttribute('tabindex')).toBe('0'));
+    fireEvent.keyDown(gridcell(container, 'B2')!, { key: 'ArrowUp' });
+    fireEvent.keyDown(gridcell(container, 'B1')!, { key: 'ArrowLeft' });
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'ArrowUp' });
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'ArrowLeft' });
+    await waitFor(() => expect(gridcell(container, 'A1')!.getAttribute('tabindex')).toBe('0'));
+  });
+
+  it('Enter opens an editor, and typing a character opens one seeded with it', async () => {
+    installFetch(okCells({}));
+    const { container } = renderEditor();
+    await waitFor(() => expect(gridcell(container, 'A1')).toBeTruthy());
+
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByLabelText('Edit cell A1')).toBeInTheDocument());
+    fireEvent.keyDown(screen.getByLabelText('Edit cell A1'), { key: 'Escape' });
+
+    await waitFor(() => expect(gridcell(container, 'A1')).toBeTruthy());
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: '7' });
+    await waitFor(() => {
+      const input = screen.getByLabelText('Edit cell A1') as HTMLInputElement;
+      expect(input.value).toBe('7');
+    });
+  });
+
+  it('Delete clears a cell from the keyboard', async () => {
+    installFetch(okCells({ A1: '99' }));
+    const { container } = renderEditor();
+    await waitFor(() => expect(shown(container, 'A1')).toBe('99'));
+
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'Delete' });
+    await waitFor(() => expect(shown(container, 'A1')).toBe(''));
+  });
+});
+
+describe('FusionSheetEditor — undo/redo', () => {
+  it('Ctrl+Z reverts an edit and Ctrl+Y reapplies it', async () => {
+    installFetch(okCells({ A1: '5' }));
+    const { container } = renderEditor();
+    await waitFor(() => expect(shown(container, 'A1')).toBe('5'));
+
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'Delete' });
+    await waitFor(() => expect(shown(container, 'A1')).toBe(''));
+
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'z', ctrlKey: true });
+    await waitFor(() => expect(shown(container, 'A1')).toBe('5'));
+
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'y', ctrlKey: true });
+    await waitFor(() => expect(shown(container, 'A1')).toBe(''));
+  });
+
+  it('the toolbar Undo button is disabled until there is something to undo', async () => {
+    installFetch(okCells({ A1: '5' }));
+    const { container } = renderEditor();
+    await waitFor(() => expect(shown(container, 'A1')).toBe('5'));
+
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+
+    fireEvent.keyDown(gridcell(container, 'A1')!, { key: 'Delete' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Undo' })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(shown(container, 'A1')).toBe('5'));
+  });
+});
+
+describe('FusionSheetEditor — the viewport covers the stored data', () => {
+  it('renders cells beyond the old hard-coded 20x10 box', async () => {
+    // A sheet holding AB40 used to be saved, evaluated, and INVISIBLE.
+    installFetch(okCells({ AB40: '123' }));
+    const { container } = renderEditor();
+
+    await waitFor(() => expect(shown(container, 'AB40')).toBe('123'));
+    const firstRow = container.querySelector('tbody tr')!;
+    expect(firstRow.querySelectorAll('td').length).toBeGreaterThan(COLS);
+    expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(40);
+  });
+
+  it('still renders at least the minimum viewport for an empty sheet', async () => {
+    installFetch(okCells({}));
+    const { container } = renderEditor();
+    await waitFor(() => expect(gridcell(container, 'A1')).toBeTruthy());
+    expect(container.querySelectorAll('tbody tr').length).toBeGreaterThanOrEqual(20);
+    expect(container.querySelector('tbody tr')!.querySelectorAll('td').length).toBeGreaterThanOrEqual(COLS);
   });
 });
