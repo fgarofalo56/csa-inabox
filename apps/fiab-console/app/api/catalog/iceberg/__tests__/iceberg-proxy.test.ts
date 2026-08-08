@@ -57,15 +57,40 @@ vi.mock('@/lib/azure/arm-credential', () => ({
 // while the live catalog answered every such call 403. The fixture modelled the
 // CODE, not the server. It now models the server.
 const upstreamAll: Array<{ url: string; init: any }> = [];
-/** Catalog hops only — the exchange is infrastructure, not the assertion target. */
+/**
+ * Catalog RESOURCE hops only — the token exchange and the `/v1/config`
+ * handshake are infrastructure, not the assertion target.
+ *
+ * `/v1/config` is excluded for the same reason the exchange is: it is a
+ * MANDATORY prelude to every resource call, not the call under test. The
+ * Iceberg REST spec makes the server's `prefix` override (returned by config)
+ * part of every subsequent path, and this catalog's routes are
+ * `/v1/catalogs/{catalog}/…` — so a client that skips the handshake addresses
+ * routes that do not exist. That is exactly what shipped: the live console's
+ * `GET /api/catalog/iceberg/namespaces` hit `/v1/namespaces`, which no route
+ * matches, and died 500 inside `UnityAccessDecorator` (bound as a route
+ * decorator over the whole `/api/2.1/unity-catalog/` prefix, so an unmatched
+ * path still enters it). Measured in Docker against the real image.
+ */
 const upstream: Array<{ url: string; init: any }> = [];
+/** The handshake hops, so tests can assert the prefix WAS resolved. */
+const handshakes: Array<{ url: string; init: any }> = [];
 const INTERNAL_TOKEN = 'internal-minted-token';
+/** What the catalog answers `/v1/config` with — this server's real shape. */
+const IRC_PREFIX = 'catalogs/loom';
 let respond: () => Response = () => new Response('{}', { status: 200 });
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({
   fetchWithTimeout: async (url: string, init: any) => {
     upstreamAll.push({ url, init });
     if (String(url).includes('/api/1.0/unity-control/auth/tokens')) {
       return new Response(JSON.stringify({ access_token: INTERNAL_TOKEN }), { status: 200 });
+    }
+    if (String(url).includes('/v1/config')) {
+      handshakes.push({ url, init });
+      return new Response(
+        JSON.stringify({ defaults: {}, overrides: { prefix: IRC_PREFIX } }),
+        { status: 200 },
+      );
     }
     upstream.push({ url, init });
     return respond();
@@ -120,6 +145,7 @@ function req(url: string, init: RequestInit = {}) {
 beforeEach(() => {
   upstream.length = 0;
   upstreamAll.length = 0;
+  handshakes.length = 0;
   auditRows.length = 0;
   respond = () => new Response('{}', { status: 200 });
   sessionValue = { claims: { oid: 'oid-1', upn: 'analyst@contoso.com', tid: 'tid-1' }, exp: Date.now() / 1000 + 3600 };
@@ -314,6 +340,72 @@ describe('input validation', () => {
     const body = await res.json();
     expect(body.dataPurged).toBe(false);
     expect(upstream[0].url).toContain('purgeRequested=false');
+  });
+});
+
+describe('IRC prefix handshake (Iceberg REST spec)', () => {
+  it('resolves the server prefix and addresses /v1/catalogs/loom/… , never /v1/…', async () => {
+    // The defect this pins: the client used to call /v1/namespaces, a route this
+    // server does not have. Measured in Docker against the real image — the
+    // request enters UnityAccessDecorator (route-decorated over the whole
+    // /api/2.1/unity-catalog/ prefix), finds no annotated method, and dies 500.
+    respond = () => new Response(JSON.stringify({ identifiers: [] }), { status: 200 });
+    const { GET } = await import('../tables/route');
+    const res = await GET(req('https://loom.test/api/catalog/iceberg/tables?namespace=gold'));
+    expect(res.status).toBe(200);
+    expect(handshakes).toHaveLength(1);
+    expect(handshakes[0].url).toContain('/v1/config?warehouse=loom');
+    expect(upstream).toHaveLength(1);
+    expect(upstream[0].url).toContain('/v1/catalogs/loom/namespaces/gold/tables');
+    expect(upstream[0].url).not.toContain('/iceberg/v1/namespaces');
+  });
+
+  it('serves namespaces from the Unity schemas API when the image 500s the IRC route', async () => {
+    // MEASURED on the shipped image (authorization on, warehouse provisioned,
+    // namespace present, tried with EVERY principal including the server's own
+    // metastore-OWNER service token):
+    //   GET <irc>/v1/catalogs/loom/namespaces
+    //     -> 500 "Authorization filter not initialized — ensure the request goes
+    //             through UnityAccessDecorator."
+    // CONTROL: the identical call on the BARE upstream v0.5.0 image (no Loom
+    // overlay) -> 200 {"namespaces":[["default"]]}. So the v0.5.1 server overlay
+    // the Dockerfile applies for upstream #1603 is what broke this one route.
+    respond = () => {
+      // The mock records the hop BEFORE calling respond(), so the call in flight
+      // is the last entry — which is how one responder can model both hops.
+      const url = upstream.at(-1)!.url;
+      if (url.includes('/api/2.1/unity-catalog/schemas')) {
+        return new Response(JSON.stringify({ schemas: [{ name: 'default' }, { name: 'gold' }] }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ error: { message: 'Authorization filter not initialized — ensure the request goes through UnityAccessDecorator.', type: 'BaseException' } }),
+        { status: 500 },
+      );
+    };
+    const { GET } = await import('../namespaces/route');
+    const res = await GET(req('https://loom.test/api/catalog/iceberg/namespaces'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.via).toBe('unity-schemas');
+    expect(body.namespaces.map((n: any) => n.name)).toEqual(['default', 'gold']);
+    // The native route WAS attempted first — the fallback is a response to a
+    // measured failure, not a replacement for the Iceberg surface.
+    expect(upstream[0].url).toContain('/v1/catalogs/loom/namespaces');
+    // And the fallback hop is a REAL read of the same catalog, not a fabricated list.
+    expect(upstream.at(-1)!.url).toContain('/api/2.1/unity-catalog/schemas?catalog_name=loom');
+  });
+
+  it('does NOT mask an unrelated 500 behind the fallback', async () => {
+    respond = () => new Response(
+      JSON.stringify({ error: { message: 'database is on fire', type: 'BaseException' } }),
+      { status: 500 },
+    );
+    const { GET } = await import('../namespaces/route');
+    const res = await GET(req('https://loom.test/api/catalog/iceberg/namespaces'));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('database is on fire');
   });
 });
 

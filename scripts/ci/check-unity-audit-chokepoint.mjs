@@ -440,8 +440,21 @@ export const OUTBOUND_BASELINE = new Map([
   ['lib/admin/health-probes.ts', 3],
   // dq-monitor's own dbxFetch.
   ['lib/azure/dq-monitor-client.ts', 1],
-  // ircFetch + the listNamespaceGrants UC read.
-  ['lib/azure/iceberg-catalog-client.ts', 2],
+  // ircFetchRaw + the listNamespaceGrants UC read + the LIST-namespaces
+  // fallback.
+  //
+  // RC-12 raised this 2 -> 3. SECURITY REVIEW: the third exit
+  // (`listNamespacesViaUnitySchemas`) is a GET of
+  // /api/2.1/unity-catalog/schemas?catalog_name=<warehouse> against the SAME
+  // catalog base, with the SAME injected bearer, and it records
+  // recordDatabricksUnityAccess on BOTH the success and the transport-failure
+  // path — i.e. it is audited exactly like the listNamespaceGrants exit next to
+  // it, not a new un-audited door. It exists because the shipped catalog image
+  // answers the native Iceberg LIST-namespaces route HTTP 500 for every
+  // principal (measured; the bare upstream v0.5.0 image answers 200 — the
+  // v0.5.1 server overlay is the cause), and it fires ONLY on that exact error
+  // signature.
+  ['lib/azure/iceberg-catalog-client.ts', 3],
   // DECLARED GAP: its own private ucFetch + one sibling. Its UC exits are now
   // audited at the facade (check 8), but the pin stays so the un-audited
   // TRANSPORT cannot grow new exits (issue #2622).

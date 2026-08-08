@@ -63,11 +63,24 @@ def mint(sub: str, aud: str, email: str, iss: str, kid: str = KID) -> str:
         "iss": iss,
         "aud": aud,
         "sub": sub,
-        "email": email,
         "iat": now,
         "nbf": now,
         "exp": now + 3600,
     }
+    # An EMPTY `email` omits the claim entirely rather than minting `"email": ""`.
+    #
+    # This is the shape that matters, not a convenience. A Microsoft Entra
+    # APP-ONLY (client-credentials) token — which is exactly what the Console's
+    # managed identity mints — carries NO `email` claim, so upstream
+    # AuthService.verifyPrincipal resolves the caller as `sub`, i.e. the service
+    # principal's OBJECT ID. Every case in authz-e2e.sh mints `email=admin`
+    # (the default), which resolves to the bootstrap admin user and therefore
+    # exercises the METASTORE-OWNER path — not the Console's. That is why the
+    # authz suite could pass while the Console's real credential was answered 403
+    # on the Iceberg surface. iceberg-e2e.sh mints with `email=` to model the
+    # real thing.
+    if email:
+        payload["email"] = email
     signing_input = (
         b64u(json.dumps(header, separators=(",", ":")).encode())
         + "."
