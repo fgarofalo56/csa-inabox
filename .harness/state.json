@@ -921,7 +921,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 57,
-      "status": "todo",
+      "status": "in_progress",
       "title": "B-FP' foundry widget-catalog last-mile + WS-4.4 sync-backfill; B-U12 px→tokens; B-R10-17 monolith decomposition + typed client-map",
       "depends_on": [],
       "validation": {
@@ -932,7 +932,9 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "agent": "a8299111bdbacbc30",
+      "dispatched": "2026-08-08 session-3"
     },
     {
       "id": "D17",
@@ -1029,7 +1031,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 3,
       "task_order": 47,
-      "status": "todo",
+      "status": "in_progress",
       "title": "Help depth D3-D5 residual guides (18 item guides + 15 app tutorials baseline 07-24, some closed since — RE-INVENTORY first). help-D6 visual captures OPERATOR-GATED — see operator_queue",
       "depends_on": [],
       "validation": {
@@ -1040,14 +1042,16 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "agent": "a5176bf37e2f9f131",
+      "dispatched": "2026-08-08 session-3"
     },
     {
       "id": "C8",
       "lane": "L-PRODUCT-A",
       "wave": 3,
       "task_order": 46,
-      "status": "todo",
+      "status": "in_progress",
       "title": "#2626 OpenLineage DRIVEN receipt (real backed pipeline + Spark batch on estate); #2581 semantic-model 3-tab scripted spec; #2622 residual (try/finally in shortcut-credentials.ts + drop KNOWN_UNAUDITED — operator file access; file unity-audit-guard.test.ts 81s-timeout issue); #2583 close after console roll",
       "depends_on": [],
       "validation": {
@@ -1058,14 +1062,16 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "agent": "a37d7fe4ea517e219",
+      "dispatched": "2026-08-08 session-3"
     },
     {
       "id": "C10",
       "lane": "L-PLATFORM",
       "wave": 3,
       "task_order": 45,
-      "status": "todo",
+      "status": "in_progress",
       "title": "June harness real residue: PP solution import/export (audit-T28/task-015), scale-by-SKU verify EVERY resource (task-020), mirroring-wizard backend consumption (persist connectionId + KV creds)",
       "depends_on": [],
       "validation": {
@@ -1076,7 +1082,9 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "agent": "a6a17c2b9bd8116d2",
+      "dispatched": "2026-08-08 session-3"
     },
     {
       "id": "P2-DOCS",
@@ -1827,7 +1835,18 @@
       "significance": "deploy-integrity R1 SATISFIED for this path. The three most recent prior runs of this workflow all FAILED. It is now green end-to-end INCLUDING the post-deploy bootstrap, which per the #3140 root cause had NEVER succeeded as part of a deploy on a multi-subscription estate.",
       "estate": "Live at 184e5ed3 (build-marker stamp=31251849951), carrying every merge from 2026-08-08."
     },
-    "ZERO_DRIFT_2026-08-08": "ESTATE == MAIN. build-marker sha=e73d976c equals origin/main HEAD - deploy-integrity R3 satisfied with ZERO commits of drift. This is the condition the whole program was opened to restore: on 2026-08-05 the live console was 8 merges behind main and the last successful subscription-level infra deploy had FAILED on 2026-07-23."
+    "ZERO_DRIFT_2026-08-08": "ESTATE == MAIN. build-marker sha=e73d976c equals origin/main HEAD - deploy-integrity R3 satisfied with ZERO commits of drift. This is the condition the whole program was opened to restore: on 2026-08-05 the live console was 8 merges behind main and the last successful subscription-level infra deploy had FAILED on 2026-07-23.",
+    "session3_2026-08-08": {
+      "state_at_start": "ALL lane PRs merged. Estate at e73d976c == origin/main, ZERO DRIFT. Release 0.89.1 merged. Ledger reconciled: 45 done, 7 todo, 4 operator.",
+      "dispatched": {
+        "RC-12": "warehouse provisioning + RC-2 persistence — the last blocker on federation grade D",
+        "C8": "OpenLineage receipt + semantic-model spec + #2622 residual (81s test timeout is part of the defect)",
+        "C10": "PP solution import/export, scale-by-SKU coverage, mirroring-wizard consumption (inert-feature shaped)",
+        "C4": "foundry last-mile, sync-backfill, px->tokens, monolith decomposition (no --family codemods)",
+        "C6": "Help depth — RE-INVENTORY FIRST against the stale 07-24 baseline"
+      },
+      "not_dispatched": "C11 and C12 are explicitly DEFERRED programs (planning only, by design). D19 (Redis P1 -> AMR) is an operator cost/timing decision with a 2028-horizon Gov path. Neither is agent work."
+    }
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
