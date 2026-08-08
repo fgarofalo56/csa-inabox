@@ -40,36 +40,64 @@
  *     `requireWorkspace` — all seven share the `NextResponse | null` contract
  *     and all seven are covered now.
  *
- *   CHECK 2 — GUARD PRESENCE (GUARD_SIGNAL_RE, below).
- *     A route in scope must reference at least one authorization signal. This
- *     is a NAME search and is honestly labelled as one. It is strengthened
- *     two ways: matching runs on comment/string-STRIPPED source (so a name in
- *     prose can never satisfy it — the #2977 mechanism, closed for every
- *     symbol at once), and every returned-value signal it accepts is
- *     simultaneously policed by CHECK 1, so "the name is present" now implies
- *     "the answer changes the response".
+ *   CHECK 2 — GUARD PRESENCE (GUARD_SIGNAL_RE, below), applied PER EXPORTED
+ *     HANDLER on comment-, string- AND import-stripped source.
+ *
+ *     It was applied per FILE on comment/string-stripped source until C22 round 2
+ *     (#3122), and both of those gaps were closed only after being MEASURED — a
+ *     real route was really broken and this checker really stayed green:
+ *
+ *       (a) PER FILE, not per handler. `app/api/workspaces/route.ts` had its GET
+ *           rewritten to take the listing tenant from `?tenantId=`, and then to
+ *           drop the `getSession()` check and the owner-scoped listing outright.
+ *           `violations: 0` both times — POST in the same file still mentioned
+ *           `session.claims.oid`, and that satisfied the whole file. Every route
+ *           pairing a list GET with a create POST was covered by its sibling.
+ *
+ *       (b) AN IMPORT IS NOT A USE. On `items/activator/[id]/route.ts` every
+ *           `loadOwnedItem` / `updateOwnedItem` / `deleteOwnedItem` /
+ *           `loadContentBackedItem` CALL was replaced with an unscoped
+ *           equivalent and every `session.claims.oid` with a caller-supplied
+ *           `?tenantId=`. The only guard-signal occurrences left in the file were
+ *           two import lines. `violations: 0`. That is #2977 exactly, with
+ *           `import` in place of a comment.
+ *
+ *     Both are now pinned by SENSITIVITY_PROBES, which re-breaks these routes in
+ *     memory on every run and fails if the verdict does not change.
  *
  * WHAT IS STILL NOT PROVEN HERE (stated so no one reads more into a green run
  * than it earns):
  *   - That the capability id / required role / workspace is the RIGHT one.
  *     Consumption proves a decision is acted on, not that the decision is
  *     correct. Reviews and per-route contract tests own that.
- *   - `claims.oid` / `claims.tid` as a signal only proves the caller identity
- *     appears in the file. A route that forwards `session.claims.oid` as a
- *     header (app/api/setup/deploy does, as `x-loom-caller-oid`) satisfies it
- *     without authorizing anything. Such routes are held up by their gate
- *     under CHECK 1, not by this signal.
+ *   - **A bare `claims.oid` / `claims.tid` proves the token is PRESENT in the
+ *     handler, not that it AUTHORIZES anything.** It is satisfied just as well by
+ *     an audit field. Measured, and the reason two shipped holes survived every
+ *     CI gate: `items/dashboard/[id]` PUT passed on
+ *     `sanitizeOverlay(id, body, session.claims.upn || session.claims.oid)` — the
+ *     overlay's `savedBy` ATTRIBUTION — while overwriting any tenant's overlay by
+ *     id; `databricks-notebook/[id]/versions` POST passed on `savedBy:
+ *     session.claims.oid` for the same reason. Both are fixed (they now call
+ *     `authorizeItemWorkspace`), but the SIGNAL remains weak by construction.
+ *     Removing bare `claims.*` from GUARD_SIGNAL_RE was measured on 2026-08-08:
+ *     it takes the tree from 0 violations to 205, i.e. ~205 routes hand-roll an
+ *     owner-scoped Cosmos query rather than calling a named guard. Converting
+ *     those to `withWorkspaceOwner` / `authorizeItemWorkspace` is a scoped
+ *     program, not a checker tweak, and until it happens a green run does NOT
+ *     mean every `claims.oid` in the tree is load-bearing.
  *   - Routes with NO session call at all are SKIPPED, not passed — see
- *     GETSESSION_RE. A route is only policed if it looks like it does auth.
- *     Exactly ONE route in the tree is skipped for that reason today:
- *     `app/api/embed/query/route.ts`, which deliberately does not call
- *     getSession() because the embed TOKEN is the credential (verified
- *     server-side, carrying the owner oid the governed query is scoped to).
- *     It used to land in the remit only because its own header comment says
- *     "this route intentionally does NOT call `getSession()`" — the comment
- *     matched where no code did. That is #2977 in miniature and it is why the
- *     count is stated here: if a SECOND route ever drops out of the remit,
- *     `scanned` moves and someone has to explain why.
+ *     GETSESSION_RE. **Measured 2026-08-08: 119 route files with a data surface
+ *     are outside the remit, not one.** (1640 data-surface files, 1521 scanned.)
+ *     A previous revision of this header asserted "exactly ONE route in the tree
+ *     is skipped … `app/api/embed/query/route.ts`" and invited the reader to
+ *     treat a moving `scanned` as the alarm. That was wrong by 118, and it is
+ *     recorded here rather than quietly corrected because a false invariant in a
+ *     security control's own documentation is how the next reader gets misled.
+ *     Of the 119, 39 carry a guard signal anyway (they route through a helper
+ *     such as `guardAdxRequest` or `resolveAdminWorkspace`, which calls
+ *     `getSession()` in ANOTHER module) and 80 carry none. Making the remit fail
+ *     closed — in scope unless explicitly excused — is the right shape and is
+ *     NOT done here; it needs those 80 triaged first.
  * ------------------------------------------------------------------------
  *
  * SCOPE (the directories where this hole class lives):
@@ -204,7 +232,24 @@ const GUARD_SIGNAL_RE = new RegExp(
     // workspace ACL → per-item grant under the tid boundary (lib/auth/item-access.ts),
     // so a route threading it is fully authorized (not a bare session).
     'resolveItemAccessByOid', 'resolveWorkspaceAccessByOid',
-    'claims\\.oid', 'claims\\.tid', 'claims\\.tenantId',
+    // C22 round 2 (#3122): `tenantScopeId(session)` IS the caller's tenant —
+    // `session.claims.tid || session.claims.oid` (lib/auth/session.ts), verified
+    // structurally by assertGuardWrappersAreReal(). It is exactly as strong as
+    // the `claims.tid` / `claims.oid` signals already accepted, and it is the
+    // idiom the tenant-partitioned Cosmos stores use (marketplace, mesh,
+    // assets/freshness). Its absence here was not a judgement that it is weak —
+    // the file-level check never needed it, because some SIBLING handler always
+    // carried a `claims.oid`. Moving to per-handler scoping exposed that gap, so
+    // it is named now rather than allowlisting a dozen correctly-scoped routes.
+    // Matched AS A CALL so `{@link tenantScopeId}` in prose cannot satisfy it.
+    'tenantScopeId\\s*\\(',
+    // C22 round 2 (#3122): OPTIONAL CHAINING must match. `s?.claims?.oid` is the
+    // idiom when the session may be null (api/iq/mcp resolveTenant), and the
+    // literal-dot form `claims\.oid` silently missed it — a route could hold a
+    // real, session-derived tenant boundary and still read as unguarded. That is
+    // a false NEGATIVE for the checker's remit test and a false POSITIVE for its
+    // violation list, depending on where the token sits; both are wrong.
+    'claims\\??\\.\\s*oid', 'claims\\??\\.\\s*tid', 'claims\\??\\.\\s*tenantId',
   ].join('|'),
 );
 
@@ -361,6 +406,49 @@ const ALLOWLIST = new Map([
   // The rendered basemap is NOT item-scoped and no credential reaches the client
   // — auth = signed-in; there is no per-tenant resource to owner-check.
   ['apps/fiab-console/app/api/maps/static/route.ts', 'server-side Azure Maps static-basemap proxy over the shared deployment Maps account; params clamped, no credential to the client, no per-tenant Cosmos read'],
+
+  // ── C22 round 2 (#3122) — surfaced by PER-HANDLER scoping ─────────────────
+  // These are NOT new routes and NOT newly unguarded. Each was already
+  // session-only; the file-level test simply never asked, because a SIBLING
+  // handler in the same file carried a signal. Every reason below was checked
+  // against the backing helper's source, not inferred from the route — the
+  // failure mode this whole change exists to end is a control believed on the
+  // strength of a name.
+  //
+  // Handler-scoped where the file is MIXED, so the guarded halves stay pinned.
+
+  // AML environments: GET/POST list+register environment versions on the
+  // deployment's SINGLE AML workspace (ARM by name via the Console UAMI) — the
+  // `api/aml/` class-A navigator, allowlisted one directory up. PATCH is the
+  // odd one out: `?action=attach` writes the chosen environment onto a per-tenant
+  // NOTEBOOK item, which is why this file is in NOW_GUARDED. Only the shared-
+  // backend halves are excused; PATCH must keep passing on its own owner-check.
+  ['apps/fiab-console/app/api/aml/environments/route.ts', { handlers: ['GET', 'POST'], reason: 'list/register AML environment versions on the deployment-shared AML workspace (ARM by name); the per-tenant notebook attach lives in PATCH and is NOT excused here' }],
+
+  // Freshness policies: `listAssetDocs(session)` / `getAssetDoc(session, key)`
+  // (lib/assets/asset-store.ts) both take `tenantOf(session)` as the Cosmos
+  // PARTITION KEY and as the `c.tenantId = @t` predicate — READ AND CONFIRMED at
+  // asset-store.ts:41-51 and :68-78. An assetKey from another tenant resolves to
+  // nothing. Same class as the (B) session-scoped stores allowlisted by prefix.
+  ['apps/fiab-console/app/api/assets/freshness/route.ts', { handlers: ['GET'], reason: 'asset-store partitions every read by tenantOf(session) (verified lib/assets/asset-store.ts:41-78); a cross-tenant assetKey resolves to nothing' }],
+
+  // Deployment-wide operational reads — no per-tenant resource exists to scope.
+  ['apps/fiab-console/app/api/admin/mcp-servers/deploy/route.ts', { handlers: ['GET'], reason: 'reads deployment-wide MCP files/ACA config from env (readMcpFilesConfig); no per-tenant resource. The DEPLOY half is not excused' }],
+  ['apps/fiab-console/app/api/spark/session-pool/route.ts', { handlers: ['GET'], reason: 'deployment-wide Spark session-pool status (getPoolStatus, in-process counters); no per-tenant resource' }],
+  ['apps/fiab-console/app/api/items/[type]/[id]/ai-function/route.ts', { handlers: ['GET'], reason: 'returns the static AI-function NAME list + deployment capability/gate flags from env; ignores [id] entirely, reads no per-tenant data' }],
+  ['apps/fiab-console/app/api/learn/notebook-import/route.ts', { handlers: ['GET'], reason: 'lists the deployment-wide Learn notebook-import CATALOG (static bundle content); the POST that installs into a workspace is not excused' }],
+  ['apps/fiab-console/app/api/demo/deploy/route.ts', { handlers: ['GET'], reason: 'delegates to GET /api/workspaces WITH THE CALLER\'S OWN COOKIE and counts the result — authorization is performed by that route, which is owner-scoped; this handler adds no data access of its own' }],
+  ['apps/fiab-console/app/api/iq/mcp/route.ts', { handlers: ['GET'], reason: 'static MCP server descriptor (protocol version, tool names, auth modes) — no session read, no per-tenant data. POST authorizes via resolveTenant(req) and is not excused' }],
+
+  // Shared Azure backends resolved by ARM/data-plane name, same class as the
+  // service-navigator prefixes above.
+  ['apps/fiab-console/app/api/items/azure-sql-managed-instance/route.ts', { handlers: ['GET'], reason: 'lists SQL Managed Instances in the deployment subscription (ARM by name via Console UAMI); POST threads createOwnedItem and is not excused' }],
+  ['apps/fiab-console/app/api/items/release-environment/[id]/swap/route.ts', { handlers: ['GET'], reason: 'lists App Service deployment SLOTS for a caller-named resourceGroup+site over the deployment subscription (ARM); [id] is unused, no per-tenant Cosmos read' }],
+  ['apps/fiab-console/app/api/items/prompt-flow/[id]/route.ts', { handlers: ['PUT', 'DELETE'], reason: 'AI Foundry prompt-flow update/delete against the deployment Foundry project resolved by ?project= (data-plane by name) — the api/foundry/ class-A backend; no per-tenant Cosmos item' }],
+  ['apps/fiab-console/app/api/dq/monitors/route.ts', { handlers: ['GET', 'DELETE'], reason: 'Databricks Lakehouse-Monitoring + Delta constraints for a caller-named table on the deployment-shared Databricks workspace — the api/databricks/ class-A backend; no per-tenant Cosmos item' }],
+
+  // Self-endpoint: the caller can only ever mint a token FOR THEMSELVES.
+  ['apps/fiab-console/app/api/developer/tokens/route.ts', { handlers: ['POST'], reason: 'self-endpoint: createPatToken binds the new token to the CALLER\'s own session; patCannotMint(session) additionally blocks token-authenticated callers from minting further tokens' }],
 ]);
 
 // ── Specific-per-item-TYPE routes over a SHARED Azure backend ────────────────
@@ -892,6 +980,220 @@ function rel(f) {
   return path.relative(REPO_ROOT, f).split(path.sep).join('/');
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// C22 round 2 (#3122): SIGNALS MUST BE USES, AND THEY MUST BE IN THE HANDLER
+// THAT NEEDS THEM. Both re-keys below were established by MUTATION — a route was
+// really broken and the checker really stayed green — never by reading the code.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Blank `import …;` STATEMENTS (length- and line-preserving, like the comment
+ * stripper) so an imported NAME cannot satisfy a guard signal.
+ *
+ * MEASURED 2026-08-08 on `app/api/items/activator/[id]/route.ts`: every
+ * `loadOwnedItem(id,'activator',session.claims.oid)` /`updateOwnedItem` /
+ * `deleteOwnedItem` / `loadContentBackedItem` CALL was replaced with an unscoped
+ * equivalent and every `session.claims.oid` with a caller-supplied
+ * `?tenantId=`. The only occurrences of ANY guard signal left in the file were
+ * the two import lines. This checker printed `violations: 0`.
+ *
+ * That is #2977 exactly — a control passing on a name that guards nothing —
+ * with `import` in place of a comment. The comment case was closed by stripping
+ * comments; a declaration is the same lie one syntax node over. Only a line-
+ * leading `import` is blanked, so a dynamic `await import(...)` expression is
+ * left as code.
+ *
+ * Cost of this re-key, measured before adopting it: ZERO routes in the tree
+ * carry a signal only in an import today. It is a pure ratchet.
+ */
+export function stripImportStatements(code) {
+  return code.replace(/(^|\n)([ \t]*)import\s[^;]*;/g, (m) =>
+    m.replace(/[^\n]/g, ' '));
+}
+
+const HANDLER_NAMES = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+
+/** Offset just past the `)` matching the `(` at `open`. */
+function closeParen(code, open) {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '(') depth++;
+    else if (code[i] === ')') { depth--; if (depth === 0) return i + 1; }
+  }
+  return code.length;
+}
+
+/**
+ * Body of a function whose parameter list opens at `parenOpen` — i.e. skip the
+ * PARAMETERS and any return-type annotation, then take the block.
+ *
+ * Not a detail. `blockAt` alone takes the first `{` after the `(`, and in this
+ * tree that `{` is routinely NOT the body:
+ *   export async function DELETE(req: NextRequest, { params }: { params: … }) {
+ *                                                  ^ destructured parameter
+ *   export async function GET(_req: NextRequest, props: { params: Promise<…> }) {
+ *                                                        ^ inline type literal
+ * Taking either as the body yields a few tokens containing no guard, so
+ * `admin/copilot/memory/[id]` (whose DELETE opens with `requireTenantAdmin`) and
+ * ~390 siblings were reported as unguarded. Measured while building this: the
+ * naive form produced 391 violations, of which the ones sampled were ALL false.
+ * A checker that invents violations trains people to allowlist, which is how the
+ * class this file exists for gets re-opened.
+ */
+function functionBody(code, parenOpen) {
+  let i = closeParen(code, parenOpen);
+  let angle = 0;
+  for (; i < code.length; i++) {
+    const c = code[i];
+    if (c === '=' && code[i + 1] === '>') { i++; continue; } // not a type close
+    if (c === '<') angle++;
+    else if (c === '>') { if (angle > 0) angle--; }
+    else if (c === '{' && angle <= 0) {
+      const block = blockAt(code, i);
+      // A `{...}` in RETURN-TYPE position, not the body. TypeScript writes
+      //   function resolveTenant(req): { tenantId: string; mode: 'x' } | null {
+      // so the first top-level `{` after the parameters can belong to the TYPE.
+      // Taking it as the body yielded a few tokens with no guard in them, which
+      // is why `api/iq/mcp` POST read as unguarded while `resolveTenant` — the
+      // function that resolves the caller's tenant from the session or a
+      // validated bearer token — sat directly above it. Decide by what FOLLOWS
+      // the block: a type is continued by `|`/`&`/`[`/`,` or is immediately
+      // followed by the real body `{`.
+      let j = i + block.length;
+      while (j < code.length && /\s/.test(code[j])) j++;
+      if ('{|&[,'.includes(code[j])) { i = i + block.length - 1; continue; }
+      return block;
+    } else if (c === ';' && angle <= 0) return ''; // overload signature, no body
+  }
+  return '';
+}
+
+/** Text of the brace-delimited block that starts at the first `{` at/after
+ *  `from`, including both braces. Operates on stripped code, so no brace can
+ *  hide inside a comment, string, or regex literal. */
+function blockAt(code, from) {
+  const open = code.indexOf('{', from);
+  if (open === -1) return '';
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}') { depth--; if (depth === 0) return code.slice(open, i + 1); }
+  }
+  return code.slice(open);
+}
+
+/** Bodies of MODULE-SCOPE bindings declared in the file, by name. These are the
+ *  legitimate ways a handler delegates its guard:
+ *    - `async function loadItem(id, type, tenantId) { … }`   items/[type]/[id]
+ *    - `const adminSweep = withTenantAdmin(async (req,{session}) => { … })`
+ *      access-governance/reviews/sweep — POST hands off to it for human callers
+ *  so both are folded into the handler's effective text. Module scope is
+ *  approximated by "declared at column 0", which is what a nested binding never
+ *  is in this formatted tree.
+ *
+ *  `initializerExpression` (not a function-shaped regex) is used for the const
+ *  form deliberately: the delegation target is frequently the RESULT of a
+ *  wrapper call, not a literal arrow. Requiring an arrow here reported the sweep
+ *  route as unguarded while `withTenantAdmin` was three lines above it. */
+function localFunctionBodies(code) {
+  const out = new Map();
+  const decl = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/g;
+  let m;
+  while ((m = decl.exec(code))) out.set(m[1], functionBody(code, m.index + m[0].length - 1));
+  const binding = /(?:^|\n)(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]*)?=/g;
+  while ((m = binding.exec(code))) {
+    if (out.has(m[1])) continue;
+    out.set(m[1], initializerExpression(code, m.index + m[0].length));
+  }
+  return out;
+}
+
+/** A handler's body PLUS the bodies of every module-local binding it references,
+ *  transitively. A guard threaded through a local helper still counts; a guard
+ *  sitting in a SIBLING handler does not.
+ *
+ *  References are matched as `\bNAME\b`, not `\bNAME\s*\(`, because the alias
+ *  export is a real idiom here — `export const POST = save;` (kql-queryset/[id])
+ *  and `export const PUT = persist;` (rayfin-app/[id]) name the delegate without
+ *  calling it, and requiring a call reported both as unguarded while `save` did
+ *  the owner check. Erring toward pulling MORE text is the safe direction for a
+ *  merge blocker: it can only cost sensitivity, never invent a violation — and
+ *  the sensitivity it costs is pinned by the mutation self-tests below, which
+ *  fail if any of them stops being detected. */
+function effectiveHandlerText(body, localBodies) {
+  let text = body;
+  const pulled = new Set();
+  for (let pass = 0; pass < 6; pass++) {
+    let grew = false;
+    for (const [name, fnBody] of localBodies) {
+      if (pulled.has(name) || !fnBody) continue;
+      if (new RegExp(`\\b${name}\\b`).test(text)) {
+        pulled.add(name); text += '\n' + fnBody; grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  return text;
+}
+
+/** The full initializer expression of `export const H = …`, up to the `;` that
+ *  ends the STATEMENT — i.e. the first `;` at paren/brace/bracket depth 0. A
+ *  naive `[^;]*` stops at the first semicolon INSIDE the arrow body, which
+ *  truncated `export const GET = withSession(async (req,{session}) => { … })`
+ *  after its first statement and reported 100+ correctly-guarded toolkit routes
+ *  as violations while I was building this. A checker that invents violations is
+ *  as useless as one that misses them. */
+function initializerExpression(code, from) {
+  let depth = 0;
+  for (let i = from; i < code.length; i++) {
+    const c = code[i];
+    if (c === '(' || c === '{' || c === '[') depth++;
+    else if (c === ')' || c === '}' || c === ']') depth--;
+    else if (c === ';' && depth <= 0) return code.slice(from, i);
+  }
+  return code.slice(from);
+}
+
+/**
+ * Which exported handlers in this file carry NO authorization signal of their
+ * own? Returns [] when the file is authorized handler-by-handler.
+ *
+ * WHY PER HANDLER — MEASURED 2026-08-08 on `app/api/workspaces/route.ts`, a
+ * COLLECTION route. Two separate mutations, each a real cross-tenant hole:
+ *   (M1)  the listing tenant taken from `?tenantId=` instead of the session;
+ *   (M1b) the whole `getSession()` check plus the owner-scoped listing DELETED
+ *         from GET, leaving it fully unauthenticated.
+ * In BOTH runs this checker printed `violations: 0`, because `POST` in the same
+ * file still mentioned `session.claims.oid` and the signal test was applied to
+ * the FILE. A file-level test cannot see a handler-level hole; every route that
+ * pairs a list GET with a create POST was covered by its sibling.
+ *
+ * `export const GET = withWorkspaceOwner(...)` is decided on its initializer:
+ * the wrapper IS the control flow (there is no returned value to drop), which is
+ * why the route-toolkit form is the preferred fix and not merely an equivalent
+ * one. `withSession` is deliberately NOT a guard signal, so a `withSession`
+ * handler is still judged on what its body does.
+ */
+function unguardedHandlers(code) {
+  const localBodies = localFunctionBodies(code);
+  const gaps = [];
+  for (const h of HANDLER_NAMES) {
+    const wrapped = new RegExp(`export\\s+const\\s+${h}\\s*(?::[^=\\n]*)?=`).exec(code);
+    if (wrapped) {
+      const expr = initializerExpression(code, wrapped.index + wrapped[0].length);
+      if (!GUARD_SIGNAL_RE.test(effectiveHandlerText(expr, localBodies))) gaps.push(h);
+      continue;
+    }
+    const classic = new RegExp(`export\\s+async\\s+function\\s+${h}\\s*(?:<[^>]*>)?\\s*\\(`).exec(code);
+    if (!classic) continue;
+    const body = functionBody(code, classic.index + classic[0].length - 1);
+    if (!GUARD_SIGNAL_RE.test(effectiveHandlerText(body, localBodies))) gaps.push(h);
+  }
+  return gaps;
+}
+
+
+
 /** How many returned-value gate CALLS a file makes (comment/string-stripped, so
  *  a name in prose is not counted). Printed so a run that silently stops seeing
  *  gates — the "measures nothing" failure mode — is visible as the number
@@ -908,10 +1210,29 @@ function countGateCalls(raw) {
 /** A flagged route is intentionally session-only when it's on the per-route
  *  ALLOWLIST, OR under an ALLOWLIST_PREFIXES class — but a NOW_GUARDED route
  *  (a fixed per-tenant hole) is NEVER allowlisted, so if its owner-check ever
- *  regresses the checker re-flags it. */
-function isAllowed(r) {
-  if (NOW_GUARDED.has(r)) return false;
-  if (ALLOWLIST.has(r)) return true;
+ *  regresses the checker re-flags it.
+ *
+ *  C22 round 2 (#3122): an entry may be a plain reason STRING (the whole file is
+ *  session-only-safe) or `{ handlers: [...], reason }` (only those handlers are).
+ *  The per-handler form exists because per-handler scoping surfaced files that
+ *  are legitimately MIXED — `aml/environments` list/create run against the
+ *  deployment-shared AML workspace while its PATCH attaches an environment to a
+ *  per-tenant notebook item. Under the old file-level test one guard covered
+ *  both; allowlisting the whole file to re-green the shared half would have
+ *  un-pinned the guarded half, which is how a checker gets quietly widened. */
+function isAllowed(r, gaps) {
+  if (NOW_GUARDED.has(r)) {
+    const entry = ALLOWLIST.get(r);
+    // A NOW_GUARDED route may still carry a per-HANDLER excuse (its shared-backend
+    // half); it may never be excused wholesale.
+    if (entry && typeof entry === 'object' && Array.isArray(entry.handlers)) {
+      return gaps.every((h) => entry.handlers.includes(h));
+    }
+    return false;
+  }
+  const entry = ALLOWLIST.get(r);
+  if (typeof entry === 'string') return true;
+  if (entry && Array.isArray(entry.handlers)) return gaps.every((h) => entry.handlers.includes(h));
   for (const [prefix] of ALLOWLIST_PREFIXES) if (r.startsWith(prefix)) return true;
   return false;
 }
@@ -985,6 +1306,17 @@ const GUARD_WRAPPERS = [
     exportKind: 'function',
     mustCall: ['loadOwnedItem\\s*\\('],
   },
+  // C22 round 2 (#3122) — `tenantScopeId` is a guard signal, so it is held to the
+  // same standard: it must still DERIVE the tenant from the session. If it ever
+  // starts reading a request/parameter instead, every route scoped by it silently
+  // loses its tenant boundary while continuing to match GUARD_SIGNAL_RE. The
+  // `mustCall` regexes here assert its body reads `claims.tid`/`claims.oid`.
+  {
+    name: 'tenantScopeId',
+    file: path.join(CONSOLE_ROOT, 'lib', 'auth', 'session.ts'),
+    exportKind: 'function',
+    mustCall: ['claims\\.tid', 'claims\\.oid'],
+  },
 ];
 
 function assertGuardWrappersAreReal() {
@@ -1036,8 +1368,136 @@ function assertGuardWrappersAreReal() {
   }
 }
 
+/**
+ * SENSITIVITY PROBES — the checker proves, every run, that its verdict CHANGES
+ * when a route stops enforcing.
+ *
+ * THE RULE THIS ENCODES: *if a guard's verdict doesn't change when you break the
+ * route, it isn't watching it.* Every defect in this family was found by
+ * mutation and none was visible by reading: #2977 (a deleted `assertOwner`
+ * surviving as a COMMENT), #3088 (`if (gate) return gate;` deleted while the
+ * `enforceCapability` CALL stayed), and the two closed here — a guard signal
+ * surviving only as an IMPORT, and a signal in a SIBLING handler standing in for
+ * the handler that actually needed one. In all four cases the checker printed
+ * `violations: 0` against genuinely broken code.
+ *
+ * So sensitivity is no longer left to a reviewer to re-establish by hand: each
+ * probe takes a REAL route, applies a REAL break IN MEMORY (nothing is written
+ * to disk), and asserts the broken handler shows up in the verdict. Weaken any
+ * of the re-keys above and these fail, loudly, before a single route is scanned.
+ *
+ * A probe whose anchor no longer matches is a FAILURE, never a skip. A silently
+ * skipped self-test is the same lie one level up: it would let a refactor disarm
+ * the proof while the run stayed green.
+ */
+const SENSITIVITY_PROBES = [
+  {
+    name: 'COLLECTION route — GET loses its owner scope while POST keeps `claims.oid`',
+    file: 'apps/fiab-console/app/api/workspaces/route.ts',
+    edits: [
+      ["  const session = getSession();\n"
+        + "  if (!session) return err('Unauthorized', 401, 'unauthorized');\n"
+        + "  const tenantId = session.claims.oid;",
+        "  const tenantId = req.nextUrl?.searchParams.get('tenantId') || '';"],
+      ['await listAccessibleWorkspaces(tenantId, { callerTid: session.claims.tid })',
+        'await listAccessibleWorkspaces(tenantId, {})'],
+    ],
+    expect: 'GET',
+  },
+  {
+    name: 'SINGLE-ITEM route — PUT loses its owner check while GET/DELETE keep theirs',
+    file: 'apps/fiab-console/app/api/items/dashboard/[id]/route.ts',
+    edits: [
+      ["  const denied = await denyUnlessAuthorized(session, id, req.nextUrl.searchParams.get('workspaceId'));\n"
+        + "  if (denied) return denied;\n"
+        + "  const body = await req.json().catch(() => null);",
+        "  const body = await req.json().catch(() => null);"],
+      // The `savedBy` attribution is removed TOO, and that is not padding — it is
+      // the honesty boundary of this probe. With the attribution left in, PUT
+      // still contains the token `session.claims.oid` and this checker still
+      // passes it, because a bare `claims.oid` cannot be told apart from an
+      // authorization use by name alone. See "WHAT IS STILL NOT PROVEN HERE".
+      ['sanitizeOverlay(id, body, session.claims.upn || session.claims.oid)',
+        'sanitizeOverlay(id, body, String(body?.savedBy || ""))'],
+    ],
+    expect: 'PUT',
+  },
+  {
+    name: 'SINGLE-ITEM route — every guard CALL replaced, the IMPORT left behind',
+    file: 'apps/fiab-console/app/api/items/activator/[id]/route.ts',
+    edits: [
+      ["await loadOwnedItem(id, 'activator', session.claims.oid)",
+        "await loadAnyItemUnscoped(id, 'activator', callerTenant(req))"],
+      ["await deleteOwnedItem(id, 'activator', session.claims.oid)",
+        "await deleteAnyItemUnscoped(id, 'activator', callerTenant(req))"],
+      ["await loadContentBackedItem(id, 'activator', tenantId)",
+        "await loadAnyContentUnscoped(id, 'activator', tenantId)"],
+      ["await loomActivator(id, session.claims.oid, workspaceId)",
+        "await loomActivator(id, callerTenant(req), workspaceId)"],
+    ],
+    expect: 'GET',
+  },
+  {
+    name: 'COLLECTION route — the workspace membership check is deleted, its import retained',
+    file: 'apps/fiab-console/app/api/items/activator/route.ts',
+    edits: [
+      ["  const denied = await authorizeWorkspace(session, workspaceId, { allowReadRoles: true });\n"
+        + "  if (denied) return denied;", ''],
+    ],
+    expect: 'GET',
+  },
+];
+
+function assertCheckerIsSensitive() {
+  const bad = [];
+  for (const probe of SENSITIVITY_PROBES) {
+    const full = path.join(REPO_ROOT, probe.file);
+    if (!fs.existsSync(full)) {
+      bad.push(`${probe.name}: probe target ${probe.file} no longer exists`);
+      continue;
+    }
+    let src = fs.readFileSync(full, 'utf8');
+    let missing = null;
+    for (const [rawFrom, rawTo] of probe.edits) {
+      let from = rawFrom; let to = rawTo;
+      if (!src.includes(from)) {
+        // The tree is CRLF; anchors here are authored with \n.
+        const crlf = from.replace(/\n/g, '\r\n');
+        if (!src.includes(crlf)) { missing = from.split('\n')[0].trim(); break; }
+        from = crlf; to = to.replace(/\n/g, '\r\n');
+      }
+      src = src.split(from).join(to);
+    }
+    if (missing) {
+      bad.push(
+        `${probe.name}: the code this probe breaks has changed — anchor not found: \`${missing}\`. `
+        + 'Re-point the probe at the current guard; do NOT delete it. Without a probe the '
+        + 'checker has no evidence its verdict still changes when this route stops enforcing.',
+      );
+      continue;
+    }
+    const gaps = unguardedHandlers(stripImportStatements(stripCommentsAndStrings(src)));
+    if (!gaps.includes(probe.expect)) {
+      bad.push(
+        `${probe.name}: ${probe.expect} was broken in ${probe.file} and the checker STILL PASSED it `
+        + `(flagged: ${gaps.length ? gaps.join(', ') : 'nothing'}).`,
+      );
+    }
+  }
+  if (bad.length) {
+    console.error('\n[route-guards] FAIL — the checker cannot demonstrate it detects a broken route:');
+    for (const b of bad) console.error(`  - ${b}`);
+    console.error('\nEvery defect in this family passed a green checker. A guard that cannot show');
+    console.error('its own sensitivity is indistinguishable from one that measures nothing, so');
+    console.error('this is a hard failure, not a warning.');
+    process.exit(1);
+  }
+  console.log(`[route-guards] sensitivity probes passed: ${SENSITIVITY_PROBES.length} (each breaks a real route in memory and must be caught)`);
+}
+
 function main() {
   assertGuardWrappersAreReal();
+  assertCheckerIsSensitive();
   // Widened (rel-T17): scan EVERY route under app/api, not just items/admin/adx.
   // The class-based ALLOWLIST_PREFIXES keep the legit session-only groups green.
   const files = walk(API_ROOT);
@@ -1061,16 +1521,22 @@ function main() {
     gateCalls += countGateCalls(raw);
 
     // CHECK 2 — presence. Matching runs on comment/string-STRIPPED source so a
-    // guard name surviving in prose (the #2977 mechanism) satisfies nothing.
-    const src = stripCommentsAndStrings(raw);
+    // guard name surviving in prose (the #2977 mechanism) satisfies nothing, and
+    // on IMPORT-stripped source so a merely-imported name satisfies nothing
+    // either (the same lie one syntax node over — measured, see
+    // stripImportStatements).
+    const src = stripImportStatements(stripCommentsAndStrings(raw));
     const hasMutating = MUTATING_EXPORT_RE.test(src);
     const hasGet = GET_EXPORT_RE.test(src);
     if (!hasMutating && !hasGet) continue; // no data surface to guard
     if (!GETSESSION_RE.test(src)) continue; // not session-based; out of this check's remit
     scanned++;
-    if (GUARD_SIGNAL_RE.test(src)) continue; // authorized (owner/tenant/admin check present)
-    if (isAllowed(r)) { allowlistedHits++; continue; } // intentional shared/session/self route
-    violations.push(r);
+    // Per HANDLER, not per file: a guard in a sibling handler does not authorize
+    // this one (measured on app/api/workspaces/route.ts — see unguardedHandlers).
+    const gaps = unguardedHandlers(src);
+    if (gaps.length === 0) continue; // every handler carries its own authorization
+    if (isAllowed(r, gaps)) { allowlistedHits++; continue; } // intentional shared/session/self route
+    violations.push(`${r}  [${gaps.join(', ')}]`);
   }
 
   console.log(`[route-guards] scanned ${scanned} session-based routes across app/api`);

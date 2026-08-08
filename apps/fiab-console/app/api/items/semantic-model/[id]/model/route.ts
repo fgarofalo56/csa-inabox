@@ -291,6 +291,22 @@ export const DELETE = withSession<{ id: string }>(async (req: NextRequest, { ses
   return NextResponse.json({ ok: true, relationships: merged, tmslPreview: buildPreview(mctx, merged, state), ...(backend ? { backend } : {}), ...backendAvailability(mctx.liveDataset, workspaceId) });
 });
 
-export const PATCH = withSession<{ id: string }>(async (req: NextRequest) => {
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  // C22 (#3122) — this handler ran NO authorization at all. GET/POST/PUT/DELETE
+  // above each run `authorizeItemWorkspace`; PATCH did not, and the route-guard
+  // checker could not see it because the signal test was applied to the FILE, so
+  // its four guarded siblings covered it. `handleColumnPatch` executes XMLA TMSL
+  // writes (`alter-column`, `add-calculated-column`, `add-calculated-table`)
+  // against the deployment's shared AAS database, which meant a read-only Viewer
+  // could author exactly the model changes POST/PUT/DELETE deliberately refuse
+  // them. WRITE surface → no `allowReadRoles`, matching PUT.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: id, itemType: SM_ITEM_TYPE, notFound: SM_NOT_FOUND,
+    });
+    if (denied) return denied;
+  }
   return handleColumnPatch(req);
 });

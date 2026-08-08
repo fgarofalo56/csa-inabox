@@ -12,13 +12,47 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
+import type { SessionPayload } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { getDashboard, listDashboardTiles, PowerBiError } from '@/lib/azure/powerbi-client';
 import { pbiDashboardOverlaysContainer } from '@/lib/azure/cosmos-client';
 import { sanitizeOverlay, type DashboardOverlay } from '@/lib/azure/dashboard-overlay';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const DASHBOARD_ITEM_TYPE = 'dashboard';
+const DASHBOARD_NOT_FOUND = 'dashboard not found';
+
+/**
+ * C22 (#3122) — the overlay is partitioned by the DASHBOARD ID (`item(id, id)`),
+ * not by a tenant, so `readOverlay`/`delete` reach any tenant's overlay from any
+ * signed-in session. Every handler here was `getSession()`-only: GET read, PUT
+ * overwrote and DELETE dropped ANY overlay by id.
+ *
+ * This file passed the route-guard checker because `PUT` mentions
+ * `session.claims.upn || session.claims.oid` — as the overlay's `savedBy`
+ * ATTRIBUTION, never as a check. That is the presence-vs-use gap this round of
+ * C22 exists to close, found in shipped code by the re-keyed checker rather than
+ * by review.
+ *
+ * `authorizeItemWorkspace` runs the canonical owner → tenant-admin → shared-ACL
+ * ladder and resolves the workspace FROM THE ITEM when `?workspaceId=` is
+ * absent, so authorization cannot be skipped by dropping the parameter. Its one
+ * permissive case — an id naming no `dashboard` item anywhere — is deliberately
+ * kept here: a raw Power BI dashboard id with no Loom item is still reachable,
+ * so the opt-in Power BI path (no-fabric-dependency.md) is unchanged.
+ */
+async function denyUnlessAuthorized(session: SessionPayload, id: string, workspaceId: string | null, opts?: { allowReadRoles?: boolean }) {
+  return authorizeItemWorkspace(session, {
+    workspaceId,
+    itemId: id,
+    itemType: DASHBOARD_ITEM_TYPE,
+    notFound: DASHBOARD_NOT_FOUND,
+    ...(opts?.allowReadRoles ? { allowReadRoles: true } : {}),
+  });
+}
 
 async function readOverlay(id: string): Promise<DashboardOverlay | null> {
   const container = await pbiDashboardOverlaysContainer();
@@ -31,11 +65,12 @@ async function readOverlay(id: string): Promise<DashboardOverlay | null> {
   }
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
+  // READ surface → any workspace role may look at the dashboard.
+  const denied = await denyUnlessAuthorized(session, id, workspaceId || null, { allowReadRoles: true });
+  if (denied) return denied;
 
   // Loom overlay (always available — Azure-native, no PBI workspace required).
   let overlay: DashboardOverlay | null = null;
@@ -66,12 +101,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 
   return NextResponse.json({ ok: true, workspaceId, dashboard, tiles, overlay });
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
+  // WRITE surface → intentionally NO `allowReadRoles`: a read-only Viewer must
+  // not be able to rewrite another member's dashboard layout.
+  const denied = await denyUnlessAuthorized(session, id, req.nextUrl.searchParams.get('workspaceId'));
+  if (denied) return denied;
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ ok: false, error: 'body required' }, { status: 400 });
@@ -84,12 +121,13 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const id = params.id;
+  // WRITE surface → write-scoped (no `allowReadRoles`).
+  const denied = await denyUnlessAuthorized(session, id, _req.nextUrl.searchParams.get('workspaceId'));
+  if (denied) return denied;
   try {
     const container = await pbiDashboardOverlaysContainer();
     await container.item(id, id).delete().catch((e: any) => { if (e?.code !== 404) throw e; });
@@ -97,4 +135,4 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

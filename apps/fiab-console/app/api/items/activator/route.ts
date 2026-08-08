@@ -4,7 +4,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { listActivators, createActivator, ActivatorError } from '@/lib/azure/activator-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { createOwnedItem } from '../_lib/item-crud';
@@ -38,11 +39,18 @@ async function listBundleActivators(workspaceId: string) {
   } catch { return []; }
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  // C22 (#3122) — `listBundleActivators` queries Cosmos by this CALLER-SUPPLIED
+  // workspaceId (it is the partition key) with no membership test, so before
+  // this guard any signed-in user could enumerate another tenant's activator
+  // items by passing their workspace id. The route-guard checker could not see
+  // it: `session.claims.oid` appears further down this file on the Fabric opt-in
+  // branch, and the signal test was applied to the FILE rather than the handler.
+  // READ surface → `allowReadRoles` so Viewer/Contributor members still list.
+  const denied = await authorizeWorkspace(session, workspaceId, { allowReadRoles: true });
+  if (denied) return denied;
   // Always include bundle-installed activators (Cosmos). Merge live Fabric
   // reflexes on top when reachable; if Fabric isn't wired we still surface the
   // installed reflexes rather than failing the whole list.
@@ -64,11 +72,9 @@ export async function GET(req: NextRequest) {
     const status = e instanceof ActivatorError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   const body = await req.json().catch(() => ({}));
@@ -101,4 +107,4 @@ export async function POST(req: NextRequest) {
     const status = e instanceof ActivatorError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
