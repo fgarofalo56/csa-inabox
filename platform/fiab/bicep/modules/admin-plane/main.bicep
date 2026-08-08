@@ -203,6 +203,18 @@ type functionAppsConfigT = {
 
   @description('Daily LLM-judge call cap for the copilot-evaluator (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred.')
   copilotEvalJudgeDailyCap: int?
+
+  @description('Deploy the access-governance sweeper (C17) as three in-VNet scheduled Container App Jobs — expiry auto-revoke, review-campaign close, and Entra group reconcile. Default ON. This capability previously had NO deploy at all: the Y1 Function that was supposed to drive it was absent from platform bicep and its LOOM_SWEEPER_TOKEN was set nowhere, so expiry auto-revoke was admin-button-only and expired access stayed live. Turning this OFF restores that broken state — only do so deliberately.')
+  accessSweeperEnabled: bool?
+
+  @description('Schedule cron for the EXPIRY auto-revoke sweep — STANDARD 5-FIELD, UTC (Container Apps jobs; the retired Y1 Function used a 6-field NCRONTAB). Default every 15 minutes, matching the retired timer.')
+  accessSweepCron: string?
+
+  @description('Schedule cron for the REVIEW-CAMPAIGN close sweep (AG-7) — standard 5-field, UTC. Default hourly at :05, matching the retired timer.')
+  accessReviewSweepCron: string?
+
+  @description('Schedule cron for the Entra GROUP-SYNC reconcile (AG-9) — standard 5-field, UTC. Default hourly at :25, matching the retired timer. The pass no-ops honestly when LOOM_GRAPH_GROUP_SYNC_ENABLED is off.')
+  accessGroupSyncCron: string?
 }
 
 @description('Scheduled/background Function-app settings bag (R0). Existing label-propagation + report-subscription cron settings live here; future per-Function enable/cron/settings (E2 copilot-evaluator, C3 cost-anomaly, L3 lineage-ingest, S1 secret-expiry) add properties to functionAppsConfigT — never a new top-level param.')
@@ -428,6 +440,17 @@ var secretExpiryWarnDays = functionAppsConfig.?secretExpiryWarnDays ?? 60
 var copilotEvaluatorEnabled = functionAppsConfig.?copilotEvaluatorEnabled ?? true
 var copilotEvaluatorCron = functionAppsConfig.?copilotEvaluatorCron ?? '0 7 * * *'
 var copilotEvalJudgeDeployment = functionAppsConfig.?copilotEvalJudgeDeployment ?? ''
+// C17 access-governance sweeper (R0 bag) — default-ON per
+// loom_default_on_opt_out. The three crons reproduce the retired Y1 Function's
+// three timers exactly, converted from 6-field NCRONTAB to the 5-field UTC cron
+// Container Apps jobs use:
+//   0 */15 * * * *  →  */15 * * * *   (expiry, every 15 min)
+//   0 5 * * * *     →  5 * * * *      (review close, hourly at :05)
+//   0 25 * * * *    →  25 * * * *     (group sync, hourly at :25)
+var accessSweeperEnabled = functionAppsConfig.?accessSweeperEnabled ?? true
+var accessSweepCron = functionAppsConfig.?accessSweepCron ?? '*/15 * * * *'
+var accessReviewSweepCron = functionAppsConfig.?accessReviewSweepCron ?? '5 * * * *'
+var accessGroupSyncCron = functionAppsConfig.?accessGroupSyncCron ?? '25 * * * *'
 // E1 2026-08-06: 500 exhausted by ~05:50 UTC at measured merge velocity (27–31
 // full 153-Q passes/day), zero-judging every gated run — see the sizing note in
 // copilot-evaluator-job.bicep. Must match that module's default.
@@ -6913,6 +6936,90 @@ module assetReconciler 'asset-reconciler-job.bicep' = if (assetReconcilerActive)
     loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
     cronExpression: assetReconcilerCron
     maxTriggers: assetReconcilerMaxTriggers
+    internalToken: loomInternalToken
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// C17 — access-governance sweeper (three scheduled Container App Jobs).
+//
+// THE DEFECT THIS CLOSES (security finding). Measured 2026-08-08 on main:
+//   grep -rn "LOOM_SWEEPER_TOKEN" platform/ scripts/ .github/ → exit 1, ZERO hits
+//   grep -rni "sweeper"           platform/                   → exit 1, ZERO hits
+// The `azure-functions/access-governance-sweeper` Function was ABSENT from
+// platform bicep and the shared secret its three timers needed was set by no
+// deploy. The console sweep routes fail closed when that variable is unset, so
+// every scheduled call was rejected on every estate. Expiry auto-revoke was
+// therefore ADMIN-BUTTON-ONLY: time-bound access that should have expired stayed
+// LIVE (a real ARM role assignment plus a real SQL/ADX data-plane grant) until a
+// human tenant-admin pressed "Run sweep", and past-deadline review campaigns
+// never auto-closed so undecided grants were never revoked.
+//
+// Now: three in-VNet jobs (console UAMI) run `node e2e/run-access-sweep.mjs`,
+// which POSTs the console's sweep routes with the SHARED deploy-minted
+// LOOM_INTERNAL_TOKEN (`internalToken: loomInternalToken`, the same
+// deterministic guid the Console already gets unconditionally). Per
+// auto-bind-by-default.md §5 the credential is PRODUCED BY THE DEPLOY — no new
+// env var, no operator step, no "set LOOM_SWEEPER_TOKEN" terminal state.
+//
+// Three instances, not one, because the retired Function had three independently
+// scheduled timers and each cadence stays independently tunable. Default-ON
+// (opt-out via functionAppsConfig.accessSweeperEnabled). Runs the loom-uat image
+// (the console image is slimmed of e2e/); until that image is pushed the
+// scheduled execution fails honestly -- build it via deploy-loom-uat-job.sh in
+// the post-deploy app phase. Per the estate constraint these are ACA Jobs, NOT
+// Y1 Functions. Completes the `access-governance-sweeper` row of
+// docs/fiab/functions-to-aca-jobs.md §4.
+// =====================================================================
+var accessSweeperActive = accessSweeperEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module accessExpirySweep 'access-governance-sweeper-job.bicep' = if (accessSweeperActive) {
+  name: 'access-expiry-sweep-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    jobName: 'loom-access-sweep'
+    sweepMode: 'expiry'
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: accessSweepCron
+    internalToken: loomInternalToken
+    complianceTags: complianceTags
+  }
+}
+
+module accessReviewSweep 'access-governance-sweeper-job.bicep' = if (accessSweeperActive) {
+  name: 'access-review-sweep-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    jobName: 'loom-access-review-sweep'
+    sweepMode: 'reviews'
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: accessReviewSweepCron
+    internalToken: loomInternalToken
+    complianceTags: complianceTags
+  }
+}
+
+module accessGroupSync 'access-governance-sweeper-job.bicep' = if (accessSweeperActive) {
+  name: 'access-group-sync-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    jobName: 'loom-access-group-sync'
+    sweepMode: 'group-sync'
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: accessGroupSyncCron
     internalToken: loomInternalToken
     complianceTags: complianceTags
   }

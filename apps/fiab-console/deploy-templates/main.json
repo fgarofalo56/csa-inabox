@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "10465452898231590383"
+      "templateHash": "12064113427198830104"
     }
   },
   "definitions": {
@@ -2518,7 +2518,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "16677342550091207880"
+              "templateHash": "973611794418992369"
             }
           },
           "definitions": {
@@ -2593,6 +2593,34 @@
                   "nullable": true,
                   "metadata": {
                     "description": "Daily LLM-judge call cap for the copilot-evaluator (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred."
+                  }
+                },
+                "accessSweeperEnabled": {
+                  "type": "bool",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Deploy the access-governance sweeper (C17) as three in-VNet scheduled Container App Jobs — expiry auto-revoke, review-campaign close, and Entra group reconcile. Default ON. This capability previously had NO deploy at all: the Y1 Function that was supposed to drive it was absent from platform bicep and its LOOM_SWEEPER_TOKEN was set nowhere, so expiry auto-revoke was admin-button-only and expired access stayed live. Turning this OFF restores that broken state — only do so deliberately."
+                  }
+                },
+                "accessSweepCron": {
+                  "type": "string",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Schedule cron for the EXPIRY auto-revoke sweep — STANDARD 5-FIELD, UTC (Container Apps jobs; the retired Y1 Function used a 6-field NCRONTAB). Default every 15 minutes, matching the retired timer."
+                  }
+                },
+                "accessReviewSweepCron": {
+                  "type": "string",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Schedule cron for the REVIEW-CAMPAIGN close sweep (AG-7) — standard 5-field, UTC. Default hourly at :05, matching the retired timer."
+                  }
+                },
+                "accessGroupSyncCron": {
+                  "type": "string",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Schedule cron for the Entra GROUP-SYNC reconcile (AG-9) — standard 5-field, UTC. Default hourly at :25, matching the retired timer. The pass no-ops honestly when LOOM_GRAPH_GROUP_SYNC_ENABLED is off."
                   }
                 }
               }
@@ -4860,6 +4888,10 @@
             "copilotEvaluatorEnabled": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvaluatorEnabled'), true())]",
             "copilotEvaluatorCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvaluatorCron'), '0 7 * * *')]",
             "copilotEvalJudgeDeployment": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvalJudgeDeployment'), '')]",
+            "accessSweeperEnabled": "[coalesce(tryGet(parameters('functionAppsConfig'), 'accessSweeperEnabled'), true())]",
+            "accessSweepCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'accessSweepCron'), '*/15 * * * *')]",
+            "accessReviewSweepCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'accessReviewSweepCron'), '5 * * * *')]",
+            "accessGroupSyncCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'accessGroupSyncCron'), '25 * * * *')]",
             "copilotEvalJudgeDailyCap": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvalJudgeDailyCap'), 5000)]",
             "adxSkuName": "[coalesce(tryGet(parameters('adxConfig'), 'adxSkuName'), 'Dev(No SLA)_Standard_E2a_v4')]",
             "adxEnableOptimizedAutoscale": "[coalesce(tryGet(parameters('adxConfig'), 'adxEnableOptimizedAutoscale'), false())]",
@@ -5098,6 +5130,7 @@
             "lineageExtractorActive": "[and(and(variables('lineageExtractorEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "costAnomalyActive": "[and(and(variables('costAnomalyEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "assetReconcilerActive": "[and(and(variables('assetReconcilerEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
+            "accessSweeperActive": "[and(and(variables('accessSweeperEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "secretExpiryActive": "[and(and(variables('secretExpiryEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "reportSubscriptionsActive": "[and(and(parameters('reportSubscriptionsEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "copilotEvaluatorActive": "[and(and(variables('copilotEvaluatorEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
@@ -23892,6 +23925,678 @@
                         "description": "The asset-reconciler Job name."
                       },
                       "value": "loom-asset-reconciler"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "containerPlatformModule",
+                "frontDoor",
+                "identity",
+                "registry"
+              ]
+            },
+            "accessExpirySweep": {
+              "condition": "[variables('accessSweeperActive')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "access-expiry-sweep-job",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "environmentId": {
+                    "value": "[reference('containerPlatformModule').outputs.caeId.value]"
+                  },
+                  "consoleUamiId": {
+                    "value": "[reference('identity').outputs.uamiConsoleId.value]"
+                  },
+                  "consoleUamiClientId": {
+                    "value": "[reference('identity').outputs.uamiConsoleClientId.value]"
+                  },
+                  "acrLoginServer": {
+                    "value": "[reference('registry').outputs.acrLoginServer.value]"
+                  },
+                  "jobName": {
+                    "value": "loom-access-sweep"
+                  },
+                  "sweepMode": {
+                    "value": "expiry"
+                  },
+                  "loomUrl": "[if(variables('fdOn'), createObject('value', reference('frontDoor').outputs.frontDoorPublicUrl.value), createObject('value', 'http://loom-console'))]",
+                  "cronExpression": {
+                    "value": "[variables('accessSweepCron')]"
+                  },
+                  "internalToken": {
+                    "value": "[variables('loomInternalToken')]"
+                  },
+                  "complianceTags": {
+                    "value": "[parameters('complianceTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.45.15.27210",
+                      "templateHash": "12214076222400234715"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Deployment region (e.g. centralus / usgovvirginia)."
+                      }
+                    },
+                    "environmentId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Container Apps managed-environment (CAE) resource id — the console VNet-integrated env."
+                      }
+                    },
+                    "consoleUamiId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console resource id — ACR pull + the identity the job runs as."
+                      }
+                    },
+                    "consoleUamiClientId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console clientId (LOOM_UAMI_CLIENT_ID)."
+                      }
+                    },
+                    "acrLoginServer": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "ACR login server, e.g. acrloomk6mvh5sm6z7do.azurecr.io."
+                      }
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Job name — one per schedule (loom-access-sweep / loom-access-review-sweep / loom-access-group-sync)."
+                      }
+                    },
+                    "sweepMode": {
+                      "type": "string",
+                      "allowedValues": [
+                        "expiry",
+                        "reviews",
+                        "group-sync",
+                        "all"
+                      ],
+                      "metadata": {
+                        "description": "Which pass this instance runs (ACCESS_SWEEP_MODE): expiry | reviews | group-sync | all."
+                      }
+                    },
+                    "image": {
+                      "type": "string",
+                      "defaultValue": "[format('{0}/loom-uat:latest', parameters('acrLoginServer'))]",
+                      "metadata": {
+                        "description": "Runner image. Default = the loom-uat image (carries e2e/run-access-sweep.mjs). The first scheduled execution fails honestly until that image is pushed — build it in the post-deploy app phase."
+                      }
+                    },
+                    "loomUrl": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "In-VNet console base URL the runner POSTs (Front Door / vanity URL, or the internal http://loom-console)."
+                      }
+                    },
+                    "cronExpression": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Schedule cron (standard 5-field, UTC). Container Apps jobs do NOT use the 6-field NCRONTAB the retired Y1 Function used."
+                      }
+                    },
+                    "internalToken": {
+                      "type": "securestring",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Shared VNet-internal trust token (LOOM_INTERNAL_TOKEN) — the deterministic guid main.bicep also wires to the Console, so the two match. Delivered as a Container Apps secretRef; never logged or output."
+                      }
+                    },
+                    "replicaTimeout": {
+                      "type": "int",
+                      "defaultValue": 900,
+                      "metadata": {
+                        "description": "Max seconds one sweep pass may take before the execution is terminated. 15 min — a large ledger with many real ARM/data-plane revokes is the slow case."
+                      }
+                    },
+                    "complianceTags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Compliance/cost tags."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "programTags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
+                    "internalTokenSecret": "[if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'loom-internal-token', 'value', parameters('internalToken'))))]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.App/jobs",
+                      "apiVersion": "2025-02-02-preview",
+                      "name": "[parameters('jobName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[variables('programTags')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('consoleUamiId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "environmentId": "[parameters('environmentId')]",
+                        "configuration": {
+                          "triggerType": "Schedule",
+                          "replicaTimeout": "[parameters('replicaTimeout')]",
+                          "replicaRetryLimit": 1,
+                          "scheduleTriggerConfig": {
+                            "cronExpression": "[parameters('cronExpression')]",
+                            "parallelism": 1,
+                            "replicaCompletionCount": 1
+                          },
+                          "registries": [
+                            {
+                              "server": "[parameters('acrLoginServer')]",
+                              "identity": "[parameters('consoleUamiId')]"
+                            }
+                          ],
+                          "secrets": "[variables('internalTokenSecret')]"
+                        },
+                        "template": {
+                          "containers": [
+                            {
+                              "name": "access-sweeper",
+                              "image": "[parameters('image')]",
+                              "command": [
+                                "node",
+                                "e2e/run-access-sweep.mjs"
+                              ],
+                              "resources": {
+                                "cpu": "[json('0.25')]",
+                                "memory": "0.5Gi"
+                              },
+                              "env": "[concat(createArray(createObject('name', 'LOOM_URL', 'value', parameters('loomUrl')), createObject('name', 'LOOM_UAMI_CLIENT_ID', 'value', parameters('consoleUamiClientId')), createObject('name', 'ACCESS_SWEEP_MODE', 'value', parameters('sweepMode'))), if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'LOOM_INTERNAL_TOKEN', 'secretRef', 'loom-internal-token'))))]"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "jobId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The access-governance sweeper Job resource id."
+                      },
+                      "value": "[resourceId('Microsoft.App/jobs', parameters('jobName'))]"
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The access-governance sweeper Job name."
+                      },
+                      "value": "[parameters('jobName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "containerPlatformModule",
+                "frontDoor",
+                "identity",
+                "registry"
+              ]
+            },
+            "accessReviewSweep": {
+              "condition": "[variables('accessSweeperActive')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "access-review-sweep-job",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "environmentId": {
+                    "value": "[reference('containerPlatformModule').outputs.caeId.value]"
+                  },
+                  "consoleUamiId": {
+                    "value": "[reference('identity').outputs.uamiConsoleId.value]"
+                  },
+                  "consoleUamiClientId": {
+                    "value": "[reference('identity').outputs.uamiConsoleClientId.value]"
+                  },
+                  "acrLoginServer": {
+                    "value": "[reference('registry').outputs.acrLoginServer.value]"
+                  },
+                  "jobName": {
+                    "value": "loom-access-review-sweep"
+                  },
+                  "sweepMode": {
+                    "value": "reviews"
+                  },
+                  "loomUrl": "[if(variables('fdOn'), createObject('value', reference('frontDoor').outputs.frontDoorPublicUrl.value), createObject('value', 'http://loom-console'))]",
+                  "cronExpression": {
+                    "value": "[variables('accessReviewSweepCron')]"
+                  },
+                  "internalToken": {
+                    "value": "[variables('loomInternalToken')]"
+                  },
+                  "complianceTags": {
+                    "value": "[parameters('complianceTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.45.15.27210",
+                      "templateHash": "12214076222400234715"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Deployment region (e.g. centralus / usgovvirginia)."
+                      }
+                    },
+                    "environmentId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Container Apps managed-environment (CAE) resource id — the console VNet-integrated env."
+                      }
+                    },
+                    "consoleUamiId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console resource id — ACR pull + the identity the job runs as."
+                      }
+                    },
+                    "consoleUamiClientId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console clientId (LOOM_UAMI_CLIENT_ID)."
+                      }
+                    },
+                    "acrLoginServer": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "ACR login server, e.g. acrloomk6mvh5sm6z7do.azurecr.io."
+                      }
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Job name — one per schedule (loom-access-sweep / loom-access-review-sweep / loom-access-group-sync)."
+                      }
+                    },
+                    "sweepMode": {
+                      "type": "string",
+                      "allowedValues": [
+                        "expiry",
+                        "reviews",
+                        "group-sync",
+                        "all"
+                      ],
+                      "metadata": {
+                        "description": "Which pass this instance runs (ACCESS_SWEEP_MODE): expiry | reviews | group-sync | all."
+                      }
+                    },
+                    "image": {
+                      "type": "string",
+                      "defaultValue": "[format('{0}/loom-uat:latest', parameters('acrLoginServer'))]",
+                      "metadata": {
+                        "description": "Runner image. Default = the loom-uat image (carries e2e/run-access-sweep.mjs). The first scheduled execution fails honestly until that image is pushed — build it in the post-deploy app phase."
+                      }
+                    },
+                    "loomUrl": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "In-VNet console base URL the runner POSTs (Front Door / vanity URL, or the internal http://loom-console)."
+                      }
+                    },
+                    "cronExpression": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Schedule cron (standard 5-field, UTC). Container Apps jobs do NOT use the 6-field NCRONTAB the retired Y1 Function used."
+                      }
+                    },
+                    "internalToken": {
+                      "type": "securestring",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Shared VNet-internal trust token (LOOM_INTERNAL_TOKEN) — the deterministic guid main.bicep also wires to the Console, so the two match. Delivered as a Container Apps secretRef; never logged or output."
+                      }
+                    },
+                    "replicaTimeout": {
+                      "type": "int",
+                      "defaultValue": 900,
+                      "metadata": {
+                        "description": "Max seconds one sweep pass may take before the execution is terminated. 15 min — a large ledger with many real ARM/data-plane revokes is the slow case."
+                      }
+                    },
+                    "complianceTags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Compliance/cost tags."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "programTags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
+                    "internalTokenSecret": "[if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'loom-internal-token', 'value', parameters('internalToken'))))]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.App/jobs",
+                      "apiVersion": "2025-02-02-preview",
+                      "name": "[parameters('jobName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[variables('programTags')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('consoleUamiId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "environmentId": "[parameters('environmentId')]",
+                        "configuration": {
+                          "triggerType": "Schedule",
+                          "replicaTimeout": "[parameters('replicaTimeout')]",
+                          "replicaRetryLimit": 1,
+                          "scheduleTriggerConfig": {
+                            "cronExpression": "[parameters('cronExpression')]",
+                            "parallelism": 1,
+                            "replicaCompletionCount": 1
+                          },
+                          "registries": [
+                            {
+                              "server": "[parameters('acrLoginServer')]",
+                              "identity": "[parameters('consoleUamiId')]"
+                            }
+                          ],
+                          "secrets": "[variables('internalTokenSecret')]"
+                        },
+                        "template": {
+                          "containers": [
+                            {
+                              "name": "access-sweeper",
+                              "image": "[parameters('image')]",
+                              "command": [
+                                "node",
+                                "e2e/run-access-sweep.mjs"
+                              ],
+                              "resources": {
+                                "cpu": "[json('0.25')]",
+                                "memory": "0.5Gi"
+                              },
+                              "env": "[concat(createArray(createObject('name', 'LOOM_URL', 'value', parameters('loomUrl')), createObject('name', 'LOOM_UAMI_CLIENT_ID', 'value', parameters('consoleUamiClientId')), createObject('name', 'ACCESS_SWEEP_MODE', 'value', parameters('sweepMode'))), if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'LOOM_INTERNAL_TOKEN', 'secretRef', 'loom-internal-token'))))]"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "jobId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The access-governance sweeper Job resource id."
+                      },
+                      "value": "[resourceId('Microsoft.App/jobs', parameters('jobName'))]"
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The access-governance sweeper Job name."
+                      },
+                      "value": "[parameters('jobName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "containerPlatformModule",
+                "frontDoor",
+                "identity",
+                "registry"
+              ]
+            },
+            "accessGroupSync": {
+              "condition": "[variables('accessSweeperActive')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "access-group-sync-job",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "environmentId": {
+                    "value": "[reference('containerPlatformModule').outputs.caeId.value]"
+                  },
+                  "consoleUamiId": {
+                    "value": "[reference('identity').outputs.uamiConsoleId.value]"
+                  },
+                  "consoleUamiClientId": {
+                    "value": "[reference('identity').outputs.uamiConsoleClientId.value]"
+                  },
+                  "acrLoginServer": {
+                    "value": "[reference('registry').outputs.acrLoginServer.value]"
+                  },
+                  "jobName": {
+                    "value": "loom-access-group-sync"
+                  },
+                  "sweepMode": {
+                    "value": "group-sync"
+                  },
+                  "loomUrl": "[if(variables('fdOn'), createObject('value', reference('frontDoor').outputs.frontDoorPublicUrl.value), createObject('value', 'http://loom-console'))]",
+                  "cronExpression": {
+                    "value": "[variables('accessGroupSyncCron')]"
+                  },
+                  "internalToken": {
+                    "value": "[variables('loomInternalToken')]"
+                  },
+                  "complianceTags": {
+                    "value": "[parameters('complianceTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.45.15.27210",
+                      "templateHash": "12214076222400234715"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Deployment region (e.g. centralus / usgovvirginia)."
+                      }
+                    },
+                    "environmentId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Container Apps managed-environment (CAE) resource id — the console VNet-integrated env."
+                      }
+                    },
+                    "consoleUamiId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console resource id — ACR pull + the identity the job runs as."
+                      }
+                    },
+                    "consoleUamiClientId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console clientId (LOOM_UAMI_CLIENT_ID)."
+                      }
+                    },
+                    "acrLoginServer": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "ACR login server, e.g. acrloomk6mvh5sm6z7do.azurecr.io."
+                      }
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Job name — one per schedule (loom-access-sweep / loom-access-review-sweep / loom-access-group-sync)."
+                      }
+                    },
+                    "sweepMode": {
+                      "type": "string",
+                      "allowedValues": [
+                        "expiry",
+                        "reviews",
+                        "group-sync",
+                        "all"
+                      ],
+                      "metadata": {
+                        "description": "Which pass this instance runs (ACCESS_SWEEP_MODE): expiry | reviews | group-sync | all."
+                      }
+                    },
+                    "image": {
+                      "type": "string",
+                      "defaultValue": "[format('{0}/loom-uat:latest', parameters('acrLoginServer'))]",
+                      "metadata": {
+                        "description": "Runner image. Default = the loom-uat image (carries e2e/run-access-sweep.mjs). The first scheduled execution fails honestly until that image is pushed — build it in the post-deploy app phase."
+                      }
+                    },
+                    "loomUrl": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "In-VNet console base URL the runner POSTs (Front Door / vanity URL, or the internal http://loom-console)."
+                      }
+                    },
+                    "cronExpression": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Schedule cron (standard 5-field, UTC). Container Apps jobs do NOT use the 6-field NCRONTAB the retired Y1 Function used."
+                      }
+                    },
+                    "internalToken": {
+                      "type": "securestring",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Shared VNet-internal trust token (LOOM_INTERNAL_TOKEN) — the deterministic guid main.bicep also wires to the Console, so the two match. Delivered as a Container Apps secretRef; never logged or output."
+                      }
+                    },
+                    "replicaTimeout": {
+                      "type": "int",
+                      "defaultValue": 900,
+                      "metadata": {
+                        "description": "Max seconds one sweep pass may take before the execution is terminated. 15 min — a large ledger with many real ARM/data-plane revokes is the slow case."
+                      }
+                    },
+                    "complianceTags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Compliance/cost tags."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "programTags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
+                    "internalTokenSecret": "[if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'loom-internal-token', 'value', parameters('internalToken'))))]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.App/jobs",
+                      "apiVersion": "2025-02-02-preview",
+                      "name": "[parameters('jobName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[variables('programTags')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('consoleUamiId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "environmentId": "[parameters('environmentId')]",
+                        "configuration": {
+                          "triggerType": "Schedule",
+                          "replicaTimeout": "[parameters('replicaTimeout')]",
+                          "replicaRetryLimit": 1,
+                          "scheduleTriggerConfig": {
+                            "cronExpression": "[parameters('cronExpression')]",
+                            "parallelism": 1,
+                            "replicaCompletionCount": 1
+                          },
+                          "registries": [
+                            {
+                              "server": "[parameters('acrLoginServer')]",
+                              "identity": "[parameters('consoleUamiId')]"
+                            }
+                          ],
+                          "secrets": "[variables('internalTokenSecret')]"
+                        },
+                        "template": {
+                          "containers": [
+                            {
+                              "name": "access-sweeper",
+                              "image": "[parameters('image')]",
+                              "command": [
+                                "node",
+                                "e2e/run-access-sweep.mjs"
+                              ],
+                              "resources": {
+                                "cpu": "[json('0.25')]",
+                                "memory": "0.5Gi"
+                              },
+                              "env": "[concat(createArray(createObject('name', 'LOOM_URL', 'value', parameters('loomUrl')), createObject('name', 'LOOM_UAMI_CLIENT_ID', 'value', parameters('consoleUamiClientId')), createObject('name', 'ACCESS_SWEEP_MODE', 'value', parameters('sweepMode'))), if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'LOOM_INTERNAL_TOKEN', 'secretRef', 'loom-internal-token'))))]"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "jobId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The access-governance sweeper Job resource id."
+                      },
+                      "value": "[resourceId('Microsoft.App/jobs', parameters('jobName'))]"
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The access-governance sweeper Job name."
+                      },
+                      "value": "[parameters('jobName')]"
                     }
                   }
                 }

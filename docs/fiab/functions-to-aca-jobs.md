@@ -129,6 +129,56 @@ Code: `src/functions/copilotEvaluatorTimer.ts` + `copilotEvaluatorHttp.ts` →
 > two modules circular. The job name is fixed by the module, so the id is
 > deterministic.
 
+### 3.4 `access-governance-sweeper` → three ACA jobs (Shape A) — 2026-08-08, C17
+
+This one was not merely un-migrated. It was **never deployed at all**, and that
+made a governance control inert. Measured on `main`, 2026-08-08:
+
+```
+grep -rn "LOOM_SWEEPER_TOKEN" platform/ scripts/ .github/   → exit 1, ZERO hits
+grep -rni "sweeper"           platform/                     → exit 1, ZERO hits
+```
+
+The Function carried its own `deploy/main.bicep`, but that file was an **orphan**
+— nothing under `platform/fiab/bicep` referenced it, so no deploy path ever
+created the Function or set the shared secret its three timers presented. The
+console sweep routes fail closed when `LOOM_SWEEPER_TOKEN` is unset, so every
+scheduled call was rejected on every estate, from the day the routes were
+written.
+
+**Security consequence (why this was P0-shaped, not a wiring nit).** Expiry
+auto-revoke was **admin-button-only**. Time-bound access that had passed its
+`expiresAt` stayed LIVE — a real ARM role assignment *and* a real SQL/ADX
+data-plane grant — until a human tenant-admin happened to open
+`/admin/access-governance` and press **Run sweep**. Past-deadline review
+campaigns never auto-closed, so undecided grants were never revoked. Loom's
+entitlement ledger showed access as time-bounded while the underlying Azure
+grants were, in practice, permanent.
+
+| Before | After |
+| --- | --- |
+| `azure-functions/access-governance-sweeper` (Y1, 3 timers + 4 HTTP routes) | Three `Microsoft.App/jobs`, Schedule trigger, from ONE module |
+| Orphan `deploy/main.bicep`, referenced by nothing | `modules/admin-plane/access-governance-sweeper-job.bicep`, wired in `admin-plane/main.bicep` |
+| `LOOM_SWEEPER_TOKEN` — a value **no deploy ever set** | Shared **`LOOM_INTERNAL_TOKEN`**, the deterministic guid the deploy already mints and hands the Console unconditionally |
+| Function-key HTTP routes (`/api/sweep-now`, …) | Dropped — the admin UI button already hits the same console routes with a session |
+| 6-field NCRONTAB `0 */15 * * * *` / `0 5 * * * *` / `0 25 * * * *` | 5-field UTC `*/15 * * * *` / `5 * * * *` / `25 * * * *` |
+| Python `urllib` caller | `node e2e/run-access-sweep.mjs` (`ACCESS_SWEEP_MODE` = expiry \| reviews \| group-sync \| all) |
+
+**Why Shape A, not Shape B.** All three passes were already thin HTTP calls into
+console routes that hold the real revoke / Cosmos / Graph logic. Giving the
+runner its own image would have duplicated nothing useful; the entrypoint is one
+`fetch` per pass.
+
+**Why three jobs and not one.** A Container Apps job has exactly one
+`cronExpression`. Collapsing three cadences into one tick would have changed
+behaviour (group-sync would run 4× more often than it did). Three instances of
+one module keep each cadence independently tunable via
+`functionAppsConfig.access{Sweep,ReviewSweep,GroupSync}Cron`.
+
+**No new operator action, per `auto-bind-by-default.md` §5.** The credential is
+produced by the deploy. There is no new env var to set; `accessSweeperEnabled`
+defaults to `true`.
+
 ## 4. Fleet status — every workload under `azure-functions/`
 
 | Workload | Trigger | Status |
@@ -137,7 +187,7 @@ Code: `src/functions/copilotEvaluatorTimer.ts` + `copilotEvaluatorHttp.ts` →
 | `secret-expiry-monitor` | timer | **Migrated in this change** (Shape B) |
 | `copilot-evaluator` | timer + HTTP | **Migrated in this change** (Shape B) |
 | `posture-refresh` | timer (Python, `*/5`) | **Queued** — Shape B; Python image, `mypy --strict` + `ruff` apply |
-| `access-governance-sweeper` | 3 timers (Python) | **Queued** — Shape B; three crons → either three jobs or one entrypoint with a mode switch |
+| `access-governance-sweeper` | 3 timers (Python) | **Migrated 2026-08-08 (C17)** — Shape A; `access-governance-sweeper-job.bicep` instantiated three times (`loom-access-sweep` `*/15 * * * *`, `loom-access-review-sweep` `5 * * * *`, `loom-access-group-sync` `25 * * * *`), one per retired timer. See §3.4 |
 | `ops-agent-evaluator` | timer | **Queued** — Shape B; mirrors the copilot-evaluator shape closely |
 | `report-subscriptions` | timer | **Queued** — Shape B; note it also drives the delivery Logic App, whose grants move to the console UAMI |
 | `copilot-chat` | HTTP | **Not a job.** An HTTP surface needs a Container *App* (internal ingress), not a job — the `bridge-services` script-runner template. Separate item |
