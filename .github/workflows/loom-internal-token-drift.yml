@@ -63,10 +63,20 @@ on:
         type: string
         default: commercial
     secrets:
+      # Declaring ANY secret on workflow_call makes this the closed set actionlint
+      # (and Actions) will resolve — an undeclared `secrets.X` elsewhere in the
+      # file then silently reads empty. Both clouds' credentials are therefore
+      # declared here, all optional: a caller that only checks Commercial simply
+      # omits the Gov ones and the Gov job precheck reports NO coverage rather
+      # than a pass.
       AZURE_CLIENT_ID: { required: false }
       AZURE_CLIENT_SECRET: { required: false }
       AZURE_TENANT_ID: { required: false }
       AZURE_SUBSCRIPTION_ID: { required: false }
+      AZURE_GOV_CLIENT_ID: { required: false }
+      AZURE_GOV_CLIENT_SECRET: { required: false }
+      AZURE_GOV_TENANT_ID: { required: false }
+      AZURE_GOV_SUBSCRIPTION_ID: { required: false }
       LOOM_INTERNAL_TOKEN: { required: false }
 
 permissions:
@@ -123,10 +133,16 @@ jobs:
           echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
 
       - name: Collect holder fingerprints
+        env:
+          # Passed through `env:` rather than interpolated into the script body:
+          # a `${{ }}` expression expanded inside a run block is textual
+          # substitution into shell source, which is the standard Actions script
+          # injection shape. A fingerprint is not a secret, but the safe form
+          # costs nothing and keeps the pattern consistent.
+          GITHUB_SECRET_FINGERPRINT: ${{ steps.ghfp.outputs.fingerprint }}
         run: |
           set -euo pipefail
-          GITHUB_SECRET_FINGERPRINT='${{ steps.ghfp.outputs.fingerprint }}' \
-            bash scripts/csa-loom/collect-internal-token-fingerprints.sh > holders.json
+          bash scripts/csa-loom/collect-internal-token-fingerprints.sh > holders.json
           echo "--- collected (fingerprints only) ---"
           cat holders.json
 

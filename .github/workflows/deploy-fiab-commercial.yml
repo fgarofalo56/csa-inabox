@@ -581,11 +581,11 @@ jobs:
       - name: Adopt the estate's live internal trust token (never re-mint it)
         run: |
           set -euo pipefail
-          # AZURE_LOCATION is read from the SHELL at runtime, not via ${{ env }},
-          # for the same reason the MSAL step above does: the reconcile step may
-          # have re-pinned the region into $GITHUB_ENV, and a step-level `env:`
-          # expression that resolved the workflow-level value would look at the
-          # wrong resource group.
+          # AZURE_LOCATION is read from the SHELL at runtime rather than through
+          # a step-level `env:` template expression, for the same reason the MSAL
+          # step above does it that way: the reconcile step may have re-pinned the
+          # region into $GITHUB_ENV, and an expression resolved against the
+          # workflow-level value would look at the wrong resource group.
           export ADMIN_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
           # The script appends LOOM_INTERNAL_TOKEN to $GITHUB_ENV itself (masked
           # first). Its stdout is the `export …` form for shell callers, which we
