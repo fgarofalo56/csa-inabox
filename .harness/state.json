@@ -1722,7 +1722,13 @@
       "also_now_live": "C24 ACR re-lock verdict, C23 __proto__ param drop, C18 image pins, D8 DNS zone-group, Gov #3124/#3125/#3126/#3127, release 0.89.0.",
       "NOT_live": "#3121 (RC-9 federation issuer) - it is in the loom-unity IMAGE and needs its own build + a roll of BOTH loom-unity and iceberg-catalog. #3122 (token ownership), #3129 (access sweeper), #3130 (ai-red-team safety), #3131/#3135/#3138/#3139 all merged AFTER this deploy's SHA - merged, NOT deployed.",
       "deploy_run": "31243230253 still in_progress at 08:29Z (remaining apps rolling); the console is already live on the new SHA."
-    }
+    },
+    "rc9_deploy_dispatched_2026-08-08": {
+      "image_build": "Run 31248782695 - build-fiab-images-acr-tasks.yml, boundary=Commercial, apps=loom-unity, tag_override=v0.1, skip_supply_chain=FALSE (never true - it ships unverified images). PRE-VERIFIED the fix is on main first: loom-entrypoint.sh has 5 discovery fetches (.well-known/openid-configuration) and the single remaining 'sts.windows' occurrence at :378 is a COMMENT documenting the removed literal, not live code. That distinction has already caught me once today on deploy-fiab-gcc.yml:146.",
+      "next_step": "After the image lands: roll BOTH loom-unity AND iceberg-catalog onto it. Rolling only one leaves the pair split.",
+      "then": "Re-run loom-ui-verify with extra_projects=external-engine-federation. Grade stays D until an AUTHENTICATED catalog read returns 200."
+    },
+    "gcc_cycle_2026-08-08": "Deferred cycle EXECUTED once the 08:00Z cron had passed (23h of margin). enable -> dispatch whatif-only (run 31248754470) -> disable, all within ~14s. VERIFIED AFTER: exactly 3 workflows non-active repo-wide; deploy-fiab-gcc and deploy-fiab-gcch both disabled_manually. The cron did not arm. This is the receipt GCC needed, since its previous SUCCESS was the hollow 2>/dev/null || echo \"0\" green."
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
