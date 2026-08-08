@@ -58,6 +58,7 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 import { isUnreachableServiceUrl } from '@/lib/azure/unreachable-url';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** Registry gate id — mirrors the ENV_CHECKS spec in env-checks/data-plane.ts. */
 export const ICEBERG_CATALOG_GATE_ID = 'svc-iceberg-catalog';
@@ -222,7 +223,10 @@ export function assertTableName(table: string): string {
  */
 export function ircPathWithPrefix(subPath: string, prefix: string): string {
   const sub = subPath.startsWith('/') ? subPath : `/${subPath}`;
-  const p = String(prefix ?? '').replace(/^\/+|\/+$/g, '');
+  // `trimSlashes`, not `.replace(/^\/+|\/+$/g, '')` — the regex form is the
+  // quadratic trailing-run shape the repo's `quadratic-trims` guard rejects,
+  // and this value arrives from an upstream HTTP response body.
+  const p = trimSlashes(String(prefix ?? ''));
   // Only `/v1/*` resources are prefixed. `/v1/config` is the handshake that
   // PRODUCES the prefix, so it is never itself prefixed (see icebergFetchRaw).
   if (!p || !sub.startsWith('/v1/')) return sub;
