@@ -159,14 +159,34 @@ note "preflight: registry = $ACR ($ACR_LOGIN)"
 #    the registry is genuinely unreachable from here.
 # ---------------------------------------------------------------------------
 LEASE_HELD="false"
+# C24 (#3088): returns NON-ZERO when the registry could not be verified
+# re-locked. It used to be `release … >/dev/null 2>&1 || warn "…"`, which broke
+# the control two ways: it discarded the verdict (a failed re-lock became a
+# warning on an otherwise-successful preflight), and `>/dev/null 2>&1` threw
+# away the script's own concrete remediation — the exact deploy-integrity R7
+# shape where the operator is told less than the code knew.
 release_lease() {
-  if [[ "$LEASE_HELD" == "true" ]]; then
-    bash "${SCRIPT_DIR}/acr-firewall-lease.sh" release --acr "$ACR" >/dev/null 2>&1 || \
-      warn "preflight: could not release the ACR firewall lease on $ACR — the scheduled sweeper (.github/workflows/acr-firewall-sweeper.yml) re-locks it."
-    LEASE_HELD="false"
+  if [[ "$LEASE_HELD" != "true" ]]; then
+    return 0
   fi
+  LEASE_HELD="false"
+  if ! bash "${SCRIPT_DIR}/acr-firewall-lease.sh" release --acr "$ACR"; then
+    err "preflight: could NOT verify the ACR firewall re-locked on $ACR — it may be PUBLICLY REACHABLE. The remediation the lease script printed is above; the scheduled sweeper (.github/workflows/acr-firewall-sweeper.yml) also retries."
+    return 1
+  fi
+  return 0
 }
-trap release_lease EXIT
+# A bare non-zero command in an EXIT trap does NOT set the script's exit status
+# (measured, bash 5.3), so the failure is turned into an explicit exit. A prior
+# failure code is preserved so a clean re-lock never masks a failed preflight.
+preflight_exit_trap() {
+  local rc=$?
+  if ! release_lease; then
+    exit 1
+  fi
+  exit "$rc"
+}
+trap preflight_exit_trap EXIT
 
 data_plane_up() { az acr repository list -n "$ACR" -o none 2>/dev/null; }
 
@@ -257,7 +277,12 @@ for ENTRY in "${ADOPTED[@]}"; do
   fi
 done
 
-release_lease
+# C24: the re-lock is a hard gate here too. Under `set -e` a bare
+# `release_lease` would already abort, but the trap is cleared on the next line,
+# so make the intent explicit rather than leaving it to errexit.
+if ! release_lease; then
+  exit 1
+fi
 trap - EXIT
 
 if [[ "$FAILED" != "0" ]]; then

@@ -56,12 +56,23 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Bicep Build
-        run: az bicep build --file deploy/bicep/gov/main.bicep
-
-      - name: Lint check
         run: |
-          az bicep build --file deploy/bicep/gov/main.bicep 2>&1 | \
-            grep -c "Error" && exit 1 || echo "No errors found"
+          set -euo pipefail
+          # Compile to a FILE, not stdout: the emitted ARM JSON is large and
+          # piping it makes a compile failure harder to read. A non-zero exit
+          # here is a genuine template defect and must stop the run.
+          az bicep build --file deploy/bicep/gov/main.bicep --outfile "$RUNNER_TEMP/gov-main.json"
+
+      # NOTE (FINISHLINE G3): the step that used to sit here was
+      #   az bicep build --file … 2>&1 | grep -c "Error" && exit 1 || echo "No errors found"
+      # which is a gate that measures almost nothing. `az bicep build` writes
+      # the compiled template to a FILE by default, so the piped stream carried
+      # only diagnostics; `grep -c` counts the literal string "Error", so any
+      # WARNING whose text happens to contain that word would have failed the
+      # run, while the step's real verdict was already decided by the compile
+      # above. It also ran the whole compile a second time for no added signal.
+      # The compile step above is the honest gate; this comment is left so the
+      # removal is not mistaken for a dropped check.
 
   what-if:
     name: What-If Analysis
@@ -160,42 +171,89 @@ jobs:
               deployOSSAlternatives=${{ github.event.inputs.deploy_oss }} \
             --name "$DEPLOY_NAME"
 
+      # deploy-integrity R7 — an error must not assert a cause it did not
+      # establish. Every probe below previously ended in
+      # `2>/dev/null || echo "…may not exist yet"`, which collapsed three very
+      # different outcomes — the RG genuinely absent, the SP denied read, and a
+      # throttle/transport error — into one reassuring sentence, printed as
+      # fact. That is the same defect class that sent two investigations down
+      # the wrong path on 2026-08-05. These steps now capture stderr, classify
+      # it, and say plainly when they do not know.
       - name: Verify Deployment
+        env:
+          RG: rg-csa-${{ github.event.inputs.environment }}-platform
         run: |
+          set -euo pipefail
           echo "=== Deployed Resources ==="
-          az resource list \
-            --resource-group "rg-csa-${{ github.event.inputs.environment }}-platform" \
-            --output table 2>/dev/null || echo "Resource group may not exist yet"
+          set +e
+          OUT=$(az resource list --resource-group "$RG" --output table 2>&1)
+          RC=$?
+          set -e
+          if [ $RC -eq 0 ]; then
+            echo "$OUT"
+          elif printf '%s' "$OUT" | grep -qiE "could not be found|ResourceGroupNotFound"; then
+            echo "::error::resource group '$RG' does not exist after a deploy that reported success. The deploy did not create what it claimed."
+            exit 1
+          else
+            echo "::error::could NOT read resource group '$RG' — so its contents are UNVERIFIED, not empty. Azure said:"
+            printf '%s\n' "$OUT"
+            exit 1
+          fi
 
       - name: Post FedRAMP Compliance Check
+        env:
+          RG: rg-csa-${{ github.event.inputs.environment }}-platform
         run: |
+          set -euo pipefail
           echo "=== FedRAMP Compliance Verification ==="
-          echo "Checking encryption at rest..."
-          az resource list \
-            --resource-group "rg-csa-${{ github.event.inputs.environment }}-platform" \
-            --query "[?type=='Microsoft.Storage/storageAccounts'].{name:name,encryption:properties.encryption.services.blob.enabled}" \
-            --output table 2>/dev/null || echo "Skipping: resource group not yet provisioned"
+          # Each probe reports one of three HONEST outcomes: the finding, a
+          # named "nothing configured" (which is itself a compliance signal),
+          # or "could not read" with the Azure error. None of them silently
+          # degrade into a pass.
+          FAILED=0
+          probe() {
+            local label="$1"; shift
+            echo ""
+            echo "--- $label"
+            set +e
+            local out; out=$("$@" 2>&1); local rc=$?
+            set -e
+            if [ $rc -ne 0 ]; then
+              echo "::error::$label — probe FAILED, result is UNKNOWN (not compliant, not non-compliant). Azure said:"
+              printf '%s\n' "$out"
+              FAILED=1
+              return
+            fi
+            if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
+              echo "::warning::$label — the query succeeded and returned NOTHING. Treat as not-configured, and confirm that is intended for this boundary."
+              return
+            fi
+            printf '%s\n' "$out"
+          }
+
+          probe "Encryption at rest (storage accounts)" \
+            az resource list --resource-group "$RG" \
+              --query "[?type=='Microsoft.Storage/storageAccounts'].{name:name,encryption:properties.encryption.services.blob.enabled}" \
+              --output table
+
+          probe "Network isolation (private endpoints)" \
+            az network private-endpoint list --resource-group "$RG" \
+              --query "[].{name:name,status:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status}" \
+              --output table
+
+          probe "Diagnostic settings" \
+            az monitor diagnostic-settings list \
+              --resource "/subscriptions/${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}/resourceGroups/$RG" \
+              --query "[].{name:name,workspace:workspaceId}" --output table
+
+          probe "Azure Policy compliance state" \
+            az policy state summarize --resource-group "$RG" \
+              --query "results.{compliant:resourceDetails[?complianceState=='Compliant'] | length(@), nonCompliant:resourceDetails[?complianceState=='NonCompliant'] | length(@)}" \
+              --output table
 
           echo ""
-          echo "Checking network isolation (private endpoints)..."
-          az network private-endpoint list \
-            --resource-group "rg-csa-${{ github.event.inputs.environment }}-platform" \
-            --query "[].{name:name,status:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status}" \
-            --output table 2>/dev/null || echo "Skipping: no private endpoints found"
-
-          echo ""
-          echo "Checking diagnostic settings..."
-          az monitor diagnostic-settings list \
-            --resource "/subscriptions/${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}/resourceGroups/rg-csa-${{ github.event.inputs.environment }}-platform" \
-            --query "[].{name:name,workspace:workspaceId}" \
-            --output table 2>/dev/null || echo "Skipping: no diagnostic settings found"
-
-          echo ""
-          echo "Checking Azure Policy compliance state..."
-          az policy state summarize \
-            --resource-group "rg-csa-${{ github.event.inputs.environment }}-platform" \
-            --query "results.{compliant:resourceDetails[?complianceState=='Compliant'] | length(@), nonCompliant:resourceDetails[?complianceState=='NonCompliant'] | length(@)}" \
-            --output table 2>/dev/null || echo "Skipping: policy state not available"
-
-          echo ""
-          echo "FedRAMP compliance check complete."
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::FedRAMP compliance check did not complete — at least one probe could not be evaluated. This run proves nothing about the compliance posture."
+            exit 1
+          fi
+          echo "FedRAMP compliance check complete — every probe returned a real answer."
