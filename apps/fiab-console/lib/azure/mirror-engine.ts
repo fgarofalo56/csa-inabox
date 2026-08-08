@@ -119,23 +119,8 @@ export interface MirrorSource {
    * Undefined keeps the legacy auto behavior (incremental when a watermark exists).
    */
   syncMode?: 'snapshot' | 'incremental' | 'continuous';
-  /**
-   * Explicit source credential resolved from the mirror's stored Loom
-   * Connection (`state.connectionId` → Key Vault secret), or undefined to read
-   * as the Console UAMI.
-   *
-   * Before this field existed the engine had NO way to see the connection the
-   * mirroring wizard collected: `connectionId` was persisted on the item and
-   * read by the schema-browse route, but `sourceFromState()` never carried it
-   * here, so every Start/Restart authenticated as the Console UAMI regardless
-   * of what the operator configured. Resolve it with
-   * `resolveSqlAuthDescribed()` / `resolvePgAuthDescribed()` from
-   * `@/lib/azure/connection-auth` — never by re-deriving it, so there is one
-   * credential path and not a second private copy that drifts.
-   *
-   * Holds secret material for the lifetime of a single run: never persist it to
-   * Cosmos, never include it in an API response, never log it.
-   */
+  /** SQL source credential — resolve ONLY via `withSourceAuth()` in
+   *  `@/lib/azure/connection-auth` (rationale there). Secret; one run; never persist/log/return. */
   auth?: SqlExplicitAuth;
   /** As `auth`, for the PostgreSQL family. */
   pgAuth?: PgExplicitAuth;

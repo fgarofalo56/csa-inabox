@@ -22,7 +22,6 @@
  * BFF + editor can render a clean MessageBar with remediation hint.
  */
 
-import crypto from 'node:crypto';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 // DUAL-IDENTITY AUTH + TRANSPORT — extracted to a single shared chokepoint so
 // this client and copilot-studio-client cannot drift again (they already had:
@@ -114,14 +113,19 @@ const PP_AUTH = { tokenError: (m: string) => new PowerPlatformError(m, 401) };
 const ppFetch = (url: string, scope: string, init: RequestInit) =>
   powerPlatformFetch(url, scope, init, PP_AUTH);
 
-interface CallOpts {
+export interface CallOpts {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   body?: unknown;
   query?: Record<string, string | number | undefined>;
   headers?: Record<string, string>;
 }
 
-async function call<T = any>(url: string, scope: string, opts: CallOpts = {}): Promise<T> {
+/**
+ * Exported so sibling Power Platform modules (e.g. powerplatform-solutions)
+ * reuse this ONE transport — dual-identity auth, the 401/403 `ppAuthHint`, and
+ * PowerPlatformError shaping — instead of re-implementing it and drifting.
+ */
+export async function ppCall<T = any>(url: string, scope: string, opts: CallOpts = {}): Promise<T> {
   const method = opts.method ?? 'GET';
   let full = url;
   if (opts.query) {
@@ -299,7 +303,7 @@ export interface AiBuilderModel {
 const ENV_API_VERSION = '2020-10-01';
 
 export async function listEnvironments(): Promise<PpEnvironment[]> {
-  const j = await call<{ value: any[] }>(
+  const j = await ppCall<{ value: any[] }>(
     `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
     bapScope(),
     { query: { 'api-version': ENV_API_VERSION } },
@@ -308,7 +312,7 @@ export async function listEnvironments(): Promise<PpEnvironment[]> {
 }
 
 export async function getEnvironment(name: string): Promise<PpEnvironment> {
-  const j = await call<any>(
+  const j = await ppCall<any>(
     `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(name)}`,
     bapScope(),
     { query: { 'api-version': ENV_API_VERSION, '$expand': 'permissions,properties/billingPolicy' } },
@@ -389,8 +393,8 @@ function isTerminalOpStatus(status?: string): boolean {
 
 /**
  * Issue a BAP control-plane call and return the parsed body PLUS the async
- * operation URL from the response headers (the standard `call()` helper drops
- * headers; lifecycle ops need them to poll). Mirrors `call()`'s auth + error
+ * operation URL from the response headers (the standard `ppCall()` helper drops
+ * headers; lifecycle ops need them to poll). Mirrors `ppCall()`'s auth + error
  * handling so 401/403/4xx surface as a PowerPlatformError with the same hint.
  */
 async function bapCallWithHeaders<T = any>(
@@ -565,7 +569,8 @@ function mapEnvironment(e: any): PpEnvironment {
 }
 
 /** Dataverse base URL for an environment (https://<org>.crm.dynamics.com). */
-async function dataverseBase(envId: string): Promise<{ url: string; scope: string }> {
+/** Exported for sibling Power Platform modules — see `ppCall`. */
+export async function dataverseBase(envId: string): Promise<{ url: string; scope: string }> {
   const env = await getEnvironment(envId);
   const url = env.instanceUrl?.replace(/\/$/, '');
   if (!url) {
@@ -584,7 +589,7 @@ async function dataverseBase(envId: string): Promise<{ url: string; scope: strin
 
 export async function listSolutions(envId: string): Promise<DataverseSolution[]> {
   const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ value: DataverseSolution[] }>(
+  const j = await ppCall<{ value: DataverseSolution[] }>(
     `${url}/api/data/v9.2/solutions`,
     scope,
     { query: { '$select': 'solutionid,uniquename,friendlyname,version,ismanaged,installedon' } },
@@ -592,306 +597,9 @@ export async function listSolutions(envId: string): Promise<DataverseSolution[]>
   return j.value || [];
 }
 
-// ============================================================
-// Dataverse: solution ALM — export / import / job tracking
-// ============================================================
-//
-// Grounded in Microsoft Learn "Solution staging, with asynchronous import and
-// export" (https://learn.microsoft.com/power-platform/alm/solution-async) and
-// the Web API action reference. These close audit-T28 / parity row I5, which
-// previously had `listSolutions` and nothing else — the Solutions row was an
-// honest ⚠️ pointing the operator at the maker portal.
-//
-// Every call below is a real Dataverse Web API action against the environment's
-// own instance URL. There is no Fabric/Power BI dependency
-// (no-fabric-dependency.md) — Dataverse is the Azure-native backing service for
-// Power Platform ALM.
-
-/** A staged/queued solution job the UI can poll. */
-export interface SolutionJobRef {
-  /** Async operation id — poll `asyncoperations({id})` for statecode/statuscode. */
-  asyncOperationId?: string;
-  /** Import job id — poll `importjobs({id})` for `progress` + the result XML. */
-  importJobId?: string;
-  /** Export job id — pass to `downloadSolutionExportData`. */
-  exportJobId?: string;
-}
-
-/** Progress of a running/finished solution import. */
-export interface SolutionImportStatus {
-  importJobId: string;
-  /** 0-100. Dataverse reports fractional progress; rounded here for display. */
-  progress: number;
-  /** Async-operation state when the job was queued asynchronously. */
-  state?: string;
-  status?: string;
-  startedOn?: string;
-  completedOn?: string;
-  /** Human-readable failure text extracted from the job when it failed. */
-  error?: string;
-}
-
-/**
- * Export a solution as a .zip. Synchronous `ExportSolution` action — returns the
- * base64 `ExportSolutionFile`. Used for solutions small enough to export inline;
- * `exportSolutionAsync` handles the large/timeout-prone case.
- *
- * `managed` selects a managed (true) or unmanaged (false) export, matching the
- * maker portal's Export choice.
- */
-export async function exportSolution(
-  envId: string,
-  uniqueName: string,
-  managed: boolean,
-  opts: {
-    exportAutoNumberingSettings?: boolean;
-    exportCalendarSettings?: boolean;
-    exportCustomizationSettings?: boolean;
-    exportEmailTrackingSettings?: boolean;
-    exportGeneralSettings?: boolean;
-    exportIsvConfig?: boolean;
-    exportMarketingSettings?: boolean;
-    exportOutlookSynchronizationSettings?: boolean;
-    exportRelationshipRoles?: boolean;
-    exportSales?: boolean;
-  } = {},
-): Promise<{ fileBase64: string; fileName: string }> {
-  const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ ExportSolutionFile: string }>(
-    `${url}/api/data/v9.2/ExportSolution`,
-    scope,
-    {
-      method: 'POST',
-      body: {
-        SolutionName: uniqueName,
-        Managed: managed,
-        ExportAutoNumberingSettings: !!opts.exportAutoNumberingSettings,
-        ExportCalendarSettings: !!opts.exportCalendarSettings,
-        ExportCustomizationSettings: !!opts.exportCustomizationSettings,
-        ExportEmailTrackingSettings: !!opts.exportEmailTrackingSettings,
-        ExportGeneralSettings: !!opts.exportGeneralSettings,
-        ExportIsvConfig: !!opts.exportIsvConfig,
-        ExportMarketingSettings: !!opts.exportMarketingSettings,
-        ExportOutlookSynchronizationSettings: !!opts.exportOutlookSynchronizationSettings,
-        ExportRelationshipRoles: !!opts.exportRelationshipRoles,
-        ExportSales: !!opts.exportSales,
-      },
-    },
-  );
-  if (!j?.ExportSolutionFile) {
-    throw new PowerPlatformError(
-      `Dataverse returned no ExportSolutionFile for solution "${uniqueName}".`,
-      502, j, undefined,
-      'The export succeeded but carried no payload. Retry, or use the asynchronous export for a large solution.',
-    );
-  }
-  return {
-    fileBase64: j.ExportSolutionFile,
-    fileName: `${uniqueName}_${managed ? 'managed' : 'unmanaged'}.zip`,
-  };
-}
-
-/**
- * Start an ASYNCHRONOUS solution export (`ExportSolutionAsync`). Returns the
- * `AsyncOperationId` (track the job) + `ExportJobId` (fetch the file when the
- * job reaches statecode 3 / statuscode 30). This is the documented path for a
- * solution large enough that the synchronous export times out.
- */
-export async function exportSolutionAsync(
-  envId: string, uniqueName: string, managed: boolean,
-): Promise<SolutionJobRef> {
-  const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ AsyncOperationId?: string; ExportJobId?: string }>(
-    `${url}/api/data/v9.2/ExportSolutionAsync`,
-    scope,
-    { method: 'POST', body: { SolutionName: uniqueName, Managed: managed } },
-  );
-  return { asyncOperationId: j?.AsyncOperationId, exportJobId: j?.ExportJobId };
-}
-
-/**
- * Download the file produced by `exportSolutionAsync` once its async operation
- * has succeeded (`DownloadSolutionExportData` → `ExportSolutionFile`).
- */
-export async function downloadSolutionExportData(
-  envId: string, exportJobId: string,
-): Promise<{ fileBase64: string }> {
-  const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ ExportSolutionFile: string }>(
-    `${url}/api/data/v9.2/DownloadSolutionExportData`,
-    scope,
-    { method: 'POST', body: { ExportJobId: exportJobId } },
-  );
-  if (!j?.ExportSolutionFile) {
-    throw new PowerPlatformError(
-      'The export job produced no file yet.', 409, j, undefined,
-      'The asynchronous export has not finished. Poll the async operation until it reports Succeeded, then download again.',
-    );
-  }
-  return { fileBase64: j.ExportSolutionFile };
-}
-
-/**
- * Stage a solution (`StageSolution`) — validates the .zip and returns the
- * validation results plus a `StageSolutionUploadId` for `ImportSolutionAsync`.
- *
- * Staging first is what makes the import surface honest: the operator sees the
- * missing-dependency / version-conflict findings BEFORE anything is applied,
- * which is exactly what the maker portal's import wizard shows.
- */
-export async function stageSolution(
-  envId: string, customizationFileBase64: string,
-): Promise<{
-  uploadId?: string;
-  status?: string;
-  solutionDetails?: any;
-  validationResults: Array<{ errorCode?: number; message?: string; solutionValidationResultType?: string }>;
-}> {
-  const { url, scope } = await dataverseBase(envId);
-  const j = await call<any>(
-    `${url}/api/data/v9.2/StageSolution`,
-    scope,
-    { method: 'POST', body: { CustomizationFile: customizationFileBase64 } },
-  );
-  const r = j?.StageSolutionResults || j || {};
-  return {
-    uploadId: r.StageSolutionUploadId,
-    status: r.StageSolutionStatus,
-    solutionDetails: r.SolutionDetails,
-    validationResults: Array.isArray(r.SolutionValidationResults)
-      ? r.SolutionValidationResults.map((v: any) => ({
-        errorCode: v?.ErrorCode,
-        message: v?.Message,
-        solutionValidationResultType: v?.SolutionValidationResultType,
-      }))
-      : [],
-  };
-}
-
-/**
- * Import a solution asynchronously (`ImportSolutionAsync`). Accepts either a
- * staged upload id (preferred — the solution was already validated) or a raw
- * base64 .zip.
- *
- * Returns `ImportJobKey` (→ `importjobs`, for progress) and `AsyncOperationId`
- * (→ `asyncoperations`, for job status), per Learn.
- */
-export async function importSolutionAsync(
-  envId: string,
-  input: { stageSolutionUploadId?: string; customizationFileBase64?: string },
-  opts: {
-    publishWorkflows?: boolean;
-    overwriteUnmanagedCustomizations?: boolean;
-    skipProductUpdateDependencies?: boolean;
-    importAsHoldingSolution?: boolean;
-  } = {},
-): Promise<SolutionJobRef> {
-  if (!input.stageSolutionUploadId && !input.customizationFileBase64) {
-    throw new PowerPlatformError(
-      'importSolutionAsync needs either a staged upload id or a solution file.', 400, null, undefined,
-      'Stage the solution first (recommended, so validation runs), or supply the .zip contents.',
-    );
-  }
-  const { url, scope } = await dataverseBase(envId);
-  const body: Record<string, unknown> = {
-    PublishWorkflows: opts.publishWorkflows !== false,
-    OverwriteUnmanagedCustomizations: !!opts.overwriteUnmanagedCustomizations,
-    SkipProductUpdateDependencies: !!opts.skipProductUpdateDependencies,
-    ImportJobId: crypto.randomUUID(),
-    ComponentParameters: [],
-  };
-  if (opts.importAsHoldingSolution) body.HoldingSolution = true;
-  if (input.stageSolutionUploadId) {
-    body.SolutionParameters = { StageSolutionUploadId: input.stageSolutionUploadId };
-    // ImportSolutionAsync still requires the CustomizationFile property to be
-    // present; an empty string is the documented value when importing a
-    // previously-staged solution by upload id.
-    body.CustomizationFile = '';
-  } else {
-    body.CustomizationFile = input.customizationFileBase64;
-  }
-  const j = await call<{ ImportJobKey?: string; AsyncOperationId?: string }>(
-    `${url}/api/data/v9.2/ImportSolutionAsync`, scope, { method: 'POST', body },
-  );
-  return { importJobId: j?.ImportJobKey, asyncOperationId: j?.AsyncOperationId };
-}
-
-/**
- * Poll an import job's progress. Reads `importjobs({id})` for `progress` and,
- * when available, the async operation for state/status + the failure message.
- *
- * Per deploy-integrity R7 a not-yet-created job row is reported as "queued, no
- * progress yet" rather than as a failure — the job record appears a moment
- * after ImportSolutionAsync returns.
- */
-export async function getSolutionImportStatus(
-  envId: string, importJobId: string, asyncOperationId?: string,
-): Promise<SolutionImportStatus> {
-  const { url, scope } = await dataverseBase(envId);
-  const out: SolutionImportStatus = { importJobId, progress: 0 };
-  try {
-    const job = await call<any>(
-      `${url}/api/data/v9.2/importjobs(${encodeURIComponent(importJobId)})`,
-      scope,
-      { query: { '$select': 'importjobid,progress,startedon,completedon,data' } },
-    );
-    out.progress = Math.round(Number(job?.progress ?? 0));
-    out.startedOn = job?.startedon;
-    out.completedOn = job?.completedon;
-  } catch (e: any) {
-    // 404 = the job row has not materialized yet. Anything else is real.
-    if (e?.status !== 404) throw e;
-  }
-  if (asyncOperationId) {
-    try {
-      const op = await call<any>(
-        `${url}/api/data/v9.2/asyncoperations(${encodeURIComponent(asyncOperationId)})`,
-        scope,
-        { query: { '$select': 'statecode,statuscode,message,friendlymessage' } },
-      );
-      out.state = ASYNC_STATE[String(op?.statecode)] ?? String(op?.statecode ?? '');
-      out.status = ASYNC_STATUS[String(op?.statuscode)] ?? String(op?.statuscode ?? '');
-      if (op?.statuscode === 31 || op?.statuscode === 32) {
-        out.error = op?.friendlymessage || op?.message || 'The import job failed.';
-      }
-    } catch (e: any) {
-      if (e?.status !== 404) throw e;
-    }
-  }
-  return out;
-}
-
-/** Dataverse asyncoperation statecode → label. */
-const ASYNC_STATE: Record<string, string> = { '0': 'Ready', '1': 'Suspended', '2': 'Locked', '3': 'Completed' };
-/** Dataverse asyncoperation statuscode → label (the subset that matters for ALM). */
-const ASYNC_STATUS: Record<string, string> = {
-  '0': 'WaitingForResources', '10': 'Waiting', '20': 'InProgress', '21': 'Pausing', '22': 'Canceling',
-  '30': 'Succeeded', '31': 'Failed', '32': 'Canceled',
-};
-
-/**
- * Publish all customizations (`PublishAllXml`) — the step the maker portal runs
- * after an unmanaged import so the changes become visible to users.
- */
-export async function publishAllCustomizations(envId: string): Promise<void> {
-  const { url, scope } = await dataverseBase(envId);
-  await call(`${url}/api/data/v9.2/PublishAllXml`, scope, { method: 'POST', body: {} });
-}
-
-/**
- * Delete a solution by id (the maker portal's Delete on the Solutions grid).
- */
-export async function deleteSolution(envId: string, solutionId: string): Promise<void> {
-  const { url, scope } = await dataverseBase(envId);
-  await call(
-    `${url}/api/data/v9.2/solutions(${encodeURIComponent(solutionId)})`,
-    scope, { method: 'DELETE' },
-  );
-}
-
 export async function listTables(envId: string): Promise<DataverseTable[]> {
   const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ value: DataverseTable[] }>(
+  const j = await ppCall<{ value: DataverseTable[] }>(
     `${url}/api/data/v9.2/EntityDefinitions`,
     scope,
     { query: { '$select': 'MetadataId,LogicalName,SchemaName,DisplayName,IsCustomEntity,EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute' } },
@@ -901,7 +609,7 @@ export async function listTables(envId: string): Promise<DataverseTable[]> {
 
 export async function getTable(envId: string, logicalName: string): Promise<DataverseTable> {
   const { url, scope } = await dataverseBase(envId);
-  return call<DataverseTable>(
+  return ppCall<DataverseTable>(
     `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')`,
     scope,
   );
@@ -909,7 +617,7 @@ export async function getTable(envId: string, logicalName: string): Promise<Data
 
 export async function getTableSchema(envId: string, logicalName: string): Promise<DataverseAttribute[]> {
   const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ value: DataverseAttribute[] }>(
+  const j = await ppCall<{ value: DataverseAttribute[] }>(
     `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')/Attributes`,
     scope,
     { query: { '$select': 'MetadataId,LogicalName,SchemaName,AttributeType,RequiredLevel,DisplayName,IsCustomAttribute,IsPrimaryId,IsPrimaryName' } },
@@ -968,7 +676,7 @@ export interface DataverseBusinessRule {
 /** Alternate keys for a table (EntityKeyMetadata). */
 export async function getTableKeys(envId: string, logicalName: string): Promise<DataverseKey[]> {
   const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ value: DataverseKey[] }>(
+  const j = await ppCall<{ value: DataverseKey[] }>(
     `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')/Keys`,
     scope,
     { query: { '$select': 'MetadataId,LogicalName,SchemaName,DisplayName,KeyAttributes,EntityKeyIndexStatus' } },
@@ -981,11 +689,11 @@ export async function getTableRelationships(envId: string, logicalName: string):
   const { url, scope } = await dataverseBase(envId);
   const base = `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')`;
   const [otm, mto, mtm] = await Promise.all([
-    call<{ value: any[] }>(`${base}/OneToManyRelationships`, scope,
+    ppCall<{ value: any[] }>(`${base}/OneToManyRelationships`, scope,
       { query: { '$select': 'MetadataId,SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedEntity,ReferencedAttribute' } }),
-    call<{ value: any[] }>(`${base}/ManyToOneRelationships`, scope,
+    ppCall<{ value: any[] }>(`${base}/ManyToOneRelationships`, scope,
       { query: { '$select': 'MetadataId,SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedEntity,ReferencedAttribute' } }),
-    call<{ value: any[] }>(`${base}/ManyToManyRelationships`, scope,
+    ppCall<{ value: any[] }>(`${base}/ManyToManyRelationships`, scope,
       { query: { '$select': 'MetadataId,SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName' } }),
   ]);
   const out: DataverseRelationship[] = [];
@@ -999,14 +707,14 @@ export async function getTableRelationships(envId: string, logicalName: string):
 export async function getTableViews(envId: string, logicalName: string): Promise<DataverseView[]> {
   const { url, scope } = await dataverseBase(envId);
   const [sys, usr] = await Promise.all([
-    call<{ value: any[] }>(`${url}/api/data/v9.2/savedqueries`, scope, {
+    ppCall<{ value: any[] }>(`${url}/api/data/v9.2/savedqueries`, scope, {
       query: {
         '$select': 'savedqueryid,name,isdefault,querytype,returnedtypecode,fetchxml,modifiedon',
         '$filter': `returnedtypecode eq '${logicalName}'`,
         '$orderby': 'name',
       },
     }),
-    call<{ value: any[] }>(`${url}/api/data/v9.2/userqueries`, scope, {
+    ppCall<{ value: any[] }>(`${url}/api/data/v9.2/userqueries`, scope, {
       query: {
         '$select': 'userqueryid,name,querytype,returnedtypecode,fetchxml,modifiedon',
         '$filter': `returnedtypecode eq '${logicalName}'`,
@@ -1024,7 +732,7 @@ export async function getTableViews(envId: string, logicalName: string): Promise
 export async function getTableBusinessRules(envId: string, logicalName: string): Promise<DataverseBusinessRule[]> {
   const { url, scope } = await dataverseBase(envId);
   // category 2 = Business Rule; type 1 = Definition (not the activation copy).
-  const j = await call<{ value: any[] }>(`${url}/api/data/v9.2/workflows`, scope, {
+  const j = await ppCall<{ value: any[] }>(`${url}/api/data/v9.2/workflows`, scope, {
     query: {
       '$select': 'workflowid,name,statecode,scope,primaryentity,modifiedon',
       '$filter': `category eq 2 and type eq 1 and primaryentity eq '${logicalName}'`,
@@ -1353,7 +1061,7 @@ export async function getTableData(
   top = 25,
 ): Promise<{ columns: string[]; rows: Record<string, any>[] }> {
   const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ value: any[] }>(`${url}/api/data/v9.2/${entitySetName}`, scope, {
+  const j = await ppCall<{ value: any[] }>(`${url}/api/data/v9.2/${entitySetName}`, scope, {
     query: { '$top': top },
     headers: { Prefer: 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"' },
   });
@@ -1408,7 +1116,7 @@ export function powerAppPlayerEmbedUri(
 }
 
 export async function listPowerApps(envId: string): Promise<PowerApp[]> {
-  const j = await call<{ value: any[] }>(
+  const j = await ppCall<{ value: any[] }>(
     `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps`,
     powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION } },
@@ -1417,7 +1125,7 @@ export async function listPowerApps(envId: string): Promise<PowerApp[]> {
 }
 
 export async function getPowerApp(envId: string, name: string, opts?: { instanceUrl?: string }): Promise<PowerApp> {
-  const j = await call<any>(
+  const j = await ppCall<any>(
     `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
     powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION } },
@@ -1432,7 +1140,7 @@ export async function getPowerApp(envId: string, name: string, opts?: { instance
  * button). Returns the action body (often empty / the refreshed app doc).
  */
 export async function publishPowerApp(envId: string, name: string): Promise<{ ok: true; body?: any }> {
-  const body = await call<any>(
+  const body = await ppCall<any>(
     `${powerAppsBase()}/providers/Microsoft.PowerApps/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}/publishAppRevision`,
     powerAppsScope(),
     { method: 'POST', query: { 'api-version': APPS_API_VERSION }, body: {} },
@@ -1491,7 +1199,7 @@ export async function listFlows(envId: string): Promise<PowerAutomateFlow[]> {
   // Please use the List Flows as Admin (V2) API."). V2 inserts /v2/ before
   // /flows and returns identifying info only (displayName/state/timestamps);
   // the full definition is fetched per-flow via getFlow/getFlowDefinition.
-  const j = await call<{ value: any[] }>(
+  const j = await ppCall<{ value: any[] }>(
     `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/v2/flows`,
     flowScope(),
     { query: { 'api-version': FLOW_API_VERSION } },
@@ -1500,7 +1208,7 @@ export async function listFlows(envId: string): Promise<PowerAutomateFlow[]> {
 }
 
 export async function getFlow(envId: string, name: string): Promise<PowerAutomateFlow> {
-  const j = await call<any>(
+  const j = await ppCall<any>(
     `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}`,
     flowScope(),
     { query: { 'api-version': FLOW_API_VERSION } },
@@ -1525,7 +1233,7 @@ function mapFlow(f: any): PowerAutomateFlow {
 
 export async function runFlow(envId: string, name: string, inputs?: Record<string, unknown>): Promise<{ ok: true; runName?: string }> {
   // Admin trigger — uses the manual trigger if present.
-  const res = await call<any>(
+  const res = await ppCall<any>(
     `${flowBase()}/providers/Microsoft.ProcessSimple/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/triggers/manual/run`,
     flowScope(),
     { method: 'POST', query: { 'api-version': FLOW_API_VERSION }, body: inputs ?? {} },
@@ -1534,7 +1242,7 @@ export async function runFlow(envId: string, name: string, inputs?: Record<strin
 }
 
 export async function listFlowRuns(envId: string, name: string, top = 50): Promise<FlowRun[]> {
-  const j = await call<{ value: any[] }>(
+  const j = await ppCall<{ value: any[] }>(
     `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/runs`,
     flowScope(),
     { query: { 'api-version': FLOW_API_VERSION, '$top': top } },
@@ -1688,7 +1396,7 @@ function encodeClientData(def: FlowDefinition): string {
 /** Read a modern cloud flow's authoring document (clientdata definition) from Dataverse. */
 export async function getFlowDefinition(envId: string, workflowId: string): Promise<FlowAuthoringDoc> {
   const { url, scope } = await dataverseBase(envId);
-  const w = await call<any>(
+  const w = await ppCall<any>(
     `${url}/api/data/v9.2/workflows(${encodeURIComponent(workflowId)})`,
     scope,
     { query: { '$select': 'workflowid,name,category,type,statecode,statuscode,primaryentity,clientdata,modifiedon' } },
@@ -1775,7 +1483,7 @@ export async function updateFlowDefinition(
   if (Object.keys(body).length === 0) {
     throw new PowerPlatformError('Nothing to update — provide a definition and/or name.', 400);
   }
-  await call<any>(
+  await ppCall<any>(
     `${url}/api/data/v9.2/workflows(${encodeURIComponent(workflowId)})`,
     scope,
     {
@@ -1796,7 +1504,7 @@ export async function setFlowStateViaDataverse(
   envId: string, workflowId: string, on: boolean,
 ): Promise<{ ok: true }> {
   const { url, scope } = await dataverseBase(envId);
-  await call<any>(
+  await ppCall<any>(
     `${url}/api/data/v9.2/workflows(${encodeURIComponent(workflowId)})`,
     scope,
     {
@@ -1819,7 +1527,7 @@ export async function listPowerPages(envId: string): Promise<PowerPage[]> {
   //   mspp_website_version, statecode, statuscode, createdon, modifiedon.
   // Older portals (adx_website) also exist; we try mspp_ first, fall back on 404.
   try {
-    const j = await call<{ value: any[] }>(
+    const j = await ppCall<{ value: any[] }>(
       `${url}/api/data/v9.2/mspp_websites`,
       scope,
       // Power Pages overrides the standard createdon/modifiedon audit fields
@@ -1842,7 +1550,7 @@ export async function listPowerPages(envId: string): Promise<PowerPage[]> {
   } catch (e) {
     if (e instanceof PowerPlatformError && e.status === 404) {
       // legacy adx_ tables
-      const j = await call<{ value: any[] }>(
+      const j = await ppCall<{ value: any[] }>(
         `${url}/api/data/v9.2/adx_websites`,
         scope,
         { query: { '$select': 'adx_websiteid,adx_name,adx_primarydomainname,adx_websiteurl,statuscode,createdon,modifiedon' } },
@@ -1865,7 +1573,7 @@ export async function listPowerPages(envId: string): Promise<PowerPage[]> {
 export async function getPowerPage(envId: string, websiteId: string): Promise<PowerPage> {
   const { url, scope } = await dataverseBase(envId);
   try {
-    const w = await call<any>(`${url}/api/data/v9.2/mspp_websites(${encodeURIComponent(websiteId)})`, scope);
+    const w = await ppCall<any>(`${url}/api/data/v9.2/mspp_websites(${encodeURIComponent(websiteId)})`, scope);
     return {
       websiteid: w.mspp_websiteid,
       name: w.mspp_name,
@@ -1878,7 +1586,7 @@ export async function getPowerPage(envId: string, websiteId: string): Promise<Po
     };
   } catch (e) {
     if (e instanceof PowerPlatformError && e.status === 404) {
-      const w = await call<any>(`${url}/api/data/v9.2/adx_websites(${encodeURIComponent(websiteId)})`, scope);
+      const w = await ppCall<any>(`${url}/api/data/v9.2/adx_websites(${encodeURIComponent(websiteId)})`, scope);
       return {
         websiteid: w.adx_websiteid,
         name: w.adx_name,
@@ -1900,7 +1608,7 @@ export async function getPowerPage(envId: string, websiteId: string): Promise<Po
 
 export async function listAiBuilderModels(envId: string): Promise<AiBuilderModel[]> {
   const { url, scope } = await dataverseBase(envId);
-  const j = await call<{ value: any[] }>(
+  const j = await ppCall<{ value: any[] }>(
     `${url}/api/data/v9.2/msdyn_aimodels`,
     scope,
     {
@@ -1926,7 +1634,7 @@ export async function listAiBuilderModels(envId: string): Promise<AiBuilderModel
 
 export async function getAiBuilderModel(envId: string, modelId: string): Promise<AiBuilderModel> {
   const { url, scope } = await dataverseBase(envId);
-  const m = await call<any>(
+  const m = await ppCall<any>(
     `${url}/api/data/v9.2/msdyn_aimodels(${encodeURIComponent(modelId)})`,
     scope,
     { query: { '$expand': 'msdyn_TemplateId($select=msdyn_name)' } },
@@ -1952,7 +1660,7 @@ export async function getAiBuilderModel(envId: string, modelId: string): Promise
  */
 export async function trainAiBuilderModel(envId: string, modelId: string): Promise<{ ok: true; body?: any }> {
   const { url, scope } = await dataverseBase(envId);
-  const body = await call<any>(
+  const body = await ppCall<any>(
     `${url}/api/data/v9.2/msdyn_aimodels(${encodeURIComponent(modelId)})/Microsoft.Dynamics.CRM.msdyn_AIModelTrain`,
     scope,
     { method: 'POST', body: {} },
@@ -1967,7 +1675,7 @@ export async function trainAiBuilderModel(envId: string, modelId: string): Promi
  */
 export async function publishAiBuilderModel(envId: string, modelId: string): Promise<{ ok: true; body?: any }> {
   const { url, scope } = await dataverseBase(envId);
-  const body = await call<any>(
+  const body = await ppCall<any>(
     `${url}/api/data/v9.2/msdyn_aimodels(${encodeURIComponent(modelId)})/Microsoft.Dynamics.CRM.msdyn_AIConfigurationActivate`,
     scope,
     { method: 'POST', body: {} },
@@ -1987,7 +1695,7 @@ export async function predictAiBuilderModel(
   request: Record<string, unknown>,
 ): Promise<{ ok: true; result: any }> {
   const { url, scope } = await dataverseBase(envId);
-  const result = await call<any>(
+  const result = await ppCall<any>(
     `${url}/api/data/v9.2/Predict`,
     scope,
     {
@@ -2043,7 +1751,7 @@ export interface PowerConnector {
 }
 
 export async function listConnections(envId: string): Promise<PowerConnection[]> {
-  const j = await call<{ value: any[] }>(
+  const j = await ppCall<{ value: any[] }>(
     `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections`,
     powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION } },
@@ -2070,14 +1778,14 @@ export async function listConnectors(envId: string): Promise<PowerConnector[]> {
   // The admin "apis" endpoint lists connectors visible in the environment.
   // We surface CUSTOM connectors prominently (isCustomApi) but return all so
   // the count + filter match the maker portal Connectors list.
-  const j = await call<{ value: any[] }>(
+  const j = await ppCall<{ value: any[] }>(
     `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
     powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION, '$filter': "environment eq '" + envId + "'" } },
   ).catch(async (e) => {
     // Some tenants reject the $filter form; retry without it.
     if (e instanceof PowerPlatformError && (e.status === 400 || e.status === 404)) {
-      return call<{ value: any[] }>(
+      return ppCall<{ value: any[] }>(
         `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
         powerAppsScope(),
         { query: { 'api-version': APPS_API_VERSION } },
@@ -2103,7 +1811,7 @@ export async function listConnectors(envId: string): Promise<PowerConnector[]> {
 
 /** Delete an API connection (real Power Apps admin REST). */
 export async function deleteConnection(envId: string, connectorId: string, connectionName: string): Promise<{ ok: true }> {
-  await call<any>(
+  await ppCall<any>(
     `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections/${encodeURIComponent(connectorId)}/${encodeURIComponent(connectionName)}`,
     powerAppsScope(),
     { method: 'DELETE', query: { 'api-version': APPS_API_VERSION } },
@@ -2113,7 +1821,7 @@ export async function deleteConnection(envId: string, connectorId: string, conne
 
 /** Delete a Power App (real Power Apps admin REST). */
 export async function deletePowerApp(envId: string, name: string): Promise<{ ok: true }> {
-  await call<any>(
+  await ppCall<any>(
     `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
     powerAppsScope(),
     { method: 'DELETE', query: { 'api-version': APPS_API_VERSION } },
@@ -2123,7 +1831,7 @@ export async function deletePowerApp(envId: string, name: string): Promise<{ ok:
 
 /** Delete a cloud flow (real Power Automate admin REST). */
 export async function deleteFlow(envId: string, name: string): Promise<{ ok: true }> {
-  await call<any>(
+  await ppCall<any>(
     `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}`,
     flowScope(),
     { method: 'DELETE', query: { 'api-version': FLOW_API_VERSION } },
@@ -2133,7 +1841,7 @@ export async function deleteFlow(envId: string, name: string): Promise<{ ok: tru
 
 /** Start/stop a cloud flow (real Power Automate admin REST: turnOn / turnOff). */
 export async function setFlowState(envId: string, name: string, on: boolean): Promise<{ ok: true }> {
-  await call<any>(
+  await ppCall<any>(
     `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/${on ? 'start' : 'stop'}`,
     flowScope(),
     { method: 'POST', query: { 'api-version': FLOW_API_VERSION }, body: {} },

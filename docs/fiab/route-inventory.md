@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1672 |
+| Total routes | 1673 |
 | Public (no session) | 102 |
-| Session-only | 561 |
+| Session-only | 562 |
 | Owner-scoped | 712 |
 | Admin | 297 |
-| Gated (backend config) | 492 |
+| Gated (backend config) | 493 |
 | Areas | 121 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -2005,6 +2005,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `powerplatform/environments/operation/route.ts` | GET | session-only | ● | — |
 | `powerplatform/environments/route.ts` | GET POST PATCH DELETE | session-only | ● | — |
 | `powerplatform/flows/route.ts` | GET POST DELETE | session-only | ● | — |
+| `powerplatform/solutions/route.ts` | GET POST DELETE | session-only | ● | — |
 | `powerplatform/tables/route.ts` | GET POST | session-only | ● | — |
 
 ## pub

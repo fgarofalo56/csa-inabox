@@ -47,13 +47,18 @@
  * accepted upload so a runaway body cannot exhaust the container's memory.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+// `withSession` (not a hand-rolled getSession) per the route-toolkit ratchet —
+// it also genericizes an unexpected throw through apiServerError, so no stack
+// trace or Dataverse error body can leak out of a 500.
+import { withSession } from '@/lib/api/route-toolkit';
 import {
-  listSolutions, exportSolution, exportSolutionAsync, downloadSolutionExportData,
+  listSolutions, powerPlatformConfigGate, dataverseConfigGate, PowerPlatformError,
+} from '@/lib/azure/powerplatform-client';
+import {
+  exportSolution, exportSolutionAsync, downloadSolutionExportData,
   stageSolution, importSolutionAsync, getSolutionImportStatus,
   publishAllCustomizations, deleteSolution,
-  powerPlatformConfigGate, dataverseConfigGate, PowerPlatformError,
-} from '@/lib/azure/powerplatform-client';
+} from '@/lib/azure/powerplatform-solutions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,9 +109,7 @@ function requireEnv(req: NextRequest): { envId: string } | NextResponse {
   return { envId };
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   const g = gate('Listing solutions');
   if (g) return g;
   const e = requireEnv(req);
@@ -115,11 +118,9 @@ export async function GET(req: NextRequest) {
     const solutions = await listSolutions(e.envId);
     return NextResponse.json({ ok: true, solutions });
   } catch (ex: any) { return err(ex); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const g = gate('Solution import/export');
   if (g) return g;
   const e = requireEnv(req);
@@ -213,11 +214,9 @@ export async function POST(req: NextRequest) {
         );
     }
   } catch (ex: any) { return err(ex); }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   const g = gate('Deleting a solution');
   if (g) return g;
   const e = requireEnv(req);
@@ -228,4 +227,4 @@ export async function DELETE(req: NextRequest) {
     await deleteSolution(e.envId, solutionId);
     return NextResponse.json({ ok: true });
   } catch (ex: any) { return err(ex); }
-}
+});
