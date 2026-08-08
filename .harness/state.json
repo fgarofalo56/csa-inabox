@@ -1569,6 +1569,13 @@
         "Gov federation surface: ONLY loom-unity runs. NO loom-trino, NO iceberg-catalog in the Gov admin RG — consistent with G2's never-run image lane.",
         "#2643 SEVERITY RE-SCOPED (measured): loom-unity has ingress.external=FALSE, fqdn *.internal.*, allowInsecure=false. The missing auth is real — there is NO auth env var of any kind — but the blast radius is VNET-INTERNAL, not public internet. Still a genuine exposure to anything inside the VNet; NOT an internet-facing anonymous-write surface."
       ]
+    },
+    "token_drift_resolved_2026-08-08": {
+      "symptom": "THREE separate failures shared one root: the eval gate's 401 sweep (0/153 rows), #2929 'reindex rejected (HTTP 401) — LOOM_INTERNAL_TOKEN is missing or does not match the console env', and the residual red on full-app-deploy that #3090's lane could not clear.",
+      "root_cause": "#3056 RE-DETONATED exactly as E1 predicted. On 2026-08-06 E1 synced the console's ROTATED 64-char token to the GitHub secret and the consumer jobs. Today's deploys regenerated the bicep DETERMINISTIC 36-char guid onto the console, so the GitHub secret (still the 64-char value) no longer matched. Measured: console token len=36 sha256=209954d26026.",
+      "fix_applied": "Re-synced the GitHub secret LOOM_INTERNAL_TOKEN from the console's live value BY PIPE (value never printed or logged). Verified all three consumer jobs (loom-copilot-evaluator, loom-asset-reconciler, loom-cost-anomaly-monitor) already carry the SAME fingerprint 209954d26026 — the drift was ONLY the GitHub secret this time.",
+      "PROOF": "loom-docs-reindex run 31236715059 = SUCCESS immediately after the re-sync (it had been failing 401).",
+      "STILL_NOT_FIXED": "This is a STOPGAP. #3056 is unfixed: every admin-plane deploy regenerates the guid and re-breaks the GitHub secret. The durable fix is bicep-vs-rotation ownership (one writer), or a KV reference both sides read. Until then this will recur on EVERY deploy."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
