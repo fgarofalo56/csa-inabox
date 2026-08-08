@@ -1625,6 +1625,13 @@
       "unreached": "gov-provision-trino STILL NEVER RUN. Gov Iceberg/Trino federation remains unexercised - the exact inversion cloud-parity.md names, since Unity Catalog does not exist in Azure Government and this IS the sovereign catalog product. NOT addressed this pass.",
       "easy_to_misread": "#3078 needs a COMMERCIAL-CLOUD image producer. GCC is AzureCloud+eastus, NOT Gov cloud - the green Gov image lane does NOT unblock it.",
       "shell_bug": "streaming-migrate's honest-skip branch was UNREACHABLE CODE: VAR=\"${VAR:-$(az ... 2>/dev/null)}\" under set -euo pipefail aborts the step with az's exit code, message already destroyed by 2>/dev/null. The correct 'UAMIs don't exist yet, skip with remediation' branch sat three lines below and could never run. Its two what-ifs also ended in '|| true', so the step COULD NOT fail for its actual purpose but COULD die on an incidental lookup."
+    },
+    "rc9_roll_plan_2026-08-08": {
+      "why": "F1's RC-9 fix is in apps/loom-unity/bin/loom-entrypoint.sh, baked into the loom-unity IMAGE that BOTH the loom-unity AND iceberg-catalog container apps run. A console roll does NOT carry it - different deploy path.",
+      "step1_build": "gh workflow run build-fiab-images-acr-tasks.yml --ref main -f boundary=Commercial -f apps=loom-unity -f tag_override=<tag>. Confirmed this workflow owns loom-unity (path filter 'apps/loom-unity/**', and its own comment notes loom-unity lives at ./apps/<name> not the ./apps/fiab-* convention and is deployed on EVERY boundary as svc-loom-unity-authz). NEVER pass skip_supply_chain=true - it ships unverified images.",
+      "step2_roll": "Roll BOTH container apps (loom-unity AND iceberg-catalog) onto the new tag. Rolling only one leaves the pair split.",
+      "step3_verify": "Re-run loom-ui-verify with extra_projects=external-engine-federation. Grade stays D until an AUTHENTICATED catalog read returns 200. Expect RC-2 (DB_LOCAL=1 scale-to-zero) and RC-8 (~23s cold start vs 10s client timeout) to remain as constraints, not new defects.",
+      "gov": "Per cloud-parity.md the same build must run for the Gov boundary; gov-build-images is now GREEN on its first-ever run so that path exists. gov-provision-trino has still NEVER run."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
