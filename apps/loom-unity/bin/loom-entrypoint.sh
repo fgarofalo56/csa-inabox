@@ -683,24 +683,12 @@ announce_bind_plan() {
 
 bind_console_principal() {  bind_principal="$1"
   bind_base="http://127.0.0.1:${LOOM_UNITY_PORT:-8080}"
-  bind_token=""
-  bind_try=0
 
   # The admin token does not exist until the server writes it, and the SCIM route
-  # does not answer until the JVM is listening. One loop covers both, so this
-  # cannot race a slow boot.
-  while [ "${bind_try}" -lt 90 ]; do
-    if [ -s "${CONF_DIR}/token.txt" ]; then
-      bind_token="$(tr -d ' \011\015\012' < "${CONF_DIR}/token.txt")"
-      if [ -n "${bind_token}" ] && curl -sS -o /dev/null -m 5 \
-          -H "Authorization: Bearer ${bind_token}" \
-          "${bind_base}/api/1.0/unity-control/scim2/Users"; then
-        break
-      fi
-    fi
-    bind_try=$((bind_try + 1))
-    sleep 2
-  done
+  # does not answer until the JVM is listening. uc_admin_token covers both, so
+  # this cannot race a slow boot. (Shared with provision_warehouse — one wait, one
+  # definition of "the server is ready for privileged local calls".)
+  bind_token="$(uc_admin_token)" || bind_token=""
 
   if [ -z "${bind_token}" ]; then
     echo "[loom-unity] AUTO-BIND FAILED: the server never wrote ${CONF_DIR}/token.txt, so the Console principal could not be registered as a Unity Catalog user. Authorization stays ENFORCED, so the catalog is refusing every caller (including the Console) rather than serving anonymous ones. See docs/fiab/security/loom-unity-threat-model.md." >&2
@@ -722,6 +710,249 @@ bind_console_principal() {  bind_principal="$1"
       ;;
     *)
       echo "[loom-unity] AUTO-BIND FAILED: registering the Console principal ${bind_principal} as a Unity Catalog user returned HTTP ${bind_status}. Authorization stays ENFORCED — the catalog refuses every caller rather than falling back to anonymous. The Console will report this through probe-loom-unity-authz. See docs/fiab/security/loom-unity-threat-model.md." >&2
+      ;;
+  esac
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# WAREHOUSE AUTO-BIND — create the Unity Catalog CATALOG that backs the Iceberg
+# `warehouse`, and grant the Console the privileges it can hold on it.
+#
+# WHY THIS EXISTS. `data-plane/iceberg-catalog-aca.bicep` has always emitted
+#   { name: 'LOOM_ICEBERG_WAREHOUSE', value: warehouse }   (default 'loom')
+# and NOTHING has ever read it: before this change `grep -ci warehouse` over this
+# entrypoint returned 0. So the deployment declared a warehouse and never created
+# the object, and the Console's `GET /v1/config?warehouse=loom` +
+# `GET /v1/catalogs/loom/namespaces` had no catalog to resolve. Creating the Loom
+# item must PROVISION AND BIND its backing object — .claude/rules/auto-bind-by-default.md
+# §1 — and the platform must do it, not an operator (§5).
+#
+# SELF-HEALING (§3). This runs on EVERY boot and is idempotent: it re-creates the
+# catalog whenever it is absent, so a catalog deleted out-of-band — or lost with
+# the ephemeral store this app runs on (LOOM_UNITY_DB_LOCAL=1 + minReplicas 0,
+# i.e. every scale-to-zero) — is repaired by the next start rather than surfaced
+# as an error.
+#
+# AUTHORITY. The server writes its own admin service token to etc/conf/token.txt
+# at boot (upstream SecurityContext.createServiceTokenFile, unconditional), and
+# that principal is the ONLY holder of metastore OWNER
+# (UnityAccessUtil.initializeAdmin). So the container has, locally and with no
+# external credential, exactly the authority these two calls need — and nothing
+# outside the container ever needs it.
+#
+# HONEST ABOUT WHAT THIS DOES NOT FIX. See announce_iceberg_list_ns_defect below:
+# provisioning the warehouse does NOT make the Iceberg REST surface readable by
+# the Console, because upstream gates every one of those routes on metastore
+# OWNER. That is stated on every boot rather than left to be rediscovered from a
+# 403.
+# ---------------------------------------------------------------------------
+
+# The catalog name backing the Iceberg namespaces. Emitted by
+# data-plane/iceberg-catalog-aca.bicep; absent on the sibling loom-unity app,
+# which serves the Unity surface only and provisions no warehouse.
+unity_warehouse() {
+  printf '%s' "${LOOM_ICEBERG_WAREHOUSE:-}"
+}
+
+# Decide — WITHOUT side effects — what the warehouse step will do. Same rationale
+# as console_bind_plan/idp_probe_plan: a provisioning decision only exercisable
+# on a live container is one nobody notices has stopped happening. Echoes:
+#   not-configured           no LOOM_ICEBERG_WAREHOUSE (the loom-unity app)
+#   invalid-warehouse-name   a value that is not a Unity Catalog identifier
+#   provision:<name>         will create-if-absent that catalog
+warehouse_bind_plan() {
+  wb_name="$(unity_warehouse)"
+  if [ -z "${wb_name}" ]; then
+    echo "not-configured"
+  elif printf '%s' "${wb_name}" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_-]{0,127}$'; then
+    echo "provision:${wb_name}"
+  else
+    echo "invalid-warehouse-name"
+  fi
+}
+
+announce_warehouse_plan() {
+  case "$1" in
+    invalid-warehouse-name)
+      echo "[loom-unity] WARNING: LOOM_ICEBERG_WAREHOUSE is not a valid Unity Catalog identifier — refusing to create a catalog from it. Use letters, digits, underscore or dash (<=128 chars); it is interpolated into a JSON body and a URL path. Set catalogConfig.warehouse on data-plane/iceberg-catalog-aca.bicep." >&2
+      ;;
+  esac
+}
+
+# The upstream defect that provisioning CANNOT fix, stated on every boot so it is
+# a KNOWN ceiling rather than a rediscovered 500.
+#
+# MEASURED on this image (authorization enabled, warehouse provisioned, namespace
+# present, every principal tried including the server's own metastore-OWNER admin
+# token):
+#   GET <irc>/v1/catalogs/<wh>/namespaces
+#     -> HTTP 500 {"error":{"message":"Authorization filter not initialized —
+#        ensure the request goes through UnityAccessDecorator.", ...}}
+# and, as the CONTROL, the identical call against the BARE upstream
+# unitycatalog/unitycatalog:v0.5.0 image with no Loom overlay:
+#     -> HTTP 200 {"namespaces":[["default"]],"next-page-token":null}
+#
+# So this is a regression imported by the v0.5.1 unitycatalog-server OVERLAY the
+# Dockerfile applies (to fix upstream #1603). v0.5.1 added @ResponseAuthorizeFilter
+# + AuthorizedService.applyResponseFilter, and IcebergRestCatalogService.listNamespaces
+# calls SchemaService.listSchemas IN-PROCESS — so it runs under the Iceberg route's
+# request context, which carries no RESULT_FILTER attribute, and applyResponseFilter
+# throws INTERNAL. Every OTHER Iceberg route is unaffected (namespace GET, table
+# list, table load and register all return 200 here).
+#
+# The Console works around it by serving namespaces from the Unity schemas API on
+# this same server (lib/azure/iceberg-catalog-client.ts listNamespaces). An
+# external engine calling the catalog DIRECTLY still hits the 500 on that one
+# route.
+announce_iceberg_list_ns_defect() {
+  [ -n "$(unity_warehouse)" ] || return 0
+  echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: GET <iceberg>/v1/catalogs/<warehouse>/namespaces answers HTTP 500 'Authorization filter not initialized' on this image, for EVERY principal including the metastore owner. Cause: the v0.5.1 unitycatalog-server overlay this image applies (Dockerfile, for upstream #1603) routes IcebergRestCatalogService.listNamespaces through AuthorizedService.applyResponseFilter, which has no ResultFilter under the Iceberg route's context. The bare v0.5.0 image answers 200 on the same call. Every other Iceberg route is unaffected. The Console serves namespaces from /api/2.1/unity-catalog/schemas instead; a DIRECT external-engine LIST-namespaces call still fails. See docs/fiab/parity/external-engine-federation.md." >&2
+}
+
+# Block until the server has written its admin token AND is answering, then echo
+# the token. Echoes nothing on exhaustion — the caller reports that honestly.
+# Shared by the SCIM bind and the warehouse provisioning so a slow boot cannot
+# race either of them.
+uc_admin_token() {
+  ut_token=""
+  ut_try=0
+  while [ "${ut_try}" -lt 90 ]; do
+    if [ -s "${CONF_DIR}/token.txt" ]; then
+      ut_token="$(tr -d ' \011\015\012' < "${CONF_DIR}/token.txt")"
+      if [ -n "${ut_token}" ] && curl -sS -o /dev/null -m 5 \
+          -H "Authorization: Bearer ${ut_token}" \
+          "http://127.0.0.1:${LOOM_UNITY_PORT:-8080}/api/1.0/unity-control/scim2/Users"; then
+        printf '%s' "${ut_token}"
+        return 0
+      fi
+    fi
+    ut_try=$((ut_try + 1))
+    sleep 2
+  done
+  return 1
+}
+
+# Create the warehouse catalog if it is absent, then grant the bound Console
+# principal every privilege it CAN hold on it.
+#
+# Grants are deliberately the API-expressible set — USE CATALOG / SELECT /
+# CREATE SCHEMA / CREATE TABLE. They are what make the Unity surface usable for
+# the Console (list schemas, read tables, register new ones under this catalog);
+# they do NOT and cannot include OWNER (see announce_iceberg_list_ns_defect).
+provision_warehouse() {
+  pw_name="$1"
+  pw_principal="$2"      # '' when nothing was bound (no user exists to grant to)
+  pw_base="http://127.0.0.1:${LOOM_UNITY_PORT:-8080}"
+  pw_api="${pw_base}/api/2.1/unity-catalog"
+
+  pw_token="$(uc_admin_token)" || pw_token=""
+  if [ -z "${pw_token}" ]; then
+    echo "[loom-unity] WAREHOUSE-BIND: FAILED name=${pw_name} reason=no-admin-token — the server never wrote ${CONF_DIR}/token.txt, so the warehouse catalog could not be created. The Iceberg REST surface has no catalog to resolve; external-engine discovery will fail until the next boot succeeds." >&2
+    return 0
+  fi
+
+  # 1. Does it already exist? A GET is cheap and makes "created" mean created.
+  pw_get="$(curl -sS -o /dev/null -w '%{http_code}' -m 15 \
+    -H "Authorization: Bearer ${pw_token}" \
+    "${pw_api}/catalogs/${pw_name}")" || pw_get="000"
+  [ -n "${pw_get}" ] || pw_get="000"
+
+  case "${pw_get}" in
+    200)
+      echo "[loom-unity] WAREHOUSE-BIND: present name=${pw_name} (HTTP 200) — nothing to create."
+      ;;
+    404)
+      pw_post="$(curl -sS -o /dev/null -w '%{http_code}' -m 30 -X POST \
+        "${pw_api}/catalogs" \
+        -H "Authorization: Bearer ${pw_token}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"name\":\"${pw_name}\",\"comment\":\"CSA Loom warehouse — backs the Iceberg REST Catalog namespaces. Created automatically by the loom-unity entrypoint (auto-bind-by-default.md).\"}")" || pw_post="000"
+      [ -n "${pw_post}" ] || pw_post="000"
+      case "${pw_post}" in
+        20*)
+          echo "[loom-unity] WAREHOUSE-BIND: created name=${pw_name} (HTTP ${pw_post})"
+          ;;
+        409)
+          echo "[loom-unity] WAREHOUSE-BIND: present name=${pw_name} (HTTP 409, created concurrently) — nothing to do."
+          ;;
+        *)
+          echo "[loom-unity] WAREHOUSE-BIND: FAILED name=${pw_name} create=HTTP ${pw_post} — the Iceberg REST Catalog has no catalog to resolve, so /v1/catalogs/${pw_name}/namespaces cannot answer. This is a catalog-server failure, not a configuration one: the admin token authenticated (the existence check above returned ${pw_get})." >&2
+          return 0
+          ;;
+      esac
+      ;;
+    *)
+      # UNKNOWN is not "absent". Creating on a 403/500 would either duplicate or
+      # fail confusingly, and reporting "created" on an unverified outcome is the
+      # exact error deploy-integrity.md R6/R7 forbid.
+      echo "[loom-unity] WAREHOUSE-BIND: UNKNOWN name=${pw_name} probe=HTTP ${pw_get} — could not establish whether the catalog exists, so nothing was created. This is NOT a statement that it is missing." >&2
+      return 0
+      ;;
+  esac
+
+  # 2. A namespace, so the warehouse is not a DEAD END on first open.
+  #
+  # MEASURED against this image: with the catalog created but empty,
+  #   GET <irc>/v1/catalogs/<wh>/namespaces/default          -> 404
+  #   GET <irc>/v1/catalogs/<wh>/namespaces/default/tables    -> 404
+  # and after creating schema `<wh>.default` the same two answer 200
+  # ({"identifiers":[],...}). An engine's first walk of a freshly provisioned
+  # warehouse must land on a real, empty namespace — not a 404 the operator has
+  # to interpret (auto-bind-by-default.md §4).
+  pw_ns="${LOOM_ICEBERG_DEFAULT_NAMESPACE:-default}"
+  pw_schema="$(curl -sS -o /dev/null -w '%{http_code}' -m 30 -X POST \
+    "${pw_api}/schemas" \
+    -H "Authorization: Bearer ${pw_token}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"name\":\"${pw_ns}\",\"catalog_name\":\"${pw_name}\",\"comment\":\"Default CSA Loom namespace.\"}")" || pw_schema="000"
+  [ -n "${pw_schema}" ] || pw_schema="000"
+  case "${pw_schema}" in
+    20*)
+      echo "[loom-unity] WAREHOUSE-BIND: namespace ${pw_name}.${pw_ns} created (HTTP ${pw_schema})"
+      ;;
+    *)
+      # DO NOT report "not created" on the strength of a non-2xx alone. Upstream
+      # answers a DUPLICATE schema with HTTP 400, not 409 — measured on the
+      # second boot of this very container, where the first revision of this
+      # block printed "NOT created … an engine will see 404" about a namespace
+      # that plainly existed. An error must not assert something it did not
+      # establish (.claude/rules/deploy-integrity.md R7), so the state is READ
+      # back before anything is claimed about it.
+      pw_ns_get="$(curl -sS -o /dev/null -w '%{http_code}' -m 15 \
+        -H "Authorization: Bearer ${pw_token}" \
+        "${pw_api}/schemas/${pw_name}.${pw_ns}")" || pw_ns_get="000"
+      [ -n "${pw_ns_get}" ] || pw_ns_get="000"
+      if [ "${pw_ns_get}" = "200" ]; then
+        echo "[loom-unity] WAREHOUSE-BIND: namespace ${pw_name}.${pw_ns} already present (create=HTTP ${pw_schema}, read-back=HTTP 200) — nothing to do."
+      else
+        echo "[loom-unity] WAREHOUSE-BIND: namespace ${pw_name}.${pw_ns} MISSING (create=HTTP ${pw_schema}, read-back=HTTP ${pw_ns_get}) — the warehouse exists but has no namespace, so an engine walking it will see 404 on every namespace route until one is created." >&2
+      fi
+      ;;
+  esac
+
+  # 3. Grants. Only meaningful once a Console principal exists as a UC user —
+  # upstream PermissionService resolves the grantee with getUserByEmail(), so a
+  # grant before the SCIM bind 404s. bind_console_principal runs first, in the
+  # same sequential job, for exactly that reason.
+  if [ -z "${pw_principal}" ]; then
+    echo "[loom-unity] WAREHOUSE-BIND: grants skipped for ${pw_name} — no Console principal is registered (LOOM_UNITY_CONSOLE_PRINCIPAL_ID unset, or authorization is the audited disable opt-out)."
+    return 0
+  fi
+
+  pw_grant="$(curl -sS -o /dev/null -w '%{http_code}' -m 30 -X PATCH \
+    "${pw_api}/permissions/catalog/${pw_name}" \
+    -H "Authorization: Bearer ${pw_token}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"changes\":[{\"principal\":\"${pw_principal}\",\"add\":[\"USE CATALOG\",\"SELECT\",\"CREATE SCHEMA\",\"CREATE TABLE\"]}]}")" || pw_grant="000"
+  [ -n "${pw_grant}" ] || pw_grant="000"
+
+  case "${pw_grant}" in
+    20*)
+      echo "[loom-unity] WAREHOUSE-BIND: granted USE CATALOG,SELECT,CREATE SCHEMA,CREATE TABLE on ${pw_name} to the Console principal (HTTP ${pw_grant})."
+      ;;
+    *)
+      echo "[loom-unity] WAREHOUSE-BIND: grants FAILED on ${pw_name} (HTTP ${pw_grant}) — the catalog exists but the Console principal holds no privilege on it, so the Unity surface will refuse its reads. Check that the SCIM bind above succeeded: PermissionService resolves the grantee by getUserByEmail(<principal object id>)." >&2
       ;;
   esac
   return 0
@@ -756,6 +987,9 @@ if [ "${LOOM_UNITY_DRYRUN:-}" = "1" ]; then
   echo "=== auto-bind ==="
   echo "console-principal-bind=$(console_bind_plan)"
   announce_bind_plan "$(console_bind_plan)"
+  echo "warehouse-bind=$(warehouse_bind_plan)"
+  announce_warehouse_plan "$(warehouse_bind_plan)"
+  announce_iceberg_list_ns_defect
   echo "=== probes ==="
   echo "idp-reachability=$(idp_probe_plan)"
   exit 0
@@ -786,11 +1020,30 @@ cd "${UC_HOME}"
 # value is a configuration error worth naming, not something to paper over.
 BIND_PLAN="$(console_bind_plan)"
 announce_bind_plan "${BIND_PLAN}"
-case "${BIND_PLAN}" in
-  bind:*)
-    bind_console_principal "${BIND_PLAN#bind:}" &
-    ;;
-esac
+WAREHOUSE_PLAN="$(warehouse_bind_plan)"
+announce_warehouse_plan "${WAREHOUSE_PLAN}"
+announce_iceberg_list_ns_defect
+
+# ONE sequential background job, deliberately. The warehouse grant resolves its
+# grantee with upstream's getUserByEmail(<principal object id>), so it MUST run
+# after the SCIM registration — running them as two independent `&` jobs would
+# race and the grant would intermittently 404 against a user that had not been
+# created yet.
+auto_bind() {
+  bind_principal_id=""
+  case "${BIND_PLAN}" in
+    bind:*)
+      bind_principal_id="${BIND_PLAN#bind:}"
+      bind_console_principal "${bind_principal_id}"
+      ;;
+  esac
+  case "${WAREHOUSE_PLAN}" in
+    provision:*)
+      provision_warehouse "${WAREHOUSE_PLAN#provision:}" "${bind_principal_id}"
+      ;;
+  esac
+}
+auto_bind &
 
 # POST-BOOT PROBES (see probe_idp_reachability / self_probe_anonymous_read).
 # Unconditional: the anonymous read is exactly as worth stating when

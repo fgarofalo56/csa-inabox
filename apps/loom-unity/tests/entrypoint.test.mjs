@@ -372,6 +372,56 @@ test('#2643 auto-bind: nothing to bind when authorization is the audited disable
   assert.match(r.stdout, /console-principal-bind=authorization-disabled/);
 });
 
+// ── RC-12 WAREHOUSE AUTO-BIND ───────────────────────────────────────────────
+// data-plane/iceberg-catalog-aca.bicep has always emitted LOOM_ICEBERG_WAREHOUSE
+// and NOTHING read it — `grep -ci warehouse` over the entrypoint returned 0. So
+// the deployment declared a warehouse and never created the object. Creating a
+// Loom item must PROVISION AND BIND its backing object
+// (.claude/rules/auto-bind-by-default.md §1), and the PLATFORM must do it (§5).
+//
+// The plan is pinned the same way console_bind_plan is: a provisioning decision
+// only exercisable on a live container is one nobody notices has stopped
+// happening. The live half is proven by tests/authz/iceberg-e2e.sh.
+
+test('RC-12 warehouse: a wired warehouse plans to PROVISION it', { skip: !shAvailable }, () => {
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /warehouse-bind=provision:loom/);
+});
+
+test('RC-12 warehouse: the sibling loom-unity app (no warehouse) provisions nothing', { skip: !shAvailable }, () => {
+  // Only the iceberg-catalog deployment carries LOOM_ICEBERG_WAREHOUSE. The
+  // general Unity app must not start inventing catalogs.
+  const r = render({ ...AUTHZ_WIRED });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /warehouse-bind=not-configured/);
+  assert.doesNotMatch(r.stdout, /warehouse-bind=provision:/);
+});
+
+test('RC-12 warehouse: a non-identifier name is REFUSED, not interpolated', { skip: !shAvailable }, () => {
+  // The value lands in a JSON body AND a URL path, so shape-validate rather than
+  // escape — same reasoning as the principal id above.
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom","x":"y' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /warehouse-bind=invalid-warehouse-name/);
+  assert.doesNotMatch(r.stdout, /warehouse-bind=provision:/);
+  assert.match(r.stderr, /not a valid Unity Catalog identifier/);
+});
+
+test('RC-12 warehouse: the LIST-namespaces defect is STATED, not left to be rediscovered', { skip: !shAvailable }, () => {
+  // MEASURED: GET <irc>/v1/catalogs/<wh>/namespaces answers 500 on this image for
+  // EVERY principal (including the metastore owner), while the BARE upstream
+  // v0.5.0 image answers 200 — so the v0.5.1 server overlay is the cause. A known
+  // ceiling stated on every boot beats a 500 rediscovered from a browser.
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /ICEBERG-LIST-NAMESPACES-DEFECT/);
+  assert.match(r.stderr, /Authorization filter not initialized/);
+  // It must name the CONTROL, not just the symptom — that is what makes it a
+  // diagnosis rather than a shrug.
+  assert.match(r.stderr, /bare v0\.5\.0 image answers 200/);
+});
+
 test('explicit IdP endpoints still win over the derived Entra ones', { skip: !shAvailable }, () => {
   const r = render({
     LOOM_UNITY_AUTH: 'enable',

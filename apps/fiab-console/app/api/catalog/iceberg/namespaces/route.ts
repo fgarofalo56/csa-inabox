@@ -16,7 +16,7 @@ import { withIrcCaller, auditedIrc } from '../_lib/irc-proxy';
 import { safeRecord } from '@/lib/security/safe-object';
 import {
   createNamespace,
-  listNamespaces,
+  listNamespacesResolved,
   namespaceToDotted,
 } from '@/lib/azure/iceberg-catalog-client';
 
@@ -29,7 +29,7 @@ export const GET = withIrcCaller(async (req, ctx) => {
     ctx,
     'namespace.list',
     { namespace: parent || undefined },
-    () => listNamespaces(parent || undefined),
+    () => listNamespacesResolved(parent || undefined),
     (r) => (r.namespaces || []).length,
   );
   return NextResponse.json({
@@ -40,6 +40,11 @@ export const GET = withIrcCaller(async (req, ctx) => {
       name: namespaceToDotted(levels),
     })),
     nextPageToken: result['next-page-token'] ?? null,
+    // Which surface actually answered. `unity-schemas` means the catalog image's
+    // Iceberg LIST-namespaces route returned its known 500 and these rows came
+    // from the Unity Catalog schemas API on the same server — the same data, but
+    // the caller is told, never left to assume the native path served it.
+    via: result.via,
   });
 });
 

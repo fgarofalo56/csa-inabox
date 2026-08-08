@@ -297,8 +297,24 @@ describe('ATTACK: round-3 reviewer bypasses (all three exited 0 against round 2)
     const s = realSources();
     const f = 'lib/azure/iceberg-catalog-client.ts';
     s.set(f, `${s.get(f)!}\nexport async function rogue(h: string) {\n  return fetch(\`https://\${h}/api/2.1/unity-catalog/catalogs/sales\`, { method: 'DELETE' });\n}\n`);
+    // The ceiling is READ from OUTBOUND_BASELINE rather than written here as a
+    // literal. RC-12 moved this file's pin 2 -> 3 (a legitimately audited third
+    // exit) and the hardcoded `(ratchet: 2)` turned this ATTACK test red — a
+    // guard self-test that breaks when the guard is legitimately re-tuned trains
+    // people to edit the test instead of reading it. The property under test is
+    // "the mutation is CAUGHT", not "the ceiling is 2".
+    const ratchet = OUTBOUND_BASELINE.get(f);
+    expect(typeof ratchet).toBe('number');
     expect(analyzeUnityChokepoint(s).join('\n'))
-      .toMatch(/iceberg-catalog-client\.ts: \d+ outbound calls \(ratchet: 2\)/);
+      .toMatch(new RegExp(`iceberg-catalog-client\\.ts: \\d+ outbound calls \\(ratchet: ${ratchet}\\)`));
+  });
+
+  it('#5 — the ratchet is NON-VACUOUS: the unmutated tree passes at the same pin', () => {
+    // The companion the assertion above needs. A pin set too high would let the
+    // mutation through AND leave the attack test green if it only ever asserted
+    // on a message shape, so prove the clean tree sits exactly at the ceiling.
+    const failures = analyzeUnityChokepoint(realSources()).join('\n');
+    expect(failures).not.toMatch(/iceberg-catalog-client\.ts: \d+ outbound calls/);
   });
 
   it('#5 — fails when a file is exempted WITHOUT pinning its outbound count', () => {
