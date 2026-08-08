@@ -153,11 +153,35 @@ jobs:
           set -e
 
           if [[ $EXIT_CODE -ne 0 ]]; then
-            echo "status=Error" >> "$GITHUB_OUTPUT"
-            echo "::error::[$CLOUD_LABEL] what-if FAILED (exit $EXIT_CODE) — the drift verdict is UNKNOWN. stderr:"
-            cat whatif.err || true
-            head -c 4000 whatif.json || true
-            exit 1
+            # #2874 / FINISHLINE G4 — a what-if that dies BEFORE comparing
+            # anything must render an explicit "could not evaluate" verdict, not
+            # a blank that the issue template then prints as "? real delta(s)".
+            # ARM hides the actual per-resource causes in `details[]`, which the
+            # CLI summary drops ("Please see details." — and then no details),
+            # so re-issue the SAME what-if once with --debug to capture the raw
+            # response bodies. Everything mined out of that stream is redacted
+            # before it is emitted: this repo, and the drift issue, are public.
+            echo "::group::Re-running the what-if with --debug to recover ARM's details[]"
+            set +e
+            az deployment sub what-if \
+              --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }}-diag \
+              --location "$LOCATION" \
+              --template-file platform/fiab/bicep/main.bicep \
+              --parameters "platform/fiab/bicep/params/$PARAMS_FILE" \
+              --parameters location="$LOCATION" \
+              --parameters adminEntraGroupId="$ADMIN_GROUP_ID" \
+              --parameters deployAppsEnabled=false \
+              --parameters loomVanityDomain="$FIAB_VANITY_DOMAIN" \
+              $EXTRA_PARAMS \
+              $VALIDATION_ARGS \
+              --no-pretty-print --debug > /dev/null 2> whatif-debug.log
+            set -e
+            echo "::endgroup::"
+            # Renders the verdict + outputs and ALWAYS exits non-zero. There is
+            # no path through this script that reports a clean estate.
+            node scripts/ci/whatif-failure-verdict.mjs \
+              --label "$CLOUD_LABEL" --exit-code "$EXIT_CODE" \
+              --err whatif.err --json whatif.json --debug-log whatif-debug.log
           fi
 
           # Single-source verdict (shared with bicep-whatif.yml's PR lane):
@@ -221,7 +245,25 @@ jobs:
             const list = process.env.DRIFT_LIST || '(what-if failed before a verdict — see the run logs)';
             const suppressedList = process.env.SUPPRESSED_LIST || '';
             const shortCircuitList = process.env.SHORTCIRCUIT_LIST || '';
-            const body = [
+            // #2874 / FINISHLINE G4 — see the Gov job below for the full
+            // rationale. "Could not evaluate" and "found N deltas" are
+            // different findings and must not share a sentence shape.
+            const unevaluated = status === 'CouldNotEvaluate';
+            const detail = process.env.FAILURE_DETAIL || '';
+            const title = unevaluated
+              ? `bicep-drift (${cloud}): NOT EVALUATED — what-if could not run`
+              : `bicep-drift (${cloud}): ${drift} unmanaged delta(s) vs live estate`;
+            const body = unevaluated ? [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Verdict: **COULD NOT EVALUATE** — this run compared **zero** resources against \`platform/fiab/bicep/main.bicep\`.`,
+              ``,
+              `**This is not a drift finding, and it is not a clean bill of health.** The ${cloud} estate is currently UNMEASURED for drift. Treat it as no coverage until the what-if runs.`,
+              ``,
+              detail,
+              ``,
+              `Triage: docs/fiab/runbooks/bicep-drift.md`,
+            ].join('\n') : [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               ``,
               `Verdict: **${status}** — ${drift} **real** Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
@@ -255,7 +297,7 @@ jobs:
             } else {
               await github.rest.issues.create({
                 owner: context.repo.owner, repo: context.repo.repo,
-                title: `bicep-drift (${cloud}): ${drift} unmanaged delta(s) vs live estate`,
+                title,
                 body, labels: ['csa-loom', 'bicep-drift', label],
               });
             }
@@ -269,6 +311,7 @@ jobs:
           SUPPRESSED_COUNT: ${{ steps.whatif.outputs.suppressed_count }}
           SHORTCIRCUIT_COUNT: ${{ steps.whatif.outputs.shortcircuit_count }}
           COVERAGE_NOTE: ${{ steps.whatif.outputs.coverage_note }}
+          FAILURE_DETAIL: ${{ steps.whatif.outputs.failure_detail }}
 
       - name: Auto-close stale drift issues on a clean run
         if: success() && steps.whatif.outputs.status == 'Clean'
@@ -388,11 +431,34 @@ jobs:
           set -e
 
           if [[ $EXIT_CODE -ne 0 ]]; then
-            echo "status=Error" >> "$GITHUB_OUTPUT"
-            echo "::error::[$CLOUD_LABEL] what-if FAILED (exit $EXIT_CODE) — the drift verdict is UNKNOWN. stderr:"
-            cat whatif.err || true
-            head -c 4000 whatif.json || true
-            exit 1
+            # #2874 / FINISHLINE G4 — a what-if that dies BEFORE comparing
+            # anything must render an explicit "could not evaluate" verdict, not
+            # a blank that the issue template then prints as "? real delta(s)".
+            # ARM hides the actual per-resource causes in `details[]`, which the
+            # CLI summary drops ("Please see details." — and then no details),
+            # so re-issue the SAME what-if once with --debug to capture the raw
+            # response bodies. Everything mined out of that stream is redacted
+            # before it is emitted: this repo, and the drift issue, are public.
+            echo "::group::Re-running the what-if with --debug to recover ARM's details[]"
+            set +e
+            az deployment sub what-if \
+              --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }}-diag \
+              --location "$LOCATION" \
+              --template-file platform/fiab/bicep/main.bicep \
+              --parameters "platform/fiab/bicep/params/$PARAMS_FILE" \
+              --parameters location="$LOCATION" \
+              --parameters adminEntraGroupId="$ADMIN_GROUP_ID" \
+              --parameters deployAppsEnabled=false \
+              $EXTRA_PARAMS \
+              $VALIDATION_ARGS \
+              --no-pretty-print --debug > /dev/null 2> whatif-debug.log
+            set -e
+            echo "::endgroup::"
+            # Renders the verdict + outputs and ALWAYS exits non-zero. There is
+            # no path through this script that reports a clean estate.
+            node scripts/ci/whatif-failure-verdict.mjs \
+              --label "$CLOUD_LABEL" --exit-code "$EXIT_CODE" \
+              --err whatif.err --json whatif.json --debug-log whatif-debug.log
           fi
 
           # Same single-source verdict as the Commercial job — see the comment
@@ -441,7 +507,30 @@ jobs:
             const list = process.env.DRIFT_LIST || '(what-if failed before a verdict — see the run logs)';
             const suppressedList = process.env.SUPPRESSED_LIST || '';
             const shortCircuitList = process.env.SHORTCIRCUIT_LIST || '';
-            const body = [
+            // #2874 / FINISHLINE G4 — "could not evaluate" and "found N deltas"
+            // are DIFFERENT findings and must never share a sentence shape. The
+            // old template rendered an unevaluated run as
+            //   "bicep-drift (Gov (GCC-High)): ? unmanaged delta(s)"
+            //   "Verdict: **Error** — ? **real** … delta(s)"
+            // which reads as a drift finding with an unreadable count, when the
+            // truth was that ZERO resources were compared and the estate had NO
+            // drift coverage at all. Branch the whole report instead.
+            const unevaluated = status === 'CouldNotEvaluate';
+            const detail = process.env.FAILURE_DETAIL || '';
+            const title = unevaluated
+              ? `bicep-drift (${cloud}): NOT EVALUATED — what-if could not run`
+              : `bicep-drift (${cloud}): ${drift} unmanaged delta(s) vs live estate`;
+            const body = unevaluated ? [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Verdict: **COULD NOT EVALUATE** — this run compared **zero** resources against \`platform/fiab/bicep/main.bicep\`.`,
+              ``,
+              `**This is not a drift finding, and it is not a clean bill of health.** The ${cloud} estate is currently UNMEASURED for drift. Treat it as no coverage until the what-if runs.`,
+              ``,
+              detail,
+              ``,
+              `Triage: docs/fiab/runbooks/bicep-drift.md`,
+            ].join('\n') : [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               ``,
               `Verdict: **${status}** — ${drift} **real** Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
@@ -475,7 +564,7 @@ jobs:
             } else {
               await github.rest.issues.create({
                 owner: context.repo.owner, repo: context.repo.repo,
-                title: `bicep-drift (${cloud}): ${drift} unmanaged delta(s) vs live estate`,
+                title,
                 body, labels: ['csa-loom', 'bicep-drift', label],
               });
             }
@@ -489,6 +578,7 @@ jobs:
           SUPPRESSED_COUNT: ${{ steps.whatif.outputs.suppressed_count }}
           SHORTCIRCUIT_COUNT: ${{ steps.whatif.outputs.shortcircuit_count }}
           COVERAGE_NOTE: ${{ steps.whatif.outputs.coverage_note }}
+          FAILURE_DETAIL: ${{ steps.whatif.outputs.failure_detail }}
 
       - name: Auto-close stale drift issues on a clean run
         if: success() && steps.whatif.outputs.status == 'Clean'
