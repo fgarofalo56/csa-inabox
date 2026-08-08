@@ -28,6 +28,11 @@ import {
   runMirrorSnapshot, restartMirrorSnapshot, getMirrorStatus,
   type MirrorSource, type MirrorTableSpec, type MirrorTableResult,
 } from '@/lib/azure/mirror-engine';
+import {
+  resolveSqlAuthDescribed, resolvePgAuthDescribed, UAMI_AUTH,
+  type ConnectionAuthDescriptor,
+} from '@/lib/azure/connection-auth';
+import { MIRROR_PG_FAMILY } from '@/lib/azure/mirror-engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,6 +58,34 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
       return m === 'snapshot' || m === 'incremental' || m === 'continuous' ? m : undefined;
     })(),
   };
+}
+
+/**
+ * Attach the mirror's stored source credential to the MirrorSource.
+ *
+ * This is the step that was MISSING: the mirroring wizard collects a Loom
+ * Connection and `/sources` persists its `connectionId` on the item, but
+ * `sourceFromState()` never read it, `MirrorSource` had no field for it, and
+ * the engine contained zero references to it. Every Start/Restart therefore
+ * ran as the Console UAMI and silently ignored the credential the operator
+ * configured — a source reachable only by a stored SQL login could have its
+ * tables browsed (that route did resolve the connection) but never replicated.
+ *
+ * The resolved secret lives only on the in-memory MirrorSource for the duration
+ * of this request. It is never written back to item state and never returned in
+ * the response — only the non-secret `ConnectionAuthDescriptor` is, so the
+ * receipt can state WHICH identity read the source without exposing anything.
+ */
+async function withSourceAuth(
+  tenantId: string, src: MirrorSource, connectionId?: string,
+): Promise<{ src: MirrorSource; descriptor: ConnectionAuthDescriptor }> {
+  if (!connectionId) return { src, descriptor: UAMI_AUTH };
+  if (MIRROR_PG_FAMILY.has(src.sourceType)) {
+    const { auth, descriptor } = await resolvePgAuthDescribed(tenantId, connectionId);
+    return { src: { ...src, pgAuth: auth }, descriptor };
+  }
+  const { auth, descriptor } = await resolveSqlAuthDescribed(tenantId, connectionId);
+  return { src: { ...src, auth }, descriptor };
 }
 
 export const POST = withSession(async (req, { session: s, params }) => {
@@ -96,7 +129,12 @@ export const POST = withSession(async (req, { session: s, params }) => {
     }
 
     // ---- start / restart: run the real Azure-native mirror ----
-    const src = sourceFromState(state);
+    // Bind the operator's stored connection credential (Key Vault-backed) to
+    // the run. Without this the engine reads as the Console UAMI regardless of
+    // what the mirroring wizard collected.
+    const { src, descriptor: sourceAuth } = await withSourceAuth(
+      s.claims.oid, sourceFromState(state), state.connectionId ? String(state.connectionId) : undefined,
+    );
     const prevTableStatus = (action === 'restart'
       ? []
       : (Array.isArray(state.tablesStatus) ? state.tablesStatus : [])) as MirrorTableResult[];
@@ -113,7 +151,10 @@ export const POST = withSession(async (req, { session: s, params }) => {
       mirroringStatus,
       lastStateChange: new Date().toISOString(),
       tablesStatus: run.tables,
-      lastRun: { at: new Date().toISOString(), status: run.status, basePath: run.basePath, note: run.note, error: run.error, gate: run.gate, changeFeed: run.changeFeed },
+      // `sourceAuth` is the NON-SECRET descriptor (identity + connection name +
+      // auth method). No credential material is persisted here — the resolved
+      // secret never leaves the in-memory MirrorSource for this request.
+      lastRun: { at: new Date().toISOString(), status: run.status, basePath: run.basePath, note: run.note, error: run.error, gate: run.gate, changeFeed: run.changeFeed, sourceAuth },
     };
     const next: WorkspaceItem = { ...existing, state: nextState, updatedAt: new Date().toISOString() };
     await items.item(existing.id, workspaceId).replace(next);
@@ -125,6 +166,7 @@ export const POST = withSession(async (req, { session: s, params }) => {
         ok: false, action,
         before, after: { mirroringStatus },
         gate: run.gate, adfLastRun: monitor.adfLastRun, note: run.note,
+        sourceAuth,
       });
     }
     return NextResponse.json({
@@ -136,6 +178,8 @@ export const POST = withSession(async (req, { session: s, params }) => {
       adfLastRun: monitor.adfLastRun,
       note: run.note,
       error: run.error,
+      // Which identity read the source. Non-secret by construction.
+      sourceAuth,
     });
   } catch (e: any) { return apiServerError(e); }
 });

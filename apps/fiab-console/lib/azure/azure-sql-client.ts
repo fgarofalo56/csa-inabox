@@ -542,6 +542,58 @@ export async function executeParameterized<T = Record<string, unknown>>(
   return (result.recordset || []) as T[];
 }
 
+/**
+ * `executeParameterized`, but honoring an explicit stored credential when one
+ * is supplied — the same `auth ? credential : UAMI` shape `listTablesWithAuth`
+ * already uses, extended to carry bound parameters.
+ *
+ * The mirror engine needs this: its reads are parameterized (`OBJECT_ID(@p0)`
+ * and friends), and `executeWithCredential` binds no parameters, so before this
+ * existed there was no way for the engine to read a source as anything other
+ * than the Console UAMI. That is precisely why a mirror could browse a source's
+ * tables with the operator's stored login but not replicate them.
+ *
+ * When `auth` is absent this delegates to the pooled UAMI path — identical
+ * behaviour, so adopting it at a call site is never a regression. The explicit
+ * path opens a short-lived pool per call (mirroring `executeWithCredential`)
+ * because pooling per-credential would mean caching secret material in memory
+ * keyed by connection, which this codebase deliberately does not do.
+ */
+export async function executeParameterizedWithAuth<T = Record<string, unknown>>(
+  server: string,
+  database: string,
+  sqlText: string,
+  params: Array<string | number | boolean> = [],
+  auth?: SqlExplicitAuth,
+): Promise<T[]> {
+  if (!auth) return executeParameterized<T>(server, database, sqlText, params);
+  let pool: sql.ConnectionPool;
+  if ('connectionString' in auth) {
+    pool = new sql.ConnectionPool(auth.connectionString);
+  } else {
+    const host = server.includes('.') ? server : `${server}.${sqlHostSuffix()}`;
+    pool = new sql.ConnectionPool({
+      server: host,
+      database,
+      user: auth.user,
+      password: auth.password,
+      options: { encrypt: true, trustServerCertificate: false },
+      pool: { max: 4, min: 0, idleTimeoutMillis: 30_000 },
+      requestTimeout: 60_000,
+      connectionTimeout: 30_000,
+    } as sql.config);
+  }
+  try {
+    await pool.connect();
+    const request = pool.request();
+    params.forEach((v, i) => request.input(`p${i}`, v));
+    const result = await request.query(sqlText);
+    return (result.recordset || []) as T[];
+  } finally {
+    await pool.close().catch(() => { /* already closed */ });
+  }
+}
+
 // ============================================================
 // Credential-backed query path (SQL login / connection string)
 //
@@ -626,6 +678,13 @@ export async function enableMirroring(
   server: string,
   database: string,
   _legacyFabricMirrorEndpoint?: string,
+  /**
+   * Explicit stored-connection credential. Enabling the change feed is a
+   * db_owner-level operation, so it must run as the SAME identity the mirror
+   * reads with — otherwise a source reachable only by the operator's stored SQL
+   * login fails here even though every subsequent read would have succeeded.
+   */
+  auth?: SqlExplicitAuth,
 ): Promise<MirroringConfig> {
   const note =
     'Change feed enabled (Azure-native CDC). Stream the captured changes to ADLS ' +
@@ -638,7 +697,7 @@ export async function enableMirroring(
     // parameter for procedure sp_change_feed_enable_db"). The documented enable
     // is the bare call (destination_type defaults to 0 = Synapse-Link/landing-
     // zone CDC, the Azure-native path — no Fabric).
-    await executeQuery(server, database, 'EXEC sys.sp_change_feed_enable_db;');
+    await executeParameterizedWithAuth(server, database, 'EXEC sys.sp_change_feed_enable_db;', [], auth);
     return { enabled: true, backend: 'azure-native-cdc', state: 'Initializing', note };
   } catch (e: any) {
     const msg = (e?.message || String(e));

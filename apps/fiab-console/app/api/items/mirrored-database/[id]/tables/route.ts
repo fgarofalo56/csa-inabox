@@ -24,8 +24,10 @@ import { listTablesWithAuth } from '@/lib/azure/sql-objects-client';
 import type { SqlExplicitAuth } from '@/lib/azure/azure-sql-client';
 import { listPostgresTables } from '@/lib/azure/postgres-flex-client';
 import { listContainers } from '@/lib/azure/cosmos-account-client';
-import { loadConnection } from '@/lib/azure/connections-store';
-import { getKeyVaultSecretValue } from '@/lib/azure/kv-secrets-client';
+// One shared credential path (lib/azure/connection-auth) — this route used to
+// carry a private copy of this logic, which is exactly why the replication path
+// could diverge from it and silently ignore the stored connection.
+import { resolveSqlAuth } from '@/lib/azure/connection-auth';
 import { withSession } from '@/lib/api/route-toolkit';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY } from '@/lib/azure/mirror-engine';
 
@@ -33,30 +35,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 
-
-/**
- * Resolve the SQL auth for the mirror's stored connection. Returns:
- *   - SqlExplicitAuth when the connection carries a SQL login / connection string
- *     (the secret is fetched from Key Vault by secretRef).
- *   - undefined when the connection is Entra-MI (or there is no connection) — the
- *     caller then enumerates as the Console UAMI.
- */
-async function resolveSqlAuth(tenantId: string, connectionId?: string): Promise<SqlExplicitAuth | undefined> {
-  if (!connectionId) return undefined;
-  const conn = await loadConnection(tenantId, connectionId);
-  if (!conn || !conn.secretRef) return undefined;
-  if (conn.authMethod === 'connection-string') {
-    const connectionString = await getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
-    return { connectionString };
-  }
-  if (conn.authMethod === 'sql-password') {
-    if (!conn.username) return undefined; // can't build SQL auth without a login
-    const password = await getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
-    return { user: conn.username, password };
-  }
-  // service-principal / account-key are not TDS logins — fall back to UAMI.
-  return undefined;
-}
 
 export const GET = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
