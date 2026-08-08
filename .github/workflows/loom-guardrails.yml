@@ -21,6 +21,14 @@ on:
 
 permissions:
   contents: read
+  # prp-freshness re-counts two PRP facts that are PR STATES (#2389, #2392) via
+  # `gh pr view`, which needs pull-requests:read. Without it `gh` 403s.
+  # That mattered the moment FRESH0 stopped being warn-only: for its entire
+  # warn-only life those two facts had NEVER been measured in CI — the 403 was
+  # swallowed into the literal string 'UNKNOWN', compared unequal to 'MERGED',
+  # emitted a ::warning:: nobody read, and exited 0. A gate that cannot reach
+  # its own evidence has verified nothing (`gates_that_measure_nothing`).
+  pull-requests: read
 
 concurrency:
   group: loom-guardrails-${{ github.ref }}
@@ -331,11 +339,43 @@ jobs:
       - name: deploy-input-safety (a dispatch cannot tear down or mis-target the estate — #3028/#3029/#3022)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-input-safety.mjs
-      - name: prp-freshness (loom-next-level FRESH0 — warn-only)
+      # G2 (ux-baseline.md): "A bare remediation MessageBar without Fix-it is no
+      # longer compliant." MEASURED 2026-08-08 by AST: the gate REGISTRY is
+      # complete (131 GATE_META entries, 131 `fixit:`, 1:1) — but 63 console
+      # surfaces still render 74 remediation bars that name a LOOM_* var and
+      # mount no HonestGate, so they hand the operator a value to set with no
+      # Fix-it, no registry linkage, and no /admin/gates entry. 59 of those 74
+      # name a var whose ENV_CHECKS spec declares a `provisionedBy` bicep module,
+      # which makes them auto-bind-by-default §5 defects (delete the gate, do not
+      # decorate it); 15 name vars that are in NO spec at all.
+      # This is a two-directional ratchet: a new bare gate fails, AND a fixed
+      # file fails until it is removed from the baseline — so adopting the fix
+      # cannot make the guard go quiet on exactly the files that were fixed
+      # (`guard_keyed_to_the_unsafe_pattern`). Selftest runs first so a neutered
+      # ratchet is caught even when the tree happens to match.
+      - name: honest-gate-coverage (G2 Fix-it ratchet — no new bare remediation bars)
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-honest-gate-coverage.mjs --selftest
+          node scripts/ci/check-honest-gate-coverage.mjs
+      # FRESH0 was warn-only for its entire life (FINISHLINE C15). `--strict`
+      # existed and worked, but the workflow never passed it and the flag was
+      # documented as "for the boundary run itself" — a run that is in no PR's
+      # required checks. So the exit code could not block a merge and every fact
+      # in the table was free to drift: the `gates_that_cannot_fail` class, by
+      # way of never asking for the result. The script is now blocking by
+      # default (no flag), classifies an unreadable counter as `undetermined`
+      # rather than as drift (deploy-integrity R7 — an error must not assert what
+      # it did not establish), and carries a --selftest that mutation-proves a
+      # drifting fact exits non-zero. Run the selftest FIRST so a neutered gate
+      # is caught even on a run where nothing happens to have drifted.
+      - name: prp-freshness (PRP ground-truth drift BLOCKS — FRESH0 / C15)
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/ci/check-prp-freshness.mjs
+        run: |
+          node scripts/ci/check-prp-freshness.mjs --selftest
+          node scripts/ci/check-prp-freshness.mjs
       - name: pnpm-overrides (CVE floors declared for BOTH pnpm majors — #2729 regression)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-pnpm-overrides.mjs
