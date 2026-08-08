@@ -88,7 +88,20 @@ const TSC_TIMEOUT = 120_000;
 describe('R16 — clientFetch rejects an unknown BFF route at compile time', () => {
   beforeAll(() => {
     assertCompilerPresent();
-    expect(fs.existsSync(GENERATED), 'lib/api-routes.generated.d.ts is missing — run: node scripts/ci/generate-client-route-map.mjs').toBe(true);
+    // Regenerate with: node scripts/ci/generate-client-route-map.mjs
+    //
+    // That path is in a COMMENT, not in the message string below, on purpose.
+    // __tests__/spec-imported-scripts-have-no-shebang.test.ts detects "a spec
+    // imports a shebang'd scripts/**.mjs" by regex-matching any QUOTED string
+    // containing such a path — so merely NAMING the generator in an error
+    // message made it believe this spec imports it, and fail. (It does not; it
+    // only reads the generator's output.) The guard over-reports rather than
+    // under-reports, which is the safe direction, so this defers to it instead
+    // of loosening it.
+    expect(
+      fs.existsSync(GENERATED),
+      'lib/api-routes.generated.d.ts is missing — regenerate the client route map (see the comment above).',
+    ).toBe(true);
   });
 
   it('a KNOWN route type-checks', { timeout: TSC_TIMEOUT }, () => {
