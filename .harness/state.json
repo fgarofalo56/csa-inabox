@@ -304,7 +304,7 @@
       "lane": "L-GOV",
       "wave": 1,
       "task_order": 79,
-      "status": "review",
+      "status": "done",
       "title": "4 Gov workflows NEVER run once: gov-build-images, gov-provision-dataplane-images (= #3012 Gov image lane → Gov fedlake/trino NOT deployed), gov-provision-streaming-migrate, gov-workspace-identity — green first runs",
       "depends_on": [
         "D9"
@@ -320,7 +320,9 @@
       "evidence": "PREMISE SUBSTANTIALLY STALE. gov-build-images: never dispatched, NO defect - GREEN on first-ever run (loom-unity 31239350207, loom-console 31239653478), full supply chain build->tag verify->Trivy CRITICAL->cosign sign+verify->ACR re-lock; console built on a NON-deploy-referenced tag so no live Gov pull was re-armed. gov-workspace-identity: never dispatched, NO defect - GREEN first-ever run (31239339295). gov-provision-dataplane-images: PREMISE FALSE - already succeeded 2026-08-07, never was a never-run. gov-provision-streaming-migrate: never dispatched AND a real bug - failed first dispatch (31239331967) bare exit 3; fixed in PR #3126, MERGED-NOT-DEPLOYED.",
       "agent": "a1e313ba6742f7a45",
       "dispatched": "2026-08-08",
-      "pr": 3127
+      "pr": 3127,
+      "merged": "2026-08-08 (#3127)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "D7",
@@ -361,7 +363,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 69,
-      "status": "review",
+      "status": "done",
       "title": "#3039/#3046/#3038 residue: DNS-migration step-9 wipes PE zone-group (caused live A-record outage); RoleAssignmentExists from guid-seed rename (ae75c3c5) permanent until old assignment deleted/adopted — fix script (remove-by-zone-id + terminal verify); #3038 closes ONLY on green deploy-fiab run",
       "depends_on": [
         "D7"
@@ -377,7 +379,9 @@
       "evidence": "ROOT CAUSE measured from the VENDOR's semantics, not inferred. 'az network private-endpoint dns-zone-group add|remove --zone-name' selects the config BY ITS NAME, never by the zone id - and 'add' REPLACES when the name matches, appending only when it does not. The script passed namespace.replace('.','-') for both, byte-identical to the config name the bicep creates (databricks.bicep:135). So step 2 REPLACED the stale config instead of appending - dual-registration NEVER HAPPENED and step 3's verify still passed - and step 9 then removed the only remaining config, the KEEP one, leaving the group EMPTY, which deregisters the A record from every zone. Nothing ran after step 9, so it EXITED 0. ORCHESTRATOR CORROBORATION: Learn confirms --zone-name is 'Name of the resource that is unique within a resource group', DISTINCT from --private-dns-zone ('Name or ID of the private dns zone') - the selector is the CONFIG name. REPRODUCED with no estate touched: a fake az implementing those semantics, driven against the UNMODIFIED origin/main script, ends with 'AFTER group configs: []', 'A record in keep zone: []', 'exit code: 0' - every step reported OK. SECOND WIPE VECTOR, same class: networking-client.ts::createPrivateDnsZoneGroup PUT a single-config body to /privateDnsZoneGroups/default - a full replace that silently dropped every other config. Now merges, and THROWS if it cannot read the group rather than clobbering ('couldn't read' != 'nothing there').",
       "agent": "a04de2e2747e8ebf9",
       "dispatched": "2026-08-08",
-      "pr": 3128
+      "pr": 3128,
+      "merged": "2026-08-08 (#3128)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "D10",
@@ -479,7 +483,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 39,
-      "status": "review",
+      "status": "done",
       "title": "D14-found: three MCR refs float ':latest' on DEPLOY paths — dab-runtime.bicep:36, presidio-sidecar.bicep, deploy-planner/container-instances.bicep:19. LIC0-exempt but still unpinned drift on a deploy path. Pin them (operator asked whether to — OP-17)",
       "depends_on": [],
       "validation": {
@@ -493,14 +497,16 @@
       "evidence": "PREMISE CONFIRMED and the count was a FLOOR: audit named 3 floating refs, there are 4. ROOT CAUSE: MIR0 (check-upstream-image-mirror.mjs, #2682) deliberately skips mcr.microsoft.com because the ACR-mirror rule genuinely does not apply to Microsoft first-party - but the skip was TOTAL. One 'continue' at line 167 meant NO MCR ref was checked for ANYTHING: not mirroring, not a digest, not a floating tag. The 4th is deploy/bicep/DLZ/modules/data-api-builder.bicep:39, which docs/tutorials/11-data-api-builder tells an operator to deploy BY HAND - CI never touches it, so nothing had ever looked. The 3 named ones are baked verbatim into the shipped ARM artifact deploy-templates/main.json (11500/59755/62487), and dabRuntimeEnabled + mlWorkspaceEnabled both default TRUE, so two are on the DEFAULT path. Found 3 MORE mutable refs a ':latest' framing misses: cbl-mariner/busybox:2.0 (x2) and azure-functions/python:4-python3.11 are ROLLING tags MCR republishes in place. OUTCOME 11 of 13 refs now carry an inline @sha256. The AML curated-environment image is a VERSION TAG only (20250224.v1): Learn documents AML's image field only as 'Name of the image' and no page says a digest is accepted; a wrong guess breaks a default-ON path untestable without a live AML deploy. Recorded under an inlineDigest:false escape hatch requiring a written reason, and labelled as the weaker outcome in code, manifest and PR. The pins DO NOT move the running bytes - ':latest' and the version tags resolved to identical digests on 2026-08-08. GUARD MCR0 keyed on the SAFE property (a digest is present and matches the registry of record), never on ':latest' - because the moment someone writes ':2.0.9' the ':latest' token is gone and a grep guard goes quiet on exactly the files it just policed. Decisive mutant: a NEW mcr/pause:3.9 - respectable version tag, no digest - which a ':latest' grep PASSES and MCR0 FAILS. 6 mutants RED, 2 clean runs GREEN.",
       "agent": "a04de2e2747e8ebf9",
       "dispatched": "2026-08-08",
-      "pr": 3123
+      "pr": 3123,
+      "merged": "2026-08-08 (#3123)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "G3",
       "lane": "L-GOV",
       "wave": 2,
       "task_order": 65,
-      "status": "review",
+      "status": "done",
       "title": "RED Gov workflows: deploy-gov (16d), gov-provision-dbx-sql-invnet (never green), gov-provision-dbx-sql, gov-provision-graph-grants — green each",
       "depends_on": [
         "G2"
@@ -516,14 +522,16 @@
       "evidence": "deploy-gov: BROKEN TEMPLATE - deploy/bicep/gov/main.bicep had 7 compile errors and had NEVER compiled. ORCHESTRATOR VERIFIED INDEPENDENTLY on origin/main: 7 errors (BCP036 x1, BCP120 x3, BCP139 x3). This is deploy-integrity R1 P0 - the Gov deploy path was structurally incapable of running. Fixed in PR #3124, az bicep build now exits 0. MERGED-NOT-DEPLOYED. gov-provision-dbx-sql-invnet: BLOCKER MOVED, not cleared. The 8 historical AuthorizationFailed roleAssignments/write failures are GONE (RBAC Administrator grant worked) - re-measured with apply=true: that step SUCCEEDS, image builds, in-VNet job runs. Now fails because Gov Databricks returns TEMPORARILY_UNAVAILABLE from /api/2.0/sql/warehouses on ALL 8 list + 8 create attempts over ~6 min. 16 responses in 6 minutes is NOT transient - plausibly a cloud-parity section-3 case (supply the Azure-native equivalent). UNRESOLVED, operator decision. NOTE: an earlier apply=false run reported SUCCESS while SKIPPING the failing step - a green run of nothing.",
       "agent": "a1e313ba6742f7a45",
       "dispatched": "2026-08-08",
-      "pr": 3124
+      "pr": 3124,
+      "merged": "2026-08-08 (#3124)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "G4",
       "lane": "L-GOV",
       "wave": 2,
       "task_order": 64,
-      "status": "review",
+      "status": "done",
       "title": "#2874 Gov bicep-drift what-if fails before any verdict (weekly red 07-27, 08-03) — drift check produces verdicts",
       "depends_on": [],
       "validation": {
@@ -537,7 +545,9 @@
       "evidence": "#2874 title read '? unmanaged delta(s)' - an UNKNOWN wearing the sentence-shape of a FINDING. Truth: zero resources compared; Gov has had NO drift coverage since 07-27. Fixed: status=CouldNotEvaluate, count is the literal string 'unknown', title says NOT EVALUATED, body says 'not a drift finding, and not a clean bill of health'. Re-runs what-if with --debug to mine ARM's hidden details[], fully redacted (public repo). ALWAYS exits non-zero - fails closed. Verified against the real #2874 error text; leak check clean. MERGED-NOT-DEPLOYED.",
       "agent": "a1e313ba6742f7a45",
       "dispatched": "2026-08-08",
-      "pr": 3125
+      "pr": 3125,
+      "merged": "2026-08-08 (#3125)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "E2",
@@ -724,7 +734,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 37,
-      "status": "review",
+      "status": "done",
       "title": "SWEEP for the apex-A3 silent-failure class: C14 found ducklake-catalog rendered 'Reading the DuckLake catalog…' FOREVER on a 500/403 — no error, no retry, asserting an in-progress read that had already FAILED (R7). Identical to the bug fixed in s3-gateway and pinned by its test, never propagated. C14 fixed+mutation-proved this one; sweep every useQuery + throwing-fetcher consumer with no isError branch",
       "depends_on": [],
       "validation": {
@@ -743,14 +753,16 @@
       "self_caught": "The agent's own specs caught a bug in its own fix before it shipped: getItem reads /api/cosmos-items/..., so six of its new error bars named /api/items/... - an error bar naming a route that was NEVER CALLED is itself an R7 false claim.",
       "verified": "tsc clean; 167 spec files / 970 tests green; new spec 4/4 mutation-proved; s3-gateway + ducklake retrofitted onto the shared component FIRST and their 8 pinned specs stayed green (that is what proves it is behaviour-identical); all 41 guardrails run INDIVIDUALLY (not under bash -e) and pass; check-file-size held at its frozen ceiling by COMPACTING data-agent-editor - THE RATCHET WAS NOT RAISED. NOT RUN: check-workflow-actionlint (binary absent locally; no workflow files changed).",
       "owed": "BROWSER RECEIPT OWED - not deployed, not verified live. loom-ui-verify has been RED since 2026-08-04 (C13). Receipt command in the PR body: force /api/cosmos-items/power-app/<id> to 500 and confirm the honest bar + Retry appear and \"isn't bound yet\" does NOT.",
-      "left_deliberately": "38 remaining RULE-1 baseline occurrences (C19's data-loss class - different rule, much larger change). semantic-model/admin-overview/admin-runtime-flags were already honest for RESOLVED failures and were UPGRADED for REJECTED ones rather than allowlisted, so the allowlist holds only the 2 genuinely-deliberate entries."
+      "left_deliberately": "38 remaining RULE-1 baseline occurrences (C19's data-loss class - different rule, much larger change). semantic-model/admin-overview/admin-runtime-flags were already honest for RESOLVED failures and were UPGRADED for REJECTED ones rather than allowlisted, so the allowlist holds only the 2 genuinely-deliberate entries.",
+      "merged": "2026-08-08 (#3138)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "C22",
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 94,
-      "status": "review",
+      "status": "done",
       "title": "SECURITY-GUARD DEFECT (mechanism established by D10, corrects two earlier inferences): check-route-guards' GUARD_SIGNAL_RE is PRESENCE-shaped, not ENFORCEMENT-shaped. 22 routes authorize via `const gate = await enforceCapability(...)` + `if (gate) return gate;` — cutting that ONE branch line defeats authorization entirely while the route stays SCANNED, still 'looks' guarded, and the guard stays GREEN. Same class as #2977 (a deleted function's name surviving in a COMMENT kept 34 routes passing), already noted in the guard's own header ~:72 for assertOwner — still live for enforceCapability",
       "depends_on": [],
       "validation": {
@@ -768,14 +780,16 @@
       "security_findings": "FIVE UNAUTHORIZED HANDLERS found BY THE FIXED CHECKER, not by review. HEADLINE, ORCHESTRATOR-VERIFIED ON ORIGIN/MAIN: items/semantic-model/[id]/model PATCH had NO AUTHORIZATION AT ALL while its four siblings each call authorizeItemWorkspace (GET:77/92, POST:140/147, PUT:223/228, DELETE:261/266; PATCH:294 has none). Its signature is withSession(async (req: NextRequest) => ...) - it does not even take session or params - and it calls handleColumnPatch(req) in lib/semantic-model/xmla-writes.ts:138, which builds an XMLA config and performs TMSL writes against the SHARED AAS database. A read-only Viewer could author exactly what POST/PUT/DELETE deliberately refuse them. Also: items/dashboard/[id] GET/PUT/DELETE (overlay partitioned by dashboard id with no tenant - read/overwrite/delete ANY tenant's); databricks-notebook/[id]/versions GET/POST (GET returned full notebook SOURCE for any id); items/activator GET (Cosmos query on caller-supplied workspaceId). All fixed + migrated to the route-toolkit. The dashboard and notebook holes passed for the SAME reason: savedBy: session.claims.oid - ATTRIBUTION READ AS AUTHORIZATION.",
       "corrections_to_orchestrator": "TWO of the orchestrator's earlier inferences were FALSIFIED by measurement: (a) 'exactly ONE route is skipped' -> actually 119 skipped (1640 data surfaces, 1521 scanned) - wrong by 118, and the header told readers to treat a moving 'scanned' count as the alarm; (b) 'claims.oid routes are held up by their gate under CHECK 1' -> FALSE for routes with no returned-value gate, which is precisely how dashboard and notebook-versions survived.",
       "durable_fix": "The checker now RE-BREAKS FOUR REAL ROUTES IN MEMORY EVERY RUN (single-item and collection x both blindnesses) and fails if the verdict does not change. A moved anchor is a hard FAILURE, never a skip. It already caught the agent's own dashboard migration shifting an anchor mid-change.",
-      "honestly_not_fixed": "(1) A bare claims.oid still proves PRESENCE, not USE. Removing it as a signal takes the tree 0 -> 205 violations: ~205 routes hand-roll owner scoping instead of calling a named guard. That conversion is a PROGRAM, not a tweak - recorded in the header, with a probe that documents it must strip the attribution too, so the boundary is EXECUTABLE not prose. (2) The remit still FAILS OPEN - 119 routes out of scope; closing it needs the 80 signal-less ones triaged. Both are candidate follow-up lanes. 16 of the 21 surfaced handlers were allowlisted; each reason checked against the backing helper's SOURCE (e.g. asset-store.ts:41-78 for the tenantOf(session) partition claim), not inferred. NOT DEPLOYED, NOT BROWSER-VERIFIED - CI change plus BFF authorization, no cloud-specific path."
+      "honestly_not_fixed": "(1) A bare claims.oid still proves PRESENCE, not USE. Removing it as a signal takes the tree 0 -> 205 violations: ~205 routes hand-roll owner scoping instead of calling a named guard. That conversion is a PROGRAM, not a tweak - recorded in the header, with a probe that documents it must strip the attribution too, so the boundary is EXECUTABLE not prose. (2) The remit still FAILS OPEN - 119 routes out of scope; closing it needs the 80 signal-less ones triaged. Both are candidate follow-up lanes. 16 of the 21 surfaced handlers were allowlisted; each reason checked against the backing helper's SOURCE (e.g. asset-store.ts:41-78 for the tenantOf(session) partition claim), not inferred. NOT DEPLOYED, NOT BROWSER-VERIFIED - CI change plus BFF authorization, no cloud-specific path.",
+      "merged": "2026-08-08 (#3134)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "C21",
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 36,
-      "status": "review",
+      "status": "done",
       "title": "C14-found: G2 breached on 9 of 14 audited surfaces — only sql-lab, ducklake-catalog, s3-gateway and feature-table use the shared HonestGate with Fix-it. Folds into C15 (G2 Fix-it coverage ~131/160 gates). ALSO: ai-red-team's attack-success rate is computed from PLAINTEXT PROBES ONLY (no PyRIT converters, no composition, no multi-turn) and the surface presents the number without that caveat — a 0% score has NOT shown a deployment is safe",
       "depends_on": [],
       "validation": {
@@ -787,14 +801,16 @@
         "V6": "pending"
       },
       "evidence": "C21 REAL, AND TWO ADDITIONAL DEFECTS ARE WORSE THAN THE REPORTED ONE. (1) Scope: 20 plaintext single-turn probes, no caveat (as reported). (2) ORCHESTRATOR-VERIFIED ON ORIGIN/MAIN, app/api/items/ai-red-team/[id]/run/route.ts:91-95: a FAILED MODEL CALL is caught and returned with verdict:'refused' - and 'refused' maps to the SUCCESS colour and counts as a safe outcome. So a deployment where EVERY PROBE ERRORED reports 100% REFUSAL / 0% ATTACK SUCCESS: A PERFECT SAFETY SCORE FROM A DEAD ENDPOINT. The surface reports maximum safety precisely when the scanner is broken. (3) An empty completion scored the same way. Line 103 also fails open on Content Safety. BOTH REMEDIES DONE: probe set extended to 12 PyRIT-analog techniques (base64, ROT13, Caesar, leetspeak, char-spacing, reverse, URL-encode, binary, Morse, payload-splitting, MULTI-TURN CRESCENDO) plus pairwise composition; AND the surface now states its scope - mandatory disclosure above the score, 'warning' when the run cannot support a safety claim, NO green badge on a baseline-only 0%, per-technique breakdown, in-product technique picker. New 'inconclusive' verdict; rates computed over SCORED probes only. Mutation-proved: reverting the two scoring lines fails 3 specs.",
-      "pr": 3130
+      "pr": 3130,
+      "merged": "2026-08-08 (#3130)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "C15",
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 42,
-      "status": "review",
+      "status": "done",
       "title": "C1-found: G2 Fix-it coverage NOT universal — ~160 GATE_META entries vs 131 fixit: declarations in lib/gates/registry/*.ts (regex-approx); G2 demands universal. ALSO: FRESH0 is warn-only in CI (loom-guardrails.yml:202) — --strict exits 1 (mutation-proved) but runs boundary-only, so drift never blocks a PR",
       "depends_on": [],
       "validation": {
@@ -812,7 +828,9 @@
       "pr": 3131,
       "premise_falsified": "THE C1 AUDIT PREMISE IS FALSE. Exact AST count of lib/gates/registry/*.ts: 131 GATE_META entries, 131 fixit: - 1:1, ZERO gaps, zero duplicate ids, zero orphans, zero entries with no surfaces. The reported '~160 vs 131' was a REGEX ARTIFACT: a looser key pattern also matches nested keys (surfaces:, loaders:, each loader entry) and counts 305, not 160. ORCHESTRATOR CONFIRMED THE STRUCTURAL PROOF: types.ts:104 and :148 declare 'fixit: GateFixit' - NON-OPTIONAL - so a GateMeta missing a fixit CANNOT COMPILE and the claimed gap is impossible.",
       "real_breach": "The breach is on the SURFACES and is BIGGER than C14's sample found (C14 sampled 14, found 9). Across the whole console: 63 files / 74 bare remediation bars that name a LOOM_* var and mount NO HonestGate; 23 surfaces do it correctly. PER-GATE VERDICT derived from each var's ENV_CHECKS spec, not hand-judged: REMOVE (auto-bind sec.5 - the spec declares a provisionedBy bicep module, so the PLATFORM could have wired it) 59/74; UNREGISTERED (var in NO spec, so no Fix-it CAN exist and it never reaches /admin/gates) 15/74; WIRE 0/74. SO THE FIX IS NOT 'ADD 74 FIX-IT BUTTONS' - IT IS 'STOP 59 OF THESE GATES FROM EXISTING'. Removed 0 and wired 0 deliberately: removing 59 is provisioner/bicep work with per-cloud verification requirements. Filed issue #3133 with the full table + the 15 unregistered vars (LOOM_ADF_NAME among them - a first-class item type's factory binding, unregistered). Shipped a TWO-DIRECTIONAL RATCHET that freezes the set and forces it down.",
-      "fresh0": "FRESH0 now BLOCKS by default; --selftest 11/11; mutation-proved on the REAL script (baseline 1671->900, live 1672 -> exit 1 '85.8% drift, tolerance 10%'; restored -> exit 0). MAKING IT BLOCK IMMEDIATELY FOUND A SECOND DEFECT: loom-guardrails.yml granted only 'contents: read', but two facts use 'gh pr view' which needs 'pull-requests: read'. Every run 403'd -> swallowed into the string 'UNKNOWN' -> ::warning:: -> exit 0. TWO OF THE GATE'S FIVE FACTS HAD NEVER BEEN MEASURED IN CI while the gate reported itself healthy. Fixed: permission granted, bounded 3-attempt retry, fail-closed as 'undetermined' with a message that names the 403 instead of claiming the PR state changed."
+      "fresh0": "FRESH0 now BLOCKS by default; --selftest 11/11; mutation-proved on the REAL script (baseline 1671->900, live 1672 -> exit 1 '85.8% drift, tolerance 10%'; restored -> exit 0). MAKING IT BLOCK IMMEDIATELY FOUND A SECOND DEFECT: loom-guardrails.yml granted only 'contents: read', but two facts use 'gh pr view' which needs 'pull-requests: read'. Every run 403'd -> swallowed into the string 'UNKNOWN' -> ::warning:: -> exit 0. TWO OF THE GATE'S FIVE FACTS HAD NEVER BEEN MEASURED IN CI while the gate reported itself healthy. Fixed: permission granted, bounded 3-attempt retry, fail-closed as 'undetermined' with a message that names the 403 instead of claiming the PR state changed.",
+      "merged": "2026-08-08 (#3131)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "C7",
@@ -1055,7 +1073,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 41,
-      "status": "review",
+      "status": "done",
       "title": "DOCS-RIGHT/CODE-WRONG defects found by P2-DOCS (flagged, deliberately not papered over): (1) RequestAccessInline has ZERO importers (AG-13) — this also STRANDS AG-2: no non-admin can request an access package at all; (2) /api/access-requests/bulk-decision has ZERO UI callers (AG-14); (3) t169 function-RG split not built (grep returns only the plan item)",
       "depends_on": [],
       "validation": {
@@ -1067,7 +1085,9 @@
         "V6": "pending"
       },
       "evidence": "ALL THREE PREMISES HELD, each grep-verified before building. AG-13 CONFIRMED (3 hits, all in its own file) - wired at the /apps/view/[id] 403, which was a LITERAL DEAD END ('Ask the app owner to add you to an audience' - out-of-band, no in-product path). WIRED, NOT DELETED. AG-14 CONFIRMED (route + one comment, no caller). AUTHORIZATION CHECKED AND IT IS NOT A BYPASS: it delegates to the real decisionPOST, which re-runs actorMayApprove PER LEG, so an unauthorized leg returns 403 in the per-id result set. Authorization sound + capability real => WIRED, NOT REMOVED. t169 CONFIRMED NOT BUILT - exactly ONE hit repo-wide, and it is the greenfield.md paragraph STATING it is not implemented. Nothing invented, no ticket closed. ZERO CI FAILURES.",
-      "pr": 3132
+      "pr": 3132,
+      "merged": "2026-08-08 (#3132)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "C17",
@@ -1284,7 +1304,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 34,
-      "status": "review",
+      "status": "done",
       "title": "Follow-up flagged by D10 (honestly scoped, NOT implied fixed): planToAdoptBag() in lib/deploy/plan-to-arm.ts is still prototype-bearing. Keys are catalog-filtered via getServiceDef() so no hostile key can become a bag key today, but it wants the same one-line safeRecord() for defence in depth",
       "depends_on": [],
       "validation": {
@@ -1299,7 +1319,9 @@
       "pr": 3120,
       "agent": "orchestrator",
       "correction": "CORRECTS the earlier note that planToAdoptBag() also wanted safeRecord(). It does NOT: its keys all pass the getServiceDef() catalog gate, and making it null-prototype BROKE 4 sibling assertions (toStrictEqual compares prototypes; four tiers assert the bag round-trips through JSON to an identical value). Left plain deliberately; the test now pins the mechanism that actually protects it - a hostile service key is dropped at the catalog gate.",
-      "trap_avoided": "First draft of the test used an object LITERAL {__proto__:true} - which is prototype-SETTER syntax and creates no own key - so it passed vacuously. Fixture switched to JSON.parse, which is also how featureFlags really arrives. Assertions are READS of an inherited key (rec.constructor), never write-then-check-a-bystander."
+      "trap_avoided": "First draft of the test used an object LITERAL {__proto__:true} - which is prototype-SETTER syntax and creates no own key - so it passed vacuously. Fixture switched to JSON.parse, which is also how featureFlags really arrives. Assertions are READS of an inherited key (rec.constructor), never write-then-check-a-bystander.",
+      "merged": "2026-08-08 (#3120)",
+      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
     },
     {
       "id": "F1",
@@ -1675,7 +1697,8 @@
       "correction": "ORCHESTRATOR CORRECTION TO ITS OWN EARLIER REPORT. I told the operator 'gcc whatif GREEN, gcch RED' and recommended re-enabling gcc first. THAT RECOMMENDATION DOES NOT STAND. Verified on origin/main, deploy-fiab-gcc.yml:125: EXISTING=$(az graph query ... -o tsv 2>/dev/null || echo \"0\"). Any az failure - AuthorizationFailed, missing extension, throttle - is silently converted to \"0\", which the hub-existence guard reads as 'no existing hub' and PASSES. GCC'S GREEN WAS THE ABSENCE OF A CHECK, NOT A CLEAN ESTATE. Sharp irony: this is the exact 2>/dev/null construct that PRODUCED the R7 rule in this repo, sitting in a sovereign deploy lane - and it is why gcch's guard LOOKED worse than gcc's: gcch's was the one still capable of failing. BOTH LANES STAY DISABLED until a fix lands and produces a green run that CAN fail.",
       "pr_status": "The Gov lane reported 'PR #3129' for the gcch/GCC fix. #3129 is fix/c17-access-sweeper-aca-job (a DIFFERENT lane). gh pr list --head fix/gov-gcch-probe-stderr-contamination returns NOTHING: the branch is pushed but NO PR WAS EVER OPENED, so none of that work is mergeable. Routed back."
     },
-    "f1_codeql_2026-08-08": "F1 reported CodeQL FAILURE as UNRESOLVED-NOT-BENIGN because it was rate-limited out of reading it. Correct call. ORCHESTRATOR READ IT: '5 new alerts including 5 high severity security vulnerabilities', ALL in apps/loom-unity/tests/entrypoint.test.mjs - js/incomplete-hostname-regexp :532 (unescaped '.' before 'windows.net'), js/regex/missing-regexp-anchor :532/:212/:211 (matches ANYWHERE in a URL, so arbitrary hosts may come before or after), js/incomplete-sanitization :535. NOT dismissible as 'only a test file': F1 kept a structural parsed-host comparison SPECIFICALLY to catch login.microsoftonline.us.evil.example, and an UNANCHORED hostname regex is exactly the hole that lets a lookalike through - i.e. the sovereignty test may no longer do the job it was kept for. NOTE THE SCOPE TRAP: F1's 'zero open alerts' query was a BRANCH alert query; these are PR alerts. The branch query reads as reassuring and is not the same scope."
+    "f1_codeql_2026-08-08": "F1 reported CodeQL FAILURE as UNRESOLVED-NOT-BENIGN because it was rate-limited out of reading it. Correct call. ORCHESTRATOR READ IT: '5 new alerts including 5 high severity security vulnerabilities', ALL in apps/loom-unity/tests/entrypoint.test.mjs - js/incomplete-hostname-regexp :532 (unescaped '.' before 'windows.net'), js/regex/missing-regexp-anchor :532/:212/:211 (matches ANYWHERE in a URL, so arbitrary hosts may come before or after), js/incomplete-sanitization :535. NOT dismissible as 'only a test file': F1 kept a structural parsed-host comparison SPECIFICALLY to catch login.microsoftonline.us.evil.example, and an UNANCHORED hostname regex is exactly the hole that lets a lookalike through - i.e. the sovereignty test may no longer do the job it was kept for. NOTE THE SCOPE TRAP: F1's 'zero open alerts' query was a BRANCH alert query; these are PR alerts. The branch query reads as reassuring and is not the same scope.",
+    "runner_saturation_2026-08-08": "Hosted-runner pool saturated by this program's OWN concurrent CI: 65 runs queued at 06:56Z, deploy 31243230253 waiting ~50min with NO concurrency group holding it (group full-app-deploy-commercial-centralus; prior runs all completed). Orchestrator cancelled 16 QUEUED DEPENDABOT runs to free capacity (reversible - they re-run on demand); 55 remained, the rest being this program's own PR checks. Deliberately stopped adding load rather than re-running checks. SEPARATE from the HTTP 403 secondary rate limit on the Actions JOBS endpoint (core stayed ~4880/5000) - two different constraints that look alike."
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
