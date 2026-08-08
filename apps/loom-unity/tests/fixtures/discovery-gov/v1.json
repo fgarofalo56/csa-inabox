@@ -1,0 +1,5 @@
+{
+  "_comment": "DELIBERATELY SYNTHETIC. The real Azure Government v1.0 issuer is not established by Microsoft docs and is not known to this repo. That is the POINT: the entrypoint must take whatever the tenant publishes, verbatim, without knowing it. A plausible-looking hostname here would be mistaken for a documented fact.",
+  "issuer": "https://sovereign-sts.invalid/tenant-guid/",
+  "jwks_uri": "https://login.microsoftonline.us/tenant-guid/discovery/keys"
+}

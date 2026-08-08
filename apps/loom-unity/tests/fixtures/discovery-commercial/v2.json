@@ -1,0 +1,4 @@
+{
+  "issuer": "https://login.microsoftonline.com/tenant-guid/v2.0",
+  "jwks_uri": "https://login.microsoftonline.com/tenant-guid/discovery/v2.0/keys"
+}

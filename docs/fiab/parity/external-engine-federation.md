@@ -316,25 +316,47 @@ Chain of evidence:
   ([iss claim formats](https://learn.microsoft.com/troubleshoot/entra/entra-id/app-integration/troubleshooting-signature-validation-errors))
 
 So the catalog rejects its own tenant's tokens over an STS version the
-deployment never chose. Fixed by deriving BOTH issuer forms. Accepting both is
-not a widening of trust — same pinned tenant GUID, same signing keys, audience
-check unchanged — and it is forward-safe if the app is ever flipped to
-`requestedAccessTokenVersion: 2`.
+deployment never chose.
+
+**The fix DERIVES both issuers from the tenant's own OIDC discovery documents
+rather than constructing them.** The tenant publishes both forms authoritatively:
+
+```
+GET https://<authority>/<tenant>/.well-known/openid-configuration
+    -> "issuer": the v1.0 form
+GET https://<authority>/<tenant>/v2.0/.well-known/openid-configuration
+    -> "issuer": the v2.0 form
+```
+
+Both are read verbatim at whichever authority host the deployment already knows
+per cloud. No hostname table, no per-cloud branch, and **the Azure Government
+issuers come out correct without this repo knowing what they are** — which is
+`cloud-parity.md`'s "supply the equivalent" rather than "Commercial-first, Gov
+later". An earlier revision of this fix appended a literal `sts.windows.net`
+issuer and did it only for the Commercial authority, which would have left Gov on
+the broken v2-only path; discovery removes the need for any such literal, and a
+test now fails if one is ever reintroduced.
+
+**Fails closed.** If either document is unreachable or carries no `issuer`, the
+entrypoint refuses to boot and names both URLs. An unreachable metadata endpoint
+is an UNKNOWN, and booting with a partial or empty allow-list would either wedge
+every call or open the door. `LOOM_UNITY_ALLOWED_ISSUERS` still overrides
+everything, which is how an air-gapped deployment pins issuers without reaching
+an IdP.
+
+Mutation-proved both ways: reintroducing a hardcoded Commercial issuer fails 6
+tests (including the Gov sovereignty guard), and removing the fail-closed branch
+fails exactly the two fail-closed tests.
 
 **This fix is NOT console code.** It is `apps/loom-unity/bin/loom-entrypoint.sh`,
 baked into the `loom-unity` image that BOTH `loom-unity` and `iceberg-catalog`
 run. It therefore needs an image rebuild + a roll of both apps — a different
-deploy path from the console rolls that carried RC-1 and RC-7. The alternative,
-equivalent fix is an Entra change (`requestedAccessTokenVersion: 2` on the app
-registration), which is an operator action in a different lane again.
+deploy path from the console rolls that carried RC-1 and RC-7.
 
-**Sovereign clouds:** the v1 form is derived for the Commercial authority ONLY.
-Microsoft's docs establish `sts.windows.net` as the v1 issuer for Entra ID but do
-not establish the Azure Government equivalent, and this lane has no Gov estate to
-measure. Guessing would risk putting a Commercial STS hostname into a sovereign
-deployment's trusted-issuer list — which the Gov sovereignty test in
-`apps/loom-unity/tests/entrypoint.test.mjs` exists to prevent. Gov keeps the
-v2-only default; set `LOOM_UNITY_ALLOWED_ISSUERS` explicitly there once measured.
+> The Entra-side alternative (`requestedAccessTokenVersion: 2`) was considered
+> and **rejected**: it changes token shape for every consumer of that app
+> registration including console sign-in, and MSAL sign-in breakage on this
+> estate has already caused one production outage (#2191).
 
 ### The shape of this bug class, stated once
 

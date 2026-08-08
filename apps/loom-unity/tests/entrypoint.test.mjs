@@ -11,15 +11,31 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(__dirname, '..', 'bin', 'loom-entrypoint.sh');
+const FIXTURES = path.join(__dirname, 'fixtures');
+const DISCOVERY_COMMERCIAL = path.join(FIXTURES, 'discovery-commercial');
+const DISCOVERY_GOV = path.join(FIXTURES, 'discovery-gov');
 
 function render(env) {
   return spawnSync('sh', [SCRIPT], {
-    env: { ...process.env, LOOM_UNITY_DRYRUN: '1', ...env },
+    env: {
+      ...process.env,
+      LOOM_UNITY_DRYRUN: '1',
+      // Issuers are derived from OIDC discovery (F1/RC-9), so EVERY render that
+      // wires a tenant would otherwise reach the live IdP — making the whole
+      // suite network-dependent, slow (~28s per test on a blocked egress) and
+      // flaky. Default every test to the offline fixtures; individual tests
+      // override this, and the fail-closed tests deliberately unset it to
+      // exercise the real fetch.
+      LOOM_UNITY_DISCOVERY_DOC_DIR: DISCOVERY_COMMERCIAL,
+      ...env,
+    },
     encoding: 'utf8',
   });
 }
@@ -33,6 +49,10 @@ const shAvailable = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 const AUTHZ_WIRED = {
   LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid',
   LOOM_UNITY_ENTRA_CLIENT_ID: 'client-guid',
+  // Issuers are DERIVED FROM OIDC DISCOVERY (F1/RC-9). Point every test at the
+  // offline fixtures so the suite stays deterministic and never touches the
+  // network — the fail-closed path is proven separately, WITHOUT this seam.
+  LOOM_UNITY_DISCOVERY_DOC_DIR: DISCOVERY_COMMERCIAL,
 };
 
 test('no Postgres wired => the H2 fallback still renders (local dev / not-yet-provisioned)', { skip: !shAvailable }, () => {
@@ -156,12 +176,15 @@ test('LU-2: an Entra tenant + client id turn authorization ON and derive issuer/
   assert.match(r.stdout, /server\.authorization-url=https:\/\/login\.microsoftonline\.com\/tenant-guid\/oauth2\/v2\.0\/authorize/);
   assert.match(r.stdout, /server\.token-url=https:\/\/login\.microsoftonline\.com\/tenant-guid\/oauth2\/v2\.0\/token/);
   // Upstream v0.5.1 REQUIRES both when authorization is enabled (exact match).
-  // BOTH issuer forms for this tenant — v2.0 AND v1.0 (F1). Entra emits the
-  // version the RESOURCE app requests, and the Console app registration has
-  // requestedAccessTokenVersion=null => v1.0 tokens, whose iss is
-  // https://sts.windows.net/<tenant>/. Deriving only the v2.0 form made the
-  // catalog answer every real token 401 "Invalid issuer".
-  assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.com\/tenant-guid\/v2\.0,https:\/\/sts\.windows\.net\/tenant-guid\//);
+  // BOTH issuer forms, taken VERBATIM from the tenant's own OIDC discovery
+  // documents (F1/RC-9). Entra emits the version the RESOURCE app requests, and
+  // the Console app registration has requestedAccessTokenVersion=null => v1.0
+  // tokens. Deriving only the v2.0 form made the catalog answer every real
+  // token 401 "Invalid issuer".
+  assert.match(
+    r.stdout,
+    /server\.allowed-issuers=https:\/\/sts\.windows\.net\/tenant-guid\/,https:\/\/login\.microsoftonline\.com\/tenant-guid\/v2\.0/,
+  );
   assert.match(r.stdout, /server\.audiences=api:\/\/client-guid,client-guid/);
   assert.doesNotMatch(r.stderr, /SECURITY WARNING/);
 });
@@ -171,13 +194,22 @@ test('LU-2: the sovereign authority host flows into every derived Entra URL (Gov
     LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid',
     LOOM_UNITY_ENTRA_CLIENT_ID: 'client-guid',
     LOOM_UNITY_AUTHORITY_HOST: 'login.microsoftonline.us',
+    LOOM_UNITY_DISCOVERY_DOC_DIR: DISCOVERY_GOV,
   });
   assert.equal(r.status, 0, r.stderr);
-  // Gov stays v2-ONLY. The v1 issuer for Azure Government is not established by
-  // Microsoft's docs and this lane cannot measure it, so the Commercial STS
-  // hostname must NOT leak into a sovereign deployment's trusted issuers (F1).
-  assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.us\/tenant-guid\/v2\.0/);
-  assert.doesNotMatch(r.stdout, /server\.allowed-issuers=[^\n]*sts\.windows\.net/);
+  // Gov issuers come out CORRECT without this repo knowing what they are: they
+  // are read verbatim from the sovereign tenant's own discovery documents. The
+  // v1 fixture uses a deliberately synthetic host precisely to prove the code
+  // never infers the value (cloud-parity.md: supply the equivalent, do not ship
+  // Commercial-first). And no Commercial STS hostname may leak into a sovereign
+  // deployment's trusted issuers.
+  const govIssuers = r.stdout.match(/server\.allowed-issuers=(.*)/)[1];
+  assert.equal(
+    govIssuers,
+    'https://sovereign-sts.invalid/tenant-guid/,https://login.microsoftonline.us/tenant-guid/v2.0',
+  );
+  assert.doesNotMatch(govIssuers, /sts\.windows\.net/);
+  assert.doesNotMatch(govIssuers, /login\.microsoftonline\.com/);
   // Assert on the PARSED hosts, not on a substring of the whole render.
   // Earlier revisions used doesNotMatch(/login\.microsoftonline\.com/) and then
   // !includes('login.microsoftonline.com'); CodeQL flagged both
@@ -189,14 +221,33 @@ test('LU-2: the sovereign authority host flows into every derived Entra URL (Gov
   // unambiguous and a strictly stronger guarantee: it would also catch a
   // sovereign-boundary leak like `login.microsoftonline.us.evil.example`,
   // which a substring check would have happily accepted.
+  //
+  // WHAT CHANGED (F1/RC-9): this used to require EVERY rendered host to equal
+  // the authority host. That premise does not survive v1.0 issuers — a tenant's
+  // v1 issuer host is never its authority host (Commercial's is
+  // `sts.windows.net`, not `login.microsoftonline.com`), so the rule would have
+  // banned the very issuer that fixes the live 401. The structural check is kept
+  // exactly as designed; only the predicate changes, from "equals the authority
+  // host" to "is not a COMMERCIAL host". That is the property the test was
+  // actually written to defend, and it still catches
+  // `login.microsoftonline.us.evil.example` because the comparison is on the
+  // PARSED host, not a substring.
+  const COMMERCIAL_HOSTS = new Set(['login.microsoftonline.com', 'sts.windows.net']);
   const renderedHosts = [...r.stdout.matchAll(/https:\/\/([^/\s]+)/g)].map((m) => m[1]);
   assert.ok(renderedHosts.length > 0, 'expected the Gov render to emit at least one URL');
   for (const host of renderedHosts) {
-    assert.equal(
-      host,
-      'login.microsoftonline.us',
-      `Gov render leaked a non-sovereign Entra host: ${host}`,
+    assert.ok(
+      !COMMERCIAL_HOSTS.has(host),
+      `Gov render leaked a COMMERCIAL Entra host: ${host}`,
     );
+  }
+  // The authority-derived URLs (authorize/token) must still be sovereign — those
+  // ARE built from the authority host, so the original exact-match still applies
+  // to them.
+  const authorityUrls = [...r.stdout.matchAll(/server\.(?:authorization|token)-url=https:\/\/([^/\s]+)/g)].map((m) => m[1]);
+  assert.equal(authorityUrls.length, 2, 'expected both authority-derived URLs');
+  for (const host of authorityUrls) {
+    assert.equal(host, 'login.microsoftonline.us', `authority-derived URL is not sovereign: ${host}`);
   }
 });
 
@@ -231,7 +282,12 @@ test('LU-2 (round 2): a pinned SENTINEL audience with no client id BOOTS, author
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /server\.authorization=enable/);
   assert.match(r.stdout, new RegExp(`server\\.audiences=${sealed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.com\/tenant-guid\/v2\.0/);
+  // Issuers now come from discovery (F1/RC-9), so both forms are present — the
+  // point of THIS test is the audience/client-id branch, not the issuer string.
+  assert.match(
+    r.stdout,
+    /server\.allowed-issuers=https:\/\/sts\.windows\.net\/tenant-guid\/,https:\/\/login\.microsoftonline\.com\/tenant-guid\/v2\.0/,
+  );
   // No client id was supplied, so nothing derives a real audience.
   assert.match(r.stdout, /server\.client-id=\s*$/m);
   // And it is NOT the anonymous opt-out.
@@ -385,4 +441,100 @@ test('#2643 probe: the audited disable opt-out has nothing to reach', { skip: !s
   const r = render({ LOOM_UNITY_AUTH: 'disable' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /idp-reachability=skipped-authorization-disabled/);
+});
+
+
+// ---------------------------------------------------------------------------
+// RC-9 — issuers are DERIVED from the tenant's OIDC discovery, never hardcoded.
+// ---------------------------------------------------------------------------
+
+test('RC-9: issuers are taken VERBATIM from discovery, not reconstructed', { skip: !shAvailable }, () => {
+  // Non-vacuity for the two per-cloud assertions above: the code must not be
+  // rebuilding a well-known string that merely happens to match the fixture.
+  // These fixture issuers are shaped nothing like Entra's, so only a verbatim
+  // read can produce them.
+  const dir = mkdtempSync(path.join(tmpdir(), 'loom-disc-'));
+  writeFileSync(path.join(dir, 'v1.json'), JSON.stringify({ issuer: 'https://v1.example.test/ANY-STRING/' }));
+  writeFileSync(path.join(dir, 'v2.json'), JSON.stringify({ issuer: 'https://v2.example.test/ANY-STRING/v9.9' }));
+
+  const r = render({ ...AUTHZ_WIRED, LOOM_UNITY_DISCOVERY_DOC_DIR: dir });
+  assert.equal(r.status, 0, r.stderr);
+  const issuers = r.stdout.match(/server\.allowed-issuers=(.*)/)[1];
+  assert.equal(issuers, 'https://v1.example.test/ANY-STRING/,https://v2.example.test/ANY-STRING/v9.9');
+});
+
+test('RC-9: an UNREACHABLE discovery endpoint FAILS CLOSED (no empty/partial allow-list)', { skip: !shAvailable }, () => {
+  // No test seam here, deliberately: this exercises the REAL fetch path against
+  // an unroutable authority, so the fail-closed behaviour is proven by the code
+  // that actually runs in production.
+  //
+  // An unreachable metadata endpoint is an UNKNOWN. Booting with an empty or
+  // half-filled issuer list would either wedge every call or open the door —
+  // and "UNKNOWN read as fine" is this program's most expensive defect class.
+  const r = render({
+    LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid',
+    LOOM_UNITY_ENTRA_CLIENT_ID: 'client-guid',
+    // RFC 5737 TEST-NET-1 — guaranteed unroutable, so this fails fast rather
+    // than resolving to somebody's host.
+    LOOM_UNITY_AUTHORITY_HOST: '192.0.2.1',
+    LOOM_UNITY_DISCOVERY_RETRIES: '1',
+    LOOM_UNITY_DISCOVERY_DOC_DIR: '',   // unset the offline seam: real fetch
+  });
+  assert.notEqual(r.status, 0, 'must refuse to boot when discovery cannot be reached');
+  assert.match(r.stderr, /token issuers could not be derived/);
+  assert.match(r.stderr, /openid-configuration/);
+  assert.doesNotMatch(r.stdout, /server\.allowed-issuers=\s*$/m);
+});
+
+test('RC-9: a discovery document with NO issuer field FAILS CLOSED', { skip: !shAvailable }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'loom-disc-'));
+  writeFileSync(path.join(dir, 'v1.json'), JSON.stringify({ jwks_uri: 'https://x.test/keys' }));
+  writeFileSync(path.join(dir, 'v2.json'), JSON.stringify({ issuer: 'https://v2.example.test/t/v2.0' }));
+
+  const r = render({ ...AUTHZ_WIRED, LOOM_UNITY_DISCOVERY_DOC_DIR: dir });
+  assert.notEqual(r.status, 0, 'a document without an issuer must not boot');
+  assert.match(r.stderr, /token issuers could not be derived/);
+});
+
+test('RC-9: LOOM_UNITY_ALLOWED_ISSUERS still overrides discovery entirely', { skip: !shAvailable }, () => {
+  // The documented escape hatch must keep working — it is the only way a
+  // sovereign or air-gapped deployment pins issuers without reaching an IdP.
+  const r = render({
+    LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid',
+    LOOM_UNITY_ENTRA_CLIENT_ID: 'client-guid',
+    LOOM_UNITY_AUTHORITY_HOST: '192.0.2.1', // unreachable: proves discovery is not consulted
+    LOOM_UNITY_DISCOVERY_DOC_DIR: '',       // and the seam is off too
+    LOOM_UNITY_ALLOWED_ISSUERS: 'https://pinned.example.test/t/v2.0',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /server\.allowed-issuers=https:\/\/pinned\.example\.test\/t\/v2\.0/);
+});
+
+test('RC-9: no cloud-specific issuer hostname is baked into the script', () => {
+  // The guard for the mistake this fix replaced: an earlier revision appended a
+  // literal Commercial "sts.windows.net" issuer, and did it only for the
+  // Commercial authority — which left Gov on the broken v2-only path. Discovery
+  // removed the need for any such literal, so CODE must contain none.
+  //
+  // Comments are stripped before matching: the rationale above the derivation
+  // legitimately NAMES these hosts, and prose is not configuration.
+  const src = readFileSync(SCRIPT, 'utf8')
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+
+  // Only ISSUER-shaped hostnames. `login.microsoftonline.{com,us}` are AUTHORITY
+  // hosts — the .com default is the documented Commercial default that bicep
+  // overrides per-cloud, and the .us mention lives inside an operator-facing
+  // egress diagnostic. Neither constructs an issuer. `sts.windows.*` has no
+  // legitimate reason to appear in code at all: it is purely an issuer host, and
+  // a literal one is exactly the mistake this fix replaced.
+  for (const host of ['sts.windows.net', 'sts.windows.us']) {
+    assert.doesNotMatch(
+      src,
+      new RegExp(host.replace(/\./g, '\\.')),
+      `'${host}' is hardcoded in entrypoint CODE. Issuer values must come from the `
+        + 'tenant OIDC discovery documents, so no cloud is special-cased.',
+    );
+  }
 });
