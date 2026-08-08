@@ -398,7 +398,32 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Run extra Playwright projects
         id: extra_projects
-        if: inputs.extra_projects != ''
+        # `!cancelled()`, NOT `continue-on-error`. These two are opposites and
+        # confusing them is how #2787 happened.
+        #
+        # THE PROBLEM (F1, run 31229730356). `verify` is the BASE smoke suite. A
+        # single unrelated flake in it — that run: "MIP sensitivity labels → 503",
+        # with the other three governance probes returning 200 — failed the step,
+        # and GitHub then SKIPPED every later step. So the
+        # `external-engine-federation` receipt the run was dispatched to collect
+        # never executed. An intermittent 503 in one probe made an independent
+        # receipt unobtainable for ANY change.
+        #
+        # THE FIX IS ORDERING, NOT TOLERANCE — the same remedy this workflow
+        # already applies to the login-health preflight one step above, and for
+        # the identical reason recorded there: "one true signal was masking a
+        # second, independent one."
+        #
+        # This does NOT make the base suite non-blocking, which would be the
+        # gates-that-cannot-fail pattern:
+        #   - `verify` has no continue-on-error, so its failure still fails the job;
+        #   - the always() gate below re-asserts `verify=failure` as a blocking
+        #     cause by name (ui-verify-gate-verdict.sh treats `failure` as
+        #     blocking and `skipped` as not);
+        #   - THIS step also stays blocking — its own failure is enforced there too.
+        # The job's pass/fail is unchanged. The run simply now contains both
+        # results instead of only the first.
+        if: ${{ !cancelled() && inputs.extra_projects != '' }}
         # NO continue-on-error. It hid every result this step produced — a real
         # /admin/tenant-settings mount failure was reported as a green run
         # (#2787). route-smoke now carries retries: 2, so an intermittent
@@ -457,6 +482,11 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Run publish-version E2E (--project=publish-version)
         id: publish_version
+        # Same reasoning as the extra-projects step above (F1): an unrelated
+        # failure in `verify` used to SKIP this independent suite, so its result
+        # became unobtainable. It still blocks — the gate below consumes its
+        # outcome — it just is no longer silently skipped by someone else's flake.
+        if: ${{ !cancelled() }}
         run: |
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
           PLAYWRIGHT_JSON_OUTPUT_NAME="test-results/publish-version/report.json" \
@@ -492,7 +522,10 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Capture browser-E2E receipt (optional)
         id: receipt
-        if: ${{ inputs.target_route != '' }}
+        # `!cancelled()` for the same reason as the two steps above (F1): a
+        # receipt the operator explicitly asked for must not be skipped because
+        # an unrelated base-suite probe flaked. Still blocking via the gate.
+        if: ${{ !cancelled() && inputs.target_route != '' }}
         env:
           # The NORMALIZED route from the validation step above — never the raw
           # input. Passed through env rather than interpolated into the shell so
