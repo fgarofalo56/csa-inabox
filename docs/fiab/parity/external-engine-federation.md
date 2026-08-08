@@ -25,11 +25,93 @@ grounded in current docs, not memory:
 
 **Grade: D (Stubbed→Functional, data path broken at time of grading).** NOT A+.
 
-Of 58 inventory rows: **18 built ✅**, **14 honest-gate ⚠️**, **26 MISSING ❌**.
+Of 59 inventory rows: **19 built ✅**, **13 honest-gate ⚠️**, **27 MISSING ❌**.
 
-*(Re-graded 2026-08-07 after the post-deploy walk. Was 21/12/25. Four rows moved
-DOWN — not because anything regressed, but because the walk measured what the
-first grade had inferred. See RC-7.)*
+*(Re-graded twice. 21/12/25 inferred → 18/14/26 after the first post-deploy walk
+(RC-7) → 19/13/27 after the in-browser run 31238543755, which PROVED one row
+rather than inferring it. See "What the browser run proved" below.)*
+
+**No authenticated catalog read has yet returned 200 on this estate.** The grade
+stays **D** until one does (RC-9).
+
+## What the browser run PROVED — first working federation behaviour
+
+Run [31238543755](https://github.com/fgarofalo56/csa-inabox/actions/runs/31238543755),
+in-VNet, minted session, against `loom-console:10365e76`. **3 passed, 3 failed,
+1 skipped.** This is the first evidence of any federation behaviour working on
+this estate rather than being reasoned about, so it is recorded precisely.
+
+### Passed (2 of mine + the session mint)
+
+| # | What it proves |
+|---|---|
+| **`mint`** | The OIDC → Key Vault → minted-session chain works end-to-end in-VNet. |
+| **federation precondition** | `GET /api/catalog/unity/capabilities` → **200**, reporting `backend: "oss"`, `configured: true`, `authorization.mode: "entra"`. The console correctly reports an Azure-native OSS catalog with Entra auth — no Fabric dependency on the default path (`no-fabric-dependency.md`). |
+| **narrow-width 900px** | `/catalog/unity?tab=federation` and `/admin/catalog` both render with **`scrollWidth <= clientWidth`** — no horizontal overflow, no badge overlap at narrow width (`ux-baseline.md` §5). Dark + light receipts captured. |
+
+### Failed — all three are REAL, and all three are distinct
+
+| Test | Cause | Class |
+|---|---|---|
+| Iceberg namespaces (:121) | 502 → upstream **401 "Invalid issuer"** | **RC-9**, new defect, loom-unity image |
+| foreign-catalog inventory (:163) | `source cosmos-csa-inabox-copilot-fg is unmounted with no reason and no route to mount it` | **RC-10**, new defect, console code |
+| Federation tab (:206) | Two console errors: `Failed to load resource: … status of 401` | **RC-11**, needs isolation |
+
+### Skipped — and the skip was MY bug
+
+The SQL Lab engine-picker test skipped, so **the single control this lane is
+about is still unverified.** The cause was my own spec: it POSTed to
+`/api/items`, which has only a `GET` handler and answers **405** (measured), and
+then a `test.skip(!create.ok(), …)` turned that wrong endpoint into a silent
+skip. A skip that reads as a deliberate exclusion is the exact failure mode this
+program exists to kill, and I shipped one. The spec now uses the shared
+`createWorkspace` / `createItem` helpers (`POST /api/workspaces`, then
+`POST /api/workspaces/<id>/items` with `{itemType, displayName}`), which assert —
+so a broken create FAILS instead of skipping.
+
+### The receipt file was empty, and that was also my bug
+
+`external-engine-federation-timings.json` was written as
+`{"capturedAt":"…","measurements":[]}`. Playwright starts a fresh worker per
+retry, so module-scoped state does not survive, and the `afterAll` that wrote the
+file ran in a worker whose measurements were empty — producing a file that looked
+like a valid receipt and contained nothing. It now persists after **every**
+measurement and merges with what is already on disk.
+
+### RC-10 — a federated source with no reason and no route (console code)
+
+My own rule assertion caught this: `/api/catalog/unity/foreign-catalogs` returns
+**200**, but the source `cosmos-csa-inabox-copilot-fg` comes back
+`mounted: false` with **neither** `unmountableReason` **nor** `mountableVia`.
+Storage/ADLS sources do carry a reason ("The lake is already federated through
+the Iceberg REST Catalog…"); Cosmos sources carry nothing. That is a dead end in
+the UI — `auto-bind-by-default.md` forbids exactly "not mounted" with no reason
+and no route. Console-side, fixable in this lane, not yet fixed.
+
+### Killed lead — `LOOM_ICEBERG_CATALOG_WAREHOUSE` / `_PREFIX` are NOT the cause
+
+Recorded so it is not re-investigated. Both vars are absent from the console env,
+and both are read by the client — which looks like a 502 shape. It is not: each
+has a code default, exactly like the audience fallback.
+
+```
+lib/azure/iceberg-catalog-client.ts:66   DEFAULT_IRC_PREFIX = '/api/2.1/unity-catalog/iceberg'
+lib/azure/iceberg-catalog-client.ts:151  return (process.env.LOOM_ICEBERG_CATALOG_WAREHOUSE || 'loom').trim() || 'loom'
+```
+
+Same for `LOOM_ICEBERG_CATALOG_AUDIENCE`: absent, but the documented fallback
+`api://${LOOM_MSAL_CLIENT_ID}/.default` resolves to the same audience Trino and
+Unity use. The decisive evidence against all three is the upstream body itself —
+the server returns a **401 "Invalid issuer"**, which is an identity check, not a
+missing-warehouse or missing-prefix error.
+
+### RC-11 — two 401s on the Federation tab (needs isolation)
+
+The tab renders, but two sub-resource loads return **401**. Not yet attributed to
+a specific endpoint — the console errors carry no URL. Recorded as measured
+rather than guessed; isolating it needs a trace read or a route-level probe.
+
+
 
 The headline is not the row count. It is that **the primary discovery path was
 returning HTTP 403 on the live estate** — measured, warm, reproducible — so a
@@ -205,6 +287,112 @@ AND storage credentials (`LOOM_LAKE_ACCOUNT` empty, §4). Three independent
 blockers, none of them in the console code this lane can fix. Claiming a row
 receipt before those land would be fabrication.
 
+### RC-9 — the catalog trusts only the v2.0 issuer; Entra mints v1.0 tokens. **Fix in the loom-unity ENTRYPOINT — needs an IMAGE REBUILD, not a console roll.**
+
+With RC-7 deployed (`loom-console:10365e76`), the exchange body is finally
+well-formed and the server parses it. It now refuses on the next check.
+Measured warm, minted session, 2026-08-08:
+
+```
+GET /api/catalog/iceberg/namespaces  ->  502 in 395ms
+"Loom Unity rejected the token exchange (HTTP 401).
+ {"error_code":"UNAUTHENTICATED","message":"Invalid issuer"}"
+```
+
+Chain of evidence:
+
+- `loom-entrypoint.sh` derives `server.allowed-issuers` as
+  `https://<authority>/<tenant>/v2.0` **only** — `LOOM_UNITY_ALLOWED_ISSUERS` is
+  unset on `iceberg-catalog` (measured).
+- Microsoft Entra emits the token version the **resource** app requests:
+  *"The values of `null` and `1` result in v1.0 tokens"*, and *"Resources always
+  own their tokens … and are the only applications that can change their token
+  details."*
+  ([token formats](https://learn.microsoft.com/entra/identity-platform/access-tokens#token-formats))
+- The Console app registration has **`requestedAccessTokenVersion: null`**
+  (measured) → v1.0 tokens.
+- A v1.0 token's issuer is `https://sts.windows.net/{tenant-id}` , not the v2.0
+  form.
+  ([iss claim formats](https://learn.microsoft.com/troubleshoot/entra/entra-id/app-integration/troubleshooting-signature-validation-errors))
+
+So the catalog rejects its own tenant's tokens over an STS version the
+deployment never chose.
+
+**The fix DERIVES both issuers from the tenant's own OIDC discovery documents
+rather than constructing them.** The tenant publishes both forms authoritatively:
+
+```
+GET https://<authority>/<tenant>/.well-known/openid-configuration
+    -> "issuer": the v1.0 form
+GET https://<authority>/<tenant>/v2.0/.well-known/openid-configuration
+    -> "issuer": the v2.0 form
+```
+
+Both are read verbatim at whichever authority host the deployment already knows
+per cloud. No hostname table, no per-cloud branch, and **the Azure Government
+issuers come out correct without this repo knowing what they are** — which is
+`cloud-parity.md`'s "supply the equivalent" rather than "Commercial-first, Gov
+later". An earlier revision of this fix appended a literal `sts.windows.net`
+issuer and did it only for the Commercial authority, which would have left Gov on
+the broken v2-only path; discovery removes the need for any such literal, and a
+test now fails if one is ever reintroduced.
+
+**Fails closed.** If either document is unreachable or carries no `issuer`, the
+entrypoint refuses to boot and names both URLs. An unreachable metadata endpoint
+is an UNKNOWN, and booting with a partial or empty allow-list would either wedge
+every call or open the door. `LOOM_UNITY_ALLOWED_ISSUERS` still overrides
+everything, which is how an air-gapped deployment pins issuers without reaching
+an IdP.
+
+Mutation-proved three ways: reintroducing a hardcoded Commercial issuer fails 6
+tests (including the Gov sovereignty guard); removing the fail-closed branch
+fails exactly the two fail-closed tests; and reverting the sovereignty predicate
+to a deny-list fails exactly the lookalike test.
+
+**A defect found in the sovereignty test itself, while fixing this.** CodeQL
+flagged the test's hostname regexes as unanchored, which prompted measuring what
+the check actually admitted. The predicate had been a DENY-list
+(`!COMMERCIAL_HOSTS.has(host)`), and it accepted every lookalike:
+
+```
+ACCEPTED  login.microsoftonline.us.evil.example
+ACCEPTED  evil.login.microsoftonline.us
+ACCEPTED  login.microsoftonline.com.evil.example   <- a COMMERCIAL lookalike
+REJECTED  login.microsoftonline.com
+```
+
+The comment above it claimed the opposite — that it "still catches
+login.microsoftonline.us.evil.example because the comparison is on the PARSED
+host". Parsing was never the issue; the predicate was. **A deny-list cannot catch
+a lookalike by construction**: the lookalike is not the denied string, so it
+passes. It is now an ALLOW-LIST, with the three lookalikes pinned as explicit
+rejections driven through poisoned discovery fixtures. This was a real
+regression in a sovereignty guard, not a lint tidy-up.
+
+**This fix is NOT console code.** It is `apps/loom-unity/bin/loom-entrypoint.sh`,
+baked into the `loom-unity` image that BOTH `loom-unity` and `iceberg-catalog`
+run. It therefore needs an image rebuild + a roll of both apps — a different
+deploy path from the console rolls that carried RC-1 and RC-7.
+
+> The Entra-side alternative (`requestedAccessTokenVersion: 2`) was considered
+> and **rejected**: it changes token shape for every consumer of that app
+> registration including console sign-in, and MSAL sign-in breakage on this
+> estate has already caused one production outage (#2191).
+
+### The shape of this bug class, stated once
+
+RC-1 → RC-7 → RC-9 were three separate defects stacked on one code path. **Each
+was invisible until the one in front of it was removed**, and each was hidden
+from CI the same way: every unit fixture doubled the upstream catalog with a stub
+that accepted any request and returned a token. The suite modelled the client,
+never the server. Only a live authenticated call has ever found one of these.
+
+That is also why the receipts matter more than the tests here: `loom-unity` and
+`iceberg-catalog` both scale to zero, so `az containerapp logs show` returns
+nothing for the failing call. The console's own error envelope — which passes the
+upstream body through verbatim — has been the **only** diagnostic available for
+all three.
+
 ## Feature inventory vs Loom coverage
 
 Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
@@ -213,8 +401,8 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 
 | # | UC capability (doc) | Loom | Backend / note |
 |---|---|---|---|
-| 1.1 | IRC endpoint exposed for external clients | ✅ | `iceberg-catalog` ACA at `/api/2.1/unity-catalog/iceberg`; proxied by `/api/catalog/iceberg/*` |
-| 1.2 | OAuth auth to IRC | ⚠️ | Entra bearer → internal-token exchange (RC-1, fix unrolled) |
+| 1.1 | IRC endpoint exposed for external clients | ✅ | `iceberg-catalog` ACA at `/api/2.1/unity-catalog/iceberg`; proxied by `/api/catalog/iceberg/*`. Reachability PROVEN in-browser (401 unauthenticated, 502-with-upstream-body authenticated — both prove the hop lands) |
+| 1.2 | OAuth auth to IRC | ⚠️ | Entra bearer → internal-token exchange. RC-1 and RC-7 both fixed and LIVE; blocked now on RC-9 (issuer). The exchange is well-formed and reaches the server — it is the issuer check that refuses |
 | 1.3 | PAT auth to IRC | ✅ | Loom scoped API tokens accepted by the BFF proxy |
 | 1.4 | Get catalog URI + auth config in UI | ⚠️ | `/admin/catalog` "Connect an external engine" snippets — but the page is admin-gated and 403s (RC-4) |
 | 1.5 | Snowflake catalog-linked database | ❌ | snippet only; no linked-DB flow |
@@ -289,6 +477,7 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 | 5.8 | No filters/masks on foreign tables | ✅ | same limitation, honestly |
 | 5.9 | Audit logging of external access | ✅ | **Loom EXCEEDS**: every IRC read/write writes a Cosmos `_auditLog` row with principal + namespace/table scope; LIST aggregated. Enforced by a CI chokepoint guard |
 | 5.10 | OAuth M2M for external clients | ⚠️ | console UAMI only; no third-party service principal onboarding |
+| 5.11 | **Fails CLOSED when its own credential cannot be resolved** | ❌ | **Loom is WEAKER than UC here.** `icebergAuthHeader()` returns `{}` — i.e. sends the request ANONYMOUSLY — when no audience resolves. The stated rationale is "the catalog has internal ingress and the VNet is the perimeter", which holds only while that ingress stays internal. A misconfiguration therefore degrades to anonymous access instead of erroring. This is the same posture as #2643, where Gov's `loom-unity` ran with authorization DISABLED and took anonymous read **and mutate** from 07-15 — so it is a repeat on a second component, not a one-off. UC has no equivalent silent-anonymous path. Note a FAILED exchange now throws (F1); this row is specifically the *no-audience* branch |
 
 ### 6. Lineage
 
@@ -357,9 +546,11 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 
 Ordered by operator-visible impact.
 
-1. **Deploy the RC-7 fix** (PR #3116 — the missing `requested_token_type`).
-   RC-1 is now LIVE and did its job; RC-7 is the blocker underneath it, and it
-   gates EVERY OSS-UC capability, not just Iceberg. *Merged, not deployed.*
+1. **Rebuild the `loom-unity` IMAGE and roll both apps** for RC-9 (the issuer
+   derivation). RC-1 and RC-7 are both LIVE and both did their job. RC-9 is the
+   blocker underneath them, it gates EVERY OSS-UC capability, and — unlike the
+   previous two — it is NOT fixed by a console roll. Alternative: set
+   `requestedAccessTokenVersion: 2` on the Console app registration.
 1b. **Raise the exchange timeout above the cold-start budget** (RC-8) — 10s in
    front of a ~23s cold start fails the first call after every idle period.
 2. **Give `iceberg-catalog` the Postgres store** (RC-2). Pass `unityPostgresFqdn`
@@ -429,7 +620,7 @@ RC-1 fix is recorded honestly instead of being smoothed into a pass or thrown as
 a false regression.
 
 **This surface is NOT A+ and this doc does not claim it is.** 26 ❌ is the real
-count, and the re-grade moved rows DOWN, not up. A+ requires, at minimum: RC-7 deployed (RC-1 already is), RC-8 raised, RC-2
-durable, RC-4 unblocked, credential vending built, and Gov at parity. No
-authenticated catalog read has yet succeeded on this estate — until one does,
-no grade above D is defensible.
+count, and the re-grade moved rows DOWN, not up. A+ requires, at minimum: RC-9 deployed (RC-1 and RC-7 already are), RC-10 and
+RC-11 fixed, RC-2 durable, RC-4 unblocked, credential vending built, and Gov at
+parity. **No authenticated catalog read has yet returned 200 on this estate** —
+until one does, no grade above D is defensible, and this doc does not claim one.

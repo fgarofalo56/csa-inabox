@@ -145,6 +145,23 @@ export interface RegisterableSource {
   mountedAs?: string;
   /** Present only when `connector` is null — the honest reason. */
   unmountableReason?: string;
+  /**
+   * Present when the source CAN be mounted but is not yet — the catalog name it
+   * would take, so the row is never a dead end.
+   *
+   * RC-10: without this, a source with a working connector came back
+   * `mounted:false` with NO `unmountableReason` (that field is only populated
+   * when `connector` is null) and no route — i.e. "not mounted", full stop.
+   * Measured live on `cosmos-csa-inabox-copilot-fg`, caught by the F1 browser
+   * receipt. `auto-bind-by-default.md` forbids exactly that shape: an unmounted
+   * thing with no reason and no action.
+   *
+   * NOTE this is the MINIMUM fix, not full compliance. §5 of that rule says the
+   * platform should MOUNT it rather than describe how — a one-click action or an
+   * automatic bind. Naming the target catalog removes the dead end; it does not
+   * discharge the rule. Tracked in docs/fiab/parity/external-engine-federation.md.
+   */
+  mountableVia?: string;
 }
 
 /**
@@ -187,6 +204,8 @@ export function buildRegisterableSources(
       mounted,
       ...(mounted ? { mountedAs: candidate } : {}),
       ...(connector ? {} : { unmountableReason: unmountableReason(c.type) || undefined }),
+      // Mountable but not yet mounted => say HOW, never leave it bare (RC-10).
+      ...(connector && !mounted ? { mountableVia: candidate } : {}),
     };
   });
 }

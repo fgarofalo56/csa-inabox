@@ -243,6 +243,96 @@ unity_authority_host() {
   printf '%s' "${LOOM_UNITY_AUTHORITY_HOST:-login.microsoftonline.com}"
 }
 
+# The two OIDC discovery URLs whose `issuer` fields are the tenant's authoritative
+# v1.0 and v2.0 issuer strings, at whichever authority host this deployment runs.
+#
+# PURE — builds strings, touches no network. Kept separate from the fetch so the
+# per-cloud correctness (Commercial vs Government vs any future sovereign host)
+# is assertable offline, in the same spirit as idp_probe_plan(): a decision only
+# exercisable against a live IdP is a decision nobody notices has gone wrong.
+discovery_urls() {
+  du_authority="$1"
+  du_tenant="$2"
+  # v1.0 first — that is the one whose absence caused the live 401 "Invalid
+  # issuer", so if the output is ever truncated it is the one still visible.
+  printf 'https://%s/%s/.well-known/openid-configuration\n' "${du_authority}" "${du_tenant}"
+  printf 'https://%s/%s/v2.0/.well-known/openid-configuration\n' "${du_authority}" "${du_tenant}"
+}
+
+# Fetch ONE discovery document and echo its `issuer` verbatim.
+# Echoes nothing and returns 1 on any failure — unreachable, non-200, or no
+# `issuer` field. Never invents or infers a value.
+discovery_issuer() {
+  di_url="$1"
+
+  # TEST SEAM (offline only). When LOOM_UNITY_DISCOVERY_DOC_DIR is set, the
+  # documents are read from <dir>/v1.json and <dir>/v2.json instead of fetched,
+  # so the extraction and fail-closed logic are testable with no network and no
+  # live tenant.
+  #
+  # This grants NO capability that does not already exist: LOOM_UNITY_ALLOWED_ISSUERS
+  # already lets an operator set the trusted issuers to anything at all, so a seam
+  # that only changes where the same bytes are read from is strictly weaker. It
+  # replaces the TRANSPORT only — extraction, validation and fail-closed run
+  # identically on both paths.
+  if [ -n "${LOOM_UNITY_DISCOVERY_DOC_DIR:-}" ]; then
+    case "${di_url}" in
+      */v2.0/.well-known/openid-configuration) di_file="${LOOM_UNITY_DISCOVERY_DOC_DIR}/v2.json" ;;
+      *) di_file="${LOOM_UNITY_DISCOVERY_DOC_DIR}/v1.json" ;;
+    esac
+    [ -f "${di_file}" ] || return 1
+    di_body="$(cat "${di_file}")" || return 1
+  else
+    # Same transport shape as probe_idp_reachability: one request per attempt
+    # with the status appended to the body, so body and code always come from
+    # the SAME response; bounded retries because DNS and the CNI can lag a cold
+    # ACA replica by seconds. `|| true` guards curl's non-zero exit under set -e.
+    # Bounded retries. Configurable so the fail-closed path is testable in
+    # seconds rather than the ~90s a full retry budget would take; production
+    # never sets it and gets the full budget.
+    di_max="${LOOM_UNITY_DISCOVERY_RETRIES:-6}"
+    di_try=0
+    di_body=""
+    while [ "${di_try}" -lt "${di_max}" ]; do
+      di_resp="$(curl -sS -m 10 -w '\n%{http_code}' "${di_url}" 2>/dev/null)" || true
+      di_code="$(printf '%s' "${di_resp}" | tail -n 1)"
+      [ -n "${di_code}" ] || di_code="000"
+      if [ "${di_code}" = "200" ]; then
+        di_body="$(printf '%s' "${di_resp}" | sed '$d')"
+        break
+      fi
+      di_try=$((di_try + 1))
+      [ "${di_try}" -lt "${di_max}" ] && sleep 5
+    done
+    [ -n "${di_body}" ] || return 1
+  fi
+
+  # No jq in the upstream image. Same extraction the jwks_uri probe uses:
+  # squeeze whitespace so a pretty-printed document parses too (a URL cannot
+  # contain whitespace, so this cannot corrupt the value).
+  di_issuer="$(printf '%s' "${di_body}" | tr -d ' \011\012\015' | grep -o '"issuer":"[^"]*"' | head -n 1 | cut -d'"' -f4)"
+  [ -n "${di_issuer}" ] || return 1
+  printf '%s' "${di_issuer}"
+}
+
+# Both issuers for this tenant, comma-joined, taken verbatim from discovery.
+# Echoes nothing and returns 1 unless BOTH resolve — the caller fails closed.
+derive_issuers_from_discovery() {
+  df_authority="$1"
+  df_tenant="$2"
+  df_out=""
+  for df_url in $(discovery_urls "${df_authority}" "${df_tenant}"); do
+    df_issuer="$(discovery_issuer "${df_url}")" || return 1
+    [ -n "${df_issuer}" ] || return 1
+    case ",${df_out}," in
+      *",${df_issuer},"*) continue ;;   # a tenant may publish the same issuer twice
+    esac
+    if [ -z "${df_out}" ]; then df_out="${df_issuer}"; else df_out="${df_out},${df_issuer}"; fi
+  done
+  [ -n "${df_out}" ] || return 1
+  printf '%s' "${df_out}"
+}
+
 render_server() {
   tenant="${LOOM_UNITY_ENTRA_TENANT_ID:-}"
   client_id="${LOOM_UNITY_ENTRA_CLIENT_ID:-}"
@@ -266,7 +356,45 @@ render_server() {
   if [ -n "${tenant}" ]; then
     if [ -z "${authz_url}" ]; then authz_url="https://${authority}/${tenant}/oauth2/v2.0/authorize"; fi
     if [ -z "${token_url}" ]; then token_url="https://${authority}/${tenant}/oauth2/v2.0/token"; fi
-    if [ -z "${issuers}" ]; then issuers="https://${authority}/${tenant}/v2.0"; fi
+    # BOTH Entra issuer forms for THIS tenant, taken VERBATIM from the tenant's
+    # own OIDC discovery documents. No hostname table, no per-cloud branch.
+    #
+    # WHY BOTH. Microsoft Entra emits the token version the RESOURCE app asks
+    # for, not the one the client wants: "The values of null and 1 result in
+    # v1.0 tokens, and the value of 2 results in v2.0 tokens", and "Resources
+    # always own their tokens ... and are the only applications that can change
+    # their token details."
+    #   https://learn.microsoft.com/entra/identity-platform/access-tokens#token-formats
+    # The Console app registration has requestedAccessTokenVersion = null, so
+    # every token minted for api://<client-id> is v1.0. Deriving only the v2.0
+    # form made the catalog reject its OWN TENANT'S tokens — measured live
+    # 2026-08-08, after the token-exchange body was fixed:
+    #   HTTP 401 {"error_code":"UNAUTHENTICATED","message":"Invalid issuer"}
+    # Accepting both is not a widening of trust — same pinned tenant, same
+    # signing keys, audience check unchanged — and it keeps working if the app
+    # is ever flipped to requestedAccessTokenVersion: 2.
+    #
+    # WHY DISCOVERY RATHER THAN A HARDCODED STRING. An earlier revision appended
+    # a literal "https://sts.windows.net/<tenant>/" and did it ONLY for the
+    # Commercial authority, because Microsoft's docs establish that form for
+    # Entra ID but do NOT establish the Azure Government equivalent. That left
+    # Gov on the broken v2-only path — a Commercial-first fix, which
+    # cloud-parity.md forbids. The tenant's own metadata is authoritative for
+    # BOTH forms at whichever authority host the deployment already knows, so
+    # discovery yields the correct Gov issuer without anyone having to know what
+    # it is, and hardcodes no cloud's hostname anywhere.
+    #
+    # FAIL CLOSED. If either document is unreachable or carries no `issuer`, the
+    # boot ABORTS. An unreachable metadata endpoint is an UNKNOWN, and a gate
+    # that reads UNKNOWN as "fine" is this program's most expensive defect class.
+    # Falling back to a partial or empty allow-list would either wedge every call
+    # or, worse, open the door.
+    if [ -z "${issuers}" ]; then
+      issuers="$(derive_issuers_from_discovery "${authority}" "${tenant}")" || issuers=""
+      if [ -z "${issuers}" ]; then
+        die "LOOM_UNITY_AUTH=enable but the token issuers could not be derived. Both OIDC discovery documents for tenant ${tenant} at ${authority} must be reachable and carry an \"issuer\" field: https://${authority}/${tenant}/.well-known/openid-configuration (v1.0) and https://${authority}/${tenant}/v2.0/.well-known/openid-configuration (v2.0). Refusing to boot with a partial or empty issuer allow-list — set LOOM_UNITY_ALLOWED_ISSUERS explicitly to override. See docs/fiab/unity-gov.md."
+      fi
+    fi
   fi
   if [ -z "${audiences}" ] && [ -n "${client_id}" ]; then
     audiences="api://${client_id},${client_id}"

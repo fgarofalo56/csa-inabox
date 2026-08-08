@@ -142,3 +142,44 @@ describe('rendered catalog properties', () => {
     expect(renderCatalogProperties({ connector: 'mongodb', host: 'cosmos' })).toContain('mongodb.connection-url=mongodb://cosmos:27017');
   });
 });
+
+
+describe('RC-10: no source is ever a dead end', () => {
+  it('every UNMOUNTED source carries either a reason or a route - never neither', () => {
+    // The invariant the F1 browser receipt caught being violated live:
+    // `cosmos-csa-inabox-copilot-fg` came back mounted:false with NO
+    // unmountableReason (that field is only populated when connector is null)
+    // and no route. `auto-bind-by-default.md` forbids exactly that shape --
+    // "not mounted" with no reason and no action is a dead end.
+    //
+    // Swept across EVERY ConnectionType rather than just the one that failed, so
+    // a newly added type cannot reintroduce the gap for a different source.
+    const types = [
+      'postgres', 'mysql', 'sqlserver', 'storage-adls', 'adx',
+      'key-vault', 'service-bus', 'cosmos', 'synapse', 'databricks',
+    ];
+
+    const conns = types.map((t, i) => ({ id: `c${i}`, name: `conn-${t}`, type: t })) as any[];
+    const sources = buildRegisterableSources(conns, []); // nothing mounted
+
+    for (const s of sources) {
+      const hasReason = typeof s.unmountableReason === 'string' && s.unmountableReason.length > 0;
+      const hasRoute = typeof s.mountableVia === 'string' && s.mountableVia.length > 0;
+      expect(
+        hasReason || hasRoute,
+        `source '${s.name}' (type ${s.type}, connector ${String(s.connector)}) is unmounted with `
+          + 'neither a reason nor a route - a dead end in the Federation tab',
+      ).toBe(true);
+    }
+  });
+
+  it('a MOUNTED source needs neither - it names what it is mounted as', () => {
+    // Non-vacuity: the invariant above must not be satisfiable by tagging
+    // every row unconditionally.
+    const conns = [{ id: 'c1', name: 'shop_db', type: 'postgres' }] as any[];
+    const mounted = buildRegisterableSources(conns, [{ name: 'shop-db' }] as any[]);
+    expect(mounted[0].mounted).toBe(true);
+    expect(mounted[0].mountedAs).toBe('shop-db');
+    expect(mounted[0].mountableVia).toBeUndefined();
+  });
+});
