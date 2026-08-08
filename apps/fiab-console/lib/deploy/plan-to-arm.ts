@@ -31,6 +31,7 @@
  * tier and something else on another.
  */
 
+import { safeRecord } from '../security/safe-object';
 import { getServiceDef } from './adoption-catalog';
 import { canonicalize, type DeploymentPlan, type ServiceDecision } from './plan-model';
 
@@ -61,6 +62,10 @@ export type ArmParamValue = string | number | boolean | Record<string, unknown> 
  *    the honest representation of "no decisions were made".
  */
 export function planToAdoptBag(plan: DeploymentPlan): AdoptBag {
+  // Deliberately a plain object, not `safeRecord()`. Every key here has already
+  // passed the `getServiceDef()` catalog gate below, so a hostile key cannot
+  // reach it — and four tiers assert this bag round-trips through JSON to an
+  // identical value, which a null-prototype record would break for no real gain.
   const bag: AdoptBag = {};
   for (const key of Object.keys(plan.services).sort()) {
     const d: ServiceDecision = plan.services[key];
@@ -93,11 +98,18 @@ export function planToAdoptBag(plan: DeploymentPlan): AdoptBag {
   return bag;
 }
 
-/** ARM deployment parameters for the tier-0 PUT and the tier-1 orchestrator. */
+/**
+ * ARM deployment parameters for the tier-0 PUT and the tier-1 orchestrator.
+ *
+ * `params` is null-prototype because its keys are the RAW `featureFlags` keys —
+ * filtered by nothing, unlike the adopt bag's catalog-gated ones. On a plain
+ * object `params['__proto__'] = false` is a SILENT NO-OP, so the flag would be
+ * dropped from the deployment rather than rejected. That is a correctness
+ * defect before it is a security one.
+ */
 export function planToArmParameters(plan: DeploymentPlan): Record<string, ArmParamValue> {
-  const params: Record<string, ArmParamValue> = {
-    adopt: planToAdoptBag(plan) as Record<string, unknown>,
-  };
+  const params: Record<string, ArmParamValue> = safeRecord<ArmParamValue>();
+  params.adopt = planToAdoptBag(plan) as Record<string, unknown>;
   for (const [flag, value] of Object.entries(plan.featureFlags)) {
     params[flag] = value;
   }
