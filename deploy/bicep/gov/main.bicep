@@ -167,7 +167,15 @@ module storage 'modules/storage.bicep' = if (deployDLZ) {
     name: replace('${baseName}stor', '-', '')
     location: location
     tags: complianceTags
-    sku: environment == 'prod' ? 'Standard_GRS' : 'Standard_LRS'
+    // FedRAMP / IL5 require GEO-redundant replication for primary data stores,
+    // which is why modules/storage.bicep restricts `sku` to GRS variants only
+    // (CKV_AZURE_206). This caller previously asked for 'Standard_LRS' in
+    // non-prod — a value the module does not allow, so the template did not
+    // compile (BCP036) AND, had it compiled, it would have silently dropped
+    // non-prod gov data out of the geo-redundancy baseline. The control is
+    // correct; the caller was wrong. Non-prod gets GRS (geo-redundant, the
+    // cheapest compliant option) and prod gets GZRS (geo + zone redundant).
+    sku: environment == 'prod' ? 'Standard_GZRS' : 'Standard_GRS'
     kind: 'StorageV2'
     isHnsEnabled: true  // Hierarchical namespace for ADLS Gen2
     minimumTlsVersion: 'TLS1_2'
@@ -343,40 +351,47 @@ module aks 'modules/aks.bicep' = if (deployOSSAlternatives) {
 
 // ─── RBAC — Service-to-Service Identity Wiring ─────────────────────────────
 // Storage Blob Data Contributor: ba92f5b4-2d11-453d-a403-e96b0029c9fe
+//
+// These three grants are deployed through modules/roleAssignment.bicep rather
+// than declared inline. A subscription-scoped file cannot declare an
+// RG-scoped resource (BCP139), and a roleAssignment `name` must be computable
+// at the start of the deployment, which `<module>.outputs.principalId` is not
+// (BCP120). Both errors were live in this file and are the reason
+// deploy-gov.yml's "Bicep Build" step had never once passed. See the module
+// header for the full explanation.
+
+var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // ADF managed identity → Storage Blob Data Contributor on storage
-resource roleAdfToStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDLZ) {
-  name: guid(rgData.id, dataFactory.outputs.principalId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+module roleAdfToStorage 'modules/roleAssignment.bicep' = if (deployDLZ) {
+  name: '${baseName}-rbac-adf-storage'
   scope: rgData
-  properties: {
+  params: {
     principalId: dataFactory.outputs.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    description: 'ADF managed identity → Storage Blob Data Contributor on gov storage'
+    roleDefinitionId: blobDataContributorRoleId
+    roleDescription: 'ADF managed identity → Storage Blob Data Contributor on gov storage'
   }
 }
 
 // Databricks managed identity → Storage Blob Data Contributor on storage
-resource roleDatabricksToStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDLZ) {
-  name: guid(rgData.id, databricks.outputs.principalId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+module roleDatabricksToStorage 'modules/roleAssignment.bicep' = if (deployDLZ) {
+  name: '${baseName}-rbac-dbx-storage'
   scope: rgData
-  properties: {
+  params: {
     principalId: databricks.outputs.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    description: 'Databricks managed identity → Storage Blob Data Contributor on gov storage'
+    roleDefinitionId: blobDataContributorRoleId
+    roleDescription: 'Databricks managed identity → Storage Blob Data Contributor on gov storage'
   }
 }
 
 // Synapse managed identity → Storage Blob Data Contributor on storage
-resource roleSynapseToStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDLZ) {
-  name: guid(rgData.id, synapse.outputs.principalId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+module roleSynapseToStorage 'modules/roleAssignment.bicep' = if (deployDLZ) {
+  name: '${baseName}-rbac-synapse-storage'
   scope: rgData
-  properties: {
+  params: {
     principalId: synapse.outputs.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    description: 'Synapse managed identity → Storage Blob Data Contributor on gov storage'
+    roleDefinitionId: blobDataContributorRoleId
+    roleDescription: 'Synapse managed identity → Storage Blob Data Contributor on gov storage'
   }
 }
 
