@@ -428,6 +428,23 @@ jobs:
       - name: upstream-image-mirror (MIR0 — ACR mirror + digest pinning, #2682)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-upstream-image-mirror.mjs
+      # MCR0 is the half MIR0 deliberately does NOT cover. MIR0 skips
+      # mcr.microsoft.com on purpose (Microsoft first-party, reachable from every
+      # boundary, so the ACR-mirror requirement does not apply) — but the skip was
+      # TOTAL: no MCR ref was looked at at all. Four floated `:latest`, one of them
+      # on a DEFAULT-ON path (dabRuntimeEnabled), and every one was baked into the
+      # shipped ARM artifact. A floating tag means two deploys of the SAME commit
+      # can run different bytes, which falsifies the build-marker SHA as an
+      # identifier of what is live (deploy-integrity R2/R3). Unfiltered for the
+      # same reason as LIC0/MIR0: the edit that introduces the violation is a bicep
+      # change. Keyed on the SAFE property (a digest is present and matches the
+      # registry of record), never on the string ':latest'.
+      - name: mcr-image-pins (MCR0 — every MCR deploy ref resolves to immutable bits, C18)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-mcr-image-pins.mjs
+      - name: mcr-image-pins mutation proof (the guard must go RED on each mutant, C18)
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-check-mcr-image-pins.sh
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-assert-acr-image-tags.sh

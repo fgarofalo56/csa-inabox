@@ -15,8 +15,12 @@ targetScope = 'resourceGroup'
 @description('Primary region')
 param location string
 
-@description('Container image to run. Default is the standard Microsoft sample image.')
-param image string = 'mcr.microsoft.com/azuredocs/aci-helloworld:latest'
+// DIGEST-PINNED (FINISHLINE C18). Upstream publishes NO tag but `latest` for this
+// repo (GET https://mcr.microsoft.com/v2/azuredocs/aci-helloworld/tags/list returns
+// exactly ["latest"]), so there is no version tag to fall back to — the ref is
+// digest-only. Registry of record: platform/fiab/images/mcr-images.json.
+@description('Container image to run. Default is the standard Microsoft sample image, pinned by digest.')
+param image string = 'mcr.microsoft.com/azuredocs/aci-helloworld@sha256:456a1150aa41340a14c7be1342deda2cde9e6e7df9fde6b8a69de0ae04f92fad'
 
 @description('CPU cores for the container.')
 param cpuCores int = 1

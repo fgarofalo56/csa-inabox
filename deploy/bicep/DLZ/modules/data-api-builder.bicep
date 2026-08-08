@@ -35,8 +35,13 @@ param sqlAdminPassword string
 @allowed(['Basic', 'S0', 'S1', 'S2', 'P1', 'P2'])
 param sqlSkuName string = 'S0'
 
-@description('DAB container image reference.')
-param dabImage string = 'mcr.microsoft.com/azure-databases/data-api-builder:latest'
+// DIGEST-PINNED (FINISHLINE C18). docs/tutorials/11-data-api-builder tells an
+// operator to `az deployment group create` this module by hand, so it is a
+// customer-followed deploy path even though CI never runs it — a floating tag
+// here means two runs of the same documented command produce different software.
+// Registry of record: platform/fiab/images/mcr-images.json.
+@description('DAB container image reference. Digest-pinned.')
+param dabImage string = 'mcr.microsoft.com/azure-databases/data-api-builder:2.0.9@sha256:ad5ac1793049f95fdd4210ca50d3c913855553139b64992046a071cd63eeead0'
 
 @description('Container App CPU cores.')
 param containerCpu string = '0.5'

@@ -1,0 +1,106 @@
+{
+  "$comment": [
+    "MCR IMAGE PIN REGISTRY — every mcr.microsoft.com image a Loom DEPLOY PATH pulls,",
+    "with its resolved manifest digest (FINISHLINE C18).",
+    "",
+    "WHY THIS FILE EXISTS. MIR0 (scripts/ci/check-upstream-image-mirror.mjs, issue #2682)",
+    "polices third-party registries — docker.io, ghcr.io, quay.io — and DELIBERATELY skips",
+    "mcr.microsoft.com because MCR is Microsoft first-party and is reachable from every",
+    "boundary Loom deploys into, so the ACR-mirror requirement does not apply. But the skip",
+    "was total: nothing at all looked at an MCR ref. Four of them floated `:latest`, one of",
+    "them on a DEFAULT-ON path (dabRuntimeEnabled = true), and all of them were baked into",
+    "the shipped ARM artifact apps/fiab-console/deploy-templates/main.json. A floating tag",
+    "means two deploys of the SAME commit can produce different running bytes, which",
+    "falsifies the build-marker SHA as an identifier of what is running.",
+    "",
+    "THE PIN. Every ref is written in bicep as `<repo>:<tag>@sha256:<digest>` (or",
+    "`<repo>@sha256:<digest>` where upstream publishes no version tag). The tag stays for",
+    "human readability; the digest is what the runtime resolves. Enforced by",
+    "scripts/ci/check-mcr-image-pins.mjs (MCR0), which keys on the SAFE property — a digest",
+    "is PRESENT and matches this file — not on the string ':latest'. Keying on ':latest'",
+    "would go quiet the moment someone wrote ':2.0.9' with no digest, which is still",
+    "mutable: MCR republishes rolling tags like `4-python3.11` and `2.0` in place.",
+    "",
+    "TO BUMP A VERSION. Change `tag` AND `digest` together here, change the bicep ref to",
+    "match byte-for-byte, and re-run `az bicep build` so the compiled template moves with it.",
+    "Resolve the digest with:",
+    "  bash scripts/ci/resolve-mcr-digest.sh <repo> <tag>",
+    "",
+    "inlineDigest:false — the ONLY escape hatch. It means the consuming ARM resource type is",
+    "not known to accept a digest reference, so the bicep ref carries an immutable-by-",
+    "convention version tag instead. It is strictly weaker than a digest and must carry a",
+    "written reason. The digest is still recorded here so drift is detectable.",
+    "",
+    "SCOPE. Deploy-TIME pulls only — an image a running Container App / Container Apps Job /",
+    "Container Instance / AML environment pulls. Images an apps/*/Dockerfile builds FROM are",
+    "pulled server-side by `az acr build` and baked into a Loom-owned image; those are",
+    "covered by LIC0 + the base-image CVE gate."
+  ],
+  "schemaVersion": 1,
+  "minObservedRefs": 7,
+  "images": [
+    {
+      "repo": "azure-databases/data-api-builder",
+      "tag": "2.0.9",
+      "digest": "sha256:ad5ac1793049f95fdd4210ca50d3c913855553139b64992046a071cd63eeead0",
+      "inlineDigest": true,
+      "resolvedOn": "2026-08-08",
+      "wasFloating": "latest",
+      "note": "`:latest` resolved to this SAME digest on 2026-08-08, so the pin is byte-identical to what the estate was already running — it only stops the bits moving under a fixed SHA.",
+      "consumers": [
+        "platform/fiab/bicep/modules/admin-plane/dab-runtime.bicep (dabImage) — DAB preview runtime, DEFAULT-ON (main.bicep dabRuntimeEnabled = true)",
+        "deploy/bicep/DLZ/modules/data-api-builder.bicep (dabImage) — the tutorial/example DLZ module operators deploy by hand (docs/tutorials/11-data-api-builder)"
+      ]
+    },
+    {
+      "repo": "cbl-mariner/busybox",
+      "tag": "2.0",
+      "digest": "sha256:e4fb4d51fc9b70d6cdc1ce66a0af02ab40554d2ca632e1d188fabc760e432fdd",
+      "inlineDigest": true,
+      "resolvedOn": "2026-08-08",
+      "wasFloating": null,
+      "note": "`2.0` is a ROLLING tag — CBL-Mariner republishes it in place for CVE rebases. Not `:latest`, but not immutable either; this is exactly the case a ':latest'-keyed guard would have missed.",
+      "consumers": [
+        "platform/fiab/bicep/modules/admin-plane/dab-runtime.bicep (init container — materialises dab-config.json)",
+        "platform/fiab/bicep/modules/admin-plane/udf-runtime.bicep (initImage)"
+      ]
+    },
+    {
+      "repo": "azure-functions/python",
+      "tag": "4-python3.11",
+      "digest": "sha256:ebc5ba1fc20f7809b2676872a016ba6ede2c43d2feab4c22164b6f2a07d75733",
+      "inlineDigest": true,
+      "resolvedOn": "2026-08-08",
+      "wasFloating": null,
+      "note": "`4-python3.11` is a ROLLING tag — the Functions base images are rebuilt in place on every runtime patch.",
+      "consumers": [
+        "platform/fiab/bicep/modules/admin-plane/udf-runtime.bicep (udfImage) — User Data Functions execution host, DEFAULT-ON"
+      ]
+    },
+    {
+      "repo": "azuredocs/aci-helloworld",
+      "tag": null,
+      "digest": "sha256:456a1150aa41340a14c7be1342deda2cde9e6e7df9fde6b8a69de0ae04f92fad",
+      "inlineDigest": true,
+      "resolvedOn": "2026-08-08",
+      "wasFloating": "latest",
+      "note": "Upstream publishes NO tag but `latest` (verified: GET https://mcr.microsoft.com/v2/azuredocs/aci-helloworld/tags/list returns exactly [\"latest\"]). There is no version tag to fall back to, so the ref is digest-only.",
+      "consumers": [
+        "platform/fiab/bicep/modules/deploy-planner/container-instances.bicep (image) — the sample group the Container Instances navigator lists/starts/stops; opt-in (containerInstancesEnabled = false)"
+      ]
+    },
+    {
+      "repo": "azureml/openmpi4.1.0-ubuntu20.04",
+      "tag": "20250224.v1",
+      "digest": "sha256:74a79815972fc52df633e894463c51ba80b178d039a7fc50c2072930b298fc33",
+      "inlineDigest": false,
+      "inlineDigestBlockedBy": "Microsoft.MachineLearningServices/workspaces/environments/versions documents `image` only as \"Name of the image that will be used for the environment\" and no Learn page states that a digest reference is accepted; a wrong guess here breaks AML environment creation on a DEFAULT-ON path (mlWorkspaceEnabled = true) and cannot be tested without a live AML deploy. Pinned to the dated AzureML base-image tag instead, which AzureML publishes immutably (new bases get a NEW date, the old date is never republished). Weaker than a digest — the digest is recorded here so drift is still detectable. Re-open when the digest form is confirmed on a live deploy.",
+      "resolvedOn": "2026-08-08",
+      "wasFloating": "latest",
+      "note": "`:latest` resolved to this SAME digest on 2026-08-08, so the pin is byte-identical to what the estate was already running.",
+      "consumers": [
+        "platform/fiab/bicep/modules/deploy-planner/ml-workspace.bicep (loomPylspEnvVersion.image) — the loom-pylsp curated AML environment"
+      ]
+    }
+  ]
+}
