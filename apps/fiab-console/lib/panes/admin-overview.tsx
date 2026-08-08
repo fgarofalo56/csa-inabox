@@ -30,6 +30,7 @@ import {
   DocumentBriefcase24Regular, Money24Regular, DatabaseLink24Regular, Alert24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import type { OverviewTileKey, OverviewTiles, TileCount } from '@/app/api/admin/overview/route';
 
 interface TileSpec {
@@ -150,10 +151,11 @@ function CountBadge({ tile }: { tile: TileCount }) {
 
 export function AdminOverview() {
   const styles = useStyles();
-  const { data, isLoading } = useQuery({
+  const q = useQuery({
     queryKey: ['admin-overview'],
     queryFn: fetchOverview,
   });
+  const { data, isLoading } = q;
 
   if (isLoading) {
     return (
@@ -165,6 +167,23 @@ export function AdminOverview() {
 
   if (data && data.status === 401) {
     return <SignInRequired subject="the admin overview" />;
+  }
+
+  // C20 sweep — this branch was already honest for a RESOLVED failure
+  // (`fetchOverview` merges `status` rather than throwing on !ok), but it was
+  // blind to a REJECTED one: `clientFetch` rejects on transport failure and on
+  // the 20s timeout, and that path arrived here as `data === undefined` and
+  // printed "unknown error" — discarding the message the error object was
+  // carrying, with no way to retry. Report what was observed (R7).
+  if (q.isError) {
+    return (
+      <QueryErrorBar
+        query={q}
+        subject="the admin overview"
+        endpoint="/api/admin/overview"
+        reassurance="No tile count is being asserted below — the read did not complete."
+      />
+    );
   }
 
   if (!data || !data.ok || !data.tiles) {

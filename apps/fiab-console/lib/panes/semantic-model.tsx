@@ -37,6 +37,7 @@ import {
   DatabaseStack16Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { EmptyState } from '@/lib/components/empty-state';
 
 interface AasDatabaseLite {
@@ -155,7 +156,8 @@ async function deployModel(body: { modelId: string; database: string }): Promise
 
 export function SemanticModelWorkspacePane() {
   const styles = useStyles();
-  const { data, isLoading } = useQuery({ queryKey: ['sm-workspace-pane'], queryFn: fetchPane });
+  const q = useQuery({ queryKey: ['sm-workspace-pane'], queryFn: fetchPane });
+  const { data, isLoading } = q;
 
   const databases = useMemo<AasDatabaseLite[]>(() => data?.aasDatabases ?? [], [data]);
   const loomModels = useMemo<LoomModelLite[]>(() => data?.loomModels ?? [], [data]);
@@ -181,6 +183,21 @@ export function SemanticModelWorkspacePane() {
       </div>
     );
   }
+  // C20 sweep — the `!data || !data.ok` branch below was honest but blind: a
+  // REJECTED read (clientFetch transport failure / timeout) landed there as
+  // `data === undefined` and printed "unknown error", throwing away the real
+  // message and offering no retry. R7.
+  if (q.isError) {
+    return (
+      <QueryErrorBar
+        query={q}
+        subject="semantic models"
+        endpoint="/api/items/semantic-model/workspace-pane"
+        reassurance="Your models and AAS databases are unaffected — they could not be listed."
+      />
+    );
+  }
+
   if (data && data.status === 401) return <SignInRequired subject="semantic models" />;
   if (!data || !data.ok) {
     return (

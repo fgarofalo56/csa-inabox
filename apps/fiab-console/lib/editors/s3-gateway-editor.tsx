@@ -28,6 +28,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
@@ -136,19 +137,16 @@ export function S3GatewayEditor({ item, id }: { item: FabricItemType; id: string
         {/* A3 (silent-failure fix): fetchInfo throws on !res.ok / transport
             failure — render it honestly instead of a blank body under the
             toolbar (this was the repo's only useQuery consumer with zero
-            error references). */}
-        {q.isError && (
-          <MessageBar intent="error" layout="multiline">
-            <MessageBarBody>
-              <MessageBarTitle>Could not read the S3 gateway configuration</MessageBarTitle>
-              {(q.error as Error)?.message || 'The request failed before /api/s3-gateway/info answered (network or timeout).'}{' '}
-              The native abfss:// + Iceberg REST Catalog path is unaffected.
-            </MessageBarBody>
-            <MessageBarActions>
-              <Button size="small" onClick={() => void q.refetch()}>Retry</Button>
-            </MessageBarActions>
-          </MessageBar>
-        )}
+            error references). C20 sweep: the hand-rolled MessageBar this file
+            pioneered is now the shared <QueryErrorBar>, so the ~12 siblings
+            that carried the same bug adopt the SAME surface instead of
+            re-deriving it — copy-paste is what let the gap open. */}
+        <QueryErrorBar
+          query={q}
+          subject="the S3 gateway configuration"
+          endpoint="/api/s3-gateway/info"
+          reassurance="The native abfss:// + Iceberg REST Catalog path is unaffected."
+        />
 
         {/* The native no-gateway path — always shown; it is the recommended default. */}
         {data?.nativePath && (

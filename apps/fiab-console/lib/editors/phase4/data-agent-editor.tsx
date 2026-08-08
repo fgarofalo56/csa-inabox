@@ -56,6 +56,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { KeyValueRows } from '@/lib/components/ui/key-value-rows';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
 import { type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
@@ -2002,10 +2003,10 @@ function DataAgentMonitoringPanel({ id }: { id: string }) {
       </Caption1>
 
       {itemQ.isLoading && <Spinner size="tiny" label="Loading agent…" labelPosition="after" />}
+      {/* C20 — the warning below is gated on `itemQ.data`, so it fires only when the read SUCCEEDED and the record truly has no workspaceId; a FAILED read showed nothing while scoping every alert-rule call to an empty workspaceId (R7). */}
+      <QueryErrorBar query={itemQ} subject="this agent’s workspace record" endpoint={`/api/cosmos-items/data-agent/${id}`} reassurance="Alert rules cannot be scoped to a workspace until it loads; existing rules are unaffected." />
       {itemQ.data && !workspaceId && (
-        <MessageBar intent="warning"><MessageBarBody>
-          Couldn&rsquo;t resolve this agent&rsquo;s workspace. Open the agent from its workspace so Monitoring can scope alert rules to it.
-        </MessageBarBody></MessageBar>
+        <MessageBar intent="warning"><MessageBarBody>Couldn&rsquo;t resolve this agent&rsquo;s workspace. Open the agent from its workspace so Monitoring can scope alert rules to it.</MessageBarBody></MessageBar>
       )}
 
       {/* Honest Azure Monitor infra-gate (NOT a Fabric gate) — verbatim from the route. */}

@@ -36,6 +36,7 @@ import {
 import { PageShell } from '@/lib/components/page-shell';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { clientFetch } from '@/lib/client-fetch';
 import { AssetsCanvas, type AssetNodeView } from '@/lib/components/assets/assets-canvas';
@@ -204,9 +205,17 @@ export default function AssetsPage() {
               <DatabaseLink20Regular aria-hidden />
               <Caption1>Assets derived</Caption1>
             </div>
-            <Text className={s.metric}>{rollup?.total ?? (status.isLoading ? '—' : 0)}</Text>
+            {/* C20 sweep — `fetchStatus` THROWS on !ok/ok!==true, and this
+                fell back to a literal 0: a failed freshness read rendered
+                "0 assets derived", a false claim about the customer's estate
+                (R7). `graph`, the query on the LINE ABOVE, already had a full
+                error branch — the in-file adoption gap in miniature. Unknown
+                is now shown as unknown; the honest bar sits below the band. */}
+            <Text className={s.metric}>{rollup?.total ?? (status.isError ? '—' : status.isLoading ? '—' : 0)}</Text>
             <Caption1 className={s.hint}>
-              {status.data ? `${status.data.configured} with a saved policy · ${status.data.autoManaged} auto-managed` : 'From lineage + your transformation projects'}
+              {status.isError
+                ? 'Freshness could not be read — this is not a count of your assets.'
+                : status.data ? `${status.data.configured} with a saved policy · ${status.data.autoManaged} auto-managed` : 'From lineage + your transformation projects'}
             </Caption1>
           </div>
           <div className={s.tile}>
@@ -288,6 +297,12 @@ export default function AssetsPage() {
             <Caption1 className={s.hint}>Derived {graph.data.builtAt}</Caption1>
           )}
         </div>
+
+        <QueryErrorBar
+          query={status}
+          subject="asset freshness"
+          endpoint="/api/assets/status"
+          reassurance="The tiles above therefore show “—”, not a real count; the asset graph below is a separate read." />
 
         {graph.isLoading && <Spinner label="Deriving the asset graph from lineage…" />}
         {graph.isError && (

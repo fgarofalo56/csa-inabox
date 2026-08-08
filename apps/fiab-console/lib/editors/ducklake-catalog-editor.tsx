@@ -28,6 +28,7 @@ import { PreviewTable, type PreviewData } from '@/lib/components/shared/preview-
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
@@ -130,20 +131,17 @@ export function DucklakeCatalogEditor({ item, id }: { item: FabricItemType; id: 
             "Reading the DuckLake catalog…" line below and sat there forever with
             no error and no retry. An unreadable catalog must never be rendered
             as an unfinished read (deploy-integrity.md R7: if the code does not
-            know, the message says it does not know). */}
-        {q.isError && (
-          <MessageBar intent="error" layout="multiline">
-            <MessageBarBody>
-              <MessageBarTitle>Could not read the DuckLake catalog</MessageBarTitle>
-              {(q.error as Error)?.message
-                || 'The request failed before /api/ducklake/catalog answered (network or timeout).'}{' '}
-              The Iceberg REST Catalog and every other editor are unaffected.
-            </MessageBarBody>
-            <MessageBarActions>
-              <Button size="small" onClick={() => void q.refetch()}>Retry</Button>
-            </MessageBarActions>
-          </MessageBar>
-        )}
+            know, the message says it does not know).
+
+            C20 sweep: the bar is now the shared <QueryErrorBar> — the same
+            component s3-gateway and ~12 other surfaces render — so there is one
+            implementation to adopt rather than a shape to re-derive. */}
+        <QueryErrorBar
+          query={q}
+          subject="the DuckLake catalog"
+          endpoint="/api/ducklake/catalog"
+          reassurance="The Iceberg REST Catalog and every other editor are unaffected."
+        />
 
         {/* Honest gate — unconfigured store OR the DuckDB tier missing. Warning,
             not an error, so a freshly opened item is never red (ux-baseline). */}

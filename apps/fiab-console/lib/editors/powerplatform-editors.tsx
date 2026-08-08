@@ -36,6 +36,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
 import { PowerAutomateDesignerTab, NewFlowAuthor } from '@/lib/power-platform/power-automate-editor';
@@ -1512,6 +1513,23 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
+        {/* C20 sweep — MOST consequential case of the class in this file. A
+            failed `getItem` leaves boundEnvId/boundAppId undefined, so
+            `isBound` goes FALSE and the editor renders the "not bound yet"
+            binding banner + picker for an app that IS bound. That is a false
+            claim about the user's own configuration (R7), and it invites them
+            to re-bind — overwriting a binding Loom simply failed to read
+            (auto-bind-by-default.md: a stale/unreadable binding is a bug to
+            repair, never a prompt to the user). Render the honest read failure
+            ABOVE the bind banner; the bind banner itself is suppressed while
+            the record is unknown. */}
+        <QueryErrorBar
+          query={itemQ}
+          subject="this Power App’s saved binding"
+          endpoint={`/api/cosmos-items/power-app/${id}`}
+          reassurance="The binding has NOT been cleared — it could not be read. Do not re-bind until this succeeds."
+        />
+
         {/* Infra gate — honest MessageBar when Power Platform isn't reachable. */}
         {env.error && (
           <MessageBar intent="warning">
@@ -1525,8 +1543,11 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
           </MessageBar>
         )}
 
-        {/* Bind state banner */}
-        {!isNew && !isBound && (
+        {/* Bind state banner. `!itemQ.isError` is load-bearing: "isn't bound
+            yet" must be a statement about the RECORD, not about our ability to
+            read it. Without this guard a 500/timeout renders the unbound copy
+            for a bound app (C20). */}
+        {!isNew && !isBound && !itemQ.isError && (
           <MessageBar intent="info">
             <MessageBarBody>
               <MessageBarTitle>This item isn&apos;t bound to a Power App yet</MessageBarTitle>
