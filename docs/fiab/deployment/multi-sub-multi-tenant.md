@@ -90,7 +90,12 @@ Two consequences specific to this topology:
 `dlz_domain` used to default to `single`, which is the single-subscription
 shape. On this topology that produced a resource-group name that does not exist
 and the bootstrap failed with `(ResourceGroupNotFound)` after the rest of the
-deploy had gone green (#3143).
+deploy had gone green. Fixed in PR **#3140** (merged 2026-08-08); the bootstrap
+now discovers the landing zone. Full explanation of the naming trap:
+[Resource-group layout](resource-groups.md#the-single--default-trap--read-this-before-you-construct-a-name-by-hand).
+
+> In-repo comments cite this fix as `#3143`. That number was never allocated to
+> it — read them as PR #3140.
 
 ## Adding a new DLZ via Console (after initial deploy)
 

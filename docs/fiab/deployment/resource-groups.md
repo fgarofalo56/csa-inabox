@@ -73,11 +73,18 @@ That mismatch is not cosmetic. It is what broke the post-deploy bootstrap:
   `(ResourceGroupNotFound)`. Every image and every Container App had already
   deployed; only the day-one wiring died.
 
-The fix (**#3143**, PR **#3140**) removed the default and made the bootstrap
-**discover** the landing zone from Azure Resource Graph across every
+The fix — PR **#3140**, merged 2026-08-08 — removed the default and made the
+bootstrap **discover** the landing zone from Azure Resource Graph across every
 subscription the deploy identity can read. **Do not construct a DLZ resource
 group name by hand.** Let discovery find it, and supply `dlz_domain` /
 `dlz_subscription` only to disambiguate an estate that genuinely has several.
+
+> **Citation warning.** Comments in `csa-loom-post-deploy-bootstrap.yml`, the
+> four `deploy-fiab-*.yml` lanes and `full-app-deploy-commercial.yml` attribute
+> this fix to **`#3143`**. That number was **never allocated to this work** — it
+> was a forward reference to an issue that was not created, and GitHub has since
+> assigned `#3143` to an unrelated pull request. **The fix is PR #3140.** Read
+> any in-repo `#3143` in a deploy workflow as "the DLZ-discovery fix, PR #3140".
 
 > **Consequence worth stating plainly:** because `dlz_domain` defaulted to a
 > value that is wrong on every non-single-sub estate, the deploy's day-one

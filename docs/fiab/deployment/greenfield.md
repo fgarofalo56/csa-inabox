@@ -310,7 +310,8 @@ estate defaults ship in a public repo. The workflow is idempotent.
 > `dlz_domain` used to default to `single`, which is one estate shape out of
 > several. On any multi-sub / `dlz-attach` estate that produced a resource group
 > that does not exist and the bootstrap died on `(ResourceGroupNotFound)` — after
-> 25 of 27 jobs had gone green (**#3143**, fixed in PR **#3140**). Supply the
+> 25 of 27 jobs had gone green. Fixed in PR **#3140** (merged 2026-08-08).
+> Supply the
 > overrides only to pick between several landing zones; an override that matches
 > nothing now fails at discovery rather than reaching ARM. The naming trap that
 > caused it is explained in
@@ -495,7 +496,7 @@ greenfield-relevant disagreements, **re-measured on this branch on 2026-08-08**:
 | `registry.bicep` sets `publicNetworkAccess=Disabled` but not `networkRuleSet.defaultAction=Deny`, which the lease's lock check requires | A from-scratch registry can fail the lock verification it should pass | — |
 | Resource-provider registration is emitted, not performed, on the local-CLI path | Register up front or hit a mid-deploy `MissingSubscriptionRegistration` | — |
 | `deploy-fiab-il5.yml` has never run | The whole IL5 path is unexercised | — |
-| The bootstrap's `DLZ_SUB` env still falls back to the admin subscription | A few late steps carry the admin-sub assumption on a cross-sub estate | **#3143** (follow-up) |
+| The bootstrap's `DLZ_SUB` env still falls back to the admin subscription | A few late steps carry the admin-sub assumption on a cross-sub estate | follow-up to PR **#3140** — no issue filed yet |
 
 **Two rows that used to be on this list have been removed because they are no
 longer true.** They are recorded here so the correction is visible rather than
