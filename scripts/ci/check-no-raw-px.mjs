@@ -44,7 +44,26 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const APP_REL = path.join('apps', 'fiab-console');
-const APP_ROOT = path.join(REPO_ROOT, APP_REL);
+/**
+ * NO_RAW_PX_APP_ROOT overrides the scanned app root. It exists for
+ * `scripts/ci/__tests__/no-raw-px-baseline-empty.test.mjs`, which drives fixture
+ * trees; **CI sets it nowhere**, and that test asserts the guardrails workflow
+ * invokes this guard without it, so the override cannot be used to quietly
+ * neuter the guard in the lane that matters. Same shape and same rationale as
+ * ROUTE_SMOKE_APP_DIR in check-route-smoke-floor.mjs.
+ *
+ * Before this existed, the fail-closed test proved itself by MUTATING THE REAL
+ * SOURCE TREE (and, in its first form, `git add -N`-ing a probe file into the
+ * index). In a repo where many agents share git state that is a genuine hazard,
+ * not a stylistic one: a test that dies between its write and its cleanup
+ * leaves a foreign file staged in somebody else's commit, and its create/delete
+ * window raced check-insecure-randomness into an ENOENT once already. A fixture
+ * tree removes the whole class.
+ */
+const APP_ROOT = process.env.NO_RAW_PX_APP_ROOT
+  ? path.resolve(process.env.NO_RAW_PX_APP_ROOT)
+  : path.join(REPO_ROOT, APP_REL);
+const USING_FIXTURE_ROOT = Boolean(process.env.NO_RAW_PX_APP_ROOT);
 const SCOPE_DIRS = ['lib/editors', 'lib/panes', 'lib/components'];
 
 const SPACING_PROPS = [
@@ -97,12 +116,31 @@ function countViolations(src) {
 
 function listFiles() {
   const files = [];
-  try {
-    const out = execSync(`git ls-files ${SCOPE_DIRS.join(' ')}`, { cwd: APP_ROOT, encoding: 'utf8' });
-    for (const f of out.split('\n').map((s) => s.trim())) {
-      if (f.endsWith('.tsx') && !f.includes('__tests__')) files.push(path.join(APP_ROOT, f));
+  // A fixture tree is not a git repo, so `git ls-files` would return nothing and
+  // the scan would silently cover only app/**/page.tsx — i.e. the fail-closed
+  // test would exercise half the guard while looking green. Walk the scope dirs
+  // directly in that mode instead.
+  if (USING_FIXTURE_ROOT) {
+    for (const rel of SCOPE_DIRS) {
+      const dir = path.join(APP_ROOT, rel);
+      if (!fs.existsSync(dir)) continue;
+      const walk = (d) => {
+        for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+          const full = path.join(d, ent.name);
+          if (ent.isDirectory()) walk(full);
+          else if (ent.name.endsWith('.tsx') && !full.includes('__tests__')) files.push(full);
+        }
+      };
+      walk(dir);
     }
-  } catch { /* ignore */ }
+  } else {
+    try {
+      const out = execSync(`git ls-files ${SCOPE_DIRS.join(' ')}`, { cwd: APP_ROOT, encoding: 'utf8' });
+      for (const f of out.split('\n').map((s) => s.trim())) {
+        if (f.endsWith('.tsx') && !f.includes('__tests__')) files.push(path.join(APP_ROOT, f));
+      }
+    } catch { /* ignore */ }
+  }
   const appDir = path.join(APP_ROOT, 'app');
   const walk = (d) => {
     for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
