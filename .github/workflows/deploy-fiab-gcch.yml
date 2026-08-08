@@ -323,9 +323,29 @@ jobs:
         run: |
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
-          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r')
+          # R7 (#3090): see the long note in deploy-fiab-commercial.yml. The
+          # discovery read used to be `2>/dev/null` + `[ -z "$ACR" ] && exit 0`,
+          # so an unreadable control plane was reported as "from-scratch deploy,
+          # nothing live to adopt" and the entire image gate was SKIPPED on a
+          # LIVE sovereign estate. `az acr list` on a missing RG exits non-zero;
+          # an existing-but-empty RG exits 0. Keep the two facts apart.
+          set +e
+          ACR_OUT=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>&1)
+          ACR_RC=$?
+          set -e
+          if [ $ACR_RC -ne 0 ]; then
+            if node scripts/ci/deploy-classify.mjs --text "$ACR_OUT" \
+                 --assert-signal config.resource-group-not-found >/dev/null 2>&1; then
+              echo "::notice::image-preflight: ARM answered ResourceGroupNotFound for $RG — from-scratch deploy, nothing live to adopt. Skipping."
+              exit 0
+            fi
+            echo "::error::image-preflight: could NOT enumerate registries in $RG, so it is NOT established whether this estate has an ACR. Refusing to treat an unreadable control plane as 'nothing to adopt' and skip the gate. $(node scripts/ci/deploy-classify.mjs --text "$ACR_OUT" --query)"
+            exit 1
+          fi
+          ACR=$(printf '%s' "$ACR_OUT" | tr -d '\r' | head -1)
+          [ "$ACR" = "None" ] && ACR=""
           if [ -z "$ACR" ]; then
-            echo "::notice::image-preflight: no ACR in $RG yet — from-scratch deploy, nothing live to adopt. Skipping."
+            echo "::notice::image-preflight: ARM ANSWERED and $RG contains no acrloom* registry — from-scratch deploy, nothing live to adopt. Skipping."
             exit 0
           fi
           # loom-unity joined this list in #2681 — admin-plane/main.bicep deploys

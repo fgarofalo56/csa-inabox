@@ -431,6 +431,16 @@ jobs:
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-assert-acr-image-tags.sh
+      # MIR0 above proves the mirror is WIRED. This proves its digest read-back
+      # can tell "verified" from "mismatch" from "could not read" — which it
+      # could not: `2>&1` merged az's PREVIEW banner for the `acr manifest`
+      # command group into the digest, so every comparison failed and the step
+      # reported "digest mismatch" with the expected and actual digests
+      # IDENTICAL (run 31229911331, #3090). A read-back that cannot pass is as
+      # useless as one that cannot fail, and this one blocked the whole deploy.
+      - name: upstream-mirror digest read-back self-test (stdout is the value, stderr is the evidence — #3090)
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-mirror-upstream-images.sh
       # assert-acr-image-tags.sh proves a tag EXISTS. This proves the workflow
       # that is supposed to CREATE it actually builds it: the Commercial image
       # producer's build matrix, its cosign APPS=() list, and the deploy
