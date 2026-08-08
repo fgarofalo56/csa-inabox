@@ -1275,7 +1275,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 34,
-      "status": "todo",
+      "status": "review",
       "title": "Follow-up flagged by D10 (honestly scoped, NOT implied fixed): planToAdoptBag() in lib/deploy/plan-to-arm.ts is still prototype-bearing. Keys are catalog-filtered via getServiceDef() so no hostile key can become a bag key today, but it wants the same one-line safeRecord() for defence in depth",
       "depends_on": [],
       "validation": {
@@ -1286,10 +1286,11 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "D10 fixed the three client-keyed maps it owned (extra/clean/legacy bag) with safeRecord(); this one is another lane's module and D10 said so rather than reaching across",
-        "the #2657 class root cause: an identifier regex gating extra[ek] ACCEPTS __proto__ because `_` matches \\w — fix structurally with safeRecord(), not by tightening the regex"
-      ]
+      "evidence": "PR #3120. REAL defect confirmed and fixed: planToArmParameters() assigned RAW featureFlags keys into a plain object, so params['__proto__']=false was a SILENT NO-OP and the flag was DROPPED from the deployment - a CORRECTNESS defect before a security one. Fixed with safeRecord(). MUTATION-PROVED both ways: fix=4 passed; params reverted to plain {} = 2 failed ('expected [Function Object] to be undefined', 'expected false to be true'). Full lib/deploy/__tests__ 226 passed/10 files, no sibling broken.",
+      "pr": 3120,
+      "agent": "orchestrator",
+      "correction": "CORRECTS the earlier note that planToAdoptBag() also wanted safeRecord(). It does NOT: its keys all pass the getServiceDef() catalog gate, and making it null-prototype BROKE 4 sibling assertions (toStrictEqual compares prototypes; four tiers assert the bag round-trips through JSON to an identical value). Left plain deliberately; the test now pins the mechanism that actually protects it - a hostile service key is dropped at the catalog gate.",
+      "trap_avoided": "First draft of the test used an object LITERAL {__proto__:true} - which is prototype-SETTER syntax and creates no own key - so it passed vacuously. Fixture switched to JSON.parse, which is also how featureFlags really arrives. Assertions are READS of an inherited key (rec.constructor), never write-then-check-a-bystander."
     },
     {
       "id": "F1",
