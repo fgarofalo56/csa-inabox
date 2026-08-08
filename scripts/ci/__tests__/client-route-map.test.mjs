@@ -5,17 +5,18 @@
  * caller must not be able to reference a BFF route that does not exist. A map
  * that merely EXISTS satisfies nothing — the repo has been bitten repeatedly by
  * signals that are presence-shaped rather than enforcement-shaped
- * (`csa_loom_guard_signals_presence_not_enforcement`). So the sharpest test
- * here is the NEGATIVE one: it runs the real TypeScript compiler over a
- * fixture that names a bogus route and asserts the compile FAILS. If that test
- * ever passes-by-vacuity, the whole feature is decorative.
+ * (`csa_loom_guard_signals_presence_not_enforcement`).
+ *
+ * This file holds the parts that need NO toolchain: the generator, the regex
+ * derivation, and the R17 CI guard. The compile-time assertions (R16) live in
+ * `apps/fiab-console/lib/__tests__/api-route-typing.test.ts` — see the note by
+ * the last test here for why that split is load-bearing rather than tidy.
  *
  * MUTATION-PROVEN (counts in the PR body):
  *   - make ValidateApiPath<S> = S            -> the negative tsc test goes RED
  *   - drop the Extract<> clause              -> the query-suffix test goes RED
  *   - remove stripComments() from the guard  -> the self-documentation test RED
  *   - drop the backtick-overlap skip         -> the template test goes RED
- *   - make classifyPath always return 'ok'   -> the unknown-path test goes RED
  *
  * Run: node --test scripts/ci/__tests__/client-route-map.test.mjs
  */
@@ -175,7 +176,11 @@ test('the R17 guard FAILS on a planted bad route (fail-closed)', (t) => {
 });
 
 test('the R17 guard fails closed when the generated map is missing', () => {
-  const missing = path.join(os.tmpdir(), `loom-route-map-does-not-exist-${Date.now()}.json`);
+  // mkdtempSync, not a constant name under os.tmpdir(): a shared temp root is
+  // world-writable, so a fixed path can be pre-created or symlinked by another
+  // local user. Enforced by scripts/ci/check-temp-artifact-safety.mjs.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-route-map-'));
+  const missing = path.join(dir, 'does-not-exist.json');
   assert.throws(
     () => loadRouteMap(missing),
     /generated route map missing/,
@@ -183,132 +188,39 @@ test('the R17 guard fails closed when the generated map is missing', () => {
   );
 });
 
-test('the R17 guard fails closed on an implausibly small map', (t) => {
-  const tiny = path.join(os.tmpdir(), `loom-route-map-tiny-${Date.now()}.json`);
-  t.after(() => { try { fs.unlinkSync(tiny); } catch { /* already gone */ } });
+test('the R17 guard fails closed on an implausibly small map', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-route-map-'));
+  const tiny = path.join(dir, 'tiny.json');
   fs.writeFileSync(tiny, JSON.stringify({ patterns: ['/api/x'], regexSources: ['^/api/x/?$'] }));
   assert.throws(() => loadRouteMap(tiny), /implausible/);
 });
 
-// ── R16: the compile-time contract (the load-bearing test) ───────────────────
+
+// ── R16 lives in the console's vitest lane — assert it did not silently vanish ─
 
 /**
- * Type-check a fixture against the console's own tsconfig paths. Returns the
- * tsc stdout so a caller can assert on the diagnostic.
+ * The COMPILE-TIME assertions (R16) are in
+ * `apps/fiab-console/lib/__tests__/api-route-typing.test.ts`, not here, because
+ * this suite runs in the `guardrails` job — which installs no console
+ * dependencies and therefore has no `typescript/bin/tsc`.
  *
- * The fixture is written INTO the console tree (not a temp dir) so `@/lib/...`
- * resolves through the real `paths` mapping — a temp-dir fixture would fail to
- * resolve for the wrong reason and the negative test would "pass" vacuously.
+ * That is not a cosmetic split. When these tests DID live here, every fixture
+ * died with `Cannot find module '…/typescript/bin/tsc'` — and only the NEGATIVE
+ * test failed. All five POSITIVE ones PASSED, because they assert
+ * `doesNotMatch(/error TS/)` and "Cannot find module" contains no `error TS`.
+ * A missing compiler read as "type-checks cleanly". CI reported five green type
+ * assertions over zero type-checking.
  *
- * A generated tsconfig is used rather than CLI flags because `--paths` is not
- * settable on the command line (TS6064). That mistake is instructive: with
- * CLI flags every fixture emitted `error TS6064`, which made the POSITIVE
- * tests fail loudly but would have let the NEGATIVE test pass on the wrong
- * error entirely. That is why the negative test asserts on the diagnostic TEXT
- * ("No BFF route matches"), not merely on "some error occurred".
+ * So the coverage moved to a lane with a toolchain — and this test exists so it
+ * cannot quietly disappear from there, which would restore the same blind spot
+ * with no red anywhere.
  */
-function typecheckFixture(t, body) {
-  const stem = `__route_type_probe_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
-  const file = path.join(CONSOLE_ROOT, `${stem}.ts`);
-  const cfg = path.join(CONSOLE_ROOT, `${stem}.tsconfig.json`);
-  t.after(() => {
-    for (const f of [file, cfg]) { try { fs.unlinkSync(f); } catch { /* already gone */ } }
-  });
-  fs.writeFileSync(file, body);
-  fs.writeFileSync(cfg, JSON.stringify({
-    compilerOptions: {
-      noEmit: true,
-      skipLibCheck: true,
-      strict: true,
-      module: 'esnext',
-      moduleResolution: 'bundler',
-      target: 'es2022',
-      lib: ['es2022', 'dom'],
-      baseUrl: '.',
-      paths: { '@/*': ['./*'] },
-      types: [],
-    },
-    files: [`./${stem}.ts`],
-  }, null, 2));
-  const tsc = path.join(CONSOLE_ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
-  const r = spawnSync(process.execPath, [tsc, '-p', cfg], { cwd: CONSOLE_ROOT, encoding: 'utf8' });
-  const out = `${r.stdout}${r.stderr}`;
-  // A configuration error (TS5xxx/TS6xxx) is NOT a verdict about the route map.
-  // Surface it loudly instead of letting a negative test pass on it.
-  assert.doesNotMatch(
-    out, /error TS[56]\d{3}/,
-    `tsc CONFIGURATION error — the fixture never type-checked, so any verdict below is meaningless:\n${out}`,
-  );
-  return out;
-}
-
-test('R16 — a KNOWN route type-checks', { timeout: 180_000 }, (t) => {
-  const out = typecheckFixture(t, [
-    "import { clientFetch } from '@/lib/client-fetch';",
-    "export const a = () => clientFetch('/api/loom/workspaces');",
-    '',
-  ].join('\n'));
-  assert.doesNotMatch(out, /error TS/, `a real route must compile:\n${out}`);
-});
-
-test('R16 — an UNKNOWN route FAILS TO COMPILE (this is the whole point)', { timeout: 180_000 }, (t) => {
-  const out = typecheckFixture(t, [
-    "import { clientFetch } from '@/lib/client-fetch';",
-    "export const a = () => clientFetch('/api/loom/workspacs');",
-    '',
-  ].join('\n'));
-  assert.match(out, /error TS/, `a bogus route MUST be a compile error, got:\n${out}`);
-  assert.match(
-    out, /No BFF route matches/,
-    `the diagnostic must name the problem, not read as an opaque type mismatch:\n${out}`,
-  );
-});
-
-test('R16 — a dynamic route accepts any single segment but not an extra one', { timeout: 180_000 }, (t) => {
-  const ok = typecheckFixture(t, [
-    "import { clientFetch } from '@/lib/client-fetch';",
-    "export const a = () => clientFetch('/api/items/lakehouse/abc123');",
-    '',
-  ].join('\n'));
-  assert.doesNotMatch(ok, /error TS/, `a dynamic segment must accept a concrete value:\n${ok}`);
-});
-
-test('R16 — a query string is stripped before matching', { timeout: 180_000 }, (t) => {
-  const out = typecheckFixture(t, [
-    "import { clientFetch } from '@/lib/client-fetch';",
-    "export const a = () => clientFetch('/api/loom/workspaces?take=5');",
-    '',
-  ].join('\n'));
-  assert.doesNotMatch(out, /error TS/, `?query must not break the match:\n${out}`);
-});
-
-test('R16 — a computed `string` path stays unconstrained (R17 covers those)', { timeout: 180_000 }, (t) => {
-  const out = typecheckFixture(t, [
-    "import { clientFetch } from '@/lib/client-fetch';",
-    'export const a = (u: string) => clientFetch(u);',
-    '',
-  ].join('\n'));
-  assert.doesNotMatch(out, /error TS/, `a wide string must still be accepted:\n${out}`);
-});
-
-test('R16 — a partially-concrete template (prefix + ${string}) still compiles', { timeout: 180_000 }, (t) => {
-  // This is the EXACT shape that broke five real call sites before the
-  // Extract<> clause was added (lib/components/admin/access-report-panel.tsx:100
-  // among them). TS infers `` `/api/access-governance/report${string}` `` — a
-  // template type that is WIDER than the union member `'/api/access-governance/report'`,
-  // so the plain `extends` direction fails and only the reverse direction
-  // (some route is assignable TO it) can accept it.
-  //
-  // NOTE the fixture must reproduce the inference, not merely resemble it: an
-  // earlier version wrote `const u = \`…\${qs}\`` and TS widened `u` to plain
-  // `string`, so the test passed with the Extract<> clause DELETED — it was
-  // proving nothing. The conditional interpolation below is what actually
-  // produces the template-literal type.
-  const out = typecheckFixture(t, [
-    "import { clientFetch } from '@/lib/client-fetch';",
-    'export const a = (qs: string) =>',
-    '  clientFetch(`/api/access-governance/report${qs ? `?${qs}` : \'\'}`);',
-    '',
-  ].join('\n'));
-  assert.doesNotMatch(out, /error TS/, `a prefix+\${string} template must compile:\n${out}`);
+test('the R16 compile-time suite still exists and still asserts the negative case', () => {
+  const spec = path.join(CONSOLE_ROOT, 'lib', '__tests__', 'api-route-typing.test.ts');
+  assert.ok(fs.existsSync(spec), `${spec} is missing — the R16 compile-time coverage has been deleted`);
+  const src = fs.readFileSync(spec, 'utf8');
+  assert.match(src, /FAILS TO COMPILE/, 'the negative case must still be asserted');
+  assert.match(src, /No BFF route matches/, 'it must still assert on the diagnostic text, not merely "some error"');
+  assert.match(src, /assertCompilerPresent/, 'it must still fail closed when tsc is absent');
+  assert.match(src, /clientFetch/, 'it must exercise clientFetch, not the type alias in isolation');
 });
