@@ -32,6 +32,8 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   auditLogContainer: vi.fn(),
   notificationsContainer: vi.fn(),
   accessAssignmentsContainer: vi.fn(),
+  approvalPoliciesContainer: vi.fn(),
+  featurePermissionsContainer: vi.fn(),
 }));
 vi.mock('@/lib/azure/rbac-client', () => ({ enforceAccessGrant: vi.fn() }));
 vi.mock('@/lib/azure/access-policy-client', () => ({ enforceAccessGrant: vi.fn() }));
@@ -42,7 +44,7 @@ import { POST as decisionPOST } from '../[id]/decision/route';
 import { getSession } from '@/lib/auth/session';
 import {
   accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
-  accessAssignmentsContainer,
+  accessAssignmentsContainer, approvalPoliciesContainer, featurePermissionsContainer,
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant } from '@/lib/azure/rbac-client';
 import { makePartitionedContainer, makeSinkContainer, type FakeContainer } from './partitioned-cosmos-fake';
@@ -53,6 +55,8 @@ const USER_B = { oid: 'user-b-oid', tid: TENANT, upn: 'bob@contoso.com' };     /
 const USER_C = { oid: 'user-c-oid', tid: TENANT, upn: 'carol@contoso.com' };   // bystander
 
 let wf: FakeContainer;
+let policies: FakeContainer;
+let grants: FakeContainer;
 
 function signIn(claims: Record<string, any>) {
   (getSession as any).mockReturnValue({ claims, exp: Date.now() / 1000 + 3600 });
@@ -94,7 +98,15 @@ const ORIGINAL_ADMIN_OID = process.env.LOOM_TENANT_ADMIN_OID;
 beforeEach(() => {
   vi.resetAllMocks();
   wf = makePartitionedContainer({ partitionKeyPath: '/tenantId' });
+  // Empty but REACHABLE: no approval policy names anyone, and no capability
+  // grant exists. So authority comes only from tenant-admin, which is what the
+  // bystander tests rely on. A container that THREW would take the
+  // "indeterminate" branch instead and prove nothing about the deny path.
+  policies = makePartitionedContainer({ partitionKeyPath: '/tenantId' });
+  grants = makePartitionedContainer({ partitionKeyPath: '/tenantId' });
   (accessRequestWorkflowContainer as any).mockResolvedValue(wf);
+  (approvalPoliciesContainer as any).mockResolvedValue(policies);
+  (featurePermissionsContainer as any).mockResolvedValue(grants);
   (auditLogContainer as any).mockResolvedValue(makeSinkContainer());
   (notificationsContainer as any).mockResolvedValue(makeSinkContainer());
   (accessAssignmentsContainer as any).mockResolvedValue(makeSinkContainer());

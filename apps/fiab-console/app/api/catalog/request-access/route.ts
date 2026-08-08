@@ -15,7 +15,7 @@
  * Returns: { ok, message, requestId } | { ok:false, error }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import {
   auditLogContainer, notificationsContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
@@ -138,7 +138,14 @@ export async function POST(req: NextRequest) {
       const arContainer = await accessRequestWorkflowContainer();
       const requestDoc: AccessRequestDoc = {
         id: crypto.randomUUID(),
-        tenantId: s.claims.oid,
+        // PARTITION KEY (/tenantId) — the ENTRA TENANT, never the requester's
+        // oid. An approver is a DIFFERENT user than the requester, so an
+        // oid-keyed partition put every request in a partition no approver
+        // could read: the inbox returned zero rows and the decision route 404'd.
+        // tenantScopeId() exists precisely so state written by one user resolves
+        // for any grantee in the same tenant. The requester stays addressable
+        // via `requesterId` below, which is what "my requests" queries on.
+        tenantId: tenantScopeId(s),
         kind: 'access-request',
         assetId,
         assetName,

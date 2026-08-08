@@ -69,13 +69,17 @@ export async function GET() {
   const oid = s.claims.oid;
 
   try {
-    // 1) F16 governed workflow — partitioned by requester oid (tenantId), so this
-    //    is a single-partition query. Scoped to data-product assets for this tab.
+    // 1) F16 governed workflow. The container is partitioned by /tenantId =
+    //    the ENTRA TENANT (tenantScopeId), so `tenantId` no longer identifies a
+    //    user — filtering on it here would return EVERY requester's rows as
+    //    "mine". The caller's own requests are the ones stamped with their oid
+    //    in `requesterId`, which is what this now queries. Scoped to
+    //    data-product assets for this tab.
     const wf = await accessRequestWorkflowContainer();
     const { resources: wfDocs } = await wf.items
       .query<AccessRequestDoc>({
         query:
-          'SELECT * FROM c WHERE c.tenantId = @oid AND c.kind = @k AND c.itemType = @t ORDER BY c.requestedAt DESC',
+          'SELECT * FROM c WHERE c.requesterId = @oid AND c.kind = @k AND c.itemType = @t ORDER BY c.requestedAt DESC',
         parameters: [
           { name: '@oid', value: oid },
           { name: '@k', value: 'access-request' },

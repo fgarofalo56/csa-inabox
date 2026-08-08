@@ -17,13 +17,16 @@
  *      the owner approves a purpose-bound request → status 'approved'/'completed',
  *      requesterId = the consumer's oid.
  *   2. F16 multi-tier workflow — the `access-request-workflow` container
- *      (PK /tenantId = requester oid): the final approval provisions a REAL
- *      Azure RBAC grant and marks the request status 'completed'.
+ *      (PK /tenantId = the Entra tenant via tenantScopeId): the final approval
+ *      provisions a REAL Azure RBAC grant and marks the request status
+ *      'completed'. The caller is identified by `requesterId`, not by the
+ *      partition key.
  *
  * Draft products: only their OWNER passes (ownership check), so previewing a
  * Draft's data is scoped to the owner — consumers can't reach it.
  */
 import type { SessionPayload } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { accessRequestsContainer, accessRequestWorkflowContainer } from '@/lib/azure/cosmos-client';
 
@@ -67,7 +70,12 @@ export async function resolveDataProductDataAccess(
     /* container absent/unprovisioned → no grant here, fall through */
   }
 
-  // 3) F16 completed workflow request (access-request-workflow, PK /tenantId=oid).
+  // 3) F16 completed workflow request (access-request-workflow, PK /tenantId =
+  //    the ENTRA TENANT via tenantScopeId — NOT the requester's oid, which is
+  //    what it used to be). Pinning the point-read partition to the caller's oid
+  //    would now target a partition that does not exist and silently return
+  //    nothing, so the read is scoped by the tenant and filtered to the caller
+  //    via `requesterId`, which is the field that actually identifies them.
   try {
     const wf = await accessRequestWorkflowContainer();
     const { resources } = await wf.items
@@ -80,7 +88,7 @@ export async function resolveDataProductDataAccess(
             { name: '@oid', value: oid },
           ],
         },
-        { partitionKey: oid },
+        { partitionKey: tenantScopeId(session) },
       )
       .fetchAll();
     if (resources.length > 0) return { allowed: true, via: 'access-request' };

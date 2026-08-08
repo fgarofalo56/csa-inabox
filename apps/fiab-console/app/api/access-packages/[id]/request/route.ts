@@ -14,7 +14,7 @@
  * Azure-native; no new grant primitive (reuses F16 → enforceAccessGrant).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   accessPackagesContainer, approvalPoliciesContainer, accessRequestWorkflowContainer,
@@ -95,7 +95,13 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
     for (const g of pkg.grants) {
       const doc: AccessRequestDoc = {
         id: crypto.randomUUID(),
-        tenantId: requesterId,
+        // PARTITION KEY (/tenantId) — the ENTRA TENANT, never a user oid.
+        // This was `requesterId`, which for an on-behalf request is a THIRD
+        // party's oid: the doc landed in a partition neither the admin who
+        // created it nor any approver could point-read, so the request was
+        // unreachable the moment it was written. The beneficiary stays
+        // addressable via `requesterId` below.
+        tenantId: tenantScopeId(s),
         kind: 'access-request',
         assetId: g.resourceRef,
         assetName: g.resourceName || g.resourceRef,
