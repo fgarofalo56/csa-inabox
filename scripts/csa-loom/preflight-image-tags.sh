@@ -196,6 +196,15 @@ if [ ! -f "$RESOLVER_PF" ]; then
   exit 1
 fi
 
+# Bound the per-ref retry budget. The resolver's defaults (6 attempts, 10s*n
+# backoff) are sized for a roll resolving ONE image; this loop walks every
+# adopted app, and data_plane_up() above has already established the registry is
+# reachable, so a long budget here would only slow a deploy down. Overridable
+# for a genuinely flaky estate.
+export LOOM_DIGEST_ATTEMPTS="${LOOM_PREFLIGHT_ATTEMPTS:-3}"
+export LOOM_DIGEST_ABSENT_ATTEMPTS="${LOOM_PREFLIGHT_ABSENT_ATTEMPTS:-2}"
+export LOOM_DIGEST_BACKOFF_SECONDS="${LOOM_PREFLIGHT_BACKOFF_SECONDS:-5}"
+
 # #3090 — THIS LOOP USED TO CONVICT TAGS IT COULD NOT READ, ON THE PATH THAT
 # GATES LIVE GOV CONTAINER APP ADOPTION. It was:
 #
