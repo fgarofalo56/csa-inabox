@@ -33,6 +33,10 @@ on:
         description: 'Keep resources up after provision AND run the post-deploy bootstrap (day-one: MSAL app-reg, Synapse SQL grants, Purview roles, Databricks SCIM, Spark PE). Skips teardown. Use for a real GCC install; leave false for the nightly validate-and-teardown ring.'
         type: boolean
         default: false
+      allow_existing_hub:
+        description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed GCC hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: commercial and gcch have carried this; gcc did not, because its guard could not fail in the first place.)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -105,8 +109,22 @@ jobs:
       # enforced at the CI layer. topology=tenant is rejected when an Admin Plane
       # (hub) RG already exists in the target sub; dlz-attach must name a NEW
       # subscription via target_subscription.
+      # Remove the CAUSE of the stderr banner, not just its effect — see the
+      # matching step in deploy-fiab-gcch.yml. Now that this lane's probe fails
+      # closed on a non-numeric answer, a dynamic-install banner would turn a
+      # working estate into a refusal, so the extension is installed up front.
+      # Fail-closed: no `|| true`.
+      - name: Pre-install the resource-graph CLI extension
+        run: |
+          set -e
+          az extension add --name resource-graph --upgrade --only-show-errors -o none
+          echo "resource-graph version: $(az extension show --name resource-graph --query version -o tsv | tr -d '\r')"
+
       - name: Topology guard
         id: topology_guard
+        env:
+          INPUT_ALLOW_EXISTING_HUB: ${{ inputs.allow_existing_hub }}
+          TRIGGER: ${{ github.event_name }}
         run: |
           set -e
           TOPOLOGY="${CSA_LOOM_TOPOLOGY:-tenant}"
@@ -121,10 +139,58 @@ jobs:
             # blocked by an old hub still running elsewhere as a UAT ring
             # (audit-t156 D3/Q10). Still blocks an accidental double-stamp into
             # the same sub.
-            SCOPE_SUB=$(az account show --query id -o tsv)
-            EXISTING=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
-            if [ "${EXISTING:-0}" != "0" ]; then
-              echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub — use topology=dlz-attach with target_subscription."; exit 1
+            # FAIL CLOSED ON UNKNOWN (deploy-integrity R6/R7) — adopted from
+            # deploy-fiab-gcch.yml 2026-08-08.
+            #
+            # This probe previously read:
+            #   EXISTING=$(az graph query … 2>/dev/null || echo "0")
+            # which converted an auth failure, a missing resource-graph
+            # extension, or a throttle into the string "0" — i.e. "no hub
+            # exists" — and let the deploy proceed against a subscription that
+            # might already hold one. The guard could not fail, so its verdict
+            # carried no information.
+            #
+            # This is why the two Gov lanes disagreed on 2026-08-08: gcch's
+            # hardened probe REFUSED on an unreadable answer (correctly), while
+            # gcc's returned a confident "0" it had not established. GCC's green
+            # was the absence of a check, not the presence of a clean estate —
+            # the guard-adoption gap: the correct fix existed in a sibling and
+            # this lane never took it.
+            SCOPE_SUB=$(az account show --query id -o tsv 2>&1) || {
+              echo "::error::Could not resolve the active subscription (az account show failed), so the hub-existence check cannot even be scoped. Refusing. Detail: ${SCOPE_SUB:-<no output>}"
+              exit 1
+            }
+            SCOPE_SUB=$(printf '%s' "$SCOPE_SUB" | tr -d '\r\n')
+            # stderr goes to a FILE, never to /dev/null and never merged into
+            # the numeric capture: the CLI's preview-extension banner is written
+            # to stderr and would otherwise contaminate the count (the exact
+            # defect fixed in gcch on the same day), while discarding it would
+            # destroy the diagnosis.
+            HUB_PROBE_ERR=$(mktemp)
+            if ! HUB_PROBE_RAW=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>"$HUB_PROBE_ERR"); then
+              HUB_PROBE_STDERR=$(head -c 2000 "$HUB_PROBE_ERR" | tr -d '\r')
+              rm -f "$HUB_PROBE_ERR"
+              echo "::error::Could NOT read the target subscription to determine whether a CSA Loom hub already exists, so the answer is UNKNOWN — not 'none'. Refusing rather than risk stamping a second Console. Resolve the read (Reader on the subscription for the GCC deploy SP, and the resource-graph CLI extension) and re-run. Detail: ${HUB_PROBE_STDERR:-<no stderr>}"
+              exit 1
+            fi
+            HUB_PROBE_STDERR=$(head -c 2000 "$HUB_PROBE_ERR" | tr -d '\r')
+            rm -f "$HUB_PROBE_ERR"
+            EXISTING=$(printf '%s' "$HUB_PROBE_RAW" | tr -d '\r\n')
+            case "$EXISTING" in
+              ''|*[!0-9]*)
+                echo "::error::The hub-existence probe exited 0 but returned a non-numeric result (${EXISTING:-<empty>}), so whether a hub exists is UNVERIFIED. Refusing. az stderr was: ${HUB_PROBE_STDERR:-<empty>}"; exit 1 ;;
+            esac
+            if [ "$EXISTING" != "0" ]; then
+              # Brownfield parity with gcch/commercial: a scheduled reconcile
+              # runs against the existing hub by design; an operator dispatch
+              # against one must opt in explicitly.
+              if [ "${INPUT_ALLOW_EXISTING_HUB:-false}" = "true" ]; then
+                echo "::notice::A CSA Loom hub already exists in this subscription ($EXISTING rg-csa-loom-admin-* RG) and allow_existing_hub=true — reconciling the EXISTING admin RG incrementally. No second Console is stamped."
+              elif [ "$TRIGGER" = "schedule" ]; then
+                echo "::notice::Scheduled reconcile against the existing GCC hub ($EXISTING rg-csa-loom-admin-* RG) — proceeding incrementally, as deploy-fiab-commercial.yml does on its schedule. An operator DISPATCH against an existing hub still requires allow_existing_hub=true."
+              else
+                echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub. To reconcile/retry the EXISTING hub, re-dispatch with allow_existing_hub=true. To add a NEW landing zone, use topology=dlz-attach with target_subscription."; exit 1
+              fi
             fi
           fi
 
