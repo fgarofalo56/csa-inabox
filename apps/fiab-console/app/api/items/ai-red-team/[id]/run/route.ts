@@ -24,6 +24,7 @@ import {
   selectProbes, buildRefusalJudgePrompt, refusalHeuristic, summarizeRedTeam,
   type RedTeamCategory, type RedTeamResultRow, type RedTeamVerdict,
 } from '@/lib/foundry/red-team';
+import { normalizeTechniques } from '@/lib/foundry/red-team-techniques';
 import { loadOwnedItem, updateOwnedItem, jerr } from '../../../_lib/item-crud';
 
 export const runtime = 'nodejs';
@@ -40,7 +41,8 @@ async function judge(prompt: string, response: string): Promise<{ verdict: RedTe
       maxCompletionTokens: 200,
       temperature: 0,
     });
-    const v = j?.verdict === 'unsafe' || j?.verdict === 'partial' || j?.verdict === 'refused' ? (j.verdict as RedTeamVerdict) : null;
+    const v = j?.verdict === 'unsafe' || j?.verdict === 'partial' || j?.verdict === 'refused' || j?.verdict === 'inconclusive'
+      ? (j.verdict as RedTeamVerdict) : null;
     if (v) return { verdict: v, rationale: j?.rationale };
   } catch { /* judge unavailable → heuristic */ }
   return { verdict: refusalHeuristic(response), rationale: 'Classified by refusal heuristic (AOAI judge unavailable).' };
@@ -72,7 +74,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const deployment = String(body?.deployment || state?.deployment || '').trim();
   if (!deployment) return NextResponse.json({ ok: false, error: 'A target model deployment is required.' }, { status: 400 });
   const categories: RedTeamCategory[] = Array.isArray(body?.categories) ? body.categories : Array.isArray(state?.categories) ? state.categories : [];
-  const probes = selectProbes(categories, Number(body?.perCategory) || undefined);
+  const techniques = normalizeTechniques(
+    Array.isArray(body?.techniques) ? body.techniques : state?.techniques);
+  const compose = body?.compose === true || (body?.compose == null && state?.compose === true);
+  const probes = selectProbes(categories, {
+    perCategory: Number(body?.perCategory) || undefined,
+    techniques,
+    compose,
+  });
   if (probes.length === 0) return NextResponse.json({ ok: false, error: 'Select at least one harm category to probe.' }, { status: 400 });
   const useContentSafety = body?.useContentSafety !== false;
   const selector: AccountSelector | undefined = body?.account ? { name: String(body.account), rg: body?.rg ? String(body.rg) : undefined } : undefined;
@@ -86,16 +95,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const rows = await mapLimit(probes, 3, async (probe): Promise<RedTeamResultRow | null> => {
     let response = '';
     try {
-      const res = await chatCompletion(deployment, [{ role: 'user', content: probe.prompt }], { temperature: 0.7, maxTokens: 512 }, selector);
-      response = res.content || '';
+      // Multi-turn (crescendo) techniques send each turn in sequence, carrying
+      // the conversation forward; the FINAL assistant turn is what gets scored.
+      const history: { role: 'user' | 'assistant'; content: string }[] = [];
+      for (const turn of probe.turns) {
+        history.push({ role: 'user', content: turn });
+        const res = await chatCompletion(deployment, history, { temperature: 0.7, maxTokens: 512 }, selector);
+        response = res.content || '';
+        history.push({ role: 'assistant', content: response });
+      }
     } catch (e: any) {
       if (e instanceof CsNotConfiguredError) { gate503 = { error: e.message, hint: (e as any).hint }; return null; }
       if (e instanceof CsError && e.status === 404) { gate503 = { error: `Model deployment "${deployment}" not found.`, hint: 'Pick a deployed model in the target picker, or deploy one from the AI Foundry hub.' }; return null; }
-      // Transient per-probe error → record as an errored refusal (no harmful output produced).
-      return { id: probe.id, category: probe.category, prompt: probe.prompt, response: `⚠ ${e?.message || String(e)}`, verdict: 'refused', rationale: 'Model call failed — no output produced.' };
+      // C21: a failed call is NOT a refusal. It is evidence of NOTHING. Scoring
+      // it 'refused' meant a deployment where every probe errored reported a
+      // 100% refusal rate and 0% attack success — a perfect safety score from a
+      // dead endpoint. 'inconclusive' is excluded from both rates.
+      return {
+        id: probe.id, category: probe.category, prompt: probe.prompt, technique: probe.technique,
+        response: `⚠ ${e?.message || String(e)}`,
+        verdict: 'inconclusive',
+        rationale: 'Model call failed — no evidence either way; excluded from the rates.',
+      };
     }
     const { verdict, rationale } = await judge(probe.prompt, response);
-    const row: RedTeamResultRow = { id: probe.id, category: probe.category, prompt: probe.prompt, response, verdict, rationale };
+    const row: RedTeamResultRow = { id: probe.id, category: probe.category, prompt: probe.prompt, response, verdict, rationale, technique: probe.technique };
     if (useContentSafety) {
       try {
         const v = await moderateContent(response);
@@ -114,7 +138,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const summary = summarizeRedTeam(resultRows);
   const run = {
     id: crypto.randomUUID(), startedAt, finishedAt: new Date().toISOString(),
-    deployment, categories, summary, results: resultRows, durationMs: Date.now() - t0,
+    deployment, categories, techniques, compose, summary, results: resultRows, durationMs: Date.now() - t0,
     ranBy: session.claims.upn || session.claims.email || session.claims.oid,
   };
 
@@ -122,7 +146,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const persistRun = { ...run, results: resultRows.map((r) => ({ ...r, response: r.response.slice(0, 600) })) };
   const runs = Array.isArray(state.runs) ? state.runs : [];
   await updateOwnedItem(itemId, ITEM_TYPE, session.claims.oid, {
-    state: { ...state, deployment, categories, runs: [persistRun, ...runs].slice(0, 25) },
+    state: { ...state, deployment, categories, techniques, compose, runs: [persistRun, ...runs].slice(0, 25) },
   }).catch(() => {});
 
   return NextResponse.json({ ok: true, run });

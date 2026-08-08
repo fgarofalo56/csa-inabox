@@ -29,21 +29,33 @@ import { NewItemCreateGate } from './new-item-gate';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useItemState } from './palantir/shared';
 import { RED_TEAM_CATEGORIES, type RedTeamCategory } from '@/lib/foundry/red-team';
+import { RED_TEAM_TECHNIQUES } from '@/lib/foundry/red-team-techniques';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 interface RedTeamResultLite {
   id: string; category: string; prompt: string; response: string;
-  verdict: 'refused' | 'partial' | 'unsafe'; rationale?: string; safetySeverity?: number; safetyCategory?: string;
+  verdict: 'refused' | 'partial' | 'unsafe' | 'inconclusive'; rationale?: string; safetySeverity?: number; safetyCategory?: string;
+  technique?: string;
+}
+interface RedTeamCoverageLite {
+  techniques: string[]; techniquesNotExercised: string[];
+  categoriesProbed: string[]; categoriesNotProbed: string[];
+  multiTurn: boolean; composed: boolean;
+  scoredProbes: number; inconclusiveProbes: number;
+  scoreIsMeaningful: boolean; scopeStatement: string;
 }
 interface RedTeamSummaryLite {
-  total: number; refused: number; partial: number; unsafe: number;
+  total: number; refused: number; partial: number; unsafe: number; inconclusive?: number;
   refusalRate: number; attackSuccessRate: number;
-  byCategory: Record<string, { total: number; refused: number; failed: number }>;
+  byCategory: Record<string, { total: number; refused: number; failed: number; inconclusive?: number }>;
+  byTechnique?: Record<string, { total: number; refused: number; failed: number; inconclusive?: number }>;
+  coverage?: RedTeamCoverageLite;
 }
 interface RedTeamRunLite { id: string; startedAt: string; deployment: string; categories: string[]; summary: RedTeamSummaryLite; results: RedTeamResultLite[]; ranBy: string }
 interface RedTeamState extends Record<string, unknown> {
   deployment?: string; account?: string; categories?: RedTeamCategory[]; runs?: RedTeamRunLite[];
+  techniques?: string[]; compose?: boolean;
 }
 
 const useStyles = makeStyles({
@@ -63,7 +75,46 @@ const useStyles = makeStyles({
   hint: { color: tokens.colorNeutralForeground3 },
 });
 
-const verdictColor = (v: string): 'success' | 'warning' | 'danger' => v === 'refused' ? 'success' : v === 'partial' ? 'warning' : 'danger';
+const verdictColor = (v: string): 'success' | 'warning' | 'danger' | 'informative' =>
+  v === 'refused' ? 'success' : v === 'partial' ? 'warning' : v === 'inconclusive' ? 'informative' : 'danger';
+
+/**
+ * C21 — the scope disclosure. A refusal/attack-success rate WITHOUT the scope
+ * that produced it is the defect this component exists to prevent: the surface
+ * used to render "Attack success 0%" in hero type from 20 plaintext probes with
+ * no caveat at all, which reads as "this deployment is safe" and is not what
+ * was measured. This bar is NOT optional and NOT dismissible — it renders on
+ * every run, and it is `warning` (not `info`) whenever the run is too narrow to
+ * support a safety claim.
+ */
+function ScopeDisclosure({ coverage }: { coverage?: RedTeamCoverageLite }) {
+  if (!coverage) {
+    // A legacy run persisted before coverage existed. Say so — never imply the
+    // score was broader than a plaintext baseline.
+    return (
+      <MessageBar intent="warning" layout="multiline">
+        <MessageBarBody>
+          <MessageBarTitle>Scope unknown — this run predates coverage tracking</MessageBarTitle>
+          This score was produced before Loom recorded which techniques a scan exercised. Treat it as a
+          plaintext baseline only: it does not establish that the deployment is safe. Re-run the scan to get a
+          scored result with its scope.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+  return (
+    <MessageBar intent={coverage.scoreIsMeaningful ? 'info' : 'warning'} layout="multiline">
+      <MessageBarBody>
+        <MessageBarTitle>
+          {coverage.scoreIsMeaningful
+            ? 'What this score covers'
+            : 'This score does NOT establish that the deployment is safe'}
+        </MessageBarTitle>
+        {coverage.scopeStatement}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
 
 export function AiRedTeamEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -79,8 +130,22 @@ export function AiRedTeamEditor({ item, id }: { item: FabricItemType; id: string
   const [err, setErr] = useState<string | null>(null);
 
   const categories = useMemo(() => Array.isArray(state.categories) ? state.categories : [], [state.categories]);
+  const techniques = useMemo(
+    () => (Array.isArray(state.techniques) && state.techniques.length ? state.techniques : ['plaintext']),
+    [state.techniques]);
+  const compose = state.compose === true;
   const runs = useMemo(() => Array.isArray(state.runs) ? state.runs : [], [state.runs]);
   useEffect(() => { if (runs[0]) setLastRun(runs[0]); }, [runs]);
+
+  const toggleTechnique = useCallback((tid: string, on: boolean) => {
+    setState((p) => {
+      const cur = Array.isArray(p.techniques) && p.techniques.length ? p.techniques : ['plaintext'];
+      const next = on ? [...new Set([...cur, tid])] : cur.filter((t) => t !== tid);
+      // Plaintext is the baseline and always runs — a scan with no technique at
+      // all would silently fall back to it anyway, so keep that visible.
+      return { ...p, techniques: next.length ? next : ['plaintext'] };
+    });
+  }, [setState]);
 
   const loadDeployments = useCallback(async () => {
     setDepGate(null);
@@ -110,7 +175,7 @@ export function AiRedTeamEditor({ item, id }: { item: FabricItemType; id: string
       if (dirty) await save();
       const r = await clientFetch(`/api/items/ai-red-team/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ deployment: state.deployment, account: state.account || undefined, categories, useContentSafety: useCs }),
+        body: JSON.stringify({ deployment: state.deployment, account: state.account || undefined, categories, techniques, compose, useContentSafety: useCs }),
       });
       const j = await r.json();
       if (!j.ok) { setErr(j.hint ? `${j.error} — ${j.hint}` : (j.error || `HTTP ${r.status}`)); return; }
@@ -118,7 +183,7 @@ export function AiRedTeamEditor({ item, id }: { item: FabricItemType; id: string
       setState((p) => ({ ...p, runs: [{ ...j.run, results: (j.run.results || []).map((x: any) => ({ ...x, response: String(x.response).slice(0, 600) })) }, ...runs] }));
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setRunning(false); }
-  }, [id, dirty, save, state.deployment, state.account, categories, useCs, runs, setState]);
+  }, [id, dirty, save, state.deployment, state.account, categories, techniques, compose, useCs, runs, setState]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -201,30 +266,95 @@ export function AiRedTeamEditor({ item, id }: { item: FabricItemType; id: string
                 {running && <ProgressBar />}
               </div>
 
+              {/* Attack techniques (C21) — the strata the score is computed over. */}
+              <div className={s.card}>
+                <span className={s.sectionHeader}><ShieldErrorRegular className={s.sectionIcon} aria-hidden /><Subtitle2>Attack techniques</Subtitle2>
+                  <div style={{ flex: 1 }} /><Badge appearance="tint" color="brand">{techniques.length} selected</Badge>
+                </span>
+                <Caption1 className={s.hint}>
+                  Plaintext alone is a baseline, not a safety result — published bypasses overwhelmingly live in the
+                  encoded, composed and multi-turn strata. Whatever you leave unchecked is named explicitly in the
+                  scope disclosure printed with the score.
+                </Caption1>
+                <div className={s.catGrid}>
+                  {RED_TEAM_TECHNIQUES.map((t) => (
+                    <Checkbox
+                      key={t.id}
+                      checked={techniques.includes(t.id)}
+                      disabled={t.id === 'plaintext'}
+                      onChange={(_, d) => toggleTechnique(t.id, !!d.checked)}
+                      label={<span>{t.label} <Caption1 className={s.hint}>— {t.description}</Caption1></span>}
+                    />
+                  ))}
+                </div>
+                <Switch
+                  checked={compose}
+                  onChange={(_, d) => setState((p) => ({ ...p, compose: d.checked }))}
+                  label="Also run composed probes (stack each pair of selected single-turn converters)"
+                />
+              </div>
+
               {/* Results */}
               {lastRun && (
                 <div className={s.card}>
                   <span className={s.sectionHeader}><ShieldErrorRegular className={s.sectionIcon} aria-hidden /><Subtitle2>Scan results</Subtitle2></span>
+                  {/* C21 — the scope comes BEFORE the number, every time. */}
+                  <ScopeDisclosure coverage={lastRun.summary.coverage} />
                   <div className={s.scoreRow}>
-                    <div className={s.metric}><Caption1 className={s.hint}>Refusal rate</Caption1><span className={s.metricBig} style={{ color: tokens.colorPaletteGreenForeground1 }}>{lastRun.summary.refusalRate}%</span></div>
-                    <div className={s.metric}><Caption1 className={s.hint}>Attack success</Caption1><span className={s.metricBig} style={{ color: lastRun.summary.attackSuccessRate > 0 ? tokens.colorPaletteRedForeground1 : tokens.colorNeutralForeground1 }}>{lastRun.summary.attackSuccessRate}%</span></div>
+                    <div className={s.metric}><Caption1 className={s.hint}>Refusal rate<br />(of scored probes)</Caption1><span className={s.metricBig} style={{ color: tokens.colorPaletteGreenForeground1 }}>{lastRun.summary.refusalRate}%</span></div>
+                    <div className={s.metric}>
+                      <Caption1 className={s.hint}>Attack success<br />(of scored probes)</Caption1>
+                      <span className={s.metricBig} style={{ color: lastRun.summary.attackSuccessRate > 0 ? tokens.colorPaletteRedForeground1 : tokens.colorNeutralForeground1 }}>{lastRun.summary.attackSuccessRate}%</span>
+                      {/* A 0% is only ever a pass-shaped statement when the run was broad
+                          enough to support it. Otherwise say what it actually means. */}
+                      {lastRun.summary.attackSuccessRate === 0 && !lastRun.summary.coverage?.scoreIsMeaningful && (
+                        <Caption1 className={s.hint}>0% across a baseline-only run — not a safety result.</Caption1>
+                      )}
+                    </div>
                     <div className={s.row}>
                       <Badge appearance="tint" color="success">{lastRun.summary.refused} refused</Badge>
                       {lastRun.summary.partial > 0 && <Badge appearance="tint" color="warning">{lastRun.summary.partial} partial</Badge>}
                       {lastRun.summary.unsafe > 0 && <Badge appearance="tint" color="danger">{lastRun.summary.unsafe} unsafe</Badge>}
+                      {(lastRun.summary.inconclusive ?? 0) > 0 && (
+                        <Badge appearance="tint" color="informative">{lastRun.summary.inconclusive} inconclusive</Badge>
+                      )}
                       <Caption1 className={s.hint}>{lastRun.summary.total} probes · {lastRun.deployment}</Caption1>
                     </div>
                   </div>
+                  {/* Per-technique breakdown — a single headline number hides which
+                      stratum actually failed. */}
+                  {lastRun.summary.byTechnique && Object.keys(lastRun.summary.byTechnique).length > 0 && (
+                    <div className={s.tableWrap}>
+                      <Table size="small" aria-label="Results by technique">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Technique</TableHeaderCell><TableHeaderCell>Probes</TableHeaderCell>
+                          <TableHeaderCell>Refused</TableHeaderCell><TableHeaderCell>Succeeded</TableHeaderCell><TableHeaderCell>Inconclusive</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {Object.entries(lastRun.summary.byTechnique).map(([tid, c]) => (
+                            <TableRow key={tid}>
+                              <TableCell>{tid}</TableCell>
+                              <TableCell>{c.total}</TableCell>
+                              <TableCell>{c.refused}</TableCell>
+                              <TableCell>{c.failed > 0 ? <Badge appearance="tint" color="danger">{c.failed}</Badge> : c.failed}</TableCell>
+                              <TableCell>{c.inconclusive ?? 0}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
                   <div className={s.tableWrap}>
                     <Table size="small" aria-label="Red-team results">
                       <TableHeader><TableRow>
-                        <TableHeaderCell>Category</TableHeaderCell><TableHeaderCell>Probe</TableHeaderCell>
+                        <TableHeaderCell>Category</TableHeaderCell><TableHeaderCell>Technique</TableHeaderCell><TableHeaderCell>Probe</TableHeaderCell>
                         <TableHeaderCell>Verdict</TableHeaderCell><TableHeaderCell>Safety</TableHeaderCell><TableHeaderCell>Response</TableHeaderCell>
                       </TableRow></TableHeader>
                       <TableBody>
                         {lastRun.results.map((r) => (
                           <TableRow key={r.id}>
                             <TableCell>{r.category}</TableCell>
+                            <TableCell>{r.technique || 'plaintext'}</TableCell>
                             <TableCell><span className={s.snippet} title={r.prompt}>{r.prompt}</span></TableCell>
                             <TableCell><Badge appearance="filled" color={verdictColor(r.verdict)}>{r.verdict}</Badge></TableCell>
                             <TableCell>{r.safetySeverity != null ? `${r.safetyCategory || '?'} ${r.safetySeverity}` : <span className={s.hint}>—</span>}</TableCell>
@@ -249,18 +379,42 @@ export function AiRedTeamEditor({ item, id }: { item: FabricItemType; id: string
                   <Table size="small" aria-label="Scan history">
                     <TableHeader><TableRow>
                       <TableHeaderCell>Started</TableHeaderCell><TableHeaderCell>Deployment</TableHeaderCell>
-                      <TableHeaderCell>Probes</TableHeaderCell><TableHeaderCell>Refusal</TableHeaderCell><TableHeaderCell>Attack success</TableHeaderCell>
+                      <TableHeaderCell>Probes</TableHeaderCell><TableHeaderCell>Techniques</TableHeaderCell>
+                      <TableHeaderCell>Refusal</TableHeaderCell><TableHeaderCell>Attack success</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {runs.map((rn) => (
-                        <TableRow key={rn.id}>
-                          <TableCell>{new Date(rn.startedAt).toLocaleString()}</TableCell>
-                          <TableCell>{rn.deployment}</TableCell>
-                          <TableCell>{rn.summary.total}</TableCell>
-                          <TableCell><Badge appearance="tint" color="success">{rn.summary.refusalRate}%</Badge></TableCell>
-                          <TableCell><Badge appearance="tint" color={rn.summary.attackSuccessRate > 0 ? 'danger' : 'success'}>{rn.summary.attackSuccessRate}%</Badge></TableCell>
-                        </TableRow>
-                      ))}
+                      {runs.map((rn) => {
+                        const cov = rn.summary.coverage;
+                        // C21: a 0% from a baseline-only run is NOT a green pass.
+                        // Colouring it 'success' was the history table's copy of
+                        // the same overstatement the results panel made.
+                        const meaningful = !!cov?.scoreIsMeaningful;
+                        const asColor = rn.summary.attackSuccessRate > 0
+                          ? 'danger'
+                          : meaningful ? 'success' : 'informative';
+                        return (
+                          <TableRow key={rn.id}>
+                            <TableCell>{new Date(rn.startedAt).toLocaleString()}</TableCell>
+                            <TableCell>{rn.deployment}</TableCell>
+                            <TableCell>
+                              {rn.summary.total}
+                              {(rn.summary.inconclusive ?? 0) > 0 && (
+                                <Caption1 className={s.hint}> ({rn.summary.inconclusive} inconclusive)</Caption1>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <span className={s.snippet} title={cov?.scopeStatement || 'Scope not recorded for this run.'}>
+                                {cov ? cov.techniques.join(', ') : 'plaintext (legacy run)'}
+                              </span>
+                            </TableCell>
+                            <TableCell><Badge appearance="tint" color="success">{rn.summary.refusalRate}%</Badge></TableCell>
+                            <TableCell>
+                              <Badge appearance="tint" color={asColor}>{rn.summary.attackSuccessRate}%</Badge>
+                              {!meaningful && <Caption1 className={s.hint}> baseline only</Caption1>}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>

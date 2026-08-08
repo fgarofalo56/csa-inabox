@@ -146,7 +146,7 @@ describe('AiRedTeamEditor — scan request shape', () => {
     renderEditor();
 
     await waitFor(() => expect(runButton()).toBeEnabled());
-    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(screen.getByRole('switch', { name: /Content Safety/i }));
     fireEvent.click(runButton());
 
     await waitFor(() => {
@@ -185,14 +185,98 @@ describe('AiRedTeamEditor — score rendering (safety-critical)', () => {
     fireEvent.click(runButton());
 
     await waitFor(() => expect(screen.getByText('Scan results')).toBeInTheDocument());
-    // Both numbers present and attached to the right labels.
-    expect(screen.getByText('Refusal rate')).toBeInTheDocument();
+    // Both numbers present and attached to the right labels. The labels now say
+    // "of scored probes" (C21) because the rates exclude inconclusive probes.
+    expect(screen.getByText(/Refusal rate/)).toBeInTheDocument();
     expect(screen.getByText('30%')).toBeInTheDocument();
-    expect(screen.getByText('Attack success')).toBeInTheDocument();
+    expect(screen.getByText(/Attack success/)).toBeInTheDocument();
     expect(screen.getByText('70%')).toBeInTheDocument();
     // Counts are surfaced too, so a reader can sanity-check the percentages.
     expect(screen.getByText('3 refused')).toBeInTheDocument();
     expect(screen.getByText('7 unsafe')).toBeInTheDocument();
+  });
+
+  // ── C21 — the surface must never present a rate without its scope ──────────
+  it('renders the scope disclosure ABOVE the score, and refuses to let a baseline 0% read as safe', async () => {
+    // THE regression test for C21: a 0% attack-success from a plaintext-only run
+    // used to render as a bare hero number (and a green badge in history), which
+    // reads as "this deployment is safe". It has not shown that.
+    installFetch({
+      deployments: [{ name: 'gpt-4o' }],
+      itemState: { deployment: 'gpt-4o', categories: ['violence'] },
+      run: () =>
+        new Response(JSON.stringify({
+          ok: true,
+          run: {
+            ...emptyRun(),
+            summary: {
+              total: 2, refused: 2, partial: 0, unsafe: 0, inconclusive: 0,
+              refusalRate: 100, attackSuccessRate: 0, byCategory: {}, byTechnique: {},
+              coverage: {
+                techniques: ['plaintext'],
+                techniquesNotExercised: ['base64', 'crescendo'],
+                categoriesProbed: ['violence'], categoriesNotProbed: ['hate'],
+                multiTurn: false, composed: false,
+                scoredProbes: 2, inconclusiveProbes: 0,
+                scoreIsMeaningful: false,
+                scopeStatement: 'Scope: 2 scored probes across 1 harm category using 1 technique (plaintext). This is a PLAINTEXT BASELINE run only.',
+              },
+            },
+            results: [],
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } }) as any,
+    });
+    renderEditor();
+
+    await waitFor(() => expect(runButton()).toBeEnabled());
+    fireEvent.click(runButton());
+    await waitFor(() => expect(screen.getByText('Scan results')).toBeInTheDocument());
+
+    // The headline caveat is present and unambiguous.
+    expect(
+      screen.getByText('This score does NOT establish that the deployment is safe'),
+    ).toBeInTheDocument();
+    // The scope sentence itself is rendered, naming what actually ran.
+    expect(screen.getByText(/PLAINTEXT BASELINE run only/)).toBeInTheDocument();
+    // And the 0% carries its own inline qualifier (rendered on the results panel
+    // AND on the history row — both must refuse to imply a pass).
+    expect(screen.getAllByText(/not a safety result/i).length).toBeGreaterThan(0);
+  });
+
+  it('surfaces inconclusive probes rather than folding them into the refusal rate', async () => {
+    installFetch({
+      deployments: [{ name: 'gpt-4o' }],
+      itemState: { deployment: 'gpt-4o', categories: ['violence'] },
+      run: () =>
+        new Response(JSON.stringify({
+          ok: true,
+          run: {
+            ...emptyRun(),
+            summary: {
+              total: 5, refused: 1, partial: 1, unsafe: 0, inconclusive: 3,
+              refusalRate: 50, attackSuccessRate: 50, byCategory: {}, byTechnique: {},
+              coverage: {
+                techniques: ['plaintext', 'base64'], techniquesNotExercised: [],
+                categoriesProbed: ['violence'], categoriesNotProbed: [],
+                multiTurn: false, composed: false,
+                scoredProbes: 2, inconclusiveProbes: 3,
+                scoreIsMeaningful: true,
+                scopeStatement: 'Scope: 2 scored probes. 3 probes produced no evidence.',
+              },
+            },
+            results: [],
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } }) as any,
+    });
+    renderEditor();
+
+    await waitFor(() => expect(runButton()).toBeEnabled());
+    fireEvent.click(runButton());
+    await waitFor(() => expect(screen.getByText('Scan results')).toBeInTheDocument());
+
+    // The inconclusive count is visible — it is not silently credited as a refusal.
+    expect(screen.getByText('3 inconclusive')).toBeInTheDocument();
+    expect(screen.getByText(/3 probes produced no evidence/)).toBeInTheDocument();
   });
 
   it('renders each probe row with its verdict so an unsafe response is visible', async () => {
