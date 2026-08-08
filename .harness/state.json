@@ -782,7 +782,7 @@
       "durable_fix": "The checker now RE-BREAKS FOUR REAL ROUTES IN MEMORY EVERY RUN (single-item and collection x both blindnesses) and fails if the verdict does not change. A moved anchor is a hard FAILURE, never a skip. It already caught the agent's own dashboard migration shifting an anchor mid-change.",
       "honestly_not_fixed": "(1) A bare claims.oid still proves PRESENCE, not USE. Removing it as a signal takes the tree 0 -> 205 violations: ~205 routes hand-roll owner scoping instead of calling a named guard. That conversion is a PROGRAM, not a tweak - recorded in the header, with a probe that documents it must strip the attribution too, so the boundary is EXECUTABLE not prose. (2) The remit still FAILS OPEN - 119 routes out of scope; closing it needs the 80 signal-less ones triaged. Both are candidate follow-up lanes. 16 of the 21 surfaced handlers were allowlisted; each reason checked against the backing helper's SOURCE (e.g. asset-store.ts:41-78 for the tenantOf(session) partition claim), not inferred. NOT DEPLOYED, NOT BROWSER-VERIFIED - CI change plus BFF authorization, no cloud-specific path.",
       "merged": "2026-08-08 (#3134)",
-      "deploy_status": "MERGED, NOT DEPLOYED — estate still 10365e76; full-app-deploy-commercial 31243230253 queued >70min on saturated hosted runners."
+      "deploy_status": "DEPLOYED AND VERIFIED LIVE 2026-08-08 on sha 2bc3489e — PATCH now takes session+params and authorizes."
     },
     {
       "id": "C21",
@@ -1715,6 +1715,13 @@
       "settled_for_operator": "The guard now distinguishes three cases, two proven live: schedule -> scheduled-reconcile proceeds incrementally; dispatch WITH allow_existing_hub=true -> proceeds (PROVEN GREEN); dispatch WITHOUT it -> refuses with a named remediation (PROVEN). So 'RE-ENABLE GCCH' IS NOW SAFE TO HAND OVER, and an empty CSA_LOOM_TARGET_SUBSCRIPTION is correct for that path (agent checked every use: ${VAR:+...} no-ops at 278/284, dlz-attach branch at 389/393/399, :-$ADMIN_SUB default at 430 - no unguarded use exists).",
       "gcc_still_unproven": "GCC REMAINS UNPROVEN. Its guard fix is in #3139 but has NEVER been exercised live. Given its earlier SUCCESS was the hollow green (2>/dev/null || echo \"0\"), GCC MUST NOT be re-enabled on the strength of any existing receipt - it needs its own enable->whatif->disable cycle once #3139 merges. The agent flagged this itself rather than letting the gcch green create a halo over it.",
       "api_workaround": "Routed around the persistent HTTP 403 on actions/runs/{id}/jobs by using commits/{sha}/check-runs and check-runs/{id}/annotations, which stayed available. Useful recipe when the jobs endpoint is burst-limited."
+    },
+    "DEPLOYED_AND_VERIFIED_2026-08-08": {
+      "estate": "ESTATE ADVANCED 10365e76 -> 2bc3489e (10 commits). Live build-marker: sha=2bc3489ef1a13fc45ffdaba813967c746f619eca stamp=31243230253 - the stamp matches the dispatched run, so this is provably THAT deploy and not a coincidental roll.",
+      "security_fix_LIVE": "VERIFIED IN THE RUNNING CODE, not just the marker. The live SHA IS the C22 commit ('fix(security): the route guard passed on a name in a SIBLING handler and on an unused IMPORT'). Read at 2bc3489e, semantic-model/[id]/model/route.ts:294 now reads 'export const PATCH = withSession<{id:string}>(async (req, { session, params }) => {' - it TAKES session and params, where on the old live SHA it took only (req) and ran no authorization before reaching XMLA TMSL writes against the shared AAS database. THE READ-ONLY-VIEWER AUTHORING PATH IS CLOSED ON THE ESTATE.",
+      "also_now_live": "C24 ACR re-lock verdict, C23 __proto__ param drop, C18 image pins, D8 DNS zone-group, Gov #3124/#3125/#3126/#3127, release 0.89.0.",
+      "NOT_live": "#3121 (RC-9 federation issuer) - it is in the loom-unity IMAGE and needs its own build + a roll of BOTH loom-unity and iceberg-catalog. #3122 (token ownership), #3129 (access sweeper), #3130 (ai-red-team safety), #3131/#3135/#3138/#3139 all merged AFTER this deploy's SHA - merged, NOT deployed.",
+      "deploy_run": "31243230253 still in_progress at 08:29Z (remaining apps rolling); the console is already live on the new SHA."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
