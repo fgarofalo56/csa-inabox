@@ -1636,7 +1636,14 @@
       "finding": "THE OLD D8 TEST SUITE WAS GREEN THROUGHOUT THE LIVE OUTAGE because its fake az filtered 'remove' by privateDnsZoneId - IT IMPLEMENTED THE FIX THE SCRIPT DID NOT HAVE. Textbook fixtures-that-model-the-code: the test encoded the author's intent instead of the vendor's behaviour, so it could never fail. Rewritten against the CLI's real semantics, 24 tests.",
       "second_order": "One rewritten test found a SEPARATE latent defect: the verify extractor was keyed on step.id, so any NEW verify step would silently fall through to the wrong shape and be UNABLE TO FAIL. Now keyed on an explicit verifyKind; unknown kind = hard stop."
     },
-    "mir0_interpolation_hole": "OUT OF SCOPE, reported not fixed: presidio-sidecar.bicep composes ${acrLoginServer}/presidio/analyzer:2.2.358 - a THIRD-PARTY image with NO entry in upstream-images.json, so nothing imports it and the Container App could not pull. MIR0's regex skips any literal containing '${' - which is PRECISELY the composition pattern MIR0 rule 5 INSTRUCTS modules to use, so interpolated ACR refs to third-party repos are invisible to it. Presidio is hard-disabled today (presidioImagesImported=false) so nothing is broken, but the hole is real. Belongs to the MIR0 owner."
+    "mir0_interpolation_hole": "OUT OF SCOPE, reported not fixed: presidio-sidecar.bicep composes ${acrLoginServer}/presidio/analyzer:2.2.358 - a THIRD-PARTY image with NO entry in upstream-images.json, so nothing imports it and the Container App could not pull. MIR0's regex skips any literal containing '${' - which is PRECISELY the composition pattern MIR0 rule 5 INSTRUCTS modules to use, so interpolated ACR refs to third-party repos are invisible to it. Presidio is hard-disabled today (presidioImagesImported=false) so nothing is broken, but the hole is real. Belongs to the MIR0 owner.",
+    "deploy_dispatched_2026-08-08": {
+      "run": "31243230253 full-app-deploy-commercial",
+      "why": "C22 merged a LIVE AUTHORIZATION FIX (5 unauthorized handlers, incl. semantic-model PATCH reaching XMLA TMSL writes against the shared AAS db with no authorization at all). Per deploy-integrity R2 that is merged-NOT-done and the estate stayed exposed at 10365e76 while main was 2bc3489e. Rolling closes it.",
+      "inputs": "region=centralus passed EXPLICITLY - the input DEFAULTS TO eastus2 (#3029) and this estate is centralus; a defaulted dispatch would target the wrong region. tag=v0.1, skip_build=false (a new image is the point), enable_apps_after=true, skip_supply_chain=false (NEVER true - it ships unverified images).",
+      "carries": "C22 authz, C23 proto, C18 image pins, D8 DNS, C24 ACR verdict, Gov #3124/#3125/#3126, release 0.89.0.",
+      "not_carried": "RC-9 federation. That fix lives in the loom-unity IMAGE which BOTH loom-unity and iceberg-catalog run - a console roll does NOT carry it. See rc9_roll_plan_2026-08-08."
+    }
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
