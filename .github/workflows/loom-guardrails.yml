@@ -90,9 +90,15 @@ jobs:
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-quadratic-trims.mjs
-      - name: no-raw-px (raw-px inline styles vs Loom tokens, ratchet)
+      - name: no-raw-px (raw-px inline styles vs Loom tokens — backlog DRAINED, now absolute)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-no-raw-px.mjs
+      - name: client-route-map drift (generated /api map vs app/api — R15)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/generate-client-route-map.mjs --check
+      - name: known-client-routes (every client /api call names a real BFF route — R17)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-known-client-routes.mjs
       - name: learn-doc-registry (Learning Hub slug sets vs authored guides/captures — loom-apex D1)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-learn-doc-registry.mjs

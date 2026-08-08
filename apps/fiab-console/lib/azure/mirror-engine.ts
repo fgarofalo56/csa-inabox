@@ -22,12 +22,12 @@
  * gate rather than a fake "Running" — their copy runtime is a disclosed
  * follow-up, not a silent stub.
  */
-import { executeParameterized, enableMirroring, type MirroringConfig } from './azure-sql-client';
-import { listTables, sqlConfigGate } from './sql-objects-client';
+import { executeParameterized, executeParameterizedWithAuth, enableMirroring, type MirroringConfig, type SqlExplicitAuth } from './azure-sql-client';
+import { listTables, listTablesWithAuth, sqlConfigGate } from './sql-objects-client';
 import { uploadFile, pathToHttpsUrl, getAccountName, listPaths, resolveAbfssRoot, type PathEntry } from './adls-client';
 import { submitSparkBatchJob, type SparkBatchRequest } from './synapse-dev-client';
 import { listPipelineRuns, adfConfigGate } from './adf-client';
-import { executePostgresQuery, listPostgresTables, postgresQueryGate } from './postgres-flex-client';
+import { executePostgresQuery, listPostgresTables, postgresQueryGate, type PgExplicitAuth } from './postgres-flex-client';
 import { queryItems } from './cosmos-data-client';
 import { listContainers } from './cosmos-account-client';
 import {
@@ -119,6 +119,11 @@ export interface MirrorSource {
    * Undefined keeps the legacy auto behavior (incremental when a watermark exists).
    */
   syncMode?: 'snapshot' | 'incremental' | 'continuous';
+  /** SQL source credential — resolve ONLY via `withSourceAuth()` in
+   *  `@/lib/azure/connection-auth` (rationale there). Secret; one run; never persist/log/return. */
+  auth?: SqlExplicitAuth;
+  /** As `auth`, for the PostgreSQL family. */
+  pgAuth?: PgExplicitAuth;
 }
 
 export interface MirrorTableResult {
@@ -333,7 +338,7 @@ async function enforceMirrorBatch(
  * as `snapshotTable`); `ALTER DATABASE`/`ALTER TABLE` names cannot be bound
  * parameters. `OBJECT_ID(@p0)` uses a bound two-part-name parameter.
  */
-async function enableChangeTracking(server: string, database: string, schema: string, table: string): Promise<void> {
+async function enableChangeTracking(server: string, database: string, schema: string, table: string, auth?: SqlExplicitAuth): Promise<void> {
   // DB-level: turn CT on with a 7-day retention window if it isn't already on.
   // Use sys.change_tracking_databases (the portable catalog view of CT-enabled
   // databases) rather than sys.databases.is_change_tracking_on — the latter
@@ -342,14 +347,14 @@ async function enableChangeTracking(server: string, database: string, schema: st
   // SQL-family mirror down the full-snapshot fallback. change_tracking_databases
   // is queryable with VIEW DATABASE STATE (db_owner has it) and is the documented
   // way to test whether CT is on for the current database.
-  await executeParameterized(server, database,
+  await executeParameterizedWithAuth(server, database,
     `IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID()) ` +
-    `BEGIN ALTER DATABASE ${bracket(database)} SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON) END`);
+    `BEGIN ALTER DATABASE ${bracket(database)} SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON) END`, [], auth);
   // Table-level: enable CT on the specific table if it isn't already tracked.
-  await executeParameterized(server, database,
+  await executeParameterizedWithAuth(server, database,
     `IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(@p0)) ` +
     `ALTER TABLE ${bracket(schema)}.${bracket(table)} ENABLE CHANGE_TRACKING`,
-    [`${schema}.${table}`]);
+    [`${schema}.${table}`], auth);
 }
 
 /**
@@ -360,11 +365,11 @@ async function enableChangeTracking(server: string, database: string, schema: st
  * the retention window (or the table was truncated) and a re-snapshot is required.
  */
 async function changeTrackingStatus(
-  server: string, database: string, schema: string, table: string,
+  server: string, database: string, schema: string, table: string, auth?: SqlExplicitAuth,
 ): Promise<{ current: number; minValid: number | null } | null> {
-  const rows = await executeParameterized<{ ctv: number | null; minV: number | null }>(server, database,
+  const rows = await executeParameterizedWithAuth<{ ctv: number | null; minV: number | null }>(server, database,
     `SELECT CHANGE_TRACKING_CURRENT_VERSION() AS ctv, CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID(@p0)) AS minV`,
-    [`${schema}.${table}`]);
+    [`${schema}.${table}`], auth);
   const r = rows[0];
   if (!r || r.ctv == null) return null;
   return { current: Number(r.ctv), minValid: r.minV == null ? null : Number(r.minV) };
@@ -375,13 +380,13 @@ async function changeTrackingStatus(
  * join, so a table without a PK cannot use the incremental path (the engine
  * falls back to a full snapshot). `@p0` is the bound two-part name for OBJECT_ID.
  */
-async function getPrimaryKeyColumns(server: string, database: string, schema: string, table: string): Promise<string[]> {
-  const rows = await executeParameterized<{ name: string }>(server, database,
+async function getPrimaryKeyColumns(server: string, database: string, schema: string, table: string, auth?: SqlExplicitAuth): Promise<string[]> {
+  const rows = await executeParameterizedWithAuth<{ name: string }>(server, database,
     `SELECT c.name FROM sys.index_columns ic ` +
     `JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id ` +
     `JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id ` +
     `WHERE i.is_primary_key = 1 AND ic.object_id = OBJECT_ID(@p0) ORDER BY ic.key_ordinal`,
-    [`${schema}.${table}`]);
+    [`${schema}.${table}`], auth);
   return rows.map((r) => r.name).filter(Boolean);
 }
 
@@ -402,6 +407,7 @@ async function getPrimaryKeyColumns(server: string, database: string, schema: st
  */
 async function readChangedRows(
   server: string, database: string, schema: string, table: string, sinceVersion: number, pkCols: string[],
+  auth?: SqlExplicitAuth,
 ): Promise<{ columns: string[]; rows: Record<string, unknown>[] }> {
   const pkJoin = pkCols.map((c) => `T.${bracket(c)} = CT.${bracket(c)}`).join(' AND ');
   const sql =
@@ -409,7 +415,7 @@ async function readChangedRows(
     `FROM ${bracket(schema)}.${bracket(table)} AS T ` +
     `JOIN CHANGETABLE(CHANGES ${bracket(schema)}.${bracket(table)}, ${BigInt(sinceVersion).toString()}) AS CT ` +
     `ON ${pkJoin}`;
-  const recordset = await executeParameterized<Record<string, unknown>>(server, database, sql);
+  const recordset = await executeParameterizedWithAuth<Record<string, unknown>>(server, database, sql, [], auth);
   const cols = recordset.length ? Object.keys(recordset[0]) : [];
   return { columns: cols, rows: recordset };
 }
@@ -423,9 +429,9 @@ async function snapshotTableIncremental(
   src: MirrorSource, t: MirrorTableSpec, basePath: string, sinceVersion: number, pkCols: string[], lastSync: string,
   enforce?: MirrorEnforcementContext,
 ): Promise<MirrorTableResult> {
-  const { columns, rows } = await readChangedRows(src.server, src.database, t.schema, t.table, sinceVersion, pkCols);
+  const { columns, rows } = await readChangedRows(src.server, src.database, t.schema, t.table, sinceVersion, pkCols, src.auth);
   // Capture the new watermark for the next run (last committed version).
-  const after = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
+  const after = await changeTrackingStatus(src.server, src.database, t.schema, t.table, src.auth);
   const newVersion = after ? after.current : sinceVersion;
   // No changes since the last watermark — don't write an empty/headerless delta
   // CSV into the folder-scoped read (it would have no columns to align). Just
@@ -460,12 +466,12 @@ function pgLit(s: string): string {
 const PG_TS_CANDIDATES = ['updated_at', 'updatedat', 'modified_at', 'modifiedat', 'last_modified', 'lastmodified', 'last_updated', 'lastupdated', '_loom_updated_at', 'updated', 'modified', 'changed_at'];
 const PG_ID_CANDIDATES = ['id', 'pk', 'seq', 'sequence', 'rowid', 'row_id', '_loom_seq'];
 async function pgDetectWatermarkColumn(
-  fqdn: string, database: string, schema: string, table: string,
+  fqdn: string, database: string, schema: string, table: string, pgAuth?: PgExplicitAuth,
 ): Promise<{ column: string; isTimestamp: boolean } | null> {
   const sql =
     `SELECT column_name, data_type FROM information_schema.columns ` +
     `WHERE table_schema = ${pgLit(schema)} AND table_name = ${pgLit(table)}`;
-  const res = await executePostgresQuery(fqdn, database, sql);
+  const res = await executePostgresQuery(fqdn, database, sql, pgAuth);
   const iN = res.columns.indexOf('column_name');
   const iT = res.columns.indexOf('data_type');
   const cols = res.rows.map((r) => ({ name: String(r[iN]).toLowerCase(), realName: String(r[iN]), type: String(r[iT]).toLowerCase() }));
@@ -492,14 +498,14 @@ async function pgDetectWatermarkColumn(
  */
 async function readChangedPgRows(
   fqdn: string, database: string, schema: string, table: string,
-  column: string, isTimestamp: boolean, since: string,
+  column: string, isTimestamp: boolean, since: string, pgAuth?: PgExplicitAuth,
 ): Promise<{ columns: string[]; rows: Record<string, unknown>[]; newWatermark: string }> {
   const cast = isTimestamp ? '::timestamptz' : '::numeric';
   const sql =
     `SELECT * FROM ${pgQuote(schema)}.${pgQuote(table)} ` +
     `WHERE ${pgQuote(column)} > ${pgLit(since)}${cast} ` +
     `ORDER BY ${pgQuote(column)} ASC LIMIT ${MAX_ROWS + 1}`;
-  const res = await executePostgresQuery(fqdn, database, sql);
+  const res = await executePostgresQuery(fqdn, database, sql, pgAuth);
   const objs = res.rows.map((row) => Object.fromEntries(res.columns.map((c, i) => [c, row[i]])));
   const newWatermark = objs.length ? pgWatermarkValue(objs[objs.length - 1][column]) : since;
   return { columns: res.columns, rows: objs, newWatermark };
@@ -542,11 +548,11 @@ async function snapshotTable(
       if (!forceSnapshot && saved?.watermark != null && saved.watermarkColumn) {
         try {
           // Re-confirm the column still exists + its family (cheap) before reading.
-          const det = await pgDetectWatermarkColumn(src.server, src.database, t.schema, t.table);
+          const det = await pgDetectWatermarkColumn(src.server, src.database, t.schema, t.table, src.pgAuth);
           const col = det && det.column === saved.watermarkColumn ? det : null;
           if (col) {
             const { columns, rows, newWatermark } = await readChangedPgRows(
-              src.server, src.database, t.schema, t.table, col.column, col.isTimestamp, saved.watermark);
+              src.server, src.database, t.schema, t.table, col.column, col.isTimestamp, saved.watermark, src.pgAuth);
             if (!rows.length) {
               const folderUrl = pathToHttpsUrl(BRONZE, `${basePath}/${t.schema}.${t.table}/`);
               const openrowset = `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
@@ -561,14 +567,14 @@ async function snapshotTable(
       }
       // Full snapshot — capture the initial watermark (when a monotonic column exists).
       const sql = `SELECT * FROM ${pgQuote(t.schema)}.${pgQuote(t.table)} LIMIT ${MAX_ROWS + 1}`;
-      const res = await executePostgresQuery(src.server, src.database, sql);
+      const res = await executePostgresQuery(src.server, src.database, sql, src.pgAuth);
       const truncated = res.rows.length > MAX_ROWS;
       const sliced = truncated ? res.rows.slice(0, MAX_ROWS) : res.rows;
       const objs = sliced.map((row) => Object.fromEntries(res.columns.map((c, i) => [c, row[i]])));
       const result = await writeCsvSnapshot(basePath, t.schema, t.table, res.columns, objs, truncated, lastSync, enforce);
       if (!forceSnapshot) {
         try {
-          const det = await pgDetectWatermarkColumn(src.server, src.database, t.schema, t.table);
+          const det = await pgDetectWatermarkColumn(src.server, src.database, t.schema, t.table, src.pgAuth);
           if (det) {
             result.watermarkColumn = det.column;
             let max = '';
@@ -632,7 +638,7 @@ async function snapshotTable(
     let fallbackNote: string | undefined;
     if (savedSyncVersion !== undefined && savedSyncVersion !== null) {
       try {
-        const ct = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
+        const ct = await changeTrackingStatus(src.server, src.database, t.schema, t.table, src.auth);
         if (!ct || ct.minValid === null) {
           // CT not usable for this table yet — either DB-level CT is off (ct null)
           // OR table-level CT is off (minValid null, even though DB-level CT is on).
@@ -643,7 +649,7 @@ async function snapshotTable(
           // enabled and the CHANGETABLE read failed with "Change tracking is not
           // enabled on table 'X'" forever.)
           try {
-            await enableChangeTracking(src.server, src.database, t.schema, t.table);
+            await enableChangeTracking(src.server, src.database, t.schema, t.table, src.auth);
             fallbackNote = 'Change tracking enabled this run; the next Start will sync incrementally.';
           } catch (ce: any) {
             fallbackNote =
@@ -654,7 +660,7 @@ async function snapshotTable(
         } else if (ct.minValid !== null && savedSyncVersion < ct.minValid) {
           fallbackNote = `Saved watermark (v${savedSyncVersion}) aged out of the change-tracking retention window (min valid v${ct.minValid}) or the table was truncated — full re-snapshot.`;
         } else {
-          const pkCols = await getPrimaryKeyColumns(src.server, src.database, t.schema, t.table);
+          const pkCols = await getPrimaryKeyColumns(src.server, src.database, t.schema, t.table, src.auth);
           if (!pkCols.length) {
             fallbackNote = 'Table has no primary key; incremental sync via CHANGETABLE is unavailable — full snapshot.';
           } else {
@@ -667,7 +673,7 @@ async function snapshotTable(
     }
 
     const sql = `SELECT TOP ${MAX_ROWS + 1} * FROM ${bracket(t.schema)}.${bracket(t.table)}`;
-    const recordset = await executeParameterized<Record<string, unknown>>(src.server, src.database, sql);
+    const recordset = await executeParameterizedWithAuth<Record<string, unknown>>(src.server, src.database, sql, [], src.auth);
     const truncated = recordset.length > MAX_ROWS;
     const rows = truncated ? recordset.slice(0, MAX_ROWS) : recordset;
     const cols = rows.length ? Object.keys(rows[0]) : [];
@@ -680,15 +686,15 @@ async function snapshotTable(
     // CHANGE_TRACKING_CURRENT_VERSION() returns NULL forever and the engine loops
     // on full snapshots and never reaches the incremental path.
     try {
-      let ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
+      let ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table, src.auth);
       // Enable when DB-level CT is off (ctNow null) OR table-level CT is off for
       // this table (minValid null, even though DB-level CT is on) — otherwise
       // CHANGE_TRACKING_MIN_VALID_VERSION(table) stays NULL and the table never
       // reaches the incremental path.
       if (!ctNow || ctNow.minValid === null) {
         try {
-          await enableChangeTracking(src.server, src.database, t.schema, t.table);
-          ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
+          await enableChangeTracking(src.server, src.database, t.schema, t.table, src.auth);
+          ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table, src.auth);
           if (ctNow && ctNow.minValid !== null && !fallbackNote) result.note = 'Change tracking enabled this run; the next Start will sync incrementally.';
         } catch (ce: any) {
           if (!fallbackNote) result.note =
@@ -1211,7 +1217,7 @@ export async function runMirrorSnapshot(
     let adfTables: MirrorTableSpec[] = (src.tables && src.tables.length) ? src.tables : [];
     if (!adfTables.length) {
       try {
-        adfTables = (await listTables(src.server, src.database)).slice(0, MAX_TABLES).map((t) => ({ schema: t.schema, table: t.name }));
+        adfTables = (await listTablesWithAuth(src.server, src.database, src.auth)).slice(0, MAX_TABLES).map((t) => ({ schema: t.schema, table: t.name }));
       } catch { /* leave empty → runMirrorAdfCdc gates asking to select tables */ }
     }
     return await runMirrorAdfCdc(mirrorId, workspaceId, src, adfTables, note);
@@ -1238,7 +1244,7 @@ export async function runMirrorSnapshot(
   //    sync via the snapshotTable engine below, not a server-side change feed.
   let changeFeed: MirroringConfig | undefined;
   if (!isPg && !isCosmos) {
-    try { changeFeed = await enableMirroring(src.server, src.database); }
+    try { changeFeed = await enableMirroring(src.server, src.database, undefined, src.auth); }
     catch (e: any) { changeFeed = { enabled: false, backend: 'azure-native-cdc', state: 'Error', lastError: e?.message || String(e) }; }
   }
 
@@ -1249,12 +1255,12 @@ export async function runMirrorSnapshot(
   } else {
     try {
       if (isPg) {
-        tableSpecs = (await listPostgresTables(src.server, src.database)).slice(0, MAX_TABLES);
+        tableSpecs = (await listPostgresTables(src.server, src.database, src.pgAuth)).slice(0, MAX_TABLES);
       } else if (isCosmos) {
         const conts = await listContainers(src.database);
         tableSpecs = conts.slice(0, MAX_TABLES).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
       } else {
-        const all = await listTables(src.server, src.database);
+        const all = await listTablesWithAuth(src.server, src.database, src.auth);
         tableSpecs = all.slice(0, MAX_TABLES).map((t) => ({ schema: t.schema, table: t.name }));
       }
     } catch (e: any) {

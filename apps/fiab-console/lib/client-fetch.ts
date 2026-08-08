@@ -30,6 +30,7 @@
  */
 
 import { reauthDestination, WELCOME_PATH } from '@/lib/auth/returning-user';
+import type { ValidateApiPath } from '@/lib/api-routes.generated';
 
 /** Default client-side per-request timeout (ms). Raised from the original 6s to
  * 20s: the 6s budget was too aggressive for admin surfaces whose BFF routes hit
@@ -110,18 +111,43 @@ export function describeNonJsonResponse(status: number, service = 'The service')
   );
 }
 
-export async function clientFetch(
-  input: string | URL,
+/**
+ * R16 — KNOWN-ROUTE TYPING. `input` is validated through `ValidateApiPath`, so
+ * a string LITERAL naming a BFF route that does not exist fails to COMPILE:
+ *
+ *     clientFetch('/api/loom/workspaces')   // ok — app/api/loom/workspaces/route.ts
+ *     clientFetch('/api/loom/workspacs')    // ERROR: No BFF route matches …
+ *
+ * Query strings and hashes are stripped before matching, and a dynamic segment
+ * accepts any single path segment, so `'/api/items/x/versions?take=5'` is fine.
+ * A path built from variables (`` `/api/items/${id}` ``, or a `string` handed
+ * in) is a WIDE `string` to TypeScript and passes through unconstrained — that
+ * is deliberate, not an oversight: narrowing it would break every computed URL
+ * in the console. Those call sites are covered statically by the R17 guard,
+ * `scripts/ci/check-known-client-routes.mjs`, which reads the literal PREFIX of
+ * a template and matches it against the same generated map.
+ *
+ * The generic is on the function, not the parameter, so `S` infers from the
+ * argument literal and the error is reported at the call site with the path in
+ * the message.
+ */
+export async function clientFetch<S extends string>(
+  input: ValidateApiPath<S> | URL,
   init?: RequestInit,
   timeoutMs: number = CLIENT_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
-  const res = await rawFetch(input, init, timeoutMs);
+  // `ValidateApiPath<S>` is a compile-time-only refinement of `string` (it is
+  // either `S` itself or the `UnknownApiRoute` error object, which is
+  // unreachable here because such a call does not compile). Widen once, at the
+  // boundary, so the rest of the body keeps its plain `string | URL` typing.
+  const target = input as string | URL;
+  const res = await rawFetch(target, init, timeoutMs);
   // SLIDING-SESSION RECOVERY: a 401 from a first-party /api route MAY mean the
   // encrypted loom_session cookie lapsed while the MSAL refresh token is still
   // alive. In that one case we transparently POST /api/auth/refresh ONCE to
   // re-slide the cookie, then retry the original request. Single retry, no loop.
   if (res.status !== 401) return res;
-  const url = String(input);
+  const url = String(target);
   // Never refresh-retry the refresh route itself (would recurse), and honor a
   // one-shot guard so a still-401 after refresh surfaces to the caller.
   if (url.includes('/api/auth/refresh')) return res;
@@ -156,7 +182,7 @@ export async function clientFetch(
     // succeeds. Callers pass JSON strings in practice, so the common path always
     // retries.
     if (isReSendableBody(init)) {
-      return rawFetch(input, init, timeoutMs);
+      return rawFetch(target, init, timeoutMs);
     }
     return res;
   }

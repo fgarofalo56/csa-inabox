@@ -341,6 +341,21 @@ export default defineConfig({
       },
     },
     {
+      // G1 receipt for the three decomposed semantic-model tabs (#2581 / B-R10).
+      // Drives the CONTROLS inside Aggregations / Incremental refresh / Direct
+      // Lake — sm-tab-clickwalk covers the strip and explicitly disclaims this.
+      // Creates a scratch workspace + model and cleans it up in afterAll.
+      name: 'sm-deep-functional',
+      testDir: './e2e',
+      testMatch: /sm-deep-functional\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
       // G1 receipt for the audited Unity Catalog exits (#2622). Drives a UC
       // operation + polls the audit trail; retry for the shared-console sweep.
       name: 'unity-audit-exit',

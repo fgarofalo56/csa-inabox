@@ -503,22 +503,14 @@ export function PowerPlatformTree({
 
         {/* Honest gate rows — Power Platform exposes these; authoring/governance
             is honestly routed to the maker/admin portal (real surfaces), or
-            needs an admin role the navigator doesn't yet wire. Never faked. */}
+            needs an admin role the navigator doesn't yet wire. Never faked.
+            Solutions used to live here as a "tracked for a follow-up" maker-portal
+            deep link; it is now BUILT in-Loom (SolutionsAlmPanel on the
+            environment editor: export managed/unmanaged, stage+validate, async
+            import with progress, publish, delete) so the row is gone. */}
         <TreeItem itemType="branch" value={`${env.name}-more`}>
           <TreeItemLayout iconBefore={<Warning20Regular />}>More in Power Platform</TreeItemLayout>
           <Tree>
-            <TreeItem itemType="leaf" value={`${env.name}-more-solutions`}>
-              <Tooltip content="Solutions (managed/unmanaged ALM) — Dataverse /api/data/v9.2/solutions is wired in the DataverseTableEditor backend; a dedicated Solutions navigator group + import is tracked for a follow-up. Open the maker portal to import/export now." relationship="description">
-                <TreeItemLayout iconBefore={<Globe20Regular />}>
-                  <span
-                    role="button" tabIndex={0} style={{ cursor: 'pointer', color: tokens.colorNeutralForeground3 }}
-                    onClick={() => openMaker(`${MAKER_BASE}/environments/${encodeURIComponent(env.name)}/solutions`)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMaker(`${MAKER_BASE}/environments/${encodeURIComponent(env.name)}/solutions`); } }}
-                  >Solutions / import</span>{' '}
-                  <Badge size="small" appearance="tint" color="informative">maker portal</Badge>
-                </TreeItemLayout>
-              </Tooltip>
-            </TreeItem>
             <TreeItem itemType="leaf" value={`${env.name}-more-dlp`}>
               <Tooltip content="DLP data policies are tenant/governance objects (BAP providers/PowerPlatform.Governance policies) that require the Power Platform Administrator role — distinct from the 'use Power Platform APIs' allow group the navigator authenticates with. Manage them in the admin centre; a governance navigator is tracked for a follow-up." relationship="description">
                 <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>
