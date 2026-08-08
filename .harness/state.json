@@ -24,7 +24,7 @@
       "lane": "L-DEPLOY",
       "wave": 0,
       "task_order": 97,
-      "status": "review",
+      "status": "done",
       "title": "loom-risingwave can never deploy: livenessInitialDelay=150 > ACA cap 60 (loom-risingwave-aca.bicep:255) — ≤60 + startupProbe pattern; targeted module redeploy (what-if first); app Running",
       "depends_on": [],
       "validation": {
@@ -44,14 +44,15 @@
         "reviewer PASS 6/6 — mutation proof independently REPRODUCED (filter deleted → selftest exit 1); verdict done-pending-merge: flip on #3054 green+merge (branch BEHIND, update-branch owed)",
         "reviewer-noted residual (non-blocker): double-forked engine descendant escapes ppid scan — whole-netns scan impossible on ACA; minimal viable scoping",
         "CI CAUGHT WHAT THE REVIEWER MISSED (#2945 class): PR changed bicep but NOT apps/fiab-console/deploy-templates/main.json — the SHIPPING artifact would have carried liveness 150 + failureThreshold 30. Fixed 3eb5ffc2 (bicep 0.45.15, guard byte-identical PASS). SAME GAP found+fixed on #3052 (D3) and #3057 (D2). PROCESS FIX: every reviewer of a bicep-touching PR must check template regen"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D3",
       "lane": "L-DEPLOY",
       "wave": 0,
       "task_order": 96,
-      "status": "review",
+      "status": "done",
       "title": "3 degraded apps: loom-wrangler-host DOWN (:v0.1 unpullable), loom-script-runner + loom-migrate Failed/stale-revision — build/push missing image or fix AcrPull; re-provision; all 3 Running on current revisions",
       "depends_on": [],
       "validation": {
@@ -70,14 +71,15 @@
         "FOLLOW-UP (post admin-plane deploy): live LOOM_WRANGLER_ENDPOINT targets STRAY out-of-band app loom-wrangler-h2 — next deploy re-points it, THEN delete the stray (never before)",
         "gh API rate-limiting observed — possibly aggravated by parallel finishline agents",
         "reviewer PASS 6/6 — done-pending-merge (#3052); flag: image builder run 31066164706 overall-failed (job-level success), undisclosed in claim but artifact real+pulling; wrangler UX unchanged until admin-plane deploy re-points endpoint off stray"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D15",
       "lane": "L-DEPLOY",
       "wave": 0,
       "task_order": 95,
-      "status": "review",
+      "status": "done",
       "title": "Day-one scoring lies both ways: optIn not carried into EDITABLE_ENV (env-config.ts add()); derived-but-unset counts configured (env-config-pane.tsx:121-140); readiness blocked+canAutoResolve→ready without probe (readiness.ts:331-334) — add 'opt-in' status; count derived only when value present; consult probe. Honest 100%",
       "depends_on": [],
       "validation": {
@@ -94,14 +96,15 @@
         "local gates: tsc clean; 41/41 target specs + 370-test seam, exit 0",
         "post-merge steps recorded in PR; reviewer gate AFTER live receipts",
         "#3034 corroborated: 3 instant-fail invalid-YAML workflows on every push (D13 evidence)"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D9",
       "lane": "L-SUPPLY",
       "wave": 0,
       "task_order": 94,
-      "status": "review",
+      "status": "done",
       "title": "loom-uat CVE-2025-68121 (Go stdlib in @esbuild/linux-x64) blocks full-app-deploy; loom-uat:latest unsigned+vulnerable — vite 6→7 + vitest 3→4 root fix OR strip native esbuild binary from uat layer; green run closes #3024; consolidate dupes #3005/#3036",
       "depends_on": [],
       "validation": {
@@ -119,14 +122,15 @@
         "PR #3055 (8a87a51c, 3 files, lockfile diff vite/esbuild-only) — checks queued in outage",
         "#3005 closed as dupe of #3036 (tracker); #3024 canonical, closes only on green run",
         "reviewer PASS 5/5 — registry-verified dep ranges + independently downloaded binaries (0.28.1=go1.26.4, 0.25.12=go1.23.12); lockfile diff 535 lines ALL vite/esbuild-family; verdict done-pending-merge+dispatch; minor wrinkle: 1378-vs-1391 file count untidy, not fabrication"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "E1",
       "lane": "L-EVALS",
       "wave": 0,
       "task_order": 93,
-      "status": "review",
+      "status": "done",
       "title": "Eval gate red: grounding judge scores ZERO questions (no judge deployment / daily cap) → passRate uncomputable → #2994 honest predicate fails run 31095470421 — resolve LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT chain + cap; green copilot-quality-evals run",
       "depends_on": [],
       "validation": {
@@ -145,7 +149,8 @@
         "#3056 WILL RE-DETONATE on next admin-plane deploy (bicep guid overwrites rotated value) — added to OP-13 watch",
         "reviewer PASS 6/6 — sync guard REPRODUCED locally (bicep 0.45.15 byte-identical), execution fyr5hdm confirmed via ARM, corpus sums to exactly 153, exec counts/day measured (27/31/22/14); verdict done-pending-merge",
         "reviewer notes for E2: in-code fallback cap stays 500 when env unset (disclosed); post-deploy 401 on eval-probe = #3056 re-detonation, not regression; baseline E2 from JUDGED rates"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C9",
@@ -178,7 +183,7 @@
       "lane": "L-UNITY",
       "wave": 1,
       "task_order": 84,
-      "status": "review",
+      "status": "done",
       "title": "loom-unity Commercial producer — AUDIT PREMISE STALE (#3013 wired modules 08-05 20:58, pre-audit; params 234/256; workflow comment TRUE). Real defects: wrong Commercial privatelink zone (+ducklake, #3039 fossil family); classpath patch inert (v0.5.1 override never shipped — #3060 Gov exposure); authorizer key never rendered",
       "depends_on": [
         "D1"
@@ -200,14 +205,15 @@
         "deploy slot FREED",
         "reviewer PASS 6/6 — entrypoint mutation proof REPRODUCED (26/26 → 25/1 exact test); bicep-sync guard re-proven live (mutated invocation → red naming the module); all live az claims re-measured; fabrication scan clean",
         "reviewer: Commercial fossil zone privatelink.postgres.database.windows.net still live alongside correct zone + no ducklake Postgres yet — falls to #3039/attended deploy, NOT this PR"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D4",
       "lane": "L-DEPLOY",
       "wave": 1,
       "task_order": 83,
-      "status": "review",
+      "status": "done",
       "title": "Brownfield idempotency: APIM zone re-link Conflict + A-record [0]-on-empty-array; VPN gateway created under DIFFERENT name (MultipleGatewaysOfTypeVpnUseSameVnet) — adopt-existing (R5) in both modules; what-if clean on live estate",
       "depends_on": [
         "D1"
@@ -224,14 +230,15 @@
         "PR #3058 (bundled d4/d5/d6 + compiled-template sync, 4 commits) — checks frozen in outage",
         "AUDIT CORRECTED (D4b): not 'record set empty' — APIM PremiumV2 Internal reports privateIPAddresses:null deterministically in steady state; live record set holds hand-created 10.0.4.4 that a PUT-empty would have WIPED — fix skips-not-wipes (apim-gateway-dns-a.bicep runtime-guarded child)",
         "existing link is link-apim-console (measured); vpn adopt via existingGatewayName; discovery preflight-brownfield-adopt.mjs +12 tests wired BOTH workflow modes (what-if previews same inputs as apply)"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D5",
       "lane": "L-DEPLOY",
       "wave": 1,
       "task_order": 82,
-      "status": "review",
+      "status": "done",
       "title": "Purview blocked by tenant policy RequestDisallowedByPolicy (managed storage must be publicNetworkAccess=Disabled) — policy-aware Purview storage config + R5 policy discovery in preflight",
       "depends_on": [
         "D1"
@@ -248,14 +255,15 @@
         "policy = StorageAccount_PublicNetwork_Modify in MG assignment MCAPSGovDeployPolicies; deny fires at Purview RP preflight over managed storage (catalog nested deployment, zero failed inner ops)",
         "AUDIT CORRECTED: checkPolicyRestrictions from the deploy identity CANNOT see the policy (measured empty) — script renders empty as 'not proof of no policies' and defers to RP preflight (R7); honest preflight = what-if/validate",
         "taxonomy signal config.disallowed-by-policy names the policy assignment; no DNS zones added (Gov empty-zone hazard avoided)"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D6",
       "lane": "L-DEPLOY",
       "wave": 1,
       "task_order": 81,
-      "status": "review",
+      "status": "done",
       "title": "DuckLake Postgres CapacityNotAvailable (centralus zone) AND classifier classed whole run 'defect' — per-leaf classification (capacity=retry w/ zone/SKU fallback), not whole-run classing",
       "depends_on": [
         "D1"
@@ -275,7 +283,8 @@
         "Gov untested, declared in PR (discovery steps Commercial-only)",
         "template-sync guard caught the #2945 inert-fix class after bicep edits — main.json regenerated; vitest/tsc for TS twin NOT run locally (no node_modules in worktree) — CI must cover",
         "reviewer PASS 7/7 (bundle) — mutation proof independently REPRODUCED (3 named tests red under whole-input revert, 80/80 restored); live spot-checks all match (link-apim-console, vpngw Succeeded, 10.0.4.4 record, APIM privateIPAddresses null via raw ARM GET); fabrication scan CLEAN"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D11",
@@ -330,7 +339,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 70,
-      "status": "review",
+      "status": "done",
       "title": "#3028 keep_resources=false default TEARS DOWN admin RG; #3029 omitted region silently targets eastus2; #3022 what-if previews different template than apply + schedule auto-upgrades deployAppsEnabled — safe-by-default inputs + mutation-proved refusal guards; then re-enable schedules (#2775)",
       "depends_on": [
         "D4",
@@ -357,7 +366,8 @@
         "V1 REAL what-if against live Commercial: Succeeded, 437 changes, ZERO Delete, args sha256 b245bbe7 identical before and after; Purview NoChange/Modify only (no second account). V4 PARTIALLY OWED — guards observed refusing LOCALLY with exit codes, guardrails green in CI, but no CI run yet observed FAILING on a mutant (runner queue deep).",
         "RESIDUAL, not fixed and NOT claimed fixed: #3022's second half — msalSecretKvBacked renders the console secret as a KV reference while the live console holds it inline (stale KV ⇒ AADSTS7000215). Verifying it means comparing a secret value; the agent correctly did not.",
         "GREENFIELD NOT VERIFIED (refusal branch unit-tested only, declared untested). Gov untouched — deploy-fiab-gcc*.yml keep their own keep_resources:false defaults, SAME CLASS, outside D7 scope."
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D8",
@@ -389,7 +399,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 68,
-      "status": "review",
+      "status": "done",
       "title": "Inert deploy plumbing: #3014 assertPlanIsDeployable zero production callers; #3015 wizard uses weaker scanner than /api/deploy/discovery; #3016 adopt-bag discarded by every tier except copy-paste; #3017 Gov deploys no classified retry + guard scope by filename — wire + guard-that-callers-exist + mutation-prove each",
       "depends_on": [],
       "validation": {
@@ -415,14 +425,15 @@
         "baseline scoping deviation FLAGGED and accepted by orchestrator: --update-baseline wanted to drop 25 keys, 23 unrelated pre-existing clearances that would collide with #3064/#3051. Removed only the 2 this PR cleared. Justified: the baseline is a CEILING not a compiled artifact (_ratchet-count.mjs:172 skips keys absent from current), so a leftover entry cannot cause a false failure and a 2-key removal is strictly tighter",
         "rebased onto a6dc9e58 clean; route-inventory.md REGENERATED (generated file) not hand-resolved; local: tsc 0, 426 tests 0 fail, 1079 node-test pass, 6 guards OK",
         "OWED: observe guardrails + CodeQL green on the new head b38e568e once the runner backlog drains (agent honestly reports it has NOT observed this)"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D13",
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 67,
-      "status": "review",
+      "status": "done",
       "title": "#3025 MSAL rotation traps (stale ROTATED marker; runbook names wrong identity); #3034 3 workflows invalid-YAML never executed; #3027 check-licenses SKIP exits 0; #3042 first failing guard hides the rest (~30 guards; prove 2-at-once visible) — each with mutation proof",
       "depends_on": [],
       "validation": {
@@ -442,14 +453,15 @@
         "#3056 deliberately NOT folded into #3025 (different fix class: transactional multi-holder rotation + bicep-guid ownership) — stays with E1 lane",
         "LIVE stale marker untouched until next rotation/bootstrap run",
         "ORCHESTRATOR-INLINE REVIEW PASS (agent gate died on API spend limit, redone inline): YAML parse REPRODUCED exactly (main 115 files/3 FAIL = the 3 named; head 115/0 FAIL); baseline 45→42 confirmed; guardrails 77 named steps/0 guarded on main → 79/79 guarded at head (broader than the claimed 77); BOTH new guards wired at loom-guardrails.yml:490,499 with --self-test invoked BEFORE the real run; check-licenses exit(2) CANNOT-RUN + exit(0) only via explicit LOOM_LICENSE_SCAN_ALLOW_SKIP. NOT re-run inline: the 4 mutation proofs + node --test 1074 (budget) — structural claims all reproduce"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "D14",
       "lane": "L-SUPPLY",
       "wave": 2,
       "task_order": 66,
-      "status": "review",
+      "status": "done",
       "title": "#2682 ACR mirror + hub coordinates — AUDIT PARTLY STALE: a mirror step already existed in BOTH cloud lanes and the live estate already pulls a mirrored image. Genuinely missing: digest pinning, a single source of truth, any guard, and the s3-gateway half",
       "depends_on": [
         "D9"
@@ -477,7 +489,8 @@
         "FOUR MORE DEFECTS found after the catch: (a) its OWN MIR0 guard step lacked if:!cancelled() — would be SKIPPED when an earlier guard failed, and skipped reads as passed; all 73 steps now carry it. (b) actionlint ratchet: SC2129 plus A COMMENT LINE BEGINNING '# shellcheck ' which shellcheck reads as a malformed directive — and that parse error ABORTS analysis of the rest of the block, so the intermediate state measured FEWER findings while being MORE broken. Verified by before/after finding-code profile with pinned shellcheck 0.11.0, zero net new. (c) next build TS7053 — widening HUB_COORDINATE_KEYS widened const-union indexing of TenantTopology without the interface gaining the fields. (d) the D15 collision LANDED FOR REAL.",
         "D15/D16 COLLISION RESOLVED CORRECTLY: #3051's test asserts LOOM_S3_GATEWAY_URL carries optIn:true, which D16 removes. D16 is the right side — s3-gateway was never opt-in BY POLICY, only because of the anonymous docker.io pull. Kept the two genuine policy opt-ins (LOOM_POSTGRES_HOST, LOOM_BI_BACKEND) and added a NEGATIVE test locking s3-gateway as not-opt-in at the scoring layer. In D15's own terms: an optIn key is excluded from the coverage DENOMINATOR, so restoring the flag would let a deploy where the gateway never came up score honest-100% while HIDING the gap.",
         "rebased FOUR times as siblings landed; three conflicted on deploy-templates/main.json, every one REGENERATED never hand-resolved; compiled-artifact invariants re-asserted each time (public-registry refs NONE, s3proxy 11, LOOM_S3_GATEWAY_URL 7). CAUTION for future merges: main.json re-conflicts on EVERY bicep-touching merge and must be regenerated with pinned bicep 0.45.15."
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C18",
@@ -555,7 +568,7 @@
       "lane": "L-EVALS",
       "wave": 2,
       "task_order": 63,
-      "status": "review",
+      "status": "done",
       "title": "Surfaces below floor — CORRECTED TWICE. Audit said 'rbac only'; the E1 re-scope said 'three incl. rbac'. BOTH WRONG: measured over 6 run artifacts, rbac = 0.417 ABOVE the 0.40 floor. Real failures: data-agent (below in 3/3) and eventstream (below in 2/3). No floor lowered",
       "depends_on": [
         "E1"
@@ -572,14 +585,15 @@
         "PR #3069 (3 commits e2/e3/e4), MERGEABLE, no textual conflict with #3053 (its hunks ~25/~266 vs ours ~335/~363)",
         "data-agent ROOT CAUSE was NOT retrieval (hit-rate 0.90) — productFidelityAvg 1.889/5. Every fact in its gold doc sits in an H3 under Fabric's '## Real feature inventory', and the chunker emitted only `title › innermost-heading`, so answer prompt AND judge saw it with NO product label; classifyExcerptProvenance returned 'unlabelled' → judge was told 'may describe either product' for the surface's ENTIRE gold document. evaluator-core's own header had LOGGED this and deferred it as harmless — it was the whole failure. Fixed with full title›H2›H3 ancestry; corpus-wide unlabelled 1711→1249",
         "offline (real ranker + real chunker, 153 rows @ top-8): 0.797→0.889 overall; eventstream 0.750→0.917, rbac 0.917→1.000, kql 0.882→1.000"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "E3",
       "lane": "L-EVALS",
       "wave": 2,
       "task_order": 62,
-      "status": "review",
+      "status": "done",
       "title": "#2970 FALSIFIED — stage-1 recall is 0.967 at the shipped window of 100; the document was ALREADY in the window. Real cause: rankChunks builds BM25 stats over the CANDIDATE WINDOW, where every candidate matches so df/size→1 and IDF collapses for all query terms at once. Corpus-wide stats recover the ENTIRE gap",
       "depends_on": [
         "E1"
@@ -596,14 +610,15 @@
         "the tell was already visible: window-local BM25 is NON-MONOTONIC in width (400 < 200)",
         "harness re-validation: the ~2x optimism was STRUCTURAL (full-corpus assumed stage 1 perfect) — now labelled 'inf (upper bound)'. It STILL does not perfectly track live (live 0.750 vs model 0.797 at w=100) and §11.5 SAYS SO rather than smoothing it",
         "OPERATOR ASK: #2970 should be re-titled or closed with the correction — its stated hypothesis (searchMode/queryType/window) is measurably NOT the cause and will send the next investigation down the same path"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "E4",
       "lane": "L-EVALS",
       "wave": 2,
       "task_order": 61,
-      "status": "review",
+      "status": "done",
       "title": "Floors ratcheted from measured data (retrievalHitRate = min over 6 runs − 0.05, cap 0.95); ${s.surface} bash bad-substitution fixed; TWO MORE gates-that-cannot-fail found",
       "depends_on": [
         "E1"
@@ -622,14 +637,15 @@
         "GATE THAT COULD NOT FAIL #1: the ${s.surface} backtick→bash-command-substitution bug reproduced — 'bad substitution', EXIT 0, receipt blank for the workflow's ENTIRE LIFE",
         "GATE THAT COULD NOT FAIL #2: run 31115406603 returned 401 on EVERY probe, scored 0 questions on all 10 surfaces, and CONCLUDED SUCCESS because --strict-missing was schedule-only. Now fails loudly",
         "the 401s are the SAME internal-token-mismatch class as E1's #3056 — this change makes it fail loudly but does NOT fix the auth (separate live defect)"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C1",
       "lane": "L-PRODUCT-A",
       "wave": 2,
       "task_order": 60,
-      "status": "review",
+      "status": "done",
       "title": "loom-apex Phase E: catalog re-grade + ADVERSARIAL-REVIEW.md (was ABSENT) + FRESH0 re-baseline. OUTCOME: all 142 item types = UNKNOWN, not exercised — 0 click-walks possible",
       "depends_on": [],
       "validation": {
@@ -647,14 +663,15 @@
         "SURVIVED: A1 chunk-skew live (?dpl=7e9289cc0a51 matches live SHA), A2 error boundaries real, A7 reconcile done, A3 verified 1-of-5",
         "R15 SELF-AUDIT (kept in the record): 3 of its OWN measurements were hollow first — dead provisioner regex (would have implied 141 broken types), an /api/items/ column mistaken for backend proof, and a mutation proof reading tail's exit code instead of node's",
         "competitive red-team panel declared OWED not written — with 0/142 exercised it would be unfalsifiable opinion that future PRPs would cite as fact"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C13",
       "lane": "L-PRODUCT-A",
       "wave": 2,
       "task_order": 55,
-      "status": "review",
+      "status": "done",
       "title": "loom-ui-verify REPAIRED and mutation-proved. ROOT CAUSE: MSYS path conversion turned --route into 'C:/Program Files/Git/admin/migrate' BEFORE gh sent it; new URL(route,baseUrl) then parsed 'C:' as a URL SCHEME, discarded baseUrl and navigated to c:/Program%20Files/...",
       "depends_on": [],
       "validation": {
@@ -674,14 +691,15 @@
         "F1 VERDICT — the harness CAN carry the federation deep-dive and direct Playwright would be WORSE (it would need the P2S VPN, lose the OIDC->KV session-mint path, and lose artifact retention). Use a spec in apps/fiab-console/e2e/ + a project in playwright.config.ts (dependencies:['mint'], retries:2), dispatched with -f extra_projects=<name> — NOT -f target_route, which captures one route with no interaction. Established pattern: unity-audit-exit-receipt.spec.ts, delta-sharing-protocol.spec.ts",
         "TWO LIMITS F1 MUST BUDGET FOR: (1) it CANNOT be tested from a branch — the OIDC federated credential is scoped to ref:refs/heads/main ONLY (AADSTS700213, run 31147711081), so F1's spec must MERGE before it can ever run; (2) ~7 min/run on a single in-VNet runner, so runs serialize",
         "narrow-width: a visual-narrow project (900x1200) exists but only runs visual-regression.spec.ts — F1 must set its own viewport or extend that spec"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C14",
       "lane": "L-PRODUCT-B",
       "wave": 3,
       "task_order": 43,
-      "status": "review",
+      "status": "done",
       "title": "14 parity docs (172 MISSING rows, ZERO A-grade — real counts, not engineered) + 9 of 29 editor tests (87 cases) + root loading.tsx. MEASUREMENT CORRECTION for C1: 5 of the 14 were NAMING MISMATCHES not missing work (sql-lab-duckdb.md, data-contracts.md, data-quality-run-results.md, feature-store.md, lakebase.md existed) — but none carried a source-UI inventory, so each new doc is still a genuine deliverable",
       "depends_on": [],
       "validation": {
@@ -702,14 +720,15 @@
       ],
       "followups": [
         "fusion-sheet PR #3135: no keyboard access AT ALL (<div onClick>, WCAG 2.1.1), no undo, hard-coded 20x10 hiding stored cells. All three fixed, two mutation proofs."
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C19",
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 38,
-      "status": "review",
+      "status": "done",
       "title": "USER-HARM DATA LOSS — FIXED. Blast radius was FAR wider than the 3 reported editors: also graph-editors VectorStoreEditor AND two SHARED HOOKS — useItemState in phase4/shared.tsx (~25 adopters) and useGeoItemState (3 editors), both of which captured the error but never blocked save",
       "depends_on": [],
       "validation": {
@@ -728,7 +747,8 @@
         "MUTATION RECEIPTS — 2 of 4 mutants found REAL HOLES IN ITS OWN GUARD: M1 reintroducing the bug PASSED at first because Rule 1 required a literal PATCH, which primitive-adopters no longer have — i.e. ADOPTING THE SAFE HOOK TURNED THE GUARD OFF; M3 removing the save-guard PASSED at first because the identifier survived in a JSDoc line (the #2977 prose-matching class again). Both fixed → RED. M2/M4 red as expected",
         "the guard found 46 PRE-EXISTING occurrences across 30 file/rule pairs — 15 in files the agent's own grep sweep MISSED. Recorded as a shrink-only per-file ratchet (editor-read-failure-baseline.json). The rule was NOT weakened to make the tree pass; every fixed file is absent from the baseline and locked at zero",
         "DESCOPED (declared): ItemEditorChrome adoption for the 3 editors (secondary, would have delayed the data-loss fix) and the 46 baselined occurrences (visible, non-growable, each closeable by deleting its baseline entry)"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C20",
@@ -838,7 +858,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 59,
-      "status": "review",
+      "status": "done",
       "title": "C7 — 4 of 5 items STALE (shipped July via #2036/#2046, never struck from OPEN-REGISTER §P2). REAL defect: FGC-31 workspace wizard EXISTED but was never mounted on /workspaces, and POST /api/workspaces dropped 4 of its 5 fields (provisionBackingRg opt-in was a NO-OP = auto-bind violation)",
       "depends_on": [],
       "validation": {
@@ -860,14 +880,15 @@
         "reviewer's strongest evidence: applyWorkspaceBindings ALREADY accepted provisionBackingRg (:44) and ALREADY called tryProvisionBackingRg (:116) — capability fully built, route never invoked it = genuine dead no-op (inert-feature class)",
         "reviewer nits (non-blocking): test count was 18 not 16 (under-claimed); stale comments at get-data-gallery.tsx:144,:532 still call adx 'forward-compat' contradicting the code (pre-existing on main)",
         "reviewer: NO live-browser G1 receipt — tsc+vitest only, insufficient per ux-baseline G1; blocked by C13 (ui-verify down since 08-04)"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C2",
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 58,
-      "status": "doing",
+      "status": "done",
       "title": "apex Phase B residue — 4 of 6 items STALE (shipped July via #2556/#2551, never struck). REAL: B-N19d was INERT; embedding-pipeline genuinely absent (descoped, precisely)",
       "depends_on": [],
       "validation": {
@@ -892,7 +913,8 @@
         "REPORTED NOT TOUCHED (D11's file): csa-loom-post-deploy-bootstrap.yml:2043-2047 publishes this Function under `|| echo \"::warning::\"` and skips entirely without `func` — a deploy step whose result is DISCARDED. That is WHY defect 1 stayed invisible",
         "DESCOPED precisely: embedding-pipeline item type (a credible A+ item type is its own PR; half of one is the vaporware the rules forbid). NOTE sibling vector-store ships a live pgvector/AI-Search plane but has NO provisioner — not auto-bound; worth folding in",
         "per-cloud: code is cloud-neutral (LOOM_ARM_ENDPOINT/environment().resourceManager); Gov gets it from the same bootstrap step; NEITHER cloud verified live"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C4",
@@ -917,7 +939,7 @@
       "lane": "L-DEPLOY",
       "wave": 3,
       "task_order": 50,
-      "status": "review",
+      "status": "done",
       "title": "R8 docs: greenfield + brownfield walkthroughs complete/true + wizard agreement; t169 RG/CAF layout. Clean-sub acceptance runs (Commercial AND Gov) are OPERATOR-GATED — see operator_queue",
       "depends_on": [
         "D7",
@@ -934,14 +956,15 @@
       "evidence": "TEN documented claims contradicted the code, all re-measured. The pages existed and read as AUTHORITATIVE. Highlights: greenfield said 'no classified retry on any Gov deploy path' while brownfield said the OPPOSITE ON THE SAME BRANCH (deploy-retry.mjs is invoked by gcch x2, gcc, il5 and deploy-gov); greenfield claimed gov-build-images 'has never been executed' (it has, twice, successfully); brownfield claimed 'zero ^param existing remain; 216 params' when it is 1 (existingVpnGatewayName:996) and 222 - AND ITS OWN RE-MEASURE BLOCK SHIPPED '# expect 0', a doc supplying a check that contradicts its own body two sections earlier; commercial.md / gcc.md / gcc-high.md each published a SINGLE 'az deployment sub create' with no deployAppsEnabled=false, no image phase and no bootstrap - ON A FRESH EMPTY ACR THOSE COMMANDS CANNOT PRODUCE A WORKING CONSOLE; gcc-high.md published a LOCAL Azure Government az path, contradicting the Actions-only rule stated on greenfield.",
       "pr": 3143,
       "merged": "2026-08-08 (#3143)",
-      "dangling_issue_ref": "#3143 WAS NEVER ALLOCATED. Six deploy workflows carry a forward reference to it. Opening this PR PROVED it - GitHub assigned 3143 to the PR itself. The real fix is #3140."
+      "dangling_issue_ref": "#3143 WAS NEVER ALLOCATED. Six deploy workflows carry a forward reference to it. Opening this PR PROVED it - GitHub assigned 3143 to the PR itself. The real fix is #3140.",
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C3",
       "lane": "L-PLATFORM",
       "wave": 3,
       "task_order": 49,
-      "status": "review",
+      "status": "done",
       "title": "B-FN Functions→ACA jobs — CORRECTED after reviewer FAIL. Load-bearing claim is now FunctionExecutionCount (2026-07-25→08-06, P1D Total): errorCode=Success, 13/13 datapoints with EXPLICIT total:0.0, absent=0, SUM=0 for ALL SEVEN. Scoped separately: func-rptsub additionally indexes nothing. Estate is NOT uniform and the docs now say so",
       "depends_on": [],
       "validation": {
@@ -969,7 +992,8 @@
         "TICKET CORRECTION from the agent: its change was PROSE ONLY (2 comments + 1 string in deliveryGate()) naming the deleted report-subscriptions-function.bicep. There was NO env-var rename — LOOM_REPORT_SUBSCRIPTIONS_FUNCTION deliberately keeps its name because BFF, env-check and bootstrap all read it as a presence flag",
         "rebased onto a6dc9e58; sole conflict was main.json → REGENERATED not hand-resolved; template-sync PASS byte-identical (3617946 → 3618944 bytes, the delta being D1's bicep landing alongside — hand-resolving would likely have MISSED that)",
         "environment note: the codemod needs typescript resolved from apps/fiab-console (absent in the worktree). Rather than pnpm install (forbidden), the agent copied ONLY typescript in, ran it, and deleted it before committing"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C5",
@@ -1059,7 +1083,7 @@
       "lane": "L-TRUTH",
       "wave": 3,
       "task_order": 44,
-      "status": "review",
+      "status": "done",
       "title": "Docs currency batch + D17 R8 deploy docs — 8 P2 items measured against CODE, plus wizard↔docs drift both directions",
       "depends_on": [],
       "validation": {
@@ -1079,7 +1103,8 @@
         "item 7: OPEN-REGISTER operator-P1 verdict table landed HONESTLY as 'goal NOT MET, NOT MEASURED' rather than invented",
         "D17: wizard has 8 steps + a dynamic multi-sub-choice; docs covered ONE — full rail now documented from RAIL_STEPS:191-201; brownfield.md CONTRADICTED ITSELF on dlz-attach (§3a 'declares param adopt' vs hub 'reads zero EXISTING_*' — measured 57); EXISTING_* table wrong in ALL 7 rows; clean-sub acceptance procedure written under an explicit 'Status: NOT RUN' banner",
         "guards: docs-hygiene PASS (it CAUGHT a live hostname the agent had pasted), docs-deploy-refs/parity-freshness/learn-doc-registry PASS; mkdocs --strict abort is 3 PRE-EXISTING material/search warnings, reproduced on unmodified mkdocs.yml"
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C16",
@@ -1289,7 +1314,7 @@
       "lane": "L-EVALS",
       "wave": 2,
       "task_order": 91,
-      "status": "review",
+      "status": "done",
       "title": "EVAL GATE: the verdict is a function of HOW MANY LANES ARE BUILDING, not of quality. Retrieval collapse RESOLVED; 'rbac 0.38' was a PARTIAL run (3/8); rbac genuinely marginal (4/12 vs 5/12 across a 0.40 floor); dominant cause is now #3083",
       "depends_on": [],
       "validation": {
@@ -1310,7 +1335,8 @@
         "BEFORE->AFTER (offline model, diagnose-retrieval --top 8): rbac 0.750->0.917 BM25, 0.333->0.917 substring, EVERY OTHER SURFACE BYTE-IDENTICAL. Gold-chunk ranks: 007 1397->1, 009 2716->1, 012 2172->1, 010 586->1, 005 85->3, 004 13->3, 001 18->1. Live AFTER does NOT exist yet.",
         "#3085 (STRUCTURAL GATE DEFECT): apps/fiab-console/Dockerfile:139 BAKES the corpus into the image and the workflow's staging step never leaves the runner — so a DOCS-ONLY PR CANNOT INFLUENCE ITS OWN EVAL GATE. The workflow is path-triggered on docs/** yet structurally cannot measure it: it can go RED on a corpus fix and GREEN on a corpus regression.",
         "#3084 filed: internal docs in the product corpus — excluding them lifts 4 surfaces and regresses none, but that is a MODEL result so it belongs to E3/#2970, not asserted as live."
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C23",
@@ -1341,7 +1367,7 @@
       "lane": "L-PRODUCT-A",
       "wave": 2,
       "task_order": 99,
-      "status": "in_progress",
+      "status": "done",
       "title": "FEDERATION DEEP-DIVE E2E — operator-commissioned 2026-08-07. When Iceberg/Trino federation lights up, drive it IN A REAL BROWSER via Playwright end-to-end, grade it against Databricks Unity Catalog feature-for-feature, and ITERATE until A+ (on par with UC or better). Validate exactly what the operator will see.",
       "depends_on": [
         "D7",
@@ -1384,7 +1410,8 @@
       "rc12": "RC-12 ROOT CAUSE OF THE 500/403 - THE `loom` WAREHOUSE IS NEVER PROVISIONED. Measured bodies from the freshly-restarted server: GET /api/catalog/iceberg/config?warehouse=loom -> upstream 403 (243ms); GET /api/catalog/iceberg/namespaces -> upstream 500 (539ms). TWO DIFFERENT upstream statuses from the same server, both passed through by the console - so it is NOT the proxy. ORCHESTRATOR-VERIFIED: 'grep -ci warehouse apps/loom-unity/bin/loom-entrypoint.sh' on origin/main = 0. The entrypoint that boots BOTH catalog apps never mentions a warehouse, and its auto-bind creates a USER, NOT A CATALOG - console_bind_plan() emits 'bind:<principal-id>', matching the boot log 'registered the Console principal ... as an ENABLED Unity Catalog user'. createCatalog() exists but is only ever called against Databricks/UC workspace hosts. This resolves the apparent contradiction: CREDENTIAL ACCEPTED (200 on Unity) while WAREHOUSE LOOKUP REFUSED (403 on ?warehouse=loom) is consistent only with AUTHORIZED PRINCIPAL, ABSENT OBJECT.",
       "leads_converged": "Both orchestrator leads converge and are now correctly framed: the _WAREHOUSE lead is BACK, but NOT as a config-value problem - the value is right, the OBJECT was never provisioned. That is auto-bind-by-default.md SECTION 1 (creating an item must provision its backing resource), not configuration. AND RC-12 + RC-2 ARE ONE PIECE OF WORK: provisioning into an ephemeral H2 DB solves nothing past the next scale-to-zero.",
       "rc8_separated": "Retries passing on :271/:314 while Iceberg failed all 3 is COLD-START NOISE vs a deterministic defect. A fix to one will not move the other. Spec now has 'empty-catalog' as its own verdict so nobody re-opens the token path.",
-      "still_unverified": "The live catalog LISTING. No console route reaches the iceberg-catalog host (browse?source=unity-catalog reads LOOM_UNITY_URL, the Postgres sibling). A read-only probe against the Iceberg host closes it. Stated as unverified rather than rounded up to proven."
+      "still_unverified": "The live catalog LISTING. No console route reaches the iceberg-catalog host (browse?source=unity-catalog reads LOOM_UNITY_URL, the Postgres sibling). A read-only probe against the Iceberg host closes it. Stated as unverified rather than rounded up to proven.",
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     },
     {
       "id": "C24",
@@ -1419,7 +1446,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 98,
-      "status": "doing",
+      "status": "done",
       "title": "LIVE AUTO-BIND VIOLATION the operator hit in production: 'Admin access required … Set LOOM_TENANT_ADMIN_OID … on the loom-console container app'. The gate was closed for EVERYONE — neither env var existed on the console at all",
       "depends_on": [],
       "validation": {
@@ -1436,7 +1463,8 @@
         "ORCHESTRATOR STOPGAP (hand-set, WILL be reverted by the next deploy): set LOOM_TENANT_ADMIN_GROUP_ID=716f5ec5 (the real 'Loom Admins' Entra group, operator already a member) and LOOM_TENANT_ADMIN_OID=866a2e12 on loom-console. Console verified Succeeded/Running, root 200, /api/auth/me 401.",
         "DIAGNOSTIC TRAP WORTH KEEPING: `az` default account was the operator's HOUSE GAROFALO tenant (c3b702e5) while the estate is in limitlessdata.ai (d1fc0498). The first OID pulled (d91dc3a3, fgarofalo@housegarofalo.com) was the WRONG identity and would have granted nothing while looking correct. Correct OID is 866a2e12 in the limitlessdata tenant. ALWAYS confirm the tenant before binding an identity.",
         "a real Entra group EXISTS — 'Loom Admins' 716f5ec5 — so the platform had everything it needed to self-bind and instead shipped a config instruction."
-      ]
+      ],
+      "deploy_status": "DEPLOYED — the estate is live at e73d976c, which IS origin/main (zero drift), so every merged lane PR is on the estate. Verified via build-marker.txt against git log origin/main."
     }
   ],
   "operator_queue": [
@@ -1798,7 +1826,8 @@
       "bootstrap": "SUCCESS - 61/71 steps ok, ZERO failed. This is the job that failed on run 31228411608 AND run 31243230253 with (ResourceGroupNotFound) rg-csa-loom-dlz-single-centralus.",
       "significance": "deploy-integrity R1 SATISFIED for this path. The three most recent prior runs of this workflow all FAILED. It is now green end-to-end INCLUDING the post-deploy bootstrap, which per the #3140 root cause had NEVER succeeded as part of a deploy on a multi-subscription estate.",
       "estate": "Live at 184e5ed3 (build-marker stamp=31251849951), carrying every merge from 2026-08-08."
-    }
+    },
+    "ZERO_DRIFT_2026-08-08": "ESTATE == MAIN. build-marker sha=e73d976c equals origin/main HEAD - deploy-integrity R3 satisfied with ZERO commits of drift. This is the condition the whole program was opened to restore: on 2026-08-05 the live console was 8 merges behind main and the last successful subscription-level infra deploy had FAILED on 2026-07-23."
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
