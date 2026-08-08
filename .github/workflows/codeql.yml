@@ -121,7 +121,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v3
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
