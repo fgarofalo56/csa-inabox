@@ -114,15 +114,23 @@ in for.
 
 ## How it is enforced
 
-Two guards, covering **different** properties. Neither implies the other.
+Three guards, covering **different** properties. None implies the others.
 
 | Guard | Polices | A violation it catches |
 |---|---|---|
 | `check-license-inventory.mjs` (**LIC0**) | *Licensing* — is the SPDX id permissive and recorded in the NOTICE manifest | Someone swaps in the AGPL MinIO gateway |
 | `check-upstream-image-mirror.mjs` (**MIR0**) | *Egress + provenance* — is the image mirrored, digest-pinned, and actually imported by both lanes | Someone bumps a bicep ref without bumping the manifest, so ACR never receives that tag |
+| `check-mcr-image-pins.mjs` (**MCR0**) | *Deploy determinism* — does every `mcr.microsoft.com` ref resolve to immutable bits | A `:latest` (or a rolling version tag) lets two deploys of the SAME commit run different software |
 
 LIC0 is completely satisfied by an image pulled anonymously from `docker.io` at
 runtime, as long as its licence is recorded. That gap is what MIR0 exists to close.
+
+MIR0 in turn **skips `mcr.microsoft.com` on purpose** — MCR is Microsoft
+first-party and is reachable from every boundary Loom deploys into, so the
+ACR-mirror requirement does not apply to it. But that skip was *total*: until
+FINISHLINE C18 no guard looked at an MCR ref at all, and four of them floated
+`:latest` (one on a default-ON path, all of them baked into the shipped
+`deploy-templates/main.json`). MCR0 is the half that closes.
 
 MIR0 fails when:
 
@@ -134,10 +142,45 @@ MIR0 fails when:
 5. the bicep scan or the manifest observes **zero** images (anti-hollow: a scan
    that matches nothing must never report success).
 
-Both run unfiltered in `loom-guardrails.yml`, because the edit that introduces
-the violation is a bicep or workflow change.
+All three run unfiltered in `loom-guardrails.yml`, because the edit that
+introduces the violation is a bicep or workflow change.
+
+### MCR0 — the MCR pin registry
+
+Registry of record: **`platform/fiab/images/mcr-images.json`**. Every
+`mcr.microsoft.com` ref reachable from a deploy path
+(`platform/fiab/bicep/**`, `deploy/bicep/**`, and the compiled
+`apps/fiab-console/deploy-templates/*.json`) must have an entry there carrying a
+resolved manifest digest, and the ref itself must carry that digest inline:
+
+```bicep
+param dabImage string = 'mcr.microsoft.com/azure-databases/data-api-builder:2.0.9@sha256:ad5ac179…'
+```
+
+Resolve a digest with:
+
+```bash
+bash scripts/ci/resolve-mcr-digest.sh azure-databases/data-api-builder 2.0.9
+```
+
+**MCR0 is keyed on the SAFE pattern, not the unsafe one.** The obvious
+implementation is `grep ':latest'` — and it is worthless: the moment someone
+adopts the fix and writes `:2.0.9`, the token the rule matched is gone and the
+guard goes quiet on exactly the files it just policed, while `:2.0.9` with no
+digest is *still* mutable. MCR republishes rolling tags (`cbl-mariner/busybox:2.0`,
+`azure-functions/python:4-python3.11`) in place on every CVE rebase. So the rule
+is "a digest is **present** and matches the registry of record", which stays true
+of every ref forever and cannot be satisfied by deleting a substring.
+
+The one escape hatch is `"inlineDigest": false`, which means the consuming ARM
+resource type is not known to accept a digest reference. It requires a written
+`inlineDigestBlockedBy` reason and an immutable version tag, and the digest is
+still recorded so drift stays detectable. Today exactly one entry uses it
+(`azureml/openmpi4.1.0-ubuntu20.04`, consumed by the AML curated environment).
 
 ### Mutation proof
+
+MIR0:
 
 ```bash
 # 1. bicep ref drift
@@ -145,6 +188,22 @@ sed -i 's/2.10.5-python3.12/2.11.0-python3.12/' platform/fiab/bicep/modules/admi
 node scripts/ci/check-upstream-image-mirror.mjs    # FAILS
 # 2. missing digest -> blank a "digest" in upstream-images.json  # FAILS
 # 3. delete the `bash scripts/ci/mirror-upstream-images.sh` run step from either lane  # FAILS
+```
+
+MCR0 ships its own mutation harness, which runs in CI beside the guard. It copies
+the **real** scanned files into a scratch git repo (never invented fixture
+content), breaks them six ways, and requires a RED verdict each time:
+
+```bash
+bash scripts/ci/test-check-mcr-image-pins.sh
+#   PASS  baseline (unmutated real tree)                           (exit 0)
+#   PASS  MUTANT: digest stripped from dab-runtime.bicep           (exit 1)
+#   PASS  MUTANT: :latest reintroduced in dab-runtime.bicep        (exit 1)
+#   PASS  MUTANT: new un-registered mcr ref pinned only by version tag (exit 1)
+#   PASS  MUTANT: manifest digest no longer matches the bicep ref  (exit 1)
+#   PASS  MUTANT: inlineDigest:false with no written reason        (exit 1)
+#   PASS  MUTANT: zero refs observed (regex/globs broken)          (exit 1)
+#   PASS  restored (all mutations reverted)                        (exit 0)
 ```
 
 ---

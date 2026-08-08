@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13824934603542121263"
+      "templateHash": "10465452898231590383"
     }
   },
   "definitions": {
@@ -2518,7 +2518,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "1936402120510010830"
+              "templateHash": "16677342550091207880"
             }
           },
           "definitions": {
@@ -11466,7 +11466,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6165237900374446156"
+                      "templateHash": "3838484745825148316"
                     }
                   },
                   "parameters": {
@@ -11497,9 +11497,9 @@
                     },
                     "dabImage": {
                       "type": "string",
-                      "defaultValue": "mcr.microsoft.com/azure-databases/data-api-builder:latest",
+                      "defaultValue": "mcr.microsoft.com/azure-databases/data-api-builder:2.0.9@sha256:ad5ac1793049f95fdd4210ca50d3c913855553139b64992046a071cd63eeead0",
                       "metadata": {
-                        "description": "DAB engine container image."
+                        "description": "DAB engine container image. Digest-pinned — see platform/fiab/images/mcr-images.json."
                       }
                     },
                     "sqlServerFqdn": {
@@ -11605,7 +11605,7 @@
                           "initContainers": [
                             {
                               "name": "config-writer",
-                              "image": "mcr.microsoft.com/cbl-mariner/busybox:2.0",
+                              "image": "mcr.microsoft.com/cbl-mariner/busybox:2.0@sha256:e4fb4d51fc9b70d6cdc1ce66a0af02ab40554d2ca632e1d188fabc760e432fdd",
                               "command": [
                                 "/bin/sh",
                                 "-c"
@@ -11738,7 +11738,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "12415317019090224375"
+                      "templateHash": "13235709071047024796"
                     }
                   },
                   "parameters": {
@@ -11770,16 +11770,16 @@
                     },
                     "udfImage": {
                       "type": "string",
-                      "defaultValue": "mcr.microsoft.com/azure-functions/python:4-python3.11",
+                      "defaultValue": "mcr.microsoft.com/azure-functions/python:4-python3.11@sha256:ebc5ba1fc20f7809b2676872a016ba6ede2c43d2feab4c22164b6f2a07d75733",
                       "metadata": {
-                        "description": "Stock container image that provides python3 + a POSIX shell. Default is an MCR image available in Commercial and Gov/IL5; override if a different registry is required."
+                        "description": "Stock container image that provides python3 + a POSIX shell. Default is an MCR image available in Commercial and Gov/IL5; override if a different registry is required. Digest-pinned."
                       }
                     },
                     "initImage": {
                       "type": "string",
-                      "defaultValue": "mcr.microsoft.com/cbl-mariner/busybox:2.0",
+                      "defaultValue": "mcr.microsoft.com/cbl-mariner/busybox:2.0@sha256:e4fb4d51fc9b70d6cdc1ce66a0af02ab40554d2ca632e1d188fabc760e432fdd",
                       "metadata": {
-                        "description": "Busybox image used by the init container to materialise host code from secrets (matches dab-runtime)."
+                        "description": "Busybox image used by the init container to materialise host code from secrets (matches dab-runtime). Digest-pinned."
                       }
                     },
                     "hostPort": {
@@ -59740,7 +59740,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "17086557745298582695"
+              "templateHash": "4783003066850692941"
             }
           },
           "parameters": {
@@ -59752,9 +59752,9 @@
             },
             "image": {
               "type": "string",
-              "defaultValue": "mcr.microsoft.com/azuredocs/aci-helloworld:latest",
+              "defaultValue": "mcr.microsoft.com/azuredocs/aci-helloworld@sha256:456a1150aa41340a14c7be1342deda2cde9e6e7df9fde6b8a69de0ae04f92fad",
               "metadata": {
-                "description": "Container image to run. Default is the standard Microsoft sample image."
+                "description": "Container image to run. Default is the standard Microsoft sample image, pinned by digest."
               }
             },
             "cpuCores": {
@@ -62177,7 +62177,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7718604205085257844"
+              "templateHash": "16443299989639895763"
             }
           },
           "parameters": {
@@ -62484,7 +62484,7 @@
               "name": "[format('{0}/{1}/{2}', variables('wsName'), 'loom-pylsp-env', '1')]",
               "properties": {
                 "description": "v1 — Pylance-grade Python LSP stack on the AML openmpi CPU base image.",
-                "image": "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest",
+                "image": "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:20250224.v1",
                 "condaFile": "name: loom-pylsp\nchannels:\n  - conda-forge\n  - defaults\ndependencies:\n  - python=3.10\n  - pip\n  - pip:\n    - jupyter-lsp>=2.2.0\n    - jupyterlab>=4.0.0\n    - python-lsp-server[all]>=1.11.0\n    - pyright>=1.1.350\n    - pandas-stubs>=2.2.0\n    - pandas\n    - numpy\n    - scikit-learn\n",
                 "tags": {
                   "csa-loom": "notebook-lsp"

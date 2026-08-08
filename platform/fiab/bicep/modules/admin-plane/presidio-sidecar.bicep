@@ -3,9 +3,14 @@
 // Copilot in Gov boundaries where Azure AI Content Safety isn't GA
 // or where PII redaction needs to be source-of-truth.
 //
-// Image: vendor-pinned `mcr.microsoft.com/presidio/analyzer:latest`
-// and `mcr.microsoft.com/presidio/anonymizer:latest`. Operator
-// pre-pulls + re-tags to the customer ACR for boundary-local availability.
+// Image: the containers below pull `${acrLoginServer}/presidio/analyzer:2.2.358`
+// and `.../presidio/anonymizer:2.2.358` — a version tag from the estate's OWN ACR,
+// which the operator pre-imports from mcr.microsoft.com/presidio/* (see
+// admin-plane/main.bicep `presidioImagesImported`). This comment previously said
+// the images were "vendor-pinned mcr.microsoft.com/presidio/analyzer:latest",
+// which was true of neither the registry nor the tag — corrected under FINISHLINE
+// C18 because an untrue comment about a pin is the same class of false statement
+// deploy-integrity.md R7 forbids in an error string.
 
 targetScope = 'resourceGroup'
 

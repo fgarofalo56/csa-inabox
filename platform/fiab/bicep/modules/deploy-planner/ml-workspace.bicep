@@ -301,7 +301,18 @@ resource loomPylspEnvVersion 'Microsoft.MachineLearningServices/workspaces/envir
   name: '1'
   properties: {
     description: 'v1 — Pylance-grade Python LSP stack on the AML openmpi CPU base image.'
-    image: 'mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest'
+    // TAG-PINNED, NOT digest-pinned (FINISHLINE C18) — this was `:latest`, which
+    // let the curated environment's base image change under a fixed commit. The
+    // AML `image` property is documented only as "Name of the image that will be
+    // used for the environment" and no Learn page states a digest reference is
+    // accepted; guessing wrong breaks AML environment creation on a DEFAULT-ON
+    // path and cannot be tested without a live AML deploy. So this carries the
+    // DATED AzureML base tag, which AzureML publishes immutably (a new base gets
+    // a NEW date; the old date is never republished). That is weaker than a
+    // digest and is recorded as such — the resolved digest sits in
+    // platform/fiab/images/mcr-images.json under inlineDigest:false so drift is
+    // still detectable. `:latest` resolved to this exact digest on 2026-08-08.
+    image: 'mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:20250224.v1'
     condaFile: '''
 name: loom-pylsp
 channels:

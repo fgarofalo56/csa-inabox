@@ -32,8 +32,15 @@ param uamiResourceId string
 @description('Console UAMI client id (used in the SQL connection string for AAD MI auth).')
 param uamiClientId string
 
-@description('DAB engine container image.')
-param dabImage string = 'mcr.microsoft.com/azure-databases/data-api-builder:latest'
+// DIGEST-PINNED (FINISHLINE C18). This param used to default to `:latest`, which
+// meant two deploys of the SAME commit could land different DAB engines — the
+// build-marker SHA then does not identify what is running (deploy-integrity R2/R3).
+// The digest below is what `:latest` AND `:2.0.9` both resolved to on 2026-08-08,
+// so the pin changed nothing that was running; it only stopped it moving.
+// Bump `tag` + `digest` together in platform/fiab/images/mcr-images.json and here
+// (scripts/ci/resolve-mcr-digest.sh); scripts/ci/check-mcr-image-pins.mjs enforces it.
+@description('DAB engine container image. Digest-pinned — see platform/fiab/images/mcr-images.json.')
+param dabImage string = 'mcr.microsoft.com/azure-databases/data-api-builder:2.0.9@sha256:ad5ac1793049f95fdd4210ca50d3c913855553139b64992046a071cd63eeead0'
 
 @description('Fully-qualified SQL server name the preview runtime targets, e.g. dabdemo-dev-sql.database.windows.net.')
 param sqlServerFqdn string
@@ -102,7 +109,7 @@ resource dab 'Microsoft.App/containerApps@2024-03-01' = {
       initContainers: [
         {
           name: 'config-writer'
-          image: 'mcr.microsoft.com/cbl-mariner/busybox:2.0'
+          image: 'mcr.microsoft.com/cbl-mariner/busybox:2.0@sha256:e4fb4d51fc9b70d6cdc1ce66a0af02ab40554d2ca632e1d188fabc760e432fdd'
           command: [ '/bin/sh', '-c' ]
           args: [ 'echo "$DAB_CONFIG_B64" | base64 -d > /config/dab-config.json && echo wrote /config/dab-config.json' ]
           env: [ { name: 'DAB_CONFIG_B64', secretRef: 'dab-config-b64' } ]

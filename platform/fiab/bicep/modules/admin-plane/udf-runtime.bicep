@@ -49,11 +49,16 @@ param uamiResourceId string
 @description('Deploy the UDF runtime host. When false the module deploys nothing and hostUrl is empty (invoke path stays honestly 409-gated).')
 param udfRuntimeEnabled bool = true
 
-@description('Stock container image that provides python3 + a POSIX shell. Default is an MCR image available in Commercial and Gov/IL5; override if a different registry is required.')
-param udfImage string = 'mcr.microsoft.com/azure-functions/python:4-python3.11'
+// Both images below are DIGEST-PINNED (FINISHLINE C18). Neither floated `:latest`,
+// but `4-python3.11` and `2.0` are ROLLING tags — MCR republishes them in place on
+// every runtime/CVE rebase — so without a digest two deploys of the same commit can
+// still land different bytes. Registry of record + bump procedure:
+// platform/fiab/images/mcr-images.json; enforced by scripts/ci/check-mcr-image-pins.mjs.
+@description('Stock container image that provides python3 + a POSIX shell. Default is an MCR image available in Commercial and Gov/IL5; override if a different registry is required. Digest-pinned.')
+param udfImage string = 'mcr.microsoft.com/azure-functions/python:4-python3.11@sha256:ebc5ba1fc20f7809b2676872a016ba6ede2c43d2feab4c22164b6f2a07d75733'
 
-@description('Busybox image used by the init container to materialise host code from secrets (matches dab-runtime).')
-param initImage string = 'mcr.microsoft.com/cbl-mariner/busybox:2.0'
+@description('Busybox image used by the init container to materialise host code from secrets (matches dab-runtime). Digest-pinned.')
+param initImage string = 'mcr.microsoft.com/cbl-mariner/busybox:2.0@sha256:e4fb4d51fc9b70d6cdc1ce66a0af02ab40554d2ca632e1d188fabc760e432fdd'
 
 @description('HTTP port the host listens on and ACA ingress targets.')
 param hostPort int = 8080
