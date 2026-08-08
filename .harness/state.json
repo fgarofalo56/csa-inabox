@@ -1055,7 +1055,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 41,
-      "status": "todo",
+      "status": "review",
       "title": "DOCS-RIGHT/CODE-WRONG defects found by P2-DOCS (flagged, deliberately not papered over): (1) RequestAccessInline has ZERO importers (AG-13) — this also STRANDS AG-2: no non-admin can request an access package at all; (2) /api/access-requests/bulk-decision has ZERO UI callers (AG-14); (3) t169 function-RG split not built (grep returns only the plan item)",
       "depends_on": [],
       "validation": {
@@ -1066,16 +1066,15 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "these are inert-feature class: the capability exists but nothing reaches it — same shape as C7's provisionBackingRg and C3's Function Apps"
-      ]
+      "evidence": "ALL THREE PREMISES HELD, each grep-verified before building. AG-13 CONFIRMED (3 hits, all in its own file) - wired at the /apps/view/[id] 403, which was a LITERAL DEAD END ('Ask the app owner to add you to an audience' - out-of-band, no in-product path). WIRED, NOT DELETED. AG-14 CONFIRMED (route + one comment, no caller). AUTHORIZATION CHECKED AND IT IS NOT A BYPASS: it delegates to the real decisionPOST, which re-runs actorMayApprove PER LEG, so an unauthorized leg returns 403 in the per-id result set. Authorization sound + capability real => WIRED, NOT REMOVED. t169 CONFIRMED NOT BUILT - exactly ONE hit repo-wide, and it is the greenfield.md paragraph STATING it is not implemented. Nothing invented, no ticket closed. ZERO CI FAILURES.",
+      "pr": 3132
     },
     {
       "id": "C17",
       "lane": "L-PLATFORM",
       "wave": 2,
       "task_order": 40,
-      "status": "todo",
+      "status": "review",
       "title": "no-vaporware §Bicep-sync + deploy-integrity R3 VIOLATION (found by P2-DOCS): access-governance-sweeper is ABSENT from platform bicep — LOOM_SWEEPER_TOKEN is set NOWHERE in platform/, scripts/, or .github/. Expiry auto-revoke is therefore admin-button-only. Fix belongs with C3's Functions→ACA migration (sweeper is one of its 5 remaining)",
       "depends_on": [
         "C3"
@@ -1088,9 +1087,11 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "a scheduled governance control that never runs = the same class as C3's inert Function Apps"
-      ]
+      "evidence": "PREMISE CONFIRMED AND ORCHESTRATOR-VERIFIED ON ORIGIN/MAIN: 'LOOM_SWEEPER_TOKEN' has ZERO hits in platform/, scripts/ and .github/; 'sweeper' has ZERO hits in platform/. The Function carried its own deploy/main.bicep but that file was an ORPHAN - nothing under platform/fiab/bicep referenced it.",
+      "pr": 3129,
+      "security_exposure": "The three console sweep routes FAIL CLOSED when LOOM_SWEEPER_TOKEN is unset (verified: 'sysOk = !!sysToken && !!process.env.LOOM_SWEEPER_TOKEN && sysToken === ...' in access-governance/sweep, reviews/sweep and group-sync). So EVERY SCHEDULED CALL WAS REJECTED, ON EVERY ESTATE, SINCE THE ROUTES WERE WRITTEN. Expiry auto-revoke was admin-button-only. Time-bound access past its expiresAt STAYED LIVE - a real ARM role assignment AND a real SQL/ADX data-plane grant - until a human tenant-admin happened to press 'Run sweep'. LOOM'S ENTITLEMENT LEDGER SHOWED ACCESS AS TIME-BOUNDED WHILE THE UNDERLYING AZURE GRANTS WERE EFFECTIVELY PERMANENT. Past-deadline review campaigns never auto-closed (undecided grants never revoked, no evidence record sealed); Entra group-reconcile never ran (a user who left a group kept the grant).",
+      "fix": "RODE THE C3 MIGRATION rather than explaining why not - the sweeper was one of its five remaining Queued timer workloads. One bicep module instantiated THREE times, because a Container Apps job has exactly one cronExpression and collapsing three cadences would have made group-sync run 4x more often. Shape A thin runner, so the real revoke/Cosmos/Graph logic stays in the ONE console implementation the admin button already uses. Y1 Function deleted. AUTO-BIND SEC.5 SATISFIED: the credential is the shared LOOM_INTERNAL_TOKEN the deploy ALREADY mints and hands the console unconditionally - no new env var, no operator step. 'Set LOOM_SWEEPER_TOKEN' would ITSELF have been the violation. No new top-level param (bag property); cap unchanged 234/256. MEASURED: bicep 0.45.15 exit 0; check-deploy-template-sync.mjs PASS byte-identical; tsc clean; 8/8 unit tests MUTATION-CHECKED (reverting the helper fails 2 of 8, so the suite measures the fix not a bystander).",
+      "deploy_status": "MERGED-PENDING, NOT DEPLOYED. Operator-gated: infra deploy creating the 3 jobs (what-if FIRST, NOT deploy-fiab-commercial defaults per #3028/#3029); loom-uat image must exist before first execution (until then the job fails HONESTLY by design); then az containerapp job start -n loom-access-sweep."
     },
     {
       "id": "C11",
@@ -1665,7 +1666,9 @@
       "guard": "Drift guard MUTATION-PROVED ON THE LIVE ESTATE: green (4 holders at 209954d26026) -> added a wrong secret to loom-diag-probe (Manual trigger, zero secrets, no token env - zero blast radius) -> RED naming the off-reference holder -> removed -> green. Estate confirmed back to secrets:null. Also mutated the REAL deploy-fiab-gcc.yml to prove the static guard flips. #3089 verified sufficient - env :5508 and secret :5666 are both unconditional on main.",
       "ci_caught_in_its_own_work": "guardrails failed the agent's first push with THREE REAL findings: a literal ${{ env }} inside a run: COMMENT (Actions interpolates those - a live expression); secrets.AZURE_GOV_* undeclared on workflow_call, which would have made the GOV LANE LOG IN WITH NOTHING AND STILL PASS; and resolve-internal-token.sh missing from the staleness paths. All fixed against pinned actionlint 1.7.12 + shellcheck 0.11.0.",
       "owed": "A DEPLOY HAS NOT PROVEN THIS. 'What-If (FIAB vs live Commercial estate)' passed - the template validates - but the real proof is dispatching deploy-fiab-commercial.yml and confirming the fingerprint STAYS 209954d26026. Not run; the PR does not claim it. GOV UNTESTED (Actions-only): adopt is wired into all three Gov lanes, but on GCC-High/IL5 THE CONSOLE IS ON AKS, NOT CONTAINER APPS, so the resolver reports greenfield and warns - the AKS-side holder is open work, recorded in docs/fiab/runbooks/internal-token-ownership.md."
-    }
+    },
+    "f16_inbox_siloed_adjacent_finding": "REPORTED, DELIBERATELY NOT FIXED (measured by code read, not run live): the F16 inbox is SILOED PER USER. GET /api/access-requests queries c.tenantId = @t with @t = s.claims.oid (route.ts:39-43) while docs are created with tenantId: requesterId - but 'oid' is the USER object id; 'tid' is the tenant, and the codebase has a tenantScopeId() helper that prefers it. GET and the decision point-read are internally consistent so NOTHING 404s; the quieter consequence is that AN APPROVER ONLY EVER SEES REQUESTS THEY CREATED, so the multi-tier approval spine may be unreachable for its actual purpose. Not fixed: a Cosmos partition-key change needs a migration and its own live receipt, not a rider on a UI PR.",
+    "c17_serialization": "C17 touches admin-plane/main.bicep (additive: bag properties, shim vars, three module blocks) and regenerates deploy-templates/main.json. If another lane's main.bicep change merges FIRST, the template must be rebuilt with bicep 0.45.15 or check-deploy-template-sync.mjs will fail."
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
