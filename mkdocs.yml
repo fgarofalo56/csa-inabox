@@ -1933,6 +1933,7 @@ nav:
       - Governance & Compliance:
           - Governance:
               - Catalog: fiab/governance/catalog.md
+              - Access requests (approval inbox): fiab/governance/access-requests.md
               - Tagging & Classification: fiab/governance/tagging-classification.md
               - Workspace RBAC: fiab/governance/workspace-rbac.md
               - Lineage: fiab/governance/lineage.md
@@ -1958,6 +1959,7 @@ nav:
       - Tutorials & Examples:
           - Tutorials:
               - Overview: fiab/tutorials/README.md
+              - "Help coverage — corrected inventory (2026-08-08)": fiab/help-inventory-2026-08-08.md
               - "01 — First Workspace": fiab/tutorials/01-first-workspace.md
               - "02 — First Lakehouse + Delta tables": fiab/tutorials/02-first-lakehouse.md
               - "03 — Direct Lake parity (warm-cache materializer)": fiab/tutorials/03-direct-lake-parity.md
