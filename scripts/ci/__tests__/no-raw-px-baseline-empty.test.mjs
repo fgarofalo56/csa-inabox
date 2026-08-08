@@ -31,6 +31,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -64,39 +65,112 @@ test('the guard reports a clean tree against the real repo', () => {
   assert.match(r.stdout, /current: 0 across 0 files/);
 });
 
-test('the guard still FAILS CLOSED on a raw-px violation (fail-closed, not just quiet)', (t) => {
-  // Plant a violation by EDITING AN EXISTING FILE IN PLACE, then restore it.
-  // Using the real tree (not a fixture) is deliberate — it also proves the file
-  // discovery + scope globs still reach lib/components at all.
-  //
-  // The first version of this test CREATED and then deleted a probe file
-  // (`lib/components/__rawpx_guard_probe__.tsx`, staged with `git add -N` so the
-  // guard's `git ls-files` would see it). Under `node --test scripts/ci/__tests__/*`
-  // — which is how the REQUIRED guardrails job runs these — files execute in
-  // parallel, and `check-insecure-randomness.mjs` enumerates the same tree via
-  // git and then reads each hit. It listed the probe, the probe vanished, and it
-  // died with ENOENT: a sibling suite went red for a file it had no interest in.
-  // A test that reddens an unrelated guard is worse than no test.
-  //
-  // Editing an existing file has no create/delete window, so no enumerate-then-
-  // read race is possible. `check-no-raw-px.mjs` is run by no other suite (only
-  // this one and the guardrails workflow), so the transient raw px cannot make
-  // anything else fail either.
-  const victim = path.join(REPO_ROOT, 'apps', 'fiab-console', 'lib', 'components', 'loom-logo.tsx');
-  const original = fs.readFileSync(victim, 'utf8');
-  t.after(() => fs.writeFileSync(victim, original));
+/**
+ * Build a throwaway app-shaped tree: { 'lib/components/x.tsx': '…' }.
+ * Returns the fixture root to hand to the guard via NO_RAW_PX_APP_ROOT.
+ */
+function fixtureRoot(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'no-raw-px-fixture-'));
+  for (const [rel, body] of Object.entries(files)) {
+    const full = path.join(root, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, body);
+  }
+  return root;
+}
 
-  const TOKEN = 'marginTop: tokens.spacingVerticalXXS }}>';
-  assert.ok(original.includes(TOKEN), 'the mutation anchor moved — update this test, do not delete it');
-  fs.writeFileSync(victim, original.replace(TOKEN, 'marginTop: 3 }}>'));
+const CLEAN_TSX = [
+  "'use client';",
+  "import { tokens } from '@fluentui/react-components';",
+  'export function Ok() {',
+  '  return <div style={{ padding: tokens.spacingVerticalL, gap: tokens.spacingHorizontalM }}>ok</div>;',
+  '}',
+  '',
+].join('\n');
 
-  const r = spawnSync(process.execPath, [SCRIPT], { cwd: REPO_ROOT, encoding: 'utf8' });
+const DIRTY_TSX = [
+  "'use client';",
+  'export function Bad() {',
+  '  return <div style={{ padding: 16, gap: 12 }}>bad</div>;',
+  '}',
+  '',
+].join('\n');
+
+test('the guard still FAILS CLOSED on a raw-px violation (fail-closed, not just quiet)', () => {
+  // Driven against a FIXTURE TREE, not the real source tree.
+  //
+  // Two earlier versions of this test proved the same property by mutating the
+  // repo, and both were wrong in ways worth recording:
+  //
+  //   v1 CREATED a probe .tsx under lib/components and `git add -N`-ed it so the
+  //      guard's `git ls-files` would see it. That mutated the shared GIT INDEX.
+  //      Many agents share git state in this repo; a run that dies between the
+  //      write and its cleanup leaves a foreign file staged in somebody else's
+  //      commit. Its create/delete window also raced check-insecure-randomness
+  //      into an ENOENT, reddening an unrelated guard in the required job. It
+  //      also carried a TOCTOU (`existsSync` then `readFileSync`) that CodeQL
+  //      flagged as js/file-system-race.
+  //   v2 edited an existing file (loom-logo.tsx) in place. No index mutation and
+  //      no ENOENT window — but still a write into the source tree, which is
+  //      still a shared-state hazard if the process dies mid-test.
+  //
+  // A fixture tree removes the entire class: nothing outside os.tmpdir() is
+  // touched, so no crash can leave the repo dirty and no sibling can observe it.
+  const root = fixtureRoot({
+    'lib/components/clean.tsx': CLEAN_TSX,
+    'lib/components/dirty.tsx': DIRTY_TSX,
+  });
+  const r = spawnSync(process.execPath, [SCRIPT], {
+    cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, NO_RAW_PX_APP_ROOT: root },
+  });
   assert.equal(
     r.status, 1,
-    `guard must exit 1 on a planted raw-px violation, got ${r.status}.\n${r.stdout}${r.stderr}`,
+    `guard must exit 1 on a raw-px violation, got ${r.status}.\n${r.stdout}${r.stderr}`,
   );
   assert.match(r.stderr, /FAIL — NEW raw-px/);
-  assert.match(r.stderr, /loom-logo\.tsx/);
+  assert.match(r.stderr, /dirty\.tsx/);
+  assert.doesNotMatch(r.stderr, /clean\.tsx/, 'a tokened file must not be reported');
+});
+
+test('the fixture lane is not a rubber stamp — a clean fixture tree PASSES', () => {
+  // The complement of the test above. Without it, a guard that failed on
+  // EVERYTHING would satisfy the fail-closed assertion and look correct.
+  const root = fixtureRoot({ 'lib/components/clean.tsx': CLEAN_TSX });
+  const r = spawnSync(process.execPath, [SCRIPT], {
+    cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, NO_RAW_PX_APP_ROOT: root },
+  });
+  assert.equal(r.status, 0, `a tokened fixture must pass\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /current: 0 across 0 files/);
+});
+
+test('the fixture root reaches lib/components — the override does not silently scan nothing', () => {
+  // A fixture tree is not a git repo, so the guard's `git ls-files` discovery
+  // returns nothing there. If the override did not switch to a direct walk, the
+  // scan would cover only app/**/page.tsx and the fail-closed test above would
+  // pass while exercising HALF the guard. This pins the file that proves it.
+  const root = fixtureRoot({ 'lib/components/dirty.tsx': DIRTY_TSX });
+  const r = spawnSync(process.execPath, [SCRIPT], {
+    cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, NO_RAW_PX_APP_ROOT: root },
+  });
+  assert.match(r.stdout, /current: 2 across 1 files/, `expected both px values counted:\n${r.stdout}`);
+});
+
+test('CI never sets the override — it cannot be used to neuter the guard', () => {
+  // The override exists for THIS file. If a workflow ever set it, the merge-
+  // blocking lane would scan a directory of someone's choosing and pass
+  // trivially. That is the "gate that measures nothing" shape, so it is pinned.
+  const wfDir = path.join(REPO_ROOT, '.github', 'workflows');
+  const offenders = [];
+  for (const name of fs.readdirSync(wfDir)) {
+    if (!/\.ya?ml$/.test(name)) continue;
+    const src = fs.readFileSync(path.join(wfDir, name), 'utf8');
+    if (/NO_RAW_PX_APP_ROOT/.test(src)) offenders.push(name);
+  }
+  assert.deepEqual(offenders, [], `NO_RAW_PX_APP_ROOT must not appear in any workflow: ${offenders.join(', ')}`);
+
+  // …and the guardrails lane must still invoke the guard plainly.
+  const guardrails = fs.readFileSync(path.join(wfDir, 'loom-guardrails.yml'), 'utf8');
+  assert.match(guardrails, /node scripts\/ci\/check-no-raw-px\.mjs/);
 });
 
 test('--update-baseline emits {} — nothing left to grandfather', () => {
