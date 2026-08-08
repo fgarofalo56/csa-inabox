@@ -130,12 +130,49 @@ while IFS=$'\t' read -r ACR_REPO TAG SRC_REG SRC_REPO DIGEST; do
   # Without it a mis-typed manifest entry, a registry-side redirect, or a
   # concurrent --force overwrite would go unnoticed (deploy-integrity.md R6:
   # never report success on an unverified outcome).
-  LANDED="$(az acr manifest show-metadata "${ACR}.azurecr.io/${DST}" --query digest -o tsv 2>&1)"
+  #
+  # #3090 — STDERR IS CAPTURED SEPARATELY, NOT MERGED. This read used to be
+  #
+  #     LANDED="$(az acr manifest show-metadata … --query digest -o tsv 2>&1)"
+  #
+  # and `2>&1` is what broke it. `az acr manifest` is a PREVIEW command group,
+  # so az writes
+  #
+  #     WARNING: Command group 'acr manifest' is in preview and under development…
+  #
+  # to stderr on EVERY successful call. Merged into stdout, that banner is
+  # prepended to the digest, so `[ "$LANDED" != "$DIGEST" ]` was ALWAYS true and
+  # the step failed 3-of-3 with
+  #
+  #     digest mismatch … expected sha256:6499a680…, registry holds WARNING: Command
+  #     group 'acr manifest' is in preview … sha256:6499a680…
+  #
+  # — the expected and actual digests IDENTICAL inside a message asserting they
+  # differed, and blaming "someone re-tagged this repo out of band". Measured on
+  # full-app-deploy-commercial run 31229911331. The intent was right (keep the
+  # error text for the R7 message below); merging the streams to get it is what
+  # corrupted the verdict. Now: stdout is the value, stderr is the evidence, and
+  # they never touch. `--only-show-errors` additionally stops the preview banner
+  # being emitted at all.
+  MERR="$(mktemp)"
+  LANDED="$(az acr manifest show-metadata "${ACR}.azurecr.io/${DST}" --query digest -o tsv --only-show-errors 2>"$MERR")"
   META_RC=$?
+  META_ERR="$(tr -d '\r' < "$MERR" | tr '\n' ' ' | cut -c1-300)"
+  rm -f "$MERR"
+  # Strip any stray whitespace/CR so a trailing newline can never read as a
+  # mismatch — the failure mode above in miniature.
+  LANDED="$(printf '%s' "$LANDED" | tr -d '[:space:]')"
   if [ $META_RC -ne 0 ]; then
     # DO NOT claim the digest is wrong — we could not READ it. R7: an error must
     # not assert a cause it did not establish.
-    echo "::error::mirrored ${DST} into ${ACR} but could NOT READ BACK its manifest digest to verify it (az acr manifest show-metadata exited ${META_RC}: ${LANDED}). This is an unverified outcome, not a confirmed mismatch — most often the ACR data plane is not reachable from this runner (firewall lease not held / not yet propagated)."
+    echo "::error::mirrored ${DST} into ${ACR} but could NOT READ BACK its manifest digest to verify it (az acr manifest show-metadata exited ${META_RC}: ${META_ERR}). This is an unverified outcome, not a confirmed mismatch — most often the ACR data plane is not reachable from this runner (firewall lease not held / not yet propagated)."
+    rc=1
+    continue
+  fi
+  if [ -z "$LANDED" ]; then
+    # Exit 0 with an empty digest is not a mismatch either — it is an answer we
+    # do not understand.
+    echo "::error::mirrored ${DST} into ${ACR} but the digest read-back exited 0 and returned NOTHING. That is not an answer, so the mirrored digest is UNVERIFIED — it is not a confirmed mismatch. stderr: ${META_ERR:-<empty>}"
     rc=1
     continue
   fi

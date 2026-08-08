@@ -31,17 +31,51 @@
 #
 # So this resolver:
 #   * NEVER discards stderr — the registry's own words go to the log;
-#   * classifies with the SAME proven regex as assert-acr-image-tags.sh rather
-#     than inventing a second dialect of "is this a 404?";
+#   * classifies with the CANONICAL failure taxonomy
+#     (apps/fiab-console/lib/deploy/failure-taxonomy.json via deploy-classify.mjs)
+#     rather than a hand-rolled regex — see #3090 below;
 #   * RETRIES with backoff, which also covers the other propagation window (a
 #     manifest pushed seconds ago may 404 briefly);
 #   * FAILS CLOSED — exhausting the budget is a refusal, never a shrug;
 #   * costs ZERO extra latency when the first call resolves (no pre-sleep, no
 #     warm-up call): one `az` invocation, no sleeps. Proven in the self-test.
 #
+# ---------------------------------------------------------------------------
+# #3090 — WHY THE REGEX HAD TO GO (deploy-integrity.md R7)
+#
+# This file used to classify with:
+#
+#     ABSENT_RE='not found|does not exist|ManifestUnknown|NAME_UNKNOWN|MANIFEST_UNKNOWN|TagNotFound|404'
+#
+# and a comment claiming it was "the identical classifier
+# assert-acr-image-tags.sh uses ... adopting the existing, tested guard beats
+# writing a second one that drifts from it." Both halves were wrong. It WAS a
+# second dialect, and it was a LOOSER one than the taxonomy:
+#
+#   * a bare `404` alternation matches any az error that merely CONTAINS those
+#     three digits — a correlation id, a request id, a digest. Measured:
+#     "Correlation id: 404abc12-…" classified ABSENT.
+#   * bare `not found` / `does not exist` match ARM and network errors that say
+#     nothing about a tag.
+#
+# Every one of those is a FALSE ABSENCE — the single direction this code must
+# never get wrong, because absence is the verdict that refuses a deploy and
+# tells the operator to go rebuild images that are fine.
+#
+# The taxonomy is strictly stricter: `config.image-tag-absent` lists the exact
+# phrases the registry emits and carries `not:` exclusions for the denial forms,
+# so a firewall denial can never satisfy it. It is ONE table with two pinned
+# implementations (deploy-classify.mjs + failure-taxonomy.ts) held together by a
+# shared corpus. Delegating here makes this the third consumer of that one
+# table instead of the second dialect of it.
+#
+# FAIL CLOSED ON THE CLASSIFIER ITSELF. If the classifier cannot run, absence is
+# NOT established — the answer is UNKNOWN. A classifier that silently degrades
+# to "everything is absent" would be strictly worse than the regex.
+#
 # Exit codes — the caller MUST keep these apart:
 #   0  digest resolved; the digest (sha256:…) is on stdout
-#   3  ABSENT   — the registry answered "not found" on every attempt
+#   3  ABSENT   — the registry ANSWERED config.image-tag-absent on every attempt
 #   4  UNKNOWN  — the registry could not be READ within the budget
 #   2  usage error
 #
@@ -51,9 +85,10 @@
 #   LOOM_DIGEST_ATTEMPTS          attempts before UNKNOWN gives up (default 6)
 #   LOOM_DIGEST_ABSENT_ATTEMPTS   attempts before ABSENT is believed (default 3)
 #   LOOM_DIGEST_BACKOFF_SECONDS   backoff unit; sleep is unit*attempt (default 10)
+#   LOOM_ACR_LEASE_TTL_MINUTES    lease TTL when --lease is passed (default 15)
 #
 # Usage:
-#   scripts/ci/resolve-acr-digest.sh --acr <acrName> --image <repo:tag>
+#   scripts/ci/resolve-acr-digest.sh --acr <acrName> --image <repo:tag> [--lease]
 set -uo pipefail
 
 AZ="${LOOM_AZ_BIN:-az}"
@@ -62,19 +97,31 @@ ATTEMPTS="${LOOM_DIGEST_ATTEMPTS:-6}"
 ABSENT_ATTEMPTS="${LOOM_DIGEST_ABSENT_ATTEMPTS:-3}"
 BACKOFF="${LOOM_DIGEST_BACKOFF_SECONDS:-10}"
 
-# The identical classifier assert-acr-image-tags.sh uses (#2640). Adopting the
-# existing, tested guard beats writing a second one that drifts from it.
-ABSENT_RE='not found|does not exist|ManifestUnknown|NAME_UNKNOWN|MANIFEST_UNKNOWN|TagNotFound|404'
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+CLASSIFIER="$HERE/deploy-classify.mjs"
+LEASE_SCRIPT="$REPO_ROOT/scripts/csa-loom/acr-firewall-lease.sh"
+
+# Absence is established ONLY when the canonical taxonomy positively returns
+# `config.image-tag-absent`. Anything else — a different signal, `unknown`, a
+# missing classifier, a broken node — is NOT absence.
+_is_absent_answer() {
+  [ -f "$CLASSIFIER" ] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+  node "$CLASSIFIER" --text "$1" --assert-signal config.image-tag-absent >/dev/null 2>&1
+}
 
 ACR=""
 IMAGE=""
+USE_LEASE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --acr) ACR="${2:-}"; shift 2 ;;
     --image) IMAGE="${2:-}"; shift 2 ;;
+    --lease) USE_LEASE=1; shift ;;
     --attempts) ATTEMPTS="${2:-}"; shift 2 ;;
     --absent-attempts) ABSENT_ATTEMPTS="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '1,58p' "$0"; exit 0 ;;
+    -h|--help) sed -n '1,100p' "$0"; exit 0 ;;
     *) echo "resolve-acr-digest.sh: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
@@ -82,6 +129,34 @@ done
 if [ -z "$ACR" ] || [ -z "$IMAGE" ]; then
   echo "::error::resolve-acr-digest.sh: --acr <name> and --image <repo:tag> are required." >&2
   exit 2
+fi
+
+# --lease: the Loom ACRs sit at publicNetworkAccess=Disabled + defaultAction=Deny
+# AT REST (#2603) and every lane that calls this runs on a HOSTED runner outside
+# the VNet. So the data plane is unreachable by default and the lease is
+# load-bearing, not an optimisation. A caller that already holds the lease (the
+# multi-ref wrapper, assert-acr-image-tags.sh) omits the flag rather than
+# thrashing the firewall once per ref.
+_release_lease() {
+  if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
+    # No `|| true` (C24 / #3088): a re-lock that did not happen must not be
+    # reported as one. The digest itself is already on stdout by then, so this
+    # only converts a genuinely-unlocked registry into a non-zero exit.
+    if ! bash "$LEASE_SCRIPT" release --acr "$ACR"; then
+      echo "::error::resolve-acr-digest: the ACR firewall lease on '$ACR' could NOT be verified re-locked after the lookup. The registry may be PUBLICLY REACHABLE — see the acr-lease output above." >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
+  if ! LOOM_ACR_LEASE_TTL_MINUTES="${LOOM_ACR_LEASE_TTL_MINUTES:-15}" \
+        bash "$LEASE_SCRIPT" acquire --acr "$ACR"; then
+    echo "::error::resolve-acr-digest: could NOT acquire the ACR firewall lease on '$ACR', so the data plane is unreachable from this hosted runner and the existence of ${IMAGE} is UNPROVEN. Not probing anyway — a lookup that is guaranteed to fail would produce exactly the false verdict this script exists to prevent (#3090). See the acr-lease output above for the reason." >&2
+    exit 4
+  fi
+  trap '_release_lease' EXIT
 fi
 
 attempt=0
@@ -102,7 +177,7 @@ while :; do
     # understand. Treat it as UNKNOWN and retry rather than guessing.
     class="unreadable"
     last_detail="az exited 0 but returned no \"digest\" field: $(printf '%s' "$OUT" | tr -d '\n' | cut -c1-200)"
-  elif printf '%s' "$OUT" | grep -qiE "$ABSENT_RE"; then
+  elif _is_absent_answer "$OUT"; then
     class="absent"
     last_detail="$(printf '%s' "$OUT" | tr -d '\r' | head -n 2 | tr '\n' ' ' | cut -c1-300)"
   else

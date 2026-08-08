@@ -311,27 +311,58 @@ jobs:
         #                 and Validate live URL fails + rolls back. The
         #                 end-to-end invariant "never green having deployed a
         #                 different SHA" holds without this step guessing.
+        #
+        # #3090 — HOW THIS STEP READS THE VERDICT.
+        #
+        # It used to split the two failure states by grepping the helper's PROSE:
+        #
+        #     if grep -q 'could not READ registry' <<<"$OUT"; then …proceed…
+        #     else …REFUSE TO ROLL… fi
+        #
+        # Two ways that was wrong. (1) A guard that matches on a MESSAGE is one
+        # copy-edit away from silently inverting — the same class as the route
+        # guards that matched prose instead of behaviour. (2) It inherited the
+        # helper's own misclassification: assert-acr-image-tags.sh was mapping
+        # unreadable refs to MISSING, so the string never appeared, the `else`
+        # fired, and the roll REFUSED with "does not exist in the registry"
+        # about images that were in the registry. Measured on run 31228790204,
+        # which blocked a merged federation fix from reaching the estate.
+        #
+        # The helper now exits 3 for ABSENT and 4 for UNPROVEN and that contract
+        # is asserted by scripts/ci/test-assert-acr-image-tags.sh, so this reads
+        # the EXIT CODE. No prose is matched.
         env:
           LOOM_ACR_LEASE_TTL_MINUTES: '15'
         run: |
           set -uo pipefail
           REF="${{ env.APP_NAME }}:${{ steps.vars.outputs.tag }}"
-          OUT=$(bash scripts/ci/assert-acr-image-tags.sh \
-                  --acr "${{ env.ACR_NAME }}" --rg "${{ env.RG_NAME }}" --lease "$REF" 2>&1)
+          set +e
+          bash scripts/ci/assert-acr-image-tags.sh \
+            --acr "${{ env.ACR_NAME }}" --rg "${{ env.RG_NAME }}" --lease "$REF"
           STATUS=$?
-          echo "$OUT"
-          if [[ $STATUS -eq 0 ]]; then
-            echo "::notice::image-exists gate PASSED — ${{ env.ACR_NAME }}/$REF is in the registry."
-            exit 0
-          fi
-          # The helper exits 1 for both "absent" and "could not read". Split
-          # them on its own markers rather than treating every failure as proof
-          # of absence.
-          if grep -q 'could not READ registry' <<<"$OUT"; then
-            echo "::warning::Could not READ ${{ env.ACR_NAME }} (private endpoint / lease held by a concurrent build), so the existence of $REF is UNPROVEN — not disproven. Proceeding; the post-roll build-marker assertion (expected SHA ${{ steps.vars.outputs.expected }}) is the definitive check and will fail + roll back if the wrong image ends up serving."
-            exit 0
-          fi
-          echo "::error::REFUSING TO ROLL — ${{ env.ACR_NAME }}/$REF does not exist in the registry. The image build for this commit has not finished (or built a different app subset). Nothing to deploy; a roll would create a revision that can never pull. Wait for build-fiab-images-acr-tasks to finish this SHA, or dispatch with an image_tag that is built."
+          set -e
+          case "$STATUS" in
+            0)
+              echo "::notice::image-exists gate PASSED — ${{ env.ACR_NAME }}/$REF is in the registry."
+              exit 0
+              ;;
+            4|5)
+              # UNPROVEN (4), or present-but-re-lock-unverified (5). Neither is
+              # evidence the image is missing, so neither may be reported as
+              # such (deploy-integrity.md R7). Proceed with a loud warning: the
+              # post-roll build-marker assertion is the definitive check.
+              echo "::warning::Could not establish whether $REF exists in ${{ env.ACR_NAME }} (preflight exit $STATUS — the registry never answered the question; see its output above). This is UNPROVEN, NOT disproven, and it is NOT a reason to rebuild the image. Proceeding; the post-roll build-marker assertion (expected SHA ${{ steps.vars.outputs.expected }}) is the definitive check and will fail + roll back if the wrong image ends up serving."
+              exit 0
+              ;;
+            3)
+              echo "::error::REFUSING TO ROLL — the registry ANSWERED and ${{ env.ACR_NAME }}/$REF does not exist. The image build for this commit has not finished (or built a different app subset). Nothing to deploy; a roll would create a revision that can never pull. Wait for build-fiab-images-acr-tasks to finish this SHA, or dispatch with an image_tag that is built."
+              exit 1
+              ;;
+          esac
+          # Any other code is the PREFLIGHT failing, not a verdict about the
+          # image (exit 2 is a usage error — i.e. a Loom bug in this step's
+          # arguments). Fail closed, and claim nothing about the tag.
+          echo "::error::REFUSING TO ROLL — the image-exists preflight itself failed with exit $STATUS, which is not one of its verdicts (0 present / 3 absent / 4 unproven / 5 re-lock unverified). Nothing is established about $REF. This is a defect in the gate invocation, not a statement about the registry; see scripts/ci/assert-acr-image-tags.sh."
           exit 1
 
       - name: Gate — require vitest (node 20) success for the rolled commit
