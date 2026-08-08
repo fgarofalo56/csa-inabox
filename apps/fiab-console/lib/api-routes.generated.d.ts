@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1672 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1673 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -727,6 +727,7 @@ export type StaticApiRoute =
   | '/api/powerplatform/environments'
   | '/api/powerplatform/environments/operation'
   | '/api/powerplatform/flows'
+  | '/api/powerplatform/solutions'
   | '/api/powerplatform/tables'
   | '/api/pub/swa-bundle'
   | '/api/real-time-hub/sources'
