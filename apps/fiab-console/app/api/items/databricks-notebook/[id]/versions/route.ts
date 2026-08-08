@@ -17,12 +17,47 @@
  * returned inline — restore is a client-side load + Save (workspace/import).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
+import type { SessionPayload } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemVersionsContainer } from '@/lib/azure/cosmos-client';
 import type { ItemVersionDoc } from '@/lib/versions/item-version-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const NB_ITEM_TYPE = 'databricks-notebook';
+const NB_NOT_FOUND = 'notebook not found';
+
+/**
+ * C22 (#3122) — neither handler authorized the caller against the notebook.
+ * `item-versions` is partitioned by `/itemId`, so `[id]` alone reached ANY
+ * tenant's notebook history: GET returned the full serialized SOURCE of every
+ * snapshot, and POST wrote snapshots into someone else's history.
+ *
+ * The route-guard checker could not see it. GET carried no signal but its
+ * sibling POST mentions `session.claims.oid` — as the snapshot's `savedBy`
+ * ATTRIBUTION, never as a check — and the signal test was applied to the FILE.
+ * Presence of the caller's oid was read as proof the caller was authorized.
+ *
+ * `authorizeItemWorkspace` runs the canonical owner → tenant-admin → shared-ACL
+ * ladder and resolves the workspace FROM THE ITEM when `?workspaceId=` is
+ * omitted, so authorization cannot be skipped by dropping the parameter.
+ */
+async function denyUnlessAuthorized(
+  session: SessionPayload,
+  id: string,
+  workspaceId: string | null,
+  opts?: { allowReadRoles?: boolean },
+) {
+  return authorizeItemWorkspace(session, {
+    workspaceId,
+    itemId: id,
+    itemType: NB_ITEM_TYPE,
+    notFound: NB_NOT_FOUND,
+    ...(opts?.allowReadRoles ? { allowReadRoles: true } : {}),
+  });
+}
 
 const MAX_VERSIONS_PER_PATH = 100;
 
@@ -38,11 +73,12 @@ function is503(e: any): boolean {
   return e?.code === 'cosmos_not_configured' || e?.name === 'CosmosNotConfiguredError';
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const path = (req.nextUrl.searchParams.get('path') || '').trim();
+  // READ surface → any workspace role may view version history.
+  const denied = await denyUnlessAuthorized(session, id, req.nextUrl.searchParams.get('workspaceId'), { allowReadRoles: true });
+  if (denied) return denied;
   try {
     const container = await itemVersionsContainer();
     const { resources } = await container.items
@@ -79,13 +115,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
+  // WRITE surface → intentionally NO `allowReadRoles`: a read-only Viewer must
+  // not be able to write into another member's notebook history.
+  const denied = await denyUnlessAuthorized(session, id, (body?.workspaceId || '').toString() || null);
+  if (denied) return denied;
   const path = (body?.path || '').toString().trim();
   const language = (body?.language || 'PYTHON').toString();
   const source = (body?.source ?? '').toString();
@@ -134,4 +172,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
