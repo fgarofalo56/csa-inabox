@@ -25,14 +25,38 @@ grounded in current docs, not memory:
 
 **Grade: D (Stubbed→Functional, data path broken at time of grading).** NOT A+.
 
-Of 59 inventory rows: **19 built ✅**, **13 honest-gate ⚠️**, **27 MISSING ❌**.
+Of **85** inventory rows: **28 built ✅**, **20 honest-gate ⚠️**, **37 MISSING ❌**.
 
-*(Re-graded twice. 21/12/25 inferred → 18/14/26 after the first post-deploy walk
-(RC-7) → 19/13/27 after the in-browser run 31238543755, which PROVED one row
-rather than inferring it. See "What the browser run proved" below.)*
+Counts are COMPUTED from the tables below, not asserted. Verify with:
 
-**No authenticated catalog read has yet returned 200 on this estate.** The grade
-stays **D** until one does (RC-9).
+```bash
+python - <<'EOF'
+import io, re
+rows = [l for l in io.open('docs/fiab/parity/external-engine-federation.md',
+        encoding='utf-8').read().split('\n') if re.match(r'^\| *[0-9]+\.[0-9]+ *\|', l)]
+for m in ('✅', '⚠️', '❌'):
+    print(m, sum(1 for r in rows if r.split('|')[3].strip().startswith(m)))
+print('total', len(rows))
+EOF
+```
+
+> **Correction (2026-08-08).** Every earlier revision of this doc reported a total
+> of 58/59/60 rows. **That was wrong, and it was my error.** The first version
+> counted the capability list I had researched rather than the rows I actually
+> wrote into the tables, and each re-grade then hand-incremented that wrong
+> total instead of recounting — so the headline drifted further from its own
+> evidence with every pass that was otherwise getting more accurate.
+>
+> The per-row verdicts and every movement between them were real and are
+> unchanged; only the totals were wrong. This is the same defect class the rest
+> of this document catalogues — a summary that no longer matches the thing it
+> summarises — so the count is now derived by the command above rather than
+> maintained by hand.
+
+**An authenticated catalog read now returns 200** (`/api/catalog/metastores`,
+real metastore, zero errors) — the auth chain is closed. The **Iceberg** read
+still does not, and that is the row this doc grades, so the grade stays **D**
+(RC-12).
 
 ## What the browser run PROVED — first working federation behaviour
 
@@ -393,6 +417,99 @@ nothing for the failing call. The console's own error envelope — which passes 
 upstream body through verbatim — has been the **only** diagnostic available for
 all three.
 
+### THE AUTH CHAIN NOW WORKS — measured, and it is a real advance
+
+RC-9 is deployed (`loom-unity:36b765e4` on BOTH `loom-unity--0000003` and
+`iceberg-catalog--0000002`). The catalog's own startup log shows the derived-issuer
+path resolving against the live tenant:
+
+```
+[loom-unity] IDP-REACHABILITY: ok host=login.microsoftonline.com discovery=200 jwks=200
+[loom-unity] auto-bind: registered the Console principal … as an ENABLED Unity Catalog user (HTTP 201)
+```
+
+And the sibling Unity read — same console, same managed identity, same exchanged
+internal token — now returns real data where it previously returned an error:
+
+```
+GET /api/catalog/metastores  ->  200 in 1731ms
+{"ok":true,"unity":[{"metastore_id":"…","name":"OSS Unity Catalog (loom-unity)", …}]}
+unityWorkspaceErrors: []      <- was: "Invalid issuer" on every call
+```
+
+**An authenticated catalog read returns 200.** Three stacked defects — RC-1 (raw
+Entra token), RC-7 (missing `requested_token_type`), RC-9 (v2.0-only issuer
+allow-list) — are all closed, and the remaining Iceberg failure is a DIFFERENT
+defect, not a recurrence. That distinction matters: the next reader must not be
+sent back to the token path, which this same measurement proves healthy.
+
+The grade stays **D** because the *Iceberg* read still does not return 200, and
+that is the row this doc is about.
+
+### RC-12 — the `loom` warehouse is never provisioned (leading hypothesis, NOT yet confirmed)
+
+Measured 2026-08-08, warm, minted session, immediately after the RC-9 roll:
+
+| Call | Upstream | ms |
+|---|---|---|
+| `/api/catalog/iceberg/config` (`?warehouse=loom`) | **403** | 243 |
+| `/api/catalog/iceberg/namespaces` | **500** | 539 |
+
+Two DIFFERENT upstream statuses from the same freshly-restarted server, while the
+credential is demonstrably accepted elsewhere. That is the shape of a **missing
+warehouse**, not a broken transport and not a refused identity:
+
+- the warehouse NAME is correct — `LOOM_ICEBERG_CATALOG_WAREHOUSE` defaults to
+  `loom` and the Trino container is wired to the same value;
+- but nothing in the deploy ever CREATES a catalog called `loom` on
+  `iceberg-catalog`;
+- and per RC-2 that app runs an ephemeral H2 DB which re-seeds from the image on
+  every restart — so even a hand-created warehouse would not survive the next
+  scale-to-zero.
+
+**Both earlier leads converge here.** The `_WAREHOUSE` lead was correctly killed
+when the failure was a 401 identity refusal (a 401 is not a missing-warehouse
+error) — but it returns on the new evidence, and not as a config-value problem:
+the value is right, the OBJECT it names was never provisioned. Under
+`auto-bind-by-default.md` §1 creating that backing object is the platform's job,
+so this is a provisioning defect, not a configuration one.
+
+**Stated as a hypothesis, because it is one.** Confirming it needs a catalog
+listing against the `iceberg-catalog` host specifically, and no console route
+exposes that — `/api/catalog/browse?source=unity-catalog` reads `LOOM_UNITY_URL`
+(the Postgres-backed sibling, which DOES hold a metastore), not
+`LOOM_ICEBERG_CATALOG_URL`. An empty list on the Iceberg host confirms this
+diagnosis; a populated one refutes it. That probe is the next step and is
+deliberately not asserted here as fact.
+
+### RC-13 — there is NO automated path to roll the two catalog apps
+
+`loom-unity` and `iceberg-catalog` had to be rolled BY HAND to deploy RC-9:
+
+- `full-app-deploy-commercial` builds the image but its own comment records that
+  loom-unity is *"deployed out-of-band, not by admin-plane"*;
+- `loom-roll-and-validate` rolls only the console.
+
+So the one image that carries the catalog's entire authorization behaviour has no
+deploy path of its own. Every fix to it is an operator-run sequence, which is the
+state `deploy-integrity.md` R1 and `auto-bind-by-default.md` §5 both forbid.
+
+Two traps recorded from that hand-roll, because either would silently produce a
+no-op deploy:
+
+- Both apps run a **SHA-pinned** tag (`089fb622` → `36b765e4`). A build with
+  `tag_override=v0.1` changes nothing at all while reporting success.
+- Revert path, if ever needed: `--image <acr>/loom-unity:089fb622` on both apps.
+
+### RC-8 confirmed as a distinct, timing-shaped failure
+
+In run 31250866889 the federated-query test passed on retry 1 and the Unity test
+passed on retry 2, while the Iceberg test failed all three attempts. That split is
+the signature of RC-8 (a ~23s scale-to-zero cold start against a 10s client
+timeout, now raised to 45s) being a SEPARATE problem from the Iceberg 500 — the
+retry-passing tests are cold-start noise, the Iceberg failure is deterministic.
+Worth keeping apart: a fix to one will not move the other.
+
 ## Feature inventory vs Loom coverage
 
 Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
@@ -402,7 +519,7 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 | # | UC capability (doc) | Loom | Backend / note |
 |---|---|---|---|
 | 1.1 | IRC endpoint exposed for external clients | ✅ | `iceberg-catalog` ACA at `/api/2.1/unity-catalog/iceberg`; proxied by `/api/catalog/iceberg/*`. Reachability PROVEN in-browser (401 unauthenticated, 502-with-upstream-body authenticated — both prove the hop lands) |
-| 1.2 | OAuth auth to IRC | ⚠️ | Entra bearer → internal-token exchange. RC-1 and RC-7 both fixed and LIVE; blocked now on RC-9 (issuer). The exchange is well-formed and reaches the server — it is the issuer check that refuses |
+| 1.2 | OAuth auth to IRC | ✅ | **WORKING.** Entra bearer → RFC-8693 exchange → server-minted internal token. RC-1, RC-7 and RC-9 all fixed and LIVE; the catalog logs `discovery=200 jwks=200` and registers the Console principal HTTP 201, and the sibling Unity read returns 200 through the same credential |
 | 1.3 | PAT auth to IRC | ✅ | Loom scoped API tokens accepted by the BFF proxy |
 | 1.4 | Get catalog URI + auth config in UI | ⚠️ | `/admin/catalog` "Connect an external engine" snippets — but the page is admin-gated and 403s (RC-4) |
 | 1.5 | Snowflake catalog-linked database | ❌ | snippet only; no linked-DB flow |
@@ -477,6 +594,7 @@ Legend: ✅ built · ⚠️ honest gate / partial · ❌ missing
 | 5.8 | No filters/masks on foreign tables | ✅ | same limitation, honestly |
 | 5.9 | Audit logging of external access | ✅ | **Loom EXCEEDS**: every IRC read/write writes a Cosmos `_auditLog` row with principal + namespace/table scope; LIST aggregated. Enforced by a CI chokepoint guard |
 | 5.10 | OAuth M2M for external clients | ⚠️ | console UAMI only; no third-party service principal onboarding |
+| 4.13 | **A deploy path for the catalog itself** | ❌ | **RC-13.** `loom-unity` and `iceberg-catalog` have NO automated roll: `full-app-deploy-commercial` builds the image but declares loom-unity *"deployed out-of-band"*, and `loom-roll-and-validate` rolls only the console. Both apps are SHA-pinned, so a `tag_override=v0.1` build is a silent no-op. UC is a managed service with no equivalent exposure |
 | 5.11 | **Fails CLOSED when its own credential cannot be resolved** | ❌ | **Loom is WEAKER than UC here.** `icebergAuthHeader()` returns `{}` — i.e. sends the request ANONYMOUSLY — when no audience resolves. The stated rationale is "the catalog has internal ingress and the VNet is the perimeter", which holds only while that ingress stays internal. A misconfiguration therefore degrades to anonymous access instead of erroring. This is the same posture as #2643, where Gov's `loom-unity` ran with authorization DISABLED and took anonymous read **and mutate** from 07-15 — so it is a repeat on a second component, not a one-off. UC has no equivalent silent-anonymous path. Note a FAILED exchange now throws (F1); this row is specifically the *no-audience* branch |
 
 ### 6. Lineage
@@ -619,8 +737,17 @@ The spec reports a deliberate three-way verdict on the data path — `working` /
 RC-1 fix is recorded honestly instead of being smoothed into a pass or thrown as
 a false regression.
 
-**This surface is NOT A+ and this doc does not claim it is.** 26 ❌ is the real
-count, and the re-grade moved rows DOWN, not up. A+ requires, at minimum: RC-9 deployed (RC-1 and RC-7 already are), RC-10 and
-RC-11 fixed, RC-2 durable, RC-4 unblocked, credential vending built, and Gov at
-parity. **No authenticated catalog read has yet returned 200 on this estate** —
-until one does, no grade above D is defensible, and this doc does not claim one.
+**This surface is NOT A+ and this doc does not claim it is.** 37 ❌ is the real
+count, computed from the tables above — and across four re-grades rows have moved
+both down (measurement replacing inference) and up (the auth chain now proven).
+
+A+ requires, at minimum: RC-12 (warehouse provisioning) and RC-2 (persistence)
+fixed together — provisioning a warehouse into an ephemeral DB solves nothing —
+plus RC-13 (a deploy path), RC-10, RC-11, RC-4, credential vending, and Gov at
+parity.
+
+**What changed:** an authenticated catalog read DOES now return 200
+(`/api/catalog/metastores`, real metastore, zero errors), so the auth chain is
+closed and proven. The **Iceberg** read still does not, which is the row this doc
+grades. Grade stays **D** — but the remaining failure is provisioning, not
+authentication, and those must not be conflated.
