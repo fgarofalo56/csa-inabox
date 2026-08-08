@@ -721,7 +721,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 37,
-      "status": "todo",
+      "status": "review",
       "title": "SWEEP for the apex-A3 silent-failure class: C14 found ducklake-catalog rendered 'Reading the DuckLake catalog…' FOREVER on a 500/403 — no error, no retry, asserting an in-progress read that had already FAILED (R7). Identical to the bug fixed in s3-gateway and pinned by its test, never propagated. C14 fixed+mutation-proved this one; sweep every useQuery + throwing-fetcher consumer with no isError branch",
       "depends_on": [],
       "validation": {
@@ -732,9 +732,15 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "guard-adoption-gap class: the correct pattern existed and was tested in ONE place, siblings never adopted it"
-      ]
+      "evidence": "PREMISE PARTLY STALE AND THAT MATTERED. A C20 sweep ALREADY LANDED in #3073 (ancestor of HEAD) - but it DEFERRED 46 OCCURRENCES INTO A RATCHET BASELINE and its own reason was scoping, not coverage: the allowlist-as-avoidance case. The real work was draining it and auditing whether the guard watched anything. IT LARGELY DID NOT: RULE 2 derived throwing fetchers from lib/api/workspaces.ts ALONE and matched 'queryFn:' up to the first comma, so it saw 8 OF 46 throwing queries AND PRINTED OK - blind to every inline-arrow queryFn (ten admin panels) and every fetcher imported from elsewhere, including clientFetch, which is what makes nearly all of them throwing. MEASURED: 49 queries enumerated with fetchers resolved THROUGH IMPORTS; 46 of 49 can throw; 19 had no error branch bound to the query; 15 genuinely broken and FIXED; 2 deliberate (allowlisted WITH the measurement). Baseline drained 46 -> 38, rule-2 entries 8 -> 0. Rule 1 (C19 data-loss class) untouched, NOT weakened.",
+      "pr": 3138,
+      "worst_finds": "PowerAppEditor rendered \"This item isn't bound to a Power App yet\" FOR AN APP THAT IS BOUND - inviting a re-bind over a binding Loom had merely failed to READ. That is a destructive-action-invited-by-a-false-claim, R7 at its worst. Also: assets rendering a rollup of literal 0; finops asserting 'No breakdown data' about the customer's real Azure spend; lakehouse/warehouse silently dropping persisted content. COVERAGE WAS MEASURED NOT ASSUMED: app/items/[type]/[id]/page.tsx returns <Editor/> BEFORE its own q.error branch, so that branch is DEAD for every item with a dedicated editor - and its comment explicitly delegates the error state to the editor. Six editors never honored it.",
+      "guard": "Mutation-proved 8/8: control GREEN; M1 delete bar RED; M1b full revert RED; M2 inline-arrow thrower RED; M3 imported thrower RED; M4 bystander catch(error) RED; M5 blind the resolver EXIT 2 (fails loud); M6 stale baseline RED; final control GREEN. Keyed on the SAFE pattern.",
+      "three_traps_only_mutation_caught": "(1) M1b FIRST RAN GREEN because the rule was satisfied by 'itemQ.isError' surviving in the EXPLANATORY COMMENT ABOVE THE FIX - i.e. THE BETTER A FIX IS DOCUMENTED, THE MORE LIKELY ITS OWN COMMENT KEEPS THE GUARD QUIET AFTER THE FIX IS REMOVED. Comments are now blanked length-preservingly. Same family as the shellcheck-comment trap. (2) The harness's relative 'cd' landed OUTSIDE the worktree, so every mutant 'passed' without the guard running at all. (3) 'git checkout --' restored from HEAD and SILENTLY REVERTED uncommitted guard fixes mid-run, faking M1b as a guard hole twice; now restores from a working-tree backup.",
+      "self_caught": "The agent's own specs caught a bug in its own fix before it shipped: getItem reads /api/cosmos-items/..., so six of its new error bars named /api/items/... - an error bar naming a route that was NEVER CALLED is itself an R7 false claim.",
+      "verified": "tsc clean; 167 spec files / 970 tests green; new spec 4/4 mutation-proved; s3-gateway + ducklake retrofitted onto the shared component FIRST and their 8 pinned specs stayed green (that is what proves it is behaviour-identical); all 41 guardrails run INDIVIDUALLY (not under bash -e) and pass; check-file-size held at its frozen ceiling by COMPACTING data-agent-editor - THE RATCHET WAS NOT RAISED. NOT RUN: check-workflow-actionlint (binary absent locally; no workflow files changed).",
+      "owed": "BROWSER RECEIPT OWED - not deployed, not verified live. loom-ui-verify has been RED since 2026-08-04 (C13). Receipt command in the PR body: force /api/cosmos-items/power-app/<id> to 500 and confirm the honest bar + Retry appear and \"isn't bound yet\" does NOT.",
+      "left_deliberately": "38 remaining RULE-1 baseline occurrences (C19's data-loss class - different rule, much larger change). semantic-model/admin-overview/admin-runtime-flags were already honest for RESOLVED failures and were UPGRADED for REJECTED ones rather than allowlisted, so the allowlist holds only the 2 genuinely-deliberate entries."
     },
     {
       "id": "C22",
