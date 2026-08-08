@@ -53,6 +53,29 @@ describe('exchangeForInternalUcToken', () => {
     expect(form.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:token-exchange');
     expect(form.get('subject_token_type')).toBe('urn:ietf:params:oauth:token-type:id_token');
     expect(form.get('subject_token')).toBe('entra-subject');
+    // F1 — REQUIRED. Omitting it is answered 400 "Unsupported requested token
+    // type: null", which is what the live catalog returned for months: the
+    // client sent three params where the server requires four, and every test
+    // here doubled the endpoint with a stub that accepted ANY body, so the
+    // suite modelled the code rather than the server.
+    expect(form.get('requested_token_type')).toBe('urn:ietf:params:oauth:token-type:access_token');
+  });
+
+  it('sends EXACTLY the four params the live authz harness sends — no more, no fewer', async () => {
+    // Non-vacuity: this is the assertion whose ABSENCE let a three-param request
+    // ship. It is pinned as a set, so dropping one or silently adding an
+    // unsupported one both fail. The reference is
+    // apps/loom-unity/tests/authz/authz-e2e.sh lines 136-139 / 154-157, which
+    // runs against the real image.
+    fetchMock.mockResolvedValue(ok({ access_token: 'internal-abc' }));
+    await exchangeForInternalUcToken('entra-subject');
+    const form = new URLSearchParams(fetchMock.mock.calls[0][1].body as string);
+    expect([...form.keys()].sort()).toEqual([
+      'grant_type',
+      'requested_token_type',
+      'subject_token',
+      'subject_token_type',
+    ]);
   });
 
   it('caches, so a second call does NOT re-exchange', async () => {

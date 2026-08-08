@@ -19,6 +19,7 @@
  */
 
 import { test, expect, type APIResponse } from '@playwright/test';
+import { classifyProbeResponse, type ProbeResult } from '@/lib/verify/probe-classify';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,43 +27,9 @@ import { test, expect, type APIResponse } from '@playwright/test';
 
 const BASE = process.env.LOOM_URL!;
 
-type ProbeResult =
-  | { kind: 'pass'; status: number }
-  | { kind: 'gate'; status: number; body: string }
-  | { kind: 'fail'; status: number; body: string };
-
-/**
- * Classify an API response:
- *   2xx          → pass
- *   404 / 503 with a JSON body that has ok:false OR gate:true OR a message
- *                → gate (honest infra gap, not a test failure)
- *   everything else 4xx / 5xx → fail
- */
+/** Thin adapter over the extracted, unit-tested classifier. */
 async function classify(res: APIResponse): Promise<ProbeResult> {
-  const status = res.status();
-  if (status >= 200 && status < 300) {
-    return { kind: 'pass', status };
-  }
-
-  let body = '';
-  try { body = (await res.text()).slice(0, 400); } catch { /* ignore */ }
-
-  // Treat 404 / 503 with structured JSON as an honest gate
-  if (status === 404 || status === 503) {
-    try {
-      const parsed = JSON.parse(body) as Record<string, unknown>;
-      if (
-        parsed.ok === false ||
-        parsed.gate === true ||
-        typeof parsed.message === 'string' ||
-        typeof parsed.error === 'string'
-      ) {
-        return { kind: 'gate', status, body };
-      }
-    } catch { /* not JSON — fall through to fail */ }
-  }
-
-  return { kind: 'fail', status, body };
+  return classifyProbeResponse(res.status(), () => res.text());
 }
 
 function annotateLine(url: string, r: ProbeResult): string {
