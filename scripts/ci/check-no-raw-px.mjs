@@ -1,36 +1,40 @@
 #!/usr/bin/env node
 /**
- * GUARDRAIL: no-raw-px-inline-style  (merge-blocker, RATCHETING)
+ * GUARDRAIL: no-raw-px-inline-style  (merge-blocker, ABSOLUTE)
  * ------------------------------------------------------------------------
  * RULE (web3-ui — BLOCKING GLOBAL): front-end surfaces use Loom/Fluent design
  *   tokens, never hard-coded px. "Raw numbers like `padding: 16` / `gap: 12`
  *   are a rule violation; use the spacing tokens" (`tokens.spacingVertical*` /
  *   `tokens.spacingHorizontal*`), and `fontSize` uses `tokens.fontSize*`.
  *
- * WHAT IT DOES (ratchet, not full-clean):
+ * WHAT IT DOES:
  *   Scans INLINE style regions — `style={{ ... }}` JSX attributes and
  *   `: React.CSSProperties = { ... }` objects — under lib/editors, lib/panes,
  *   lib/components, and app page.tsx files, and counts numeric values on the
  *   spacing / fontSize properties (`gap`/`padding*`/`margin*`/`fontSize: 16`).
- *   Each such value is a raw-px violation. A large BACKLOG of these predates
- *   the token sweep (rel-T56); rather than block on the whole backlog, this
- *   guard RATCHETS: the current per-file counts are frozen as BASELINE, and CI
- *   fails only when a file's count RISES above its baseline (i.e. NEW raw-px
- *   was introduced). Migrate a file's remaining px to tokens and its baseline
- *   drops — the ratchet only tightens.
+ *   Each such value is a raw-px violation.
+ *
+ * NO LONGER A RATCHET. This guard shipped as one, because a large backlog
+ * predated the token sweep (rel-T56) and blocking on the whole backlog was not
+ * viable; per-file counts were frozen in BASELINE and CI failed only on a RISE.
+ * That backlog is now fully drained (18 -> B-U12 -> 7 -> C4 -> 0), BASELINE is
+ * `{}`, and the guard is ABSOLUTE: the FIRST raw-px value re-introduced
+ * anywhere in scope fails the build. See the BASELINE sentinel block below.
  *
  * Only INLINE-style regions are scanned, so a numeric `padding`/`fontSize`
  * consumed as a NUMBER by a chart/layout lib (recharts, react-flow) is never
- * counted.
+ * counted. Layout TRACK sizes (`width`/`height`/`minWidth`/`maxWidth`/grid
+ * templates) are deliberately out of scope — Fluent ships no token for an
+ * arbitrary track dimension, so demanding one would force a fake token.
  *
- * HOW TO CLEAR A NEW FAILURE:
+ * HOW TO CLEAR A FAILURE:
  *   Map the raw value to the nearest token (Fluent spacing scale: XXS 2, XS 4,
  *   SNudge 6, S 8, MNudge 10, M 12, L 16, XL 20, XXL 24, XXXL 32; fontSize →
- *   tokens.fontSizeBase* / Hero*). Run the one-shot codemod for the bulk:
+ *   Base 10/12/14/16/20/24, Hero 28/32/40/68). Bulk codemod:
  *     node apps/fiab-console/scripts/codemod-raw-px-to-tokens.mjs --apply
- *   then refresh the baseline:
- *     node scripts/ci/check-no-raw-px.mjs --update-baseline
- *   and paste the emitted JSON into BASELINE below.
+ *   DO NOT clear a failure by re-populating BASELINE — that re-grandfathers
+ *   debt and lowers the ratchet. `scripts/ci/__tests__/no-raw-px-baseline-empty.test.mjs`
+ *   fails if you do (and also proves this guard still fails closed).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -127,18 +131,28 @@ function scan() {
 }
 
 // __BASELINE_START__  (regenerate with --update-baseline)
-// 5 files, 7 grandfathered raw-px inline-style values remaining after the
-// rel-T56 codemod + the B-U12 token sweep (18 -> 7). What's left has no exact
-// Fluent token: a list indent (paddingLeft:18), an 11px tagline + 1px optical
-// nudge in the SVG wordmark, a 48px score glyph, a 22px KPI figure, and two
-// 44px empty-state icon glyphs.
-const BASELINE = {
-  "apps/fiab-console/lib/components/admin-security/not-configured-bar.tsx": 1,
-  "apps/fiab-console/lib/components/admin/health-pane.tsx": 1,
-  "apps/fiab-console/lib/components/foundry/foundry-charts.tsx": 1,
-  "apps/fiab-console/lib/components/loom-logo.tsx": 2,
-  "apps/fiab-console/lib/editors/data-product-detail.tsx": 2,
-};
+// EMPTY — the raw-px backlog is FULLY DRAINED (rel-T56 codemod -> B-U12 token
+// sweep 18 -> 7 -> C4 final drain 7 -> 0). With an empty baseline this guard is
+// no longer a ratchet, it is ABSOLUTE: any raw-px spacing/fontSize value newly
+// introduced into an inline-style region under lib/editors, lib/panes,
+// lib/components, or an app page.tsx fails CI immediately.
+//
+// The final 7 all had NO exact Fluent token (48/44/22/18/11/1 px). They were
+// resolved by snapping to the nearest step on the Fluent scale, or — better —
+// by deleting an override that was fighting a shared primitive:
+//   health-pane score glyph        fontSize 48 -> fontSizeHero900 (40px)
+//   foundry-charts KPI figure      fontSize 22 -> fontSizeBase600 (24px)
+//   loom-logo tagline              fontSize 11 -> fontSizeBase200 (12px)
+//   loom-logo optical nudge        marginTop 1 -> spacingVerticalXXS (2px)
+//   not-configured-bar list indent paddingLeft 18 -> spacingHorizontalXL (20px)
+//   data-product-detail (x2)       fontSize 44 override DELETED — EmptyState's
+//                                  own .illustration slot already sets 40px, so
+//                                  these were the only two call sites in the
+//                                  repo overriding the shared primitive.
+//
+// DO NOT re-populate this object to land new raw px. Convert the value instead.
+// `scripts/ci/__tests__/no-raw-px-baseline-empty.test.mjs` asserts it stays {}.
+const BASELINE = {};
 // __BASELINE_END__
 
 function main() {

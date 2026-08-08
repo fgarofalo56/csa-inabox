@@ -164,7 +164,7 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 |---|---|---|---|
 | 2.4 | Action validation rules + side effects (webhook/notify/audit chain) | W1 | ✅ COMPLETE — validation rules E2E'd (#2200, rev 0000340); audit chain via checkpoints (#2196); lineage side-effect SHIPPED (#2202, emitLineage → Thread/Purview). External webhook deferred (freeform-URL rule); lineage covers the Loom-native side-effect |
 | 2.6 | Ontology instance explorer (search/facet/traverse/saved explorations) | W1 | ✅ SHIPPED + E2E'd (#2195, search-fix #2197) |
-| 4.1 | Workshop widget catalog 7→~40 + variables/events/interactions | W3 | open |
+| 4.1 | Workshop widget catalog 7→~40 + variables/events/interactions | W3 | ✅ **SHIPPED — re-measured 2026-08-08 (FINISHLINE C4).** ~~open~~. The catalog is at **43 kinds** (`WorkshopWidgetKind`, `_workshop-model.ts:66`), past the ~40 target, and **all 43 carry a `KIND_META` entry** (label/icon/hint/data-bound) plus a `DEFAULT_SIZE` — verified programmatically, zero gaps. Variables (`WorkshopVariable`), events (`WorkshopEventTrigger` ×3 → `WorkshopEventEffect` ×6) and interactions are wired through `workshop-app-builder.tsx`. §"Tabs child-widget nesting" below already recorded the last deferred note closing in #2235 with "zero tracked notes remain on the catalog" — this row simply never got flipped. Residual for the row: **none**. |
 | 3.2 | Quiver card catalog 5→~30 (TS analysis families) | W3 | open |
 | 3.1 | analysis-board (Contour) — net-new | W2 | open |
 | 3.3/3.4 | notepad + fusion-sheet — net-new | W5 | open |

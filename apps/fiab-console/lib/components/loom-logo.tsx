@@ -85,7 +85,7 @@ export function LoomLogo({
           }}>
             Cloud Scale Analytics
           </span>
-          <span style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>
+          <span style={{ fontSize: tokens.fontSizeBase200, opacity: 0.7, marginTop: tokens.spacingVerticalXXS }}>
             Weaving every Azure data service into one experience
           </span>
         </>
