@@ -265,9 +265,17 @@ jobs:
       # is idempotent, so running it again here is free.
       - name: Release the ACR firewall lease (always)
         if: always()
+        # C24 (#3088): NO `|| true`. This is the SAFETY-NET release — it runs
+        # exactly when the build died before its inline release, which is the
+        # single likeliest way a registry is left publicly reachable. Discarding
+        # its verdict made this the last surviving instance of the C24 defect: a
+        # green re-lock step over a possibly-open registry. The `|| true` sat on
+        # the CONTINUATION line, so the per-line guard in
+        # scripts/ci/__tests__/acr-firewall-lease-close.test.mjs could not see
+        # it; that guard now joins continuations (and scans scripts/ too).
         run: |
           bash scripts/csa-loom/acr-firewall-lease.sh release \
-            --acr "${{ steps.resolve.outputs.acr }}" || true
+            --acr "${{ steps.resolve.outputs.acr }}"
 
       # ── Deploy green as a NEW revision at 0% traffic ──────────────────────────
       - name: Deploy green revision (0% traffic)

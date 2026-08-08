@@ -137,7 +137,18 @@ echo ""
 echo "[provision-gh-runner] 1/3 Acquiring the ACR firewall lease (opens the registry)..."
 bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
 release_acr_lease() {
-  bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB" || true
+  # Preserve the status the script was already exiting with, so a clean re-lock
+  # never masks a failed build (see deploy-loom-uat-job.sh for the measurement:
+  # a bare non-zero command in an EXIT trap does NOT set the script's status).
+  local rc=$?
+  # C24 (#3088): NO `|| true`. `release` VERIFIES the registry reads back
+  # publicNetworkAccess=Disabled + defaultAction=Deny; discarding that verdict
+  # is a script exiting 0 over a publicly reachable registry.
+  if ! bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"; then
+    echo "[provision-gh-runner] ERROR: could NOT verify $ACR_NAME re-locked — it may be PUBLICLY REACHABLE. See the remediation above; the scheduled acr-firewall-sweeper will retry." >&2
+    exit 1
+  fi
+  exit "$rc"
 }
 trap release_acr_lease EXIT
 
