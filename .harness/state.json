@@ -688,6 +688,9 @@
         "tests written for 9: ducklake-catalog, ai-red-team (ASR/refusal not swapped), data-contract (derive-MERGE preserves annotations), data-quality (no_rules ≠ pass), synthetic-data (the PII→synthetic GUARANTEE), feature-table (timestamp-key gate — relax it and every training set leaks), fusion-sheet, notepad, analysis-board",
         "20 tests remain: agent-flow, data-api-builder, data-marketplace, batch-pool, mapping-dataflow, activation-sync, transformation-project, linked-service, integration-runtime, logic-app, model-serving-endpoint, fine-tuning-job, postgres-flexible-server, azure-cosmos-account, loom-app, workshop-app, slate-app, health-check, workspace-monitor, digital-twin (largest/highest-value remaining)",
         "local: tsc clean, check-no-raw-px at baseline, 13 spec files / 123 tests green exit 0"
+      ],
+      "followups": [
+        "fusion-sheet PR #3135: no keyboard access AT ALL (<div onClick>, WCAG 2.1.1), no undo, hard-coded 20x10 hiding stored cells. All three fixed, two mutation proofs."
       ]
     },
     {
@@ -772,7 +775,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 36,
-      "status": "todo",
+      "status": "review",
       "title": "C14-found: G2 breached on 9 of 14 audited surfaces — only sql-lab, ducklake-catalog, s3-gateway and feature-table use the shared HonestGate with Fix-it. Folds into C15 (G2 Fix-it coverage ~131/160 gates). ALSO: ai-red-team's attack-success rate is computed from PLAINTEXT PROBES ONLY (no PyRIT converters, no composition, no multi-turn) and the surface presents the number without that caveat — a 0% score has NOT shown a deployment is safe",
       "depends_on": [],
       "validation": {
@@ -783,17 +786,15 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "the ai-red-team caveat is a safety-signal integrity issue, not cosmetic",
-        "fusion-sheet also has no keyboard nav, no undo, hard-coded 20x10 grid — a spreadsheet you must click every cell of"
-      ]
+      "evidence": "C21 REAL, AND TWO ADDITIONAL DEFECTS ARE WORSE THAN THE REPORTED ONE. (1) Scope: 20 plaintext single-turn probes, no caveat (as reported). (2) ORCHESTRATOR-VERIFIED ON ORIGIN/MAIN, app/api/items/ai-red-team/[id]/run/route.ts:91-95: a FAILED MODEL CALL is caught and returned with verdict:'refused' - and 'refused' maps to the SUCCESS colour and counts as a safe outcome. So a deployment where EVERY PROBE ERRORED reports 100% REFUSAL / 0% ATTACK SUCCESS: A PERFECT SAFETY SCORE FROM A DEAD ENDPOINT. The surface reports maximum safety precisely when the scanner is broken. (3) An empty completion scored the same way. Line 103 also fails open on Content Safety. BOTH REMEDIES DONE: probe set extended to 12 PyRIT-analog techniques (base64, ROT13, Caesar, leetspeak, char-spacing, reverse, URL-encode, binary, Morse, payload-splitting, MULTI-TURN CRESCENDO) plus pairwise composition; AND the surface now states its scope - mandatory disclosure above the score, 'warning' when the run cannot support a safety claim, NO green badge on a baseline-only 0%, per-technique breakdown, in-product technique picker. New 'inconclusive' verdict; rates computed over SCORED probes only. Mutation-proved: reverting the two scoring lines fails 3 specs.",
+      "pr": 3130
     },
     {
       "id": "C15",
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 42,
-      "status": "todo",
+      "status": "review",
       "title": "C1-found: G2 Fix-it coverage NOT universal — ~160 GATE_META entries vs 131 fixit: declarations in lib/gates/registry/*.ts (regex-approx); G2 demands universal. ALSO: FRESH0 is warn-only in CI (loom-guardrails.yml:202) — --strict exits 1 (mutation-proved) but runs boundary-only, so drift never blocks a PR",
       "depends_on": [],
       "validation": {
@@ -807,7 +808,11 @@
       "evidence": [
         "from C1 Phase-E adversarial pass",
         "pipeline/top-tabs.tsx:19 still overflow:hidden (body now auto at :33) — A5 fix looks attempted; only a browser settles the geometry"
-      ]
+      ],
+      "pr": 3131,
+      "premise_falsified": "THE C1 AUDIT PREMISE IS FALSE. Exact AST count of lib/gates/registry/*.ts: 131 GATE_META entries, 131 fixit: - 1:1, ZERO gaps, zero duplicate ids, zero orphans, zero entries with no surfaces. The reported '~160 vs 131' was a REGEX ARTIFACT: a looser key pattern also matches nested keys (surfaces:, loaders:, each loader entry) and counts 305, not 160. ORCHESTRATOR CONFIRMED THE STRUCTURAL PROOF: types.ts:104 and :148 declare 'fixit: GateFixit' - NON-OPTIONAL - so a GateMeta missing a fixit CANNOT COMPILE and the claimed gap is impossible.",
+      "real_breach": "The breach is on the SURFACES and is BIGGER than C14's sample found (C14 sampled 14, found 9). Across the whole console: 63 files / 74 bare remediation bars that name a LOOM_* var and mount NO HonestGate; 23 surfaces do it correctly. PER-GATE VERDICT derived from each var's ENV_CHECKS spec, not hand-judged: REMOVE (auto-bind sec.5 - the spec declares a provisionedBy bicep module, so the PLATFORM could have wired it) 59/74; UNREGISTERED (var in NO spec, so no Fix-it CAN exist and it never reaches /admin/gates) 15/74; WIRE 0/74. SO THE FIX IS NOT 'ADD 74 FIX-IT BUTTONS' - IT IS 'STOP 59 OF THESE GATES FROM EXISTING'. Removed 0 and wired 0 deliberately: removing 59 is provisioner/bicep work with per-cloud verification requirements. Filed issue #3133 with the full table + the 15 unregistered vars (LOOM_ADF_NAME among them - a first-class item type's factory binding, unregistered). Shipped a TWO-DIRECTIONAL RATCHET that freezes the set and forces it down.",
+      "fresh0": "FRESH0 now BLOCKS by default; --selftest 11/11; mutation-proved on the REAL script (baseline 1671->900, live 1672 -> exit 1 '85.8% drift, tolerance 10%'; restored -> exit 0). MAKING IT BLOCK IMMEDIATELY FOUND A SECOND DEFECT: loom-guardrails.yml granted only 'contents: read', but two facts use 'gh pr view' which needs 'pull-requests: read'. Every run 403'd -> swallowed into the string 'UNKNOWN' -> ::warning:: -> exit 0. TWO OF THE GATE'S FIVE FACTS HAD NEVER BEEN MEASURED IN CI while the gate reported itself healthy. Fixed: permission granted, bounded 3-attempt retry, fail-closed as 'undetermined' with a message that names the 403 instead of claiming the PR state changed."
     },
     {
       "id": "C7",
@@ -1649,7 +1654,8 @@
       "inputs": "region=centralus passed EXPLICITLY - the input DEFAULTS TO eastus2 (#3029) and this estate is centralus; a defaulted dispatch would target the wrong region. tag=v0.1, skip_build=false (a new image is the point), enable_apps_after=true, skip_supply_chain=false (NEVER true - it ships unverified images).",
       "carries": "C22 authz, C23 proto, C18 image pins, D8 DNS, C24 ACR verdict, Gov #3124/#3125/#3126, release 0.89.0.",
       "not_carried": "RC-9 federation. That fix lives in the loom-unity IMAGE which BOTH loom-unity and iceberg-catalog run - a console roll does NOT carry it. See rc9_roll_plan_2026-08-08."
-    }
+    },
+    "c15_self_inflicted": "Agent's G2 guard died MODULE_NOT_FOUND on its FIRST CI run - it required 'typescript', which the guardrails job does not install. Locally invisible because the worktree had a junction to main's node_modules (the known pnpm-worktree hazard). Rewrote it dependency-free (bracket-matching JSX extractor, not a loose regex) and PROVED EQUIVALENCE: both implementations over all 953 .tsx files -> identical file set, identical per-file counts, 63/74. Verified from a node process OUTSIDE the worktree so no junction can mask it again. Junction removed; main's node_modules intact."
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
