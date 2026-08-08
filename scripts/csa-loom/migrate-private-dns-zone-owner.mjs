@@ -29,19 +29,61 @@
  *   So the record is DUAL-REGISTERED first. A privateDnsZoneGroup accepts a LIST
  *   of zones, so the A record can exist in both at once:
  *
- *     1  ensure the keep zone exists
- *     2  point every PE DNS zone group at BOTH zones      (no gap: record in both)
- *     3  VERIFY the record is present in the keep zone    (refuses to go on if not)
- *     4  delete the stale zone's VNet links
- *     5  create the same links on the keep zone
- *     6  VERIFY every VNet the stale zone served is now linked to the keep zone
- *     7  point every PE DNS zone group at the keep zone ONLY
- *     8  delete the stale zone
+ *      1  ensure the keep zone exists
+ *      2  point every PE DNS zone group at BOTH zones     (no gap: record in both)
+ *      3  VERIFY the record is present in the keep zone   (refuses to go on if not)
+ *      4  delete the stale zone's VNet links
+ *      5  create the same links on the keep zone
+ *      6  VERIFY every VNet the stale zone served is now linked to the keep zone
+ *      7  remove ONLY the stale config from each PE DNS zone group
+ *      8  VERIFY each group still points at the keep zone   (terminal)
+ *      9  VERIFY the records are still in the keep zone     (terminal)
+ *     10  delete the stale zone
  *
  *   Steps 4→5 are a genuine gap of seconds — Azure permits only one link per
  *   namespace per VNet, so the old link must go before the new one can exist.
  *   That is a property of Azure, not of this script, and it is stated rather
  *   than glossed.
+ *
+ * THE OUTAGE THIS SCRIPT CAUSED, AND WHY (#3046, FINISHLINE D8)
+ *
+ *   The first cut of steps 2 and 7 selected the zone-group config the way a
+ *   reader would ASSUME `az` selects it — by the zone. It does not. Measured
+ *   from the vendor's own source
+ *   (azure-cli/.../network/private_endpoint/dns_zone_group/_add.py and
+ *   _remove.py, class SubresourceSelector):
+ *
+ *       filter(lambda e: e[1].name == self.ctx.args.zone_name, ...)
+ *       add._set:    idx = next(filters, [len(result)])[0]   # REPLACE if that
+ *                                                            # NAME exists, else APPEND
+ *       remove._get: idx = next(filters)[0]                  # StopIteration if absent
+ *
+ *   `--zone-name` is the CONFIG's name inside the group, never the zone id. The
+ *   script passed `namespace.replace(/\./g,'-')` for both — and that string is
+ *   byte-identical to the config name the bicep already creates
+ *   (landing-zone/databricks.bicep:135 = `privatelink-azuredatabricks-net`). So:
+ *
+ *     - step 2 REPLACED the stale config instead of appending. "Dual"
+ *       registration never happened; the record moved to a zone with no VNet
+ *       link. Step 3 still passed, because the record WAS in the keep zone.
+ *     - step 7 then removed the only remaining config — the KEEP one — leaving
+ *       the group with ZERO configs, which deregisters the endpoint's A record
+ *       from every zone. The service went dark and the script exited 0.
+ *     - nothing ran after step 7, so no check could see it.
+ *
+ *   The fix is three things, and each is load-bearing:
+ *     - dual-register uses a config name NOTHING else owns, so `add` appends.
+ *     - single-register removes the config selected BY ITS OWN NAME as READ FROM
+ *       THE ESTATE, only when that config still points at the stale zone, and
+ *       never when the removal would empty the group or leave it with no config
+ *       on the keep zone. Per deploy-integrity.md R5 this script does not remove
+ *       wiring it cannot prove is stale — DISCOVER, OFFER, never assume.
+ *     - two TERMINAL verifications run after the removal and before the zone
+ *       delete, so a wipe cannot be silent again.
+ *
+ *   Every destructive step also re-reads its subject immediately before acting:
+ *   a plan built from a snapshot must not mutate a group that changed underneath
+ *   it. That is what makes a re-run CONVERGE instead of re-applying.
  *
  * WHAT VERIFICATION HERE DOES AND DOES NOT PROVE (R7)
  *
@@ -82,6 +124,8 @@ export const STEP_IDS = Object.freeze([
   'link-keep',
   'verify-links-on-keep-zone',
   'single-register',
+  'verify-zone-group-bound-to-keep',
+  'verify-record-after-single-register',
   'delete-stale-zone',
 ]);
 
@@ -198,6 +242,142 @@ export function discover(opts, run) {
 }
 
 /**
+ * Read one private endpoint's DNS zone groups fresh. Destructive steps call this
+ * immediately before acting so they never mutate a snapshot.
+ */
+function readZoneGroups(run, pe) {
+  return readJson(run, [
+    'network', 'private-endpoint', 'dns-zone-group', 'list',
+    '-g', pe.resourceGroup, '--endpoint-name', pe.endpoint, '--subscription', pe.subscription, '-o', 'json',
+  ]);
+}
+
+const ARM_CHILD_NAME_MAX = 80;
+
+/**
+ * The config name dual-registration writes.
+ *
+ * MUST NOT collide with any name already in the group. `az … dns-zone-group add`
+ * REPLACES a config whose `name` matches and only APPENDS when it does not
+ * (measured: _add.py SubresourceSelector._set, `next(filters, [len(result)])`).
+ * The obvious choice — `namespace.replace(/\./g,'-')` — is exactly the name the
+ * bicep gives the config it creates (landing-zone/databricks.bicep:135), so it
+ * silently turned "dual-register" into "replace", which is how the 2026-08-06
+ * outage started. So: never `base`, always a suffixed name, and if that is taken
+ * too, keep counting.
+ */
+export function keepConfigName(namespace, existingNames = []) {
+  const base = String(namespace).replace(/\./g, '-');
+  const taken = new Set(existingNames.map((n) => lower(n)));
+  for (let i = 0; i < 100; i += 1) {
+    const suffix = i === 0 ? '-loom-keep' : `-loom-keep-${i + 1}`;
+    const cand = `${base.slice(0, ARM_CHILD_NAME_MAX - suffix.length)}${suffix}`;
+    if (!taken.has(lower(cand))) return cand;
+  }
+  // 100 collisions is not a real estate; it is a bug. Say so rather than
+  // returning a name that would overwrite one of them.
+  throw new Error(
+    `could not find a free privateDnsZoneConfigs name for "${namespace}" — 100 candidates were already taken ` +
+      `(${existingNames.join(', ')}). Refusing to reuse one, because \`az dns-zone-group add\` would REPLACE it.`,
+  );
+}
+
+/**
+ * Run-time guard for `single-register`. This is the step that caused the outage,
+ * so it re-reads the group and refuses anything it cannot prove is safe.
+ * Returns { action: 'run' | 'skip' | 'stop', reason }.
+ */
+export function guardSingleRegister(run, pe, targetName, keepId, staleId) {
+  const g = readZoneGroups(run, pe);
+  if (!g.ok) {
+    return {
+      action: 'stop',
+      reason:
+        `could not re-read ${pe.endpoint}/${pe.group} before removing a DNS zone config, so whether the removal ` +
+        `is safe is UNKNOWN — not "safe". ${g.reason}. Nothing was changed.`,
+    };
+  }
+  const group = (g.value ?? []).find((x) => x.name === pe.group);
+  if (!group) {
+    return { action: 'skip', reason: `${pe.endpoint}/${pe.group} no longer exists — nothing to remove.` };
+  }
+  const cfgs = (group.privateDnsZoneConfigs ?? []).map((c) => ({ name: c.name, zoneId: c.privateDnsZoneId }));
+  const target = cfgs.find((c) => c.name === targetName);
+  if (!target) {
+    return {
+      action: 'skip',
+      reason: `config "${targetName}" is already absent from ${pe.endpoint}/${pe.group} — converged, not re-applied.`,
+    };
+  }
+  if (lower(target.zoneId) !== lower(staleId)) {
+    return {
+      action: 'stop',
+      reason:
+        `REFUSING to remove "${targetName}" from ${pe.endpoint}/${pe.group}: it now points at ${target.zoneId}, ` +
+        `NOT the stale zone. Something changed this group since the plan was built. This script removes only ` +
+        `wiring it can prove is stale (deploy-integrity R5). Nothing was changed.`,
+    };
+  }
+  const survivors = cfgs.filter((c) => c.name !== targetName);
+  if (survivors.length === 0) {
+    return {
+      action: 'stop',
+      reason:
+        `REFUSING to remove "${targetName}" from ${pe.endpoint}/${pe.group}: it is the ONLY config, so removing it ` +
+        `leaves the group empty, which DEREGISTERS the endpoint's A record from every zone and takes the service ` +
+        `dark. That is exactly the 2026-08-06 outage (#3046). Dual-registration has to land first.`,
+    };
+  }
+  if (!survivors.some((c) => lower(c.zoneId) === lower(keepId))) {
+    return {
+      action: 'stop',
+      reason:
+        `REFUSING to remove "${targetName}" from ${pe.endpoint}/${pe.group}: afterwards NO config would point at ` +
+        `the surviving zone (${keepId}), so the A record would not be registered in any zone this migration links. ` +
+        `Nothing was changed.`,
+    };
+  }
+  return { action: 'run', reason: null };
+}
+
+/** Run-time guard for `dual-register` — an `add` must never overwrite a config. */
+export function guardDualRegister(run, pe, cfgName, keepId) {
+  const g = readZoneGroups(run, pe);
+  if (!g.ok) {
+    return {
+      action: 'stop',
+      reason:
+        `could not re-read ${pe.endpoint}/${pe.group} before adding a DNS zone config, so whether the add would ` +
+        `APPEND or REPLACE is UNKNOWN. ${g.reason}. Nothing was changed.`,
+    };
+  }
+  const group = (g.value ?? []).find((x) => x.name === pe.group);
+  if (!group) {
+    return {
+      action: 'stop',
+      reason:
+        `${pe.endpoint}/${pe.group} does not exist any more, so there is no group to dual-register into. ` +
+        `Nothing was changed.`,
+    };
+  }
+  const cfgs = (group.privateDnsZoneConfigs ?? []).map((c) => ({ name: c.name, zoneId: c.privateDnsZoneId }));
+  if (cfgs.some((c) => lower(c.zoneId) === lower(keepId))) {
+    return { action: 'skip', reason: `${pe.endpoint}/${pe.group} already points at the surviving zone — converged.` };
+  }
+  const clash = cfgs.find((c) => c.name === cfgName);
+  if (clash) {
+    return {
+      action: 'stop',
+      reason:
+        `REFUSING to add config "${cfgName}" to ${pe.endpoint}/${pe.group}: a config with that NAME already exists ` +
+        `and points at ${clash.zoneId}. \`az dns-zone-group add\` matches on the config NAME and would REPLACE it, ` +
+        `silently un-registering that zone — the 2026-08-06 failure mode. Nothing was changed.`,
+    };
+  }
+  return { action: 'run', reason: null };
+}
+
+/**
  * The ordered plan. Every step carries `needed` — false means the estate is
  * already in that state, which is what makes a re-run a genuine no-op rather
  * than a re-application.
@@ -206,7 +386,6 @@ export function buildPlan(opts, state) {
   const { namespace, keepZoneRg, keepZoneSubscription, staleZoneRg, staleZoneSubscription } = opts;
   const keepId = state.keepZone?.id ?? zoneId(keepZoneSubscription, keepZoneRg, namespace);
   const staleId = state.staleZoneId;
-  const cfgName = namespace.replace(/\./g, '-');
   const steps = [];
 
   steps.push({
@@ -217,16 +396,20 @@ export function buildPlan(opts, state) {
   });
 
   for (const pe of state.attachedEndpoints) {
-    const already = pe.configs.some((c) => lower(c.zoneId) === lower(keepId));
+    const keepCfg = pe.configs.find((c) => lower(c.zoneId) === lower(keepId));
+    // Reuse an existing keep-zone config's name when there is one (idempotence);
+    // otherwise mint a name NOTHING in the group owns, so `add` appends.
+    const cfgName = keepCfg?.name ?? keepConfigName(namespace, pe.configs.map((c) => c.name));
     steps.push({
       id: 'dual-register',
-      needed: !already,
-      why: `${pe.endpoint} registers the A record; pointing it at BOTH zones puts the record in the surviving zone with no gap in resolution.`,
-      argv: ['network', 'private-endpoint', 'dns-zone-group', 'create', '-g', pe.resourceGroup, '--endpoint-name', pe.endpoint, '-n', pe.group, '--subscription', pe.subscription, '--zone-name', cfgName, '--private-dns-zone', keepId, '-o', 'none'],
-      // az's dns-zone-group `create` replaces the group; `add` appends one zone.
-      // The append form is used so the STALE config survives this step — that
-      // is the whole point of dual registration.
-      argvOverride: ['network', 'private-endpoint', 'dns-zone-group', 'add', '-g', pe.resourceGroup, '--endpoint-name', pe.endpoint, '-n', pe.group, '--subscription', pe.subscription, '--zone-name', cfgName, '--private-dns-zone', keepId, '-o', 'none'],
+      needed: !keepCfg,
+      why:
+        `${pe.endpoint} registers the A record; pointing it at BOTH zones puts the record in the surviving zone ` +
+        `with no gap in resolution. The config is named "${cfgName}" — deliberately NOT ` +
+        `"${namespace.replace(/\./g, '-')}", which the bicep already owns and which \`az … add\` would REPLACE ` +
+        `rather than append (#3046).`,
+      precondition: (run) => guardDualRegister(run, pe, cfgName, keepId),
+      argv: ['network', 'private-endpoint', 'dns-zone-group', 'add', '-g', pe.resourceGroup, '--endpoint-name', pe.endpoint, '-n', pe.group, '--subscription', pe.subscription, '--zone-name', cfgName, '--private-dns-zone', keepId, '-o', 'none'],
     });
   }
 
@@ -234,6 +417,7 @@ export function buildPlan(opts, state) {
     id: 'verify-record-in-keep-zone',
     needed: true,
     verify: true,
+    verifyKind: 'records',
     why: 'refuses to unlink anything until the record is provably present in the surviving zone.',
     expect: state.staleRecords.map((r) => r.name),
     argv: ['network', 'private-dns', 'record-set', 'a', 'list', '-g', keepZoneRg, '-z', namespace, '--subscription', keepZoneSubscription, '-o', 'json'],
@@ -262,19 +446,56 @@ export function buildPlan(opts, state) {
     id: 'verify-links-on-keep-zone',
     needed: true,
     verify: true,
+    verifyKind: 'links',
     why: 'every VNet the stale zone served must resolve on the surviving zone before the stale zone is removed.',
     expect: state.staleLinks.map((l) => l.vnetId),
     argv: ['network', 'private-dns', 'link', 'vnet', 'list', '-g', keepZoneRg, '-z', namespace, '--subscription', keepZoneSubscription, '-o', 'json'],
   });
 
+  // Remove ONLY the configs that actually point at the stale zone, each selected
+  // by the name READ FROM THE ESTATE — `az` matches --zone-name against the
+  // config's name, not the zone id, so a guessed name removes the wrong thing.
+  // Emitting a step per real config (rather than one blanket step per endpoint)
+  // is also what makes a second run a no-op: after the first run there is no
+  // stale config left to enumerate.
+  for (const pe of state.attachedEndpoints) {
+    for (const cfg of pe.configs.filter((c) => lower(c.zoneId) === lower(staleId))) {
+      steps.push({
+        id: 'single-register',
+        needed: true,
+        why:
+          `removes config "${cfg.name}" — the one that points at the STALE zone — from ${pe.endpoint}/${pe.group}. ` +
+          `Selected by the name read from the estate, and re-checked immediately before removal: it must still ` +
+          `point at the stale zone, and the group must be left with at least one config still on the surviving zone.`,
+        precondition: (run) => guardSingleRegister(run, pe, cfg.name, keepId, staleId),
+        argv: ['network', 'private-endpoint', 'dns-zone-group', 'remove', '-g', pe.resourceGroup, '--endpoint-name', pe.endpoint, '-n', pe.group, '--subscription', pe.subscription, '--zone-name', cfg.name, '-o', 'none'],
+      });
+    }
+  }
+
+  // TERMINAL verifications. The first cut had NOTHING after single-register, so
+  // when it emptied the group nothing could see it and the run exited 0.
   for (const pe of state.attachedEndpoints) {
     steps.push({
-      id: 'single-register',
+      id: 'verify-zone-group-bound-to-keep',
       needed: true,
-      why: `drops the stale zone from ${pe.endpoint}'s DNS zone group so the zone can be deleted.`,
-      argv: ['network', 'private-endpoint', 'dns-zone-group', 'remove', '-g', pe.resourceGroup, '--endpoint-name', pe.endpoint, '-n', pe.group, '--subscription', pe.subscription, '--zone-name', namespace.replace(/\./g, '-'), '-o', 'none'],
+      verify: true,
+      verifyKind: 'zoneConfigs',
+      why: `terminal check — ${pe.endpoint}/${pe.group} must STILL carry a config pointing at the surviving zone after the stale one was removed.`,
+      expect: [keepId],
+      argv: ['network', 'private-endpoint', 'dns-zone-group', 'list', '-g', pe.resourceGroup, '--endpoint-name', pe.endpoint, '--subscription', pe.subscription, '-o', 'json'],
     });
   }
+
+  steps.push({
+    id: 'verify-record-after-single-register',
+    needed: true,
+    verify: true,
+    verifyKind: 'records',
+    why: 'terminal check — every A record the stale zone served must STILL be in the surviving zone before the stale zone is deleted.',
+    expect: state.staleRecords.map((r) => r.name),
+    argv: ['network', 'private-dns', 'record-set', 'a', 'list', '-g', keepZoneRg, '-z', namespace, '--subscription', keepZoneSubscription, '-o', 'json'],
+  });
 
   steps.push({
     id: 'delete-stale-zone',
@@ -294,21 +515,44 @@ export function isConverged(state, plan) {
 }
 
 /**
+ * How each kind of verification turns an `az … list` payload into the set of
+ * things that must be present. Explicit, and looked up by `step.verifyKind` —
+ * NOT by `step.id`. Keying on the id meant every id the author had not thought
+ * of silently fell through to the "links" shape, which extracts `undefined` from
+ * a record set and would have made a new verify step unable to fail.
+ */
+const VERIFY_EXTRACT = Object.freeze({
+  records: (v) => (v ?? []).map((x) => lower(x.name)),
+  links: (v) => (v ?? []).map((x) => lower(x.virtualNetwork?.id)),
+  zoneConfigs: (v) => (v ?? []).flatMap((g) => (g.privateDnsZoneConfigs ?? []).map((c) => lower(c.privateDnsZoneId))),
+});
+
+/**
  * Execute. Verification steps are HARD GATES: a failed verify stops the run
- * before anything destructive, and says what it could not establish.
+ * before anything destructive, and says what it could not establish. Destructive
+ * steps that carry a `precondition` re-read their subject first and may skip
+ * (already converged) or stop (cannot prove the change is safe).
  */
 export function applyPlan(plan, run, log) {
   for (const step of plan.steps) {
     if (step.verify) {
+      const extract = VERIFY_EXTRACT[step.verifyKind];
+      if (!extract) {
+        return {
+          ok: false,
+          stoppedAt: step.id,
+          reason:
+            `internal defect: verification step "${step.id}" has no known verifyKind (got ${JSON.stringify(step.verifyKind)}). ` +
+            'Refusing to continue rather than run a check that cannot fail. Nothing further was changed.',
+        };
+      }
       const res = readJson(run, step.argv);
       if (!res.ok) {
         return { ok: false, stoppedAt: step.id, reason: `verification could not read the estate: ${res.reason}. Nothing further was changed.` };
       }
-      const got =
-        step.id === 'verify-record-in-keep-zone'
-          ? (res.value ?? []).map((x) => lower(x.name))
-          : (res.value ?? []).map((x) => lower(x.virtualNetwork?.id));
-      const missing = (step.expect ?? []).map(lower).filter((e) => !got.includes(e));
+      const got = extract(res.value);
+      const expect = step.expect ?? [];
+      const missing = expect.map(lower).filter((e) => !got.includes(e));
       if (missing.length > 0) {
         return {
           ok: false,
@@ -319,14 +563,36 @@ export function applyPlan(plan, run, log) {
             'proceeding would take the service dark.',
         };
       }
-      log(`  ✓ ${step.id}: ${step.expect.length} entr(ies) present in the surviving zone.`);
+      // An empty expectation proves nothing, and must not be logged as if it did.
+      log(
+        expect.length === 0
+          ? `  ~ ${step.id}: nothing to check (the stale zone served no such entries) — this step proved NOTHING.`
+          : `  ✓ ${step.id}: ${expect.length} entr(ies) present in the surviving zone.`,
+      );
       continue;
     }
     if (!step.needed) {
       log(`  · ${step.id}: already in the desired state — skipped.`);
       continue;
     }
-    const argv = step.argvOverride ?? step.argv;
+    if (step.precondition) {
+      const verdict = step.precondition(run);
+      if (verdict.action === 'skip') {
+        log(`  · ${step.id}: ${verdict.reason}`);
+        continue;
+      }
+      if (verdict.action === 'stop') {
+        return { ok: false, stoppedAt: step.id, reason: verdict.reason };
+      }
+      if (verdict.action !== 'run') {
+        return {
+          ok: false,
+          stoppedAt: step.id,
+          reason: `internal defect: precondition for "${step.id}" returned an unknown action ${JSON.stringify(verdict.action)}. Refusing to guess. Nothing further was changed.`,
+        };
+      }
+    }
+    const argv = step.argv;
     const res = run(argv);
     if (res.status !== 0) {
       return {
@@ -357,13 +623,20 @@ export function renderPlan(opts, state, plan, { apply }) {
   plan.steps.forEach((s, i) => {
     const mark = s.verify ? 'VERIFY' : s.needed ? 'DO    ' : 'skip  ';
     out.push(`  ${String(i + 1).padStart(2)}. [${mark}] ${s.id} — ${s.why}`);
-    if (!s.verify) out.push(`        az ${(s.argvOverride ?? s.argv).join(' ')}`);
+    if (!s.verify) out.push(`        az ${s.argv.join(' ')}`);
   });
   out.push('');
   out.push(
     'NOTE: steps `unlink-stale` → `link-keep` are a resolution gap of seconds. Azure permits one link ' +
       'per namespace per VNet, so the old link must be removed before the new one can be created; that is ' +
       'an Azure constraint, not a choice made here.',
+  );
+  out.push(
+    'NOTE: `az … dns-zone-group add|remove --zone-name` selects the CONFIG BY ITS NAME, not by the zone id ' +
+      '(measured from azure-cli _add.py / _remove.py SubresourceSelector). Every add above uses a name nothing ' +
+      'else in the group owns, and every remove targets a name read from the estate. Each destructive step ' +
+      're-reads the group immediately before acting and REFUSES anything it cannot prove is safe — in ' +
+      'particular it will never leave a group with zero configs (#3046).',
   );
   out.push(
     'NOTE: the verification steps read ARM (the record set exists, the links exist). They do NOT prove the ' +

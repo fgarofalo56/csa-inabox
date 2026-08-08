@@ -62,7 +62,7 @@ Common failure modes:
 | `Quota exceeded` for Databricks Premium | quota | Region quota | Request quota via Azure portal → Subscriptions → Usage + quotas; or pick a different region. **Do not retry — it is deterministic** |
 | `QuotaExceeded: standardDDSv5Family Cores` during an image build | quota | The ACR-task agent pool has no cores | Raise the VM-family quota for that region, or build without the dedicated pool |
 | `RoleAssignmentExists` | config | The grant is **already in place** under a different assignment NAME. ARM enforces uniqueness on the `(scope, principalId, roleDefinitionId)` triple, not on the name, so a name-seed change (e.g. the Website Contributor role id correction …706ee → …84772) or a grant created out-of-band by `az role assignment create` (random GUID) blocks the template's create forever | Converge the name: `az role assignment delete --ids <the id printed in the error message>`, then re-run — the template recreates it under its deterministic name. `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled; it is a workaround, not a fix |
-| `BadRequest: A virtual network cannot be linked to multiple zones with overlapping namespaces` | config | The hub VNet is already linked to a **different** Private DNS zone of the same namespace — usually a leftover zone from a superseded design in another resource group or subscription. Azure permits one link per namespace per VNet, so the admin plane's own link can never be created | **Do not delete the existing link first** — the A records live in that zone and unlinking takes the service dark. Run `node scripts/csa-loom/migrate-private-dns-zone-owner.mjs …` (dry-run by default; `--apply` to execute). `node scripts/csa-loom/preflight-private-dns-links.mjs` detects it before the deploy, and `deploy-fiab-commercial.yml` runs that preflight automatically |
+| `BadRequest: A virtual network cannot be linked to multiple zones with overlapping namespaces` | config | The hub VNet is already linked to a **different** Private DNS zone of the same namespace — usually a leftover zone from a superseded design in another resource group or subscription. Azure permits one link per namespace per VNet, so the admin plane's own link can never be created | **Do not delete the existing link first** — the A records live in that zone and unlinking takes the service dark. Run `node scripts/csa-loom/migrate-private-dns-zone-owner.mjs …` (dry-run by default; `--apply` to execute). It dual-registers under a **new** zone-group config name, moves the links, removes **only** the config that still points at the stale zone, refuses any removal that would empty the group, and re-verifies the group and the record before deleting the stale zone — see [Private DNS zone-owner migration](#private-dns-zone-owner-migration-3039--3046). `node scripts/csa-loom/preflight-private-dns-links.mjs` detects it before the deploy, and `deploy-fiab-commercial.yml` runs that preflight automatically |
 | `InvalidTemplateDeployment` on Container Apps in IL4 | config | Container Apps not at IL4 | Set `containerPlatform = 'aks'` in `.bicepparam` |
 | `Forbidden` on Key Vault Premium HSM | permission | Lacks `Microsoft.KeyVault/managedHsms/write` | Request elevated role |
 | `VnetAddressRangeInUse` | config | CIDR conflict | Pick a different CIDR; update `hubVnetCidr`. The DLZ spoke CIDR (`10.100.0.0/16`) is not settable from the root template today |
@@ -91,6 +91,69 @@ Common failure modes:
    `confirm_teardown_rg=rg-csa-loom-admin-<region>` (#3028)
 5. **Verify** — `curl <console-url>/api/health` returns 200, then open the
    Console and confirm sign-in and `/admin/readiness`
+
+### Private DNS zone-owner migration (#3039 / #3046)
+
+`scripts/csa-loom/migrate-private-dns-zone-owner.mjs` adopts a `privatelink.*`
+namespace onto the zone that should own it, without taking the service dark.
+It is **dry-run by default**; `--apply` executes.
+
+```bash
+node scripts/csa-loom/migrate-private-dns-zone-owner.mjs \
+  --namespace privatelink.azuredatabricks.net \
+  --keep-zone-rg  rg-csa-loom-admin-<region>       --keep-zone-subscription  <sub> \
+  --stale-zone-rg rg-csa-loom-dlz-default-<region> --stale-zone-subscription <sub> \
+  [--pe-resource-group <rg> …]      # extra scopes to search for private endpoints
+```
+
+The plan is 10 steps; the two **terminal** verifications and the removal guard
+are the part to understand, because their absence caused a live outage.
+
+| # | step | what it does |
+|---|---|---|
+| 1 | `ensure-keep-zone` | creates the surviving zone if it is missing |
+| 2 | `dual-register` | **adds** a config pointing at the keep zone, under a name nothing else in the group owns (`<ns>-loom-keep`). The record is then in **both** zones |
+| 3 | `verify-record-in-keep-zone` | hard gate — refuses to unlink anything until the record is provably in the keep zone |
+| 4–5 | `unlink-stale` → `link-keep` | moves each VNet link. **A resolution gap of seconds**: Azure permits one link per namespace per VNet |
+| 6 | `verify-links-on-keep-zone` | hard gate — every VNet the stale zone served resolves on the keep zone |
+| 7 | `single-register` | removes **only** the config that still points at the stale zone, selected by the name read from the estate |
+| 8 | `verify-zone-group-bound-to-keep` | terminal gate — the group still carries a config on the keep zone |
+| 9 | `verify-record-after-single-register` | terminal gate — the A records are still in the keep zone |
+| 10 | `delete-stale-zone` | the stale zone goes last |
+
+!!! danger "Why steps 2, 7, 8 and 9 look the way they do (#3046)"
+    `az network private-endpoint dns-zone-group add|remove --zone-name` selects
+    the config **by its `name`**, never by the zone id (measured from the az CLI
+    source: `_add.py` / `_remove.py`, `SubresourceSelector`). `add` **replaces**
+    a config whose name matches and only appends when it does not.
+
+    The first cut of this script passed `<namespace with dots→dashes>` for both.
+    That string is byte-identical to the config name the bicep creates
+    (`landing-zone/databricks.bicep:135`), so step 2 *replaced* the stale config
+    instead of appending — dual-registration never happened — and step 7 then
+    removed the only remaining config, leaving the group **empty**, which
+    deregisters the endpoint's A record from every zone. The service went dark
+    and the script exited 0, because nothing ran after step 7.
+
+    Now: step 2 uses a name nothing owns and refuses if that name is taken;
+    step 7 refuses to remove a config that no longer points at the stale zone,
+    that it cannot re-read, or whose removal would leave the group empty or with
+    no config on the keep zone; steps 8 and 9 re-check the outcome before
+    anything is deleted. Every destructive step re-reads its subject immediately
+    before acting, so a re-run **converges** rather than re-applying.
+
+**What the verifications do NOT prove.** They read ARM — the record set exists,
+the links exist, the group is bound. They do **not** prove the name resolves from
+inside the hub VNet; a hosted runner is not in the VNet. For that, run a lookup
+from the in-VNet runner (`loom-aca-runner-smoke.yml`) or over the admin P2S VPN.
+
+**Empty-zone shadowing.** Step 1 creates the keep zone but does not link it, and
+step 5 links it only after step 3 has proved the record is there — so the
+migration never leaves an empty zone linked to a VNet. That matters: a linked but
+empty `privatelink.*` zone **shadows** public resolution for the whole namespace
+and returns NXDOMAIN rather than falling through (the Gov Purview incident). If
+you stop the migration part-way, an unlinked empty keep zone is harmless; a
+linked empty one is not.
 
 ## Prevention
 

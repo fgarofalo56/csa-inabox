@@ -72,12 +72,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // Optional: register the FQDN in a hub private DNS zone so it resolves to
     // the PE private IP. Best-effort — surface the error but keep the PE.
     let dnsRegistered = false;
+    let dnsNote: string | undefined;
     const dnsZoneId = typeof body?.dnsZoneId === 'string' ? body.dnsZoneId.trim() : '';
     if (dnsZoneId) {
+      // The reason is REPORTED, not discarded (deploy-integrity R7). It matters
+      // now that createPrivateDnsZoneGroup refuses to PUT over a zone group it
+      // could not read, rather than replacing its whole config list (#3046) —
+      // "not registered" and "could not tell" must not look the same.
       try { await createPrivateDnsZoneGroup(peName, dnsZoneId); dnsRegistered = true; }
-      catch { dnsRegistered = false; }
+      catch (dnsErr) { dnsRegistered = false; dnsNote = (dnsErr as Error)?.message || String(dnsErr); }
     }
-    return NextResponse.json({ ok: true, enabled: true, pe, dnsRegistered });
+    return NextResponse.json({ ok: true, enabled: true, pe, dnsRegistered, dnsNote });
   } catch (e) {
     return networkingErrorResponse(e);
   }
