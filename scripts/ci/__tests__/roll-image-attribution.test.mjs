@@ -62,8 +62,21 @@ const WORKFLOW_PATH = path.join(REPO_ROOT, '.github', 'workflows', 'loom-roll-an
 const WORKFLOW = readFileSync(WORKFLOW_PATH, 'utf8').replace(/\r\n/g, '\n');
 const HELPER = path.join(REPO_ROOT, 'scripts', 'ci', 'assert-acr-image-tags.sh');
 
-/** The exact substring the roll step branches on to mean "unreachable". */
-const UNREACHABLE_MARKER = 'could not READ registry';
+/**
+ * Exit-code contract of scripts/ci/assert-acr-image-tags.sh (#3090).
+ *
+ * These used to be one code (1) for both "absent" and "could not read", and the
+ * roll step told them apart by GREPPING the helper's prose for
+ * "could not READ registry". That is a guard matching on a MESSAGE: reword one
+ * side and every locked-registry roll silently becomes a false RED — which is
+ * exactly what happened, because the helper was ALSO misclassifying unreadable
+ * refs as MISSING, so the string never appeared and the roll refused with
+ * "does not exist in the registry" about images that were in the registry.
+ * The states now have distinct exit codes and the step branches on those.
+ */
+const EXIT_PRESENT = 0;
+const EXIT_ABSENT = 3;
+const EXIT_UNPROVEN = 4;
 
 /**
  * Body of the named step, from its `- name:` line to the next step at the same
@@ -173,38 +186,85 @@ test('the real preflight refuses an absent tag, and does NOT call it unreachable
     presentRef: 'loom-console:1111111111111111111111111111111111111111',
     refs: ['loom-console:0000000000000000000000000000000000000000'],
   });
-  assert.equal(status, 1, 'a tag the registry says is not there must be a refusal');
+  assert.equal(
+    status,
+    EXIT_ABSENT,
+    `a tag the registry says is not there must exit ${EXIT_ABSENT} (ABSENT), not ${EXIT_UNPROVEN} (UNPROVEN) — the roll REFUSES on ${EXIT_ABSENT} and merely warns on ${EXIT_UNPROVEN}`,
+  );
   assert.match(out, /MISSING in/, 'refusal must state the tag is missing');
+  assert.match(
+    out,
+    /registry ANSWERED/,
+    'a confirmed absence must say the registry ANSWERED — that is the only basis on which absence may be claimed (deploy-integrity.md R7)',
+  );
   assert.doesNotMatch(
     out,
-    new RegExp(UNREACHABLE_MARKER),
-    'a confirmed absence must not be reported as "could not read" — the roll would then downgrade it to a warning and ship',
+    /is UNPROVEN/,
+    'a confirmed absence must not be reported as unproven — the roll would then downgrade it to a warning and ship',
   );
 });
 
-test('the real preflight reports an unreadable registry with the marker the roll greps', { skip: !bashOk && 'bash unavailable' }, () => {
+test('the real preflight reports an unreadable registry as UNPROVEN, never as absence', { skip: !bashOk && 'bash unavailable' }, () => {
   const { status, out } = runHelper({
     mode: 'unreachable',
     refs: ['loom-console:0000000000000000000000000000000000000000'],
   });
-  assert.equal(status, 1, 'unreadable is a non-zero exit from the helper (the roll re-classifies it)');
-  assert.ok(
-    out.includes(UNREACHABLE_MARKER),
-    `the helper's unreachable error must contain "${UNREACHABLE_MARKER}" — loom-roll-and-validate.yml greps for exactly that string to tell "could not ask" from "the answer is no". Reword one side and every locked-registry roll becomes a false RED.`,
+  assert.equal(
+    status,
+    EXIT_UNPROVEN,
+    `an unreadable registry must exit ${EXIT_UNPROVEN} (UNPROVEN), not ${EXIT_ABSENT} (ABSENT). Collapsing the two is #3090: on run 31213089184 fifteen refs resolved and four — including the image the LIVE console was running — were declared MISSING`,
   );
+  assert.match(out, /UNPROVEN/, 'the unreadable error must say the existence is UNPROVEN');
   assert.doesNotMatch(out, /MISSING in/, 'unreachable must not be reported as a confirmed absence');
+  assert.doesNotMatch(
+    out,
+    /PRODUCERS —/,
+    'an unreadable registry must NOT print the rebuild-the-image remediation: nothing established that any tag is missing, and that advice sent the operator to rebuild images that were fine',
+  );
 });
 
 // ── T4 — the roll keeps the three states apart ──────────────────────────────
 test('the image-exists gate distinguishes absent (refuse) from unreachable (warn)', () => {
-  const body = stepBody(STEP_IMAGE_EXISTS);
-  assert.ok(
-    body.includes(`grep -q '${UNREACHABLE_MARKER}'`),
-    `the gate must branch on the helper's "${UNREACHABLE_MARKER}" marker; without it every unreadable registry is treated as a confirmed absence`,
+  // EXECUTABLE LINES ONLY. This assertion used to be
+  //   body.includes(`grep -q '${UNREACHABLE_MARKER}'`)
+  // and after #3090 replaced that grep with exit-code branching it KEPT
+  // PASSING — because the step's new explanatory comment quotes the removed
+  // grep verbatim. A guard satisfied by a comment describing the code it is
+  // supposed to be checking is measuring nothing, which is the same class of
+  // defect as the prose-matching branch it was guarding. Strip comments first.
+  const body = stepBody(STEP_IMAGE_EXISTS)
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+
+  assert.match(
+    body,
+    /STATUS=\$\?/,
+    'the gate must capture the helper\'s exit status — that status IS the verdict',
+  );
+  assert.match(
+    body,
+    new RegExp(`\\b${EXIT_ABSENT}\\)`),
+    `the gate must have a branch for exit ${EXIT_ABSENT} (ABSENT)`,
+  );
+  assert.match(
+    body,
+    new RegExp(`\\b${EXIT_UNPROVEN}\\b`),
+    `the gate must have a branch for exit ${EXIT_UNPROVEN} (UNPROVEN)`,
+  );
+  assert.doesNotMatch(
+    body,
+    /grep -q/,
+    'the gate must NOT branch by grepping the helper\'s prose — reword the helper and the verdict silently inverts (#3090)',
   );
   assert.match(body, /REFUSING TO ROLL/, 'the absent branch must refuse loudly');
   assert.match(body, /exit 1/, 'the absent branch must exit non-zero');
   assert.match(body, /::warning::/, 'the unreachable branch must warn rather than assert absence');
+  assert.match(
+    body,
+    /UNPROVEN, NOT disproven/,
+    'the unreachable branch must say so in words that cannot be read as "the image is missing"',
+  );
 });
 
 // ── T5 — unskippable ────────────────────────────────────────────────────────
