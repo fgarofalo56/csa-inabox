@@ -304,7 +304,7 @@
       "lane": "L-GOV",
       "wave": 1,
       "task_order": 79,
-      "status": "todo",
+      "status": "in_progress",
       "title": "4 Gov workflows NEVER run once: gov-build-images, gov-provision-dataplane-images (= #3012 Gov image lane → Gov fedlake/trino NOT deployed), gov-provision-streaming-migrate, gov-workspace-identity — green first runs",
       "depends_on": [
         "D9"
@@ -320,7 +320,9 @@
       "evidence": [
         "from D2: #3060 — Gov unity catalog runs with the #1603 v0.5.1 security override INERT (classpath patch hit wrong module in every shipped image); Gov image re-roll owed once the image lane first-runs",
         "D2 reviewer: Gov catalog CANNOT be on the Entra-Postgres path today (plugin ClassNotFound would prevent boot) — it's on another store (H2/EmptyDir lineage); the #3060 re-roll needs a DATA/STORE-CUTOVER step to fresh LU-1 Postgres, existing contents won't migrate; zone bug is a NO-OP in Gov (suffixes coincide)"
-      ]
+      ],
+      "agent": "a1e313ba6742f7a45",
+      "dispatched": "2026-08-08"
     },
     {
       "id": "D7",
@@ -361,7 +363,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 69,
-      "status": "todo",
+      "status": "in_progress",
       "title": "#3039/#3046/#3038 residue: DNS-migration step-9 wipes PE zone-group (caused live A-record outage); RoleAssignmentExists from guid-seed rename (ae75c3c5) permanent until old assignment deleted/adopted — fix script (remove-by-zone-id + terminal verify); #3038 closes ONLY on green deploy-fiab run",
       "depends_on": [
         "D7"
@@ -374,7 +376,9 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "agent": "a04de2e2747e8ebf9",
+      "dispatched": "2026-08-08"
     },
     {
       "id": "D10",
@@ -476,7 +480,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 39,
-      "status": "todo",
+      "status": "in_progress",
       "title": "D14-found: three MCR refs float ':latest' on DEPLOY paths — dab-runtime.bicep:36, presidio-sidecar.bicep, deploy-planner/container-instances.bicep:19. LIC0-exempt but still unpinned drift on a deploy path. Pin them (operator asked whether to — OP-17)",
       "depends_on": [],
       "validation": {
@@ -489,14 +493,16 @@
       },
       "evidence": [
         "found while inventorying upstream images for D14"
-      ]
+      ],
+      "agent": "a04de2e2747e8ebf9",
+      "dispatched": "2026-08-08"
     },
     {
       "id": "G3",
       "lane": "L-GOV",
       "wave": 2,
       "task_order": 65,
-      "status": "todo",
+      "status": "in_progress",
       "title": "RED Gov workflows: deploy-gov (16d), gov-provision-dbx-sql-invnet (never green), gov-provision-dbx-sql, gov-provision-graph-grants — green each",
       "depends_on": [
         "G2"
@@ -509,14 +515,16 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "agent": "a1e313ba6742f7a45",
+      "dispatched": "2026-08-08"
     },
     {
       "id": "G4",
       "lane": "L-GOV",
       "wave": 2,
       "task_order": 64,
-      "status": "todo",
+      "status": "in_progress",
       "title": "#2874 Gov bicep-drift what-if fails before any verdict (weekly red 07-27, 08-03) — drift check produces verdicts",
       "depends_on": [],
       "validation": {
@@ -527,7 +535,9 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [],
+      "agent": "a1e313ba6742f7a45",
+      "dispatched": "2026-08-08"
     },
     {
       "id": "E2",
@@ -731,7 +741,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 2,
       "task_order": 94,
-      "status": "todo",
+      "status": "in_progress",
       "title": "SECURITY-GUARD DEFECT (mechanism established by D10, corrects two earlier inferences): check-route-guards' GUARD_SIGNAL_RE is PRESENCE-shaped, not ENFORCEMENT-shaped. 22 routes authorize via `const gate = await enforceCapability(...)` + `if (gate) return gate;` — cutting that ONE branch line defeats authorization entirely while the route stays SCANNED, still 'looks' guarded, and the guard stays GREEN. Same class as #2977 (a deleted function's name surviving in a COMMENT kept 34 routes passing), already noted in the guard's own header ~:72 for assertOwner — still live for enforceCapability",
       "depends_on": [],
       "validation": {
@@ -750,7 +760,9 @@
         "HIGHEST-RISK TWO: setup/deploy SUBMITS SUBSCRIPTION-SCOPED ARM DEPLOYMENTS (the choke point D10 just wired the fitness gate into); admin/permissions/grants MUTATES the capability grants enforceCapability itself reads",
         "admin/env-config on the list independently corroborates the #3051 measurement, now with the mechanism attached: the BRANCH is the control, not the call",
         "PROPOSED FIX (D10): make the signal enforcement-shaped — a withCapability(...) wrapper in the route-toolkit family that CANNOT be discarded, instead of a returned value. Also makes it mechanically detectable, converting 22 discardable branches into a shape the existing toolkit ratchet already polices"
-      ]
+      ],
+      "agent": "a49ef6d331b4302c8",
+      "dispatched": "2026-08-08"
     },
     {
       "id": "C21",
@@ -1192,7 +1204,7 @@
       "lane": "L-DEPLOY",
       "wave": 1,
       "task_order": 78,
-      "status": "todo",
+      "status": "done",
       "title": "#2678 residual (from C9 reopen): apply the #3012 trino/iceberg console env bindings — LOOM_TRINO_* vars + real catalog URL on Console (placeholder 0.0.0.0 live, env pass predates 12:19Z app deploy); then G1 SHOW-CATALOGS + no-bearer-401 receipt. Audience registration decision is OP-11 (operator)",
       "depends_on": [
         "D1"
@@ -1205,9 +1217,8 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": [
-        "seeded from C9 sweep 2026-08-06"
-      ]
+      "evidence": "VERIFIED LIVE 2026-08-08 on loom-console: the #3012 trino/iceberg console env IS deployed. Placeholder https://0.0.0.0:3000/... is GONE. Measured present: LOOM_ICEBERG_CATALOG_URL, LOOM_TRINO_URL, LOOM_TRINO_AUTH_MODE=entra, LOOM_TRINO_AUDIENCE, LOOM_TRINO_POLICY_URL, LOOM_TRINO_SESSION_USER, LOOM_TRINO_POLICY_TOKEN (secretRef=YES - empty 'value' is ACA's secretRef rendering, NOT a gap), LOOM_UNITY_URL/_CLIENT_ID/_AUDIENCE/_AUTH_MODE. Measured by az containerapp show, not inferred from bicep.",
+      "residual": "Console carries ONLY LOOM_ICEBERG_CATALOG_URL; _AUDIENCE/_TOKEN/_WAREHOUSE/_PREFIX are emitted into loom-trino-aca.bicep (the Trino container), not the console. _AUDIENCE is MASKED by a measured fallback (iceberg-catalog-client.ts:221 -> api://<LOOM_MSAL_CLIENT_ID>/.default; LOOM_MSAL_CLIENT_ID confirmed set live), so NOT a defect. _WAREHOUSE/_PREFIX have NO such fallback - open lead routed to F1, causation NOT established."
     },
     {
       "id": "D19",
@@ -1319,7 +1330,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 93,
-      "status": "todo",
+      "status": "in_progress",
       "title": "ACR re-lock reports SUCCESS while leaving the registry publicly OPEN. Measured 2026-08-07 after run 31143181962: the 'Re-lock ACR (private endpoint only)' job concluded success, yet az acr show read publicNetworkAccess=Enabled/defaultAction=Allow on three probes over a minute (ruling out the known 30-90s propagation lag). Orchestrator re-locked by hand. Add verify-after-write that FAILS the job if the registry is not Disabled/Deny afterwards",
       "depends_on": [],
       "validation": {
@@ -1333,7 +1344,9 @@
       "evidence": [
         "LIKELY ROOT CAUSE from D7: full-app-deploy's concurrency group was keyed on inputs.region||'auto', so two runs landed in different groups and RACED for the same ACR firewall lease — one run's re-lock could be undone by the other's open. D7 made the group a constant, which should prevent recurrence, but the re-lock step still has no verify-after-write and would still report success on a no-op.",
         "SECURITY: this left the Commercial ACR publicly reachable for an unknown window while CI reported green."
-      ]
+      ],
+      "agent": "ab51c8a90451e7f4a",
+      "dispatched": "2026-08-08"
     },
     {
       "id": "C25",
@@ -1576,6 +1589,22 @@
       "fix_applied": "Re-synced the GitHub secret LOOM_INTERNAL_TOKEN from the console's live value BY PIPE (value never printed or logged). Verified all three consumer jobs (loom-copilot-evaluator, loom-asset-reconciler, loom-cost-anomaly-monitor) already carry the SAME fingerprint 209954d26026 — the drift was ONLY the GitHub secret this time.",
       "PROOF": "loom-docs-reindex run 31236715059 = SUCCESS immediately after the re-sync (it had been failing 401).",
       "STILL_NOT_FIXED": "This is a STOPGAP. #3056 is unfixed: every admin-plane deploy regenerates the guid and re-breaks the GitHub secret. The durable fix is bicep-vs-rotation ownership (one writer), or a KV reference both sides read. Until then this will recur on EVERY deploy."
+    },
+    "session2_dispatch_2026-08-08": {
+      "lanes": {
+        "C24": "ACR re-lock false SUCCESS (security)",
+        "C22": "route-guard presence-shaped defect",
+        "GOV(G2/G3/G4)": "never-run + red Gov workflows + drift what-if; cloud-parity matrix",
+        "C18+D8": "floating :latest on deploy paths + PE zone-group wipe",
+        "F1": "federation deep-dive (resumed w/ 502-persists evidence)",
+        "#3056": "LOOM_INTERNAL_TOKEN single-writer durable fix"
+      },
+      "note": "release PR #3072 was BLOCKED by two NEVER-REPORTED required checks (guardrails, vitest node 20) - webhook-drop class, not path filtering; close+reopen re-triggered both."
+    },
+    "findings_2026-08-08": {
+      "disproved": "Hypothesis 'missing LOOM_ICEBERG_CATALOG_AUDIENCE causes the federation 502' was DISPROVED by measurement before being reported: the documented fallback resolves to the same audience Trino/Unity use. Recorded so it is not re-raised.",
+      "latent_security": "iceberg-catalog-client.ts:212-213 - when neither a pre-shared token nor an audience resolves, the hop proceeds UNAUTHENTICATED by design (internal ingress = perimeter). A misconfiguration therefore degrades to anonymous access rather than failing closed. Same posture class as #2643 (Gov unity anonymous read+mutate since 07-15). Routed to F1 for the parity doc; NOT yet fixed.",
+      "release_pr_block": "#3072 BLOCKED by two NEVER-REPORTED required checks (guardrails, vitest node 20). Root cause was the webhook-drop class, NOT path filtering - loom-guardrails.yml has 'on: pull_request' with no paths filter. close+reopen re-triggered both; guardrails then SUCCESS. Absent checks are not passing checks."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
