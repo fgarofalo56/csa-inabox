@@ -1791,7 +1791,14 @@
       "doc_was_right_for_the_wrong_reason": "index.md's 'use the CLI for brownfield' advice was RIGHT FOR THE WRONG REASON - it cited #3016 (fixed); the real cause is #3014 (unfixed). Fixing the stated reason would have DELETED a warning that still needs to be there."
     },
     "image_tag_reality_2026-08-08": "CORRECTS MY BRIEF TO THE D17 LANE. I said the federation apps are SHA-pinned. What is true: bicep sets the tag from '${appImageTags.?unity ?? 'v0.1'}' (admin-plane/main.bicep:5929 and :6327) - so the DEFAULT is the MUTABLE v0.1 - while the LIVE apps carry whatever tag was last rolled (089fb622 before my roll, 36b765e4 now). Container Apps pins the DIGEST at revision creation, so rebuilding a tag never lands without a new revision - which is why my first v0.1 build changed nothing. CONSEQUENCE: a future admin-plane deploy would set both apps back to v0.1. The RC-9 fix survives that ONLY because I also rebuilt v0.1 from main (run 31248782695) - LUCK, NOT DESIGN. If anyone rebuilds v0.1 from an older commit, RC-9 regresses silently. iceberg-catalog is additionally create-only-if-absent, so an existing one is frozen permanently.",
-    "d17_reported_not_fixed": "registry.bicep sets publicNetworkAccess:'Disabled' but NOT defaultAction:'Deny', while the ACR lease's lock check requires BOTH; the loom-unity/iceberg roll gap; a residual DLZ_SUB admin-sub fallback INSIDE the bootstrap; six workflows' dangling #3143 comments; and a FALSE in-repo comment claiming loom-unity is 'deployed out-of-band, not by admin-plane'."
+    "d17_reported_not_fixed": "registry.bicep sets publicNetworkAccess:'Disabled' but NOT defaultAction:'Deny', while the ACR lease's lock check requires BOTH; the loom-unity/iceberg roll gap; a residual DLZ_SUB admin-sub fallback INSIDE the bootstrap; six workflows' dangling #3143 comments; and a FALSE in-repo comment claiming loom-unity is 'deployed out-of-band, not by admin-plane'.",
+    "DEPLOY_PATH_HEALTHY_2026-08-08": {
+      "run": "31251849951 full-app-deploy-commercial — completed/SUCCESS, 26 of 27 jobs green.",
+      "only_failure": "'Post-deploy Copilot quality evals (fire-and-forget)' - it does not fail the run by design. The evals gate has been red on main for days and is tracked separately (#2585/#2970 hollow-evals history).",
+      "bootstrap": "SUCCESS - 61/71 steps ok, ZERO failed. This is the job that failed on run 31228411608 AND run 31243230253 with (ResourceGroupNotFound) rg-csa-loom-dlz-single-centralus.",
+      "significance": "deploy-integrity R1 SATISFIED for this path. The three most recent prior runs of this workflow all FAILED. It is now green end-to-end INCLUDING the post-deploy bootstrap, which per the #3140 root cause had NEVER succeeded as part of a deploy on a multi-subscription estate.",
+      "estate": "Live at 184e5ed3 (build-marker stamp=31251849951), carrying every merge from 2026-08-08."
+    }
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
