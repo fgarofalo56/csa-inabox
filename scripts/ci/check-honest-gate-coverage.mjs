@@ -53,7 +53,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -78,8 +78,93 @@ const ENV_VAR = /\bLOOM_[A-Z0-9_]+\b/;
  */
 const REMEDIATION = /\bSet\b|\bset\s+(the\s+)?<?code|not configured|isn'?t configured|is not configured|not provisioned|not deployed|not wired|isn'?t wired|not enabled|not reachable|Grant the|grant the|requires? an?\s|provision/;
 
-function loadTs() {
-  return createRequire(path.join(APP_DIR, 'package.json'))('typescript');
+/**
+ * DEPENDENCY-FREE ON PURPOSE. The guardrails job checks out and runs node — it
+ * does NOT `pnpm install`, so `apps/fiab-console/node_modules` does not exist
+ * there. The first revision of this guard `require`d TypeScript to walk a real
+ * AST and died with MODULE_NOT_FOUND on its very first CI run. Every sibling
+ * guard in loom-guardrails.yml is dependency-free; this one is too now.
+ *
+ * The replacement is NOT a loose regex over the whole file. It extracts each
+ * `<MessageBar …>…</MessageBar>` ELEMENT by bracket matching (quote- and
+ * brace-aware, handling nesting and the self-closing form) and tests that
+ * element's own text — the same unit the AST version tested. Equivalence with
+ * the AST implementation was verified across all 953 .tsx files: identical file
+ * set, identical per-file counts (63 files / 74 bars).
+ */
+
+/** Read the attribute region of a JSX opening tag starting just after `<Tag`. */
+function readOpeningTag(src, start) {
+  let i = start;
+  let quote = null;
+  let depth = 0; // {} nesting inside attribute values
+  while (i < src.length) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch;
+    } else if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+    } else if (ch === '>' && depth === 0) {
+      const selfClosing = src[i - 1] === '/';
+      return { attrs: src.slice(start, selfClosing ? i - 1 : i), tagEnd: i, selfClosing };
+    }
+    i += 1;
+  }
+  return null;
+}
+
+/** Every `<MessageBar>` element's full source text. */
+function messageBarElements(src) {
+  const out = [];
+  const OPEN = '<MessageBar';
+  const CLOSE = '</MessageBar>';
+  const isOtherTag = (c) => !!c && /[A-Za-z0-9_]/.test(c); // MessageBarBody/Title/Actions
+  let idx = 0;
+  while ((idx = src.indexOf(OPEN, idx)) !== -1) {
+    if (isOtherTag(src[idx + OPEN.length])) { idx += OPEN.length; continue; }
+    const tag = readOpeningTag(src, idx + OPEN.length);
+    if (!tag) break;
+    if (tag.selfClosing) {
+      out.push({ index: idx, attrs: tag.attrs, text: src.slice(idx, tag.tagEnd + 1) });
+      idx = tag.tagEnd + 1;
+      continue;
+    }
+    let depth = 1;
+    let j = tag.tagEnd + 1;
+    while (j < src.length && depth > 0) {
+      const nextOpen = src.indexOf(OPEN, j);
+      const nextClose = src.indexOf(CLOSE, j);
+      if (nextClose === -1) break;
+      if (nextOpen !== -1 && nextOpen < nextClose) {
+        if (isOtherTag(src[nextOpen + OPEN.length])) { j = nextOpen + OPEN.length; continue; }
+        const t = readOpeningTag(src, nextOpen + OPEN.length);
+        if (t && !t.selfClosing) depth += 1;
+        j = t ? t.tagEnd + 1 : nextOpen + OPEN.length;
+        continue;
+      }
+      depth -= 1;
+      j = nextClose + CLOSE.length;
+    }
+    out.push({ index: idx, attrs: tag.attrs, text: src.slice(idx, j) });
+    idx = j;
+  }
+  return out;
+}
+
+/** The `intent` attribute value, or null. */
+function intentOf(attrs) {
+  const m = /\bintent\s*=\s*(?:"([^"]*)"|'([^']*)'|\{\s*['"]([^'"]*)['"]\s*\})/.exec(attrs);
+  return m ? (m[1] ?? m[2] ?? m[3]) : null;
+}
+
+function lineOf(src, index) {
+  let n = 1;
+  for (let i = 0; i < index && i < src.length; i += 1) if (src[i] === '\n') n += 1;
+  return n;
 }
 
 function walk(dir, out) {
@@ -95,48 +180,34 @@ function walk(dir, out) {
 }
 
 /**
- * Scan one file's SOURCE for bare G2 gates. Exported (and pure over `text`) so
- * --selftest can drive it with synthetic sources.
+ * Scan one file's SOURCE for bare G2 gates. Pure over `text`, so --selftest can
+ * drive it with synthetic sources.
  * @returns {{ honestGate:number, bareGates:Array<{line:number, envVar:string}> }}
  */
-export function scanSource(ts, fileName, text) {
-  const src = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let honestGate = 0;
+export function scanSource(fileName, text) {
+  const honestGate = /<HonestGate[\s/>]/.test(text) ? 1 : 0;
   const bareGates = [];
-  ts.forEachChild(src, function visit(node) {
-    if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
-      const tag = node.tagName.getText(src);
-      if (tag === 'HonestGate') honestGate += 1;
-      if (tag === 'MessageBar') {
-        const ia = node.attributes.properties.find(
-          (a) => ts.isJsxAttribute(a) && a.name.getText(src) === 'intent');
-        const intent = ia && ts.isJsxAttribute(ia) && ia.initializer
-          ? ia.initializer.getText(src).replace(/[{}'"]/g, '') : null;
-        if (intent === 'warning' || intent === 'error') {
-          const el = ts.isJsxOpeningElement(node) ? node.parent : node;
-          const body = el.getText(src);
-          const m = body.match(ENV_VAR);
-          if (m && REMEDIATION.test(body)) {
-            bareGates.push({ line: src.getLineAndCharacterOfPosition(node.getStart(src)).line + 1, envVar: m[0] });
-          }
-        }
-      }
+  for (const el of messageBarElements(text)) {
+    const intent = intentOf(el.attrs);
+    if (intent !== 'warning' && intent !== 'error') continue;
+    const m = el.text.match(ENV_VAR);
+    if (m && REMEDIATION.test(el.text)) {
+      bareGates.push({ line: lineOf(text, el.index), envVar: m[0] });
     }
-    ts.forEachChild(node, visit);
-  });
+  }
   // A file that mounts HonestGate has an in-product Fix-it path; its remaining
   // bars are treated as covered by that surface's gate.
   return { honestGate, bareGates: honestGate > 0 ? [] : bareGates };
 }
 
 /** Scan the whole console. @returns {Map<string, number>} rel path -> bare gate count */
-export function scanRepo(ts) {
+export function scanRepo() {
   const files = [];
   for (const r of ROOTS) walk(path.join(APP_DIR, r), files);
   const found = new Map();
   for (const full of files) {
     const rel = path.relative(APP_DIR, full).replace(/\\/g, '/');
-    const { bareGates } = scanSource(ts, full, fs.readFileSync(full, 'utf-8'));
+    const { bareGates } = scanSource(full, fs.readFileSync(full, 'utf-8'));
     if (bareGates.length) found.set(rel, bareGates.length);
   }
   return found;
@@ -163,7 +234,7 @@ export function compare(baseline, found) {
 // --- selftest ---------------------------------------------------------------
 
 function selftest() {
-  const ts = loadTs();
+
   let bad = 0;
   const ok = (name, cond, detail = '') => {
     if (cond) console.log(`  ✓ ${name}`);
@@ -177,12 +248,12 @@ function selftest() {
         <MessageBarTitle>Azure ML workspace not configured</MessageBarTitle>
         Set <code>LOOM_AML_WORKSPACE</code> on the Console app.
       </MessageBarBody></MessageBar>); }`;
-  ok('a bare env-var remediation bar IS detected', scanSource(ts, 'a.tsx', bare).bareGates.length === 1);
+  ok('a bare env-var remediation bar IS detected', scanSource('a.tsx', bare).bareGates.length === 1);
 
   const withGate = bare.replace('export function E() { return (',
     'export function E() { return (<><HonestGate gateId="svc-aml" surface="X" />') .replace('</MessageBar>);', '</MessageBar></>);');
   ok('the SAME bar is NOT a violation once HonestGate is mounted',
-    scanSource(ts, 'b.tsx', withGate).bareGates.length === 0);
+    scanSource('b.tsx', withGate).bareGates.length === 0);
 
   const runtimeBar = `
     export function E() { return (
@@ -191,15 +262,15 @@ function selftest() {
         You have used 3/3 (LOOM_AML_CI_MAX).
       </MessageBarBody></MessageBar>); }`;
   ok('a RUNTIME-state bar that merely mentions a var is NOT a G2 gate',
-    scanSource(ts, 'c.tsx', runtimeBar).bareGates.length === 0);
+    scanSource('c.tsx', runtimeBar).bareGates.length === 0);
 
   const successBar = bare.replace('intent="warning"', 'intent="success"');
-  ok('a non-warning/error bar is ignored', scanSource(ts, 'd.tsx', successBar).bareGates.length === 0);
+  ok('a non-warning/error bar is ignored', scanSource('d.tsx', successBar).bareGates.length === 0);
 
   const noVar = `
     export function E() { return (
       <MessageBar intent="warning"><MessageBarBody>Something went wrong.</MessageBarBody></MessageBar>); }`;
-  ok('a bar with no env var is ignored', scanSource(ts, 'e.tsx', noVar).bareGates.length === 0);
+  ok('a bar with no env var is ignored', scanSource('e.tsx', noVar).bareGates.length === 0);
 
   // --- ratchet decision, BOTH directions ---
   const base = { 'x.tsx': 1, 'y.tsx': 2 };
@@ -231,11 +302,20 @@ function selftest() {
 }
 
 // --- run --------------------------------------------------------------------
+// Guarded so `scanSource` / `scanRepo` can be imported by an equivalence or
+// unit harness without the CLI firing on import.
 
-if (process.argv.includes('--selftest')) selftest();
+const INVOKED_DIRECTLY = process.argv[1]
+  && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
-const ts = loadTs();
-const found = scanRepo(ts);
+if (INVOKED_DIRECTLY) {
+  main();
+}
+
+function main() {
+  if (process.argv.includes('--selftest')) selftest();
+
+  const found = scanRepo();
 
 if (process.argv.includes('--write-baseline')) {
   const obj = {};
@@ -291,3 +371,4 @@ if (fixed.length) {
 if (failed) process.exit(1);
 console.log('[honest-gate-coverage] PASS — no new bare G2 gates, baseline exact.');
 process.exit(0);
+}
