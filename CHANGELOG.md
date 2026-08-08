@@ -25,6 +25,38 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.89.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.89.0...csa-inabox-v0.89.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* **access-governance:** the expiry auto-revoke sweeper could never run — deploy it (FINISHLINE C17) ([#3129](https://github.com/fgarofalo56/csa-inabox/issues/3129)) ([81c2704](https://github.com/fgarofalo56/csa-inabox/commit/81c2704ee5cca6fdf6405678385bc5185ee369d0))
+* **access-governance:** wire the two access-governance surfaces that had ZERO callers (FINISHLINE C16) ([#3132](https://github.com/fgarofalo56/csa-inabox/issues/3132)) ([69c9e80](https://github.com/fgarofalo56/csa-inabox/commit/69c9e80975a179977c4f9aa2b3c905a1a34b6c52))
+* **ai-red-team:** the safety score was three separate over-claims — scope, failed calls, and empty completions (FINISHLINE C21) ([#3130](https://github.com/fgarofalo56/csa-inabox/issues/3130)) ([3ed90ed](https://github.com/fgarofalo56/csa-inabox/commit/3ed90edf92e6bad5517f9124c11ea225dad5bf05))
+* **ci:** FRESH0 could not block a merge, and nothing watched G2 Fix-it coverage (FINISHLINE C15) ([#3131](https://github.com/fgarofalo56/csa-inabox/issues/3131)) ([9bd5041](https://github.com/fgarofalo56/csa-inabox/commit/9bd504137decb6ff2a41ac0424ffe33727fe5241))
+* **deploy:** null-prototype the ARM param map — a __proto__ feature flag was silently DROPPED ([#3120](https://github.com/fgarofalo56/csa-inabox/issues/3120)) ([6b3c156](https://github.com/fgarofalo56/csa-inabox/commit/6b3c15698d7a303c0444fc322ea81ad4a655b568))
+* **deploy:** the DNS migration's step 9 removed the WRONG zone-group config and emptied the group — that was the outage (FINISHLINE D8, [#3046](https://github.com/fgarofalo56/csa-inabox/issues/3046)) ([#3128](https://github.com/fgarofalo56/csa-inabox/issues/3128)) ([e237667](https://github.com/fgarofalo56/csa-inabox/commit/e237667b474cf9dd629f88ed78bad163572878d8))
+* **deploy:** the internal token had TWO writers and no owner — bicep re-minted it on EVERY deploy (FINISHLINE L-DEPLOY, [#3056](https://github.com/fgarofalo56/csa-inabox/issues/3056)) ([#3122](https://github.com/fgarofalo56/csa-inabox/issues/3122)) ([36b765e](https://github.com/fgarofalo56/csa-inabox/commit/36b765e47c80b1a1d1eebb3328d212207e61e113))
+* **deploy:** the post-deploy bootstrap assumed the DLZ was `single` — discover it ([#3140](https://github.com/fgarofalo56/csa-inabox/issues/3140)) ([184e5ed](https://github.com/fgarofalo56/csa-inabox/commit/184e5ed3ebf9d386759ddb506b44528b59b27a27)), closes [#3143](https://github.com/fgarofalo56/csa-inabox/issues/3143)
+* **drift:** the Gov drift detector reported an UNKNOWN as a delta count ([#2874](https://github.com/fgarofalo56/csa-inabox/issues/2874), FINISHLINE G4) ([#3125](https://github.com/fgarofalo56/csa-inabox/issues/3125)) ([a43df10](https://github.com/fgarofalo56/csa-inabox/commit/a43df1005adde65a354b254d2cfe2edf879ef016))
+* **editors:** a failed read can no longer be rendered as a fact about the user's data — C20 sweep (FINISHLINE C20) ([#3138](https://github.com/fgarofalo56/csa-inabox/issues/3138)) ([a3408c3](https://github.com/fgarofalo56/csa-inabox/commit/a3408c3ef5eed05c32a0fd5d67610b6f0c5fff32)), closes [#3050](https://github.com/fgarofalo56/csa-inabox/issues/3050)
+* **fusion-sheet:** a spreadsheet you had to click every cell of — no keyboard, no undo, hard-coded 20x10 (FINISHLINE C14) ([#3135](https://github.com/fgarofalo56/csa-inabox/issues/3135)) ([c9a82b0](https://github.com/fgarofalo56/csa-inabox/commit/c9a82b095f145cb3f46a24514f9db52ea4aac562))
+* **gov:** deploy-gov could never have been green — its template had never compiled (FINISHLINE G3) ([#3124](https://github.com/fgarofalo56/csa-inabox/issues/3124)) ([93f2535](https://github.com/fgarofalo56/csa-inabox/commit/93f2535f738db9afa07c64c20b6ee52699643655))
+* **governance:** the admin policy preview compiled with NO options — three LU-7 follow-ups closed (FINISHLINE C5) ([#3142](https://github.com/fgarofalo56/csa-inabox/issues/3142)) ([e73d976](https://github.com/fgarofalo56/csa-inabox/commit/e73d976c8a405ad00e3dd89640559bf3693aba89))
+* **gov:** streaming-migrate died with a bare "exit code 3" — its own honest-skip was dead code (FINISHLINE G2) ([#3126](https://github.com/fgarofalo56/csa-inabox/issues/3126)) ([37047d8](https://github.com/fgarofalo56/csa-inabox/commit/37047d81107d44c72484d1eaa3b617b4db2fb955))
+* **gov:** the hub probe read az's stderr banner as its answer — and GCC's guard could not fail at all ([#3139](https://github.com/fgarofalo56/csa-inabox/issues/3139)) ([6fa3386](https://github.com/fgarofalo56/csa-inabox/commit/6fa33861e93c78ce1b5c718b2a72243897924886))
+* **security:** four ACR re-lock call sites still discarded the verified-close verdict, and the guard could not see any of them (FINISHLINE C24) ([#3119](https://github.com/fgarofalo56/csa-inabox/issues/3119)) ([d7d681b](https://github.com/fgarofalo56/csa-inabox/commit/d7d681b9152460450e4380155cf7d8e9c9096970)), closes [#3088](https://github.com/fgarofalo56/csa-inabox/issues/3088)
+* **security:** the route guard passed on a name in a SIBLING handler and on an unused IMPORT — 5 unauthorized handlers shipped behind it (FINISHLINE C22) ([#3134](https://github.com/fgarofalo56/csa-inabox/issues/3134)) ([2bc3489](https://github.com/fgarofalo56/csa-inabox/commit/2bc3489ef1a13fc45ffdaba813967c746f619eca))
+* **supply-chain:** MCR deploy refs floated :latest — pin to digests and guard the SAFE property (FINISHLINE C18) ([#3123](https://github.com/fgarofalo56/csa-inabox/issues/3123)) ([af3d378](https://github.com/fgarofalo56/csa-inabox/commit/af3d378864bda5ec2da42242efa265bde6123c5a))
+* **unity:** the catalog trusts only the v2.0 issuer while Entra mints v1.0 tokens (FINISHLINE F1, RC-9 + RC-10) ([#3121](https://github.com/fgarofalo56/csa-inabox/issues/3121)) ([5e0841f](https://github.com/fgarofalo56/csa-inabox/commit/5e0841f9f38a424c63b2a918419a890e5bada0b3))
+
+
+### Documentation
+
+* **deploy:** D17 R8 — re-measure both deploy walkthroughs against the code, and name what was false ([#3143](https://github.com/fgarofalo56/csa-inabox/issues/3143)) ([f601280](https://github.com/fgarofalo56/csa-inabox/commit/f601280c79668cea60fe8226e3ffd8b3caaa6ccd))
+* **f1:** the auth chain is PROVEN working; the Iceberg failure is now provisioning, not identity (RC-12/RC-13) ([#3141](https://github.com/fgarofalo56/csa-inabox/issues/3141)) ([6954f42](https://github.com/fgarofalo56/csa-inabox/commit/6954f429758b952537562f3f1c65a79af3847474))
+* **parity:** Commercial↔Gov capability matrix — and two Gov deploy lanes are DISABLED (FINISHLINE G2/G3/G4) ([#3127](https://github.com/fgarofalo56/csa-inabox/issues/3127)) ([29a746a](https://github.com/fgarofalo56/csa-inabox/commit/29a746af7b498dabe5b221f2043e87f5f95860df))
+
 ## [0.89.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.88.1...csa-inabox-v0.89.0) (2026-08-08)
 
 
