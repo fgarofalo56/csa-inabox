@@ -440,8 +440,13 @@ async function main() {
   let playwrightExitCode = 0;
   try {
     const grepArg = grep ? ` --grep "${grep}"` : '';
-    // UAT_GREP_INVERT excludes matching test titles — e.g. "tutorial:" to skip
-    // the slow screenshot-generation suite during a fast functional run.
+    // Playwright matches --grep / --grep-invert against the test's FILE PATH as
+    // well as its title, so both a title fragment ("tutorial:") and a filename
+    // fragment ("apps.uat.ts") are valid selectors. Verified live 2026-08-08:
+    // UAT_GREP="(admin-security|phase2-install-rbac|apps\.uat\.ts)" selected
+    // exactly the 13 tests in those three spec files. Prefer bare filename
+    // fragments over rooted paths — the separator differs between the Windows
+    // workstation and the Linux job container.
     const grepInvert = process.env.UAT_GREP_INVERT || '';
     const grepInvertArg = grepInvert ? ` --grep-invert "${grepInvert}"` : '';
     const cmd = `pnpm exec playwright test --project=${project}${grepArg}${grepInvertArg}`;
@@ -516,12 +521,22 @@ async function main() {
   // on pass<=2 with an exit code of 0. Nothing anywhere said the suite had not
   // run. This floor makes that state fail loudly instead of passing silently.
   //
-  // The floor applies ONLY when the run CLAIMS to be the full suite (UAT_GREP
-  // empty). An explicit targeted grep is exempt by construction — narrowing on
-  // purpose is legitimate; narrowing by accident is the defect.
-  const minTests = Number.parseInt(process.env.UAT_MIN_TESTS ?? '40', 10);
+  // The floor applies in two cases:
+  //   - UAT_MIN_TESTS set EXPLICITLY → applies to ANY run, narrow or not. A
+  //     caller that names a floor knows how many tests it expects; this is what
+  //     lets the roll gate run a deliberately narrow slice and still assert the
+  //     slice was actually collected. Without this, arming the gate on a grep
+  //     would silently switch the floor OFF — re-creating the 2026-08-08 defect
+  //     in a new shape.
+  //   - UAT_MIN_TESTS unset → default floor, full-suite runs ONLY (UAT_GREP
+  //     empty). On a run that claims everything, "collected almost nothing" is
+  //     unambiguous; on an unannounced narrow run it is not.
+  const minTestsRaw = process.env.UAT_MIN_TESTS;
+  const minTestsExplicit = typeof minTestsRaw === 'string' && minTestsRaw.trim() !== '';
+  const minTests = Number.parseInt(minTestsExplicit ? minTestsRaw : '40', 10);
   let floorViolation = null;
-  if (!grep && Number.isFinite(minTests) && minTests > 0) {
+  if (Number.isFinite(minTests) && minTests > 0 && (minTestsExplicit || !grep)) {
+    const scope = grep ? `the requested slice (UAT_GREP='${grep}')` : 'the FULL suite (UAT_GREP is empty)';
     if (!summary) {
       // R7: state only what was established — the count is UNKNOWN, not zero.
       floorViolation =
@@ -531,8 +546,8 @@ async function main() {
       const collected = (summary.pass || 0) + (summary.fail || 0) + (summary.skip || 0);
       if (collected < minTests) {
         floorViolation =
-          `Playwright collected ${collected} test(s) on a run that claims to be the ` +
-          `FULL suite (UAT_GREP is empty). The floor is ${minTests} (UAT_MIN_TESTS).`;
+          `Playwright collected ${collected} test(s) on a run that claims to be ` +
+          `${scope}. The floor is ${minTests} (UAT_MIN_TESTS).`;
       }
     }
   }
@@ -549,8 +564,9 @@ async function main() {
         '  3. Playwright genuinely collected nothing — check the "running:" command echoed\n' +
         '     above against testMatch/testDir for the "' +
         `${project}" project in playwright.config.ts.\n` +
-        '  If this run is INTENTIONALLY narrow, set UAT_GREP explicitly (the floor then does\n' +
-        '  not apply) rather than lowering UAT_MIN_TESTS.',
+        '  If this run is INTENTIONALLY narrower than the floor, lower UAT_MIN_TESTS to the\n' +
+        '  number that slice actually collects — do NOT clear it. A floor of 0/unset on a\n' +
+        '  narrow run is the exact state that let 2-test rolls pass as "the full suite".',
     );
   }
 

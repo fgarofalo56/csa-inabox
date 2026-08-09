@@ -96,11 +96,15 @@ on:
         type: boolean
         default: false
       uat_timeout_minutes:
-        description: 'Minutes to wait for the loom-uat job before failing the UAT gate.'
+        description: 'Minutes to wait for the loom-uat job before failing the UAT gate. Blank = auto (12 for the default slice, 100 for uat_grep=all).'
         type: string
-        default: '20'
+        default: ''
       uat_grep:
-        description: 'Optional Playwright --grep slice for the UAT gate. Default runs the fast functional slice (the slow "tutorial" screenshot suite is always excluded).'
+        description: 'Playwright --grep slice for the UAT gate. Blank = the proven 13-test roll slice (~3.5 min). "all" = the whole functional suite (~84 min — exceeds the roll budget; use the scheduled run instead). Matches file paths as well as titles.'
+        type: string
+        default: ''
+      uat_min_tests:
+        description: 'Minimum tests the UAT run must COLLECT or the gate fails (guards against a stale/mangled grep silently narrowing the suite). Blank = auto (13 for the default slice).'
         type: string
         default: ''
   workflow_run:
@@ -817,12 +821,18 @@ jobs:
 
       - name: Gate — in-VNet UAT (loom-uat Container App Job)
         id: uat
-        # Runs AFTER the new revision is serving. The loom-uat job runs the
-        # full-visual Playwright suite from INSIDE the console VNet (it mints a
-        # session from the console's SESSION_SECRET — no MFA/user creds) and its
-        # process exits non-zero on a REAL code failure (crash/empty/non-infra
-        # bug) while exiting 0 when the only failures are honest infra-gates.
+        # Runs AFTER the new revision is serving. The loom-uat job runs a Playwright
+        # slice from INSIDE the console VNet (it mints a session from the console's
+        # SESSION_SECRET — no MFA/user creds) and its process exits non-zero on a
+        # REAL code failure (crash/empty/non-infra bug) while exiting 0 when the
+        # only failures are honest infra-gates.
         # A real failure fails THIS step → the Rollback step below reverts.
+        #
+        # SCOPE: this gate runs the 13-test roll slice by default, NOT the whole
+        # suite — see the scope block in `run:` for the measurements behind that
+        # and for why the full suite belongs on a schedule (#3164). The collected
+        # count is asserted (UAT_MIN_TESTS) so a stale or mangled grep cannot
+        # silently shrink the gate the way it did on 2026-08-08.
         #
         # Skippable (skip_uat / LOOM_ROLL_SKIP_UAT). A MISSING job is a loud
         # warning, not a hard block — so a not-yet-deployed harness can't
@@ -833,8 +843,9 @@ jobs:
         env:
           RG: ${{ env.RG_NAME }}
           SKIP_UAT: ${{ steps.vars.outputs.skip_uat }}
-          UAT_TIMEOUT_MINUTES: ${{ inputs.uat_timeout_minutes || '20' }}
-          UAT_GREP: ${{ inputs.uat_grep || '' }}
+          UAT_TIMEOUT_IN: ${{ inputs.uat_timeout_minutes || '' }}
+          UAT_GREP_IN: ${{ inputs.uat_grep || '' }}
+          UAT_MIN_TESTS_IN: ${{ inputs.uat_min_tests || '' }}
         run: |
           set -e
           az config set extension.use_dynamic_install=yes_without_prompt -o none 2>/dev/null || true
@@ -849,31 +860,70 @@ jobs:
             exit 0
           fi
 
-          # Fast FUNCTIONAL slice: always exclude the slow 'tutorial' screenshot
-          # suite so the gate fits the ~20-min budget; a caller can narrow further
-          # with uat_grep. Non-strict provisioning is the job default (infra-gates
-          # exit 0; only real code bugs exit 1) — exactly the roll-gate semantics.
+          # ---- Gate scope, computed HERE and not in `default:` -----------------
+          # This workflow ALSO fires on `workflow_run` (build-fiab-images-acr-tasks
+          # completed). On that trigger `inputs.*` is EMPTY and workflow_dispatch
+          # `default:` values DO NOT APPLY. A slice living only in `default:` would
+          # therefore cover manual dispatches and leave every AUTOMATIC roll running
+          # the full suite — so the fallback is computed in this shell, which is the
+          # one place both triggers pass through.
+          #
+          # Default = the proven 13-test roll slice. Measured live 2026-08-08 on
+          # execution loom-uat-0l7o7p9: "Running 13 tests using 1 worker", 13/13 ✓,
+          # 3m16s wall, UAT_RESULT pass=13 fail=0 skip=0 realFails=0 infraGated=0.
+          # 12 minutes is ~3.6x that measurement.
+          #
+          # The FULL functional suite is deliberately NOT the roll default: measured
+          # 84 minutes and pass=571 fail=37 skip=16 realFails=4. It cannot fit a roll
+          # budget and currently cannot pass, so arming the roll gate on it (#3165)
+          # produced a gate that could not go green at any timeout. It belongs on a
+          # schedule instead (#3164); `uat_grep=all` runs it here on purpose.
+          #
+          # Playwright matches --grep against the test's FILE PATH as well as its
+          # title, so these are spec-file selectors, not title fragments.
+          UAT_GREP_DEFAULT='(admin-security|phase2-install-rbac|apps\.uat\.ts)'
+          UAT_GREP="$UAT_GREP_IN"
+          UAT_MIN_TESTS="$UAT_MIN_TESTS_IN"
+          UAT_TIMEOUT_MINUTES="$UAT_TIMEOUT_IN"
+
+          if [[ "$UAT_GREP" == "all" ]]; then
+            # Explicit opt-in to the whole functional suite. Empty UAT_GREP is the
+            # runner's "no --grep" signal; its own default floor (40) then applies.
+            UAT_GREP=""
+            if [[ -z "$UAT_TIMEOUT_MINUTES" ]]; then UAT_TIMEOUT_MINUTES=100; fi
+          elif [[ -z "$UAT_GREP" ]]; then
+            UAT_GREP="$UAT_GREP_DEFAULT"
+            if [[ -z "$UAT_MIN_TESTS" ]]; then UAT_MIN_TESTS=13; fi
+            if [[ -z "$UAT_TIMEOUT_MINUTES" ]]; then UAT_TIMEOUT_MINUTES=12; fi
+          else
+            # A caller-supplied slice. No floor is INVENTED for it — the caller
+            # names one with uat_min_tests if it wants the collected-count assertion.
+            if [[ -z "$UAT_TIMEOUT_MINUTES" ]]; then UAT_TIMEOUT_MINUTES=20; fi
+          fi
+          echo "::notice::UAT gate scope: grep='${UAT_GREP:-<full suite>}' min_tests='${UAT_MIN_TESTS:-<runner default>}' timeout=${UAT_TIMEOUT_MINUTES}m"
+
+          # Non-strict provisioning is the job default (infra-gates exit 0; only real
+          # code bugs exit 1) — exactly the roll-gate semantics.
+          #
           # `az containerapp job start --env-vars` (even with --image) REPLACES the
           # execution's whole container spec, dropping every baseline env var the
           # job needs — LOOM_URL, SESSION_SECRET, LOOM_AUTOMATION_*, results
           # account, UAMI. That made the container die in <1s with
           # "LOOM_URL is required" (pass=0 fail=2 realFails=0). Instead MERGE the
-          # tutorial-exclude default (and optional grep) into the job template with
-          # --set-env-vars (which preserves all other env), then start PLAIN so the
-          # execution inherits the full, correct env.
+          # gate env into the job template with --set-env-vars (which preserves all
+          # other env), then start PLAIN so the execution inherits the full env.
           #
-          # UAT_GREP is ALWAYS pushed — including when EMPTY. `--set-env-vars` is a
-          # MERGE, so omitting the var leaves whatever the template already carries.
-          # On 2026-08-08 the live loom-uat template still held a UAT_GREP from an
-          # old targeted use-case-apps run:
+          # Every var here is ALWAYS pushed — including when EMPTY. `--set-env-vars`
+          # is a MERGE, so omitting a var leaves whatever the template already
+          # carries. On 2026-08-08 the live loom-uat template still held a UAT_GREP
+          # from an old targeted use-case-apps run:
           #   "use-case app via UI . app-(direct-lake-replacement|supercharge-streaming)"
-          # which matches 2 of the 120 declared tests. Every roll in the FINISHLINE
+          # which matches 2 of the declared tests. Every roll in the FINISHLINE
           # program therefore gated on pass=2 while this step's own comment claimed
-          # "the full-visual Playwright suite". Pushing UAT_GREP= (empty) CLEARS it;
-          # run-uat-unattended.mjs maps an empty UAT_GREP to no --grep arg, so an
-          # empty value is the correct "run everything" signal.
-          echo "Merging UAT gate env (UAT_GREP_INVERT=tutorial, UAT_GREP='${UAT_GREP}') into loom-uat template ..."
-          SET_ENV=(UAT_GREP_INVERT=tutorial "UAT_GREP=$UAT_GREP")
+          # "the full-visual Playwright suite". The same trap applies to
+          # UAT_MIN_TESTS: pushing it empty is what CLEARS a stale floor.
+          echo "Merging UAT gate env into loom-uat template ..."
+          SET_ENV=(UAT_GREP_INVERT=tutorial "UAT_GREP=$UAT_GREP" "UAT_MIN_TESTS=$UAT_MIN_TESTS")
           UPD_ERR=$(mktemp)
           if ! az containerapp job update -n loom-uat -g "$RG" \
               --set-env-vars "${SET_ENV[@]}" -o none 2>"$UPD_ERR"; then
