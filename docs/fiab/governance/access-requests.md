@@ -15,18 +15,21 @@ backing store and records the resulting role-assignment id on the request.
 There is no Microsoft Fabric dependency — the grant is an Azure Storage /
 Synapse SQL / ADX assignment (`no-fabric-dependency.md`).
 
-!!! warning "Known defect — cross-user approval does not currently work"
-    The inbox and the decision route both scope their Cosmos reads to the
-    **signed-in user's own object id**, while requests are written under the
-    **requester's** object id. In any tenant where the approver is a different
-    person from the requester, the approver's inbox comes back **empty** and a
-    direct decision call returns **404 `not found`**.
+!!! info "Cross-user approval — fixed in code; the back-fill of OLD requests is a separate, manual step"
+    The partition-key defect that made an approver's inbox come back **empty**
+    and a decision call return **404** is corrected: every route on this
+    container now scopes to the Entra **tenant** via `tenantScopeId(session)`.
+    See [The cross-user partition defect](#the-cross-user-partition-defect-fixed-2026-08-08).
 
-    Do not read the walkthrough below as a description of working cross-user
-    behaviour — today it is reliable only where approver and requester are the
-    same identity. See [What is broken](#what-is-broken-today) for the exact
-    lines and the fix. This page will be updated when the fix ships and is
-    verified live.
+    Two caveats before you read the walkthrough as live behaviour:
+
+    - **Requests filed BEFORE the fix stay invisible until they are migrated.**
+      Cosmos partition keys are immutable, so the code fix only governs new
+      documents. The one-time repartition is documented in
+      [Access-request approvals](access-request-approvals.md#migration-estates-created-before-2026-08-08),
+      and it has **never been executed against a real Cosmos container**.
+    - **Per `deploy-integrity.md` R2, a merge is not a deploy.** Check the live
+      build SHA on `/admin/readiness` before assuming this estate carries it.
 
 ## How a request gets here
 
@@ -126,38 +129,55 @@ write, notification, and audit entry. A leg the caller may not approve comes
 back as a 403 in the per-id `results` array — never as a silent success. The
 response reports `total`, `succeeded`, and `failed`.
 
-## What is broken today
+## The cross-user partition defect (fixed 2026-08-08)
 
-Three routes disagree with each other about what the `tenantId` partition key
-holds.
+Recorded because the shape of it is worth keeping, not because it is still live.
 
-| Route | Line | Value written / read |
-|---|---|---|
-| `POST /api/catalog/request-access` | 141 | writes `tenantId: s.claims.oid` — the **requester's** object id |
-| `POST /api/access-packages/[id]/request` | 98 | writes `tenantId: requesterId` — the **requester's** object id |
-| `GET /api/access-requests` | 39 | queries `WHERE c.tenantId = @t`, `@t = s.claims.oid` — the **approver's** object id |
-| `POST /api/access-requests/[id]/decision` | 65, 72 | reads `c.item(id, s.claims.oid)` — the **approver's** object id |
+Three routes disagreed with each other about what the `tenantId` partition key
+holds. Until 2026-08-08:
+
+| Route | Value written / read |
+|---|---|
+| `POST /api/catalog/request-access` | wrote `tenantId: s.claims.oid` — the **requester's** object id |
+| `POST /api/access-packages/[id]/request` | wrote `tenantId: requesterId` — the **requester's** object id |
+| `GET /api/access-requests` | queried `WHERE c.tenantId = @t`, `@t = s.claims.oid` — the **approver's** object id |
+| `POST /api/access-requests/[id]/decision` | read `c.item(id, s.claims.oid)` — the **approver's** object id |
 
 `oid` is the Entra **user** object id, not the tenant id. So unless the approver
-and the requester are the same person, the inbox query matches zero rows and the
-decision read 404s before any approver logic runs.
+and the requester were the same person, the inbox query matched zero rows and the
+decision read 404'd before any approver logic ran.
 
-The platform already has the correct helper for exactly this case.
+The platform already had the correct helper for exactly this case.
 `tenantScopeId(session)` in `apps/fiab-console/lib/auth/session.ts` returns
 `claims.tid || claims.oid` — the Entra **tenant** id — and its doc comment states
 it exists so that state written by one user "resolves for any grantee in the
-**same tenant**". It is adopted by 84 API route files. The four routes above are
-not among them.
+**same tenant**". All four routes now use it.
 
-The fix is to scope this container's reads and writes with `tenantScopeId(s)`
-consistently, plus a one-time repartition of existing documents. Note that the
-existing `POST /api/access-governance/backfill` sweeps completed F16 requests
-into the entitlement ledger, so a repartition needs to be sequenced with it.
+**Widening the partition removed an accidental authorization boundary.** The
+per-requester partition was the only thing confining a caller to their own rows,
+and `actorMayApprove` returns `allowed: true` whenever the governing plan does
+not enforce named approvers — which is the default plan. So the fix ships with
+the real boundary that has to replace the accident: `withApprovalAuthority`
+(a route-toolkit wrapper, not a droppable `if (gate) return gate;` line) plus
+separation of duties, so a requester can never action their own request. See
+[Who may approve](access-request-approvals.md#who-may-approve).
 
-Why CI did not catch it: the decision-route unit test builds its fixture with the
-document's `tenantId` set equal to the approver session's `oid`. That models the
-code's assumption rather than what the creating routes actually write, so the
-mismatch cannot appear in the test.
+**Old documents are not fixed by the code change.** Cosmos partition keys are
+immutable; requests filed before the fix remain in per-requester partitions and
+stay invisible to the inbox until physically rewritten. The one-time repartition
+endpoint and its guarantees are in
+[Access-request approvals](access-request-approvals.md#migration-estates-created-before-2026-08-08).
+It has **never been run against a real Cosmos container** — its properties are
+proven only against an in-memory partition-honest fake. Sequence it before
+`POST /api/access-governance/backfill`, which sweeps completed requests into the
+entitlement ledger.
+
+Why CI did not catch it: the decision-route unit test built its fixture with the
+document's `tenantId` set equal to the approver session's `oid`. That modelled
+the code's assumption rather than what the creating routes actually wrote, so the
+mismatch could not appear in the test. The regression test added with the fix
+now drives the reader from a document produced by the **real creating route**,
+so the two can no longer disagree silently.
 
 ## Related
 

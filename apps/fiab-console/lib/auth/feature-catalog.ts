@@ -194,6 +194,11 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'admin.deploy-mcp',          domain: 'Admin',     workload: 'Tenant Admin',      name: 'Deploy MCP Server',    kind: 'admin',     description: 'External MCP Tools — deploy a catalog MCP server as an internal Azure Container App (per-field Key Vault secrets, auto-registered for Copilot). Admin-only by default; an existing admin can delegate it by granting this capability at /admin/permissions.', parentId: 'workload.admin' },
   { id: 'admin.attach-service',      domain: 'Admin',     workload: 'Tenant Admin',      name: 'Attach existing service', kind: 'admin', description: 'Landing zones — attach an EXISTING brownfield Azure service (Synapse / ADX / ADLS / …) to a Loom landing zone so it becomes part of Loom (governance, chargeback, navigators). Admin-only by default; an existing admin can delegate it by granting this capability at /admin/permissions.', parentId: 'workload.admin' },
   { id: 'admin.parity-autopilot',    domain: 'Admin',     workload: 'Tenant Admin',      name: 'Parity Autopilot', kind: 'admin', description: '/admin/ai-operations?tab=autopilot — WS-10.5: schedule Playwright captures, run an AOAI vision diff against the parity docs, and auto-file gap issues with a proposed plan. Read the run ledger + trigger a run. Admin-only by default; delegable at /admin/permissions.', parentId: 'workload.admin' },
+
+  // ============================================================
+  // Domain: Governance
+  // ============================================================
+  { id: 'governance.access-approvals', domain: 'Governance', workload: 'Access governance', name: 'Access approvals', kind: 'admin', description: '/governance/access-requests — review and action the F16 multi-tier access-request inbox for the whole tenant. Final approval provisions a REAL Azure RBAC grant, so this is a privileged capability: tenant admins hold it implicitly, and an approver named on an approval-policy stage gets it for their own queue automatically. Grant it here to delegate tenant-wide approval rights to a governance team. A requester can never approve their own request, whatever they hold.' },
 ];
 
 /** Lookup by id. */

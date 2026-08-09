@@ -1,6 +1,6 @@
 {
   "__generated": "node scripts/ci/generate-client-route-map.mjs — do not edit by hand",
-  "count": 1673,
+  "count": 1674,
   "patterns": [
     "/api/a2a",
     "/api/a2a/agent-cards",
@@ -9,6 +9,7 @@
     "/api/access-governance/assignments/[id]/activate",
     "/api/access-governance/backfill",
     "/api/access-governance/group-sync",
+    "/api/access-governance/repartition",
     "/api/access-governance/report",
     "/api/access-governance/reviews",
     "/api/access-governance/reviews/[id]",
@@ -1684,6 +1685,7 @@
     "^/api/access-governance/assignments/[^/]+/activate/?$",
     "^/api/access-governance/backfill/?$",
     "^/api/access-governance/group-sync/?$",
+    "^/api/access-governance/repartition/?$",
     "^/api/access-governance/report/?$",
     "^/api/access-governance/reviews/?$",
     "^/api/access-governance/reviews/[^/]+/?$",
