@@ -1,0 +1,797 @@
+name: Loom data-plane roll (unity / iceberg / trino)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE GAP THIS CLOSES
+#
+# Three production Container Apps had NO automated roll path of any kind:
+#
+#   loom-unity        the Loom Unity catalog
+#   iceberg-catalog   the Iceberg REST catalog   ← runs the SAME image as above
+#   loom-trino        the Trino federation engine
+#
+# Measured on 2026-08-08, not taken on trust:
+#   - loom-roll-and-validate.yml hard-codes `env.APP_NAME: loom-console` (:121)
+#     and takes no app input, so it can only ever roll the Console.
+#   - full-app-deploy-commercial.yml BUILDS loom-unity (:434) and loom-trino
+#     (:441) but its roll array contains neither, nor iceberg-catalog. The same
+#     is true of ROLL_APPS in scripts/ci/deploy-image-roles.mjs.
+#   So the images were built and then nothing ever put them on the estate.
+#
+# deploy-integrity.md R1: a missing deploy path is P0. R3: a path that has never
+# run is the LOUDEST case of drift, not a silent pass.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THE THREE TRAPS THIS IS DESIGNED AROUND (each measured, each has a step)
+#
+# 1. CONTAINER APPS PINS THE DIGEST AT REVISION CREATION.
+#    Rebuilding a mutable tag produces no new revision and no error — the app
+#    keeps running the digest its current revision was created with. So a roll
+#    that trusts a build's exit code proves nothing. Every roll here carries a
+#    unique --revision-suffix (forcing tag re-resolution) and every outcome is
+#    read back off the LIVE app, never inferred.
+#
+# 2. THE UNITY PAIR IS ATOMIC.
+#    loom-unity and iceberg-catalog run the SAME repository (loom-unity), and
+#    reconcile-policy.mjs::resolveRunningImageTags groups the live estate BY
+#    REPOSITORY. A repo running at two different tags resolves to UNKNOWN, and
+#    decideDeployApps() then refuses deployAppsEnabled while anything is
+#    unknown. So a half-roll does not merely split a pair — it freezes
+#    estate-wide config reconciliation. roll-plan.mjs computes the atomic
+#    closure, so asking for either member always rolls both.
+#
+# 3. THE TAG BICEP SETS IS MUTABLE, SO A SHA ROLL CAN BE REVERTED BY A DEPLOY.
+#    admin-plane/main.bicep sets these images to
+#      '${registry.outputs.acrLoginServer}/loom-unity:${appImageTags.?unity ?? 'v0.1'}'
+#    (iceberg image at :6190, the loomUnity module call at :6667) — the MUTABLE
+#    'v0.1', not a SHA. Durability therefore differs PER BOUNDARY:
+#
+#      Commercial  DURABLE TWO WAYS. deploy-fiab-commercial.yml (:257) runs
+#                  reconcile-resolve.mjs, which MEASURES the running tags and
+#                  exports LOOM_UNITY_TAG / LOOM_TRINO_TAG into $GITHUB_ENV;
+#                  params/commercial.bicepparam consumes them (:272, :284).
+#                  A SHA roll survives the next deploy on its own.
+#
+#      GCC-High    DURABLE ONE WAY ONLY. The "Provision" step in
+#      IL5         deploy-fiab-gcch.yml / deploy-fiab-il5.yml has NO `env:`
+#                  block, so bicep resolves readEnvironmentVariable(
+#                  'LOOM_UNITY_TAG','v0.1') to LITERALLY 'v0.1' on every full
+#                  Gov deploy. A SHA-only roll WILL be reverted. The only
+#                  durability mechanism available in Gov is to make ':v0.1'
+#                  CARRY the verified content — which is exactly what
+#                  gov-provision-trino.yml's own Round-3 note concluded
+#                  independently ("pushing only a SHA tag would leave the next
+#                  orchestrator deploy pointing at an image that does not
+#                  exist").
+#
+#    Hence the `pin_deploy_tag` step: AFTER the live estate is verified, the
+#    verified digest is retagged onto :v0.1 in-registry via `az acr import`
+#    (an ARM control-plane, digest-preserving operation that works while the
+#    registry data plane is firewalled shut), and the pin is then VERIFIED by
+#    re-resolving :v0.1 and comparing digests. Pin-after-verify is deliberate:
+#    pinning first would make an unverified image the deploy default.
+#
+#    NOT FIXED HERE, ON PURPOSE, AND FILED SO IT CANNOT GO STALE IN A COMMENT:
+#    issue #3161 — making bicep itself carry a non-mutable tag on the Gov path
+#    is a separate change to the Gov deploy workflows (give their Provision
+#    steps the same reconcile-resolve/env treatment Commercial has). That is a
+#    bicep/deploy-workflow change, not a roll path, and mixing them would leave
+#    two half-verified things instead of one verified one. #3161 also records
+#    the sharper form of the defect: deploy-fiab-gcch.yml DOES honour
+#    vars.LOOM_UNITY_TAG on its Image-preflight step (:367-368) and does NOT on
+#    its Provision step (:409) — so setting the repo variable produces a
+#    preflight that asserts the pinned tag exists, followed by a deploy that
+#    ignores it. The preflight passing reads as "the pin took effect". It did
+#    not.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# BOUNDARY COVERAGE (cloud-parity.md — declared, never implied)
+#
+#   commercial  in scope
+#   gcc-high    in scope   (gcch.bicepparam: containerPlatform='containerApps',
+#   il5         in scope    deployAppsEnabled=true, and neither overrides
+#                           loomBackends.unity / .icebergCatalog — all three
+#                           apps are deployed there)
+#   gcc         OUT OF SCOPE, and this is not a parity gap: gcc.bicepparam sets
+#               containerPlatform to a non-containerApps value and deploys ZERO
+#               Container Apps, so there is nothing in that boundary to roll.
+#
+# Databricks Unity Catalog does not exist in Azure Government. Loom Unity +
+# Iceberg + Trino IS the catalog and federation story for sovereign customers,
+# which is why the Gov path is first-class here rather than a follow-up.
+#
+# If you have read gov-uc-purview-wire.yml's OWNERSHIP header and believe that
+# workflow is the ONLY producer/owner of the Gov loom-unity app and that
+# admin-plane/main.bicep does not deploy it — that header is STALE. Filed as
+# issue #3162 with the measurements. admin-plane/main.bicep deploys BOTH halves
+# of the pair in Gov (:6667/:6676 loom-unity, :6181/:6190 iceberg-catalog), from
+# the same image expression, which is why this workflow treats the pair as
+# atomic in every boundary rather than only in Commercial.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# FAIL-CLOSED DISCIPLINE
+#
+# There is no `|| true`, no `2>/dev/null`, no `continue-on-error` and no
+# `|| echo ""` anywhere in this file. Every step that cannot establish its
+# outcome FAILS rather than passing. Every error message asserts only what was
+# established (R7): where the registry could not be READ, this says exactly
+# that and never converts it into "the tag does not exist".
+#
+# CONCURRENCY (#3159). loom-roll-and-validate.yml has no concurrency block at
+# all, so two rolls can run `az containerapp update` against one app at once and
+# collide with ContainerAppOperationInProgress — the loser can then trip an
+# auto-rollback for a reason unrelated to the revision. A deploy path whose
+# safety depends on an operator remembering to hold merges is not zero-touch
+# (R4), so this workflow serializes per boundary from day one.
+# cancel-in-progress is FALSE deliberately: cancelling mid-`containerapp update`
+# leaves the app in an indeterminate revision state, and a cancelled run must
+# never read as a pass to anything downstream.
+# ─────────────────────────────────────────────────────────────────────────────
+
+run-name: >-
+  Roll ${{ inputs.apps }} → ${{ inputs.tag }} on ${{ inputs.boundary }}${{ inputs.pin_deploy_tag && ' (+pin :v0.1)' || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Which cloud boundary to roll. GCC is not offered: it deploys zero Container Apps.'
+        type: choice
+        required: true
+        default: commercial
+        options:
+          - commercial
+          - gcc-high
+          - il5
+      apps:
+        description: 'all | comma list of loom-unity,iceberg-catalog,loom-trino. Either unity-pair member pulls in the other (they share one image).'
+        type: string
+        required: false
+        default: 'all'
+      tag:
+        description: 'Image tag to roll to (a commit SHA is strongly preferred over a mutable tag).'
+        type: string
+        required: true
+      location:
+        description: 'Override the region. Default: centralus (commercial) / usgovvirginia (gcc-high, il5).'
+        type: string
+        required: false
+        default: ''
+      resource_group:
+        description: 'Override the admin RG. Default: rg-csa-loom-admin-<location>.'
+        type: string
+        required: false
+        default: ''
+      acr:
+        description: 'Override the registry name. Default: the single ACR in the admin RG.'
+        type: string
+        required: false
+        default: ''
+      pin_deploy_tag:
+        description: 'After the live estate verifies, retag the verified digest onto :v0.1 so the next bicep deploy cannot revert it. REQUIRED for durability in Gov.'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  # deploy-notify-failure.mjs files/updates ONE issue per workflow on failure.
+  issues: write
+
+concurrency:
+  group: loom-dataplane-roll-${{ inputs.boundary }}
+  cancel-in-progress: false
+
+jobs:
+  roll:
+    name: Roll ${{ inputs.apps }} on ${{ inputs.boundary }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 1. Pure input validation. No Azure, no network: a bad input should
+      #       cost nothing and say precisely what is wrong.
+      - name: Validate inputs
+        env:
+          IN_TAG: ${{ inputs.tag }}
+          IN_APPS: ${{ inputs.apps }}
+          IN_BOUNDARY: ${{ inputs.boundary }}
+        run: |
+          set -euo pipefail
+          TAG="$(printf '%s' "$IN_TAG" | tr -d '[:space:]')"
+          if [ -z "$TAG" ]; then
+            echo "::error::The 'tag' input is empty. Refusing to roll: an empty tag would resolve to a malformed image reference, and roll-plan.mjs throws rather than emit one."
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "::error::tag '$TAG' is not a legal OCI tag (letters, digits, '.', '_', '-')."
+            exit 1
+          fi
+          case "$IN_BOUNDARY" in
+            commercial|gcc-high|il5) : ;;
+            *)
+              echo "::error::boundary '$IN_BOUNDARY' is not supported by this workflow. GCC deploys zero Container Apps, so it has nothing to roll."
+              exit 1
+              ;;
+          esac
+          {
+            echo "TAG=$TAG"
+            echo "APPS=${IN_APPS:-all}"
+            echo "BOUNDARY=$IN_BOUNDARY"
+          } >> "$GITHUB_ENV"
+          echo "::notice::boundary=$IN_BOUNDARY apps=${IN_APPS:-all} tag=$TAG"
+
+      # ── 2. Login. Two mutually exclusive steps; the Gov one carries the full
+      #       endpoint set because the default (Commercial) endpoints do not
+      #       resolve inside a sovereign boundary.
+      - name: Azure login (Commercial)
+        if: inputs.boundary == 'commercial'
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Azure login (Gov)
+        if: inputs.boundary != 'commercial'
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        if: inputs.boundary != 'commercial'
+        run: az cloud set --name AzureUSGovernment
+
+      # ── 3. Estate coordinates.
+      #
+      #  The prior art (gov-provision-trino.yml:145) writes this as
+      #     az group show -n "$RG" -o none 2>/dev/null || { echo "not found"; }
+      #  which is the exact R7 defect this program keeps finding: it discards the
+      #  reason and then ASSERTS one. A permission denial and a genuine 404
+      #  produce the same sentence. Here the az output is left on the log and the
+      #  message claims only that the group could not be CONFIRMED.
+      - name: Resolve estate coordinates (RG / ACR)
+        env:
+          IN_LOCATION: ${{ inputs.location }}
+          IN_RG: ${{ inputs.resource_group }}
+          IN_ACR: ${{ inputs.acr }}
+        run: |
+          set -euo pipefail
+          LOC="$IN_LOCATION"
+          if [ -z "$LOC" ]; then
+            case "$BOUNDARY" in
+              commercial) LOC=centralus ;;
+              *)          LOC=usgovvirginia ;;
+            esac
+          fi
+          # main.bicep: var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
+          RG="$IN_RG"
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${LOC}"
+
+          if ! az group show -n "$RG" -o none; then
+            echo "::error::Could not CONFIRM that admin resource group '$RG' exists in boundary '$BOUNDARY'. The az output above states why — it may not exist, or this identity may not be able to read it. This is NOT a claim that it is missing. Pass resource_group= to override."
+            exit 1
+          fi
+
+          ACR="$IN_ACR"
+          if [ -z "$ACR" ]; then
+            COUNT=$(az acr list -g "$RG" --query 'length(@)' -o tsv | tr -d '\r')
+            if [ "${COUNT:-x}" != "1" ]; then
+              echo "::error::Expected exactly ONE container registry in '$RG' to infer the source registry, found '${COUNT:-<unreadable>}'. Pass acr= explicitly rather than letting this guess."
+              exit 1
+            fi
+            ACR=$(az acr list -g "$RG" --query '[0].name' -o tsv | tr -d '\r')
+          fi
+          ACR_LOGIN=$(az acr show -n "$ACR" -g "$RG" --query loginServer -o tsv | tr -d '\r')
+          if [ -z "$ACR_LOGIN" ]; then
+            echo "::error::Registry '$ACR' returned an empty loginServer. Not proceeding on an unresolved registry host."
+            exit 1
+          fi
+          { echo "LOC=$LOC"; echo "RG=$RG"; echo "ACR=$ACR"; echo "ACR_LOGIN=$ACR_LOGIN"; } >> "$GITHUB_ENV"
+          echo "::notice::boundary=$BOUNDARY location=$LOC registry=$ACR_LOGIN"
+
+      # ── 4. The plan. roll-plan.mjs owns the app→repository mapping and the
+      #       atomic closure; it is unit-tested (40 assertions) including the
+      #       fact that iceberg-catalog's repository is loom-unity, which is what
+      #       makes an implicit "$ACR/$app:$TAG" roll wrong.
+      - name: Plan the roll
+        id: plan
+        run: |
+          set -euo pipefail
+          mkdir -p .roll
+          node scripts/ci/roll-plan.mjs --apps "$APPS" --acr "$ACR_LOGIN" --tag "$TAG" --format json > .roll/plan.json
+          cat .roll/plan.json
+
+          jq -r '.rows[] | "\(.app)\t\(.repo)\t\(.image)"' .roll/plan.json > .roll/rows.tsv
+          jq -r '.groups[].repo' .roll/plan.json | sort -u > .roll/repos.txt
+          if [ ! -s .roll/rows.tsv ]; then
+            echo "::error::The plan resolved ZERO apps. A roll that rolls nothing must not report success."
+            exit 1
+          fi
+          if [ "$(jq -r '.mutableTag' .roll/plan.json)" = "true" ]; then
+            echo "::warning::'$TAG' is a MUTABLE tag. The digest behind it can change under you, and the post-roll digest assertion can only prove what was true at the moment it read. Prefer a commit SHA."
+          fi
+          ADDED=$(jq -r '.added | join(", ")' .roll/plan.json)
+          if [ -n "$ADDED" ]; then
+            echo "::notice::Atomic closure pulled in: $ADDED — these apps share one image, and leaving them on different tags resolves the repository to UNKNOWN in reconcile-policy.mjs, which freezes estate-wide config reconciliation."
+          fi
+
+      # ── 5. Every planned app must EXIST as a Container App before anything is
+      #       mutated. A missing app is a real condition (a boundary where the
+      #       backend is not deployed) and must stop the run, not be skipped —
+      #       skipping is how a roll reports success having rolled nothing.
+      - name: Assert every planned app exists in this boundary
+        run: |
+          set -euo pipefail
+          MISSING=""
+          # rows.tsv columns: app <TAB> repo <TAB> image. Only the app name is
+          # read here; the two trailing fields go to `_` so an unused-variable
+          # warning cannot be silenced by habit later.
+          while IFS=$'\t' read -r APP _ _; do
+            [ -n "$APP" ] || continue
+            if az containerapp show -n "$APP" -g "$RG" -o none; then
+              echo "  present: $APP"
+            else
+              MISSING="$MISSING $APP"
+            fi
+          done < .roll/rows.tsv
+          if [ -n "$MISSING" ]; then
+            echo "::error::Could not CONFIRM these Container App(s) in '$RG' (boundary=$BOUNDARY):$MISSING. The az output above states why for each. If they are genuinely absent, this boundary has not deployed the data-plane apps yet and needs an admin-plane deploy first — a roll cannot create them."
+            exit 1
+          fi
+
+      # ── 6. Preflight: does the requested tag actually exist, and what digest
+      #       is behind it?
+      #
+      #  resolve-acr-digest.sh keeps three states apart and has distinct exit
+      #  codes for them: 0 resolved / 3 the registry ANSWERED not-found / 4 the
+      #  registry could not be READ. Collapsing 4 into 3 is the #2963 defect
+      #  verbatim ("the tag does not exist" when the truth was "I could not reach
+      #  the registry"), so they get different messages and different outcomes.
+      #
+      #  The firewall lease is acquired ONCE here rather than passing --lease per
+      #  call: the ACRs sit at publicNetworkAccess=Disabled + defaultAction=Deny
+      #  at rest (#2603), and acquiring/releasing once per repository would thrash
+      #  the firewall — the exact #2980/#2982 propagation race the lease exists to
+      #  avoid. The resolver's own header prescribes this: "A caller that already
+      #  holds the lease omits the flag rather than thrashing the firewall once
+      #  per ref."
+      - name: Preflight — resolve the requested tag to a digest
+        id: preflight
+        run: |
+          set -uo pipefail
+          LEASE_HELD=0
+          release_lease() {
+            [ "$LEASE_HELD" = "1" ] || return 0
+            LEASE_HELD=0
+            if bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"; then
+              return 0
+            fi
+            echo "::error::The ACR firewall lease on '$ACR' could NOT be confirmed released. The registry data plane may still be publicly reachable. Check the registry's networkRuleSet before doing anything else."
+            return 1
+          }
+          trap 'release_lease' EXIT
+
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+            echo "::error::Could not acquire the ACR firewall lease on '$ACR'. Either another build/roll holds it, or this identity cannot change the registry network rules. Existence of '$TAG' is therefore UNPROVEN — this run establishes nothing and refuses to roll on it."
+            exit 1
+          fi
+          LEASE_HELD=1
+
+          : > .roll/digests.tsv
+          UNPROVEN=0
+          while read -r REPO; do
+            [ -n "$REPO" ] || continue
+            set +e
+            DIGEST=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "${REPO}:${TAG}")
+            RC=$?
+            set -e
+            case "$RC" in
+              0)
+                if [ -z "$DIGEST" ]; then
+                  echo "::error::resolve-acr-digest.sh reported success for ${REPO}:${TAG} but printed no digest. That is a defect in the gate, not a verdict about the image; refusing to proceed on it."
+                  exit 1
+                fi
+                echo "${REPO}	${DIGEST}" >> .roll/digests.tsv
+                echo "::notice::${REPO}:${TAG} → ${DIGEST}"
+                ;;
+              3)
+                echo "::error::REFUSING TO ROLL — ${REPO}:${TAG} does not exist in '$ACR': the registry ANSWERED not-found on every attempt. Nothing to roll. Check the tag, or wait for the build that produces it to finish."
+                exit 1
+                ;;
+              4)
+                echo "::warning::Could not READ '$ACR' to resolve a digest for ${REPO}:${TAG}. This is NOT evidence the tag is missing — the registry never answered. The roll will still proceed and will be verified against the LIVE app, but the :v0.1 pin will be SKIPPED, because a pin whose landing cannot be asserted must not be claimed."
+                UNPROVEN=1
+                ;;
+              *)
+                echo "::error::resolve-acr-digest.sh exited $RC for ${REPO}:${TAG}, which is not one of its documented outcomes (0/3/4). Treating an unrecognised verdict as a pass is how a gate stops measuring; failing closed."
+                exit 1
+                ;;
+            esac
+          done < .roll/repos.txt
+
+          if [ "$UNPROVEN" = "1" ]; then
+            echo "digests_complete=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "digests_complete=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if ! release_lease; then exit 1; fi
+
+      # ── 7. Rollback anchor. Captured BEFORE any mutation, and unreadable is
+      #       fatal: rolling without a way back is how a bad revision becomes
+      #       permanent.
+      - name: Capture the current live images (rollback anchor)
+        run: |
+          set -euo pipefail
+          : > .roll/previous.tsv
+          # rows.tsv columns: app <TAB> repo <TAB> image. The anchor is the image
+          # the app is running NOW, read from ARM — not the one being rolled to —
+          # so both planned fields are deliberately unread.
+          while IFS=$'\t' read -r APP _ _; do
+            [ -n "$APP" ] || continue
+            PREV=$(az containerapp show -n "$APP" -g "$RG" \
+              --query "properties.template.containers[0].image" -o tsv | tr -d '\r')
+            if [ -z "$PREV" ]; then
+              echo "::error::Read an EMPTY current image for '$APP'. Without a rollback anchor a failed roll could not be undone, so this refuses to roll rather than proceed blind."
+              exit 1
+            fi
+            echo "${APP}	${PREV}" >> .roll/previous.tsv
+            echo "  $APP is currently running $PREV"
+          done < .roll/rows.tsv
+
+      # ── 8. The roll itself.
+      #
+      #  --revision-suffix is load-bearing, not cosmetic: Container Apps pins the
+      #  digest at revision creation, so `--image` with a tag the app is already
+      #  on is a silent no-op that creates no revision. A unique suffix forces a
+      #  new revision and therefore a fresh tag→digest resolution.
+      #
+      #  deploy-retry.mjs (not a hand-rolled loop) supplies the ONLY retry that
+      #  is allowed to exist here. It retries transient/eventual-consistency —
+      #  which is precisely ContainerAppOperationInProgress, the collision the
+      #  concurrency group above is designed to prevent in the first place — and
+      #  FAILS CLOSED on exhaustion, on wall-clock, and on `unknown`.
+      - name: Roll the Container Apps
+        id: roll
+        run: |
+          set -euo pipefail
+          SUFFIX="r${{ github.run_id }}-${{ github.run_attempt }}"
+          : > .roll/expected.tsv
+          # rows.tsv columns: app <TAB> repo <TAB> image. The repo column exists
+          # to make the app→repository mapping auditable in the log above; the
+          # roll itself consumes the fully-resolved image reference.
+          while IFS=$'\t' read -r APP _ IMAGE; do
+            [ -n "$APP" ] || continue
+            echo "── rolling $APP → $IMAGE (revision suffix $SUFFIX)"
+            node scripts/ci/deploy-retry.mjs \
+              --class-allow transient,eventual-consistency \
+              --max-attempts 6 --backoff 30 --jitter 0.3 --wall-clock 15m \
+              --step "roll $APP" --artifact deploy-failure.json \
+              -- az containerapp update -n "$APP" -g "$RG" \
+                   --image "$IMAGE" --revision-suffix "$SUFFIX"
+            echo "${APP}	${IMAGE}" >> .roll/expected.tsv
+          done < .roll/rows.tsv
+          echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
+
+      # ── 9. Health, in its OWN step.
+      #
+      #  #2963: the Console's equivalent loop probed ten times, `break`d on
+      #  success and then simply ENDED — an image that never pulled walked
+      #  straight through a step named "Wait for revision health". This one has a
+      #  verdict per app and the verdict has teeth.
+      #
+      #  "Scaled to 0" counts as healthy on purpose: loom-trino and the catalog
+      #  pair scale to zero when idle, and a revision with no running replica is
+      #  not an unhealthy revision. What is NOT tolerated is Failed/Degraded or
+      #  never reaching a settled state — the ImagePullBackOff shape.
+      - name: Wait for revision health
+        id: health
+        run: |
+          set -uo pipefail
+          SUFFIX="${{ steps.roll.outputs.suffix }}"
+          BAD=""
+          # expected.tsv columns: app <TAB> image. Health is judged per REVISION,
+          # so the image column is unread here — the image is asserted in the
+          # next step, against what ARM reports as live rather than this file.
+          while IFS=$'\t' read -r APP _; do
+            [ -n "$APP" ] || continue
+            REV="${APP}--${SUFFIX}"
+            OK=false
+            LAST=""
+            for i in $(seq 1 30); do
+              LAST=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$REV" \
+                --query "{h:properties.healthState,r:properties.runningState,p:properties.provisioningState}" -o tsv | tr -d '\r')
+              echo "  [$APP $i] $LAST"
+              case "$LAST" in
+                *Failed*|*Degraded*)
+                  echo "::error::Revision $REV reported a failed/degraded state: $LAST. Not waiting out a terminal state."
+                  break
+                  ;;
+              esac
+              if [ -n "$LAST" ] && printf '%s' "$LAST" | grep -Eq 'Running|RunningAtMaxScale|Scaled to 0|ScaledToZero'; then
+                OK=true; break
+              fi
+              sleep 10
+            done
+            if [ "$OK" != "true" ]; then
+              echo "::error::Revision $REV never settled after ~5 min (last observed state: ${LAST:-<no state read>}). The most common cause is a revision that cannot pull its image."
+              BAD="$BAD $APP"
+            fi
+          done < .roll/expected.tsv
+          if [ -n "$BAD" ]; then
+            echo "::error::Unhealthy after the roll:$BAD"
+            exit 1
+          fi
+
+      # ── 10. THE VERIFICATION THAT MATTERS: read what the estate is ACTUALLY
+      #        running and assert it equals what this run asked for. Nothing here
+      #        infers anything from a build's or an update's exit code.
+      #
+      #  verifyLive() keeps THREE verdicts apart — ok / mismatch / unreadable —
+      #  and an empty expectation set is a FAILURE, not a pass. That last one is
+      #  the "gate that measures nothing" shape and is unit-tested in both
+      #  directions.
+      - name: Verify the LIVE image on every rolled app
+        id: verify
+        run: |
+          set -euo pipefail
+          : > .roll/observed.tsv
+          # expected.tsv columns: app <TAB> image. The expected image is NOT read
+          # from the loop on purpose — it is passed to the comparator below as a
+          # whole map, so this loop cannot accidentally compare a value against
+          # itself. What it collects is only what ARM says is live.
+          while IFS=$'\t' read -r APP _; do
+            [ -n "$APP" ] || continue
+            GOT=$(az containerapp show -n "$APP" -g "$RG" \
+              --query "properties.template.containers[0].image" -o tsv | tr -d '\r')
+            echo "${APP}	${GOT}" >> .roll/observed.tsv
+            echo "  $APP is live on '${GOT:-<empty>}'"
+          done < .roll/expected.tsv
+
+          EXPECTED=$(jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}' < .roll/expected.tsv)
+          OBSERVED=$(jq -Rn '[inputs | split("\t") | {(.[0]): (.[1] // "")}] | add // {}' < .roll/observed.tsv)
+          node scripts/ci/roll-plan.mjs --verify --expected "$EXPECTED" --observed "$OBSERVED"
+
+      # ── 11. The digest assertion.
+      #
+      #  ARM exposes no per-revision digest, so the roll stays BY TAG (rolling by
+      #  digest would also break reconcile-policy.mjs::resolveRunningImageTags,
+      #  which filters on a truthy ref.tag). What this proves is narrower and
+      #  worth stating precisely: the tag the live apps are running still resolves
+      #  to the SAME digest the preflight resolved, i.e. nothing re-pointed the
+      #  tag underneath this run. It is not a claim about the running container's
+      #  own digest.
+      - name: Re-assert the tag still resolves to the preflighted digest
+        if: steps.preflight.outputs.digests_complete == 'true'
+        run: |
+          set -uo pipefail
+          LEASE_HELD=0
+          release_lease() {
+            [ "$LEASE_HELD" = "1" ] || return 0
+            LEASE_HELD=0
+            if bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"; then
+              return 0
+            fi
+            echo "::error::The ACR firewall lease on '$ACR' could NOT be confirmed released. The registry data plane may still be publicly reachable."
+            return 1
+          }
+          trap 'release_lease' EXIT
+
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+            echo "::error::Could not acquire the ACR firewall lease to re-read '$ACR'. The digest assertion could not be performed, so this run cannot claim the tag is unchanged. Failing closed."
+            exit 1
+          fi
+          LEASE_HELD=1
+
+          FAILED=0
+          while IFS=$'\t' read -r REPO WANT_DIGEST; do
+            [ -n "$REPO" ] || continue
+            set +e
+            NOW=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "${REPO}:${TAG}")
+            RC=$?
+            set -e
+            if [ "$RC" != "0" ]; then
+              echo "::error::Could not re-resolve ${REPO}:${TAG} (resolver exit $RC). The preflight digest cannot be re-confirmed, so this run will not claim it."
+              FAILED=1
+              continue
+            fi
+            if [ "$NOW" != "$WANT_DIGEST" ]; then
+              echo "::error::${REPO}:${TAG} now resolves to $NOW but the preflight resolved $WANT_DIGEST. The tag was re-pointed while this roll was in flight — the live apps may be running either digest, and this run cannot say which."
+              FAILED=1
+              continue
+            fi
+            echo "::notice::${REPO}:${TAG} still resolves to $WANT_DIGEST."
+          done < .roll/digests.tsv
+
+          if ! release_lease; then exit 1; fi
+          [ "$FAILED" = "0" ]
+
+      - name: Digest assertion SKIPPED (state it, never imply it passed)
+        if: steps.preflight.outputs.digests_complete != 'true'
+        run: |
+          echo "::warning::The preflight could not READ the registry for at least one repository, so no digest was recorded and the digest assertion did not run. The live-image verification above still passed. This run proves the apps are running the requested TAG; it does not prove which digest that tag pointed at."
+
+      # ── 12. Durability. Pin the verified digest onto :v0.1 — the tag every
+      #        .bicepparam resolves to via readEnvironmentVariable(…, 'v0.1') and
+      #        the tag admin-plane/main.bicep falls back to.
+      #
+      #  `az acr import` with --source and --image on the SAME registry is an ARM
+      #  control-plane retag performed by the registry service. It is
+      #  digest-preserving (no rebuild, no repush) and does not need the data
+      #  plane, so it works while the registry is firewalled shut. The VERIFY
+      #  afterwards does need the data plane, hence the lease.
+      #
+      #  Gated on the estate having verified first, and on the digest being known.
+      #  Pinning an unverified image would make it the deploy default — the
+      #  opposite of what this is for.
+      - name: Pin the verified digest onto :v0.1 (deploy durability)
+        id: pin
+        if: inputs.pin_deploy_tag && steps.preflight.outputs.digests_complete == 'true'
+        run: |
+          set -uo pipefail
+          if [ "$TAG" = "v0.1" ]; then
+            echo "::notice::The rolled tag IS v0.1 — nothing to pin. Note that this run therefore rolled a MUTABLE tag; the estate is durable only for as long as nothing else repoints it."
+            exit 0
+          fi
+
+          IMPORT_FAILED=0
+          while IFS=$'\t' read -r REPO WANT_DIGEST; do
+            [ -n "$REPO" ] || continue
+            echo "── retagging ${REPO}:${TAG} → ${REPO}:v0.1 (in-registry, digest-preserving)"
+            if ! node scripts/ci/deploy-retry.mjs \
+                --class-allow transient,eventual-consistency \
+                --max-attempts 4 --backoff 20 --jitter 0.3 --wall-clock 10m \
+                --step "pin ${REPO}:v0.1" --artifact deploy-failure.json \
+                -- az acr import --name "$ACR" \
+                     --source "${ACR_LOGIN}/${REPO}:${TAG}" \
+                     --image "${REPO}:v0.1" --force; then
+              echo "::error::Could not retag ${REPO}:${TAG} onto :v0.1. The next bicep deploy of this boundary will therefore set this app back to whatever :v0.1 currently points at. The roll itself is verified and live; the DURABILITY of it is not."
+              IMPORT_FAILED=1
+            fi
+          done < .roll/digests.tsv
+
+          LEASE_HELD=0
+          release_lease() {
+            [ "$LEASE_HELD" = "1" ] || return 0
+            LEASE_HELD=0
+            if bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"; then
+              return 0
+            fi
+            echo "::error::The ACR firewall lease on '$ACR' could NOT be confirmed released. The registry data plane may still be publicly reachable."
+            return 1
+          }
+          trap 'release_lease' EXIT
+
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+            echo "::error::Retag(s) were issued but the lease to VERIFY them could not be acquired. This run will not claim the pin landed — an unverified pin is exactly the class of claim this program exists to eliminate."
+            exit 1
+          fi
+          LEASE_HELD=1
+
+          VERIFY_FAILED=0
+          while IFS=$'\t' read -r REPO WANT_DIGEST; do
+            [ -n "$REPO" ] || continue
+            set +e
+            PINNED=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "${REPO}:v0.1")
+            RC=$?
+            set -e
+            if [ "$RC" != "0" ]; then
+              echo "::error::Could not read ${REPO}:v0.1 back (resolver exit $RC). Whether the pin landed is UNKNOWN — this run does not claim it did."
+              VERIFY_FAILED=1
+              continue
+            fi
+            if [ "$PINNED" != "$WANT_DIGEST" ]; then
+              echo "::error::${REPO}:v0.1 resolves to $PINNED, not the rolled digest $WANT_DIGEST. The pin did NOT land, so the next bicep deploy of this boundary would revert this app."
+              VERIFY_FAILED=1
+              continue
+            fi
+            echo "::notice::${REPO}:v0.1 now resolves to $WANT_DIGEST — a subsequent admin-plane deploy of this boundary will land the same image."
+          done < .roll/digests.tsv
+
+          if ! release_lease; then exit 1; fi
+          [ "$IMPORT_FAILED" = "0" ] && [ "$VERIFY_FAILED" = "0" ]
+
+      - name: Durability NOT established (state it plainly)
+        if: >-
+          success() && (!inputs.pin_deploy_tag || steps.preflight.outputs.digests_complete != 'true')
+        run: |
+          set -euo pipefail
+          if [ "$BOUNDARY" = "commercial" ]; then
+            echo "::warning::The :v0.1 pin did not run. On Commercial the roll can still survive the next deploy, because deploy-fiab-commercial.yml runs reconcile-resolve.mjs, which MEASURES the running tags and exports LOOM_UNITY_TAG / LOOM_TRINO_TAG. That mechanism is not exercised by this run and is not verified by it."
+          else
+            echo "::error::The :v0.1 pin did not run, and on '$BOUNDARY' that is the ONLY durability mechanism: the Provision step in the Gov deploy workflows has no env: block, so bicep resolves readEnvironmentVariable('LOOM_UNITY_TAG','v0.1') to literally 'v0.1'. The next full deploy of this boundary WILL revert these apps. This roll is live but NOT durable."
+            exit 1
+          fi
+
+      # ── 13. Rollback. The prior art (loom-roll-and-validate.yml:908) omits
+      #        --revision-suffix, which makes the rollback a silent no-op whenever
+      #        the previous and current image strings are equal (both ':v0.1', the
+      #        common case here). This one carries its own suffix.
+      - name: Roll back on failure
+        if: failure() && steps.roll.outcome == 'success'
+        run: |
+          set -uo pipefail
+          SUFFIX="rb${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "::error::A post-roll gate failed (health=${{ steps.health.outcome }}, verify=${{ steps.verify.outcome }}). Restoring the images captured before the roll."
+          FAILED=0
+          while IFS=$'\t' read -r APP PREV; do
+            [ -n "$APP" ] || continue
+            echo "── restoring $APP → $PREV"
+            if ! node scripts/ci/deploy-retry.mjs \
+                --class-allow transient,eventual-consistency \
+                --max-attempts 6 --backoff 30 --jitter 0.3 --wall-clock 15m \
+                --step "rollback $APP" --artifact deploy-rollback-failure.json \
+                -- az containerapp update -n "$APP" -g "$RG" \
+                     --image "$PREV" --revision-suffix "$SUFFIX"; then
+              echo "::error::Could not restore '$APP' to '$PREV'. This app is left on the FAILED roll and needs manual attention."
+              FAILED=1
+            fi
+          done < .roll/previous.tsv
+          if [ "$FAILED" != "0" ]; then
+            echo "::error::Rollback INCOMPLETE — at least one app could not be restored (named above)."
+            exit 1
+          fi
+          echo "::notice::Rollback complete. Note the pair is only consistent again if BOTH unity apps restored; the messages above say which did."
+
+      # ── 14. One issue per workflow, updated. Never a hard-coded issue number:
+      #        four deploy workflows commented on a CLOSED roadmap issue for 47
+      #        days because the number was baked in, which is why C1 bans it.
+      - name: Notify on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/deploy-notify-failure.mjs \
+            --workflow loom-dataplane-roll --failure-json deploy-failure.json
+
+      - name: Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### Loom data-plane roll — \`$BOUNDARY\`"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| boundary | \`$BOUNDARY\` |"
+            echo "| resource group | \`$RG\` |"
+            echo "| registry | \`$ACR_LOGIN\` |"
+            echo "| requested tag | \`$TAG\` |"
+            echo "| roll | ${{ steps.roll.outcome }} |"
+            echo "| health | ${{ steps.health.outcome }} |"
+            echo "| live-image verification | ${{ steps.verify.outcome }} |"
+            echo "| :v0.1 pin | ${{ steps.pin.outcome }} |"
+            echo ""
+            if [ -s .roll/observed.tsv ]; then
+              echo "Live images read back off the estate:"
+              echo ""
+              echo '```'
+              cat .roll/observed.tsv
+              echo '```'
+            else
+              echo "No live images were read back — the run did not reach verification."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
