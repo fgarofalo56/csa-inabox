@@ -119,7 +119,7 @@ jobs:
           echo "Fetched and masked SESSION_SECRET from $KV/$KV_SECRET_NAME"
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
