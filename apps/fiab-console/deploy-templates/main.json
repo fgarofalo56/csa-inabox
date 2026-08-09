@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13680777448369137085"
+      "templateHash": "10059779734585899623"
     }
   },
   "definitions": {
@@ -2528,7 +2528,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18016421778574184282"
+              "templateHash": "17129487701922255369"
             }
           },
           "definitions": {
@@ -19472,7 +19472,7 @@
                       "image": "[format('{0}/loom-unity:{1}', reference('registry').outputs.acrLoginServer.value, coalesce(tryGet(parameters('appImageTags'), 'unity'), 'v0.1'))]",
                       "lakeStorageAccountName": "[parameters('loomStorageAccount')]",
                       "assignLakeRole": false,
-                      "minReplicas": 0,
+                      "minReplicas": 1,
                       "cpu": "1.0",
                       "memory": "2Gi",
                       "entraClientId": "[if(not(empty(parameters('loomMsalClientId'))), parameters('loomMsalClientId'), if(variables('msalAppRegProvisioned'), reference('entraAppReg').outputs.appId.value, ''))]",
