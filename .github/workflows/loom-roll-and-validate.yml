@@ -861,9 +861,19 @@ jobs:
           # tutorial-exclude default (and optional grep) into the job template with
           # --set-env-vars (which preserves all other env), then start PLAIN so the
           # execution inherits the full, correct env.
-          echo "Merging UAT gate env (UAT_GREP_INVERT=tutorial${UAT_GREP:+, UAT_GREP=$UAT_GREP}) into loom-uat template ..."
-          SET_ENV=(UAT_GREP_INVERT=tutorial)
-          [[ -n "$UAT_GREP" ]] && SET_ENV+=("UAT_GREP=$UAT_GREP")
+          #
+          # UAT_GREP is ALWAYS pushed — including when EMPTY. `--set-env-vars` is a
+          # MERGE, so omitting the var leaves whatever the template already carries.
+          # On 2026-08-08 the live loom-uat template still held a UAT_GREP from an
+          # old targeted use-case-apps run:
+          #   "use-case app via UI . app-(direct-lake-replacement|supercharge-streaming)"
+          # which matches 2 of the 120 declared tests. Every roll in the FINISHLINE
+          # program therefore gated on pass=2 while this step's own comment claimed
+          # "the full-visual Playwright suite". Pushing UAT_GREP= (empty) CLEARS it;
+          # run-uat-unattended.mjs maps an empty UAT_GREP to no --grep arg, so an
+          # empty value is the correct "run everything" signal.
+          echo "Merging UAT gate env (UAT_GREP_INVERT=tutorial, UAT_GREP='${UAT_GREP}') into loom-uat template ..."
+          SET_ENV=(UAT_GREP_INVERT=tutorial "UAT_GREP=$UAT_GREP")
           UPD_ERR=$(mktemp)
           if ! az containerapp job update -n loom-uat -g "$RG" \
               --set-env-vars "${SET_ENV[@]}" -o none 2>"$UPD_ERR"; then

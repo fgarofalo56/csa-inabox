@@ -504,10 +504,63 @@ async function main() {
   // --- 6. Best-effort results upload ----------------------------------------
   await uploadResults(runTag);
 
+  // --- 7. Minimum-collected-test floor --------------------------------------
+  // A run that collects almost nothing is a MEASUREMENT FAILURE, not a pass.
+  //
+  // Incident, 2026-08-08: a stale UAT_GREP left on the loom-uat job template by
+  // an old targeted run —
+  //   "use-case app via UI . app-(direct-lake-replacement|supercharge-streaming)"
+  // — narrowed every roll gate to 2 of the 120 declared tests. The roll workflow
+  // described that step as "the full-visual Playwright suite" and three
+  // consecutive production rolls (31277716379, 31280987503, 31284001915) gated
+  // on pass<=2 with an exit code of 0. Nothing anywhere said the suite had not
+  // run. This floor makes that state fail loudly instead of passing silently.
+  //
+  // The floor applies ONLY when the run CLAIMS to be the full suite (UAT_GREP
+  // empty). An explicit targeted grep is exempt by construction — narrowing on
+  // purpose is legitimate; narrowing by accident is the defect.
+  const minTests = Number.parseInt(process.env.UAT_MIN_TESTS ?? '40', 10);
+  let floorViolation = null;
+  if (!grep && Number.isFinite(minTests) && minTests > 0) {
+    if (!summary) {
+      // R7: state only what was established — the count is UNKNOWN, not zero.
+      floorViolation =
+        'test-results/uat/report.json could not be read, so the number of tests ' +
+        'actually executed is UNKNOWN. An unmeasured run cannot pass a gate.';
+    } else {
+      const collected = (summary.pass || 0) + (summary.fail || 0) + (summary.skip || 0);
+      if (collected < minTests) {
+        floorViolation =
+          `Playwright collected ${collected} test(s) on a run that claims to be the ` +
+          `FULL suite (UAT_GREP is empty). The floor is ${minTests} (UAT_MIN_TESTS).`;
+      }
+    }
+  }
+  if (floorViolation) {
+    console.error(`\nUAT_FLOOR_VIOLATION ${floorViolation}`);
+    console.error(
+      '[run-uat-unattended] REMEDIATION — check these, in order:\n' +
+        "  1. A stale filter on the JOB TEMPLATE (this is what happened on 2026-08-08).\n" +
+        '     Read it:   az containerapp job show -n loom-uat -g <rg> ' +
+        '--query "properties.template.containers[0].env[?starts_with(name,\'UAT_\')]"\n' +
+        '     Clear it:  az containerapp job update -n loom-uat -g <rg> --set-env-vars UAT_GREP=\n' +
+        '     (--set-env-vars MERGES, so omitting UAT_GREP leaves the old value in place.)\n' +
+        `  2. UAT_GREP_INVERT excluding too much — currently '${process.env.UAT_GREP_INVERT || ''}'.\n` +
+        '  3. Playwright genuinely collected nothing — check the "running:" command echoed\n' +
+        '     above against testMatch/testDir for the "' +
+        `${project}" project in playwright.config.ts.\n` +
+        '  If this run is INTENTIONALLY narrow, set UAT_GREP explicitly (the floor then does\n' +
+        '  not apply) rather than lowering UAT_MIN_TESTS.',
+    );
+  }
+
   // Exit code:
+  //   floorViolation        → non-zero regardless of mode (the run is unmeasured)
   //   strictProvision=true  → use Playwright's raw exit code (any fail = non-zero)
   //   strictProvision=false → non-zero only if there are real code bugs
-  if (strictProvision) {
+  if (floorViolation) {
+    process.exit(1);
+  } else if (strictProvision) {
     process.exit(playwrightExitCode);
   } else {
     process.exit(realFailCount > 0 ? 1 : 0);
