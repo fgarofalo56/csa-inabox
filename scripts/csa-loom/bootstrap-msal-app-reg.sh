@@ -189,10 +189,112 @@ echo "==> Ensuring confidential web app (NOT a fallback public client) + delegat
 az ad app update --id "${APP_ID}" --set isFallbackPublicClient=false || echo "    WARN: isFallbackPublicClient update failed"
 az ad app update --id "${APP_ID}" --required-resource-accesses "${REQUIRED_RA}" || echo "    WARN: required-resource-accesses update failed"
 
+# ---------------------------------------------------------------------------
+# KEY VAULT ACCESS GOES THROUGH ARM, NOT THE DATA PLANE (#3176).
+#
+# MEASURED on Commercial 2026-08-09: the Loom vault is publicNetworkAccess=
+# Disabled + defaultAction=Deny, and Azure Policy `KeyVault_PublicNetwork_Modify`
+# (assignment MCAPSGovDeployPolicies, effect `modify`) SILENTLY reverts any
+# attempt to open a write window — `az keyvault update --public-network-access
+# Enabled` returns rc=0 and an ARM PATCH returns HTTP 200, and the vault stays
+# Disabled. The activity log shows the vault write succeeding next to
+# `Microsoft.Authorization/policies/modify/action`.
+#
+# So every `az keyvault secret set` from a public runner failed, the caller
+# swallowed it into a warning, and the estate ran with an app registration that
+# had ZERO credentials while the Console presented a stale Key Vault value —
+# AADSTS7000215 on every sign-in, with a green bootstrap. That is the outage
+# this function exists to prevent.
+#
+# The ARM control plane is a DIFFERENT path and is not gated by the vault's
+# network ACL — it is how bicep provisions secrets into private vaults. Verified
+# working against the live private vault.
+#
+# Requires control-plane `Microsoft.KeyVault/vaults/secrets/write` (Key Vault
+# Contributor / Contributor), which is a different grant from the data-plane
+# "Key Vault Secrets Officer" role the old path needed.
+# ---------------------------------------------------------------------------
+kv_arm_base() {
+  # Derived from the vault's own ARM id, so no extra subscription/RG inputs have
+  # to be threaded in (and none can drift out of sync with KEYVAULT_NAME).
+  if [ -z "${KV_ARM_ID:-}" ]; then
+    KV_ARM_ID="$(az keyvault show --name "${KEYVAULT_NAME}" --query id -o tsv)"
+    if [ -z "${KV_ARM_ID:-}" ]; then
+      echo "    ERROR: could not resolve the ARM id of Key Vault '${KEYVAULT_NAME}'. This is a control-plane read; it failing means the vault does not exist under this subscription or the identity cannot see it — NOT that the vault is network-blocked." >&2
+      return 1
+    fi
+  fi
+  echo "https://management.azure.com${KV_ARM_ID}/secrets"
+}
+
+# kv_secret_put <name> <value> — write via ARM. Fails loudly; never prints the value.
+kv_secret_put() {
+  local _n="$1" _v="$2" _out
+  if ! _out="$(az rest --method PUT \
+        --url "$(kv_arm_base)/${_n}?api-version=2023-07-01" \
+        --body "{\"properties\":{\"value\":\"${_v}\"}}" -o none 2>&1)"; then
+    # Scrub the value out of any echoed request body before surfacing the error.
+    echo "    ERROR: could not write ${_n} to ${KEYVAULT_NAME} via ARM:" >&2
+    printf '%s\n' "${_out}" | grep -vF "${_v}" | head -5 >&2
+    return 1
+  fi
+  return 0
+}
+
+# kv_secret_exists <name> — ARM GET. Answers EXISTENCE without returning the
+# value (ARM deliberately does not expose it). This replaces a data-plane
+# `az keyvault secret show ... 2>/dev/null || true`, which on a private vault
+# returned empty for "unreachable" and was then read as "absent" — regenerating
+# session-secret and RE-KEYING EVERY LIVE SESSION (the #1534 bug class).
+kv_secret_exists() {
+  az rest --method GET --url "$(kv_arm_base)/$1?api-version=2023-07-01" -o none >/dev/null 2>&1
+}
+
 echo "==> Resetting client secret + persisting to Key Vault ${KEYVAULT_NAME}"
-SECRET="$(az ad app credential reset --id "${APP_ID}" --years 2 --query password -o tsv)"
-az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${MSAL_SECRET_NAME}" --value "${SECRET}" -o none
-echo "    wrote ${MSAL_SECRET_NAME}"
+# --append, NOT a bare reset. A bare `credential reset` DELETES every existing
+# credential and mints a new one, so the running Console — which is still
+# serving the OLD secret until its next revision — starts failing sign-in the
+# instant this line runs, and stays broken until the roll lands. Appending keeps
+# the outgoing secret valid across that window.
+SECRET="$(az ad app credential reset --id "${APP_ID}" --append --years 2 --query password -o tsv)"
+if [ -z "${SECRET:-}" ]; then
+  echo "    ERROR: credential reset returned an empty password for ${APP_ID}. Nothing was written to Key Vault; sign-in still uses the previous secret." >&2
+  exit 1
+fi
+
+# PROVE the secret before persisting it. Entra replicates new client secrets
+# ASYNCHRONOUSLY — a token request in the first seconds is answered
+# AADSTS7000215 ("invalid client secret") even though the secret is genuine.
+# Observed live 2026-08-09: attempt 1 rejected, attempt 2 (+10s) issued a token.
+# Writing an unproven value would put Key Vault and the app registration back
+# out of sync, which is the exact failure this script is meant to end.
+echo "    validating the new secret against Entra (async replication)"
+# Tenant + login host resolved from the signed-in context rather than assumed,
+# so this is correct in every cloud (the AD endpoint differs in Gov).
+_tenant="$(az account show --query tenantId -o tsv)"
+_login_host="$(az cloud show --query endpoints.activeDirectory -o tsv 2>&1)" || _login_host=''
+case "${_login_host}" in https://*) : ;; *) _login_host='https://login.microsoftonline.com' ;; esac
+_login_host="${_login_host%/}"
+if [ -z "${_tenant:-}" ]; then
+  echo "    ERROR: could not resolve the tenant id from the current az context, so the new secret cannot be validated. Refusing to write an unproven secret to Key Vault." >&2
+  exit 1
+fi
+_ok=0
+for _i in 1 2 3 4 5 6 7 8; do
+  _resp="$(curl -s -X POST "${_login_host}/${_tenant}/oauth2/v2.0/token" \
+    -d "client_id=${APP_ID}" --data-urlencode "client_secret=${SECRET}" \
+    -d "scope=https://graph.microsoft.com/.default" -d "grant_type=client_credentials" --max-time 30)"
+  if printf '%s' "${_resp}" | grep -q '"access_token"'; then _ok=1; break; fi
+  echo "      attempt ${_i}: $(printf '%s' "${_resp}" | grep -oE 'AADSTS[0-9]+' | sort -u | tr '\n' ' ')— retrying in $((_i * 10))s"
+  sleep "$((_i * 10))"
+done
+if [ "${_ok}" -ne 1 ]; then
+  echo "    ERROR: Entra never issued a token for the newly minted secret after 8 attempts. It was NOT written to Key Vault, so the previous secret remains authoritative and sign-in is unchanged." >&2
+  exit 1
+fi
+
+kv_secret_put "${MSAL_SECRET_NAME}" "${SECRET}" || exit 1
+echo "    wrote ${MSAL_SECRET_NAME} (validated: Entra issued a token with it)"
 
 # SIGN-IN DURABILITY — persist the app registration's CLIENT ID too.
 # It is not a secret; it is the DURABLE record of which app registration this
@@ -205,17 +307,20 @@ echo "    wrote ${MSAL_SECRET_NAME}"
 # existing MSAL client id" steps in deploy-fiab-gcch / deploy-fiab-il5 /
 # csa-loom-post-deploy-bootstrap), which makes the reconcile idempotent.
 MSAL_CLIENT_ID_SECRET_NAME="${MSAL_CLIENT_ID_SECRET_NAME:-loom-msal-client-id}"
-az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${MSAL_CLIENT_ID_SECRET_NAME}" --value "${APP_ID}" -o none \
+kv_secret_put "${MSAL_CLIENT_ID_SECRET_NAME}" "${APP_ID}" \
   && echo "    wrote ${MSAL_CLIENT_ID_SECRET_NAME}=${APP_ID} (redeploys resolve it from here)" \
   || echo "    WARN: could not persist ${MSAL_CLIENT_ID_SECRET_NAME} — a later redeploy may blank sign-in until LOOM_MSAL_CLIENT_ID is supplied"
 
-EXISTING_SS="$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${SESSION_SECRET_NAME}" --query value -o tsv 2>/dev/null || true)"
-if [ -z "${EXISTING_SS:-}" ]; then
-  SS="$(openssl rand -hex 32)"
-  az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${SESSION_SECRET_NAME}" --value "${SS}" -o none
-  echo "    generated + wrote ${SESSION_SECRET_NAME}"
-else
+# EXISTENCE, not value. See kv_secret_exists: the old data-plane read used
+# `2>/dev/null || true`, so an unreachable private vault looked identical to an
+# absent secret and this branch regenerated session-secret — silently re-keying
+# every live session on a healthy estate.
+if kv_secret_exists "${SESSION_SECRET_NAME}"; then
   echo "    ${SESSION_SECRET_NAME} already present — preserved (sessions survive)"
+else
+  SS="$(openssl rand -hex 32)"
+  kv_secret_put "${SESSION_SECRET_NAME}" "${SS}" || exit 1
+  echo "    generated + wrote ${SESSION_SECRET_NAME}"
 fi
 
 # Optionally wire the Console Container App so LOOM_MSAL_CLIENT_ID + secretRefs

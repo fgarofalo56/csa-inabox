@@ -435,12 +435,33 @@ jobs:
           done
           UAMI_ID=$(az identity list -g "$ADMIN_RG" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
           chmod +x scripts/csa-loom/bootstrap-msal-app-reg.sh
-          OUT=$(KEYVAULT_NAME="$KV_NAME" \
+          # NOT best-effort any more (#3176). This step OWNS interactive sign-in:
+          # if it does not put a VALIDATED client secret into Key Vault, every
+          # sign-in fails AADSTS7000215. It used to end in
+          #   || echo "::warning::MSAL app-reg provisioning incomplete …"
+          # so a total failure produced a warning and a GREEN bootstrap. That is
+          # exactly how the live Commercial estate ended up with an app
+          # registration holding ZERO credentials while the Console served a
+          # stale Key Vault value — for weeks, with every deploy reporting
+          # success (deploy-integrity R1/R6: never report success on an
+          # unverified outcome).
+          #
+          # The script now writes to Key Vault through the ARM control plane, so
+          # it no longer depends on the firewall window above — which CANNOT be
+          # opened where Azure Policy KeyVault_PublicNetwork_Modify is assigned
+          # (it silently reverts publicNetworkAccess, so the open "succeeds" and
+          # changes nothing). The window is left in place only for other steps
+          # in this job that still use the data plane.
+          if ! OUT=$(KEYVAULT_NAME="$KV_NAME" \
             CONSOLE_HOSTS="$HOSTS" \
             EXISTING_CLIENT_ID="${LOOM_MSAL_CLIENT_ID:-}" \
             CONSOLE_APP_NAME=loom-console CONSOLE_RG="$ADMIN_RG" \
             UAMI_RESOURCE_ID="${UAMI_ID:-}" \
-            bash scripts/csa-loom/bootstrap-msal-app-reg.sh 2>&1) || echo "::warning::MSAL app-reg provisioning incomplete (Graph admin consent may be required)"
+            bash scripts/csa-loom/bootstrap-msal-app-reg.sh 2>&1); then
+            echo "$OUT"
+            echo "::error::MSAL app-reg provisioning FAILED. Interactive sign-in will not work on this estate: the Console resolves LOOM_MSAL_CLIENT_SECRET from the Key Vault secret this step writes, so a failure here leaves it stale (or absent) and every sign-in returns AADSTS7000215. The script fails closed — it does NOT write an unvalidated secret — so the PREVIOUS secret is still authoritative and a currently-working sign-in is not broken by this failure. Read the output above for the specific cause (Graph Application Administrator role, or control-plane Microsoft.KeyVault/vaults/secrets/write on $KV_NAME)."
+            exit 1
+          fi
           echo "$OUT"
           # Export the resolved app id for the Dataverse AppUser step below.
           APP_ID=$(echo "$OUT" | sed -n 's/^LOOM_MSAL_CLIENT_ID=//p' | tail -1)
