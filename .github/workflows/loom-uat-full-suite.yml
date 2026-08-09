@@ -1,0 +1,374 @@
+name: loom-uat-full-suite
+
+run-name: >-
+  full-suite UAT
+  (${{ github.event_name == 'schedule' && 'nightly' || 'manual dispatch' }})
+
+# NIGHTLY FULL-SUITE UAT — the counterpart to the roll gate, not a duplicate.
+#
+# Why this workflow exists (#3164, and the incident it closes out):
+#
+# On 2026-08-08 the roll's in-VNet UAT gate was found to be running TWO tests
+# while presenting itself as the whole suite — a stale `UAT_GREP` left on the
+# `loom-uat` job template by an earlier targeted run, preserved indefinitely
+# because `az containerapp job update --set-env-vars` MERGES. Measured against
+# the real suite that gate was covering 0.3% of what actually executes.
+#
+# The fix (#3168) pins the roll gate to a PROVEN 13-test slice with an asserted
+# floor, because the full suite measured 84 minutes and cannot fit a roll
+# budget. That fix is only half an answer: narrowing the roll gate relocates
+# the "measures nothing" defect one level up unless something else runs the
+# full suite on a cadence. This workflow is that something.
+#
+# WHAT IT DOES
+#   1. Refuses to start if another `loom-uat` execution is already Running —
+#      they share ONE live estate and would interfere with each other. Bounded
+#      wait first (a coincident roll usually clears in minutes), then a hard,
+#      true failure rather than a silent skip.
+#   2. MERGES the full-suite env onto the job template, pushing EVERY gate var
+#      explicitly INCLUDING the empty ones. Pushing `UAT_GREP=` empty is what
+#      CLEARS a stale slice; omitting it is what caused the incident above.
+#   3. Starts the execution PLAIN. `job start --env-vars` REPLACES the whole
+#      container spec and would drop the baseline env (LOOM_URL, SESSION_SECRET,
+#      the automation identity, the results account), killing the container in
+#      under a second with "LOOM_URL is required". Merge-then-plain-start is the
+#      only correct sequence.
+#   4. Polls the execution to a terminal status. The EXECUTION STATUS is the
+#      authoritative verdict — nothing else.
+#   5. Reads the UAT_RESULT line from Log Analytics, time-scoped to this run, as
+#      REPORTING ONLY. Log Analytics ingestion lags; an absent line means the
+#      counts are UNKNOWN and this workflow says exactly that (R7). It never
+#      converts a missing measurement into a pass.
+#   6. Files (or updates) a GitHub issue on failure, then FAILS.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#   - It does not gate the roll. It is a detector, not a blocker; a roll must
+#     not wait 84 minutes.
+#   - It contains no `|| true`, no `continue-on-error`, and no `2>/dev/null` on
+#     any load-bearing path. Every `az` invocation captures stderr to a file and
+#     PRINTS it on failure, so a permission denial can never be laundered into
+#     an empty string and then into a false claim (deploy-integrity R7).
+#
+# KNOWN LIMITATION, STATED RATHER THAN HIDDEN
+#   The `UAT_MIN_TESTS` floor is enforced by `e2e/run-uat-unattended.mjs` INSIDE
+#   the loom-uat image. Pushing the env var here does nothing until that image
+#   is rebuilt from a commit that carries the floor logic. Until the rebuild,
+#   this workflow's protection against a truncated run is the execution status
+#   plus the reported counts — NOT the floor. Rebuild via
+#   scripts/csa-loom/deploy-loom-uat-job.sh.
+#
+# BOUNDARY: Commercial only. The Gov estate runs its own loom-uat job and needs
+# its own scheduled run; that is NOT covered here and is not implied to work
+# (cloud-parity.md — an untested boundary is named as untested).
+
+on:
+  schedule:
+    # 07:23 UTC daily — off-peak for a centralus estate, and deliberately off
+    # the :00/:30 marks the whole world schedules on.
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: 'Minutes to wait for the execution. Blank = 125 (the loom-uat job replicaTimeout is 120m, so this observes the real terminal status instead of giving up first).'
+        required: false
+        type: string
+      min_tests:
+        description: 'UAT_MIN_TESTS floor for the full suite. Blank = 500 (measured 624 executed on 2026-08-08).'
+        required: false
+        type: string
+      grep_invert:
+        description: 'UAT_GREP_INVERT value. Blank = tutorial (the tutorial-capture specs are a separate workflow).'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  # Its own group: this must NEVER serialize against the roll workflow, or a
+  # nightly run would hold a roll hostage for over an hour. Cross-run collision
+  # on the shared loom-uat job is handled by the explicit pre-flight check
+  # inside the job, which can give a true reason for what it did.
+  group: loom-uat-full-suite
+  cancel-in-progress: false
+
+env:
+  RG_NAME: rg-csa-loom-admin-centralus
+  JOB_NAME: loom-uat
+
+jobs:
+  full-suite:
+    name: Full-suite UAT (in-VNet loom-uat job)
+    runs-on: ubuntu-latest
+    # Above the 125m poll deadline so the poll owns the timeout decision, not
+    # the runner. A runner-level kill would leave no verdict and no issue.
+    timeout-minutes: 150
+    outputs:
+      status: ${{ steps.uat.outputs.status }}
+      execution: ${{ steps.uat.outputs.execution }}
+      result_line: ${{ steps.uat.outputs.result_line }}
+    steps:
+      - name: Azure login
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Run the full UAT suite and wait for a verdict
+        id: uat
+        env:
+          RG: ${{ env.RG_NAME }}
+          JOB: ${{ env.JOB_NAME }}
+          TIMEOUT_IN: ${{ inputs.timeout_minutes || '' }}
+          MIN_TESTS_IN: ${{ inputs.min_tests || '' }}
+          GREP_INVERT_IN: ${{ inputs.grep_invert || '' }}
+        run: |
+          set -euo pipefail
+          az config set extension.use_dynamic_install=yes_without_prompt -o none
+
+          # ---- Defaults computed HERE, not in `default:` ---------------------
+          # This workflow fires on `schedule` as well as `workflow_dispatch`. On
+          # a schedule trigger `inputs.*` is EMPTY and workflow_dispatch
+          # `default:` values DO NOT APPLY. The shell is the one place both
+          # triggers pass through, so the fallbacks live here.
+          TIMEOUT_MINUTES="$TIMEOUT_IN"
+          MIN_TESTS="$MIN_TESTS_IN"
+          GREP_INVERT="$GREP_INVERT_IN"
+          if [[ -z "$TIMEOUT_MINUTES" ]]; then TIMEOUT_MINUTES=125; fi
+          if [[ -z "$MIN_TESTS" ]]; then MIN_TESTS=500; fi
+          if [[ -z "$GREP_INVERT" ]]; then GREP_INVERT=tutorial; fi
+
+          # Floor rationale, so a future reader does not have to re-measure:
+          # execution loom-uat-qlht6qj (2026-08-08, full suite) reported
+          #   UAT_RESULT pass=571 fail=37 skip=16 realFails=4 infraGated=...
+          # i.e. 624 tests EXECUTED, ~635 collected, in 84 minutes. 500 sits
+          # ~20% under that measurement — loose enough to absorb normal churn,
+          # far enough above a truncated slice (13) that truncation cannot hide.
+
+          echo "::notice::full-suite UAT — grep='<full suite>' grep_invert='$GREP_INVERT' min_tests=$MIN_TESTS timeout=${TIMEOUT_MINUTES}m"
+
+          ERR=$(mktemp)
+
+          # ---- Pre-flight: is the job even deployed? -------------------------
+          # An absent job is a REAL failure here. Unlike the roll gate (where a
+          # missing job must never permanently block an emergency ship), this
+          # workflow's entire purpose is to run the suite. Skipping would make
+          # it a detector that cannot detect.
+          if ! az containerapp job show -n "$JOB" -g "$RG" -o none 2>"$ERR"; then
+            echo "::error::Container App Job '$JOB' was not found in resource group '$RG', or it could not be read. az stderr follows — note that 'not found' and 'not permitted to read' are different problems and this output distinguishes them:"
+            cat "$ERR" >&2
+            echo "status=JobNotFound" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # ---- Pre-flight: refuse to collide with another execution ----------
+          # loom-uat drives ONE live estate. Two concurrent executions create
+          # and delete the same workspaces and items, so their results are
+          # meaningless. A roll's 13-test slice clears in ~4 minutes, so a
+          # bounded wait absorbs the common case.
+          WAIT_DEADLINE=$(( $(date +%s) + 20 * 60 ))
+          while :; do
+            if ! RUNNING=$(az containerapp job execution list -n "$JOB" -g "$RG" \
+                --query "[?properties.status=='Running'].name" -o tsv 2>"$ERR"); then
+              echo "::error::Could not list executions of '$JOB' to check for a run in progress. az stderr:"
+              cat "$ERR" >&2
+              echo "status=PreflightError" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            RUNNING=$(echo "$RUNNING" | tr -d '\r' | tr '\n' ' ' | sed 's/ *$//')
+            if [[ -z "$RUNNING" ]]; then break; fi
+            if (( $(date +%s) >= WAIT_DEADLINE )); then
+              echo "::error::Another '$JOB' execution is still Running after a 20-minute wait: $RUNNING. Refusing to start a second — both drive the same live estate and would corrupt each other's results. This run produced NO verdict about the suite; it did not pass and it did not fail, it never ran."
+              echo "status=BlockedByConcurrentExecution" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "[preflight] $(date -u +%H:%M:%S) waiting for in-progress execution(s): $RUNNING"
+            sleep 60
+          done
+
+          # ---- Merge the full-suite env onto the job template ----------------
+          # EVERY var is pushed, INCLUDING the empty UAT_GREP. `--set-env-vars`
+          # is a MERGE: omitting a var leaves whatever the template already
+          # carries. Pushing UAT_GREP empty is precisely what clears a stale
+          # slice left behind by a targeted run — the 2026-08-08 incident.
+          echo "Merging full-suite env into the '$JOB' template ..."
+          if ! az containerapp job update -n "$JOB" -g "$RG" \
+              --set-env-vars "UAT_GREP=" "UAT_GREP_INVERT=$GREP_INVERT" "UAT_MIN_TESTS=$MIN_TESTS" \
+              -o none 2>"$ERR"; then
+            echo "::error::Failed to set the full-suite env on '$JOB'. az stderr:"
+            cat "$ERR" >&2
+            echo "status=EnvUpdateFailed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Timestamp taken BEFORE the start so the Log Analytics read below can
+          # be scoped to this execution rather than picking up a previous run's
+          # UAT_RESULT line. One minute of slack for clock skew.
+          SINCE=$(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ)
+
+          echo "Starting '$JOB' (plain start — inherits the full template env) ..."
+          if ! EXEC=$(az containerapp job start -n "$JOB" -g "$RG" --query name -o tsv 2>"$ERR"); then
+            echo "::error::Failed to start a '$JOB' execution. az stderr:"
+            cat "$ERR" >&2
+            echo "status=StartFailed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          EXEC=$(echo "$EXEC" | tr -d '\r')
+          if [[ -z "$EXEC" ]]; then
+            echo "::error::'az containerapp job start' returned success but named no execution. The run state is UNKNOWN — this workflow cannot confirm whether the suite started, so it is not claiming either way."
+            echo "status=StartReturnedNoName" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "execution=$EXEC" >> "$GITHUB_OUTPUT"
+          echo "::notice::Started execution: $EXEC (expected wall time ~84 minutes)"
+
+          # ---- Poll to a terminal status -------------------------------------
+          DEADLINE=$(( $(date +%s) + TIMEOUT_MINUTES * 60 ))
+          STATUS="Running"
+          UNREADABLE_POLLS=0
+          while :; do
+            if POLL=$(az containerapp job execution list -n "$JOB" -g "$RG" \
+                --query "[?name=='$EXEC'].properties.status | [0]" -o tsv 2>"$ERR"); then
+              POLL=$(echo "$POLL" | tr -d '\r')
+              if [[ -n "$POLL" ]]; then
+                STATUS="$POLL"
+                UNREADABLE_POLLS=0
+              else
+                # Empty means the query matched nothing, which is NOT the same
+                # as "the execution failed". Say so and keep the last known
+                # status rather than inventing one.
+                UNREADABLE_POLLS=$(( UNREADABLE_POLLS + 1 ))
+                echo "[uat] $(date -u +%H:%M:%S) execution $EXEC not present in the list response (consecutive: $UNREADABLE_POLLS); last known status=$STATUS"
+              fi
+            else
+              UNREADABLE_POLLS=$(( UNREADABLE_POLLS + 1 ))
+              echo "[uat] $(date -u +%H:%M:%S) status query FAILED (consecutive: $UNREADABLE_POLLS). az stderr:"
+              cat "$ERR" >&2
+            fi
+
+            # Ten consecutive unreadable polls (~10 minutes) is a control-plane
+            # problem, not a test verdict. Fail closed and say which it was.
+            if (( UNREADABLE_POLLS >= 10 )); then
+              echo "::error::Could not read the status of execution $EXEC for 10 consecutive polls. The SUITE RESULT IS UNKNOWN — this is a control-plane read failure, not a test failure. Do not read this as the suite having failed."
+              STATUS="StatusUnreadable"
+              break
+            fi
+
+            echo "[uat] $(date -u +%H:%M:%S) status=$STATUS"
+            case "$STATUS" in
+              Succeeded|Failed|Degraded|Cancelled) break ;;
+            esac
+            if (( $(date +%s) >= DEADLINE )); then
+              STATUS="TimedOut"
+              echo "::error::Execution $EXEC did not reach a terminal status within ${TIMEOUT_MINUTES} minutes. The job's own replicaTimeout is 120 minutes, so an execution still Running past that is itself anomalous."
+              break
+            fi
+            sleep 60
+          done
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+          # ---- Reporting only: the UAT_RESULT counts -------------------------
+          # Best-effort BY DESIGN and never load-bearing. Log Analytics ingestion
+          # lags by minutes; an absent line means the counts are UNKNOWN. The
+          # verdict above already exists and does not depend on this.
+          RESULT=""
+          if WS=$(az monitor log-analytics workspace list -g "$RG" \
+              --query "[?starts_with(name, 'law-csa-loom-')]|[0].customerId" -o tsv 2>"$ERR"); then
+            WS=$(echo "$WS" | tr -d '\r')
+          else
+            echo "Could not list Log Analytics workspaces in '$RG'; the run counts will be reported as UNKNOWN. az stderr:"
+            cat "$ERR" >&2
+            WS=""
+          fi
+          if [[ -n "$WS" ]]; then
+            QUERY="ContainerAppConsoleLogs_CL | where TimeGenerated >= datetime($SINCE) | where ContainerName_s == 'uat' | where Log_s contains 'UAT_RESULT pass=' | order by TimeGenerated desc | take 1 | project Log_s"
+            if RESULT=$(az monitor log-analytics query -w "$WS" --analytics-query "$QUERY" \
+                --query "[0].Log_s" -o tsv 2>"$ERR"); then
+              RESULT=$(echo "$RESULT" | tr -d '\r')
+            else
+              echo "Log Analytics query failed; the run counts will be reported as UNKNOWN. az stderr:"
+              cat "$ERR" >&2
+              RESULT=""
+            fi
+          fi
+          if [[ -n "$RESULT" ]]; then
+            echo "::notice::$RESULT"
+          else
+            RESULT="UNKNOWN — no UAT_RESULT line was retrievable for this execution. Log Analytics ingestion lags by several minutes; this says nothing about how many tests ran."
+            echo "::warning::Run counts are UNKNOWN for execution $EXEC (no UAT_RESULT line retrievable). The verdict below comes from the execution status alone."
+          fi
+          echo "result_line=$RESULT" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Full-suite UAT"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Execution | \`$EXEC\` |"
+            echo "| Status | **$STATUS** |"
+            echo "| Floor (UAT_MIN_TESTS) | $MIN_TESTS |"
+            echo "| Counts | $RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$STATUS" == "Succeeded" ]]; then
+            echo "::notice::Full-suite UAT PASSED (execution $EXEC)."
+            exit 0
+          fi
+          echo "::error::Full-suite UAT did not pass (status=$STATUS, execution $EXEC). Inspect Log Analytics ContainerAppConsoleLogs_CL where ContainerName_s == 'uat' for the UAT_REAL_FAILS line."
+          exit 1
+
+      # Failure has to be visible somewhere the operator actually looks, not
+      # only in a run that nobody opens. One issue, reused — a nightly that
+      # files a fresh issue every night trains people to ignore it.
+      - name: File or update the failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.uat.outputs.status }}
+          EXECUTION: ${{ steps.uat.outputs.execution }}
+          RESULT_LINE: ${{ steps.uat.outputs.result_line }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          TITLE='[uat-nightly] Full-suite UAT is failing'
+
+          BODY=$(mktemp)
+          {
+            echo "The nightly full-suite UAT run did not pass."
+            echo ""
+            echo "- **Status:** \`${STATUS:-<the harness failed before producing a status>}\`"
+            echo "- **Execution:** \`${EXECUTION:-<none started>}\`"
+            echo "- **Counts:** ${RESULT_LINE:-UNKNOWN}"
+            echo "- **Run:** $RUN_URL"
+            echo "- **Trigger:** $TRIGGER"
+            echo ""
+            echo "This is the full functional suite, not the roll gate's 13-test slice."
+            echo "A failure here does NOT block rolls by design — it is a detector, so"
+            echo "it needs a human to look at it."
+            echo ""
+            echo "Where the detail is: Log Analytics, table \`ContainerAppConsoleLogs_CL\`,"
+            echo "\`ContainerName_s == 'uat'\`. The \`UAT_REAL_FAILS\` line names the surfaces"
+            echo "that genuinely broke, as opposed to the ones sitting behind honest infra"
+            echo "gates."
+            echo ""
+            echo "If Counts reads UNKNOWN, the number of tests that ran was not retrievable"
+            echo "— that is a gap in this report, not evidence that zero ran."
+          } > "$BODY"
+
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Commenting on existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body-file "$BODY"
+          else
+            echo "Creating a new tracking issue"
+            gh issue create --title "$TITLE" --body-file "$BODY"
+          fi
