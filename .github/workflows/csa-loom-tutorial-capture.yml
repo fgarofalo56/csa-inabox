@@ -7,6 +7,26 @@ name: csa-loom-tutorial-capture
 # every editor, and uploads the staged screenshots as an artifact for review.
 # Publishing into docs/ stays a manual step (scripts/csa-loom/publish-tutorials.mjs)
 # after the operator reviews the artifact (Azure-imagery privacy gate).
+#
+# HONESTY CONTRACT (see #3172).
+# This job used to end `playwright test ... || true`, so its conclusion carried no
+# information about whether anything was captured. Run 29224470851 (2026-07-13,
+# dimensions=features) recorded 6 failed / 11 passed and the workflow REPORTED
+# SUCCESS. The `|| true` existed only to keep the upload step running so partial
+# screenshots survived a partial failure — `if: always()` on the upload buys that
+# without lying about the outcome. The rules now are:
+#   * The Playwright exit code is captured, never discarded.
+#   * The verdict is decided from Playwright's own JSON report
+#     (apps/fiab-console/test-results/uat/report.json, emitted by playwright.config.ts).
+#     A missing/unparseable report is reported as UNKNOWN and FAILS — it is not
+#     read as "no failures".
+#   * "Stage directory absent" and "stage directory empty" are DIFFERENT facts and
+#     are reported as such. The spec mkdir -p's the stage at module load, so an
+#     absent directory means the spec never loaded — i.e. nothing ran at all.
+#   * Every dimension the operator selected must stage at least min_staged_per_dimension
+#     surfaces. There is no hardcoded per-dimension baseline to go stale as the
+#     editor registry grows.
+#   * The artifact still uploads on failure, so a partial capture is still reviewable.
 
 on:
   workflow_dispatch:
@@ -37,6 +57,10 @@ on:
           - apps
           - features
           - items,features
+      min_staged_per_dimension:
+        description: 'Minimum staged surfaces required per SELECTED dimension. 1 = "the dimension produced something". Raise to pin a stronger expectation.'
+        type: string
+        default: '1'
 
 permissions:
   contents: read
@@ -44,6 +68,8 @@ permissions:
 env:
   SUB: ${{ inputs.sub }}
   ADMIN_RG: ${{ inputs.admin_rg }}
+  STAGE_REL: temp/azure-screenshots/redacted/loom-tutorials
+  PW_REPORT_REL: apps/fiab-console/test-results/uat/report.json
 
 jobs:
   capture:
@@ -77,49 +103,196 @@ jobs:
           LOOM_TUTORIAL_DIMENSIONS: ${{ inputs.dimensions }}
         run: |
           set -uo pipefail
+          # ---------------------------------------------------------------
           # Resolve the live session secret (container-app secret, else Key Vault).
+          # Each lookup is ALLOWED to fail (we have fallbacks), but its stderr is
+          # kept so the final error can state what actually happened. The previous
+          # `2>/dev/null || true` chain collapsed "no such secret", "permission
+          # denied" and "resource group not found" into one indistinguishable
+          # empty string, and then asserted a cause it had not established
+          # (deploy-integrity R7).
+          # ---------------------------------------------------------------
+          AZ_ERR="$RUNNER_TEMP/az-secret-lookup.err"
+          : > "$AZ_ERR"
+
           SNAME=$(az containerapp secret list -g "$ADMIN_RG" -n loom-console \
-                  --query "[?contains(name,'session') || contains(name,'SESSION')].name | [0]" -o tsv 2>/dev/null || true)
+                  --query "[?contains(name,'session') || contains(name,'SESSION')].name | [0]" \
+                  -o tsv 2>>"$AZ_ERR")
           SS=""
           if [[ -n "$SNAME" ]]; then
-            SS=$(az containerapp secret show -g "$ADMIN_RG" -n loom-console --secret-name "$SNAME" --query value -o tsv 2>/dev/null || true)
+            SS=$(az containerapp secret show -g "$ADMIN_RG" -n loom-console \
+                 --secret-name "$SNAME" --query value -o tsv 2>>"$AZ_ERR")
           fi
           if [[ -z "$SS" ]]; then
-            KV=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            KV=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>>"$AZ_ERR")
             if [[ -n "$KV" ]]; then
               for KVS in loom-session-secret session-secret; do
-                SS=$(az keyvault secret show --vault-name "$KV" --name "$KVS" --query value -o tsv 2>/dev/null || true)
-                [[ -n "$SS" ]] && break
+                SS=$(az keyvault secret show --vault-name "$KV" --name "$KVS" \
+                     --query value -o tsv 2>>"$AZ_ERR")
+                if [[ -n "$SS" ]]; then
+                  break
+                fi
               done
             fi
           fi
           if [[ -z "$SS" ]]; then
-            echo "::error::Could not read the session secret. Cannot mint a session."; exit 1
+            echo "::group::Azure CLI stderr from the session-secret lookups"
+            cat "$AZ_ERR"
+            echo "::endgroup::"
+            echo "::error::No session secret could be read from resource group '$ADMIN_RG' (container-app secret on loom-console, then Key Vault secrets loom-session-secret/session-secret). No session can be minted, so nothing was captured. The Azure CLI stderr above is the evidence — check it before assuming the secret is absent; a permission denial and a genuinely missing secret both land here."
+            exit 1
           fi
           echo "::add-mask::$SS"
-          cd apps/fiab-console
-          # Don't fail the job on individual editor capture errors — we want the
-          # partial screenshots uploaded for review.
-          SESSION_SECRET="$SS" pnpm exec playwright test --project=uat e2e/tutorial-capture.uat.ts || true
-      - name: Capture summary (staged slugs by dimension)
+
+          # ---------------------------------------------------------------
+          # Run the capture. The exit code is RECORDED, not discarded — the
+          # verdict step decides pass/fail once the artifact has been uploaded.
+          # ---------------------------------------------------------------
+          # `set -u -o pipefail` has no `-e`, so a failed cd would silently run
+          # Playwright from the repo root and every downstream path check would
+          # then be measuring a directory that never existed. Fail closed.
+          if ! cd apps/fiab-console; then
+            echo "::error::Could not enter apps/fiab-console from $(pwd). The checkout is not laid out as expected, so the capture never started."
+            exit 1
+          fi
+          SESSION_SECRET="$SS" pnpm exec playwright test --project=uat e2e/tutorial-capture.uat.ts
+          PW_RC=$?
+          echo "PW_RC=$PW_RC" >> "$GITHUB_ENV"
+          echo "Playwright exited $PW_RC. The verdict step decides the job outcome after the artifact upload."
+
+      - name: Capture summary (staged surfaces by dimension)
         if: always()
+        env:
+          LOOM_TUTORIAL_DIMENSIONS: ${{ inputs.dimensions }}
         run: |
-          STAGE=temp/azure-screenshots/redacted/loom-tutorials
+          set -uo pipefail
+          STAGE="$STAGE_REL"
+          DIMS="${LOOM_TUTORIAL_DIMENSIONS:-items,apps,features}"
+
+          # "Absent" and "empty" are different facts. tutorial-capture.uat.ts does
+          # fs.mkdirSync(STAGE, {recursive:true}) at MODULE LOAD, so an absent
+          # directory means the spec never loaded — nothing ran. The old
+          # `ls ... 2>/dev/null | wc -l` printed 0 for both.
+          if [[ -d "$STAGE" ]]; then
+            echo "STAGE_PRESENT=yes" >> "$GITHUB_ENV"
+          else
+            echo "STAGE_PRESENT=no" >> "$GITHUB_ENV"
+          fi
+
+          TOTAL=0
           {
             echo "## Tutorial capture — staged surfaces"
             echo ""
-            for pfx in item app feature; do
-              n=$(ls -d "$STAGE"/${pfx}-*/ 2>/dev/null | wc -l | tr -d ' ')
-              echo "- **${pfx}s**: ${n} staged"
-            done
+            echo "Dimensions requested: \`${DIMS}\`"
+            echo ""
+            if [[ ! -d "$STAGE" ]]; then
+              echo "> **The stage directory \`${STAGE}\` does not exist.** The spec creates it"
+              echo "> at module load, so this is not an empty capture — the spec never loaded."
+            else
+              echo "| dimension | prefix | requested | staged |"
+              echo "|---|---|---|---|"
+              for pair in "items:item" "apps:app" "features:feature"; do
+                dim="${pair%%:*}"; pfx="${pair##*:}"
+                n=$(find "$STAGE" -mindepth 1 -maxdepth 1 -type d -name "${pfx}-*" | wc -l | tr -d ' ')
+                req="no"
+                case ",${DIMS}," in *",${dim},"*) req="yes" ;; esac
+                echo "| ${dim} | \`${pfx}-*\` | ${req} | ${n} |"
+                echo "STAGED_$(echo "$pfx" | tr '[:lower:]' '[:upper:]')=${n}" >> "$GITHUB_ENV"
+                TOTAL=$((TOTAL + n))
+              done
+              echo ""
+              echo "**Total staged: ${TOTAL}**"
+            fi
             echo ""
             echo "Download the \`loom-tutorial-captures\` artifact, review for sensitive Azure"
             echo "data, then publish with \`node scripts/csa-loom/publish-tutorials.mjs\` and commit."
           } >> "$GITHUB_STEP_SUMMARY"
+          echo "STAGED_TOTAL=${TOTAL}" >> "$GITHUB_ENV"
+
       - name: Upload staged tutorial captures (REVIEW before publishing)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: loom-tutorial-captures
           path: temp/azure-screenshots/redacted/loom-tutorials/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
+
+      - name: Verdict — did the capture actually capture?
+        if: always()
+        env:
+          LOOM_TUTORIAL_DIMENSIONS: ${{ inputs.dimensions }}
+          MIN_PER_DIM: ${{ inputs.min_staged_per_dimension }}
+        run: |
+          set -uo pipefail
+          STAGE="$STAGE_REL"
+          REPORT="$PW_REPORT_REL"
+          DIMS="${LOOM_TUTORIAL_DIMENSIONS:-items,apps,features}"
+          MIN="${MIN_PER_DIM:-1}"
+          if ! [[ "$MIN" =~ ^[0-9]+$ ]]; then
+            echo "::error::min_staged_per_dimension must be a non-negative integer; got '${MIN}'."
+            exit 1
+          fi
+          FAIL=0
+
+          # -- 1. Playwright's own result -------------------------------------
+          # A missing report is UNKNOWN, not "clean". Reading absence as success
+          # is the failure class this whole change exists to remove.
+          if [[ ! -f "$REPORT" ]]; then
+            echo "::error::No Playwright JSON report at ${REPORT}. The capture run produced no machine-readable result, so its outcome is UNKNOWN — it did not necessarily fail and it did not necessarily pass. Playwright exit code was '${PW_RC:-<never recorded: the run step did not reach the end>}'."
+            FAIL=1
+          elif ! jq -e . "$REPORT" > /dev/null; then
+            echo "::error::The Playwright JSON report at ${REPORT} is not parseable JSON. Outcome UNKNOWN. Playwright exit code was '${PW_RC:-<never recorded>}'."
+            FAIL=1
+          else
+            EXPECTED=$(jq -r '.stats.expected // 0' "$REPORT")
+            UNEXPECTED=$(jq -r '.stats.unexpected // 0' "$REPORT")
+            FLAKY=$(jq -r '.stats.flaky // 0' "$REPORT")
+            SKIPPED=$(jq -r '.stats.skipped // 0' "$REPORT")
+            RAN=$((EXPECTED + UNEXPECTED))
+            echo "Playwright: expected=${EXPECTED} unexpected=${UNEXPECTED} flaky=${FLAKY} skipped=${SKIPPED}"
+
+            if [[ "$RAN" -eq 0 ]]; then
+              echo "::error::Playwright ran ZERO tests (expected=0, unexpected=0, skipped=${SKIPPED}). The browser never exercised a single surface. This is a harness failure, not a clean run."
+              FAIL=1
+            fi
+            if [[ "$UNEXPECTED" -gt 0 ]]; then
+              echo "::error::${UNEXPECTED} of ${RAN} capture tests FAILED. Before #3172 this job reported success anyway — run 29224470851 hid 6 failures out of 17 that way."
+              echo "Failed tests:"
+              jq -r '[.. | objects | select(has("title") and has("results"))
+                      | select([.results[]?.status] | index("failed") or index("timedOut"))
+                      | .title] | unique | .[] | "  - " + .' "$REPORT"
+              FAIL=1
+            fi
+            if [[ "$UNEXPECTED" -eq 0 && "${PW_RC:-0}" -ne 0 ]]; then
+              echo "::error::Playwright exited ${PW_RC} with zero unexpected test failures. That is a runner/config failure (e.g. a global setup or teardown error), not a test failure, and it means the run cannot be trusted as complete."
+              FAIL=1
+            fi
+          fi
+
+          # -- 2. Did anything reach the stage? -------------------------------
+          if [[ "${STAGE_PRESENT:-no}" != "yes" || ! -d "$STAGE" ]]; then
+            echo "::error::The stage directory ${STAGE} does not exist. tutorial-capture.uat.ts creates it at module load, so this means the spec never loaded and NOTHING was captured. This is distinct from 'the capture ran and staged nothing'."
+            FAIL=1
+          else
+            for pair in "items:item" "apps:app" "features:feature"; do
+              dim="${pair%%:*}"; pfx="${pair##*:}"
+              case ",${DIMS}," in
+                *",${dim},"*) ;;
+                *) continue ;;
+              esac
+              n=$(find "$STAGE" -mindepth 1 -maxdepth 1 -type d -name "${pfx}-*" | wc -l | tr -d ' ')
+              if [[ "$n" -lt "$MIN" ]]; then
+                echo "::error::Dimension '${dim}' was requested but staged ${n} surfaces (${pfx}-*), below the required minimum of ${MIN}. The stage directory exists, so the spec loaded — the capture ran and produced nothing for this dimension."
+                FAIL=1
+              else
+                echo "Dimension '${dim}': ${n} staged (>= ${MIN}) OK"
+              fi
+            done
+          fi
+
+          if [[ "$FAIL" -ne 0 ]]; then
+            echo "::error::Tutorial capture FAILED. The artifact (if any files were produced) has already been uploaded above — partial captures are still reviewable."
+            exit 1
+          fi
+          echo "Tutorial capture verified: Playwright reported no unexpected failures and every requested dimension staged at least ${MIN} surface(s)."
