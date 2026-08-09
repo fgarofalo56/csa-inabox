@@ -626,6 +626,7 @@ jobs:
           # csa-loom-ci-31210378858.
           ADMIN_ENTRA_GROUP_ID: ${{ secrets.FIAB_ADMIN_GROUP_ID || vars.FIAB_ADMIN_GROUP_ID }}
           INPUT_TENANT_ADMIN_OID: ${{ inputs.tenant_admin_oid }}
+          VAR_TENANT_ADMIN_OID: ${{ vars.FIAB_TENANT_ADMIN_OID }}
           INPUT_TENANT_ADMIN_GROUP_ID: ${{ inputs.tenant_admin_group_id }}
           DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
           PURVIEW_ENABLED: ${{ steps.topology_guard.outputs.purview_enabled }}
@@ -690,8 +691,20 @@ jobs:
           # a silently different one (the two must never disagree).
           TENANT_ADMIN_GROUP="${INPUT_TENANT_ADMIN_GROUP_ID:-$ADMIN_ENTRA_GROUP_ID}"
           add --parameters "loomTenantAdminGroupId=$TENANT_ADMIN_GROUP"
-          if [ -n "${INPUT_TENANT_ADMIN_OID:-}" ]; then
-            add --parameters "loomTenantAdminOid=$INPUT_TENANT_ADMIN_OID"
+          # The OID binding falls back to the FIAB_TENANT_ADMIN_OID repo variable
+          # when no dispatch input is given (#3109). Without that fallback the
+          # param renders empty on every routine deploy, and admin-plane/main.bicep
+          # then computes
+          #   effectiveTenantAdminOid = !empty(loomTenantAdminOid) ? ... :
+          #                             (hasRealAdminGroup ? '' : deployer().objectId)
+          # which BLANKS the binding precisely because an admin GROUP is configured.
+          # That assumes the group path works — and it does not: the auth callback
+          # never populates session.claims.groups (#3175), so isTenantAdmin() can
+          # only ever match the OID. Group configured + OID blank = nobody has
+          # admin, which is exactly what the live Commercial estate shipped.
+          TENANT_ADMIN_OID="${INPUT_TENANT_ADMIN_OID:-$VAR_TENANT_ADMIN_OID}"
+          if [ -n "${TENANT_ADMIN_OID:-}" ]; then
+            add --parameters "loomTenantAdminOid=$TENANT_ADMIN_OID"
           fi
           # Fail CLOSED. A console rendered with no bootstrap-admin binding has
           # an admin gate that no one can pass — /admin/*, the onboarding queue,
