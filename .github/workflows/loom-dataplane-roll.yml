@@ -190,7 +190,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Use Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
