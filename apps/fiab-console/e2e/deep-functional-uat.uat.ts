@@ -32,6 +32,10 @@ const BASE_URL = process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.
 const SCREENSHOT_DIR = path.resolve(__dirname, '..', '..', '..', 'temp', 'uat-2026-05-28', 'screenshots');
 const REPORT_DIR = path.resolve(__dirname, '..', '..', '..', 'temp', 'uat-2026-05-28', 'deep-functional');
 const WORKSPACE_ID = '00b7b715-a441-4ed1-9c70-f2fa8a17f67e'; // 'e2e Playwright UAT'
+// See catalog-uat.uat.ts: SCREENSHOT_DIR/REPORT_DIR are under repo-root/temp/,
+// which run-uat-unattended.mjs does NOT upload — it only walks test-results/uat/.
+// The CSV is written to both, and every row is echoed to stdout (#3167).
+const RESULTS_DIR = path.join(process.cwd(), 'test-results', 'uat');
 fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 fs.mkdirSync(REPORT_DIR, { recursive: true });
 
@@ -155,10 +159,29 @@ async function probeVisualDesigner(page: Page): Promise<boolean> {
   });
 }
 
+/** RFC4180 cell — quote only when the value could break the row. */
+function csvCell(v: string | number | boolean | null): string {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+const CSV_HEADER = 'slug,category,verdict,visualDesignerOk,primary,primaryClicked,enabledCount,disabledCount,tabCount,consoleErrorCount';
+
+/** One CSV row. Shares its column order with CSV_HEADER so the two cannot drift. */
+function csvRow(r: FunctionalResult): string {
+  return [
+    r.slug, r.category, r.verdict, r.visualDesignerOk, r.primaryAction.name,
+    r.primaryAction.clicked, r.ribbonEnabled.length, r.ribbonDisabled.length,
+    r.tabs.length, r.consoleErrors.length,
+  ].map(csvCell).join(',');
+}
+
 test.describe.serial('Deep functional UAT — every catalog item', () => {
   const results: FunctionalResult[] = [];
 
   test.beforeAll(async ({ browser }) => {
+    console.log(`UAT_ROW_HEADER deep-functional ${CSV_HEADER}`);
+    console.log(`UAT_ROW_DECLARED deep-functional ${FABRIC_ITEM_TYPES.length}`);
     const context = await browser.newContext();
     const page = await context.newPage();
     await ensureSession(page);
@@ -281,6 +304,10 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
         verdict,
       };
       results.push(r);
+      // Emitted per-test, not only in afterAll: describe.serial skips the
+      // remainder after any failure, so afterAll-only emission could silently
+      // publish a tally covering just a prefix of the catalog (#3167).
+      console.log(`UAT_ROW deep-functional ${csvRow(r)}`);
 
       // Per-item Markdown report
       fs.writeFileSync(
@@ -309,16 +336,16 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
 
   test.afterAll(async () => {
     // CSV summary
-    const csv = ['slug,category,verdict,visualDesignerOk,primary,primaryClicked,enabledCount,disabledCount,tabCount,consoleErrorCount']
-      .concat(results.map(r =>
-        [r.slug, r.category, r.verdict, String(r.visualDesignerOk), r.primaryAction.name, r.primaryAction.clicked, r.ribbonEnabled.length, r.ribbonDisabled.length, r.tabs.length, r.consoleErrors.length].join(',')
-      )).join('\n');
+    const csv = [CSV_HEADER].concat(results.map(csvRow)).join('\n');
     fs.writeFileSync(path.join(REPORT_DIR, '..', 'deep-functional-uat.csv'), csv);
+    fs.mkdirSync(RESULTS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(RESULTS_DIR, 'deep-functional-uat.csv'), csv);
 
     // Verdict tally
     const tally: Record<string, number> = {};
     for (const r of results) tally[r.verdict] = (tally[r.verdict] || 0) + 1;
     console.log('Verdict tally:', tally);
+    console.log(`UAT_ROW_SUMMARY deep-functional declared=${FABRIC_ITEM_TYPES.length} graded=${results.length} ${JSON.stringify(tally)}`);
 
     // Visual designer summary
     const visualMisses = results.filter(r => r.visualDesignerOk === false).map(r => r.slug);

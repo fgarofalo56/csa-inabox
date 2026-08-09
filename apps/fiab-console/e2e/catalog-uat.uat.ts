@@ -23,6 +23,14 @@ const BASE_URL = process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.
 const OUT_DIR = path.resolve(__dirname, '..', '..', '..', 'temp', 'uat-2026-05-28', 'editor-snapshots');
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
+// `test-results/uat/` is the ONLY local directory run-uat-unattended.mjs uploads
+// to blob. OUT_DIR above is repo-root/temp/… — outside it — so everything this
+// spec wrote used to be unreachable from outside the container by every channel
+// at once (#3167). The CSV is now also written here so the blob path can carry
+// it, and every row is echoed to stdout below so the receipt survives even when
+// LOOM_UAT_RESULTS_* is unset and the upload is skipped.
+const RESULTS_DIR = path.join(process.cwd(), 'test-results', 'uat');
+
 interface ItemVerdict {
   slug: string;
   displayName: string;
@@ -78,28 +86,61 @@ async function evaluateItem(page: Page, slug: string, displayName: string, categ
   return { slug, displayName, category, url, httpStatus, renderOk, ribbonEnabled, ribbonDisabled, tabs, errorBanners, has404Marker, verdict, notes };
 }
 
+/** RFC4180 cell — quote only when the value could break the row. */
+function csvCell(v: string | number): string {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+const CSV_HEADER = 'slug,displayName,category,url,httpStatus,ribbonEnabled,ribbonDisabled,tabs,errorBanners,verdict,notes';
+
+/** One CSV row. Shares its column order with CSV_HEADER so the two cannot drift. */
+function csvRow(v: ItemVerdict): string {
+  return [
+    v.slug, v.displayName, v.category, v.url, v.httpStatus,
+    v.ribbonEnabled, v.ribbonDisabled, v.tabs, v.errorBanners, v.verdict, v.notes,
+  ].map(csvCell).join(',');
+}
+
 test.describe.serial('catalog UAT', () => {
   const verdicts: ItemVerdict[] = [];
+
+  test.beforeAll(async () => {
+    // Emitted up-front so a run that dies mid-way still has a parseable header,
+    // and so the DECLARED denominator is measured rather than inferred. Static
+    // greps have already published two wrong item counts (#3164, #3167) because
+    // FABRIC_ITEM_TYPES is a barrel over per-category slice modules.
+    console.log(`UAT_ROW_HEADER catalog-uat ${CSV_HEADER}`);
+    console.log(`UAT_ROW_DECLARED catalog-uat ${FABRIC_ITEM_TYPES.length}`);
+  });
 
   for (const item of FABRIC_ITEM_TYPES) {
     test(`item: ${item.slug}`, async ({ page }) => {
       const v = await evaluateItem(page, item.slug, item.displayName, item.category);
       verdicts.push(v);
+      // Emitted HERE, not only in afterAll. afterAll runs once at the end, so a
+      // crash — or the skip-cascade that describe.serial triggers after any
+      // failure — used to take every completed row with it. Per-test emission
+      // means the rows already earned are already out.
+      console.log(`UAT_ROW catalog-uat ${csvRow(v)}`);
       // Pass criteria: don't fail tests for D/F — we capture them; only fail on crashes.
+      // NOTE: because a D/F grade does NOT fail the test, these rows are invisible
+      // to run-uat-unattended.mjs's printFailedTests(), which only enumerates
+      // FAILING tests. That is precisely why #3167 could say "20 items are
+      // F-grade" without being able to say which 20.
       expect(v.httpStatus).toBeLessThan(500);
     });
   }
 
   test.afterAll(async () => {
-    const csv = ['slug,displayName,category,url,httpStatus,ribbonEnabled,ribbonDisabled,tabs,errorBanners,verdict,notes']
-      .concat(
-        verdicts.map(v =>
-          [v.slug, v.displayName, v.category, v.url, v.httpStatus, v.ribbonEnabled, v.ribbonDisabled, v.tabs, v.errorBanners, v.verdict, `"${v.notes.replace(/"/g, '""')}"`].join(',')
-        )
-      )
-      .join('\n');
+    const csv = [CSV_HEADER].concat(verdicts.map(csvRow)).join('\n');
     fs.writeFileSync(path.join(OUT_DIR, '..', 'catalog-uat.csv'), csv);
+    fs.mkdirSync(RESULTS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(RESULTS_DIR, 'catalog-uat.csv'), csv);
     const summary = verdicts.reduce<Record<string, number>>((m, v) => ({ ...m, [v.verdict]: (m[v.verdict] || 0) + 1 }), {});
     console.log('Verdict summary:', summary);
+    // declared vs graded makes a truncated run self-evident instead of letting
+    // the summary read as though it covered the whole catalog.
+    console.log(`UAT_ROW_SUMMARY catalog-uat declared=${FABRIC_ITEM_TYPES.length} graded=${verdicts.length} ${JSON.stringify(summary)}`);
   });
 });

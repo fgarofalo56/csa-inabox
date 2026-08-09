@@ -64,12 +64,33 @@ export interface FeatureResult {
   durationMs?: number;
 }
 
-/** Append a verdict to the run-wide JSON log. */
+/**
+ * Append a verdict to the run-wide JSON log AND echo it to stdout.
+ *
+ * The echo is not decoration — it is the only channel that reliably survives.
+ * This suite's real home is the in-VNet `loom-uat` Container App Job, where:
+ *   - `test-results/` dies with the container;
+ *   - `actions/upload-artifact` does not exist (it is not a GitHub runner);
+ *   - the blob upload in `run-uat-unattended.mjs` is explicitly best-effort and
+ *     is skipped entirely unless LOOM_UAT_RESULTS_ACCOUNT/_CONTAINER are set.
+ * Container stdout reaches Log Analytics, so echoing the exact ndjson line means
+ * a log scrape can rebuild `verdicts.ndjson` line-for-line when the blob path is
+ * unset or failed. Producing a result nobody can retrieve is the same defect as
+ * producing no result (#3167).
+ *
+ * The `UAT_VERDICT` prefix deliberately does NOT contain the substring
+ * `UAT_RESULT`: the roll gate and the synthetic monitor both select their
+ * summary with `Log_s contains 'UAT_RESULT' | take 1`, and a prefix that
+ * matched would let a per-verdict line win that `take 1` and change what the
+ * gate reads.
+ */
 export function recordVerdict(r: FeatureResult) {
   const dir = path.join(process.cwd(), 'test-results', 'uat');
   fs.mkdirSync(dir, { recursive: true });
   const f = path.join(dir, 'verdicts.ndjson');
-  fs.appendFileSync(f, JSON.stringify({ ts: new Date().toISOString(), ...r }) + '\n');
+  const line = JSON.stringify({ ts: new Date().toISOString(), ...r });
+  fs.appendFileSync(f, line + '\n');
+  console.log(`UAT_VERDICT ${line}`);
 }
 
 /**
