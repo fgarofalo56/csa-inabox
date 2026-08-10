@@ -573,6 +573,14 @@ jobs:
       - name: 'github-script-syntax (every github-script body must compile as the action compiles it)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-github-script-syntax.mjs
+      # init/autobuild/analyze share one CodeQL bundle. Dependabot bumped ONLY
+      # init (#3103), every Analyze job died on the version mismatch — and a
+      # failed analysis still uploads a 0-result SARIF that GitHub will not
+      # retire alerts from, so the code-scanning list froze at the last real
+      # scan and read as current while merges went unscanned.
+      - name: 'codeql-action-pins (init/autobuild/analyze must run one release)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-codeql-action-pins.mjs
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw
