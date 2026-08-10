@@ -76,7 +76,7 @@ the managed identity's object id, and **no `email` claim**), plus the bare
 upstream image as a control. Reproduce with:
 
 ```bash
-bash apps/loom-unity/tests/authz/iceberg-e2e.sh     # 17/17 PASS
+bash apps/loom-unity/tests/authz/iceberg-e2e.sh     # 19/19 PASS
 ```
 
 | # | Call | Principal | Status | What it means |
@@ -86,12 +86,40 @@ bash apps/loom-unity/tests/authz/iceberg-e2e.sh     # 17/17 PASS
 | E | `/v1/config?warehouse=<absent>` | Console, exchanged | **200** | **The premise, falsified directly.** `config()` never looks the catalog up — upstream's own source carries `// TODO: check catalog exists`. An absent warehouse cannot produce a 403. |
 | G | `/v1/namespaces` (unprefixed) | admin | **500** | **Half of the live 500.** There is no such route: upstream's are `/v1/catalogs/{catalog}/…`. Because `UnityAccessDecorator` is bound as a **route decorator over the whole `/api/2.1/unity-catalog/` prefix**, an unmatched path still enters it, `findServiceMethod` returns null, and it dies `"Couldn't unwrap service."` — a 500, not a 404. The Loom client sent exactly this path. |
 | H | `/v1/catalogs/loom/namespaces` | admin (metastore OWNER) | **500** | **The other half, and the worse one.** Even the CORRECT route fails, for *every* principal: `{"error":{"message":"Authorization filter not initialized — ensure the request goes through UnityAccessDecorator.","code":500}}` |
-| I | `/v1/catalogs/unity/namespaces` on **bare `unitycatalog/unitycatalog:v0.5.0`** | anonymous | **200** | **The control that names the cause.** `{"namespaces":[["default"]]}`. The regression arrives with the **v0.5.1 `unitycatalog-server` overlay** this image applies (Dockerfile, for upstream #1603). v0.5.1 added `@ResponseAuthorizeFilter` + `AuthorizedService.applyResponseFilter`, and `IcebergRestCatalogService.listNamespaces` calls `SchemaService.listSchemas` **in-process** — under the Iceberg route's context, which carries no `ResultFilter`. |
+| I1 | `/v1/catalogs/loom/namespaces`, **same image**, `server.authorization` **DISABLED** | anonymous | **200** | **The control that names the cause.** One variable moved — the authorization flag — and the status moves with it. |
+| I2 | `/v1/catalogs/loom/namespaces`, **same image with the #1603 overlay STRIPPED off the classpath**, authorization still **ENABLED** | admin | **500** | **The control that EXONERATES the overlay.** The other variable moved on its own, and the status does not budge — same body, byte for byte. Paired with I3 (the permission GET reverts to 500 on that stripped image), which proves the strip really took. |
 | J | `/v1/catalogs/loom/namespaces/default` | Console, exchanged | **200** | ✅ |
 | K | `/v1/catalogs/loom/namespaces/default/tables` | Console, exchanged | **200** | ✅ **An authenticated Iceberg read, as the Console's own principal, against a warehouse the platform provisioned by itself.** |
 
 ### Corrections to earlier reasoning in this lane, recorded so they are not repeated
 
+- **"The v0.5.1 overlay caused the LIST-namespaces 500" is WRONG** (rows I1/I2),
+  and it is the most instructive error in this lane because it was produced by a
+  **control that moved two variables at once**. The original row I compared this
+  image (overlay **ON**, authorization **ENABLED**) against the bare upstream
+  image (overlay **OFF**, authorization **DISABLED**) and credited the difference
+  to the overlay. Re-measured 2026-08-10 with one variable at a time: stripping
+  the overlay and leaving authorization on leaves the 500 exactly as it was.
+  Byte-level confirmation, by extracting both released jars and hashing every
+  entry: **`AuthorizedService`, `SchemaService`, `IcebergRestCatalogService`,
+  `UnityAccessDecorator` and `ResultFilter` are IDENTICAL in v0.5.0 and v0.5.1.**
+  The claim that "v0.5.1 added `@ResponseAuthorizeFilter` +
+  `AuthorizedService.applyResponseFilter`" is false — both exist, unchanged, in
+  v0.5.0. The **entire** v0.5.0 → v0.5.1 delta is five entries:
+  `PermissionService` (one added annotation — the whole #1603 fix), its synthetic
+  sibling `PermissionService$1`, `AuthorizeExpressions` (the constant that
+  annotation names), `VersionUtils` (a version string) and the manifest.
+  The wrong cause had propagated into the Dockerfile header, the boot-time
+  warning, the harness comments and this doc; all four are now corrected.
+- **The real cause is upstream, in BOTH releases**, and fires only when
+  `server.authorization` is enabled. `AuthorizedService.applyResponseFilter` runs
+  its body only `if (isAuthorizationEnabled())`, then requires the `RESULT_FILTER`
+  request attribute that `UnityAccessDecorator` installs for
+  `@ResponseAuthorizeFilter` routes. `IcebergRestCatalogService.listNamespaces`
+  reaches `SchemaService.listSchemas` **in-process**, under the Iceberg route's
+  context, where that attribute was never set — so it throws `INTERNAL`. With
+  authorization disabled the body is skipped entirely, which is the only reason
+  the bare image ever looked healthy.
 - **"403 = absent object" is wrong** (row E). It is an unexchanged bearer (row C).
 - **"Every Iceberg route requires metastore OWNER, and OWNER is not grantable"**
   is a correct reading of the source (`@AuthorizeExpression("#authorize(#principal,
@@ -126,11 +154,41 @@ bash apps/loom-unity/tests/authz/iceberg-e2e.sh     # 17/17 PASS
 
 ### Residual — stated, not rounded up
 
-- **The native IRC LIST-namespaces route is still broken** in the shipped image.
-  The Console works around it; an **external engine calling the catalog directly**
-  (Trino, Spark, DuckDB) still gets a 500 on that one route. Every other Iceberg
-  route works. Fixing it properly means either an upstream fix or narrowing the
-  v0.5.1 overlay — neither is done here.
+- **The native IRC LIST-namespaces route is still broken** in the shipped image,
+  and the previously-proposed fix for it **does not exist**. The Console works
+  around it; an **external engine calling the catalog directly** (Trino, Spark,
+  DuckDB) still gets a 500 on that one route. Every other Iceberg route works.
+
+  The earlier text said the fix was "either an upstream fix or **narrowing the
+  v0.5.1 overlay**". **The overlay has now been narrowed — to the three classes
+  that actually differ — and it changed nothing about this route**, exactly as
+  rows I1/I2 predict: the overlaid classes were never on this code path. There is
+  no narrowing that can fix it, because there is nothing to narrow *away*.
+
+  What remains is genuinely an upstream change, and there is currently **nothing
+  to bump to**: `io.unitycatalog:unitycatalog-server` publishes **0.5.1 as its
+  newest release** on Maven Central (checked 2026-08-10 against
+  `maven-metadata.xml`), and the defect is present in it. A fix requires upstream
+  to either annotate the Iceberg route so `UnityAccessDecorator` installs a
+  `ResultFilter`, or have `listNamespaces` call a repository method that does not
+  response-filter. Patching that here would mean **recompiling an upstream class**
+  — which ends this image's "packaging, not a fork" contract — so it is **not
+  done**, and is not a hidden ceiling: it is announced on every boot
+  (`ICEBERG-LIST-NAMESPACES-DEFECT`) and asserted by
+  `tests/authz/iceberg-e2e.sh` rows H/I1/I2/I3.
+
+- **The overlay is now three classes instead of 419** (`apps/loom-unity/Dockerfile`).
+  Only `PermissionService`, `PermissionService$1` and `AuthorizeExpressions`
+  differ between the released v0.5.0 and v0.5.1 artifacts in any way that matters,
+  so the previous full-jar prepend was shadowing 416 classes with **exact copies
+  of themselves**. That bought no behaviour and cost two real things: it made the
+  overlay unfalsifiable by inspection (which is how the wrong cause above survived),
+  and it was a live hazard the day the base tag moves — a full-jar overlay would
+  silently revert an entire newer server module to v0.5.1 classes. The build now
+  pins each extracted class by digest **and** hashes the base image's own copies,
+  failing loudly if the base has drifted. `authz-e2e.sh` case 9 (permission GET
+  = 200 with authorization enabled — the whole point of the overlay) still passes:
+  **12/12**.
 - **RC-2 durability.** `admin-plane/main.bicep` invokes
   `data-plane/iceberg-catalog-aca.bicep` with **no `catalogDbUrl`**, so the app
   runs `LOOM_UNITY_DB_LOCAL=1` — ephemeral H2 in `/tmp` — **and** `minReplicas: 0`.
