@@ -102,7 +102,7 @@ jobs:
           bash scripts/csa-loom/stage-copilot-corpus.sh
 
       - name: Build + push (public channel)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.context }}/Dockerfile
