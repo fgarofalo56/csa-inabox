@@ -1903,6 +1903,25 @@
       "prs_advanced": {
         "3180": "admin OID + Iceberg minReplicas — branch updated onto main; required checks green"
       }
+    },
+    "session4_continuation_2026-08-10": {
+      "outcome": "THE LIVE OUTAGE IS CLOSED AND VERIFIED. UAT_RESULT pass=7 fail=0 skip=0 realFails=0; the loom-synthetic-monitor workflow is GREEN for the first time since 2026-08-07T08:15Z, and the auto-close path closed #3182 at 15:56:24Z.",
+      "merged_and_verified": {
+        "3183": "CodeQL version mismatch — VERIFIED: Analyze (python) AND Analyze (javascript-typescript) both SUCCESS on main.",
+        "3181": "synthetic alert SyntaxError + github-script-syntax guard — VERIFIED: create, dedup-comment and auto-close paths all exercised live.",
+        "3180": "admin OID fallback + iceberg minReplicas 0->1. Its vitest failure was REAL: a test asserted the scale-to-zero that was eating the catalog. Rewritten.",
+        "3192": "frontDoorEnabled was never set in commercial.bicepparam — the ROOT CAUSE of the http BASE behind J3.",
+        "3193": "J3 counted a minted-session reauth 401 as a mount failure; narrowed with 6 cases, 4 adversarial.",
+        "3154": "release 0.90.0."
+      },
+      "cost_decision_taken": "iceberg-catalog minReplicas 1 costs ~$100-200/mo/cloud always-on (iceberg-catalog-aca.bicep's own note). Raised on #3180 BEFORE merging, then merged on the operator's 'keep going and fix issues'. STOPGAP: #3110 (durable Postgres, catalogDbUrl) makes scale-to-zero safe again and the cost can come back off. If the cost is unacceptable, land #3110 — do NOT restore minReplicas 0, that trades money for silent data loss.",
+      "do_not_repeat": [
+        "An e2e/*.uat.ts change is INERT until the loom-uat IMAGE is rebuilt (it is deliberately excluded from apps=all) AND `az containerapp job update --image …:latest` forces ACA to re-resolve the tag. A rebuilt tag alone does not land. Confirm by looking for a marker you added.",
+        "Approving two batches of action_required runs on the SAME ref makes them cancel each other — the workflows share a per-ref concurrency group with cancel-in-progress: true. Approve only the current head SHA.",
+        "The what-if gate prints 'Unsupported: N' as a COUNT and never names the N, so a resource's absence from the change list is not proof it is unchanged. Flagged on #3192.",
+        "`az acr repository show` starts prompting for a username once the build workflow re-locks the ACR firewall."
+      ],
+      "still_open": "7 dependabot PRs, incl. major bumps that touch deploy paths (actions/checkout 4->7, cosign 3->4, docker/login 3->4) — NOT merged; they deserve individual verification under deploy-integrity R1. C4 remains never-started."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
