@@ -271,7 +271,7 @@ jobs:
 
       - name: Supply-chain — install cosign
         if: ${{ !inputs.skip_supply_chain }}
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Supply-chain — cosign sign (keyless OIDC) + verify-before-roll
         if: ${{ !inputs.skip_supply_chain }}

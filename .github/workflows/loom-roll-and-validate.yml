@@ -403,7 +403,7 @@ jobs:
 
       - name: Install cosign
         if: steps.vars.outputs.skip_verify != 'true'
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Gate — cosign signature verify (SC1 supply chain)
         id: sigverify

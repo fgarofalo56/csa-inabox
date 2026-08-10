@@ -611,7 +611,7 @@ jobs:
 
       - name: Supply-chain — install cosign
         if: ${{ !inputs.skip_supply_chain }}
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Supply-chain — cosign sign (keyless OIDC)
         if: ${{ !inputs.skip_supply_chain }}
@@ -663,7 +663,7 @@ jobs:
             }
       - name: Install cosign
         if: ${{ !inputs.skip_supply_chain }}
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
       - name: Verify every image the roll ships is signed by a trusted workflow
         env:
           CONTRACT_REFS: ${{ needs.resolve.outputs.contract_refs }}
