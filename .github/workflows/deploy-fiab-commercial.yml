@@ -57,9 +57,9 @@ on:
         type: boolean
         default: false
       front_door_enabled:
-        description: 'Deploy Azure Front Door (public entry + custom/vanity domain) in front of the console. Requires deploy_apps_enabled + containerApps. Off by default.'
+        description: 'Deploy Azure Front Door (public entry + custom/vanity domain) in front of the console. Default TRUE — the Commercial estate HAS an Active Front Door profile, and this input is passed to ARM unconditionally, so a false default silently overrode params/commercial.bicepparam and disabled Front Door on every dispatch (measured: run 31409031982 composed frontDoorEnabled=false with flag-source=inputs). Set false only for an estate that genuinely has no Front Door.'
         type: boolean
-        default: false
+        default: true
       # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
       topology:
         description: 'Explicit topology (audit-t156). Overrides deployment_mode. tenant = first-run hub install (DMLZ console + shared only). dlz-attach = add ONE DLZ to an existing hub (no Console is stamped). single-sub = dev/demo all-in-one. Empty = derive from deployment_mode. A second Console can never be stamped — the guard rejects topology=tenant when a hub already exists in the target sub.'
@@ -718,7 +718,16 @@ jobs:
             echo "::error::No bootstrap tenant-admin binding could be resolved, and this run renders the Container Apps (deployAppsEnabled=true). loom-console would come up with LOOM_TENANT_ADMIN_GROUP_ID and LOOM_TENANT_ADMIN_OID both empty, which shuts /admin/* for EVERY user with no in-product remedy. Set the FIAB_ADMIN_GROUP_ID repo variable (or secret) to your Loom admin security-group object id — 'az ad group show --group \"Loom Admins\" --query id -o tsv' — or dispatch this workflow with tenant_admin_group_id / tenant_admin_oid. Refusing."
             exit 1
           fi
-          echo "::notice::Bootstrap admin binding: group=$([ -n "$TENANT_ADMIN_GROUP" ] && echo present || echo absent), oid=$([ -n "${INPUT_TENANT_ADMIN_OID:-}" ] && echo present || echo absent). Values redacted."
+          # R7 — this line must report what was ACTUALLY composed. It used to
+          # test INPUT_TENANT_ADMIN_OID (the dispatch input), which #3180 stopped
+          # being the whole story: the OID now falls back to the
+          # FIAB_TENANT_ADMIN_OID repo variable. Measured on run 31409194897 —
+          # the notice printed "oid=absent" on a run whose very next line added
+          # `loomTenantAdminOid=<the repo variable>`. A status line that
+          # contradicts the parameter it is describing is worse than none,
+          # because this is the line an operator reads to decide whether admin
+          # access will survive the deploy.
+          echo "::notice::Bootstrap admin binding: group=$([ -n "$TENANT_ADMIN_GROUP" ] && echo present || echo absent), oid=$([ -n "${TENANT_ADMIN_OID:-}" ] && echo "present (source=$([ -n "${INPUT_TENANT_ADMIN_OID:-}" ] && echo dispatch-input || echo FIAB_TENANT_ADMIN_OID-repo-var))" || echo absent). Values redacted."
           # Keep the paramfile's OWN readEnvironmentVariable in agreement with
           # the explicit override above, so `az bicep build-params` on this
           # checkout (and the documented by-hand `-p params/commercial.bicepparam`
