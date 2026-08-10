@@ -934,7 +934,8 @@
       },
       "evidence": [],
       "agent": "a8299111bdbacbc30",
-      "dispatched": "2026-08-08 session-3"
+      "dispatched": "2026-08-08 session-3",
+      "session4_reconcile": "STILL in_progress and, on the evidence, NEVER STARTED: no PR, empty evidence[], all six validation gates 'pending', and its agent (a8299111bdbacbc30) died with session-3. Not picked up in session 4: the session's agent budget went to two live-estate outages (synthetic-monitor alert, CodeQL) that preempt feature work under deploy-integrity R1. RESUMABLE AS-IS — the four parts are independent: B-FP' foundry widget-catalog last-mile, WS-4.4 sync-backfill, B-U12 px->tokens, B-R10-17 monolith decomposition + typed client-map."
     },
     {
       "id": "D17",
@@ -1031,7 +1032,7 @@
       "lane": "L-PRODUCT-B",
       "wave": 3,
       "task_order": 47,
-      "status": "review",
+      "status": "done",
       "title": "Help depth D3-D5 residual guides (18 item guides + 15 app tutorials baseline 07-24, some closed since — RE-INVENTORY first). help-D6 visual captures OPERATOR-GATED — see operator_queue",
       "depends_on": [],
       "validation": {
@@ -1051,7 +1052,8 @@
       "docs_false_corrected": "parity/access-requests.md rows 4+5 claimed BUILT - now marked missing with root cause. It pointed at lib/types/access-request.ts for the tiers; that file has ZERO tier constants (they are in access-request-workflow.ts). It named Cosmos 'access-requests' (PK /tenantId) as the store; the F16 container is 'access-request-workflow' - 'access-requests' is the MARKETPLACE container, PK /dataProductId. lib/learn/content.ts said '117 catalog item types' with a keep-in-sync instruction; actual is 142.",
       "self_caught": "THREE false findings caught in its own work before shipping: five 'dead links' actually resolve via README.md; three 'undocumented' admin routes are redirect() stubs; and it first called access-requests 'mentioned in no document' - a parity doc existed and its grep had been TRUNCATED WITH head -5. That last one is the UNKNOWN-as-NEGATIVE class.",
       "operator_gated": "help-D6 captures NOT attempted. Precise state: 121 of 142 editor guides have a landing screenshot; the other 21 fall back to the intended placeholder. EDITOR_STEP_IMAGE_COUNTS is EMPTY - no slug has a multi-step capture.",
-      "flagged_not_fixed": "mkdocs.yml has ZERO fiab/parity/ references - THE ENTIRE PARITY CORPUS IS NAV-ORPHANED, reachable only by direct URL. Pre-existing and systemic."
+      "flagged_not_fixed": "mkdocs.yml has ZERO fiab/parity/ references - THE ENTIRE PARITY CORPUS IS NAV-ORPHANED, reachable only by direct URL. Pre-existing and systemic.",
+      "session4_reconcile": "MERGED #3148 2026-08-08T22:55Z. Verified this session by PR state, not by report. Its premise was FULLY STALE (33/33 already done) and its real deliverable was the corrected inventory + the one genuinely missing guide. Residual = help-D6 visual captures, which are OPERATOR-GATED and already tracked as OP-8 — not agent work."
     },
     {
       "id": "C8",
@@ -1876,11 +1878,36 @@
       "verified": "access-requests/route.ts:39 '{ name: '@t', value: s.claims.oid }' and [id]/decision/route.ts:65 'const tenantId = s.claims.oid'. Meanwhile 81 route files adopt tenantScopeId(), whose own comment says it exists so state written by one user 'resolves for any grantee in the same tenant'. GUARD-ADOPTION-GAP CLASS.",
       "why_ci_missed_it": "The unit test's fixture sets the doc's tenantId EQUAL TO THE APPROVER's oid - modelling the code's assumption rather than what the creating routes write. FIXTURES-THAT-MODEL-THE-CODE class.",
       "not_yet_reproduced": "INFERRED from code by both lanes; NOT reproduced live. The fix lane must establish it for real before fixing, and must sequence a repartition with access-governance/backfill."
+    },
+    "session4_2026-08-09": {
+      "state_at_start": "Estate at b52cee5b == origin/main. ZERO DRIFT. Ledger: 47 done, 1 in_progress (C4), 1 review (C6), 3 todo, 4 operator.",
+      "headline": "Two live outages found, BOTH of the same shape: the detector worked and the REPORTING CHANNEL was silently dead. Neither was visible in any status.",
+      "finding_1_synthetic_alert": "The six live user journeys have been FAILING CONTINUOUSLY since 2026-08-07T08:15Z (83 of the last 100 runs red, plus the ACA job's own */15 cron). Number of synthetic-monitor issues EVER filed: ZERO. Cause: `const exec = ...` in the alert step — `exec` is injected by actions/github-script, so the body is a SyntaxError and never ran one statement. Its sibling action-group notification swallows errors with 2>/dev/null, so both channels went quiet at once. Fixed + guarded in PR #3181; the fix filed the first-ever P1 (#3182) on its first run.",
+      "finding_2_codeql_dead": "Every Analyze job failing: dependabot #3103 bumped ONLY codeql-action/init (4.35.3->4.37.6), leaving autobuild/analyze behind -> 'Loaded a configuration file for version 4.37.6, but running version 4.35.3'. A failed analysis still uploads a 0-result SARIF and GitHub does NOT retire alerts from it, so the code-scanning list FROZE at the last real scan and read as current while every merge went unscanned. PR #3183: align pins, group in dependabot, add a fail-closed ratchet. EXPECT THE ALERT COUNT TO JUMP on the first green run — that is the backlog becoming visible, not a regression.",
+      "finding_3_j3_root_cause": "With the pager working, the failing journey is J3 (open editor + primary action): UAT_RESULT pass=3 fail=1 skip=3 realFails=1. It fails on console 401s, incl. /api/telemetry/rum. MEASURED cause: the in-VNet job runs LOOM_URL=http://loom-console while e2e/_lib/uat.ts signIn() minted the cookie with `secure: true` — a Secure cookie is never sent over http, so the BROWSER context was unauthenticated. J2/J4 kept passing because the API context authenticates via extraHTTPHeaders (a raw header), which bypasses cookie scheme rules. Fixed in #3181 (secure now matches BASE's scheme). OPEN: this explains the CURRENT failure but NOT why the last success was 08-07T08:15Z — the job's env history could not be recovered. Do not record J3 as closed on this alone.",
+      "flagged_not_fixed": "admin-plane/main.bicep gives the synthetic job `fdOn ? frontDoorPublicUrl : 'http://loom-console'`, and fdOn = frontDoorEnabled && containerPlatform=='containerApps' && deployAppsEnabled. The job EXISTING proves the last two are true, so it was deployed with frontDoorEnabled FALSE — while the estate's Front Door profile is Active. Not investigated. Also: scripts/ci/check-node-test-suites.mjs walks temp/ (gitignored, so CI never sees it) and any worktree the operator leaves there makes the LOCAL run unusable.",
+      "repo_health": "The main .git index was CORRUPT ('bad signature 0x00000000') and `git status` reported a clean tree while reading it. Rebuilt from HEAD (working tree untouched). The corruption was actually in an ORPHANED .claude/worktrees/wf_* tree, which git fsck reports repo-wide; removed it (no unique commits). 316 worktrees remain. .git/index.lock recurs — left behind by git-spawning test suites, not a live holder; verified by removing and watching.",
+      "do_not_repeat": [
+        "A guard's own first draft can be blind to a VARIANT: check-github-script-syntax anchored on /^\\s*uses:/ and missed the `- uses:` spelling — 2 of 20 real blocks. Caught only by cross-checking its count against an independent grep. Always reconcile a scanner's N.",
+        "stderr NON-EMPTY != command FAILED. My own new 'query FAILED' branch keyed on [[ -s $ERR ]] and az writes extension-install notices to stderr, so it reported a good query as failed. Use the EXIT CODE.",
+        "`tr '\n' ' | '` silently collapses to a space (tr maps CHARACTERS), and the tr-to-sentinel + sed '\u001c' workaround does not match either — it leaves invisible control bytes. Use awk and verify with od -c.",
+        "Do not interpolate LOG TEXT into a github-script `${{ }}` template literal: a backtick or ${ in a captured line is a SyntaxError that kills the alert — reproducing the very outage. Pass via env: / process.env.",
+        "Truncating evidence you already collected is a self-inflicted unknown: J3's note capped the console list at 2 entries/150 chars and cut off mid-way through the second error, which is why the cause was unreadable for two days.",
+        "MSYS mangles `git show 'branch:path'` — prefix MSYS_NO_PATHCONV=1.",
+        "The ledger lives on harness/finishline-s1-b. Reading it from a branch off main shows a STALE copy with different statuses."
+      ],
+      "prs_opened": {
+        "3181": "synthetic-monitor alert never fired + github-script-syntax guard + J3 fix",
+        "3183": "CodeQL version mismatch + dependabot grouping + codeql-action-pins guard"
+      },
+      "prs_advanced": {
+        "3180": "admin OID + Iceberg minReplicas — branch updated onto main; required checks green"
+      }
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
-  "last_updated": "2026-08-06T00:00:00Z",
-  "last_agent": "harness-initializer",
+  "last_updated": "2026-08-10",
+  "last_agent": "session-4",
   "initializer_verification": [
     "Seed commit 49f38c08 merged to main as PR #3049 (fbe51385); PRP + AUDIT present in tree; June ledger archived at .harness/archive/2026-06-05/ — verified by git ls-tree.",
     "AUDIT coverage check: 17 D-rows, 5 G-rows, 4 E-rows, 12 C-rows + P2-docs = 39 items; all carried into tasks[] (D-rows as tasks, G5/D12/D16/G1 as operator). No row dropped.",

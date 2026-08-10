@@ -1,5 +1,127 @@
 # FINISHLINE session notes
 
+## Session 4 — 2026-08-09/10
+
+### THE HEADLINE
+
+Two live outages, **both the same shape**: the detector worked perfectly and the
+**reporting channel was silently dead**. Neither appeared in any status.
+
+The estate itself is healthy — `b52cee5b` == `origin/main`, **zero drift**.
+
+### 1. The synthetic-journey alert has NEVER once fired
+
+The six live user journeys have been failing **continuously since
+2026-08-07T08:15Z** — 83 of the last 100 workflow runs red, plus the ACA job's
+own `*/15` cron. Number of `synthetic-monitor` issues ever filed: **ZERO**.
+
+Cause, in the step the file's own header calls *"the durable signal"*:
+
+    const exec = `${{ steps.run.outputs.execution }}` || '<unknown>';
+
+`exec` is injected by `actions/github-script`, so the body is a redeclaration —
+`SyntaxError` at COMPILE time; not one statement ever ran. The sibling
+action-group notification swallows its errors with `2>/dev/null`, so both
+channels went quiet simultaneously.
+
+Fixed in **#3181**, with a guard (`check-github-script-syntax.mjs`) that compiles
+all 20 of the repo's github-script bodies the way the action does. On its first
+run the fix filed **#3182** — the first P1 this monitor has ever produced.
+
+### 2. CodeQL has been analysing NOTHING
+
+Dependabot #3103 bumped **only** `codeql-action/init` (4.35.3 → 4.37.6), leaving
+`autobuild`/`analyze` behind → *"Loaded a configuration file for version
+'4.37.6', but running version '4.35.3'"*.
+
+Not merely a red non-required check. A failed analysis still uploads a
+0-rule/0-result SARIF, and **GitHub does not retire alerts from that upload** —
+so the code-scanning list FROZE at the last real scan and has been reading as
+current while every merge went unscanned. codeql.yml's own assertion step says
+exactly this, and it was firing.
+
+**#3183**: align the pins, group `github/codeql-action*` in dependabot so a bump
+cannot split again, plus a fail-closed ratchet. **Expect the alert count to JUMP
+on the first green run** — that is the backlog becoming visible, not a regression.
+
+### 3. The failing journey is J3 — a Secure cookie against an http BASE
+
+With the pager working, the first run gave the diagnosis 83 red runs never did:
+
+    UAT_RESULT pass=3 fail=1 skip=3 realFails=1 infraGated=0
+    UAT_FAIL … synthetic J3 — open editor + primary action (lakehouse tables → ADLS)
+
+Measured cause: the in-VNet job runs `LOOM_URL=http://loom-console` while
+`e2e/_lib/uat.ts` `signIn()` minted its cookie with `secure: true`. A Secure
+cookie is never sent over http, so the **browser** context was unauthenticated —
+every client call 401s (including `/api/telemetry/rum`), which J3 reads as
+"editor mount errors". J2/J4 kept passing because the API context authenticates
+via `extraHTTPHeaders`, a raw header that bypasses cookie scheme rules.
+
+**OPEN, deliberately not closed:** this explains the CURRENT failure but not why
+the last success was 08-07T08:15Z. The job's env history could not be recovered.
+Do not record J3 as fixed on this alone — re-measure after the `loom-uat` image
+rebuilds (the test-side fixes are merged-not-deployed until then).
+
+### FLAGGED, NOT FIXED
+
+- `admin-plane/main.bicep` hands the job `fdOn ? frontDoorPublicUrl :
+  'http://loom-console'`. The job existing proves two of `fdOn`'s three
+  conjuncts, so it was deployed with **frontDoorEnabled FALSE** — while the
+  estate's Front Door profile is **Active**. Not investigated.
+- `check-node-test-suites.mjs` walks `temp/` (gitignored, so CI never sees it);
+  any worktree left there makes the LOCAL run unusable.
+
+### REPO HEALTH (found incidentally)
+
+The main `.git` index was **corrupt** (`bad signature 0x00000000`) and
+`git status` reported a **clean tree** while reading it. Rebuilt from HEAD,
+working tree untouched. The corruption actually lived in an orphaned
+`.claude/worktrees/wf_*` tree — `git fsck` reports those repo-wide — now removed
+(no unique commits). **316 worktrees remain.** `.git/index.lock` recurs; it is
+left behind by git-spawning test suites, not a live holder (verified by removing
+it and watching whether it came back).
+
+### DO-NOT-REPEAT (all measured this session)
+
+- **A guard's own first draft can be blind to a VARIANT.**
+  `check-github-script-syntax` anchored on `/^\s*uses:/` and missed the
+  `- uses:` spelling — 2 of 20 real blocks. Caught **only** by reconciling its
+  count against an independent grep. Always reconcile a scanner's N.
+- **stderr non-empty ≠ command failed.** My own new "query FAILED" branch keyed
+  on `[[ -s $ERR ]]`, and az writes extension-install notices to stderr — so it
+  reported a good query as failed. Use the EXIT CODE.
+- **`tr '\n' ' | '` silently collapses to a space** (tr maps CHARACTERS), and the
+  tr-to-sentinel + `sed 's/\034/…/'` workaround does not match either — it leaves
+  invisible control bytes. Use `awk`, verify with `od -c`.
+- **Never interpolate LOG TEXT into a github-script `${{ }}` template literal.**
+  A backtick or `${` in a captured line is a SyntaxError that kills the alert —
+  reproducing the very outage. Pass via `env:` / `process.env`.
+- **Truncating evidence you already collected is a self-inflicted unknown.**
+  J3's note capped the console list at 2 entries / 150 chars and cut off mid-way
+  through the second error; that cap is why the cause was unreadable for two days.
+- **MSYS mangles `git show 'branch:path'`** — prefix `MSYS_NO_PATHCONV=1`.
+- **The ledger lives on `harness/finishline-s1-b`.** Read from a branch off main
+  it shows a STALE copy with different statuses.
+
+### IN FLIGHT / OWED
+
+- **#3181** (synthetic alert + J3) and **#3183** (CodeQL) — open, CI running.
+  Both blocked only by the CodeQL jobs that #3183 itself fixes.
+- **#3180** (admin OID + Iceberg `minReplicas`) — branch updated onto main, all
+  **required** checks green. It restores the operator's own admin access, which
+  every deploy currently reverts.
+- **C4** is still `in_progress` and, on the evidence, **never started**: no PR,
+  empty evidence, all six gates pending, and its session-3 agent died with that
+  session. Resumable as-is; its four parts are independent.
+
+### OPERATOR QUEUE
+
+Unchanged from session 3 (OP-1…OP-12; none resolved this session). New: decide
+whether the `frontDoorEnabled=false` deploy of the synthetic job is intended.
+
+---
+
 ## Session 2 — 2026-08-08
 
 ### THE NUMBER THAT MATTERS
