@@ -20,13 +20,40 @@
  * this deployment's Container Apps environment reading this deployment's own
  * ADLS Gen2. No Microsoft Fabric / Power BI, no SaaS catalog — so the whole
  * surface works disconnected in an IL5 enclave.
+ *
+ * ── RENDERER FREEZE (#3197) ────────────────────────────────────────────────
+ * Both grids below MUST stay windowed. They previously rendered every row of
+ * an UNBOUNDED collection into a hand-rolled Fluent `<Table>` — one `Tooltip`
+ * and 3–4 `Badge`s per row — with no virtualization and no cap. The row count
+ * is unbounded by construction on the BFF side: /api/catalog/iceberg/overview
+ * caps CATALOG namespaces at 40 but appends one lake-sourced row per
+ * interop-tracked Iceberg table across every lakehouse in the tenant, with no
+ * limit. Measured in real Chromium against this component (temp harness, dev
+ * build, 1440x900):
+ *
+ *     rows     settle    LONGEST single main-thread task   total blocking
+ *       200     1.6 s      764 ms                            1.2 s
+ *     3,000     3.7 s    1,465 ms                            3.3 s
+ *     8,000     9.8 s    5,648 ms                            9.6 s
+ *    20,000    22.5 s   13,845 ms                           23.1 s
+ *
+ * A single task over ~5 s is exactly what a DevTools/extension script
+ * injection with a 5,000 ms ceiling reports as "the page is busy", repeatedly,
+ * across a 20+ s window — the #3197 signature. Navigating away recovers the
+ * tab because the blocking task belongs to this page's render, not the
+ * browser. The namespace `Dropdown` was measured at 5,000 options and is NOT
+ * a contributor (803 ms — Fluent mounts the listbox lazily).
+ *
+ * The fix is the repo's own answer to this class (the /browse 1,437-item
+ * renderer freeze): `LoomDataTable` + `virtualizeRows`, which materializes
+ * only the rows near the viewport above the shared `VIRTUALIZATION_CUTOFF`.
+ * Do not swap either grid back to a plain `<Table>` that maps every row.
  */
 
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Button, Caption1, Dropdown, Input, Option, Spinner, Subtitle2, Tab, TabList, Tooltip,
-  Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow,
   MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -36,6 +63,7 @@ import {
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { EmptyState } from '@/lib/components/empty-state';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { clientFetch } from '@/lib/client-fetch';
@@ -63,6 +91,23 @@ interface NamespaceGrants {
   assignments: Array<{ principal: string; privileges: string[] }>;
   note?: string;
 }
+
+/** One flattened (namespace, principal) grant — the windowed grid's row type. */
+interface GrantRow {
+  id: string;
+  namespace: string;
+  /** null when the namespace has no direct grants; `note` explains why. */
+  principal: string | null;
+  privileges: string[];
+  note: string | null;
+}
+
+/** Tooltip copy for the table `source` badge — hoisted so it is not rebuilt per row. */
+const SOURCE_HELP: Record<CatalogTableRow['source'], string> = {
+  catalog: 'Listed by the REST catalog.',
+  lake: 'Iceberg metadata exists in your lake; the catalog has not listed it (yet). Engines can read it via the metadata folder.',
+  both: 'Listed by the REST catalog AND tracked by Loom interop state.',
+};
 
 interface OverviewResponse {
   ok: boolean;
@@ -158,6 +203,116 @@ export default function AdminCatalogPage() {
       grants: (q.data?.grants || []).reduce((n, g) => n + g.assignments.length, 0),
     };
   }, [q.data]);
+
+  /**
+   * Grants flattened to ONE row per (namespace, principal) so the grid can be
+   * windowed the same way the tables grid is. A namespace the catalog served
+   * with no direct grants keeps its honest note as a single row rather than
+   * disappearing.
+   */
+  const grantRows = useMemo<GrantRow[]>(() => {
+    const out: GrantRow[] = [];
+    for (const g of q.data?.grants || []) {
+      if (g.assignments.length === 0) {
+        out.push({
+          id: `${g.namespace}::none`,
+          namespace: g.namespace,
+          principal: null,
+          privileges: [],
+          note: g.note || 'No direct grants on this namespace.',
+        });
+        continue;
+      }
+      for (const a of g.assignments) {
+        out.push({
+          id: `${g.namespace}::${a.principal}`,
+          namespace: g.namespace,
+          principal: a.principal,
+          privileges: a.privileges,
+          note: null,
+        });
+      }
+    }
+    return out;
+  }, [q.data]);
+
+  const tableColumns = useMemo<LoomColumn<CatalogTableRow>[]>(() => [
+    {
+      key: 'namespace',
+      label: 'Namespace',
+      width: 180,
+      render: (t) => <span className={s.mono}>{t.namespace}</span>,
+    },
+    {
+      key: 'name',
+      label: 'Table',
+      width: 220,
+      render: (t) => <span className={s.mono}>{t.name}</span>,
+    },
+    {
+      key: 'formats',
+      label: 'Formats',
+      width: 240,
+      // Sort/filter on the plain-text meaning, not the badge markup.
+      getValue: (t) => `Delta${t.iceberg ? ' Iceberg' : ''}${t.via && t.via !== 'none' ? ` ${t.via}` : ''}`,
+      render: (t) => (
+        <div className={s.badges}>
+          <Badge appearance="filled" color="brand">Delta ✓</Badge>
+          {t.iceberg
+            ? <Badge appearance="filled" color="success">Iceberg ✓</Badge>
+            : <Badge appearance="outline" color="informative">Iceberg —</Badge>}
+          {t.via && t.via !== 'none' && <Badge appearance="outline">{t.via}</Badge>}
+        </div>
+      ),
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      width: 120,
+      filterType: 'select',
+      render: (t) => (
+        <Tooltip relationship="description" content={SOURCE_HELP[t.source]}>
+          <Badge appearance="tint">{t.source}</Badge>
+        </Tooltip>
+      ),
+    },
+    {
+      key: 'metadataLocation',
+      label: 'Metadata location',
+      width: 420,
+      getValue: (t) => t.metadataLocation || '',
+      render: (t) => <span className={s.mono}>{t.metadataLocation || '—'}</span>,
+    },
+  ], [s.mono, s.badges]);
+
+  const grantColumns = useMemo<LoomColumn<GrantRow>[]>(() => [
+    {
+      key: 'namespace',
+      label: 'Namespace',
+      width: 200,
+      render: (g) => <span className={s.mono}>{g.namespace}</span>,
+    },
+    {
+      key: 'principal',
+      label: 'Principal',
+      width: 260,
+      getValue: (g) => g.principal || '',
+      render: (g) => (g.principal
+        ? <span className={s.mono}>{g.principal}</span>
+        : <Caption1>{g.note}</Caption1>),
+    },
+    {
+      key: 'privileges',
+      label: 'Privileges',
+      width: 320,
+      getValue: (g) => g.privileges.join(' '),
+      render: (g) => (
+        <div className={s.badges}>
+          {g.privileges.map((p) => <Badge key={p} appearance="outline">{p}</Badge>)}
+        </div>
+      ),
+    },
+  ], [s.mono, s.badges]);
 
   const snippets = q.data?.snippets || [];
   const active = snippets.find((x) => x.id === engine) || snippets[0];
@@ -328,49 +483,17 @@ export default function AdminCatalogPage() {
             />
           ) : (
             <div className={s.tableWrap}>
-              <Table size="small" aria-label="Published catalog tables">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Namespace</TableHeaderCell>
-                    <TableHeaderCell>Table</TableHeaderCell>
-                    <TableHeaderCell>Formats</TableHeaderCell>
-                    <TableHeaderCell>Source</TableHeaderCell>
-                    <TableHeaderCell>Metadata location</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tables.map((t) => (
-                    <TableRow key={`${t.namespace}.${t.name}`}>
-                      <TableCell><span className={s.mono}>{t.namespace}</span></TableCell>
-                      <TableCell><span className={s.mono}>{t.name}</span></TableCell>
-                      <TableCell>
-                        <div className={s.badges}>
-                          <Badge appearance="filled" color="brand">Delta ✓</Badge>
-                          {t.iceberg
-                            ? <Badge appearance="filled" color="success">Iceberg ✓</Badge>
-                            : <Badge appearance="outline" color="informative">Iceberg —</Badge>}
-                          {t.via && t.via !== 'none' && <Badge appearance="outline">{t.via}</Badge>}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Tooltip
-                          relationship="description"
-                          content={
-                            t.source === 'catalog'
-                              ? 'Listed by the REST catalog.'
-                              : t.source === 'lake'
-                                ? 'Iceberg metadata exists in your lake; the catalog has not listed it (yet). Engines can read it via the metadata folder.'
-                                : 'Listed by the REST catalog AND tracked by Loom interop state.'
-                          }
-                        >
-                          <Badge appearance="tint">{t.source}</Badge>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell><span className={s.mono}>{t.metadataLocation || '—'}</span></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              {/* WINDOWED (#3197). `virtualizeRows` materializes only the rows
+                  near the viewport once the collection passes the shared
+                  VIRTUALIZATION_CUTOFF — the row count here is unbounded. */}
+              <LoomDataTable<CatalogTableRow>
+                columns={tableColumns}
+                rows={tables}
+                getRowId={(t) => `${t.namespace}.${t.name}`}
+                density="compact"
+                virtualizeRows
+                ariaLabel="Published catalog tables"
+              />
             </div>
           )}
         </div>
@@ -382,45 +505,21 @@ export default function AdminCatalogPage() {
             <Subtitle2>Grant mapping</Subtitle2>
             <Caption1>Unity Catalog privileges an external engine is subject to, per namespace.</Caption1>
           </div>
-          {(q.data?.grants || []).length === 0 ? (
+          {grantRows.length === 0 ? (
             <Caption1>
               No namespace grants to show yet. Grants appear once the catalog serves at least one namespace.
             </Caption1>
           ) : (
             <div className={s.tableWrap}>
-              <Table size="small" aria-label="Namespace grants">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Namespace</TableHeaderCell>
-                    <TableHeaderCell>Principal</TableHeaderCell>
-                    <TableHeaderCell>Privileges</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(q.data?.grants || []).flatMap((g) =>
-                    g.assignments.length === 0
-                      ? [(
-                        <TableRow key={`${g.namespace}-none`}>
-                          <TableCell><span className={s.mono}>{g.namespace}</span></TableCell>
-                          <TableCell colSpan={2}>
-                            <Caption1>{g.note || 'No direct grants on this namespace.'}</Caption1>
-                          </TableCell>
-                        </TableRow>
-                      )]
-                      : g.assignments.map((a) => (
-                        <TableRow key={`${g.namespace}-${a.principal}`}>
-                          <TableCell><span className={s.mono}>{g.namespace}</span></TableCell>
-                          <TableCell><span className={s.mono}>{a.principal}</span></TableCell>
-                          <TableCell>
-                            <div className={s.badges}>
-                              {a.privileges.map((p) => <Badge key={p} appearance="outline">{p}</Badge>)}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )),
-                  )}
-                </TableBody>
-              </Table>
+              {/* WINDOWED (#3197) — assignments per namespace are unbounded. */}
+              <LoomDataTable<GrantRow>
+                columns={grantColumns}
+                rows={grantRows}
+                getRowId={(g) => g.id}
+                density="compact"
+                virtualizeRows
+                ariaLabel="Namespace grants"
+              />
             </div>
           )}
         </div>
