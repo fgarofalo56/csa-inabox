@@ -34,6 +34,7 @@
  */
 import { ossUcBase } from '@/lib/azure/uc-backend';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { logSafe } from '@/lib/util/log-safe';
 
 
 /**
@@ -182,6 +183,151 @@ export class UcTokenExchangeError extends Error {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SELF-DIAGNOSIS for the mint → exchange → catalog-call chain (#3197)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The single greppable token every step of the catalog-auth chain logs under.
+ *
+ * WHY THIS EXISTS — measured, not inferred. On 2026-08-10 the live Commercial
+ * console answered BOTH `/api/catalog/iceberg/config` and
+ * `/api/catalog/iceberg/namespaces` with
+ *
+ *   {"ok":false,"error":"Iceberg REST Catalog returned HTTP 403",
+ *    "code":"iceberg_catalog_error"}
+ *
+ * while every documented prerequisite was satisfied (the Entra app registration
+ * DOES carry `identifierUris`, the catalog auto-bound the Console principal as
+ * an ENABLED Unity Catalog user at boot, the `loom` warehouse was created and
+ * granted). And `az containerapp logs show -n loom-console` returned ZERO lines
+ * matching iceberg / unity / 403 / exchange / token; the catalog logged only its
+ * boot sequence. So there was no evidence anywhere for WHICH of the three steps
+ * refused — and the three are not distinguishable from the outside:
+ *
+ *   - the Entra MINT can quietly return nothing, and `icebergAuthHeader()` then
+ *     returned `{}` — an ANONYMOUS upstream hop, which a catalog with
+ *     authorization enabled answers 403;
+ *   - the EXCHANGE can be refused, which surfaces as a different message but was
+ *     never logged either;
+ *   - the CATALOG CALL can refuse a perfectly-minted internal token.
+ *
+ * All three produced the same user-visible string. The defect this module now
+ * fixes is therefore NOT the 403 — it is that the 403 was not diagnosable
+ * (`deploy-integrity.md` R6: every failure self-diagnoses; R7: a message never
+ * asserts a cause the code did not establish).
+ *
+ *   grep '[uc-auth]'                    every step of the chain
+ *   grep '[uc-auth] step=mint'          Entra token acquisition
+ *   grep '[uc-auth] step=exchange'      POST /api/1.0/unity-control/auth/tokens
+ *   grep '[uc-auth] step=catalog-call'  the call that carries the internal token
+ *   grep '[uc-auth] step=invalidate'    the 401/403 minted-token eviction
+ *
+ * NOTHING here ever carries token material. The claim helper below returns a
+ * FIXED set of six public identifiers and the log helper takes only explicit
+ * fields; `__tests__/uc-auth-diagnostics.test.ts` asserts a token handed to any
+ * call site cannot reach the output.
+ */
+export const UC_AUTH_DIAG = '[uc-auth]';
+
+/** The four separately-attributable steps of the chain. */
+export type UcAuthStep = 'mint' | 'exchange' | 'catalog-call' | 'invalidate';
+
+/**
+ * The NON-SECRET identity claims of a bearer this process already holds.
+ *
+ * Every field is a public identifier that appears in the Azure portal: an object
+ * id, an application id, an audience, an issuer, a tenant id, an expiry. None of
+ * them can be replayed. The signature, the raw token, and every other claim are
+ * deliberately NOT carried — this type is the allow-list, not a filter applied
+ * after the fact.
+ *
+ * The pair that actually names an audience misconfiguration is
+ * (`audience` requested at the mint site, `tokenAud` observed here): the catalog
+ * server derives its accepted audiences from its own client id, so a token whose
+ * `aud` is some OTHER app registration is refused with no clue as to why.
+ */
+export interface SubjectTokenClaims {
+  /** `oid` — the principal the token was minted FOR. */
+  oid: string;
+  /** `appid`/`azp` — the application that minted it. */
+  appid: string;
+  /** `aud` — what the token is addressed to (comma-joined when it is a list). */
+  tokenAud: string;
+  /** `iss` — which issuer minted it (v1.0 `sts.windows.net` vs v2.0 differ). */
+  iss: string;
+  /** `tid` — the tenant. */
+  tid: string;
+  /** `exp` rendered ISO-8601, so an expired credential is obvious. */
+  exp: string;
+}
+
+const asStr = (v: unknown): string => (v === undefined || v === null ? '' : String(v));
+
+/**
+ * Decode the six public claims of a JWT this process already holds.
+ *
+ * The payload is base64url and unsigned-readable by design; reading it is not a
+ * privilege escalation — we minted the token. Returns `undefined` for anything
+ * that is not a decodable JWT (a pre-shared opaque token, a truncated string),
+ * and NEVER throws: a diagnostic that can break the call it is diagnosing is
+ * worse than no diagnostic.
+ */
+export function describeSubjectToken(token: string): SubjectTokenClaims | undefined {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length < 2 || !parts[1]) return undefined;
+    const raw = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as Record<string, unknown>;
+    if (!raw || typeof raw !== 'object') return undefined;
+    const aud = raw.aud;
+    const expSec = typeof raw.exp === 'number' ? raw.exp : 0;
+    return {
+      oid: asStr(raw.oid),
+      appid: asStr(raw.appid ?? raw.azp),
+      tokenAud: Array.isArray(aud) ? aud.map(asStr).join(',') : asStr(aud),
+      iss: asStr(raw.iss),
+      tid: asStr(raw.tid),
+      exp: expSec ? new Date(expSec * 1000).toISOString() : '',
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Outcomes that are NOT a failure — logged at info, everything else at warn. */
+const BENIGN_OUTCOMES = new Set(['ok', 'minted', 'evicted']);
+
+/**
+ * Emit ONE structured, greppable line for one step of the chain, and return it
+ * (so a test can assert on the exact text rather than on a spy's argument shape).
+ *
+ * Every interpolated value goes through `logSafe` — the repo's
+ * CodeQL-recognisable sanitizer (`lib/util/log-safe.ts`). Upstream error bodies
+ * and namespace names are attacker-influencable, and a bare CR/LF in one would
+ * forge a whole log record, which is precisely the class
+ * `scripts/ci/check-log-injection.mjs` exists to keep closed.
+ *
+ * Free-text fields are emitted last so the `key=value` head of the line stays
+ * machine-parseable even when a body contains spaces.
+ */
+export function logUcAuthDiag(
+  step: UcAuthStep,
+  outcome: string,
+  fields: Record<string, string | number | undefined>,
+): string {
+  const parts = [`${UC_AUTH_DIAG} step=${step}`, `outcome=${logSafe(outcome, 40)}`];
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined || v === '') continue;
+    parts.push(`${k}=${logSafe(v, 300)}`);
+  }
+  const line = parts.join(' ');
+  /* eslint-disable no-console */
+  if (BENIGN_OUTCOMES.has(outcome)) console.info(line);
+  else console.warn(line);
+  /* eslint-enable no-console */
+  return line;
+}
+
 /**
  * Validate an explicit exchange base before a credential is sent to it.
  *
@@ -238,6 +384,14 @@ async function cacheKey(base: string, subjectToken: string): Promise<string> {
  * The UC client calls this when the catalog answers 401/403, so a token the
  * server has stopped honouring cannot wedge every subsequent request for the
  * rest of the TTL.
+ *
+ * It also emits the line that separates two states which were previously
+ * IDENTICAL from the outside (#3197): `outcome=evicted` proves an exchange had
+ * genuinely happened and produced a token that the catalog then refused;
+ * `outcome=nothing-cached` proves the refused request carried no exchanged token
+ * at all — an anonymous or pre-shared-token hop. Without that line, "the
+ * exchange succeeded and the catalog said no" and "the exchange never ran" are
+ * the same observation.
  */
 export async function invalidateUcInternalToken(subjectToken: string, baseOverride?: string): Promise<void> {
   let base: string;
@@ -247,6 +401,9 @@ export async function invalidateUcInternalToken(subjectToken: string, baseOverri
     try {
       base = assertExchangeBase(baseOverride);
     } catch {
+      logUcAuthDiag('invalidate', 'skipped', {
+        reason: 'the base is not LOOM_ICEBERG_CATALOG_URL or LOOM_UNITY_URL, so nothing could have been cached under it',
+      });
       return;
     }
   } else {
@@ -254,12 +411,19 @@ export async function invalidateUcInternalToken(subjectToken: string, baseOverri
       base = ossUcBase();
     } catch {
       // No configured server => nothing could have been cached under it.
+      logUcAuthDiag('invalidate', 'skipped', { reason: 'LOOM_UNITY_URL is not configured' });
       return;
     }
   }
   const key = await cacheKey(base, subjectToken);
-  cache.delete(key);
+  const evicted = cache.delete(key);
   inflight.delete(key);
+  const subject = describeSubjectToken(subjectToken);
+  logUcAuthDiag('invalidate', evicted ? 'evicted' : 'nothing-cached', {
+    base,
+    oid: subject?.oid,
+    tokenAud: subject?.tokenAud,
+  });
 }
 
 /** Test seam: forget every minted token. */
@@ -306,6 +470,21 @@ export async function exchangeForInternalUcToken(
   if (pending) return pending;
 
   const run = (async () => {
+    // The six public claims of the SUBJECT, carried on every line below so a log
+    // reader can answer "which principal, addressed to which audience, minted by
+    // which app, issued by which endpoint, expiring when" without ever seeing a
+    // token. `subject` is `undefined` for an opaque (non-JWT) credential.
+    const subject = describeSubjectToken(subjectToken);
+    const who = {
+      base,
+      oid: subject?.oid,
+      appid: subject?.appid,
+      tokenAud: subject?.tokenAud,
+      iss: subject?.iss,
+      tid: subject?.tid,
+      exp: subject?.exp,
+    };
+
     // Form-encoded per RFC 8693 (the upstream endpoint reads form params).
     // All FOUR params — `requested_token_type` is required; omitting it is
     // answered 400 "Unsupported requested token type: null".
@@ -334,6 +513,12 @@ export async function exchangeForInternalUcToken(
       }, TIMEOUT_MS);
     } catch (e) {
       // Network / timeout. The message deliberately carries no token material.
+      logUcAuthDiag('exchange', 'unreachable', {
+        ...who,
+        path: EXCHANGE_PATH,
+        timeoutMs: TIMEOUT_MS,
+        reason: (e as Error)?.message || String(e),
+      });
       void recordExchange(base, 0, 'failure', `unreachable: ${(e as Error)?.message || String(e)}`);
       throw new UcTokenExchangeError(
         `Loom Unity token exchange could not reach ${base}${EXCHANGE_PATH}: ${(e as Error)?.message || String(e)}`,
@@ -344,6 +529,17 @@ export async function exchangeForInternalUcToken(
       // Upstream error text can be echoed — it is the server's own message, not
       // ours — but cap it so a stray HTML error page cannot flood a log line.
       const detail = (await res.text().catch(() => '')).slice(0, 300);
+      // The line that answers "did the exchange even happen, and what did the
+      // server SAY?". The upstream body is the only place the server's own
+      // reason (`INVALID_ARGUMENT`, `PERMISSION_DENIED`, an unregistered
+      // principal) is ever stated, and until now it was read into an exception
+      // message that the BFF replaced with a generic envelope.
+      logUcAuthDiag('exchange', res.status === 401 || res.status === 403 ? 'denied' : 'failure', {
+        ...who,
+        path: EXCHANGE_PATH,
+        status: res.status,
+        body: detail,
+      });
       // 401/403 is the catalog REFUSING this principal — an auditor's row.
       // Anything else is an availability failure.
       void recordExchange(
@@ -362,6 +558,7 @@ export async function exchangeForInternalUcToken(
     try {
       payload = await res.json();
     } catch {
+      logUcAuthDiag('exchange', 'non-json', { ...who, path: EXCHANGE_PATH, status: res.status });
       void recordExchange(base, res.status, 'failure', 'non-JSON response');
       throw new UcTokenExchangeError(
         'Loom Unity returned a non-JSON token-exchange response.',
@@ -373,6 +570,7 @@ export async function exchangeForInternalUcToken(
     if (typeof token !== 'string' || !token) {
       // A 200 with no usable token is a failure, not a success. Returning
       // undefined here would send an anonymous request downstream.
+      logUcAuthDiag('exchange', 'no-token', { ...who, path: EXCHANGE_PATH, status: res.status });
       void recordExchange(base, res.status, 'failure', 'response carried no access_token');
       throw new UcTokenExchangeError(
         'Loom Unity token-exchange response carried no access_token.',
@@ -381,6 +579,11 @@ export async function exchangeForInternalUcToken(
     }
 
     cache.set(key, { token, expiresAt: Date.now() + TTL_MS });
+    // Logged as loudly as the failures. "The exchange succeeded" is the fact
+    // that turns a downstream 403 from an unattributable mystery into a claim
+    // about the CATALOG CALL specifically — and its absence is the fact that
+    // says the exchange was never reached at all.
+    logUcAuthDiag('exchange', 'minted', { ...who, path: EXCHANGE_PATH, status: res.status, ttlMs: TTL_MS });
     // The moment the Console acquires catalog authority — the row an auditor
     // correlates every subsequent catalog operation back to.
     void recordExchange(base, res.status, 'success', 'internal token minted');

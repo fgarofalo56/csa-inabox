@@ -40,6 +40,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewritePath, invalidateUnityInternalToken } from '@/lib/azure/uc-backend';
+import { logUcAuthDiag } from '@/lib/azure/uc-token-exchange';
 import { UnityCatalogError, ucRows, clampInt } from '@/lib/azure/uc-primitives';
 import { classifyUnityCall, recordUnityAccess, unityOutcomeForError } from '@/lib/azure/unity-audit';
 import type { UCEffectivePermissions } from '@/lib/azure/uc-effective-permissions';
@@ -226,6 +227,8 @@ async function ucFetch<T = any>(
   const call = classifyUnityCall(method, path);
   let status = 0;
   let failure: unknown;
+  // Loom Unity base, captured for the #3197 auth diagnostics (see logUcAuthDiag).
+  let ossBase = '';
   try {
     const authHeaders: Record<string, string> = {};
     let url: string;
@@ -246,14 +249,26 @@ async function ucFetch<T = any>(
       // ossUcBase() throws OssUcNotConfiguredError (structured gate) when unset.
       // The path rewrite maps the one Databricks↔OSS naming split
       // (storage-credentials → credentials) so callers stay backend-agnostic.
-      url = `${ossUcBase()}${ossUcRewritePath(path)}`;
+      ossBase = ossUcBase();
+      url = `${ossBase}${ossUcRewritePath(path)}`;
       // LU-2 — the BFF is the single choke point: inject the Console's credential
       // (pre-shared server token, or an Entra bearer minted by the Console UAMI for
       // the Loom Unity audience). Fails CLOSED when authorization is required but
       // unmintable; returns {} only in the explicitly-anonymous posture, which the
       // svc-loom-unity-authz gate + probe-loom-unity-authz probe surface as a
       // security finding rather than a silent open door.
-      Object.assign(authHeaders, await ossUcAuthHeader());
+      try {
+        Object.assign(authHeaders, await ossUcAuthHeader());
+      } catch (e) {
+        // #3197 — attribute the failure to the MINT step. An exchange failure
+        // already logged its own `step=exchange` line inside uc-token-exchange,
+        // so re-reporting it here as a mint failure would assert a cause this
+        // code did not establish (deploy-integrity R7).
+        if ((e as Error)?.name !== 'UcTokenExchangeError') {
+          logUcAuthDiag('mint', 'failure', { base: ossBase, path, reason: (e as Error)?.message || String(e) });
+        }
+        throw e;
+      }
     } else {
       const token = await dbxToken();
       url = `https://${host}${path}`;
@@ -278,8 +293,21 @@ async function ucFetch<T = any>(
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
     if (!res.ok) {
+      // #3197 — the Loom Unity twin of the Iceberg catalog-call diagnostic.
+      // `authMode` distinguishes "the catalog refused an UNCREDENTIALED hop"
+      // (anonymous posture) from "it refused a token it minted itself".
+      if (oss) {
+        logUcAuthDiag('catalog-call', res.status === 401 || res.status === 403 ? 'denied' : 'failure', {
+          base: ossBase, path, method, status: res.status,
+          authMode: authHeaders.authorization ? 'credentialed' : 'anonymous',
+          code: json?.error_code,
+          body: String(typeof json === 'string' ? json : json?.message ?? text ?? '').slice(0, 300),
+        });
+      }
       // #2679 — evict a no-longer-honoured internal token so the next call re-exchanges
       // instead of failing identically. Rationale + why no retry: invalidateUnityInternalToken.
+      // The eviction logs its own `step=invalidate` line, so a token that was
+      // never cached is now distinguishable from one that was.
       if (isOssUc() && (res.status === 401 || res.status === 403)) await invalidateUnityInternalToken();
       const msg =
         json?.message ||
