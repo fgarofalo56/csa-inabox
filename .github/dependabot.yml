@@ -29,6 +29,20 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "ci"]
     open-pull-requests-limit: 5
+    # github/codeql-action/{init,autobuild,analyze} are three actions from ONE
+    # repo that MUST run the same release. Bumping them separately is not a
+    # partial upgrade, it is an outage: on 2026-08-09 `init` sat at v4.37.6
+    # while autobuild/analyze were still v4.35.3, and every Analyze job died
+    # with "Loaded a configuration file for version '4.37.6', but running
+    # version '4.35.3'". A failed analysis still uploads a 0-rule/0-result
+    # SARIF, and GitHub does not retire alerts from that upload — so the
+    # code-scanning list FREEZES at the last real scan and reads as current
+    # while every merge since goes unscanned. Grouping keeps them in lockstep;
+    # scripts/ci/check-codeql-action-pins.mjs fails closed if they ever drift.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
 
   - package-ecosystem: "npm"
     directory: "/portal/react-webapp"
