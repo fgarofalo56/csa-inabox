@@ -1950,6 +1950,27 @@
         "Regenerate deploy-templates/main.json with the PINNED bicep from its own _generator stamp, and ensure the bicep checkout is LF first — a CRLF checkout embeds CRLF into deploymentScripts bash.",
         "Module params do NOT count against the 256 ARM parameter cap; only ROOT main.bicep params do."
       ]
+    },
+    "session5_fanout_results_2026-08-10": {
+      "approved_scope": "Operator approved a BOUNDED fan-out on safe lanes only; deploy path, federation 403 and all deploys stayed serial and operator-driven.",
+      "lanes": {
+        "gov-classification (#3198)": "12 of 16 Gov blockers are DEPLOYED-BUT-UNWIRED, 1 not deployed (airflow), 1 opt-in that should default ON (ducklake), 1 cloud-parity gap (databricks-sql), 1 defective gate with no underlying gap (purview-uc). Also fixed 3 provablyFALSE provisionedBy strings citing modules/deploy-planner/postgres-flexible.bicep — A PATH THAT DOES NOT EXIST — and established that NO bicep anywhere emits LOOM_PGVECTOR_HOST, so that gate cannot be cleared by any deploy on any cloud.",
+        "iceberg-overlay (#3200 MERGED)": "DISPROVED the brief I gave it. The listNamespaces 500 is NOT the v0.5.1 overlay: those classes are byte-identical in v0.5.0/v0.5.1 and the 500 reproduces with the overlay REMOVED. Upstream defect in BOTH releases. Narrowed the overlay 419->3 classes and RETRACTED the false cause from the parity doc AND the boot warning (an R7 error string).",
+        "federation-403 (#3199 MERGED)": "Found a REAL defect while instrumenting: iceberg-catalog-client.ts was the ONE caller of exchangeForInternalUcToken with NO invalidateUcInternalToken, so a rejected token wedged every Iceberg request for the 5-min TTL. VERIFIED independently: evict counts on main were iceberg=0, uc-backend=3, uc-token-exchange=2. Also found icebergAuthHeader() had three silent `return {}` branches that send the hop out ANONYMOUS — which a catalog with authz enabled also answers 403, making 'never attempted' indistinguishable from 'exchange failed'.",
+        "admin-catalog-freeze (#3201 MERGED)": "DISPROVED my hypothesis too. The 403 is NOT the freeze — with a 403 the page fires one request and stays interactive at 1-2ms. The freeze is an UN-VIRTUALIZED render of an unbounded row set: 8000 rows = 5648ms longest single main-thread task, 20000 = 13845ms. A >5s task is exactly what a 5000ms injection ceiling reports as 'page is busy'. Fixed with the repo's own LoomDataTable + virtualizeRows (verified that primitive really exists and is used by 2 other surfaces)."
+      },
+      "verification_i_did_myself": [
+        "Both sovereign lanes deploy-fiab-gcch AND deploy-fiab-gcc are disabled_manually — checked the workflows API directly, because a disabled lane is INVISIBLE to `gh run list`.",
+        "0.5.1 IS the newest unitycatalog-server on Maven Central (repo1.maven.org maven-metadata.xml) — so there is nothing to bump to.",
+        "The eviction asymmetry: grep of exchangeForInternalUcToken callers vs invalidate calls on main.",
+        "LoomDataTable + virtualizeRows genuinely exist and are used by all-items-explorer + federated-search."
+      ],
+      "dependabot_triage": "MERGED #3184 (msal-browser), #3186 (setup-buildx 3->4) and #3189 (build-push 6->7) — the last two because the Trivy IMAGE jobs actually ran and exercised them. HELD #3187 (cosign-installer 3->4): it is a Cosign CLI v2->v3 upgrade and EVERY workflow it touches is dispatch-only, so none of its 28 green checks ran `cosign sign` or `verify` even once; the failure mode is images that sign fine and fail verify AT ROLL TIME. #3190 has no evidence either. #3188 (checkout 4->7) has a helm lint failure.",
+      "operator_decisions_owed": [
+        "Re-enable deploy-fiab-gcch? It clears 8 of Gov's 16 in one pass, but gov-provision-streaming-migrate failed 08-08 and loom-migrate/risingwave/trino are not covered by the image preflight — dispatching first risks MANIFEST_UNKNOWN taking the Gov estate down. deploy-fiab-gcc must NOT be re-enabled on a stale receipt (teardown ring).",
+        "cosign #3187: pin cosign-release v2.6.1 and take the installer, or dispatch a real signed build from the branch first."
+      ],
+      "still_open": "#3198 (evals gate re-running after a transient reindex 504), #3194 release 0.90.1 (bot runs need approval — approve ONLY the current head SHA, two batches cancel each other), #3185/#3188/#3190/#3101/#3094 dependabot."
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
