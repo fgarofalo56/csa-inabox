@@ -6190,7 +6190,17 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
       image: '${registry.outputs.acrLoginServer}/loom-unity:${appImageTags.?unity ?? 'v0.1'}'
       lakeStorageAccountName: loomStorageAccount
       assignLakeRole: false
-      minReplicas: 0
+      // 1, NOT 0. iceberg-catalog runs the loom-unity image on an EPHEMERAL H2
+      // store (LOOM_UNITY_DB_LOCAL=1 -> /tmp/loom-unity-db), so scaling to zero
+      // DESTROYS the catalog: the warehouse, its namespaces and every grant are
+      // re-seeded from the image on the next cold start. Measured live 2026-08-09
+      // -- the app logged 'seeding empty catalog DB dir' on every wake and re-ran
+      // WAREHOUSE-BIND, while its sibling loom-unity (same image, same DB mode)
+      // ran minReplicas 1 and kept its state. iceberg-catalog-aca.bicep already
+      // defaults this to 1 and documents 'never scale-to-zero' -- this call site
+      // was overriding its own module. The durable answer is still the Postgres
+      // store (data-plane/loom-unity-postgres.bicep); this only stops the amnesia.
+      minReplicas: 1
       cpu: '1.0'
       memory: '2Gi'
       entraClientId: effectiveMsalClientId
