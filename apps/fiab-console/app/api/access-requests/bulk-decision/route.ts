@@ -11,7 +11,7 @@
  * Returns a per-id result set (approved / denied / gated / error).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withApprovalAuthority } from '@/lib/api/route-toolkit';
 import { normalizeIds } from '@/lib/access/leaver';
 import { POST as decisionPOST } from '../[id]/decision/route';
 import { apiServerError } from '@/lib/api/respond';
@@ -19,9 +19,7 @@ import { apiServerError } from '@/lib/api/respond';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withApprovalAuthority(async (req) => {
 
   const body = await req.json().catch(() => ({} as any));
   const ids = normalizeIds(body?.ids);
@@ -36,14 +34,18 @@ export async function POST(req: NextRequest) {
     let succeeded = 0;
     for (const id of ids) {
       // Reuse the real single-request handler with a synthesized request so the
-      // full grant/ledger/audit path runs identically per leg. Session resolves
-      // from the same cookie context.
+      // full grant/ledger/audit path runs identically per leg — including the
+      // withApprovalAuthority wrapper, the separation-of-duties check and the
+      // per-stage approver enforcement. Session resolves from the same cookie
+      // context, so a caller who may not approve one request may not bulk it
+      // either. `decisionPOST` is a route-toolkit handler, so it is typed as the
+      // web `Response` the runtime actually returns.
       const inner = new NextRequest(new URL(`http://internal/api/access-requests/${id}/decision`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ decision, ...(reason ? { reason } : {}) }),
       });
-      let res: NextResponse;
+      let res: Response;
       try {
         res = await decisionPOST(inner, { params: Promise.resolve({ id }) });
       } catch (e: any) {
@@ -59,4 +61,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

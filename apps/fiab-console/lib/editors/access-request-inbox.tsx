@@ -31,7 +31,7 @@ import {
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Textarea, Input, Dropdown, Option, Field, Checkbox,
-  MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Tooltip,
 } from '@fluentui/react-components';
 import {
   CheckmarkCircle20Regular, DismissCircle20Regular, ChevronDown20Regular,
@@ -178,8 +178,16 @@ export function AccessRequestInboxEditor() {
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Set when the API refuses because the caller lacks approval authority. This
+   * is a DIFFERENT state from "couldn't load": it is an answer, not a failure,
+   * and it carries the remediation. Kept separate so a 403 never renders as an
+   * empty inbox (which would read as "no pending requests").
+   */
+  const [gate, setGate] = useState<{ reason?: string; remediation?: string; indeterminate: boolean } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [counts, setCounts] = useState<Record<string, number>>({});
+  /** Per-tier open counts. `null` = could not be determined (never shown as 0). */
+  const [counts, setCounts] = useState<Record<string, number | null>>({});
   // AG-14 — bulk approve/deny selection. Open tiers only; History is read-only.
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -196,7 +204,7 @@ export function AccessRequestInboxEditor() {
   const [dlgError, setDlgError] = useState<string | null>(null);
 
   const load = useCallback(async (v: ViewKey) => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setGate(null);
     try {
       const isHistory = v === 'history';
       const url = isHistory
@@ -204,6 +212,12 @@ export function AccessRequestInboxEditor() {
         : `/api/access-requests?tier=${v}&status=open`;
       const r = await clientFetch(url);
       const j = await r.json();
+      if (r.status === 403) {
+        // An ANSWER, not a load failure: surface why and how to fix it.
+        setGate({ reason: j.reason, remediation: j.remediation, indeterminate: j.code === 'authority_indeterminate' });
+        setRequests([]);
+        return;
+      }
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setRequests([]); return; }
       let rows: AccessRequest[] = j.requests || [];
       if (isHistory) {
@@ -222,14 +236,18 @@ export function AccessRequestInboxEditor() {
   }, []);
 
   // Refresh per-tier open counts for the tab badges.
+  //
+  // A count we could NOT obtain is recorded as `null`, never 0. Rendering a
+  // failed or forbidden read as "0" would tell the approver there is nothing
+  // waiting for them — the most misleading thing this surface could say.
   const loadCounts = useCallback(async () => {
-    const next: Record<string, number> = {};
+    const next: Record<string, number | null> = {};
     await Promise.all(TIER_SEQUENCE.map(async (t) => {
       try {
         const r = await clientFetch(`/api/access-requests?tier=${t}&status=open`);
         const j = await r.json();
-        next[t] = j.ok ? (j.requests || []).length : 0;
-      } catch { next[t] = 0; }
+        next[t] = j.ok ? (j.requests || []).length : null;
+      } catch { next[t] = null; }
     }));
     setCounts(next);
   }, []);
@@ -346,9 +364,11 @@ export function AccessRequestInboxEditor() {
         {tabs.map((t) => (
           <Tab key={t.value} value={t.value} icon={<ShieldKeyhole20Regular />}>
             {t.label}
-            {counts[t.value] > 0 && (
+            {counts[t.value] === null ? (
+              <Badge className={s.tabCount} appearance="tint" color="informative" size="small" title="Count unavailable — this is NOT zero.">?</Badge>
+            ) : (counts[t.value] ?? 0) > 0 ? (
               <Badge className={s.tabCount} appearance="filled" color="brand" size="small">{counts[t.value]}</Badge>
-            )}
+            ) : null}
           </Tab>
         ))}
         <Tab value="history" icon={<History20Regular />}>History</Tab>
@@ -361,6 +381,25 @@ export function AccessRequestInboxEditor() {
             : `Requests awaiting ${TIER_LABEL[view as ApprovalTier]} action. Approving advances the request to the next tier; the final Access provider approval provisions a real Azure RBAC grant on the backing store and subscribes the requester.`}
         </Caption1>
 
+        {gate && (
+          <MessageBar intent={gate.indeterminate ? 'error' : 'warning'} className={s.err} layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>
+                {gate.indeterminate
+                  ? 'Couldn’t determine your approval authority'
+                  : 'You don’t have access-approval rights'}
+              </MessageBarTitle>
+              {gate.reason}
+              {gate.remediation ? <> {gate.remediation}</> : null}
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button as="a" href="/admin/permissions" appearance="primary" size="small">
+                Fix it — open Feature permissions
+              </Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
+
         {error && (
           <MessageBar intent="error" className={s.err}>
             <MessageBarBody><MessageBarTitle>Couldn’t load requests</MessageBarTitle>{error}</MessageBarBody>
@@ -369,7 +408,7 @@ export function AccessRequestInboxEditor() {
 
         {loading && <Spinner label="Loading requests…" style={{ justifyContent: 'flex-start' }} />}
 
-        {!loading && requests.length === 0 && !error && (
+        {!loading && requests.length === 0 && !error && !gate && (
           <div className={s.empty}>
             <ShieldKeyhole20Regular style={{ width: 28, height: 28 }} />
             <Text>
