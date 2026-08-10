@@ -202,6 +202,21 @@ test('synthetic J3 — open editor + primary action (lakehouse tables → ADLS)'
       });
       const fiveHundreds = networkErrors.filter((n) => n.status >= 500);
       if (consoleErrors.length > 0 || fiveHundreds.length > 0) {
+        // Print the FULL lists before truncating them into the verdict note.
+        // The note is capped (it becomes a one-line UAT_FAIL record), and on
+        // 2026-08-09 that cap was the whole problem: J3 had been red since
+        // 08-07 and the only surviving evidence was
+        // "console=[…401 @ /api/telemetry/rum | Failed to load" — cut off
+        // mid-way through the SECOND error, so the actual cause could not be
+        // read from the monitor's own output. Truncating evidence you have
+        // already collected is a self-inflicted unknown.
+        // eslint-disable-next-line no-console
+        console.log(
+          `[J3] editor mount failed. consoleErrors(${consoleErrors.length}):\n` +
+            consoleErrors.map((e, i) => `  [${i}] ${e}`).join('\n') +
+            `\n[J3] networkErrors(${networkErrors.length}):\n` +
+            networkErrors.map((n, i) => `  [${i}] ${n.status} ${n.url}`).join('\n'),
+        );
         return {
           outcome: 'fail',
           note: `editor mount errors — console=[${consoleErrors.slice(0, 2).join(' | ').slice(0, 150)}] 5xx=[${fiveHundreds.map((n) => `${n.status} ${n.url}`).slice(0, 2).join(' | ').slice(0, 150)}]`,

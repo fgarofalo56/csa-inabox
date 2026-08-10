@@ -141,15 +141,25 @@ jobs:
             sed 's/^/  /' "$LA_ERR" >&2 || true
           else
             QERR=$(mktemp)
-            RESULT=$(az monitor log-analytics query -w "$WS" --analytics-query \
+            # The VERDICT is az's EXIT CODE, never "did it write to stderr".
+            # az writes extension-install notices there ("The command requires
+            # the extension log-analytics. It will be installed first."), so a
+            # stderr-emptiness test reports a perfectly good query as FAILED —
+            # measured on run 31351602478, which is the same stderr-contamination
+            # class this step exists to stop mis-reporting.
+            set +e
+            RAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
               "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
-              --query "[0].Log_s" -o tsv 2>"$QERR" | tr -d '\r' || echo "")
+              --query "[0].Log_s" -o tsv 2>"$QERR")
+            QRC=$?
+            set -e
+            RESULT=$(printf '%s' "$RAW" | tr -d '\r')
             if [[ -n "$RESULT" ]]; then
               echo "::notice::$RESULT"
               echo "loom-synthetic-monitor: $RESULT" >> "$GITHUB_STEP_SUMMARY"
               echo "uat_result=$RESULT" >> "$GITHUB_OUTPUT"
-            elif [[ -s "$QERR" ]]; then
-              echo "::warning::The UAT_RESULT query FAILED (so 'no result' here is unknown, not negative). az stderr:"
+            elif [[ $QRC -ne 0 ]]; then
+              echo "::warning::The UAT_RESULT query FAILED (rc=$QRC) — so 'no result' here is unknown, not negative. az stderr:"
               sed 's/^/  /' "$QERR" >&2 || true
             else
               echo "::notice::No UAT_RESULT row yet for $JOB_NAME (query succeeded, zero rows — ingestion typically lags a few minutes)."
@@ -167,9 +177,14 @@ jobs:
           # and hand the operator the raw lines to read.
           if [[ -n "$WS" ]]; then
             JERR=$(mktemp)
-            JOURNEYS=$(az monitor log-analytics query -w "$WS" --analytics-query \
-              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where TimeGenerated > ago(2h) | where Log_s contains 'synthetic J' | order by TimeGenerated asc | take 40 | project Log_s" \
-              --query "[].Log_s" -o tsv 2>"$JERR" | tr -d '\r' || echo "")
+            # Exit code, not stderr-emptiness — see the UAT_RESULT block above.
+            set +e
+            JRAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
+              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where TimeGenerated > ago(2h) | where Log_s has_any ('synthetic J', 'UAT_FAIL', 'UAT_REAL_FAILS') | order by TimeGenerated asc | take 60 | project Log_s" \
+              --query "[].Log_s" -o tsv 2>"$JERR")
+            JRC=$?
+            set -e
+            JOURNEYS=$(printf '%s' "$JRAW" | tr -d '\r')
             if [[ -n "$JOURNEYS" ]]; then
               echo "::group::Per-journey console lines (last 2h)"
               echo "$JOURNEYS"
@@ -191,8 +206,8 @@ jobs:
               # control bytes in the issue body. Both were tried; both were
               # wrong in a way a terminal will not show you.
               echo "journey_lines=$(printf '%s' "$JOURNEYS" | awk '{ printf "%s%s", (NR>1 ? " | " : ""), $0 }' | cut -c1-800)" >> "$GITHUB_OUTPUT"
-            elif [[ -s "$JERR" ]]; then
-              echo "::warning::The per-journey log query FAILED — 'no journey lines' below is unknown, not negative."
+            elif [[ $JRC -ne 0 ]]; then
+              echo "::warning::The per-journey log query FAILED (rc=$JRC) — 'no journey lines' below is unknown, not negative."
               sed 's/^/  /' "$JERR" >&2 || true
             else
               echo "::notice::No 'synthetic J' console lines in the last 2h (query succeeded, zero rows)."
