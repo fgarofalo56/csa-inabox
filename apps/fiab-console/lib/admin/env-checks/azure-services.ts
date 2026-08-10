@@ -445,14 +445,14 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     id: 'svc-postgres-flex', category: 'azure-services', title: 'PostgreSQL Flexible Server (postgres items)', severity: 'optional',
     required: ['LOOM_POSTGRES_AAD_USER'], warnOnMiss: true,
     remediation: 'Set LOOM_POSTGRES_AAD_USER (the Entra admin login) so the postgres-flexible-server editor connects with AAD token auth (postgres_flex_not_configured).',
-    provisionedBy: 'modules/deploy-planner/postgres-flexible.bicep → apps[] env',
+    provisionedBy: 'modules/landing-zone/postgres-flexible.bicep → main.bicep loomPostgresHost (main.bicep ~1393) → admin-plane/main.bicep apps[] env LOOM_POSTGRES_HOST',
     role: 'Entra admin (Console UAMI) on the flexible server',
   },
   {
     id: 'svc-pgvector', category: 'azure-services', title: 'pgvector (Postgres vector search)', severity: 'optional',
     required: ['LOOM_PGVECTOR_HOST'], warnOnMiss: true,
-    remediation: 'Set LOOM_PGVECTOR_HOST to a Postgres Flexible Server with the pgvector extension to enable the Postgres vector backend (pgvector_not_configured). AI Search covers vector workloads without it.',
-    provisionedBy: 'modules/deploy-planner/postgres-flexible.bicep (pgvector extension) → apps[] env',
+    remediation: 'Set LOOM_PGVECTOR_HOST to a Postgres Flexible Server with the pgvector extension to enable the Postgres vector backend (pgvector_not_configured). AI Search covers vector workloads without it. HONEST STATE (measured 2026-08-10, docs/fiab/gov-readiness-2026-08-10.md): NO bicep module in this repo emits LOOM_PGVECTOR_HOST, so this gate cannot currently be cleared by a deploy on ANY cloud — it is set by hand or not at all. The backing server IS deployed and the VECTOR extension IS allowlisted (modules/landing-zone/postgres-flexible.bicep), and the same FQDN is already derived for LOOM_POSTGRES_HOST (main.bicep ~1393), so the value is derivable at deploy time; the wiring is simply missing.',
+    provisionedBy: 'NOT WIRED BY ANY TEMPLATE TODAY. The backing resource is modules/landing-zone/postgres-flexible.bicep (VECTOR extension allowlisted); the deploy-time value would be the same FQDN main.bicep already derives for loomPostgresHost. Previously this field named modules/deploy-planner/postgres-flexible.bicep — a path that does not exist.',
     role: 'Entra AAD login (Console UAMI) on the server',
   },
   {
