@@ -1922,6 +1922,34 @@
         "`az acr repository show` starts prompting for a username once the build workflow re-locks the ACR firewall."
       ],
       "still_open": "7 dependabot PRs, incl. major bumps that touch deploy paths (actions/checkout 4->7, cosign 3->4, docker/login 3->4) — NOT merged; they deserve individual verification under deploy-integrity R1. C4 remains never-started."
+    },
+    "session5_estate_wiring_2026-08-10": {
+      "operator_report": "Admin access broke AGAIN (#3180 was merged-not-deployed; the 07:48Z reconcile re-blanked the hand fix). External-engine federation not working. 'Lots of gates not configured.'",
+      "headline": "The estate was NOT missing infrastructure. It was NOT WIRED to infrastructure it already owned.",
+      "the_dlz_finding": "The Loom DLZ is FULLY deployed in sub 363ef5d1 / rg-csa-loom-dlz-default-centralus: ADLS saloomdefaulttr4nm4dcgsq (HNS + PEs), Databricks adb-loom-default-centralus, Event Hubs evhns-loom-default-centralus, Synapse, Cosmos x3, Weave Postgres, AAS. The Console was bound to NONE of it. Root cause main.bicep:1328 — `loomStorageAccount: useSingleDlz ? take(...) : ''` — useSingleDlz is FALSE on multi-sub, so it passed ''. That ONE line blocked svc-adls, medallion Silver/Gold, sample-data, RTI-export, CSV-imports and the S3 gateway.",
+      "why_it_could_not_just_be_filled": "`!empty(loomStorageAccount)` ALSO gated four RBAC/workload consumers (s3GatewayActive, adxExportRbac, labelRbacGrants, ADX export binding). Those create role assignments ON the account, which a sub-scoped deployment cannot do in ANOTHER subscription. Binding and granting were one flag, so the value had to stay empty purely to keep grants from firing. Fixed by splitting them: new MODULE param loomStorageAccountSameSub (module params do NOT consume the 256 ARM budget — root stayed 222), consuming the existing `adopt` plan, + discover-dlz-adopt-plan.sh wired into the deploy BEFORE the compose step (bicepparam reads LOOM_ADOPT_JSON at COMPILE time).",
+      "my_errors_corrected": [
+        "I asked the operator whether to DEPLOY Databricks + Event Hubs; they said deploy both. BOTH ALREADY EXISTED — my check was resource-group-scoped and I generalised it to the subscription. Acting on it would have duplicated them (R5 violation). Corrected BEFORE any spend.",
+        "I reported #3192 as the Front Door root-cause fix. It was INERT: the composer adds `frontDoorEnabled=` UNCONDITIONALLY and a CLI --parameters beats the bicepparam file.",
+        "I then fixed only the YAML default, leaving SCHEDULE_FLAG_DEFAULTS at false — so the DAILY scheduled reconcile still disabled Front Door. The drift guard caught it. Half-fixes on a dual-path (dispatch + schedule) workflow are their own class.",
+        "I used `git stash` to swap bicep line endings, against my own recorded rule that stash is REPO-GLOBAL. It collided with a sibling agent's stash and left 188 bicep files deleted + 4 unmerged. Recovered from HEAD (work was already pushed); foreign stash preserved. WIP-commit, never stash."
+      ],
+      "federation_state": "iceberg-catalog was DOWN — minReplicas 0, zero replicas, ephemeral H2 destroyed on every scale-to-zero. Set to 1 live; it then created the loom warehouse + loom.default + grants on boot. Endpoints moved from unreachable to 403. The 403 is NOT audience (entrypoint derives api://<client-id> when LOOM_UNITY_AUDIENCES is empty) and NOT cross-instance (the client exchanges against icebergCatalogBase()). #2678/OP-11 is STALE — api://5c59f3f3-… IS registered. NEITHER side logs the failure, so the cause is genuinely UNKNOWN. Filed #3197 with that plus the /admin/catalog renderer FREEZE (script injection times out 20s+, GuidedPickerRail class). Separately the image announces its own ICEBERG-LIST-NAMESPACES-DEFECT: 500 for every principal, from the v0.5.1 overlay; fix is narrowing the overlay.",
+      "readiness_measured": "Commercial 82/100 (104 ready / 1 partial / 25 blocked / 84 config-only). Gov GCC-High 86/100 (100 ready / 8 partial / 16 blocked). Gov's gaps are a DIFFERENT, easier class: container-app URLs for apps that already run (ducklake, migrate, risingwave, airflow).",
+      "merged": {
+        "3195": "front_door default + admin-binding notice truth + SCHEDULE_FLAG_DEFAULTS"
+      },
+      "open": {
+        "3196": "DLZ adopt wiring — CI running",
+        "3197": "federation 403 + /admin/catalog freeze (issue)"
+      },
+      "do_not_repeat": [
+        "SCOPE a resource check to the SUBSCRIPTION before concluding 'not deployed'. `az X list -g <rg>` answers a different question than `az X list`.",
+        "A CLI `--parameters k=v` OVERRIDES the .bicepparam file. Fixing a param file cannot fix a value the workflow passes explicitly.",
+        "deploy-fiab-commercial has TWO flag paths — workflow_dispatch defaults AND SCHEDULE_FLAG_DEFAULTS in deploy-trigger-policy.mjs. Fix both; the drift test enforces it.",
+        "Regenerate deploy-templates/main.json with the PINNED bicep from its own _generator stamp, and ensure the bicep checkout is LF first — a CRLF checkout embeds CRLF into deploymentScripts bash.",
+        "Module params do NOT count against the 256 ARM parameter cap; only ROOT main.bicep params do."
+      ]
     }
   },
   "created_at": "2026-08-06T00:00:00Z",
