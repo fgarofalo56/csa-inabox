@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "16931539241311737143"
+      "templateHash": "13595631202190928199"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7282709641706067456"
+              "templateHash": "9340633074762576604"
             }
           },
           "definitions": {
@@ -14254,7 +14254,7 @@
               ]
             },
             "orgVisualsRbac": {
-              "condition": "[and(and(not(parameters('skipRoleGrants')), not(empty(parameters('loomStorageAccount')))), not(equals(coalesce(tryGet(parameters('loomBackends'), 'orgVisuals'), 'enabled'), 'disabled')))]",
+              "condition": "[and(and(not(parameters('skipRoleGrants')), variables('loomStorageGrantable')), not(equals(coalesce(tryGet(parameters('loomBackends'), 'orgVisuals'), 'enabled'), 'disabled')))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "org-visuals-rbac",
@@ -22319,7 +22319,7 @@
               ]
             },
             "risingwaveLakeRbac": {
-              "condition": "[and(and(variables('risingwaveActive'), not(parameters('skipRoleGrants'))), not(empty(parameters('loomStorageAccount'))))]",
+              "condition": "[and(and(variables('risingwaveActive'), not(parameters('skipRoleGrants'))), variables('loomStorageGrantable'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "risingwave-lake-rbac",
@@ -27647,7 +27647,7 @@
               ]
             },
             "aasShim": {
-              "condition": "[and(and(parameters('loomDirectLakeShimEnabled'), not(empty(parameters('loomDlzRg')))), not(empty(parameters('loomStorageAccount'))))]",
+              "condition": "[and(and(parameters('loomDirectLakeShimEnabled'), not(empty(parameters('loomDlzRg')))), variables('loomStorageGrantable'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "aas-direct-lake-shim",
