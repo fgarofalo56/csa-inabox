@@ -410,16 +410,22 @@ test('RC-12 warehouse: a non-identifier name is REFUSED, not interpolated', { sk
 
 test('RC-12 warehouse: the LIST-namespaces defect is STATED, not left to be rediscovered', { skip: !shAvailable }, () => {
   // MEASURED: GET <irc>/v1/catalogs/<wh>/namespaces answers 500 on this image for
-  // EVERY principal (including the metastore owner), while the BARE upstream
-  // v0.5.0 image answers 200 — so the v0.5.1 server overlay is the cause. A known
-  // ceiling stated on every boot beats a 500 rediscovered from a browser.
+  // EVERY principal (including the metastore owner). A known ceiling stated on
+  // every boot beats a 500 rediscovered from a browser.
   const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /ICEBERG-LIST-NAMESPACES-DEFECT/);
   assert.match(r.stderr, /Authorization filter not initialized/);
   // It must name the CONTROL, not just the symptom — that is what makes it a
-  // diagnosis rather than a shrug.
-  assert.match(r.stderr, /bare v0\.5\.0 image answers 200/);
+  // diagnosis rather than a shrug. The control is the AUTHORIZATION FLAG.
+  assert.match(r.stderr, /authorization DISABLED returns 200/);
+  // And it must NOT re-assert the cause we disproved on 2026-08-10. The overlay
+  // was blamed on a two-variable "control"; measured with one variable (overlay
+  // removed, authorization still enabled) the 500 is unchanged. An error string
+  // that names a cause the code never established is a deploy-integrity R7
+  // violation, so this assertion keeps the retraction from silently regressing.
+  assert.match(r.stderr, /NOT caused by the #1603 overlay/);
+  assert.doesNotMatch(r.stderr, /Cause: the v0\.5\.1 unitycatalog-server overlay/);
 });
 
 test('explicit IdP endpoints still win over the derived Entra ones', { skip: !shAvailable }, () => {
