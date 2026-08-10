@@ -58,6 +58,13 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 import { isUnreachableServiceUrl } from '@/lib/azure/unreachable-url';
+import {
+  describeSubjectToken,
+  exchangeForInternalUcToken,
+  invalidateUcInternalToken,
+  logUcAuthDiag,
+  type SubjectTokenClaims,
+} from '@/lib/azure/uc-token-exchange';
 import { trimSlashes } from '@/lib/util/trim';
 
 /** Registry gate id — mirrors the ENV_CHECKS spec in env-checks/data-plane.ts. */
@@ -322,28 +329,130 @@ export function ircUrl(subPath: string, query?: Record<string, string | undefine
  * fallback of retrying with the raw Entra token would either 403 opaquely or —
  * far worse — succeed against a server running with authorization disabled, and
  * so hide the very misconfiguration it should surface.
+ *
+ * Thin wrapper over {@link resolveIcebergAuth}, which is where the credential is
+ * actually resolved and where every step of it is logged (#3197). Callers that
+ * need to ATTRIBUTE a failure — i.e. anything that reads the response status —
+ * should use `resolveIcebergAuth` directly so they can report `authMode`.
  */
 export async function icebergAuthHeader(): Promise<Record<string, string>> {
+  return (await resolveIcebergAuth()).headers;
+}
+
+/** How the upstream hop ended up credentialed. */
+export type IcebergAuthMode = 'pre-shared' | 'exchanged' | 'anonymous';
+
+/**
+ * The header for the upstream hop, PLUS everything a failure needs to name
+ * itself (#3197).
+ *
+ * `icebergAuthHeader()` threw away the two facts that decide what a downstream
+ * 403 means: whether the hop is credentialed at all, and which principal /
+ * audience it carries. Both silent-`return {}` branches below produced an
+ * ANONYMOUS request that a catalog with authorization enabled answers 403 —
+ * byte-identical, from the caller's side, to a catalog rejecting a
+ * perfectly-good internal token. That ambiguity is what made the live 403
+ * un-attributable.
+ */
+export interface IcebergAuth {
+  headers: Record<string, string>;
+  mode: IcebergAuthMode;
+  /** The audience the Entra mint REQUESTED ('' when none was resolvable). */
+  audience: string;
+  /** Non-secret claims of the subject token, when one was minted. */
+  subject?: SubjectTokenClaims;
+  /**
+   * The Entra subject token. Held ONLY so a 401/403 can evict the internal
+   * token minted from it. NEVER logged, never returned to a route, never put in
+   * an error message — `logUcAuthDiag` takes explicit fields and this is not
+   * one of them.
+   */
+  subjectToken?: string;
+}
+
+/**
+ * Resolve the upstream credential and report, honestly, how it was obtained.
+ *
+ * Each non-credentialed outcome now says so on its own greppable line rather
+ * than returning `{}` in silence:
+ *
+ *   step=mint outcome=skipped   no audience is resolvable → hop is ANONYMOUS
+ *   step=mint outcome=failure   the credential chain threw → hop is ANONYMOUS
+ *   step=mint outcome=empty     the chain returned no token, no error → ANONYMOUS
+ *   step=mint outcome=ok        a token was minted; its aud/oid/iss are printed
+ *
+ * The `outcome=ok` line carries BOTH the audience that was requested and the
+ * `aud` the token actually came back with. Those are different things, and the
+ * Iceberg path derives its audience from `LOOM_ICEBERG_CATALOG_AUDIENCE`
+ * (else `api://<LOOM_MSAL_CLIENT_ID>/.default`) while the catalog server derives
+ * the audiences it ACCEPTS from its own client id — so whether those two agree
+ * is a fact that has never been observable in a log until now.
+ */
+export async function resolveIcebergAuth(): Promise<IcebergAuth> {
+  // Resolved for the diagnostic only; an unwired catalog still surfaces its
+  // honest 503 gate from the caller, exactly as before.
+  let base = '';
+  try { base = icebergCatalogBase(); } catch { /* caller surfaces the gate */ }
+
   const preShared = (process.env.LOOM_ICEBERG_CATALOG_TOKEN || '').trim();
-  if (preShared) return { authorization: `Bearer ${preShared}` };
+  if (preShared) {
+    return { headers: { authorization: `Bearer ${preShared}` }, mode: 'pre-shared', audience: '' };
+  }
 
   const audience = (process.env.LOOM_ICEBERG_CATALOG_AUDIENCE || '').trim()
     || (process.env.LOOM_MSAL_CLIENT_ID ? `api://${process.env.LOOM_MSAL_CLIENT_ID}/.default` : '');
-  if (!audience) return {};
+  if (!audience) {
+    logUcAuthDiag('mint', 'skipped', {
+      base,
+      reason: 'neither LOOM_ICEBERG_CATALOG_AUDIENCE nor LOOM_MSAL_CLIENT_ID is set, so no Entra '
+        + 'audience is resolvable and the upstream hop goes out UNAUTHENTICATED',
+    });
+    return { headers: {}, mode: 'anonymous', audience: '' };
+  }
 
   let entraToken: string | undefined;
   try {
     entraToken = (await uamiArmCredential().getToken(audience))?.token;
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn('[iceberg-catalog] Entra token for %s unavailable: %s', audience, (e as Error)?.message || e);
-    return {};
+    logUcAuthDiag('mint', 'failure', {
+      base,
+      audience,
+      reason: (e as Error)?.message || String(e),
+    });
+    return { headers: {}, mode: 'anonymous', audience };
   }
-  if (!entraToken) return {};
+  if (!entraToken) {
+    logUcAuthDiag('mint', 'empty', {
+      base,
+      audience,
+      reason: 'the Console managed identity returned NO token for this audience and raised no error; '
+        + 'the upstream hop goes out UNAUTHENTICATED',
+    });
+    return { headers: {}, mode: 'anonymous', audience };
+  }
 
-  const { exchangeForInternalUcToken } = await import('@/lib/azure/uc-token-exchange');
-  const internal = await exchangeForInternalUcToken(entraToken, icebergCatalogBase());
-  return { authorization: `Bearer ${internal}` };
+  const subject = describeSubjectToken(entraToken);
+  logUcAuthDiag('mint', 'ok', {
+    base,
+    audience,
+    oid: subject?.oid,
+    appid: subject?.appid,
+    tokenAud: subject?.tokenAud,
+    iss: subject?.iss,
+    tid: subject?.tid,
+    exp: subject?.exp,
+  });
+
+  // Throws UcTokenExchangeError on failure, which logs its own step=exchange
+  // line before it propagates — so the exchange never fails silently either.
+  const internal = await exchangeForInternalUcToken(entraToken, base || icebergCatalogBase());
+  return {
+    headers: { authorization: `Bearer ${internal}` },
+    mode: 'exchanged',
+    audience,
+    subject,
+    subjectToken: entraToken,
+  };
 }
 
 /**
@@ -359,21 +468,36 @@ export async function ircFetchRaw<T = unknown>(
   subPath: string,
   init: { method?: string; body?: unknown; query?: Record<string, string | undefined> } = {},
 ): Promise<T> {
+  const base = icebergCatalogBase();
   const url = ircUrl(subPath, init.query);
+  const method = init.method || 'GET';
+  const auth = await resolveIcebergAuth();
   const headers: Record<string, string> = {
     accept: 'application/json',
-    ...(await icebergAuthHeader()),
+    ...auth.headers,
   };
   if (init.body !== undefined) headers['content-type'] = 'application/json';
+  // The path only — the base is logged separately, and neither carries a
+  // credential (the bearer lives in `headers`, which is never logged).
+  const path = url.startsWith(base) ? url.slice(base.length) : url;
 
   let res: Response;
   try {
     res = await fetchWithTimeout(url, {
-      method: init.method || 'GET',
+      method,
       headers,
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
     });
   } catch (e) {
+    logUcAuthDiag('catalog-call', 'unreachable', {
+      base,
+      path,
+      method,
+      authMode: auth.mode,
+      audience: auth.audience,
+      oid: auth.subject?.oid,
+      reason: (e as Error)?.message || String(e),
+    });
     throw new IcebergCatalogError(
       `Iceberg REST Catalog unreachable at ${icebergCatalogBase()}: ${(e as Error)?.message || String(e)}`,
       502,
@@ -388,6 +512,39 @@ export async function ircFetchRaw<T = unknown>(
   }
   if (!res.ok) {
     const errObj = (body as { error?: { message?: string; type?: string } } | undefined)?.error;
+    // THE line the live 403 needed and did not have. `authMode` is the
+    // decisive field: `anonymous` means the catalog refused an uncredentialed
+    // request (a MINT problem), `exchanged` means it refused a token it minted
+    // itself minutes earlier (a REGISTRATION / audience problem), `pre-shared`
+    // means LOOM_ICEBERG_CATALOG_TOKEN is stale. `body` is the server's own
+    // words, which the BFF envelope discards.
+    logUcAuthDiag('catalog-call', res.status === 401 || res.status === 403 ? 'denied' : 'failure', {
+      base,
+      path,
+      method,
+      status: res.status,
+      authMode: auth.mode,
+      audience: auth.audience,
+      oid: auth.subject?.oid,
+      appid: auth.subject?.appid,
+      tokenAud: auth.subject?.tokenAud,
+      code: errObj?.type,
+      body: text.slice(0, 300),
+    });
+    // #3197 — evict the no-longer-honoured minted token so the NEXT request
+    // re-exchanges instead of failing identically for the rest of the 5-minute
+    // TTL. The Unity sibling has done this since #2679 (unity-catalog-client
+    // `ucFetch` → `invalidateUnityInternalToken`); THIS path never did — it was
+    // the one call site of `exchangeForInternalUcToken` with no matching
+    // `invalidateUcInternalToken`, so a stale minted token wedged every Iceberg
+    // request for five minutes at a time and nothing anywhere said so.
+    //
+    // Deliberately no automatic replay: the 401/403 may have arrived on a
+    // POST/DELETE and a retry could double-apply a mutation (same reasoning as
+    // `invalidateUnityInternalToken`).
+    if ((res.status === 401 || res.status === 403) && auth.subjectToken) {
+      await invalidateUcInternalToken(auth.subjectToken, base);
+    }
     throw new IcebergCatalogError(
       errObj?.message || `Iceberg REST Catalog returned HTTP ${res.status}`,
       res.status,
