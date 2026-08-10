@@ -122,17 +122,95 @@ jobs:
 
           # Best-effort: surface the UAT_RESULT summary line from Log Analytics
           # (ingestion lags — the execution status above is the gate, never this).
+          #
+          # R7 (deploy-integrity: error messages must be TRUE): keep stderr so a
+          # FAILED query is reported as a failed query. The previous version sent
+          # both the workspace lookup and the query to /dev/null, so "the lookup
+          # errored" and "there is no UAT_RESULT row" collapsed into the same
+          # empty string — and the issue body then asserted the second. That is
+          # the UNKNOWN-reported-as-NEGATIVE class; the cause is now measured, not
+          # guessed. Still best-effort: this never fails the step.
+          LA_ERR=$(mktemp)
           WS=$(az monitor log-analytics workspace list -g "$RG_NAME" \
-            --query "[?starts_with(name, 'law-csa-loom-')]|[0].customerId" -o tsv 2>/dev/null | tr -d '\r' || echo "")
-          [[ -z "$WS" ]] && WS=$(az monitor log-analytics workspace list -g "$RG_NAME" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r' || echo "")
-          if [[ -n "$WS" ]]; then
-            RESULT=$(az monitor log-analytics query -w "$WS" --analytics-query \
+            --query "[?starts_with(name, 'law-csa-loom-')]|[0].customerId" -o tsv 2>"$LA_ERR" | tr -d '\r' || echo "")
+          if [[ -z "$WS" ]]; then
+            WS=$(az monitor log-analytics workspace list -g "$RG_NAME" --query "[0].customerId" -o tsv 2>>"$LA_ERR" | tr -d '\r' || echo "")
+          fi
+          if [[ -z "$WS" ]]; then
+            echo "::warning::Could not resolve a Log Analytics workspace in $RG_NAME — the failing-journey summary is unavailable for this run (this is NOT evidence about the journeys). az stderr:"
+            sed 's/^/  /' "$LA_ERR" >&2 || true
+          else
+            QERR=$(mktemp)
+            # The VERDICT is az's EXIT CODE, never "did it write to stderr".
+            # az writes extension-install notices there ("The command requires
+            # the extension log-analytics. It will be installed first."), so a
+            # stderr-emptiness test reports a perfectly good query as FAILED —
+            # measured on run 31351602478, which is the same stderr-contamination
+            # class this step exists to stop mis-reporting.
+            set +e
+            RAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
               "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
-              --query "[0].Log_s" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+              --query "[0].Log_s" -o tsv 2>"$QERR")
+            QRC=$?
+            set -e
+            RESULT=$(printf '%s' "$RAW" | tr -d '\r')
             if [[ -n "$RESULT" ]]; then
               echo "::notice::$RESULT"
               echo "loom-synthetic-monitor: $RESULT" >> "$GITHUB_STEP_SUMMARY"
               echo "uat_result=$RESULT" >> "$GITHUB_OUTPUT"
+            elif [[ $QRC -ne 0 ]]; then
+              echo "::warning::The UAT_RESULT query FAILED (rc=$QRC) — so 'no result' here is unknown, not negative. az stderr:"
+              sed 's/^/  /' "$QERR" >&2 || true
+            else
+              echo "::notice::No UAT_RESULT row yet for $JOB_NAME (query succeeded, zero rows — ingestion typically lags a few minutes)."
+            fi
+          fi
+
+          # Surface the per-journey lines from the execution's own console logs.
+          # This is what an operator actually needs: which of J1..J6 went red.
+          #
+          # Deliberately NOT a guessed pass/fail regex. The reporter's marker
+          # glyphs are not pinned anywhere in this repo, and a pattern that
+          # matched nothing would render as "no journey failed" — manufacturing
+          # the same false-negative this commit exists to remove. So: match the
+          # journey TITLES (which are pinned, in e2e/synthetic-journeys.uat.ts)
+          # and hand the operator the raw lines to read.
+          if [[ -n "$WS" ]]; then
+            JERR=$(mktemp)
+            # Exit code, not stderr-emptiness — see the UAT_RESULT block above.
+            set +e
+            JRAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
+              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where TimeGenerated > ago(2h) | where Log_s has_any ('synthetic J', 'UAT_FAIL', 'UAT_REAL_FAILS') | order by TimeGenerated asc | take 60 | project Log_s" \
+              --query "[].Log_s" -o tsv 2>"$JERR")
+            JRC=$?
+            set -e
+            JOURNEYS=$(printf '%s' "$JRAW" | tr -d '\r')
+            if [[ -n "$JOURNEYS" ]]; then
+              echo "::group::Per-journey console lines (last 2h)"
+              echo "$JOURNEYS"
+              echo "::endgroup::"
+              {
+                echo "### Per-journey lines"
+                echo '```'
+                echo "$JOURNEYS"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              # Keep the output single-line and bounded — GITHUB_OUTPUT is not a
+              # multi-line channel without a heredoc, and the issue body only
+              # needs a pointer plus a short excerpt.
+              #
+              # awk, not tr/sed: `tr` maps single CHARACTERS, so `tr '\n' ' | '`
+              # silently collapses to a plain space, and a tr-to-sentinel +
+              # `sed 's/\034/ | /g'` does not match either (sed does not read
+              # `\034` as an octal escape in the pattern) — it leaves invisible
+              # control bytes in the issue body. Both were tried; both were
+              # wrong in a way a terminal will not show you.
+              echo "journey_lines=$(printf '%s' "$JOURNEYS" | awk '{ printf "%s%s", (NR>1 ? " | " : ""), $0 }' | cut -c1-800)" >> "$GITHUB_OUTPUT"
+            elif [[ $JRC -ne 0 ]]; then
+              echo "::warning::The per-journey log query FAILED (rc=$JRC) — 'no journey lines' below is unknown, not negative."
+              sed 's/^/  /' "$JERR" >&2 || true
+            else
+              echo "::notice::No 'synthetic J' console lines in the last 2h (query succeeded, zero rows)."
             fi
           fi
 
@@ -162,17 +240,42 @@ jobs:
       - name: File / update dedup issue on failure
         if: failure() && steps.run.outputs.status != 'NotDeployed'
         uses: actions/github-script@v7
+        env:
+          # Values reach the script through the ENVIRONMENT, never through
+          # `${{ }}` interpolated into the JS source. Two reasons, both of them
+          # the same failure class this commit exists to close:
+          #   1. These strings are LOG TEXT. A Playwright line containing a
+          #      backtick or `${` interpolated into a template literal is a
+          #      SyntaxError — which kills the step before line 1 and makes the
+          #      alert silent, exactly as `const exec` did.
+          #   2. It is also the injection-safe form: nothing in a log line can
+          #      become code.
+          SYNTH_STATUS: ${{ steps.run.outputs.status }}
+          SYNTH_EXEC: ${{ steps.run.outputs.execution }}
+          SYNTH_UAT: ${{ steps.run.outputs.uat_result }}
+          SYNTH_JOURNEYS: ${{ steps.run.outputs.journey_lines }}
         with:
           script: |
-            const status = `${{ steps.run.outputs.status }}` || 'Failed';
-            const exec = `${{ steps.run.outputs.execution }}` || '<unknown>';
-            const uat = `${{ steps.run.outputs.uat_result }}` || '(UAT_RESULT not yet in Log Analytics — check container logs)';
+            // NOTE: `exec`, `github`, `context`, `core`, `glob`, `io`, `fetch`,
+            // `require` and `__original_require__` are INJECTED by
+            // actions/github-script as parameters of the async function this
+            // body becomes. Declaring a `const` of any of those names is a
+            // SyntaxError that kills the step before its first line runs — which
+            // is exactly how this alert stayed silent for 83 consecutive
+            // failures (see the header). scripts/ci/check-github-script-syntax.mjs
+            // now compiles every one of these blocks the same way the action
+            // does, so the class cannot come back.
+            const status = process.env.SYNTH_STATUS || 'Failed';
+            const execName = process.env.SYNTH_EXEC || '<unknown>';
+            const uat = process.env.SYNTH_UAT || '(no UAT_RESULT was retrieved — either Log Analytics ingestion lagged or the query itself failed; the poll step logs which. Check the container logs.)';
+            const journeys = process.env.SYNTH_JOURNEYS || '(none retrieved — see the poll step, which distinguishes a failed query from zero rows)';
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               ``,
               `Severity: **P1** (page band — O1 alert convention, docs/fiab/runbooks/on-call.md)`,
-              `Execution: \`${exec}\` → **${status}**`,
+              `Execution: \`${execName}\` → **${status}**`,
               `Summary: \`${uat}\``,
+              `Journey lines: \`${journeys}\``,
               ``,
               `The six synthetic journeys (J1 MSAL login / J2 create-item / J3 editor / J4 query / J5 marketplace / J6 git-promotion) run in-VNet every 15 min; a failure here is a REAL code or sign-in-path failure (honest infra gates never fail the run).`,
               `Triage + ack: on-call runbook docs/fiab/runbooks/on-call.md · Journeys tab on /admin/health · runbook docs/fiab/runbooks/synthetic-journeys.md · Log Analytics ContainerAppConsoleLogs_CL (ContainerAppName_s=='loom-synthetic-monitor').`,

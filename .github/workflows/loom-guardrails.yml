@@ -562,6 +562,17 @@ jobs:
       - name: 'annotation-teeth (a step that prints ::error:: must be able to fail — #2837)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-annotation-teeth.mjs
+      # annotation-teeth judges a step that PRINTS a verdict. This judges the
+      # step that never got to print one: actions/github-script compiles each
+      # `script:` body into an async function whose PARAMETERS are the injected
+      # names (github, context, core, exec, glob, io, fetch, require), so a
+      # `const exec = …` is a redeclaration and the SyntaxError kills the step
+      # before line 1. loom-synthetic-monitor's alert — the file's own
+      # "durable signal" — threw exactly that on every run: 83 consecutive red
+      # runs with the six live journeys down, and ZERO issues ever filed.
+      - name: 'github-script-syntax (every github-script body must compile as the action compiles it)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-github-script-syntax.mjs
       # init/autobuild/analyze share one CodeQL bundle. Dependabot bumped ONLY
       # init (#3103), every Analyze job died on the version mismatch — and a
       # failed analysis still uploads a 0-result SARIF that GitHub will not
