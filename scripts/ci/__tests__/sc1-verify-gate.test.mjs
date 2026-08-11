@@ -104,7 +104,7 @@ function renderScript() {
  * @param {string}  [o.contractRefs]
  * @returns {{code:number, out:string}}
  */
-function runGate({ absent = [], unreadable = [], unsigned = [], contractRefs } = {}) {
+function runGate({ absent = [], unreadable = [], unsigned = [], dataplaneDenied = false, contractRefs } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'sc1-gate-'));
   const bin = path.join(dir, 'bin');
   mkdirSync(bin);
@@ -154,6 +154,27 @@ exit 0
 `,
     { mode: 0o755 },
   );
+  // #3210 — the gate now waits for the ACR firewall open to reach the DATA
+  // plane via scripts/ci/acr-dataplane-ready.sh, which makes a REAL HTTPS call
+  // to <acr>.azurecr.io. Unstubbed, that call cannot succeed against a stub
+  // registry, so the gate sat in the probe's full 180s budget on every case and
+  // the whole node:test job hit its 10-minute timeout — reported as `cancelled`,
+  // which reads like "superseded by a newer push" rather than "this job died".
+  // Injected through LOOM_ACR_DATAPLANE_READY_SCRIPT, the same seam the lease
+  // script uses. STUB_DATAPLANE_DENIED=1 exercises the refuse-to-roll branch.
+  writeFileSync(
+    path.join(bin, 'ready'),
+    `#!/usr/bin/env bash
+if [ "\${STUB_DATAPLANE_DENIED:-0}" = "1" ]; then
+  echo "::error::acr-dataplane-ready: still refusing this runner (stub)" >&2
+  exit 1
+fi
+echo "[acr-dataplane-ready] READY (stub)"
+exit 0
+`,
+    'utf8',
+  );
+  chmodSync(path.join(bin, 'ready'), 0o755);
   chmodSync(path.join(bin, 'az'), 0o755);
   chmodSync(path.join(bin, 'cosign'), 0o755);
 
@@ -185,6 +206,8 @@ exit 0
       env: {
         ...process.env,
         PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        LOOM_ACR_DATAPLANE_READY_SCRIPT: path.join(bin, 'ready'),
+        STUB_DATAPLANE_DENIED: dataplaneDenied ? '1' : '0',
         CONTRACT_REFS: refs,
         STUB_ABSENT: absent.join(' '),
         STUB_UNREADABLE: unreadable.join(' '),
@@ -283,4 +306,23 @@ test('an EMPTY deploy contract fails closed rather than verifying a narrowed set
   const r = runGate({ contractRefs: '' });
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /no deploy contract/);
+});
+
+test('#3210 — a DENIED data plane blocks the roll, and says so as REACHABILITY not as "unsigned"', () => {
+  // The gate used to call `az acr login` here, which authenticates through an
+  // ARM-mediated token exchange and returns 0 while the registry is still
+  // refusing the runner by IP. loom-roll-and-validate run 31454217160 rode that
+  // straight into `DENIED: client with IP … is not allowed access` and then
+  // reported "has NO valid cosign signature" — a claim about the IMAGES that the
+  // DENIAL does not support (deploy-integrity.md R7).
+  //
+  // Two assertions, and the second is the one that matters: it must refuse to
+  // roll, AND it must not attribute the failure to the supply chain.
+  const r = runGate({ dataplaneDenied: true });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /REACHABILITY failure, not a statement about whether the images are signed/);
+  assert.ok(
+    !/unsigned image\(s\)/.test(r.out),
+    `a reachability failure must not be reported as an unsigned-image verdict:\n${r.out}`,
+  );
 });

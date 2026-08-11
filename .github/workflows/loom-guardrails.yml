@@ -37,7 +37,15 @@ concurrency:
 jobs:
   guardrails:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 was the original budget and the job has outgrown it: on 2026-08-11 it
+    # ran 10m15s, was killed at step 94 of 98, and GitHub reported the kill as
+    # `cancelled` — which in a run list reads like "superseded by a newer push",
+    # not "this job died". The four steps after it showed as `skipped`, and
+    # skipped reads as passed (the #3042 shape this file's `if: !cancelled()`
+    # convention exists to prevent — a TIMEOUT defeats that convention, because
+    # the runner is gone). Raised with headroom; if it approaches this again the
+    # answer is to split the job, not to raise it further.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -602,6 +610,32 @@ jobs:
       - name: 'teardown-not-on-schedule (a cron must never be able to tear down an estate)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-teardown-not-on-schedule.mjs
+      # If the registry NAME comes from a variable, the login-server SUFFIX must
+      # too. mirror-upstream-images.sh read back `${ACR}.azurecr.io/${DST}` — the
+      # name was right for Gov, the suffix was Commercial. All three upstream
+      # images mirrored fine; only the VERIFY failed, which failed the step, which
+      # starved the Gov ACR of loom-duckdb:v0.1, which is what deploy-fiab-gcch's
+      # image preflight refuses on. One literal suffix made GCC-High undeployable.
+      - name: 'acr-suffix-boundary-agnostic (a varying registry needs a varying suffix)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-acr-suffix-boundary-agnostic.mjs
+      # `az acr login` authenticates through an ARM-mediated token exchange, so it
+      # returns 0 while the registry still refuses this runner's IP. Roll
+      # 31454217160: this oracle said "reachable after 1 attempt" in the SAME
+      # SECOND the firewall opened, and cosign was DENIED 3s later — then the
+      # gate reported "NO valid cosign signature", a fact it never established.
+      # 19 sites across the Commercial and sovereign lanes carried the same
+      # oracle, 10 of them with no failure path at all.
+      - name: 'acr-reachability-oracle (az acr login is a credential, not a probe)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-acr-reachability-oracle.mjs
+      # The probe itself is mutation-proved offline against stub az/curl: 403 DENIED
+      # is NOT ready, a connect failure is exit 2 (not 1), and reinstating
+      # `CODE="$(curl … || echo 000)"` — which concatenates to `000000` and makes
+      # a DNS failure read as a firewall refusal — fails the suite.
+      - name: 'acr-dataplane-ready self-test (403 != ready; DNS failure != refusal)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-acr-dataplane-ready.sh
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw

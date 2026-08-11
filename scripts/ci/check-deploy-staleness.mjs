@@ -397,6 +397,12 @@ export const WATCHED = [
       //     register as drift" hole this file exists to close.
       'scripts/ci/mirror-upstream-images.sh',
       'platform/fiab/images/upstream-images.json',
+      // refs #3210 — this lane waits for the ACR firewall open to reach the DATA
+      // plane before it builds or verifies anything, and that wait is now this
+      // script rather than `az acr login` (which returns 0 against a registry
+      // still denying by IP). Editing it changes whether this lane proceeds into
+      // a denied registry, so it is a deploy source of this lane.
+      'scripts/ci/acr-dataplane-ready.sh',
       'apps/fiab-wrangler-host/**',
       'apps/fiab-dbt-runner/**',
       'apps/loom-transform-runner/**',

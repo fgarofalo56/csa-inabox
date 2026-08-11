@@ -270,7 +270,11 @@ jobs:
           # cancelled sibling's cleanup must not re-lock under this push.
           LOOM_ACR_LEASE_TTL_MINUTES=120 \
             bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
-          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # #3210 — same fix as the Commercial lane (.claude/rules/cloud-parity.md).
+          # acr-dataplane-ready.sh derives the login-server suffix from the active
+          # cloud, so it probes .azurecr.us here without a second code path.
+          bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR" --timeout-seconds 180             || echo "::warning::Gov ACR data plane not confirmed reachable; the az acr build upload may be denied."
+          az acr login -n "$ACR" >/dev/null
           # 2026-07-16: the console compile cgroup-OOMs on the default 8 GB ACR
           # Tasks agent (re-confirmed 2026-07-30, run 30564119314: "Next.js build
           # worker exited with code: null and signal: SIGKILL" at ~7min). A

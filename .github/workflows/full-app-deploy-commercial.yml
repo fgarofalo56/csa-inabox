@@ -304,14 +304,16 @@ jobs:
           # they started pushing before the open took effect. Poll the registry
           # token endpoint until it authorizes from this runner, then give the
           # change extra slack before the build matrix fans out.
+          # #3210 — `az acr login` is NOT a data-plane reachability oracle. It
+          # authenticates through an ARM-mediated token exchange and returns 0
+          # while the registry is still denying by IP, so this loop "succeeded"
+          # in the same second the open was issued and the work that followed was
+          # DENIED. Probe the path the tools actually use.
           echo "Waiting for ACR public access to propagate…"
-          ok=false
-          for i in $(seq 1 24); do
-            if az acr login --name "$ACR_NAME" >/dev/null 2>&1; then ok=true; echo "ACR reachable after ${i} attempt(s)."; break; fi
-            sleep 10
-          done
-          $ok || echo "::warning::ACR login still failing after ~240s; builds may need a retry."
-          sleep 20
+          if ! bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR_NAME" --timeout-seconds 240; then
+            echo "::warning::ACR data plane still refusing this runner after ~240s; builds may need a retry."
+          fi
+          az acr login --name "$ACR_NAME" >/dev/null 2>&1 || true
       - name: Grant AcrPush to deploy SP + AcrPull to all app UAMIs (idempotent)
         run: |
           set +e
@@ -698,10 +700,13 @@ jobs:
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
           ACR_LOGIN="${{ needs.resolve.outputs.acr_login_server }}"
           TAG="${{ inputs.tag || 'v0.1' }}"
-          if ! az acr login --name "$ACR_NAME" >/dev/null; then
-            echo "::error::Cannot reach the ACR data plane on $ACR_NAME even though open-acr ran this run — cannot verify image signatures, refusing to roll blind. Check the ACR network toggle (an Azure Policy may have reverted it), or (emergency only) re-dispatch with skip_supply_chain=true."
+          # #3210 — probe the registry on cosign's own HTTP path before trusting
+          # `az acr login`, which can return 0 against a still-denying data plane.
+          if ! bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR_NAME" --timeout-seconds 180; then
+            echo "::error::Cannot reach the ACR data plane on $ACR_NAME even though open-acr ran this run — cannot verify image signatures, refusing to roll blind. This is a REACHABILITY failure, not a statement about whether the images are signed. Check the ACR network toggle (an Azure Policy may have reverted it), or (emergency only) re-dispatch with skip_supply_chain=true."
             exit 1
           fi
+          az acr login --name "$ACR_NAME" >/dev/null
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
           # ── WHAT THIS GATE COVERS — DERIVED, NOT HAND-COPIED (refs #3035) ──
           # This used to be a hand-maintained 17-name array under the claim

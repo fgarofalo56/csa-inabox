@@ -51,6 +51,11 @@ cat > "$STUB_DIR/az" <<'STUB'
 #!/usr/bin/env bash
 sub="$1 $2"
 case "$sub" in
+  # Real `az cloud show --query suffixes.acrLoginServerEndpoint -o tsv` prints
+  # the active cloud's registry suffix. The script derives it rather than
+  # hardcoding `.azurecr.io`, which is what made the Gov mirror's read-back fail
+  # (#3209), so the stub has to answer it like the real CLI does.
+  "cloud show") echo ".azurecr.io"; exit 0 ;;
   "acr import") exit 0 ;;
   "acr manifest")
     case "${MODE}" in
