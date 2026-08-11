@@ -140,22 +140,45 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
       // exactly the signed-in-only block seen on the Gov console 2026-07-14.
       // Scoped to just this cookie NAME (RequestCookieNames), so every other
       // request part is still fully inspected. Applies to Commercial + Gov.
-      exclusions: [
-        {
-          matchVariable: 'RequestCookieNames'
-          selectorMatchOperator: 'StartsWith'
-          selector: 'loom_session'
-        }
-      ]
+      // PER RULE SET, not on `managedRules`. ARM rejected the parent-level form
+      // outright — measured on run 31435481880:
+      //   BadRequest on 'wafloomfdk6mvh5sm6z7do': "Could not find member
+      //   'exclusions' on object of type 'ManagedRules'"
+      // Microsoft.Network/FrontDoorWebApplicationFirewallPolicies models
+      // `managedRules` as a ManagedRuleSetList, whose only members are
+      // `managedRuleSets` (+ `exceptionsList` on newer API versions).
+      // `exclusions` is a member of each ManagedRuleSet — "the exclusions that
+      // are applied to all rules in the set". The parent-level spelling belongs
+      // to the APPLICATION GATEWAY policy type, which is a different resource.
+      // Schema: learn.microsoft.com/azure/templates/microsoft.network/
+      //         2024-02-01/frontdoorwebapplicationfirewallpolicies
+      //
+      // The intent is unchanged and is applied to BOTH sets, because either can
+      // block the request: exclude Loom's OWN encrypted session cookie from
+      // inspection, scoped to that cookie NAME alone.
       managedRuleSets: [
         {
           ruleSetType: 'Microsoft_DefaultRuleSet'
           ruleSetVersion: '2.1'
           ruleSetAction: 'Block'
+          exclusions: [
+            {
+              matchVariable: 'RequestCookieNames'
+              selectorMatchOperator: 'StartsWith'
+              selector: 'loom_session'
+            }
+          ]
         }
         {
           ruleSetType: 'Microsoft_BotManagerRuleSet'
           ruleSetVersion: '1.0'
+          exclusions: [
+            {
+              matchVariable: 'RequestCookieNames'
+              selectorMatchOperator: 'StartsWith'
+              selector: 'loom_session'
+            }
+          ]
         }
       ]
     }

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "7761645123598600102"
+      "templateHash": "15143805453960889561"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11125583285722601727"
+              "templateHash": "15299635444160815425"
             }
           },
           "definitions": {
@@ -14254,7 +14254,7 @@
               ]
             },
             "orgVisualsRbac": {
-              "condition": "[and(and(not(parameters('skipRoleGrants')), not(empty(parameters('loomStorageAccount')))), not(equals(coalesce(tryGet(parameters('loomBackends'), 'orgVisuals'), 'enabled'), 'disabled')))]",
+              "condition": "[and(and(not(parameters('skipRoleGrants')), variables('loomStorageGrantable')), not(equals(coalesce(tryGet(parameters('loomBackends'), 'orgVisuals'), 'enabled'), 'disabled')))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "org-visuals-rbac",
@@ -22319,7 +22319,7 @@
               ]
             },
             "risingwaveLakeRbac": {
-              "condition": "[and(and(variables('risingwaveActive'), not(parameters('skipRoleGrants'))), not(empty(parameters('loomStorageAccount'))))]",
+              "condition": "[and(and(variables('risingwaveActive'), not(parameters('skipRoleGrants'))), variables('loomStorageGrantable'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "risingwave-lake-rbac",
@@ -27055,7 +27055,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "519504316615210808"
+                      "templateHash": "13958119005097407850"
                     }
                   },
                   "parameters": {
@@ -27194,22 +27194,29 @@
                           ]
                         },
                         "managedRules": {
-                          "exclusions": [
-                            {
-                              "matchVariable": "RequestCookieNames",
-                              "selectorMatchOperator": "StartsWith",
-                              "selector": "loom_session"
-                            }
-                          ],
                           "managedRuleSets": [
                             {
                               "ruleSetType": "Microsoft_DefaultRuleSet",
                               "ruleSetVersion": "2.1",
-                              "ruleSetAction": "Block"
+                              "ruleSetAction": "Block",
+                              "exclusions": [
+                                {
+                                  "matchVariable": "RequestCookieNames",
+                                  "selectorMatchOperator": "StartsWith",
+                                  "selector": "loom_session"
+                                }
+                              ]
                             },
                             {
                               "ruleSetType": "Microsoft_BotManagerRuleSet",
-                              "ruleSetVersion": "1.0"
+                              "ruleSetVersion": "1.0",
+                              "exclusions": [
+                                {
+                                  "matchVariable": "RequestCookieNames",
+                                  "selectorMatchOperator": "StartsWith",
+                                  "selector": "loom_session"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -27623,7 +27630,7 @@
               ]
             },
             "aasShim": {
-              "condition": "[and(and(parameters('loomDirectLakeShimEnabled'), not(empty(parameters('loomDlzRg')))), not(empty(parameters('loomStorageAccount'))))]",
+              "condition": "[and(and(parameters('loomDirectLakeShimEnabled'), not(empty(parameters('loomDlzRg')))), variables('loomStorageGrantable'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "aas-direct-lake-shim",
