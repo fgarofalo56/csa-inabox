@@ -1113,6 +1113,30 @@ jobs:
           echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-}" >> "$GITHUB_OUTPUT"
           echo "region=${{ steps.reconcile.outputs.region }}" >> "$GITHUB_OUTPUT"
 
+      # ── Front Door -> ACA env Private Link approval (#3203) ────────────────
+      # Was an ARM deploymentScript inside front-door.bicep. It could not run
+      # under a policy denying shared-key storage (KeyBasedAuthenticationNotPermitted
+      # — one of four ARM leaves that failed run 31435481880 outright), and its
+      # `az network private-endpoint-connection list --id` call does not support
+      # Microsoft.App/managedEnvironments at all, so under its `2>/dev/null || true`
+      # it could only ever time out. The mitigation had been "skip it on Gov and
+      # let the operator click Approve in the portal" — a violation of both
+      # auto-bind-by-default.md and cloud-parity.md.
+      #
+      # Front Door answers 504 while the connection is Pending, so this is not
+      # optional; it is just no longer allowed to fail the whole apply for a
+      # reason unrelated to Front Door.
+      - name: Approve the Front Door -> ACA private-endpoint connection
+        if: steps.provision.outcome == 'success'
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp env show -n "cae-csa-loom-${{ steps.reconcile.outputs.region }}" -g "rg-csa-loom-admin-${{ steps.reconcile.outputs.region }}" --query id -o tsv | tr -d '[:space:]')
+          if [ -z "$CAE_ID" ]; then
+            echo "::error::could not resolve the Container Apps managed environment id in rg-csa-loom-admin-${{ steps.reconcile.outputs.region }} — cannot approve the Front Door private-endpoint connection, and Front Door answers 504 while it is Pending."
+            exit 1
+          fi
+          bash scripts/csa-loom/approve-cae-private-endpoints.sh --cae-id "$CAE_ID" --timeout-seconds 600
+
       - name: Post-provision validation (from inside cluster)
         id: validate
         if: steps.provision.outcome == 'success'
