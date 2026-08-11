@@ -27,15 +27,14 @@ param consoleFqdn string
 @description('Compliance tags')
 param complianceTags object
 
-@description('''Console UAMI resource id — identity for the private-endpoint-connection
-approval deployment script. MUST hold Network Contributor (or Contributor) on the
-RG that owns the Container Apps managed environment (the admin-plane RG grants the
-Console UAMI Network Contributor on itself — see network.bicep F15). Leave empty to
-skip the auto-approval script (operator then approves the PE connection manually in
-the portal: ACA env -> Networking -> Private endpoint connections).''')
+@description('''DEPRECATED and IGNORED since #3203. The Front Door -> ACA env
+private-endpoint approval moved out of an ARM deploymentScript and into the deploy
+itself (scripts/csa-loom/approve-cae-private-endpoints.sh), because the script
+could not run under a policy denying shared-key storage and its az command did not
+support managedEnvironments anyway. Retained so existing callers do not break.''')
 param scriptIdentityId string = ''
 
-@description('Region for the approval deployment script (kept distinct so it can run where ACI quota exists).')
+@description('DEPRECATED and IGNORED since #3203 — there is no longer an approval deployment script to place.')
 param scriptLocation string = location
 
 @description('Cache-busting tag so the approval script re-runs on each deploy (idempotent — approve is a no-op once Approved).')
@@ -232,109 +231,36 @@ resource fdOrigin 'Microsoft.Cdn/profiles/originGroups/origins@2024-02-01' = {
   }
 }
 
-// ── Auto-approve the Front Door -> ACA env Private Link connection ────────────
-// When FD creates the sharedPrivateLinkResource above, a private-endpoint
-// connection lands on the Container Apps managed environment in *Pending* state.
-// Until it is approved, FD cannot reach the origin and the public endpoint 504s
-// (verified live: clean deploy with frontDoorEnabled -> portal "Approve" was the
-// only thing standing between a 504 and a working console). This script runs
-// `az network private-endpoint-connection approve` for that connection so a clean
-// deploy is end-to-end functional with no manual portal step.
+// ── Front Door -> ACA env Private Link: APPROVED BY THE DEPLOY, NOT BY ARM ────
 //
-// Identity: the Console UAMI (scriptIdentityId) holds Network Contributor on the
-// admin-plane RG that owns the CAE (network.bicep F15), which is sufficient to
-// approve a PE connection on the managed environment.
+// This was a `Microsoft.Resources/deploymentScripts` (AzureCLI) that approved the
+// pending private-endpoint connection the FD origin raises. It is gone, for two
+// independent reasons — both measured, neither hypothetical (#3203).
 //
-// FD has a known issue where it may create MULTIPLE pending connections; the
-// script approves EVERY pending connection on the env (idempotent — already-
-// approved connections are skipped), which also covers that case.
+// 1. IT COULD NOT RUN. ARM auto-provisions an ephemeral SHARED-KEY staging
+//    storage account for a deploymentScript. Any subscription with a policy
+//    denying `allowSharedKeyAccess` blocks it:
+//        DeploymentScriptOperationFailed  script-loom-fd-aca-pe-approve
+//        ErrorCode: KeyBasedAuthenticationNotPermitted
+//    deploy-fiab-commercial run 31435481880 — one of four ARM leaves that failed
+//    the WHOLE apply, for a step Front Door does not depend on. The mitigation in
+//    place was to pass an empty scriptIdentityId on GCC-High/IL5 and tell the
+//    operator to click Approve in the portal, which violates
+//    auto-bind-by-default.md (a remediation the platform could perform itself)
+//    and cloud-parity.md (the sovereign boundaries got the lesser path). MCAPS
+//    policy has since reached Commercial too, so the split stopped holding there.
 //
-// Staging-storage caveat: this AzureCLI deploymentScript lets ARM auto-provision
-// its ephemeral staging storage account (same as the other admin-plane scripts —
-// entra-app-registration, ai-search). If the subscription enforces an Azure Policy
-// that DENIES storage accounts with shared-key access (allowSharedKeyAccess=false),
-// ARM's auto-provisioned SA is blocked and this script fails to start. In that case
-// either (a) exempt the deploymentScripts-created SA from the policy, or (b) leave
-// scriptIdentityId empty and approve the PE connection manually in the portal
-// (ACA env -> Networking -> Private endpoint connections -> Approve). The FD wiring
-// itself does not depend on this script succeeding.
-resource approvePeScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (!empty(scriptIdentityId)) {
-  name: 'script-loom-fd-aca-pe-approve'
-  location: scriptLocation
-  tags: complianceTags
-  kind: 'AzureCLI'
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${scriptIdentityId}': {}
-    }
-  }
-  // Approve only AFTER both the ACA env (caeId) and the FD origin (which raises
-  // the PE request) exist. fdOrigin implicitly depends on caeId via the
-  // sharedPrivateLinkResource.privateLink.id reference.
-  dependsOn: [
-    fdOrigin
-  ]
-  properties: {
-    azCliVersion: '2.61.0'
-    retentionInterval: 'PT1H'
-    timeout: 'PT20M'
-    forceUpdateTag: forceUpdateTag
-    cleanupPreference: 'OnSuccess'
-    environmentVariables: [
-      { name: 'CAE_ID', value: caeId }
-    ]
-    scriptContent: '''
-set -euo pipefail
-echo "Resolving pending private-endpoint connections on Container Apps env: $CAE_ID"
-
-# FD may take a moment to raise the PE request after the origin is created, and
-# may create more than one. Poll for up to ~10 min, approving any Pending ones.
-deadline=$(( $(date +%s) + 600 ))
-approved_any=0
-while :; do
-  # List PE connections on the managed environment that are Pending.
-  PENDING=$(az network private-endpoint-connection list \
-    --id "$CAE_ID" \
-    --query "[?properties.privateLinkServiceConnectionState.status=='Pending'].id" \
-    -o tsv 2>/dev/null || true)
-
-  if [ -n "${PENDING:-}" ]; then
-    while IFS= read -r conn; do
-      [ -z "$conn" ] && continue
-      echo "Approving pending PE connection: $conn"
-      az network private-endpoint-connection approve \
-        --id "$conn" \
-        --description "Auto-approved by CSA Loom deploy (Front Door to ACA env)" \
-        >/dev/null
-      approved_any=1
-    done <<< "$PENDING"
-  fi
-
-  # Already approved at least one AND nothing left pending -> done.
-  STILL_PENDING=$(az network private-endpoint-connection list \
-    --id "$CAE_ID" \
-    --query "length([?properties.privateLinkServiceConnectionState.status=='Pending'])" \
-    -o tsv 2>/dev/null || echo 0)
-  if [ "$approved_any" = "1" ] && [ "${STILL_PENDING:-0}" = "0" ]; then
-    echo "All Front Door PE connections approved."
-    break
-  fi
-
-  if [ "$(date +%s)" -ge "$deadline" ]; then
-    if [ "$approved_any" = "1" ]; then
-      echo "Approved connection(s); some may still be settling. Continuing."
-      break
-    fi
-    echo "Timed out waiting for a pending Front Door PE connection to appear." >&2
-    echo "If this persists, approve manually: ACA env -> Networking -> Private endpoint connections." >&2
-    exit 1
-  fi
-  sleep 20
-done
-'''
-  }
-}
+// 2. ITS az COMMAND DID NOT WORK EITHER. It called
+//    `az network private-endpoint-connection list --id <caeId>`, which answers
+//    "Resource ID is invalid. Please check it." for
+//    Microsoft.App/managedEnvironments — verified live 2026-08-11. That read was
+//    wrapped in `2>/dev/null || true`, so the error became an empty list and the
+//    empty list became "nothing pending". The script could only ever time out.
+//
+// The deploy now runs scripts/csa-loom/approve-cae-private-endpoints.sh with the
+// deploy identity: no staging storage, the ARM child path with a probed
+// api-version, every failure classified, and idempotent — so a deleted or
+// re-raised connection is re-approved on the next deploy instead of erroring.
 
 // ── Optional vanity custom domain (e.g. csa-loom.contoso.ai) ──────────────────
 // When the admin supplies a vanity URL at deploy time, create a Front Door
@@ -420,3 +346,6 @@ output vanityValidationToken string = empty(vanityDomain) ? '' : fdCustomDomain.
 output frontDoorOriginGroupId string = fdOriginGroup.id
 output wafPolicyId string = wafPolicy.id
 output caeDefaultDomainEcho string = caeDefaultDomain
+
+@description('The Container Apps managed environment whose Front Door private-endpoint connection the deploy must approve (scripts/csa-loom/approve-cae-private-endpoints.sh --cae-id).')
+output caeIdForPeApproval string = caeId
