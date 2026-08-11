@@ -1,0 +1,13 @@
+{
+  "$comment": "Pre-existing %{http_code} captures that abort their own `set -e` script. OPERATOR-RUN tools under scripts/csa-loom/, not CI paths — the live and CI paths (apps/loom-unity, .github/scripts) were fixed outright. This baseline may only SHRINK; check-httpcode-probe-aborts.mjs fails if a file drops below its recorded count without the entry being updated, so a fix cannot silently make room for a new bug.",
+  "entries": {
+    "scripts/csa-loom/dataverse-add-appuser.sh": 1,
+    "scripts/csa-loom/enable-unity-catalog.sh": 2,
+    "scripts/csa-loom/grant-graph-approles.sh": 1,
+    "scripts/csa-loom/grant-identity-graph-approles.sh": 1,
+    "scripts/csa-loom/grant-powerplatform-sp.sh": 1,
+    "scripts/csa-loom/grant-shortcut-graph-approles.sh": 1,
+    "scripts/csa-loom/powerplatform-tenant-bootstrap.sh": 1,
+    "scripts/csa-loom/provision-scc-labels-sidecar.sh": 1
+  }
+}

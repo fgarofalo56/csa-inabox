@@ -699,6 +699,16 @@ jobs:
       - name: 'curl-httpcode-fallback (`|| echo` concatenates onto the code curl already printed)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-curl-httpcode-fallback.mjs
+      # The OTHER half, and they are not interchangeable. `|| true` fixes the
+      # exit STATUS and leaves stdout alone; `|| echo` appends to stdout and
+      # corrupts the value. A correct probe needs the first and must not have the
+      # second. Removing `|| echo` from loom-unity's probe (#3246) also removed
+      # what made curl's non-zero exit survive `set -eu`, so a wrong-but-present
+      # marker became NO marker: gov-uc-purview-wire run 31513755240 reported
+      # "No ANON-READ marker … authorization is UNVERIFIED".
+      - name: 'httpcode-probe-aborts (a probe that dies at the assignment never reaches its own branch)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-httpcode-probe-aborts.mjs
       # The probe itself is mutation-proved offline against stub az/curl: 403 DENIED
       # is NOT ready, a connect failure is exit 2 (not 1), and reinstating
       # `CODE="$(curl … || echo 000)"` — which concatenates to `000000` and makes

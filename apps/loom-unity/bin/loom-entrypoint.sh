@@ -632,7 +632,17 @@ self_probe_anonymous_read() {
     #   (401/403) nor a success (200) — the catalog is not in a state this
     #   deploy can vouch for.
     anon_code="$(curl -sS -o /dev/null -w '%{http_code}' -m 10 \
-      "${anon_base}/api/2.1/unity-catalog/catalogs" 2>/dev/null)"
+      "${anon_base}/api/2.1/unity-catalog/catalogs" 2>/dev/null)" || true
+    # `|| true` above guards the ASSIGNMENT's exit status, because this script
+    # runs under `set -eu` (line 29) and curl exits non-zero whenever the server
+    # is not up yet — the NORMAL case on the first attempts of a wait loop.
+    # Dropping it silently deleted the marker entirely: gov-uc-purview-wire run
+    # 31513755240 reported "No ANON-READ marker … whether authorization is
+    # enforced is UNVERIFIED", because the probe died at curl's exit 28 before it
+    # could echo.
+    #
+    # It is emphatically NOT `|| echo`, which appends to stdout and CONCATENATES
+    # onto the value curl already printed — the original defect (#3246).
     [ -n "${anon_code}" ] || anon_code="000"
     if [ "${anon_code}" != "000" ]; then
       break
@@ -711,7 +721,7 @@ bind_console_principal() {  bind_principal="$1"
     "${bind_base}/api/1.0/unity-control/scim2/Users" \
     -H "Authorization: Bearer ${bind_token}" \
     -H 'Content-Type: application/scim+json' \
-    -d "{\"schemas\":[\"urn:ietf:params:scim:schemas:core:2.0:User\"],\"userName\":\"${bind_principal}\",\"displayName\":\"CSA Loom Console\",\"emails\":[{\"value\":\"${bind_principal}\",\"primary\":true}],\"active\":true}")"
+    -d "{\"schemas\":[\"urn:ietf:params:scim:schemas:core:2.0:User\"],\"userName\":\"${bind_principal}\",\"displayName\":\"CSA Loom Console\",\"emails\":[{\"value\":\"${bind_principal}\",\"primary\":true}],\"active\":true}")" || true
 
   case "${bind_status}" in
     20*)
@@ -883,7 +893,7 @@ provision_warehouse() {
   # 1. Does it already exist? A GET is cheap and makes "created" mean created.
   pw_get="$(curl -sS -o /dev/null -w '%{http_code}' -m 15 \
     -H "Authorization: Bearer ${pw_token}" \
-    "${pw_api}/catalogs/${pw_name}")" || pw_get="000"
+    "${pw_api}/catalogs/${pw_name}")" || pw_get="000" || true
   [ -n "${pw_get}" ] || pw_get="000"
 
   case "${pw_get}" in
@@ -895,7 +905,7 @@ provision_warehouse() {
         "${pw_api}/catalogs" \
         -H "Authorization: Bearer ${pw_token}" \
         -H 'Content-Type: application/json' \
-        -d "{\"name\":\"${pw_name}\",\"comment\":\"CSA Loom warehouse — backs the Iceberg REST Catalog namespaces. Created automatically by the loom-unity entrypoint (auto-bind-by-default.md).\"}")" || pw_post="000"
+        -d "{\"name\":\"${pw_name}\",\"comment\":\"CSA Loom warehouse — backs the Iceberg REST Catalog namespaces. Created automatically by the loom-unity entrypoint (auto-bind-by-default.md).\"}")" || pw_post="000" || true
       [ -n "${pw_post}" ] || pw_post="000"
       case "${pw_post}" in
         20*)
@@ -933,7 +943,7 @@ provision_warehouse() {
     "${pw_api}/schemas" \
     -H "Authorization: Bearer ${pw_token}" \
     -H 'Content-Type: application/json' \
-    -d "{\"name\":\"${pw_ns}\",\"catalog_name\":\"${pw_name}\",\"comment\":\"Default CSA Loom namespace.\"}")" || pw_schema="000"
+    -d "{\"name\":\"${pw_ns}\",\"catalog_name\":\"${pw_name}\",\"comment\":\"Default CSA Loom namespace.\"}")" || pw_schema="000" || true
   [ -n "${pw_schema}" ] || pw_schema="000"
   case "${pw_schema}" in
     20*)
@@ -949,7 +959,7 @@ provision_warehouse() {
       # back before anything is claimed about it.
       pw_ns_get="$(curl -sS -o /dev/null -w '%{http_code}' -m 15 \
         -H "Authorization: Bearer ${pw_token}" \
-        "${pw_api}/schemas/${pw_name}.${pw_ns}")" || pw_ns_get="000"
+        "${pw_api}/schemas/${pw_name}.${pw_ns}")" || pw_ns_get="000" || true
       [ -n "${pw_ns_get}" ] || pw_ns_get="000"
       if [ "${pw_ns_get}" = "200" ]; then
         echo "[loom-unity] WAREHOUSE-BIND: namespace ${pw_name}.${pw_ns} already present (create=HTTP ${pw_schema}, read-back=HTTP 200) — nothing to do."
@@ -972,7 +982,7 @@ provision_warehouse() {
     "${pw_api}/permissions/catalog/${pw_name}" \
     -H "Authorization: Bearer ${pw_token}" \
     -H 'Content-Type: application/json' \
-    -d "{\"changes\":[{\"principal\":\"${pw_principal}\",\"add\":[\"USE CATALOG\",\"SELECT\",\"CREATE SCHEMA\",\"CREATE TABLE\"]}]}")" || pw_grant="000"
+    -d "{\"changes\":[{\"principal\":\"${pw_principal}\",\"add\":[\"USE CATALOG\",\"SELECT\",\"CREATE SCHEMA\",\"CREATE TABLE\"]}]}")" || pw_grant="000" || true
   [ -n "${pw_grant}" ] || pw_grant="000"
 
   case "${pw_grant}" in
