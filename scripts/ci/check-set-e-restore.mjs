@@ -99,7 +99,14 @@ for (const file of files) {
 
   lines.forEach((raw, i) => {
     if (heredocEnd !== null) {
-      if (new RegExp(`^\s*${heredocEnd}\s*$`).test(raw)) heredocEnd = null;
+      // NOTE the DOUBLED backslashes. In a TEMPLATE LITERAL `\s` is not a regex
+      // escape — JS resolves it to a bare `s` before RegExp ever sees it, so the
+      // first version of this line compiled to /^s*EOFs*$/ and could not match an
+      // INDENTED terminator. The skip window then never closed and every `set -e`
+      // after the first heredoc in that file was silently ignored — a guard that
+      // goes quiet, which is worse than no guard. CodeQL caught it
+      // (js/useless-regexp-character-escape, 2 high) before it shipped.
+      if (new RegExp(`^\\s*${heredocEnd}\\s*$`).test(raw)) heredocEnd = null;
       return;
     }
     const hd = /<<-?\s*(?:'([A-Za-z_][\w]*)'|"([A-Za-z_][\w]*)"|([A-Za-z_][\w]*))/.exec(raw);
