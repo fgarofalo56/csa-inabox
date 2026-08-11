@@ -25,6 +25,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.91.0...csa-inabox-v0.92.0) (2026-08-11)
+
+
+### Features
+
+* **harness:** agile sprint orchestration over the Loom backlog ([#3243](https://github.com/fgarofalo56/csa-inabox/issues/3243)) ([872e555](https://github.com/fgarofalo56/csa-inabox/commit/872e5551508ccb6f17a9d7927ad23c9be883684a))
+
+
+### Bug Fixes
+
+* **ci:** `|| echo` on a curl http_code CONCATENATES — 10 probes read a non-code ([#3246](https://github.com/fgarofalo56/csa-inabox/issues/3246)) ([153d5cc](https://github.com/fgarofalo56/csa-inabox/commit/153d5ccd85dcc0d02c4089c354a9afc77cff52c1))
+* **gov:** deploy loom-unity by DIGEST — a rebuilt tag never rolls the revision ([#3249](https://github.com/fgarofalo56/csa-inabox/issues/3249)) ([dd2c5b6](https://github.com/fgarofalo56/csa-inabox/commit/dd2c5b601468bd383715b7853d8b57c52b10151a))
+* **sharing:** the Delta Sharing image could NEVER build — a platform flag on FROM ([#3244](https://github.com/fgarofalo56/csa-inabox/issues/3244)) ([50ebe3a](https://github.com/fgarofalo56/csa-inabox/commit/50ebe3ade8010d52b8d3010eecb90e741311a345))
+
 ## [0.91.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.90.2...csa-inabox-v0.91.0) (2026-08-11)
 
 
