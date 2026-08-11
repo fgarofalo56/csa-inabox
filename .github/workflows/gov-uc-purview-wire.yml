@@ -10,15 +10,26 @@ name: gov-uc-purview-wire
 #      App into the Gov CAE, then sets LOOM_UC_BACKEND=oss + LOOM_UNITY_URL on
 #      the Gov console so uc-backend.ts routes to it.
 #
-#      OWNERSHIP: this workflow is the ONLY producer/owner of the live Gov
-#      `loom-unity` Container App today — admin-plane/main.bicep does NOT deploy
-#      it (loom-unity-app.bicep is still a standalone entrypoint, orphan-
-#      allowlisted in scripts/ci/check-bicep-sync.mjs). Making the orchestrator
-#      deploy + adopt it is a separate, follow-up change; it is deliberately not
-#      part of the svc-loom-unity-authz fix, because adoption would flip this
-#      LIVE federal app's authorization mode. This workflow publishes :v0.1 (the
-#      tag the Gov bicepparams pull) so that future adoption cannot repoint the
-#      app at a missing image. See docs/fiab/unity-gov.md § "Ownership".
+#      OWNERSHIP (corrected 2026-08-11, #3162): the ORCHESTRATOR owns the app.
+#      admin-plane/main.bicep invokes `module loomUnity '../compute/loom-unity-app.bicep'`
+#      gated on `loomUnityActive` (default-ON via the loomBackends bag) and
+#      `loomUnityPostgres` gated on `loomUnityPostgresActive`, and emits
+#      LOOM_UNITY_URL / _CLIENT_ID / _AUDIENCE / _AUTH_MODE onto the Console.
+#      The orphan-allowlist entries for both modules were REMOVED from
+#      scripts/ci/check-bicep-sync.mjs in finishline D2 (2026-08-06).
+#
+#      This header previously said the opposite — "this workflow is the ONLY
+#      producer/owner … admin-plane/main.bicep does NOT deploy it … still
+#      orphan-allowlisted". That was true when written and became false when
+#      #3013 landed. It is not a harmless staleness: it tells the next engineer
+#      that a LIVE federal app has a single owner outside the orchestrator, which
+#      is exactly the belief that stops someone from checking what the deploy
+#      would do to it.
+#
+#      What this workflow still legitimately does: publish the :v0.1 tag the Gov
+#      bicepparams pull, so an orchestrator deploy cannot repoint the app at a
+#      missing image, and wire LOOM_UC_BACKEND=oss + LOOM_UNITY_URL for the OSS
+#      Unity path. See docs/fiab/unity-gov.md § "Ownership".
 #
 #   2. Purview — a Purview account is ALREADY deployed in the Gov sub but the
 #      console never had LOOM_PURVIEW_ACCOUNT set, so every governance surface

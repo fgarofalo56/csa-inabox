@@ -205,6 +205,21 @@ catalog access attributable (and is what LU-3 hangs the audit rows on).
 > and change its authorization mode. `loom-unity-app.bicep` remains a standalone
 > entrypoint, orphan-allowlisted in `scripts/ci/check-bicep-sync.mjs`.
 
+**Superseded 2026-08-11 (#3162).** The paragraph directly above is no longer true
+and is kept only so the blockquote reads as the record it is. Since #3013,
+`admin-plane/main.bicep` invokes
+`module loomUnity '../compute/loom-unity-app.bicep'` gated on `loomUnityActive`
+(default-ON via the `loomBackends` bag) and `loomUnityPostgres` gated on
+`loomUnityPostgresActive`, and emits `LOOM_UNITY_URL` / `_CLIENT_ID` /
+`_AUDIENCE` / `_AUTH_MODE` onto the Console. The orphan-allowlist entries for
+BOTH modules were removed from `scripts/ci/check-bicep-sync.mjs` in finishline D2
+(2026-08-06); the comment left in their place says so.
+
+The orchestrator therefore OWNS the app. `gov-uc-purview-wire.yml` still publishes
+the `:v0.1` tag the Gov bicepparams pull — so an orchestrator deploy cannot repoint
+the app at a missing image — and still wires `LOOM_UC_BACKEND=oss` +
+`LOOM_UNITY_URL` for the OSS Unity path. What it is NOT is the sole owner.
+
 ### Status 2026-08-05 — the blockers above are cleared; the deploy path is now gated
 
 Everything the blockquote defers to "the same change as the token-exchange client"
