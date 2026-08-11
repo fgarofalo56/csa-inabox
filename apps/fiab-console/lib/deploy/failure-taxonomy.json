@@ -416,6 +416,16 @@
       "remediation": "Authenticate azd itself before `azd provision`, in this order: `azd config set cloud.name <AzureCloud|AzureUSGovernment>` then `azd auth login --client-id <id> --client-secret <secret> --tenant-id <tid>`. Setting the cloud AFTER logging in yields a token the target ARM endpoint will not accept. Retrying cannot help — this is a missing credential, not a transient fault."
     },
     {
+      "id": "config.waf-managed-ruleset-no-exclusions",
+      "class": "config",
+      "anyOf": [
+        "does not support exclusions"
+      ],
+      "observed": "Measured on deploy-fiab-commercial run 31468134448 (2026-08-11): the Front Door WAF policy PUT failed with 'WebApplicationFirewallPolicy validation failed. More information \"Managed rule set of \"Microsoft_BotManagerRuleSet\" type does not support exclusions\"'. The ARM leaf classified as UNKNOWN and the whole subscription deploy failed closed, even though the message names its own cause exactly. Deterministic: retrying cannot change it.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "Remove the `exclusions` array from the Microsoft_BotManagerRuleSet entry in platform/fiab/bicep/modules/admin-plane/front-door.bicep. Azure accepts the key on the DRS entry (Microsoft_DefaultRuleSet) but rejects the entire policy when it appears on a Bot Manager rule set — so the exclusion must be expressed on the DRS entry, or as a custom rule, not on Bot Manager."
+    },
+    {
       "id": "capacity.not-available",
       "class": "capacity",
       "anyOf": [
