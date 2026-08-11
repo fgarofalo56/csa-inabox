@@ -58,6 +58,24 @@ jobs:
           # still exists.
           version: v3.21.3
 
+      # `helm lint --strict` treats WARNINGs as errors, and an unvendored
+      # dependency is a WARNING:
+      #     [WARNING] …/csa-portal: chart directory is missing these dependencies: redis
+      # Chart.yaml declares `redis ~18` from the Bitnami repo and charts/ has
+      # never existed, so the chart has never been lintable in --strict mode.
+      # That finding was INVISIBLE until now because the helm-diff plugin error
+      # aborted the lint before it reached the chart.
+      #
+      # `dependency build` needs the repo registered. It is pinned to the
+      # declared repository, not to `helm repo add` of whatever is current.
+      - name: Vendor chart dependencies (helm dependency build)
+        run: |
+          set -euo pipefail
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm dependency build "${CHART_DIR}"
+          ls -la "${CHART_DIR}/charts"
+
       - name: helm lint --strict (schema-enforced)
         # CSA-0053: values.schema.json is checked by --strict. Any unknown
         # key in values.yaml or a CI --set will fail the build.
