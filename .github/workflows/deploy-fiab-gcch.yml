@@ -522,8 +522,23 @@ jobs:
           CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
           BOUNDARY: GCC-High
 
+      # NEVER ON THE SCHEDULE. This condition used to read
+      #   (github.event_name == 'schedule' || inputs.run_mode == 'full')
+      # so the DAILY 10:00 UTC cron tore the GCC-High estate down on every
+      # successful run: a scheduled event carries no inputs, so
+      # `!inputs.keep_resources` is `!''` = TRUE and nothing stopped it.
+      #
+      # The Commercial lane has always guarded `github.event_name != 'schedule'`
+      # for exactly this reason. The sovereign lanes inverted it.
+      #
+      # This is why re-enabling `deploy-fiab-gcch` was unsafe: the lane is
+      # `disabled_manually`, and the first thing turning it back on would have
+      # done is arm an unattended sovereign teardown. Twelve of GCC-High's 16
+      # blocked capabilities are merged fixes waiting on this lane to run, so
+      # "just re-enable it" was a genuinely tempting and genuinely destructive
+      # move. Fixed here FIRST, so enabling the lane is a safe act.
       - name: Teardown
-        if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full') && !inputs.keep_resources
+        if: success() && github.event_name != 'schedule' && inputs.run_mode == 'full' && !inputs.keep_resources
         run: bash .github/scripts/fiab-teardown.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
