@@ -521,10 +521,26 @@ jobs:
           set -e
           REF="${ACR_LOGIN_SERVER}/${{ matrix.name }}@${{ steps.sc.outputs.digest }}"
           echo "Signing $REF keylessly (GitHub Actions OIDC → Fulcio/Rekor) ..."
-          if ! cosign sign --yes "$REF"; then
-            echo "::error::cosign signing FAILED for $REF. The image is built but UNSIGNED — the roll gates will reject it. Re-run this workflow (transient Sigstore outage), or (emergency only) re-dispatch with skip_supply_chain=true AND use the roll workflow's skip valve."
-            exit 1
-          fi
+          # BOUNDED RETRY AT THE STEP LEVEL, and it must be at THIS level (R6).
+          #
+          # cosign has its own internal retry, and on run 31496454872 that
+          # internal retry is what turned a transient into a failure:
+          #
+          #   13:36:32  error fetching GitHub OIDC token (will retry):
+          #             … net/http: TLS handshake timeout
+          #   13:41:35  Error: … getting key from Fulcio: retrieving cert:
+          #             error obtaining token: expired_token
+          #
+          # It retried for five minutes against a token with a short lifetime, so
+          # the terminal error class MUTATED from a network timeout into
+          # `expired_token` — which reads like a credential problem and is not
+          # one. Re-invoking `cosign sign` fresh re-requests a NEW OIDC token
+          # from ACTIONS_ID_TOKEN_REQUEST_URL; cosign's internal retry cannot,
+          # because it is still holding the old one.
+          #
+          # Fails closed after 3 attempts: an image that cannot be signed stays
+          # unsigned and the roll gates reject it. The retry can fail.
+          bash scripts/ci/cosign-sign-retry.sh --ref "$REF"
           echo "::notice::Signed $REF (signature stored in ACR alongside the image; verified at roll time by loom-roll-and-validate / gov-console-roll / full-app-deploy-commercial)."
 
   # v3.41: toggle ACR publicNetworkAccess so `az acr build` can upload the

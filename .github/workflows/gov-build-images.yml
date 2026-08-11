@@ -438,7 +438,11 @@ jobs:
         run: |
           set -euo pipefail
           REF="${ACR_LOGIN}/${{ matrix.app }}@${{ steps.sc.outputs.digest }}"
-          cosign sign --yes "$REF"
+          # Via the shared retry — same helper as the Commercial producer
+          # (cloud-parity.md: one fix, every boundary). This site previously had
+          # no retry AND no message: `set -e` turned a Sigstore transient into a
+          # bare non-zero exit with nothing naming the cause.
+          bash scripts/ci/cosign-sign-retry.sh --ref "$REF"
           cosign verify \
             --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/gov-build-images\.yml@" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \

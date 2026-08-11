@@ -319,10 +319,9 @@ jobs:
           set -euo pipefail
           REF="$ACR_LOGIN/loom-console@${{ steps.sc.outputs.digest }}"
           echo "Signing $REF keylessly (GitHub Actions OIDC → Fulcio/Rekor) ..."
-          if ! cosign sign --yes "$REF"; then
-            echo "::error::cosign signing FAILED for $REF — refusing to roll an unsigned image. Re-run (transient Sigstore outage) or (emergency only) re-dispatch with skip_supply_chain=true."
-            exit 1
-          fi
+          # Via the shared retry — see scripts/ci/cosign-sign-retry.sh. Refusing
+          # to roll an unsigned image is still the outcome when it exhausts.
+          bash scripts/ci/cosign-sign-retry.sh --ref "$REF"
           echo "Verifying $REF before the roll ..."
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
           if ! cosign verify "$REF" \
