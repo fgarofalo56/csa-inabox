@@ -81,6 +81,7 @@
     "comment": "MIRRORS pnpm-workspace.yaml. Both are required: pnpm 9 (the Dockerfile + CI builder) reads ONLY this field and ignores pnpm-workspace.yaml; pnpm 10+ reads ONLY that file and warns this one is ignored. Declaring in one place alone makes the floors inert under the other major. scripts/ci/check-pnpm-overrides.mjs asserts the two stay identical.",
     "overrides": {
       "protobufjs": ">=8.6.0",
+      "nanoid": "^3.3.17",
       "postcss": ">=8.5.23",
       "uuid": ">=11.1.1",
       "@opentelemetry/core": ">=2.8.0",

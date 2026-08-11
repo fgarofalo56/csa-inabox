@@ -34,6 +34,16 @@ overrides:
   # the 7.x line patched in 7.6.5. The 8.x floor covers both, since nothing here
   # resolves protobufjs 7.
   protobufjs: '>=8.6.0'
+  # CVE-2026-67213 (HIGH): a custom generator can loop indefinitely when size is
+  # zero. Transitive only — nothing here depends on nanoid directly; it arrives
+  # under the 3.x line and the lockfile resolved 3.3.16. Patched in 3.3.17.
+  #
+  # CARET, NOT `>=`, and deliberately against this block's usual convention. A
+  # `>=3.3.17` floor resolved to nanoid **6.0.1** — nanoid 4+ is ESM-only, so a
+  # bare floor turns a CVE patch into a major-version migration for a package
+  # nothing here depends on directly. `^3.3.17` clears the vulnerable range
+  # (<3.3.17) and stays on the 3.x line.
+  nanoid: '^3.3.17'
   # <8.5.10 and <=8.5.11 advisories in this lockfile; portal/react-webapp has a
   # separate <=8.5.17 advisory handled in its own manifest.
   #
