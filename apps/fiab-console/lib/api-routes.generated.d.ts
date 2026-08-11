@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1673 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1674 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -18,6 +18,7 @@ export type StaticApiRoute =
   | '/api/a2a/delegate'
   | '/api/access-governance/backfill'
   | '/api/access-governance/group-sync'
+  | '/api/access-governance/repartition'
   | '/api/access-governance/report'
   | '/api/access-governance/reviews'
   | '/api/access-governance/reviews/sweep'

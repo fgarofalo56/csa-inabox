@@ -12,14 +12,38 @@
  *   - deny at any tier closes the request as Denied with the reason
  *   - an enforcement error at the final tier keeps the request open (502) —
  *     no false "completed" (no-vaporware)
+ *
+ * FIXTURE NOTE (read before changing TENANT / the fake container).
+ *
+ * This file used to be blind to the defect it looked like it covered. Two
+ * things did that, and both are fixed here:
+ *
+ *   1. `baseDoc()` set `tenantId: TENANT` where TENANT was ALSO the signed-in
+ *      approver's `oid` — a document shape the creating routes never produce.
+ *      It modelled the ROUTE'S ASSUMPTION rather than what the writers write.
+ *   2. the fake container's `item(_id, _pk)` IGNORED the partition key and
+ *      returned the one stored doc for any key, so even a correct fixture could
+ *      not have surfaced a partition-key mismatch.
+ *
+ * The fixture now uses the real partitioning: `tenantId` is the ENTRA TENANT
+ * and the requester is a DIFFERENT principal, reached via `requesterId` — which
+ * is what `catalog/request-access` and `access-packages/[id]/request` actually
+ * write. The container is the shared partition-honest fake. Cross-user approval
+ * itself is proved end-to-end in ./cross-user-approval.test.ts.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+vi.mock('@/lib/auth/session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/session')>();
+  return { ...actual, getSession: vi.fn() };
+});
 vi.mock('@/lib/azure/cosmos-client', () => ({
   accessRequestWorkflowContainer: vi.fn(),
   auditLogContainer: vi.fn(),
   notificationsContainer: vi.fn(),
+  accessAssignmentsContainer: vi.fn(),
+  approvalPoliciesContainer: vi.fn(),
+  featurePermissionsContainer: vi.fn(),
 }));
 vi.mock('@/lib/azure/rbac-client', () => ({ enforceAccessGrant: vi.fn() }));
 
@@ -27,10 +51,17 @@ import { POST } from '../[id]/decision/route';
 import { getSession } from '@/lib/auth/session';
 import {
   accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
+  accessAssignmentsContainer, approvalPoliciesContainer, featurePermissionsContainer,
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant } from '@/lib/azure/rbac-client';
+import { makePartitionedContainer, makeSinkContainer, type FakeContainer } from './partitioned-cosmos-fake';
 
-const TENANT = 'tenant-oid';
+/** The partition key: the Entra TENANT, as tenantScopeId() resolves it. */
+const TENANT = 'tenant-1-tid';
+/** The approver acting in these tests — NOT the requester. */
+const APPROVER_OID = 'approver-oid';
+/** The requester who filed the request — a different principal. */
+const REQUESTER_OID = 'requester-oid';
 
 function makeReq(body: any) {
   return { json: async () => body } as any;
@@ -39,18 +70,18 @@ function ctx(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
-// In-memory access-requests container backed by a single mutable doc.
+/**
+ * A partition-honest container seeded with one doc, laid out the way the real
+ * creating routes lay it out: partition key = tenant, requester = someone else.
+ */
 function fakeArContainer(doc: any) {
-  const audit: any[] = [];
-  const store = { doc };
-  const container = {
-    item: (_id: string, _pk: string) => ({
-      read: async () => ({ resource: store.doc }),
-      replace: async (next: any) => { store.doc = next; return { resource: next }; },
-    }),
-    items: { create: async (d: any) => ({ resource: d }) },
+  const container = makePartitionedContainer({ partitionKeyPath: '/tenantId', seed: [doc] });
+  return {
+    container,
+    get store() {
+      return { doc: container.__all()[0] };
+    },
   };
-  return { container, store, audit };
 }
 
 function baseDoc(overrides: Partial<any> = {}) {
@@ -65,7 +96,7 @@ function baseDoc(overrides: Partial<any> = {}) {
     scopeRef: 'gold',
     permission: 'read',
     justification: 'quarterly report',
-    requesterId: 'requester-oid',
+    requesterId: REQUESTER_OID,
     requesterUpn: 'req@contoso.com',
     requestedAt: '2026-06-01T00:00:00.000Z',
     tier: 'manager',
@@ -74,11 +105,30 @@ function baseDoc(overrides: Partial<any> = {}) {
   };
 }
 
+const ORIGINAL_ADMIN_OID = process.env.LOOM_TENANT_ADMIN_OID;
+
 beforeEach(() => {
   vi.resetAllMocks();
-  (getSession as any).mockReturnValue({ claims: { oid: TENANT, upn: 'approver@contoso.com' } });
-  (auditLogContainer as any).mockResolvedValue({ items: { create: vi.fn(async () => ({})) } });
-  (notificationsContainer as any).mockResolvedValue({ items: { create: vi.fn(async () => ({})) } });
+  (getSession as any).mockReturnValue({
+    claims: { oid: APPROVER_OID, tid: TENANT, upn: 'approver@contoso.com' },
+  });
+  (auditLogContainer as any).mockResolvedValue(makeSinkContainer());
+  (notificationsContainer as any).mockResolvedValue(makeSinkContainer());
+  (accessAssignmentsContainer as any).mockResolvedValue(makeSinkContainer());
+  (approvalPoliciesContainer as any).mockResolvedValue(
+    makePartitionedContainer({ partitionKeyPath: '/tenantId' }),
+  );
+  (featurePermissionsContainer as any).mockResolvedValue(
+    makePartitionedContainer({ partitionKeyPath: '/tenantId' }),
+  );
+  // The approver's authority. Without this the route (correctly) 403s — the
+  // approval-authority boundary has its own coverage in cross-user-approval.
+  process.env.LOOM_TENANT_ADMIN_OID = APPROVER_OID;
+});
+
+afterEach(() => {
+  if (ORIGINAL_ADMIN_OID === undefined) delete process.env.LOOM_TENANT_ADMIN_OID;
+  else process.env.LOOM_TENANT_ADMIN_OID = ORIGINAL_ADMIN_OID;
 });
 
 describe('POST /api/access-requests/[id]/decision', () => {

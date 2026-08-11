@@ -1129,7 +1129,12 @@ var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
 // only (an AKS boundary deploys this workload via the cluster GitOps path) and
 // only once the apps tier is on.
 var s3GatewayEnabled = true
-var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && !empty(loomStorageAccount)
+// `loomStorageGrantable`, not merely `!empty(loomStorageAccount)`: the gateway
+// module also creates a data-plane role assignment on the lake account, so it
+// can only stand up when that account is in THIS subscription. On a multi-sub
+// estate the dlz-attach pass deploys it beside the lake instead (see the
+// dlzAttachS3Gateway note above) — the console binding is unaffected either way.
+var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && loomStorageGrantable
 
 // ── N2b/N3 — loom-duckdb serving tier (default-ON) ────────────────────────────
 // The engine that runs DuckLake's `ATTACH 'ducklake:postgres:<dsn>'` and every
@@ -1474,6 +1479,13 @@ param loomArmScope string = ''
 
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
+
+@description('True when loomStorageAccount lives in THIS subscription, so RBAC grants against it can be created by this deployment. False for a multi-sub / dlz-attach estate whose lake is in another subscription: the console still BINDS to the account (LOOM_ADLS_ACCOUNT and every derived URL are plain strings) but the grant modules skip, because a subscription-scoped deployment cannot create a role assignment in another subscription. Splitting these two concerns is what lets a multi-sub estate be wired at all — before this flag, loomStorageAccount had to stay EMPTY on that topology purely to keep the grants from firing, which left LOOM_ADLS_ACCOUNT blank and hard-blocked svc-adls, medallion Silver/Gold, sample-data, RTI-export, CSV-imports and the S3 gateway. The old workaround was patch-navigator-env.sh AFTER the deploy, which the next deploy then reverted (auto-bind-by-default.md §5).')
+param loomStorageAccountSameSub bool = true
+
+// Grants may only be attempted when the account is BOTH configured and local.
+// Every consumer below uses this instead of `!empty(loomStorageAccount)`.
+var loomStorageGrantable = !empty(loomStorageAccount) && loomStorageAccountSameSub
 
 @description('ADLS Gen2 storage account name for ADX continuous-export (Delta / OneLake-style availability). Backs LOOM_RTI_EXPORT_ADLS and grants the ADX cluster MI Storage Blob Data Contributor. Defaults to loomStorageAccount when empty.')
 param loomRtiExportAdls string = ''
@@ -3282,8 +3294,10 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     // 'activator-viewer' grant in landing-zone/adx-db-inner.bicep).
     activatorPrincipalId: identity.outputs.uamiActivatorPrincipalId
     // Continuous-export: grant cluster MI Storage Blob Data Contributor on the DLZ ADLS account.
-    // Empty when loomStorageAccount is unset → grant is skipped → wizard shows honest gate.
-    adlsAccountName: loomStorageAccount
+    // Empty when loomStorageAccount is unset OR the account is in another
+    // subscription (a sub-scoped deployment cannot grant there) → grant is
+    // skipped → wizard shows the honest gate. The console still binds the name.
+    adlsAccountName: loomStorageGrantable ? loomStorageAccount : ''
     adlsAccountRg: loomDlzRg
     // EH data connections: grant cluster MI Azure Event Hubs Data Receiver on the DLZ EH namespace.
     // The namespace name follows the single-sub DLZ convention set in loomEventHubNamespace.
@@ -3322,7 +3336,7 @@ module aasServer 'aas-server.bicep' = if (aasEnabled && empty(existingAasServerN
 // system-assigned MI Storage Blob Data Contributor on the export account so
 // OneLake-style availability works Azure-native (no Fabric workspace). Deployed
 // at the storage account's RG (DLZ lake account is commonly in a different RG).
-module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingAdxClusterName) && !skipRoleGrants && !empty(!empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount)) {
+module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingAdxClusterName) && !skipRoleGrants && (!empty(loomRtiExportAdls) || loomStorageGrantable)) {
   name: 'adx-export-rbac'
   scope: resourceGroup(!empty(loomRtiExportAdlsRg) ? loomRtiExportAdlsRg : resourceGroup().name)
   params: {
@@ -3337,7 +3351,7 @@ module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingA
 // is applied/changed (lib/azure/label-protection.ts). Scoped to the DLZ RG (the
 // lake account usually lives outside the admin RG). Skipped (honest gate in the
 // editor) when loomStorageAccount is unset.
-module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount)) {
+module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && loomStorageGrantable) {
   name: 'label-rbac-grants'
   scope: resourceGroup(loomDlzRg)
   params: {
@@ -6190,7 +6204,17 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
       image: '${registry.outputs.acrLoginServer}/loom-unity:${appImageTags.?unity ?? 'v0.1'}'
       lakeStorageAccountName: loomStorageAccount
       assignLakeRole: false
-      minReplicas: 0
+      // 1, NOT 0. iceberg-catalog runs the loom-unity image on an EPHEMERAL H2
+      // store (LOOM_UNITY_DB_LOCAL=1 -> /tmp/loom-unity-db), so scaling to zero
+      // DESTROYS the catalog: the warehouse, its namespaces and every grant are
+      // re-seeded from the image on the next cold start. Measured live 2026-08-09
+      // -- the app logged 'seeding empty catalog DB dir' on every wake and re-ran
+      // WAREHOUSE-BIND, while its sibling loom-unity (same image, same DB mode)
+      // ran minReplicas 1 and kept its state. iceberg-catalog-aca.bicep already
+      // defaults this to 1 and documents 'never scale-to-zero' -- this call site
+      // was overriding its own module. The durable answer is still the Postgres
+      // store (data-plane/loom-unity-postgres.bicep); this only stops the amnesia.
+      minReplicas: 1
       cpu: '1.0'
       memory: '2Gi'
       entraClientId: effectiveMsalClientId

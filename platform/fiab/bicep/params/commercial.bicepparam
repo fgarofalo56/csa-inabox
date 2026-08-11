@@ -190,6 +190,38 @@ param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
 param apimEnabled = true
 param hubFirewallEnabled = true
 
+// Front Door: ON, and the ONLY capability flag this file was silently getting
+// wrong (measured 2026-08-10).
+//
+// main.bicep declares `param frontDoorEnabled bool = false`, and this file did
+// not set it — while commercial-full.bicepparam sets it `true` and the LIVE
+// Commercial estate has an Active Front Door profile serving a vanity endpoint.
+// So the estate was BUILT with Front Door and every routine deploy through
+// deploy-fiab-commercial.yml (which uses THIS file, not -full) then ran as if it
+// did not exist. It is an omission, not a decision: the flag appears nowhere in
+// this file, in docs/, or in .claude/, and default-ON/opt-out is a standing rule.
+//
+// What `fdOn` gates in admin-plane/main.bicep, all of which took the fallback:
+//   - SIX ACA jobs get `loomUrl: fdOn ? frontDoorPublicUrl : 'http://loom-console'`.
+//     That is not cosmetic. It is the root cause of the J3 synthetic-journey
+//     outage: e2e/_lib/uat.ts minted a `Secure` session cookie, a Secure cookie
+//     is never sent over http, so the UAT browser context was unauthenticated and
+//     every client call 401'd (fixed defensively in #3181 — this fixes the cause).
+//   - `effectiveMsalConsoleHosts` (line ~2553) drops the Front Door hostname from
+//     the console-hosts list the MSAL app registration is built from.
+//   - `vanityPublicUrl` / `vanityCnameTarget` / `vanityDnsTxtName` outputs go empty.
+//   - The Front Door resource is never reconciled by a routine deploy at all.
+//
+// Verified NOT a wider divergence: of the 16 bool flags commercial-full sets that
+// this file omits, 12 already default true in main.bicep, `deployAppsEnabled` is
+// passed explicitly by the workflow, `atlasOnAksEnabled` is false in both, and
+// `appGatewayEnabled` defaults false and is correct — there is genuinely no
+// Application Gateway in the estate. This one flag was the whole gap.
+//
+// The `What-If (FIAB vs live Commercial estate)` check on this PR is the receipt
+// for what turning it on actually changes against the running estate.
+param frontDoorEnabled = true
+
 // Multi-sub mode (empty for single-sub)
 param dlzSubscriptionIds = []
 param dlzDomainNames = []

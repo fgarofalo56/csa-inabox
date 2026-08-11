@@ -25,6 +25,54 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.90.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.89.1...csa-inabox-v0.90.0) (2026-08-10)
+
+
+### Features
+
+* **deploy:** the ONLY roll path for loom-unity / iceberg-catalog / loom-trino — three production apps had none (FINISHLINE D2-ROLL) ([#3163](https://github.com/fgarofalo56/csa-inabox/issues/3163)) ([5d17d2c](https://github.com/fgarofalo56/csa-inabox/commit/5d17d2c37d8c5043dc059758b6f19231c40b5a48))
+* **loom:** the mirroring wizard's Key Vault credential was collected and never used — now consumed (FINISHLINE C10) ([#3146](https://github.com/fgarofalo56/csa-inabox/issues/3146)) ([87fac1f](https://github.com/fgarofalo56/csa-inabox/commit/87fac1feecec3541af795da85aab5674fded4b0e))
+* **uat:** run the full functional suite on a schedule ([#3164](https://github.com/fgarofalo56/csa-inabox/issues/3164)) ([#3173](https://github.com/fgarofalo56/csa-inabox/issues/3173)) ([1eb1864](https://github.com/fgarofalo56/csa-inabox/commit/1eb18641ff54cea5f50cd71fa3a50d1a6c4a89fe))
+
+
+### Bug Fixes
+
+* **capture:** tutorial-capture reported SUCCESS on a run that failed 6 of 17 tests ([#3172](https://github.com/fgarofalo56/csa-inabox/issues/3172)) ([#3174](https://github.com/fgarofalo56/csa-inabox/issues/3174)) ([1987c0e](https://github.com/fgarofalo56/csa-inabox/commit/1987c0ed8465141c7f60ebd2bf5963af32c40cd3))
+* **ci:** regenerate the client route map — main is red on a merge-order skew ([#3157](https://github.com/fgarofalo56/csa-inabox/issues/3157)) ([cade689](https://github.com/fgarofalo56/csa-inabox/commit/cade689ad4884129bc0ad97bf8a696bca29a71cd))
+* **ci:** the raw-px fail-closed test mutated shared git state — drive it off a fixture tree ([#3156](https://github.com/fgarofalo56/csa-inabox/issues/3156)) ([adb8061](https://github.com/fgarofalo56/csa-inabox/commit/adb80616b5f87730e3ea21a351168fb8659c7baa))
+* **deploy:** admin access and the Iceberg catalog both reverted on every deploy ([#3109](https://github.com/fgarofalo56/csa-inabox/issues/3109), [#3110](https://github.com/fgarofalo56/csa-inabox/issues/3110)) ([#3180](https://github.com/fgarofalo56/csa-inabox/issues/3180)) ([6477eb5](https://github.com/fgarofalo56/csa-inabox/commit/6477eb550ebd0c64f87736ed76e09cb8e72cdf46))
+* **deploy:** the MSAL secret could never reach Key Vault, and the failure was a warning ([#3176](https://github.com/fgarofalo56/csa-inabox/issues/3176)) ([#3179](https://github.com/fgarofalo56/csa-inabox/issues/3179)) ([a1860be](https://github.com/fgarofalo56/csa-inabox/commit/a1860be5d86f109cb57c6a3758f611b90eb4842a))
+* **f16:** cross-user access-request approval was impossible — partition key, and the authorization the bug was hiding ([#3155](https://github.com/fgarofalo56/csa-inabox/issues/3155)) ([b52cee5](https://github.com/fgarofalo56/csa-inabox/commit/b52cee5bd2c44d4811eb0025cd9c2893cfbc9a1d))
+* **iceberg:** the warehouse is now auto-bound — and the live 403/500 were NOT the absent object (RC-12) ([#3150](https://github.com/fgarofalo56/csa-inabox/issues/3150)) ([a69be16](https://github.com/fgarofalo56/csa-inabox/commit/a69be16ff9e55b7b1b69667f5f091c38c3ba917a))
+* **monitoring:** the synthetic-journey alert never once fired — a SyntaxError killed it before line 1 ([#3181](https://github.com/fgarofalo56/csa-inabox/issues/3181)) ([6f3acbc](https://github.com/fgarofalo56/csa-inabox/commit/6f3acbcca4ecf65855070c692b2da600603e3abf))
+* **security:** CodeQL has been analysing NOTHING — init was bumped, autobuild/analyze were not ([#3183](https://github.com/fgarofalo56/csa-inabox/issues/3183)) ([4cacc5a](https://github.com/fgarofalo56/csa-inabox/commit/4cacc5a8d098188470128c9281905f8f7109276d))
+* **uat:** [#3165](https://github.com/fgarofalo56/csa-inabox/issues/3165) armed the roll gate on a suite that cannot pass in the budget ([#3168](https://github.com/fgarofalo56/csa-inabox/issues/3168)) ([6cb3714](https://github.com/fgarofalo56/csa-inabox/commit/6cb3714f08f073e3c91831029377e3e56396b8b3)), closes [#3164](https://github.com/fgarofalo56/csa-inabox/issues/3164)
+* **uat:** per-item verdicts died with the job container ([#3167](https://github.com/fgarofalo56/csa-inabox/issues/3167) 1a) ([#3177](https://github.com/fgarofalo56/csa-inabox/issues/3177)) ([33587df](https://github.com/fgarofalo56/csa-inabox/commit/33587dfccd28e91b20a457ca3c078d663563a961))
+* **uat:** roll gate ran 2 of 120 tests while claiming the full suite ([#3165](https://github.com/fgarofalo56/csa-inabox/issues/3165)) ([769c7d1](https://github.com/fgarofalo56/csa-inabox/commit/769c7d1dc9d21ea34ead9b42ead080a68b951563))
+
+
+### Documentation
+
+* **help:** the 33-item help backlog was ALREADY DONE — and the one real gap hid a broken approval chain (FINISHLINE C6) ([#3148](https://github.com/fgarofalo56/csa-inabox/issues/3148)) ([e1a81c2](https://github.com/fgarofalo56/csa-inabox/commit/e1a81c2bd9fcd62fa1f2bab06f44ecc04af6d4d6))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump @types/react-dom in /portal/react-webapp ([#3099](https://github.com/fgarofalo56/csa-inabox/issues/3099)) ([79e0fd1](https://github.com/fgarofalo56/csa-inabox/commit/79e0fd186b32f5c56431c2258764d15880c18845))
+* **deps-dev:** bump eslint-config-next in /portal/react-webapp ([#3096](https://github.com/fgarofalo56/csa-inabox/issues/3096)) ([017a8be](https://github.com/fgarofalo56/csa-inabox/commit/017a8be1c1e358e7ed33590da73977780b8e31ce))
+* **deps-dev:** update cryptography requirement ([#3100](https://github.com/fgarofalo56/csa-inabox/issues/3100)) ([3e954b1](https://github.com/fgarofalo56/csa-inabox/commit/3e954b1444811d110590e3f7fb899221487f15e2))
+* **deps:** bump @azure/msal-browser in /portal/react-webapp ([#3106](https://github.com/fgarofalo56/csa-inabox/issues/3106)) ([d134e5f](https://github.com/fgarofalo56/csa-inabox/commit/d134e5f70d59a5bfe88662137fa82cabce06e8b3))
+* **deps:** bump actions/deploy-pages from 4.0.5 to 5.0.0 ([#3105](https://github.com/fgarofalo56/csa-inabox/issues/3105)) ([4c42c3d](https://github.com/fgarofalo56/csa-inabox/commit/4c42c3db44bbaed05cee7794222faedbd4ab8c23))
+* **deps:** bump actions/setup-node from 4 to 7 ([#3104](https://github.com/fgarofalo56/csa-inabox/issues/3104)) ([69297eb](https://github.com/fgarofalo56/csa-inabox/commit/69297eba6ec6d6cdf5dae40b0bdf65d48dabacd7))
+* **deps:** bump actions/setup-python from 5.6.0 to 7.0.0 ([#3107](https://github.com/fgarofalo56/csa-inabox/issues/3107)) ([1119638](https://github.com/fgarofalo56/csa-inabox/commit/11196384a5d08946aae753d910c67f6f1b89a1cf))
+* **deps:** bump axios from 1.18.1 to 1.19.0 in /portal/react-webapp ([#3092](https://github.com/fgarofalo56/csa-inabox/issues/3092)) ([a33083d](https://github.com/fgarofalo56/csa-inabox/commit/a33083d15f477541736e1520197dc9f5c3e2a791))
+* **deps:** bump fastapi from 0.140.13 to 0.141.1 in /apps/loom-duckdb ([#3093](https://github.com/fgarofalo56/csa-inabox/issues/3093)) ([b146410](https://github.com/fgarofalo56/csa-inabox/commit/b146410f9a39f18cf619d7215c2d49d1752c2e7f))
+* **deps:** bump github/codeql-action/init from 4.35.3 to 4.37.6 ([#3103](https://github.com/fgarofalo56/csa-inabox/issues/3103)) ([ea335f4](https://github.com/fgarofalo56/csa-inabox/commit/ea335f4f1651fb23ba653b1bd74f82ce73349ad1))
+* **deps:** bump github/codeql-action/upload-sarif ([#3098](https://github.com/fgarofalo56/csa-inabox/issues/3098)) ([f296040](https://github.com/fgarofalo56/csa-inabox/commit/f296040da5cb0c5611d3ac01db0b4bfa2a79af11))
+* **deps:** bump nanoid from 3.3.16 to 3.3.18 in /portal/react-webapp ([#3112](https://github.com/fgarofalo56/csa-inabox/issues/3112)) ([e5a5c15](https://github.com/fgarofalo56/csa-inabox/commit/e5a5c15098373804713f4e402ef37ffcc28e7efc))
+* **deps:** bump next from 16.2.12 to 16.3.0 in /portal/react-webapp ([#3097](https://github.com/fgarofalo56/csa-inabox/issues/3097)) ([316784e](https://github.com/fgarofalo56/csa-inabox/commit/316784ecbb686c4cf47ab90899e1f36d2d546d2d))
+* **deps:** bump react-hook-form in /portal/react-webapp ([#3095](https://github.com/fgarofalo56/csa-inabox/issues/3095)) ([1701e14](https://github.com/fgarofalo56/csa-inabox/commit/1701e143161072a8808ed88ea6fe004c2b68ee94))
+
 ## [0.89.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.89.0...csa-inabox-v0.89.1) (2026-08-08)
 
 

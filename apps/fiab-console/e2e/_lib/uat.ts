@@ -42,11 +42,30 @@ export function mintSession(): string {
   return Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64url');
 }
 
-/** Install the minted session cookie before any navigation. */
+/**
+ * Install the minted session cookie before any navigation.
+ *
+ * `secure` MATCHES THE SCHEME OF `BASE` — it is not hard-coded true. A `Secure`
+ * cookie is never sent over `http://` (Chromium special-cases only localhost),
+ * so hard-coding it silently leaves the browser context UNAUTHENTICATED against
+ * an http BASE: every client API call 401s, and the only symptom is a pile of
+ * "Failed to load resource … 401" console errors that read like an app bug.
+ *
+ * That is not hypothetical. The in-VNet `loom-synthetic-monitor` job runs with
+ * `LOOM_URL=http://loom-console` — admin-plane/main.bicep hands the job
+ * `fdOn ? frontDoorPublicUrl : 'http://loom-console'`, and the job existing at
+ * all proves the other two conjuncts of `fdOn` are true, so it was deployed
+ * with frontDoorEnabled false. Measured on the live job 2026-08-09.
+ * J3 (open editor + primary action) failed on exactly those console 401s,
+ * including one on /api/telemetry/rum.
+ *
+ * API-context auth is unaffected: it passes the cookie as a header, which is
+ * why J2/J4 kept passing while only the browser-driven journey failed.
+ */
 export async function signIn(context: BrowserContext) {
   await context.addCookies([{
     name: 'loom_session', value: mintSession(),
-    domain: HOST, path: '/', secure: true, httpOnly: false, sameSite: 'Lax',
+    domain: HOST, path: '/', secure: BASE.startsWith('https:'), httpOnly: false, sameSite: 'Lax',
   }]);
 }
 

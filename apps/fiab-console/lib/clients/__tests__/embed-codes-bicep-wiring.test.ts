@@ -41,17 +41,54 @@ describe('embed-codes / org-visuals bicep wiring', () => {
   const cosmos = read(...BICEP, 'modules', 'landing-zone', 'cosmos.bicep');
   const rbac = read(...BICEP, 'modules', 'landing-zone', 'org-visuals-rbac.bicep');
 
-  it('top-level main.bicep gates loomStorageAccount on single-sub (no phantom account in multi-sub)', () => {
-    // The phantom-account regression: an UNCONDITIONAL derive from singleDlzRg.
+  it('top-level main.bicep never invents a storage account name (no phantom account in multi-sub)', () => {
+    // THE INVARIANT, unchanged since audit-T128: in multi-sub, `loomStorageAccount`
+    // must never be a name this template COMPUTED. A guessed `saloomdefault…`
+    // emitted LOOM_ORG_VISUALS_URL (so the pane skipped its honest gate) pointing
+    // at an account that does not exist, and SAS minting 500'd at runtime.
+    //
+    // WHAT CHANGED (2026-08-10): the account may now also come from an explicit
+    // `adopt` plan — a name DISCOVERED from the estate, not derived from
+    // singleDlzRg. That is the opposite of a phantom: it is the real lake, and
+    // binding to it is what unblocked svc-adls, medallion Silver/Gold,
+    // sample-data, RTI-export, CSV-imports and the S3 gateway on a multi-sub
+    // estate that owned every one of those resources already.
+    //
+    // So the invariant is asserted by its three legal outcomes rather than by one
+    // literal expression: adopted-real, single-sub-convention, or ''.
+
+    // (a) The original regression: an UNCONDITIONAL derive from singleDlzRg.
     expect(topMain).not.toMatch(
       /loomStorageAccount:\s*take\('saloomdefault\$\{uniqueString\(singleDlzRg\.id\)\}/,
     );
-    // The fixed form: the account name is gated on a single-sub-only condition,
-    // empty ('') in multi-sub. Accept either the resolved `useSingleDlz` var
-    // (current, post audit-t156) or the original `deploymentMode == 'single-sub'`
-    // literal — both are semantically single-sub-only.
+
+    // (b) Adopt-first: an explicitly adopted `storage-adls` name wins.
     expect(topMain).toMatch(
-      /loomStorageAccount:\s*(?:useSingleDlz|deploymentMode == 'single-sub')\s*\?\s*take\('saloomdefault\$\{uniqueString\(singleDlzRg\.id\)\}', 24\)\s*:\s*''/,
+      /loomStorageAccount:\s*!empty\(adoptName\(adopt, 'storage-adls'\)\)/,
+    );
+
+    // (c) The convention branch is STILL gated on single-sub and STILL falls back
+    //     to '' — this is the half that keeps multi-sub honest-gating when there
+    //     is nothing to adopt. Accept the resolved `useSingleDlz` var (current)
+    //     or the original `deploymentMode == 'single-sub'` literal.
+    expect(topMain).toMatch(
+      /\(\s*(?:useSingleDlz|deploymentMode == 'single-sub')\s*\?\s*take\('saloomdefault\$\{uniqueString\(singleDlzRg\.id\)\}', 24\)\s*:\s*''\s*\)/,
+    );
+  });
+
+  it('grants are gated on the lake being in THIS subscription, not merely configured', () => {
+    // A cross-subscription lake can be BOUND (the env vars are plain strings) but
+    // cannot be GRANTED — a subscription-scoped deployment cannot create a role
+    // assignment in another subscription. Before this split, one flag did both,
+    // so the only way to stop the grants firing was to leave the account name
+    // EMPTY, which is precisely why multi-sub estates could not bind their lake.
+    expect(topMain).toMatch(/loomStorageAccountSameSub:/);
+    // Same-sub is derived from the adopt entry's `sub`, and an adopted lake with
+    // no explicit sub is treated as local.
+    expect(topMain).toMatch(/adoptSub\(adopt, 'storage-adls'\)/);
+    // Every RBAC/workload consumer keys off the combined var, never `!empty()`.
+    expect(adminMain).toMatch(
+      /var loomStorageGrantable = !empty\(loomStorageAccount\) && loomStorageAccountSameSub/,
     );
   });
 

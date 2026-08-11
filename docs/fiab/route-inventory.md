@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1673 |
-| Public (no session) | 102 |
-| Session-only | 562 |
-| Owner-scoped | 712 |
-| Admin | 297 |
+| Total routes | 1674 |
+| Public (no session) | 104 |
+| Session-only | 561 |
+| Owner-scoped | 711 |
+| Admin | 298 |
 | Gated (backend config) | 493 |
 | Areas | 121 |
 
@@ -42,6 +42,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `access-governance/assignments/[id]/activate/route.ts` | POST | owner-scoped |  | Cosmos |
 | `access-governance/backfill/route.ts` | POST | admin |  | Cosmos |
 | `access-governance/group-sync/route.ts` | POST | admin | ● | Cosmos |
+| `access-governance/repartition/route.ts` | POST | admin |  | Cosmos |
 | `access-governance/report/route.ts` | GET | admin |  | Cosmos |
 | `access-governance/reviews/[id]/decision/route.ts` | POST | admin |  | Cosmos |
 | `access-governance/reviews/[id]/evidence/route.ts` | GET | admin |  | Cosmos |
@@ -64,9 +65,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `access-requests/[id]/decision/route.ts` | POST | admin |  | Cosmos |
-| `access-requests/bulk-decision/route.ts` | POST | session-only |  | — |
+| `access-requests/bulk-decision/route.ts` | POST | public |  | — |
 | `access-requests/public/route.ts` | POST | public |  | Cosmos |
-| `access-requests/route.ts` | GET | owner-scoped |  | Cosmos |
+| `access-requests/route.ts` | GET | public |  | Cosmos |
 
 ## activity
 

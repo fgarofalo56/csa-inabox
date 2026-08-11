@@ -109,12 +109,32 @@ describe('N1 Iceberg REST Catalog — deployed BY the orchestrator, not asked of
     expect(read(ADMIN_PLANE)).not.toMatch(/^param icebergCatalog/m);
   });
 
-  it('scales to zero, so DEFAULT-ON is also ~$0/mo at idle', () => {
+  it('does NOT scale to zero — zero replicas DESTROYS the ephemeral catalog', () => {
     const src = read(ADMIN_PLANE);
     const block = src.slice(src.indexOf("module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep'"));
     const body = block.slice(0, block.indexOf('\n}\n'));
-    // The module's own default is minReplicas 1; the orchestrator must override.
-    expect(body).toMatch(/minReplicas: 0/);
+
+    // THIS TEST USED TO ASSERT THE OPPOSITE — "scales to zero, so DEFAULT-ON is
+    // also ~$0/mo at idle". That was a cost optimisation that silently ate data.
+    //
+    // iceberg-catalog runs the loom-unity image on an EPHEMERAL H2 store
+    // (LOOM_UNITY_DB_LOCAL=1 -> /tmp/loom-unity-db), so scaling to zero destroys
+    // the warehouse, its namespaces and every grant. Measured live 2026-08-09:
+    // the app logged "seeding empty catalog DB dir" and re-ran WAREHOUSE-BIND on
+    // every wake, while the sibling loom-unity — same image, same DB mode, but
+    // minReplicas 1 — kept its state.
+    //
+    // iceberg-catalog-aca.bicep's own default is 1 and it documents why:
+    // "the catalog is on the metadata hot path (never scale-to-zero)". The
+    // orchestrator was overriding a correct default with a cheaper broken one.
+    //
+    // COST, stated rather than buried: that module also records
+    // "~$100-200/mo/cloud always-on". This is a STOPGAP. The real fix is the
+    // durable Postgres store (data-plane/loom-unity-postgres.bicep, #3110) —
+    // with `catalogDbUrl` set, scale-to-zero becomes safe again and the cost
+    // can come back off.
+    expect(body).not.toMatch(/minReplicas: 0/);
+    expect(body).toMatch(/minReplicas: 1/);
   });
 });
 

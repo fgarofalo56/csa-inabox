@@ -14,8 +14,9 @@
  *         scopeType?, scopeRef? }
  * Returns: { ok, message, requestId } | { ok:false, error }
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
+import { tenantScopeId } from '@/lib/auth/session';
 import {
   auditLogContainer, notificationsContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
@@ -35,9 +36,7 @@ const SCOPE_TYPES = new Set<AccessScopeType>(['adls-container', 'warehouse', 'kq
 //   request    — record the request + notify the owner; provisioning is manual
 const ACCESS_MODELS = new Set(['governed', 'self-serve', 'request']);
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req, { session: s }) => {
 
   const body = await req.json().catch(() => ({} as any));
   const assetId = String(body?.assetId || '').trim();
@@ -138,7 +137,14 @@ export async function POST(req: NextRequest) {
       const arContainer = await accessRequestWorkflowContainer();
       const requestDoc: AccessRequestDoc = {
         id: crypto.randomUUID(),
-        tenantId: s.claims.oid,
+        // PARTITION KEY (/tenantId) — the ENTRA TENANT, never the requester's
+        // oid. An approver is a DIFFERENT user than the requester, so an
+        // oid-keyed partition put every request in a partition no approver
+        // could read: the inbox returned zero rows and the decision route 404'd.
+        // tenantScopeId() exists precisely so state written by one user resolves
+        // for any grantee in the same tenant. The requester stays addressable
+        // via `requesterId` below, which is what "my requests" queries on.
+        tenantId: tenantScopeId(s),
         kind: 'access-request',
         assetId,
         assetName,
@@ -170,4 +176,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

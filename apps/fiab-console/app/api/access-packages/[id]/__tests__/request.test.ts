@@ -4,7 +4,14 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+// Partially mock: `getSession` is stubbed, but `tenantScopeId` must stay REAL —
+// the route uses it to stamp the workflow doc's partition key, and replacing
+// the whole module would leave it undefined (a 500 that says nothing about the
+// behaviour under test).
+vi.mock('@/lib/auth/session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/session')>();
+  return { ...actual, getSession: vi.fn() };
+});
 vi.mock('@/lib/azure/cosmos-client', () => ({
   accessPackagesContainer: vi.fn(),
   approvalPoliciesContainer: vi.fn(),
@@ -28,9 +35,11 @@ function queryCreate(resources: any[], sink: any[]) {
 }
 const ctx = { params: Promise.resolve({ id: 'A' }) };
 
+const TENANT = 'tenant-1-tid';
+
 beforeEach(() => {
   vi.resetAllMocks();
-  (getSession as any).mockReturnValue({ claims: { oid: 'consumer', upn: 'c@x' } });
+  (getSession as any).mockReturnValue({ claims: { oid: 'consumer', tid: TENANT, upn: 'c@x' } });
   (approvalPoliciesContainer as any).mockResolvedValue(queryOnly([])); // → default plan
 });
 
@@ -66,5 +75,38 @@ describe('POST /api/access-packages/[id]/request', () => {
     expect(sink[0].tier).toBe('manager');
     expect(sink[0].approvalPlan.stages).toEqual(['manager', 'privacy', 'approver', 'access-provider']);
     expect(sink.map((d) => d.scopeType).sort()).toEqual(['kql-database', 'workspace']);
+    // Partition key = the ENTRA TENANT, so an approver (a different user) can
+    // reach the request. It must NOT be the requester's oid — that put the doc
+    // in a partition the inbox could not read.
+    expect(sink.every((d) => d.tenantId === TENANT)).toBe(true);
+    expect(sink.every((d) => d.requesterId === 'consumer')).toBe(true);
+  });
+
+  it('an ON-BEHALF request is still partitioned by the tenant, not the beneficiary', async () => {
+    // A tenant admin opening a request for someone else used to stamp
+    // tenantId = the BENEFICIARY's oid, putting the doc in a partition neither
+    // the admin nor any approver could point-read.
+    const ORIGINAL = process.env.LOOM_TENANT_ADMIN_OID;
+    process.env.LOOM_TENANT_ADMIN_OID = 'admin-oid';
+    try {
+      (getSession as any).mockReturnValue({ claims: { oid: 'admin-oid', tid: TENANT, upn: 'admin@x' } });
+      const A = { id: 'A', name: 'Sales', enabled: true, requestable: true, sodConflictsWith: [], grants: [
+        { resourceType: 'workspace', resourceRef: 'ws-1', role: 'Viewer' },
+      ] };
+      (accessPackagesContainer as any).mockResolvedValue(queryOnly([A]));
+      const sink: any[] = [];
+      (accessRequestWorkflowContainer as any).mockResolvedValue(queryCreate([], sink));
+
+      const req = { json: async () => ({ onBehalfOf: { oid: 'beneficiary-oid', upn: 'ben@x' } }) };
+      const res = await POST(req as any, ctx);
+
+      expect(res.status).toBe(201);
+      expect(sink).toHaveLength(1);
+      expect(sink[0].tenantId).toBe(TENANT);              // NOT 'beneficiary-oid'
+      expect(sink[0].requesterId).toBe('beneficiary-oid'); // the beneficiary stays addressable
+    } finally {
+      if (ORIGINAL === undefined) delete process.env.LOOM_TENANT_ADMIN_OID;
+      else process.env.LOOM_TENANT_ADMIN_OID = ORIGINAL;
+    }
   });
 });

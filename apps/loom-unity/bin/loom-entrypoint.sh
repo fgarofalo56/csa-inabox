@@ -789,17 +789,33 @@ announce_warehouse_plan() {
 #   GET <irc>/v1/catalogs/<wh>/namespaces
 #     -> HTTP 500 {"error":{"message":"Authorization filter not initialized —
 #        ensure the request goes through UnityAccessDecorator.", ...}}
-# and, as the CONTROL, the identical call against the BARE upstream
-# unitycatalog/unitycatalog:v0.5.0 image with no Loom overlay:
-#     -> HTTP 200 {"namespaces":[["default"]],"next-page-token":null}
 #
-# So this is a regression imported by the v0.5.1 unitycatalog-server OVERLAY the
-# Dockerfile applies (to fix upstream #1603). v0.5.1 added @ResponseAuthorizeFilter
-# + AuthorizedService.applyResponseFilter, and IcebergRestCatalogService.listNamespaces
-# calls SchemaService.listSchemas IN-PROCESS — so it runs under the Iceberg route's
-# request context, which carries no RESULT_FILTER attribute, and applyResponseFilter
-# throws INTERNAL. Every OTHER Iceberg route is unaffected (namespace GET, table
-# list, table load and register all return 200 here).
+# ── CAUSE, CORRECTED 2026-08-10 ───────────────────────────────────────────────
+# This was previously announced as "a regression imported by the v0.5.1
+# unitycatalog-server overlay". THAT WAS WRONG, and the error message asserted a
+# cause nothing had established (deploy-integrity.md R7). The "control" behind it
+# changed TWO variables at once: it compared this image (overlay ON, authorization
+# ENABLED) against the bare upstream image (overlay OFF, authorization DISABLED),
+# then credited the difference to the overlay.
+#
+# Re-measured with ONE variable — this same image with the overlay stripped off
+# the classpath and authorization still ENABLED — the route answers the SAME 500.
+# And at byte level, AuthorizedService, SchemaService, IcebergRestCatalogService,
+# UnityAccessDecorator and ResultFilter are IDENTICAL in the released v0.5.0 and
+# v0.5.1 artifacts; the entire v0.5.0->v0.5.1 delta is PermissionService (one added
+# annotation, the #1603 fix), its synthetic sibling, AuthorizeExpressions and a
+# version string. The overlaid classes are not on this code path at all.
+#
+# The real cause is an UPSTREAM defect present in BOTH v0.5.0 and v0.5.1 that
+# fires whenever server.authorization is enabled: AuthorizedService.applyResponseFilter
+# runs only `if (isAuthorizationEnabled())`, and then requires the RESULT_FILTER
+# request attribute that UnityAccessDecorator installs for @ResponseAuthorizeFilter
+# routes. IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas
+# IN-PROCESS, under the Iceberg route's context, where that attribute was never set
+# — so it throws INTERNAL. With authorization DISABLED the whole body is skipped,
+# which is the only reason the bare image looked healthy. Every OTHER Iceberg route
+# is unaffected (namespace GET, table list, table load and register all return 200).
+# v0.5.1 is the newest release on Maven Central, so there is no version to bump to.
 #
 # The Console works around it by serving namespaces from the Unity schemas API on
 # this same server (lib/azure/iceberg-catalog-client.ts listNamespaces). An
@@ -807,7 +823,7 @@ announce_warehouse_plan() {
 # route.
 announce_iceberg_list_ns_defect() {
   [ -n "$(unity_warehouse)" ] || return 0
-  echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: GET <iceberg>/v1/catalogs/<warehouse>/namespaces answers HTTP 500 'Authorization filter not initialized' on this image, for EVERY principal including the metastore owner. Cause: the v0.5.1 unitycatalog-server overlay this image applies (Dockerfile, for upstream #1603) routes IcebergRestCatalogService.listNamespaces through AuthorizedService.applyResponseFilter, which has no ResultFilter under the Iceberg route's context. The bare v0.5.0 image answers 200 on the same call. Every other Iceberg route is unaffected. The Console serves namespaces from /api/2.1/unity-catalog/schemas instead; a DIRECT external-engine LIST-namespaces call still fails. See docs/fiab/parity/external-engine-federation.md." >&2
+  echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: GET <iceberg>/v1/catalogs/<warehouse>/namespaces answers HTTP 500 'Authorization filter not initialized' on this image, for EVERY principal including the metastore owner. Cause: an UPSTREAM defect in unitycatalog v0.5.0 AND v0.5.1 that fires whenever server.authorization is enabled — IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas in-process, under a request context where UnityAccessDecorator never installed the RESULT_FILTER attribute that AuthorizedService.applyResponseFilter requires. It is NOT caused by the #1603 overlay this image applies: measured with the overlay removed and authorization still enabled, the same call returns the same 500, and the overlaid classes are byte-identical in both releases. The same call with authorization DISABLED returns 200, which is the only reason the bare upstream image looked healthy. Every other Iceberg route is unaffected. The Console serves namespaces from /api/2.1/unity-catalog/schemas instead; a DIRECT external-engine LIST-namespaces call still fails. See docs/fiab/parity/external-engine-federation.md." >&2
 }
 
 # Block until the server has written its admin token AND is answering, then echo

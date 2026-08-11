@@ -57,9 +57,9 @@ on:
         type: boolean
         default: false
       front_door_enabled:
-        description: 'Deploy Azure Front Door (public entry + custom/vanity domain) in front of the console. Requires deploy_apps_enabled + containerApps. Off by default.'
+        description: 'Deploy Azure Front Door (public entry + custom/vanity domain) in front of the console. Default TRUE — the Commercial estate HAS an Active Front Door profile, and this input is passed to ARM unconditionally, so a false default silently overrode params/commercial.bicepparam and disabled Front Door on every dispatch (measured: run 31409031982 composed frontDoorEnabled=false with flag-source=inputs). Set false only for an estate that genuinely has no Front Door.'
         type: boolean
-        default: false
+        default: true
       # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
       topology:
         description: 'Explicit topology (audit-t156). Overrides deployment_mode. tenant = first-run hub install (DMLZ console + shared only). dlz-attach = add ONE DLZ to an existing hub (no Console is stamped). single-sub = dev/demo all-in-one. Empty = derive from deployment_mode. A second Console can never be stamped — the guard rejects topology=tenant when a hub already exists in the target sub.'
@@ -612,6 +612,73 @@ jobs:
       # The file lives in $RUNNER_TEMP, is never uploaded, and is printed with
       # its values redacted — adminEntraGroupId is a secret and GitHub's log
       # masking is not something a deploy path should be leaning on.
+      # ── ADOPT the Data Landing Zone before composing arguments ─────────────
+      #
+      # Must run BEFORE the compose step: commercial.bicepparam reads
+      # LOOM_ADOPT_JSON via readEnvironmentVariable at BICEP-COMPILE time, so the
+      # value has to be in the environment before `az deployment … ` expands the
+      # param file. Setting it afterwards is a no-op.
+      #
+      # WHY THIS EXISTS. main.bicep derived the lake account from the single-sub
+      # convention alone, so on a multi-sub / dlz-attach estate it passed '' and
+      # LOOM_ADLS_ACCOUNT rendered EMPTY. Measured on Commercial 2026-08-10: the
+      # lake, Databricks, Event Hubs, Synapse and the Weave Postgres were ALL
+      # deployed in the DLZ subscription while /admin/readiness reported 25
+      # blocked capabilities. The documented workaround (patch-navigator-env.sh,
+      # post-deploy) was both a user-performed plumbing step and self-reverting,
+      # because the next deploy re-renders the container app env array.
+      #
+      # Discovery is best-effort BY DESIGN: no DLZ, an absent RG, or an estate
+      # that simply has none of these services all yield `{}`, `adoptMode()`
+      # defaults every key to 'create', and a greenfield deploy behaves exactly
+      # as it did before this step existed. It never creates and never grants.
+      - name: Adopt the DLZ (discover what the estate already owns)
+        id: dlz_adopt
+        env:
+          # This workflow deliberately exposes no dlz_subscription / dlz_domain
+          # inputs — it targets ONE estate identified by `region`, and the DLZ is
+          # whatever that estate actually has. So the resolver runs in pure
+          # DISCOVERY mode here; the bootstrap workflow keeps its explicit inputs
+          # for the cases where an operator must name a DLZ by hand.
+          ADMIN_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          REGION: ${{ inputs.region }}
+        run: |
+          set -euo pipefail
+          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""
+          RESOLVED="$RUNNER_TEMP/dlz-coords.env"; : > "$RESOLVED"
+          # resolve-dlz-coordinates.mjs DISCOVERS rather than assuming the
+          # `…-single-<region>` convention, which is exactly the shape this
+          # estate is not. It fails closed on an ambiguous estate; a clean
+          # "no DLZ" is not a failure and leaves the file empty.
+          node scripts/csa-loom/resolve-dlz-coordinates.mjs \
+            --region "$REGION" \
+            --admin-subscription "$ADMIN_SUB" \
+            ${INPUT_DLZ_SUBSCRIPTION:+--dlz-subscription "$INPUT_DLZ_SUBSCRIPTION"} \
+            ${INPUT_DLZ_DOMAIN:+--dlz-domain "$INPUT_DLZ_DOMAIN"} \
+            --github-env "$RESOLVED" || echo "[dlz-adopt] resolver found no unambiguous DLZ — continuing without adoption"
+          DLZ_SUB="$(grep '^DLZ_SUB=' "$RESOLVED" | tail -1 | cut -d= -f2- || true)"
+          DLZ_RG="$(grep  '^DLZ_RG='  "$RESOLVED" | tail -1 | cut -d= -f2- || true)"
+          [ -n "${DLZ_SUB:-}" ] && echo "::add-mask::$DLZ_SUB"
+
+          PLAN='{}'
+          if [ -n "${DLZ_SUB:-}" ] && [ -n "${DLZ_RG:-}" ]; then
+            PLAN="$(bash scripts/csa-loom/discover-dlz-adopt-plan.sh \
+                      --dlz-subscription "$DLZ_SUB" --dlz-rg "$DLZ_RG")"
+          fi
+
+          # An EXPLICIT plan always wins over a discovered one — the operator (or
+          # the Setup Wizard) said what to adopt, and discovery must not override
+          # a deliberate decision. Discovery only fills keys nobody chose.
+          if [ -n "${LOOM_ADOPT_JSON:-}" ] && [ "${LOOM_ADOPT_JSON}" != "{}" ]; then
+            PLAN="$(PLAN="$PLAN" EXPLICIT="$LOOM_ADOPT_JSON" python -c 'import json,os; d=json.loads(os.environ["PLAN"]); d.update(json.loads(os.environ["EXPLICIT"])); print(json.dumps(d,separators=(",",":")))')"
+            echo "::notice::[dlz-adopt] merged discovery UNDER the explicitly supplied LOOM_ADOPT_JSON (explicit wins)."
+          fi
+
+          echo "LOOM_ADOPT_JSON=$PLAN" >> "$GITHUB_ENV"
+          KEYS="$(PLAN="$PLAN" python -c 'import json,os; print(",".join(sorted(json.loads(os.environ["PLAN"]))) or "(none)")')"
+          echo "::notice::[dlz-adopt] adopting: $KEYS"
+          echo "adopted=$KEYS" >> "$GITHUB_OUTPUT"
+
       - name: Compose deployment arguments (ONE source for what-if and apply)
         id: params
         env:
@@ -626,6 +693,7 @@ jobs:
           # csa-loom-ci-31210378858.
           ADMIN_ENTRA_GROUP_ID: ${{ secrets.FIAB_ADMIN_GROUP_ID || vars.FIAB_ADMIN_GROUP_ID }}
           INPUT_TENANT_ADMIN_OID: ${{ inputs.tenant_admin_oid }}
+          VAR_TENANT_ADMIN_OID: ${{ vars.FIAB_TENANT_ADMIN_OID }}
           INPUT_TENANT_ADMIN_GROUP_ID: ${{ inputs.tenant_admin_group_id }}
           DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
           PURVIEW_ENABLED: ${{ steps.topology_guard.outputs.purview_enabled }}
@@ -690,8 +758,20 @@ jobs:
           # a silently different one (the two must never disagree).
           TENANT_ADMIN_GROUP="${INPUT_TENANT_ADMIN_GROUP_ID:-$ADMIN_ENTRA_GROUP_ID}"
           add --parameters "loomTenantAdminGroupId=$TENANT_ADMIN_GROUP"
-          if [ -n "${INPUT_TENANT_ADMIN_OID:-}" ]; then
-            add --parameters "loomTenantAdminOid=$INPUT_TENANT_ADMIN_OID"
+          # The OID binding falls back to the FIAB_TENANT_ADMIN_OID repo variable
+          # when no dispatch input is given (#3109). Without that fallback the
+          # param renders empty on every routine deploy, and admin-plane/main.bicep
+          # then computes
+          #   effectiveTenantAdminOid = !empty(loomTenantAdminOid) ? ... :
+          #                             (hasRealAdminGroup ? '' : deployer().objectId)
+          # which BLANKS the binding precisely because an admin GROUP is configured.
+          # That assumes the group path works — and it does not: the auth callback
+          # never populates session.claims.groups (#3175), so isTenantAdmin() can
+          # only ever match the OID. Group configured + OID blank = nobody has
+          # admin, which is exactly what the live Commercial estate shipped.
+          TENANT_ADMIN_OID="${INPUT_TENANT_ADMIN_OID:-$VAR_TENANT_ADMIN_OID}"
+          if [ -n "${TENANT_ADMIN_OID:-}" ]; then
+            add --parameters "loomTenantAdminOid=$TENANT_ADMIN_OID"
           fi
           # Fail CLOSED. A console rendered with no bootstrap-admin binding has
           # an admin gate that no one can pass — /admin/*, the onboarding queue,
@@ -705,7 +785,16 @@ jobs:
             echo "::error::No bootstrap tenant-admin binding could be resolved, and this run renders the Container Apps (deployAppsEnabled=true). loom-console would come up with LOOM_TENANT_ADMIN_GROUP_ID and LOOM_TENANT_ADMIN_OID both empty, which shuts /admin/* for EVERY user with no in-product remedy. Set the FIAB_ADMIN_GROUP_ID repo variable (or secret) to your Loom admin security-group object id — 'az ad group show --group \"Loom Admins\" --query id -o tsv' — or dispatch this workflow with tenant_admin_group_id / tenant_admin_oid. Refusing."
             exit 1
           fi
-          echo "::notice::Bootstrap admin binding: group=$([ -n "$TENANT_ADMIN_GROUP" ] && echo present || echo absent), oid=$([ -n "${INPUT_TENANT_ADMIN_OID:-}" ] && echo present || echo absent). Values redacted."
+          # R7 — this line must report what was ACTUALLY composed. It used to
+          # test INPUT_TENANT_ADMIN_OID (the dispatch input), which #3180 stopped
+          # being the whole story: the OID now falls back to the
+          # FIAB_TENANT_ADMIN_OID repo variable. Measured on run 31409194897 —
+          # the notice printed "oid=absent" on a run whose very next line added
+          # `loomTenantAdminOid=<the repo variable>`. A status line that
+          # contradicts the parameter it is describing is worse than none,
+          # because this is the line an operator reads to decide whether admin
+          # access will survive the deploy.
+          echo "::notice::Bootstrap admin binding: group=$([ -n "$TENANT_ADMIN_GROUP" ] && echo present || echo absent), oid=$([ -n "${TENANT_ADMIN_OID:-}" ] && echo "present (source=$([ -n "${INPUT_TENANT_ADMIN_OID:-}" ] && echo dispatch-input || echo FIAB_TENANT_ADMIN_OID-repo-var))" || echo absent). Values redacted."
           # Keep the paramfile's OWN readEnvironmentVariable in agreement with
           # the explicit override above, so `az bicep build-params` on this
           # checkout (and the documented by-hand `-p params/commercial.bicepparam`

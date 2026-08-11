@@ -79,7 +79,20 @@ export const SCHEDULE_FLAG_DEFAULTS = Object.freeze({
   hubFirewallEnabled: 'true',
   deployAppsEnabled: 'false',
   skipRoleGrants: 'false',
-  frontDoorEnabled: 'false',
+  // TRUE, matching the workflow_dispatch default. The Commercial estate has an
+  // ACTIVE Front Door profile, and because this value reaches ARM as a CLI
+  // `--parameters frontDoorEnabled=…` it OVERRIDES whatever
+  // commercial.bicepparam says (see the note above) — so a 'false' here did not
+  // merely fail to enable Front Door, it actively disabled it on every
+  // SCHEDULED reconcile, which is the run that executes daily.
+  //
+  // What that cost: `fdOn` gates six ACA jobs' loomUrl
+  // (fdOn ? frontDoorPublicUrl : 'http://loom-console'), the Front Door hostname
+  // in effectiveMsalConsoleHosts, and the vanity* outputs. The http fallback is
+  // what broke the J3 synthetic journey for three days — a `Secure` session
+  // cookie is never sent over http, so the UAT browser context was
+  // unauthenticated and every client call 401'd (#3181, #3193).
+  frontDoorEnabled: 'true',
 });
 
 /**

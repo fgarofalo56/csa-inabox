@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13680777448369137085"
+      "templateHash": "16931539241311737143"
     }
   },
   "definitions": {
@@ -2334,7 +2334,8 @@
           "loomVanityDomain": {
             "value": "[parameters('loomVanityDomain')]"
           },
-          "loomStorageAccount": "[if(variables('useSingleDlz'), createObject('value', take(format('saloomdefault{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24)), createObject('value', ''))]",
+          "loomStorageAccount": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls'))), createObject('value', __bicep.adoptName(parameters('adopt'), 'storage-adls')), if(variables('useSingleDlz'), createObject('value', take(format('saloomdefault{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24)), createObject('value', '')))]",
+          "loomStorageAccountSameSub": "[if(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls')), createObject('value', true()), createObject('value', or(empty(__bicep.adoptSub(parameters('adopt'), 'storage-adls')), equals(__bicep.adoptSub(parameters('adopt'), 'storage-adls'), subscription().subscriptionId))))]",
           "loomEventHubNamespace": "[if(and(variables('useSingleDlz'), parameters('loomEventHubEnabled')), createObject('value', format('evhns-loom-default-{0}', parameters('location'))), createObject('value', ''))]",
           "loomDlzRg": "[if(variables('useSingleDlz'), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', variables('adminPlaneRgName')))]",
           "loomAsaRg": "[if(not(empty(variables('existingAsaJob'))), createObject('value', variables('existingAsaRg')), if(and(variables('useSingleDlz'), parameters('loomStreamAnalyticsEnabled')), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', '')))]",
@@ -2528,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18016421778574184282"
+              "templateHash": "7282709641706067456"
             }
           },
           "definitions": {
@@ -4130,6 +4131,13 @@
                 "description": "Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message."
               }
             },
+            "loomStorageAccountSameSub": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "True when loomStorageAccount lives in THIS subscription, so RBAC grants against it can be created by this deployment. False for a multi-sub / dlz-attach estate whose lake is in another subscription: the console still BINDS to the account (LOOM_ADLS_ACCOUNT and every derived URL are plain strings) but the grant modules skip, because a subscription-scoped deployment cannot create a role assignment in another subscription. Splitting these two concerns is what lets a multi-sub estate be wired at all — before this flag, loomStorageAccount had to stay EMPTY on that topology purely to keep the grants from firing, which left LOOM_ADLS_ACCOUNT blank and hard-blocked svc-adls, medallion Silver/Gold, sample-data, RTI-export, CSV-imports and the S3 gateway. The old workaround was patch-navigator-env.sh AFTER the deploy, which the next deploy then reverted (auto-bind-by-default.md §5)."
+              }
+            },
             "loomRtiExportAdls": {
               "type": "string",
               "defaultValue": "",
@@ -5006,7 +5014,7 @@
             "ducklakePgPassword": "[format('Dl7{0}!Qz', uniqueString(parameters('loomGeneratedSecretSeed'), 'loom-ducklake-pg-v1'))]",
             "ducklakeCatalogUrlSecretName": "loom-ducklake-catalog-url",
             "s3GatewayEnabled": true,
-            "s3GatewayActive": "[and(and(and(variables('s3GatewayEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), not(empty(parameters('loomStorageAccount'))))]",
+            "s3GatewayActive": "[and(and(and(variables('s3GatewayEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), variables('loomStorageGrantable'))]",
             "duckdbTierEnabled": true,
             "duckdbTierActive": "[and(and(variables('duckdbTierEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "loomUnityEnabled": "[not(equals(coalesce(tryGet(parameters('loomBackends'), 'unity'), 'enabled'), 'disabled'))]",
@@ -5024,6 +5032,7 @@
             "loomBatchAccount": "[coalesce(tryGet(parameters('byoExisting'), 'batchAccount'), '')]",
             "loomBatchRg": "[if(not(empty(coalesce(tryGet(parameters('byoExisting'), 'batchRg'), ''))), parameters('byoExisting').batchRg, parameters('loomDlzRg'))]",
             "loomConsoleBaseUrl": "",
+            "loomStorageGrantable": "[and(not(empty(parameters('loomStorageAccount'))), parameters('loomStorageAccountSameSub'))]",
             "byoAiSearchRg": "[if(not(empty(parameters('existingAiSearchRg'))), parameters('existingAiSearchRg'), resourceGroup().name)]",
             "byoApimRg": "[if(not(empty(parameters('existingApimRg'))), parameters('existingApimRg'), resourceGroup().name)]",
             "byoAdxRg": "[if(not(empty(parameters('existingAdxClusterRg'))), parameters('existingAdxClusterRg'), resourceGroup().name)]",
@@ -13229,9 +13238,7 @@
                   "activatorPrincipalId": {
                     "value": "[reference('identity').outputs.uamiActivatorPrincipalId.value]"
                   },
-                  "adlsAccountName": {
-                    "value": "[parameters('loomStorageAccount')]"
-                  },
+                  "adlsAccountName": "[if(variables('loomStorageGrantable'), createObject('value', parameters('loomStorageAccount')), createObject('value', ''))]",
                   "adlsAccountRg": {
                     "value": "[parameters('loomDlzRg')]"
                   },
@@ -13914,7 +13921,7 @@
               ]
             },
             "adxExportRbac": {
-              "condition": "[and(and(and(parameters('adxEnabled'), empty(parameters('existingAdxClusterName'))), not(parameters('skipRoleGrants'))), not(empty(if(not(empty(parameters('loomRtiExportAdls'))), parameters('loomRtiExportAdls'), parameters('loomStorageAccount')))))]",
+              "condition": "[and(and(and(parameters('adxEnabled'), empty(parameters('existingAdxClusterName'))), not(parameters('skipRoleGrants'))), or(not(empty(parameters('loomRtiExportAdls'))), variables('loomStorageGrantable')))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "adx-export-rbac",
@@ -13979,7 +13986,7 @@
               ]
             },
             "labelRbacGrants": {
-              "condition": "[and(not(parameters('skipRoleGrants')), not(empty(parameters('loomStorageAccount'))))]",
+              "condition": "[and(not(parameters('skipRoleGrants')), variables('loomStorageGrantable'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "label-rbac-grants",
@@ -19472,7 +19479,7 @@
                       "image": "[format('{0}/loom-unity:{1}', reference('registry').outputs.acrLoginServer.value, coalesce(tryGet(parameters('appImageTags'), 'unity'), 'v0.1'))]",
                       "lakeStorageAccountName": "[parameters('loomStorageAccount')]",
                       "assignLakeRole": false,
-                      "minReplicas": 0,
+                      "minReplicas": 1,
                       "cpu": "1.0",
                       "memory": "2Gi",
                       "entraClientId": "[if(not(empty(parameters('loomMsalClientId'))), parameters('loomMsalClientId'), if(variables('msalAppRegProvisioned'), reference('entraAppReg').outputs.appId.value, ''))]",

@@ -11,7 +11,6 @@
     "copilot-quality-evals.yml": 2,
     "csa-loom-attempt-interactive-grants.yml": 1,
     "csa-loom-post-deploy-bootstrap.yml": 32,
-    "csa-loom-tutorial-capture.yml": 1,
     "deploy-dbt.yml": 3,
     "deploy-fiab-commercial.yml": 3,
     "deploy-fiab-gcc.yml": 11,

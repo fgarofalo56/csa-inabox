@@ -201,13 +201,60 @@ test('synthetic J3 — open editor + primary action (lakehouse tables → ADLS)'
         await page.waitForTimeout(4_000); // let the editor chunk hydrate
       });
       const fiveHundreds = networkErrors.filter((n) => n.status >= 500);
-      if (consoleErrors.length > 0 || fiveHundreds.length > 0) {
+
+      // A 401 on a BACKGROUND session-maintenance beacon is a reauth-GATE, not
+      // an editor-mount failure — this file's own gateFor() already says so:
+      //   401 -> `reauth-gate 401 (minted session, no MSAL cache)`
+      // The suite drives the console with a MINTED session (signIn() writes the
+      // cookie directly), which by construction has no MSAL refresh token and no
+      // token cache. /api/auth/refresh therefore answers 401 every time, and the
+      // BROWSER logs "Failed to load resource: …401" for it unconditionally —
+      // no client code can suppress that, so it lands in consoleErrors and,
+      // before this change, hard-failed the journey.
+      //
+      // Measured 2026-08-10 on the live estate after the Secure-cookie fix:
+      //   consoleErrors(1): 401 @ http://loom-console/api/auth/refresh
+      //   networkErrors(0), 5xx=[]
+      // i.e. the editor mounted perfectly and the ONLY complaint was the gate
+      // the suite already knows to expect. That is a false P1.
+      //
+      // DELIBERATELY NARROW. Only these two background beacons, only on 401,
+      // and only when nothing else went wrong: any other console error, any
+      // 5xx, or a 401 anywhere else still FAILS. A blanket "ignore 401s" would
+      // hide exactly the sign-in outage J1 exists to catch (#2191, AADSTS7000215).
+      const REAUTH_BEACONS = ['/api/auth/refresh', '/api/telemetry/rum'];
+      const isReauthGate = (e: string) =>
+        /\b401\b/.test(e) && REAUTH_BEACONS.some((p) => e.includes(p));
+      const gatedErrors = consoleErrors.filter(isReauthGate);
+      const realErrors = consoleErrors.filter((e) => !isReauthGate(e));
+
+      if (realErrors.length > 0 || fiveHundreds.length > 0) {
+        // Print the FULL lists before truncating them into the verdict note.
+        // The note is capped (it becomes a one-line UAT_FAIL record), and on
+        // 2026-08-09 that cap was the whole problem: J3 had been red since
+        // 08-07 and the only surviving evidence was
+        // "console=[…401 @ /api/telemetry/rum | Failed to load" — cut off
+        // mid-way through the SECOND error, so the actual cause could not be
+        // read from the monitor's own output. Truncating evidence you have
+        // already collected is a self-inflicted unknown.
+        // eslint-disable-next-line no-console
+        console.log(
+          `[J3] editor mount failed. consoleErrors(${consoleErrors.length}, ${realErrors.length} real / ${gatedErrors.length} reauth-gated):\n` +
+            consoleErrors.map((e, i) => `  [${i}]${isReauthGate(e) ? ' (gated)' : ''} ${e}`).join('\n') +
+            `\n[J3] networkErrors(${networkErrors.length}):\n` +
+            networkErrors.map((n, i) => `  [${i}] ${n.status} ${n.url}`).join('\n'),
+        );
         return {
           outcome: 'fail',
-          note: `editor mount errors — console=[${consoleErrors.slice(0, 2).join(' | ').slice(0, 150)}] 5xx=[${fiveHundreds.map((n) => `${n.status} ${n.url}`).slice(0, 2).join(' | ').slice(0, 150)}]`,
+          note: `editor mount errors — console=[${realErrors.slice(0, 2).join(' | ').slice(0, 150)}] 5xx=[${fiveHundreds.map((n) => `${n.status} ${n.url}`).slice(0, 2).join(' | ').slice(0, 150)}]`,
         };
       }
-      mountNote = 'editor mounted clean';
+      // Mounted clean. Gated beacons are still REPORTED — suppressed from the
+      // verdict is not the same as hidden, and a reauth-gate count that starts
+      // climbing is a signal worth having in the record.
+      mountNote = gatedErrors.length
+        ? `editor mounted clean (${gatedErrors.length} reauth-gated beacon 401${gatedErrors.length > 1 ? 's' : ''}: ${gatedErrors.map((e) => REAUTH_BEACONS.find((p) => e.includes(p)) ?? '?').join(', ')})`
+        : 'editor mounted clean';
     } finally {
       await ctx.close().catch(() => {});
     }

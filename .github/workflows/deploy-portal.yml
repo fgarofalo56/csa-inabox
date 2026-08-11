@@ -65,7 +65,7 @@ jobs:
         # context. The legacy portal/shared/Dockerfile has been removed —
         # it drifted (different UID/healthcheck/module path) from the
         # Helm/compose-consumed image.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         id: build
         with:
           context: .
@@ -102,7 +102,7 @@ jobs:
       - name: Build and push frontend
         # CSA-0039: Repo-root context — the Dockerfile references paths
         # relative to the repo root (portal/react-webapp/...).
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: portal/kubernetes/docker/frontend/Dockerfile

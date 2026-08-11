@@ -22,9 +22,32 @@
  * Every decision writes an audit-log entry (itemId = requestId). No Fabric
  * dependency: the grant is a real Azure ARM Storage / Synapse SQL / ADX
  * data-plane assignment via lib/azure/rbac-client.
+ *
+ * PARTITION KEY — read this before changing the point read.
+ *
+ * `access-request-workflow` is partitioned by `/tenantId`, which carries
+ * `tenantScopeId(session)` = `claims.tid || claims.oid` (the Entra TENANT), NOT
+ * the caller's `oid`. This route actions a document a DIFFERENT user wrote, so
+ * a point read keyed on the approver's `oid` misses the requester's partition
+ * and 404s before any approver logic runs — which is exactly what it did until
+ * this adoption.
+ *
+ * AUTHORIZATION — the oid-keyed partition used to confine every caller to their
+ * own rows. That accident, not a check, was what stopped one user actioning
+ * another's request; it also meant the only person who COULD action a request
+ * was its requester (self-approval). Both are now explicit:
+ *   1. approval authority   — tenant admin / capability / named approver,
+ *      enforced STRUCTURALLY by the `withApprovalAuthority` wrapper so there is
+ *      no returned-value gate to drop;
+ *   2. separation of duties — a requester never actions their own request
+ *      (needs the loaded doc, so it runs right after the point read);
+ *   3. `actorMayApprove`    — per-stage named-approver enforcement (unchanged).
+ *
+ * Route-toolkit: withApprovalAuthority (R3).
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withApprovalAuthority } from '@/lib/api/route-toolkit';
 import {
   accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
 } from '@/lib/azure/cosmos-client';
@@ -37,6 +60,7 @@ import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 import { recordAssignment } from '@/lib/access/assignment-ledger';
 import { effectiveStages, nextStage, actorMayApprove } from '@/lib/access/approval-policy';
+import { checkSelfApproval } from '@/lib/access/approval-authority';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { computeExpiry } from '@/lib/access/expiry';
 
@@ -45,11 +69,8 @@ export const dynamic = 'force-dynamic';
 
 const SCOPE_TYPES = new Set<AccessScopeType>(['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection']);
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { id } = await ctx.params;
+export const POST = withApprovalAuthority<{ id: string }>(async (req, { session: s, params }) => {
+  const { id } = params;
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
 
   const body = await req.json().catch(() => ({} as any));
@@ -62,7 +83,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ ok: false, error: 'a reason is required to deny a request' }, { status: 400 });
   }
 
-  const tenantId = s.claims.oid;
+  const tenantId = tenantScopeId(s);
   const now = new Date().toISOString();
 
   try {
@@ -84,6 +105,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
 
+    // ── Separation of duties. Absolute — it holds even for a tenant admin, so
+    // it is checked here rather than folded into the wrapper's authority test.
+    // It needs the loaded document (the requester's identity), which is why it
+    // cannot live in `withApprovalAuthority`. Before the partition fix, a
+    // self-approval was the ONLY decision that could ever succeed, because the
+    // oid-keyed point read could only find the caller's own documents.
+    const sod = checkSelfApproval(s, doc);
+    if (!sod.allowed) {
+      return NextResponse.json(
+        { ok: false, error: sod.reason, code: 'self_approval_forbidden', remediation: sod.remediation },
+        { status: 403 },
+      );
+    }
+
     const currentTier = doc.tier;
     // W2 — configurable approver enforcement. No-op for legacy requests and for
     // policies that don't enforce named approvers; tenant admins always pass.
@@ -93,7 +128,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     const step: ApprovalStep = {
       decision,
-      by: s.claims.upn || tenantId,
+      by: s.claims.upn || s.claims.oid,
       byOid: s.claims.oid,
       at: now,
       ...(reason ? { reason } : {}),
@@ -132,7 +167,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             principalId: doc.requesterId,
             principalUpn: doc.requesterUpn,
             principalType: 'User',
-            tenantId: s.claims.oid,
+            tenantId,
             resourceType: doc.scopeType,
             resourceRef: doc.scopeRef,
             resourceName: doc.assetName,
@@ -178,7 +213,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             principalId: doc.requesterId,
             principalUpn: doc.requesterUpn,
             principalType: 'User',
-            tenantId: s.claims.oid,
+            tenantId,
             resourceType: doc.scopeType,
             resourceRef: doc.scopeRef,
             resourceName: doc.assetName,
@@ -229,12 +264,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       itemType: 'access-request',
       action: `${verb}-by-${currentTier}`,
       summary:
-        `${s.claims.upn || tenantId} ${verb} access to "${doc.assetName}" at the ` +
+        `${s.claims.upn || s.claims.oid} ${verb} access to "${doc.assetName}" at the ` +
         `${TIER_LABEL[currentTier]} tier${reason ? ` — "${reason}"` : ''}` +
         (doc.status === 'completed' && doc.enforcement?.roleAssignmentId
           ? ` · granted ${doc.enforcement.roleName} (${doc.enforcement.roleAssignmentId})`
           : ''),
-      upn: s.claims.upn || tenantId,
+      upn: s.claims.upn || s.claims.oid,
       at: now,
     });
 
@@ -245,4 +280,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

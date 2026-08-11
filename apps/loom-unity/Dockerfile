@@ -25,14 +25,11 @@
 #     io.unitycatalog:unitycatalog-server:0.5.1  (upstream's own released binary).
 #   That is the same "packaging, not a fork" seam this image already uses for the
 #   Postgres JDBC driver, so stage 2 OVERLAYS it instead of forking or rebuilding
-#   from source. The published jar is THIN — only `io.unitycatalog.*` classes plus
-#   the `jcasbin_auth_model.conf` authorization-model resource, no shaded third-
-#   party packages — and it BUNDLES the server + control model classes. Prepended
-#   to the server classpath (ahead of the v0.5.0 `server/target/classes`), its
-#   classes WIN the first-match scan, so the whole UC server module — the fixed
-#   PermissionService + UnityAccessDecorator + JCasbinAuthorizer, the bundled
-#   models, and the auth-model resource — runs at v0.5.1 as a self-consistent set,
-#   while every THIRD-PARTY dependency stays exactly as the pinned base ships it.
+#   from source. NARROWED 2026-08-10: the overlay is no longer the whole 419-class
+#   artifact but the THREE classes that actually differ between v0.5.0 and v0.5.1
+#   and carry the #1603 fix (PermissionService, PermissionService$1,
+#   AuthorizeExpressions) — taken verbatim from upstream's released jar, digest-
+#   pinned per class. Full measurement and rationale in the stage-1 header.
 #   The v0.5.0 and v0.5.1 server POMs are byte-identical except their own version
 #   strings (ZERO third-party dependency changes — verified 2026-08-04), so the
 #   v0.5.1 classes link cleanly against the base image's v0.5.0 dependency jars.
@@ -58,6 +55,20 @@
 #   403 even with an exact `server.audiences` match. Clients must exchange it at
 #   POST /api/1.0/unity-control/auth/tokens first. Bumping to v0.5.1 does NOT
 #   change this — it is the upstream design, not a bug.
+#
+#   WHAT THE OVERLAY DOES *NOT* CAUSE (corrected 2026-08-10). The Iceberg
+#   LIST-namespaces 500 ("Authorization filter not initialized") was previously
+#   attributed to this overlay. That attribution was WRONG, and it was wrong
+#   because the "control" changed two variables at once (bare image AND
+#   authorization disabled). Re-measured with ONE variable — the same Loom image
+#   with the overlay stripped off the classpath, authorization still ENABLED —
+#   the route still answers 500, byte-for-byte the same error. The three overlaid
+#   classes are not on that code path at all, and `AuthorizedService`,
+#   `SchemaService`, `IcebergRestCatalogService`, `UnityAccessDecorator` and
+#   `ResultFilter` are BYTE-IDENTICAL in v0.5.0 and v0.5.1. It is an upstream
+#   defect present in BOTH releases that fires whenever `server.authorization` is
+#   enabled — see tests/authz/iceberg-e2e.sh (which now runs that single-variable
+#   control) and docs/fiab/parity/external-engine-federation.md.
 #
 # Build: docker build -t loom-unity .
 # Run (local dev, ephemeral H2 file DB). NOTE: since svc-loom-unity-authz,
@@ -107,24 +118,73 @@ RUN curl -fsSL -o /build/postgresql.jar \
       "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PG_JDBC_VERSION}/postgresql-${PG_JDBC_VERSION}.jar" \
  && echo "${PG_JDBC_SHA256}  /build/postgresql.jar" | sha256sum -c -
 
-# ── #1603 overlay — upstream v0.5.1 unitycatalog-server (permission-GET fix) ────
+# ── #1603 overlay — NARROWED to the three classes that actually differ ─────────
 # The permission GET routes 500 under server.authorization=enable on v0.5.0
 # (issue #1603). Docker Hub never published the v0.5.1 IMAGE, but Maven Central
 # publishes the v0.5.1 SERVER MODULE — io.unitycatalog:unitycatalog-server:0.5.1,
-# upstream's own released binary. Stage 2 PREPENDS this thin jar to the server
+# upstream's own released binary. Stage 2 PREPENDS the overlay to the server
 # classpath so its (fixed) classes shadow the v0.5.0 base copies; see the header
 # rationale for why this is packaging, not a fork.
 #
+# ── WHY A 3-CLASS JAR AND NOT THE WHOLE 419-CLASS ARTIFACT ────────────────────
+# MEASURED 2026-08-10, by extracting both released jars and hashing every entry
+# (temp/uc051, reproduced in the PR body). The v0.5.0 -> v0.5.1 delta is FIVE
+# entries, and only THREE of them matter:
+#
+#   io/unitycatalog/server/service/PermissionService.class     <- the #1603 fix
+#   io/unitycatalog/server/service/PermissionService$1.class   <- its synthetic sibling
+#   io/unitycatalog/server/auth/AuthorizeExpressions.class     <- adds the constant it uses
+#   io/unitycatalog/server/utils/VersionUtils.class            <- version STRING only, excluded
+#   META-INF/MANIFEST.MF                                       <- version strings only
+#
+# The whole #1603 fix is ONE ADDED ANNOTATION —
+#   @AuthorizeExpression("#principal != null")   (AuthorizeExpressions.GET_RESOURCE_AUTHORIZATION)
+# on the permission GET handler. Every other one of the 419 entries is
+# BYTE-IDENTICAL between v0.5.0 and v0.5.1, so prepending the full jar shadowed
+# 416 classes with exact copies of themselves — no behaviour change, but a large
+# and invisible blast radius:
+#
+#   * it made the overlay UNFALSIFIABLE by inspection — "the overlay broke X" could
+#     not be checked against a short list, and one such claim (the Iceberg
+#     LIST-namespaces 500) was in fact WRONG; see tests/authz/iceberg-e2e.sh, which
+#     now carries a real single-variable control, and the parity doc; and
+#   * it is a live hazard the day the BASE TAG moves: a full-jar overlay would
+#     silently revert an entire newer server module to v0.5.1 classes. The
+#     narrowed overlay reverts three, and the stage-2 digest assertions below FAIL
+#     THE BUILD if the base's copies are no longer the v0.5.0 ones this was
+#     derived against.
+#
+# VersionUtils is deliberately EXCLUDED: it carries only the string "0.5.1", and
+# this image is v0.5.0 plus a three-class patch, not v0.5.1. Letting the server
+# report 0.5.0 keeps /version honest; the overlay is recorded in the LABELs.
+#
 # Pin the artifact AND its SHA-256. The digest below was verified by downloading
 # the jar from Maven Central on 2026-08-04 and hashing it locally — it matched
-# both the value hashed locally and the published `.jar.sha256` sidecar. A
-# tampered or truncated download fails the build instead of shipping the bug back.
+# both the value hashed locally and the published `.jar.sha256` sidecar (and was
+# re-verified 2026-08-10). A tampered or truncated download fails the build
+# instead of shipping the bug back. Each EXTRACTED class is then pinned too, so a
+# re-released artifact cannot quietly change what we overlay.
 ARG UC_SERVER_VERSION=0.5.1
 ARG UC_SERVER_SHA256=df8647d5a0e2b72c623fff5c2cf6f08a739a33e34aea960dfbd862495ef3b027
-RUN mkdir -p /build/override \
- && curl -fsSL -o /build/override/unitycatalog-server.jar \
-      "https://repo1.maven.org/maven2/io/unitycatalog/unitycatalog-server/${UC_SERVER_VERSION}/unitycatalog-server-${UC_SERVER_VERSION}.jar" \
- && echo "${UC_SERVER_SHA256}  /build/override/unitycatalog-server.jar" | sha256sum -c -
+ARG UC_PERMISSIONSERVICE_SHA256=9238d2e8baedf8816b32f28611996a7baf7d77398b6f1aabe5669549f9f8f226
+ARG UC_PERMISSIONSERVICE1_SHA256=ab7e8a408f4db5664950550c563109f7d5936e204553b2841d2ed7df9ea291c7
+ARG UC_AUTHORIZEEXPRESSIONS_SHA256=7cb0e68dbd8a17374ab2dda81f212c95bd49ce4f744cb9d1af0df51cf6f6df66
+RUN set -eu; \
+    mkdir -p /build/override /build/ucfull /build/ucnarrow; \
+    curl -fsSL -o /build/unitycatalog-server-full.jar \
+      "https://repo1.maven.org/maven2/io/unitycatalog/unitycatalog-server/${UC_SERVER_VERSION}/unitycatalog-server-${UC_SERVER_VERSION}.jar"; \
+    echo "${UC_SERVER_SHA256}  /build/unitycatalog-server-full.jar" | sha256sum -c -; \
+    cd /build/ucfull; \
+    jar --extract --file /build/unitycatalog-server-full.jar \
+      io/unitycatalog/server/service/PermissionService.class \
+      'io/unitycatalog/server/service/PermissionService$1.class' \
+      io/unitycatalog/server/auth/AuthorizeExpressions.class; \
+    echo "${UC_PERMISSIONSERVICE_SHA256}  io/unitycatalog/server/service/PermissionService.class" | sha256sum -c -; \
+    echo "${UC_PERMISSIONSERVICE1_SHA256}  io/unitycatalog/server/service/PermissionService\$1.class" | sha256sum -c -; \
+    echo "${UC_AUTHORIZEEXPRESSIONS_SHA256}  io/unitycatalog/server/auth/AuthorizeExpressions.class" | sha256sum -c -; \
+    jar --create --file /build/override/loom-uc-1603-fix.jar -C /build/ucfull .; \
+    ENTRIES="$(jar --list --file /build/override/loom-uc-1603-fix.jar | grep -c '\.class$')"; \
+    [ "${ENTRIES}" -eq 3 ] || { echo "FATAL: narrowed overlay carries ${ENTRIES} classes, expected exactly 3" >&2; exit 1; }
 
 COPY java/ /build/src/
 RUN mkdir -p /build/classes /build/lib \
@@ -215,19 +275,29 @@ RUN cp -a /home/unitycatalog/etc/db /home/unitycatalog/etc/db.seed 2>/dev/null |
 # trailing newline is stripped — a newline inside the -cp argument would
 # word-split the java command and break the boot.
 #
-#   PREPEND  lib-loom-override/unitycatalog-server.jar (upstream v0.5.1) — placed
-#            BEFORE the v0.5.0 server/target/classes so the #1603-fixed classes
-#            (PermissionService, UnityAccessDecorator, …) win the first-match
-#            scan. This is the whole point of the overlay. The v0.5.0 classes stay
-#            on the path as a fallback for anything the jar does not carry — the
-#            jar only ADDS/SHADOWS, never removes, so there is no not-found risk.
+#   PREPEND  lib-loom-override/loom-uc-1603-fix.jar (THREE classes taken verbatim
+#            from upstream's released v0.5.1 artifact) — placed BEFORE the v0.5.0
+#            server/target/classes so the #1603-fixed PermissionService wins the
+#            first-match scan. This is the whole point of the overlay. Every other
+#            v0.5.0 class keeps resolving from the base image, which is what we
+#            want: they are byte-identical in v0.5.1 anyway (measured — see the
+#            stage-1 header), so shadowing them bought nothing and hid a lot.
 #   APPEND   lib-loom/* (Postgres driver + Entra auth plugin) — purely additive,
 #            unique classes, so their position does not matter.
 #
 # The build FAILS LOUDLY if the classpath file is missing, the Postgres/Entra
-# rewrite does not take, or the v0.5.1 override is not FIRST on the path — a
-# shadowed override would silently ship the v0.5.0 500-on-permission-GET bug while
-# claiming to fix it, which is exactly the failure this assertion exists to catch.
+# rewrite does not take, or the override is not FIRST on the path — a shadowed
+# override would silently ship the v0.5.0 500-on-permission-GET bug while claiming
+# to fix it, which is exactly the failure this assertion exists to catch.
+#
+# ── BASE-DRIFT ASSERTION (new with the narrowing) ─────────────────────────────
+# A narrow overlay is only correct while the base image's copies of those three
+# classes are the v0.5.0 ones it was derived against. If the base tag is ever
+# bumped, silently reverting three classes of a NEWER server to v0.5.1 would be a
+# real regression — and, unlike the full-jar overlay, it would be a subtle one.
+# So the build hashes the base's own copies and REFUSES TO BUILD if they have
+# moved: the next person gets a loud, specific failure telling them to re-derive
+# the overlay against the new base, not a silent behaviour change.
 #
 # ── WHY *EVERY* CLASSPATH FILE, AND WHY THE ASSERTION NAMES THE EXACT FILE ─────
 # (finishline D2, root-caused LIVE on Commercial 2026-08-06.) The upstream image
@@ -258,7 +328,22 @@ RUN set -eu; \
     fi; \
     OVERRIDE="$(find /home/unitycatalog/lib-loom-override -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
     EXTRA="$(find /home/unitycatalog/lib-loom -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
-    if [ -z "${OVERRIDE}" ]; then echo "FATAL: v0.5.1 unitycatalog-server override jar not found in lib-loom-override" >&2; exit 1; fi; \
+    if [ -z "${OVERRIDE}" ]; then echo "FATAL: the #1603 override jar was not found in lib-loom-override" >&2; exit 1; fi; \
+    BASE_CLASSES=/home/unitycatalog/server/target/classes; \
+    for PAIR in \
+      "f7ffa437ab66d3eb49675fb7c7bbfd37a2eb1b4b73b7081ece49573ee81c9176:io/unitycatalog/server/service/PermissionService.class" \
+      "2f3c74023a051b1ab9b43b58ea2631d2bbff4d7a9f37eec167233e1b7519799b:io/unitycatalog/server/service/PermissionService\$1.class" \
+      "f9ad9832f79c2949e71bac534c79eb1aa78cb7d114f53409b7467e63698a0a91:io/unitycatalog/server/auth/AuthorizeExpressions.class" \
+    ; do \
+      WANT="${PAIR%%:*}"; REL="${PAIR#*:}"; \
+      if [ ! -f "${BASE_CLASSES}/${REL}" ]; then \
+        echo "FATAL: ${REL} is absent from the base image's server classes — the narrowed #1603 overlay was derived against unitycatalog/unitycatalog:v0.5.0 and cannot be reasoned about on this base. Re-derive it (see the stage-1 header) before bumping the base tag." >&2; exit 1; \
+      fi; \
+      GOT="$(sha256sum "${BASE_CLASSES}/${REL}" | cut -d' ' -f1)"; \
+      if [ "${GOT}" != "${WANT}" ]; then \
+        echo "FATAL: base-image drift. ${REL} hashes ${GOT}, expected the v0.5.0 value ${WANT}. The base tag has moved, so prepending the v0.5.1 copy of this class would REVERT a newer server class instead of patching v0.5.0. Re-derive the narrowed overlay against the new base (diff the released jars, keep only the classes that differ AND carry the #1603 fix) and update the ARG digests." >&2; exit 1; \
+      fi; \
+    done; \
     for CP_FILE in $(find /home/unitycatalog -type f -name classpath); do \
       if ! grep -q 'loom-unity-entra-auth.jar' "${CP_FILE}"; then \
         printf '%s:%s:%s' "${OVERRIDE}" "$(cat "${CP_FILE}")" "${EXTRA}" > /tmp/loom-classpath; \
@@ -272,7 +357,7 @@ RUN set -eu; \
     grep -q 'loom-unity-entra-auth.jar' "${SERVER_CP_FILE}" || { echo "FATAL: classpath rewrite did not take on ${SERVER_CP_FILE} (Postgres/Entra jars missing from the file the server boots from)" >&2; exit 1; }; \
     case "$(cat "${SERVER_CP_FILE}")" in \
       "${OVERRIDE}:"*) : ;; \
-      *) echo "FATAL: the v0.5.1 unitycatalog-server override is not FIRST on ${SERVER_CP_FILE} — the v0.5.0 #1603 permission-GET-500 bug would still ship" >&2; exit 1 ;; \
+      *) echo "FATAL: the #1603 override jar is not FIRST on ${SERVER_CP_FILE} — the v0.5.0 permission-GET-500 bug would still ship" >&2; exit 1 ;; \
     esac; \
     java -cp "$(cat "${SERVER_CP_FILE}")" ai.limitlessdata.loom.unity.EntraPostgresAuthPlugin 2>&1 | grep -q 'Main method not found' || { \
       echo "FATAL: EntraPostgresAuthPlugin does NOT load from the server's real classpath (expected 'Main method not found' = class resolvable; got ClassNotFoundException?) — the Entra-Postgres boot would die with 'Unable to load Authentication Plugin'" >&2; \
@@ -323,4 +408,4 @@ LABEL org.opencontainers.image.source="https://github.com/fgarofalo56/csa-inabox
 LABEL csa.loom.component="loom-unity"
 LABEL csa.loom.version="0.2.0"
 LABEL csa.loom.upstream="unitycatalog/unitycatalog:v0.5.0"
-LABEL csa.loom.upstream.server-override="io.unitycatalog:unitycatalog-server:0.5.1 (Maven Central overlay — #1603 permission-GET fix)"
+LABEL csa.loom.upstream.server-override="io.unitycatalog:unitycatalog-server:0.5.1 — 3 classes only (PermissionService, PermissionService\$1, AuthorizeExpressions): the #1603 permission-GET fix"

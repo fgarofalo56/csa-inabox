@@ -27,7 +27,8 @@
 #   F  IRC prefix override      config body                             -> catalogs/loom
 #   G  UNPREFIXED namespaces    /v1/namespaces (what the client sent)   -> 500
 #   H  PREFIXED  namespaces     /v1/catalogs/loom/namespaces            -> 500
-#   I  bare v0.5.0 control      same call, NO Loom overlay              -> 200
+#   I1 SAME image, authz OFF    the ONE variable that moves it          -> 200
+#   I2 SAME image, NO overlay   authz still ON — overlay exonerated     -> 500
 #   J  namespace GET            /v1/catalogs/loom/namespaces/default    -> 200
 #   K  table LIST, console      .../namespaces/default/tables           -> 200
 #   L  Unity schemas, console   the LIST-namespaces fallback source     -> 200
@@ -44,12 +45,31 @@
 # principal including the metastore owner —
 #   {"error":{"message":"Authorization filter not initialized — ensure the
 #     request goes through UnityAccessDecorator.","code":500}}
-# I is the control that names the cause: the identical call on the bare upstream
-# v0.5.0 image answers 200, so the regression arrives with the v0.5.1
-# unitycatalog-server OVERLAY this image applies for upstream #1603. v0.5.1 added
-# @ResponseAuthorizeFilter + AuthorizedService.applyResponseFilter, and
-# IcebergRestCatalogService.listNamespaces calls SchemaService.listSchemas
-# IN-PROCESS — under the Iceberg route's context, which has no ResultFilter.
+#
+# ── THE CONTROL WAS BROKEN, AND IT PRODUCED A WRONG DIAGNOSIS (fixed 2026-08-10) ─
+# Row I used to be "the same call on the BARE upstream v0.5.0 image answers 200",
+# and the conclusion drawn from it was "so the regression arrives with the v0.5.1
+# unitycatalog-server OVERLAY". That control moved TWO variables at once: the bare
+# image has no overlay AND runs with server.authorization DISABLED. It could not
+# separate them, and it credited the wrong one. The Dockerfile, this file and the
+# parity doc then all repeated the wrong cause for two days.
+#
+# It is now a pair of SINGLE-variable controls:
+#   I1  the same Loom image, authorization DISABLED  -> 200   (moves the flag only)
+#   I2  the same Loom image with the #1603 overlay STRIPPED off the classpath,
+#       authorization still ENABLED                  -> 500   (moves the overlay only)
+# I2 is the one that exonerates the overlay, and it is built here rather than
+# assumed. Byte-level confirmation: AuthorizedService, SchemaService,
+# IcebergRestCatalogService, UnityAccessDecorator and ResultFilter are IDENTICAL in
+# the released v0.5.0 and v0.5.1 artifacts — the whole delta is PermissionService
+# (one added annotation), its synthetic sibling, AuthorizeExpressions, a version
+# string and the manifest.
+#
+# The real cause is upstream, in BOTH releases: AuthorizedService.applyResponseFilter
+# runs only `if (isAuthorizationEnabled())` and then requires the RESULT_FILTER
+# attribute UnityAccessDecorator installs for @ResponseAuthorizeFilter routes;
+# IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas
+# IN-PROCESS, under the Iceberg route's context, where that attribute was never set.
 #
 # J+K are the receipt that matters: an AUTHENTICATED Iceberg read returning 200,
 # as the Console's own principal, against a warehouse the platform provisioned
@@ -63,11 +83,13 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${HERE}/../.." && pwd)"
 IMAGE="${1:-loom-unity:iceberg-e2e}"
-BARE_IMAGE="unitycatalog/unitycatalog:v0.5.0"
+NOOVL_IMAGE="${IMAGE%%:*}:iceberg-e2e-no-overlay"
 NET=loom-unity-iceberg-e2e
 IDP=loom-unity-iceberg-idp
 UC=loom-unity-iceberg-uc
-BARE=loom-unity-iceberg-bare
+UC_OPEN=loom-unity-iceberg-open
+NOOVL=loom-unity-iceberg-nooverlay
+NOOVL_DIR="$(mktemp -d)"
 AUD='api://loom-unity'
 WAREHOUSE='loom'
 NS='default'
@@ -76,14 +98,16 @@ NS='default'
 PRINCIPAL='11111111-2222-3333-4444-555555555555'
 IRC='/api/2.1/unity-catalog/iceberg'
 UC_PORT=18090
-BARE_PORT=18093
+OPEN_PORT=18091
+NOOVL_PORT=18092
 
 PASS=0
 FAIL=0
 
 cleanup() {
-  docker rm -f "$IDP" "$UC" "$BARE" >/dev/null 2>&1
+  docker rm -f "$IDP" "$UC" "$UC_OPEN" "$NOOVL" >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
+  rm -rf "$NOOVL_DIR" >/dev/null 2>&1
   true
 }
 trap cleanup EXIT
@@ -188,7 +212,7 @@ case "$CFG" in
   *) check "F  IRC config declares prefix=catalogs/loom" "yes" "no ($CFG)" ;;
 esac
 
-echo "== G-I. the 500: a wrong path, and an upstream-overlay regression =="
+echo "== G-I. the 500: a wrong path, and an UPSTREAM defect (not the overlay) =="
 check "G  IRC    /v1/namespaces (UNPREFIXED)         [admin]  " "500" \
   "$(status "$UC_PORT" "$IRC/v1/namespaces" "$ADMIN")"
 check "H  IRC    /v1/catalogs/loom/namespaces        [admin]  " "500" \
@@ -198,11 +222,73 @@ case "$NSBODY" in
   *"Authorization filter not initialized"*) check "H2 …with the applyResponseFilter signature" "yes" "yes" ;;
   *) check "H2 …with the applyResponseFilter signature" "yes" "no ($NSBODY)" ;;
 esac
-# CONTROL — the same call on the BARE upstream image, no Loom overlay.
-docker run -d --name "$BARE" --network "$NET" -p "$BARE_PORT:8080" "$BARE_IMAGE" >/dev/null
-wait_ready "$BARE_PORT" || { echo "bare control never answered"; exit 1; }
-check "I  bare v0.5.0 /v1/catalogs/unity/namespaces  [no authz]" "200" \
-  "$(status "$BARE_PORT" "$IRC/v1/catalogs/unity/namespaces" "")"
+
+# CONTROL I1 — the SAME image, the SAME warehouse, authorization DISABLED. This
+# moves exactly one variable, and it is the one that moves the status.
+docker run -d --name "$UC_OPEN" --network "$NET" -p "$OPEN_PORT:8080" \
+  -e LOOM_UNITY_AUTH=disable -e LOOM_UNITY_DB_LOCAL=1 \
+  -e "LOOM_ICEBERG_WAREHOUSE=$WAREHOUSE" "$IMAGE" >/dev/null
+wait_ready "$OPEN_PORT" || { echo "authz-disabled control never answered"; exit 1; }
+sleep 20
+check "I1 SAME image, authz DISABLED                 [no authz]" "200" \
+  "$(status "$OPEN_PORT" "$IRC/v1/catalogs/$WAREHOUSE/namespaces" "")"
+
+# CONTROL I2 — the SAME image with the #1603 overlay STRIPPED off every classpath
+# file, authorization still ENABLED. This moves the OTHER variable on its own, and
+# it does NOT move the status: the overlay is not the cause. Built here so the
+# claim is measured on this tree rather than quoted from a doc.
+#
+# NOTE: `sed -i` truncates these classpath files to 0 bytes (mode 0550, busybox),
+# which is how the first attempt at this control silently produced an unbootable
+# image. Read-modify-`cat >` instead, and assert on BYTE COUNT so an emptied
+# classpath can never masquerade as a passing control.
+mkdir -p "$NOOVL_DIR"   # the early cleanup() call removes it; recreate before use
+cat > "$NOOVL_DIR/Dockerfile" <<DOCKERFILE
+FROM $IMAGE
+USER root
+RUN set -eu; \
+    OVERRIDE=/home/unitycatalog/lib-loom-override/loom-uc-1603-fix.jar; \
+    for CP_FILE in \$(find /home/unitycatalog -type f -name classpath); do \
+      NEW="\$(tr ':' '\n' < "\${CP_FILE}" | grep -v "^\${OVERRIDE}\$" | tr '\n' ':' | sed 's/:\$//')"; \
+      printf '%s' "\${NEW}" > /tmp/cp-new; \
+      cat /tmp/cp-new > "\${CP_FILE}"; \
+      rm -f /tmp/cp-new; \
+    done; \
+    SCP=/home/unitycatalog/server/target/classpath; \
+    BYTES="\$(wc -c < "\${SCP}")"; \
+    [ "\${BYTES}" -gt 30000 ] || { echo "FATAL: classpath truncated (\${BYTES} bytes)"; exit 1; }; \
+    ! grep -q 'lib-loom-override' "\${SCP}" || { echo "FATAL: overlay still present"; exit 1; }; \
+    grep -q 'server/target/classes' "\${SCP}" || { echo "FATAL: v0.5.0 server classes lost"; exit 1; }
+USER unitycatalog
+DOCKERFILE
+if docker build -q -t "$NOOVL_IMAGE" "$NOOVL_DIR" >/dev/null 2>&1; then
+  docker run -d --name "$NOOVL" --network "$NET" -p "$NOOVL_PORT:8080" \
+    -e LOOM_UNITY_AUTH=enable -e LOOM_UNITY_ALLOWED_ISSUERS=http://idp:8000 \
+    -e "LOOM_UNITY_AUDIENCES=$AUD" -e LOOM_UNITY_DB_LOCAL=1 \
+    -e "LOOM_ICEBERG_WAREHOUSE=$WAREHOUSE" \
+    -e "LOOM_UNITY_CONSOLE_PRINCIPAL_ID=$PRINCIPAL" "$NOOVL_IMAGE" >/dev/null
+  if wait_ready "$NOOVL_PORT"; then
+    sleep 20
+    NOOVL_ADMIN="$(docker exec "$NOOVL" sh -c 'cat /home/unitycatalog/etc/conf/token.txt' | tr -d '\r\n')"
+    check "I2 SAME image, overlay STRIPPED, authz ON  [admin]  " "500" \
+      "$(status "$NOOVL_PORT" "$IRC/v1/catalogs/$WAREHOUSE/namespaces" "$NOOVL_ADMIN")"
+    # And the #1603 fix must be GONE without the overlay — that is what proves the
+    # stripped image really lost it, i.e. that I2 tested what it claims to test.
+    NOOVL_XCH="$(curl -s -m 30 -X POST "http://127.0.0.1:$NOOVL_PORT/api/1.0/unity-control/auth/tokens" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+      --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
+      --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token' \
+      --data-urlencode "subject_token=$RAW")"
+    NOOVL_CONSOLE="$(printf '%s' "$NOOVL_XCH" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
+    check "I3 …and #1603 IS back once stripped (500)  [console]" "500" \
+      "$(status "$NOOVL_PORT" /api/2.1/unity-catalog/permissions/catalog/unity "$NOOVL_CONSOLE")"
+  else
+    check "I2 SAME image, overlay STRIPPED, authz ON  [admin]  " "500" "control-never-answered"
+  fi
+else
+  check "I2 SAME image, overlay STRIPPED, authz ON  [admin]  " "500" "control-image-build-failed"
+fi
 
 echo "== J-L. the receipt: an AUTHENTICATED Iceberg read returning 200 =="
 check "J  IRC    /v1/catalogs/loom/namespaces/default        [console]" "200" \

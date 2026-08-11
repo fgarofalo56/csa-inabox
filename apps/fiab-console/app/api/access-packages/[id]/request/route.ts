@@ -13,8 +13,9 @@
  *
  * Azure-native; no new grant primitive (reuses F16 → enforceAccessGrant).
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   accessPackagesContainer, approvalPoliciesContainer, accessRequestWorkflowContainer,
@@ -35,10 +36,8 @@ function toScopeType(resourceType: string): AccessScopeType {
   return SCOPE_TYPES.has(resourceType as AccessScopeType) ? (resourceType as AccessScopeType) : inferScopeType(resourceType);
 }
 
-export async function POST(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (_req, { session: s, params }) => {
+  const { id } = params;
   // AG-14 — request-on-behalf-of: a tenant admin may open a package request for
   // another principal. Absent/non-admin, the requester is always the caller.
   const body = (typeof (_req as any)?.json === 'function' ? await _req.json().catch(() => ({})) : {}) as any;
@@ -95,7 +94,13 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
     for (const g of pkg.grants) {
       const doc: AccessRequestDoc = {
         id: crypto.randomUUID(),
-        tenantId: requesterId,
+        // PARTITION KEY (/tenantId) — the ENTRA TENANT, never a user oid.
+        // This was `requesterId`, which for an on-behalf request is a THIRD
+        // party's oid: the doc landed in a partition neither the admin who
+        // created it nor any approver could point-read, so the request was
+        // unreachable the moment it was written. The beneficiary stays
+        // addressable via `requesterId` below.
+        tenantId: tenantScopeId(s),
         kind: 'access-request',
         assetId: g.resourceRef,
         assetName: g.resourceName || g.resourceRef,
@@ -134,4 +139,4 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

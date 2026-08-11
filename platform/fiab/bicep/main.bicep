@@ -1325,7 +1325,30 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // those panes honest-gate; operators wire multi-sub DLZ accounts post-deploy
     // via scripts/csa-loom/patch-navigator-env.sh (same pattern as the Cosmos
     // endpoints below).
-    loomStorageAccount: useSingleDlz ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : ''
+    // ADOPT-FIRST. An explicit `storage-adls` adopt entry names the estate's REAL
+    // lake account and wins over the single-sub convention — this is what makes a
+    // MULTI-SUB estate bindable at all. Measured on Commercial 2026-08-10: the
+    // lake `saloomdefaulttr4nm4dcgsq` was fully deployed in the DLZ subscription
+    // (rg-csa-loom-dlz-default-centralus, alongside Databricks, Event Hubs,
+    // Synapse and the Weave Postgres) while this expression evaluated to '' —
+    // because useSingleDlz is false on that topology — so LOOM_ADLS_ACCOUNT
+    // rendered EMPTY and svc-adls, medallion Silver/Gold, sample-data,
+    // RTI-export, CSV-imports and the S3 gateway were all hard-blocked on an
+    // estate that owned every resource they needed.
+    //
+    // Binding is SAFE cross-subscription (these are plain strings the Console
+    // reads); only the RBAC/workload modules are not, and those are gated
+    // separately by loomStorageAccountSameSub below.
+    loomStorageAccount: !empty(adoptName(adopt, 'storage-adls'))
+      ? adoptName(adopt, 'storage-adls')
+      : (useSingleDlz ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : '')
+    // Grants can only be created in THIS subscription. An adopted lake with no
+    // explicit `sub` is assumed local (the adopt plan omits it for same-sub
+    // targets); a different sub disables the grant modules while leaving the
+    // console binding intact.
+    loomStorageAccountSameSub: empty(adoptName(adopt, 'storage-adls'))
+      ? true
+      : (empty(adoptSub(adopt, 'storage-adls')) || adoptSub(adopt, 'storage-adls') == subscription().subscriptionId)
     // Tenant/multi-sub: no LOCAL DLZ exists yet (DLZs attach later), so the ADX
     // cluster's DLZ-scoped Event Hub / storage grants must NOT fire — they would
     // target the non-existent rg-csa-loom-dlz-single-<loc> RG (ResourceGroupNotFound).

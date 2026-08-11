@@ -306,6 +306,17 @@ export const WATCHED = [
       // that touches them without a subsequent successful run IS drift.
       'scripts/ci/assert-acr-image-tags.sh',
       'scripts/ci/resolve-image-preflight-refs.mjs',
+      // The DLZ adoption pass. These two decide which lake/Databricks/Event Hubs
+      // the apply BINDS the Console to, by emitting LOOM_ADOPT_JSON before the
+      // param file is expanded. If discovery starts returning nothing, the apply
+      // silently reverts to the single-sub convention — which on a multi-sub
+      // estate means loomStorageAccount = '' and LOOM_ADLS_ACCOUNT blank again,
+      // re-blocking svc-adls, medallion Silver/Gold, sample-data, RTI-export,
+      // CSV-imports and the S3 gateway. That is exactly the drift this watchdog
+      // exists to catch, so a commit touching either without a subsequent
+      // successful run IS drift.
+      'scripts/csa-loom/discover-dlz-adopt-plan.sh',
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
       // #2681 — this lane now resolves the estate's existing Entra app
       // registration into LOOM_MSAL_CLIENT_ID before applying, because that id is
       // both the sign-in client AND the audience admin-plane/main.bicep pins on
