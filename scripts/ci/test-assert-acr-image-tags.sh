@@ -60,9 +60,28 @@ trap 'rm -rf "$STUB_DIR"' EXIT
 #   throttled      429 on the per-ref lookup; `list` succeeds
 #   corr404        a non-404 error whose CORRELATION ID contains "404" — the
 #                  loose regex read this as absence
+# The readiness probe (scripts/ci/acr-dataplane-ready.sh) makes a real HTTPS call
+# to <acr>.azurecr.io, which no stub can serve — so it is injected through the
+# LOOM_ACR_DATAPLANE_READY_SCRIPT seam, the same way the lease script is. It
+# mirrors the az stub's view of the firewall: reachable except in the modes where
+# the registry is denying this runner.
+cat > "$STUB_DIR/ready" <<'READY'
+#!/usr/bin/env bash
+case "${MODE}" in
+  unreachable|partial-deny)
+    echo "::error::acr-dataplane-ready: still refusing this runner (stub)" >&2
+    exit 1 ;;
+esac
+echo "[acr-dataplane-ready] READY (stub)"
+exit 0
+READY
+chmod +x "$STUB_DIR/ready"
+export LOOM_ACR_DATAPLANE_READY_SCRIPT="$STUB_DIR/ready"
+
 cat > "$STUB_DIR/az" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
+  "cloud show") echo ".azurecr.io"; exit 0 ;;
   "acr show")
      case "${MODE}" in
        no-registry) echo "ERROR: (ResourceNotFound) The Resource 'Microsoft.ContainerRegistry/registries/stubacr' under resource group 'rg' was not found." >&2; exit 1 ;;

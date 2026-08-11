@@ -92,6 +92,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # degraded mode, and it is the one that used to print "probing anyway" and then
 # manufacture MISSING verdicts out of guaranteed-failing lookups.
 LEASE_SCRIPT="${LOOM_ACR_LEASE_SCRIPT:-$REPO_ROOT/scripts/csa-loom/acr-firewall-lease.sh}"
+# Same TEST SEAM shape, for the same reason: the readiness probe makes a real
+# HTTPS call to the registry host, which a stubbed-`az` self-test cannot serve.
+# Without the seam the probe fails on DNS and every case collapses to UNPROVEN,
+# hiding the outcomes the test exists to distinguish.
+READY_SCRIPT="${LOOM_ACR_DATAPLANE_READY_SCRIPT:-$REPO_ROOT/scripts/ci/acr-dataplane-ready.sh}"
 
 release_lease() {
   # Idempotent: the success path calls this EXPLICITLY (so the verdict can take
@@ -183,7 +188,7 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
   LOGIN_OUT=""
   LOGIN_OK=0
   set +e
-  READY_OUT=$(bash "$REPO_ROOT/scripts/ci/acr-dataplane-ready.sh" --acr "$ACR" --timeout-seconds 120 2>&1)
+  READY_OUT=$(bash "$READY_SCRIPT" --acr "$ACR" --timeout-seconds 120 2>&1)
   READY_RC=$?
   set -e
   printf '%s\n' "$READY_OUT"

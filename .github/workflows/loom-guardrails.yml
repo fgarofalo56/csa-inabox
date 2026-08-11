@@ -610,6 +610,13 @@ jobs:
       - name: 'acr-reachability-oracle (az acr login is a credential, not a probe)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-reachability-oracle.mjs
+      # The probe itself is mutation-proved offline against stub az/curl: 403 DENIED
+      # is NOT ready, a connect failure is exit 2 (not 1), and reinstating
+      # `CODE="$(curl … || echo 000)"` — which concatenates to `000000` and makes
+      # a DNS failure read as a firewall refusal — fails the suite.
+      - name: 'acr-dataplane-ready self-test (403 != ready; DNS failure != refusal)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-acr-dataplane-ready.sh
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw
