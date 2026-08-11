@@ -101,15 +101,25 @@ describe('embed-codes / org-visuals bicep wiring', () => {
     expect(adminMain).toMatch(/!empty\(loomStorageAccount\) \? \[/);
   });
 
-  it('admin-plane grants the org-visuals RBAC only when loomStorageAccount is set', () => {
-    // The guard requires both !skipRoleGrants and a non-empty loomStorageAccount.
-    // It now also AND-gates on the org-visuals backend toggle
-    // (`(loomBackends.?orgVisuals ?? 'enabled') != 'disabled'`) — accept the
-    // optional trailing backend condition so the guard stays pinned without
-    // over-fitting to the exact toggle spelling.
+  it('admin-plane grants the org-visuals RBAC only when the lake is LOCAL and grantable', () => {
+    // Was `!empty(loomStorageAccount)`. That is now too weak: this module takes an
+    // `existing` reference to storageAccounts/blobServices/containers scoped to
+    // `loomDlzRg`, which on a multi-sub estate is the ADMIN resource group while
+    // the lake lives in another subscription. Measured on run 31435481880 it
+    // failed ParentResourceNotFound — "Failed to perform 'write' on resource(s)
+    // of type 'storageAccounts/blobServices', because the parent resource
+    // '…/saloomdefaulttr4nm4dcgsq' could not be found".
+    //
+    // `loomStorageGrantable` is EXACTLY equivalent on a single-sub estate
+    // (loomStorageAccountSameSub is true there), so this tightens multi-sub
+    // without changing single-sub behaviour at all. The org-visuals backend
+    // toggle stays optional so the guard does not over-fit its spelling.
     expect(adminMain).toMatch(
-      /module orgVisualsRbac '\.\.\/landing-zone\/org-visuals-rbac\.bicep' = if \(!skipRoleGrants && !empty\(loomStorageAccount\)/,
+      /module orgVisualsRbac '\.\.\/landing-zone\/org-visuals-rbac\.bicep' = if \(!skipRoleGrants && loomStorageGrantable/,
     );
+    // And the raw check must not come back on ANY module activation — that is the
+    // partial-split regression, enforced repo-wide by check-lake-grant-gate.mjs.
+    expect(adminMain).not.toMatch(/module\s+\S+\s+'[^']+'\s*=\s*if\s*\([^)]*!empty\(loomStorageAccount\)/);
   });
 
   it('landing-zone creates the org-visuals Blob container by default', () => {

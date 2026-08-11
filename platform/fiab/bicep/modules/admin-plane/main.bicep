@@ -3397,7 +3397,13 @@ module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGra
 // for the embed-code SAS). Scoped to the DLZ RG (the lake account usually lives
 // outside the admin RG). Skipped (honest gate in the panes) when loomStorageAccount
 // is unset. No Fabric/Power BI dependency.
-module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount) && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') {
+// `loomStorageGrantable`, not `!empty(loomStorageAccount)`: this module takes an
+// `existing` reference to storageAccounts/blobServices/containers scoped to
+// `loomDlzRg`, which on a multi-sub estate is the ADMIN resource group — the lake
+// is not there. MEASURED on run 31435481880: ParentResourceNotFound, "Failed to
+// perform 'write' on resource(s) of type 'storageAccounts/blobServices', because
+// the parent resource '…/saloomdefaulttr4nm4dcgsq' could not be found".
+module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && loomStorageGrantable && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') {
   name: 'org-visuals-rbac'
   scope: resourceGroup(loomDlzRg)
   params: {
@@ -6793,7 +6799,10 @@ resource risingwaveAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 // "the principal to grant"). Skipped when no lake account is bound, in which
 // case RisingWave still runs on single-node local state and serves the Postgres
 // wire; only a CREATE SINK to the lake would gate.
-module risingwaveLakeRbac 'azure-connections-rbac.bicep' = if (risingwaveActive && !skipRoleGrants && !empty(loomStorageAccount)) {
+// Same split: a role assignment ON the lake account cannot be created from a
+// deployment scoped to a different subscription. RisingWave still BINDS the
+// account name either way; only the grant is conditional.
+module risingwaveLakeRbac 'azure-connections-rbac.bicep' = if (risingwaveActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'risingwave-lake-rbac'
   scope: resourceGroup(loomDlzRg)
   params: {
@@ -7454,7 +7463,12 @@ module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRole
 // DLZ storage account; otherwise skipped (the semantic-model editor stays fully
 // functional, showing the honest setup MessageBar in the Direct Lake tab).
 // =====================================================================
-module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) && !empty(loomStorageAccount)) {
+// `loomStorageGrantable`: aas.bicep takes an `existing` reference to the storage
+// ACCOUNT itself (aas.bicep:52) inside `loomDlzRg`. MEASURED on run 31435481880:
+// ResourceNotFound, "The Resource 'Microsoft.Storage/storageAccounts/
+// saloomdefaulttr4nm4dcgsq' under resource group 'rg-csa-loom-admin-centralus'
+// was not found" — the lake lives in the DLZ subscription, not the admin RG.
+module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) && loomStorageGrantable) {
   name: 'aas-direct-lake-shim'
   scope: resourceGroup(loomDlzRg)
   params: {

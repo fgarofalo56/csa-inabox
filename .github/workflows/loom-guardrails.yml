@@ -581,6 +581,17 @@ jobs:
       - name: 'codeql-action-pins (init/autobuild/analyze must run one release)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-codeql-action-pins.mjs
+      # A module that reaches INTO the lake account (role assignment, or an
+      # `existing` reference inside loomDlzRg) must gate on loomStorageGrantable,
+      # not on !empty(loomStorageAccount). #3196 split binding from granting but
+      # converted only 4 of 7 consumers; the 3 it missed took the estate's first
+      # real apply down with ResourceNotFound / ParentResourceNotFound, because on
+      # a multi-sub estate loomDlzRg is the ADMIN rg and the lake is in another
+      # subscription. A PARTIAL split is worse than none — it looks wired right up
+      # until ARM refuses.
+      - name: 'lake-grant-gate (cross-sub lake: bind always, grant only when local)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-lake-grant-gate.mjs
       # A teardown step must be UNREACHABLE from a cron. Both sovereign lanes
       # had `(github.event_name == 'schedule' || inputs.run_mode == 'full') &&
       # !inputs.keep_resources` — and a scheduled event carries NO inputs, so
