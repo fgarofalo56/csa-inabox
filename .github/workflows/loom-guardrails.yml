@@ -636,6 +636,24 @@ jobs:
       - name: 'acr-dataplane-ready self-test (403 != ready; DNS failure != refusal)'
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-acr-dataplane-ready.sh
+      # `set +e; CMD; RC=$?; set -e` is correct ONLY when -e was on to begin with.
+      # These scripts start `set -uo pipefail` deliberately, because they implement
+      # multi-valued exit contracts (0 ok / 3 absent / 4 unknown) that -e destroys.
+      # Writing `set -e` to "restore" turns on a mode the script was designed
+      # without: check-vanity-edge-health.sh exited 5 (jq's parse-error code)
+      # instead of its contracted 2, because the branch that returns 2 was never
+      # reached. Found in three scripts, one of them the image preflight whose
+      # callers BRANCH on those codes.
+      - name: 'set-e-restore (a bare `set -e` where -e was never on is an ENABLE, not a restore)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-set-e-restore.mjs
+      # The vanity domain lost its Front Door route binding TWICE with nothing
+      # watching: the synthetic monitor's job probes http://loom-console (the
+      # IN-CLUSTER name) and loom-uat probes *.azurefd.net, so both stayed green
+      # through an outage on the only URL a human opens.
+      - name: 'vanity-edge-health self-test (unreadable route is UNKNOWN, never "unbound")'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-vanity-edge-health.sh
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw

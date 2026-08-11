@@ -134,7 +134,6 @@ trap cleanup EXIT
 set +e
 SHOW_OUT=$(az acr show -n "$ACR" ${RG:+-g "$RG"} -o none 2>&1)
 SHOW_RC=$?
-set -e
 if [ "$SHOW_RC" -ne 0 ]; then
   REGISTRY_ABSENT=0
   if [ -f "$REPO_ROOT/scripts/ci/deploy-classify.mjs" ] && command -v node >/dev/null 2>&1; then
@@ -190,13 +189,11 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
   set +e
   READY_OUT=$(bash "$READY_SCRIPT" --acr "$ACR" --timeout-seconds 120 2>&1)
   READY_RC=$?
-  set -e
   printf '%s\n' "$READY_OUT"
   if [ "$READY_RC" -eq 0 ]; then
     set +e
     LOGIN_OUT=$(az acr login -n "$ACR" 2>&1)
     LOGIN_RC=$?
-    set -e
     [ "$LOGIN_RC" -eq 0 ] && LOGIN_OK=1
   else
     LOGIN_OUT="$READY_OUT"
@@ -281,7 +278,6 @@ for REF in "${REFS[@]}"; do
   set +e
   DIGEST=$(bash "$RESOLVER" --acr "$ACR" --image "$REF" 2>"$ERRFILE")
   RC=$?
-  set -e
   DIGEST="$(printf '%s' "$DIGEST" | tr -d '\r' | head -1)"
   case "$RC" in
     0)

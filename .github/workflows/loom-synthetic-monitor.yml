@@ -71,6 +71,31 @@ jobs:
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
 
+      # THE EDGE, WHICH NOTHING ELSE WATCHES.
+      #
+      # This monitor's ACA job probes LOOM_URL=`http://loom-console` — the
+      # IN-CLUSTER name. It never leaves the Container Apps environment, so it is
+      # blind to Front Door, to the vanity-domain binding and to TLS entirely.
+      # loom-uat probes the *.azurefd.net host, which stays healthy while the
+      # vanity host is dead — that is the CONTROL, not the subject.
+      #
+      # csa-loom.limitlessdata.ai has lost its Front Door route binding TWICE
+      # (2026-08-10, reported by the operator; 2026-08-11, found by hand) and this
+      # monitor reported success straight through both. The one URL a human opens
+      # was the one URL nothing checked.
+      #
+      # continue-on-error is NOT set: an edge outage is an outage. The check
+      # itself distinguishes BROKEN (exit 1) from UNKNOWN (exit 2, an unreadable
+      # control plane) so a lapsed permission cannot manufacture a false outage.
+      - name: Vanity-domain edge health (Front Door route binding + served certificate)
+        env:
+          FD_PROFILE: fd-loom-k6mvh5sm6z7do
+          FD_ENDPOINT: loom-console-k6mvh5sm6z7do
+          FD_ROUTE: console-route
+          VANITY_HOST: csa-loom.limitlessdata.ai
+        run: |
+          bash scripts/ci/check-vanity-edge-health.sh             --profile "$FD_PROFILE" --rg "$RG_NAME"             --endpoint "$FD_ENDPOINT" --route "$FD_ROUTE"             --host "$VANITY_HOST"
+
       - name: Start (or adopt) a synthetic-monitor execution + poll to completion
         id: run
         env:
