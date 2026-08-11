@@ -89,12 +89,14 @@ jobs:
       # control plane) so a lapsed permission cannot manufacture a false outage.
       - name: Vanity-domain edge health (Front Door route binding + served certificate)
         env:
-          FD_PROFILE: fd-loom-k6mvh5sm6z7do
-          FD_ENDPOINT: loom-console-k6mvh5sm6z7do
-          FD_ROUTE: console-route
+          # Only the HOST. The profile, custom domain, endpoints and routes are
+          # all discovered from it — check-afd-endpoint-discovery.mjs forbids
+          # addressing a CDN endpoint by a name CI never discovered, and naming
+          # the route here would also have made the check unable to see the very
+          # outage it exists for (the binding is what breaks).
           VANITY_HOST: csa-loom.limitlessdata.ai
         run: |
-          bash scripts/ci/check-vanity-edge-health.sh             --profile "$FD_PROFILE" --rg "$RG_NAME"             --endpoint "$FD_ENDPOINT" --route "$FD_ROUTE"             --host "$VANITY_HOST"
+          bash scripts/ci/check-vanity-edge-health.sh --rg "$RG_NAME" --host "$VANITY_HOST"
 
       - name: Start (or adopt) a synthetic-monitor execution + poll to completion
         id: run
