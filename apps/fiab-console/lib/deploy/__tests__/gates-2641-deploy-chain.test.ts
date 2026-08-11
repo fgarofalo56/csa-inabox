@@ -133,7 +133,17 @@ describe('both clouds — the loom-uat runner image has a producer', () => {
     expect(wf).toMatch(/- il5/);
     // SC1 parity with the Commercial matrix.
     expect(wf).toMatch(/aquasecurity\/trivy-action/);
-    expect(wf).toMatch(/cosign sign --yes/);
+    // The ASSERTION IS "this lane signs", not "this lane contains a literal
+    // string". #3240 routed every `cosign sign` through
+    // scripts/ci/cosign-sign-retry.sh (cosign's internal retry outlives its OIDC
+    // token, so a Sigstore hiccup surfaced as `expired_token`), which REMOVED
+    // the token this matched — and the test then failed on a lane that signs
+    // MORE reliably than before.
+    //
+    // That is the guard-keyed-to-the-unsafe-pattern trap: a check keyed to the
+    // literal text of the thing being fixed goes red exactly when the fix lands.
+    // Match either shape, so the assertion tracks the BEHAVIOUR.
+    expect(wf).toMatch(/cosign sign --yes|cosign-sign-retry\.sh/);
   });
 
   it('can be built on demand from the Commercial ACR-Tasks lane', () => {
