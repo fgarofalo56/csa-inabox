@@ -48,6 +48,39 @@ export function analyze(text) {
   for (const jobId of Object.keys(jobs)) {
     const job = jobs[jobId];
     const steps = Array.isArray(job?.steps) ? job.steps : [];
+
+    // THE HOLE IN THE `if: !cancelled()` CONVENTION (#3042, measured 2026-08-11).
+    //
+    // That convention stops the FIRST FAILING STEP from masking later ones. It
+    // does nothing about a `timeout-minutes` kill, because the runner is gone:
+    // every later step reports `skipped`, and GitHub reports the job itself as
+    // `cancelled` — which in a run list reads as "superseded by a newer push",
+    // not "this job died". Measured: the guardrails job ran 10m15s against a
+    // 10-minute budget, was killed at step 94 of 98, and I twice diagnosed it as
+    // a concurrency cancellation before reading the timestamps.
+    //
+    // A job cannot detect its own timeout from the inside — an `always()` step
+    // does not run either. What IS checkable statically is that the budget was
+    // declared at all. A job with NO `timeout-minutes` inherits GitHub's 6-hour
+    // default, so a single hung guard burns six hours of runner time and reports
+    // `cancelled` at the end of it, which is the same misreading with a much
+    // worse bill.
+    if (steps.some((st) => st && typeof st === 'object' && st.run != null)) {
+      const budget = scalarValue(job?.['timeout-minutes']);
+      if (budget == null) {
+        findings.push({
+          job: jobId,
+          name: '(job-level)',
+          line: 0,
+          msg:
+            'declares no `timeout-minutes`, so it inherits the 6-hour GitHub default. A hung guard ' +
+            'then burns six hours and ends as `cancelled` — and a timeout kill makes every later ' +
+            'step read `skipped`, which is exactly the masking `if: ${{ !cancelled() }}` exists to ' +
+            'prevent. Declare a budget with headroom.',
+        });
+      }
+    }
+
     for (const st of steps) {
       if (!st || typeof st !== 'object' || Array.isArray(st)) continue;
       const run = st.run;
@@ -83,6 +116,7 @@ on: push
 jobs:
   guardrails:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - name: guard one
@@ -98,6 +132,7 @@ on: push
 jobs:
   guardrails:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: guard one
         if: \${{ !cancelled() }}
@@ -111,10 +146,45 @@ on: push
 jobs:
   guardrails:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: guard one
         if: success()
         run: node scripts/ci/one.mjs
+`;
+
+// The `if: !cancelled()` convention protects against a FAILING step masking its
+// successors. It does NOT protect against a `timeout-minutes` kill, which ends
+// the runner and makes every later step read `skipped` — the same masking, and
+// GitHub labels the job `cancelled`, which in a run list reads as "superseded".
+// Measured 2026-08-11: this very job ran 10m15s against a 10-minute budget and
+// was killed at step 94 of 98. A job with NO budget inherits 6 hours, so the
+// same misreading arrives after six hours of burnt runner time.
+//
+// The three fixtures above now declare a budget precisely so they test ONLY the
+// `if:` property; this one tests only the budget.
+const FIX_NO_TIMEOUT = `
+name: fixture
+on: push
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: guard one
+        if: \${{ !cancelled() }}
+        run: node scripts/ci/one.mjs
+`;
+
+// A job with no `run:` steps has no verdict to hide, so it needs no budget for
+// THIS rule's purposes — the check must not fire on it.
+const FIX_NO_RUN_STEPS = `
+name: fixture
+on: push
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 `;
 
 function selfTest() {
@@ -136,6 +206,21 @@ function selfTest() {
 
   const wrongIf = analyze(FIX_WRONG_IF);
   say(wrongIf.findings.length === 1, 'a run step with `if: success()` is detected (re-creates the masking)');
+
+  // #3042's second route: a timeout kill ends the runner, every later step reads
+  // `skipped`, and GitHub calls the job `cancelled`.
+  const noTimeout = analyze(FIX_NO_TIMEOUT);
+  say(
+    noTimeout.findings.length === 1 && /timeout-minutes/.test(noTimeout.findings[0].msg),
+    'a job with run steps and NO `timeout-minutes` is detected (the timeout route to the same masking)',
+  );
+
+  // …and it must not fire where there is no verdict to hide.
+  const noRunSteps = analyze(FIX_NO_RUN_STEPS);
+  say(
+    noRunSteps.findings.length === 0,
+    'a job with only `uses:` steps needs no budget for this rule (no false positive)',
+  );
 
   console.log(ok ? '[guardrails-observability] self-test OK' : '[guardrails-observability] self-test FAILED');
   return ok ? 0 : 1;
