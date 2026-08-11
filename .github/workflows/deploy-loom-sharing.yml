@@ -231,7 +231,10 @@ jobs:
           echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
 
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
-          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # #3210 — see loom-roll-and-validate: `az acr login` is not a
+          # data-plane reachability probe.
+          bash scripts/ci/acr-dataplane-ready.sh --acr "$ACR" --timeout-seconds 180             || echo "::warning::ACR data plane not confirmed reachable; the az acr build upload may be denied."
+          az acr login -n "$ACR" >/dev/null
 
           az acr build --registry "$ACR" \
             --image "${IMAGE}:${TAG}" \

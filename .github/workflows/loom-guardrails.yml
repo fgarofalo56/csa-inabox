@@ -600,6 +600,16 @@ jobs:
       - name: 'acr-suffix-boundary-agnostic (a varying registry needs a varying suffix)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-suffix-boundary-agnostic.mjs
+      # `az acr login` authenticates through an ARM-mediated token exchange, so it
+      # returns 0 while the registry still refuses this runner's IP. Roll
+      # 31454217160: this oracle said "reachable after 1 attempt" in the SAME
+      # SECOND the firewall opened, and cosign was DENIED 3s later — then the
+      # gate reported "NO valid cosign signature", a fact it never established.
+      # 19 sites across the Commercial and sovereign lanes carried the same
+      # oracle, 10 of them with no failure path at all.
+      - name: 'acr-reachability-oracle (az acr login is a credential, not a probe)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-acr-reachability-oracle.mjs
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw

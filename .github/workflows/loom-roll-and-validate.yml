@@ -484,22 +484,38 @@ jobs:
             fi
           fi
 
-          # `az acr login` is still required — it mints the data-plane token
-          # cosign uses. It is just no longer trusted to answer "is the firewall
-          # open?". Poll it: right after an open, propagation is exactly the lag
-          # described above, in the other direction.
-          REACHABLE=false
-          for i in $(seq 1 18); do
-            if az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then REACHABLE=true; echo "ACR data plane reachable after $i attempt(s)."; break; fi
-            sleep 10
-          done
-          if [[ "$REACHABLE" != "true" ]]; then
+          # ── Wait for the OPEN to reach the data plane. On the SAME HTTP path
+          # cosign uses, because `az acr login` is not that path.
+          #
+          # #3210 — run 31454217160 failed here, and the previous fix had the
+          # mirror image of the bug it fixed. The lease opened the registry and
+          # this loop declared success in the SAME SECOND:
+          #
+          #   03:05:48.748  [acr-lease] opening ACR (Enabled, Allow) ...
+          #   03:05:48.748  ACR data plane reachable after 1 attempt(s).
+          #   03:05:51.221  Error: POST …/oauth2/token: DENIED: client with IP
+          #                 '20.3.215.35' is not allowed access.
+          #
+          # `az acr login` authenticates through an ARM-mediated token exchange
+          # and returned 0 while the registry was still denying cosign by IP.
+          # The 30–90s propagation lag documented above applies to the OPEN
+          # direction too; `az acr login` is the wrong oracle in BOTH.
+          #
+          # acr-dataplane-ready.sh probes `GET https://<acr><suffix>/v2/` with
+          # plain curl — same host, same source IP, same TCP path cosign takes.
+          # Measured both sides 2026-08-11: closed -> HTTP 403 DENIED, open ->
+          # HTTP 401 UNAUTHORIZED. Self-tested offline in
+          # scripts/ci/test-acr-dataplane-ready.sh.
+          if ! bash scripts/ci/acr-dataplane-ready.sh --acr "${{ env.ACR_NAME }}" --timeout-seconds 180; then
             # Unreachable ≠ unsigned. Same policy as a missing loom-uat job:
             # loud warning, gate skipped — an infra hiccup must never
             # permanently block an emergency roll.
             echo "::warning::Could not reach the ACR data plane after ~3 min — CANNOT verify the image signature. SKIPPING the SC1 gate for this roll (the image may or may not be signed). Investigate the ACR network toggle (an Azure Policy may be reverting it)."
             exit 0
           fi
+          # Now mint the data-plane token cosign uses. This is a credential step,
+          # not a reachability probe.
+          az acr login --name "${{ env.ACR_NAME }}" >/dev/null
 
           # ── Resolve the manifest digest. Bounded retry; FAILS CLOSED.
           #
@@ -527,13 +543,48 @@ jobs:
           REF="${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}@$DIGEST"
           echo "Verifying cosign signature on $REF ..."
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
-          if cosign verify "$REF" \
-              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              --certificate-identity-regexp "$IDENTITY_RE" \
-              --output text; then
+
+          # ── Three outcomes, not two. `cosign verify` exits non-zero for
+          # "this image is not signed by a trusted identity" AND for "I could
+          # not talk to the registry", and #3210 collapsed both into the first.
+          # Run 31454217160 printed, verbatim:
+          #
+          #   Error: POST …/oauth2/token: DENIED: client with IP … is not allowed access
+          #   ::error::SC1 SUPPLY-CHAIN GATE FAILED — … has NO valid cosign signature
+          #
+          # The second sentence is not a fact the first sentence supports. That
+          # is deploy-integrity.md R7, and it sent the roll's failure into the
+          # supply-chain bucket instead of the networking one. Transport denials
+          # are RETRIED (propagation is the usual cause) and, if they persist,
+          # reported as what they are.
+          COS_LOG="$(mktemp)"
+          VERDICT=""
+          for attempt in 1 2 3; do
+            if cosign verify "$REF" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                --certificate-identity-regexp "$IDENTITY_RE" \
+                --output text >"$COS_LOG" 2>&1; then
+              VERDICT="signed"; break
+            fi
+            if grep -qiE "DENIED|is not allowed access|no route to host|TLS handshake|connection refused|i/o timeout|502 Bad Gateway|503 Service" "$COS_LOG"; then
+              VERDICT="unreachable"
+              echo "::warning::cosign attempt ${attempt}/3 could not REACH the registry (not a signature verdict): $(head -c 300 "$COS_LOG" | tr -d '\r\n')"
+              sleep 30
+              continue
+            fi
+            VERDICT="unsigned"; break
+          done
+          sed -n '1,80p' "$COS_LOG"
+
+          if [[ "$VERDICT" == "signed" ]]; then
             echo "::notice::SC1 supply-chain gate PASSED — $REF is cosign-signed by a trusted build workflow (Trivy CRITICAL gate passed at build time)."
+          elif [[ "$VERDICT" == "unreachable" ]]; then
+            # Same policy as the readiness timeout above: an infra fault must not
+            # masquerade as a supply-chain verdict, and must not permanently
+            # block an emergency roll.
+            echo "::warning::CANNOT VERIFY — cosign could not reach ${{ env.ACR_NAME }} on any of 3 attempts (last: $(head -c 300 "$COS_LOG" | tr -d '\r\n')). This says NOTHING about whether ${{ env.APP_NAME }}:$TAG is signed. SKIPPING the SC1 gate for this roll. Investigate the ACR firewall/propagation, not the build."
           else
-            echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — ${{ env.APP_NAME }}:$TAG ($DIGEST) has NO valid cosign signature from a trusted build workflow. This image was NOT produced by the gated CI path (or was built with skip_supply_chain, or predates SC1). Fix: rebuild the commit via build-fiab-images-acr-tasks (which scans + signs), then re-roll. Emergency only: re-dispatch this roll with skip_signature_verify=true or set repo variable LOOM_ROLL_SKIP_VERIFY=true."
+            echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — ${{ env.APP_NAME }}:$TAG ($DIGEST) has NO valid cosign signature from a trusted build workflow. The registry ANSWERED and the signature was absent or from an untrusted identity (see the cosign output above). This image was NOT produced by the gated CI path (or was built with skip_supply_chain, or predates SC1). Fix: rebuild the commit via build-fiab-images-acr-tasks (which scans + signs), then re-roll. Emergency only: re-dispatch this roll with skip_signature_verify=true or set repo variable LOOM_ROLL_SKIP_VERIFY=true."
             exit 1
           fi
 

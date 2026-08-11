@@ -172,22 +172,36 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
   # is CAPTURED and CLASSIFIED — this loop used to be
   # `az acr login … >/dev/null 2>&1 && break` with no failure path at all, so
   # six straight denials fell through silently into the lookup batch.
+  #
+  # #3210 — the ORACLE was still wrong even after that fix. `az acr login`
+  # authenticates through an ARM-mediated token exchange, so it returns 0 while
+  # the registry is still refusing raw HTTP from this runner's IP. On roll
+  # 31454217160 this loop passed, and the cosign gate two steps later got
+  # `DENIED: client with IP '20.3.215.35' is not allowed access` — from a
+  # registry this step had just certified reachable. Probe the data plane on the
+  # path those tools use, THEN mint the token.
   LOGIN_OUT=""
   LOGIN_OK=0
-  for _ in 1 2 3 4 5 6 7 8 9; do
+  set +e
+  READY_OUT=$(bash "$REPO_ROOT/scripts/ci/acr-dataplane-ready.sh" --acr "$ACR" --timeout-seconds 120 2>&1)
+  READY_RC=$?
+  set -e
+  printf '%s\n' "$READY_OUT"
+  if [ "$READY_RC" -eq 0 ]; then
     set +e
     LOGIN_OUT=$(az acr login -n "$ACR" 2>&1)
     LOGIN_RC=$?
     set -e
-    if [ "$LOGIN_RC" -eq 0 ]; then LOGIN_OK=1; break; fi
-    sleep 10
-  done
+    [ "$LOGIN_RC" -eq 0 ] && LOGIN_OK=1
+  else
+    LOGIN_OUT="$READY_OUT"
+  fi
   if [ "$LOGIN_OK" != "1" ]; then
     WHY=""
     if [ -f "$REPO_ROOT/scripts/ci/deploy-classify.mjs" ] && command -v node >/dev/null 2>&1; then
       WHY=$(node "$REPO_ROOT/scripts/ci/deploy-classify.mjs" --text "$LOGIN_OUT" --query 2>&1)
     fi
-    echo "::error::image-preflight: held the firewall lease on '$ACR' and opened it, but the ACR DATA PLANE never became reachable (9 attempts over ~90s). The existence of ${REFS[*]} is UNPROVEN — not disproven. Last error: $(printf '%s' "$LOGIN_OUT" | tr -d '\r' | tr '\n' ' ' | cut -c1-300) ${WHY}" >&2
+    echo "::error::image-preflight: held the firewall lease on '$ACR' and opened it, but the ACR DATA PLANE never became reachable within the 120s probe budget. The existence of ${REFS[*]} is UNPROVEN — not disproven. Last error: $(printf '%s' "$LOGIN_OUT" | tr -d '\r' | tr '\n' ' ' | cut -c1-300) ${WHY}" >&2
     exit 4
   fi
 fi

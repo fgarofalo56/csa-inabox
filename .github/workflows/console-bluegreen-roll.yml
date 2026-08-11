@@ -166,7 +166,10 @@ jobs:
           # after a dead run. Matches gov-console-roll.yml.
           LOOM_ACR_LEASE_TTL_MINUTES=100 \
             bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
-          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # #3210 — this loop had no verdict at all and `az acr login` is the
+          # wrong oracle anyway (returns 0 against a still-denying data plane).
+          bash scripts/ci/acr-dataplane-ready.sh --acr "$ACR" --timeout-seconds 180             || echo "::warning::ACR data plane not confirmed reachable; the next data-plane call may be denied."
+          az acr login -n "$ACR" >/dev/null
           # 2026-07-16: console builds run on the dedicated 16 GB S3 pool —
           # the default 8 GB agent cgroup-OOM-SIGKILLs the compile (cjdq..cjdv).
           # NOTE: pool builds do NOT get the trusted-service network bypass, so
