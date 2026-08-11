@@ -86,6 +86,14 @@ on:
       # deploys it on every boundary (svc-loom-unity-authz). Its entrypoint owns
       # the fail-closed authorization posture, so a change there must produce a
       # new image.
+      # loom-copilot-maf builds from ./apps/copilot-maf — it does NOT follow the
+      # ./apps/fiab-* convention, so the glob above never matched it. It is in the
+      # default "all" matrix, i.e. a push WOULD build it; the trigger simply could
+      # not fire. A change to the MAF Copilot tier merged green and never produced
+      # an image, with no failure anywhere to notice. Caught by
+      # scripts/ci/check-build-trigger-covers-matrix.mjs, which now compares the
+      # two lists mechanically.
+      - 'apps/copilot-maf/**'
       - 'apps/loom-unity/**'
       # loom-trino is the N7e Federated SQL engine, now DEFAULT-ON
       # (admin-plane/main.bicep -> data-plane/loom-trino-aca.bicep). Without its

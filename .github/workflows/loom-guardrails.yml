@@ -619,6 +619,14 @@ jobs:
       - name: 'acr-suffix-boundary-agnostic (a varying registry needs a varying suffix)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-suffix-boundary-agnostic.mjs
+      # The set of apps a push BUILDS and the set of paths that TRIGGER the push
+      # are two hand-maintained lists that must agree. loom-copilot-maf builds from
+      # ./apps/copilot-maf, outside the ./apps/fiab-* glob, so a change to the MAF
+      # tier merged green and produced no image — no failure, no signal. Both
+      # lists are machine-readable, so the drift is checkable, not reviewable.
+      - name: 'build-trigger-covers-matrix (every app a push builds is an app a push can trigger)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-build-trigger-covers-matrix.mjs
       # `az acr login` authenticates through an ARM-mediated token exchange, so it
       # returns 0 while the registry still refuses this runner's IP. Roll
       # 31454217160: this oracle said "reachable after 1 attempt" in the SAME
