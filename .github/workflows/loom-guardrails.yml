@@ -688,6 +688,17 @@ jobs:
       - name: 'acr-buildable-dockerfiles (a platform flag on FROM can never ship)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-buildable-dockerfiles.mjs
+      # curl PRINTS its -w value on BOTH failure paths AND exits non-zero, so an
+      # `|| echo 000` CONCATENATES: a connection failure becomes "000000" and an
+      # HTTP 401 under -f becomes "401000". Neither is a status code. Two live
+      # incidents on 2026-08-11: loom-unity's enforcement probe defeated its own
+      # 60-attempt retry (000000 != "000") and failed the Gov wire; and
+      # fiab-smoke-test Test 2 — which asserts a 401 IS the success case — could
+      # never pass, in all three deploy paths, while running under
+      # continue-on-error so it could never fail either.
+      - name: 'curl-httpcode-fallback (`|| echo` concatenates onto the code curl already printed)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-curl-httpcode-fallback.mjs
       # The probe itself is mutation-proved offline against stub az/curl: 403 DENIED
       # is NOT ready, a connect failure is exit 2 (not 1), and reinstating
       # `CODE="$(curl … || echo 000)"` — which concatenates to `000000` and makes

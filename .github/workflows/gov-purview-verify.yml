@@ -132,7 +132,10 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://purview.azure.net --query accessToken -o tsv | tr -d '\r')
           URL="$BASE/datamap/api/atlas/v2/types/typedefs/headers?api-version=$DATAMAP_API"
           echo "== GET $URL =="
-          HTTP=$(curl -sS -o /tmp/probe.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$URL" || echo "000")
+          # NO `|| echo "000"` — curl prints 000 itself and exits non-zero, so a
+          # fallback concatenates to "000000".
+          HTTP=$(curl -sS -o /tmp/probe.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$URL")
+          [ -n "$HTTP" ] || HTTP="000"
           echo "HTTP $HTTP"
           head -c 300 /tmp/probe.json || true; echo
           case "$HTTP" in

@@ -89,7 +89,12 @@ probe_console_external() {
   local fqdn
   fqdn=$(az containerapp show -g "$RG" -n loom-console --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null | tr -d '\r')
   [[ -z "$fqdn" ]] && { echo "ERR"; return; }
-  curl -fsS -o /dev/null -w '%{http_code}' --max-time 15 "https://${fqdn}/api/health" 2>/dev/null || echo "ERR"
+  local code
+  # NO `|| echo`: curl already prints its own value (000 on a connection
+  # failure, the real status on an HTTP error) AND exits non-zero, so a
+  # fallback CONCATENATES — a 404 became "404ERR". Default an EMPTY capture.
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${fqdn}/api/health" 2>/dev/null)"
+  [ -n "$code" ] && echo "$code" || echo "ERR"
 }
 
 for app in $APPS; do
