@@ -353,3 +353,42 @@ test('a rolled commit SHA always yields an expected SHA to validate against', ()
     'a tag that yields no expectation at all must refuse rather than validate nothing',
   );
 });
+
+test('#3159 — the roll serializes on its TARGET, and the group cannot drift from it', () => {
+  // The workflow had NO concurrency group, so two rolls could run
+  // `az containerapp update` against loom-console simultaneously. The build
+  // lane's per-boundary group staggers when rolls START but does not bound how
+  // long they OVERLAP — a roll gates on vitest for up to 50 minutes and then on
+  // a full loom-uat Playwright suite. Observed 2026-08-11: three build-triggered
+  // rolls of 92d18007 in flight at once.
+  //
+  // GitHub does not expose the `env` context to a workflow-level `concurrency:`,
+  // so the group has to be a literal. This asserts the literal still names the
+  // app and resource group the workflow actually rolls — otherwise a rename in
+  // `env:` would silently leave the roll serializing on a group that guards
+  // nothing, which is indistinguishable from having no group at all.
+  const cc = /\nconcurrency:\n(?:[ \t]+.*\n)+/.exec(WORKFLOW);
+  assert.ok(cc, 'loom-roll-and-validate.yml declares no workflow-level concurrency group');
+  const block = cc[0];
+
+  const rg = /^\s+RG_NAME:\s*(\S+)\s*$/m.exec(WORKFLOW)?.[1];
+  const app = /^\s+APP_NAME:\s*(\S+)\s*$/m.exec(WORKFLOW)?.[1];
+  assert.ok(rg && app, 'could not read RG_NAME / APP_NAME from the workflow env block');
+
+  const group = /^\s+group:\s*(.+?)\s*$/m.exec(block)?.[1];
+  assert.ok(group, 'the concurrency block declares no group');
+  assert.ok(
+    group.includes(rg) && group.includes(app),
+    `concurrency group "${group}" does not name the roll target (${rg} / ${app}); ` +
+      'it would serialize on something the roll does not touch',
+  );
+
+  // Cancelling a roll mid-`az containerapp update` is how
+  // ContainerAppOperationInProgress gets left behind. A superseded PENDING run
+  // has done nothing, so queueing is safe; cancelling an IN-FLIGHT one is not.
+  assert.match(
+    block,
+    /cancel-in-progress:\s*false/,
+    'cancel-in-progress must be false — killing a roll mid-update strands the Container App',
+  );
+});

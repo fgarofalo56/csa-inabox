@@ -118,6 +118,39 @@ permissions:
   # Read the `vitest (node 20)` check-run conclusion for the rolled commit.
   checks: read
 
+# SERIALIZE ROLLS AGAINST THE SAME CONTAINER APP (#3159).
+#
+# This workflow had NO concurrency group, so two rolls could run
+# `az containerapp update` against loom-console at the same time. The build
+# lane serializes per-boundary, which staggers when rolls START but does not
+# bound how long they OVERLAP: a roll's documented sequence is vitest gate
+# (waits up to LOOM_ROLL_VITEST_WAIT_MINUTES, default 50) -> roll -> revision
+# health -> Front Door purge -> live URL validate -> a full loom-uat Playwright
+# suite. Build N+1 finishes and fires roll N+1 while roll N is still gating.
+#
+# Observed 2026-08-11: three build-triggered rolls of 92d18007 were in flight
+# at once (two reported `skipped`, one ran). Concurrent updates return
+# ContainerAppOperationInProgress, which is an unclassified failure in a deploy
+# path under deploy-integrity.md R6 — and the loser of the race can trip the
+# auto-rollback backstop, reverting a GOOD revision because of a collision.
+#
+# The group names the ROLL TARGET (resource group + app), not github.ref:
+# rolls for different SHAs all target the SAME Container App, so a ref-keyed
+# group would not serialize the thing that actually collides. It is a literal
+# because GitHub does not expose the `env` context to a workflow-level
+# `concurrency:` — and scripts/ci/__tests__/roll-image-attribution.test.mjs
+# asserts the literal still matches env.RG_NAME + env.APP_NAME, so the two
+# cannot drift apart silently.
+#
+# cancel-in-progress is FALSE, deliberately. Killing a roll mid-`az containerapp
+# update` is how ContainerAppOperationInProgress gets left behind (recorded
+# gotcha: never cancel a same-SHA auto-roll). A queued run that is superseded by
+# a newer one has done nothing yet, and rolling the newer SHA is strictly better
+# than rolling the older — that is GitHub's default pending-run behaviour and it
+# is the correct one here.
+concurrency:
+  group: loom-roll-rg-csa-loom-admin-centralus-loom-console
+  cancel-in-progress: false
 env:
   AZURE_LOCATION: centralus
   RG_NAME: rg-csa-loom-admin-centralus
