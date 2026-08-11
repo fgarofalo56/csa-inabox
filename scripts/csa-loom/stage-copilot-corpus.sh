@@ -33,6 +33,36 @@ $ROOT/PRPs/completed/csa-loom-pillar|PRPs/completed/csa-loom-pillar
 $ROOT/PRPs/active|PRPs/active
 "
 
+# ── INTERNAL WORKING MATERIAL IS NOT PRODUCT DOCUMENTATION (#3084) ──────────
+#
+# These trees are how the TEAM tracks work — parity gaps, PRP drafts, audits.
+# Staged into the corpus they do not merely add noise, they DISPLACE real
+# answers, because they are numerous and share boilerplate headings that match
+# almost any question.
+#
+# The measured case: `rbac-007` ("What happens to undecided items when a review
+# expires?") retrieved EIGHT chunks, every one of them headed "What actually
+# happens", from eight unrelated docs/fiab/parity-gap/app-*.md files. Eight of
+# the top-K slots went to documents about rag-builder, lakehouse-inspector,
+# healthcare-popmgt, fabric-mirror-onboard, fedramp-tracker, finops-cost,
+# pipeline-designer and iot-realtime — none of which is about review expiry.
+#
+# Excluding them was measured to lift 4 surfaces and regress none (#3084).
+#
+# Pruned by `find`, so the exclusion happens at HASH time: an excluded file is
+# never in NEW, so the existing comm -13 / comm -23 diff deletes any copy a
+# previous run staged. No separate cleanup step, and no way for the two lists to
+# disagree.
+# An ARRAY, not a string. An unquoted string expands its `*` against the CWD
+# before find ever sees it — the first attempt did exactly that and find died
+# with `paths must precede expression: ./fiab/parity-gap/_global-summary-….md`,
+# having silently staged everything anyway.
+EXCLUDE_FIND=(
+  -not -path './fiab/parity-gap/*'
+  -not -path './fiab/prp/*'
+  -not -path './fiab/audit/*'
+)
+
 NEW="$(mktemp)"   # desired staged files: "<relpath>\t<sha>", sorted
 OLD="$(mktemp)"   # previous run's manifest (empty on first run)
 [ -f "$HASHES" ] && sort "$HASHES" > "$OLD" || : > "$OLD"
@@ -40,7 +70,7 @@ OLD="$(mktemp)"   # previous run's manifest (empty on first run)
 # ── 1. batch-hash every source md (one process per source tree) → NEW ──
 while IFS='|' read -r src destsub; do
   [ -n "$src" ] && [ -d "$src" ] || continue
-  ( cd "$src" && find . -name '*.md' -print0 | xargs -0 $SHA_CMD 2>/dev/null ) \
+  ( cd "$src" && find . -name '*.md' "${EXCLUDE_FIND[@]}" -print0 | xargs -0 $SHA_CMD 2>/dev/null ) \
     | while IFS= read -r line; do
         h="${line%% *}"; p="${line#* }"; p="${p#\*}"; p="${p# }"; p="${p#./}"
         printf '%s\t%s\n' "$destsub/$p" "$h"
