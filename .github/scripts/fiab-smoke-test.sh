@@ -57,7 +57,7 @@ pass() {
 # ---------------------------------------------------------------------------
 http_code() {
   local code
-  code="$(curl -sS -w '%{http_code}' "$@" 2>/dev/null)"
+  code="$(curl -sS -w '%{http_code}' "$@" 2>/dev/null)" || true
   [ -n "$code" ] || code="000"
   printf '%s' "$code"
 }
@@ -97,7 +97,7 @@ else
     -H "Authorization: Bearer $DEPLOY_PRINCIPAL_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"$WORKSPACE_NAME\",\"capacitySku\":\"F2\",\"region\":\"eastus2\",\"domainName\":\"ci\"}" \
-    || echo "000")
+    || echo "000") || true
   if [[ "$RESPONSE" != "201" ]]; then
     fail "expected 201, got $RESPONSE; body: $(cat /tmp/ws-resp 2>/dev/null)"
   else
@@ -176,7 +176,7 @@ if [[ "$BOUNDARY" == "GCC-High" || "$BOUNDARY" == "IL5" ]]; then
   echo "Test 8: Copilot orchestrate route enforces auth (MAF tier wiring)"
   RESPONSE=$(curl -fsS -o /dev/null -w "%{http_code}" --max-time 30 \
     -X POST "${CONSOLE_URL}/api/copilot/orchestrate" \
-    -H "Content-Type: application/json" -d '{}' || echo "000")
+    -H "Content-Type: application/json" -d '{}' || echo "000") || true
   if [[ "$RESPONSE" != "401" && "$RESPONSE" != "403" ]]; then
     fail "expected 401/403 (unauth) at /api/copilot/orchestrate, got $RESPONSE"
   else
