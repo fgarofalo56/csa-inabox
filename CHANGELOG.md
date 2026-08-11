@@ -25,6 +25,36 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.90.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.90.0...csa-inabox-v0.90.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **catalog-auth:** the Iceberg/Unity 403 could not be attributed to a step ([#3197](https://github.com/fgarofalo56/csa-inabox/issues/3197)) ([#3199](https://github.com/fgarofalo56/csa-inabox/issues/3199)) ([c33b42a](https://github.com/fgarofalo56/csa-inabox/commit/c33b42a716af0f36536e8f787a3be7b13250ab5f))
+* **catalog:** /admin/catalog froze the tab by rendering every row of an unbounded table ([#3197](https://github.com/fgarofalo56/csa-inabox/issues/3197)) ([#3201](https://github.com/fgarofalo56/csa-inabox/issues/3201)) ([ffc2cb1](https://github.com/fgarofalo56/csa-inabox/commit/ffc2cb1e376cee4692356e5e5938eead1df13b76))
+* **deploy:** a multi-sub estate could not bind its own lake — ADOPT the DLZ instead of assuming it ([#3196](https://github.com/fgarofalo56/csa-inabox/issues/3196)) ([372e055](https://github.com/fgarofalo56/csa-inabox/commit/372e05503648178b9a925deae9d2f9928d85ba83))
+* **deploy:** a scheduled run of EITHER sovereign lane would have torn down the estate ([#3205](https://github.com/fgarofalo56/csa-inabox/issues/3205)) ([25723b9](https://github.com/fgarofalo56/csa-inabox/commit/25723b9086b2447d7d7296bd2f28a8aa955f1e88))
+* **deploy:** the Front Door input silently disabled Front Door, and the admin-binding notice reported the wrong variable ([#3195](https://github.com/fgarofalo56/csa-inabox/issues/3195)) ([a51c87e](https://github.com/fgarofalo56/csa-inabox/commit/a51c87ee1344e9650348da66fbbf35778b55d8a6))
+* **deploy:** the routine Commercial deploy ran as if Front Door did not exist ([#3192](https://github.com/fgarofalo56/csa-inabox/issues/3192)) ([9ffc656](https://github.com/fgarofalo56/csa-inabox/commit/9ffc656cbb1f81de4f96ef450ac3a653e7df666b))
+* **front-door:** the vanity domain was never attached to a route — hard-coded customDomains: [] ([#3207](https://github.com/fgarofalo56/csa-inabox/issues/3207)) ([e2bbfef](https://github.com/fgarofalo56/csa-inabox/commit/e2bbfef7c8417c2fc2f66374ad8b545fc2d87df1))
+* **loom-unity:** narrow the [#1603](https://github.com/fgarofalo56/csa-inabox/issues/1603) overlay to 3 classes, and retract the Iceberg cause it never had ([#3200](https://github.com/fgarofalo56/csa-inabox/issues/3200)) ([d96a4cc](https://github.com/fgarofalo56/csa-inabox/commit/d96a4cc03bd36c3357e82adcb9e8257a086202c8)), closes [#3197](https://github.com/fgarofalo56/csa-inabox/issues/3197)
+* **uat:** J3 counted a minted-session reauth 401 as an editor-mount failure ([#3193](https://github.com/fgarofalo56/csa-inabox/issues/3193)) ([dcaca9e](https://github.com/fgarofalo56/csa-inabox/commit/dcaca9e3fabc657ad88e0ec75a8097e5d9191bc8))
+
+
+### Documentation
+
+* **gov:** classify the 16 blocked GCC-High capabilities — 12 are unwired, not missing ([#3198](https://github.com/fgarofalo56/csa-inabox/issues/3198)) ([d6bff7e](https://github.com/fgarofalo56/csa-inabox/commit/d6bff7e905fac40638fc5f53b578fc009dd77dc7))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump @types/react in /portal/react-webapp ([#3101](https://github.com/fgarofalo56/csa-inabox/issues/3101)) ([2eee17f](https://github.com/fgarofalo56/csa-inabox/commit/2eee17fd32994c657c11be2ca19e309acc028164))
+* **deps:** bump @azure/msal-browser in /portal/react-webapp ([#3184](https://github.com/fgarofalo56/csa-inabox/issues/3184)) ([7faaee4](https://github.com/fgarofalo56/csa-inabox/commit/7faaee40a68fd177aaccc5bd924d5e2e7db16bde))
+* **deps:** bump @azure/msal-react in /portal/react-webapp ([#3185](https://github.com/fgarofalo56/csa-inabox/issues/3185)) ([95e7527](https://github.com/fgarofalo56/csa-inabox/commit/95e7527f1e1b3916a06cb577f898872504d28127))
+* **deps:** bump docker/build-push-action from 6 to 7 ([#3189](https://github.com/fgarofalo56/csa-inabox/issues/3189)) ([d451043](https://github.com/fgarofalo56/csa-inabox/commit/d4510433260695502979b3f8d8bd4b1a06c237b0))
+* **deps:** bump docker/login-action from 3 to 4 ([#3190](https://github.com/fgarofalo56/csa-inabox/issues/3190)) ([9b10b11](https://github.com/fgarofalo56/csa-inabox/commit/9b10b1113ec195c501a74e059bf19c74916b3374))
+* **deps:** bump docker/setup-buildx-action from 3 to 4 ([#3186](https://github.com/fgarofalo56/csa-inabox/issues/3186)) ([020cf1e](https://github.com/fgarofalo56/csa-inabox/commit/020cf1e43881eb535002ae845cce53395369a848))
+
 ## [0.90.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.89.1...csa-inabox-v0.90.0) (2026-08-10)
 
 

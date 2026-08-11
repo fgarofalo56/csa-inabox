@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "9474903355279296012"
+      "templateHash": "13488059606731759124"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15477161545907254042"
+              "templateHash": "7726745333224801619"
             }
           },
           "definitions": {
@@ -27055,7 +27055,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "5789484081176319906"
+                      "templateHash": "5142357106180637301"
                     }
                   },
                   "parameters": {
@@ -27346,7 +27346,7 @@
                       "apiVersion": "2024-02-01",
                       "name": "[format('{0}/{1}/{2}', format('fd-loom-{0}', uniqueString(resourceGroup().id)), format('loom-console-{0}', uniqueString(resourceGroup().id)), 'console-route')]",
                       "properties": {
-                        "customDomains": [],
+                        "customDomains": "[if(empty(parameters('vanityDomain')), createArray(), createArray(createObject('id', resourceId('Microsoft.Cdn/profiles/customDomains', format('fd-loom-{0}', uniqueString(resourceGroup().id)), variables('vanityName')))))]",
                         "originGroup": {
                           "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', format('fd-loom-{0}', uniqueString(resourceGroup().id)), 'aca-console')]"
                         },
@@ -27362,6 +27362,7 @@
                         "httpsRedirect": "Enabled"
                       },
                       "dependsOn": [
+                        "[resourceId('Microsoft.Cdn/profiles/customDomains', format('fd-loom-{0}', uniqueString(resourceGroup().id)), variables('vanityName'))]",
                         "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('fd-loom-{0}', uniqueString(resourceGroup().id)), format('loom-console-{0}', uniqueString(resourceGroup().id)))]",
                         "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', format('fd-loom-{0}', uniqueString(resourceGroup().id)), 'aca-console', 'aca-console-origin')]",
                         "[resourceId('Microsoft.Cdn/profiles/originGroups', format('fd-loom-{0}', uniqueString(resourceGroup().id)), 'aca-console')]"

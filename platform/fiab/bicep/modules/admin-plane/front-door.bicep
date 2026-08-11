@@ -386,7 +386,24 @@ resource fdRoute 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = {
   parent: fdEndpoint
   name: 'console-route'
   properties: {
-    customDomains: []
+    // ASSOCIATE THE VANITY DOMAIN. This was a hard-coded `[]`, which meant the
+    // route served ONLY the default *.azurefd.net host: Front Door had no route
+    // bound to the custom hostname, so the edge answered it with a fallback
+    // `CN=*.azureedge.net` certificate and every browser reported
+    // ERR_CERT_COMMON_NAME_INVALID. Measured live on csa-loom.limitlessdata.ai
+    // 2026-08-11 — the custom domain itself was Approved/Succeeded with a
+    // ManagedCertificate the whole time; nothing was expired. It simply was not
+    // attached to a route.
+    //
+    // Because the association had to be made out-of-band, it was also invisible
+    // to this template and therefore DELETED by any apply that reached this
+    // module — the same "a bicep re-render drops whatever is not in the
+    // template" class that blanked the bootstrap admin OID and LOOM_ADLS_ACCOUNT.
+    //
+    // `linkToDefaultDomain` stays Enabled, so the generated *.azurefd.net host
+    // keeps working alongside the vanity name (the roll gates and the in-VNet
+    // UAT both target it).
+    customDomains: empty(vanityDomain) ? [] : [ { id: fdCustomDomain!.id } ]
     originGroup: { id: fdOriginGroup.id }
     supportedProtocols: ['Http', 'Https']
     patternsToMatch: ['/*']
