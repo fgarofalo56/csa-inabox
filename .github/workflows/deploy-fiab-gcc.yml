@@ -1,5 +1,15 @@
 name: deploy-fiab-gcc
 
+# The run-name carries the OUTCOME, because the conclusion alone lies.
+# Without credentials this lane skips both real jobs and concludes SUCCESS —
+# five consecutive green runs, three of them scheduled, that deployed nothing
+# (see the precheck below). `gh run list` and the GitHub UI show only the
+# conclusion, so the run title is the one place the truth is visible without
+# opening the run.
+run-name: >-
+  deploy-fiab-gcc
+  ${{ github.event_name == 'schedule' && '(scheduled)' || format('({0})', inputs.run_mode) }}
+
 # CSA Loom — nightly deploy validation against GCC (Azure Commercial
 # under M365 GCC identity). GCC limitations: no F-SKU, no Direct
 # Lake parity.
@@ -67,8 +77,21 @@ jobs:
         run: |
           if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
             echo "configured=false" >> $GITHUB_OUTPUT
-            echo "::warning::AZURE_GCC_* secrets not configured — skipping."
-            echo "::warning::Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md"
+            MISSING=""
+            [[ -z "$C" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_ID"
+            [[ -z "$S" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_SECRET"
+            [[ -z "$T" ]] && MISSING="$MISSING AZURE_GCC_TENANT_ID"
+            [[ -z "$U" ]] && MISSING="$MISSING AZURE_GCC_SUBSCRIPTION_ID"
+            # A CRON that can never do anything is not a no-op, it is a defect
+            # that reports green every day (deploy-integrity.md R3). An explicit
+            # dispatch is different: the operator asked, and gets the warning in
+            # front of them, so a graceful skip is the right answer there.
+            if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+              echo "::error::deploy-fiab-gcc is on a DAILY CRON and cannot authenticate — missing secret(s):${MISSING}. Every scheduled run since this cron was added has reported SUCCESS while skipping both real jobs, i.e. a green tick over a lane that has never deployed anything. Either bootstrap the secrets (docs/fiab/runbooks/secrets-bootstrap.md) or remove the schedule. Failing rather than reporting a green no-op."
+              exit 1
+            fi
+            echo "::warning::AZURE_GCC_* secrets not configured — skipping. Missing:${MISSING}"
+            echo "::warning::Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md. NOTE: this run will conclude SUCCESS having deployed NOTHING; that is why the scheduled path fails instead."
           else
             echo "configured=true" >> $GITHUB_OUTPUT
           fi
