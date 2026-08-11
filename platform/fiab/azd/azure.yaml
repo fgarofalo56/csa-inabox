@@ -26,52 +26,78 @@ infra:
 # platform/fiab/azd -> .. = platform/fiab -> ../.. = platform -> ../../.. = repo
 # root. All seven needed one more level. Checked with os.path.normpath against the
 # real tree, not by eye.
+# LANGUAGE IS `docker` FOR ALL SEVEN, because all seven ARE Dockerfile builds.
+#
+# They declared csharp / java / ts. azd takes that literally and looks for the
+# language's project file BEFORE it looks at `docker.path`, so `azd provision`
+# died at:
+#
+#     ERROR: initializing service 'activator-engine', could not locate a dotnet
+#     project file for service activator-engine in …/apps/fiab-activator-engine
+#
+# measured on deploy-fiab-gcch run 31490493159. Checked against the tree, the
+# declarations were wrong for five of seven — activator-engine (csharp, no
+# .csproj), setup-orchestrator (csharp, actually PYTHON), mirroring-engine (java,
+# no pom), direct-lake-shim (csharp, no .csproj), mcp-server (ts, no
+# package.json). Only console and mcp-bridge matched what they claimed.
+#
+# `docker` is the documented value for exactly this — Learn, "Use Docker support
+# to deploy containerized apps in any language": set `language: docker` and give
+# `docker.path`, and azd builds the Dockerfile without introspecting the project.
+# It is in the schema's allowed list alongside dotnet/py/js/java/go.
+#
+# scripts/ci/check-azd-service-paths.mjs now also asserts that a declared
+# compiled language HAS the project file it implies, so this cannot come back.
 services:
   console:
     project: ../../../apps/fiab-console
-    language: ts
+    language: docker
     host: containerapp
     docker:
       path: ./Dockerfile
 
   setup-orchestrator:
     project: ../../../apps/fiab-setup-orchestrator
-    language: csharp
+    language: docker
     host: containerapp
     docker:
       path: ./Dockerfile
 
   mcp-server:
     project: ../../../apps/fiab-mcp-config
-    language: ts
+    language: docker
     host: containerapp
     docker:
-      path: ./Dockerfile.wrapper
+      # ./Dockerfile, not ./Dockerfile.wrapper — the latter has never existed in
+      # apps/fiab-mcp-config. The authoritative answer is the build lane:
+      # build-fiab-images-acr-tasks.yml maps loom-mcp -> ./apps/fiab-mcp-config
+      # with no `file:` override, i.e. the default Dockerfile.
+      path: ./Dockerfile
 
   mcp-bridge:
     project: ../../../apps/fiab-mcp-bridge
-    language: ts
+    language: docker
     host: containerapp
     docker:
       path: ./Dockerfile
 
   activator-engine:
     project: ../../../apps/fiab-activator-engine
-    language: csharp
+    language: docker
     host: containerapp
     docker:
       path: ./Dockerfile
 
   mirroring-engine:
     project: ../../../apps/fiab-mirroring-engine
-    language: java
+    language: docker
     host: containerapp
     docker:
       path: ./Dockerfile
 
   direct-lake-shim:
     project: ../../../apps/fiab-direct-lake-shim
-    language: csharp
+    language: docker
     host: containerapp
     docker:
       path: ./Dockerfile
