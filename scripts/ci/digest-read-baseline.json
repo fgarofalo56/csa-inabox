@@ -1,0 +1,15 @@
+{
+  "_owner": "CSA Loom platform / deploy-integrity",
+  "_why": "Manifest-digest reads that have not yet adopted scripts/ci/resolve-acr-digest.sh. The resolver keeps ABSENT (exit 3) apart from UNKNOWN (exit 4); a single-shot read collapses them, which is the #2980/#2982 defect class. Recorded per file so NEW bypasses fail while existing debt stays visible.",
+  "_unblock": "Convert the site to `bash scripts/ci/resolve-acr-digest.sh --acr <acr> --image <repo:tag>` and branch on 0/3/4, then decrement (or delete) the entry here. The rule FAILS if the baseline overstates reality, so it cannot rot upward or downward.",
+  "_note": "Not all nine are naive. gov-build-images.yml already captures stderr AND calls deploy-classify.mjs — correct by hand, but a second implementation of the same table. deploy-loom-sharing.yml captures the exit code and then collapses an unreadable registry to an empty digest, which IS the defect. mirror-upstream-images.sh reads back a JUST-IMPORTED ref and has its own three-state handling with a self-test; converting it needs care, not a sweep.",
+  "entries": {
+    ".github/workflows/build-fiab-images-acr-tasks.yml": 1,
+    ".github/workflows/deploy-loom-sharing.yml": 1,
+    ".github/workflows/full-app-deploy-commercial.yml": 2,
+    ".github/workflows/gov-build-images.yml": 2,
+    ".github/workflows/gov-console-roll.yml": 1,
+    ".github/workflows/gov-provision-streaming-migrate.yml": 1,
+    "scripts/ci/mirror-upstream-images.sh": 1
+  }
+}
