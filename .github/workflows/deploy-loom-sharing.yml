@@ -233,7 +233,7 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           # #3210 — see loom-roll-and-validate: `az acr login` is not a
           # data-plane reachability probe.
-          bash scripts/ci/acr-dataplane-ready.sh --acr "$ACR" --timeout-seconds 180             || echo "::warning::ACR data plane not confirmed reachable; the az acr build upload may be denied."
+          bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR" --timeout-seconds 180             || echo "::warning::ACR data plane not confirmed reachable; the az acr build upload may be denied."
           az acr login -n "$ACR" >/dev/null
 
           az acr build --registry "$ACR" \

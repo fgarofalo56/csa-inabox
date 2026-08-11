@@ -506,7 +506,7 @@ jobs:
           # Measured both sides 2026-08-11: closed -> HTTP 403 DENIED, open ->
           # HTTP 401 UNAUTHORIZED. Self-tested offline in
           # scripts/ci/test-acr-dataplane-ready.sh.
-          if ! bash scripts/ci/acr-dataplane-ready.sh --acr "${{ env.ACR_NAME }}" --timeout-seconds 180; then
+          if ! bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "${{ env.ACR_NAME }}" --timeout-seconds 180; then
             # Unreachable ≠ unsigned. Same policy as a missing loom-uat job:
             # loud warning, gate skipped — an infra hiccup must never
             # permanently block an emergency roll.

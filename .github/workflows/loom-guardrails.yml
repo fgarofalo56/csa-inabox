@@ -37,7 +37,15 @@ concurrency:
 jobs:
   guardrails:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 was the original budget and the job has outgrown it: on 2026-08-11 it
+    # ran 10m15s, was killed at step 94 of 98, and GitHub reported the kill as
+    # `cancelled` — which in a run list reads like "superseded by a newer push",
+    # not "this job died". The four steps after it showed as `skipped`, and
+    # skipped reads as passed (the #3042 shape this file's `if: !cancelled()`
+    # convention exists to prevent — a TIMEOUT defeats that convention, because
+    # the runner is gone). Raised with headroom; if it approaches this again the
+    # answer is to split the job, not to raise it further.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
