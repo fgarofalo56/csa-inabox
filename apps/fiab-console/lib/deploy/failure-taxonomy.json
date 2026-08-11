@@ -24,7 +24,6 @@
     "not classify this' — which is a correct outcome. A wrong match is not."
   ],
   "schemaVersion": 1,
-
   "classPrecedence": [
     "defect",
     "permission",
@@ -53,7 +52,6 @@
     "on run 31100384405, where a retryable CapacityNotAvailable leaf was never",
     "retried because an unrelated InvalidTemplate leaf won this precedence."
   ],
-
   "classes": {
     "transient": {
       "retryable": true,
@@ -129,13 +127,19 @@
       "exitCode": 17
     }
   },
-
   "signals": [
     {
       "id": "defect.invalid-template",
       "class": "defect",
-      "anyOf": ["invalidtemplate", "invalidtemplatedeployment", "deploymentfailed: the template"],
-      "not": ["skunotavailable", "quotaexceeded"],
+      "anyOf": [
+        "invalidtemplate",
+        "invalidtemplatedeployment",
+        "deploymentfailed: the template"
+      ],
+      "not": [
+        "skunotavailable",
+        "quotaexceeded"
+      ],
       "observed": "ARM rejects main.bicep's compiled template. Excluded when the nested reason is a SKU/quota problem, which InvalidTemplateDeployment also wraps.",
       "remediationKind": "not-remediable",
       "remediation": "The compiled ARM template is invalid — this is a CSA Loom defect, not an estate problem. Re-run `az bicep build` on an LF checkout, and if apps/fiab-console/deploy-templates/main.json changed, regenerate it (scripts/ci/check-deploy-template-sync.mjs enforces the byte-compare). File the run against the deploy-integrity label."
@@ -143,7 +147,9 @@
     {
       "id": "defect.acr-name-constructed",
       "class": "defect",
-      "anyOf": ["registry names may contain only alpha numeric"],
+      "anyOf": [
+        "registry names may contain only alpha numeric"
+      ],
       "observed": "full-app-deploy-commercial.yml resolved an EMPTY ACR name and passed it to az. Always a Loom bug in name resolution, never an operator input problem.",
       "remediationKind": "not-remediable",
       "remediation": "A CSA Loom step passed an empty registry name to `az`. The real failure is upstream, in whatever was supposed to resolve the ACR — read the log ABOVE this error, not this line. Registry coordinates must be DISCOVERED (Resource Graph by tag), never constructed from a region input."
@@ -151,7 +157,10 @@
     {
       "id": "defect.firewall-policy-update-race",
       "class": "defect",
-      "anyOf": ["firewallpolicyupdatefailed", "faulted referenced firewalls"],
+      "anyOf": [
+        "firewallpolicyupdatefailed",
+        "faulted referenced firewalls"
+      ],
       "observed": "Measured on deploy-fiab-commercial runs 31194622139 + 31196922481 (centralus, 2026-08-07). The referenced firewall was healthy at rest — Succeeded, allocated, Standard tier matching the policy — so the 'faulted' state was transient. The ARM operation records showed the firewall-policy PUT and the hub VNet PUT sharing an identical start timestamp: the policy carried no dependsOn and was scheduled in the first parallel wave, concurrently with the PUT of the VNet that declares AzureFirewallSubnet. network.bicep now serializes the policy behind subnetNsgAttach + bastion. Before this was understood, the leaf classified as unknown and correctly refused to retry.",
       "remediationKind": "not-remediable",
       "remediation": "The firewall policy could not be pushed to a firewall that references it. This is NOT evidence the firewall is broken — verify before assuming either cause. On the one occurrence measured (centralus 2026-08-07) the firewall was healthy and the true cause was a deploy-ordering race against a concurrent hub-VNet write, fixed by serializing the policy behind subnetNsgAttach + bastion in modules/admin-plane/network.bicep. Confirm which case you have: `az network firewall show -g rg-csa-loom-admin-<region> -n fw-csa-loom-<region> --query provisioningState` — if that is Succeeded, look for a concurrent hub writer with `az deployment operation group list -g rg-csa-loom-admin-<region> --name network` and compare start timestamps; two operations sharing a start instant is the race. If the firewall is genuinely Failed, that is a different problem and this remediation does not apply. Do NOT read a successful hand-run `az network firewall policy update` as proof the estate is healed — at rest there is no concurrent writer, so the manual PUT succeeds and the next deploy fails identically. A policy left in Failed state with zero rule collection groups is residue of this failure; a correctly-ordered PUT heals it. On a current template this is a defect (a new concurrent hub-VNet writer) — file it against deploy-integrity, refs #3038."
@@ -159,7 +168,11 @@
     {
       "id": "permission.authorization-failed",
       "class": "permission",
-      "anyOf": ["authorizationfailed", "linkedauthorizationfailed", "does not have authorization to perform action"],
+      "anyOf": [
+        "authorizationfailed",
+        "linkedauthorizationfailed",
+        "does not have authorization to perform action"
+      ],
       "observed": "ARM's standard RBAC denial. LinkedAuthorizationFailed is the cross-resource variant (e.g. assigning a UAMI you cannot read).",
       "remediationKind": "operator-action",
       "remediation": "The deploying identity lacks the role this action needs. A subscription-scoped deployment requires Contributor on the target subscription; creating role assignments additionally requires User Access Administrator or Owner. Grant the role at the scope named in the ARM message, then re-run.",
@@ -168,7 +181,12 @@
     {
       "id": "permission.forbidden",
       "class": "permission",
-      "anyOf": ["(forbidden)", "code: forbidden", "\"code\":\"forbidden\"", "operation returned an invalid status 'forbidden'"],
+      "anyOf": [
+        "(forbidden)",
+        "code: forbidden",
+        "\"code\":\"forbidden\"",
+        "operation returned an invalid status 'forbidden'"
+      ],
       "observed": "Key Vault and other data planes return a bare Forbidden. Matched narrowly (with punctuation/JSON context) so the word 'forbidden' appearing inside prose does not trip it.",
       "remediationKind": "operator-action",
       "remediation": "A data plane refused the deploying identity. For Key Vault this is nearly always the vault firewall or a missing RBAC data-plane role (Key Vault Secrets Officer / Certificates Officer at the vault scope). Grant the data-plane role — a control-plane Contributor is NOT sufficient — then re-run."
@@ -176,7 +194,10 @@
     {
       "id": "permission.acr-denied",
       "class": "permission",
-      "anyOf": ["denied: requested access to the resource is denied", "unauthorized: authentication required"],
+      "anyOf": [
+        "denied: requested access to the resource is denied",
+        "unauthorized: authentication required"
+      ],
       "observed": "Docker/OCI registry denial from `az acr build` / `cosign` against ACR.",
       "remediationKind": "operator-action",
       "remediation": "The registry refused this identity. Grant AcrPush (build) or AcrPull (roll) on the registry, and confirm the ACR firewall lease is held — CSA Loom keeps publicNetworkAccess=Disabled between builds (scripts/csa-loom/acr-firewall-lease.sh)."
@@ -184,7 +205,12 @@
     {
       "id": "quota.exceeded",
       "class": "quota",
-      "anyOf": ["quotaexceeded", "resourcequotaexceeded", "subscriptionoperationslimitexceeded", "operation could not be completed as it results in exceeding approved"],
+      "anyOf": [
+        "quotaexceeded",
+        "resourcequotaexceeded",
+        "subscriptionoperationslimitexceeded",
+        "operation could not be completed as it results in exceeding approved"
+      ],
       "observed": "Verified verbatim from build-fiab-images-acr-tasks run 31022950740 (2026-08-05): 'QuotaExceeded: standardDDSv5Family Cores, Location: centralus, Current Limit: 200, Current Usage: 196, Additional Required: 8'.",
       "remediationKind": "operator-action",
       "remediation": "The subscription is at a quota limit in this region. Retrying cannot help. Request an increase for the family and region named in the message, or reduce what the deployment asks for. For an ACR Tasks agent-pool core denial specifically, the poolless hosted build is the fallback — but see scripts/ci/check-acr-agent-pool.mjs R1 before switching it off.",
@@ -193,7 +219,12 @@
     {
       "id": "quota.sku-unavailable",
       "class": "quota",
-      "anyOf": ["skunotavailable", "locationnotavailableforresourcetype", "the requested size for resource", "is currently not available in location"],
+      "anyOf": [
+        "skunotavailable",
+        "locationnotavailableforresourcetype",
+        "the requested size for resource",
+        "is currently not available in location"
+      ],
       "observed": "ARM capacity/SKU refusals. Grouped with quota because the remediation shape is identical: change the ask, do not retry it.",
       "remediationKind": "operator-action",
       "remediation": "The requested SKU or resource type is not offered in this region (or is capacity-constrained right now). Pick the declared fallback SKU, or deploy this service cross-region. Purview specifically supports cross-region adoption via the purviewLocation parameter."
@@ -201,7 +232,9 @@
     {
       "id": "config.already-exists-purview",
       "class": "config",
-      "anyOf": ["enterprisetenantalreadyexists"],
+      "anyOf": [
+        "enterprisetenantalreadyexists"
+      ],
       "observed": "Purview is a TENANT singleton — main.bicep:100 documents this. A second account always fails with exactly this code.",
       "remediationKind": "platform-will-fix",
       "remediation": "This tenant already has a Purview account and only one is permitted. Loom must ADOPT it rather than create a second: set the Purview entry of the deployment plan to mode 'adopt' with the existing account's coordinates and re-run. Never attempt the create twice."
@@ -209,7 +242,9 @@
     {
       "id": "config.disallowed-by-policy",
       "class": "config",
-      "anyOf": ["requestdisallowedbypolicy"],
+      "anyOf": [
+        "requestdisallowedbypolicy"
+      ],
       "observed": "Verified verbatim from deploy run 31100384405 (2026-08-06), drilled from the failed 'catalog' nested deployment: the Microsoft.Purview/accounts RP preflight (error 21010) simulated its MANAGED storage account against Azure Policy, and the MCAPSGovDeployPolicies management-group assignment (definition StorageAccount_PublicNetwork_Modify) required Microsoft.Storage/storageAccounts/publicNetworkAccess=Disabled — rejecting even an UPDATE of an account whose live managedResourcesPublicNetworkAccess was NotSpecified. The leaf message is a JSON blob carrying the restricted field, the required values, and the policyAssignmentId. This signal is declared BEFORE config.acr-unreachable on purpose: the blob contains the literal 'publicnetworkaccess', which that signal also matches, and within one class file order breaks the tie.",
       "remediationKind": "operator-action",
       "remediation": "Azure Policy denied the request — the evidence line carries the policy JSON: the restricted field, the required values, and the exact policyAssignmentId. This is deterministic; retrying cannot help. First check whether the template already carries a compliance default for the named field (Purview managed storage: catalog.bicep purviewManagedResourcesPublicNetworkAccess defaults to Disabled — a run pinned to an older template predates it). scripts/csa-loom/preflight-policy-restrictions.mjs surfaces the restriction BEFORE a deploy is submitted. If the deployment genuinely cannot comply, the assignment named in the message must be exempted at the deployment scope by whoever owns that policy — quote the assignment id from this evidence."
@@ -217,7 +252,9 @@
     {
       "id": "config.private-dns-zone-exists",
       "class": "config",
-      "anyOf": ["privatednszonealreadyexists"],
+      "anyOf": [
+        "privatednszonealreadyexists"
+      ],
       "observed": "The classic brownfield re-deploy failure: the privatelink zone is already in the target scope. NOTE: docs/fiab/runbooks/deploy-failure.md remediates this with `existingPrivateDnsZones = true`, a parameter that DOES NOT EXIST in platform/fiab/bicep — do not repeat that instruction.",
       "remediationKind": "platform-will-fix",
       "remediation": "A Private DNS zone of this name already exists. Loom must adopt it — flip that zone to mode 'adopt' in the plan's network decision and add the hub VNet link — rather than re-create it. There is no `existingPrivateDnsZones` parameter; any doc that says otherwise is wrong."
@@ -225,7 +262,9 @@
     {
       "id": "config.private-dns-namespace-overlap",
       "class": "config",
-      "anyOf": ["cannot be linked to multiple zones with overlapping namespaces"],
+      "anyOf": [
+        "cannot be linked to multiple zones with overlapping namespaces"
+      ],
       "observed": "Verified verbatim from deploy-fiab-commercial run 31069329802 (2026-08-06), drilled out of the failed deployment operations of admin-plane/network: 'A virtual network cannot be linked to multiple zones with overlapping namespaces. You tried to link virtual network with privatelink.azuredatabricks.net and privatelink.azuredatabricks.net zones.' Azure permits a VNet at most ONE Private DNS zone link per namespace, so a hub VNet already linked to a DIFFERENT zone of that name can never take the admin plane's link.",
       "remediationKind": "platform-will-fix",
       "remediation": "This VNet is already linked to a DIFFERENT Private DNS zone of the same namespace, so the link this deploy wants can never be created. DO NOT delete the existing link first — the A records live in that zone and removing it takes the service dark. Run `node scripts/csa-loom/migrate-private-dns-zone-owner.mjs --namespace <zone> --keep-zone-rg <intended rg> --keep-zone-subscription <sub> --stale-zone-rg <owning rg> --stale-zone-subscription <sub>` (dry-run by default, --apply to execute): it dual-registers the record on both zones under a NEW config name (never overwriting the one the bicep owns), moves the VNet links, VERIFIES the record and links landed, removes ONLY the config that still points at the stale zone — refusing if that would leave the endpoint's DNS zone group empty — VERIFIES again that the group and the record survived, and only then deletes the stale zone. Read the dry run before you pass --apply. `node scripts/csa-loom/preflight-private-dns-links.mjs` detects the condition before the deploy runs, and deploy-fiab-commercial.yml runs it as a preflight step."
@@ -233,7 +272,10 @@
     {
       "id": "config.role-assignment-exists",
       "class": "config",
-      "anyOf": ["roleassignmentexists", "the role assignment already exists"],
+      "anyOf": [
+        "roleassignmentexists",
+        "the role assignment already exists"
+      ],
       "observed": "Verified verbatim from deploy-fiab-commercial run 31069329802 (2026-08-06), drilled out of the failed deployment operations of admin-plane/swa-publish-rbac: 'RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is 2f9290b01a8244fea959b441c49c84cb.'",
       "remediationKind": "operator-action",
       "remediation": "The grant is ALREADY IN PLACE — this is not a missing permission. ARM enforces uniqueness on the (scope, principalId, roleDefinitionId) TRIPLE, not on the assignment NAME, so an assignment created under a different name blocks the template's create forever. It happens when the name seed changed (the swa-publish-rbac role definition id was corrected from …706ee to …84772 on 2026-08-03, which changed guid(scope, principalId, roleId)) or when the grant was created out-of-band by `az role assignment create`, which mints a random GUID. To converge, delete the stray and let the template recreate it under its deterministic name: `az role assignment delete --ids <the id printed in this message>` then re-run. `skipRoleGrants=true` suppresses the symptom and leaves the estate un-reconciled — it is a workaround, not a fix.",
@@ -242,7 +284,10 @@
     {
       "id": "config.container-app-secret-in-use",
       "class": "config",
-      "anyOf": ["containerappsecretinuse", "active revision referencing a secret you are trying to delete"],
+      "anyOf": [
+        "containerappsecretinuse",
+        "active revision referencing a secret you are trying to delete"
+      ],
       "observed": "Measured on deploy-fiab-commercial run 31202584780 (centralus, 2026-08-07). The template's secret list for loom-console no longer declared four secrets the ACTIVE revision still referenced (loom-internal-token, airflow-admin-password, loom-dataverse-client-secret, cosmos-vcore-conn), and ARM refuses to delete a secret an active revision uses. Two contributors: a rename (the live app carries airflow-admin-password while the template now declares loom-airflow-admin-password, so they are different secrets and the old one is orphaned), and secrets that are conditional on runtime-resolved values, which makes the declared set vary between runs of the SAME template. Deterministic given the estate, so config rather than transient.",
       "remediationKind": "not-remediable",
       "remediation": "The template would delete a Container App secret that the currently-active revision still references. This blocks app-deployments, which is the module that emits LOOM_ICEBERG_CATALOG_URL, the LOOM_TRINO_* family and LOOM_UNITY_URL - so federation stays on its placeholder until it is resolved. Read the message: it names both the secrets and the pinning revision. Confirm the real shape before changing anything - `az containerapp show -g <rg> -n loom-console --query properties.configuration.secrets[].name` versus `az containerapp revision show -g <rg> -n loom-console --revision <pinning-revision> --query \"properties.template.containers[0].env[?secretRef!=null].secretRef\"`. If a live secret name has no counterpart in the template, it was RENAMED and the old one is orphaned. Do NOT 'fix' this by deactivating the revision when activeRevisionsMode is Single and it is the only active revision - that is the sign-in path, and this repo has already had one MSAL production outage. The durable fix is in the template: keep declaring the secrets that exist, or make the declared set deterministic rather than conditional on runtime-resolved values. Refs #3038."
@@ -250,8 +295,14 @@
     {
       "id": "config.vnet-range-in-use",
       "class": "config",
-      "anyOf": ["vnetaddressrangeinuse", "address space", "overlaps with"],
-      "not": ["authorizationfailed"],
+      "anyOf": [
+        "vnetaddressrangeinuse",
+        "address space",
+        "overlaps with"
+      ],
+      "not": [
+        "authorizationfailed"
+      ],
       "observed": "Hub or spoke CIDR collides with an existing VNet. Spoke CIDR is currently hardcoded 10.100.0.0/16 (landing-zone/main.bicep:115 is never passed from root), so any estate using that range collides deterministically.",
       "remediationKind": "platform-will-fix",
       "remediation": "The requested address space overlaps an existing VNet. Loom must re-plan the CIDR from the scanned VNet inventory (pick the next free block) and re-emit. If no free range of the required size exists, that is a hard stop — Loom cannot renumber a customer VNet, and the exact number and size of subnets required has to be surfaced instead."
@@ -259,8 +310,16 @@
     {
       "id": "config.name-taken",
       "class": "config",
-      "anyOf": ["storageaccountalreadytaken", "is already in use", "name is not available", "alreadyexists"],
-      "not": ["enterprisetenantalreadyexists", "privatednszonealreadyexists"],
+      "anyOf": [
+        "storageaccountalreadytaken",
+        "is already in use",
+        "name is not available",
+        "alreadyexists"
+      ],
+      "not": [
+        "enterprisetenantalreadyexists",
+        "privatednszonealreadyexists"
+      ],
       "observed": "Globally-unique-name collisions. The two more specific already-exists codes are excluded so they keep their own, better remediations.",
       "remediationKind": "operator-action",
       "remediation": "A globally-unique resource name is taken. If the existing resource is yours, adopt it in the deployment plan; if it belongs to someone else, the deterministic name suffix has to change."
@@ -268,8 +327,14 @@
     {
       "id": "config.resource-group-not-found",
       "class": "config",
-      "anyOf": ["resourcegroupnotfound", "could not be found"],
-      "not": ["authorizationfailed", "subscriptionnotfound"],
+      "anyOf": [
+        "resourcegroupnotfound",
+        "could not be found"
+      ],
+      "not": [
+        "authorizationfailed",
+        "subscriptionnotfound"
+      ],
       "observed": "Verified verbatim from full-app-deploy-commercial run 31028909702 (2026-08-05): a default dispatch resolved rg-csa-loom-admin-eastus2 while the live estate is centralus. The step died here and the run's headline error became an unrelated registry-name complaint.",
       "remediationKind": "platform-will-fix",
       "remediation": "The named resource group does not exist in the target subscription. If the name was CONSTRUCTED from a region input, that is the bug: coordinates must be discovered (Resource Graph, by tag or name pattern) across the subscription, not assembled from a default. For a multi-subscription deployment, spoke resource groups must be pre-created — a subscription-scoped deployment cannot create a resource group in a remote subscription."
@@ -277,8 +342,20 @@
     {
       "id": "config.resource-not-found",
       "class": "config",
-      "anyOf": ["resourcenotfound", "parentresourcenotfound", "was not found"],
-      "not": ["authorizationfailed", "resourcegroupnotfound", "forbidden", "in the registry", "manifestunknown", "manifest_unknown", "tagnotfound"],
+      "anyOf": [
+        "resourcenotfound",
+        "parentresourcenotfound",
+        "was not found"
+      ],
+      "not": [
+        "authorizationfailed",
+        "resourcegroupnotfound",
+        "forbidden",
+        "in the registry",
+        "manifestunknown",
+        "manifest_unknown",
+        "tagnotfound"
+      ],
       "observed": "ARM's per-resource 404: az emits `(ResourceNotFound) The Resource 'Microsoft.App/containerApps/<name>' under resource group '<rg>' was not found.` This is the ONLY basis on which a workflow may say a resource does not exist — an `az … show` that failed for any OTHER reason establishes nothing about existence (deploy-integrity.md R7).",
       "remediationKind": "platform-will-fix",
       "remediation": "ARM answered and the resource genuinely does not exist yet. If a deploy step was supposed to create it, that step is what failed — look upstream. If this is a roll skipping an app the estate does not carry, that is a correct skip, but it must be stated as 'ARM answered ResourceNotFound', never inferred from a command that merely failed."
@@ -296,7 +373,11 @@
         "does not exist for the repository",
         "repository name not known to registry"
       ],
-      "not": ["denied: requested access", "unauthorized: authentication required", "not allowed access"],
+      "not": [
+        "denied: requested access",
+        "unauthorized: authentication required",
+        "not allowed access"
+      ],
       "observed": "The registry ANSWERED and the answer was 'no such tag'. This signal is the ONLY basis on which any CSA Loom code may state that an image tag does not exist. The first draft of scripts/ci/roll-gate-decision.mjs matched 'the tag does not exist' when az actually emits 'the SPECIFIED tag does not exist' — hence the verbatim strings here. 'does not exist for the repository' was added for #3090: it is the wording az ACTUALLY emits for a missing manifest (`ResourceNotFoundError: The manifest 'v0.1' does not exist for the repository 'loom-console' in the registry '<acr>'`), and config.resource-not-found deliberately excludes it via `not: [\"in the registry\"]` — so until this string was listed here the real absence message classified as `unknown` and NOTHING in the repo could honestly establish absence. NOTE: this comment used to claim scripts/ci/assert-acr-image-tags.sh 'encodes the same split'. That claim was FALSE — that script mapped any unclassified per-ref failure to MISSING whenever a follow-up `az acr repository list` happened to succeed, which is what produced the false-MISSING verdicts in #3090. Both shell checkers now delegate to THIS table instead of re-implementing a regex.",
       "remediationKind": "operator-action",
       "remediation": "The registry answered and the tag is genuinely absent. The image build for this SHA has not finished, or built a different app subset. Wait for the producing build workflow, or dispatch with a tag that exists. Do NOT roll — a revision that cannot pull its image is worse than no roll."
@@ -311,15 +392,20 @@
         "client with ip",
         "is not allowed access"
       ],
-      "not": ["requestdisallowedbypolicy"],
+      "not": [
+        "requestdisallowedbypolicy"
+      ],
       "observed": "ACR keeps publicNetworkAccess=Disabled between builds by design (#2603). Deterministic, not transient — retrying without taking the firewall lease will fail identically. CRITICAL: this outcome must NEVER be rendered as 'the tag does not exist'. The registry did not answer, so nothing is known about the tag (deploy-integrity.md R7 — the message that sent two investigations down the wrong path).",
       "remediationKind": "platform-will-fix",
-      "remediation": "The registry data plane is network-locked. Take the shared ACR firewall lease before the call (scripts/csa-loom/acr-firewall-lease.sh acquire) and release it after. Note the data plane lags the control plane by 30-90s in BOTH directions — poll `az acr login` after opening, and never trust a control-plane read to mean the data plane is already open."
+      "remediation": "The registry data plane is network-locked. Take the shared ACR firewall lease before the call (scripts/csa-loom/acr-firewall-lease.sh acquire) and release it after. Note the data plane lags the control plane by 30-90s in BOTH directions — poll the registry's own HTTP path after opening (scripts/ci/acr-dataplane-ready.sh — 403 DENIED means still closed, 401 UNAUTHORIZED means open), and never trust `az acr login` or a control-plane read to mean the data plane is already open. `az acr login` authenticates through an ARM-mediated token exchange and returns 0 while the registry is still refusing the runner by IP (#3210)."
     },
     {
       "id": "capacity.not-available",
       "class": "capacity",
-      "anyOf": ["capacitynotavailable", "capacity is not available in this region"],
+      "anyOf": [
+        "capacitynotavailable",
+        "capacity is not available in this region"
+      ],
       "observed": "Verified verbatim from deploy-fiab-commercial run 31100384405 (2026-08-06), ARM leaf on Microsoft.DBforPostgreSQL/flexibleServers 'psql-loom-ducklake-…' (Standard_B1ms, centralus): 'CapacityNotAvailable: Capacity is not available in this region/zone. Please retry after some time.' Distinct from quota.sku-unavailable — the SKU IS offered here and the subscription is under its limits; the zone was momentarily full.",
       "remediationKind": "platform-will-fix",
       "remediation": "The platform retries with a long backoff (capacity usually returns; the ARM message itself says to retry). The DuckLake catalog server pins NO availability zone, so a retry may land in any zone with capacity. If the budget exhausts, the ask has to change: a different SKU (data-plane/ducklake-catalog-postgres.bicep `skuName`, default Standard_B1ms — the smallest sold, so the fallback direction is UP, e.g. Standard_B2s), or a different region for that server. Do NOT lower the retry budget to make the run finish faster — an exhausted capacity retry failing closed is the correct outcome."
@@ -327,7 +413,11 @@
     {
       "id": "registration.provider",
       "class": "registration",
-      "anyOf": ["missingsubscriptionregistration", "noregisteredproviderfound", "the subscription is not registered to use namespace"],
+      "anyOf": [
+        "missingsubscriptionregistration",
+        "noregisteredproviderfound",
+        "the subscription is not registered to use namespace"
+      ],
       "observed": "ARM's provider-registration refusal. Registration is idempotent and takes seconds to minutes.",
       "remediationKind": "platform-will-fix",
       "remediation": "The subscription has not registered a resource provider this deployment needs. Registering is idempotent and safe — the platform performs it and retries once. If it cannot (the identity lacks Microsoft.Resources/subscriptions/providers/register/action), the exact command is emitted instead.",
@@ -336,7 +426,12 @@
     {
       "id": "eventual.principal-not-found",
       "class": "eventual-consistency",
-      "anyOf": ["principalnotfound", "does not exist in the directory", "roleassignmentupdatenotpermitted", "managedidentityroleassignmentdelay"],
+      "anyOf": [
+        "principalnotfound",
+        "does not exist in the directory",
+        "roleassignmentupdatenotpermitted",
+        "managedidentityroleassignmentdelay"
+      ],
       "observed": "A managed identity created earlier in the same deployment is not yet replicated to the directory the RBAC service reads. Resolves on its own in seconds.",
       "remediationKind": "platform-will-fix",
       "remediation": "A principal created moments ago has not replicated through Entra yet. This resolves itself — the platform waits and retries. No operator action."
@@ -395,14 +490,39 @@
     {
       "id": "transient.operation-not-allowed-concurrent",
       "class": "transient",
-      "anyOf": ["another operation"],
-      "allOf": ["operationnotallowed"],
+      "anyOf": [
+        "another operation"
+      ],
+      "allOf": [
+        "operationnotallowed"
+      ],
       "observed": "OperationNotAllowed is overloaded — it is also emitted for quota. Only the concurrency variant is transient, so this signal requires BOTH strings. The quota variant matches quota.exceeded and, per classPrecedence, quota wins a tie regardless.",
       "remediationKind": "platform-will-fix",
       "remediation": "A concurrent operation on the same scope blocked this one. The platform retries."
+    },
+    {
+      "id": "transient.connection-reset",
+      "class": "transient",
+      "anyOf": [
+        "connectionreseterror",
+        "connection aborted",
+        "connection reset by peer",
+        "connection broken",
+        "remote end closed connection",
+        "eof occurred in violation of protocol",
+        "read timed out",
+        "max retries exceeded with url"
+      ],
+      "not": [
+        "authorizationfailed",
+        "quotaexceeded",
+        "denied:"
+      ],
+      "observed": "The TCP connection to an Azure endpoint was dropped mid-request. Measured on build-fiab-images-acr-tasks run 31460135118 (loom-unity): `az acr build` died uploading its context with ERROR: ('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')), which failed the build, skipped the roll and left the Commercial estate a commit behind main. Excluded when the drop is really an authorization or quota denial, which some SDK layers surface with a connection error attached.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "A dropped connection is transient by definition — retry the step. If it recurs across attempts on the same endpoint, the endpoint or the runner's egress is the problem, not the request: check the ACR firewall lease is held (scripts/csa-loom/acr-firewall-lease.sh) and that the data plane is reachable (scripts/ci/acr-dataplane-ready.sh)."
     }
   ],
-
   "remediationKinds": {
     "platform-will-fix": "CSA Loom can and must perform this itself (auto-bind-by-default.md §5). Surfacing it to the operator as an instruction is a defect.",
     "operator-action": "Requires a decision or a grant only the operator can make. MUST name the exact command, value, or role + scope.",

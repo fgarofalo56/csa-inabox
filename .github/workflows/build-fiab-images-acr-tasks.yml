@@ -404,7 +404,28 @@ jobs:
             grep -vxE 'e2e|tests' apps/fiab-console/.dockerignore > /tmp/di && mv /tmp/di apps/fiab-console/.dockerignore
             echo "::notice::loom-uat build — e2e/ + tests/ un-ignored for this context"
           fi
-          az acr build \
+          # RETRY WITH CLASSIFICATION (#3212, deploy-integrity R6). This ran BARE
+          # on the ONLY producer of every app image, so one dropped TCP
+          # connection failed the build outright. Measured on run 31460135118:
+          #     ERROR: ('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))
+          # loom-unity's build died mid-upload, the roll for that SHA reported
+          # `skipped`, and the Commercial estate sat a commit behind main until a
+          # human re-ran it. R6 names that case explicitly: retry what is
+          # genuinely transient, with bounded backoff, and fail closed on
+          # exhaustion.
+          #
+          # deploy-retry.mjs is the repo's retry primitive and its own header
+          # says it replaces exactly this shape -- it had simply never been
+          # adopted here. It retries ONLY the classes named in --class-allow, so
+          # a QuotaExceeded or an OOM-killed compile still fails on attempt 1
+          # rather than burning three attempts and then reporting a less accurate
+          # error. An unclassifiable failure fails closed.
+          node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
+            --class-allow transient \
+            --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 90m \
+            --step "az acr build (${{ matrix.name }})" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            -- az acr build \
             --registry "$ACR" $POOL_ARGS \
             --image "${{ matrix.name }}:${TAG}" \
             --image "${{ matrix.name }}:${{ github.sha }}" \
