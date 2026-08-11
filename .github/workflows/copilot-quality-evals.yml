@@ -60,6 +60,14 @@ on:
       - 'PRPs/active/**'
       - 'PRPs/completed/csa-loom-pillar/**'
       - 'content/evals/**'
+      # The script that decides WHAT IS IN the corpus. Without it the trigger is
+      # inverted: a typo in one docs/ file runs the full suite, while #3261 —
+      # which removed 168 documents from the shipped corpus — ran ZERO evals,
+      # because it touched only scripts/. Measured on that PR's branch:
+      #   gh run list --branch fix/corpus-exclude-internal … -> 0 eval runs.
+      # The largest corpus change in recent history was invisible to the checks
+      # that exist to measure corpus quality (#3085).
+      - 'scripts/csa-loom/stage-copilot-corpus.sh'
       - '.github/workflows/copilot-quality-evals.yml'
   pull_request:
     branches: [main]
@@ -68,6 +76,7 @@ on:
       - 'PRPs/active/**'
       - 'PRPs/completed/csa-loom-pillar/**'
       - 'content/evals/**'
+      - 'scripts/csa-loom/stage-copilot-corpus.sh'
   schedule:
     # Nightly full run (UTC). Offset from the Function's own 07:00 timer so the
     # two runs don't share a burst window against the AOAI judge TPM.
