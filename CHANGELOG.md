@@ -25,6 +25,31 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.90.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.90.1...csa-inabox-v0.90.2) (2026-08-11)
+
+
+### Bug Fixes
+
+* **build:** one app in the default build matrix could never be triggered by a push ([#3223](https://github.com/fgarofalo56/csa-inabox/issues/3223)) ([b944a60](https://github.com/fgarofalo56/csa-inabox/commit/b944a6059bf3d4f64168e7e228df5580146bdcd9))
+* **build:** the only producer of every app image had NO retry — one dropped TCP connection froze the estate ([#3213](https://github.com/fgarofalo56/csa-inabox/issues/3213)) ([6e0b560](https://github.com/fgarofalo56/csa-inabox/commit/6e0b5602be9fee3b0a4a926352c0aa935646b0a9))
+* **ci:** [#3042](https://github.com/fgarofalo56/csa-inabox/issues/3042) has a second route — a TIMEOUT kill masks later guards the same way ([#3220](https://github.com/fgarofalo56/csa-inabox/issues/3220)) ([b39ced4](https://github.com/fgarofalo56/csa-inabox/commit/b39ced4f21207ad2e9277b50e66c4427fb1c0df4))
+* **ci:** helm-lint removed the plugin poison, then reinstalled it — red on every run it has ever had ([#3218](https://github.com/fgarofalo56/csa-inabox/issues/3218)) ([69e4860](https://github.com/fgarofalo56/csa-inabox/commit/69e4860fb0c5324864956f9b22009f911b1f7ece))
+* **deploy:** [#3196](https://github.com/fgarofalo56/csa-inabox/issues/3196) split bind from grant on only 4 of 7 consumers — the other 3 failed the apply ([#3202](https://github.com/fgarofalo56/csa-inabox/issues/3202)) ([c5d5def](https://github.com/fgarofalo56/csa-inabox/commit/c5d5defde91d463415fe58521c852879a1e75dd7))
+* **deploy:** the FD→ACA private-endpoint approval was a deploymentScript that could not run — and whose az command does not exist ([#3210](https://github.com/fgarofalo56/csa-inabox/issues/3210)) ([92d1800](https://github.com/fgarofalo56/csa-inabox/commit/92d18007b80aafb437ac623e6a64cee6fdf1b18f))
+* **gov:** `azd provision` was never authenticated — the azd branch has never worked ([#3221](https://github.com/fgarofalo56/csa-inabox/issues/3221)) ([8f03e57](https://github.com/fgarofalo56/csa-inabox/commit/8f03e57ffa778ab33f6be67bd231ab6a22f0fb5b))
+* **gov+roll:** two ACR oracles that lied — a Commercial-only suffix (GCC-High undeployable) and `az acr login` green-lighting a DENIED registry ([#3209](https://github.com/fgarofalo56/csa-inabox/issues/3209)) ([690c46c](https://github.com/fgarofalo56/csa-inabox/commit/690c46ce9d991fe4a1e538c7320c12b8c672a341))
+* **gov:** both sovereign lanes died on their OWN default — `azd env set X $EMPTY` is a hard error ([#3217](https://github.com/fgarofalo56/csa-inabox/issues/3217)) ([3aa645c](https://github.com/fgarofalo56/csa-inabox/commit/3aa645c3c1fa5e4d6e9e062b78d3f961761fd113))
+* **gov:** deploy-fiab-gcc reported SUCCESS five times while having no credentials at all ([#3219](https://github.com/fgarofalo56/csa-inabox/issues/3219)) ([b095077](https://github.com/fgarofalo56/csa-inabox/commit/b095077c23fc3bccc038f02c35b42cb93afe6f6b))
+* **login-health:** the gate could not tell "sign-in is down" from "sign-in WAS down" ([#3216](https://github.com/fgarofalo56/csa-inabox/issues/3216)) ([f218d56](https://github.com/fgarofalo56/csa-inabox/commit/f218d56cd620ecd3daa69ebda44ccca2bb1073b3))
+* **R7:** the five remaining image-existence sites convicted tags they never read ([#3215](https://github.com/fgarofalo56/csa-inabox/issues/3215)) ([93251b8](https://github.com/fgarofalo56/csa-inabox/commit/93251b857dac9b8fa9749b2c4fe2f6559f7939a9))
+* **roll:** loom-roll-and-validate had NO concurrency group — two rolls could collide on the same Container App ([#3214](https://github.com/fgarofalo56/csa-inabox/issues/3214)) ([99c6250](https://github.com/fgarofalo56/csa-inabox/commit/99c6250c0e224cb9d3a7158c780623e7f10d4d41))
+
+
+### Miscellaneous
+
+* **deps:** bump actions/checkout from 4 to 7 ([#3188](https://github.com/fgarofalo56/csa-inabox/issues/3188)) ([42d2b41](https://github.com/fgarofalo56/csa-inabox/commit/42d2b411f70547ba4a8e9f160402350b0813d777))
+* **deps:** bump uvicorn from 0.51.0 to 0.52.1 in /apps/loom-duckdb ([#3094](https://github.com/fgarofalo56/csa-inabox/issues/3094)) ([70ab684](https://github.com/fgarofalo56/csa-inabox/commit/70ab68471f1a7716dac2c464e24c065e14fab57f))
+
 ## [0.90.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.90.0...csa-inabox-v0.90.1) (2026-08-11)
 
 
