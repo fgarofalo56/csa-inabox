@@ -165,7 +165,12 @@ for (const file of files) {
     if (need) {
       const hit = need.some((pat) => {
         if (!pat.includes('*')) return existsSync(resolve(abs, pat));
-        const ext = pat.replace('*', '');
+        // replaceAll, not replace: `replace` with a STRING needle rewrites only
+        // the first occurrence, so a future two-star pattern would silently
+        // match on a half-stripped suffix. Every pattern here has one star
+        // today — this is correct now and stays correct (CodeQL
+        // js/incomplete-sanitization on PR #3236).
+        const ext = pat.replaceAll('*', '');
         try { return readdirSync(abs).some((f) => f.endsWith(ext)); } catch { return false; }
       });
       if (!hit) {
