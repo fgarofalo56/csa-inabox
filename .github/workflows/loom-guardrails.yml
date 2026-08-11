@@ -680,6 +680,16 @@ jobs:
       - name: 'vanity-edge-health self-test (unreadable route is UNKNOWN, never "unbound")'
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-vanity-edge-health.sh
+      # deploy-retry.mjs gates EVERY deploy path. Its 30 unit tests all exercise
+      # PURE FUNCTIONS (decideRetry, backoff, parseDuration) — nothing ran the
+      # process, so nothing covered which of the child's STREAMS is classified.
+      # `az acr build` reports failures on stdout; deploy-retry read stderr only,
+      # so on run 31489538101 it printed an empty stderr block and "Could not
+      # classify" for an IP denial the taxonomy names in full. Perfect coverage of
+      # the decision, zero coverage of its input. This tests the process itself.
+      - name: 'deploy-retry self-test (a failure on STDOUT classifies; stderr keeps precedence)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-deploy-retry.sh
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw
