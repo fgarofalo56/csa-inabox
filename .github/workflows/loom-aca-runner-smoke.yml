@@ -154,10 +154,23 @@ jobs:
           # Tail-capped: loom-console alone carries thousands of SHA tags and an
           # uncapped dump made a 176 KB log where the answer was unreadable.
           echo "== tag inventory for the referenced repositories (last 12 tags each) =="
+          # #3117 (deploy-integrity R7). The `>` redirect above truncates
+          # /tmp/acr-repos.txt BEFORE `az` runs, so when the data plane is
+          # unreachable the file is EMPTY — and this loop then printed
+          # 'REPOSITORY ABSENT (never built into this registry)' for every single
+          # referenced repo, complete with a causal explanation, three lines after
+          # the step itself warned that the registry could not be reached. A
+          # fabricated absence is worse than no line at all: this is the output an
+          # operator reads first, even though the real gate below delegates
+          # correctly. Absence may only be claimed when the listing SUCCEEDED.
           for REF in $REFS; do
             REPO="${REF%%:*}"
+            if [ ! -s /tmp/acr-repos.txt ]; then
+              echo "    $REPO — UNKNOWN (the repository listing above did not succeed, so nothing is established about this repo)"
+              continue
+            fi
             if ! grep -qx "$REPO" /tmp/acr-repos.txt 2>/dev/null; then
-              echo "    $REPO — REPOSITORY ABSENT (never built into this registry)"
+              echo "    $REPO — REPOSITORY ABSENT (the registry listed its repositories and this one was not among them)"
               continue
             fi
             ALL=$(az acr repository show-tags --name "$ACR" --repository "$REPO" -o tsv 2>/dev/null | tr -d '\r')

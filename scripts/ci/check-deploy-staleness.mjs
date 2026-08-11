@@ -68,6 +68,11 @@ export const WATCHED = [
       '.github/workflows/gov-uc-purview-wire.yml',
       'platform/fiab/bicep/modules/compute/loom-unity-app.bicep',
       'apps/loom-unity/**',
+      // refs #3117 — the :v0.1 existence proof after the build now delegates to
+      // the shared three-state checker instead of asserting absence from any
+      // non-zero `az`. It decides whether this lane wires a LIVE federal estate
+      // at a tag it could not verify, so it is a deploy source of this lane.
+      'scripts/ci/resolve-acr-digest.sh',
     ],
     maxDays: 14,
   },

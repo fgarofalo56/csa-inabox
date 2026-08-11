@@ -251,11 +251,32 @@ jobs:
           # nothing, and the failure only surfaced a step later as a confusing
           # supply-chain error. Green deploys the image it just "built", so a
           # silent no-op here would roll a revision at an image that does not exist.
-          if ! az acr repository show -n "$ACR" --image "loom-console:$SHA" -o none 2>/dev/null; then
-            echo "::error::az acr build exited 0 but loom-console:$SHA does NOT exist on $ACR — the build silently produced nothing (#2706). Re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3."
+          # #3117 (deploy-integrity R7). This was:
+          #   if ! az acr repository show … -o none 2>/dev/null; then
+          #     echo '::error::… does NOT exist … the build silently produced nothing'
+          # Any non-zero exit — auth, throttle, firewall, DNS — became 'does NOT
+          # exist', and `2>/dev/null` destroyed the evidence that would have
+          # classified it. On this step in particular the false diagnosis is
+          # expensive: it blames a wedged ACR agent pool and tells the operator to
+          # re-dispatch with a FRESH pool name, which is a long, disruptive
+          # remediation for a problem that is usually the firewall.
+          #
+          # resolve-acr-digest.sh keeps the three states apart and is self-tested:
+          #   0 = digest on stdout   3 = registry ANSWERED absent   4 = could not READ
+          set +e
+          DIGEST=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-acr-digest.sh" \
+                     --acr "$ACR" --image "loom-console:$SHA")
+          RC=$?
+          set -e
+          if [ $RC -eq 3 ]; then
+            echo "::error::az acr build exited 0 but the registry ANSWERED NOT FOUND for loom-console:$SHA on $ACR — the build silently produced nothing (#2706). Re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3."
             exit 1
           fi
-          echo "::notice::verified loom-console:$SHA exists on $ACR"
+          if [ $RC -ne 0 ]; then
+            echo "::error::could NOT READ $ACR to confirm loom-console:$SHA (see the resolver output above). This is NOT proof the tag is missing and it is NOT evidence of a wedged agent pool — the registry never answered. Most likely the ACR firewall is closed to this runner or a firewall change has not propagated. Refusing to roll an unverified image."
+            exit 1
+          fi
+          echo "::notice::loom-console:$SHA verified present on $ACR -> $DIGEST"
           q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
           [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
           # Re-locks only if this run still holds the lease; re-locks
