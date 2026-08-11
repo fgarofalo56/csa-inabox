@@ -14,51 +14,63 @@ infra:
   path: ../bicep
   module: main
 
+# SERVICE PATHS ARE RELATIVE TO THIS FILE, WHICH LIVES AT platform/fiab/azd/.
+#
+# Every entry read `../../apps/<name>`, which resolves to platform/apps/<name> —
+# a directory that has never existed. `azd provision` validates the project file
+# before it does anything, so it died on the FIRST service every time:
+#
+#     ERROR: initializing service 'activator-engine',
+#     stat …/csa-inabox/platform/apps/fiab-activator-engine: no such file or directory
+#
+# platform/fiab/azd -> .. = platform/fiab -> ../.. = platform -> ../../.. = repo
+# root. All seven needed one more level. Checked with os.path.normpath against the
+# real tree, not by eye.
 services:
   console:
-    project: ../../apps/fiab-console
+    project: ../../../apps/fiab-console
     language: ts
     host: containerapp
     docker:
       path: ./Dockerfile
 
   setup-orchestrator:
-    project: ../../apps/fiab-setup-orchestrator
+    project: ../../../apps/fiab-setup-orchestrator
     language: csharp
     host: containerapp
     docker:
       path: ./Dockerfile
 
   mcp-server:
-    project: ../../apps/fiab-mcp-config
+    project: ../../../apps/fiab-mcp-config
     language: ts
     host: containerapp
     docker:
       path: ./Dockerfile.wrapper
 
   mcp-bridge:
-    project: ../../apps/fiab-mcp-bridge
+    project: ../../../apps/fiab-mcp-bridge
     language: ts
     host: containerapp
     docker:
       path: ./Dockerfile
 
   activator-engine:
-    project: ../../apps/fiab-activator-engine
+    project: ../../../apps/fiab-activator-engine
     language: csharp
     host: containerapp
     docker:
       path: ./Dockerfile
 
   mirroring-engine:
-    project: ../../apps/fiab-mirroring-engine
+    project: ../../../apps/fiab-mirroring-engine
     language: java
     host: containerapp
     docker:
       path: ./Dockerfile
 
   direct-lake-shim:
-    project: ../../apps/fiab-direct-lake-shim
+    project: ../../../apps/fiab-direct-lake-shim
     language: csharp
     host: containerapp
     docker:
