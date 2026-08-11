@@ -426,6 +426,17 @@
       "remediation": "Remove the `exclusions` array from the Microsoft_BotManagerRuleSet entry in platform/fiab/bicep/modules/admin-plane/front-door.bicep. Azure accepts the key on the DRS entry (Microsoft_DefaultRuleSet) but rejects the entire policy when it appears on a Bot Manager rule set — so the exclusion must be expressed on the DRS entry, or as a custom rule, not on Bot Manager."
     },
     {
+      "id": "config.nuget-package-unresolvable",
+      "class": "config",
+      "anyOf": [
+        "nu1103",
+        "unable to find a stable package"
+      ],
+      "observed": "Measured on build-fiab-images-acr-tasks run for 316a5bf7 (2026-08-11): `az acr build` of loom-mcp failed with `error NU1103: Unable to find a stable package Microsoft.NET.ILLink.Tasks with version (>= 10.0.11)` across ~40 ms-mcp tool projects, the feed offering only `11.0.0-preview.1.26104.118`. The classifier reported UNKNOWN, which fails closed correctly but asserts nothing. NU1103 is a RESOLUTION failure, not a network one: the feed ANSWERED and does not carry a stable version satisfying the constraint. Retrying cannot change it.",
+      "remediationKind": "operator-action",
+      "remediation": "A NuGet constraint cannot be satisfied by any STABLE package on the feed. This is deterministic — do not retry. Read the `Nearest version:` the error prints; if it is a prerelease, the project either needs that prerelease allowed explicitly or the constraint relaxed. For the ms-mcp submodule this is an UPSTREAM pin: check whether the submodule is behind, and pin/bump it deliberately rather than floating the dependency."
+    },
+    {
       "id": "capacity.not-available",
       "class": "capacity",
       "anyOf": [
