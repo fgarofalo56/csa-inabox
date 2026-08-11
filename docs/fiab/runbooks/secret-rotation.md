@@ -68,16 +68,24 @@ UAMI_ID=$(az containerapp show -n loom-console -g "$RG" \
   --query "keys(identity.userAssignedIdentities)[0]" -o tsv)
 az containerapp secret set -n loom-console -g "$RG" \
   --secrets "loom-msal-client-secret=keyvaultref:https://$KV.vault.azure.net/secrets/loom-msal-client-secret,identityref:$UAMI_ID"
+#    Roll the revision. `--revision-suffix` is a revision-scope change, so this
+#    creates and activates a NEW revision that re-resolves the Key Vault
+#    reference — and it writes no env-var state, so nothing here is lost on the
+#    next deploy. The suffix also names the rotation in `revision list`.
 az containerapp update -n loom-console -g "$RG" \
-  --set-env-vars "LOOM_MSAL_SECRET_ROTATED=$(date -u +%Y-%m-%dT%H%MZ)"
-#    ^ one call: forces the new revision AND stamps the rotation marker, so
-#    the marker can never again drift from the secret it describes (#3025:
-#    the live marker read 2026-07-19 while the inline secret was the
-#    2026-08-03 credential — a two-rotations-stale marker read during
-#    AADSTS7000215 triage is worse than no marker). The Entra credential
-#    list (`az ad app credential list --id "$APP_ID"`) stays the
-#    AUTHORITATIVE answer; the marker is a hint, written by the same hand
-#    that writes the secret.
+  --revision-suffix "rotated-$(date -u +%Y%m%d-%H%M)"
+#
+#    THERE IS DELIBERATELY NO ROTATION-MARKER ENV VAR (#3025). This step used
+#    to also stamp `LOOM_MSAL_SECRET_ROTATED`. On 2026-08-10 that marker was
+#    measured ABSENT from all 425 env vars on the live loom-console: this
+#    runbook and bootstrap-msal-app-reg.sh were its ONLY writers, it was never
+#    declared in platform/fiab/bicep/modules/admin-plane/main.bicep, and the
+#    next `az deployment sub create` re-renders the container template without
+#    it — the same class that dropped the admin OID, LOOM_ADLS_ACCOUNT and the
+#    Front Door vanity binding. A marker that vanishes on the next deploy is
+#    read during AADSTS7000215 triage as "never rotated", which is worse than
+#    no marker at all. Use §2.1 instead: the Entra credential list is the
+#    record, and no redeploy can drop it.
 
 # 4. VERIFY sign-in before removing the old credential:
 #    - interactive browser login on the live URL,
@@ -101,6 +109,48 @@ az ad app credential delete --id "$APP_ID" --key-id "<old-keyId>"
 Rollback: the old credential still works until step 5 — if sign-in breaks after
 the roll, `az containerapp revision activate` the previous revision (it still
 references the prior secret value) and re-run from step 1.
+
+### 2.1 "Which credential is the app actually using?" — the authoritative check
+
+This is the question `AADSTS7000215` triage asks first, and the only sources
+that answer it survive a redeploy. **Do not look for a rotation marker env var
+on the Container App — there isn't one, on purpose (#3025, see step 3).**
+
+```bash
+# AUTHORITATIVE — the Entra app registration's credential list. This is the
+# record: every mint appears here with its start/end, and no `az deployment sub
+# create` can drop it. Two live credentials = a rotation whose step 5 never ran.
+az ad app credential list --id "$APP_ID" \
+  --query "[].{keyId:keyId,start:startDateTime,end:endDateTime,name:displayName}" -o table
+
+# What the CONSOLE reads. A keyVaultUrl here means the value is resolved from
+# Key Vault at revision activation, so the vault version timeline below is the
+# vintage; an inline secret means the value was baked at wiring time.
+# (Values are projected away on purpose — never print a secret.)
+az containerapp secret list -n loom-console -g "$RG" \
+  --query "[].{name:name,keyVaultUrl:keyVaultUrl,identity:identity}" -o table
+
+# The Key Vault copy's own timeline — when the current version was written.
+az keyvault secret list-versions --vault-name "$KV" --name loom-msal-client-secret \
+  --query "[].{created:attributes.created,enabled:attributes.enabled}" -o table
+
+# WHEN the running revision last re-resolved that reference. A revision created
+# BEFORE the newest KV version is still serving the older secret: roll it.
+az containerapp revision list -n loom-console -g "$RG" \
+  --query "[?properties.active].{revision:name,created:properties.createdTime,state:properties.runningState}" -o table
+```
+
+Read them together: newest Entra credential ↔ newest Key Vault version ↔ a
+revision created after both. Any gap in that chain is the rotation that did not
+finish, and the fix is to re-run step 3 (secret set + roll), not to re-mint.
+
+**Every boundary, same procedure.** These commands are identical in Commercial,
+GCC, GCC-High, IL5 and DoD — only the cloud endpoint differs (`az cloud set
+--name AzureUSGovernment` per the §2 prereq; Graph is `graph.microsoft.us` /
+`dod-graph.microsoft.us`). The post-deploy bootstrap that performs the same
+wiring, `.github/workflows/csa-loom-post-deploy-bootstrap.yml`, is one
+cloud-agnostic workflow selected by its `boundary` input, so there is no
+per-cloud variant of this runbook to keep in sync.
 
 ## 3. Rotate the synthetic-login secret (V1 automation account)
 

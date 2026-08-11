@@ -861,12 +861,19 @@ jobs:
       - name: 'workflow-actionlint (pinned actionlint + shellcheck, ratcheted; probes prove shellcheck + invalid-YAML detection are live; unparseable = hard fail, #3034)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-workflow-actionlint.mjs
-      # #3025 — the MSAL rotation marker is written by the same hand that
-      # writes the secret, the rotation runbook names the UAMI (not `system`),
-      # and no rotation step discards its result. Self-test first: it carries
-      # the mutant fixtures (marker dropped / identityref:system / `|| true`)
-      # and proves the analyser flags each before the real files are judged.
-      - name: 'msal-rotation-consistency (marker written with the secret; runbook names the UAMI — #3025)'
+      # #3025 — there is NO out-of-band MSAL rotation marker: one existed, was
+      # written only by a post-deploy `az containerapp update`, was never
+      # declared in admin-plane bicep, and was measured ABSENT from all 425 env
+      # vars on the live console after a re-render. So the rule is now the
+      # MISMATCH (a marker written by a script that bicep does not declare),
+      # the runbook must name `az ad app credential list` as the record and
+      # still roll a revision after the secret set, must name the UAMI (not
+      # `system`), and neither file may discard the result of an MSAL wiring
+      # command. Self-test first: it carries the mutant fixtures (marker added
+      # alongside a clean roll / marker fragment with no command token /
+      # identityref:system / `|| echo` / a dark bicep probe) and proves the
+      # analyser flags each before the real files are judged.
+      - name: 'msal-rotation-consistency (no out-of-band rotation marker; runbook names the Entra credential list + the UAMI — #3025)'
         if: ${{ !cancelled() }}
         run: |
           node scripts/ci/check-msal-rotation-consistency.mjs --self-test

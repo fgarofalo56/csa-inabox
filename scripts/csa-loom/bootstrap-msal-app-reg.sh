@@ -349,23 +349,62 @@ if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
   # this run even on a KV-literal estate. (We already hold ${SECRET} from the
   # credential reset above.)
   if [ "${KVREF_OK}" -ne 1 ]; then
-    az containerapp secret set -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" --secrets \
-      "loom-msal-client-secret=${SECRET}" -o none || echo "    WARN: inline secret set failed"
+    if ! az containerapp secret set -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" --secrets \
+      "loom-msal-client-secret=${SECRET}" -o none; then
+      echo "    ERROR: this run could NOT write the secret 'loom-msal-client-secret' on"
+      echo "           ${CONSOLE_APP_NAME} (${CONSOLE_RG}) — neither as a Key Vault reference nor"
+      echo "           inline. A new credential WAS minted in Entra and written to Key Vault."
+      echo "           What this script cannot tell you: if the app's secret is ALREADY a Key Vault"
+      echo "           reference from an earlier deploy, the new value is picked up on the next"
+      echo "           revision roll; if it is an inline literal, the console still holds the"
+      echo "           PREVIOUS secret and sign-in will fail with AADSTS7000215. Check with:"
+      echo "             az containerapp secret list -n ${CONSOLE_APP_NAME} -g ${CONSOLE_RG} \\"
+      echo "               --query \"[].{name:name,keyVaultUrl:keyVaultUrl}\" -o table"
+      echo "           Refusing to continue on an unverified rotation (deploy-integrity.md R6/R7)."
+      echo "           Remediation: grant the deploy principal 'Container Apps Contributor' (or"
+      echo "           Contributor) on ${CONSOLE_APP_NAME} in ${CONSOLE_RG}, then re-run this script."
+      exit 1
+    fi
   fi
   # Force a new revision so the updated secret value/reference is picked up
   # immediately (a secret-set alone does NOT roll running replicas). Setting the
   # env vars both wires LOOM_MSAL_CLIENT_ID and serves as the revision-roll.
   #
-  # LOOM_MSAL_SECRET_ROTATED is stamped in the SAME call (#3025): the marker
-  # exists so an AADSTS7000215 triage can see which credential vintage the app
-  # holds, and a marker written by any hand other than the one that writes the
-  # secret WILL drift (measured: the live marker read 2026-07-19 while the
-  # secret was the 2026-08-03 credential). The Entra credential list stays the
-  # authoritative record; this is the hint that must never lie.
-  ROTATED_STAMP="$(date -u +%Y-%m-%dT%H%MZ)"
-  az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" \
-    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" "LOOM_MSAL_SECRET_ROTATED=${ROTATED_STAMP}" -o none || echo "    WARN: env-var update failed"
-  echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME} + LOOM_MSAL_SECRET_ROTATED=${ROTATED_STAMP} (kvref=${KVREF_OK})"
+  # NO rotation-marker env var is stamped here (#3025). This block used to also
+  # set LOOM_MSAL_SECRET_ROTATED. On 2026-08-10 that marker was measured ABSENT
+  # from all 425 env vars on the live loom-console: this script was its only
+  # writer, it was never declared in
+  # platform/fiab/bicep/modules/admin-plane/main.bicep, and the next
+  # `az deployment sub create` re-renders the container template without it —
+  # the same class that dropped the admin OID, LOOM_ADLS_ACCOUNT and the Front
+  # Door vanity binding. A marker that disappears on the next deploy reads as
+  # "never rotated" during AADSTS7000215 triage, which is worse than no marker.
+  # The record that survives a redeploy is the Entra credential list
+  # (`az ad app credential list --id <APP_ID>`) cross-read with the Key Vault
+  # version timeline and the active revision's createdTime — see
+  # docs/fiab/runbooks/secret-rotation.md §2.1.
+  #
+  # The result is BRANCHED, not discarded. Until 2026-08-11 this command ended
+  # in `|| echo "WARN: env-var update failed"` and the next line printed
+  # "wired LOOM_MSAL_CLIENT_ID=… " unconditionally — asserting a write that may
+  # never have happened (deploy-integrity.md R7).
+  if az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" \
+    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" -o none; then
+    echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME} (kvref=${KVREF_OK})"
+  else
+    echo "    ERROR: the env-var update on ${CONSOLE_APP_NAME} (${CONSOLE_RG}) FAILED."
+    echo "           LOOM_MSAL_CLIENT_ID / LOOM_MSAL_CLIENT_SECRET are NOT confirmed wired, and the"
+    echo "           revision roll is NOT confirmed either (the CLI returned non-zero; this script"
+    echo "           does not know how far the update got). The running console may therefore still"
+    echo "           be serving the PREVIOUS client secret while Entra holds the new one →"
+    echo "           AADSTS7000215 on sign-in. Confirm with \`az containerapp revision list\`."
+    echo "           Remediation: grant the deploy principal 'Container Apps Contributor' (or"
+    echo "           Contributor) on ${CONSOLE_APP_NAME} in ${CONSOLE_RG}, confirm the app name and"
+    echo "           resource group, then re-run this script or the equivalent:"
+    echo "             az containerapp update -n ${CONSOLE_APP_NAME} -g ${CONSOLE_RG} \\"
+    echo "               --set-env-vars LOOM_MSAL_CLIENT_ID=${APP_ID} LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}"
+    exit 1
+  fi
 fi
 
 # ---------------------------------------------------------------------
