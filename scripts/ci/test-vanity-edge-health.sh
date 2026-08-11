@@ -34,6 +34,12 @@ cat > "$STUB/az" <<'AZ'
 SUB="$1 $2 $3"
 case "$SUB" in
   "afd profile list")
+     # Real `az` prints extension-install notices. They belong on STDERR; the
+     # probe must never fold them into the captured value. `noisy` reproduces
+     # loom-synthetic-monitor run 31481444420, where a `2>&1` turned
+     # "WARNING: Preview version of extension is disabled by default…" into a
+     # PROFILE NAME and the next call died on it.
+     [ "${STUB_MODE:-ok}" = "noisy" ] && echo "WARNING: Preview version of extension is disabled by default for extension installation, enabled for modules without stable versions." >&2
      case "${STUB_MODE:-ok}" in
        profiles-unreadable) echo "ERROR: (AuthorizationFailed) no authorization to perform 'Microsoft.Cdn/profiles/read'" >&2; exit 1 ;;
        no-profiles)         : ;;
@@ -118,6 +124,18 @@ done
 OUT="$(STUB_MODE=ok STUB_CERT=silent run)"; RC=$?
 [ $RC -eq 0 ] && pass "bound + no TLS answer => still exit 0, warned not failed" || fail "expected 0, got $RC: $OUT"
 echo "$OUT" | grep -qi "not by itself proof of an outage" && pass "says why the silence is not a verdict" || fail "missing the silence caveat"
+
+# 7. THE RUNNER-ONLY REGRESSION. `az` writes extension notices to stderr; a
+#    `2>&1` folds them into the captured value and a WARNING becomes a profile
+#    name. Reproduced live on run 31481444420 — and NOT locally, because the afd
+#    extension was already installed on the workstation.
+OUT="$(STUB_MODE=noisy STUB_CERT=good run)"; RC=$?
+[ $RC -eq 0 ] && pass "az notices on stderr do not corrupt the discovered value" || fail "expected 0, got $RC: $OUT"
+if echo "$OUT" | grep -qi "profile='WARNING"; then
+  fail "an az WARNING was read as a profile NAME — the 2>&1 contamination is back"
+else
+  pass "no az WARNING was mistaken for a resource name"
+fi
 
 echo
 if [ $FAILED -eq 0 ]; then echo "vanity-edge-health: ALL CASES PASS"; else echo "vanity-edge-health: FAILURES ABOVE"; fi
