@@ -251,10 +251,18 @@ jobs:
             HITS_RAW=$(az monitor log-analytics query --workspace "$LAW" \
               --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | count" \
               -o tsv 2>/dev/null | tr -d '\r')
+            # #3160 — the count alone cannot tell a CURRENT outage from one that
+            # was rotated away days ago. Carry the newest hit's timestamp so the
+            # verdict can compare it against the newest MSAL credential.
+            HITS_LAST=$(az monitor log-analytics query -w "$LAW" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | summarize last=max(TimeGenerated) | project tostring(last)" \
+              -o tsv 2>/dev/null | tr -d '\r')
           fi
           MINEND=$(az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv 2>/dev/null | tr -d '\r')
+          CREDNEW=$(az ad app credential list --id "$MSAL_APP_ID" --query "max([].startDateTime)" -o tsv 2>/dev/null | tr -d '\r')
 
           LH_LAW="$LAW" LH_HITS_RAW="$HITS_RAW" LH_MIN_END="$MINEND" \
+          LH_HITS_LAST="${HITS_LAST:-}" LH_CRED_NEWEST="${CREDNEW:-}" \
           LH_APP_ID="$MSAL_APP_ID" LH_CONSOLE_RG="$CONSOLE_RG" \
             bash scripts/ci/login-health-verdict.sh
           rc=$?

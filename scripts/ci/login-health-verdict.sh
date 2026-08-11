@@ -39,6 +39,10 @@
 # INPUTS (all optional; absent means "could not determine")
 #   LH_LAW         resolved Log Analytics customerId ('' = unresolvable)
 #   LH_HITS_RAW    raw az output for the invalid_client count ('' = unreadable)
+#   LH_HITS_LAST   ISO8601 timestamp of the MOST RECENT invalid_client hit
+#                  ('' = unreadable -> the gate fails closed, see #3160)
+#   LH_CRED_NEWEST ISO8601 startDateTime of the NEWEST MSAL app credential
+#                  ('' = unreadable -> the gate fails closed)
 #   LH_MIN_END     soonest MSAL credential expiry, ISO-8601 ('' or 'None' =
 #                  unreadable — the verify SP likely lacks Application.Read.All)
 #   LH_APP_ID      MSAL app id, for the remediation command in the annotation
@@ -103,8 +107,36 @@ else
     echo "::warning::resolved the workspace but could NOT read the invalid_client count (query error / no Log Analytics Reader on it) — the callback-error check did NOT run. Not treated as zero."
     UNKNOWN=$((UNKNOWN + 1))
   elif [ "$HITS" -gt 0 ]; then
-    echo "::error::LOGIN BROKEN — ${HITS} auth/callback invalid_client errors in the last 7d (AADSTS7000215). The MSAL secret has drifted/expired. Rotate: ${ROTATE_CMD}."
-    RC=1
+    # RECENCY (#3160). A 7-day count with no recency test cannot tell
+    # 'sign-in is down' from 'sign-in WAS down and someone fixed it' — so a
+    # rotation that worked still failed this gate for a week, and an operator
+    # who has seen it cry wolf twice stops believing the third one. Worse, the
+    # two states produce byte-identical output.
+    #
+    # The discriminator is whether any hit SURVIVED the newest credential: an
+    # invalid_client after the most recent `az ad app credential reset` means
+    # the console is still presenting something the app does not hold. Every
+    # hit before it is evidence about a fixed outage.
+    LAST_HIT="${LH_HITS_LAST:-}"
+    CRED_NEW="${LH_CRED_NEWEST:-}"
+    LAST_SEC=""; CRED_SEC=""
+    [ -n "$LAST_HIT" ] && LAST_SEC="$(date -u -d "$LAST_HIT" +%s 2>/dev/null || true)"
+    [ -n "$CRED_NEW" ] && CRED_SEC="$(date -u -d "$CRED_NEW" +%s 2>/dev/null || true)"
+    if [ -n "$LAST_SEC" ] && [ -n "$CRED_SEC" ] && [ "$LAST_SEC" -le "$CRED_SEC" ]; then
+      # FAIL OPEN here, deliberately and narrowly: we have BOTH timestamps and
+      # they establish the last failure predates the current credential set.
+      echo "::warning::${HITS} auth/callback invalid_client error(s) in the last 7d, but the most recent one (${LAST_HIT}) PREDATES the newest MSAL credential (${CRED_NEW}) — this is evidence about an outage that has since been rotated, not a current one. Not failing the gate on it. It will age out of the 7d window on its own."
+      echo "  (no invalid_client since the credential reset.)"
+    else
+      WHY=""
+      if [ -z "$LAST_SEC" ] || [ -z "$CRED_SEC" ]; then
+        WHY=" Recency could NOT be established (last-hit=${LAST_HIT:-<unread>}, newest-credential=${CRED_NEW:-<unread>}), so this fails closed rather than assuming the errors are historical."
+      else
+        WHY=" The most recent error (${LAST_HIT}) is NEWER than the newest MSAL credential (${CRED_NEW}), so the console is still presenting a secret the app does not hold — a rotation has not fixed it."
+      fi
+      echo "::error::LOGIN BROKEN — ${HITS} auth/callback invalid_client errors in the last 7d (AADSTS7000215).${WHY} Rotate: ${ROTATE_CMD}."
+      RC=1
+    fi
   else
     echo "  OK — no invalid_client callback errors in the last 7d."
   fi
