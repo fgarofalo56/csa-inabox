@@ -60,6 +60,12 @@ jobs:
     name: Run + gate the six synthetic journeys
     runs-on: ubuntu-latest
     steps:
+      # This job never checked out the repo — it only called `az` to start an ACA
+      # job. The edge-health step below runs a SCRIPT from the tree, so it needs
+      # one. Its first live run (31479818731) died with
+      #     bash: scripts/ci/check-vanity-edge-health.sh: No such file or directory
+      - uses: actions/checkout@v4
+
       - name: Azure login
         uses: azure/login@v2.3.0
         with:
@@ -70,33 +76,6 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-
-      # THE EDGE, WHICH NOTHING ELSE WATCHES.
-      #
-      # This monitor's ACA job probes LOOM_URL=`http://loom-console` — the
-      # IN-CLUSTER name. It never leaves the Container Apps environment, so it is
-      # blind to Front Door, to the vanity-domain binding and to TLS entirely.
-      # loom-uat probes the *.azurefd.net host, which stays healthy while the
-      # vanity host is dead — that is the CONTROL, not the subject.
-      #
-      # csa-loom.limitlessdata.ai has lost its Front Door route binding TWICE
-      # (2026-08-10, reported by the operator; 2026-08-11, found by hand) and this
-      # monitor reported success straight through both. The one URL a human opens
-      # was the one URL nothing checked.
-      #
-      # continue-on-error is NOT set: an edge outage is an outage. The check
-      # itself distinguishes BROKEN (exit 1) from UNKNOWN (exit 2, an unreadable
-      # control plane) so a lapsed permission cannot manufacture a false outage.
-      - name: Vanity-domain edge health (Front Door route binding + served certificate)
-        env:
-          # Only the HOST. The profile, custom domain, endpoints and routes are
-          # all discovered from it — check-afd-endpoint-discovery.mjs forbids
-          # addressing a CDN endpoint by a name CI never discovered, and naming
-          # the route here would also have made the check unable to see the very
-          # outage it exists for (the binding is what breaks).
-          VANITY_HOST: csa-loom.limitlessdata.ai
-        run: |
-          bash scripts/ci/check-vanity-edge-health.sh --rg "$RG_NAME" --host "$VANITY_HOST"
 
       - name: Start (or adopt) a synthetic-monitor execution + poll to completion
         id: run
@@ -245,6 +224,37 @@ jobs:
             echo "::error::Synthetic journeys FAILED (status=$STATUS, execution $EXEC) — realFails>0 (the runner exits non-zero only on real code/login failures; honest infra gates exit 0). Inspect ContainerAppConsoleLogs_CL (ContainerAppName_s=='$JOB_NAME') for the failing journey + the Journeys tab on /admin/health."
             exit 1
           fi
+
+      # THE EDGE, WHICH NOTHING ELSE WATCHES.
+      #
+      # This monitor's ACA job probes LOOM_URL=`http://loom-console` — the
+      # IN-CLUSTER name. It never leaves the Container Apps environment, so it is
+      # blind to Front Door, to the vanity-domain binding and to TLS entirely.
+      # loom-uat probes the *.azurefd.net host, which stays healthy while the
+      # vanity host is dead — that is the CONTROL, not the subject.
+      #
+      # csa-loom.limitlessdata.ai has lost its Front Door route binding TWICE
+      # (2026-08-10, reported by the operator; 2026-08-11, found by hand) and this
+      # monitor reported success straight through both. The one URL a human opens
+      # was the one URL nothing checked.
+      #
+      # continue-on-error is NOT set: an edge outage is an outage. The check
+      # itself distinguishes BROKEN (exit 1) from UNKNOWN (exit 2, an unreadable
+      # control plane) so a lapsed permission cannot manufacture a false outage.
+      - name: Vanity-domain edge health (Front Door route binding + served certificate)
+        # Runs even when the journey step failed: a journey outage and an edge
+        # outage are different faults, and the second must not be hidden by the
+        # first (the #3042 masking shape). Its own verdict still fails the run.
+        if: ${{ !cancelled() }}
+        env:
+          # Only the HOST. The profile, custom domain, endpoints and routes are
+          # all discovered from it — check-afd-endpoint-discovery.mjs forbids
+          # addressing a CDN endpoint by a name CI never discovered, and naming
+          # the route here would also have made the check unable to see the very
+          # outage it exists for (the binding is what breaks).
+          VANITY_HOST: csa-loom.limitlessdata.ai
+        run: |
+          bash scripts/ci/check-vanity-edge-health.sh --rg "$RG_NAME" --host "$VANITY_HOST"
 
       - name: Alert — notify the shared action group (loom-default-alerts, P1)
         if: failure() && steps.run.outputs.status != 'NotDeployed'
