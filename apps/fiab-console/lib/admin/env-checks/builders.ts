@@ -104,15 +104,15 @@ export const BUILDERS_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-copyjob-control', category: 'builders', title: 'Copy job — watermark control store (Azure SQL)', severity: 'optional',
     required: ['LOOM_COPYJOB_CONTROL_SQL_SERVER'], warnOnMiss: true,
-    remediation: 'Set LOOM_COPYJOB_CONTROL_SQL_SERVER (the Azure SQL logical server) so incremental copy jobs persist watermarks (copyjob_control_not_configured). Full-load copy jobs work without it.',
-    provisionedBy: 'modules/shared/plan-backing-sql.bicep (shared control SQL) → apps[] env',
+    remediation: 'Set LOOM_COPYJOB_CONTROL_SQL_SERVER (the Azure SQL logical server) so incremental copy jobs persist watermarks (copyjob_control_not_configured). Full-load copy jobs work without it. HONEST STATE (measured 2026-08-10, docs/fiab/gov-readiness-2026-08-10.md): NO caller anywhere in platform/fiab/bicep passes admin-plane/main.bicep\'s loomCopyJobControlSqlServer param, so this var is emitted empty on every cloud and the control-table module (copy-job-control.bicep, guarded by !empty(loomCopyJobControlSqlServer)) never runs. The gate cannot currently be cleared by a deploy.',
+    provisionedBy: 'NOT WIRED BY ANY TEMPLATE TODAY — admin-plane/main.bicep declares loomCopyJobControlSqlServer (default \'\') and emits it to apps[] env, but no orchestrator passes a value. NOTE modules/shared/plan-backing-sql.bicep (previously named here) creates only a DATABASE on an EXISTING Azure SQL logical server — it does not create the server, and it too is invoked only when loomPlanBackingSqlServer is non-empty, which nothing sets.',
     role: 'db_datawriter (Console UAMI AAD login) on the control database',
   },
   {
     id: 'svc-weave-ontology', category: 'builders', title: 'Weave ontology store (Postgres)', severity: 'optional',
     required: ['LOOM_WEAVE_PG_FQDN'], warnOnMiss: true,
-    remediation: 'Set LOOM_WEAVE_PG_FQDN so the Weave ontology store persists to its governed Postgres database (weave_ontology_not_configured).',
-    provisionedBy: 'modules/deploy-planner/postgres-flexible.bicep → apps[] env LOOM_WEAVE_PG_FQDN',
+    remediation: 'Set LOOM_WEAVE_PG_FQDN so the Weave ontology store persists to its governed Postgres database (weave_ontology_not_configured). HONEST STATE (measured 2026-08-10, docs/fiab/gov-readiness-2026-08-10.md): main.bicep derives this FQDN only when useSingleDlz is true — i.e. topology single-sub. On a tenant or multi-sub deployment (which includes every GCC-High / IL5 deploy) it is emitted EMPTY even though weaveOntologyEnabled defaults true, so the gate cannot be cleared by a deploy on those topologies. Same cliff affects LOOM_BATCH_ACCOUNT, LOOM_POSTGRES_HOST and the AML default compute.',
+    provisionedBy: 'modules/landing-zone/postgres-weave.bicep (Apache AGE PostgreSQL flexible server) → main.bicep loomWeavePgFqdn (main.bicep ~1385, gated on useSingleDlz && weaveOntologyEnabled) → admin-plane/main.bicep apps[] env LOOM_WEAVE_PG_FQDN. Previously this field named modules/deploy-planner/postgres-flexible.bicep — a path that does not exist.',
     role: 'Entra AAD login (Console UAMI) on the server',
   },
   {

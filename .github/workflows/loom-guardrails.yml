@@ -592,6 +592,16 @@ jobs:
       - name: 'lake-grant-gate (cross-sub lake: bind always, grant only when local)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-lake-grant-gate.mjs
+      # A teardown step must be UNREACHABLE from a cron. Both sovereign lanes
+      # had `(github.event_name == 'schedule' || inputs.run_mode == 'full') &&
+      # !inputs.keep_resources` — and a scheduled event carries NO inputs, so
+      # `!inputs.keep_resources` is `!''` = TRUE. The daily crons (gcch 10:00Z,
+      # gcc 08:00Z) would have destroyed the sovereign estate on every green run.
+      # Invisible from `gh run list` because both lanes are disabled_manually,
+      # and invisible from run history because it had never fired.
+      - name: 'teardown-not-on-schedule (a cron must never be able to tear down an estate)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-teardown-not-on-schedule.mjs
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw

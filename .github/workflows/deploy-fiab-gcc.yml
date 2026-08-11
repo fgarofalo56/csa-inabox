@@ -290,8 +290,13 @@ jobs:
           CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
           SKIP_DIRECT_LAKE_TEST: true   # No F-SKU in GCC
 
+      # NEVER ON THE SCHEDULE — identical defect to deploy-fiab-gcch.yml. The
+      # daily 08:00 UTC cron would tear the GCC estate down on every successful
+      # run, because a scheduled event carries no inputs so `!inputs.keep_resources`
+      # is `!''` = TRUE. Commercial has always guarded
+      # `github.event_name != 'schedule'`; both sovereign lanes inverted it.
       - name: Teardown
-        if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full') && !inputs.keep_resources
+        if: success() && github.event_name != 'schedule' && inputs.run_mode == 'full' && !inputs.keep_resources
         run: bash .github/scripts/fiab-teardown.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
