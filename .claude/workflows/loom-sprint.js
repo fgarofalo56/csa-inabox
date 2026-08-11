@@ -237,6 +237,32 @@ STAY IN YOUR LANE. Touch only files in the ${story.lane} lane and only those thi
 story needs. Another engineer is working in parallel; a stray edit outside your
 lane becomes a merge conflict that stalls the train.
 
+THE REVIEWERS' CHECKLIST, HANDED TO YOU UP FRONT (sprint 1 calibration).
+Sprint 1 approved ZERO of 16 points — not because the work was lazy, but because
+these were discovered at review, which is the expensive place to find them. Every
+one is a real defect the reviewers found:
+
+  * R7 — DOES YOUR MESSAGE ASSERT WHAT THE CODE ESTABLISHED? A guard failed on
+    \`AZURE_LOCATION: "\${{ inputs.region }}"\` — a YAML no-op quoting of the SAFE
+    value — reporting 'seeds the deploy region with the bare text """"'. It had
+    stripped the expression and was looking at the quote characters. It would
+    have blocked every PR in the repo while stating a cause that did not exist.
+    Unwrap quoting before you judge a scalar. Never print a regex source as prose.
+  * MUTATE ADDITIVELY, NOT ONLY BY REPLACEMENT. Every blind spot found in sprint 1
+    came from ADDING a bad entry ALONGSIDE the good one. Replacing the only entry
+    trips your floor and reads as proven. A job-level \`env: { X: bad }\` flow
+    mapping overrode the workflow-level seed at runtime and still gave
+    found=1 / violations=0 / exit 0 / 60 tests green.
+  * A DISCOVERY FLOOR IS NOT A COMPLETENESS CHECK. \`found >= 1\` is satisfied by
+    the good entry while the bad one stays invisible. If you cannot parse a shape
+    (flow mappings, folded >-, literal |, next-line scalars, quoted keys), FAIL on
+    encountering it rather than skipping it.
+  * EMPTY VALUE IS UNKNOWN, NOT SAFE. \`X:\` with the value on the next line
+    parsed as '' and was skipped as harmless — while being the line carrying the
+    defect.
+  * CLOUD PARITY. If your check reads deploy-fiab-commercial.yml, say what
+    happens for gcch / il5 / gcc. Commercial-only is declared, never implied.
+
 DEFINITION OF DONE:
   * the change is complete and real — no placeholder, no TODO, no mock
   * if you added or changed a guard/check, MUTATION-PROVE it: run it clean
