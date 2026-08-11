@@ -20,6 +20,27 @@ scripts/csa-loom/gen-apps-catalog-fixture.mjs text eol=lf
 # sdk/ tree to LF or a CRLF checkout would falsely fail every one of them.
 sdk/** text eol=lf
 
+# EVERY shell script is LF, full stop.
+#
+# The per-file entries below were added one incident at a time - the ACR firewall
+# lease (#2603), the sweeper (#2836), the image preflight (#2640), the digest
+# resolver (#2980), the login-health verdict (#2837). Five separate PRs, all the
+# same trap, each pinning only the file that had just broken.
+#
+# It happened AGAIN on 2026-08-11: scripts/ci/check-vanity-edge-health.sh was
+# committed with CRLF and loom-guardrails' self-test died on a Linux runner with
+#     line 72: set: pipefail: invalid option name
+#     line 77: syntax error near unexpected token `$'in''
+# while passing locally, because Git Bash does not care. Of 166 tracked .sh files
+# that was the ONLY one carrying CR - i.e. the per-file list works right up until
+# someone adds a file that is not on it.
+#
+# A blanket rule makes the next one impossible instead of pinning it afterwards.
+# The specific entries below are kept: they are load-bearing documentation of
+# WHICH scripts a Linux runner executes, and they cost nothing.
+*.sh text eol=lf
+
+
 # #2603 — the ACR firewall lease + its regression test are executed by `bash` on
 # Linux GitHub runners and are also invoked from the deploy-*-job.sh scripts. A
 # CRLF checkout makes bash choke on the trailing \r ("$'\r': command not

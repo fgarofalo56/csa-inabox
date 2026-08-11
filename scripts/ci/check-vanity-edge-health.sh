@@ -90,10 +90,33 @@ fi
 
 RC=0
 
+# STDOUT IS THE VALUE, STDERR IS THE EVIDENCE — never `2>&1` into a value.
+#
+# The first live run (loom-synthetic-monitor 31481444420) died with:
+#
+#   could NOT list custom domains on profile 'WARNING: Preview version of
+#   extension is disabled by default for extension installation…'
+#
+# `az` prints extension-install notices, and `2>&1` folded them INTO the captured
+# profile list, so a warning line was read as a profile NAME. It did not happen
+# locally because the `afd` extension was already installed here — the classic
+# shape where a clean workstation hides a runner-only fault.
+#
+# Fixed two ways, belt and braces: `--only-show-errors` suppresses the notices,
+# and stderr goes to a FILE so a message can still be quoted in an error without
+# ever contaminating the value. (Note the inverse mistake is also recorded in this
+# repo: treating non-empty stderr as failure, when az writes notices there
+# routinely. The exit CODE is the verdict; stderr is only ever evidence.)
+ERRF="$(mktemp)"
+trap 'rm -f "$ERRF"' EXIT
+azerr() { tr -d '
+' < "$ERRF" | tr '
+' ' ' | cut -c1-300; }
+
 # ── 1. CONTROL PLANE — discovered end to end from $HOST ──────────────────────
 echo "== (1) Front Door route binding for ${HOST} =="
 
-PROFILES="$(az afd profile list -g "$RG" --query "[].name" -o tsv 2>&1)"
+PROFILES="$(az afd profile list -g "$RG" --query "[].name" -o tsv --only-show-errors 2>"$ERRF")"
 PROF_RC=$?
 if [ $PROF_RC -ne 0 ]; then
   echo "::error::check-vanity-edge-health: could NOT list Front Door profiles in '${RG}' (az exit ${PROF_RC}): $(printf '%s' "$PROFILES" | tr -d '\r' | tr '\n' ' ' | cut -c1-300). This is an UNKNOWN — it does NOT establish that ${HOST} is unbound. Grant the probe identity CDN Profile Reader on ${RG}." >&2
@@ -110,7 +133,7 @@ FOUND_PROFILE=""
 FOUND_DOMAIN=""
 while IFS= read -r P; do
   [ -z "$P" ] && continue
-  CD="$(az afd custom-domain list --profile-name "$P" -g "$RG" --query "[?hostName=='${HOST}'].name | [0]" -o tsv 2>&1)"
+  CD="$(az afd custom-domain list --profile-name "$P" -g "$RG" --query "[?hostName=='${HOST}'].name | [0]" -o tsv --only-show-errors 2>"$ERRF")"
   CD_RC=$?
   CD="$(printf '%s' "$CD" | tr -d '\r')"
   if [ $CD_RC -ne 0 ]; then
@@ -131,7 +154,7 @@ echo "  discovered: profile='${FOUND_PROFILE}' customDomain='${FOUND_DOMAIN}'"
 # Which route — if any — carries it? Enumerate rather than assume a name: the
 # BINDING is what breaks, so a check that needed the binding to find the route
 # could never see the outage.
-ENDPOINTS="$(az afd endpoint list --profile-name "$FOUND_PROFILE" -g "$RG" --query "[].name" -o tsv 2>&1)"
+ENDPOINTS="$(az afd endpoint list --profile-name "$FOUND_PROFILE" -g "$RG" --query "[].name" -o tsv --only-show-errors 2>"$ERRF")"
 EP_RC=$?
 ENDPOINTS="$(printf '%s' "$ENDPOINTS" | tr -d '\r')"
 if [ $EP_RC -ne 0 ]; then
@@ -149,7 +172,7 @@ while IFS= read -r EP; do
   # assignment but cannot follow one through a `while read` loop, so it sees $EP
   # as untraced. The value it distrusts IS the discovered list.
   # afd-endpoint-discovery-ok: $EP is read from `az afd endpoint list` 8 lines above
-  ROUTES_JSON="$(az afd route list --profile-name "$FOUND_PROFILE" -g "$RG" --endpoint-name "$EP" -o json 2>&1)"
+  ROUTES_JSON="$(az afd route list --profile-name "$FOUND_PROFILE" -g "$RG" --endpoint-name "$EP" -o json --only-show-errors 2>"$ERRF")"
   R_RC=$?
   if [ $R_RC -ne 0 ]; then
     echo "::error::check-vanity-edge-health: could NOT list routes on endpoint '${EP}' (az exit ${R_RC}): $(printf '%s' "$ROUTES_JSON" | tr -d '\r' | tr '\n' ' ' | cut -c1-200). UNKNOWN, not unbound." >&2
