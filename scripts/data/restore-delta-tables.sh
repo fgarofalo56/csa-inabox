@@ -111,12 +111,42 @@ else
 fi
 
 # ─── Safety Check: Target Exists ──────────────────────────────────────────
-TARGET_CHECK=$(azcopy list "${TARGET%/}/" 2>&1 || true)
+#
+# #3117 (deploy-integrity R7). This was:
+#     TARGET_CHECK=$(azcopy list "${TARGET%/}/" 2>&1 || true)
+#     if echo "$TARGET_CHECK" | grep -qv "not found\|404\|does not exist"; then
+#         TARGET_HAS_DATA=true
+#
+# `|| true` discarded the exit status entirely, and `grep -qv` asks "does SOME
+# line NOT match" — so an auth or network error message, which contains none of
+# those tokens, satisfied it and set TARGET_HAS_DATA=true. The verdict about
+# whether real data exists was being derived from an unclassified failure.
+#
+# Three states, kept apart. The unknown state deliberately behaves like
+# "has data" (refuse to overwrite without --force) because that is the safe
+# direction for a RESTORE — but it now SAYS it is unknown instead of asserting
+# a fact it never established.
+set +e
+TARGET_CHECK=$(azcopy list "${TARGET%/}/" 2>&1)
+TARGET_RC=$?
+set -e
 
-if echo "$TARGET_CHECK" | grep -qv "not found\|404\|does not exist"; then
-    TARGET_HAS_DATA=true
-else
+if [[ $TARGET_RC -eq 0 ]]; then
+    # azcopy answered. Data exists iff it listed at least one entry.
+    if printf '%s' "$TARGET_CHECK" | grep -qE "INFO: azcopy: A total of 0 file|^$"; then
+        TARGET_HAS_DATA=false
+    else
+        TARGET_HAS_DATA=true
+    fi
+elif printf '%s' "$TARGET_CHECK" | grep -qiE "not found|404|does not exist|cannot find the path"; then
+    # azcopy answered, and the answer was "there is nothing there".
     TARGET_HAS_DATA=false
+else
+    log "  WARNING: could NOT read ${TARGET%/}/ (azcopy exit ${TARGET_RC}). Whether it holds data is UNPROVEN, not disproven:"
+    printf '%s
+' "$TARGET_CHECK" | head -5 | sed 's/^/    /'
+    log "  Treating it as NON-EMPTY, which is the safe direction for a restore — pass --force only if you know the target is disposable."
+    TARGET_HAS_DATA=true
 fi
 
 if [[ "$TARGET_HAS_DATA" == "true" && "$FORCE" == "false" && "$DRY_RUN" == "false" ]]; then

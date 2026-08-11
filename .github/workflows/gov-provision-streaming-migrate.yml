@@ -243,13 +243,26 @@ jobs:
         if: ${{ env.MODE != 'whatif' && steps.discover.outputs.estate == 'present' }}
         run: |
           set -euo pipefail
+          # #3117 (deploy-integrity R7). Every failure class used to land in the
+          # `else` here, which asserted BOTH that the tag 'is NOT in $ACR' and a
+          # specific downstream error (MANIFEST_UNKNOWN) it had never established.
+          # `2>/dev/null` threw away the evidence that would have told them apart.
+          # The R7-correct `lookup` helper further down THIS FILE is the model:
+          # absent and unreadable are different answers and must read differently.
           RC=0
           for IMG in loom-migrate loom-risingwave; do
-            if D=$(az acr repository show -n "$ACR" --image "$IMG:$IMAGE_TAG" --query digest -o tsv 2>/dev/null | tr -d '\r'); then
-              [ -n "$D" ] || RC=1
-              echo "::notice::$ACR_LOGIN/$IMG:$IMAGE_TAG → ${D:-<no digest>}"
+            set +e
+            D=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-acr-digest.sh" \
+                  --acr "$ACR" --image "$IMG:$IMAGE_TAG")
+            DRC=$?
+            set -e
+            if [ $DRC -eq 0 ] && [ -n "$D" ]; then
+              echo "::notice::$ACR_LOGIN/$IMG:$IMAGE_TAG → $D"
+            elif [ $DRC -eq 3 ]; then
+              echo "::error::$IMG:$IMAGE_TAG is NOT in $ACR — the registry ANSWERED not-found on every attempt. An apps-enabled Gov deploy would fail the Container App PUT with MANIFEST_UNKNOWN. Build it first (gov-provision-streaming-migrate mode=build-and-deploy)."
+              RC=1
             else
-              echo "::error::$IMG:$IMAGE_TAG is NOT in $ACR. An apps-enabled Gov deploy would fail the Container App PUT with MANIFEST_UNKNOWN."
+              echo "::error::could NOT READ $ACR for $IMG:$IMAGE_TAG (see the resolver output above). Its existence is UNPROVEN, not disproven — this says nothing about whether a deploy would fail. Most likely the ACR firewall is closed to this runner or a change has not propagated."
               RC=1
             fi
           done

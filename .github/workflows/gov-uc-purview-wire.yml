@@ -133,9 +133,21 @@ jobs:
           # deploy step below, and any future orchestrator deploy that adopts
           # this app, reference exactly that tag, so a silent tagging failure
           # here would leave the live Gov catalog pointing at a missing image.
-          DIGEST=$(az acr repository show -n "$ACR" --image "loom-unity:v0.1" --query digest -o tsv | tr -d '\r')
-          if [ -z "${DIGEST:-}" ]; then
-            echo "::error::loom-unity:v0.1 is NOT resolvable in $ACR after the build. That is the exact tag gcc-high/il5.bicepparam pull, so deploying now would point this estate at a missing image. Refusing."
+          # #3117 (deploy-integrity R7). `set -euo pipefail` meant an `az` failure
+          # aborted the step before the `-z` test could run, so this branch was
+          # largely unreachable — and when it WAS reached it asserted the tag is
+          # 'NOT resolvable', which an unread registry does not establish.
+          set +e
+          DIGEST=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-acr-digest.sh" \
+                     --acr "$ACR" --image "loom-unity:v0.1")
+          DRC=$?
+          set -e
+          if [ $DRC -eq 3 ]; then
+            echo "::error::loom-unity:v0.1 is NOT in $ACR after the build — the registry ANSWERED not-found. That is the exact tag gcc-high/il5.bicepparam pull, so deploying now would point this estate at a missing image. Refusing."
+            exit 1
+          fi
+          if [ $DRC -ne 0 ] || [ -z "${DIGEST:-}" ]; then
+            echo "::error::could NOT READ $ACR to confirm loom-unity:v0.1 after the build (see the resolver output above). Its presence is UNPROVEN, not disproven. Refusing to wire a live federal estate at a tag this run could not verify."
             exit 1
           fi
           echo "::notice::loom-unity:v0.1 -> $DIGEST (the tag the Gov bicepparams pull)"
