@@ -156,7 +156,7 @@ jobs:
       # The matrix resolver probes ./apps/<name> to decide each build context, so this
       # job needs the tree. It had no checkout before — the probe silently evaluated
       # false for every app and everything fell through to the ./apps/fiab-* convention.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Fail LOUDLY rather than silently building into the wrong cloud: a Gov
       # dispatch with no AZURE_GOV_* secret set would otherwise fall through to
       # an unauthenticated `az` and report a confusing "ACR not found".
@@ -304,7 +304,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.resolve.outputs.app_matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (Commercial)
         if: env.BOUNDARY == 'Commercial'
@@ -530,7 +530,7 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Azure login (Commercial)
         if: env.BOUNDARY == 'Commercial'
         uses: azure/login@v2.3.0
@@ -577,7 +577,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Azure login (Commercial)
         if: env.BOUNDARY == 'Commercial'
         uses: azure/login@v2.3.0

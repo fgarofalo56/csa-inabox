@@ -140,7 +140,7 @@ jobs:
       DRILL_CLOUD: ${{ needs.pre-flight.outputs.cloud }}
       LIVE_RG: ${{ needs.pre-flight.outputs.live_rg }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Azure login (live estate)
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
@@ -340,7 +340,7 @@ jobs:
       DRILL_CLOUD: ${{ needs.pre-flight.outputs.cloud }}
       LIVE_RG: ${{ needs.pre-flight.outputs.live_rg }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Azure login (live estate)
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
@@ -433,7 +433,7 @@ jobs:
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -460,7 +460,7 @@ jobs:
       DRILL_CLOUD: ${{ needs.pre-flight.outputs.cloud }}
       LIVE_RG: ${{ needs.pre-flight.outputs.live_rg }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Azure login (live estate)
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
@@ -528,7 +528,7 @@ jobs:
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}

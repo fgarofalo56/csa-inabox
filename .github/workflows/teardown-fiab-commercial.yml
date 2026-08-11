@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm == 'DELETE'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login
         uses: Azure/login@v2

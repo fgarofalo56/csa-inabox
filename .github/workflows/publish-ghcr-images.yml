@@ -62,7 +62,7 @@ jobs:
           - app: loom-copilot-maf
             context: ./apps/copilot-maf
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Derive the bare semver image tag from the git tag (csa-inabox-v0.43.1 →
       # 0.43.1) or the workflow_dispatch override. The updater pulls this tag.

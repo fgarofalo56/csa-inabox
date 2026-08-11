@@ -41,7 +41,7 @@ jobs:
       fiab_changed: ${{ steps.changes.outputs.fiab }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Detect file changes
         id: changes
@@ -88,7 +88,7 @@ jobs:
     steps:
       - name: Checkout
         if: matrix.changed == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Bicep Build
         if: matrix.changed == 'true'
@@ -126,7 +126,7 @@ jobs:
     steps:
       - name: Checkout
         if: matrix.changed == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Azure Login (OIDC)
         if: matrix.changed == 'true'
@@ -255,7 +255,7 @@ jobs:
 
       - name: Checkout
         if: steps.precheck.outputs.configured == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Azure Login (Commercial — creds JSON, same block as loom-roll-and-validate.yml)
         if: steps.precheck.outputs.configured == 'true'
@@ -421,7 +421,7 @@ jobs:
     steps:
       - name: Checkout
         if: matrix.changed == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Install dependencies
         if: matrix.changed == 'true'

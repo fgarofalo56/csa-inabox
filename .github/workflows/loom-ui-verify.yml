@@ -161,7 +161,7 @@ jobs:
       # 1. Checkout
       # -----------------------------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # -----------------------------------------------------------------------
       # 1b. NORMALIZE + VALIDATE `target_route` UP FRONT (FINISHLINE C13).

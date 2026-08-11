@@ -105,7 +105,7 @@ jobs:
       region: ${{ steps.bootstrap_coords.outputs.region }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (Gov sub) — limitlessdata_deploy SP
         uses: Azure/login@v2

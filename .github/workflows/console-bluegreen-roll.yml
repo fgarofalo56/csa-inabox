@@ -59,7 +59,7 @@ jobs:
       APP: ${{ inputs.app }}
       HEALTH_RETRIES: ${{ inputs.health_retries }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── Auth: Commercial vs Gov SP (mirrors full-app-deploy / gov-console-roll) ──
       - name: Azure login (Commercial)
