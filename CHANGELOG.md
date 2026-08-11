@@ -25,6 +25,17 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.1...csa-inabox-v0.92.2) (2026-08-11)
+
+
+### Bug Fixes
+
+* **ci:** guard a third-party source ref pinned to a moving branch ([#3259](https://github.com/fgarofalo56/csa-inabox/issues/3259)) ([95b362e](https://github.com/fgarofalo56/csa-inabox/commit/95b362ed165c67eb20073fb996cfd1ea62d3311a))
+* **copilot:** stop shipping internal working docs in the product corpus ([#3261](https://github.com/fgarofalo56/csa-inabox/issues/3261)) ([3d632db](https://github.com/fgarofalo56/csa-inabox/commit/3d632db083ee4a3fb8db4cf8aaa3fcaa8f89c146))
+* **deploy:** classify NU1103 (unresolvable NuGet constraint) instead of UNKNOWN ([#3257](https://github.com/fgarofalo56/csa-inabox/issues/3257)) ([217f4d6](https://github.com/fgarofalo56/csa-inabox/commit/217f4d6054d508e7a9dec862ff7f4918184daf81))
+* **security:** clear the nanoid HIGH advisory — floor the 3.x line, in BOTH majors ([#3254](https://github.com/fgarofalo56/csa-inabox/issues/3254)) ([0a4fb56](https://github.com/fgarofalo56/csa-inabox/commit/0a4fb56cce4098e80b08901bb450bc706102f5b9))
+* **test:** the Gov-signing assertion was keyed to the literal my own fix removed ([#3255](https://github.com/fgarofalo56/csa-inabox/issues/3255)) ([6a2459c](https://github.com/fgarofalo56/csa-inabox/commit/6a2459c25e8d9001e3277816563234212177ff19))
+
 ## [0.92.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.0...csa-inabox-v0.92.1) (2026-08-11)
 
 
