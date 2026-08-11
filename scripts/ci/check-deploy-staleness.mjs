@@ -401,6 +401,12 @@ export const WATCHED = [
       // proceeds is a deploy source of THIS lane too. check-deploy-paths-coverage
       // caught its absence the moment #3001 landed underneath this entry.
       'scripts/ci/assert-acr-image-tags.sh',
+      // The keyless SIGNER. Editing it changes whether a signature lands beside
+      // each image, and the roll gates REFUSE an unsigned image — so a commit
+      // here can decide whether this lane deploys at all. Not run-shaping: it
+      // leaves an artifact in ACR. check-deploy-paths-coverage flagged its
+      // absence the moment the four bare `cosign sign` sites adopted it.
+      'scripts/ci/cosign-sign-retry.sh',
       // refs #2682 — the upstream-image ACR mirror. BOTH halves are deploy
       // sources of this lane and BOTH must be watched:
       //   * the SCRIPT is what the workflow executes (check-deploy-paths-coverage

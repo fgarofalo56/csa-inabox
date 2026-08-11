@@ -633,10 +633,10 @@ jobs:
           set -euo pipefail
           REF="${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}@${{ steps.sc.outputs.digest }}"
           echo "Signing $REF keylessly (GitHub Actions OIDC → Fulcio/Rekor) ..."
-          if ! cosign sign --yes "$REF"; then
-            echo "::error::cosign signing FAILED for $REF. The image is built but UNSIGNED — the verify-images gate will reject the roll. Re-run (transient Sigstore outage), or (emergency only) re-dispatch with skip_supply_chain=true."
-            exit 1
-          fi
+          # Via the shared retry (run 31496454872): cosign's INTERNAL retry held
+          # an OIDC token past its lifetime, so a TLS timeout surfaced as
+          # `expired_token`. Only a fresh invocation re-mints the token.
+          bash scripts/ci/cosign-sign-retry.sh --ref "$REF"
           echo "::notice::Signed $REF."
 
       - name: Supply-chain — skip notice

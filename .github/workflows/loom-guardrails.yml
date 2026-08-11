@@ -666,6 +666,19 @@ jobs:
       - name: 'acr-login-retry-adoption (a bare `az acr login` reds a deploy on a known transient)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-login-retry-adoption.mjs
+      # cosign's INTERNAL retry holds one OIDC token, so on a Sigstore hiccup it
+      # retries until the token EXPIRES and reports `expired_token` — a network
+      # transient dressed as a credential fault (run 31496454872: a TLS handshake
+      # timeout at 13:36 surfaced as expired_token at 13:41). Only a FRESH
+      # invocation re-mints the token, so the retry has to live outside cosign.
+      # Four sites had the bare shape, including BOTH Gov producers; one had no
+      # retry and no message at all.
+      - name: 'cosign-sign-retry-adoption (an in-process retry outlives its OIDC token)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-cosign-sign-retry-adoption.mjs
+      - name: 'cosign-sign-retry self-test (the signing retry MUST be able to fail)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-cosign-sign-retry.sh
       # The probe itself is mutation-proved offline against stub az/curl: 403 DENIED
       # is NOT ready, a connect failure is exit 2 (not 1), and reinstating
       # `CODE="$(curl … || echo 000)"` — which concatenates to `000000` and makes
