@@ -103,7 +103,11 @@ end
 # We only FAIL if the route 5xx's OR returns 200 with count=0.
 # ---------------------------------------------------------------------------
 log "6. /api/copilot/tools"
-TOOLS_HTTP=$(curl -s -m 30 -o /tmp/loom-tools.json -w "%{http_code}" "${URL}/api/copilot/tools${CACHEBUST}" || echo "000")
+# NO `|| echo "000"`: curl prints 000 itself on a connection failure AND exits
+# non-zero, so the fallback concatenates to "000000" — which compares unequal to
+# "000" and defeats every branch that tests for it.
+TOOLS_HTTP=$(curl -s -m 30 -o /tmp/loom-tools.json -w "%{http_code}" "${URL}/api/copilot/tools${CACHEBUST}")
+[ -n "$TOOLS_HTTP" ] || TOOLS_HTTP="000"
 cat /tmp/loom-tools.json 2>/dev/null
 echo ""
 echo "http=$TOOLS_HTTP"

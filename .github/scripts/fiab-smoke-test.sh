@@ -32,11 +32,41 @@ pass() {
   TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
+# ---------------------------------------------------------------------------
+# http_code — the ONLY way this script reads a status code.
+#
+# Every probe here used to be:
+#     curl -fsS -o … -w "%{http_code}" … || echo "000"
+# which is wrong twice over, both measured with real curl:
+#
+#   connection failure : curl PRINTS 000 and exits non-zero  -> "000000"
+#   HTTP 401 with -f   : curl PRINTS 401 and exits 22        -> "401000"
+#
+# The second one is what made Test 2 unpassable. It asserts that /api/workspaces
+# refuses an unauthenticated caller — i.e. a 401 is the SUCCESS case — but `-f`
+# makes curl exit non-zero on exactly that response, so the fallback concatenated
+# and the comparison against "401" could never match. The test failed when the
+# auth gate was working, and also failed when it was broken (200 matches neither
+# 401 nor 403). It could not pass. Nobody saw it, because the deploy ran this
+# script under `continue-on-error: true` and threw the result away.
+#
+# NO `-f`: this script is INTERESTED in 4xx/5xx — they are answers, not errors.
+# NO `|| echo`: curl already prints the right value in both failure modes; a
+# fallback can only concatenate onto it. An EMPTY capture (curl absent, killed)
+# is the one case that needs a default.
+# ---------------------------------------------------------------------------
+http_code() {
+  local code
+  code="$(curl -sS -w '%{http_code}' "$@" 2>/dev/null)"
+  [ -n "$code" ] || code="000"
+  printf '%s' "$code"
+}
+
 # ---------------------------------------------------------------------
 # Test 1: Console health endpoint
 # ---------------------------------------------------------------------
 echo "Test 1: Console /api/health responds 200"
-RESPONSE=$(curl -fsS -o /tmp/health-resp -w "%{http_code}" --max-time 30 "${CONSOLE_URL}/api/health" || echo "000")
+RESPONSE=$(http_code -o /tmp/health-resp --max-time 30 "${CONSOLE_URL}/api/health")
 if [[ "$RESPONSE" != "200" ]]; then
   fail "got $RESPONSE expected 200; body: $(cat /tmp/health-resp 2>/dev/null || echo '(empty)')"
 else
@@ -47,7 +77,7 @@ fi
 # Test 2: Workspaces list responds 200 (with auth) or 401 (without)
 # ---------------------------------------------------------------------
 echo "Test 2: /api/workspaces enforces auth"
-RESPONSE=$(curl -fsS -o /dev/null -w "%{http_code}" --max-time 30 "${CONSOLE_URL}/api/workspaces" || echo "000")
+RESPONSE=$(http_code -o /dev/null --max-time 30 "${CONSOLE_URL}/api/workspaces")
 if [[ "$RESPONSE" != "401" && "$RESPONSE" != "403" ]]; then
   fail "expected 401/403 (unauth), got $RESPONSE — auth gate may be broken"
 else
@@ -82,7 +112,7 @@ fi
 # ---------------------------------------------------------------------
 echo "Test 4: MCP server health endpoint"
 MCP_URL="${MCP_URL:-${CONSOLE_URL/loom-console/loom-mcp}}"
-RESPONSE=$(curl -fsS -o /dev/null -w "%{http_code}" --max-time 30 "${MCP_URL}/.well-known/health" || echo "000")
+RESPONSE=$(http_code -o /dev/null --max-time 30 "${MCP_URL}/.well-known/health")
 if [[ "$RESPONSE" != "200" ]]; then
   fail "MCP server health expected 200, got $RESPONSE at ${MCP_URL}"
 else
@@ -94,7 +124,7 @@ fi
 # ---------------------------------------------------------------------
 echo "Test 5: Setup Orchestrator health endpoint"
 ORCH_URL="${ORCH_URL:-${CONSOLE_URL/loom-console/loom-orchestrator}}"
-RESPONSE=$(curl -fsS -o /tmp/orch-resp -w "%{http_code}" --max-time 30 "${ORCH_URL}/health" || echo "000")
+RESPONSE=$(http_code -o /tmp/orch-resp --max-time 30 "${ORCH_URL}/health")
 if [[ "$RESPONSE" != "200" ]]; then
   fail "Setup Orchestrator health expected 200, got $RESPONSE; body: $(cat /tmp/orch-resp 2>/dev/null)"
 else
@@ -111,7 +141,7 @@ else
   # Without a real Power BI Premium model wired, we can only verify the
   # shim service is up and reporting telemetry.
   SHIM_URL="${SHIM_URL:-${CONSOLE_URL/loom-console/loom-direct-lake-shim}}"
-  RESPONSE=$(curl -fsS -o /dev/null -w "%{http_code}" --max-time 30 "${SHIM_URL}/health" || echo "000")
+  RESPONSE=$(http_code -o /dev/null --max-time 30 "${SHIM_URL}/health")
   if [[ "$RESPONSE" != "200" ]]; then
     fail "Direct-Lake-Shim health expected 200, got $RESPONSE at ${SHIM_URL}"
   else
@@ -125,7 +155,7 @@ fi
 for svc in activator-engine mirroring-engine; do
   echo "Test 7.$svc: $svc health endpoint"
   SVC_URL="${CONSOLE_URL/loom-console/loom-$svc}"
-  RESPONSE=$(curl -fsS -o /dev/null -w "%{http_code}" --max-time 30 "${SVC_URL}/health" || echo "000")
+  RESPONSE=$(http_code -o /dev/null --max-time 30 "${SVC_URL}/health")
   if [[ "$RESPONSE" != "200" ]]; then
     fail "$svc health expected 200, got $RESPONSE"
   else

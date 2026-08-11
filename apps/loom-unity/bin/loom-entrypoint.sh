@@ -620,8 +620,20 @@ self_probe_anonymous_read() {
   anon_code="000"
   anon_try=0
   while [ "${anon_try}" -lt 60 ]; do
+    # NO `|| echo 000`. curl PRINTS `000` on a connection failure AND exits
+    # non-zero, so the fallback CONCATENATES and yields `000000`. That is not
+    # cosmetic here: the test below breaks out of the loop when the value is
+    # != "000", and "000000" != "000" — so the 60-attempt wait-for-server retry
+    # exited on attempt 1, before the server was listening, and the deploy gate
+    # was handed a code that is not a code. Measured on gov-uc-purview-wire run
+    # 31503926181, which failed with:
+    #   [loom-unity] ANON-READ: 000000
+    #   ##[error]anonymous read answered 000, which is neither a refusal
+    #   (401/403) nor a success (200) — the catalog is not in a state this
+    #   deploy can vouch for.
     anon_code="$(curl -sS -o /dev/null -w '%{http_code}' -m 10 \
-      "${anon_base}/api/2.1/unity-catalog/catalogs" 2>/dev/null || echo 000)"
+      "${anon_base}/api/2.1/unity-catalog/catalogs" 2>/dev/null)"
+    [ -n "${anon_code}" ] || anon_code="000"
     if [ "${anon_code}" != "000" ]; then
       break
     fi
