@@ -313,7 +313,7 @@ jobs:
           if ! bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR_NAME" --timeout-seconds 240; then
             echo "::warning::ACR data plane still refusing this runner after ~240s; builds may need a retry."
           fi
-          az acr login --name "$ACR_NAME" >/dev/null 2>&1 || true
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR_NAME" || echo "::warning::could not mint an ACR token; the build steps below may be denied."
       - name: Grant AcrPush to deploy SP + AcrPull to all app UAMIs (idempotent)
         run: |
           set +e
@@ -587,7 +587,7 @@ jobs:
         run: |
           set -euo pipefail
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
-          az acr login --name "$ACR_NAME" >/dev/null
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR_NAME"
           DIGEST=$(az acr repository show --name "$ACR_NAME" --image "${{ matrix.app }}:${{ github.sha }}" --query digest -o tsv | tr -d '\r')
           if [[ -z "$DIGEST" ]]; then
             echo "::error::Could not resolve the manifest digest for ${{ matrix.app }}:${{ github.sha }} — cannot scan/sign."
@@ -706,7 +706,7 @@ jobs:
             echo "::error::Cannot reach the ACR data plane on $ACR_NAME even though open-acr ran this run — cannot verify image signatures, refusing to roll blind. This is a REACHABILITY failure, not a statement about whether the images are signed. Check the ACR network toggle (an Azure Policy may have reverted it), or (emergency only) re-dispatch with skip_supply_chain=true."
             exit 1
           fi
-          az acr login --name "$ACR_NAME" >/dev/null
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR_NAME"
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
           # ── WHAT THIS GATE COVERS — DERIVED, NOT HAND-COPIED (refs #3035) ──
           # This used to be a hand-maintained 17-name array under the claim

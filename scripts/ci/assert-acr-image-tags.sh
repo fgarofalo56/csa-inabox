@@ -192,7 +192,11 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
   printf '%s\n' "$READY_OUT"
   if [ "$READY_RC" -eq 0 ]; then
     set +e
-    LOGIN_OUT=$(az acr login -n "$ACR" 2>&1)
+    # #3230 — bounded retry. The AAD -> ACR token exchange has its own
+    # propagation window after the firewall opens, separate from the /v2/
+    # reachability the probe above establishes; runs 31477166587 and 31478802493
+    # both had READY followed 1s later by CONNECTIVITY_REFRESH_TOKEN_ERROR / 403.
+    LOGIN_OUT=$(bash "$REPO_ROOT/scripts/ci/acr-login-retry.sh" --acr "$ACR" 2>&1)
     LOGIN_RC=$?
     [ "$LOGIN_RC" -eq 0 ] && LOGIN_OK=1
   else
