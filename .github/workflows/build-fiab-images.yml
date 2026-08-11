@@ -171,7 +171,10 @@ jobs:
         run: |
           ACR="${{ needs.resolve-acr.outputs.login_server }}"
           ACR_NAME="${ACR%%.*}"
-          az acr login --name "$ACR_NAME"
+          # Via the retry helper (#3230) — see acr-login-retry.sh. A bare
+          # `az acr login` turns the AAD→ACR token exchange's own propagation
+          # window into a red build.
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR_NAME"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

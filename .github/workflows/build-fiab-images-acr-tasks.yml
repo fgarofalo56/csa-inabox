@@ -470,7 +470,11 @@ jobs:
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
           if [[ "$SKIP" == "true" ]]; then exit 0; fi
           # Authenticate docker (Trivy + cosign both read ~/.docker/config.json).
-          az acr login --name "$ACR_NAME"
+          # Via the retry helper (#3230): the AAD→ACR token exchange fails
+          # transiently with CONNECTIVITY_REFRESH_TOKEN_ERROR / 403 for a window
+          # after the firewall opens, and a bare login turns that into a red
+          # build. The helper retries ONLY that named set and fails closed.
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR_NAME"
           DIGEST=$(az acr repository show --name "$ACR_NAME" --image "${{ matrix.name }}:${{ github.sha }}" --query digest -o tsv | tr -d '\r')
           if [[ -z "$DIGEST" ]]; then
             echo "::error::Could not resolve the manifest digest for ${{ matrix.name }}:${{ github.sha }} — cannot scan/sign. The image build reported success but the manifest is unreadable."

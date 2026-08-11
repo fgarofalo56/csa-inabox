@@ -655,6 +655,17 @@ jobs:
       - name: 'acr-reachability-oracle (az acr login is a credential, not a probe)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-reachability-oracle.mjs
+      # The complement: the oracle rule says `az acr login` must not be used to
+      # ASK whether the registry is reachable. This one says that when it IS used
+      # (to mint a credential), it goes through the retry helper. The AAD->ACR
+      # token exchange has its own propagation window AFTER the firewall opens —
+      # roll 31494527960 failed ~2s after its own probe reported READY, with
+      # CONNECTIVITY_REFRESH_TOKEN_ERROR / 403. acr-login-retry.sh existed for
+      # exactly that and 3 of 16 sites had never adopted it, including the roll's
+      # own cosign gate: the fix was in the repo and the failure happened anyway.
+      - name: 'acr-login-retry-adoption (a bare `az acr login` reds a deploy on a known transient)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-acr-login-retry-adoption.mjs
       # The probe itself is mutation-proved offline against stub az/curl: 403 DENIED
       # is NOT ready, a connect failure is exit 2 (not 1), and reinstating
       # `CODE="$(curl … || echo 000)"` — which concatenates to `000000` and makes
