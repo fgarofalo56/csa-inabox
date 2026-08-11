@@ -250,13 +250,30 @@ jobs:
               --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
           else
             azd env new csa-loom-gcc-ci-${{ github.run_id }} --no-prompt
-            azd env set AZURE_CLOUD $AZURE_CLOUD
-            azd env set AZURE_LOCATION $AZURE_LOCATION
-            azd env set CSA_LOOM_BOUNDARY $CSA_LOOM_BOUNDARY
-            azd env set CSA_LOOM_DEPLOYMENT_MODE $CSA_LOOM_DEPLOYMENT_MODE
-            azd env set CSA_LOOM_TOPOLOGY $CSA_LOOM_TOPOLOGY
-            azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
-            azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}
+            # `azd env set X $VAR` with an EMPTY $VAR drops the argument entirely,
+            # so azd sees one token and hard-errors:
+            #     ERROR: invalid key=value format: CSA_LOOM_TOPOLOGY
+            # Measured on deploy-fiab-gcch run 31465019347, dispatched with this
+            # workflow's OWN defaults — `topology` defaults to '' and its help says
+            # "Empty=derive". So the documented default could not get past this line.
+            #
+            # Empty means DERIVE, which means: do not set the variable at all and let
+            # main.bicep's default apply. Setting it to a literal empty string would
+            # be a different thing and would not derive.
+            azdset() {
+              if [ -z "${2:-}" ]; then
+                echo "::notice::azd env set $1 — SKIPPED (empty; the template derives it)"
+                return 0
+              fi
+              azd env set "$1" "$2"
+            }
+            azdset AZURE_CLOUD "$AZURE_CLOUD"
+            azdset AZURE_LOCATION "$AZURE_LOCATION"
+            azdset CSA_LOOM_BOUNDARY "$CSA_LOOM_BOUNDARY"
+            azdset CSA_LOOM_DEPLOYMENT_MODE "$CSA_LOOM_DEPLOYMENT_MODE"
+            azdset CSA_LOOM_TOPOLOGY "$CSA_LOOM_TOPOLOGY"
+            azdset CSA_LOOM_CAPACITY_SKU "$CSA_LOOM_CAPACITY_SKU"
+            azdset CSA_LOOM_ADMIN_GROUP_ID "${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}"
             # azd names its own nested deployment — no --arm-deployment to drill
             # into; classification runs on azd's own output. Two attempts only.
             node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
