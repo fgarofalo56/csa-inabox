@@ -71,6 +71,14 @@
  * param file to `readEnvironmentVariable('…', adminEntraGroupId)` → red naming
  * the file and the trap; restore → green. Both exercised by --selftest.
  *
+ * SCOPE — this file owns SUPPLY: that a binding is passed, and that a param
+ * file can express it. It does NOT judge WHAT was supplied. The kind of
+ * principal behind the value — a service principal (the deployer fallback), a
+ * group id in the oid slot, a comma list — is owned by
+ * scripts/ci/check-admin-principal-kind.mjs (static) and
+ * scripts/ci/bootstrap-admin-principal.mjs (the deploy-time refusal, #3109).
+ * Supply and kind fail with identical symptoms and must both be held.
+ *
  * Usage: node scripts/ci/check-tenant-admin-binding.mjs [repo-root]
  *        node scripts/ci/check-tenant-admin-binding.mjs --selftest
  */

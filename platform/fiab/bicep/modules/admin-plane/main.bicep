@@ -1964,14 +1964,44 @@ param loomTenantAdminGroupId string = ''
 @description('Entra user oid that bypasses the Loom Feature Permissions gate. Used in single-user bootstrap scenarios. Members of loomTenantAdminGroupId are recommended for production.')
 param loomTenantAdminOid string = ''
 
-// Bootstrap admin is never blank: when no explicit OID and no real admin group
-// is supplied, fall back to the deploying principal (deployer().objectId) so the
-// push-button deploy always has a working admin who can grant others access from
-// the empty state (PRP deploy-readiness gap #4). A non-empty group id (even the
-// placeholder) does not suppress this — the deployer-as-admin fallback is
-// harmless and guarantees first-login admin access.
+// Bootstrap admin fallback: when no explicit OID and no real admin group is
+// supplied, fall back to the deploying principal (deployer().objectId) so a
+// HAND-RUN push-button deploy always has a working admin who can grant others
+// access from the empty state (PRP deploy-readiness gap #4).
+//
+// #3109 — THE FALLBACK IS NOW RESTRICTED TO A HUMAN DEPLOYER. Every CI deploy
+// runs as a service principal (Azure/login with secrets.AZURE_CLIENT_ID), so on
+// those runs deployer().objectId is the DEPLOY SP's object id — and binding it
+// as LOOM_TENANT_ADMIN_OID hands the console's tenant-admin bypass to a
+// non-interactive workload identity that can never sign in, while every human
+// still gets 403. That is how the deploy SP became the estate's bootstrap
+// admin. The console compares session.claims.oid === LOOM_TENANT_ADMIN_OID
+// (apps/fiab-console/lib/auth/feature-gate.ts isTenantAdmin), so an SP oid
+// there matches NOBODY: it is not a lesser binding, it is a dead one that
+// reads as configured.
+//
+// The discriminator is deployer().userPrincipalName. Per Microsoft Learn
+// (bicep-functions-deployment#deployer) ARM returns the UPN "if available. For
+// service principals or managed identities, this property may be empty." So a
+// non-empty UPN establishes an interactive user; an EMPTY one does NOT
+// establish "service principal" — it establishes "ARM did not disclose a user
+// principal name", which is exactly the case where auto-binding an unverified
+// oid as tenant admin must not happen. Fail closed: bind nothing, and let the
+// deploy lane's own refusal (deploy-fiab-commercial.yml -> scripts/ci/
+// bootstrap-admin-principal.mjs) demand a real binding before the apply.
+//
+// Cloud-neutral: this expression is evaluated by ARM in every boundary
+// (Commercial, GCC, GCC-High, IL5) and needs no Graph call, so the SP-as-admin
+// path is closed identically in all of them.
 var hasRealAdminGroup = !empty(loomTenantAdminGroupId) && !startsWith(loomTenantAdminGroupId, '<')
-var effectiveTenantAdminOid = !empty(loomTenantAdminOid) ? loomTenantAdminOid : (hasRealAdminGroup ? '' : deployer().objectId)
+// Safe-dereferenced (`.?` -> ARM tryGet): if a boundary's ARM omits the
+// property altogether rather than returning it empty, a direct
+// deployer().userPrincipalName would HARD-FAIL every deployment in that cloud.
+// Absent and empty both mean "no user principal name was disclosed" here.
+var deployerIsInteractiveUser = !empty(deployer().?userPrincipalName ?? '')
+var effectiveTenantAdminOid = !empty(loomTenantAdminOid)
+  ? loomTenantAdminOid
+  : ((hasRealAdminGroup || !deployerIsInteractiveUser) ? '' : deployer().objectId)
 
 @description('Default Fabric/Power BI workspace id the Phase-2 install engine uses when a Loom workspace has no bound Fabric group yet. Optional — the wizard prompts when missing.')
 param loomDefaultFabricWorkspace string = ''
