@@ -83,7 +83,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -381,13 +381,75 @@ export function armDrilldown(args, run) {
   };
 }
 
+/**
+ * How much of stdout is kept for classification. The failure is at the END of a
+ * build log, and a 60-minute `az acr build` can emit tens of megabytes, so the
+ * TAIL is what is retained. Generous enough to hold a full az error block.
+ */
+const STDOUT_TAIL_CAP = 256 * 1024;
+
+/**
+ * Run the child, STREAMING both streams through as they arrive, while keeping a
+ * bounded copy of each for classification.
+ *
+ * WHY THIS IS NOT spawnSync. spawnSync cannot tee: `stdio: 'inherit'` streams
+ * but captures nothing, `'pipe'` captures but withholds every byte until the
+ * process exits. The previous shape chose `inherit` for stdout — so a long
+ * build showed progress, and its failure text was invisible to the classifier.
+ *
+ * That is not hypothetical. `az acr build` streams the ACR Tasks runner's
+ * output to STDOUT, so on run 31489538101 an IP denial the taxonomy names in
+ * full was reported as:
+ *
+ *     ───── deploy-retry: full captured stderr ─────
+ *                                                     <- empty
+ *     ##[error]Could not classify this failure … Unknown fails closed.
+ *
+ * Live progress on a 60-minute build is worth keeping, so this streams AND
+ * captures rather than trading one for the other.
+ */
+function runTee(cmd, argv) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(cmd, argv, { stdio: ['inherit', 'pipe', 'pipe'], shell: false });
+    } catch (e) {
+      resolve({ status: 1, stdout: '', stderr: '', error: e });
+      return;
+    }
+    let out = '';
+    let err = '';
+    let settled = false;
+    const done = (status, error) => {
+      if (settled) return;
+      settled = true;
+      resolve({ status, stdout: out, stderr: err, error });
+    };
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      process.stdout.write(chunk); // live progress, unchanged from `inherit`
+      out += chunk;
+      if (out.length > STDOUT_TAIL_CAP) out = out.slice(out.length - STDOUT_TAIL_CAP);
+    });
+    // stderr is captured and written in full AFTER the attempt, exactly as
+    // before — the final report's stderr block must stay whole and unordered
+    // against the build log.
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => {
+      err += chunk;
+    });
+    child.on('error', (e) => done(1, e));
+    child.on('close', (code) => done(code === null ? 1 : code, null));
+  });
+}
+
 function ghAnnotate(level, message) {
   // One line, GitHub-annotation form. Newlines are escaped so a multi-line
   // remediation still renders as ONE annotation rather than being truncated.
   process.stdout.write(`::${level}::${message.replace(/\r?\n/g, '%0A')}\n`);
 }
 
-function main() {
+async function main() {
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -421,19 +483,16 @@ function main() {
   let attempt = 0;
   let remediated = false;
   let lastStderr = '';
+  let lastStdout = '';
   let lastStatus = null;
   const history = [];
 
   for (;;) {
     attempt += 1;
-    const res = spawnSync(args.cmd[0], args.cmd.slice(1), {
-      // stdout streams straight through so a long build still shows progress.
-      // stderr is PIPED so it can be classified — and then written out in full.
-      stdio: ['inherit', 'inherit', 'pipe'],
-      encoding: 'utf8',
-      shell: false,
-    });
+    // Both streams tee: they reach the log live AND are kept for classification.
+    const res = await runTee(args.cmd[0], args.cmd.slice(1));
 
+    lastStdout = res.stdout ?? '';
     lastStderr = res.stderr ?? '';
     // spawnSync sets .error when the binary is missing / not executable. That is
     // a real failure with no stderr; record it rather than classifying "".
@@ -470,7 +529,30 @@ function main() {
     // concatenated classify would use), but the retry decision below is made
     // from the SET, so one deterministic leaf no longer hides a retryable one.
     const leafDiagnoses = drill?.result.status === ARM_STATUS.FOUND ? classifyLeaves(drill.result.leaves) : [];
-    const diagnosis = leafDiagnoses.length > 0 ? worstLeafDiagnosis(leafDiagnoses) : classify(classifyInput);
+    let diagnosis = leafDiagnoses.length > 0 ? worstLeafDiagnosis(leafDiagnoses) : classify(classifyInput);
+
+    // STDOUT IS THE FALLBACK, NEVER THE OVERRIDE.
+    //
+    // Only consulted when everything authoritative — ARM leaves, then stderr —
+    // yielded `unknown`. That ordering is the safety property: a build log
+    // mentioning a throttle must never downgrade a real permission failure into
+    // something retryable, because retrying a permission error turns a 3-minute
+    // failure into a 30-minute one. It can only turn "I cannot name this" into a
+    // name, which is strictly more information and never a weaker verdict.
+    let diagnosedFromStdout = false;
+    if (leafDiagnoses.length === 0 && diagnosis.class === 'unknown' && lastStdout.trim()) {
+      const fromStdout = classify(lastStdout);
+      if (fromStdout.class !== 'unknown') {
+        diagnosis = fromStdout;
+        diagnosedFromStdout = true;
+        ghAnnotate(
+          'notice',
+          'deploy-retry: the command failed with nothing classifiable on stderr, but its STDOUT names a known ' +
+            `failure — classified "${fromStdout.class}" (${fromStdout.signalId}). ` +
+            '`az acr build` and other streaming commands report failures on stdout.',
+        );
+      }
+    }
     if (leafDiagnoses.length > 0) {
       process.stderr.write('deploy-retry: per-leaf classification:\n');
       for (const l of leafDiagnoses) {
@@ -557,6 +639,7 @@ function main() {
         elapsedSeconds: Math.round((Date.now() - started) / 1000),
         childExitCode: lastStatus,
         stderrPath: errFile,
+        evidenceStream: diagnosedFromStdout ? 'stdout' : 'stderr',
         // D6: every leaf keeps ITS OWN class in the artifact, so a retryable
         // leaf is visible even when the headline class is a deterministic one.
         ...(leafDiagnoses.length > 0
@@ -595,6 +678,17 @@ function main() {
       process.stderr.write('\n───── deploy-retry: full captured stderr ─────\n');
       process.stderr.write(lastStderr.endsWith('\n') ? lastStderr : `${lastStderr}\n`);
       process.stderr.write('─────────────────────────────────────────────\n');
+      // An EMPTY block above is itself a finding: it means the command reported
+      // its failure somewhere else. Say so and show the stdout tail, rather than
+      // leaving the operator with an empty box and an unknown class.
+      if (!lastStderr.trim() && lastStdout.trim()) {
+        const tail = lastStdout.split(/\r?\n/).filter(Boolean).slice(-40).join('\n');
+        process.stderr.write(
+          'deploy-retry: stderr was EMPTY — this command reports failures on STDOUT. Last 40 lines:\n',
+        );
+        process.stderr.write(`───── deploy-retry: stdout tail ─────\n${tail}\n`);
+        process.stderr.write('─────────────────────────────────────\n');
+      }
       // Every leaf is repeated in the annotation: a deployment can fail for more
       // than one reason at once (run 31069329802 failed for two) and the
       // classifier names only the winner.
@@ -625,4 +719,13 @@ function main() {
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
-if (isMain) main();
+if (isMain) {
+  // A rejected promise must not become a silent exit 0: this primitive gates
+  // every deploy path, so an unhandled rejection has to fail closed like any
+  // other failure it reports.
+  main().catch((e) => {
+    process.stderr.write(`deploy-retry: internal error — ${e?.stack || e}
+`);
+    process.exit(1);
+  });
+}
