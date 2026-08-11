@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13595631202190928199"
+      "templateHash": "9474903355279296012"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9340633074762576604"
+              "templateHash": "15477161545907254042"
             }
           },
           "definitions": {
@@ -27055,7 +27055,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "3466840571147835660"
+                      "templateHash": "5789484081176319906"
                     }
                   },
                   "parameters": {
@@ -27194,22 +27194,29 @@
                           ]
                         },
                         "managedRules": {
-                          "exclusions": [
-                            {
-                              "matchVariable": "RequestCookieNames",
-                              "selectorMatchOperator": "StartsWith",
-                              "selector": "loom_session"
-                            }
-                          ],
                           "managedRuleSets": [
                             {
                               "ruleSetType": "Microsoft_DefaultRuleSet",
                               "ruleSetVersion": "2.1",
-                              "ruleSetAction": "Block"
+                              "ruleSetAction": "Block",
+                              "exclusions": [
+                                {
+                                  "matchVariable": "RequestCookieNames",
+                                  "selectorMatchOperator": "StartsWith",
+                                  "selector": "loom_session"
+                                }
+                              ]
                             },
                             {
                               "ruleSetType": "Microsoft_BotManagerRuleSet",
-                              "ruleSetVersion": "1.0"
+                              "ruleSetVersion": "1.0",
+                              "exclusions": [
+                                {
+                                  "matchVariable": "RequestCookieNames",
+                                  "selectorMatchOperator": "StartsWith",
+                                  "selector": "loom_session"
+                                }
+                              ]
                             }
                           ]
                         }
