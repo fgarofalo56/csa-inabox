@@ -153,9 +153,11 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
       // Schema: learn.microsoft.com/azure/templates/microsoft.network/
       //         2024-02-01/frontdoorwebapplicationfirewallpolicies
       //
-      // The intent is unchanged and is applied to BOTH sets, because either can
-      // block the request: exclude Loom's OWN encrypted session cookie from
-      // inspection, scoped to that cookie NAME alone.
+      // The intent: exclude Loom's OWN encrypted session cookie from inspection,
+      // scoped to that cookie NAME alone. It is applied to the DefaultRuleSet
+      // only — Bot Manager REJECTS exclusions outright (see the note on that
+      // entry). An earlier revision of this comment said "applied to BOTH sets",
+      // which is what the deploy then failed on.
       managedRuleSets: [
         {
           ruleSetType: 'Microsoft_DefaultRuleSet'
@@ -172,13 +174,23 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
         {
           ruleSetType: 'Microsoft_BotManagerRuleSet'
           ruleSetVersion: '1.0'
-          exclusions: [
-            {
-              matchVariable: 'RequestCookieNames'
-              selectorMatchOperator: 'StartsWith'
-              selector: 'loom_session'
-            }
-          ]
+          // NO `exclusions` HERE. Azure rejects the whole policy:
+          //   WebApplicationFirewallPolicy validation failed. More information
+          //   "Managed rule set of "Microsoft_BotManagerRuleSet" type does not
+          //   support exclusions"
+          // Measured on deploy-fiab-commercial run 31468134448 (2026-08-11).
+          //
+          // #3202 fixed the SCHEMA error — `exclusions` belongs inside each
+          // managedRuleSets[] entry, not on the parent `managedRules` object —
+          // and that was correct. This is the next layer: the key is accepted by
+          // the schema on every set, but only the OWASP-style sets IMPLEMENT it.
+          // Bot Manager classifies by client reputation, not by inspecting named
+          // request members, so there is nothing for a cookie-name exclusion to
+          // exclude.
+          //
+          // Losing the exclusion here does not weaken the intent. The exclusion
+          // exists so the DefaultRuleSet does not inspect Loom's own encrypted
+          // session cookie; Bot Manager never inspected it in the first place.
         }
       ]
     }
