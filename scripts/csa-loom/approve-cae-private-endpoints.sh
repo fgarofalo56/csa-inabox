@@ -136,7 +136,6 @@ while :; do
   set +e
   LIST_OUT="$(read_connections)"
   LIST_RC=$?
-  set -e
   if [ $LIST_RC -ne 0 ]; then
     echo "::error::approve-cae-private-endpoints: could not READ the private-endpoint connections on '${CAE_NAME}' (az exit ${LIST_RC}): $(printf '%s' "$LIST_OUT" | tr -d '\r' | tr '\n' ' ' | cut -c1-300). This is an UNKNOWN — it does NOT establish that there are no pending connections. Tried api-versions: ${API_CANDIDATES}. Either none of them serve this child path any more (add the current one), or the deploy identity lacks 'Microsoft.App/managedEnvironments/privateEndpointConnections/read' -- grant it Network Contributor (or Contributor) on the admin-plane resource group." >&2
     exit 1
@@ -163,7 +162,6 @@ while :; do
         --body '{"properties":{"privateLinkServiceConnectionState":{"status":"Approved","description":"Auto-approved by CSA Loom deploy (Front Door -> Container Apps env)"}}}' \
         -o none 2>&1)"
       APV_RC=$?
-      set -e
       if [ $APV_RC -ne 0 ]; then
         echo "::error::approve-cae-private-endpoints: APPROVE failed for connection '${conn##*/}' on '${CAE_NAME}' (az exit ${APV_RC}): $(printf '%s' "$APV_OUT" | tr -d '\r' | tr '\n' ' ' | cut -c1-300). Front Door will keep answering 504 until this connection is Approved, so this is not skippable." >&2
         exit 1
