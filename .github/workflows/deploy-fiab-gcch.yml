@@ -445,6 +445,25 @@ jobs:
               --parameters topology="$CSA_LOOM_TOPOLOGY" \
               --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
           else
+            # AUTHENTICATE azd ITSELF (#3221). Azure/login@v2 authenticates the
+            # az CLI and Azure/setup-azd@v2 installs azd — but azd keeps its OWN
+            # credential store, and nothing ever logged into it. The azd branch of
+            # this lane therefore died at:
+            #     ERROR: not logged in, run `azd auth login` to login
+            # measured on run 31468942301, the first run ever to get past the
+            # `azd env set` defect (#3217) and actually reach `azd provision`.
+            #
+            # Order matters and is documented: set the cloud FIRST, then log in.
+            # Learn, Use Azure Developer CLI in sovereign clouds: "When switching
+            # between clouds, run `azd auth login` to authenticate with the set
+            # cloud." A login performed against the wrong cloud yields a token the
+            # target ARM endpoint will not accept.
+            azd config set cloud.name AzureUSGovernment
+            azd auth login \
+              --client-id "${{ secrets.AZURE_GOV_CLIENT_ID }}" \
+              --client-secret "${{ secrets.AZURE_GOV_CLIENT_SECRET }}" \
+              --tenant-id "${{ secrets.AZURE_GOV_TENANT_ID }}"
+            azd auth status
             azd env new csa-loom-gcch-ci-${{ github.run_id }} --no-prompt
             # `azd env set X $VAR` with an EMPTY $VAR drops the argument entirely,
             # so azd sees one token and hard-errors:

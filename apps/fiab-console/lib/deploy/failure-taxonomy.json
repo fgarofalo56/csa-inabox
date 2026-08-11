@@ -400,6 +400,22 @@
       "remediation": "The registry data plane is network-locked. Take the shared ACR firewall lease before the call (scripts/csa-loom/acr-firewall-lease.sh acquire) and release it after. Note the data plane lags the control plane by 30-90s in BOTH directions — poll the registry's own HTTP path after opening (scripts/ci/acr-dataplane-ready.sh — 403 DENIED means still closed, 401 UNAUTHORIZED means open), and never trust `az acr login` or a control-plane read to mean the data plane is already open. `az acr login` authenticates through an ARM-mediated token exchange and returns 0 while the registry is still refusing the runner by IP (#3210)."
     },
     {
+      "id": "config.azd-not-logged-in",
+      "class": "config",
+      "anyOf": [
+        "not logged in, run `azd auth login`",
+        "not logged in, run 'azd auth login'",
+        "azd auth login` to login",
+        "fetching current principal: not logged in"
+      ],
+      "not": [
+        "quotaexceeded"
+      ],
+      "observed": "`azd provision` ran without an azd credential. Measured on deploy-fiab-gcch run 31468942301: Azure/login@v2 had authenticated the az CLI and Azure/setup-azd@v2 had installed azd, but nothing ran `azd auth login` — azd keeps its own credential store. The classifier previously answered UNKNOWN for this, which fails closed correctly but names no cause.",
+      "remediationKind": "operator-action",
+      "remediation": "Authenticate azd itself before `azd provision`, in this order: `azd config set cloud.name <AzureCloud|AzureUSGovernment>` then `azd auth login --client-id <id> --client-secret <secret> --tenant-id <tid>`. Setting the cloud AFTER logging in yields a token the target ARM endpoint will not accept. Retrying cannot help — this is a missing credential, not a transient fault."
+    },
+    {
       "id": "capacity.not-available",
       "class": "capacity",
       "anyOf": [

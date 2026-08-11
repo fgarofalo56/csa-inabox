@@ -378,6 +378,16 @@
         "signalId": "config.acr-unreachable",
         "retryable": false
       }
+    },
+    {
+      "name": "config — azd provision with no azd credential, verbatim",
+      "source": "deploy-fiab-gcch run 31468942301, 2026-08-11 — the first run to reach `azd provision` after the azd-env defect (#3217) was fixed; previously classified UNKNOWN",
+      "input": "ERROR: not logged in, run `azd auth login` to login",
+      "expect": {
+        "class": "config",
+        "signalId": "config.azd-not-logged-in",
+        "retryable": false
+      }
     }
   ]
 }
