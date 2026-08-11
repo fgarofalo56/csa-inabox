@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.0...csa-inabox-v0.92.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **gov:** an http_code probe under `set -e` dies before it can report — I caused this ([#3250](https://github.com/fgarofalo56/csa-inabox/issues/3250)) ([1ac84e9](https://github.com/fgarofalo56/csa-inabox/commit/1ac84e90886402da3245edfe454d5687dd81af3a))
+
 ## [0.92.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.91.0...csa-inabox-v0.92.0) (2026-08-11)
 
 
