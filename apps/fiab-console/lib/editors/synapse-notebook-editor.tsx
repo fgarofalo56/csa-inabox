@@ -550,6 +550,11 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
           const cr = await clientFetch('/api/admin/scaling/databricks-cluster');
           const cj = await cr.json();
           if (!cancelled && cj?.ok) setClusters(cj.clusters || []);
+        } else if (typeof j.pool === 'string' && j.pool) {
+          // #3171 — AUTO-BIND: the probe hands back the pool the server resolved
+          // from the workspace's real bigDataPools list, so a freshly created
+          // notebook opens ATTACHED. A saved binding loaded later still wins.
+          setAttachedPool((cur) => cur ?? j.pool);
         }
       } catch { /* stay on synapse default */ }
     })();
@@ -610,7 +615,9 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
         if (!Array.isArray(props.cells) || props.cells.length === 0) return;
         setOpenName(j.notebook?.name || item.displayName || 'notebook');
         setCells(ipynbToCells(props));
-        setAttachedPool(props?.bigDataPool?.referenceName ?? null);
+        // #3171 — a saved binding wins, but its ABSENCE must not wipe the pool
+        // the server auto-bound on probe; a fresh notebook has no bigDataPool.
+        setAttachedPool((cur) => props?.bigDataPool?.referenceName ?? cur);
         setAttachedEnv((props?.metadata?.a365ComputeOptions?.name as string) ?? null);
         setSessionId(null); setSessionState('none'); setDirty(false);
         setBanner({ intent: 'info', text: 'Loaded notebook cells from the installed app bundle. Open a workspace notebook on the left to edit the published copy.' });
@@ -628,7 +635,8 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       const props = j.notebook?.properties || {};
       setOpenName(name);
       setCells(ipynbToCells(props));
-      setAttachedPool(props?.bigDataPool?.referenceName ?? null);
+      // #3171 — a saved binding wins; its ABSENCE must not wipe an auto-bound pool.
+      setAttachedPool((cur) => props?.bigDataPool?.referenceName ?? cur);
       setAttachedEnv((props?.metadata?.a365ComputeOptions?.name as string) ?? null);
       setSessionId(null); setSessionState('none'); setDirty(false);
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
@@ -864,10 +872,17 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   //    submit → poll). Reuses the warm session across cells (notebook
   //    semantics). Databricks uses the execution-context analog under the same
   //    /api/notebook/[id]/{session,execute} routes. ──────────────────────────
-  const computeParam = useCallback((sess: number | string, stmt?: number | string) => {
-    const compute = backend === 'databricks' ? attachedCluster : attachedPool;
+  // `computeOverride` carries the pool the SERVER auto-bound on this run
+  // (#3171). React state updates are not visible to the rest of the same
+  // callback, so a run that started with no attached pool must thread the
+  // resolved name through explicitly rather than read `attachedPool` back.
+  const computeParam = useCallback((sess: number | string, stmt?: number | string, computeOverride?: string | null) => {
+    const compute = computeOverride ?? (backend === 'databricks' ? attachedCluster : attachedPool);
     const key = backend === 'databricks' ? 'cluster' : 'pool';
-    let qs = `${key}=${encodeURIComponent(String(compute))}&sessionId=${encodeURIComponent(String(sess))}`;
+    // An unbound pool is omitted, not sent as the string "null" — the server
+    // resolves it. (`pool=null` would be honoured verbatim as a pool NAMED null.)
+    let qs = compute ? `${key}=${encodeURIComponent(String(compute))}&` : '';
+    qs += `sessionId=${encodeURIComponent(String(sess))}`;
     if (stmt != null) qs += `&stmtId=${encodeURIComponent(String(stmt))}`;
     return qs;
   }, [backend, attachedCluster, attachedPool]);
@@ -899,10 +914,10 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     setProgressByCell((p) => { if (!(cid in p)) return p; const n = { ...p }; delete n[cid]; return n; });
   }, []);
 
-  const pollStatement = useCallback(async (sess: number | string, stmt: number | string, cid: string) => {
+  const pollStatement = useCallback(async (sess: number | string, stmt: number | string, cid: string, computeOverride?: string | null) => {
     for (let i = 0; i < 200; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, stmt)}`);
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, stmt, computeOverride)}`);
       const j = await r.json();
       if (!j?.ok) { clearProgress(cid); patchCell(cid, { running: false, output: { status: 'error', text: j?.error || 'poll failed' } }); return; }
       // R4-SYN-5 — surface the real Livy statement progress (0..1) as a live bar.
@@ -927,9 +942,14 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const runCell = useCallback(async (cid: string): Promise<void> => {
     const cell = cells.find((c) => c.id === cid);
     if (!cell || cell.type !== 'code') return;
-    const compute = backend === 'databricks' ? attachedCluster : attachedPool;
-    if (!compute) {
-      setBanner({ intent: 'info', text: backend === 'databricks' ? 'Attach a Databricks cluster before running.' : 'Attach a Spark pool before running.' });
+    // #3171 — on the Synapse default the pool is AUTO-BOUND server-side, so a
+    // freshly created notebook with no saved `bigDataPool` runs without the user
+    // attaching anything (auto-bind-by-default.md §1). Databricks is the opt-in
+    // backend and still needs an explicit cluster (there is no server-side
+    // equivalent resolver for it).
+    let poolInUse: string | null = attachedPool;
+    if (backend === 'databricks' && !attachedCluster) {
+      setBanner({ intent: 'info', text: 'Attach a Databricks cluster before running.' });
       return;
     }
 
@@ -938,7 +958,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     if (isConfigureCell(cell.source)) {
       const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sessionId ?? undefined, code: cell.source, kind: cell.lang }),
+        body: JSON.stringify({ pool: poolInUse ?? undefined, cluster: attachedCluster, sessionId: sessionId ?? undefined, code: cell.source, kind: cell.lang }),
       });
       const j = await r.json();
       if (!j?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: j?.error || '%%configure invalid' } }); return; }
@@ -977,10 +997,11 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       // 1. Ensure a live, idle session (create or reuse). Poll to idle.
       let sess = sessionId;
       for (let attempt = 0; attempt < 90; attempt++) {
+        const sentPool = poolInUse;
         const sr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            pool: attachedPool, cluster: attachedCluster,
+            pool: poolInUse ?? undefined, cluster: attachedCluster,
             kind: cell.lang,
             existingSessionId: backend === 'synapse' && typeof sess === 'number' ? sess : undefined,
             existingContextId: backend === 'databricks' && typeof sess === 'string' ? sess : undefined,
@@ -989,6 +1010,15 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
         });
         const sj = await sr.json();
         if (!sj?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: sj?.error || 'session failed' } }); return; }
+        // Adopt whatever pool the server actually bound — auto-bind on a fresh
+        // notebook, or a re-bind off a stale name (#3171).
+        if (backend === 'synapse' && typeof sj.pool === 'string' && sj.pool) {
+          poolInUse = sj.pool;
+          setAttachedPool((cur) => (cur === sj.pool ? cur : sj.pool));
+          // Only surface the note when the server actually (re)bound something
+          // — repeating it on every run of an already-bound notebook is noise.
+          if (sj.pool !== sentPool && sj.poolNote) setBanner({ intent: 'info', text: sj.poolNote });
+        }
         sess = sj.sessionId; setSessionId(sj.sessionId);
         // R4-SYN-5 — resolve the real Spark UI URL from the session app info for
         // the running-cell drill-down link (no fabricated URL).
@@ -997,7 +1027,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
           setSessionState(sj.state || 'starting');
           // Poll the session GET until idle.
           await new Promise((r2) => setTimeout(r2, 3000));
-          const gr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!)}`);
+          const gr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!, undefined, backend === 'synapse' ? poolInUse : undefined)}`);
           const gj = await gr.json();
           if (gj?.ok) { setSessionState(gj.state); sess = gj.sessionId ?? sess; if (gj.appInfo?.sparkUiUrl) setSparkUiUrl(gj.appInfo.sparkUiUrl); }
           if (gj?.state === 'idle') break;
@@ -1008,12 +1038,12 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       if (sess == null) { patchCell(cid, { running: false, output: { status: 'error', text: 'Spark session did not become ready in time' } }); return; }
 
       setSessionState('busy');
-      liveSessionRef.current = { compute, sessionId: sess };
+      liveSessionRef.current = { compute: (backend === 'databricks' ? attachedCluster : poolInUse) || '', sessionId: sess };
 
       // 2. Submit the statement (codeToRun carries the %run preamble when set).
       const er = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sess, code: codeToRun, kind: cell.lang }),
+        body: JSON.stringify({ pool: poolInUse ?? undefined, cluster: attachedCluster, sessionId: sess, code: codeToRun, kind: cell.lang }),
       });
       const ej = await er.json();
       if (!ej?.ok) {
@@ -1030,7 +1060,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       }
 
       // 3. Poll the statement to completion.
-      await pollStatement(sess, ej.stmtId, cid);
+      await pollStatement(sess, ej.stmtId, cid, backend === 'synapse' ? poolInUse : undefined);
       setSessionState('idle');
     } catch (e: any) {
       clearProgress(cid);
@@ -1156,11 +1186,11 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   //    warm session + the same session/execute run path as cells; Python-only,
   //    exactly like Synapse Studio / Fabric. No mock — a real globals() snapshot. ──
   const inspectVariables = useCallback(async (): Promise<VarRow[]> => {
-    const compute = backend === 'databricks' ? attachedCluster : attachedPool;
-    if (!compute) {
-      throw new Error(backend === 'databricks'
-        ? 'Attach a Databricks cluster before inspecting variables.'
-        : 'Attach a Spark pool before inspecting variables.');
+    // #3171 — Synapse pool is auto-bound server-side; only the opt-in
+    // Databricks backend still needs an explicit cluster.
+    let poolInUse: string | null = attachedPool;
+    if (backend === 'databricks' && !attachedCluster) {
+      throw new Error('Attach a Databricks cluster before inspecting variables.');
     }
     const INSPECT_SOURCE = [
       'import json as __loom_j__',
@@ -1191,7 +1221,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       const sr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          pool: attachedPool, cluster: attachedCluster, kind: 'pyspark',
+          pool: poolInUse ?? undefined, cluster: attachedCluster, kind: 'pyspark',
           existingSessionId: backend === 'synapse' && typeof sess === 'number' ? sess : undefined,
           existingContextId: backend === 'databricks' && typeof sess === 'string' ? sess : undefined,
           configureOptions: backend === 'synapse' && sessionConfig ? sessionConfig : undefined,
@@ -1199,11 +1229,15 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       });
       const sj = await sr.json();
       if (!sj?.ok) throw new Error(sj?.error || 'Spark session failed to start.');
+      if (backend === 'synapse' && typeof sj.pool === 'string' && sj.pool) {
+        poolInUse = sj.pool;
+        setAttachedPool((cur) => (cur === sj.pool ? cur : sj.pool));
+      }
       sess = sj.sessionId; setSessionId(sj.sessionId);
       if (sj.state !== 'idle') {
         setSessionState(sj.state || 'starting');
         await new Promise((r) => setTimeout(r, 3000));
-        const gr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!)}`);
+        const gr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!, undefined, backend === 'synapse' ? poolInUse : undefined)}`);
         const gj = await gr.json();
         if (gj?.ok) { setSessionState(gj.state); sess = gj.sessionId ?? sess; }
         if (gj?.state === 'idle') break;
@@ -1212,12 +1246,13 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       break;
     }
     if (sess == null) throw new Error('Spark session did not become ready in time.');
-    setSessionState('busy'); liveSessionRef.current = { compute, sessionId: sess };
+    setSessionState('busy');
+    liveSessionRef.current = { compute: (backend === 'databricks' ? attachedCluster : poolInUse) || '', sessionId: sess };
 
     // 2. Submit the introspection statement.
     const er = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sess, code: INSPECT_SOURCE, kind: 'pyspark' }),
+      body: JSON.stringify({ pool: poolInUse ?? undefined, cluster: attachedCluster, sessionId: sess, code: INSPECT_SOURCE, kind: 'pyspark' }),
     });
     const ej = await er.json();
     if (!ej?.ok) {
@@ -1230,7 +1265,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     let text = '';
     for (let i = 0; i < 200; i++) {
       await new Promise((r) => setTimeout(r, 1500));
-      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, ej.stmtId)}`);
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, ej.stmtId, backend === 'synapse' ? poolInUse : undefined)}`);
       const j = await r.json();
       if (!j?.ok) throw new Error(j?.error || 'Polling the inspection statement failed.');
       const st = String(j.state);

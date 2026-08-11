@@ -32,6 +32,7 @@ import {
   parseMagicKind, parseConfigureMagic, normalizeLivyOutput, resolveNotebookBackend,
   type LivyKind, type NormalizedOutput,
 } from '@/lib/azure/synapse-livy-client';
+import { resolveSparkPool, type SparkPoolResolution } from '@/lib/azure/spark-pool-resolver';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,6 +61,21 @@ function synapseGate(): NextResponse | null {
     );
   }
   return null;
+}
+
+/**
+ * #3171 — the pool is AUTO-BOUND server-side; `body.pool` / `?pool=` is a HINT,
+ * not a requirement. A freshly created notebook has no `properties.bigDataPool`,
+ * so the editor legitimately sends none. Only a resolution that genuinely could
+ * not be made (empty workspace pool list, or an unreadable one with no hint)
+ * reaches the user, and it says exactly what was observed (R7).
+ */
+function poolGate(r: SparkPoolResolution): NextResponse | null {
+  if (r.ok) return null;
+  return NextResponse.json(
+    { ok: false, code: r.code, error: r.error, hint: r.hint },
+    { status: r.status },
+  );
 }
 
 function il5BlocksDatabricks(): NextResponse | null {
@@ -165,24 +181,32 @@ export async function POST(req: NextRequest) {
 
   // ---- Synapse Livy default ----
   const g = synapseGate(); if (g) return g;
-  const pool: string = typeof body?.pool === 'string' ? body.pool.trim() : '';
+  const requestedPool: string = typeof body?.pool === 'string' ? body.pool.trim() : '';
   const sessionId = typeof body?.sessionId === 'number' ? body.sessionId : Number(body?.sessionId);
-  if (!pool) return NextResponse.json({ ok: false, error: 'pool is required' }, { status: 400 });
+  // Statement submit is paired with a LIVE session id, so an already-bound pool
+  // is honoured verbatim (verifyRequested defaults false); only an ABSENT pool
+  // is resolved against the workspace.
+  const resolution = await resolveSparkPool(requestedPool);
+  const pg = poolGate(resolution); if (pg) return pg;
+  const pool = (resolution as Extract<SparkPoolResolution, { ok: true }>).pool;
+  const poolMeta = resolution.ok
+    ? { pool, poolSource: resolution.source, poolVerified: resolution.verified, poolNote: resolution.note }
+    : {};
   if (!Number.isFinite(sessionId) || sessionId <= 0) return NextResponse.json({ ok: false, error: 'sessionId is required' }, { status: 400 });
 
   try {
     const s = await getLivySession(pool, sessionId);
     if (['error', 'dead', 'killed', 'shutting_down', 'success'].includes(String(s.state))) {
-      return NextResponse.json({ ok: false, error: `Session is ${s.state} — create a new session`, sessionDead: true }, { status: 409 });
+      return NextResponse.json({ ok: false, error: `Session is ${s.state} — create a new session`, sessionDead: true, ...poolMeta }, { status: 409 });
     }
     if (s.state !== 'idle') {
       // Still warming — editor polls the session GET until idle then re-POSTs.
-      return NextResponse.json({ ok: true, sessionId, stmtId: null, state: s.state, sessionWarming: true });
+      return NextResponse.json({ ok: true, sessionId, stmtId: null, state: s.state, sessionWarming: true, ...poolMeta });
     }
     const stmt = await submitLivyStatement(pool, sessionId, runCode, kind);
-    return NextResponse.json({ ok: true, sessionId, stmtId: stmt.id, state: stmt.state || 'running' });
+    return NextResponse.json({ ok: true, sessionId, stmtId: stmt.id, state: stmt.state || 'running', ...poolMeta });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return NextResponse.json({ ok: false, error: e?.message || String(e), ...poolMeta }, { status: 502 });
   }
 }
 
@@ -252,12 +276,19 @@ export async function GET(req: NextRequest) {
   }
 
   const g = synapseGate(); if (g) return g;
-  const pool = req.nextUrl.searchParams.get('pool')?.trim() || '';
-  const sessionId = Number(req.nextUrl.searchParams.get('sessionId'));
-  const stmtId = Number(req.nextUrl.searchParams.get('stmtId'));
-  if (!pool || !Number.isFinite(sessionId) || !Number.isFinite(stmtId)) {
-    return NextResponse.json({ ok: false, error: 'pool, sessionId, stmtId query params required' }, { status: 400 });
+  const requestedPool = req.nextUrl.searchParams.get('pool')?.trim() || '';
+  // ABSENT is not 0: `Number(null)` and `Number('')` are both 0 and finite, so
+  // presence is checked on the raw param. The `!pool` term used to mask this.
+  const sessionParam = req.nextUrl.searchParams.get('sessionId');
+  const stmtParam = req.nextUrl.searchParams.get('stmtId');
+  const sessionId = Number(sessionParam);
+  const stmtId = Number(stmtParam);
+  if (!sessionParam || !stmtParam || !Number.isFinite(sessionId) || !Number.isFinite(stmtId)) {
+    return NextResponse.json({ ok: false, error: 'sessionId and stmtId query params required' }, { status: 400 });
   }
+  const resolution = await resolveSparkPool(requestedPool);
+  const pg = poolGate(resolution); if (pg) return pg;
+  const pool = (resolution as Extract<SparkPoolResolution, { ok: true }>).pool;
   try {
     const st = await getLivyStatement(pool, sessionId, stmtId);
     const output = st.output ? normalizeLivyOutput(st.output) : null;

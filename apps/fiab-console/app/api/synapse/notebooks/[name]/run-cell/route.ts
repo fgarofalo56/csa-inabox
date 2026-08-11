@@ -33,6 +33,10 @@ import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
 import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
+import {
+  resolveSparkPool, createSessionOnResolvedPool,
+  type SparkPoolResolution, type ResolvedSparkPool,
+} from '@/lib/azure/spark-pool-resolver';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,6 +52,21 @@ function gate() {
     );
   }
   return null;
+}
+
+/**
+ * #3171 — the pool is AUTO-BOUND server-side; `body.pool` / `?pool=` is a HINT.
+ * The notebook designer's Run-cell button used to 400 with "pool is required"
+ * on a notebook that had never been attached, which is an
+ * `auto-bind-by-default.md` §1 violation. Only a resolution that genuinely
+ * could not be made surfaces, stating what was OBSERVED (R7).
+ */
+function poolGate(r: SparkPoolResolution): NextResponse | null {
+  if (r.ok) return null;
+  return NextResponse.json(
+    { ok: false, code: r.code, error: r.error, hint: r.hint },
+    { status: r.status },
+  );
 }
 
 function normKind(raw: unknown): Kind {
@@ -70,42 +89,55 @@ export async function POST(req: NextRequest) {
   const g = gate(); if (g) return g;
 
   const body = await req.json().catch(() => ({}));
-  const pool: string = typeof body?.pool === 'string' ? body.pool.trim() : '';
+  const requestedPool: string = typeof body?.pool === 'string' ? body.pool.trim() : '';
   const code: string = typeof body?.code === 'string' ? body.code : '';
-  if (!pool) return NextResponse.json({ ok: false, error: 'pool is required — attach a Spark pool' }, { status: 400 });
   if (!code.trim()) return NextResponse.json({ ok: false, error: 'cell is empty' }, { status: 400 });
+
+  // A BIND point (this handler creates Livy sessions), so a supplied pool is
+  // confirmed against the workspace's real pool list and re-bound when absent.
+  const resolution = await resolveSparkPool(requestedPool, { verifyRequested: true });
+  const pg = poolGate(resolution); if (pg) return pg;
+  const resolved = resolution as ResolvedSparkPool;
+  let pool = resolved.pool;
+  let poolNote = resolved.note;
 
   const stmtKind = normKind(body?.kind);
   const existing = typeof body?.sessionId === 'number' ? body.sessionId : Number(body?.sessionId);
 
   try {
-    let sessionId: number;
-    if (Number.isFinite(existing) && existing > 0) {
-      // Reuse the warm session. Verify it isn't dead before submitting.
-      const s = await getLivySession(pool, existing);
-      if (['error', 'dead', 'killed', 'shutting_down', 'success'].includes(String(s.state))) {
-        const fresh = await createLivySessionAsync(pool, sessionKindFor(stmtKind));
-        sessionId = fresh.id;
-      } else {
+    let sessionId: number | null = null;
+    // Reuse the warm session only when the resolver stayed on the caller's pool
+    // — a session id means nothing on a different pool.
+    if (Number.isFinite(existing) && existing > 0 && (!requestedPool || resolved.source === 'request')) {
+      const s = await getLivySession(pool, existing).catch(() => null);
+      if (s && !['error', 'dead', 'killed', 'shutting_down', 'success'].includes(String(s.state))) {
         sessionId = existing;
       }
-    } else {
-      const fresh = await createLivySessionAsync(pool, sessionKindFor(stmtKind));
-      sessionId = fresh.id;
     }
+    if (sessionId === null) {
+      // Proves the resolved pool ACCEPTS a Livy session: an established 404 for
+      // that pool re-binds once to the next-ranked pool, then fails closed.
+      const created = await createSessionOnResolvedPool(resolved, (p) =>
+        createLivySessionAsync(p, sessionKindFor(stmtKind)));
+      sessionId = created.session.id;
+      pool = created.pool;
+      poolNote = created.note;
+    }
+
+    const poolMeta = { pool, poolSource: pool === resolved.pool ? resolved.source : 'workspace', poolVerified: resolved.verified, poolNote };
 
     // Probe current session state; only submit the statement once idle.
     const s = await getLivySession(pool, sessionId);
     if (s.state !== 'idle') {
       // Still warming up — hand the session id back so the client polls until
       // idle, then re-POSTs with the same sessionId to submit.
-      return NextResponse.json({ ok: true, sessionId, stmtId: null, state: s.state, sessionWarming: true });
+      return NextResponse.json({ ok: true, sessionId, stmtId: null, state: s.state, sessionWarming: true, ...poolMeta });
     }
 
     const stmt = await submitLivyStatement(pool, sessionId, { code, kind: stmtKind });
-    return NextResponse.json({ ok: true, sessionId, stmtId: stmt.id, state: stmt.state || 'running' });
+    return NextResponse.json({ ok: true, sessionId, stmtId: stmt.id, state: stmt.state || 'running', ...poolMeta });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return NextResponse.json({ ok: false, error: e?.message || String(e), pool }, { status: 502 });
   }
 }
 
@@ -114,12 +146,19 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
 
-  const pool = req.nextUrl.searchParams.get('pool')?.trim() || '';
-  const sessionId = Number(req.nextUrl.searchParams.get('session'));
+  const requestedPool = req.nextUrl.searchParams.get('pool')?.trim() || '';
+  // ABSENT is not 0: `Number(null)` and `Number('')` are both 0 and finite, so
+  // presence is checked on the raw param. The `!pool` term used to mask this.
+  const sessionParam = req.nextUrl.searchParams.get('session');
+  const sessionId = Number(sessionParam);
   const stmtParam = req.nextUrl.searchParams.get('stmt');
-  if (!pool || !Number.isFinite(sessionId)) {
-    return NextResponse.json({ ok: false, error: 'pool and session query params required' }, { status: 400 });
+  if (!sessionParam || !Number.isFinite(sessionId)) {
+    return NextResponse.json({ ok: false, error: 'session query param required' }, { status: 400 });
   }
+  // Polling is paired with a live session id — honour a supplied pool verbatim.
+  const resolution = await resolveSparkPool(requestedPool);
+  const pg = poolGate(resolution); if (pg) return pg;
+  const pool = (resolution as ResolvedSparkPool).pool;
 
   try {
     // No stmt → caller is polling for the session to become idle.
