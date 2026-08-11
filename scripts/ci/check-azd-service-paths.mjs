@@ -28,7 +28,7 @@
  * SELF-DEFENCE. Fails if no azure.yaml is found, or if one declares no services —
  * a rule that checks nothing must not report a pass.
  */
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve, relative, join, sep } from 'node:path';
 
@@ -84,7 +84,18 @@ function servicesOf(text) {
     const svc = /^\s{2}([A-Za-z0-9._-]+):\s*$/.exec(raw);
     if (svc) { current = svc[1]; continue; }
     const proj = /^\s{4}project:\s*['"]?([^'"\s#]+)['"]?\s*$/.exec(raw);
-    if (proj && current) out.push({ name: current, project: proj[1] });
+    if (proj && current) { out.push({ name: current, project: proj[1] }); continue; }
+    const lang = /^\s{4}language:\s*['"]?([A-Za-z#+]+)['"]?\s*$/.exec(raw);
+    if (lang && current) {
+      const e = out.find((x) => x.name === current);
+      if (e) e.language = lang[1];
+      continue;
+    }
+    const dpath = /^\s{6}path:\s*['"]?([^'"\s#]+)['"]?\s*$/.exec(raw);
+    if (dpath && current) {
+      const e = out.find((x) => x.name === current);
+      if (e) e.dockerPath = dpath[1];
+    }
   }
   return out;
 }
@@ -116,7 +127,59 @@ for (const file of files) {
     const abs = resolve(dirname(file), s.project);
     const exists = existsSync(abs) && statSync(abs).isDirectory();
     if (!exists) {
-      problems.push({ file: rel, name: s.name, project: s.project, resolved: relative(ROOT, abs).split(sep).join('/') });
+      problems.push({
+        file: rel, name: s.name, what: `project: ${s.project}`,
+        resolved: relative(ROOT, abs).split(sep).join('/'), why: 'no such directory',
+      });
+      continue; // nothing below can be judged without the project dir
+    }
+
+    // A declared Dockerfile must exist. azure.yaml pointed mcp-server at
+    // ./Dockerfile.wrapper, which has never existed in apps/fiab-mcp-config.
+    if (s.dockerPath) {
+      const df = resolve(abs, s.dockerPath);
+      if (!existsSync(df) || !statSync(df).isFile()) {
+        problems.push({
+          file: rel, name: s.name, what: `docker.path: ${s.dockerPath}`,
+          resolved: relative(ROOT, df).split(sep).join('/'), why: 'no such file',
+        });
+      }
+    }
+
+    // A declared COMPILED language must have the project file it implies. azd
+    // looks for that file BEFORE it looks at docker.path, so `language: csharp`
+    // on a Dockerfile-only service fails with "could not locate a dotnet project
+    // file" — which reads like a build problem, not a declaration problem. Five
+    // of seven services here were mis-declared; `docker` is the documented value
+    // for a Dockerfile build (Learn: "Use Docker support to deploy containerized
+    // apps in any language").
+    const NEEDS = {
+      dotnet: ['*.csproj', '*.fsproj'], csharp: ['*.csproj'], fsharp: ['*.fsproj'],
+      java: ['pom.xml', 'build.gradle', 'build.gradle.kts'],
+      py: ['pyproject.toml', 'requirements.txt', 'setup.py'],
+      python: ['pyproject.toml', 'requirements.txt', 'setup.py'],
+      js: ['package.json'], ts: ['package.json'],
+      go: ['go.mod'], golang: ['go.mod'],
+    };
+    const need = NEEDS[(s.language || '').toLowerCase()];
+    if (need) {
+      const hit = need.some((pat) => {
+        if (!pat.includes('*')) return existsSync(resolve(abs, pat));
+        // replaceAll, not replace: `replace` with a STRING needle rewrites only
+        // the first occurrence, so a future two-star pattern would silently
+        // match on a half-stripped suffix. Every pattern here has one star
+        // today — this is correct now and stays correct (CodeQL
+        // js/incomplete-sanitization on PR #3236).
+        const ext = pat.replaceAll('*', '');
+        try { return readdirSync(abs).some((f) => f.endsWith(ext)); } catch { return false; }
+      });
+      if (!hit) {
+        problems.push({
+          file: rel, name: s.name, what: `language: ${s.language}`,
+          resolved: relative(ROOT, abs).split(sep).join('/'),
+          why: `no ${need.join(' / ')} here — use \`language: docker\` if this is a Dockerfile build`,
+        });
+      }
     }
   }
 }
@@ -128,9 +191,9 @@ if (problems.length > 0) {
       'deploy — with a message about a SERVICE, which reads like an application problem rather than a path typo.',
   );
   for (const p of problems) {
-    console.error(`::error file=${p.file}::service '${p.name}' project: ${p.project}  ->  ${p.resolved}  (no such directory)`);
+    console.error(`::error file=${p.file}::service '${p.name}' ${p.what}  ->  ${p.resolved}  (${p.why})`);
   }
   process.exit(1);
 }
 
-console.log(`azd-service-paths OK — ${checked} service path(s) across ${files.length} azure.yaml file(s), all resolve.`);
+console.log(`azd-service-paths OK — ${checked} service(s) across ${files.length} azure.yaml file(s): project dirs, Dockerfiles and language project-files all resolve.`);
