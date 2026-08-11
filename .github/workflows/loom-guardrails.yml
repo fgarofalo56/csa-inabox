@@ -628,6 +628,15 @@ jobs:
       - name: 'azd-service-paths (every azd service project resolves to a real directory)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-azd-service-paths.mjs
+      # #3166's real finding was not "14 sites bypass the resolver" — it was that
+      # the ONLY thing guardrails ran was the resolver's own self-test. That proves
+      # the resolver WORKS; nothing proved it is USED, so every bypass sailed
+      # through green forever. This is the missing half, as a shrink-only ratchet:
+      # new bypasses fail, the 9 pre-existing ones stay visible in
+      # scripts/ci/digest-read-baseline.json, and a stale baseline also fails.
+      - name: 'digest-read-chokepoint (a raw manifest-digest read bypasses the 3-state resolver)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-digest-read-chokepoint.mjs
       # The set of apps a push BUILDS and the set of paths that TRIGGER the push
       # are two hand-maintained lists that must agree. loom-copilot-maf builds from
       # ./apps/copilot-maf, outside the ./apps/fiab-* glob, so a change to the MAF
