@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "15143805453960889561"
+      "templateHash": "11612933509351838407"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15299635444160815425"
+              "templateHash": "16413493801790956669"
             }
           },
           "definitions": {
@@ -27055,7 +27055,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "13958119005097407850"
+                      "templateHash": "9525364789372669588"
                     }
                   },
                   "parameters": {
@@ -27209,14 +27209,7 @@
                             },
                             {
                               "ruleSetType": "Microsoft_BotManagerRuleSet",
-                              "ruleSetVersion": "1.0",
-                              "exclusions": [
-                                {
-                                  "matchVariable": "RequestCookieNames",
-                                  "selectorMatchOperator": "StartsWith",
-                                  "selector": "loom_session"
-                                }
-                              ]
+                              "ruleSetVersion": "1.0"
                             }
                           ]
                         }
