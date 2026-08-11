@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13488059606731759124"
+      "templateHash": "15143805453960889561"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7726745333224801619"
+              "templateHash": "15299635444160815425"
             }
           },
           "definitions": {
@@ -27055,7 +27055,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "5142357106180637301"
+                      "templateHash": "13958119005097407850"
                     }
                   },
                   "parameters": {
@@ -27094,14 +27094,14 @@
                       "type": "string",
                       "defaultValue": "",
                       "metadata": {
-                        "description": "Console UAMI resource id — identity for the private-endpoint-connection\napproval deployment script. MUST hold Network Contributor (or Contributor) on the\nRG that owns the Container Apps managed environment (the admin-plane RG grants the\nConsole UAMI Network Contributor on itself — see network.bicep F15). Leave empty to\nskip the auto-approval script (operator then approves the PE connection manually in\nthe portal: ACA env -> Networking -> Private endpoint connections)."
+                        "description": "DEPRECATED and IGNORED since #3203. The Front Door -> ACA env\nprivate-endpoint approval moved out of an ARM deploymentScript and into the deploy\nitself (scripts/csa-loom/approve-cae-private-endpoints.sh), because the script\ncould not run under a policy denying shared-key storage and its az command did not\nsupport managedEnvironments anyway. Retained so existing callers do not break."
                       }
                     },
                     "scriptLocation": {
                       "type": "string",
                       "defaultValue": "[parameters('location')]",
                       "metadata": {
-                        "description": "Region for the approval deployment script (kept distinct so it can run where ACI quota exists)."
+                        "description": "DEPRECATED and IGNORED since #3203 — there is no longer an approval deployment script to place."
                       }
                     },
                     "forceUpdateTag": {
@@ -27294,38 +27294,6 @@
                       ]
                     },
                     {
-                      "condition": "[not(empty(parameters('scriptIdentityId')))]",
-                      "type": "Microsoft.Resources/deploymentScripts",
-                      "apiVersion": "2023-08-01",
-                      "name": "script-loom-fd-aca-pe-approve",
-                      "location": "[parameters('scriptLocation')]",
-                      "tags": "[parameters('complianceTags')]",
-                      "kind": "AzureCLI",
-                      "identity": {
-                        "type": "UserAssigned",
-                        "userAssignedIdentities": {
-                          "[format('{0}', parameters('scriptIdentityId'))]": {}
-                        }
-                      },
-                      "properties": {
-                        "azCliVersion": "2.61.0",
-                        "retentionInterval": "PT1H",
-                        "timeout": "PT20M",
-                        "forceUpdateTag": "[parameters('forceUpdateTag')]",
-                        "cleanupPreference": "OnSuccess",
-                        "environmentVariables": [
-                          {
-                            "name": "CAE_ID",
-                            "value": "[parameters('caeId')]"
-                          }
-                        ],
-                        "scriptContent": "set -euo pipefail\necho \"Resolving pending private-endpoint connections on Container Apps env: $CAE_ID\"\n\n# FD may take a moment to raise the PE request after the origin is created, and\n# may create more than one. Poll for up to ~10 min, approving any Pending ones.\ndeadline=$(( $(date +%s) + 600 ))\napproved_any=0\nwhile :; do\n  # List PE connections on the managed environment that are Pending.\n  PENDING=$(az network private-endpoint-connection list \\\n    --id \"$CAE_ID\" \\\n    --query \"[?properties.privateLinkServiceConnectionState.status=='Pending'].id\" \\\n    -o tsv 2>/dev/null || true)\n\n  if [ -n \"${PENDING:-}\" ]; then\n    while IFS= read -r conn; do\n      [ -z \"$conn\" ] && continue\n      echo \"Approving pending PE connection: $conn\"\n      az network private-endpoint-connection approve \\\n        --id \"$conn\" \\\n        --description \"Auto-approved by CSA Loom deploy (Front Door to ACA env)\" \\\n        >/dev/null\n      approved_any=1\n    done <<< \"$PENDING\"\n  fi\n\n  # Already approved at least one AND nothing left pending -> done.\n  STILL_PENDING=$(az network private-endpoint-connection list \\\n    --id \"$CAE_ID\" \\\n    --query \"length([?properties.privateLinkServiceConnectionState.status=='Pending'])\" \\\n    -o tsv 2>/dev/null || echo 0)\n  if [ \"$approved_any\" = \"1\" ] && [ \"${STILL_PENDING:-0}\" = \"0\" ]; then\n    echo \"All Front Door PE connections approved.\"\n    break\n  fi\n\n  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then\n    if [ \"$approved_any\" = \"1\" ]; then\n      echo \"Approved connection(s); some may still be settling. Continuing.\"\n      break\n    fi\n    echo \"Timed out waiting for a pending Front Door PE connection to appear.\" >&2\n    echo \"If this persists, approve manually: ACA env -> Networking -> Private endpoint connections.\" >&2\n    exit 1\n  fi\n  sleep 20\ndone\n"
-                      },
-                      "dependsOn": [
-                        "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', format('fd-loom-{0}', uniqueString(resourceGroup().id)), 'aca-console', 'aca-console-origin')]"
-                      ]
-                    },
-                    {
                       "condition": "[not(empty(parameters('vanityDomain')))]",
                       "type": "Microsoft.Cdn/profiles/customDomains",
                       "apiVersion": "2024-02-01",
@@ -27443,6 +27411,13 @@
                     "caeDefaultDomainEcho": {
                       "type": "string",
                       "value": "[parameters('caeDefaultDomain')]"
+                    },
+                    "caeIdForPeApproval": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The Container Apps managed environment whose Front Door private-endpoint connection the deploy must approve (scripts/csa-loom/approve-cae-private-endpoints.sh --cae-id)."
+                      },
+                      "value": "[parameters('caeId')]"
                     }
                   }
                 }

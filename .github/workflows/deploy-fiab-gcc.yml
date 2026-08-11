@@ -269,6 +269,23 @@ jobs:
           fi
         working-directory: platform/fiab/azd
 
+      # Front Door -> ACA env Private Link approval (#3203). CLOUD PARITY: the
+      # sovereign lanes previously passed an EMPTY scriptIdentityId so the ARM
+      # deploymentScript never ran, and the documented substitute was the
+      # operator clicking Approve in the portal. That is exactly what
+      # auto-bind-by-default.md forbids, applied to the boundary that can least
+      # afford a manual step. Same script, same behaviour, every cloud.
+      - name: Approve the Front Door -> ACA private-endpoint connection
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp env show -n "cae-csa-loom-${{ env.AZURE_LOCATION }}" -g "rg-csa-loom-admin-${{ env.AZURE_LOCATION }}" --query id -o tsv | tr -d '[:space:]')
+          if [ -z "$CAE_ID" ]; then
+            echo "::error::could not resolve the Container Apps managed environment id in rg-csa-loom-admin-${{ env.AZURE_LOCATION }} - cannot approve the Front Door private-endpoint connection, and Front Door answers 504 while it is Pending."
+            exit 1
+          fi
+          bash scripts/csa-loom/approve-cae-private-endpoints.sh --cae-id "$CAE_ID" --timeout-seconds 600
+
       - name: Export bootstrap coordinates (for the chained Gov bootstrap)
         id: bootstrap_coords
         if: (github.event_name == 'schedule' || inputs.run_mode == 'full')

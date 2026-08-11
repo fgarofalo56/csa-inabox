@@ -334,6 +334,13 @@ export const WATCHED = [
       // probes 401'd on 2026-08-06. A commit touching it without a subsequent
       // successful run IS drift.
       'scripts/csa-loom/resolve-internal-token.sh',
+      // #3203 — the Front Door -> ACA env private-endpoint approval. It moved out
+      // of an ARM deploymentScript (which could not run under a policy denying
+      // shared-key storage, and whose az command does not support
+      // Microsoft.App/managedEnvironments anyway) into this lane. Front Door
+      // answers 504 while that connection is Pending, so a change here changes
+      // whether the deployed estate is reachable at all.
+      'scripts/csa-loom/approve-cae-private-endpoints.sh',
     ],
     maxDays: 7,
   },
