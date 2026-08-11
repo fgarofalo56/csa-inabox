@@ -688,6 +688,16 @@ jobs:
       - name: 'acr-buildable-dockerfiles (a platform flag on FROM can never ship)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-buildable-dockerfiles.mjs
+      # `# Pinned to a known-good tag` above `ARG MS_MCP_REF=main` — the comment
+      # asserts a property the value does not have, which is worse than no
+      # comment because it is what a reviewer reads INSTEAD of the value. Every
+      # build cloned whatever upstream's main happened to be, so an upstream
+      # dependency move broke loom-mcp (NU1103 across ~40 projects) with no
+      # commit in this repo, and the last green ref is unrecoverable because
+      # nothing recorded it. Ratcheted at 1 (#3258) — a SECOND one fails.
+      - name: 'dockerfile-floating-refs (a third-party ref pinned to a moving branch)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-dockerfile-floating-refs.mjs
       # curl PRINTS its -w value on BOTH failure paths AND exits non-zero, so an
       # `|| echo 000` CONCATENATES: a connection failure becomes "000000" and an
       # HTTP 401 under -f becomes "401000". Neither is a status code. Two live
