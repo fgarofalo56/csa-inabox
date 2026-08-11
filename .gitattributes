@@ -29,8 +29,10 @@ sdk/** text eol=lf
 #
 # It happened AGAIN on 2026-08-11: scripts/ci/check-vanity-edge-health.sh was
 # committed with CRLF and loom-guardrails' self-test died on a Linux runner with
-#     line 72: set: pipefail: invalid option name
-#     line 77: syntax error near unexpected token `$'in''
+#     line 72: set: pipefail
+: invalid option name
+#     line 77: syntax error near unexpected token `$'in
+''
 # while passing locally, because Git Bash does not care. Of 166 tracked .sh files
 # that was the ONLY one carrying CR - i.e. the per-file list works right up until
 # someone adds a file that is not on it.
@@ -106,3 +108,7 @@ apps/loom-trino/** text eol=lf
 # \r ("$'\r': command not found"), so pin both to LF regardless of core.autocrlf.
 scripts/csa-loom/aoai-deployment-pick.sh text eol=lf
 scripts/ci/test-aoai-deployment-pick.sh text eol=lf
+
+# Workflow orchestration scripts are read verbatim by the Workflow tool, which
+# rejects a CR as a control character. Keep them LF on every platform.
+.claude/workflows/*.js text eol=lf
