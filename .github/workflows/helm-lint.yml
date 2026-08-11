@@ -49,15 +49,32 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
         with:
-          version: v3.16.2
+          # v3.16.2 (Oct 2024) predates the `platformHooks` key in Helm's plugin
+          # schema, which landed in Helm 3.18. Every current helm-diff release
+          # declares it — checked back to v3.14.0 — so an old helm CANNOT load a
+          # current helm-diff, and `helm lint` refuses to start when ANY plugin
+          # fails to load. Bumping helm is the fix; pinning helm-diff backwards
+          # would mean pinning to something older than the oldest release that
+          # still exists.
+          version: v3.21.3
 
-      - name: Remove cached helm-diff plugin (avoid platformHooks poison)
+      # `helm lint --strict` treats WARNINGs as errors, and an unvendored
+      # dependency is a WARNING:
+      #     [WARNING] …/csa-portal: chart directory is missing these dependencies: redis
+      # Chart.yaml declares `redis ~18` from the Bitnami repo and charts/ has
+      # never existed, so the chart has never been lintable in --strict mode.
+      # That finding was INVISIBLE until now because the helm-diff plugin error
+      # aborted the lint before it reached the chart.
+      #
+      # `dependency build` needs the repo registered. It is pinned to the
+      # declared repository, not to `helm repo add` of whatever is current.
+      - name: Vendor chart dependencies (helm dependency build)
         run: |
-          rm -rf ~/.local/share/helm/plugins/helm-diff || true
-
-      - name: Install helm-diff plugin
-        run: |
-          helm plugin install https://github.com/databus23/helm-diff || true
+          set -euo pipefail
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm dependency build "${CHART_DIR}"
+          ls -la "${CHART_DIR}/charts"
 
       - name: helm lint --strict (schema-enforced)
         # CSA-0053: values.schema.json is checked by --strict. Any unknown
@@ -88,6 +105,30 @@ jobs:
             --set frontend.autoscaling.enabled=true \
             --set backend.autoscaling.enabled=true \
             > /tmp/render-full.yaml
+
+      # THE PLUGIN IS INSTALLED HERE, not before `helm lint`.
+      #
+      # The previous shape was self-defeating: one step removed the cached
+      # helm-diff "to avoid platformHooks poison" and the very next step
+      # re-installed it, unpinned, from HEAD — reintroducing exactly the poison
+      # that had just been removed. `|| true` on the install then hid the
+      # breakage, so the only symptom was `helm lint --strict` failing with
+      #     failed to load plugins: … unknown field "platformHooks"
+      # which looks nothing like a chart problem. helm-lint has failed on EVERY
+      # run it has ever had (2026-04-22, 2026-05-07) and it is not a required
+      # check, so nobody chased it — it just quietly blocked every dependabot PR
+      # that touches a workflow file (#3188).
+      #
+      # `helm lint` and `helm template` do not use helm-diff. Installing it only
+      # where it is needed means a plugin problem can no longer take out the
+      # steps that do not need the plugin. No `|| true`: a failed install must
+      # fail the step that depends on it.
+      - name: Install helm-diff plugin
+        run: |
+          set -euo pipefail
+          rm -rf ~/.local/share/helm/plugins/helm-diff
+          helm plugin install https://github.com/databus23/helm-diff
+          helm plugin list
 
       - name: helm diff (vs chart on main)
         # helm-diff upgrade against a release dry-run so reviewers can see
