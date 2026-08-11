@@ -109,7 +109,8 @@ RC=0
 # routinely. The exit CODE is the verdict; stderr is only ever evidence.)
 ERRF="$(mktemp)"
 trap 'rm -f "$ERRF"' EXIT
-azerr() { tr -d '' < "$ERRF" | tr '
+azerr() { tr -d '
+' < "$ERRF" | tr '
 ' ' ' | cut -c1-300; }
 
 # ── 1. CONTROL PLANE — discovered end to end from $HOST ──────────────────────
