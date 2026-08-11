@@ -83,12 +83,30 @@
 # (.claude/rules/no-fabric-dependency.md).
 
 # ── Stage 1: PAYLOAD SOURCE ONLY. Never executed. ──────────────────────────
-# `--platform=linux/arm64` is explicit rather than incidental: the upstream ref
-# resolves to a single-platform manifest, so a plain FROM pulls the arm64 image
-# anyway and merely emits an InvalidBaseImagePlatform warning. Naming it makes
-# the constraint reviewable and keeps the behaviour pinned if upstream ever
-# publishes a manifest list.
-FROM --platform=linux/arm64 deltaio/delta-sharing-server:0.7.8 AS payload
+# NO `--platform=` FLAG HERE, and that is load-bearing rather than an omission.
+#
+# ACR Tasks' Dockerfile dependency scanner cannot parse a platform flag on FROM.
+# Measured on the FIRST-EVER run of deploy-loom-sharing.yml (31503836350,
+# 2026-08-11), which is why that workflow's staleness entry read "NEVER RUN":
+#
+#   unable to understand line FROM --platform=linux/arm64 \
+#     deltaio/delta-sharing-server:0.7.8 AS payload
+#   failed to run step ID: build: failed to scan dependencies: exit status 1
+#   Run ID: cj3sv failed after 4s.
+#
+# `az acr build` is the ONLY mechanism that can reach these registries — they are
+# provisioned publicNetworkAccess=Disabled, so a client-side docker push cannot
+# push to them at all. A Dockerfile ACR Tasks cannot parse is therefore a
+# Dockerfile that can never ship, no matter that `docker build` accepts it.
+#
+# Removing the flag changes NOTHING about what is pulled, by this file's own
+# earlier reasoning: the upstream ref resolves to a single-platform arm64
+# manifest, so a plain FROM pulls that same image and merely emits an
+# InvalidBaseImagePlatform warning. The stage is a file source only
+# (`COPY --from=payload`); nothing in it is ever executed on the builder, so its
+# architecture does not matter. The constraint stays reviewable — it is stated
+# here, at length, instead of in a flag that costs us the build.
+FROM deltaio/delta-sharing-server:0.7.8 AS payload
 
 # ── Stage 2: the runtime Loom actually ships. ──────────────────────────────
 # Temurin 8 (Ubuntu 24.04 LTS) — the same Java 8 the upstream image carried
