@@ -162,6 +162,15 @@ jobs:
             exit 1
           fi
           echo "::notice::loom-unity:v0.1 -> $DIGEST (the tag the Gov bicepparams pull)"
+          # CARRY IT FORWARD. Until #3247 this digest was resolved, validated
+          # against the resolver's 3-state contract, and then only ECHOED — the
+          # deploy step below re-referenced the TAG. Container Apps pins a
+          # revision's image to a DIGEST at creation time, so re-pushing the same
+          # tag never rolls: run 31509561256 rebuilt a fixed image, deployed
+          # nothing new, and then verified `loom-unity--0000006` — the SAME
+          # revision as the pre-fix run — whose logs still carried the old
+          # container's output (a line stamped 14:57 read at 16:02).
+          echo "UNITY_DIGEST=$DIGEST" >> "$GITHUB_ENV"
 
       - name: Release the ACR firewall lease (always)
         if: always()
@@ -255,7 +264,7 @@ jobs:
                unityUamiId="$UNITY_UAMI_ID" \
                unityUamiClientId="$UNITY_UAMI_CLIENT_ID" \
                acrLoginServer="$ACR_LOGIN" \
-               image="$ACR_LOGIN/loom-unity:v0.1" \
+               image="$ACR_LOGIN/loom-unity@$UNITY_DIGEST" \
                dbEphemeral=true \
                authMode="$UNITY_AUTH_MODE" \
                entraClientId="$UNITY_CLIENT_ID" \
@@ -352,7 +361,19 @@ jobs:
           # to catch. Without it `set -e` kills the step at the assignment, so it
           # still fails (closed, which is the safe side) but prints no ::error::
           # and no diagnostics: a correct verdict delivered as a mystery.
-          ANON=$(printf '%s' "$LOGS" | grep -oE 'ANON-READ: [0-9]{3}' | tail -n 1 | awk '{print $2}' || true)
+          # `[0-9]{3}` matched EXACTLY three digits, so it silently took a PREFIX
+          # of a malformed marker: the literal log text `ANON-READ: 000000` was
+          # reported as `anonymous read answered 000`. That is a plausible-looking
+          # value, and it sent the investigation toward "the catalog is
+          # unreachable" rather than "the probe is emitting garbage" (#3247).
+          # Consume the WHOLE token and let the check below judge it — an
+          # extractor must not manufacture a believable value out of one it
+          # cannot fully parse.
+          ANON=$(printf '%s' "$LOGS" | grep -oE 'ANON-READ: [0-9]+' | tail -n 1 | awk '{print $2}' || true)
+          if [ -n "${ANON:-}" ] && ! printf '%s' "$ANON" | grep -qE '^[0-9]{3}$'; then
+            echo "::error::loom-unity reported ANON-READ: ${ANON}, which is not a three-digit HTTP status. The probe itself is malformed — do NOT read this as a network or authorization finding. Refusing to wire the Console on an unparseable measurement."
+            exit 1
+          fi
           BIND_OK=$(printf '%s' "$LOGS" | grep -cE 'auto-bind: (registered|the Console principal .* is already)' || true)
           BIND_BAD=$(printf '%s' "$LOGS" | grep -c 'AUTO-BIND FAILED' || true)
 
