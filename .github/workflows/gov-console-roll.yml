@@ -112,7 +112,7 @@ jobs:
           # tools use, and derives the suffix from the active cloud so it works
           # unchanged in .azurecr.us (.claude/rules/cloud-parity.md).
           bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR" --timeout-seconds 180             || echo "::warning::ACR data plane not confirmed reachable; the next data-plane call may be denied."
-          az acr login -n "$ACR" >/dev/null
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR"
           # 2026-07-16: console builds run on a dedicated 16 GB S3 agent pool —
           # the default 8 GB agent cgroup-OOM-SIGKILLs the compile. Agent pools
           # are available in USGov Arizona/Texas/Virginia. Pool builds don't get
@@ -274,7 +274,7 @@ jobs:
         if: ${{ !inputs.skip_supply_chain }}
         run: |
           set -euo pipefail
-          az acr login -n "$ACR" >/dev/null
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR"
           DIGEST=$(az acr repository show --name "$ACR" --image "loom-console:$SHA" --query digest -o tsv | tr -d '\r')
           if [ -z "$DIGEST" ]; then
             echo "::error::Could not resolve the manifest digest for loom-console:$SHA on $ACR — cannot scan/sign/verify."

@@ -73,6 +73,11 @@ export const WATCHED = [
       // non-zero `az`. It decides whether this lane wires a LIVE federal estate
       // at a tag it could not verify, so it is a deploy source of this lane.
       'scripts/ci/resolve-acr-digest.sh',
+      // refs #3230 — the ACR data-plane token exchange has its own propagation
+      // window after the firewall opens, so this lane retries `az acr login`
+      // through a shared helper. Editing it changes whether the lane can
+      // authenticate at all.
+      'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 14,
   },
@@ -262,6 +267,8 @@ export const WATCHED = [
       '.github/workflows/deploy-loom-sharing.yml',
       'apps/loom-sharing/**',
       'platform/fiab/bicep/modules/compute/loom-sharing-app.bicep',
+      // refs #3230 — same ACR token-exchange retry as the sibling lanes.
+      'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 14,
   },
@@ -346,6 +353,11 @@ export const WATCHED = [
       // answers 504 while that connection is Pending, so a change here changes
       // whether the deployed estate is reachable at all.
       'scripts/csa-loom/approve-cae-private-endpoints.sh',
+      // refs #3230 — the ACR data-plane token exchange has its own propagation
+      // window after the firewall opens, so this lane retries `az acr login`
+      // through a shared helper. Editing it changes whether the lane can
+      // authenticate at all.
+      'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 7,
   },
@@ -412,6 +424,11 @@ export const WATCHED = [
       'apps/fiab-dbt-runner/**',
       'apps/loom-transform-runner/**',
       'apps/loom-duckdb/**',
+      // refs #3230 — the ACR data-plane token exchange has its own propagation
+      // window after the firewall opens, so this lane retries `az acr login`
+      // through a shared helper. Editing it changes whether the lane can
+      // authenticate at all.
+      'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 21,
   },
@@ -448,6 +465,11 @@ export const WATCHED = [
       '.github/workflows/loom-dataplane-roll.yml',
       'scripts/ci/resolve-acr-digest.sh',
       'scripts/ci/roll-plan.mjs',
+      // refs #3230 — the ACR data-plane token exchange has its own propagation
+      // window after the firewall opens, so this lane retries `az acr login`
+      // through a shared helper. Editing it changes whether the lane can
+      // authenticate at all.
+      'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 14,
   },

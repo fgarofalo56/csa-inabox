@@ -274,7 +274,7 @@ jobs:
           # acr-dataplane-ready.sh derives the login-server suffix from the active
           # cloud, so it probes .azurecr.us here without a second code path.
           bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR" --timeout-seconds 180             || echo "::warning::Gov ACR data plane not confirmed reachable; the az acr build upload may be denied."
-          az acr login -n "$ACR" >/dev/null
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR"
           # 2026-07-16: the console compile cgroup-OOMs on the default 8 GB ACR
           # Tasks agent (re-confirmed 2026-07-30, run 30564119314: "Next.js build
           # worker exited with code: null and signal: SIGKILL" at ~7min). A
@@ -369,7 +369,7 @@ jobs:
       - name: Verify the DEPLOY-REFERENCED tag exists in the Gov ACR
         run: |
           set -euo pipefail
-          az acr login -n "$ACR" >/dev/null
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR"
           for T in ${TAG_LIST:-$TAG $SHA_TAG latest}; do
             # R7: `2>/dev/null || echo ""` collapsed a denial, a throttle and a
             # genuine 404 into one empty string, and the branch below then
@@ -397,7 +397,7 @@ jobs:
         if: ${{ !inputs.skip_supply_chain }}
         run: |
           set -euo pipefail
-          az acr login -n "$ACR" >/dev/null
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR"
           DIGEST=$(az acr repository show --name "$ACR" --image "${{ matrix.app }}:$TAG" --query digest -o tsv | tr -d '\r')
           [ -n "$DIGEST" ] || { echo "::error::could not resolve the manifest digest for ${{ matrix.app }}:$TAG"; exit 1; }
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
