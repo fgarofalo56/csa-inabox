@@ -25,6 +25,33 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.91.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.90.2...csa-inabox-v0.91.0) (2026-08-11)
+
+
+### Features
+
+* **ci:** measure what a cron actually runs at — all four minute-crons are 3-10x their declared cadence ([#3225](https://github.com/fgarofalo56/csa-inabox/issues/3225)) ([6b622e8](https://github.com/fgarofalo56/csa-inabox/commit/6b622e876adba622955a505ab8900b05f5ded4e3))
+* **ci:** prove the digest resolver is USED, not just that it works — [#3166](https://github.com/fgarofalo56/csa-inabox/issues/3166)'s actual finding ([#3234](https://github.com/fgarofalo56/csa-inabox/issues/3234)) ([32b657c](https://github.com/fgarofalo56/csa-inabox/commit/32b657cb885a7c0c1f8833f7c4755a71fe986b10))
+
+
+### Bug Fixes
+
+* **ci:** cosign signing retries by re-invoking, so the OIDC token is re-minted ([#3240](https://github.com/fgarofalo56/csa-inabox/issues/3240)) ([7fb07ab](https://github.com/fgarofalo56/csa-inabox/commit/7fb07ab63323ad05ba30e15974d1912f2e28b89e))
+* **ci:** deploy-retry classifies failures printed on STDOUT ([#3238](https://github.com/fgarofalo56/csa-inabox/issues/3238)) ([c3a0c71](https://github.com/fgarofalo56/csa-inabox/commit/c3a0c7189f3d343123e0505c1655c3ee1c630ba5))
+* **ci:** route every `az acr login` through the retry helper (P0 roll failure) ([#3239](https://github.com/fgarofalo56/csa-inabox/issues/3239)) ([9dcc48f](https://github.com/fgarofalo56/csa-inabox/commit/9dcc48f96f9d4653fafdf74f1486256eed24f856))
+* **deploy:** Bot Manager rejects exclusions outright — the last failing Commercial deploy leaf ([#3233](https://github.com/fgarofalo56/csa-inabox/issues/3233)) ([2427079](https://github.com/fgarofalo56/csa-inabox/commit/24270794de001677a8f207f3793a40b7f72da3b6))
+* **gov:** every azd service path was one level short — the azd branch could never provision ([#3232](https://github.com/fgarofalo56/csa-inabox/issues/3232)) ([f6d3f5d](https://github.com/fgarofalo56/csa-inabox/commit/f6d3f5d0d229aafb326d9492b7300b7be041081d))
+* **gov:** five of seven azd services declared a language they are not — and one Dockerfile does not exist ([#3236](https://github.com/fgarofalo56/csa-inabox/issues/3236)) ([d77cdee](https://github.com/fgarofalo56/csa-inabox/commit/d77cdee3ff49a48231e819243a8f2f11c79fb312))
+* **monitor:** `2>&1` folded an az WARNING into the value and it became a "profile name" ([#3231](https://github.com/fgarofalo56/csa-inabox/issues/3231)) ([91763b7](https://github.com/fgarofalo56/csa-inabox/commit/91763b79124a47ec83caf2b64dc7b2c1bba74deb))
+* **monitor:** the edge check had no checkout, and it sat where it could suppress the monitor ([#3229](https://github.com/fgarofalo56/csa-inabox/issues/3229)) ([3fdc0a8](https://github.com/fgarofalo56/csa-inabox/commit/3fdc0a81c0c2ccfe9703a3e6bdc5056386d9ad13))
+* **monitor:** the vanity URL went down twice with nothing watching it — plus a `set -e` bug in my own code ([#3222](https://github.com/fgarofalo56/csa-inabox/issues/3222)) ([28de89f](https://github.com/fgarofalo56/csa-inabox/commit/28de89fb9372e459dbc4a6cdd380377f724f7b39))
+* **roll:** P0 — I removed a retry that was absorbing a real transient; two rolls failed on it ([#3230](https://github.com/fgarofalo56/csa-inabox/issues/3230)) ([d4d8287](https://github.com/fgarofalo56/csa-inabox/commit/d4d8287ba166f95a1bea0e0dbdce1b098a0d8425))
+
+
+### Documentation
+
+* **gov:** the workflow header said the orchestrator does not own loom-unity — it does ([#3235](https://github.com/fgarofalo56/csa-inabox/issues/3235)) ([dae2d7d](https://github.com/fgarofalo56/csa-inabox/commit/dae2d7d7599e93ad0a88cae1dfab354eb78b431e))
+
 ## [0.90.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.90.1...csa-inabox-v0.90.2) (2026-08-11)
 
 
