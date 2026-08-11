@@ -548,7 +548,20 @@ jobs:
           fi
           # Now mint the data-plane token cosign uses. This is a credential step,
           # not a reachability probe.
-          az acr login --name "${{ env.ACR_NAME }}" >/dev/null
+          #
+          # THROUGH THE RETRY HELPER (#3230), never bare. The probe above having
+          # returned READY means the NETWORK is open; it says nothing about the
+          # AAD→ACR token exchange, which has its own propagation window after
+          # the firewall opens. Run 31494527960 failed here with the registry
+          # network confirmed open seconds earlier:
+          #
+          #   [acr-dataplane-ready] READY after 1 attempt(s) — HTTP 401
+          #   WARNING: Unable to get AAD authorization tokens … CONNECTIVITY_REFRESH_TOKEN_ERROR
+          #   Access to registry … was denied. Response code: 403.
+          #
+          # acr-login-retry.sh retries ONLY that named transient set and fails
+          # closed on anything else, so a real credential fault still goes red.
+          bash scripts/ci/acr-login-retry.sh --acr "${{ env.ACR_NAME }}" >/dev/null
 
           # ── Resolve the manifest digest. Bounded retry; FAILS CLOSED.
           #
