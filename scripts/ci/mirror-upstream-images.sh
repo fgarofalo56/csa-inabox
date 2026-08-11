@@ -101,6 +101,36 @@ if [ $NODE_RC -ne 0 ]; then
   exit 1
 fi
 
+# ACR LOGIN-SERVER SUFFIX — DERIVED FROM THE ACTIVE CLOUD, never hardcoded.
+#
+# This was `${ACR}.azurecr.io` literally, which is WRONG in every sovereign
+# boundary: Azure Government's registries are `.azurecr.us`. The push itself
+# succeeded (az acr import takes the registry NAME), but the read-back that
+# VERIFIES it was handed a Commercial-suffixed reference and az refused:
+#
+#     ERROR: Provided registry suffix '.azurecr.io' does not match the configured
+#     az cli acr login server suffix '.azurecr.us'.
+#
+# Measured on gov-provision-dataplane-images run 31454737765 (GCC-High): all
+# three upstream mirrors landed and all three were then reported as UNVERIFIED,
+# failing the step and blocking the GCC-High deploy — which in turn is what the
+# gcch image preflight refuses on. So a hardcoded Commercial suffix was, by
+# itself, enough to make the sovereign estate undeployable
+# (.claude/rules/cloud-parity.md).
+#
+# The error text this produced was honest ("unverified outcome, not a confirmed
+# mismatch") but pointed at the firewall lease, because that is the usual cause.
+# It cost a full diagnosis cycle to find the suffix.
+#
+# Fail CLOSED on an unreadable cloud config rather than guessing a suffix: a
+# wrong guess reproduces exactly the confusing failure above.
+ACR_SUFFIX="$(az cloud show --query 'suffixes.acrLoginServerEndpoint' -o tsv 2>/dev/null | tr -d '[:space:]')"
+if [ -z "$ACR_SUFFIX" ]; then
+  echo "::error::mirror-upstream-images: could not read suffixes.acrLoginServerEndpoint from 'az cloud show'. Refusing to assume '.azurecr.io' — that assumption is the defect this check replaces, and in a sovereign boundary it produces a 'registry suffix does not match' error that reads like a firewall problem." >&2
+  exit 1
+fi
+echo "::notice::ACR login-server suffix for this cloud: ${ACR_SUFFIX}"
+
 echo "::notice::Mirroring $(printf '%s\n' "$ROWS" | wc -l | tr -d ' ') upstream image(s) into $ACR (by digest)."
 
 rc=0
@@ -119,7 +149,7 @@ while IFS=$'\t' read -r ACR_REPO TAG SRC_REG SRC_REPO DIGEST; do
   if ! az acr import -n "$ACR" --source "$SRC" --image "$DST" --force -o none; then
     echo "::warning::${SRC_REG} import failed for ${DST}; retrying via the MCR Docker Hub mirror ${MCR_SRC}"
     if ! az acr import -n "$ACR" --source "$MCR_SRC" --image "$DST" --force -o none; then
-      echo "::error::could not mirror ${DST} into ${ACR} from ${SRC} or ${MCR_SRC}. The consuming Container App pins ${ACR}.azurecr.io/${DST} and cannot activate a revision without it — fix the import, do not deploy past this."
+      echo "::error::could not mirror ${DST} into ${ACR} from ${SRC} or ${MCR_SRC}. The consuming Container App pins ${ACR}${ACR_SUFFIX}/${DST} and cannot activate a revision without it — fix the import, do not deploy past this."
       rc=1
       continue
     fi
@@ -155,7 +185,7 @@ while IFS=$'\t' read -r ACR_REPO TAG SRC_REG SRC_REPO DIGEST; do
   # they never touch. `--only-show-errors` additionally stops the preview banner
   # being emitted at all.
   MERR="$(mktemp)"
-  LANDED="$(az acr manifest show-metadata "${ACR}.azurecr.io/${DST}" --query digest -o tsv --only-show-errors 2>"$MERR")"
+  LANDED="$(az acr manifest show-metadata "${ACR}${ACR_SUFFIX}/${DST}" --query digest -o tsv --only-show-errors 2>"$MERR")"
   META_RC=$?
   META_ERR="$(tr -d '\r' < "$MERR" | tr '\n' ' ' | cut -c1-300)"
   rm -f "$MERR"

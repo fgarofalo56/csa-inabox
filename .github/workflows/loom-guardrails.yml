@@ -591,6 +591,15 @@ jobs:
       - name: 'teardown-not-on-schedule (a cron must never be able to tear down an estate)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-teardown-not-on-schedule.mjs
+      # If the registry NAME comes from a variable, the login-server SUFFIX must
+      # too. mirror-upstream-images.sh read back `${ACR}.azurecr.io/${DST}` — the
+      # name was right for Gov, the suffix was Commercial. All three upstream
+      # images mirrored fine; only the VERIFY failed, which failed the step, which
+      # starved the Gov ACR of loom-duckdb:v0.1, which is what deploy-fiab-gcch's
+      # image preflight refuses on. One literal suffix made GCC-High undeployable.
+      - name: 'acr-suffix-boundary-agnostic (a varying registry needs a varying suffix)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-acr-suffix-boundary-agnostic.mjs
       # annotation-teeth judges steps that PRINT ::error::. The publish-version
       # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
       # is not an annotation — so it sailed through while continue-on-error threw
