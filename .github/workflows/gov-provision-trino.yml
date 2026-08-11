@@ -260,6 +260,17 @@ jobs:
       - name: Supply-chain — install cosign
         if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
         uses: sigstore/cosign-installer@v4.1.2
+        # PIN THE CLI. cosign-installer v4 defaults to Cosign v3.0.5 — a MAJOR
+        # upgrade of the tool that signs every image this repo ships. Every
+        # workflow that runs `cosign sign` / `cosign verify` is DISPATCH-ONLY, so
+        # PR CI never exercises it: a green PR proves nothing about signing, and
+        # the failure mode that matters is an image that signs fine and fails
+        # `verify` AT ROLL TIME, which stops deploys (deploy-integrity R1).
+        # Upstream discourages pinning "unless you have a specific reason";
+        # not silently changing the signature format on a path CI cannot run is
+        # a specific reason. Cosign v3 gets its own change, with a real receipt.
+        with:
+          cosign-release: v2.6.1
 
       - name: Supply-chain — sign + verify the pushed digests
         if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
