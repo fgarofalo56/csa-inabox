@@ -15,6 +15,12 @@ on:
       # signal is tests/loom_duckdb (#2543). Its requirements.txt pins duckdb
       # and pyarrow, so a dependency bump has to reach this lane.
       - 'apps/loom-duckdb/**'
+      # apps/fiab-setup-orchestrator is a default-ON Container App in Commercial
+      # and a GitOps workload on GCC-High / IL5. Its Dockerfile fresh-resolves
+      # its own pyproject on every image build and apps/** is NOT in the root
+      # `testpaths`, so the app-fresh-resolve job below is its ONLY automated
+      # signal (story 3063).
+      - 'apps/fiab-setup-orchestrator/**'
       - 'pyproject.toml'
       - '.github/workflows/test.yml'
   schedule:
@@ -235,6 +241,82 @@ jobs:
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
             }
 
+  # ------------------------------------------------------------------
+  # FRESH-RESOLVE LEG (story 3063)
+  #
+  # apps/** is NOT in the root pyproject's `testpaths`, so no job above ever
+  # collects apps/fiab-setup-orchestrator/tests. The only workflow references to
+  # that app are image builds. Its Dockerfile does a bare `pip install .` with no
+  # lockfile, so every image build fresh-resolves the app's own specifiers -- and
+  # an uncapped azure-mgmt-resource pin resolved to 26.0.0, which no longer
+  # provides Deployment / DeploymentProperties / DeploymentMode / TemplateLink or
+  # even ResourceManagementClient. The Setup Wizard's Deploy path shipped broken
+  # in every rebuilt image and nothing in CI could see it.
+  #
+  # This leg reproduces the Dockerfile's resolution in a clean venv and imports
+  # what the source imports. It is keyed to the MISMATCH between the app's source
+  # and its resolved environment -- not to a version string, so it stays live on
+  # files that already carry the fix. It refuses to pass on an empty population
+  # (missing app dir, zero third-party imports, zero resolved distributions, zero
+  # image builders) and it fails on SKIPPED tests, because test_orchestrator.py
+  # importorskips azure.mgmt.resource and a skip there would hide exactly this.
+  #
+  # CLOUD PARITY -- stated as measured, not as assumed:
+  #   * There is ONE pyproject.toml and ONE Dockerfile for this app. Four
+  #     workflows build that same context: build-fiab-images.yml and
+  #     build-fiab-images-acr-tasks.yml and full-app-deploy-commercial.yml (the
+  #     customer's private ACR) and publish-ghcr-images.yml (the public GHCR
+  #     channel the in-product updater pulls). So the break shipped identically
+  #     wherever the image ran, and the fix lands identically wherever it is
+  #     rebuilt. The guard enumerates those builders and FAILS on zero, so a
+  #     boundary-specific fork of the build context cannot slip past unnoticed.
+  #   * COMMERCIAL + GCC: loom-setup-orchestrator is a live Container App
+  #     (admin-plane/main.bicep `setupOrchestratorActive`), so this leg is the
+  #     guard on a running deploy path there.
+  #   * GCC-High + IL5: `setupOrchestratorActive` explicitly excludes those two
+  #     boundaries today (`boundary != 'GCC-High' && boundary != 'IL5'`), and the
+  #     comment above that var records that the image is not published to the
+  #     sovereign ACR. Grepping platform/ deploy/ gitops/ helm/ charts/ found no
+  #     manifest that deploys it either, so this change is NOT verified against a
+  #     running GCC-High / IL5 orchestrator -- there does not appear to be one to
+  #     verify against. That sovereign gap is pre-existing and untouched here;
+  #     what this leg does guarantee is that when the image IS published to those
+  #     boundaries, it will not carry this defect.
+  app-fresh-resolve:
+    name: App Fresh-Resolve (setup-orchestrator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
+        with:
+          # Matches apps/fiab-setup-orchestrator/Dockerfile (python:3.12-slim), so
+          # the resolution this leg observes is the resolution the image gets.
+          python-version: '3.12'
+
+      - name: Fresh-resolve guard (clean venv, import what the source imports)
+        run: python scripts/ci/check_app_fresh_resolve.py apps/fiab-setup-orchestrator
+
+      - name: Install the app + dev extras into a clean venv
+        run: |
+          set -euo pipefail
+          python -m venv .venv-orch
+          .venv-orch/bin/python -m pip install --disable-pip-version-check -q --upgrade pip
+          .venv-orch/bin/python -m pip install --disable-pip-version-check -q './apps/fiab-setup-orchestrator[dev]'
+          echo "resolved azure-mgmt-resource:"
+          .venv-orch/bin/python -m pip show azure-mgmt-resource | head -2
+
+      - name: Run the Setup Orchestrator's own tests (never collected elsewhere)
+        run: |
+          set -euo pipefail
+          .venv-orch/bin/python -m pytest apps/fiab-setup-orchestrator/tests \
+            -o addopts= --tb=short --junitxml=orchestrator-junit.xml
+
+      - name: Assert the run measured something and skipped nothing
+        run: python scripts/ci/assert_pytest_junit.py orchestrator-junit.xml --min-tests 31
+
   dbt-compile:
     name: dbt Compile (${{ matrix.domain }})
     runs-on: ubuntu-latest
@@ -337,7 +419,7 @@ jobs:
   pr-summary:
     name: PR Summary
     if: github.event_name == 'pull_request' && always()
-    needs: [python-tests, dbt-compile, dbt-integration]
+    needs: [python-tests, app-fresh-resolve, dbt-compile, dbt-integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -348,6 +430,7 @@ jobs:
           script: |
             const jobs = [
               { name: 'Python Tests', id: 'python-tests' },
+              { name: 'App Fresh-Resolve', id: 'app-fresh-resolve' },
               { name: 'dbt Compile', id: 'dbt-compile' },
               { name: 'dbt Integration', id: 'dbt-integration' },
             ];
