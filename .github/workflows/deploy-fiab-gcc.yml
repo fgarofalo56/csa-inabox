@@ -6,9 +6,20 @@ name: deploy-fiab-gcc
 # (see the precheck below). `gh run list` and the GitHub UI show only the
 # conclusion, so the run title is the one place the truth is visible without
 # opening the run.
+#
+# The third line is not decoration on the second. The `Provision` step below is
+# gated `if: github.event_name == 'schedule' || inputs.run_mode == 'full'` and
+# run_mode DEFAULTS to whatif-only, so the DEFAULT dispatch succeeds having
+# applied nothing — and this lane is now a WATCHED entry in
+# scripts/ci/check-deploy-staleness.mjs, which clears drift on the newest
+# SUCCESSFUL run. That watchdog filters on the exact literal DRY_RUN_MARKER
+# ('DRY RUN'); "(whatif-only)" from line two does NOT match it, so line two
+# alone would have let one default dispatch silence a GCC deploy gap it did not
+# close. Machine-readable marker AND human-readable mode, deliberately both.
 run-name: >-
   deploy-fiab-gcc
   ${{ github.event_name == 'schedule' && '(scheduled)' || format('({0})', inputs.run_mode) }}
+  ${{ (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && '— DRY RUN (whatif-only, applies nothing)' || '' }}
 
 # CSA Loom — nightly deploy validation against GCC (Azure Commercial
 # under M365 GCC identity). GCC limitations: no F-SKU, no Direct
