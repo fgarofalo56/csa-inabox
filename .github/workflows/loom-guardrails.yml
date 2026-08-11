@@ -619,6 +619,15 @@ jobs:
       - name: 'acr-suffix-boundary-agnostic (a varying registry needs a varying suffix)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-suffix-boundary-agnostic.mjs
+      # `azd provision` validates the WHOLE project file before it does anything,
+      # so one bad service path stops the entire sovereign deploy — and reports it
+      # as a SERVICE error, which reads like an application problem. All seven
+      # paths in platform/fiab/azd/azure.yaml were one level short and had never
+      # resolved; three earlier defects on the same code path had each stopped the
+      # run before it got far enough to find out.
+      - name: 'azd-service-paths (every azd service project resolves to a real directory)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-azd-service-paths.mjs
       # The set of apps a push BUILDS and the set of paths that TRIGGER the push
       # are two hand-maintained lists that must agree. loom-copilot-maf builds from
       # ./apps/copilot-maf, outside the ./apps/fiab-* glob, so a change to the MAF
