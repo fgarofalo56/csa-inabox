@@ -234,3 +234,74 @@ test('CONTROL: with no $GITHUB_OUTPUT set the script still works and exits norma
   assert.equal(r.code, 0);
   assert.doesNotMatch(r.out, /::error::/);
 });
+
+// ── RECENCY (#3160) ─────────────────────────────────────────────────────────
+// A 7-day count with no recency test cannot tell "sign-in is down" from
+// "sign-in WAS down and someone fixed it". Both produced byte-identical output,
+// so a rotation that worked still failed this gate for a week — and an operator
+// who has seen it cry wolf twice stops believing the third one.
+//
+// Measured on loom-ui-verify run 31465529808 (2026-08-11), which reported BOTH:
+//     LOGIN BROKEN — 4 auth/callback invalid_client errors in the last 7d
+//     soonest MSAL secret expiry: 2028-08-09T13:46:44Z (729d)  OK
+// Those are only simultaneously true if the hits predate the credentials — or
+// if the console presents a secret the app does not hold. The gate could not
+// say which.
+
+test('#3160 — hits that PREDATE the newest credential are historical, not a current outage', () => {
+  const r = run({
+    LH_LAW: 'ws-guid',
+    LH_HITS_RAW: '4',
+    LH_HITS_LAST: '2026-08-09T10:00:00Z',
+    LH_CRED_NEWEST: '2026-08-09T16:21:19Z',
+    LH_MIN_END: daysOut(400),
+  });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /login-health-verdict=ok/);
+  assert.match(r.out, /PREDATES the newest MSAL credential/);
+  // It must still SAY the hits exist — silently dropping them would hide a real
+  // outage that was fixed by luck rather than by the rotation.
+  assert.match(r.out, /4 auth\/callback invalid_client error\(s\)/);
+});
+
+test('#3160 — a hit NEWER than the newest credential is a current outage and still fails', () => {
+  const r = run({
+    LH_LAW: 'ws-guid',
+    LH_HITS_RAW: '4',
+    LH_HITS_LAST: '2026-08-10T10:00:00Z',
+    LH_CRED_NEWEST: '2026-08-09T16:21:19Z',
+    LH_MIN_END: daysOut(400),
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /login-health-verdict=broken/);
+  assert.match(r.out, /NEWER than the newest MSAL credential/);
+  assert.match(r.out, /a rotation has not fixed it/);
+});
+
+test('#3160 — UNREADABLE timestamps fail CLOSED; recency is never assumed', () => {
+  const r = run({
+    LH_LAW: 'ws-guid',
+    LH_HITS_RAW: '4',
+    LH_HITS_LAST: '',
+    LH_CRED_NEWEST: '',
+    LH_MIN_END: daysOut(400),
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /login-health-verdict=broken/);
+  assert.match(r.out, /Recency could NOT be established/);
+  assert.match(r.out, /fails closed rather than assuming the errors are historical/);
+});
+
+test('#3160 — ONE unreadable timestamp is still unestablished recency, not a pass', () => {
+  // The half-known case is the one a naive `[ -n "$a" ] || [ -n "$b" ]` would
+  // get wrong. Knowing when the last failure was, without knowing when the
+  // credential was minted, establishes nothing about which came first.
+  for (const half of [
+    { LH_HITS_LAST: '2026-08-09T10:00:00Z', LH_CRED_NEWEST: '' },
+    { LH_HITS_LAST: '', LH_CRED_NEWEST: '2026-08-09T16:21:19Z' },
+  ]) {
+    const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '4', LH_MIN_END: daysOut(400), ...half });
+    assert.equal(r.code, 1, `half-known recency must fail closed: ${JSON.stringify(half)}\n${r.out}`);
+    assert.match(r.out, /Recency could NOT be established/);
+  }
+});
