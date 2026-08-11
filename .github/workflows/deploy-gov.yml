@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Bicep Build
         run: |
@@ -81,7 +81,7 @@ jobs:
     needs: validate
     environment: ${{ github.event.inputs.environment }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Azure Gov Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
@@ -123,7 +123,7 @@ jobs:
     if: github.event.inputs.what_if == 'false'
     environment: ${{ github.event.inputs.environment }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Azure Gov Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2

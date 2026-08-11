@@ -98,7 +98,7 @@ jobs:
       PARAMS_FILE: commercial-full.bicepparam
       FIAB_VANITY_DOMAIN: csa-loom.limitlessdata.ai
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (Commercial)
         uses: Azure/login@v2
@@ -373,7 +373,7 @@ jobs:
       LOCATION: usgovvirginia
       PARAMS_FILE: gcc-high.bicepparam
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2

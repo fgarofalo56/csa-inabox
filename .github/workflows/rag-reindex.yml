@@ -77,7 +77,7 @@ jobs:
       COPILOT_AZURE_OPENAI_API_KEY: ${{ secrets.COPILOT_AZURE_OPENAI_API_KEY }}
       COPILOT_OTEL_DISABLE: '1'  # suppress off-box telemetry in CI
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 2  # need HEAD~1 so the ingester can diff changed files
 

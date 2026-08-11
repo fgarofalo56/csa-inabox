@@ -111,7 +111,7 @@ jobs:
     steps:
       # The script stages its build context with `git archive HEAD`, so the
       # checked-out commit IS the image. Default fetch-depth (1) is sufficient.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login
         uses: Azure/login@v2

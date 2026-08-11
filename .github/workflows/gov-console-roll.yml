@@ -64,7 +64,7 @@ jobs:
     # bound turns "silently stuck" into a failed run someone can act on.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2

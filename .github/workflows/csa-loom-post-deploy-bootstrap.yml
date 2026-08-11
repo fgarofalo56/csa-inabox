@@ -162,7 +162,7 @@ jobs:
   bootstrap:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate required inputs (no estate defaults)
         # Hard gate — NOT masked. Enforces the rel-T34 required-ness for BOTH the

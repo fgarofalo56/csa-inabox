@@ -98,7 +98,7 @@ jobs:
       ESTATE: commercial
       ADMIN_RG: rg-csa-loom-admin-centralus
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (Commercial)
         uses: Azure/login@v2
@@ -164,7 +164,7 @@ jobs:
       # does not exist. Stated in the log rather than silently skipped.
       GITHUB_SECRET_EXPECTED: 'false'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Gov configured?
         id: precheck

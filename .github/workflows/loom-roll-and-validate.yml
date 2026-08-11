@@ -164,7 +164,7 @@ jobs:
     # When triggered by upstream image-build workflow, only run if it succeeded.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The roll gates run as node scripts (scripts/ci/roll-*.mjs) so their
       # decision logic is unit-tested rather than living in untestable inline
