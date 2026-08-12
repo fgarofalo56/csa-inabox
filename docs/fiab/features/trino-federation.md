@@ -28,8 +28,11 @@ that outgrow one container.
 
 The trade is a **cold start**: the first query after an idle period waits ~20-40s
 for the JVM. The BFF budgets 120s for that hop
-(`LOOM_TRINO_FETCH_TIMEOUT_MS`). Set `minReplicas: 1` on the module if a warm
-engine is worth ~$60-90/mo/cloud.
+(`LOOM_TRINO_FETCH_TIMEOUT_MS`). If a warm engine is worth ~$60-90/mo/cloud, set
+`loomBackends.trinoMinReplicas = 1` in your param file — see
+[Paying to skip the cold start](#paying-to-skip-the-cold-start-opt-in). (Until
+#3110 that meant editing the module: the orchestrator never passed `minReplicas`,
+so the module's parameter was unreachable from a param file.)
 
 ## How to use it end to end
 
