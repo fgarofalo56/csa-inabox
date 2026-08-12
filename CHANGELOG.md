@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.6...csa-inabox-v0.92.7) (2026-08-12)
+
+
+### Bug Fixes
+
+* **deploy:** the last two cross-sub lake grants were ungated — Commercial apply P0 ([#3279](https://github.com/fgarofalo56/csa-inabox/issues/3279)) ([e896131](https://github.com/fgarofalo56/csa-inabox/commit/e896131c9ed215881551d962a28a1e017275021f))
+
 ## [0.92.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.5...csa-inabox-v0.92.6) (2026-08-12)
 
 
