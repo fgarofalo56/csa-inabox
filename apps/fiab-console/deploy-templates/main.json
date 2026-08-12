@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "7914104847095585451"
+      "templateHash": "10182872320792467602"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9844955326153972889"
+              "templateHash": "7416430500591295349"
             }
           },
           "definitions": {
@@ -14063,7 +14063,7 @@
               ]
             },
             "azureConnectionsRbac": {
-              "condition": "[not(parameters('skipRoleGrants'))]",
+              "condition": "[and(not(parameters('skipRoleGrants')), variables('loomStorageGrantable'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "console-azure-connections-rbac",
@@ -20090,7 +20090,7 @@
               ]
             },
             "s3GatewayLakeRbac": {
-              "condition": "[and(variables('s3GatewayActive'), not(parameters('skipRoleGrants')))]",
+              "condition": "[and(and(variables('s3GatewayActive'), not(parameters('skipRoleGrants'))), variables('loomStorageGrantable'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "loom-s3-gateway-lake-rbac",

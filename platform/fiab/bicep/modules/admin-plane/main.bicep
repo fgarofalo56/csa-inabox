@@ -3396,7 +3396,16 @@ module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && loomSt
 // workspace's "Azure connections" bindings are fully functional (dataflow
 // staging + query-log export). Skipped (honest gate in the pane) when
 // loomStorageAccount is unset; the LAW grant always applies (admin-RG LAW).
-module azureConnectionsRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants) {
+// `loomStorageGrantable`, not just `!skipRoleGrants` — SAME reason as
+// labelRbacGrants / orgVisualsRbac immediately below. This module is scoped to
+// `loomDlzRg`, which on a MULTI-SUB estate is the ADMIN resource group, and the
+// lake is not there. Measured on run 31563628416 (2026-08-12): the Commercial
+// apply failed ResourceNotFound on
+//   Microsoft.Storage/storageAccounts/saloomdefaulttr4nm4dcgsq under
+//   rg-csa-loom-admin-centralus
+// while that lake was fully deployed in the DLZ subscription. #3202 split bind
+// from grant on 4 of 7 consumers; this is one of the ones it missed.
+module azureConnectionsRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants && loomStorageGrantable) {
   name: 'console-azure-connections-rbac'
   scope: resourceGroup(loomDlzRg)
   params: {
@@ -6307,7 +6316,11 @@ module s3Gateway '../data-plane/s3-gateway-aca.bicep' = if (s3GatewayActive) {
 // Least-privilege lake grant for the gateway's dedicated identity. Scoped to
 // the DLZ RG — the lake is NOT in the admin RG — exactly like labelRbacGrants /
 // azureConnectionsRbac / orgVisualsRbac.
-module s3GatewayLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (s3GatewayActive && !skipRoleGrants) {
+// `loomStorageGrantable` for the same reason as its siblings: the comment above
+// already says the lake is NOT in the admin RG, but the condition did not act
+// on it, so on a multi-sub estate this took an `existing` reference in a RG
+// that does not hold the account (#3202's remaining consumers).
+module s3GatewayLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (s3GatewayActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-s3-gateway-lake-rbac'
   scope: resourceGroup(loomDlzRg)
   params: {
