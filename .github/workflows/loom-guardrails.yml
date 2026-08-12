@@ -745,6 +745,16 @@ jobs:
       - name: 'session-claims-produced (a claim that is read but never written)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-session-claims-produced.mjs
+      # gcc-high/il5.bicepparam read 16 image tags via readEnvironmentVariable(),
+      # and the step that ran `az deployment sub create` set NONE of them. Because
+      # readEnvironmentVariable() has a DEFAULT it cannot fail: every full Gov
+      # deploy SUCCEEDED while silently writing the mutable `v0.1` onto loom-unity,
+      # iceberg-catalog and loom-trino, reverting any SHA-pinned roll with nothing
+      # in the log. The issue reported 2 tags; the real count was 16 per lane.
+      # See #3161.
+      - name: 'bicepparam-env-reaches-deploy (a param file reads a tag the deploy never sets)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-bicepparam-env-reaches-deploy.mjs
       # curl PRINTS its -w value on BOTH failure paths AND exits non-zero, so an
       # `|| echo 000` CONCATENATES: a connection failure becomes "000000" and an
       # HTTP 401 under -f becomes "401000". Neither is a status code. Two live

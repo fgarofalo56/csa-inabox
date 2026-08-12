@@ -426,6 +426,30 @@ jobs:
 
       - name: Provision (with full Gov dispatch)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # #3161 — gcc-high.bicepparam reads these with readEnvironmentVariable(),
+        # and this step had NO env: block at all. So every full Gov deploy fell
+        # back to the default and wrote the MUTABLE `v0.1` onto loom-unity,
+        # iceberg-catalog (same image) and loom-trino — silently reverting any
+        # SHA-pinned roll of those apps, with nothing in the log to say it had
+        # happened. The sibling preflight step already resolves the tag from the
+        # same repo variable; only the step that actually deploys was missing it.
+        env:
+          LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG || 'v0.1' }}
+          LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG || 'v0.1' }}
+          LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG || 'v0.1' }}
+          LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
+          LOOM_MAF_TAG: ${{ vars.LOOM_MAF_TAG || 'v0.1' }}
+          LOOM_MCP_BRIDGE_TAG: ${{ vars.LOOM_MCP_BRIDGE_TAG || 'v0.1' }}
+          LOOM_MCP_TAG: ${{ vars.LOOM_MCP_TAG || 'v0.1' }}
+          LOOM_MIGRATE_TAG: ${{ vars.LOOM_MIGRATE_TAG || 'v0.1' }}
+          LOOM_MIRRORING_TAG: ${{ vars.LOOM_MIRRORING_TAG || 'v0.1' }}
+          LOOM_ORCHESTRATOR_TAG: ${{ vars.LOOM_ORCHESTRATOR_TAG || 'v0.1' }}
+          LOOM_RISINGWAVE_TAG: ${{ vars.LOOM_RISINGWAVE_TAG || 'v0.1' }}
+          LOOM_SCRIPT_RUNNER_TAG: ${{ vars.LOOM_SCRIPT_RUNNER_TAG || 'v0.1' }}
+          LOOM_SETUP_ORCHESTRATOR_TAG: ${{ vars.LOOM_SETUP_ORCHESTRATOR_TAG || 'v0.1' }}
+          LOOM_TRINO_TAG: ${{ vars.LOOM_TRINO_TAG || 'v0.1' }}
+          LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
+          LOOM_WRANGLER_TAG: ${{ vars.LOOM_WRANGLER_TAG || 'v0.1' }}
         run: |
           set -e
           # RETRY WITH CLASSIFICATION (#3017, deploy-integrity R6). This ran
