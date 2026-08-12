@@ -370,6 +370,51 @@ jobs:
           echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-}" >> "$GITHUB_OUTPUT"
           echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
 
+      # deploy-integrity forbids "a deploy workflow that exits 0 having produced no
+      # artifact". gcc.bicepparam deliberately never sets `deployAppsEnabled`
+      # (no GCC image producer — #3078), so this lane stands up the hub and ZERO
+      # Container Apps, then concludes SUCCESS. In `gh run list` that is
+      # indistinguishable from a boundary that is fully deployed, which is exactly
+      # the "green dashboard over a dead pipeline" shape R3 exists to prevent.
+      #
+      # This step does not fail the lane — infra-only is the DECIDED state, not a
+      # regression — but it makes the run say what it actually produced, both in
+      # the log and in the run summary the operator reads.
+      - name: 'Declare what this deploy actually produced (infra-only vs apps)'
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run_mode == 'full') }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${{ env.AZURE_LOCATION }}"
+          # `az … -o tsv` carries a trailing CR on some runners; strip before counting.
+          if ! APPS=$(az containerapp list -g "$RG" --query "length(@)" -o tsv 2>/dev/null | tr -d '[:space:]'); then
+            APPS=""
+          fi
+          if [ -z "$APPS" ]; then
+            # UNKNOWN is not ZERO. Say which one this is.
+            echo "::warning::GCC: could not enumerate Container Apps in $RG (the query failed or the RG is unreachable). This run does NOT establish how many apps exist."
+            {
+              echo "### GCC deploy — app count UNKNOWN"
+              echo ""
+              echo "Could not enumerate Container Apps in \`$RG\`. This run does **not** establish whether apps are deployed."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$APPS" -eq 0 ]; then
+            echo "::warning::GCC deployed INFRA ONLY — 0 Container Apps in $RG. gcc.bicepparam does not set deployAppsEnabled because there is no GCC image producer (#3078). A green run here does NOT mean the GCC boundary serves Loom."
+            {
+              echo "### ⚠️ GCC deploy — INFRA ONLY (0 Container Apps)"
+              echo ""
+              echo "The hub deployed, but **no Container Apps** were stamped: no \`loom-console\`, \`loom-unity\`, \`loom-trino\`, or \`iceberg-catalog\`."
+              echo ""
+              echo "\`gcc.bicepparam\` deliberately leaves \`deployAppsEnabled\` unset — there is no GCC image producer, so enabling it would fail every Container App PUT with \`MANIFEST_UNKNOWN\`. Tracked in #3078 (cloud-parity)."
+              echo ""
+              echo "**A success on this lane does not mean the GCC boundary serves Loom.**"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::GCC deployed $APPS Container App(s) in $RG."
+            echo "### GCC deploy — $APPS Container App(s) deployed" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Smoke test (GCC-specific — no Direct Lake)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: bash .github/scripts/fiab-smoke-test.sh
