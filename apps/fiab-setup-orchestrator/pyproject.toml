@@ -9,8 +9,29 @@ dependencies = [
   "pydantic>=2.9.0",
   "httpx>=0.28.0",
   "azure-identity>=1.19.0",
-  "azure-mgmt-resource>=23.2.0",
+  # UPPER BOUND IS LOAD-BEARING. Dockerfile does a bare `pip install .` with no
+  # lockfile, so every image build fresh-resolves this specifier to whatever is
+  # newest on PyPI. azure-mgmt-resource 25.0.0 removed Deployment /
+  # DeploymentProperties / DeploymentMode / TemplateLink from
+  # azure.mgmt.resource.resources.models, and 26.0.0 additionally dropped
+  # ResourceManagementClient from azure.mgmt.resource (it moved to
+  # azure.mgmt.resource.resources) and split the deployments API out of the
+  # distribution entirely. orchestrator.py:48 + :365 import both, so an
+  # unbounded pin ships a Setup Wizard whose Deploy raises ImportError on first
+  # use, in every cloud boundary that rebuilds the image.
+  # 24.0.0 is the newest release that still provides every symbol this app
+  # imports (verified in a clean venv, story 3063); 25.0.0 is the first that
+  # does not -- hence <25.0.0. Migrating to the v26 layout means rewriting
+  # run_bicep_deploy against azure-mgmt-resource-deployments, tracked separately.
+  # scripts/ci/check_app_fresh_resolve.py enforces the general invariant.
+  "azure-mgmt-resource>=23.2.0,<25.0.0",
   "azure-mgmt-authorization>=4.0.0",
+  # deployment_state.py:33 imports azure.cosmos.aio when COSMOS_ENDPOINT is set
+  # (the Cosmos-backed store). It was never declared, so a fresh resolve of this
+  # manifest could not provide it and the Cosmos path would raise
+  # ModuleNotFoundError the moment that env var is wired. Same bound the repo
+  # root uses for azure-cosmos.
+  "azure-cosmos>=4.5.0,<5.0.0",
   "openai>=1.55.0",
   "azure-monitor-opentelemetry>=1.6.0",
   "opentelemetry-instrumentation-fastapi>=0.49b0",
