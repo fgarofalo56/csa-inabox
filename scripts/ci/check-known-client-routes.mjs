@@ -263,7 +263,7 @@ function selftest() {
   process.exit(0);
 }
 
-function main() {
+async function main() {
   if (process.argv.includes('--selftest')) return selftest();
   let result;
   try {
@@ -279,9 +279,55 @@ function main() {
     process.exit(1);
   }
   if (violations.length) {
+    // R7 — DO NOT ASSERT ABSENCE FROM A DERIVED ARTIFACT (#3158).
+    //
+    // This guard resolves against the COMMITTED map, and on 2026-08-08 that made
+    // it turn main red with "3 call(s) name a BFF route that does not exist:
+    // /api/powerplatform/solutions". The route existed. It was real, complete and
+    // withSession-wrapped, shipped in #3146 alongside the panel calling it. What
+    // did not exist was a MAP ENTRY, because #3152 regenerated the map from a
+    // base predating #3146 — each PR correct alone, the merge order not, and no
+    // review of either could have caught it.
+    //
+    // The map going stale is a real defect and the drift gate exists to catch it.
+    // But "the map does not mention X" and "X does not exist" are DIFFERENT
+    // CLAIMS, and reporting the second while having established only the first
+    // sent the #3157 repair hunting for a route that was sitting in the tree.
+    //
+    // So: before saying a route is absent, look on disk. The verdict does not
+    // change — a stale map still fails the build, because shipping it breaks the
+    // compile-time guarantee in api-routes.generated.d.ts — but the REASON is now
+    // the true one, and the remediation matches it.
+    const onDisk = new Set();
+    try {
+      const gen = await import(pathToFileURL(path.join(__dirname, 'generate-client-route-map.mjs')).href);
+      for (const p of gen.buildRoutes()) onDisk.add(p);
+    } catch {
+      // Discovery unavailable: fall back to the original wording rather than
+      // inventing a cause. UNKNOWN is not "the route is missing".
+    }
+    const staleOnly = onDisk.size > 0
+      ? violations.filter((v) => [...onDisk].some((r) => r === STRIP(v.path) || r.startsWith(STRIP(v.path))))
+      : [];
+
+    if (staleOnly.length === violations.length && violations.length > 0) {
+      console.error(
+        `\n[known-client-routes] FAIL — the generated route map is STALE. ${violations.length} call(s) name a route ` +
+        'that EXISTS on disk but is absent from lib/api-routes.generated.json. This is the merge-order race in #3158: ' +
+        'one PR added the route, another regenerated the map from a base that predated it.',
+      );
+      for (const v of violations) {
+        console.error(`  - ${v.file}:${v.line}  ${v.path}${v.isTemplate ? '${…}' : ''}   [route EXISTS on disk]`);
+      }
+      console.error('\nFix: regenerate and commit the map — the routes are fine.');
+      console.error('  node scripts/ci/generate-client-route-map.mjs');
+      process.exit(1);
+    }
+
     console.error(`\n[known-client-routes] FAIL — ${violations.length} call(s) name a BFF route that does not exist:`);
     for (const v of violations) {
-      console.error(`  - ${v.file}:${v.line}  ${v.path}${v.isTemplate ? '${…}' : ''}`);
+      const exists = onDisk.size > 0 && [...onDisk].some((r) => r === STRIP(v.path) || r.startsWith(STRIP(v.path)));
+      console.error(`  - ${v.file}:${v.line}  ${v.path}${v.isTemplate ? '${…}' : ''}${exists ? '   [route EXISTS on disk — the MAP is stale]' : ''}`);
     }
     console.error('\nFix: correct the path, or add the missing app/api/…/route.ts.');
     console.error('If you just added a route, regenerate the map:');
