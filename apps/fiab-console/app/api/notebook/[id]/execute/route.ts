@@ -25,7 +25,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
 import {
   getLivySession, submitLivyStatement, getLivyStatement,
@@ -33,6 +32,7 @@ import {
   type LivyKind, type NormalizedOutput,
 } from '@/lib/azure/synapse-livy-client';
 import { resolveSparkPool, type SparkPoolResolution } from '@/lib/azure/spark-pool-resolver';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -88,9 +88,7 @@ function il5BlocksDatabricks(): NextResponse | null {
   return null;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const code: string = typeof body?.code === 'string' ? body.code : '';
@@ -208,7 +206,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e), ...poolMeta }, { status: 502 });
   }
-}
+});
 
 // Map a Databricks command result into the same NormalizedOutput shape the
 // editor renders for Livy.
@@ -232,9 +230,7 @@ function normalizeDbxResults(status: string, results: any): NormalizedOutput | n
   return { status: 'ok', textPlain: results.data != null ? String(results.data) : '' };
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
 
   if (resolveNotebookBackend() === 'databricks') {
     const cluster = req.nextUrl.searchParams.get('cluster')?.trim() || '';
@@ -296,4 +292,4 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

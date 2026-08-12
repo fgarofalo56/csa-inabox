@@ -29,7 +29,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
 import {
   createLivySession, getLivySession, killLivySession, keepaliveLivySession,
@@ -40,6 +39,7 @@ import {
   resolveSparkPool, createSessionOnResolvedPool,
   type SparkPoolResolution, type ResolvedSparkPool,
 } from '@/lib/azure/spark-pool-resolver';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -106,9 +106,7 @@ function il5BlocksDatabricks(): NextResponse | null {
   return null;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const kind = sessionKindFor(normKind(body?.kind));
@@ -192,11 +190,9 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e), pool: resolved.pool }, { status: 502 });
   }
-}
+});
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   // Backend probe — lets the editor choose the Spark-pool vs Databricks-cluster
   // picker without committing a session. On the Synapse default it ALSO hands
@@ -253,11 +249,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
 
   if (resolveNotebookBackend() === 'databricks') {
     const cluster = req.nextUrl.searchParams.get('cluster')?.trim() || '';
@@ -291,4 +285,4 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
