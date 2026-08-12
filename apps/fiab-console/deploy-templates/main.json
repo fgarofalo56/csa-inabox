@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "5023974359352349684"
+      "templateHash": "13794469284627382006"
     }
   },
   "definitions": {
@@ -2539,7 +2539,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9475350750057363963"
+              "templateHash": "2219719554726388530"
             }
           },
           "definitions": {
@@ -5009,6 +5009,7 @@
             "trinoKeyVaultEnv": "[coalesce(tryGet(parameters('loomBackends'), 'trinoCatalogSecrets'), createObject())]",
             "trinoAuthMode": "[string(coalesce(tryGet(parameters('loomBackends'), 'trinoAuthMode'), 'entra'))]",
             "trinoAudienceOverride": "[string(coalesce(tryGet(parameters('loomBackends'), 'trinoAudienceClientId'), ''))]",
+            "trinoRequestedMinReplicas": "[int(coalesce(tryGet(parameters('loomBackends'), 'trinoMinReplicas'), 0))]",
             "trinoCatalogPolicy": "[string(coalesce(tryGet(parameters('loomBackends'), 'trinoCatalogPolicy'), ''))]",
             "loomTrinoPolicyToken": "[guid(parameters('loomGeneratedSecretSeed'), 'loom-trino-policy-token-v1')]",
             "trinoPolicyRulesUrl": "[if(variables('trinoEngineActive'), 'http://loom-console/api/governance/policy-code/engine-rules', '')]",
@@ -20243,6 +20244,7 @@
                   },
                   "authMode": "[if(equals(variables('trinoAuthMode'), 'disabled'), createObject('value', 'disabled'), createObject('value', 'entra'))]",
                   "entraClientId": "[if(not(empty(variables('trinoAudienceOverride'))), createObject('value', variables('trinoAudienceOverride')), if(not(empty(parameters('loomMsalClientId'))), createObject('value', parameters('loomMsalClientId')), if(variables('msalAppRegProvisioned'), createObject('value', reference('entraAppReg').outputs.appId.value), createObject('value', ''))))]",
+                  "minReplicas": "[if(equals(if(equals(variables('trinoAuthMode'), 'disabled'), 'disabled', if(empty(if(not(empty(variables('trinoAudienceOverride'))), variables('trinoAudienceOverride'), if(not(empty(parameters('loomMsalClientId'))), parameters('loomMsalClientId'), if(variables('msalAppRegProvisioned'), reference('entraAppReg').outputs.appId.value, '')))), 'sealed', 'entra')), 'sealed'), createObject('value', 0), createObject('value', variables('trinoRequestedMinReplicas')))]",
                   "accessControl": "[if(equals(string(coalesce(tryGet(parameters('loomBackends'), 'trinoAccessControl'), 'file')), 'none'), createObject('value', 'none'), createObject('value', 'file'))]",
                   "policyRulesUrl": {
                     "value": "[variables('trinoPolicyRulesUrl')]"
