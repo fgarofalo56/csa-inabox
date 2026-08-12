@@ -158,11 +158,70 @@ env:
   APP_NAME: loom-console
 
 jobs:
+  # ── WHY THIS GATE JOB EXISTS (#3260) ────────────────────────────────────────
+  #
+  # The upstream image build is a matrix of ~12 INDEPENDENT images, so the RUN's
+  # conclusion is the AND of all of them. Gating the roll on it froze the estate
+  # whenever ANY image broke, even though loom-console had built fine and was
+  # sitting in ACR. Measured 2026-08-11: loom-mcp failed for most of the day and
+  # deploy-staleness reported the estate 5 commits behind, while every gate that
+  # matters to the console was green.
+  #
+  # This job answers one question — did the loom-console job succeed? — and the
+  # roll below runs only if it did. Nothing about the roll's own gates changes:
+  # image-exists, cosign verify, vitest, health, version, build-marker and the
+  # in-VNet UAT all still have to pass. Whether a SIBLING image built says nothing
+  # about whether this console image is fit to deploy.
+  #
+  # It is a separate job so that "the console image is also broken" SKIPS the roll
+  # rather than reddening it — that case is already reported by the build workflow
+  # and does not need a second red run saying the same thing.
+  gate:
+    name: Did the console image build?
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' }}
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          # A manual dispatch, or an upstream run that fully succeeded, proceeds
+          # exactly as before this change.
+          if [ "$EVENT" = 'workflow_dispatch' ] || [ "$CONCLUSION" = 'success' ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          ERR="$(mktemp)"
+          # FAILS CLOSED on an unreadable answer. An empty list previously read as
+          # "not found" across this repo (#2819); here it means UNKNOWN, and
+          # unknown must not roll.
+          if ! JOBS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100"                         --jq '.jobs[] | select(.name | test("loom-console")) | .conclusion' 2>"$ERR")"; then
+            echo "::error::Could not read the jobs of upstream run ${RUN_ID}, so whether loom-console built is UNKNOWN — refusing to roll. Detail: $(head -c 400 "$ERR")"
+            exit 1
+          fi
+          if [ -z "${JOBS//[[:space:]]/}" ]; then
+            echo "::error::Upstream run ${RUN_ID} reported NO job matching 'loom-console'. Either that matrix job was renamed or this query is wrong; either way nothing here establishes that a console image was built. Refusing."
+            exit 1
+          fi
+          echo "loom-console conclusion(s): ${JOBS}"
+          if printf '%s' "$JOBS" | grep -qvx 'success'; then
+            echo "::notice::Upstream run ${RUN_ID} failed and loom-console is part of why — nothing new to roll. The build workflow already reports this; not reddening a second run for it."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Upstream run ${RUN_ID} failed on a SIBLING image, but loom-console SUCCEEDED — rolling. A broken sibling does not make this console image unfit; the roll's own gates still decide that (#3260)."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   roll-and-validate:
     name: Roll image + validate live URL
     runs-on: ubuntu-latest
-    # When triggered by upstream image-build workflow, only run if it succeeded.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    needs: gate
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
     steps:
       - uses: actions/checkout@v7
 
