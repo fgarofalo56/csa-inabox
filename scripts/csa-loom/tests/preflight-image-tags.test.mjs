@@ -72,11 +72,28 @@ esac
 exit 0
 `;
 
+// A stand-in for acr-firewall-lease.sh that RECORDS what it was asked to do.
+//
+// The real helper talks to ARM and polls for firewall propagation, so before
+// this the lease path was simply unreachable under test — the suite stubs `az`,
+// and a real acquire spun against a stub registry. That gap is why the #3137
+// race ("read the data plane without taking a lease, and lose it mid-read") had
+// no coverage at all. Recording the verbs lets a test assert the lease was
+// ACQUIRED, which is the actual fix.
+const LEASE_STUB = `#!/usr/bin/env bash
+echo "$1" >> "\${LEASE_LOG:-/dev/null}"
+[ "\${FAKE_LEASE_ACQUIRE_OK:-true}" = "true" ] || exit 1
+exit 0
+`;
+
 let stubDir = '';
+let leaseScript = '';
 if (shAvailable) {
   stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-preflight-'));
   const azPath = path.join(stubDir, 'az');
   fs.writeFileSync(azPath, AZ_STUB, { mode: 0o755 });
+  leaseScript = path.join(stubDir, 'lease.sh');
+  fs.writeFileSync(leaseScript, LEASE_STUB, { mode: 0o755 });
 }
 
 function preflight(env, args = ['--rg', 'rg-csa-loom-admin-usgovvirginia', '--require', 'loom-unity:v0.1']) {
@@ -93,6 +110,8 @@ function preflight(env, args = ['--rg', 'rg-csa-loom-admin-usgovvirginia', '--re
       LOOM_PREFLIGHT_ATTEMPTS: '1',
       LOOM_PREFLIGHT_ABSENT_ATTEMPTS: '1',
       LOOM_PREFLIGHT_BACKOFF_SECONDS: '0',
+      // Route the lease helper at the recording stub (see LEASE_STUB).
+      LOOM_ACR_LEASE_SCRIPT: leaseScript,
       ...env,
     },
   });
@@ -165,4 +184,44 @@ test('a malformed --require is a usage error, not a silent pass', { skip: !shAva
   ]);
   assert.equal(r.status, 2);
   assert.match(r.stdout + r.stderr, /malformed --require/);
+});
+
+// ── #3137 — the race this suite could not see ──────────────────────────────
+//
+// deploy-fiab-gcch failed on 2026-08-12T10:58Z with "Could not read the ACR data
+// plane". The lease note never printed, so the FIRST probe succeeded and no
+// lease was taken; six seconds later the second probe failed, because the
+// sibling image-build job released ITS lease and the registry (which rests at
+// Deny) shut mid-read. The preflight was reading on borrowed time.
+//
+// An open registry is not a registry that will STAY open. If it is reachable at
+// all it is standing open under someone else's lease.
+
+test('#3137: takes the lease even when the data plane is ALREADY reachable', { skip: !shAvailable }, () => {
+  const leaseLog = path.join(stubDir, `acquired-${Date.now()}.log`);
+  const r = preflight({
+    FAKE_LIVE_APPS: 'loom-unity',
+    FAKE_TAGS: 'loom-unity:v0.1',
+    FAKE_DATAPLANE_UP: 'true',
+    LEASE_LOG: leaseLog,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const verbs = fs.existsSync(leaseLog) ? fs.readFileSync(leaseLog, 'utf8') : '';
+  // The regression: the old code leased ONLY when the first probe failed, so
+  // this file was empty on the happy path and the read went unprotected.
+  assert.match(verbs, /acquire/, 'the happy path must ACQUIRE the firewall lease, not read on a lease it does not hold');
+  assert.match(verbs, /release/, 'and must release it');
+});
+
+test('#3137: --no-lease still reads when reachable, and says the read is unprotected', { skip: !shAvailable }, () => {
+  const leaseLog = path.join(stubDir, `nolease-${Date.now()}.log`);
+  const r = preflight({
+    FAKE_LIVE_APPS: 'loom-unity',
+    FAKE_TAGS: 'loom-unity:v0.1',
+    FAKE_DATAPLANE_UP: 'true',
+    LEASE_LOG: leaseLog,
+  }, ['--rg', 'rg-csa-loom-admin-usgovvirginia', '--require', 'loom-unity:v0.1', '--no-lease']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.existsSync(leaseLog), false, '--no-lease must NOT touch the firewall');
+  assert.match(r.stdout + r.stderr, /WITHOUT a lease/);
 });
