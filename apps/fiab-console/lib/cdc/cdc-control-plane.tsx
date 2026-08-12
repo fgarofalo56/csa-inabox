@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ConnectionPicker } from '@/lib/components/connections/connection-picker';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   Badge, Button, Caption1, Input, Select, Spinner, Subtitle2, Text, ProgressBar, Field,
@@ -454,7 +455,7 @@ function ConnectorWizard({ workspaceId, onClose, onCreated }: {
   const [server, setServer] = useState('');
   const [database, setDatabase] = useState('');
   const [syncMode, setSyncMode] = useState('incremental');
-  const [secretRef, setSecretRef] = useState('');
+  const [connectionId, setConnectionId] = useState('');
   const [tables, setTables] = useState<CdcTableSpec[]>([]);
   const [available, setAvailable] = useState<CdcTableSpec[] | null>(null);
   const [tablesGate, setTablesGate] = useState<string | null>(null);
@@ -493,14 +494,14 @@ function ConnectorWizard({ workspaceId, onClose, onCreated }: {
     try {
       const r = await clientFetch(`/api/cdc/connectors?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName, kind, server, database, syncMode, secretRef, tables }),
+        body: JSON.stringify({ displayName, kind, server, database, syncMode, connectionId, tables }),
       });
       const j = await r.json();
       if (!j.ok) { setErr((j.errors && j.errors.join(' ')) || j.error || 'create failed'); return; }
       onCreated(j.connector?.id);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [workspaceId, displayName, kind, server, database, syncMode, secretRef, tables, onCreated]);
+  }, [workspaceId, displayName, kind, server, database, syncMode, connectionId, tables, onCreated]);
 
   const canNext0 = displayName.trim().length > 0 && !!def;
   const canNext1 = database.trim().length > 0 && (!!server.trim());
@@ -539,12 +540,19 @@ function ConnectorWizard({ workspaceId, onClose, onCreated }: {
                   <Field label="Database" required>
                     <Input value={database} onChange={(_, d) => setDatabase(d.value)} placeholder="appdb" />
                   </Field>
-                  <Field
-                    label="Credential (Key Vault reference)"
-                    hint="A Key Vault secret name or vault-secret URI — never an inline password. Leave empty for Entra-token sources (Postgres / SQL Server)."
-                  >
-                    <Input value={secretRef} onChange={(_, d) => setSecretRef(d.value)} placeholder="my-source-password  ·  https://kv.vault.azure.net/secrets/my-source-password" />
-                  </Field>
+                  {/* #3149 — this was a free-text Key Vault reference that was
+                      validated, persisted, and then never read by anything: every
+                      Start authenticated as the Console UAMI. It is now a Loom
+                      Connection, resolved at Start through the same
+                      withSourceAuth() path mirrored-database uses. A picker also
+                      satisfies no-freeform-config, which the free-text box did
+                      not. */}
+                  <ConnectionPicker
+                    value={connectionId}
+                    onSelect={(c) => setConnectionId(c?.id || '')}
+                    label="Source credential"
+                    hint="The Loom Connection holding this source's credential. Leave empty for Entra-token sources (Postgres / SQL Server) — the connector then reads as the Console managed identity, and the connector page says so."
+                  />
                 </>
               )}
               {step === 2 && (

@@ -36,7 +36,11 @@ export const GET = withWorkspaceOwner(ITEM_TYPE, { allowReadRoles: true }, async
       database: st.database,
       tables: Array.isArray(st.tables) ? st.tables : [],
       syncMode: st.syncMode,
-      secretRefBound: !!st.secretRef,
+      // Renamed from secretRefBound (#3149): the old flag reported that a KV
+      // reference had been STORED, which was true and meaningless — nothing
+      // consumed it. This reports whether a Loom Connection is bound, which
+      // is what actually determines the identity the engine reads as.
+      connectionBound: !!st.connectionId,
       builtIn: def?.builtIn ?? false,
     },
     mirroringStatus: st.mirroringStatus || 'NotStarted',
