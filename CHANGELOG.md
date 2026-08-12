@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.3...csa-inabox-v0.92.4) (2026-08-12)
+
+
+### Bug Fixes
+
+* **ci:** delete the MSAL rotation marker — its only writer was a post-deploy patch bicep drops ([#3025](https://github.com/fgarofalo56/csa-inabox/issues/3025)) ([#3269](https://github.com/fgarofalo56/csa-inabox/issues/3269)) ([c942527](https://github.com/fgarofalo56/csa-inabox/commit/c942527b05e012c82c982c7fdbd3400742a104ee))
+* **ci:** watch the sovereign reconciles for deploy staleness ([#3211](https://github.com/fgarofalo56/csa-inabox/issues/3211)) ([#3268](https://github.com/fgarofalo56/csa-inabox/issues/3268)) ([396ad8f](https://github.com/fgarofalo56/csa-inabox/commit/396ad8f1f45154634ac77ed8298b102e715fe4ee))
+* **orchestrator:** cap azure-mgmt-resource — the Deploy path ships broken today ([#3266](https://github.com/fgarofalo56/csa-inabox/issues/3266)) ([ad2b403](https://github.com/fgarofalo56/csa-inabox/commit/ad2b403226ff1d91ff34932d97de156a3832de97))
+
 ## [0.92.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.2...csa-inabox-v0.92.3) (2026-08-12)
 
 
