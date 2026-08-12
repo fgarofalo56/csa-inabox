@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "10182872320792467602"
+      "templateHash": "5023974359352349684"
     }
   },
   "definitions": {
@@ -1726,6 +1726,13 @@
         "description": "Optional vanity URL for the console (e.g. csa-loom.contoso.ai) — set in the Setup Wizard. Creates a Front Door managed-cert custom domain; the deploy outputs the CNAME + _dnsauth TXT to add at your DNS provider. Empty = use the generated Front Door host."
       }
     },
+    "loomVanityCustomDomainName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "OPTIONAL. Existing Front Door customDomains RESOURCE name for loomVanityDomain (#3287). Empty => derived from the host name."
+      }
+    },
     "loomAmlWorkspace": {
       "type": "string",
       "defaultValue": "",
@@ -2334,6 +2341,9 @@
           "loomVanityDomain": {
             "value": "[parameters('loomVanityDomain')]"
           },
+          "loomVanityCustomDomainName": {
+            "value": "[parameters('loomVanityCustomDomainName')]"
+          },
           "loomStorageAccount": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls'))), createObject('value', __bicep.adoptName(parameters('adopt'), 'storage-adls')), if(variables('useSingleDlz'), createObject('value', take(format('saloomdefault{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24)), createObject('value', '')))]",
           "loomStorageAccountSameSub": "[if(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls')), createObject('value', true()), createObject('value', or(empty(__bicep.adoptSub(parameters('adopt'), 'storage-adls')), equals(__bicep.adoptSub(parameters('adopt'), 'storage-adls'), subscription().subscriptionId))))]",
           "loomEventHubNamespace": "[if(and(variables('useSingleDlz'), parameters('loomEventHubEnabled')), createObject('value', format('evhns-loom-default-{0}', parameters('location'))), createObject('value', ''))]",
@@ -2529,7 +2539,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7416430500591295349"
+              "templateHash": "9475350750057363963"
             }
           },
           "definitions": {
@@ -4898,6 +4908,13 @@
               "defaultValue": "",
               "metadata": {
                 "description": "Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = generated Front Door host only. The deploy emits the CNAME + _dnsauth TXT to add at your DNS provider."
+              }
+            },
+            "loomVanityCustomDomainName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "OPTIONAL. Existing Front Door customDomains RESOURCE name for loomVanityDomain. Empty => derived. See front-door.bicep (#3287): a derived name that does not match the live resource makes every apply fail Conflict instead of reconciling."
               }
             }
           },
@@ -27044,6 +27061,9 @@
                   "vanityDomain": {
                     "value": "[parameters('loomVanityDomain')]"
                   },
+                  "vanityCustomDomainName": {
+                    "value": "[parameters('loomVanityCustomDomainName')]"
+                  },
                   "scriptIdentityId": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), createObject('value', ''), createObject('value', reference('identity').outputs.uamiConsoleId.value))]",
                   "complianceTags": {
                     "value": "[parameters('complianceTags')]"
@@ -27056,7 +27076,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "9525364789372669588"
+                      "templateHash": "6102562982605094537"
                     }
                   },
                   "parameters": {
@@ -27118,10 +27138,18 @@
                       "metadata": {
                         "description": "Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = use the generated Front Door host."
                       }
+                    },
+                    "vanityCustomDomainName": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "OPTIONAL. The EXISTING customDomains resource name for vanityDomain, when the estate already has one whose name the convention here would not produce. Empty => derive it. Front Door refuses a second customDomain resource for a host name that is already claimed, so deriving a name that does not match the live resource makes every deploy fail Conflict rather than reconcile it."
+                      }
                     }
                   },
                   "variables": {
-                    "vanityName": "[if(empty(parameters('vanityDomain')), 'unused-vanity', replace(replace(parameters('vanityDomain'), '.', '-'), '*', 'wild'))]"
+                    "vanityNameDerived": "[if(empty(parameters('vanityDomain')), 'unused-vanity', replace(replace(parameters('vanityDomain'), '.', '-'), '*', 'wild'))]",
+                    "vanityName": "[if(empty(parameters('vanityCustomDomainName')), variables('vanityNameDerived'), parameters('vanityCustomDomainName'))]"
                   },
                   "resources": [
                     {

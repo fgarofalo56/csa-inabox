@@ -306,7 +306,25 @@ resource fdOrigin 'Microsoft.Cdn/profiles/originGroups/origins@2024-02-01' = {
 @description('Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = use the generated Front Door host.')
 param vanityDomain string = ''
 
-var vanityName = empty(vanityDomain) ? 'unused-vanity' : replace(replace(vanityDomain, '.', '-'), '*', 'wild')
+@description('OPTIONAL. The EXISTING customDomains resource name for vanityDomain, when the estate already has one whose name the convention here would not produce. Empty => derive it. Front Door refuses a second customDomain resource for a host name that is already claimed, so deriving a name that does not match the live resource makes every deploy fail Conflict rather than reconcile it.')
+param vanityCustomDomainName string = ''
+
+// The DERIVED name, used only when no existing resource is named.
+//
+// ADOPT-FIRST (#3287). This estate's live custom domain is named
+// `csa-loom-limitlessdata` while the convention below derives
+// `csa-loom-limitlessdata-ai` from `csa-loom.limitlessdata.ai` — so the module
+// tried to CREATE a second resource for a host name Front Door had already
+// claimed, and every apply that supplied a vanity domain failed:
+//
+//   Conflict: We couldn't create your custom domain. Another custom domain with
+//   the same host name already exists.  (on .../csa-loom-limitlessdata-ai)
+//
+// That is not a naming preference, it is the difference between reconciling the
+// estate and being unable to deploy at all. The deploy discovers the live name
+// and passes it; the derived form remains the greenfield default.
+var vanityNameDerived = empty(vanityDomain) ? 'unused-vanity' : replace(replace(vanityDomain, '.', '-'), '*', 'wild')
+var vanityName = empty(vanityCustomDomainName) ? vanityNameDerived : vanityCustomDomainName
 
 resource fdCustomDomain 'Microsoft.Cdn/profiles/customDomains@2024-02-01' = if (!empty(vanityDomain)) {
   parent: fdProfile
