@@ -35,19 +35,50 @@ end
 # 2) /api/version — must include the expected SHA if provided
 # ---------------------------------------------------------------------------
 log "2. /api/version"
-VER_JSON=$(curl -s -m 30 "${URL}/api/version${CACHEBUST}" || true)
+
+# WAIT FOR THE ROLLOUT TO BE SERVED, DON'T JUST ASK ONCE (#3305).
+#
+# The roll waits for the new revision to report Healthy+Running and then probes
+# immediately. Revision health is NOT the same event as ingress serving that
+# revision: ACA finishes activating and shifting traffic some seconds later.
+# A single curl in that window reads the OLD build and the roll concludes
+# "rollout did not take" — then rolls back a revision that was fine.
+#
+# Measured on run 31616497298: revision loom-console--0000670 was created
+# 16:21:40Z and was HEALTHY; the probe fired 16:23:34Z, saw the previous SHA,
+# and the roll reverted to 0000671. The same roll succeeded at 14:17 and 15:06
+# and failed at 13:08, 13:27 and 16:13 — the signature of a race, not a bad build.
+#
+# THIS DOES NOT MAKE THE ASSERTION UNABLE TO FAIL. It is a bounded wait: after
+# the budget the check fails exactly as before, and says how long it waited so a
+# genuinely stuck rollout is not mistaken for a slow one.
+ROLLOUT_WAIT_SECONDS="${LOOM_ROLLOUT_WAIT_SECONDS:-180}"
+ROLLOUT_POLL_SECONDS="${LOOM_ROLLOUT_POLL_SECONDS:-10}"
+VER_JSON=""
+BUILD_SHA=""
+_waited=0
+while :; do
+  VER_JSON=$(curl -s -m 30 "${URL}/api/version${CACHEBUST}" || true)
+  BUILD_SHA=$(echo "$VER_JSON" | python -c "import json,sys; print((json.load(sys.stdin).get('build') or {}).get('sha',''))" 2>/dev/null || echo "")
+  # No expected SHA means nothing to wait for.
+  [[ -z "$EXPECTED_SHA" ]] && break
+  [[ "$BUILD_SHA" == *"$EXPECTED_SHA"* ]] && break
+  (( _waited >= ROLLOUT_WAIT_SECONDS )) && break
+  echo "   …serving '${BUILD_SHA:-<none>}', waiting for '${EXPECTED_SHA}' (${_waited}s/${ROLLOUT_WAIT_SECONDS}s)"
+  sleep "$ROLLOUT_POLL_SECONDS"
+  _waited=$(( _waited + ROLLOUT_POLL_SECONDS ))
+done
 echo "$VER_JSON"
 CURRENT=$(echo "$VER_JSON" | python -c "import json,sys; d=json.load(sys.stdin); print(d.get('current',''))" 2>/dev/null || echo "")
 # The rolled SHA lives in build.sha (the semver `current` is the last cut
 # release tag, e.g. 0.72.1, and does NOT carry the commit SHA). Validate the
 # SHA against build.sha; keep `current` only for the human-readable message.
-BUILD_SHA=$(echo "$VER_JSON" | python -c "import json,sys; print((json.load(sys.stdin).get('build') or {}).get('sha',''))" 2>/dev/null || echo "")
 echo "current=$CURRENT build.sha=$BUILD_SHA"
 if [[ -n "$EXPECTED_SHA" ]]; then
   if [[ "$BUILD_SHA" == *"$EXPECTED_SHA"* ]]; then
     ok "version $CURRENT (build.sha $BUILD_SHA) contains expected SHA prefix $EXPECTED_SHA"
   else
-    fail "build.sha is '$BUILD_SHA' but expected to contain '$EXPECTED_SHA' — rollout did not take"
+    fail "build.sha is '$BUILD_SHA' but expected to contain '$EXPECTED_SHA' after waiting ${ROLLOUT_WAIT_SECONDS}s for the rollout to be SERVED — the new revision is not receiving traffic (not merely slow to activate)"
   fi
 else
   ok "no expected SHA passed, current is '$CURRENT' (informational)"
