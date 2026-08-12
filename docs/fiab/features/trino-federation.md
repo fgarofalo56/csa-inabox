@@ -28,8 +28,11 @@ that outgrow one container.
 
 The trade is a **cold start**: the first query after an idle period waits ~20-40s
 for the JVM. The BFF budgets 120s for that hop
-(`LOOM_TRINO_FETCH_TIMEOUT_MS`). Set `minReplicas: 1` on the module if a warm
-engine is worth ~$60-90/mo/cloud.
+(`LOOM_TRINO_FETCH_TIMEOUT_MS`). If a warm engine is worth ~$60-90/mo/cloud, set
+`loomBackends.trinoMinReplicas = 1` in your param file — see
+[Paying to skip the cold start](#paying-to-skip-the-cold-start-opt-in). (Until
+#3110 that meant editing the module: the orchestrator never passed `minReplicas`,
+so the module's parameter was unreachable from a param file.)
 
 ## How to use it end to end
 
@@ -241,6 +244,32 @@ replicas), and the first query after idle pays a ~20-40s JVM cold start, which
 That is the Trino tier only. The synthetic-monitor results store this PR also
 adds is **not** free: its blob **private endpoint** bills roughly $7-8/month per
 cloud whether or not anything writes to it (the storage itself is cents).
+
+### Paying to skip the cold start (opt-in)
+
+Scale-to-zero is the default and stays the default. If you would rather pay for a
+warm engine than pay the ~20-40s JVM cold start on the first query after an idle
+window, set a floor on the existing `loomBackends` bag — no new parameter, no
+module edit:
+
+```bicep
+loomBackends: {
+  trino: 'enabled'
+  trinoMinReplicas: 1     // always-warm; default 0 = scale to zero
+}
+```
+
+Two things worth knowing before you set it:
+
+- **It is per-boundary.** `loomBackends` is set per param file, so a floor in
+  `commercial-full.bicepparam` does not warm the Gov engines, and vice versa.
+- **A `sealed` engine is pinned back to 0 regardless.** Sealed means enforced with
+  no mintable audience: the engine is up and serves *nobody*. An always-warm
+  replica there would bill continuously for something that cannot answer a single
+  query, so the floor is ignored until the audience is pinned (see
+  [Authentication](#authentication-on-by-default-sealed-when-it-cannot-be-pinned)).
+  If you set a floor and idle cost stays $0, check the posture first — that is the
+  likely reason, and `/admin/readiness` reports it.
 
 ## Honest gates
 

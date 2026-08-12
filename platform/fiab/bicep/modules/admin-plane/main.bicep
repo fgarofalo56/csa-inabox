@@ -897,6 +897,25 @@ var trinoAudienceClientId = !empty(trinoAudienceOverride) ? trinoAudienceOverrid
 // 'entra' = enforced + reachable, 'sealed' = enforced + nobody can mint a token,
 // 'disabled' = the explicit anonymous opt-out.
 var trinoAuthPosture = trinoAuthMode == 'disabled' ? 'disabled' : (empty(trinoAudienceClientId) ? 'sealed' : 'entra')
+// ── Always-warm opt-in (#3110) ───────────────────────────────────────────────
+// Federated SQL is scale-to-zero BY DEFAULT and that stays the default: the
+// engine costs nothing while nobody is querying, which is the reason the module
+// exists. The cost of that is a cold start on the first query after an idle
+// window, and an operator who would rather pay for a warm engine than pay that
+// latency can now say so WITHOUT editing a module:
+//
+//   loomBackends.trinoMinReplicas = 1
+//
+// Rides the existing bag — no new top-level param, so this costs nothing against
+// the 256-parameter deployment ceiling.
+//
+// A SEALED engine is pinned back to 0 no matter what was asked for. Sealed means
+// enforced-with-no-mintable-audience: it is UP and serves NOBODY, so an
+// always-warm replica would bill continuously for an engine that cannot answer a
+// single query. Paying for that silently would be exactly the kind of cost the
+// scale-to-zero default is there to avoid.
+var trinoRequestedMinReplicas = int(loomBackends.?trinoMinReplicas ?? 0)
+var trinoMinReplicas = trinoAuthPosture == 'sealed' ? 0 : trinoRequestedMinReplicas
 // The resource the Console's UAMI asks Entra for. `api://<clientId>` is the
 // audience the module pins on the engine; `/.default` is the client-credentials
 // scope form. Empty whenever the engine is not enforcing a pinnable audience.
@@ -6380,6 +6399,9 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     // anything other than an explicit 'disabled' opt-out means ENFORCED.
     authMode: trinoAuthMode == 'disabled' ? 'disabled' : 'entra'
     entraClientId: trinoAudienceClientId
+    // Scale-to-zero by default; `loomBackends.trinoMinReplicas` opts into an
+    // always-warm engine. Forced to 0 when SEALED — see the var above.
+    minReplicas: trinoMinReplicas
     // #2678 — engine-level catalog authorization is deny-by-default (file-based
     // system access control rendered from the wired catalogs). Opt out with
     // loomBackends.trinoAccessControl='none' (audited SECURITY WARNING).
