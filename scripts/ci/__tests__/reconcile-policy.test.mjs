@@ -119,6 +119,7 @@ import {
   checkWorkflowWiring,
   checkRegionSeed,
   envAssignments,
+  regionSeedTerms,
   deriveImageReads,
   parseParamImageTags,
   executableRun,
@@ -708,4 +709,47 @@ test('CONTROL: the guard parses the workflow into real steps', () => {
   assert.ok(steps.length >= 10, `only ${steps.length} steps parsed`);
   assert.ok(steps.some((s) => /Azure login/.test(s.name)));
   assert.ok(steps.some((s) => /az deployment sub create/.test(s.run)));
+});
+
+// ── Sprint-1 review findings, regression-locked ──────────────────────────────
+//
+// Both were found by REVIEWERS before this guard ever merged, and both are the
+// shapes the guard itself was most likely to be wrong about.
+test('R7 — quoting the SAFE value is a YAML no-op and must NOT be reported as bare text', () => {
+  for (const q of ['"', "'"]) {
+    const terms = regionSeedTerms(`${q}\${{ inputs.region }}${q}`);
+    assert.equal(
+      terms.outside,
+      '',
+      `${q}-quoted safe seed produced outside=${JSON.stringify(terms.outside)} — the guard would report ` +
+        'that it "seeds the deploy region with bare text" when what it saw was punctuation. That message ' +
+        'asserts a cause the code never established and would fail every PR in the repo.',
+    );
+  }
+});
+
+test('R7 — an UNBALANCED quote is not unwrapped (the fix must not over-reach)', () => {
+  const terms = regionSeedTerms('"eastus2');
+  assert.ok(
+    terms.outside.includes('eastus2'),
+    'an unbalanced leading quote must NOT be treated as wrapping; a hardcoded region hidden behind one ' +
+      'has to stay visible',
+  );
+});
+
+test('a job-level env FLOW MAPPING is REFUSED, not skipped (it overrides workflow-level at runtime)', () => {
+  const yaml = [
+    'env:',
+    '  AZURE_LOCATION: \${{ inputs.region }}',
+    'jobs:',
+    '  deploy:',
+    '    env: { AZURE_LOCATION: eastus2 }',
+  ].join(String.fromCharCode(10));
+  const found = envAssignments(yaml);
+  assert.ok(
+    found.some((a) => a.name === '__UNPARSEABLE_ENV_FLOW_MAPPING__'),
+    'a flow mapping the reader cannot see into must be surfaced as UNKNOWN. Skipping it gave ' +
+      'found=1 / violations=0 / exit 0 while the entry that actually decides the region was invisible — ' +
+      'the discovery FLOOR is a lower bound, not a completeness check.',
+  );
 });

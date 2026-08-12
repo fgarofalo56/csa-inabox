@@ -506,6 +506,22 @@ const indentOf = (line) => line.match(/^[ \t]*/)[0].length;
 const BLOCK_SCALAR = /^[ \t]*(?:-[ \t]+)?[A-Za-z0-9_.-]+:[ \t]*[|>][-+]?\d*[ \t]*(?:#.*)?$/;
 /** An `env:` mapping opener, at workflow, job or step level. */
 const ENV_OPENER = /^[ \t]*(-[ \t]+)?env:[ \t]*(?:#.*)?$/;
+/**
+ * An `env:` whose value is a FLOW MAPPING on the same line -- `env: { A: b }`.
+ *
+ * ENV_OPENER matches only a BLOCK opener, so a flow mapping was invisible: adding
+ * `env: { AZURE_LOCATION: eastus2 }` at JOB level, ALONGSIDE the safe
+ * workflow-level seed, gave found=1 / violations=0 / exit 0 -- while PyYAML saw
+ * the job-level entry, and job-level env OVERRIDES workflow-level at runtime. So
+ * the invisible entry was the one that would actually decide the region.
+ *
+ * The DISCOVERY FLOOR did not save it either: a floor is a lower bound, satisfied
+ * by the surviving good seed, not a completeness check.
+ *
+ * This reader deliberately does NOT learn to parse flow mappings. It REFUSES
+ * them: a shape the reader cannot see is unknown, and unknown is not safe.
+ */
+const ENV_FLOW_MAPPING = /^[ \t]*(?:-[ \t]+)?env:[ \t]*\{/;
 /** One `NAME: value` entry inside it. */
 const ENV_ENTRY = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*):(?:[ \t]+(.*))?$/;
 
@@ -559,6 +575,11 @@ export function envAssignments(yaml) {
       continue;
     }
 
+    if (ENV_FLOW_MAPPING.test(line)) {
+      out.push({ name: '__UNPARSEABLE_ENV_FLOW_MAPPING__', value: line.trim(), line: i + 1 });
+      continue;
+    }
+
     const opener = ENV_OPENER.exec(line);
     if (!opener) continue;
 
@@ -590,7 +611,21 @@ export function envAssignments(yaml) {
 export function regionSeedTerms(rawValue) {
   const value = stripValueComment(rawValue);
   const exprs = [...value.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]);
-  const outside = value.replace(/\$\{\{[\s\S]*?\}\}/g, '').trim();
+  // UNWRAP BALANCED YAML QUOTING FIRST.
+  //
+  // `AZURE_LOCATION: "${{ inputs.region }}"` is a YAML no-op - identical in
+  // meaning to the unquoted form this guard approves. Computing `outside` on
+  // the raw scalar left the two quote characters behind, so the guard FAILED
+  // the safe value and reported that it seeds the region with bare text that
+  // was actually just punctuation.
+  //
+  // That is an R7 violation in the guard itself: it asserted a cause it had
+  // not established, and it would have failed every PR in the repo while
+  // sending the reader hunting for text that is not there. Both quote styles
+  // reproduce it. Found by the Sprint-1 reviewers before this ever merged.
+  const unwrapped = /^(['"])([\s\S]*)\1$/.exec(value.trim());
+  const forOutside = unwrapped ? unwrapped[2] : value;
+  const outside = forOutside.replace(/\$\{\{[\s\S]*?\}\}/g, '').trim();
   const literals = [];
   const refs = [];
   for (const expr of exprs) {
@@ -616,8 +651,29 @@ export function regionSeedTerms(rawValue) {
  * apply is one `run()` refactor away from being forgotten.
  */
 export function checkRegionSeed(yaml) {
-  const seeds = envAssignments(yaml).filter((a) => a.name === REGION_SEED_ENV);
+  const allEnv = envAssignments(yaml);
+
+  // An `env:` the reader could not parse is UNKNOWN, and unknown is not safe.
+  // Reported before the floor, because a flow mapping that REPLACES the only
+  // seed would otherwise trip the floor with a message about the wrong thing,
+  // and one that sits ALONGSIDE it would not trip anything at all.
+  const unreadable = allEnv.filter((a) => a.name === '__UNPARSEABLE_ENV_FLOW_MAPPING__');
+
+  const seeds = allEnv.filter((a) => a.name === REGION_SEED_ENV);
   const violations = [];
+
+  for (const u of unreadable) {
+    violations.push({
+      line: u.line,
+      msg:
+        `\`${u.value}\` is an \`env:\` FLOW MAPPING, which this reader cannot see into. A job-level ` +
+        `\`env: { ${REGION_SEED_ENV}: <region> }\` OVERRIDES the workflow-level seed at runtime, so an ` +
+        'entry hidden in this shape is precisely the one that would decide the region — and it produced ' +
+        'found=1 / violations=0 / exit 0 while the surviving good seed satisfied the discovery floor. ' +
+        'Write the block form (`env:` then indented `NAME: value`) so it is readable, rather than teaching ' +
+        'this guard a second syntax to be wrong about.',
+    });
+  }
 
   if (seeds.length < FLOORS.regionSeeds) {
     violations.push({
