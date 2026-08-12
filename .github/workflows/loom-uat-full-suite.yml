@@ -320,7 +320,63 @@ jobs:
             echo "::notice::Full-suite UAT PASSED (execution $EXEC)."
             exit 0
           fi
-          echo "::error::Full-suite UAT did not pass (status=$STATUS, execution $EXEC). Inspect Log Analytics ContainerAppConsoleLogs_CL where ContainerName_s == 'uat' for the UAT_REAL_FAILS line."
+          # PULL THE FAILURE DETAIL INSTEAD OF NAMING A TABLE (#3169).
+          #
+          # This step already holds the workspace id and the credentials — it ran
+          # the UAT_RESULT query twenty lines up. On failure it nevertheless told
+          # the operator to go query Log Analytics by hand for UAT_REAL_FAILS,
+          # which is a remediation the workflow could perform itself
+          # (auto-bind-by-default 5, deploy-integrity R6: hand back a concrete
+          # answer, not a pointer to a log).
+          #
+          # The cost of that gap was real: #3169 sat with "a11y:workspaces and
+          # a11y:setup regressed past baseline" and NO violation detail, so the
+          # fix needed a manual query against an estate most contributors cannot
+          # reach.
+          FAILS=""
+          if [[ -n "${WS:-}" ]]; then
+            FQ="ContainerAppConsoleLogs_CL | where TimeGenerated >= datetime($SINCE) | where ContainerName_s == 'uat' | where Log_s has 'UAT_REAL_FAILS' or Log_s has 'axe' or Log_s has 'serious' | order by TimeGenerated asc | take 60 | project Log_s"
+            if FAILS=$(az monitor log-analytics query -w "$WS" --analytics-query "$FQ" --query "[].Log_s" -o tsv 2>"$ERR"); then
+              FAILS=$(echo "$FAILS" | tr -d '\r')
+            else
+              echo "Could not retrieve the failure detail from Log Analytics. az stderr:"
+              cat "$ERR" >&2
+              FAILS=""
+            fi
+          fi
+
+          {
+            echo ""
+            echo "### Why it failed"
+            echo ""
+            if [[ -n "$FAILS" ]]; then
+              echo '```'
+              echo "$FAILS"
+              echo '```'
+            else
+              echo "The failure detail could NOT be retrieved for execution '$EXEC'."
+              echo "That is UNKNOWN, **not** an empty failure list: Log Analytics ingestion"
+              echo "lags by several minutes, and the workspace may be unreachable from this"
+              echo "runner. Do not read this as 'nothing failed'."
+              echo ""
+              echo "Query it directly:"
+              echo '```kusto'
+              echo "ContainerAppConsoleLogs_CL"
+              echo "| where ContainerName_s == 'uat'"
+              echo "| where Log_s has 'UAT_REAL_FAILS'"
+              echo "| order by TimeGenerated desc"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -n "$FAILS" ]]; then
+            echo "::error::Full-suite UAT did not pass (status=$STATUS, execution $EXEC). The failing surfaces are named below and in the run summary."
+            echo "$FAILS" | while IFS= read -r line; do
+              [[ -n "$line" ]] && echo "::error::$line"
+            done
+          else
+            echo "::error::Full-suite UAT did not pass (status=$STATUS, execution $EXEC), and the failure detail could NOT be retrieved from Log Analytics — that is UNKNOWN, not an empty failure list. The run summary carries the query."
+          fi
           exit 1
 
       # Failure has to be visible somewhere the operator actually looks, not
