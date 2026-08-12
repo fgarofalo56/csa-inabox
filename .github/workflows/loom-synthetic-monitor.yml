@@ -34,6 +34,9 @@ name: loom-synthetic-monitor
 
 on:
   schedule:
+    # DECLARED */15. MEASURED median 55m (3.6x) — GitHub drops high-frequency
+    # schedules on busy repos. Do not assume this interval when sizing anything
+    # that depends on it (#3226).
     - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:

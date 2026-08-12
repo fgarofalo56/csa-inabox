@@ -23,8 +23,17 @@ name: acr-firewall-sweeper
 #     without waiting out the remaining TTL
 #   * lease live and the holder run is still going     -> LEAVE IT OPEN
 #
-# Worst-case exposure is therefore one sweeper interval (15 min) for a crashed
-# holder whose run status is readable, and TTL + one interval otherwise.
+# Worst-case exposure is therefore one sweeper interval for a crashed holder
+# whose run status is readable, and TTL + one interval otherwise.
+#
+# THAT INTERVAL IS NOT 15 MINUTES. This said "(15 min)", the declared cron. The
+# MEASURED median between runs is 54m (3.6x) — GitHub delays and drops
+# high-frequency schedules on busy repositories (#3226). So the real worst-case
+# window in which a crashed holder leaves a registry publicly reachable is on the
+# order of an hour, not a quarter of one.
+#
+# Stated rather than left implied, because this is a SECURITY bound and the
+# number a reader takes away from it should be the one that happens.
 #
 # Emergency valve: set the repository variable LOOM_ACR_SWEEPER_DISABLED=true to
 # park the sweeper (e.g. during a long manual maintenance window). Prefer taking
@@ -40,6 +49,9 @@ on:
   schedule:
     # Every 15 minutes. Bounds how long a crashed holder can leave a registry
     # publicly reachable.
+    # DECLARED */15. MEASURED median 54m (3.6x). This bounds how long a crashed
+    # lease holder can leave a registry publicly reachable, so the real worst-case
+    # exposure is ~54m at the median, NOT the 15m the header states (#3226).
     - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
