@@ -422,12 +422,20 @@ function RestrictSection() {
   const [err, setErr] = useState<string | null>(null);
   const [history, setHistory] = useState<RestrictionRow[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  // A FAILED read must not be indistinguishable from an empty one: without
+  // this the catch below swallowed the error, `finally` marked the load
+  // COMPLETE, and the panel asserted "no restrict-access actions have been
+  // recorded yet" as fact. See #3281.
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
+    setHistoryError(null);
     try {
       const j = await clientFetch('/api/governance/dlp/meta').then((r) => r.json());
       setHistory(Array.isArray(j?.restrictions) ? j.restrictions : []);
-    } catch { /* best-effort */ } finally { setHistoryLoaded(true); }
+    } catch (e: any) {
+      setHistoryError(e?.message || String(e));
+    } finally { setHistoryLoaded(true); }
   }, []);
 
   useEffect(() => {
@@ -604,7 +612,16 @@ function RestrictSection() {
         </MessageBar>
       )}
 
-      {historyLoaded && history.length === 0 && (
+      {historyLoaded && historyError && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Couldn&apos;t load restriction history</MessageBarTitle>
+            {historyError} — this list may be incomplete. Retry to load it.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {historyLoaded && !historyError && history.length === 0 && (
         <EmptyState
           icon={<History20Regular />}
           title="No restrict-access actions"
