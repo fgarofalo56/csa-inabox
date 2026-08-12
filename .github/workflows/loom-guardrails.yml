@@ -725,6 +725,15 @@ jobs:
       - name: 'domain-store-tenant-scope (tenant doc keyed by the caller, not the tenant)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-domain-store-tenant-scope.mjs
+      # dlp-panel swallowed its read error, then a `finally` PROMOTED the failed
+      # read to loaded — taking the spinner down and asserting "no restrict-access
+      # actions have been recorded yet" as fact. The finally is what makes it
+      # lethal: a swallowed catch alone usually leaves a spinner up. Population is
+      # zero, so this guard self-defends with an EMBEDDED CONTROL (the real pre-fix
+      # code) and fails if its own matcher can no longer find it. See #3281.
+      - name: 'loaded-flag-honesty (a finally that promotes a FAILED read to loaded)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-loaded-flag-honesty.mjs
       # curl PRINTS its -w value on BOTH failure paths AND exits non-zero, so an
       # `|| echo 000` CONCATENATES: a connection failure becomes "000000" and an
       # HTTP 401 under -f becomes "401000". Neither is a status code. Two live
