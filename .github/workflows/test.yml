@@ -306,7 +306,11 @@ jobs:
           .venv-orch/bin/python -m pip install --disable-pip-version-check -q --upgrade pip
           .venv-orch/bin/python -m pip install --disable-pip-version-check -q './apps/fiab-setup-orchestrator[dev]'
           echo "resolved azure-mgmt-resource:"
-          .venv-orch/bin/python -m pip show azure-mgmt-resource | head -2
+          # NOT `pip show ... | head`: head closes the pipe after 2 lines, pip gets
+          # EPIPE and exits 120, and under `set -o pipefail` that fails the STEP -
+          # observed on this PR's first run, where the resolve itself had already
+          # succeeded (24.0.0). A diagnostic must not fail the job it diagnoses.
+          .venv-orch/bin/python -m pip show azure-mgmt-resource | sed -n '1,2p'
 
       - name: Run the Setup Orchestrator's own tests (never collected elsewhere)
         run: |
