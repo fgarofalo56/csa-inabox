@@ -815,8 +815,30 @@ jobs:
           # a second copy is what drifted in #3022.
           echo "tenant_admin_oid=${TENANT_ADMIN_OID:-}"      >> "$GITHUB_OUTPUT"
           echo "tenant_admin_group=$TENANT_ADMIN_GROUP"      >> "$GITHUB_OUTPUT"
-          echo "tenant_admin_oid_source=$([ -z "${TENANT_ADMIN_OID:-}" ] && echo "unbound" || { [ -n "${INPUT_TENANT_ADMIN_OID:-}" ] && echo "the tenant_admin_oid dispatch input" || echo "the FIAB_TENANT_ADMIN_OID repo variable"; })" >> "$GITHUB_OUTPUT"
-          echo "tenant_admin_group_source=$([ -z "$TENANT_ADMIN_GROUP" ] && echo "unbound" || { [ -n "${INPUT_TENANT_ADMIN_GROUP_ID:-}" ] && echo "the tenant_admin_group_id dispatch input" || echo "the FIAB_ADMIN_GROUP_ID repo variable/secret"; })" >> "$GITHUB_OUTPUT"
+          # EXPLICIT if/else, not `A && B || C`. That idiom is not if-then-else:
+          # when B fails, C still runs. It is safe here only because `echo` cannot
+          # fail — which is exactly the reasoning that stops being true the next
+          # time someone edits the middle branch (shellcheck SC2015).
+          if [ -z "${TENANT_ADMIN_OID:-}" ]; then
+            OID_SOURCE="unbound"
+          elif [ -n "${INPUT_TENANT_ADMIN_OID:-}" ]; then
+            OID_SOURCE="the tenant_admin_oid dispatch input"
+          else
+            OID_SOURCE="the FIAB_TENANT_ADMIN_OID repo variable"
+          fi
+          if [ -z "$TENANT_ADMIN_GROUP" ]; then
+            GROUP_SOURCE="unbound"
+          elif [ -n "${INPUT_TENANT_ADMIN_GROUP_ID:-}" ]; then
+            GROUP_SOURCE="the tenant_admin_group_id dispatch input"
+          else
+            GROUP_SOURCE="the FIAB_ADMIN_GROUP_ID repo variable/secret"
+          fi
+          # Grouped redirect: individual `>>` per line is SC2129, and this block
+          # writes several related outputs.
+          {
+            echo "tenant_admin_oid_source=$OID_SOURCE"
+            echo "tenant_admin_group_source=$GROUP_SOURCE"
+          } >> "$GITHUB_OUTPUT"
           add --parameters "loomVanityDomain=$CSA_LOOM_VANITY_DOMAIN"
           # #3056 — adopt, never re-mint. Empty ONLY on a greenfield estate with
           # no console to read; passing it empty on an estate that already has

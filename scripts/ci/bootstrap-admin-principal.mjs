@@ -117,7 +117,14 @@ const IS_WIN = process.platform === 'win32';
 /** Node >=20 refuses to execFile a .cmd without a shell (CVE-2024-27980), so on
  *  Windows the arguments go through cmd and must be quoted. Every argument this
  *  file passes is either a literal or a GUID that GUID_RE has already accepted. */
-const quoteWin = (a) => `"${String(a).replace(/"/g, '\\"')}"`;
+const quoteWin = (a) =>
+  // Escape BACKSLASHES before quotes. Escaping only `"` leaves a trailing `\`
+  // able to escape the closing quote and break out of the quoted argument
+  // (CodeQL js/incomplete-sanitization). Every argument this file passes is a
+  // literal or a GUID_RE-validated GUID, so this is defence in depth rather than
+  // a live hole - but a quoting helper that is only correct for its current
+  // callers is a trap for the next one.
+  `"${String(a).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
 /** Default process runner (separated so tests can drive the parsing directly). */
 function runAz(args) {
