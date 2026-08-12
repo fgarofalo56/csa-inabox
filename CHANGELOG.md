@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.7...csa-inabox-v0.92.8) (2026-08-12)
+
+
+### Bug Fixes
+
+* **deploy:** ADOPT the live vanity domain — a blank input unbinds it and takes the console offline ([#3284](https://github.com/fgarofalo56/csa-inabox/issues/3284)) ([bfc0cda](https://github.com/fgarofalo56/csa-inabox/commit/bfc0cda62bf2dc0775f46546e99c40171d31aa21))
+
 ## [0.92.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.6...csa-inabox-v0.92.7) (2026-08-12)
 
 
