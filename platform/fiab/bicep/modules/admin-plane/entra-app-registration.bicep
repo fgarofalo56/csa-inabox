@@ -160,6 +160,20 @@ az ad app update --id "$APP_ID" --web-redirect-uris "${MERGED_REDIRECTS[@]}" || 
 az ad app update --id "$APP_ID" --set isFallbackPublicClient=false || echo "WARN: isFallbackPublicClient update failed"
 az ad app update --id "$APP_ID" --required-resource-accesses "$GRAPH_RA" || echo "WARN: required-resource-accesses update failed"
 
+# GROUPS CLAIM (#3175). Without this Entra emits NO `groups` claim at all, and
+# every group-based authorization path in Loom is dead on arrival: tenant admin
+# by group can never succeed, capability grants to a group never match, and item
+# ACLs granted to a group never match. The console half (reading the claim in the
+# auth callback) is useless without this half, and vice versa.
+# SecurityGroup = security groups + directory roles, which is what Loom binds.
+if az ad app update --id "$APP_ID" --set groupMembershipClaims=SecurityGroup; then
+  echo "groupMembershipClaims=SecurityGroup set on $APP_ID"
+else
+  # Not silently swallowed: if this fails, group-based authz stays dead and the
+  # only working admin path is the single-user LOOM_TENANT_ADMIN_OID bootstrap.
+  echo "::warning::groupMembershipClaims update FAILED on $APP_ID — Entra will emit no groups claim, so group-based authorization (tenant admin by group, capability grants to a group, group item ACLs) will NOT work. Set it by hand: az ad app update --id $APP_ID --set groupMembershipClaims=SecurityGroup"
+fi
+
 # Reset the client secret (2-year lifetime) and persist to Key Vault.
 SECRET=$(az ad app credential reset --id "$APP_ID" --years 2 --query password -o tsv)
 az keyvault secret set --vault-name "$KEYVAULT_NAME" --name "$MSAL_SECRET_NAME" --value "$SECRET" -o none
