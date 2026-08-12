@@ -30,6 +30,7 @@ This file is maintained automatically by
 
 ### Bug Fixes
 
+* **ci:** rework the region-seed guard — R7 false positive + flow-mapping blind spot ([#3273](https://github.com/fgarofalo56/csa-inabox/issues/3273)) ([4675f88](https://github.com/fgarofalo56/csa-inabox/commit/4675f886d6b850a46479d59b66b3d8e5dd896bbf))
 * **notebook:** auto-bind the Spark pool server-side — run-cell no longer 400s ([#3267](https://github.com/fgarofalo56/csa-inabox/issues/3267)) ([8ae9f2e](https://github.com/fgarofalo56/csa-inabox/commit/8ae9f2eee968e61de2a46b19c46bc4f1bcbbe693))
 
 ## [0.92.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.3...csa-inabox-v0.92.4) (2026-08-12)
