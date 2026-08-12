@@ -29,13 +29,17 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
 import {
   createLivySession, getLivySession, killLivySession, keepaliveLivySession,
   resolveNotebookBackend, type LivyKind, type LivySessionOptions,
 } from '@/lib/azure/synapse-livy-client';
 import { markSessionInUse } from '@/lib/azure/spark-session-pool';
+import {
+  resolveSparkPool, createSessionOnResolvedPool,
+  type SparkPoolResolution, type ResolvedSparkPool,
+} from '@/lib/azure/spark-pool-resolver';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -75,6 +79,21 @@ function synapseGate(): NextResponse | null {
   return null;
 }
 
+/**
+ * #3171 — the Spark pool is AUTO-BOUND server-side. `body.pool` / `?pool=` is a
+ * HINT: a freshly created notebook has no `properties.bigDataPool`, so the
+ * editor sends none and the platform picks from the workspace's real pool list
+ * (`auto-bind-by-default.md` §1). Only a resolution that genuinely could not be
+ * made surfaces, and it reports what was OBSERVED (R7).
+ */
+function poolGate(r: SparkPoolResolution): NextResponse | null {
+  if (r.ok) return null;
+  return NextResponse.json(
+    { ok: false, code: r.code, error: r.error, hint: r.hint },
+    { status: r.status },
+  );
+}
+
 // IL5: Databricks Government tier is not IL5-authorized. Block the opt-in when
 // the deployment is tagged IL5 so notebooks fall back to Synapse Livy.
 function il5BlocksDatabricks(): NextResponse | null {
@@ -87,9 +106,7 @@ function il5BlocksDatabricks(): NextResponse | null {
   return null;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const kind = sessionKindFor(normKind(body?.kind));
@@ -123,22 +140,33 @@ export async function POST(req: NextRequest) {
 
   // ---- Synapse Livy default ----
   const g = synapseGate(); if (g) return g;
-  const pool: string = typeof body?.pool === 'string' ? body.pool.trim() : '';
-  if (!pool) return NextResponse.json({ ok: false, error: 'pool is required — attach a Spark pool' }, { status: 400 });
+  const requestedPool: string = typeof body?.pool === 'string' ? body.pool.trim() : '';
+  // This is the BIND point — a stale saved binding (the `loompool` → `loompool2`
+  // drift after the 2026-07-14 capacity incident) would otherwise create a
+  // session against a pool that no longer exists, so the request IS verified
+  // against the workspace's real pool list here and re-bound when absent.
+  const resolution = await resolveSparkPool(requestedPool, { verifyRequested: true });
+  const pg = poolGate(resolution); if (pg) return pg;
+  const resolved = resolution as ResolvedSparkPool;
 
   const configure: Partial<LivySessionOptions> =
     body?.configureOptions && typeof body.configureOptions === 'object' ? body.configureOptions : {};
   const existing = typeof body?.existingSessionId === 'number' ? body.existingSessionId : Number(body?.existingSessionId);
 
   try {
-    if (Number.isFinite(existing) && existing > 0) {
-      const s = await getLivySession(pool, existing);
-      if (ALIVE.has(String(s.state)) && !TERMINAL.has(String(s.state))) {
+    // Reuse only when the resolver did NOT move us off the caller's pool — a
+    // session id is meaningful only on the pool it was created on.
+    if (Number.isFinite(existing) && existing > 0 && (!requestedPool || resolved.source === 'request')) {
+      const s = await getLivySession(resolved.pool, existing).catch(() => null);
+      if (s && ALIVE.has(String(s.state)) && !TERMINAL.has(String(s.state))) {
         // Protect this reused session from the #1796 stale-session reaper.
-        markSessionInUse(pool, existing);
-        return NextResponse.json({ ok: true, sessionId: existing, state: s.state, appInfo: s.appInfo });
+        markSessionInUse(resolved.pool, existing);
+        return NextResponse.json({
+          ok: true, sessionId: existing, state: s.state, appInfo: s.appInfo,
+          pool: resolved.pool, poolSource: resolved.source, poolVerified: resolved.verified, poolNote: resolved.note,
+        });
       }
-      // dead/terminal → fall through and create a fresh session
+      // dead/terminal/unreachable → fall through and create a fresh session
     }
     const opts: LivySessionOptions = {
       kind,
@@ -148,23 +176,39 @@ export async function POST(req: NextRequest) {
       numExecutors: 2,
       ...configure,
     };
-    const sess = await createLivySession(pool, opts);
+    // Proves the resolved pool actually ACCEPTS a Livy session: an established
+    // 404 for that pool re-binds once to the next-ranked pool, then fails closed.
+    const { session: sess, pool: boundPool, note } =
+      await createSessionOnResolvedPool(resolved, (p) => createLivySession(p, opts));
     // Protect this freshly-created (pool-untracked) session from the reaper.
-    markSessionInUse(pool, sess.id);
-    return NextResponse.json({ ok: true, sessionId: sess.id, state: sess.state, appInfo: sess.appInfo });
+    markSessionInUse(boundPool, sess.id);
+    return NextResponse.json({
+      ok: true, sessionId: sess.id, state: sess.state, appInfo: sess.appInfo,
+      pool: boundPool, poolSource: boundPool === resolved.pool ? resolved.source : 'workspace',
+      poolVerified: resolved.verified, poolNote: note,
+    });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return NextResponse.json({ ok: false, error: e?.message || String(e), pool: resolved.pool }, { status: 502 });
   }
-}
+});
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   // Backend probe — lets the editor choose the Spark-pool vs Databricks-cluster
-  // picker without committing a session.
+  // picker without committing a session. On the Synapse default it ALSO hands
+  // back the pool the server would auto-bind (#3171), so a freshly created
+  // notebook opens already attached instead of asking the user to pick.
   if (req.nextUrl.searchParams.get('probe')) {
-    return NextResponse.json({ ok: true, backend: resolveNotebookBackend() });
+    const backend = resolveNotebookBackend();
+    if (backend !== 'synapse' || synapseConfigGate()) {
+      return NextResponse.json({ ok: true, backend });
+    }
+    const r = await resolveSparkPool();
+    return NextResponse.json(
+      r.ok
+        ? { ok: true, backend, pool: r.pool, poolSource: r.source, poolVerified: r.verified, poolNote: r.note }
+        : { ok: true, backend, pool: null, poolUnresolved: { code: r.code, error: r.error, hint: r.hint } },
+    );
   }
 
   if (resolveNotebookBackend() === 'databricks') {
@@ -181,11 +225,19 @@ export async function GET(req: NextRequest) {
   }
 
   const g = synapseGate(); if (g) return g;
-  const pool = req.nextUrl.searchParams.get('pool')?.trim() || '';
-  const sessionId = Number(req.nextUrl.searchParams.get('sessionId'));
-  if (!pool || !Number.isFinite(sessionId)) {
-    return NextResponse.json({ ok: false, error: 'pool and sessionId query params required' }, { status: 400 });
+  const requestedPool = req.nextUrl.searchParams.get('pool')?.trim() || '';
+  // ABSENT is not 0: `Number(null)` and `Number('')` are both 0 and finite, so
+  // presence is checked on the raw param. The `!pool` term used to mask this.
+  const sessionParam = req.nextUrl.searchParams.get('sessionId');
+  const sessionId = Number(sessionParam);
+  if (!sessionParam || !Number.isFinite(sessionId)) {
+    return NextResponse.json({ ok: false, error: 'sessionId query param required' }, { status: 400 });
   }
+  // Poll/keepalive is paired with a live session id, so a supplied pool is
+  // honoured verbatim; only an absent one is resolved.
+  const resolution = await resolveSparkPool(requestedPool);
+  const pg = poolGate(resolution); if (pg) return pg;
+  const pool = (resolution as ResolvedSparkPool).pool;
   try {
     // Fire-and-forget keepalive resets the idle clock; never fail the poll on it.
     await keepaliveLivySession(pool, sessionId).catch(() => {});
@@ -197,11 +249,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
 
   if (resolveNotebookBackend() === 'databricks') {
     const cluster = req.nextUrl.searchParams.get('cluster')?.trim() || '';
@@ -217,15 +267,22 @@ export async function DELETE(req: NextRequest) {
   }
 
   const g = synapseGate(); if (g) return g;
-  const pool = req.nextUrl.searchParams.get('pool')?.trim() || '';
-  const sessionId = Number(req.nextUrl.searchParams.get('sessionId'));
-  if (!pool || !Number.isFinite(sessionId)) {
-    return NextResponse.json({ ok: false, error: 'pool and sessionId query params required' }, { status: 400 });
+  const requestedPool = req.nextUrl.searchParams.get('pool')?.trim() || '';
+  // ABSENT is not 0: `Number(null)` and `Number('')` are both 0 and finite, so
+  // presence is checked on the raw param. The `!pool` term used to mask this.
+  const sessionParam = req.nextUrl.searchParams.get('sessionId');
+  const sessionId = Number(sessionParam);
+  if (!sessionParam || !Number.isFinite(sessionId)) {
+    return NextResponse.json({ ok: false, error: 'sessionId query param required' }, { status: 400 });
   }
+  // Teardown targets a live session id, so a supplied pool is honoured verbatim.
+  const resolution = await resolveSparkPool(requestedPool);
+  const pg = poolGate(resolution); if (pg) return pg;
+  const pool = (resolution as ResolvedSparkPool).pool;
   try {
     await killLivySession(pool, sessionId);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

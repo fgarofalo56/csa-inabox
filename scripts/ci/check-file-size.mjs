@@ -160,7 +160,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/components/admin/mcp-servers-panel.tsx": { max: 2000, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/components/eventstream/visual-designer.tsx": { max: 2000, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/powerplatform-client.ts": { max: 1900, reason: "pre-existing large module — ratchet-frozen" },
-  "apps/fiab-console/lib/editors/synapse-notebook-editor.tsx": { max: 1900, reason: "pre-existing large module — ratchet-frozen" },
+  "apps/fiab-console/lib/editors/synapse-notebook-editor.tsx": { max: 1930, reason: "pre-existing large module — ratchet-frozen. Re-baselined 1900→1930 for #3171: the editor stopped requiring the user to attach a Spark pool before Run-cell would work (three routes 400'd with 'pool is required'; the pool is now resolved server-side per auto-bind-by-default). +61 LOC, 23 of them the comment explaining why the client no longer passes a pool — deliberately kept, because the next person to 'simplify' this by reading the pool from the request body reintroduces the defect. NOTE: at 1921 LOC this file is already a monolith and wants the same pane/hook carving notebook-editor.tsx got; that is a tracked follow-up, not something to do inside a bug fix." },
   "apps/fiab-console/lib/editors/azure-sql-editors.tsx": { max: 1900, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/panes/setup-wizard.tsx": { max: 1900, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/monitor-client.ts": { max: 1900, reason: "pre-existing large module — ratchet-frozen" },
