@@ -25,6 +25,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.5...csa-inabox-v0.92.6) (2026-08-12)
+
+
+### Bug Fixes
+
+* **ci:** one broken sibling image must not freeze the estate ([#3260](https://github.com/fgarofalo56/csa-inabox/issues/3260)) ([#3276](https://github.com/fgarofalo56/csa-inabox/issues/3276)) ([9ff4bae](https://github.com/fgarofalo56/csa-inabox/commit/9ff4baece5d987eb4aabe9665e4de20531ff669e))
+* **deploy:** gate the bootstrap tenant-admin fallback on an interactive user ([#3272](https://github.com/fgarofalo56/csa-inabox/issues/3272)) ([30c5b97](https://github.com/fgarofalo56/csa-inabox/commit/30c5b97efb67732d1d4618720111953861b715ec))
+
+
+### Miscellaneous
+
+* **main:** release csa-inabox 0.92.5 ([#3275](https://github.com/fgarofalo56/csa-inabox/issues/3275)) ([6eda48d](https://github.com/fgarofalo56/csa-inabox/commit/6eda48d9b9a64f7d034a75cdb75cbdc825df7a57))
+
 ## [0.92.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.4...csa-inabox-v0.92.5) (2026-08-12)
 
 
