@@ -147,10 +147,18 @@ export function PurviewGate({
   const registryGate = getGate('purview');
 
   if (status.reason === 'loading') {
+    // a11y (#3169) — axe `aria-progressbar-name` [serious] on `.fui-Spinner`,
+    // measured on /governance by the 2026-08-12 full-suite UAT.
+    //
+    // The caption beside it already says what is loading, so a `label=` here
+    // would give the same sentence twice to a screen reader — once as the
+    // progressbar's name and once as the text node. Pointing the Spinner at the
+    // EXISTING visible text names it once and keeps the two in sync by
+    // construction; the visible caption IS the label.
     return (
       <div className={s.liveRow}>
-        <Spinner size="tiny" />
-        <Caption1>Checking Microsoft Purview connection…</Caption1>
+        <Spinner size="tiny" aria-labelledby="purview-gate-loading-caption" />
+        <Caption1 id="purview-gate-loading-caption">Checking Microsoft Purview connection…</Caption1>
       </div>
     );
   }
