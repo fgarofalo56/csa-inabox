@@ -68,7 +68,25 @@ function trackedDockerfiles() {
 const EXEMPT = new Set(['scripts/ci/check-dockerfile-floating-refs.mjs']);
 
 /** Does this Dockerfile fetch third-party SOURCE at build time? */
-const FETCHES_SOURCE = /\bgit\s+clone\b|\b(?:curl|wget)\b[^\n]*\b(?:github\.com|gitlab\.com|codeload\.github\.com)\b/;
+/**
+ * MUST match `git fetch` / `git remote add`, not just `git clone`.
+ *
+ * The first version matched only `clone` - and the very first fix this guard
+ * motivated replaced `git clone --branch` with `git init` + `git remote add` +
+ * `git fetch` (because `--branch` cannot take a SHA). That silently dropped the
+ * file out of the guard's population, and reverting the pin to `main` afterwards
+ * produced exit 0.
+ *
+ * The guard went blind on exactly the file it was written for, by way of its own
+ * fix. Keying a rule to the shape of the CURRENT code rather than to the PROPERTY
+ * being enforced is how that happens every time.
+ *
+ * And then it happened AGAIN one step later: `git\s+(?:clone|fetch)` still
+ * required adjacency, while the real line reads `git -C ms-mcp fetch`. Hence
+ * `git` … `clone|fetch` anywhere on the line - matching the PROPERTY (this
+ * Dockerfile pulls source over git) rather than a spelling of it.
+ */
+const FETCHES_SOURCE = /\bgit\b[^\n]*\b(?:clone|fetch)\b|\bgit\b[^\n]*\bremote\s+add\b|\b(?:curl|wget)\b[^\n]*\b(?:github\.com|gitlab\.com|codeload\.github\.com)\b/;
 
 /** An ARG naming a ref, defaulting to something that MOVES. */
 const FLOATING_ARG = /^\s*ARG\s+([A-Za-z0-9_]*(?:REF|VERSION|TAG|BRANCH|COMMIT|SHA))\s*=\s*["']?(main|master|latest|HEAD|develop|trunk)["']?\s*$/i;
@@ -118,7 +136,11 @@ for (const rel of files) {
 // making the debt visible on every run, and blocks a SECOND floating ref. It is
 // a shrink-only baseline: fixing this site without updating the file fails.
 // Tracked in #3258.
-const BASELINE = { 'apps/fiab-mcp-config/Dockerfile': 1 };
+// EMPTY, and it must stay that way. The single recorded site
+// (apps/fiab-mcp-config/Dockerfile, ARG MS_MCP_REF=main) was pinned to a
+// verified commit SHA in the same change that emptied this. Any entry added
+// back is new debt and needs its own justification.
+const BASELINE = {};
 
 const byFile = {};
 for (const v of violations) byFile[v.file] = (byFile[v.file] || 0) + 1;
