@@ -16,17 +16,16 @@
  * (admin-plane/main.bicep). Shape: { ok:true, grafana?, powerbi?, isGov }.
  */
 import { NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { isGovCloud, getPbiGovHost } from '@/lib/azure/cloud-endpoints';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session: s }) => {
 
   // D2: DLZ visualization config is tenant-admin or domain-admin only.
   // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
@@ -56,4 +55,4 @@ export async function GET() {
     grafana: grafanaEndpoint ? { endpoint: grafanaEndpoint.replace(/\/+$/, ''), dashboardUid: grafanaUid || null } : null,
     powerbi: pbiWorkspaceId && pbiReportId ? { host: getPbiGovHost(), workspaceId: pbiWorkspaceId, reportId: pbiReportId } : null,
   });
-}
+});

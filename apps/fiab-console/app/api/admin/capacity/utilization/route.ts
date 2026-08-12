@@ -26,19 +26,18 @@
  * Shape: { ok:true, data } | { ok:false, gate } | { ok:false, error }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import {
   fetchMetrics, metricsForType, MonitorNotConfiguredError, MonitorError,
 } from '@/lib/azure/monitor-client';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
 
   // D2: the DLZ monitor pane is tenant-admin or domain-admin only.
   // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
@@ -132,4 +131,4 @@ export async function POST(req: NextRequest) {
     const status = e instanceof MonitorError ? e.status : 500;
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status });
   }
-}
+});

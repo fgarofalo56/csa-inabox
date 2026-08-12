@@ -28,7 +28,7 @@
  * DELETE /api/admin/domains?id=...
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { tenantSettingsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -61,6 +61,7 @@ import {
 } from '@/lib/azure/domain-groups';
 import { apiServerError } from '@/lib/api/respond';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -106,9 +107,7 @@ function unityLinkedFor(d: DomainItem, unity: UnityLinkStatus, allItems: DomainI
   return unity.catalogs.includes(unityName(d.id));
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session: s }) => {
   // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
   // sibling readers (chargeback) key it with tid. See #3282.
   const tenantId = tenantScopeId(s);
@@ -159,7 +158,7 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
 function normalizeOwners(raw: unknown): string[] | undefined {
   if (Array.isArray(raw)) {
@@ -184,9 +183,7 @@ function applyMirrorIds(item: DomainItem, mirror: UnifiedMirrorResult): void {
   }
 }
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
   // sibling readers (chargeback) key it with tid. See #3282.
   const tenantId = tenantScopeId(s);
@@ -296,7 +293,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
 /**
  * PATCH /api/admin/domains?id=...
@@ -315,9 +312,7 @@ export async function POST(req: NextRequest) {
  *     `name`, `admins`, and `parentId`.
  *   - Anyone else -> 403.
  */
-export async function PATCH(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req: NextRequest, { session: s }) => {
   // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
   // sibling readers (chargeback) key it with tid. See #3282.
   const tenantId = tenantScopeId(s);
@@ -455,11 +450,9 @@ export async function PATCH(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest, { session: s }) => {
   // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
   // sibling readers (chargeback) key it with tid. See #3282.
   const tenantId = tenantScopeId(s);
@@ -503,4 +496,4 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
