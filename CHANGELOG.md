@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.2...csa-inabox-v0.92.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **ci:** the drift issue must refresh its title and body, not only comment ([#3263](https://github.com/fgarofalo56/csa-inabox/issues/3263)) ([df62825](https://github.com/fgarofalo56/csa-inabox/commit/df628253f57b0247c906877418faa63158b92e95))
+* **mcp:** pin the SDK and the upstream ref — loom-mcp builds again ([#3265](https://github.com/fgarofalo56/csa-inabox/issues/3265)) ([b2a76ca](https://github.com/fgarofalo56/csa-inabox/commit/b2a76ca883106abba591e9417d74c7107b8e66b0))
+
 ## [0.92.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.1...csa-inabox-v0.92.2) (2026-08-11)
 
 
