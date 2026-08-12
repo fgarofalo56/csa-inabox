@@ -16,7 +16,9 @@ name: csa-loom SHIR idle-stop
 
 on:
   schedule:
-    - cron: '*/15 * * * *' # every 15 minutes
+    # DECLARED */15. MEASURED median 49m (3.3x) — see #3226. Idle SHIRs are
+    # therefore stopped later than this cadence implies.
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       idle_minutes:

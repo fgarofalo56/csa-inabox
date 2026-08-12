@@ -25,7 +25,18 @@ name: csa-loom-spark-keepwarm
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # every 5 minutes (idle TTL is 15m; 5m keeps min=1 topped up)
+    # DECLARED */5. MEASURED median 51m, min 25m, max 140m over 59 consecutive
+    # intervals (2026-08-08 -> 2026-08-11) — 10.2x the declared cadence. GitHub
+    # delays and drops high-frequency schedules on busy repositories; this has
+    # NEVER run at 5-minute cadence.
+    #
+    # The old comment here said "5m keeps min=1 topped up". That is false: a 15m
+    # idle TTL expires ~3x between consecutive runs at the median and ~9x at the
+    # observed max, so the keep-warm cannot do the thing it claims. The defect is
+    # the DESIGN that assumed the declared number, not the workflow — recorded
+    # here so nobody designs against */5 again. See #3226 for the options, which
+    # trade money against latency and are an operator decision.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       console_url:
