@@ -25,6 +25,27 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.93.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.8...csa-inabox-v0.93.0) (2026-08-12)
+
+
+### Features
+
+* **trino:** let operators opt into an always-warm federated engine ([#3110](https://github.com/fgarofalo56/csa-inabox/issues/3110)) ([#3295](https://github.com/fgarofalo56/csa-inabox/issues/3295)) ([058973f](https://github.com/fgarofalo56/csa-inabox/commit/058973fc800b4f5819844dffd0d831ea96f64e9f))
+
+
+### Bug Fixes
+
+* **cdc:** resolve the connector's source credential instead of ignoring it ([#3149](https://github.com/fgarofalo56/csa-inabox/issues/3149)) ([#3296](https://github.com/fgarofalo56/csa-inabox/issues/3296)) ([539c6c7](https://github.com/fgarofalo56/csa-inabox/commit/539c6c7352c86888524b1d552a739286e014dbcd))
+* **deploy:** adopt the EXISTING custom-domain resource name, not just the host ([#3287](https://github.com/fgarofalo56/csa-inabox/issues/3287)) ([#3288](https://github.com/fgarofalo56/csa-inabox/issues/3288)) ([5a51a06](https://github.com/fgarofalo56/csa-inabox/commit/5a51a069d1beb4d1149f377170a869d477ea92dc))
+* **dlp:** a failed restriction-history read no longer claims 'none recorded' ([#3281](https://github.com/fgarofalo56/csa-inabox/issues/3281)) ([#3293](https://github.com/fgarofalo56/csa-inabox/issues/3293)) ([4cecd41](https://github.com/fgarofalo56/csa-inabox/commit/4cecd412d40f8ea2b9967aff99e85e774e9e06e6))
+* **gcc:** make the GCC deploy declare that it produced ZERO Container Apps ([#3078](https://github.com/fgarofalo56/csa-inabox/issues/3078)) ([#3294](https://github.com/fgarofalo56/csa-inabox/issues/3294)) ([1fa4668](https://github.com/fgarofalo56/csa-inabox/commit/1fa466836e0bbb71f5983891743c7261c9883895))
+* **tenancy:** key the tenant domain document by the tenant, not the caller ([#3282](https://github.com/fgarofalo56/csa-inabox/issues/3282)) ([#3292](https://github.com/fgarofalo56/csa-inabox/issues/3292)) ([28f0fa1](https://github.com/fgarofalo56/csa-inabox/commit/28f0fa18a2a085b879b85b970497897d9866daee))
+
+
+### Performance Improvements
+
+* **editors:** prefetch the editor chunk on hover so controls paint on arrival ([#3290](https://github.com/fgarofalo56/csa-inabox/issues/3290)) ([9f80b51](https://github.com/fgarofalo56/csa-inabox/commit/9f80b519f86937f581e150f4f431c4c1672c27fe))
+
 ## [0.92.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.7...csa-inabox-v0.92.8) (2026-08-12)
 
 
