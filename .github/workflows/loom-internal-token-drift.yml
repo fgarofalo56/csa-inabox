@@ -146,8 +146,30 @@ jobs:
           echo "--- collected (fingerprints only) ---"
           cat holders.json
 
+      # Same treatment as the Gov lane below: the verdict and the fingerprints go
+      # into the run summary so a failure is diagnosable without an Azure
+      # session. Fingerprints are truncated hashes, never the secret.
       - name: Verdict
-        run: node scripts/ci/internal-token-drift-verdict.mjs holders.json
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          RC=0
+          node scripts/ci/internal-token-drift-verdict.mjs holders.json | tee verdict.txt || RC=$?
+          {
+            echo "### Commercial internal-token convergence"
+            echo ""
+            echo "Verdict exit code: \`${RC}\`"
+            echo ""
+            echo '```'
+            cat verdict.txt 2>/dev/null || echo "(the verdict produced no output)"
+            echo '```'
+            echo ""
+            echo "Holders (fingerprints are truncated hashes, never the secret):"
+            echo '```json'
+            cat holders.json 2>/dev/null || echo "(holders.json missing — collection did not produce a file)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$RC"
 
   gov:
     name: internal-token convergence — Gov (console + jobs only)
@@ -209,6 +231,38 @@ jobs:
           echo "--- collected (fingerprints only; GitHub secret deliberately out of scope) ---"
           cat holders.json
 
+      # SURFACE THE VERDICT, DON'T JUST COMPUTE IT (#3056).
+      #
+      # This job has failed on EVERY run since 2026-08-11 — five consecutive —
+      # with `Collect holder fingerprints=success, Verdict=failure`. So there is
+      # a genuine adverse verdict on the Gov estate, and nobody can tell which
+      # of `drift` / `missing` / `unknown` it is without an Azure session,
+      # because the fingerprints and the verdict never reach the run summary.
+      #
+      # A detector that is permanently red is a detector nobody reads: a NEW Gov
+      # drift would land in an already-failing lane and change nothing anyone
+      # sees. Same gap fixed for the UAT in #3301.
+      #
+      # Fingerprints are TRUNCATED HASHES, never the secret — that is the whole
+      # point of the fingerprint design, and it is why this is safe to print.
       - name: Verdict
-        if: steps.precheck.outputs.configured == 'true'
-        run: node scripts/ci/internal-token-drift-verdict.mjs holders.json
+        if: ${{ !cancelled() && steps.precheck.outputs.configured == 'true' }}
+        run: |
+          set -uo pipefail
+          RC=0
+          node scripts/ci/internal-token-drift-verdict.mjs holders.json | tee verdict.txt || RC=$?
+          {
+            echo "### Gov internal-token convergence"
+            echo ""
+            echo "Verdict exit code: \`${RC}\`"
+            echo ""
+            echo '```'
+            cat verdict.txt 2>/dev/null || echo "(the verdict produced no output)"
+            echo '```'
+            echo ""
+            echo "Holders (fingerprints are truncated hashes, never the secret):"
+            echo '```json'
+            cat holders.json 2>/dev/null || echo "(holders.json missing — collection did not produce a file)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$RC"
