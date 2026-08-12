@@ -865,9 +865,10 @@ jobs:
           # move that caused the outage — so the run stops instead.
           if [ -z "${CSA_LOOM_VANITY_DOMAIN:-}" ]; then
             VD_ERR="$(mktemp)"
-            FD_PROFILE="$(az afd profile list -g "$RG_NAME" --query "[0].name" -o tsv 2>"$VD_ERR" | tr -d '\r')"
+            ADMIN_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+            FD_PROFILE="$(az afd profile list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>"$VD_ERR" | tr -d '\r')"
             if [ -n "$FD_PROFILE" ]; then
-              LIVE_VANITY="$(az afd custom-domain list --profile-name "$FD_PROFILE" -g "$RG_NAME" --query "[0].hostName" -o tsv 2>>"$VD_ERR" | tr -d '\r')"
+              LIVE_VANITY="$(az afd custom-domain list --profile-name "$FD_PROFILE" -g "$ADMIN_RG" --query "[0].hostName" -o tsv 2>>"$VD_ERR" | tr -d '\r')"
               if [ -n "${LIVE_VANITY:-}" ]; then
                 CSA_LOOM_VANITY_DOMAIN="$LIVE_VANITY"
                 echo "::notice::Adopted the live vanity domain '$LIVE_VANITY' (no vanity_domain input was supplied). Passing '' here would have unbound it and taken the console offline on its real URL."
@@ -875,7 +876,7 @@ jobs:
                 echo "::notice::Front Door profile '$FD_PROFILE' carries no custom domain — this estate has no vanity URL to preserve."
               fi
             elif [ -s "$VD_ERR" ]; then
-              echo "::error::Could not read the Front Door profile in $RG_NAME to find out whether a vanity domain is bound: $(head -c 400 "$VD_ERR"). That is UNKNOWN, and passing an empty loomVanityDomain over a bound domain UNBINDS it. Refusing."
+              echo "::error::Could not read the Front Door profile in $ADMIN_RG to find out whether a vanity domain is bound: $(head -c 400 "$VD_ERR"). That is UNKNOWN, and passing an empty loomVanityDomain over a bound domain UNBINDS it. Refusing."
               exit 1
             fi
             rm -f "$VD_ERR"
