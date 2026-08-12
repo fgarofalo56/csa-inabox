@@ -294,6 +294,26 @@ jobs:
               state: 'open', labels: `bicep-drift,${label}`, per_page: 1,
             });
             if (existing.data.length > 0) {
+              // REFRESH THE TITLE AND BODY, not just a comment.
+              //
+              // The dedup previously only commented, so an issue's title and
+              // body stayed frozen at the FIRST occurrence forever. #2874 was
+              // filed 2026-08-03 from a run whose what-if died before producing
+              // a verdict, so for a week it read:
+              //     "bicep-drift (Gov (GCC-High)): ? unmanaged delta(s)"
+              //     Coverage: (unknown - what-if failed before a verdict)
+              // while the 2026-08-10 comment carried the real answer: 5 real
+              // deltas with full change counts.
+              //
+              // Anyone triaging by title or body saw a broken MEASUREMENT; the
+              // actual finding was buried in a comment. The detector worked and
+              // the reporting channel misrepresented it.
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                title, body,
+              });
+              
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: existing.data[0].number,
@@ -566,6 +586,26 @@ jobs:
               state: 'open', labels: `bicep-drift,${label}`, per_page: 1,
             });
             if (existing.data.length > 0) {
+              // REFRESH THE TITLE AND BODY, not just a comment.
+              //
+              // The dedup previously only commented, so an issue's title and
+              // body stayed frozen at the FIRST occurrence forever. #2874 was
+              // filed 2026-08-03 from a run whose what-if died before producing
+              // a verdict, so for a week it read:
+              //     "bicep-drift (Gov (GCC-High)): ? unmanaged delta(s)"
+              //     Coverage: (unknown - what-if failed before a verdict)
+              // while the 2026-08-10 comment carried the real answer: 5 real
+              // deltas with full change counts.
+              //
+              // Anyone triaging by title or body saw a broken MEASUREMENT; the
+              // actual finding was buried in a comment. The detector worked and
+              // the reporting channel misrepresented it.
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                title, body,
+              });
+              
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: existing.data[0].number,
