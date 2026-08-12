@@ -734,6 +734,17 @@ jobs:
       - name: 'loaded-flag-honesty (a finally that promotes a FAILED read to loaded)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-loaded-flag-honesty.mjs
+      # `groups` was DECLARED on UserClaims, READ in six places, and WRITTEN
+      # nowhere — so session.claims.groups was permanently undefined and EVERY
+      # group-based authorization path in Loom was dead for months: tenant admin
+      # by group could never succeed, capability grants to a group never matched,
+      # item ACLs granted to a group never matched. TypeScript could not catch it
+      # (the field is optional) and a unit test of the extraction helper passes
+      # whether or not the callback calls it. Only comparing the PRODUCER against
+      # the CONSUMERS catches a missing producer. See #3175.
+      - name: 'session-claims-produced (a claim that is read but never written)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-session-claims-produced.mjs
       # curl PRINTS its -w value on BOTH failure paths AND exits non-zero, so an
       # `|| echo 000` CONCATENATES: a connection failure becomes "000000" and an
       # HTTP 401 under -f becomes "401000". Neither is a status code. Two live

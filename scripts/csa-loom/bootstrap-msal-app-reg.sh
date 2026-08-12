@@ -189,6 +189,15 @@ echo "==> Ensuring confidential web app (NOT a fallback public client) + delegat
 az ad app update --id "${APP_ID}" --set isFallbackPublicClient=false || echo "    WARN: isFallbackPublicClient update failed"
 az ad app update --id "${APP_ID}" --required-resource-accesses "${REQUIRED_RA}" || echo "    WARN: required-resource-accesses update failed"
 
+# GROUPS CLAIM (#3175) — see the identical block in
+# platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep. Both
+# provisioning paths must set it or the estate they produce has dead group authz.
+if az ad app update --id "${APP_ID}" --set groupMembershipClaims=SecurityGroup; then
+  echo "    groupMembershipClaims=SecurityGroup set"
+else
+  echo "::warning::groupMembershipClaims update FAILED on ${APP_ID} — Entra will emit no groups claim, so group-based authorization will NOT work. Set it by hand: az ad app update --id ${APP_ID} --set groupMembershipClaims=SecurityGroup"
+fi
+
 # ---------------------------------------------------------------------------
 # KEY VAULT ACCESS GOES THROUGH ARM, NOT THE DATA PLANE (#3176).
 #

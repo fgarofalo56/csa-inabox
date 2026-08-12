@@ -260,6 +260,28 @@ function htmlRedirect(url: string, cookieValue?: string, extraCookies: string[] 
   return new Response(htmlBody(url), { status: 200, headers });
 }
 
+
+/**
+ * Pull the `groups` claim off the id token.
+ *
+ * Returns `undefined` — never `[]` — when Entra sent no usable membership, so
+ * the Graph fallbacks downstream can tell "we do not know" from "the user is in
+ * no groups". Reporting the second when we only established the first is the
+ * error class deploy-integrity R7 exists for.
+ *
+ * Entra emits `groups` only when the app registration sets
+ * `groupMembershipClaims` (wired by entra-app-registration.bicep and
+ * bootstrap-msal-app-reg.sh — both halves are required, see #3175), and REPLACES
+ * it with `_claim_names`/`_claim_sources` when the user exceeds the token limit.
+ */
+export function groupsFromIdToken(idTokenClaims: Record<string, unknown> | undefined): string[] | undefined {
+  if (!idTokenClaims) return undefined;
+  const raw = idTokenClaims.groups;
+  if (!Array.isArray(raw)) return undefined;
+  const ids = raw.map((g) => String(g)).filter((g) => g.length > 0);
+  return ids.length > 0 ? ids : undefined;
+}
+
 export async function GET(req: NextRequest) {
   // Per-IP anonymous rate limit (rel-T16) — bound the code-exchange endpoint.
   // On limit, redirect back with an honest error rather than a raw 429 JSON
@@ -353,6 +375,22 @@ export async function GET(req: NextRequest) {
       name: account.name ?? account.username,
       email: account.username,
       upn: account.username,
+      // #3175 — this was DECLARED on UserClaims and read in six places, and
+      // NOTHING ever wrote it. `session.claims.groups` was permanently
+      // undefined, so every group-based authorization path in Loom was dead:
+      // tenant-admin-by-group could never succeed (only LOOM_TENANT_ADMIN_OID
+      // worked), capability grants made to a group never matched, and item ACLs
+      // granted to a group never matched. Domain roles survived only because
+      // domain-role.ts has its own Graph fallback.
+      //
+      // Left UNDEFINED rather than [] when Entra sends nothing. The two states
+      // are NOT equivalent downstream: `groupsClaimUnavailable()` treats
+      // empty-or-absent as "ask Graph", and an empty array asserted as fact
+      // would be a claim we never established. This is the group-OVERAGE case
+      // too — past ~200 groups Entra drops the inline claim and sends
+      // `_claim_names`/`_claim_sources` instead, which is precisely when we must
+      // defer to Graph rather than conclude the user has no groups.
+      groups: groupsFromIdToken(account.idTokenClaims as Record<string, unknown> | undefined),
     };
     // SLIDING SESSION (LOOM_SESSION_SLIDING_ENABLED, default ON): the cookie
     // `exp` tracks the cookie LIFETIME (MAX_AGE_SECS, 8h), NOT the MSAL
