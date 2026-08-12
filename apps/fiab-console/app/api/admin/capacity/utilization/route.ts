@@ -26,7 +26,7 @@
  * Shape: { ok:true, data } | { ok:false, gate } | { ok:false, error }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import {
   fetchMetrics, metricsForType, MonitorNotConfiguredError, MonitorError,
 } from '@/lib/azure/monitor-client';
@@ -41,7 +41,9 @@ export async function POST(req: NextRequest) {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   // D2: the DLZ monitor pane is tenant-admin or domain-admin only.
-  const domains = await loadTenantDomains(s.claims.oid);
+  // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
+  // sibling readers (chargeback) key it with tid. See #3282.
+  const domains = await loadTenantDomains(tenantScopeId(s));
   if (!(await canAccessDlzPanes(s, domains))) {
     return NextResponse.json(
       {

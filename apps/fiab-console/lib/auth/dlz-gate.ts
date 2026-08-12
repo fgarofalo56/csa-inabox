@@ -23,6 +23,7 @@
  *   const denied = await denyIfNoDlzAccess(s, 'scaling');
  *   if (denied) return denied;
  */
+import { tenantScopeId } from '@/lib/auth/session';
 import { NextResponse } from 'next/server';
 import type { SessionPayload } from './session';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from './domain-role';
@@ -47,7 +48,9 @@ export async function denyIfNoDlzAccess(
   session: SessionPayload,
   pane: DlzPane = 'scaling',
 ): Promise<NextResponse | null> {
-  const domains = await loadTenantDomains(session.claims.oid);
+  // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
+  // sibling readers (chargeback) key it with tid. See #3282.
+  const domains = await loadTenantDomains(tenantScopeId(session));
   if (await canAccessDlzPanes(session, domains)) return null;
   return NextResponse.json(
     {

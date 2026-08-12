@@ -714,6 +714,17 @@ jobs:
       - name: 'dockerfile-floating-refs (a third-party ref pinned to a moving branch)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-dockerfile-floating-refs.mjs
+      # The tenant domain document was keyed by the CALLER's oid on 7 sites and
+      # by tenantScopeId() on its siblings — same doc id, two partition schemes.
+      # Every user silently got a PRIVATE copy, seeded on read with the starter
+      # list and 0 workspaces: renders fine, means nothing. Worst site was
+      # lib/auth/dlz-gate.ts, an AUTHORIZATION gate deciding on a per-user set.
+      # Keyed to the FIRST ARGUMENT, not to `claims.oid` — the second argument
+      # ("who touched it") legitimately uses an oid, so a line-grep rule would
+      # flag correct calls and get muted. See #3282.
+      - name: 'domain-store-tenant-scope (tenant doc keyed by the caller, not the tenant)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-domain-store-tenant-scope.mjs
       # curl PRINTS its -w value on BOTH failure paths AND exits non-zero, so an
       # `|| echo 000` CONCATENATES: a connection failure becomes "000000" and an
       # HTTP 401 under -f becomes "401000". Neither is a status code. Two live

@@ -14,7 +14,7 @@
  * the whole table.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { getResourceMonthlyCost } from '@/lib/clients/cost-client';
 import { MonitorError } from '@/lib/azure/monitor-client';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
@@ -31,7 +31,9 @@ export async function GET(req: NextRequest) {
 
   // D2: the DLZ cost pane is tenant-admin (global) or domain-admin (their domain's
   // workspaces) only — domain contributors and unprivileged users can't read it.
-  const domains = await loadTenantDomains(s.claims.oid);
+  // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
+  // sibling readers (chargeback) key it with tid. See #3282.
+  const domains = await loadTenantDomains(tenantScopeId(s));
   if (!(await canAccessDlzPanes(s, domains))) {
     return NextResponse.json(
       {

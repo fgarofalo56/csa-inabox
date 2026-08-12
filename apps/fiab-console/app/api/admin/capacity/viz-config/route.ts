@@ -16,7 +16,7 @@
  * (admin-plane/main.bicep). Shape: { ok:true, grafana?, powerbi?, isGov }.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { isGovCloud, getPbiGovHost } from '@/lib/azure/cloud-endpoints';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
@@ -29,7 +29,9 @@ export async function GET() {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   // D2: DLZ visualization config is tenant-admin or domain-admin only.
-  const domains = await loadTenantDomains(s.claims.oid);
+  // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
+  // sibling readers (chargeback) key it with tid. See #3282.
+  const domains = await loadTenantDomains(tenantScopeId(s));
   if (!(await canAccessDlzPanes(s, domains))) {
     return NextResponse.json(
       {

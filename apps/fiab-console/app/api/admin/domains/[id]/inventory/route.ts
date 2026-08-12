@@ -15,7 +15,7 @@
  * Commercial, GCC, and the USGov boundaries with no code change.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { loadOrSeedDomains } from '@/lib/azure/domain-registry';
 import { domainResourceInventory, InventoryError } from '@/lib/azure/topology-inventory';
@@ -32,7 +32,9 @@ export async function GET(
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const denied = requireTenantAdmin(s);
   if (denied) return denied;
-  const tenantId = s.claims.oid;
+  // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
+  // sibling readers (chargeback) key it with tid. See #3282.
+  const tenantId = tenantScopeId(s);
   const { id } = await params;
   if (!id) return NextResponse.json({ ok: false, error: 'domain id required' }, { status: 400 });
 

@@ -20,7 +20,7 @@
  * (also surfaced via `rbacAdminGate` on GET). See no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveDomainTier, isAtLeastDomainAdmin } from '@/lib/auth/domain-role';
@@ -54,7 +54,8 @@ async function callerIsOwningDomainAdmin(
   const domainId = (workspace?.domain || '').toString().trim();
   if (!domainId) return false;
   try {
-    const domains = await loadTenantDomains(session.claims.oid);
+    // Tenant scope, NOT the caller's oid (#3282).
+    const domains = await loadTenantDomains(tenantScopeId(session));
     const domain = domains.find((d) => d.id === domainId);
     if (!domain) return false;
     const tier = await resolveDomainTier(session, domain);
