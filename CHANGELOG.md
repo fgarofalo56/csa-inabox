@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.93.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.2...csa-inabox-v0.93.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **roll:** wait for the rollout to be SERVED before failing it ([#3305](https://github.com/fgarofalo56/csa-inabox/issues/3305)) ([#3306](https://github.com/fgarofalo56/csa-inabox/issues/3306)) ([a966395](https://github.com/fgarofalo56/csa-inabox/commit/a966395c40af479f86b124b0ce1bd8bb4c556a55))
+* **token-drift:** surface the verdict and the fingerprints, don't just compute them ([#3056](https://github.com/fgarofalo56/csa-inabox/issues/3056)) ([#3308](https://github.com/fgarofalo56/csa-inabox/issues/3308)) ([bace229](https://github.com/fgarofalo56/csa-inabox/commit/bace229d5ffc36307fd43b68aa9cda63a000b301))
+
 ## [0.93.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.1...csa-inabox-v0.93.2) (2026-08-12)
 
 
