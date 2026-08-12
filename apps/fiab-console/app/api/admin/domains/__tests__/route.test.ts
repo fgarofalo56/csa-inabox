@@ -40,6 +40,9 @@ vi.mock('@/lib/azure/databricks-client', () => ({
 }));
 
 vi.mock('@/lib/auth/session', () => ({
+  // Real implementation (tid || oid) — these fixtures carry no tid, so this
+  // resolves to the same value the mock used before #3282.
+  tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
   getSession: vi.fn(() => ({
     claims: { oid: 'tenant-1', upn: 'admin@contoso.com' },
     exp: Date.now() / 1000 + 3600,

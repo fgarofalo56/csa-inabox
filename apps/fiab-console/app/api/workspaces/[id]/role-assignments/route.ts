@@ -20,7 +20,7 @@
  * (also surfaced via `rbacAdminGate` on GET). See no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveDomainTier, isAtLeastDomainAdmin } from '@/lib/auth/domain-role';
@@ -34,6 +34,7 @@ import {
 } from '@/lib/azure/workspace-roles-client';
 import { apiServerError } from '@/lib/api/respond';
 import { recordAssignment } from '@/lib/access/assignment-ledger';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,7 +55,8 @@ async function callerIsOwningDomainAdmin(
   const domainId = (workspace?.domain || '').toString().trim();
   if (!domainId) return false;
   try {
-    const domains = await loadTenantDomains(session.claims.oid);
+    // Tenant scope, NOT the caller's oid (#3282).
+    const domains = await loadTenantDomains(tenantScopeId(session));
     const domain = domains.find((d) => d.id === domainId);
     if (!domain) return false;
     const tier = await resolveDomainTier(session, domain);
@@ -64,10 +66,8 @@ async function callerIsOwningDomainAdmin(
   }
 }
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session: s, params }) => {
+  const { id } = params;
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
@@ -89,12 +89,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id } = params;
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
@@ -142,4 +140,4 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

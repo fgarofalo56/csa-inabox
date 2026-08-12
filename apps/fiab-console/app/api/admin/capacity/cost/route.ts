@@ -14,24 +14,25 @@
  * the whole table.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { getResourceMonthlyCost } from '@/lib/clients/cost-client';
 import { MonitorError } from '@/lib/azure/monitor-client';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 // Cost Management is QPU-throttled; allow a couple of backoff retries to land.
 export const maxDuration = 60;
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
 
   // D2: the DLZ cost pane is tenant-admin (global) or domain-admin (their domain's
   // workspaces) only — domain contributors and unprivileged users can't read it.
-  const domains = await loadTenantDomains(s.claims.oid);
+  // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
+  // sibling readers (chargeback) key it with tid. See #3282.
+  const domains = await loadTenantDomains(tenantScopeId(s));
   if (!(await canAccessDlzPanes(s, domains))) {
     return NextResponse.json(
       {
@@ -78,4 +79,4 @@ export async function GET(req: NextRequest) {
     const status = e instanceof MonitorError ? e.status : 500;
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status });
   }
-}
+});
