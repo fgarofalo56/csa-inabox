@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.93.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.1...csa-inabox-v0.93.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **cloud-parity:** pass every image tag to the Gov deploys, and guard it ([#3161](https://github.com/fgarofalo56/csa-inabox/issues/3161)) ([#3303](https://github.com/fgarofalo56/csa-inabox/issues/3303)) ([9e46aa4](https://github.com/fgarofalo56/csa-inabox/commit/9e46aa4d40521ea2e3e33eabe94b06c680eb4b79))
+* **guard:** stop claiming a route does not exist when only the MAP is stale ([#3158](https://github.com/fgarofalo56/csa-inabox/issues/3158)) ([#3304](https://github.com/fgarofalo56/csa-inabox/issues/3304)) ([82a7d01](https://github.com/fgarofalo56/csa-inabox/commit/82a7d0187e96f88465d3672306eb1f45d2eefc26))
+* **uat:** report WHY the suite failed instead of naming a table to go query ([#3169](https://github.com/fgarofalo56/csa-inabox/issues/3169)) ([#3301](https://github.com/fgarofalo56/csa-inabox/issues/3301)) ([e1ee201](https://github.com/fgarofalo56/csa-inabox/commit/e1ee201165e0e2c973fceb98d28c2c94909ce8da))
+
 ## [0.93.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.0...csa-inabox-v0.93.1) (2026-08-12)
 
 
