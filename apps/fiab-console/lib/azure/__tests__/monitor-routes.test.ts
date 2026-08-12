@@ -10,6 +10,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 vi.mock('@/lib/auth/session', () => ({
+  // Real implementation (tid || oid) — these fixtures carry no tid, so this
+  // resolves to the same value the mock used before #3282.
+  tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
   getSession: vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 })),
 }));
 
