@@ -159,6 +159,13 @@ note "preflight: registry = $ACR ($ACR_LOGIN)"
 #    the registry is genuinely unreachable from here.
 # ---------------------------------------------------------------------------
 LEASE_HELD="false"
+# The lease helper, overridable so the behaviour tests can exercise the LEASE
+# PATH with a stub. Before this that path was unreachable under test: the tests
+# stub `az` on PATH, so a real acquire spun against a stub registry — which is
+# exactly why the "reads without a lease" race (#3137) had no coverage. Acquire
+# and release BOTH route through it; stubbing only one half would leave a test
+# that passes while the real script leaks a lease.
+LEASE_SCRIPT="${LOOM_ACR_LEASE_SCRIPT:-${SCRIPT_DIR}/acr-firewall-lease.sh}"
 # C24 (#3088): returns NON-ZERO when the registry could not be verified
 # re-locked. It used to be `release … >/dev/null 2>&1 || warn "…"`, which broke
 # the control two ways: it discarded the verdict (a failed re-lock became a
@@ -170,7 +177,7 @@ release_lease() {
     return 0
   fi
   LEASE_HELD="false"
-  if ! bash "${SCRIPT_DIR}/acr-firewall-lease.sh" release --acr "$ACR"; then
+  if ! bash "$LEASE_SCRIPT" release --acr "$ACR"; then
     err "preflight: could NOT verify the ACR firewall re-locked on $ACR — it may be PUBLICLY REACHABLE. The remediation the lease script printed is above; the scheduled sweeper (.github/workflows/acr-firewall-sweeper.yml) also retries."
     return 1
   fi
@@ -190,19 +197,58 @@ trap preflight_exit_trap EXIT
 
 data_plane_up() { az acr repository list -n "$ACR" -o none 2>/dev/null; }
 
-if ! data_plane_up; then
-  if [[ "$ALLOW_LEASE" != "true" ]]; then
+# TAKE THE LEASE WHENEVER WE INTEND TO READ — not only when we find the door
+# already shut (#3137).
+#
+# The old shape probed first and leased ONLY on failure. That made a successful
+# first probe the decision to read WITHOUT a lease, and an open registry is not
+# the same thing as a registry that will STAY open: every Loom ACR rests at
+# publicNetworkAccess=Disabled + defaultAction=Deny, so if it is open at all it
+# is standing open under SOMEONE ELSE'S lease. When that holder releases — or
+# acr-firewall-sweeper re-locks it — the door shuts mid-read.
+#
+# Measured on run 31589236616 (deploy-fiab-gcch, 2026-08-12T10:58Z): the
+# "firewalled off — taking the lease" note NEVER printed, so the first probe
+# succeeded and no lease was taken; SIX SECONDS later the second probe failed.
+# The sibling image-build job in the same workflow had just released its lease.
+# The deploy was reading on borrowed time and lost the race.
+#
+# Leasing unconditionally costs an ACR firewall update on the happy path. That is
+# the correct trade for a gate whose whole job is to stop an adoption deploy
+# repointing a LIVE Gov Container App at an unverified tag.
+FIRST_PROBE_OK="false"
+if data_plane_up; then FIRST_PROBE_OK="true"; fi
+
+if [[ "$ALLOW_LEASE" != "true" ]]; then
+  if [[ "$FIRST_PROBE_OK" != "true" ]]; then
     err "The $ACR data plane is not reachable from this host and --no-lease was passed, so the image tags for the LIVE app(s) ${ADOPTED[*]} cannot be verified. Refusing to deploy blind onto a running Gov app. Re-run from an in-VNet runner, or drop --no-lease so the owned firewall lease can be taken."
     exit 1
   fi
-  note "preflight: $ACR data plane is firewalled off — taking the owned firewall lease to read tags."
-  if bash "${SCRIPT_DIR}/acr-firewall-lease.sh" acquire --acr "$ACR"; then
+  note "preflight: --no-lease was passed and the $ACR data plane is reachable — reading WITHOUT a lease. If another holder releases mid-read this can still fail; that is the documented cost of --no-lease."
+else
+  if [[ "$FIRST_PROBE_OK" == "true" ]]; then
+    note "preflight: $ACR data plane is reachable — taking the owned firewall lease anyway so it cannot be re-locked mid-read."
+  else
+    note "preflight: $ACR data plane is firewalled off — taking the owned firewall lease to read tags."
+  fi
+  if bash "$LEASE_SCRIPT" acquire --acr "$ACR"; then
     LEASE_HELD="true"
     for _ in $(seq 1 12); do data_plane_up && break; sleep 15; done
+  elif [[ "$FIRST_PROBE_OK" == "true" ]]; then
+    # Could not take our own lease, but the plane was reachable a moment ago.
+    # Say exactly that rather than implying we are safe.
+    note "preflight: could NOT acquire the firewall lease on $ACR. The data plane was reachable on the first probe, so the read is attempted anyway — but it is unprotected, and a concurrent release or sweep can still close it mid-read."
   fi
 fi
 
 if ! data_plane_up; then
+  # R7 — do not assert a cause we did not establish. "Fix your AcrPull" is a
+  # DIFFERENT bug from "the door shut under us", and stating the first when the
+  # second happened sent this exact failure down the wrong path once already.
+  if [[ "$FIRST_PROBE_OK" == "true" ]]; then
+    err "The $ACR data plane was REACHABLE moments ago and is NOT reachable now, so the image tags for the LIVE app(s) ${ADOPTED[*]} could not be verified. This is a firewall race, not a permissions problem: the registry rests at Deny, it was standing open under another holder's lease, and it was re-locked mid-read (a sibling job releasing, or acr-firewall-sweeper). $( [[ "$LEASE_HELD" == "true" ]] && echo "This run HELD its own lease, so investigate who re-locked a leased registry." || echo "This run did NOT hold a lease — acquire failed above." ) Re-run; if it persists, check acr-firewall-lease.sh acquire permissions for this principal. EMERGENCY OVERRIDE: LOOM_SKIP_IMAGE_PREFLIGHT=true."
+    exit 1
+  fi
   err "Could not read the $ACR data plane, so the image tags for the LIVE app(s) ${ADOPTED[*]} could not be verified. An adoption deploy that repoints a running Gov Container App at an unverified tag can take it down, so this is a hard stop. Fix registry access (private endpoint / firewall / AcrPull on this principal) and re-run. EMERGENCY OVERRIDE: LOOM_SKIP_IMAGE_PREFLIGHT=true."
   exit 1
 fi
