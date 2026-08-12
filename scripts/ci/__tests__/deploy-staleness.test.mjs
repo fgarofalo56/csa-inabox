@@ -32,6 +32,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseWorkflow, scalarValue } from '../_workflow-yaml.mjs';
 import {
   classifyDrift,
   classifyEstate,
@@ -40,10 +43,14 @@ import {
   decide,
   pickLastRealSuccess,
   DAY_MS,
+  DRY_RUN_MARKER,
   ESTATES,
   FAILING_STREAK,
   WATCHED,
 } from '../check-deploy-staleness.mjs';
+
+/** Workflow directory, resolved from the repo root the suite is run from. */
+const WORKFLOWS = '.github/workflows';
 
 /** `n` days after ISO `t`, as an ISO-Z string. */
 const plusDays = (t, n) => new Date(Date.parse(t) + n * DAY_MS).toISOString();
@@ -464,6 +471,93 @@ test('full-app-deploy watches the image contexts NO other lane builds', () => {
   ]) {
     assert.ok(entry.paths.includes(ctx), `${ctx} is watched by the only lane that builds it`);
   }
+});
+
+// --- CLOUD PARITY: the sovereign reconciles (cloud-parity.md) --------------
+//
+// On 2026-08-11 this control's own output was a cloud-parity violation. Run
+// 31503308453 printed thirteen watched rows — `ok` for deploy-fiab-commercial
+// and NOT ONE sovereign lane — on a day when deploy-fiab-gcch had failed six
+// times (14:42, 12:17, 10:41, 07:26, 06:25, 02:59) and deploy-fiab-gcc had been
+// `disabled_manually` since 2026-08-08. Commercial drift was measured; sovereign
+// drift was not measurable at all, so "GCC-High is fine" and "nothing is looking
+// at GCC-High" rendered identically. These two tests are what make that state
+// impossible to re-enter silently.
+
+test('CLOUD PARITY — both sovereign reconciles are WATCHED, not just Commercial', () => {
+  const watched = new Set(WATCHED.map((e) => e.workflow));
+  for (const wf of ['deploy-fiab-commercial.yml', 'deploy-fiab-gcch.yml', 'deploy-fiab-gcc.yml']) {
+    assert.ok(watched.has(wf),
+      `${wf} applies main.bicep to a supported boundary and must be watched — `
+      + 'a capability measured in Commercial and not in Gov is INCOMPLETE (cloud-parity.md)');
+  }
+});
+
+test('each deploy-fiab lane watches ITS OWN boundary param file, never a sibling\'s', () => {
+  // The copy-paste failure this dies on: duplicating the Commercial entry for a
+  // sovereign boundary and leaving params/commercial.bicepparam in `paths`. That
+  // entry would read green forever on gcc-high.bicepparam changes — a watched row
+  // measuring the wrong boundary, which is worse than an unwatched one because it
+  // LOOKS covered. `--parameters` is not a shape check-deploy-paths-coverage.mjs
+  // detects, so nothing else in CI would catch it.
+  const OWN = {
+    'deploy-fiab-commercial.yml': 'platform/fiab/bicep/params/commercial.bicepparam',
+    'deploy-fiab-gcch.yml': 'platform/fiab/bicep/params/gcc-high.bicepparam',
+    'deploy-fiab-gcc.yml': 'platform/fiab/bicep/params/gcc.bicepparam',
+  };
+  for (const [wf, own] of Object.entries(OWN)) {
+    const entry = WATCHED.find((e) => e.workflow === wf);
+    assert.ok(entry, `${wf} must be a WATCHED entry`);
+    assert.ok(entry.paths.includes(own), `${wf} must watch ${own}`);
+    for (const [otherWf, otherParam] of Object.entries(OWN)) {
+      if (otherWf === wf) continue;
+      assert.ok(!entry.paths.includes(otherParam),
+        `${wf} watches ${otherParam}, which belongs to ${otherWf} — that entry is measuring the wrong boundary`);
+    }
+  }
+});
+
+test('a WATCHED lane whose DEFAULT dispatch applies nothing must emit the DRY RUN marker', () => {
+  // KEYED TO THE MISMATCH, not to the unsafe string. The defect is the PAIR:
+  // an apply step gated behind `inputs.run_mode == 'full'` while run_mode
+  // DEFAULTS to something else (so the default dispatch succeeds having deployed
+  // nothing) AND a `run-name` that pickLastRealSuccess cannot recognise as a dry
+  // run. Either half alone is fine; together they let one default dispatch clear
+  // an entry's drift without deploying anything — the "green on nothing" shape
+  // this whole file exists to catch.
+  //
+  // Both sovereign lanes failed this the moment they were registered:
+  // deploy-fiab-gcch.yml had NO run-name at all, and deploy-fiab-gcc.yml's said
+  // "(whatif-only)" — human-readable, but not the literal the filter matches.
+  //
+  // Matched against the RAW, unevaluated run-name expression: the marker has to
+  // be present in the branch that fires for a non-full dispatch, and that is what
+  // is source-visible. Asserting on a rendered title would need a GitHub
+  // expression evaluator this repo does not have.
+  const gated = [];
+  for (const entry of WATCHED) {
+    const file = join(WORKFLOWS, entry.workflow);
+    const doc = parseWorkflow(readFileSync(file, 'utf8'));
+    const runModeDefault = scalarValue(doc?.on?.workflow_dispatch?.inputs?.run_mode?.default);
+    // No run_mode input, or one that defaults to a real apply, is not this shape.
+    if (runModeDefault === undefined || runModeDefault === null || runModeDefault === 'full') continue;
+    gated.push(entry.workflow);
+    const runName = scalarValue(doc['run-name']);
+    assert.ok(typeof runName === 'string' && runName.length > 0,
+      `${entry.workflow} defaults run_mode to "${runModeDefault}" (a dispatch that applies nothing) `
+      + 'but declares no run-name, so every run is titled identically and a dry run would clear its drift');
+    assert.ok(runName.includes(DRY_RUN_MARKER),
+      `${entry.workflow} defaults run_mode to "${runModeDefault}" — a default dispatch SUCCEEDS having applied `
+      + `nothing — so its run-name must carry the marker "${DRY_RUN_MARKER}" that pickLastRealSuccess filters on. `
+      + `Got: ${JSON.stringify(runName)}`);
+  }
+  // REFUSE TO PASS ON AN EMPTY POPULATION. If the parser stops finding
+  // `run_mode` (a schema change, a parser regression, an entry renamed), the
+  // loop above would scan zero lanes and this test would report a green having
+  // measured nothing — the exact hollow-gate class it belongs to.
+  assert.ok(gated.length >= 3,
+    'expected at least the three deploy-fiab reconciles to declare a whatif-only run_mode default; '
+    + `found ${gated.length} (${gated.join(', ') || 'none'}). Zero or few means the matcher drifted, not that the repo is clean.`);
 });
 
 test('ESTATES carries a SMALL time allowance and NO commit-count band', () => {

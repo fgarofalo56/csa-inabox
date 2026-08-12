@@ -361,6 +361,122 @@ export const WATCHED = [
     ],
     maxDays: 7,
   },
+  // ── THE SOVEREIGN RECONCILES (cloud-parity.md) ───────────────────────────
+  // The entry above watches the Commercial half of `az deployment sub create -f
+  // platform/fiab/bicep/main.bicep`. The GCC-High and GCC halves were watched by
+  // NOTHING, which made this file's own output a cloud-parity violation: on
+  // 2026-08-11 run 31503308453 printed thirteen rows, `ok` against
+  // deploy-fiab-commercial.yml, and NOT ONE sovereign lane — while
+  // deploy-fiab-gcch.yml had failed six times that same day (14:42, 12:17,
+  // 10:41, 07:26, 06:25, 02:59; the newest, 31503034931, inside the topology
+  // guard) and deploy-fiab-gcc.yml had been `disabled_manually` since
+  // 2026-08-08. Commercial drift was measured; sovereign drift was not
+  // measurable at all, so "the sovereign estates are fine" and "nothing is
+  // looking at the sovereign estates" produced the identical output.
+  //
+  // WHY THIS IS THE LOUDEST GAP IN THE TABLE, not merely the widest. ESTATES
+  // below can probe Commercial's /build-marker.txt and says out loud that it
+  // cannot see Gov (private ingress, no public marker). So for a sovereign
+  // boundary these rows are not one signal among several — they are the ONLY
+  // automated statement that merged bicep has reached the estate. Absent them,
+  // GCC-High drift has no representation anywhere in CI.
+  //
+  // THE DEFERRAL RATIONALE THAT CAME WITH THIS WORK DOES NOT SURVIVE THE TREE.
+  // It said adding these entries "makes loom-guardrails permanently red on every
+  // PR". Measured: nothing but .github/workflows/deploy-staleness.yml invokes
+  // check-deploy-staleness.mjs, that workflow's own header states "Deliberately
+  // NOT a required PR check", it is schedule (`47 13 * * *`) + dispatch, and it
+  // had already exited 1 on each of its last five daily runs. Registering these
+  // adds no PR blocking whatsoever; it adds two rows to a report that was
+  // already red for Commercial reasons. A row that reads STALE from its first
+  // day is the intended reading here, exactly as it was for
+  // loom-dataplane-roll.yml above — deploy-integrity R3: a deploy path that has
+  // never run, or that is switched off, is the loudest case of drift and never a
+  // silent pass.
+  //
+  // WHY 7 DAYS, both entries. Same argument as deploy-fiab-commercial: these are
+  // SCHEDULED DAILY (10:00 UTC / 08:00 UTC). If the schedule works at all a
+  // successful run exists every day and drift sits near zero, so 7 is not a
+  // tolerance for ordinary lag — it is the assertion that the daily sovereign
+  // reconcile is running.
+  //
+  // WHAT IS DELIBERATELY *NOT* IN EITHER PATH LIST:
+  //   * the reusable workflows these lanes call (`gov-provision-streaming-
+  //     migrate.yml` on gcch, `csa-loom-post-deploy-bootstrap.yml` on both).
+  //     The bootstrap already has its own WATCHED entry, and both are dispatched
+  //     independently — listing a callee's YAML here would mark this lane stale
+  //     on a change another run already applied, i.e. cry-wolf, the failure mode
+  //     this whole file is about. That gov-provision-streaming-migrate.yml is
+  //     itself unwatched is a real and separate gap; it is named here rather
+  //     than papered over from this entry.
+  //   * scripts/ci/deploy-retry.mjs and scripts/ci/deploy-classify.mjs. They
+  //     shape how a failing run behaves, not what a successful run deploys, and
+  //     deploy-fiab-commercial.yml — which executes both — does not list them
+  //     either. One rule, three lanes.
+  {
+    workflow: 'deploy-fiab-gcch.yml',
+    why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC-High (Azure Government) estate — every env var, role grant and module the sovereign Console depends on reaches production through this path and no other. Databricks Unity Catalog has no Gov endpoint, so this is also the lane that adopts and re-points the loom-unity catalog that IS the sovereign catalog story (cloud-parity.md). Stale, failing or disabled here means merged bicep is inert in the boundary that can least afford it — and because the Gov console has no publicly reachable /build-marker.txt, this row is the ONLY signal in CI that says so.',
+    paths: [
+      '.github/workflows/deploy-fiab-gcch.yml',
+      'platform/fiab/bicep/main.bicep',
+      // Same reasoning as the Commercial entry: main.bicep composes the admin
+      // plane, and a module change there is applied by this lane and no other.
+      'platform/fiab/bicep/modules/admin-plane/**',
+      // The param file is a deploy source, and an invisible one: the detector in
+      // check-deploy-paths-coverage.mjs recognises `--template-file`, not
+      // `--parameters`, so this has to be listed by hand. It decides what the
+      // apply actually deploys into GCC-High (deployAppsEnabled, the backend
+      // set, the image tags), so a commit here with no subsequent successful run
+      // IS drift — the same reason params/commercial.bicepparam is listed above.
+      'platform/fiab/bicep/params/gcc-high.bicepparam',
+      // The NON-dlz-attach branch of this lane does not run `az deployment sub
+      // create` at all — it runs `azd provision` from platform/fiab/azd, and
+      // azure.yaml is what tells azd which template (`infra.path: ../bicep`,
+      // `module: main`) and which services to provision. `azd provision` is not
+      // a detected shape, so this is hand-listed. It is load-bearing, not
+      // decorative: wrong service paths in this file killed gcch run 31490493159
+      // before ARM was ever reached.
+      'platform/fiab/azd/azure.yaml',
+      // Both preflights are gates that decide whether the apply proceeds at all
+      // — and on this lane refusing is the SAFE outcome, because the deploy
+      // ADOPTS live federal Container Apps and re-points them at a tag. A change
+      // that flips either from refusing to applying is a change to what reaches
+      // the estate.
+      'scripts/ci/assert-acr-image-tags.sh',
+      'scripts/csa-loom/preflight-image-tags.sh',
+      // #3203 — Front Door answers 504 while the ACA private-endpoint connection
+      // is Pending, so this decides whether the deployed sovereign estate is
+      // reachable at all.
+      'scripts/csa-loom/approve-cae-private-endpoints.sh',
+      // #3056 / #2681 — the two adoption resolvers. If either starts returning
+      // nothing, this apply re-mints the internal trust token (stranding every
+      // holder) or blanks LOOM_MSAL_CLIENT_ID (taking sovereign sign-in dark),
+      // which is precisely what the ACA template-rewrite drop did to GCC-High
+      // before they were wired.
+      'scripts/csa-loom/resolve-internal-token.sh',
+      'scripts/csa-loom/resolve-msal-client-id.sh',
+    ],
+    maxDays: 7,
+  },
+  {
+    workflow: 'deploy-fiab-gcc.yml',
+    why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC estate (Azure public cloud under GCC M365 identity). It is `disabled_manually` as of 2026-08-08 — its 08:00 UTC cron therefore cannot fire, so GCC accrues drift forever and nothing anywhere said so. Registering it is what turns "switched off" from an invisible state into a named row: classifyWorkflowState reports the disablement separately from the drift, because "the reconcile is off" and "the reconcile is behind" have different fixes.',
+    paths: [
+      '.github/workflows/deploy-fiab-gcc.yml',
+      'platform/fiab/bicep/main.bicep',
+      'platform/fiab/bicep/modules/admin-plane/**',
+      // Hand-listed for the same reason as gcc-high.bicepparam above:
+      // `--parameters` is not a detected deploy shape.
+      'platform/fiab/bicep/params/gcc.bicepparam',
+      // The azd branch of this lane provisions from platform/fiab/azd — see the
+      // gcch entry for why azure.yaml is a deploy source and why it has to be
+      // hand-listed.
+      'platform/fiab/azd/azure.yaml',
+      'scripts/csa-loom/approve-cae-private-endpoints.sh',
+      'scripts/csa-loom/resolve-internal-token.sh',
+    ],
+    maxDays: 7,
+  },
   // ── The APP-IMAGE path (the second silently-broken lane) ─────────────────
   // no-vaporware.md names the canonical from-scratch Commercial path as THREE
   // phases: (1) `az deployment sub create` with deployAppsEnabled=false, (2)
@@ -546,8 +662,17 @@ export const ESTATES = [
  * dry_run=true. A dry run resolves coordinates and touches nothing, so counting
  * one as a deploy would let this watchdog be silenced by a run that deployed
  * NOTHING — the precise "green on nothing" shape this file exists to catch.
+ *
+ * EXPORTED so the self-test can assert the CONTRACT rather than re-type the
+ * literal: every WATCHED lane whose apply step is gated behind
+ * `inputs.run_mode == 'full'` (i.e. whose DEFAULT dispatch succeeds having
+ * applied nothing) must emit this marker in its `run-name`. Both sovereign
+ * reconciles failed that contract when they were registered — gcch had no
+ * `run-name` at all, and gcc's said "(whatif-only)", which this filter does not
+ * match — so a single default dispatch would have cleared a GCC-High deploy gap
+ * it had not closed.
  */
-const DRY_RUN_MARKER = 'DRY RUN';
+export const DRY_RUN_MARKER = 'DRY RUN';
 
 /**
  * Consecutive completed failures that make a deploy path "failing".

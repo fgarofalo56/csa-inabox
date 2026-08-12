@@ -6,6 +6,24 @@ name: deploy-fiab-gcch
 # Manual approval gate (per environment protection rule) since this
 # deploys into a Gov sub.
 
+# The `Provision (with full Gov dispatch)` step below is gated
+# `if: github.event_name == 'schedule' || inputs.run_mode == 'full'`, and
+# run_mode DEFAULTS to whatif-only — so the DEFAULT dispatch of this workflow
+# SUCCEEDS having applied nothing to GCC-High.
+#
+# This lane is now a WATCHED entry in scripts/ci/check-deploy-staleness.mjs, and
+# that watchdog clears an entry's drift on its newest SUCCESSFUL run. Until this
+# line existed the workflow had no `run-name` at all, so every run — apply or
+# not — was titled "deploy-fiab-gcch" and one default dispatch would have
+# silenced a sovereign deploy gap it did not close: the precise "green on
+# nothing" shape that watchdog exists to catch.
+#
+# The marker string is DRY_RUN_MARKER ('DRY RUN') in check-deploy-staleness.mjs,
+# which filters those runs out of the last-success search. Schedule runs
+# provision, so they carry no marker. Same contract, same wording, as
+# deploy-fiab-commercial.yml.
+run-name: deploy-fiab-gcch${{ (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)' || '' }}
+
 on:
   schedule:
     - cron: '0 10 * * *'   # 10:00 UTC daily

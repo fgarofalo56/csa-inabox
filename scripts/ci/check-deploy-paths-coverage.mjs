@@ -69,6 +69,7 @@ export const CI_PLUMBING = {
   'scripts/csa-loom/acr-firewall-lease.sh': 'Opens/closes the ACR data-plane firewall around a push and releases the lease. It shapes how the RUN behaves, not what the run deploys — the image bytes and the template are identical either way, so a commit here is not estate drift.',
   'scripts/csa-loom/kv-firewall-window.sh': 'Same shape for Key Vault: brackets the bootstrap with an ingress window so the runner can read secrets. It grants the RUNNER temporary access; it deploys nothing and leaves no artifact behind.',
   'scripts/csa-loom/verify-console-runtime.sh': 'A post-deploy ASSERTION over the already-deployed Console. It reads runtime state and fails the job; it changes nothing, so a commit here cannot leave the estate diverged from main.',
+  'scripts/csa-loom/gov-verify-evidence.sh': 'The GCC-High/IL5 deploy-verification EVIDENCE harness. It runs pytest/vitest and a read-only endpoint sweep, and with --live adds `redeploy-gov.sh --what-if` — a what-if applies nothing. Its output is a receipt uploaded as an artifact, and deploy-fiab-gcch.yml invokes it with a trailing `|| true`, so it can neither change the estate nor stop the deploy. It is the verify-console-runtime.sh shape exactly: an assertion, not a deploy source. NOTE the boundary this loan does NOT cross — the two image PREFLIGHTS on the same lane (assert-acr-image-tags.sh, preflight-image-tags.sh) CAN refuse the apply, so they are watched in the WATCHED entry and are not plumbing.',
 };
 
 /**
