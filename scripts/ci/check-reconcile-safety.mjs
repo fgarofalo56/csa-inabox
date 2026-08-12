@@ -54,6 +54,30 @@
  *       deploy, and the az commands consume ITS `deploy_apps_enabled` rather
  *       than the upstream one.
  *
+ *   I6  Every `AZURE_LOCATION` entry in an `env:` mapping resolves to the
+ *       OPERATOR'S INPUT or to the resolver's measured output — never to a
+ *       literal. This is the REGION defect above, and until now nothing in this
+ *       file watched the line that carries it: reintroducing
+ *       `${{ inputs.region || 'eastus2' }}` left all 47 tests of
+ *       __tests__/reconcile-policy.test.mjs green and this script exiting 0
+ *       (measured 2026-08-11).
+ *
+ *       A sibling guard, check-deploy-input-safety.mjs S3, does match that ONE
+ *       spelling — `/\|\|\s*'[a-z0-9]+'/` against the FIRST `AZURE_LOCATION:`
+ *       line in the file. Measured against it, five other spellings of the same
+ *       defect walk straight through, and so does deleting the line:
+ *
+ *         || "eastus2"   (double quotes)                     NOT CAUGHT
+ *         || 'EastUS2'   (mixed case — `az` accepts it)      NOT CAUGHT
+ *         AZURE_LOCATION: eastus2   (bare scalar)            NOT CAUGHT
+ *         inputs.region == '' && 'eastus2' || inputs.region  NOT CAUGHT
+ *         the line deleted / restructured (no floor at all)  NOT CAUGHT
+ *
+ *       I6 is therefore keyed to the MISMATCH — "this seed has a producer that
+ *       is neither the input nor the resolver" — and never to the string
+ *       'eastus2'. A future default of 'westus2' fails identically, and the
+ *       safe form keeps the rule matching instead of silencing it.
+ *
  * FAILING CLOSED. Every discovery step has a floor. A regex that stops matching
  * would otherwise report "0 violations" and read as a pass — the exact shape
  * this repo keeps finding inside its own guards. Finding FEWER image reads,
@@ -95,6 +119,7 @@ export const FLOORS = Object.freeze({
   destructiveSteps: 1,   // the Teardown step
   imageReads: 16,        // appImageTags.* reads in admin-plane/main.bicep
   paramKeys: 10,         // keys admin-plane reads NON-optionally (17 are declared)
+  regionSeeds: 1,        // AZURE_LOCATION entries in an `env:` mapping (I6)
 });
 
 const stripLineComments = (src) =>
@@ -454,6 +479,261 @@ export function checkWorkflowWiring(yaml) {
 }
 
 // ---------------------------------------------------------------------------
+// I6 — the AZURE_LOCATION seed in `env:` (refs #3029)
+// ---------------------------------------------------------------------------
+
+/** The env var whose value IS the identity of the estate being deployed to. */
+export const REGION_SEED_ENV = 'AZURE_LOCATION';
+
+/**
+ * The only producers a region seed may name.
+ *
+ * `inputs.region` is the operator's explicit choice (the input is
+ * `required: true`, held by check-deploy-input-safety.mjs S3).
+ * `steps.<id>.outputs.region` is reconcile-resolve.mjs's MEASURED verdict.
+ * Everything else — a literal, another env var, a `format(...)` — is a value
+ * nobody chose and nobody measured, which is exactly what #3029 was.
+ */
+export const ALLOWED_REGION_PRODUCERS = Object.freeze([
+  /^inputs\.region$/,
+  /^github\.event\.inputs\.region$/,
+  /^steps\.[A-Za-z0-9_-]+\.outputs\.region$/,
+]);
+
+const indentOf = (line) => line.match(/^[ \t]*/)[0].length;
+
+/** `run: |`, `script: >-`, `creds: |` … — the body is text, never YAML. */
+const BLOCK_SCALAR = /^[ \t]*(?:-[ \t]+)?[A-Za-z0-9_.-]+:[ \t]*[|>][-+]?\d*[ \t]*(?:#.*)?$/;
+/** An `env:` mapping opener, at workflow, job or step level. */
+const ENV_OPENER = /^[ \t]*(-[ \t]+)?env:[ \t]*(?:#.*)?$/;
+/**
+ * An `env:` whose value is a FLOW MAPPING on the same line -- `env: { A: b }`.
+ *
+ * ENV_OPENER matches only a BLOCK opener, so a flow mapping was invisible: adding
+ * `env: { AZURE_LOCATION: eastus2 }` at JOB level, ALONGSIDE the safe
+ * workflow-level seed, gave found=1 / violations=0 / exit 0 -- while PyYAML saw
+ * the job-level entry, and job-level env OVERRIDES workflow-level at runtime. So
+ * the invisible entry was the one that would actually decide the region.
+ *
+ * The DISCOVERY FLOOR did not save it either: a floor is a lower bound, satisfied
+ * by the surviving good seed, not a completeness check.
+ *
+ * This reader deliberately does NOT learn to parse flow mappings. It REFUSES
+ * them: a shape the reader cannot see is unknown, and unknown is not safe.
+ */
+const ENV_FLOW_MAPPING = /^[ \t]*(?:-[ \t]+)?env:[ \t]*\{/;
+/** One `NAME: value` entry inside it. */
+const ENV_ENTRY = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*):(?:[ \t]+(.*))?$/;
+
+/**
+ * Strip a YAML trailing `#` comment without touching a `#` that is inside a
+ * `${{ … }}` expression or a quoted string.
+ */
+export function stripValueComment(value) {
+  let out = '';
+  let quote = null;
+  let depth = 0;
+  for (let i = 0; i < value.length; i++) {
+    if (!quote && value.startsWith('${{', i)) { depth++; out += '${{'; i += 2; continue; }
+    if (!quote && depth > 0 && value.startsWith('}}', i)) { depth--; out += '}}'; i += 1; continue; }
+    const c = value[i];
+    if (quote) { if (c === quote) quote = null; out += c; continue; }
+    if (c === "'" || c === '"') { quote = c; out += c; continue; }
+    if (c === '#' && depth === 0 && (i === 0 || /[ \t]/.test(value[i - 1]))) break;
+    out += c;
+  }
+  return out.trim();
+}
+
+/**
+ * Every `NAME: value` in every `env:` mapping of a workflow.
+ *
+ * Deliberately NOT `yaml.split('\n').find(/^\s*AZURE_LOCATION:/)`: that shape
+ * sees only the first occurrence, cannot tell an `env:` entry from a line of
+ * shell inside `run: |`, and returns '' — which reads as clean — the moment the
+ * YAML is restructured. Block-scalar bodies are skipped for the same reason.
+ *
+ * @returns {Array<{name:string, value:string, line:number}>}
+ */
+export function envAssignments(yaml) {
+  const lines = yaml.split('\n');
+  const out = [];
+
+  /** Advance past the body of a block scalar whose key sits at `keyIndent`. */
+  const skipBlock = (from, keyIndent) => {
+    let j = from;
+    while (j < lines.length && (lines[j].trim() === '' || indentOf(lines[j]) > keyIndent)) j++;
+    return j;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '' || /^[ \t]*#/.test(line)) continue;
+
+    if (BLOCK_SCALAR.test(line)) {
+      i = skipBlock(i + 1, indentOf(line) + (/^[ \t]*-[ \t]+/.test(line) ? 2 : 0)) - 1;
+      continue;
+    }
+
+    if (ENV_FLOW_MAPPING.test(line)) {
+      out.push({ name: '__UNPARSEABLE_ENV_FLOW_MAPPING__', value: line.trim(), line: i + 1 });
+      continue;
+    }
+
+    const opener = ENV_OPENER.exec(line);
+    if (!opener) continue;
+
+    const keyIndent = indentOf(line) + (opener[1] ? opener[1].length : 0);
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const l = lines[j];
+      if (l.trim() === '') continue;
+      if (indentOf(l) <= keyIndent) break;
+      if (/^[ \t]*#/.test(l)) continue;
+      const entry = ENV_ENTRY.exec(l);
+      if (!entry) continue;
+      const raw = (entry[2] ?? '').trim();
+      if (/^[|>][-+]?\d*$/.test(raw)) { j = skipBlock(j + 1, indentOf(l)) - 1; continue; }
+      out.push({ name: entry[1], value: raw, line: j + 1 });
+    }
+    i = j - 1;
+  }
+  return out;
+}
+
+/**
+ * Split an env value into the string LITERALS and the context REFERENCES it is
+ * built from, plus any text sitting outside a `${{ … }}` expression.
+ *
+ * `${{ inputs.region || 'eastus2' }}` -> refs ['inputs.region'], literals ['eastus2']
+ * `eastus2`                           -> outside 'eastus2'
+ */
+export function regionSeedTerms(rawValue) {
+  const value = stripValueComment(rawValue);
+  const exprs = [...value.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]);
+  // UNWRAP BALANCED YAML QUOTING FIRST.
+  //
+  // `AZURE_LOCATION: "${{ inputs.region }}"` is a YAML no-op - identical in
+  // meaning to the unquoted form this guard approves. Computing `outside` on
+  // the raw scalar left the two quote characters behind, so the guard FAILED
+  // the safe value and reported that it seeds the region with bare text that
+  // was actually just punctuation.
+  //
+  // That is an R7 violation in the guard itself: it asserted a cause it had
+  // not established, and it would have failed every PR in the repo while
+  // sending the reader hunting for text that is not there. Both quote styles
+  // reproduce it. Found by the Sprint-1 reviewers before this ever merged.
+  const unwrapped = /^(['"])([\s\S]*)\1$/.exec(value.trim());
+  const forOutside = unwrapped ? unwrapped[2] : value;
+  const outside = forOutside.replace(/\$\{\{[\s\S]*?\}\}/g, '').trim();
+  const literals = [];
+  const refs = [];
+  for (const expr of exprs) {
+    // GitHub expression strings are single-quoted with '' as the escape; the
+    // double-quoted form is invalid in an expression but IS valid YAML around
+    // one, and either way a quoted region is a hardcoded region.
+    for (const m of expr.matchAll(/'((?:[^']|'')*)'|"([^"]*)"/g)) literals.push(m[1] ?? m[2] ?? '');
+    const bare = expr.replace(/'(?:[^']|'')*'|"[^"]*"/g, ' ');
+    for (const m of bare.matchAll(/[A-Za-z_][A-Za-z0-9_.-]*/g)) {
+      if (/^(true|false|null|and|or|not)$/i.test(m[0])) continue;
+      refs.push(m[0]);
+    }
+  }
+  return { value, exprs, literals, refs, outside };
+}
+
+/**
+ * I6. Every AZURE_LOCATION seed resolves to the input or the resolver alone.
+ *
+ * The DISCOVERY FLOOR is returned as a violation rather than left to the
+ * caller: a check whose population can silently become empty is the failure
+ * mode this whole file exists to prevent, and a floor a caller can forget to
+ * apply is one `run()` refactor away from being forgotten.
+ */
+export function checkRegionSeed(yaml) {
+  const allEnv = envAssignments(yaml);
+
+  // An `env:` the reader could not parse is UNKNOWN, and unknown is not safe.
+  // Reported before the floor, because a flow mapping that REPLACES the only
+  // seed would otherwise trip the floor with a message about the wrong thing,
+  // and one that sits ALONGSIDE it would not trip anything at all.
+  const unreadable = allEnv.filter((a) => a.name === '__UNPARSEABLE_ENV_FLOW_MAPPING__');
+
+  const seeds = allEnv.filter((a) => a.name === REGION_SEED_ENV);
+  const violations = [];
+
+  for (const u of unreadable) {
+    violations.push({
+      line: u.line,
+      msg:
+        `\`${u.value}\` is an \`env:\` FLOW MAPPING, which this reader cannot see into. A job-level ` +
+        `\`env: { ${REGION_SEED_ENV}: <region> }\` OVERRIDES the workflow-level seed at runtime, so an ` +
+        'entry hidden in this shape is precisely the one that would decide the region — and it produced ' +
+        'found=1 / violations=0 / exit 0 while the surviving good seed satisfied the discovery floor. ' +
+        'Write the block form (`env:` then indented `NAME: value`) so it is readable, rather than teaching ' +
+        'this guard a second syntax to be wrong about.',
+    });
+  }
+
+  if (seeds.length < FLOORS.regionSeeds) {
+    violations.push({
+      line: 0,
+      msg:
+        `DISCOVERY FLOOR: found ${seeds.length} \`${REGION_SEED_ENV}\` entr(y/ies) in an \`env:\` mapping of ` +
+        `deploy-fiab-commercial.yml, expected >= ${FLOORS.regionSeeds}. Either the seed was removed (lower ` +
+        'FLOORS.regionSeeds in the same commit) or envAssignments() stopped matching the YAML, in which ' +
+        'case this check is measuring nothing and a reintroduced region default would read as clean.',
+    });
+    return { found: seeds.length, violations };
+  }
+
+  const allowed = ALLOWED_REGION_PRODUCERS.map((re) => re.source.replace(/^\^|\$$/g, '').replace(/\\/g, ''));
+  const why =
+    'The region IS the identity of the estate — rg-csa-loom-admin-<region>, vnet-csa-loom-hub-<region> and ' +
+    'uami-loom-console-<region> are all derived from it — so a value nobody chose and nobody measured does not ' +
+    'fail the deploy, it succeeds against a DIFFERENT, empty estate (#3029). A schedule carries no inputs and a ' +
+    'dispatch may leave the field blank, which is precisely when a seed like this decides. reconcile-resolve.mjs ' +
+    'does later write the MEASURED region into $GITHUB_ENV, so a seed here is latent rather than immediately ' +
+    'live: that is defence in depth, not a licence to put the default back.';
+
+  for (const seed of seeds) {
+    if (seed.value === '') continue;   // nothing seeded at all — the resolver decides. Safe.
+
+    const { value, literals, refs, outside } = regionSeedTerms(seed.value);
+
+    if (outside) {
+      violations.push({
+        line: seed.line,
+        msg:
+          `\`${REGION_SEED_ENV}: ${value}\` seeds the deploy region with the bare text "${outside}" rather than ` +
+          `an expression over ${allowed.join(' / ')}. ${why}`,
+      });
+    }
+    for (const literal of literals) {
+      // `|| ''` collapses to the same "nothing seeded" state as an empty value,
+      // so it is not a hardcoded region. Any NON-empty literal is.
+      if (literal === '') continue;
+      violations.push({
+        line: seed.line,
+        msg:
+          `\`${REGION_SEED_ENV}: ${value}\` contains the hardcoded literal '${literal}'. ${why} ` +
+          `Seed it from the input alone: \`${REGION_SEED_ENV}: \${{ inputs.region }}\`.`,
+      });
+    }
+    for (const ref of refs) {
+      if (ALLOWED_REGION_PRODUCERS.some((re) => re.test(ref))) continue;
+      violations.push({
+        line: seed.line,
+        msg:
+          `\`${REGION_SEED_ENV}: ${value}\` takes the deploy region from \`${ref}\`, which is neither the ` +
+          `operator's input nor the resolver's measured output (allowed: ${allowed.join(' / ')}). ${why}`,
+      });
+    }
+  }
+  return { found: seeds.length, violations };
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -497,6 +777,9 @@ export function run() {
   // I5
   for (const v of checkWorkflowWiring(yaml)) note(WORKFLOW, v);
 
+  // I6 — carries its own discovery floor (see checkRegionSeed).
+  for (const v of checkRegionSeed(yaml).violations) note(WORKFLOW, v);
+
   return problems;
 }
 
@@ -515,6 +798,7 @@ if (invokedDirectly) {
     `[reconcile-safety] OK — ${checkDestructiveSteps(read(WORKFLOW)).found} destructive step(s) excluded from the schedule; ` +
     `${reads.length} appImageTags read(s) across ${new Set(reads.map((r) => r.key)).size} key(s), each naming one repository; ` +
     `${Object.keys(tags).length} key(s) pinned via readEnvironmentVariable in commercial.bicepparam; ` +
-    `${APP_IMAGE_TAGS.length} key(s) in the resolver table.`,
+    `${APP_IMAGE_TAGS.length} key(s) in the resolver table; ` +
+    `${checkRegionSeed(read(WORKFLOW)).found} ${REGION_SEED_ENV} seed(s), each resolving to the input or the resolver.`,
   );
 }

@@ -46,6 +46,54 @@
  * are in the pass set of all four runs), and each mutated file was restored and
  * confirmed byte-identical by md5 with the suite back at 41/41.
  *
+ * ---------------------------------------------------------------------------
+ * 2026-08-11 — I6 ADDED. Fix #2 above (REGION) was the ONE fix in this file
+ * with no test on the line that carries it. Measured on a clean tree, baseline
+ * 47 tests / 47 pass:
+ *
+ *   restore `AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}` in the
+ *   workflow's `env:`  ->  47 pass / 47, STILL GREEN. `node
+ *   scripts/ci/check-reconcile-safety.mjs` also exited 0.
+ *
+ * Two tests NAMED that regression and both passed with the defect present:
+ * one calls resolveReconcileRegion() as a pure function (the YAML is invisible
+ * to it) and the other asserted only the DOWNSTREAM override in
+ * reconcile-resolve.mjs, with a comment explicitly tolerating the `env:`
+ * fallback. Nothing read the seed.
+ *
+ * A sibling — check-deploy-input-safety.mjs S3 — did catch that exact
+ * spelling, so this was a coverage hole rather than a total blind spot. Its
+ * matcher is `/\|\|\s*'[a-z0-9]+'/` against the FIRST `AZURE_LOCATION:` line in
+ * the file; measured against it, five other spellings of the same defect and a
+ * deletion of the line all walk through (see the I6 mutant table below).
+ *
+ * MUTATION-PROVEN at 60 tests / 60 pass baseline. MEASURED red counts:
+ *
+ *   E. `AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}` on disk
+ *                                                          -> 46 pass, 14 RED
+ *        "check-reconcile-safety.run() is clean on the real repo"
+ *        "REGRESSION: the schedule no longer takes its region from the …"
+ *        "I6: the real workflow seeds AZURE_LOCATION from the input alone"
+ *        + the 11 I6 mutant/control tests, which refuse to run once SAFE_SEED
+ *          is no longer on disk rather than silently proving nothing.
+ *      `node scripts/ci/check-reconcile-safety.mjs` -> exit 1, naming
+ *      .github/workflows/deploy-fiab-commercial.yml:132.
+ *   F. break the DETECTOR instead of the workflow (ENV_OPENER -> a regex that
+ *      never matches)                                      -> 47 pass, 13 RED
+ *      including "I6 DISCOVERY: env: mappings are parsed at every level …",
+ *      and the guard exits 1 with `DISCOVERY FLOOR: found 0 AZURE_LOCATION
+ *      entr(y/ies)`. An empty population is a failure here, never a pass.
+ *   G. `|| 'westus2'` (a region that is NOT eastus2)  -> guard exit 1. The rule
+ *      is keyed to the MISMATCH, so it cannot be side-stepped by picking a
+ *      different literal, and the safe form keeps `found` at 1 rather than
+ *      silencing the rule.
+ *   H. `|| 'EastUS2'` (mixed case, which `az --location` accepts)
+ *                     -> check-reconcile-safety exit 1, check-deploy-input-
+ *                        safety exit 0. This shape was previously unguarded.
+ *
+ * All mutations reverted; the workflow is byte-identical to HEAD and the suite
+ * is back at 60/60.
+ *
  * Run: node --test scripts/ci/__tests__/reconcile-policy.test.mjs
  */
 import test from 'node:test';
@@ -69,6 +117,9 @@ import {
   checkPolicyTableCoverage,
   checkParamFile,
   checkWorkflowWiring,
+  checkRegionSeed,
+  envAssignments,
+  regionSeedTerms,
   deriveImageReads,
   parseParamImageTags,
   executableRun,
@@ -468,9 +519,131 @@ test('REGRESSION: the schedule no longer takes its region from the eastus2 defau
   const yaml = readNorm(WORKFLOW);
   const code = yaml.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   assert.match(code, /node scripts\/ci\/reconcile-resolve\.mjs/);
-  // The fallback may remain in `env:` — it IS the first-run default. What must
-  // exist is the override that makes a schedule use the estate's own region.
+  // TWO independent things have to hold, and this test used to assert only the
+  // second. Its old comment said "the fallback may remain in `env:` — it IS the
+  // first-run default", which was already false when #3029 landed: there is NO
+  // default region. Restoring `${{ inputs.region || 'eastus2' }}` therefore left
+  // all 47 tests here green (measured 2026-08-11). I6 is the missing half.
+  const seed = checkRegionSeed(yaml);
+  assert.deepEqual(seed.violations, [], seed.violations.map((v) => v.msg).join('\n'));
+  // …and the downstream override that makes the resolver's verdict the one ARM sees.
   assert.match(readNorm(join(HERE, '..', 'reconcile-resolve.mjs')), /AZURE_LOCATION=\$\{region\}/);
+});
+
+// ---------------------------------------------------------------------------
+// I6 — the AZURE_LOCATION seed in `env:` (refs #3029)
+//
+// Keyed to the MISMATCH ("a producer that is neither the input nor the
+// resolver"), never to the string 'eastus2': a future default of 'westus2'
+// must fail identically, and adopting the safe form must leave the rule
+// MATCHING the line rather than going quiet on it.
+// ---------------------------------------------------------------------------
+
+/** The seed as it stands on `main` — the text every mutant below replaces. */
+const SAFE_SEED = 'AZURE_LOCATION: ${{ inputs.region }}';
+
+/** Apply a mutation and refuse to proceed if it did not actually land. */
+function mutateWorkflow(replacement) {
+  const yaml = readNorm(WORKFLOW);
+  const mutant = yaml.replace(SAFE_SEED, replacement);
+  assert.notEqual(mutant, yaml, `the mutation did not apply (\`${SAFE_SEED}\` not found) — this test would prove nothing`);
+  return mutant;
+}
+
+test('I6: the real workflow seeds AZURE_LOCATION from the input alone', () => {
+  const r = checkRegionSeed(readNorm(WORKFLOW));
+  // found >= 1 is the half that matters most: the safe form must keep the rule
+  // POINTED AT the line. A guard that only matches the broken spelling goes
+  // silent on exactly the files that adopted the fix.
+  assert.ok(
+    r.found >= FLOORS.regionSeeds,
+    `only ${r.found} AZURE_LOCATION seed(s) discovered — envAssignments(), not the workflow, is what changed`,
+  );
+  assert.deepEqual(r.violations, [], r.violations.map((v) => v.msg).join('\n'));
+});
+
+test('I6 DISCOVERY: env: mappings are parsed at every level, and shell text is not', () => {
+  const entries = envAssignments(readNorm(WORKFLOW));
+  assert.ok(entries.length >= 40, `only ${entries.length} env entries parsed — the parser broke`);
+  // Workflow-level AND step-level env: blocks.
+  assert.ok(entries.some((e) => e.name === 'AZURE_LOCATION'), 'the workflow-level seed was not found');
+  assert.ok(entries.some((e) => e.name === 'INPUT_REGION'), 'no step-level env: block was parsed');
+  // `run: |` bodies are shell, not YAML. A line like `RG="rg-…-${AZURE_LOCATION}"`
+  // must never be mistaken for an env assignment.
+  assert.equal(entries.filter((e) => e.name === 'AZURE_LOCATION').length, 1);
+  assert.equal(entries.filter((e) => /[^A-Za-z0-9_]/.test(e.name)).length, 0);
+});
+
+// Each row is a DIFFERENT spelling of the same defect. Measured 2026-08-11
+// against check-deploy-input-safety.mjs S3 (`/\|\|\s*'[a-z0-9]+'/` on the FIRST
+// matching line): only the first two are caught there. I6 must catch all seven.
+const REGION_SEED_MUTANTS = [
+  ["|| 'eastus2' — the #3029 defect verbatim", "AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}", /'eastus2'/],
+  ["|| 'westus2' — a DIFFERENT region, so the rule cannot be keyed to eastus2", "AZURE_LOCATION: ${{ inputs.region || 'westus2' }}", /'westus2'/],
+  ['|| "eastus2" — double quotes', 'AZURE_LOCATION: ${{ inputs.region || "eastus2" }}', /'eastus2'/],
+  ["|| 'EastUS2' — mixed case, which `az --location` accepts", "AZURE_LOCATION: ${{ inputs.region || 'EastUS2' }}", /'EastUS2'/],
+  ['a bare YAML scalar with no expression at all', 'AZURE_LOCATION: eastus2', /bare text "eastus2"/],
+  ["the literal on the LEFT of ||", "AZURE_LOCATION: ${{ inputs.region == '' && 'eastus2' || inputs.region }}", /'eastus2'/],
+  ['seeded from another env var nobody measured', 'AZURE_LOCATION: ${{ env.DEFAULT_REGION }}', /env\.DEFAULT_REGION/],
+];
+
+for (const [label, replacement, expected] of REGION_SEED_MUTANTS) {
+  test(`I6 MUTANT: ${label} -> the guard FAILS`, () => {
+    const r = checkRegionSeed(mutateWorkflow(replacement));
+    assert.ok(r.violations.length > 0, `expected a violation for \`${replacement}\`, got none`);
+    const text = r.violations.map((v) => v.msg).join('\n');
+    assert.match(text, /AZURE_LOCATION/);
+    assert.match(text, expected);
+    // The violation must point at the line, so the failure names WHERE to look.
+    assert.ok(r.violations.every((v) => v.line > 0), `a violation carries no line number: ${text}`);
+  });
+}
+
+test('I6 MUTANT: the whole seed line DELETED -> DISCOVERY FLOOR, not a clean pass', () => {
+  const yaml = readNorm(WORKFLOW);
+  const mutant = yaml.replace(`  ${SAFE_SEED}\n`, '');
+  assert.notEqual(mutant, yaml, 'the deletion did not apply — this test would prove nothing');
+  const r = checkRegionSeed(mutant);
+  assert.equal(r.found, 0);
+  assert.equal(r.violations.length, 1);
+  assert.match(r.violations[0].msg, /DISCOVERY FLOOR/);
+});
+
+test('I6 MUTANT: the env: block restructured into a flow mapping -> DISCOVERY FLOOR', () => {
+  // A YAML restructure must report BROKEN DISCOVERY, never silence. The old
+  // `.find(/^\s*AZURE_LOCATION:/)` shape returned '' here and read as clean.
+  const yaml = readNorm(WORKFLOW);
+  const mutant = yaml.replace(`  ${SAFE_SEED}`, "  # moved: { AZURE_LOCATION: '${{ inputs.region }}' }");
+  assert.notEqual(mutant, yaml);
+  const r = checkRegionSeed(mutant);
+  assert.equal(r.found, 0);
+  assert.match(r.violations[0].msg, /DISCOVERY FLOOR/);
+});
+
+test('I6 CONTROL: the resolver\'s own output and an empty fallback are ALLOWED', () => {
+  const yaml = readNorm(WORKFLOW);
+  for (const ok of [
+    'AZURE_LOCATION: ${{ github.event.inputs.region }}',
+    'AZURE_LOCATION: ${{ steps.reconcile.outputs.region }}',
+    "AZURE_LOCATION: ${{ inputs.region || '' }}",
+    'AZURE_LOCATION: ${{ inputs.region }}   # a trailing comment is not a value',
+    'AZURE_LOCATION:',
+  ]) {
+    const variant = yaml.replace(SAFE_SEED, ok);
+    assert.notEqual(variant, yaml, `the variant \`${ok}\` did not apply`);
+    const r = checkRegionSeed(variant);
+    assert.equal(r.found, 1, `${ok} was not discovered`);
+    assert.deepEqual(r.violations, [], `${ok} -> ${r.violations.map((v) => v.msg).join('\n')}`);
+  }
+});
+
+test('I6 CONTROL: a NON-region env entry is never policed by this rule', () => {
+  // CSA_LOOM_CAPACITY_SKU legitimately carries `|| 'F8'`. I6 must not widen
+  // into a general "no literals in env:" rule and start failing on it.
+  const r = checkRegionSeed(readNorm(WORKFLOW));
+  assert.deepEqual(r.violations, []);
+  const entries = envAssignments(readNorm(WORKFLOW));
+  assert.ok(entries.some((e) => e.name === 'CSA_LOOM_CAPACITY_SKU' && /'F8'/.test(e.value)));
 });
 
 // ---------------------------------------------------------------------------
@@ -536,4 +709,47 @@ test('CONTROL: the guard parses the workflow into real steps', () => {
   assert.ok(steps.length >= 10, `only ${steps.length} steps parsed`);
   assert.ok(steps.some((s) => /Azure login/.test(s.name)));
   assert.ok(steps.some((s) => /az deployment sub create/.test(s.run)));
+});
+
+// ── Sprint-1 review findings, regression-locked ──────────────────────────────
+//
+// Both were found by REVIEWERS before this guard ever merged, and both are the
+// shapes the guard itself was most likely to be wrong about.
+test('R7 — quoting the SAFE value is a YAML no-op and must NOT be reported as bare text', () => {
+  for (const q of ['"', "'"]) {
+    const terms = regionSeedTerms(`${q}\${{ inputs.region }}${q}`);
+    assert.equal(
+      terms.outside,
+      '',
+      `${q}-quoted safe seed produced outside=${JSON.stringify(terms.outside)} — the guard would report ` +
+        'that it "seeds the deploy region with bare text" when what it saw was punctuation. That message ' +
+        'asserts a cause the code never established and would fail every PR in the repo.',
+    );
+  }
+});
+
+test('R7 — an UNBALANCED quote is not unwrapped (the fix must not over-reach)', () => {
+  const terms = regionSeedTerms('"eastus2');
+  assert.ok(
+    terms.outside.includes('eastus2'),
+    'an unbalanced leading quote must NOT be treated as wrapping; a hardcoded region hidden behind one ' +
+      'has to stay visible',
+  );
+});
+
+test('a job-level env FLOW MAPPING is REFUSED, not skipped (it overrides workflow-level at runtime)', () => {
+  const yaml = [
+    'env:',
+    '  AZURE_LOCATION: \${{ inputs.region }}',
+    'jobs:',
+    '  deploy:',
+    '    env: { AZURE_LOCATION: eastus2 }',
+  ].join(String.fromCharCode(10));
+  const found = envAssignments(yaml);
+  assert.ok(
+    found.some((a) => a.name === '__UNPARSEABLE_ENV_FLOW_MAPPING__'),
+    'a flow mapping the reader cannot see into must be surfaced as UNKNOWN. Skipping it gave ' +
+      'found=1 / violations=0 / exit 0 while the entry that actually decides the region was invisible — ' +
+      'the discovery FLOOR is a lower bound, not a completeness check.',
+  );
 });
