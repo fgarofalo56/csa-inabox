@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.93.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.0...csa-inabox-v0.93.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* **auth:** populate session.claims.groups — group authorization was dead ([#3175](https://github.com/fgarofalo56/csa-inabox/issues/3175)) ([#3298](https://github.com/fgarofalo56/csa-inabox/issues/3298)) ([06aa6bd](https://github.com/fgarofalo56/csa-inabox/commit/06aa6bd0cd5a04ae02be88a36bd615986a87be7e))
+* **gov-deploy:** take the ACR firewall lease BEFORE reading, not only when locked out ([#3137](https://github.com/fgarofalo56/csa-inabox/issues/3137)) ([#3300](https://github.com/fgarofalo56/csa-inabox/issues/3300)) ([be772d4](https://github.com/fgarofalo56/csa-inabox/commit/be772d4198ddf124630f0216bf21e614df013f4b))
+
 ## [0.93.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.8...csa-inabox-v0.93.0) (2026-08-12)
 
 
