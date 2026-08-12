@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { preloadEditor } from '@/lib/editors/registry';
 /**
  * CatalogItemActions — per-hit actions for a Loom (OneLake-source) catalog
  * record, rendered inside the CatalogDetailTile metadata dialog (alongside
@@ -296,6 +297,9 @@ export function CatalogItemActions({ hit }: { hit: CatalogActionHit }) {
         as="a"
         href={`/items/${hit.type}/${hit.id}`}
         icon={<Open16Regular />}
+        // Warm the editor chunk on hover — see preloadEditor().
+        onMouseEnter={() => preloadEditor(hit.type)}
+        onFocus={() => preloadEditor(hit.type)}
         data-testid="catalog-open-in-workspace"
       >
         Open in workspace
