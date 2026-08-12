@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "11612933509351838407"
+      "templateHash": "7914104847095585451"
     }
   },
   "definitions": {
@@ -2529,7 +2529,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "16413493801790956669"
+              "templateHash": "9844955326153972889"
             }
           },
           "definitions": {
@@ -5090,7 +5090,8 @@
             "dlShimQueueId": "[format('{0}/resourceGroups/{1}/providers/Microsoft.ServiceBus/namespaces/{2}/queues/{3}', subscription().id, parameters('loomDlzRg'), variables('dlShimSbNamespaceName'), parameters('loomDirectLakeShimQueue'))]",
             "loomCosmosEndpointVal": "[if(not(empty(parameters('loomCosmosAccount'))), format('https://{0}.documents.{1}:443/', parameters('loomCosmosAccount'), if(equals(environment().suffixes.storage, 'core.usgovcloudapi.net'), 'azure.us', 'azure.com')), '')]",
             "hasRealAdminGroup": "[and(not(empty(parameters('loomTenantAdminGroupId'))), not(startsWith(parameters('loomTenantAdminGroupId'), '<')))]",
-            "effectiveTenantAdminOid": "[if(not(empty(parameters('loomTenantAdminOid'))), parameters('loomTenantAdminOid'), if(variables('hasRealAdminGroup'), '', deployer().objectId))]",
+            "deployerIsInteractiveUser": "[not(empty(coalesce(tryGet(deployer(), 'userPrincipalName'), '')))]",
+            "effectiveTenantAdminOid": "[if(not(empty(parameters('loomTenantAdminOid'))), parameters('loomTenantAdminOid'), if(or(variables('hasRealAdminGroup'), not(variables('deployerIsInteractiveUser'))), '', deployer().objectId))]",
             "loomWarehouseBackend": "[coalesce(tryGet(parameters('loomBackends'), 'warehouse'), 'synapse-dedicated')]",
             "loomPipelineBackend": "[coalesce(tryGet(parameters('loomBackends'), 'pipeline'), 'synapse')]",
             "effectiveBiBackend": "[if(or(not(empty(variables('existingAasServerName'))), parameters('aasEnabled')), 'aas', coalesce(tryGet(parameters('loomBackends'), 'bi'), ''))]",

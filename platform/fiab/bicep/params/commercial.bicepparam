@@ -158,6 +158,16 @@ param hubVnetCidr = '10.0.0.0/16'
 // principal (deployer().objectId) as the bootstrap admin so the push-button path
 // is never locked out of /admin/* (GH #1383). Set LOOM_ADMIN_ENTRA_GROUP_ID to
 // your FiaB Admins security-group OID for a production multi-admin bootstrap.
+//
+// #3109 — that deployer fallback now applies ONLY to a deploy run by an
+// interactive USER (admin-plane/main.bicep gates it on
+// deployer().userPrincipalName). A deploy run by a service principal — which is
+// every CI run, including deploy-fiab-commercial.yml — binds NOTHING rather
+// than binding the deploy SP's own object id, because a workload identity can
+// never complete the sign-in that would use it. CI supplies the real binding
+// explicitly (loomTenantAdminGroupId / loomTenantAdminOid below) and
+// scripts/ci/bootstrap-admin-principal.mjs refuses the apply if what it
+// supplied is not a principal the console can match.
 param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
 // Feature-Permissions bootstrap admin — who can open /admin/* (Feature

@@ -780,8 +780,16 @@ jobs:
           # needs admin.env-config at Admin). Shipping that is worse than not
           # shipping: refuse rather than deploy an unusable console. Only
           # asserted when apps are actually being rendered.
+          #
+          # #3109 — this used to test INPUT_TENANT_ADMIN_OID, the DISPATCH INPUT,
+          # and not the OID that was actually composed. An estate bound solely by
+          # the FIAB_TENANT_ADMIN_OID repo variable (no group, no dispatch input)
+          # therefore refused a deploy whose binding was in fact present and
+          # valid — the same "the assertion describes a different value than the
+          # one composed" defect #3180 fixed one line below. It now tests the
+          # resolved value, which is the one that reaches the container app.
           if [ "${DEPLOY_APPS_ENABLED}" = "true" ] \
-             && [ -z "${TENANT_ADMIN_GROUP}" ] && [ -z "${INPUT_TENANT_ADMIN_OID:-}" ]; then
+             && [ -z "${TENANT_ADMIN_GROUP}" ] && [ -z "${TENANT_ADMIN_OID:-}" ]; then
             echo "::error::No bootstrap tenant-admin binding could be resolved, and this run renders the Container Apps (deployAppsEnabled=true). loom-console would come up with LOOM_TENANT_ADMIN_GROUP_ID and LOOM_TENANT_ADMIN_OID both empty, which shuts /admin/* for EVERY user with no in-product remedy. Set the FIAB_ADMIN_GROUP_ID repo variable (or secret) to your Loom admin security-group object id — 'az ad group show --group \"Loom Admins\" --query id -o tsv' — or dispatch this workflow with tenant_admin_group_id / tenant_admin_oid. Refusing."
             exit 1
           fi
@@ -801,6 +809,36 @@ jobs:
           # path in docs/fiab) resolves to the same binding rather than ''.
           echo "LOOM_ADMIN_ENTRA_GROUP_ID=$ADMIN_ENTRA_GROUP_ID" >> "$GITHUB_ENV"
           echo "LOOM_TENANT_ADMIN_GROUP_ID=$TENANT_ADMIN_GROUP"  >> "$GITHUB_ENV"
+          # Hand the COMPOSED binding (not the raw inputs) to the principal-kind
+          # refusal below, so what is classified is exactly what will be applied.
+          # Recomputing them there would be a second copy of this resolution, and
+          # a second copy is what drifted in #3022.
+          echo "tenant_admin_oid=${TENANT_ADMIN_OID:-}"      >> "$GITHUB_OUTPUT"
+          echo "tenant_admin_group=$TENANT_ADMIN_GROUP"      >> "$GITHUB_OUTPUT"
+          # EXPLICIT if/else, not `A && B || C`. That idiom is not if-then-else:
+          # when B fails, C still runs. It is safe here only because `echo` cannot
+          # fail — which is exactly the reasoning that stops being true the next
+          # time someone edits the middle branch (shellcheck SC2015).
+          if [ -z "${TENANT_ADMIN_OID:-}" ]; then
+            OID_SOURCE="unbound"
+          elif [ -n "${INPUT_TENANT_ADMIN_OID:-}" ]; then
+            OID_SOURCE="the tenant_admin_oid dispatch input"
+          else
+            OID_SOURCE="the FIAB_TENANT_ADMIN_OID repo variable"
+          fi
+          if [ -z "$TENANT_ADMIN_GROUP" ]; then
+            GROUP_SOURCE="unbound"
+          elif [ -n "${INPUT_TENANT_ADMIN_GROUP_ID:-}" ]; then
+            GROUP_SOURCE="the tenant_admin_group_id dispatch input"
+          else
+            GROUP_SOURCE="the FIAB_ADMIN_GROUP_ID repo variable/secret"
+          fi
+          # Grouped redirect: individual `>>` per line is SC2129, and this block
+          # writes several related outputs.
+          {
+            echo "tenant_admin_oid_source=$OID_SOURCE"
+            echo "tenant_admin_group_source=$GROUP_SOURCE"
+          } >> "$GITHUB_OUTPUT"
           add --parameters "loomVanityDomain=$CSA_LOOM_VANITY_DOMAIN"
           # #3056 — adopt, never re-mint. Empty ONLY on a greenfield estate with
           # no console to read; passing it empty on an estate that already has
@@ -855,6 +893,50 @@ jobs:
           echo "::notice::Composed $(grep -c . "$ARGS_FILE") deployment argument(s); sha256=$SHA. The what-if and the apply expand THIS file — there is no second copy to drift (#3022)."
           echo "Bicep parameters in this deployment (values redacted — adminEntraGroupId is a secret):"
           sed -n 's/^\([A-Za-z][A-Za-z0-9]*\)=.*/  \1=<redacted>/p' "$ARGS_FILE"
+
+      # ── THE BOUND ADMIN MUST BE A HUMAN ADMIN (#3109) ─────────────────────
+      #
+      # Composing a binding is not the same as composing a WORKING one. Every
+      # wrong shape fails identically to a right one — the container app comes
+      # up with LOOM_TENANT_ADMIN_OID / _GROUP_ID set, /admin/readiness reports
+      # the binding present, and no human can pass the gate:
+      #
+      #   * a SERVICE PRINCIPAL oid — what admin-plane/main.bicep produced on
+      #     every CI run while it fell back to deployer().objectId, because CI
+      #     logs in as an SP. A workload identity cannot sign in interactively,
+      #     so the bypass belongs to a principal that can never use it.
+      #   * a GROUP oid in the OID slot (or a user oid in the GROUP slot) —
+      #     feature-gate.ts matches the oid against session.claims.oid and the
+      #     group against session.claims.groups; neither ever crosses over.
+      #   * a comma-separated OID — compared with === against the whole string.
+      #
+      # The classification is Microsoft Graph's own @odata.type, read through
+      # the ACTIVE cloud's Graph endpoint (az cloud show), so the same step is
+      # correct in a sovereign boundary. It fails closed on an unresolved read
+      # and on an empty population: an unknown binding is the state that
+      # shipped the outage, and "0 violations because nothing was checked" is
+      # the guard class this repo keeps finding inside its own guards.
+      #
+      # Runs BEFORE the what-if — a refusal must cost seconds, not an hour of
+      # provisioning, and nothing has reached ARM at this point.
+      #
+      # DOES THIS CREDENTIAL HAVE THE DIRECTORY READ? Measured, not assumed: on
+      # csa-loom-post-deploy-bootstrap run 31239422563 (2026-08-08), logging in
+      # with this same secrets.AZURE_CLIENT_ID, `az ad sp list --filter "appId
+      # eq '00000003-…'"` returned the Microsoft Graph SP object id — a Graph
+      # directory read that succeeded. If this step ever reports a REFUSED read,
+      # that is the permission to restore (Directory.Read.All application
+      # permission, or the Directory Readers role, on the deploy SP); the step
+      # says so in its own message rather than guessing a principal type.
+      - name: Bootstrap admin binding is a HUMAN admin (rejects a service-principal oid — #3109)
+        env:
+          TENANT_ADMIN_OID: ${{ steps.params.outputs.tenant_admin_oid }}
+          TENANT_ADMIN_OID_SOURCE: ${{ steps.params.outputs.tenant_admin_oid_source }}
+          TENANT_ADMIN_GROUP_ID: ${{ steps.params.outputs.tenant_admin_group }}
+          TENANT_ADMIN_GROUP_SOURCE: ${{ steps.params.outputs.tenant_admin_group_source }}
+          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
+          DEPLOY_LANE: .github/workflows/deploy-fiab-commercial.yml
+        run: node scripts/ci/bootstrap-admin-principal.mjs
 
       - name: Bicep what-if (preview)
         id: whatif

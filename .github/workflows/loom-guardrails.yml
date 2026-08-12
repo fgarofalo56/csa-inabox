@@ -358,6 +358,22 @@ jobs:
         run: |
           node scripts/ci/check-tenant-admin-binding.mjs --selftest
           node scripts/ci/check-tenant-admin-binding.mjs
+      # tenant-admin-binding (above) proves a binding is SUPPLIED. This proves it
+      # is a binding a HUMAN can use. They are different failures with identical
+      # symptoms: on the live estate the console came up with
+      # LOOM_TENANT_ADMIN_OID *populated* — with the DEPLOY SERVICE PRINCIPAL's
+      # object id, because admin-plane/main.bicep fell back to
+      # deployer().objectId and every CI deploy authenticates as an SP. A
+      # workload identity never completes the interactive sign-in that
+      # feature-gate.ts compares against, so that binding reads as configured on
+      # /admin/readiness and matches nobody. Same for a group id in the oid slot,
+      # a user oid in the group slot, or a comma list (=== on the whole string).
+      # B1/B2 hold the ARM-side gate in EVERY cloud; W1 holds that a lane binding
+      # an oid also classifies it against the tenant before the apply.
+      # Mutation-proved in scripts/ci/__tests__/bootstrap-admin-principal.test.mjs.
+      - name: admin-principal-kind (the bound bootstrap admin is a principal a human can sign in as — #3109)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-admin-principal-kind.mjs
       # deploy-staleness (above) says the reconcile has not RUN. This says that
       # when it does run, it cannot destroy, duplicate or re-image the estate:
       # no destructive step on the schedule, one image repository per
