@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.92.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.4...csa-inabox-v0.92.5) (2026-08-12)
+
+
+### Bug Fixes
+
+* **notebook:** auto-bind the Spark pool server-side — run-cell no longer 400s ([#3267](https://github.com/fgarofalo56/csa-inabox/issues/3267)) ([8ae9f2e](https://github.com/fgarofalo56/csa-inabox/commit/8ae9f2eee968e61de2a46b19c46bc4f1bcbbe693))
+
 ## [0.92.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.92.3...csa-inabox-v0.92.4) (2026-08-12)
 
 
