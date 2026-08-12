@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.93.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.3...csa-inabox-v0.93.4) (2026-08-12)
+
+
+### Bug Fixes
+
+* **a11y:** name the Purview loading spinner from its visible caption ([#3169](https://github.com/fgarofalo56/csa-inabox/issues/3169)) ([#3311](https://github.com/fgarofalo56/csa-inabox/issues/3311)) ([b015ede](https://github.com/fgarofalo56/csa-inabox/commit/b015ede5eea6a4d43b9a5d73fcfc611da9cc8f54))
+
+
+### Documentation
+
+* **cron:** record the MEASURED cadence where four workflows claim a declared one ([#3226](https://github.com/fgarofalo56/csa-inabox/issues/3226)) ([#3309](https://github.com/fgarofalo56/csa-inabox/issues/3309)) ([b1b1523](https://github.com/fgarofalo56/csa-inabox/commit/b1b15232b9608cb620deee5b6b7d948764d51f2b))
+
 ## [0.93.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.2...csa-inabox-v0.93.3) (2026-08-12)
 
 
