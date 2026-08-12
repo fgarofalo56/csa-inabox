@@ -43,7 +43,13 @@ const LIVY_MARKER =
   /\b(createLivySession|createLivySessionAsync|submitLivyStatement|getLivyStatement|getLivySession|killLivySession|keepaliveLivySession)\b/;
 
 /** A pool value that arrives from the CALLER (request body or query string). */
-const POOL_READ = /body\??\.pool\b|searchParams\.get\('pool'\)|sp\.get\('pool'\)/;
+// `(body as any)?.pool` must match too. The first version required `body`
+// ADJACENT to `.pool`, so a TypeScript cast between them slipped the read past
+// the matcher entirely: a reviewer's fair reproduction of the #3171 defect
+// written that way produced 5/5 PASS. The pre-fix shape on main was
+// `body?.pool`, which this always caught — but a rule keyed to one spelling
+// of a read only ever catches that spelling.
+const POOL_READ = /(?:\bbody\b|\(\s*body\b[^)]*\))\s*\??\.pool\b|searchParams\.get\('pool'\)|sp\.get\('pool'\)/;
 
 /** The three routes the #3171 defect was found in. Their absence is a failure. */
 const REQUIRED_MEMBERS = [
