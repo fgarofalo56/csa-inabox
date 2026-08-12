@@ -839,6 +839,48 @@ jobs:
             echo "tenant_admin_oid_source=$OID_SOURCE"
             echo "tenant_admin_group_source=$GROUP_SOURCE"
           } >> "$GITHUB_OUTPUT"
+          # ADOPT THE LIVE VANITY DOMAIN, never pass '' over one that exists.
+          #
+          # `vanity_domain` is an OPTIONAL dispatch input with no default, so a
+          # schedule (which carries no inputs) and any dispatch that leaves the
+          # field blank both send ''. front-door.bicep then renders
+          #     customDomains: empty(vanityDomain) ? [] : [ { id: … } ]
+          # which BLANKS the route binding, and the edge answers SNI with the
+          # fallback *.azureedge.net certificate — every browser refuses the
+          # console on its real URL.
+          #
+          # Measured on run 31566892058 (2026-08-12): CSA_LOOM_VANITY_DOMAIN was
+          # empty, the apply succeeded, and csa-loom.limitlessdata.ai went to
+          # `subject=CN=*.azureedge.net` with route customDomains=0. Third
+          # recurrence of the same outage.
+          #
+          # This is the pattern the internal token already uses immediately below
+          # (#3056: "adopt, never re-mint — passing it empty on an estate that
+          # already has one is what strands every other holder"). Same rule, same
+          # reason: an out-of-band value the template does not carry must be READ
+          # from the estate, not defaulted to empty.
+          #
+          # Discovery FAILS CLOSED: if the profile cannot be read we do not know
+          # whether a domain is bound, and passing '' on an unknown is exactly the
+          # move that caused the outage — so the run stops instead.
+          if [ -z "${CSA_LOOM_VANITY_DOMAIN:-}" ]; then
+            VD_ERR="$(mktemp)"
+            ADMIN_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+            FD_PROFILE="$(az afd profile list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>"$VD_ERR" | tr -d '\r')"
+            if [ -n "$FD_PROFILE" ]; then
+              LIVE_VANITY="$(az afd custom-domain list --profile-name "$FD_PROFILE" -g "$ADMIN_RG" --query "[0].hostName" -o tsv 2>>"$VD_ERR" | tr -d '\r')"
+              if [ -n "${LIVE_VANITY:-}" ]; then
+                CSA_LOOM_VANITY_DOMAIN="$LIVE_VANITY"
+                echo "::notice::Adopted the live vanity domain '$LIVE_VANITY' (no vanity_domain input was supplied). Passing '' here would have unbound it and taken the console offline on its real URL."
+              else
+                echo "::notice::Front Door profile '$FD_PROFILE' carries no custom domain — this estate has no vanity URL to preserve."
+              fi
+            elif [ -s "$VD_ERR" ]; then
+              echo "::error::Could not read the Front Door profile in $ADMIN_RG to find out whether a vanity domain is bound: $(head -c 400 "$VD_ERR"). That is UNKNOWN, and passing an empty loomVanityDomain over a bound domain UNBINDS it. Refusing."
+              exit 1
+            fi
+            rm -f "$VD_ERR"
+          fi
           add --parameters "loomVanityDomain=$CSA_LOOM_VANITY_DOMAIN"
           # #3056 — adopt, never re-mint. Empty ONLY on a greenfield estate with
           # no console to read; passing it empty on an estate that already has
