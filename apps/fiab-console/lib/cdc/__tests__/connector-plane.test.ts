@@ -65,15 +65,42 @@ describe('validateConnectorWizard', () => {
     expect(v.ok).toBe(false);
     expect(v.errors.join(' ')).toMatch(/source type/i);
   });
+  // #3149 — a raw Key Vault reference was accepted, validated and persisted for
+  // months while NOTHING downstream read it, so every Start ran as the Console
+  // UAMI. It is now refused rather than ignored: silently accepting a credential
+  // you cannot honour is how the bug survived. An inline password is still
+  // refused too, and BOTH must be refused for the plane to be honest.
   it('rejects an inline password in the credential field', () => {
     const v = validateConnectorWizard({ displayName: 'x', kind: 'mysql', server: 'h', database: 'd', secretRef: 'P@ss w0rd!' });
     expect(v.ok).toBe(false);
-    expect(v.errors.join(' ')).toMatch(/Key Vault/i);
+    expect(v.errors.join(' ')).toMatch(/no longer accepted|Loom Connection/i);
   });
-  it('accepts a Key Vault reference credential', () => {
+  it('REFUSES a raw Key Vault reference and names the replacement', () => {
     const v = validateConnectorWizard({ displayName: 'x', kind: 'mysql', server: 'h', database: 'd', secretRef: 'mysql-pw' });
+    expect(v.ok).toBe(false);
+    expect(v.errors.join(' ')).toMatch(/connectionId/);
+    // and it must NOT be persisted under any key
+    expect(v.state).toBeUndefined();
+  });
+  it('accepts a Loom Connection id and persists it as the credential', () => {
+    const v = validateConnectorWizard({ displayName: 'x', kind: 'mysql', server: 'h', database: 'd', connectionId: 'conn-sales-mysql' });
     expect(v.ok).toBe(true);
-    expect(v.state!.secretRef).toBe('mysql-pw');
+    expect(v.state!.connectionId).toBe('conn-sales-mysql');
+    // The dropped field must be gone entirely, not merely unread.
+    expect('secretRef' in (v.state as Record<string, unknown>)).toBe(false);
+  });
+  it('rejects a Key Vault URI passed as a connectionId', () => {
+    const v = validateConnectorWizard({
+      displayName: 'x', kind: 'mysql', server: 'h', database: 'd',
+      connectionId: 'https://kv-loom.vault.azure.net/secrets/mysql-pw',
+    });
+    expect(v.ok).toBe(false);
+    expect(v.errors.join(' ')).toMatch(/not a Key Vault URI/i);
+  });
+  it('omits the credential entirely for Entra-token sources', () => {
+    const v = validateConnectorWizard({ displayName: 'x', kind: 'postgres', server: 'h', database: 'd' });
+    expect(v.ok).toBe(true);
+    expect(v.state!.connectionId).toBeUndefined();
   });
   it('coerces an unknown sync mode to incremental', () => {
     const v = validateConnectorWizard({ displayName: 'x', kind: 'postgres', server: 'h', database: 'd', syncMode: 'bogus' });

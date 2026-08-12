@@ -147,9 +147,22 @@ export interface CdcConnectorWizardInput {
   tables?: CdcTableSpec[];
   syncMode?: string;
   /**
-   * Key Vault secret REFERENCE for the source credential (a secret name or a
-   * `https://<vault>.vault.azure.net/secrets/<name>` URI) — NEVER an inline
-   * secret value. Optional for Entra-token sources (Postgres/SQL Server).
+   * Loom Connection id holding the source credential. Resolved at Start via the
+   * SHARED `withSourceAuth()` path (lib/azure/connection-auth.ts) — the same one
+   * mirrored-database uses.
+   *
+   * Omit for Entra-token sources (Postgres / SQL Server via the Console UAMI).
+   */
+  connectionId?: string;
+  /**
+   * DEPRECATED and REJECTED (#3149). A raw Key Vault reference was collected,
+   * validated, and persisted here for months, and NOTHING downstream ever read
+   * it: `connectorToEngineSource()` dropped it, `EngineSourceConfig` had no
+   * credential field, and every Start authenticated as the Console UAMI while
+   * the wizard implied otherwise.
+   *
+   * It is refused rather than quietly ignored, because silently accepting a
+   * credential you cannot honour is how that bug survived. Use `connectionId`.
    */
   secretRef?: string;
 }
@@ -161,6 +174,15 @@ export interface EngineSourceConfig {
   database: string;
   tables: CdcTableSpec[];
   syncMode?: CdcSyncMode;
+  /**
+   * Resolved source credentials. NOT set by `connectorToEngineSource()` — that
+   * function stays structural so this module remains vitest-pure. The route
+   * layers them on via `withSourceAuth()`, exactly as the mirrored-database
+   * lifecycle/state routes do. Absent = the engine reads as the Console UAMI,
+   * which is now a DELIBERATE state rather than an accident.
+   */
+  auth?: unknown;
+  pgAuth?: unknown;
 }
 
 /** The connector document's `state` bag — what we persist on the Cosmos item. */
@@ -169,8 +191,11 @@ export interface CdcConnectorState extends EngineSourceConfig {
   cdcConnector: true;
   kind: CdcSourceKind;
   connectorClass: string;
-  /** KV reference only (validated); absent for Entra-token sources. */
-  secretRef?: string;
+  /**
+   * Loom Connection id — resolved to real credentials at Start via
+   * withSourceAuth(). Absent = Entra-token source (Console UAMI).
+   */
+  connectionId?: string;
   /** Engine replication status, updated by the state route. */
   mirroringStatus?: string;
   [k: string]: unknown;
@@ -226,9 +251,30 @@ export function validateConnectorWizard(input: CdcConnectorWizardInput): CdcVali
     ? (syncModeRaw as CdcSyncMode)
     : 'incremental';
 
+  // #3149 — a raw Key Vault reference cannot be honoured by this plane: there is
+  // no declared KvSecretPurpose for an operator-named CDC secret, so it would be
+  // persisted and never read, and Start would silently run as the Console UAMI.
+  // Refuse it loudly instead of accepting a credential we will ignore.
   const secretRefRaw = String(input.secretRef || '').trim();
-  if (secretRefRaw && !isKeyVaultReference(secretRefRaw)) {
-    errors.push('The credential must be a Key Vault secret reference (a secret name or vault-secret URI) — never an inline password.');
+  if (secretRefRaw) {
+    errors.push(
+      'A raw Key Vault secret reference is no longer accepted for CDC connectors (#3149) — it was persisted but never used, '
+      + 'so every Start authenticated as the Console UAMI. Create a Loom Connection for this source and pass `connectionId` instead.',
+    );
+  }
+
+  // The credential is a Loom Connection id, resolved at Start by withSourceAuth().
+  // Deliberately NOT a Key Vault reference: that path has no declared purpose and
+  // no username, and Connections already carry a reviewed, audited credential.
+  // NOTE: `isKeyVaultReference()` deliberately accepts a BARE SECRET NAME, which
+  // is character-identical to a connection id — using it here rejected every
+  // valid id. Only the URI form is distinguishable, so only the URI form is
+  // called out; the charset check below catches everything else.
+  const connectionIdRaw = String(input.connectionId || '').trim();
+  if (connectionIdRaw && /^https?:\/\//i.test(connectionIdRaw)) {
+    errors.push('connectionId is a Loom Connection id, not a Key Vault URI. Create a Connection that holds the secret and pass its id.');
+  } else if (connectionIdRaw && !/^[A-Za-z0-9._-]{1,128}$/.test(connectionIdRaw)) {
+    errors.push('connectionId must be a Loom Connection id (letters, digits, dot, dash, underscore; 1-128 chars).');
   }
 
   const tables: CdcTableSpec[] = Array.isArray(input.tables)
@@ -249,7 +295,7 @@ export function validateConnectorWizard(input: CdcConnectorWizardInput): CdcVali
     database,
     tables,
     syncMode,
-    ...(secretRefRaw ? { secretRef: secretRefRaw } : {}),
+    ...(connectionIdRaw ? { connectionId: connectionIdRaw } : {}),
     mirroringStatus: 'NotStarted',
   };
   return { ok: true, errors: [], state };

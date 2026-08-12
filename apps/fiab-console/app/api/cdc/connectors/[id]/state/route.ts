@@ -21,6 +21,11 @@ import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { runMirrorSnapshot, type MirrorTableResult } from '@/lib/azure/mirror-engine';
 import { connectorToEngineSource, foldSchemaCapture, type CdcSchemaTracking } from '@/lib/cdc/connector-plane';
+// SHARED with the mirrored-database lifecycle/state routes on purpose. A
+// per-route copy of credential resolution is precisely how the original
+// 'collected but never consumed' bug survived in two planes at once (#3146,
+// #3149).
+import { withSourceAuth } from '@/lib/azure/connection-auth';
 import { captureSourceSchema } from '@/lib/cdc/schema-capture';
 
 export const runtime = 'nodejs';
@@ -48,7 +53,16 @@ export const POST = withWorkspaceOwner('cdc-connector', async (req: NextRequest,
     }
 
     // ---- start ----
-    const src = connectorToEngineSource(state);
+    // Bind the operator's stored Connection credential to the run. Without this
+    // the engine reads as the Console UAMI no matter what the wizard collected —
+    // which is exactly what #3149 measured. `connectionId` absent is a legitimate
+    // state (Entra-token sources); withSourceAuth returns UAMI_AUTH for it, so
+    // the fallback is now DELIBERATE and described rather than silent.
+    const { src, descriptor: sourceAuth } = await withSourceAuth(
+      session.claims.oid,
+      connectorToEngineSource(state),
+      state.connectionId ? String(state.connectionId) : undefined,
+    );
     const prevTableStatus = (Array.isArray(state.tablesStatus) ? state.tablesStatus : []) as MirrorTableResult[];
     // N6 — pass the tenant scope so the engine enforces the ODCS contracts bound
     // to this connector at the Bronze boundary (warn-quarantine → `_rejected`).
@@ -75,6 +89,11 @@ export const POST = withWorkspaceOwner('cdc-connector', async (req: NextRequest,
         lastRun: {
           at: new Date().toISOString(), status: run.status, engine: run.engine, cdcName: run.cdcName,
           basePath: run.basePath, note: run.note, error: run.error, gate: run.gate,
+          // NON-SECRET descriptor: which identity actually read the source
+          // ('connection' + its name, or 'uami'). Never the secret. Recorded so
+          // the surface can STATE the identity instead of implying one — the
+          // whole point of #3149 was that it implied a credential it never used.
+          sourceAuth,
         },
       },
       updatedAt: new Date().toISOString(),
@@ -82,11 +101,12 @@ export const POST = withWorkspaceOwner('cdc-connector', async (req: NextRequest,
     await items.item(item.id, item.workspaceId).replace(next);
 
     if (run.status === 'Gated') {
-      return apiOk({ action, status: { mirroringStatus }, gate: run.gate, note: run.note });
+      return apiOk({ action, status: { mirroringStatus }, gate: run.gate, note: run.note, sourceAuth });
     }
     return apiOk({
       action, status: { mirroringStatus }, tables: run.tables, engine: run.engine,
       cdcName: run.cdcName, basePath: run.basePath, note: run.note, error: run.error,
+      sourceAuth,
     });
   } catch (e) {
     return apiServerError(e);
