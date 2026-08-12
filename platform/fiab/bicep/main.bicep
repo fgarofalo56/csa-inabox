@@ -903,6 +903,9 @@ param frontDoorEnabled bool = false
 @description('Optional vanity URL for the console (e.g. csa-loom.contoso.ai) — set in the Setup Wizard. Creates a Front Door managed-cert custom domain; the deploy outputs the CNAME + _dnsauth TXT to add at your DNS provider. Empty = use the generated Front Door host.')
 param loomVanityDomain string = ''
 
+@description('OPTIONAL. Existing Front Door customDomains RESOURCE name for loomVanityDomain (#3287). Empty => derived from the host name.')
+param loomVanityCustomDomainName string = ''
+
 // Standalone Azure ML workspace coordinates for the AML control-plane
 // navigator (aml-client.ts / resolveAmlTarget). All optional — empty values
 // fall back to the AI Foundry hub env (LOOM_FOUNDRY_*) + the deployment
@@ -1314,6 +1317,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
     loomVanityDomain: loomVanityDomain
+    loomVanityCustomDomainName: loomVanityCustomDomainName
     // Single-sub: the DLZ ADLS account name is deterministic over singleDlzRg
     // (matches landing-zone/storage.bicep's saName) so the Console binds to the
     // real account — LOOM_ADLS_ACCOUNT / LOOM_*_URL / LOOM_ORG_VISUALS_URL all
@@ -1383,7 +1387,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // `adminPlane` deploys BEFORE `singleDlz` (and singleDlz depends on
     // adminPlane outputs) — referencing the DLZ output would create a cycle.
     // This is the same deterministic-name pattern used for amlWorkspaceName /
-    // loomCosmosAccount above. Database/graph names match the module's literals
+    // loomCosmosAccount above. Database/graph names match the the module literals
     // (loom-graph / default / loom-vectors / docs-vec); they are NOT optional —
     // the gremlin client defaults to graphdb/graph which the module never
     // creates, so a bare endpoint would target a non-existent db/graph.
@@ -2208,7 +2212,7 @@ module dlzAttachS3Gateway 'modules/data-plane/s3-gateway-aca.bicep' = if (topolo
     name: take('loom-s3-gateway-${attachDomainName}', 32)
     s3GatewayConfig: {
       environmentId: effHubCaeId
-      // ACR pull credential ONLY — the storage data plane runs as the module's
+      // ACR pull credential ONLY — the storage data plane runs as the the module
       // own dedicated Storage-Blob-Data-Reader identity.
       uamiId: effHubConsoleUamiId
       lakeStorageAccountName: dlzAttach!.outputs.storageAccountName
@@ -2866,7 +2870,7 @@ output dlzAttachHubAiServicesAccountName string = topology == 'dlz-attach' ? hub
 // dlz-attach echo-back: the EXACT hub-console DLZ env vars this attach wired (so
 // the orchestrator can verify, or re-apply `az containerapp update --set-env-vars`
 // on the hub console if the cross-sub deploymentScript was skipped/failed).
-// Sourced from the hub-console env module's outputs (computed there to keep
+// Sourced from the hub-console env the module outputs (computed there to keep
 // environment() out of the subscription-scoped main.bicep). Empty unless the
 // module ran (dlz-attach + containerApps + hub Console UAMI present).
 var dlzAttachConsoleEnvWired = topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami

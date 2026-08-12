@@ -453,7 +453,7 @@ var accessReviewSweepCron = functionAppsConfig.?accessReviewSweepCron ?? '5 * * 
 var accessGroupSyncCron = functionAppsConfig.?accessGroupSyncCron ?? '25 * * * *'
 // E1 2026-08-06: 500 exhausted by ~05:50 UTC at measured merge velocity (27–31
 // full 153-Q passes/day), zero-judging every gated run — see the sizing note in
-// copilot-evaluator-job.bicep. Must match that module's default.
+// copilot-evaluator-job.bicep. Must match that the module default.
 var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 5000
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
@@ -736,7 +736,7 @@ var loomCiToken = guid(loomGeneratedSecretSeed, 'loom-ci-token-v1')
 // boundaries it is deployed via the cluster GitOps path instead.
 // SOVEREIGN GATE: the loom-setup-orchestrator image is NOT published to the
 // GCC-High / IL5 release ACR (MANIFEST_UNKNOWN on a fresh Gov deploy), and the
-// Console env-wires LOOM_SETUP_ORCHESTRATOR_URL from this module's output, so an
+// Console env-wires LOOM_SETUP_ORCHESTRATOR_URL from this the module output, so an
 // active-but-unpullable orchestrator blocks the Console container app itself.
 // Gate it off for GCC-High / IL5 — the Setup Wizard's browser Deploy honest-gates
 // (the operator deploys via CLI / the deploy workflow); re-enable once the image
@@ -818,7 +818,7 @@ var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && 
 // (catalogConfig) and the toggle rides the EXISTING loomBackends bag, so this
 // adds ZERO top-level params anywhere (main.bicep is at 251/256).
 //
-// COST. minReplicas 0 — the same override duckdbTier applies below. The module's
+// COST. minReplicas 0 — the same override duckdbTier applies below. The the module
 // own default is 1 ("the catalog is on the metadata hot path"), which is the
 // right shape for an operator who explicitly wants an always-warm catalog and the
 // WRONG shape for a default-ON service; scale-to-zero makes "on by default" also
@@ -1159,7 +1159,7 @@ var duckdbTierActive = duckdbTierEnabled && containerPlatform == 'containerApps'
 // LOOM_UNITY_URL is set, so an ABSENT catalog reported ready. Deploying it here
 // is what makes that gate MEAN something.
 //
-// AUTHORIZATION IS NOT OPTIONAL ON THIS PATH. The module's own default is
+// AUTHORIZATION IS NOT OPTIONAL ON THIS PATH. The the module own default is
 // `authMode: 'entra'`, and when no audience can be pinned it deploys SEALED
 // (minReplicas 0, an unroutable audience) rather than silently downgrading to an
 // anonymous catalog — that downgrade WAS #2643. #2974 then closed the other half
@@ -2344,7 +2344,7 @@ var loomGithubMcpPatKvSecret = loomMcpBackends.?githubPatKvSecret ?? ''
 // NOTE: loomAasDatabase (TMSL Catalog) is declared once earlier in this file
 // (defaulted to 'model'). The column-editor path reuses the same param.
 
-// (The former `aasSku` param — the composite `aas` module's SKU — was retired
+// (The former `aasSku` param — the composite `aas` the module SKU — was retired
 // with that module: the single AAS server is now sized solely by aasSkuName
 // via aas-server.bicep, giving a deterministic single SKU on redeploy. rel-T31/B7.)
 
@@ -2411,9 +2411,9 @@ module defaultAlerts 'monitoring-default-alerts.bicep' = {
     // 256 ARM/Bicep parameter limit). The default rules notify subscription
     // Owners (the admin group) via the ARM-role receiver; an operator adds an
     // email/SMS/webhook receiver to the loom-default-alerts action group from
-    // the /monitor Alerts editor. Opt-out via the module's skipDefaultAlerts.
+    // the /monitor Alerts editor. Opt-out via the the module skipDefaultAlerts.
     notifyOwners: true
-    // O1: the module's @secure alertWebhookUrl (persisted on-call webhook
+    // O1: the the module @secure alertWebhookUrl (persisted on-call webhook
     // receiver) is intentionally NOT passed here — a KV getSecret() cannot be
     // empty-safe when the operator has not created the secret yet. The runtime
     // path (LOOM_ALERT_WEBHOOK_URL secretRef via observabilityConfig.
@@ -3356,7 +3356,7 @@ module aasServer 'aas-server.bicep' = if (aasEnabled && empty(existingAasServerN
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     tenantId: tenant().tenantId
     // Optional dedicated RLS/OLS SPN admin (LOOM_AAS_CLIENT_ID authoring over
-    // XMLA). Preserves the former composite `aas` module's SPN-admin option now
+    // XMLA). Preserves the former composite `aas` the module SPN-admin option now
     // that this module is the single owner of the shared AAS server (rel-T31/B7).
     spnAdminClientId: aasSpnClientId
   }
@@ -4349,7 +4349,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // /admin/migrate renders fully with its honest Fix-it gate.
             //
             // BLAST-RADIUS: the value is CONSTRUCTED from the Container Apps
-            // environment's defaultDomain rather than read from the module's
+            // environment's defaultDomain rather than read from the the module
             // `fqdn` output ON PURPOSE. Reading the output makes ARM emit
             // `appDeployments dependsOn [... loomMigrate ...]`, which means a
             // loom-migrate image that is missing from a boundary's ACR stops
@@ -5079,7 +5079,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Custom domain-image gallery storage (honest-gated). The
           // /admin/domains Image tab lists image blobs here; preset swatches +
           // icons work regardless. Precedence: an explicit operator param wins;
-          // otherwise fall back to the catalog module's auto-provisioned ADLS
+          // otherwise fall back to the catalog the module auto-provisioned ADLS
           // (DFS) container URL so the custom-image gallery is wired with NO
           // manual step whenever Purview/catalog storage is deployed. Stays
           // unset (honest "not configured" gate) only when neither is present.
@@ -5541,7 +5541,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AOAI_VIA_APIM',  value: string(aoaiViaApim) }
             { name: 'LOOM_AOAI_APIM_URL',  value: (apimEnabled && empty(existingApimName) && aoaiApimGatewayEnabled) ? apim!.outputs.aoaiGatewayUrl : '' }
             // Inline code completion (ghost text) deployment. Explicit
-            // loomAoaiCompletionDeployment wins; otherwise the Foundry module's
+            // loomAoaiCompletionDeployment wins; otherwise the Foundry the module
             // output (empty unless a dedicated slot was deployed). When empty the
             // /api/copilot/complete route falls back to LOOM_AOAI_DEPLOYMENT.
             { name: 'LOOM_AOAI_COMPLETION_DEPLOYMENT', value: !empty(loomAoaiCompletionDeployment) ? loomAoaiCompletionDeployment : (agentFoundryCreate ? agentFoundry!.outputs.completionDeployment : '') }
@@ -5817,7 +5817,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // postgresql:// string (with its @secure() seed-derived password) and
           // writes it to the Loom Key Vault; this reads it back at deploy time
           // through the Console UAMI's Key Vault Secrets User grant. Referencing
-          // the module's own output name (not the local var) makes the ACA app
+          // the the module own output name (not the local var) makes the ACA app
           // wait for the secret to exist before it binds it.
           ducklakeCatalogActive ? [
             { name: 'loom-ducklake-catalog-url', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${ducklakeCatalog!.outputs.catalogUrlSecretName}', identity: identity.outputs.uamiConsoleId }
@@ -6146,7 +6146,7 @@ module ducklakeCatalog '../data-plane/ducklake-catalog-postgres.bicep' = if (duc
     // data-plane/loom-unity-postgres.bicep, which is a standalone out-of-band
     // entrypoint — MUST consume the zone this module creates rather than create
     // its own. It is surfaced as the `ducklakePrivateDnsZoneId` output below;
-    // pass it as that module's `privateDnsZoneId`. Deploying both into the SAME
+    // pass it as that the module `privateDnsZoneId`. Deploying both into the SAME
     // resource group is also fine (identical resource, idempotent); it is only
     // a cross-RG second zone of the same name that conflicts.
     entraAdminPrincipalId: identity.outputs.uamiConsolePrincipalId
@@ -6169,7 +6169,7 @@ module ducklakeCatalog '../data-plane/ducklake-catalog-postgres.bicep' = if (duc
 // that runs the `ATTACH 'ducklake:postgres:…'` did not exist. The tier is now
 // deployed by default and both vars are bound on the Console.
 //
-// SCALE-TO-ZERO (loom_default_on_opt_out): the module's own default is
+// SCALE-TO-ZERO (loom_default_on_opt_out): the the module own default is
 // minReplicas 1 / 2 vCPU / 4 GiB (~$120-240/mo/cloud), which is the right shape
 // for an operator who explicitly wants an always-warm interactive tier but the
 // WRONG shape for a default-ON service. The orchestrator overrides to
@@ -6179,7 +6179,7 @@ module ducklakeCatalog '../data-plane/ducklake-catalog-postgres.bicep' = if (duc
 // DISABLE toggle, never an enablement gate.
 //
 // LAKE ROLE: `assignLakeRole: false`. The lake lives in the DLZ RG (and on a
-// dlz-attach estate a different SUBSCRIPTION), so the module's own in-RG role
+// dlz-attach estate a different SUBSCRIPTION), so the the module own in-RG role
 // assignment cannot resolve it; the Console UAMI this app runs as already holds
 // Storage Blob Data Contributor on the lake via console-azure-connections-rbac.
 // =====================================================================
@@ -6224,7 +6224,7 @@ module duckdbTier '../data-plane/duckdb-aca.bicep' = if (duckdbTierActive) {
 // COST: minReplicas 0 — same override, same rationale, as duckdbTier above.
 //
 // LAKE ROLE: `assignLakeRole: false`. The lake lives in the DLZ RG (and on a
-// dlz-attach estate a different SUBSCRIPTION), so the module's own in-RG role
+// dlz-attach estate a different SUBSCRIPTION), so the the module own in-RG role
 // assignment cannot resolve it — and it does not need to: this app runs as the
 // CONSOLE UAMI, which console-azure-connections-rbac already grants Storage Blob
 // Data Contributor on that lake. Same choice as duckdbTier above.
@@ -6299,7 +6299,7 @@ module s3Gateway '../data-plane/s3-gateway-aca.bicep' = if (s3GatewayActive) {
     location: location
     s3GatewayConfig: {
       environmentId: containerPlatformModule.outputs.caeId
-      // ACR pull credential ONLY — the storage data plane runs as the module's
+      // ACR pull credential ONLY — the storage data plane runs as the the module
       // own dedicated Storage-Blob-Data-Reader identity.
       uamiId: identity.outputs.uamiConsoleId
       lakeStorageAccountName: loomStorageAccount
@@ -6376,7 +6376,7 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     // csa-loom-post-deploy-bootstrap.yml / the in-bicep deploymentScript), so
     // effectiveMsalClientId is empty and the engine deploys SEALED: enforced,
     // sentinel audience nothing can mint, minReplicas 0 so it bills nothing.
-    // It is never anonymous-on-the-VNet. Normalized to the module's union:
+    // It is never anonymous-on-the-VNet. Normalized to the the module union:
     // anything other than an explicit 'disabled' opt-out means ENFORCED.
     authMode: trinoAuthMode == 'disabled' ? 'disabled' : 'entra'
     entraClientId: trinoAudienceClientId
@@ -6448,7 +6448,7 @@ resource scriptRunnerUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024
 
 // AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) on the admin-plane ACR — the
 // runner identity's ONE and ONLY role. The existing-ref recomputes the registry
-// module's deterministic name (take('acrloom${uniqueString(resourceGroup().id)}',
+// the module deterministic name (take('acrloom${uniqueString(resourceGroup().id)}',
 // 50)) rather than reading registry.outputs.acrName, because a roleAssignment's
 // scope/name must be calculable at deployment START (a module output is a runtime
 // value → BCP120). dependsOn the registry module keeps ordering correct.
@@ -6552,7 +6552,7 @@ resource wranglerUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-
 }
 
 // AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) on the admin-plane ACR — the
-// wrangler identity's ONE and ONLY role. Recomputes the registry module's
+// wrangler identity's ONE and ONLY role. Recomputes the registry the module
 // deterministic name (same convention as scriptRunnerAcrPull) so the scope is
 // calculable at deployment start; dependsOn the registry module keeps ordering.
 // guid()-named ⇒ idempotent; gated on !skipRoleGrants so reconcile redeploys
@@ -7398,6 +7398,7 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
     caeDefaultDomain: containerPlatformModule.outputs.caeDefaultDomain
     consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
     vanityDomain: loomVanityDomain
+    vanityCustomDomainName: loomVanityCustomDomainName
     // Auto-approve the FD -> ACA env Private Link connection so a clean deploy is
     // end-to-end functional (no manual portal "Approve"; otherwise FD 504s until
     // approved). The Console UAMI holds Network Contributor on this admin-plane RG
@@ -7417,6 +7418,9 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
 
 @description('Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = generated Front Door host only. The deploy emits the CNAME + _dnsauth TXT to add at your DNS provider.')
 param loomVanityDomain string = ''
+
+@description('OPTIONAL. Existing Front Door customDomains RESOURCE name for loomVanityDomain. Empty => derived. See front-door.bicep (#3287): a derived name that does not match the live resource makes every apply fail Conflict instead of reconciling.')
+param loomVanityCustomDomainName string = ''
 
 // =====================================================================
 // Outputs
@@ -7668,7 +7672,7 @@ output mcpBridgeUrl string = containerPlatform == 'containerApps'
 output builtinMcpUrl string = builtinMcpUrl
 output builtinMcpApiKeySecretName string = loomBuiltinMcpActive ? loomBuiltinMcpApiKeySecretName : ''
 
-// Purview endpoint uses the catalog module's own purviewEndpoint output (which
+// Purview endpoint uses the catalog the module own purviewEndpoint output (which
 // is built from the SELF-HEALED purview region — catalog.bicep falls back to a
 // Purview-supported region when the hub `location`, e.g. centralus, is not in the
 // Purview availability set). Recomputing with `${location}` here would emit the
@@ -7726,9 +7730,9 @@ output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 // OpenAI User on the REAL account. Precedence: dedicated agentFoundry account
 // (the day-one default) > shared Foundry hub > reused existing account IN THE
 // ADMIN RG. A cross-sub / external BYO account is left empty here (the RBAC
-// module's `existing` ref is scoped to the admin RG, so it can't grant on an
+// the module `existing` ref is scoped to the admin RG, so it can't grant on an
 // out-of-RG account — the operator grants that one manually, matching the
-// module's documented note). Empty when AOAI is fully disabled → module no-ops.
+// the module documented note). Empty when AOAI is fully disabled → module no-ops.
 output aiServicesAccountName string = agentFoundryCreate
   ? agentFoundry!.outputs.accountNameOut
   : ((aiFoundryEnabled && empty(existingFoundryAccountName))

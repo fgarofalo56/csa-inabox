@@ -869,6 +869,12 @@ jobs:
             FD_PROFILE="$(az afd profile list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>"$VD_ERR" | tr -d '\r')"
             if [ -n "$FD_PROFILE" ]; then
               LIVE_VANITY="$(az afd custom-domain list --profile-name "$FD_PROFILE" -g "$ADMIN_RG" --query "[0].hostName" -o tsv 2>>"$VD_ERR" | tr -d '\r')"
+              # The RESOURCE NAME too, not just the host. front-door.bicep derives
+              # `replace(host, ".", "-")` = csa-loom-limitlessdata-ai, while this estate
+              # names it csa-loom-limitlessdata. Front Door refuses a SECOND custom
+              # domain for a host it has already claimed, so passing the host without
+              # the name made every apply fail Conflict instead of reconciling (#3287).
+              LIVE_VANITY_NAME="$(az afd custom-domain list --profile-name "$FD_PROFILE" -g "$ADMIN_RG" --query "[0].name" -o tsv 2>>"$VD_ERR" | tr -d '\r')"
               if [ -n "${LIVE_VANITY:-}" ]; then
                 CSA_LOOM_VANITY_DOMAIN="$LIVE_VANITY"
                 echo "::notice::Adopted the live vanity domain '$LIVE_VANITY' (no vanity_domain input was supplied). Passing '' here would have unbound it and taken the console offline on its real URL."
@@ -882,6 +888,9 @@ jobs:
             rm -f "$VD_ERR"
           fi
           add --parameters "loomVanityDomain=$CSA_LOOM_VANITY_DOMAIN"
+          if [ -n "${LIVE_VANITY_NAME:-}" ]; then
+            add --parameters "loomVanityCustomDomainName=$LIVE_VANITY_NAME"
+          fi
           # #3056 — adopt, never re-mint. Empty ONLY on a greenfield estate with
           # no console to read; passing it empty on an estate that already has
           # one is what re-mints the token and strands every other holder.
