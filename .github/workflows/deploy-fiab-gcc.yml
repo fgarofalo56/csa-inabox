@@ -51,9 +51,9 @@ on:
         type: string
         required: false
       keep_resources:
-        description: 'Keep resources up after provision AND run the post-deploy bootstrap (day-one: MSAL app-reg, Synapse SQL grants, Purview roles, Databricks SCIM, Spark PE). Skips teardown. Use for a real GCC install; leave false for the nightly validate-and-teardown ring.'
+        description: 'Keep the estate up and RECONCILE in place (the safe default, and what a real install wants). TRUE reconfigures and adds services without destroying anything, so a full run is IDEMPOTENT and can be repeated safely. Setting it FALSE makes this a TEARDOWN run — only do that for a deliberate clean-slate rebuild.'
         type: boolean
-        default: false
+        default: true
       allow_existing_hub:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed GCC hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: commercial and gcch have carried this; gcc did not, because its guard could not fail in the first place.)'
         type: boolean
