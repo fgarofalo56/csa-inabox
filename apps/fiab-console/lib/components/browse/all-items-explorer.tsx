@@ -19,6 +19,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { preloadEditor } from '@/lib/editors/registry';
 import { useRouter } from 'next/navigation';
 import {
   makeStyles, tokens, Badge, Dropdown, Option, Field, Spinner, Body1, Caption1,
@@ -189,7 +190,17 @@ export function AllItemsExplorer() {
       key: 'displayName', label: 'Name', sortable: true, filterable: true, width: 280,
       getValue: (r) => r.displayName || '(unnamed)',
       render: (r) => (
-        <Link href={`/items/${r.itemType}/${r.id}`} className={s.nameCell} style={{ textDecoration: 'none', color: 'inherit' }}>
+        <Link
+          href={`/items/${r.itemType}/${r.id}`}
+          className={s.nameCell}
+          style={{ textDecoration: 'none', color: 'inherit' }}
+          // Warm the editor's JS chunk while the pointer is still on the row.
+          // Editors are `ssr:false` dynamic imports, so without this the download
+          // only STARTS on navigation — 26 of 142 types took >2.5s to paint a
+          // single interactive control (UAT, 2026-08-11).
+          onMouseEnter={() => preloadEditor(r.itemType)}
+          onFocus={() => preloadEditor(r.itemType)}
+        >
           <BrandedItemIcon type={r.itemType} size="sm" />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.displayName || '(unnamed)'}</span>
         </Link>

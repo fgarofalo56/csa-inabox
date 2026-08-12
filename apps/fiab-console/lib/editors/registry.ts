@@ -43,11 +43,17 @@ type EditorComponent = ComponentType<EditorProps>;
 // PSR-9 — route-level code-split (ssr:false) PLUS a shared loading skeleton so a
 // heavy editor's JS chunk downloads behind a designed placeholder instead of a
 // blank pane (perceived-TTI win). The skeleton fills the ribbon + rail + body.
-const reg = (loader: () => Promise<Record<string, unknown>>, name: string): EditorComponent =>
-  dynamic(() => loader().then((m) => ({ default: m[name] as EditorComponent })), {
+// `dynamic()` keeps its loader private, so a chunk cannot be warmed in advance
+// through the public API. Stashing the loader ON the returned component is the
+// smallest way to expose it — see preloadEditor() below.
+const reg = (loader: () => Promise<Record<string, unknown>>, name: string): EditorComponent => {
+  const component = dynamic(() => loader().then((m) => ({ default: m[name] as EditorComponent })), {
     ssr: false,
     loading: () => createElement(EditorLoadingSkeleton),
   });
+  (component as unknown as { __loomLoader?: () => Promise<Record<string, unknown>> }).__loomLoader = loader;
+  return component;
+};
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Loom Apps (Azure-native app building — Fabric Apps parity)
@@ -315,5 +321,48 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
 };
 
 export function getEditor(slug: string): EditorComponent | null {
-  return EDITOR_REGISTRY[slug] ?? null;
+  return Object.hasOwn(EDITOR_REGISTRY, slug) ? EDITOR_REGISTRY[slug] : null;
+}
+
+/** Every registered item-type slug. Exported so tests can assert over the whole
+ *  population rather than a hand-picked sample. */
+export const EDITOR_SLUGS: string[] = Object.keys(EDITOR_REGISTRY);
+
+/**
+ * Start fetching an editor's JS chunk BEFORE the user navigates to it.
+ *
+ * WHY. Editors are route-level code-split with `ssr: false`, so the chunk only
+ * begins downloading once the route mounts. Measured on the 2026-08-11 UAT run:
+ * at 2500 ms, 26 of 142 item types had `tabs=13` but ZERO interactive buttons —
+ * the ribbon skeleton was up and the real controls were not. EditorLoadingSkeleton
+ * makes that window legible; it does not make it shorter.
+ *
+ * Calling this on hover/focus of a catalog tile spends the idle time between
+ * "user looks at the tile" and "user clicks it" on the download, which is the
+ * cheapest second available.
+ *
+ * SAFE TO CALL ANYWHERE. Idempotent per slug, swallows rejection (a failed
+ * prefetch must never surface — the real navigation will retry and render its
+ * own error), and is a no-op for an unknown slug.
+ */
+const preloaded = new Set<string>();
+export function preloadEditor(slug: string): void {
+  if (!slug || preloaded.has(slug)) return;
+  // `EDITOR_REGISTRY['constructor']` is truthy on a plain object literal, so an
+  // own-property check is required — not a truthiness check.
+  if (!Object.hasOwn(EDITOR_REGISTRY, slug)) return;
+  const component = EDITOR_REGISTRY[slug];
+  if (!component) return;
+  const loader = (component as unknown as { __loomLoader?: () => Promise<unknown> }).__loomLoader;
+  if (typeof loader !== 'function') return;
+  preloaded.add(slug);
+  try {
+    void Promise.resolve(loader()).catch(() => {
+      // A prefetch that fails is not an error the user should ever see; drop the
+      // memo so a later, real navigation is not starved by this attempt.
+      preloaded.delete(slug);
+    });
+  } catch {
+    preloaded.delete(slug);
+  }
 }
