@@ -32,6 +32,10 @@ import {
   templateOfParamFile,
   undeclaredParamAssignments,
   acceptsDispatch,
+  requiredDispatchInputs,
+  suppliedDispatchInputs,
+  fencedLines,
+  commandTextAt,
 } from '../check-docs-deploy-refs.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
@@ -156,6 +160,97 @@ test('acceptsDispatch distinguishes dispatchable from not, and unreadable from f
   assert.equal(acceptsDispatch(`${dir}/yes.yml`), true);
   assert.equal(acceptsDispatch(`${dir}/no.yml`), false);
   assert.equal(acceptsDispatch(`${dir}/absent.yml`), null, 'missing must be null, not false');
+});
+
+// ── check 3b: a fenced dispatch must supply its required inputs ──────────────
+//
+// EMBEDDED CONTROL. Check 3b's population in the repo is now ZERO by
+// construction (the three real violations were fixed in the same PR that added
+// it), and a guard whose population is zero protects nothing once the debt is
+// paid — it can rot to vacuous and still report OK. So the defect shape is
+// pinned here as a fixture: if the detection ever stops distinguishing the
+// broken command from the fixed one, THIS fails, not a future customer.
+//
+// The fixture is grounded in the real workflow, not in the guard's model of it:
+// `deploy-fiab-commercial.yml` genuinely declares `region` as `required: true`.
+
+test('requiredDispatchInputs reads the REAL commercial workflow and finds `region`', () => {
+  const required = requiredDispatchInputs('.github/workflows/deploy-fiab-commercial.yml');
+  assert.ok(required instanceof Set, 'the real workflow must be readable');
+  assert.ok(
+    required.has('region'),
+    'region is declared `required: true` (#3029) — if this fails, either the workflow changed ' +
+      'or the scanner broke; both need a human, neither may be silently accepted',
+  );
+});
+
+test('requiredDispatchInputs scopes to workflow_dispatch, not workflow_call', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-dispatchreq-')).split(path.sep).join('/');
+  const f = `${dir}/both.yml`;
+  fs.writeFileSync(
+    f.split('/').join(path.sep),
+    [
+      'on:',
+      '  workflow_call:',
+      '    inputs:',
+      '      call_only:',
+      '        type: string',
+      '        required: true',
+      '  workflow_dispatch:',
+      '    inputs:',
+      '      region:',
+      '        type: string',
+      '        required: true',
+      '      optional_one:',
+      '        type: string',
+      '        required: false',
+      '',
+    ].join('\n'),
+  );
+  const required = requiredDispatchInputs(f);
+  assert.deepEqual([...required].sort(), ['region']);
+  assert.ok(!required.has('call_only'), 'a workflow_call-only input is not passable via gh workflow run');
+  assert.equal(requiredDispatchInputs(`${dir}/absent.yml`), null, 'missing must be null, not empty');
+});
+
+test('suppliedDispatchInputs accepts every gh spelling of a field flag', () => {
+  const s = suppliedDispatchInputs(
+    'gh workflow run x.yml -f a=1 --field b=2 -F c=3 --raw-field d=4',
+  );
+  assert.deepEqual([...s].sort(), ['a', 'b', 'c', 'd']);
+});
+
+test('the guard DISTINGUISHES the measured drift from its fix', () => {
+  // The exact command two published runbooks carried on 2026-08-13. GitHub
+  // rejects it: `region` is required and has no default.
+  const broken = 'gh workflow run deploy-fiab-commercial -f run_mode=whatif-only';
+  const fixed = 'gh workflow run deploy-fiab-commercial.yml -f run_mode=whatif-only -f region=centralus';
+  const required = requiredDispatchInputs('.github/workflows/deploy-fiab-commercial.yml');
+
+  const missingIn = (cmd) => [...required].filter((r) => !suppliedDispatchInputs(cmd).has(r));
+
+  assert.deepEqual(missingIn(broken), ['region'], 'the broken command must be REPORTED');
+  assert.deepEqual(missingIn(fixed), [], 'the fixed command must PASS — otherwise the guard is noise');
+});
+
+test('multi-line continuations are read as one command', () => {
+  const lines = [
+    '```bash',
+    'gh workflow run deploy-fiab-commercial.yml \\',
+    '  -f run_mode=full \\',
+    '  -f region=centralus',
+    '```',
+  ];
+  const cmd = commandTextAt(lines, 2);
+  assert.deepEqual([...suppliedDispatchInputs(cmd)].sort(), ['region', 'run_mode']);
+});
+
+test('fencedLines separates copy-pasteable recipes from prose', () => {
+  const text = ['prose gh workflow run a.yml', '```bash', 'gh workflow run b.yml', '```', 'more prose'].join('\n');
+  const f = fencedLines(text);
+  assert.ok(!f.has(1), 'prose is not a recipe and must not be enforced');
+  assert.ok(f.has(3), 'a fenced command is a recipe and must be enforced');
+  assert.ok(!f.has(2) && !f.has(4), 'the fence markers themselves are not content');
 });
 
 // ── whole-repo state ─────────────────────────────────────────────────────────

@@ -111,7 +111,10 @@ All 6 builds failed with `CONNECTIVITY_REFRESH_TOKEN_ERROR` at ACR login.
 3. **Dispatch with keep_resources=true** during iteration so you can inspect
    live state:
    ```bash
-   gh workflow run deploy-fiab-commercial -f run_mode=full -f keep_resources=true
+   # `region` is REQUIRED and has no default — a dispatch without it is
+   # rejected by GitHub before anything reaches Azure.
+   gh workflow run deploy-fiab-commercial.yml \
+     -f run_mode=full -f keep_resources=true -f region=<region>
    ```
 4. **Use the post-provision validation script** which curls from inside the
    cluster (works around VNet-internal ingress).

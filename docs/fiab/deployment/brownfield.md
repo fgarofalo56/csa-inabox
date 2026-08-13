@@ -1,5 +1,10 @@
 # Brownfield deployment — adopting existing Azure infrastructure
 
+> **New here? Start with [Prerequisites and first deploy](prerequisites.md).**
+> That page is the spine — the three human prerequisites with exact commands and
+> verifications, the credential set per cloud, and the verify checklist. This
+> page is the brownfield depth it links to.
+
 **Brownfield** means: the target tenant already contains at least one Azure
 resource CSA Loom could use — an existing Purview account, a shared AI Search
 service, an ADLS Gen2 lake, an existing VNet — or an existing
