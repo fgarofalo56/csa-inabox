@@ -67,6 +67,16 @@ param msalSecretName string = 'loom-msal-client-secret'
 @description('KV secret name for the session signing secret (stable, generated once).')
 param sessionSecretName string = 'session-secret'
 
+@description('Lifetime in YEARS of a newly minted MSAL client secret (#3335). Default 1, not 2: the script now RENEWS automatically once a credential is inside msalMinRemainingDays of expiry, so a shorter lifetime shortens the exposure of any single credential without risking the expiry outage a long gap used to hide. Raise it for an estate that redeploys less often than that renewal window.')
+@minValue(1)
+@maxValue(2)
+param msalSecretYears int = 1
+
+@description('Renew when the recorded credential has fewer than this many days left (#3335). MUST be well under msalSecretYears*365 or every run mints a replacement — which is the credential-sprawl defect itself.')
+@minValue(7)
+@maxValue(180)
+param msalMinRemainingDays int = 90
+
 @description('Forces the script to re-run when changed (e.g. on a redeploy you want to re-reconcile redirect URIs). Defaults to a per-template value so a normal redeploy re-reconciles.')
 param forceUpdateTag string = utcNow()
 
@@ -107,6 +117,12 @@ resource appRegScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (r
       { name: 'KEYVAULT_NAME', value: keyVaultName }
       { name: 'MSAL_SECRET_NAME', value: msalSecretName }
       { name: 'SESSION_SECRET_NAME', value: sessionSecretName }
+      // #3335 — same contract as scripts/csa-loom/bootstrap-msal-app-reg.sh
+      // (LOOM_MSAL_SECRET_YEARS / LOOM_MSAL_SECRET_MIN_REMAINING_DAYS). Stated
+      // in the template rather than left to a shell default so the credential
+      // lifetime this estate mints is visible in the deployment, not implied.
+      { name: 'MSAL_SECRET_YEARS', value: string(msalSecretYears) }
+      { name: 'MSAL_MIN_REMAINING_DAYS', value: string(msalMinRemainingDays) }
     ]
     scriptContent: '''
 set -euo pipefail
@@ -174,10 +190,66 @@ else
   echo "::warning::groupMembershipClaims update FAILED on $APP_ID — Entra will emit no groups claim, so group-based authorization (tenant admin by group, capability grants to a group, group item ACLs) will NOT work. Set it by hand: az ad app update --id $APP_ID --set groupMembershipClaims=SecurityGroup"
 fi
 
-# Reset the client secret (2-year lifetime) and persist to Key Vault.
-SECRET=$(az ad app credential reset --id "$APP_ID" --years 2 --query password -o tsv)
-az keyvault secret set --vault-name "$KEYVAULT_NAME" --name "$MSAL_SECRET_NAME" --value "$SECRET" -o none
-echo "Wrote $MSAL_SECRET_NAME to $KEYVAULT_NAME"
+# CREDENTIAL LIFECYCLE (#3335) — must stay identical in intent to
+# scripts/csa-loom/bootstrap-msal-app-reg.sh, which is the home that actually
+# runs on every estate today. Two defects lived here:
+#
+#   1. A BARE `az ad app credential reset` (no --append). Per the az help,
+#      "By default, this command clears all passwords and keys" — so this line
+#      DELETED every credential the app had, including the one the running
+#      console was still serving, producing AADSTS7000215 from the instant it
+#      ran until the next revision roll. The sibling script has carried
+#      --append since that was understood; this copy never got it.
+#   2. Minting unconditionally, which is the #3335 sprawl (measured: 9 live
+#      credentials, 5 minted in one day, each --years 2).
+#
+# The fix is the same contract as the sibling: the `msalKeyId` TAG on the Key
+# Vault secret records WHICH credential the estate presents, so provenance is
+# readable without ever reading the secret value. When that credential is still
+# on the app and not near expiry, mint nothing.
+#
+# THE PRUNE DELIBERATELY DOES NOT LIVE HERE. A deploymentScript runs
+# unattended inside an ARM deployment with no operator reviewing a dry run, and
+# it cannot prove what the Container App is bound to (the app may not exist yet
+# on a first deploy). Deleting credentials from that position is exactly the
+# blind delete this change exists to prevent; pruning stays in the bootstrap
+# script, which can prove the console's binding first.
+MINT=1
+IN_USE_KEY_ID=$(az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$MSAL_SECRET_NAME" --query "tags.msalKeyId" -o tsv) || IN_USE_KEY_ID=''
+IN_USE_KEY_ID=$(printf '%s' "$IN_USE_KEY_ID" | tr -d ' \r')
+if [ -n "$IN_USE_KEY_ID" ]; then
+  CRED_END=$(az ad app credential list --id "$APP_ID" --query "[?keyId=='$IN_USE_KEY_ID'].endDateTime | [0]" -o tsv) || CRED_END=''
+  CRED_END=$(printf '%s' "$CRED_END" | tr -d ' \r')
+  case "$CRED_END" in
+    ''|None) echo "Key Vault records credential $IN_USE_KEY_ID but the app no longer carries it — minting a replacement" ;;
+    *)
+      REMAIN=$(( ( $(date -u -d "$CRED_END" +%s) - $(date -u +%s) ) / 86400 ))
+      if [ "$REMAIN" -gt "${MSAL_MIN_REMAINING_DAYS:-90}" ]; then
+        MINT=0
+        echo "REUSE: $MSAL_SECRET_NAME holds credential $IN_USE_KEY_ID, live until $CRED_END ($REMAIN days). Minting nothing."
+      else
+        echo "RENEW: credential $IN_USE_KEY_ID expires $CRED_END ($REMAIN days) — minting a replacement"
+      fi ;;
+  esac
+fi
+if [ "$MINT" -eq 1 ]; then
+  # --append: never wipe the credential the running console is still serving.
+  # The label is unique per run and is how this credential's key id is resolved
+  # afterwards (`credential reset` returns appId/password/tenant, not the key id).
+  CRED_LABEL="loom-console-$(date -u +%Y%m%dT%H%M%SZ)"
+  SECRET=$(az ad app credential reset --id "$APP_ID" --append --years "${MSAL_SECRET_YEARS:-1}" --display-name "$CRED_LABEL" --query password -o tsv)
+  az keyvault secret set --vault-name "$KEYVAULT_NAME" --name "$MSAL_SECRET_NAME" --value "$SECRET" -o none
+  NEW_KEY_ID=$(az ad app credential list --id "$APP_ID" --query "[?displayName=='$CRED_LABEL'].keyId | [0]" -o tsv) || NEW_KEY_ID=''
+  NEW_KEY_ID=$(printf '%s' "$NEW_KEY_ID" | tr -d ' \r')
+  if [ -n "$NEW_KEY_ID" ] && [ "$NEW_KEY_ID" != "None" ]; then
+    # Provenance for the NEXT run's reuse check. Key ids are not secrets.
+    az keyvault secret set --vault-name "$KEYVAULT_NAME" --name "$MSAL_SECRET_NAME" --value "$SECRET" \
+      --tags "msalKeyId=$NEW_KEY_ID" "msalAppId=$APP_ID" "msalCredentialLabel=$CRED_LABEL" -o none
+    echo "Wrote $MSAL_SECRET_NAME to $KEYVAULT_NAME (msalKeyId=$NEW_KEY_ID)"
+  else
+    echo "Wrote $MSAL_SECRET_NAME to $KEYVAULT_NAME, but the new credential's key id could not be resolved by its label — the next run cannot reuse and will mint again."
+  fi
+fi
 
 # Stable SESSION_SECRET — generate once, never rotate on redeploy (so sessions
 # survive). Only write when absent.

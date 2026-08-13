@@ -152,6 +152,122 @@ wiring, `.github/workflows/csa-loom-post-deploy-bootstrap.yml`, is one
 cloud-agnostic workflow selected by its `boundary` input, so there is no
 per-cloud variant of this runbook to keep in sync.
 
+### 2.2 Credential sprawl — reuse, prune, and the ceiling (#3335)
+
+**The defect.** Until #3335 the bootstrap minted a credential on EVERY
+invocation and nothing removed one. Measured 2026-08-13 on the live Commercial
+registration: **9 live password credentials, five minted that day** (05:26,
+07:06, 08:27, 09:44, 12:50Z), each `--years 2`. The mint rate follows the
+*deploy* rate — `deploy-fiab-commercial` ran 11 times that day and reaches
+`bootstrap-msal-app-reg.sh` through this workflow's `workflow_call`. Sign-in
+worked throughout; the defect was posture, not availability.
+
+**What the bootstrap does now**, in order:
+
+1. **Reuse.** The Key Vault secret carries an `msalKeyId` **tag** naming the
+   credential the estate presents. (A tag, because the ARM secrets API never
+   returns `properties.value` — provenance is readable without ever reading the
+   secret.) If that credential is still on the app and has more than
+   `LOOM_MSAL_SECRET_MIN_REMAINING_DAYS` (default 90) left, **nothing is
+   minted and Key Vault is not touched.**
+2. **Mint** only otherwise, always `--append`, always validated against Entra
+   *before* Key Vault is written, and labelled `loom-console-<UTC timestamp>`
+   so its key id can be resolved without racing a concurrent deploy.
+3. **Prune** — see below. **Dry run by default.**
+4. **Ceiling** — the live credential count is asserted against
+   `LOOM_MSAL_CREDENTIAL_CEILING` (default 12, interim) and the run **fails**
+   above it. That failure is hygiene, not availability: it runs after sign-in
+   is wired, so it never means "login is broken".
+
+**Reviewing what a prune would delete** (safe, deletes nothing):
+
+```bash
+# The default. Prints one line per credential with a keep/PRUNE verdict and the
+# reason. Key ids and dates only — no value is read or printed at any point.
+KEYVAULT_NAME="$KV" EXISTING_CLIENT_ID="$APP_ID" \
+CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+```
+
+**Authorizing the prune** — only after reading the dry-run list:
+
+```bash
+LOOM_MSAL_PRUNE=1 KEYVAULT_NAME="$KV" EXISTING_CLIENT_ID="$APP_ID" \
+CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+```
+
+**Why this cannot strand the running app.** A credential is deleted only when
+ALL of the following hold, and each is printed in the dry run when it does not:
+
+| # | Precondition |
+|---|---|
+| P1 | The prune runs LAST — after the mint was validated, Key Vault written, the Container App wired, and the revision rolled. Any of those failing exits the script first. |
+| P2 | The in-use credential is **known** from the Key Vault tag, not guessed. No tag, an unreadable vault, or an unresolvable key id → the prune is **disarmed**. |
+| P3 | The console's `loom-msal-client-secret` is provably an **unversioned** `keyvaultref` to that same secret. A versioned reference, an inline literal, or an unreadable binding degrades the prune to **already-expired credentials only**, which can strand nobody. |
+| P3b | Every **active** revision was created at or after the Key Vault secret's last write. A KV reference is resolved at revision creation and then pinned, so an older active revision is still serving the previous version. |
+| P4 | The candidate is not the in-use one, not among the newest `LOOM_MSAL_PRUNE_KEEP` (default 2), older than `LOOM_MSAL_PRUNE_MIN_AGE_DAYS` (default 7), and minted **strictly before** the in-use credential. |
+| P5 | The keep set is computed before the first delete, so an interrupted run leaves a *superset* of it. There is no ordering that reaches zero. |
+
+Residual risk, stated rather than implied: a consumer that captured a raw
+credential value **out of band** — not through Key Vault — is invisible to this
+script. P4's age and keep windows cover recent ones; the dry-run list is how you
+check the rest. Commercial's Dataverse S2S reuses this credential but reads it
+from the *same* Key Vault secret, so P3 covers it.
+
+**Clearing an existing backlog — expect the first prune to be a no-op.** The 9
+credentials measured on 2026-08-13 were minted within four days of each other,
+so on a first cleanup **every one is inside the default 7-day grace** and
+nothing is deleted. The run says so explicitly and names the knob. After reading
+the dry run, narrow the window:
+
+```bash
+# 1. dry run with the narrowed window — still deletes nothing
+LOOM_MSAL_PRUNE_MIN_AGE_DAYS=1 KEYVAULT_NAME="$KV" EXISTING_CLIENT_ID="$APP_ID" \
+CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+
+# 2. authorize it
+LOOM_MSAL_PRUNE_MIN_AGE_DAYS=1 LOOM_MSAL_PRUNE=1 KEYVAULT_NAME="$KV" \
+EXISTING_CLIENT_ID="$APP_ID" CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+
+# 3. confirm the count and that sign-in still works
+az ad app credential list --id "$APP_ID" --query "length(@)" -o tsv
+```
+
+The grace guards consumers this script cannot see; the console's own binding is
+already proven independently by P3/P3b, so narrowing it for a reviewed one-off
+cleanup is safe. Do not make the narrow value the default.
+
+Once the count is down, lower `LOOM_MSAL_CREDENTIAL_CEILING` from its interim
+**12** to **3** (`LOOM_MSAL_PRUNE_KEEP` + 1) so the alarm sits just above the
+steady state instead of well above it.
+
+**One-time migration.** An estate provisioned before #3335 has an untagged
+secret, so the next run mints once more purely to establish provenance. To avoid
+that, `--adopt-inferred` correlates the Key Vault secret's `updated` timestamp
+with the credential start times and records the tag when **exactly one**
+credential matches inside a 15-minute window. A tie or a miss adopts nothing and
+falls back to minting — an inferred provenance that is merely plausible must
+never authorize a delete.
+
+**Why 1 year rather than 2.** The 2-year default existed because nothing renewed
+automatically, so a long clock was the only protection against the 2026-07-19
+expiry outage. Rule 1 above changes that: renewal now happens on the first
+bootstrap run inside the 90-day window, and the measured gap between bootstrap
+runs is at most ~31 days — roughly 3x of headroom — with the S1 expiry monitor
+alerting at 60/30/7 days as a backstop. A shorter clock halves the exposure of
+any single standing credential. The end state remains **no standing secret at
+all** (the FIC migration in
+[msal-credential-strategy.md](msal-credential-strategy.md)); this is the interim
+posture, and `LOOM_MSAL_SECRET_YEARS=2` restores the old lifetime for an estate
+that deploys less often than the renewal window.
+
+**Verification:** `node --test scripts/ci/__tests__/msal-credential-lifecycle.test.mjs`
+drives the real script against a stub `az` and pins every rule above;
+`scripts/ci/check-msal-credential-hygiene.mjs` is the merge-blocking static half.
+
 ## 3. Rotate the synthetic-login secret (V1 automation account)
 
 ```bash
