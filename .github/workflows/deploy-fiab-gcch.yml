@@ -567,10 +567,10 @@ jobs:
           # The smoke step below used to carry
           #     env:
           #       CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
-          # A workflow `env:` value is a LITERAL — Actions substitutes `${{ }}`
-          # during workflow processing and passes the rest through verbatim, and
-          # nothing in that path is a shell. So the smoke script received that
-          # TEXT as its console URL. Non-empty, so its own
+          # A workflow `env:` value is a LITERAL — Actions substitutes GitHub
+          # expressions during workflow processing and passes the rest through
+          # verbatim, and nothing in that path is a shell. So the smoke script
+          # received that TEXT as its console URL. Non-empty, so its own
           # `${CONSOLE_URL:?CONSOLE_URL must be set}` guard passed, and every
           # probe curled a nonsense address: a step that runs and cannot pass.
           # It had never fired because this lane had never got past THIS step.
