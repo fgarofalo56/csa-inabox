@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: 'Run mode — whatif-only validates Bicep + auth without provisioning; full does provision + smoke + teardown.'
+        description: 'whatif-only PREVIEWS the Bicep and applies NOTHING. full APPLIES the template: it provisions/reconciles the infrastructure and smokes it, and does NOT tear anything down (keep_resources defaults true). KNOWN GAP — on THIS boundary a full run deploys INFRASTRUCTURE ONLY: gcc.bicepparam leaves deployAppsEnabled unset because there is no GCC image producer, so ZERO Container Apps are created and no loom-console is stamped. A green run here does not mean GCC serves Loom. Tracked in #3078; the other three lanes deploy the app tier on full.'
         type: choice
         default: whatif-only
         options:

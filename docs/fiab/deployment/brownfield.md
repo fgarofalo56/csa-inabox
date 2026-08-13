@@ -665,7 +665,7 @@ group, a **second Console cannot be stamped into it**. Two supported moves:
 
 | Goal | How |
 |---|---|
-| Reconcile / retry a partially-deployed hub | `gh workflow run deploy-fiab-commercial.yml -f run_mode=full -f region=<the estate's region> -f allow_existing_hub=true -f keep_resources=true -f deploy_apps_enabled=true` |
+| Reconcile / retry a partially-deployed hub | `gh workflow run deploy-fiab-commercial.yml -f run_mode=full -f region=<the estate's region> -f allow_existing_hub=true` |
 | Add another Data Landing Zone | `topology=dlz-attach` with `target_subscription=<new-sub-id>` — the DLZ lands in a **new** subscription |
 
 > `allow_existing_hub` exists because the topology guard otherwise rejects
@@ -692,9 +692,15 @@ group, a **second Console cannot be stamped into it**. Two supported moves:
 > down without that confirmation is **refused before anything reaches ARM**, by
 > the `Deploy input safety gate` step.
 >
-> `deploy_apps_enabled` still defaults `false`, so without it no Container Apps
-> are created and **no `LOOM_*` env var reaches the Console** — that flag is the
-> only thing that makes `app-deployments.bicep` run.
+> **`deploy_apps_enabled` now defaults `true` (#3332).** It used to default
+> `false`, so `run_mode=full` with nothing else set applied infrastructure and
+> created or updated **no Container App at all** — `app-deployments.bicep` is
+> gated on that flag, and it is the only thing that puts a `LOOM_*` env var on
+> the Console. A green run that changed nothing you could see. It is still an
+> input, because phase 1 of a **from-scratch** install must set it `false`: the
+> ACR is created empty, so a Container App pull could only fail. Reconciling an
+> existing estate does not need it — the run pins every app to the tag it is
+> already running and refuses up front if any running tag is ambiguous.
 >
 > **Deliberate teardown** (a disposable validation subscription) is therefore:
 > `-f run_mode=full -f region=<region> -f keep_resources=false -f confirm_teardown_rg=rg-csa-loom-admin-<region>`.

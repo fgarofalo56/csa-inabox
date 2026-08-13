@@ -55,11 +55,13 @@
 /**
  * Feature-flag defaults for a run that carries NO inputs (a `schedule` event).
  *
- * These mirror the `default:` of each corresponding workflow_dispatch input,
- * one-for-one; deploy-trigger-policy.test.mjs parses the workflow YAML and
- * fails if the two ever drift. They are duplicated here rather than read at
- * runtime because a scheduled run has no inputs context to read them from --
- * that absence is the whole bug.
+ * These mirror the `default:` of each corresponding workflow_dispatch input --
+ * with ONE deliberate, tested exception, `deployAppsEnabled` (see
+ * DISPATCH_FLAG_DEFAULTS below). deploy-trigger-policy.test.mjs parses the
+ * workflow YAML and fails if the tables drift, and separately fails if the set
+ * of exceptions grows. They are duplicated here rather than read at runtime
+ * because a scheduled run has no inputs context to read them from -- that
+ * absence is the whole bug.
  *
  * On the schedule path these previously expanded to the EMPTY STRING and were
  * passed straight to `az deployment sub create` as `purviewEnabled=` etc.
@@ -69,9 +71,12 @@
  * OVERRIDES the value the commercial.bicepparam file sets, so the bicepparam
  * defaults could not rescue it.
  *
- * deployAppsEnabled STAYS FALSE, deliberately. See the note on
+ * deployAppsEnabled STAYS FALSE *here*, deliberately, even though the DISPATCH
+ * default is now true. See the note on
  * SCHEDULED_RECONCILE_DOES_NOT_APPLY_APP_ENV below -- flipping it here would
- * roll production onto a non-existent image tag.
+ * hand ARM an UNPINNED `true` on any path that skips the resolver, and roll
+ * production onto a non-existent image tag. An unattended job earns `true` by
+ * measuring; an operator asks for it.
  */
 export const SCHEDULE_FLAG_DEFAULTS = Object.freeze({
   purviewEnabled: 'true',
@@ -106,6 +111,58 @@ export const FLAG_INPUT_NAMES = Object.freeze({
   deployAppsEnabled: 'deploy_apps_enabled',
   skipRoleGrants: 'skip_role_grants',
   frontDoorEnabled: 'front_door_enabled',
+});
+
+/**
+ * The `default:` each workflow_dispatch input declares in
+ * .github/workflows/deploy-fiab-commercial.yml. This is the table the YAML is
+ * checked against; SCHEDULE_FLAG_DEFAULTS is what an input-less trigger gets.
+ *
+ * WHY THE TWO TABLES EXIST SEPARATELY (refs #3332)
+ * -----------------------------------------------
+ * `deploy_apps_enabled` defaulted to FALSE on the dispatch form, so an operator
+ * who chose `run_mode=full` and changed nothing else got a subscription deploy
+ * that applied INFRASTRUCTURE ONLY: `module appDeployments = if (… &&
+ * deployAppsEnabled)` never ran, so no Container App was created or updated and
+ * not one LOOM_* env var reached loom-console. The run went green having
+ * changed nothing the operator could see. Worse, it was inverted -- the
+ * UNATTENDED nightly schedule reaches `true` (by measuring, below) while the
+ * deliberate human dispatch did not.
+ *
+ * So the DISPATCH default is now true, and the two tables genuinely differ on
+ * this one key. That difference is a decision, not drift, so it is written down
+ * and asserted in both directions:
+ *
+ *   dispatch  true   an operator asking for `full` means "make the estate match
+ *                    the template", which includes the app tier. The image
+ *                    preflight + deploy-input-safety.mjs already refuse a run
+ *                    that would rewrite a running image, so `true` is safe to
+ *                    ask for and loud when it is not.
+ *   schedule  false  the fail-safe BASE. reconcile-policy.mjs `decideDeployApps`
+ *                    upgrades it to true ONLY after `az containerapp list` has
+ *                    pinned every running tag, so the ARM PUT is a no-op for
+ *                    the image. Default deny; upgrade on evidence.
+ *
+ * Set `deploy_apps_enabled=false` explicitly for phase 1 of a from-scratch
+ * install, where the ACR is still EMPTY and a Container App PUT could only fail
+ * MANIFEST_UNKNOWN (no-vaporware.md, two-phase image path).
+ */
+export const DISPATCH_FLAG_DEFAULTS = Object.freeze({
+  ...SCHEDULE_FLAG_DEFAULTS,
+  deployAppsEnabled: 'true',
+});
+
+/**
+ * The keys where the dispatch default deliberately differs from the schedule
+ * default, each with the reason. The drift test asserts that the two tables
+ * differ on EXACTLY these keys -- so a future edit that silently diverges a
+ * seventh flag fails, and one that quietly converges this one fails too.
+ */
+export const FLAG_DEFAULT_DIVERGENCES = Object.freeze({
+  deployAppsEnabled:
+    'a human dispatching run_mode=full means the app tier too (#3332); the schedule keeps the ' +
+    'fail-safe base and earns true in reconcile-policy.mjs decideDeployApps by pinning every ' +
+    'RUNNING image tag first.',
 });
 
 /**
