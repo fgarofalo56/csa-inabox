@@ -25,6 +25,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.95.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.94.1...csa-inabox-v0.95.0) (2026-08-13)
+
+
+### Features
+
+* **guard:** flag a module that hunts a resource in the wrong resource group ([#3333](https://github.com/fgarofalo56/csa-inabox/issues/3333)) ([#3358](https://github.com/fgarofalo56/csa-inabox/issues/3358)) ([d95891d](https://github.com/fgarofalo56/csa-inabox/commit/d95891d4758390a1dad39b2a01bb23c628778d7b))
+
+
+### Bug Fixes
+
+* **auth:** bound the session cookie — a 99-group admin's 5383-byte cookie was silently dropped, looping sign-in forever (P0) ([#3331](https://github.com/fgarofalo56/csa-inabox/issues/3331)) ([0c987a7](https://github.com/fgarofalo56/csa-inabox/commit/0c987a7cc2b3131dbe1be671067e03846cb81745)), closes [#3175](https://github.com/fgarofalo56/csa-inabox/issues/3175)
+* **deploy:** move the transform-runner lake grant to a DLZ-scoped module — restores the deploy path AND keeps dbt/SQLMesh on (P0) ([#3329](https://github.com/fgarofalo56/csa-inabox/issues/3329)) ([ee33f9c](https://github.com/fgarofalo56/csa-inabox/commit/ee33f9c9e3f60a18fa41bc8e76339bb558d0cfa4))
+* **readiness:** dbtRunnerImageReady=true — the images are BUILT and their apps are RUNNING ([#3325](https://github.com/fgarofalo56/csa-inabox/issues/3325)) ([aa6a7d9](https://github.com/fgarofalo56/csa-inabox/commit/aa6a7d98aa342eb3395698cd246255925c03aea7)), closes [#3133](https://github.com/fgarofalo56/csa-inabox/issues/3133)
+
 ## [0.94.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.94.0...csa-inabox-v0.94.1) (2026-08-13)
 
 
