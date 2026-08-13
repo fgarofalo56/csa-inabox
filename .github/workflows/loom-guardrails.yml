@@ -115,6 +115,17 @@ jobs:
       - name: editor-read-failure-honesty (a failed read must never look like empty content — C19 data loss)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-editor-read-failure-honesty.mjs
+      # The sibling above resolves `useQuery` fetchers, which is 34 of ~540
+      # surfaces — #3281 measured 506 that use useState+useEffect+fetch and were
+      # invisible to it, while the gate still printed OK over 4058 scanned files.
+      # Widening it BY REGEX was tried first and produced only false positives
+      # (see check-loaded-flag-honesty.mjs). This guard instead parses the TSX
+      # structurally and asks whether the empty-state claim is reachable on a
+      # path where the read FAILED. Its embedded controls run on every
+      # invocation, so a drifted analyser cannot present a clean codebase.
+      - name: empty-claim-read-evidence (an empty-state claim must be gated on the read having SUCCEEDED — #3281)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-empty-claim-read-evidence.mjs
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-quadratic-trims.mjs
