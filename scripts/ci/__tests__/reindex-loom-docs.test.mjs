@@ -253,3 +253,37 @@ test('missing CONSOLE_URL is a hard error, not a silent skip', async () => {
   assert.equal(res.status, 1);
   assert.match(res.stderr, /CONSOLE_URL/);
 });
+
+// ── gateway 504 on the POST → POLL, do not guess (#3396) ─────────────────────
+//
+// The pair below is the whole point: the SAME edge failure resolves to pass or
+// fail purely on what the durable freshness signal turns out to say. If either
+// case ever stops depending on the poll, the tolerance has become a hole.
+
+const EDGE_504 = { status: 504, body: '<!DOCTYPE html><HTML><TITLE>The request timed out.</TITLE></HTML>' };
+
+test('504 gateway on POST → DOES poll → freshness fresh → exit 0', async () => {
+  await withServer(
+    () => EDGE_504,
+    () => ({ status: 200, body: pollBody({ freshness: 'fresh' }) }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0);
+      // The load-bearing assertion: it must actually have GONE AND LOOKED.
+      assert.ok(counts().gets > 0, 'expected the 504 to fall through to the poll, but it never polled');
+      assert.match(res.stdout, /UNKNOWN/);
+    },
+  );
+});
+
+test('504 gateway on POST → polls → never fresh → exit 1 (tolerance is not a pass)', async () => {
+  await withServer(
+    () => EDGE_504,
+    () => ({ status: 200, body: pollBody({ freshness: 'stale' }) }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 1);
+      assert.ok(counts().gets > 0, 'expected it to poll before failing');
+    },
+  );
+});

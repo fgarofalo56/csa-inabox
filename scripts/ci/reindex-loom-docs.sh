@@ -22,13 +22,22 @@
 # very different failures collapsed onto one opaque "HTTP 502" at the caller:
 #   1. the route's OWN 502 in ~160ms — no corpus in the image at all
 #      (copilot-quality-evals run 30937670794); a hard failure, and
-#   2. a Front Door EDGE 502 at 60s — the AFD default origin timeout, which
-#      front-door.bicep never overrides — on a perfectly healthy rebuild that
-#      simply takes longer than a minute.
+#   2. a gateway 5xx from the EDGE on a rebuild that simply ran long.
 # A caller that cannot tell those apart either reds healthy runs or tolerates
 # broken ones. The route is now async: it ACCEPTS the work (202) and this script
 # polls GET for the terminal state, so no gateway timeout is on the critical
 # path at all.
+#
+# ── AND A GATEWAY 5xx ON THE POST IS STILL INDETERMINATE (#3396) ────────────
+# copilot-quality-evals went red on `HTTP 504` in 4 of 12 runs on 2026-08-13,
+# ~30s in, with a Front Door HTML body. What is MEASURED: the POST handler
+# cannot be the slow party (auth check, a stat-only corpus count, fire the job,
+# return 202 — apps/fiab-console/app/api/help-copilot/reindex/route.ts), and
+# `originResponseTimeoutSeconds` is set NOWHERE in platform/fiab/bicep. What is
+# NOT measured, and is therefore not asserted anywhere in this script: why the
+# edge gave up at ~30s when the AFD default is 60s, and whether the POST ever
+# reached a replica. The fix does not need that answer — it converts the
+# unknown into a measurement by polling the durable freshness signal.
 #
 # ── WHAT COUNTS AS DONE ─────────────────────────────────────────────────────
 # `freshness.state === 'fresh'` — the DURABLE, cross-replica signal (the
@@ -112,15 +121,25 @@ echo ""
 emit "reindex_post=$CODE"
 
 # The verdict is the classifier's, never a `case` statement beside it.
-if ! HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"; then
+# Exit 75 is its INDETERMINATE answer (a gateway 5xx with no application body,
+# #3394): the edge replied for the console, so whether the POST reached a replica
+# is unknown. Do not guess — fall through to the poll and let the durable
+# freshness signal settle it. Every OTHER non-zero stays a failure.
+HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"
+CRC=$?
+POLL_ANYWAY=false
+if [ "$CRC" -eq 75 ]; then
+  POLL_ANYWAY=true
+elif [ "$CRC" -ne 0 ]; then
   emit 'reindex_poll=not-started'
   fail
 fi
 
 # Only a 202 leaves work in flight. A 200 is an older console that rebuilt
 # inline (already complete); 000 and an honest not-configured gate were
-# tolerated above. In none of those is there anything to poll for.
-if [ "$CODE" != "202" ]; then
+# tolerated above. In none of those is there anything to poll for — EXCEPT the
+# indeterminate gateway case, which polls precisely because it is unresolved.
+if [ "$CODE" != "202" ] && [ "$POLL_ANYWAY" != "true" ]; then
   emit 'reindex_poll=not-applicable'
   exit 0
 fi
