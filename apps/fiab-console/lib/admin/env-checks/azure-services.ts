@@ -31,7 +31,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     role: 'Azure Event Hubs Data Owner (UAMI) on the namespace',
   },
   {
-    id: 'svc-report-subscriptions', category: 'azure-services', title: 'Report-subscription scheduled delivery', severity: 'optional',
+    id: 'svc-report-subscriptions', category: 'azure-services', title: 'Report-subscription scheduled delivery', severity: 'recommended',
     required: ['LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', 'LOOM_SUBSCRIPTION_LOGIC_APP_NAME'], warnOnMiss: true,
     remediation: 'Scheduled report delivery needs the report-subscriptions delivery job (LOOM_REPORT_SUBSCRIPTIONS_FUNCTION, set by bicep to the loom-report-subscriptions Container App Job name) + the delivery Logic App (LOOM_SUBSCRIPTION_LOGIC_APP_NAME). Deploy admin-plane/main.bicep with reportSubscriptionsEnabled=true (report-subscriptions-job.bicep + integration/report-subscription-logicapp.bicep), dispatch deploy-report-subscriptions.yml to build the job image, then authorize the Logic App\'s Office 365 connection in the portal. Subscriptions save to Cosmos regardless and begin delivering once the job is live. No Microsoft Fabric required.',
     provisionedBy: 'modules/admin-plane/report-subscriptions-job.bicep + modules/integration/report-subscription-logicapp.bicep (reportSubscriptionsEnabled) → apps[] env',
@@ -45,7 +45,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     role: 'Storage Blob Data Contributor (UAMI) on the DLZ account',
   },
   {
-    id: 'svc-aisearch', category: 'azure-services', title: 'Azure AI Search (RAG indexes)', severity: 'optional',
+    id: 'svc-aisearch', category: 'azure-services', title: 'Azure AI Search (RAG indexes)', severity: 'recommended',
     required: ['LOOM_AI_SEARCH_SERVICE'], warnOnMiss: true,
     remediation: 'Set LOOM_AI_SEARCH_SERVICE to enable AI Search index items + RAG apps.',
     provisionedBy: 'modules/admin-plane (aiSearchEnabled=true) → AI Search service → apps[] env',
@@ -74,7 +74,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // Vision, Language, Translator, Content Safety). Each endpoint is a wiring
     // selector for its cognitive account; unset → honest infra gate on the AI
     // enrich canvas node + preview route (default-ON / opt-out per WAVES.md).
-    id: 'svc-ai-enrich', category: 'azure-services', title: 'Azure AI enrichment (pipeline AI activities)', severity: 'optional',
+    id: 'svc-ai-enrich', category: 'azure-services', title: 'Azure AI enrichment (pipeline AI activities)', severity: 'recommended',
     required: [
       'LOOM_DOCINTEL_ENDPOINT', 'LOOM_VISION_ENDPOINT', 'LOOM_LANGUAGE_ENDPOINT',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_CONTENT_SAFETY_ENDPOINT',
@@ -96,28 +96,28 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     role: 'Cognitive Services User (Console UAMI + ADF factory managed identity) on the shared AI Services account (or each dedicated account)',
   },
   {
-    id: 'svc-monitor-alerts', category: 'azure-services', title: 'Azure Monitor (Activator alerts)', severity: 'optional',
+    id: 'svc-monitor-alerts', category: 'azure-services', title: 'Azure Monitor (Activator alerts)', severity: 'recommended',
     required: ['LOOM_LOG_ANALYTICS_RESOURCE_ID'], anyOf: [['LOOM_ALERT_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_LOG_ANALYTICS_RESOURCE_ID (alert query scope) + LOOM_ALERT_RG so the Azure-native Activator can create scheduled-query alert rules. A push-button deploy wires both day-one (LOOM_ALERT_RG defaults to the admin RG) and provisions a default alert set — Console availability, 5xx errors, replica restarts — plus a default action group (modules/admin-plane/monitoring-default-alerts.bicep), so /monitor Alerts shows a real default set out of the box.',
     provisionedBy: 'modules/admin-plane/main.bicep (monitoring module → apps[] env, auto-derived) + modules/admin-plane/monitoring-default-alerts.bicep (default alert rules + action group)',
     role: 'Monitoring Contributor (UAMI) on the alert resource group',
   },
   {
-    id: 'svc-adf', category: 'azure-services', title: 'Azure Data Factory (mirror CDC)', severity: 'optional',
+    id: 'svc-adf', category: 'azure-services', title: 'Azure Data Factory (mirror CDC)', severity: 'recommended',
     anyOf: [['LOOM_ADF_FACTORY', 'LOOM_ADF_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_ADF_FACTORY (+ LOOM_ADF_RG / LOOM_ADF_SUBSCRIPTION_ID) to enable the ADF-CDC mirrored-database backend (source SQL → ADLS Bronze).',
     provisionedBy: 'modules/landing-zone (ADF factory) → apps[] env',
     role: 'Data Factory Contributor (UAMI) on the factory',
   },
   {
-    id: 'svc-posture-refresh', category: 'azure-services', title: 'Govern posture-refresh Function (on-open recompute)', severity: 'optional',
+    id: 'svc-posture-refresh', category: 'azure-services', title: 'Govern posture-refresh Function (on-open recompute)', severity: 'recommended',
     required: ['LOOM_POSTURE_FUNCTION_URL'], warnOnMiss: true,
     remediation: 'Set LOOM_POSTURE_FUNCTION_URL to the posture-refresh Function base URL so the Govern tab recomputes data-owner posture on tab-open. Without it the Govern view still renders posture computed LIVE from Cosmos — only the on-open pre-warm is gated. The post-deploy bootstrap deploys azure-functions/posture-refresh/deploy/main.bicep, publishes the code, stores the host key in Key Vault (loom-posture-function-key → LOOM_POSTURE_FUNCTION_KEY secretRef), and sets this URL on the Console.',
     provisionedBy: 'azure-functions/posture-refresh/deploy/main.bicep → admin-plane param loomPostureFunctionUrl (apps[] env) + csa-loom-post-deploy-bootstrap "Govern posture-refresh Function" step',
     role: 'Cosmos DB Built-in Data Contributor (Function MI) on the Loom Cosmos account',
   },
   {
-    id: 'purview', category: 'azure-services', title: 'Microsoft Purview (governance)', severity: 'optional',
+    id: 'purview', category: 'azure-services', title: 'Microsoft Purview (governance)', severity: 'recommended',
     required: ['LOOM_PURVIEW_ACCOUNT'], warnOnMiss: true,
     remediation: 'Set LOOM_PURVIEW_ACCOUNT to link a Purview account. Domains + data-quality work Loom-native (Cosmos) without it; Purview adds the external mirror + scan plane.',
     provisionedBy: 'main.bicep (param loomPurviewAccount / purviewEnabled) → admin-plane apps[] env',
@@ -125,7 +125,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   },
   // ── usage / governance analytics embed (per-cloud, opt-in over native charts) ──
   {
-    id: 'usage-embed', category: 'azure-services', title: 'Usage analytics embed (F21 — /admin/usage)', severity: 'optional',
+    id: 'usage-embed', category: 'azure-services', title: 'Usage analytics embed (F21 — /admin/usage)', severity: 'recommended',
     required: ['LOOM_USAGE_REPORT_KIND'],
     anyOf: [['LOOM_USAGE_PBI_WORKSPACE_ID', 'LOOM_USAGE_PBI_REPORT_ID', 'LOOM_GRAFANA_USAGE_DASHBOARD_UID', 'LOOM_GRAFANA_ENDPOINT']],
     warnOnMiss: true,
@@ -143,7 +143,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'govern-embed', category: 'azure-services', title: 'Governance analytics embed (F2 — /governance Govern)', severity: 'optional',
+    id: 'govern-embed', category: 'azure-services', title: 'Governance analytics embed (F2 — /governance Govern)', severity: 'recommended',
     required: ['LOOM_REPORT_KIND'],
     anyOf: [['LOOM_GOVERN_PBI_WORKSPACE_ID', 'LOOM_GOVERN_PBI_REPORT_ID', 'LOOM_GRAFANA_DASHBOARD_UID']],
     warnOnMiss: true,
@@ -158,35 +158,35 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   },
   // ── derived (bicep auto-fills from another resource; operator rarely sets) ──
   {
-    id: 'org-visuals', category: 'azure-services', title: 'Embed codes / Org visuals (F22/F23)', severity: 'optional',
+    id: 'org-visuals', category: 'azure-services', title: 'Embed codes / Org visuals (F22/F23)', severity: 'recommended',
     required: ['LOOM_ORG_VISUALS_URL'], warnOnMiss: true, derived: true,
     remediation: 'Auto-derived from the DLZ storage account (https://<account>.blob.<suffix>/org-visuals) when loomStorageAccount is known — single-sub fills it automatically. Multi-sub: set LOOM_ORG_VISUALS_URL to the org-visuals Blob container URL via scripts/csa-loom/patch-navigator-env.sh.',
     provisionedBy: 'modules/admin-plane/main.bicep line ~2360 (derived from loomStorageAccount) + landing-zone/org-visuals-rbac.bicep',
     role: 'Storage Blob Data Contributor (container) + Storage Blob Delegator (account) on the org-visuals container — landing-zone/org-visuals-rbac.bicep',
   },
   {
-    id: 'audit-la-workspace', category: 'azure-services', title: 'Audit logs — Log Analytics workspace (/admin/audit-logs)', severity: 'optional',
+    id: 'audit-la-workspace', category: 'azure-services', title: 'Audit logs — Log Analytics workspace (/admin/audit-logs)', severity: 'recommended',
     required: ['LOOM_LOG_ANALYTICS_WORKSPACE_ID'], warnOnMiss: true, derived: true,
     remediation: 'Auto-derived from the monitoring module (the Log Analytics workspace customerId) on a push-button deploy. If unset, /admin/audit-logs still shows Cosmos + Purview audit rows; set LOOM_LOG_ANALYTICS_WORKSPACE_ID (the workspace GUID) to add the Log Analytics source.',
     provisionedBy: 'modules/admin-plane/main.bicep line ~1780 (derived from monitoring.outputs.lawCustomerId)',
     role: 'Log Analytics Reader (UAMI) on the workspace',
   },
   {
-    id: 'svc-databricks', category: 'azure-services', title: 'Azure Databricks (notebooks / SQL / Warp)', severity: 'optional',
+    id: 'svc-databricks', category: 'azure-services', title: 'Azure Databricks (notebooks / SQL / Warp)', severity: 'recommended',
     required: ['LOOM_DATABRICKS_HOSTNAME'], warnOnMiss: true,
     remediation: 'Set LOOM_DATABRICKS_HOSTNAME (the workspace hostname, no scheme) to enable Databricks-backed notebooks, SQL warehouses, and Warp run targets. Synapse covers the same workloads if you prefer not to deploy Databricks.',
     provisionedBy: 'modules/landing-zone (Databricks workspace) → admin-plane forwards loomDatabricksHostname → apps[] env',
     role: 'Databricks workspace access for the Console UAMI (SCIM-provisioned) + network reachability (private link / IP allowlist — see issue #1466)',
   },
   {
-    id: 'svc-activator-adx-scope', category: 'azure-services', title: 'Activator — ADX continuous-evaluation scope', severity: 'optional',
+    id: 'svc-activator-adx-scope', category: 'azure-services', title: 'Activator — ADX continuous-evaluation scope', severity: 'recommended',
     required: ['LOOM_ADX_ALERT_SCOPE'], warnOnMiss: true,
     remediation: 'Set LOOM_ADX_ALERT_SCOPE to the ADX cluster ARM resource id so Activator rules on Eventhouse/ADX sources get hands-off scheduled evaluation (an Azure Monitor scheduled-query rule scoped to the cluster), and grant the alert identity "Database Viewer" on the target database. Without it, ADX-sourced rules still evaluate on-demand via Trigger; Log Analytics sources evaluate continuously regardless.',
     provisionedBy: 'modules/admin-plane/adx-cluster.bicep (adxEnabled → the ADX cluster) → admin-plane/main.bicep apps[] env LOOM_ADX_ALERT_SCOPE (the cluster ARM id; a BYO cluster resolves via byoExisting) — auto-emitted on a push-button deploy',
     role: 'Database Viewer (alert identity) on the ADX database + Monitoring Contributor (Console UAMI) on LOOM_ALERT_RG',
   },
   {
-    id: 'svc-azure-maps', category: 'azure-services', title: 'Map visuals / Geo (Azure Maps or OSS MapLibre)', severity: 'optional',
+    id: 'svc-azure-maps', category: 'azure-services', title: 'Map visuals / Geo (Azure Maps or OSS MapLibre)', severity: 'recommended',
     required: ['LOOM_MAPS_BACKEND'],
     anyOf: [['LOOM_AZURE_MAPS_CLIENT_ID', 'LOOM_AZURE_MAPS_KEY', 'LOOM_MAPS_TILE_URL']],
     warnOnMiss: true,
@@ -202,7 +202,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-loom-capacity-broker', category: 'azure-services', title: 'Loom Capacity Broker — LCU admission control (Hyperscale)', severity: 'optional',
+    id: 'svc-loom-capacity-broker', category: 'azure-services', title: 'Loom Capacity Broker — LCU admission control (Hyperscale)', severity: 'recommended',
     required: ['LOOM_BROKER_URL', 'LOOM_BROKER_REDIS'], warnOnMiss: true, optionalDefault: true,
     remediation: 'Set LOOM_BROKER_URL to the internal-ingress Loom Capacity Broker ACA app (synchronous POST /admit choke-point + smoothing/bursting/4-stage-throttle over an LCU timepoint ledger) and LOOM_BROKER_REDIS to the shared H-band Redis ledger endpoint from compute/hband-shared.bicep (use its redisEndpoint output verbatim: <host>:10000 on Azure Managed Redis in Commercial, <host>:6380 on the retiring Azure Cache for Redis in Azure Government — do not hard-code a port). Deploy compute/loom-capacity-broker-app.bicep. Unset → job submission proceeds UNTHROTTLED with a MessageBar (default-ON posture — the broker constrains, it never blocks the platform if absent).',
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-capacity-broker + shared Redis timepoint ledger) + modules/compute/loom-capacity-broker-app.bicep (out-of-band) → LOOM_BROKER_URL / LOOM_BROKER_REDIS on the Console app',
@@ -215,7 +215,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // capacity ceiling auto-derives from observed peak. Making them editable here
     // lets the autopilot ROLL LOOM_CAPACITY_LCU through env-apply (the right-size
     // actuator) and an admin bootstrap the default mode from /admin/env-config.
-    id: 'svc-lcu-autopilot', category: 'azure-services', title: 'LCU-Autopilot — self-driving FinOps (idle-pause + capacity right-size)', severity: 'optional',
+    id: 'svc-lcu-autopilot', category: 'azure-services', title: 'LCU-Autopilot — self-driving FinOps (idle-pause + capacity right-size)', severity: 'recommended',
     required: ['LOOM_AUTOPILOT_MODE', 'LOOM_CAPACITY_LCU'], warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: "the autopilot runs in 'propose' mode by default (LOOM_AUTOPILOT_MODE bicep default 'propose' — surfaces pause-idle/right-size recommendations with real $ impact, actuates nothing) and the LCU capacity ceiling auto-derives from observed peak + 25% headroom when LOOM_CAPACITY_LCU is unset. Set LOOM_AUTOPILOT_MODE=auto (per-tenant, from /admin/autopilot) to let it pause idle compute + roll the ceiling unattended.",
     remediation: "Set LOOM_AUTOPILOT_MODE ('auto' to let the loop actuate unattended, 'propose' to surface recommendations only — the per-tenant mode on /admin/autopilot overrides this bootstrap default) and LOOM_CAPACITY_LCU (the published LCU capacity ceiling; unset auto-derives from peak + 25% headroom). The autopilot reads real per-resource LCU + $ from the chargeback model (Cost Management Reader on the Console UAMI) and pauses idle Synapse/ADX compute via ARM. The push-button deploy wires LOOM_AUTOPILOT_MODE='propose' from admin-plane/main.bicep.",
@@ -236,7 +236,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // is auto-wired by the push-button deploy AND the Cost Management Reader
     // grant is now bicep-provisioned, so cost pulls run day-one with zero
     // operator input — LOOM_BILLING_SCOPE is an optional widener only.
-    id: 'svc-cost-management', category: 'azure-services', title: 'Cost Management (FinOps — cost / chargeback pulls)', severity: 'optional',
+    id: 'svc-cost-management', category: 'azure-services', title: 'Cost Management (FinOps — cost / chargeback pulls)', severity: 'recommended',
     anyOf: [['LOOM_BILLING_SCOPE', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
     remediation: 'Cost pulls run per Loom subscription by default (LOOM_SUBSCRIPTION_ID — auto-wired by the push-button deploy) and the Console UAMI is granted "Cost Management Reader" at subscription scope by bicep (main.bicep console-cost-management-reader → modules/admin-plane/cost-management-reader-rbac.bicep), so cost/chargeback works day-one with no operator input. Optionally set LOOM_BILLING_SCOPE to a billing-account / enrollment / management-group scope (e.g. "/providers/Microsoft.Billing/billingAccounts/<id>") to roll the report up to a wider billing scope (required on some Gov EA/MCA enrollments).',
     provisionedBy: 'platform/fiab/bicep/main.bicep (console-cost-management-reader, skipRoleGrants-aware) → modules/admin-plane/cost-management-reader-rbac.bicep + modules/admin-plane/main.bicep apps[] env LOOM_SUBSCRIPTION_ID',
@@ -259,7 +259,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // 30-day horizon and method 'auto' (API first, computed projection on any
     // failure). Editable here so an admin can force the computed method (e.g.
     // IL5 CSV-ingest estates) or widen the horizon from /admin/env-config.
-    id: 'svc-cost-forecast', category: 'azure-services', title: 'Cost Management Forecast (FinOps — period-end projection)', severity: 'optional',
+    id: 'svc-cost-forecast', category: 'azure-services', title: 'Cost Management Forecast (FinOps — period-end projection)', severity: 'recommended',
     required: ['LOOM_COST_FORECAST_HORIZON_DAYS', 'LOOM_COST_FORECAST_METHOD'], warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: "the forecast runs day-one with fully-functional defaults — a 30-day horizon and method 'auto' (the real Cost Management Forecast API first, falling back to a computed linear/seasonal projection from the real daily series, honestly labeled on every surface).",
     remediation: "Optional tuning only — the forecast works unset. Set LOOM_COST_FORECAST_HORIZON_DAYS (1–90, default 30) to change how far forward the FinOps forecast projects, and LOOM_COST_FORECAST_METHOD to 'api' (Forecast API only, computed fallback on failure), 'linear' (least-squares run-rate) or 'seasonal' (7-day weekday profile × trend) to force a method — e.g. 'seasonal' on Gov enrollments where the Forecast API returns FailedDependency, or 'linear'/'seasonal' on IL5 estates computing from the CSV-ingest series.",
@@ -286,7 +286,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // unset LOOM_COST_ANOMALY_ENABLED = enabled, the job is bicep-provisioned and
     // the Cost Management Reader grant is shared with svc-cost-management, so the
     // monitor runs day-one with zero operator input; set =false to opt out.
-    id: 'svc-cost-anomaly-monitor', category: 'azure-services', title: 'Cost-anomaly monitor (FinOps — scheduled spike detection + alerts)', severity: 'optional',
+    id: 'svc-cost-anomaly-monitor', category: 'azure-services', title: 'Cost-anomaly monitor (FinOps — scheduled spike detection + alerts)', severity: 'recommended',
     required: ['LOOM_COST_ANOMALY_ENABLED'], warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'the cost-anomaly monitor runs day-one with fully-functional defaults — the loom-cost-anomaly-monitor Container App Job is bicep-provisioned (default-ON), seeds a whole-estate 3σ watch rule, and reuses the C1 Cost Management Reader grant + the shared action group; a firing anomaly writes an in-product notification and dispatches email with zero config.',
     remediation: "Optional opt-out only — the monitor works unset (default-ON). The scheduled loom-cost-anomaly-monitor Container App Job is deployed by modules/admin-plane/cost-anomaly-monitor-job.bicep (enable flag rides the observabilityConfig bag). It reuses the C1 'Cost Management Reader' grant (cost-management-reader-rbac.bicep) to pull cost, the shared loom-default-alerts action group (LOOM_ALERT_ACTION_GROUP_ID) to email, and writes in-product notifications the console reads. Edit thresholds + recipients on /admin/finops (Anomaly rules). Set LOOM_COST_ANOMALY_ENABLED=false to opt out. Tune the schedule via observabilityConfig.costAnomalyCron (default daily 06:00 UTC).",
@@ -312,7 +312,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // subscription var (the same day-one signal as svc-cost-management) and
     // NAMES the role in its remediation; the actual 403 is surfaced honestly at
     // the budgets route (budgets_write_forbidden) with this Fix-it.
-    id: 'svc-budgets-write', category: 'azure-services', title: 'Azure Budgets — create/update/delete (FinOps hub)', severity: 'optional',
+    id: 'svc-budgets-write', category: 'azure-services', title: 'Azure Budgets — create/update/delete (FinOps hub)', severity: 'recommended',
     anyOf: [['LOOM_SUBSCRIPTION_ID', 'LOOM_BILLING_SCOPE']], warnOnMiss: true,
     remediation: 'Budget READ works with the C1 Cost Management Reader grant. To CREATE/UPDATE/DELETE budgets from /admin/finops, grant the Console UAMI "Cost Management Contributor" at the subscription (or billing) scope — bicep-granted by modules/admin-plane/cost-management-reader-rbac.bicep (role id 434105ed-43f6-45c7-a02f-909b2ba83430) on a push-button deploy; on an existing estate re-run the deploy with skipRoleGrants=false. On some Gov EA/MCA enrollments budget write is a billing-account admin action (document per no-vaporware).',
     provisionedBy: 'modules/admin-plane/cost-management-reader-rbac.bicep (Cost Management Contributor, skipRoleGrants-aware) — the same module that grants the C1 reader role',
@@ -327,7 +327,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-databricks-sql', category: 'azure-services', title: 'Databricks SQL warehouse (DQ monitor / MDM / DLP schemas)', severity: 'optional',
+    id: 'svc-databricks-sql', category: 'azure-services', title: 'Databricks SQL warehouse (DQ monitor / MDM / DLP schemas)', severity: 'recommended',
     required: ['LOOM_DATABRICKS_SQL_WAREHOUSE_ID'], warnOnMiss: true,
     remediation: 'Set LOOM_DATABRICKS_SQL_WAREHOUSE_ID (with LOOM_DATABRICKS_HOSTNAME) so DQ monitoring, MDM match-merge, and governance DLP schema surfaces run against a real Databricks SQL warehouse (warehouseConfigGate). Synapse covers the warehouse item type without it.',
     provisionedBy: 'modules/landing-zone (Databricks workspace + SQL warehouse) → apps[] env',
@@ -352,7 +352,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // metastore/account-admin system-schema enablement plus the UAMI grants,
     // which is why the Fix-it is `role-grant`, not a picker.
     id: 'svc-databricks-system-tables', category: 'azure-services',
-    title: 'Unity Catalog system tables (audit / billing / query history)', severity: 'optional',
+    title: 'Unity Catalog system tables (audit / billing / query history)', severity: 'recommended',
     required: ['LOOM_DATABRICKS_HOSTNAME'], warnOnMiss: true,
     remediation: 'Reading system.access.audit / system.billing.usage / system.query.history needs (1) LOOM_DATABRICKS_HOSTNAME + a SQL warehouse, (2) the system schema ENABLED on the metastore — a metastore or account admin runs `databricks system-schemas enable <metastore_id> system.<schema>` (PUT /api/2.1/unity-catalog/metastores/{id}/systemschemas/{schema}); the Audit & system tables dialog offers this inline — and (3) USE CATALOG on `system` + USE SCHEMA + SELECT on each system schema for the Console UAMI. None of the three is an env write the Console can perform for you.',
     provisionedBy: 'modules/landing-zone (Databricks workspace) → admin-plane forwards loomDatabricksHostname → apps[] env. The system-schema enablement + grants are a one-time metastore-admin action, not IaC.',
@@ -371,14 +371,14 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-synapse-spark-pool', category: 'azure-services', title: 'Synapse Spark pool (ML predict / scheduled runs)', severity: 'optional',
+    id: 'svc-synapse-spark-pool', category: 'azure-services', title: 'Synapse Spark pool (ML predict / scheduled runs)', severity: 'recommended',
     required: ['LOOM_SYNAPSE_SPARK_POOL'], warnOnMiss: true,
     remediation: 'Set LOOM_SYNAPSE_SPARK_POOL (e.g. loompool) so ml-model predict and scheduled job run-adapters have a Spark compute target (synapse_spark_pool_not_configured).',
     provisionedBy: 'modules/landing-zone/synapse.bicep (Spark pool) → apps[] env LOOM_SYNAPSE_SPARK_POOL',
     role: 'Synapse Administrator (UAMI) on the workspace',
   },
   {
-    id: 'svc-cosmos-vcore', category: 'azure-services', title: 'Cosmos DB for MongoDB vCore (vector search)', severity: 'optional',
+    id: 'svc-cosmos-vcore', category: 'azure-services', title: 'Cosmos DB for MongoDB vCore (vector search)', severity: 'recommended',
     required: ['LOOM_COSMOS_VCORE_CONNECTION_STRING'], warnOnMiss: true,
     // Vector search is ON by default via Azure AI Search; Mongo vCore is an
     // ALTERNATE backend selected by a customer-supplied connection string (which
@@ -391,14 +391,14 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     role: 'none (connection-string auth)',
   },
   {
-    id: 'svc-eventgrid-topics', category: 'azure-services', title: 'Event Grid topics (real-time intelligence)', severity: 'optional',
+    id: 'svc-eventgrid-topics', category: 'azure-services', title: 'Event Grid topics (real-time intelligence)', severity: 'recommended',
     anyOf: [['LOOM_EVENTGRID_SUB', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
     remediation: 'Set LOOM_EVENTGRID_SUB (falls back to LOOM_SUBSCRIPTION_ID) so the event-grid-topic editor can manage topics via ARM (eventgrid_not_configured).',
     provisionedBy: 'modules/landing-zone (Event Grid) → apps[] env',
     role: 'EventGrid Contributor (Console UAMI) on the RG',
   },
   {
-    id: 'svc-webhooks-eventgrid', category: 'azure-services', title: 'Event subscriptions — Event Grid delivery', severity: 'optional',
+    id: 'svc-webhooks-eventgrid', category: 'azure-services', title: 'Event subscriptions — Event Grid delivery', severity: 'recommended',
     required: ['LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY'], warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'outbound webhooks deliver via HMAC-SHA256-signed direct HTTPS by default — Event Grid is an optional alternative transport.',
     remediation: 'Webhook delivery works day-one via signed direct HTTPS. To route deliveries through Azure Event Grid instead, set LOOM_EVENTGRID_TOPIC_ENDPOINT + LOOM_EVENTGRID_TOPIC_KEY (custom topic + access key).',
@@ -406,14 +406,14 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     role: 'none (topic key auth)',
   },
   {
-    id: 'svc-iothub', category: 'azure-services', title: 'IoT Hub (iot-hub items)', severity: 'optional',
+    id: 'svc-iothub', category: 'azure-services', title: 'IoT Hub (iot-hub items)', severity: 'recommended',
     anyOf: [['LOOM_IOTHUB_SUB', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
     remediation: 'Set LOOM_IOTHUB_SUB (falls back to LOOM_SUBSCRIPTION_ID) so the IoT Hub editor can manage hubs via ARM (iothub_not_configured).',
     provisionedBy: 'modules/landing-zone (IoT Hub) → apps[] env',
     role: 'IoT Hub Data Contributor (Console UAMI)',
   },
   {
-    id: 'svc-digital-twins', category: 'azure-services', title: 'Digital twins (ADX graph-twin — Azure-native default)', severity: 'optional',
+    id: 'svc-digital-twins', category: 'azure-services', title: 'Digital twins (ADX graph-twin — Azure-native default)', severity: 'recommended',
     // Azure Digital Twins (ADT) is NOT available in GCC-High / IL5 / DoD, so it can
     // never be the default backing. The DEFAULT twin backend is the ADX graph-twin:
     // the Digital Twin Builder editor materializes entity/relationship types as
@@ -442,49 +442,49 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-postgres-flex', category: 'azure-services', title: 'PostgreSQL Flexible Server (postgres items)', severity: 'optional',
+    id: 'svc-postgres-flex', category: 'azure-services', title: 'PostgreSQL Flexible Server (postgres items)', severity: 'recommended',
     required: ['LOOM_POSTGRES_AAD_USER'], warnOnMiss: true,
     remediation: 'Set LOOM_POSTGRES_AAD_USER (the Entra admin login) so the postgres-flexible-server editor connects with AAD token auth (postgres_flex_not_configured).',
     provisionedBy: 'modules/landing-zone/postgres-flexible.bicep → main.bicep loomPostgresHost (main.bicep ~1393) → admin-plane/main.bicep apps[] env LOOM_POSTGRES_HOST',
     role: 'Entra admin (Console UAMI) on the flexible server',
   },
   {
-    id: 'svc-pgvector', category: 'azure-services', title: 'pgvector (Postgres vector search)', severity: 'optional',
+    id: 'svc-pgvector', category: 'azure-services', title: 'pgvector (Postgres vector search)', severity: 'recommended',
     required: ['LOOM_PGVECTOR_HOST'], warnOnMiss: true,
     remediation: 'Set LOOM_PGVECTOR_HOST to a Postgres Flexible Server with the pgvector extension to enable the Postgres vector backend (pgvector_not_configured). AI Search covers vector workloads without it. HONEST STATE (measured 2026-08-10, docs/fiab/gov-readiness-2026-08-10.md): NO bicep module in this repo emits LOOM_PGVECTOR_HOST, so this gate cannot currently be cleared by a deploy on ANY cloud — it is set by hand or not at all. The backing server IS deployed and the VECTOR extension IS allowlisted (modules/landing-zone/postgres-flexible.bicep), and the same FQDN is already derived for LOOM_POSTGRES_HOST (main.bicep ~1393), so the value is derivable at deploy time; the wiring is simply missing.',
     provisionedBy: 'NOT WIRED BY ANY TEMPLATE TODAY. The backing resource is modules/landing-zone/postgres-flexible.bicep (VECTOR extension allowlisted); the deploy-time value would be the same FQDN main.bicep already derives for loomPostgresHost. Previously this field named modules/deploy-planner/postgres-flexible.bicep — a path that does not exist.',
     role: 'Entra AAD login (Console UAMI) on the server',
   },
   {
-    id: 'svc-shir', category: 'azure-services', title: 'Self-hosted integration runtime (SHIR VMSS)', severity: 'optional',
+    id: 'svc-shir', category: 'azure-services', title: 'Self-hosted integration runtime (SHIR VMSS)', severity: 'recommended',
     anyOf: [['LOOM_SHIR_VMSS_NAME', 'LOOM_PURVIEW_SHIR_VMSS_NAME']], warnOnMiss: true,
     remediation: 'Set LOOM_SHIR_VMSS_NAME (ADF/Synapse SHIR) and/or LOOM_PURVIEW_SHIR_VMSS_NAME (Purview scan SHIR) so the scale-to-0 SHIR controls can start/stop the VMSS (shir_not_configured).',
     provisionedBy: 'modules/landing-zone/shir-vmss.bicep → apps[] env',
     role: 'Virtual Machine Contributor (Console UAMI) on the VMSS RG',
   },
   {
-    id: 'svc-rti-export', category: 'azure-services', title: 'Eventhouse continuous export (ADLS sink)', severity: 'optional',
+    id: 'svc-rti-export', category: 'azure-services', title: 'Eventhouse continuous export (ADLS sink)', severity: 'recommended',
     anyOf: [['LOOM_RTI_EXPORT_ADLS', 'LOOM_ADLS_ACCOUNT']], warnOnMiss: true,
     remediation: 'Set LOOM_RTI_EXPORT_ADLS (an ADLS container URL; falls back to the DLZ account) so eventhouse continuous export lands in a real lake path (rti_export_not_configured).',
     provisionedBy: 'modules/landing-zone/storage.bicep → apps[] env',
     role: 'Storage Blob Data Contributor (ADX cluster MI) on the sink container',
   },
   {
-    id: 'svc-eh-schema-registry', category: 'azure-services', title: 'Event Hubs schema registry (event-schema-set)', severity: 'optional',
+    id: 'svc-eh-schema-registry', category: 'azure-services', title: 'Event Hubs schema registry (event-schema-set)', severity: 'recommended',
     required: ['LOOM_EH_SCHEMA_GROUP'], warnOnMiss: true,
     remediation: 'Set LOOM_EH_SCHEMA_GROUP (a schema group in the Event Hubs namespace) so event-schema-set items manage real registry schemas (schema_registry_not_configured).',
     provisionedBy: 'modules/landing-zone (Event Hubs namespace schema group) → apps[] env',
     role: 'Schema Registry Contributor (UAMI) on the namespace',
   },
   {
-    id: 'svc-dataverse', category: 'azure-services', title: 'Dataverse (Power Platform tables)', severity: 'optional',
+    id: 'svc-dataverse', category: 'azure-services', title: 'Dataverse (Power Platform tables)', severity: 'recommended',
     required: ['LOOM_DATAVERSE_CLIENT_ID', 'LOOM_DATAVERSE_CLIENT_SECRET'], warnOnMiss: true,
     remediation: 'Set LOOM_DATAVERSE_CLIENT_ID + LOOM_DATAVERSE_CLIENT_SECRET (an S2S app registered in the Power Platform environment) so Dataverse table browsing works (dataverse_not_configured). Requires the operator-run Power Platform SP grant (scripts/csa-loom/grant-powerplatform-sp.sh).',
     provisionedBy: 'operator-run scripts/csa-loom/grant-powerplatform-sp.sh + Key Vault secret → apps[] env',
     role: 'Power Platform environment application user (S2S app)',
   },
   {
-    id: 'svc-lakebase', category: 'azure-services', title: 'Lakebase (Postgres-on-lake)', severity: 'optional',
+    id: 'svc-lakebase', category: 'azure-services', title: 'Lakebase (Postgres-on-lake)', severity: 'recommended',
     anyOf: [['LOOM_LAKEBASE_BACKEND', 'LOOM_DATABRICKS_HOSTNAME']], warnOnMiss: true,
     remediation: 'Set LOOM_LAKEBASE_BACKEND=databricks (with LOOM_DATABRICKS_HOSTNAME) so lakebase-postgres items provision against the real Databricks Lakebase backend (lakebase_not_configured).',
     provisionedBy: 'modules/landing-zone (Databricks workspace) → apps[] env',
@@ -494,7 +494,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   //    (docs/fiab/health-coverage-audit.md). Each is an honest env gate; the
   //    matching live probe (lib/admin/health-probes.ts) exercises the real call. ──
   {
-    id: 'svc-aas', category: 'azure-services', title: 'Analysis Services (semantic-model fast path)', severity: 'optional',
+    id: 'svc-aas', category: 'azure-services', title: 'Analysis Services (semantic-model fast path)', severity: 'recommended',
     // The Loom-native tabular layer (LOOM_SEMANTIC_BACKEND, always emitted —
     // default 'loom-native') is the DEFAULT semantic engine and is fully
     // functional (Synapse-Serverless / loom-columnar). It satisfies this gate
@@ -524,7 +524,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-aml', category: 'azure-services', title: 'Azure Machine Learning (ML models / AutoML / experiments)', severity: 'optional',
+    id: 'svc-aml', category: 'azure-services', title: 'Azure Machine Learning (ML models / AutoML / experiments)', severity: 'recommended',
     anyOf: [['LOOM_AML_WORKSPACE', 'LOOM_FOUNDRY_NAME']], warnOnMiss: true,
     remediation: 'Set LOOM_AML_WORKSPACE (+ LOOM_AML_RESOURCE_GROUP; falls back to the AI Foundry hub via LOOM_FOUNDRY_NAME/LOOM_FOUNDRY_RG) so ml-model / ml-experiment / AutoML items have a workspace. The Data Science item family is gated on this.',
     provisionedBy: 'modules/admin-plane (aiFoundryEnabled → hub workspace) or a dedicated AML workspace → apps[] env (resolve-aml-target.ts)',
@@ -539,7 +539,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // one via the selector); the per-request servingConfigGate() gates precisely.
     // LOOM_MODEL_SERVING_BACKEND is the only NEW editable var here (the workspace /
     // hostname keys are shared with svc-aml / svc-databricks). No Fabric.
-    id: 'svc-model-serving', category: 'azure-services', title: 'Model serving endpoints (Azure ML online endpoints / Databricks Mosaic)', severity: 'optional',
+    id: 'svc-model-serving', category: 'azure-services', title: 'Model serving endpoints (Azure ML online endpoints / Databricks Mosaic)', severity: 'recommended',
     anyOf: [['LOOM_AML_WORKSPACE', 'LOOM_FOUNDRY_NAME', 'LOOM_DATABRICKS_HOSTNAME', 'LOOM_MODEL_SERVING_BACKEND']], warnOnMiss: true,
     remediation: 'Model-serving endpoints run on Azure ML managed online endpoints by DEFAULT — set LOOM_AML_WORKSPACE (or rely on the AI Foundry hub via LOOM_FOUNDRY_NAME) and grant the Console UAMI "AzureML Data Scientist" on the workspace. To use Databricks Mosaic AI Model Serving instead, set LOOM_MODEL_SERVING_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME. No Microsoft Fabric required.',
     provisionedBy: 'modules/admin-plane (aiFoundryEnabled → AML/Foundry workspace) → apps[] env (LOOM_AML_WORKSPACE); LOOM_MODEL_SERVING_BACKEND selector defaults to the Azure ML path',
@@ -557,7 +557,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // LOOM_FINETUNE_BACKEND + LOOM_AOAI_ACCOUNT are the NEW editable vars here
     // (LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME are shared with svc-aoai / svc-aml).
     // No Fabric.
-    id: 'svc-fine-tuning', category: 'azure-services', title: 'LLM fine-tuning (Azure OpenAI / AI Foundry fine-tuning; Databricks Mosaic opt-in)', severity: 'optional',
+    id: 'svc-fine-tuning', category: 'azure-services', title: 'LLM fine-tuning (Azure OpenAI / AI Foundry fine-tuning; Databricks Mosaic opt-in)', severity: 'recommended',
     anyOf: [['LOOM_AOAI_ACCOUNT', 'LOOM_AOAI_ENDPOINT', 'LOOM_FOUNDRY_NAME', 'LOOM_FINETUNE_BACKEND']], warnOnMiss: true,
     remediation: 'Fine-tuning runs on Azure OpenAI in Azure AI Foundry by DEFAULT — ensure an AIServices/OpenAI account is resolvable (set LOOM_AOAI_ACCOUNT, or rely on the AI Foundry hub via LOOM_FOUNDRY_NAME / discovery in LOOM_FOUNDRY_RG) and grant the Console UAMI "Cognitive Services OpenAI Contributor" on it. To use Databricks Mosaic AI fine-tuning instead, set LOOM_FINETUNE_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME. No Microsoft Fabric required.',
     provisionedBy: 'modules/admin-plane/ai-foundry.bicep (AIServices/OpenAI account) → apps[] env (LOOM_AOAI_ACCOUNT / LOOM_FOUNDRY_NAME); LOOM_FINETUNE_BACKEND selector defaults to the Azure OpenAI path',
@@ -574,7 +574,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // selector); the per-request featureStoreConfigGate() / onlineStoreGate() gate
     // precisely. LOOM_FEATURE_STORE_BACKEND is the only NEW editable var here (the
     // hostname / pgvector keys are shared with svc-databricks / svc-postgres). No Fabric.
-    id: 'svc-feature-store', category: 'azure-services', title: 'Feature Store (UC feature tables + pgvector online serving)', severity: 'optional',
+    id: 'svc-feature-store', category: 'azure-services', title: 'Feature Store (UC feature tables + pgvector online serving)', severity: 'recommended',
     anyOf: [['LOOM_FEATURE_STORE_BACKEND', 'LOOM_DATABRICKS_HOSTNAME', 'LOOM_PGVECTOR_HOST']], warnOnMiss: true,
     remediation: 'Feature tables author on the Azure-native offline backend by DEFAULT — Unity Catalog (set LOOM_DATABRICKS_HOSTNAME) on Commercial, or set LOOM_FEATURE_STORE_BACKEND=postgres for the sovereign OSS-UC + Azure Database for PostgreSQL path (Gov). Online serving (feature-lookup-at-inference) uses Lakebase/pgvector — set LOOM_PGVECTOR_HOST + LOOM_POSTGRES_AAD_USER. No Microsoft Fabric required.',
     provisionedBy: 'modules/landing-zone (Databricks UC + postgres-flex) → apps[] env (LOOM_DATABRICKS_HOSTNAME / LOOM_PGVECTOR_HOST); LOOM_FEATURE_STORE_BACKEND selector defaults to the Unity Catalog path',
@@ -591,35 +591,35 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // signal is the live `powerplatform` probe in lib/admin/service-probes.ts
     // (Exercise → Power Platform), which performs an actual BAP environment
     // list and reports gate/fail with the exact remediation.
-    id: 'svc-powerplatform', category: 'azure-services', title: 'Power Platform control plane (power-* items / Copilot Studio)', severity: 'optional',
+    id: 'svc-powerplatform', category: 'azure-services', title: 'Power Platform control plane (power-* items / Copilot Studio)', severity: 'recommended',
     required: ['LOOM_UAMI_CLIENT_ID'], warnOnMiss: true,
     remediation: 'Env presence alone does NOT mean Power Platform is reachable — run Exercise → "Power Platform — list environments" for the live verdict. The BAP API authenticates as the Console UAMI (LOOM_UAMI_CLIENT_ID), and a Power Platform admin must ALSO register it as a management app (New-PowerAppManagementApp -ApplicationId <clientId>) — Microsoft requires an admin USER context for that registration, so a service principal cannot self-register. Loom additionally runs Power Platform calls under the SIGNED-IN USER by default (LOOM_POWERPLATFORM_USER_PASSTHROUGH), which is required for Power Automate authoring because Flow APIs reject unlicensed service-principal identities.',
     provisionedBy: 'modules/admin-plane/main.bicep (uami-console → apps[] env) + operator-run PP management-app registration; user-passthrough needs no provisioning',
     role: 'Power Platform management application (tenant admin registration) + Environment Admin where environments are managed; OR a signed-in user with Power Platform licences (passthrough)',
   },
   {
-    id: 'svc-servicebus', category: 'azure-services', title: 'Service Bus (queues / topics — business events)', severity: 'optional',
+    id: 'svc-servicebus', category: 'azure-services', title: 'Service Bus (queues / topics — business events)', severity: 'recommended',
     required: ['LOOM_SERVICEBUS_NAMESPACE'], warnOnMiss: true,
     remediation: 'Set LOOM_SERVICEBUS_NAMESPACE (+ LOOM_SERVICEBUS_RG) to enable Service Bus queue/topic business-event routing. Event Grid / Event Hubs paths work without it.',
     provisionedBy: 'modules/landing-zone (Service Bus namespace) → apps[] env LOOM_SERVICEBUS_NAMESPACE',
     role: 'Azure Service Bus Data Owner (Console UAMI) on the namespace',
   },
   {
-    id: 'svc-stream-analytics', category: 'azure-services', title: 'Stream Analytics (eventstream processing jobs)', severity: 'optional',
+    id: 'svc-stream-analytics', category: 'azure-services', title: 'Stream Analytics (eventstream processing jobs)', severity: 'recommended',
     anyOf: [['LOOM_ASA_RG', 'LOOM_DLZ_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_ASA_RG (falls back to LOOM_DLZ_RG) so eventstream processing deploys real Stream Analytics jobs. Grant the Console UAMI Contributor on that RG.',
     provisionedBy: 'modules/landing-zone (DLZ RG) → apps[] env; ASA jobs are created on demand by the eventstream provisioner',
     role: 'Contributor (Console UAMI) on the Stream Analytics resource group',
   },
   {
-    id: 'svc-azure-sql', category: 'azure-services', title: 'Azure SQL (SQL database items / mirroring source ops)', severity: 'optional',
+    id: 'svc-azure-sql', category: 'azure-services', title: 'Azure SQL (SQL database items / mirroring source ops)', severity: 'recommended',
     anyOf: [['LOOM_AZURE_SQL_DEFAULT_SERVER', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
     remediation: 'Azure SQL item creates provision via ARM under LOOM_SUBSCRIPTION_ID; set LOOM_AZURE_SQL_DEFAULT_SERVER to bind existing-database flows to a default logical server. The Console UAMI needs an AAD login on target servers for data-plane ops (mirroring change-feed DDL).',
     provisionedBy: 'modules/deploy-planner/azure-sql.bicep (on-demand) → per-item state; default server via apps[] env',
     role: 'SQL Server Contributor (ARM) + AAD login with db_owner on managed databases (Console UAMI)',
   },
   {
-    id: 'svc-postgres', category: 'azure-services', title: 'PostgreSQL Flexible Server (Lakebase / pgvector)', severity: 'optional',
+    id: 'svc-postgres', category: 'azure-services', title: 'PostgreSQL Flexible Server (Lakebase / pgvector)', severity: 'recommended',
     anyOf: [['LOOM_POSTGRES_HOST', 'LOOM_PGVECTOR_HOST']], warnOnMiss: true,
     // OPT-IN infra: a Postgres Flexible Server is off by default (postgresEnabled
     // defaults false in the orchestrator) and carries real standing cost. Its
@@ -634,7 +634,7 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     role: 'AAD administrator-created role for the Console UAMI on the server (azure_ad_user)',
   },
   {
-    id: 'bi-powerbi-backend', category: 'azure-services', title: 'Power BI backend (Fabric-family) — opt-in', severity: 'optional',
+    id: 'bi-powerbi-backend', category: 'azure-services', title: 'Power BI backend (Fabric-family) — opt-in', severity: 'recommended',
     required: ['LOOM_BI_BACKEND'], warnOnMiss: true,
     // OPT-IN BY DESIGN (.claude/rules/no-fabric-dependency.md). Power BI is
     // Fabric-family, so it is never the default: the semantic-model, report,
@@ -650,14 +650,14 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     docs: '.claude/rules/no-fabric-dependency.md',
   },
   {
-    id: 'svc-eventgrid', category: 'azure-services', title: 'Event Grid (business-events topics / shims)', severity: 'optional',
+    id: 'svc-eventgrid', category: 'azure-services', title: 'Event Grid (business-events topics / shims)', severity: 'recommended',
     anyOf: [['LOOM_EVENTGRID_BUSINESS_TOPIC', 'LOOM_EVENTGRID_RG', 'LOOM_DLZ_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_EVENTGRID_BUSINESS_TOPIC (custom topic for business events; RG falls back to LOOM_DLZ_RG). Grant the Console UAMI "EventGrid Contributor" on the RG and "EventGrid Data Sender" on the topic.',
     provisionedBy: 'modules/landing-zone (Event Grid custom topic) → apps[] env LOOM_EVENTGRID_BUSINESS_TOPIC',
     role: 'EventGrid Contributor (RG) + EventGrid Data Sender (topic) — Console UAMI',
   },
   {
-    id: 'svc-batch', category: 'azure-services', title: 'Azure Batch (batch-pool compute items)', severity: 'optional',
+    id: 'svc-batch', category: 'azure-services', title: 'Azure Batch (batch-pool compute items)', severity: 'recommended',
     required: ['LOOM_BATCH_ACCOUNT'], warnOnMiss: true,
     remediation: 'Set LOOM_BATCH_ACCOUNT (+ LOOM_BATCH_RG) so batch-pool items manage real Azure Batch pools. Grant the Console UAMI Contributor on the Batch account.',
     provisionedBy: 'modules/landing-zone (batchEnabled → Batch account) → apps[] env LOOM_BATCH_ACCOUNT',

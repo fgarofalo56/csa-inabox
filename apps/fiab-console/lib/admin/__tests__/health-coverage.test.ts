@@ -68,7 +68,7 @@ describe('wave-3 env checks (previously-unmonitored backends)', () => {
 
 describe('family derivation (auto-expanding coverage)', () => {
   const mk = (id: string, status: CheckResult['status']): CheckResult => ({
-    id, category: 'azure-services', title: id, severity: 'optional', status,
+    id, category: 'azure-services', title: id, severity: 'recommended', status,
     detail: 'x', remediation: status === 'pass' ? undefined : `fix ${id}`,
   });
 

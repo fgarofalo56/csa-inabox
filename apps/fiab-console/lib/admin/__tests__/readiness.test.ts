@@ -156,8 +156,8 @@ describe('buildCapabilityNodes — H1', () => {
   });
 
   it('an opt-in gate renders state=opt-in (not blocked) when its var is unset', () => {
-    // issue #2753: an additive, non-default feature (severity:'optional' +
-    // warnOnMiss, e.g. svc-loom-trino) must NOT read as a red misconfiguration.
+    // issue #2753: an additive, non-default feature (the EXPLICIT `EnvSpec.optIn`
+    // flag, e.g. svc-postgres) must NOT read as a red misconfiguration.
     // Its GateStatus is 'opt-in'; buildCapabilityNodes must preserve that.
     const target = GATES[0].id;
     const statuses = statusesWith([]).map((st) =>

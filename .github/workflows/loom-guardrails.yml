@@ -86,6 +86,20 @@ jobs:
       - name: no-freeform (raw-JSON config surfaces)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-no-freeform.mjs
+      # `optional` never changed any behaviour — the readiness scorer gives a
+      # BLOCKED capability 0 whatever its severity — so the label's only effect
+      # was on how a human read the number, and it was used exactly that way:
+      # a readiness gap reported as "13 blocked, all optional severity" excused
+      # thirteen capabilities the deploy was supposed to wire and had not. The
+      # tier is deleted (#3347); this keeps it deleted. The debt is already 0,
+      # so the scan runs an EMBEDDED CONTROL — known-violating fixtures it must
+      # still detect — on every invocation, because "found nothing" over a
+      # detector that has gone blind is indistinguishable from clean.
+      - name: no-optional-severity (the excusing readiness label stays deleted — #3347)
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-no-optional-severity.mjs --self-test
+          node scripts/ci/check-no-optional-severity.mjs
       - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-sql-quoting.mjs

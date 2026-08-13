@@ -14,7 +14,7 @@ export const OBSERVABILITY_ENV_CHECKS: EnvSpec[] = [
     // /api/admin/synthetic-runs route read run artifacts from Blob; without the
     // results account/container they honest-gate (503) with this spec's Fix-it.
     id: 'svc-synthetic-monitor', category: 'observability',
-    title: 'Synthetic journey monitor — results store (Blob)', severity: 'optional',
+    title: 'Synthetic journey monitor — results store (Blob)', severity: 'recommended',
     required: ['LOOM_SYNTHETIC_MONITOR_ENABLED', 'LOOM_UAT_RESULTS_ACCOUNT', 'LOOM_UAT_RESULTS_CONTAINER'],
     warnOnMiss: true,
     remediation: 'Set LOOM_UAT_RESULTS_ACCOUNT (the storage account the in-VNet UAT/synthetic runners upload run artifacts to) + LOOM_UAT_RESULTS_CONTAINER (default uat-results) + LOOM_SYNTHETIC_MONITOR_ENABLED=true so the Health & Reliability hub\'s Journeys tab can list the last synthetic-journey runs (verdicts + screenshots). A push-button deploy sets all three by itself in EVERY topology and both clouds: modules/admin-plane/uat-results-storage.bicep creates a dedicated admin-plane blob account, the uat-results container and its 30-day lifecycle rule, and grants the Console UAMI Storage Blob Data Contributor on it; the scheduled loom-synthetic-monitor Container App Job is deployed by modules/admin-plane/synthetic-monitor-job.bicep (enable flag rides the observabilityConfig bag, default-ON). BUILDING THE IMAGE IS NOT ENOUGH FOR RESULTS: the runner signs in as the standing automation account svc-loom-synthetic@limitlessdata.ai, whose sign-in is blocked by tenant Conditional Access until a TENANT ADMIN scopes a CA exclusion for it — a one-time human action nobody can automate. Until then the Journeys tab stays empty. See docs/fiab/runbooks/synthetic-journeys.md.',
@@ -31,7 +31,7 @@ export const OBSERVABILITY_ENV_CHECKS: EnvSpec[] = [
     // Entra-authorize → /auth/callback probe is skipped, and the Journeys tab
     // reports J1 as 'skip' with this exact reason.
     id: 'svc-synthetic-login', category: 'identity',
-    title: 'Synthetic MSAL login probe — automation credential', severity: 'optional',
+    title: 'Synthetic MSAL login probe — automation credential', severity: 'recommended',
     required: ['SYNTHETIC_LOGIN_UPN', 'SYNTHETIC_LOGIN_SECRET'],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'the minted-session synthetic journeys (J2–J6) monitor the live app with zero config; the TRUE MSAL login-path probe (J1 — the check that catches the 2026-07-19 AADSTS7000215 secret-drift class while minted-session verify stays green) records an honest SKIP until an automation credential is wired.',
@@ -55,7 +55,7 @@ export const OBSERVABILITY_ENV_CHECKS: EnvSpec[] = [
     // deploy wires everything default-ON. Kill instantly (no roll) via the
     // rum1-client-telemetry runtime flag on /admin/runtime-flags.
     id: 'svc-client-rum', category: 'observability',
-    title: 'Client-side real-user monitoring (RUM) — browser telemetry', severity: 'optional',
+    title: 'Client-side real-user monitoring (RUM) — browser telemetry', severity: 'recommended',
     required: ['LOOM_RUM_ENABLED', 'LOOM_RUM_SAMPLE_RATE', 'APPLICATIONINSIGHTS_CONNECTION_STRING'],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'browser RUM capture is a strictly-additive telemetry layer — with the App Insights connection string unset the client provider and the ingest route are a silent no-op (zero user impact, zero errors); server-side telemetry, synthetic journeys and every surface keep working identically.',
@@ -75,7 +75,7 @@ export const OBSERVABILITY_ENV_CHECKS: EnvSpec[] = [
     // (dispatchAlert — S1 secret-expiry, V1 synthetic journeys, later DR4/C3/A11).
     // Bicep derives it on every push-button deploy; operators never hand-set it.
     id: 'svc-alert-action-group', category: 'observability',
-    title: 'Shared alert action group (LOOM_ALERT_ACTION_GROUP_ID)', severity: 'optional',
+    title: 'Shared alert action group (LOOM_ALERT_ACTION_GROUP_ID)', severity: 'recommended',
     required: ['LOOM_ALERT_ACTION_GROUP_ID'],
     warnOnMiss: true, derived: true,
     remediation: 'Auto-derived from modules/admin-plane/monitoring-default-alerts.bicep (defaultActionGroup loom-default-alerts) on a push-button deploy. If unset, redeploy the admin plane (or set it to the action group\'s ARM resource id) so every alert routed through lib/azure/alert-dispatch.ts (dispatchAlert — synthetic journeys, secret expiry, DR drills, cost anomaly) notifies through the ONE shared action group (admin email + subscription-Owner ARM-role receivers).',
@@ -92,7 +92,7 @@ export const OBSERVABILITY_ENV_CHECKS: EnvSpec[] = [
     // docs/fiab/runbooks/on-call.md. NOTE: LOOM_ALERT_ACTION_GROUP_ID is owned
     // by svc-alert-action-group above (dedupe — never double-counted here).
     id: 'svc-alerting', category: 'observability',
-    title: 'Unified alert dispatch — on-call webhook (optional)', severity: 'optional',
+    title: 'Unified alert dispatch — on-call webhook (optional)', severity: 'recommended',
     required: ['LOOM_ALERT_WEBHOOK_URL'],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'the unified alert path (lib/azure/alert-dispatch.ts → the shared loom-default-alerts action group) delivers every P1/P2/P3 via the email + subscription-Owner ARM-role receivers with zero config; the webhook is an optional page/bridge channel layered on top for P1/P2.',

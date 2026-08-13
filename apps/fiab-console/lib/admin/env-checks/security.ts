@@ -9,21 +9,21 @@ import type { EnvSpec } from './core';
 
 export const SECURITY_ENV_CHECKS: EnvSpec[] = [
   {
-    id: 'svc-pe-subnet', category: 'security', title: 'Managed private endpoints — PE subnet', severity: 'optional',
+    id: 'svc-pe-subnet', category: 'security', title: 'Managed private endpoints — PE subnet', severity: 'recommended',
     required: ['LOOM_PE_SUBNET_ID'], warnOnMiss: true, derived: true,
     remediation: 'Auto-derived from the network module (snet-private-endpoints) on a push-button deploy. Set LOOM_PE_SUBNET_ID to the ARM id of the private-endpoints subnet so tenant admins can create self-service managed private endpoints (and workspace inbound-protection / outbound PE rules) from the admin Network page. The Console UAMI needs Network Contributor on the networking RG.',
     provisionedBy: 'modules/admin-plane/main.bicep (network.outputs.privateEndpointsSubnetId → apps[] env, auto-derived, line ~2353)',
     role: 'Network Contributor (Console UAMI) on the networking resource group (LOOM_NETWORKING_RG / LOOM_ADMIN_RG)',
   },
   {
-    id: 'svc-onelake-acl', category: 'security', title: 'OneLake security roles — ADLS ACL enforcement', severity: 'optional',
+    id: 'svc-onelake-acl', category: 'security', title: 'OneLake security roles — ADLS ACL enforcement', severity: 'recommended',
     required: ['LOOM_ONELAKE_SECURITY_ACL'], warnOnMiss: true,
     remediation: 'Set LOOM_ONELAKE_SECURITY_ACL=true so lakehouse OneLake-security roles are ENFORCED as real ADLS Gen2 POSIX ACLs on the Delta folders (deploy admin-plane + synapse.bicep with loomOnelakeSecurityEnabled=true). Requires the Console UAMI to hold "Storage Blob Data Owner" on the DLZ storage account and the LOOM_{LANDING,BRONZE,SILVER,GOLD}_URL container URLs to be set. Role definitions still author + persist without it — only ACL enforcement is gated.',
     provisionedBy: 'modules/admin-plane/main.bicep (param loomOnelakeSecurityEnabled → LOOM_ONELAKE_SECURITY_ACL, ~3484) + modules/landing-zone/synapse.bicep (Storage Blob Data Owner grant)',
     role: 'Storage Blob Data Owner (Console UAMI) on the DLZ storage account',
   },
   {
-    id: 'svc-audit-siem-stream', category: 'security', title: 'SIEM audit stream — LoomAudit_CL DCR (BR-SIEM)', severity: 'optional',
+    id: 'svc-audit-siem-stream', category: 'security', title: 'SIEM audit stream — LoomAudit_CL DCR (BR-SIEM)', severity: 'recommended',
     required: ['LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID'], warnOnMiss: true,
     // Default-ON / opt-out (loom_default_on_opt_out): audit logging is fully ON
     // via the built-in Cosmos audit trail (/admin/audit-logs) regardless of these
@@ -44,14 +44,14 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
   //    wizard. All optional/warnOnMiss — a fresh minimal deploy is all-gates,
   //    zero-fails. Canonical producers: the per-client *ConfigGate() helpers. ──
   {
-    id: 'svc-mip', category: 'security', title: 'Microsoft Information Protection (sensitivity labels)', severity: 'optional',
+    id: 'svc-mip', category: 'security', title: 'Microsoft Information Protection (sensitivity labels)', severity: 'recommended',
     required: ['LOOM_MIP_ENABLED'], warnOnMiss: true,
     remediation: 'Set LOOM_MIP_ENABLED=true and grant the Console UAMI Graph InformationProtectionPolicy.Read.All so label pickers read the tenant\'s real MIP labels (mip_not_configured). Loom-native labels work without it.',
     provisionedBy: 'modules/admin-plane/main.bicep (apps[] env) + post-deploy Graph grant',
     role: 'Microsoft Graph InformationProtectionPolicy.Read.All (application) on the Console UAMI',
   },
   {
-    id: 'svc-dlp', category: 'security', title: 'Data Loss Prevention (Purview DLP)', severity: 'optional',
+    id: 'svc-dlp', category: 'security', title: 'Data Loss Prevention (Purview DLP)', severity: 'recommended',
     anyOf: [['LOOM_DLP_ENABLED', 'LOOM_DLP_ADMIN_ENABLED']], warnOnMiss: true,
     remediation: 'Set LOOM_DLP_ENABLED=true (+ LOOM_DLP_ADMIN_ENABLED=true for the admin DLP panes) and grant the Graph DLP application roles so DLP policy surfaces drive the real Purview DLP plane (dlp_not_configured / dlp_admin_not_configured). The Loom-native policy library works without it.',
     provisionedBy: 'modules/admin-plane/main.bicep (apps[] env) + post-deploy Graph grant',
@@ -65,7 +65,7 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-workspace-identity', category: 'security', title: 'Per-workspace managed identity (shadow → enforce)', severity: 'optional',
+    id: 'svc-workspace-identity', category: 'security', title: 'Per-workspace managed identity (shadow → enforce)', severity: 'recommended',
     required: ['LOOM_WORKSPACE_IDENTITY_MODE'],
     // I3: LOOM_WS_IDENTITY_SHADOW_SAMPLE is an optional tuning alias (code
     // default 1.0) grouped with the mode var so an unset sample never warns —
@@ -117,7 +117,7 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-a2a-egress', category: 'security', title: 'A2A outbound egress profile (gov-safe allow-list)', severity: 'optional',
+    id: 'svc-a2a-egress', category: 'security', title: 'A2A outbound egress profile (gov-safe allow-list)', severity: 'recommended',
     required: ['LOOM_A2A_EGRESS_ALLOW'], warnOnMiss: true, optionalDefault: true,
     // WS-5.2. INBOUND A2A (an external agent delegating a task INTO Loom, and Loom
     // agents registering as A2A cards) is fully functional with ZERO config. This
@@ -222,7 +222,7 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
   // an unset optional gate — which is correct: nothing is broken there.
   {
     id: 'svc-loom-sharing', category: 'security',
-    title: 'Loom Sharing — open Delta Sharing server (sovereign path)', severity: 'optional',
+    title: 'Loom Sharing — open Delta Sharing server (sovereign path)', severity: 'recommended',
     required: ['LOOM_SHARING_URL'],
     // The recipient credential pin. /api/delta-sharing/* fails CLOSED (503)
     // unless one of these is set, because the fallback audience is the

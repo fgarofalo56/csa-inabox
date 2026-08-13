@@ -30,14 +30,14 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    regression). Deploy compute/hband-shared.bicep (shared Redis + UAMIs) then
   //    the per-service compute/loom-*-app.bicep, and set these on the Console app.
   {
-    id: 'svc-loom-onelake', category: 'data-plane', title: 'Loom OneLake — unified namespace service (Hyperscale)', severity: 'optional',
+    id: 'svc-loom-onelake', category: 'data-plane', title: 'Loom OneLake — unified namespace service (Hyperscale)', severity: 'recommended',
     required: ['LOOM_ONELAKE_URL'], warnOnMiss: true, optionalDefault: true,
     remediation: 'Set LOOM_ONELAKE_URL to the internal-ingress Loom OneLake ACA app (loom://<workspace>/<item>.<type>/<path> namespace + shortcut + security + catalog resolver on ADLS Gen2 + Cosmos — no Microsoft Fabric / OneLake DNS). Deploy compute/loom-onelake-app.bicep on the shared substrate from compute/hband-shared.bicep. Unset → the lakehouse/shortcut/security editors use the existing per-item library path (adls-client / lakehouse-shortcuts / onelake-security-client) with no loss of function.',
     provisionedBy: 'modules/compute/hband-shared.bicep (shared UAMIs + Redis) + modules/compute/loom-onelake-app.bicep (out-of-band; admin-plane at 256-param ceiling) → LOOM_ONELAKE_URL on the Console app',
     role: 'Storage Blob Data Contributor (uami-loom-onelake) on the DLZ lake + Cosmos data-plane on the registry containers',
   },
   {
-    id: 'svc-loom-directlake', category: 'data-plane', title: 'Loom Direct Lake — columnar cache/scan engine (Hyperscale)', severity: 'optional',
+    id: 'svc-loom-directlake', category: 'data-plane', title: 'Loom Direct Lake — columnar cache/scan engine (Hyperscale)', severity: 'recommended',
     required: ['LOOM_DIRECTLAKE_URL'], warnOnMiss: true, optionalDefault: true,
     remediation: 'Set LOOM_DIRECTLAKE_URL to the internal-ingress Loom Direct Lake ACA app (Arrow + delta-rs framing/transcoding + DuckDB/DataFusion scan; the OSS outcome-equivalent of Direct Lake — no VertiPaq, no Power BI). Also set LOOM_SEMANTIC_BACKEND=loom-columnar-cache to route DAX-class queries to it. Deploy compute/loom-directlake-app.bicep on compute/hband-shared.bicep. Unset → the semantic-model / report layer uses the AAS fast-path or the Synapse-Serverless cold path unchanged.',
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-directlake + shared Redis) + modules/compute/loom-directlake-app.bicep (out-of-band) → LOOM_DIRECTLAKE_URL on the Console app',
@@ -45,7 +45,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   },
   // ── N2b — DuckDB serving tier (the interactive fast path BELOW Spark) ──
   {
-    id: 'svc-loom-duckdb', category: 'data-plane', title: 'SQL Lab serving tier (embedded DuckDB Container App)', severity: 'optional',
+    id: 'svc-loom-duckdb', category: 'data-plane', title: 'SQL Lab serving tier (embedded DuckDB Container App)', severity: 'recommended',
     required: ['LOOM_DUCKDB_URL'], warnOnMiss: true, optionalDefault: true,
     rejectUnreachableUrls: ['LOOM_DUCKDB_URL'],
     optionalDefaultDetail:
@@ -62,7 +62,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   },
   // ── N3 — Arrow Flight SQL serving wire (ADBC / JDBC clients) ──
   {
-    id: 'svc-flight-sql', category: 'data-plane', title: 'Arrow Flight SQL wire (ADBC / JDBC serving)', severity: 'optional',
+    id: 'svc-flight-sql', category: 'data-plane', title: 'Arrow Flight SQL wire (ADBC / JDBC serving)', severity: 'recommended',
     required: ['LOOM_FLIGHTSQL_URL'], warnOnMiss: true, optionalDefault: true,
     rejectUnreachableUrls: ['LOOM_FLIGHTSQL_URL'],
     optionalDefaultDetail:
@@ -93,7 +93,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    `https://0.0.0.0:3000/api/catalog/iceberg` and 503-ing every request. A
   //    gate that cannot go red measures nothing.
   {
-    id: 'svc-iceberg-catalog', category: 'data-plane', title: 'Iceberg REST Catalog (Unity Catalog OSS container)', severity: 'optional',
+    id: 'svc-iceberg-catalog', category: 'data-plane', title: 'Iceberg REST Catalog (Unity Catalog OSS container)', severity: 'recommended',
     required: ['LOOM_ICEBERG_CATALOG_URL'], warnOnMiss: true,
     rejectUnreachableUrls: ['LOOM_ICEBERG_CATALOG_URL'],
     remediation:
@@ -121,7 +121,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    posture reads as a configuration defect (the same rejectValues mechanism
   //    #2643 introduced for LOOM_UNITY_AUTH_MODE).
   {
-    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine (Trino Container App)', severity: 'optional',
+    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine (Trino Container App)', severity: 'recommended',
     required: ['LOOM_TRINO_URL'], warnOnMiss: true,
     rejectUnreachableUrls: ['LOOM_TRINO_URL'],
     remediation:
@@ -171,21 +171,21 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     role: 'No Azure role. The engine validates an Entra bearer against the active cloud JWKS with the audience pinned by data-plane/loom-trino-aca.bicep.',
   },
   {
-    id: 'svc-cosmos-control', category: 'data-plane', title: 'Cosmos DB control plane (versions / scaling / CMK)', severity: 'optional',
+    id: 'svc-cosmos-control', category: 'data-plane', title: 'Cosmos DB control plane (versions / scaling / CMK)', severity: 'recommended',
     required: ['LOOM_COSMOS_ACCOUNT'], anyOf: [['LOOM_DLZ_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_COSMOS_ACCOUNT (+ the RG vars) so ARM control-plane operations (account scaling, CMK, item version restore) can target the Cosmos account (cosmosConfigGate). Distinct from the data-plane LOOM_COSMOS_ENDPOINT gate — both are needed for full coverage.',
     provisionedBy: 'modules/landing-zone/main.bicep (cosmos account) → apps[] env LOOM_COSMOS_ACCOUNT',
     role: 'Cosmos DB Operator / Contributor (Console UAMI) on the account',
   },
   {
-    id: 'svc-medallion-layers', category: 'data-plane', title: 'Medallion layer URLs (Silver / Gold)', severity: 'optional',
+    id: 'svc-medallion-layers', category: 'data-plane', title: 'Medallion layer URLs (Silver / Gold)', severity: 'recommended',
     anyOf: [['LOOM_SILVER_URL', 'LOOM_GOLD_URL', 'LOOM_ADLS_ACCOUNT']], warnOnMiss: true,
     remediation: 'Set LOOM_SILVER_URL + LOOM_GOLD_URL (ADLS container URLs; derived from LOOM_ADLS_ACCOUNT when unset) so medallion-aware surfaces (direct-lake, dataflow runs, onelake paths) resolve every layer (gold_url_not_configured).',
     provisionedBy: 'modules/landing-zone/storage.bicep (silver/gold containers) → apps[] env',
     role: 'Storage Blob Data Contributor (UAMI) on the containers',
   },
   {
-    id: 'svc-redis-result-cache', category: 'data-plane', title: 'Result-cache Redis (ADX / query result cache)', severity: 'optional',
+    id: 'svc-redis-result-cache', category: 'data-plane', title: 'Result-cache Redis (ADX / query result cache)', severity: 'recommended',
     required: ['LOOM_RESULT_CACHE_REDIS'], warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'query result caching runs on the built-in in-memory per-replica cache with zero loss of function. Set LOOM_RESULT_CACHE_REDIS (the shared Redis host) only to make the cache shared across Console replicas.',
     remediation: 'Set LOOM_RESULT_CACHE_REDIS to the shared H-band Redis endpoint to upgrade the per-replica in-memory result cache to a shared cross-replica cache. Use the redisEndpoint output of compute/hband-shared.bicep verbatim — it is <host>:10000 on Azure Managed Redis (Commercial) and <host>:6380 on the retiring Azure Cache for Redis (Azure Government, where Managed Redis is unavailable), so do not hard-code a port. Optional scale-out — the in-memory default is fully functional.',
@@ -194,7 +194,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   },
   // ── DR0 + CMK1 — restore/at-rest posture (loom-next-level ws-verification-dr) ──
   {
-    id: 'svc-dr-restore-posture', category: 'data-plane', title: 'DR restore posture — Cosmos PITR + CMK-at-rest + lake recovery', severity: 'optional',
+    id: 'svc-dr-restore-posture', category: 'data-plane', title: 'DR restore posture — Cosmos PITR + CMK-at-rest + lake recovery', severity: 'recommended',
     anyOf: [['LOOM_COSMOS_ACCOUNT', 'LOOM_ADLS_ACCOUNT']], warnOnMiss: true,
     remediation: 'Set LOOM_COSMOS_ACCOUNT (+ LOOM_COSMOS_ACCOUNT_RG) and/or LOOM_ADLS_ACCOUNT (+ LOOM_DLZ_RG) so the restore-posture probe can read live ARM and verify the estate is restorable: the Loom-store Cosmos account on Continuous (PITR) backup, and the lake with blob + container soft delete and change feed on. A push-button deploy ships both by default (drConfig.cosmosBackupTier, default Continuous30Days; recycleRetentionDays soft delete). CMK1: the same probe reports encryption-at-rest — when the deploy mandates customer-managed keys (LOOM_COSMOS_REQUIRE_CMK=true, wired from drConfig.cosmosRequireCmk; IL5 mandate, opt-in elsewhere) a Cosmos account without properties.keyVaultKeyUri is flagged as a posture gap; otherwise the service-managed default is reported honestly. NOTE: blob versioning / blob PITR are "Not yet supported" on HNS (ADLS Gen2) accounts per the Learn feature matrix — the supported lake restore path is soft delete + change feed + Delta time travel, and that is what this row verifies.',
     docs: 'https://learn.microsoft.com/azure/cosmos-db/continuous-backup-restore-introduction',
@@ -206,7 +206,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'perf-spark-warm-pool-store', category: 'data-plane', title: 'Warm Spark pool — cross-replica lease store (PSR-3)', severity: 'optional',
+    id: 'perf-spark-warm-pool-store', category: 'data-plane', title: 'Warm Spark pool — cross-replica lease store (PSR-3)', severity: 'recommended',
     anyOf: [['LOOM_SPARK_POOL_LEASE_CONTAINER', 'LOOM_SPARK_POOL_REDIS']], warnOnMiss: true,
     remediation: 'The warm Spark session pool is DEFAULT-ON (instant notebook attach on a warm hit; opt out with LOOM_SPARK_POOL_ENABLED=0 or the /admin/performance kill switch). To make warm sessions SHARED across Console replicas, signal the shared H-band substrate: set LOOM_SPARK_POOL_REDIS to the shared Azure Cache for Redis host from compute/hband-shared.bicep (same value as LOOM_BROKER_REDIS), or set LOOM_SPARK_POOL_LEASE_CONTAINER to a Cosmos container name. Either turns on the cross-replica lease registry (the Cosmos spark-warm-leases container). Unset → the pool runs per-replica (still fully functional, just not shared).',
     provisionedBy: 'modules/landing-zone/cosmos.bicep (loomContainers → spark-warm-leases) + modules/compute/hband-shared.bicep (shared Redis substrate) → LOOM_SPARK_POOL_REDIS / LOOM_SPARK_POOL_LEASE_CONTAINER on the Console app',
@@ -218,7 +218,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    a thrash guard + operator alert). Set LOOM_SPARK_AUTORECOVER_ENABLED=0 to
   //    detect-and-alert only (recreate becomes the manual /admin/health button).
   {
-    id: 'svc-spark-autorecover', category: 'data-plane', title: 'Spark pool auto-recovery (FAULTED detect + recreate)', severity: 'optional',
+    id: 'svc-spark-autorecover', category: 'data-plane', title: 'Spark pool auto-recovery (FAULTED detect + recreate)', severity: 'recommended',
     required: ['LOOM_SPARK_AUTORECOVER_ENABLED'], anyOf: [['LOOM_SPARK_RECOVER_MAX_ATTEMPTS']],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'auto-recovery runs day-one with fully-functional defaults — the keep-warm heartbeat (csa-loom-spark-keepwarm.yml, every 5 min) detects a pool whose ARM provisioningState is Failed/Canceled OR that reports Succeeded while the warm-pool circuit breaker is armed (the "Succeeded but can\'t launch" class), delete+recreates it via the Synapse ARM control plane with exponential backoff, and alerts via the shared action group (dispatchAlert) + an in-product notification. A thrash guard caps recreate attempts per pool (LOOM_SPARK_RECOVER_MAX_ATTEMPTS, default 3, in a 6h window) so a persistently-broken pool backs off instead of looping. Set LOOM_SPARK_AUTORECOVER_ENABLED=0 (or flip the a11-spark-autorecover runtime flag) to keep detection + alerting but require the manual "Recreate pool" action.',
@@ -237,7 +237,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    a runaway workload can't exhaust the workspace vCore quota. Unset = the
   //    built-in defaults (session cap + vCore budget) apply.
   {
-    id: 'svc-spark-vcore-budget', category: 'data-plane', title: 'Spark session quota — vCore budget ceiling', severity: 'optional',
+    id: 'svc-spark-vcore-budget', category: 'data-plane', title: 'Spark session quota — vCore budget ceiling', severity: 'recommended',
     anyOf: [['LOOM_SPARK_VCORE_BUDGET', 'LOOM_SPARK_TENANT_SESSION_MAX']],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'session-quota hygiene runs day-one with safe built-in defaults — the warm pool accounts active Spark sessions + estimated vCores (local slots + the cross-replica lease store), refuses to warm a NEW session past LOOM_SPARK_VCORE_BUDGET / LOOM_SPARK_TENANT_SESSION_MAX (returning an honest "session quota reached" structured error rather than hanging), and hard-kills sessions idle past LOOM_SPARK_POOL_IDLE_TTL so leaked leases release their vCores. Set the two vars to tune the ceiling to your Synapse workspace vCore quota; unset applies the built-in defaults.',
@@ -252,7 +252,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   },
   // ── A13 — Spark chaos-drill harness (default OFF in prod) ───────────────────
   {
-    id: 'svc-spark-chaos-drill', category: 'data-plane', title: 'Spark chaos-drill harness (fault injection)', severity: 'optional',
+    id: 'svc-spark-chaos-drill', category: 'data-plane', title: 'Spark chaos-drill harness (fault injection)', severity: 'recommended',
     required: ['LOOM_SPARK_CHAOS_ENABLED'],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'the chaos-drill harness is OFF by default (the fully-functional production posture — no fault injection). It is a tenant-admin, double-gated (LOOM_SPARK_CHAOS_ENABLED=true AND a valid LOOM_INTERNAL_TOKEN) test tool that injects real faults (kill N Livy sessions, arm a pool\'s FAULTED breaker) so the A11 recovery + A12 reaper + warm-pool refill path can be exercised end-to-end in a non-prod environment. Unset/false = disabled, which is the intended default.',
@@ -267,7 +267,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   },
   // ── CH1 — Dependency-fault chaos harness (default OFF in prod) ───────────────
   {
-    id: 'svc-dependency-chaos-drill', category: 'data-plane', title: 'Dependency-fault chaos harness (Cosmos / AOAI / ADX / KV)', severity: 'optional',
+    id: 'svc-dependency-chaos-drill', category: 'data-plane', title: 'Dependency-fault chaos harness (Cosmos / AOAI / ADX / KV)', severity: 'recommended',
     required: ['LOOM_DEPENDENCY_CHAOS_ENABLED'],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'the dependency-fault chaos harness is OFF by default (the fully-functional production posture — no fault injection). It is a tenant-admin, triple-gated (the ch1-dependency-chaos runtime flag ON + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN) resilience-DRILL tool that injects real faults (Cosmos-429, Azure OpenAI 429/timeout, ADX cold-start 503, Key Vault throttle) against a replica so the serve-stale / honest-gate / breaker paths can be proven end-to-end in a non-prod environment. Every armed fault auto-expires (≤5 min). Unset/false = disabled, which is the intended default.',
@@ -290,7 +290,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    Not a Fabric dependency.
 
   {
-    id: 'svc-ducklake-catalog', category: 'data-plane', title: 'DuckLake catalog (Postgres-backed lakehouse metadata) — Preview', severity: 'optional',
+    id: 'svc-ducklake-catalog', category: 'data-plane', title: 'DuckLake catalog (Postgres-backed lakehouse metadata) — Preview', severity: 'recommended',
     required: ['LOOM_DUCKLAKE_CATALOG_URL'], warnOnMiss: true,
     remediation:
       'LOOM_DUCKLAKE_CATALOG_URL is the connection string of the Postgres database that backs the DuckLake catalog metadata (postgresql://…/ducklake). DuckLake stores lakehouse table metadata in a SQL database instead of a metadata-file tree; the N2 DuckDB serving tier ATTACHes it (ducklake extension) and reads the Delta/Parquet data in place on your own ADLS Gen2. This is a lab ALONGSIDE the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL), not a replacement — pick the catalog that matches your engine mix. NOTHING TO DO on a normal deployment: platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep provisions the store by DEFAULT (private-endpoint-only Standard_B1ms flexible server) and admin-plane/main.bicep binds this var as a Key Vault secretRef, so a from-scratch COMMERCIAL deploy arrives wired. It is unset in four cases: the apps tier is off (deployAppsEnabled=false — the server is deliberately not billed before a Console exists to read it), an AKS boundary (the DuckDB engine that runs the ATTACH is Container-Apps-only), postgresQuotaAvailable=false, or you point it at your own server instead. GCC-HIGH AND IL5 SET postgresQuotaAvailable=false TODAY, so on those boundaries this gate is the expected state. PostgreSQL Flexible Server IS an Azure Government service (US Gov Virginia / Arizona / Texas), so that is not a service gap — the same flag also gates the OSS Airflow host, whose image is an unmirrored docker.io pull and whose metadata Postgres is created with public network access enabled, and both are being fixed before the sovereign flip (see the comment on postgresQuotaAvailable in params/gcc-high.bicepparam). A genuinely quota-restricted subscription requests an increase at https://aka.ms/postgres-request-quota-increase. Unset → the DuckLake catalog editor renders a guided empty state and honest-gates; nothing else changes. No Microsoft Fabric.',
@@ -327,11 +327,13 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //
   //    NOT `optionalDefault`: an unset value is not a fully-functional posture
   //    with a safe built-in default, it means the gateway did not deploy. It stays
-  //    `severity: 'optional'` + `warnOnMiss` because the N1 Iceberg REST Catalog +
+  //    `warnOnMiss` (a warn, not a hard fail) because the N1 Iceberg REST Catalog +
   //    native ADLS/abfss path already give external engines governed access, so a
   //    missing gateway degrades one access shape rather than breaking the lake.
+  //    Its severity is `recommended` — the deploy is supposed to wire
+  //    LOOM_S3_GATEWAY_URL, so an unset one is a deploy defect to fix (#3347).
   {
-    id: 'svc-s3-gateway', category: 'data-plane', title: 'S3-compatible ADLS gateway (Apache-2.0 s3proxy) — Preview', severity: 'optional',
+    id: 'svc-s3-gateway', category: 'data-plane', title: 'S3-compatible ADLS gateway (Apache-2.0 s3proxy) — Preview', severity: 'recommended',
     required: ['LOOM_S3_GATEWAY_URL'], warnOnMiss: true,
     remediation:
       'LOOM_S3_GATEWAY_URL is emitted by the deploy — the Apache-2.0 s3proxy Container App (data-plane/s3-gateway-aca.bicep) is deployed by DEFAULT in front of the deployment\'s own ADLS Gen2, internal ingress only, read-only by default, minReplicas 0 so it bills nothing at idle. It is stood up by whichever pass owns the lake: modules/admin-plane/main.bicep when a lake is bound at admin-plane time (single-sub), otherwise the dlz-attach pass (platform/fiab/bicep/main.bicep dlzAttachS3Gateway), which also patches this var onto the already-running Console. Unset therefore means one of: the orchestrator has not been re-run since this shipped; the s3proxy image is not in this ACR (run the cloud\'s image lane — full-app-deploy-commercial.yml or gov-provision-dataplane-images.yml — which mirrors it in BY DIGEST from platform/fiab/images/upstream-images.json); a dlz-attach run that carried no hub ACR / Container Apps environment coordinate; or a non-Container-Apps boundary. Nothing else is affected: the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) plus the native ADLS/abfss path already give external engines governed, audited access to the same data, so only s3://-exclusive clients (Trino, Spark, DuckDB with the s3 extension, boto3) need this face. The S3 wire credential pair is mirrored into Key Vault as loom-s3-gateway-access-key / loom-s3-gateway-secret-key. The gateway is NEVER public (external:false). No Microsoft Fabric.',
@@ -351,7 +353,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    route honest-gates with a Fix-it; a Fabric / Power BI estate is only ever
   //    a migration SOURCE (Loom needs no Fabric).
   {
-    id: 'svc-loom-migrate', category: 'data-plane', title: 'Estate assessment reader (inbound migration on-ramp)', severity: 'optional',
+    id: 'svc-loom-migrate', category: 'data-plane', title: 'Estate assessment reader (inbound migration on-ramp)', severity: 'recommended',
     required: ['LOOM_MIGRATE_URL'], warnOnMiss: true,
     remediation:
       'LOOM_MIGRATE_URL is set by the deployment itself — admin-plane/main.bicep deploys data-plane/loom-migrate-aca.bicep by default and wires the reader\'s internal FQDN. If it is unset, this estate predates that wiring (redeploy), the apps tier has not deployed yet, or an admin opted out with loomBackends.loomMigrate=\'disabled\'. To set it manually, point it at the internal-ingress FQDN of the loom-migrate Container App (connects to a Snowflake / Databricks Unity Catalog / Microsoft Fabric / Power BI source estate and enumerates its inventory for the /admin/migrate readiness report). The reader is NEVER public — every enumeration goes through the audited BFF at /api/migrate/assess, and it scales to zero so it costs nothing when no assessment is running. Each SaaS source still needs its own connection (account/workspace URL + a Key-Vault-stored token) supplied in the surface; until then that connector is honestly gated (never a fabricated count).',
@@ -376,7 +378,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    renders fully (guided empty state + Fix-it) and Azure Stream Analytics
   //    (the stream-analytics-job item) still covers simple jobs.
   {
-    id: 'svc-loom-risingwave', category: 'data-plane', title: 'Streaming SQL tier (RisingWave Container App)', severity: 'optional',
+    id: 'svc-loom-risingwave', category: 'data-plane', title: 'Streaming SQL tier (RisingWave Container App)', severity: 'recommended',
     required: ['LOOM_RISINGWAVE_URL'], warnOnMiss: true,
     remediation:
       'LOOM_RISINGWAVE_URL is set by the deployment itself — admin-plane/main.bicep deploys '

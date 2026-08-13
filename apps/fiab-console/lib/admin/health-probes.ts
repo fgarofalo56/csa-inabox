@@ -183,7 +183,7 @@ async function probeKusto(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probeEventHubs(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-eventhubs', category: 'azure-services' as const, title: 'Event Hubs namespace reachable + authorized (eventstream)', severity: 'optional' as const };
+  const base = { id: 'probe-eventhubs', category: 'azure-services' as const, title: 'Event Hubs namespace reachable + authorized (eventstream)', severity: 'recommended' as const };
   try {
     const { eventhubsConfigGate, listEventHubs } = await import('@/lib/azure/eventhubs-client');
     const gate = eventhubsConfigGate();
@@ -217,7 +217,7 @@ async function probeEventHubs(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probeAdf(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-adf', category: 'azure-services' as const, title: 'Data Factory reachable + authorized (pipelines / mirroring CDC)', severity: 'optional' as const };
+  const base = { id: 'probe-adf', category: 'azure-services' as const, title: 'Data Factory reachable + authorized (pipelines / mirroring CDC)', severity: 'recommended' as const };
   try {
     const { adfConfigGate, getDefaultFactory } = await import('@/lib/azure/adf-client');
     const gate = adfConfigGate();
@@ -282,7 +282,7 @@ async function probeArmReader(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probeLogAnalytics(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-log-analytics', category: 'azure-services' as const, title: 'Log Analytics query access (monitor / audit / activator)', severity: 'optional' as const };
+  const base = { id: 'probe-log-analytics', category: 'azure-services' as const, title: 'Log Analytics query access (monitor / audit / activator)', severity: 'recommended' as const };
   try {
     const { logAnalyticsWorkspaceId, queryLogs } = await import('@/lib/azure/monitor-client');
     if (!logAnalyticsWorkspaceId()) {
@@ -313,7 +313,7 @@ async function probeLogAnalytics(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probeGraphDirectory(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-graph-directory', category: 'enrichment' as const, title: 'Microsoft Graph directory read (Users / identity pickers)', severity: 'optional' as const };
+  const base = { id: 'probe-graph-directory', category: 'enrichment' as const, title: 'Microsoft Graph directory read (Users / identity pickers)', severity: 'recommended' as const };
   if (env('LOOM_GRAPH_USERS_ENABLED') !== 'true') {
     return {
       ...base, status: 'warn',
@@ -340,7 +340,7 @@ async function probeGraphDirectory(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probePowerPlatform(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-powerplatform', category: 'azure-services' as const, title: 'Power Platform API reachable + authorized (Copilot Studio / Power Apps)', severity: 'optional' as const };
+  const base = { id: 'probe-powerplatform', category: 'azure-services' as const, title: 'Power Platform API reachable + authorized (Copilot Studio / Power Apps)', severity: 'recommended' as const };
   try {
     const { powerPlatformConfigGate, listEnvironments } = await import('@/lib/azure/powerplatform-client');
     const gate = powerPlatformConfigGate();
@@ -379,7 +379,7 @@ async function probePowerPlatform(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probeServiceBus(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-servicebus', category: 'azure-services' as const, title: 'Service Bus namespace reachable + authorized (business events)', severity: 'optional' as const };
+  const base = { id: 'probe-servicebus', category: 'azure-services' as const, title: 'Service Bus namespace reachable + authorized (business events)', severity: 'recommended' as const };
   try {
     const { servicebusConfigGate, getNamespaceProperties } = await import('@/lib/azure/servicebus-client');
     const gate = servicebusConfigGate();
@@ -411,7 +411,7 @@ async function probeServiceBus(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probeApim(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-apim', category: 'builders' as const, title: 'API Management reachable (publish-as-API / API marketplace)', severity: 'optional' as const };
+  const base = { id: 'probe-apim', category: 'builders' as const, title: 'API Management reachable (publish-as-API / API marketplace)', severity: 'recommended' as const };
   try {
     const { apimConfigGate, getApimService, apimTarget } = await import('@/lib/azure/apim-client');
     const gate = apimConfigGate();
@@ -448,7 +448,7 @@ async function probeApim(h: ProbeHelpers): Promise<CheckResult> {
 }
 
 async function probeKeyVault(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-keyvault', category: 'security' as const, title: 'Key Vault reachable (connection / shortcut / MCP secrets)', severity: 'optional' as const };
+  const base = { id: 'probe-keyvault', category: 'security' as const, title: 'Key Vault reachable (connection / shortcut / MCP secrets)', severity: 'recommended' as const };
   try {
     const { vaultUrl } = await import('@/lib/azure/kv-secrets-client');
     const url = vaultUrl();
@@ -499,7 +499,7 @@ async function probeHttpService(
   id: string, category: CheckResult['category'], title: string, envVar: string,
   featureWhenUp: string, deployHint: string, h: ProbeHelpers,
 ): Promise<CheckResult> {
-  const base = { id, category, title, severity: 'optional' as const };
+  const base = { id, category, title, severity: 'recommended' as const };
   const url = env(envVar);
   if (!url) {
     return {
@@ -534,7 +534,7 @@ async function probeHttpService(
  *  06-29), which a mere env gate can't see. AAS is unavailable in Gov clouds —
  *  that is an honest warn (the Synapse-serverless fallback stays functional). */
 async function probeAas(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-aas', category: 'azure-services' as const, title: 'Analysis Services reachable + running (semantic-model fast path)', severity: 'optional' as const };
+  const base = { id: 'probe-aas', category: 'azure-services' as const, title: 'Analysis Services reachable + running (semantic-model fast path)', severity: 'recommended' as const };
   if (!anyHas('LOOM_AAS_SERVER', 'LOOM_AAS_SERVER_NAME', 'LOOM_AAS_XMLA_ENDPOINT', 'LOOM_POWERBI_XMLA_ENDPOINT')) {
     return { ...base, status: 'warn', detail: 'AAS not configured — semantic models fall back to the Synapse Serverless tabular layer (functional, slower cold queries).', remediation: 'Set LOOM_AAS_SERVER (asazure://… URI) or LOOM_AAS_SERVER_NAME. See the "Analysis Services (semantic-model fast path)" check.', redeploy: true, ...h.envVarFix(['LOOM_AAS_SERVER']) };
   }
@@ -562,7 +562,7 @@ async function probeAas(h: ProbeHelpers): Promise<CheckResult> {
 /** Azure ML workspace (Data Science family: ml-model / AutoML / experiments).
  *  ARM read of the workspace as the Console UAMI. */
 async function probeAml(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-aml', category: 'azure-services' as const, title: 'Azure ML workspace reachable + authorized (Data Science family)', severity: 'optional' as const };
+  const base = { id: 'probe-aml', category: 'azure-services' as const, title: 'Azure ML workspace reachable + authorized (Data Science family)', severity: 'recommended' as const };
   try {
     const { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError, AML_ARM_API_VERSION } = await import('@/lib/azure/resolve-aml-target');
     let target;
@@ -588,7 +588,7 @@ async function probeAml(h: ProbeHelpers): Promise<CheckResult> {
 
 /** Azure SQL logical servers (SQL database items + mirroring source ops). ARM list. */
 async function probeAzureSql(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-azure-sql', category: 'azure-services' as const, title: 'Azure SQL logical servers reachable + authorized', severity: 'optional' as const };
+  const base = { id: 'probe-azure-sql', category: 'azure-services' as const, title: 'Azure SQL logical servers reachable + authorized', severity: 'recommended' as const };
   if (!anyHas('LOOM_AZURE_SQL_DEFAULT_SERVER', 'LOOM_SUBSCRIPTION_ID')) {
     return { ...base, status: 'warn', detail: 'Azure SQL not configured — SQL database items / mirroring source ops have no default server.', remediation: 'Set LOOM_SUBSCRIPTION_ID (Azure SQL items provision via ARM) and optionally LOOM_AZURE_SQL_DEFAULT_SERVER. See the "Azure SQL" check.', redeploy: true, ...h.envVarFix(['LOOM_AZURE_SQL_DEFAULT_SERVER']) };
   }
@@ -606,7 +606,7 @@ async function probeAzureSql(h: ProbeHelpers): Promise<CheckResult> {
 /** PostgreSQL Flexible (Lakebase / pgvector). Real AAD token + SELECT 1 over the
  *  pg wire protocol — the deepest liveness (proves auth + reachability). */
 async function probePostgres(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-postgres', category: 'azure-services' as const, title: 'PostgreSQL Flexible reachable + authorized (Lakebase — AAD SELECT 1)', severity: 'optional' as const };
+  const base = { id: 'probe-postgres', category: 'azure-services' as const, title: 'PostgreSQL Flexible reachable + authorized (Lakebase — AAD SELECT 1)', severity: 'recommended' as const };
   const host = env('LOOM_POSTGRES_HOST') || env('LOOM_PGVECTOR_HOST');
   if (!host) {
     return { ...base, status: 'warn', detail: 'Postgres Flexible not configured — lakebase-postgres items and the pgvector store are gated.', remediation: 'Set LOOM_POSTGRES_HOST (+ LOOM_POSTGRES_AAD_USER). See the "PostgreSQL Flexible Server (Lakebase / pgvector)" check.', redeploy: true, ...h.envVarFix(['LOOM_POSTGRES_HOST']) };
@@ -625,7 +625,7 @@ async function probePostgres(h: ProbeHelpers): Promise<CheckResult> {
 
 /** Stream Analytics jobs (eventstream processing). ARM list at the RG. */
 async function probeStreamAnalytics(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-stream-analytics', category: 'azure-services' as const, title: 'Stream Analytics reachable + authorized (eventstream processing)', severity: 'optional' as const };
+  const base = { id: 'probe-stream-analytics', category: 'azure-services' as const, title: 'Stream Analytics reachable + authorized (eventstream processing)', severity: 'recommended' as const };
   if (!anyHas('LOOM_ASA_RG', 'LOOM_DLZ_RG')) {
     return { ...base, status: 'warn', detail: 'Stream Analytics RG not configured — eventstream processing has no ASA target.', remediation: 'Set LOOM_ASA_RG (falls back to LOOM_DLZ_RG). See the "Stream Analytics" check.', redeploy: true, ...h.envVarFix(['LOOM_ASA_RG']) };
   }
@@ -641,7 +641,7 @@ async function probeStreamAnalytics(h: ProbeHelpers): Promise<CheckResult> {
 
 /** Event Grid topics (business-events / real-time shims). ARM list. */
 async function probeEventGrid(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-eventgrid', category: 'azure-services' as const, title: 'Event Grid reachable + authorized (business-events topics)', severity: 'optional' as const };
+  const base = { id: 'probe-eventgrid', category: 'azure-services' as const, title: 'Event Grid reachable + authorized (business-events topics)', severity: 'recommended' as const };
   try {
     const { eventgridTopicsConfigGate, listEventGridTopics } = await import('@/lib/azure/eventgrid-topics-client');
     const g = eventgridTopicsConfigGate();
@@ -656,7 +656,7 @@ async function probeEventGrid(h: ProbeHelpers): Promise<CheckResult> {
 
 /** Azure Batch account (batch-pool compute items). ARM read. */
 async function probeBatch(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-batch', category: 'azure-services' as const, title: 'Azure Batch account reachable + authorized (batch-pool items)', severity: 'optional' as const };
+  const base = { id: 'probe-batch', category: 'azure-services' as const, title: 'Azure Batch account reachable + authorized (batch-pool items)', severity: 'recommended' as const };
   try {
     const { batchConfigGate, getBatchAccount } = await import('@/lib/azure/batch-client');
     const g = batchConfigGate();
@@ -677,7 +677,7 @@ async function probeBatch(h: ProbeHelpers): Promise<CheckResult> {
  *  is a Loom-internal artifact (Cosmos fallback always available); the only
  *  action is an admin reindex. */
 async function probeCopilotCorpus(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-copilot-corpus', category: 'ai-copilot' as const, title: 'Help Copilot corpus freshness (docs RAG index)', severity: 'optional' as const };
+  const base = { id: 'probe-copilot-corpus', category: 'ai-copilot' as const, title: 'Help Copilot corpus freshness (docs RAG index)', severity: 'recommended' as const };
   try {
     const { corpusFreshness } = await import('@/lib/azure/loom-docs-index');
     const f = await withTimeout(corpusFreshness(), 8000);
@@ -724,7 +724,7 @@ async function probeCopilotCorpus(h: ProbeHelpers): Promise<CheckResult> {
  *  restore path is soft delete + change feed + Delta time travel — a false
  *  isVersioningEnabled is NOT a defect there. */
 async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-dr-restore-posture', category: 'data-plane' as const, title: 'DR restore posture — Cosmos continuous backup + CMK-at-rest + lake recovery (live ARM)', severity: 'optional' as const };
+  const base = { id: 'probe-dr-restore-posture', category: 'data-plane' as const, title: 'DR restore posture — Cosmos continuous backup + CMK-at-rest + lake recovery (live ARM)', severity: 'recommended' as const };
   const good: string[] = [];
   const bad: string[] = [];
   let probed = false;

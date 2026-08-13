@@ -24,7 +24,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     // matrix — Commercial gpt-5.6/gpt-5.5; Gov gpt-5.2/gpt-5.1/gpt-5; floor
     // gpt-4.1), so it works in Commercial AND Gov (*.openai.azure.us).
     id: 'svc-model-reasoning-tier', category: 'ai-copilot',
-    title: 'Model tier router — reasoning (strong) + mini tiers', severity: 'optional',
+    title: 'Model tier router — reasoning (strong) + mini tiers', severity: 'recommended',
     required: ['LOOM_AOAI_STRONG_DEPLOYMENT', 'LOOM_AOAI_MINI_DEPLOYMENT'],
     warnOnMiss: true,
     optionalDefault: true,
@@ -48,7 +48,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     // functional day-one (default-ON / opt-out). LOOM_A2A_EGRESS_ALLOW is the
     // comma-separated host-suffix allow-list that lets an air-gap / gov agent
     // reach an approved in-boundary proxy (empty ⇒ nothing egresses).
-    id: 'svc-agent-mesh', category: 'ai-copilot', title: 'Sovereign Agent Mesh (egress profile + allow-list)', severity: 'optional',
+    id: 'svc-agent-mesh', category: 'ai-copilot', title: 'Sovereign Agent Mesh (egress profile + allow-list)', severity: 'recommended',
     required: ['LOOM_MESH_PROFILE', 'LOOM_A2A_EGRESS_ALLOW'],
     warnOnMiss: true, optionalDefault: true,
     optionalDefaultDetail: 'the mesh runs on the cloud default egress profile (Gov cloud → gov, else commercial) with an empty egress allow-list. Set LOOM_MESH_PROFILE=air-gap for a sovereign/disconnected boundary (fail-closed egress) and LOOM_A2A_EGRESS_ALLOW to a comma-separated host-suffix list only if an approved in-boundary proxy exists.',
@@ -59,7 +59,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
 
   // ── AI & Copilot (new surfaces) ──
   {
-    id: 'svc-learning-hub', category: 'ai-copilot', title: 'Learning Hub — help agent + sample-data install', severity: 'optional',
+    id: 'svc-learning-hub', category: 'ai-copilot', title: 'Learning Hub — help agent + sample-data install', severity: 'recommended',
     // The Learning Hub help-copilot answers from an AOAI/Foundry model; the
     // use-case apps install + notebook-import provision into Synapse/Databricks
     // and seed sample data into ADLS. The model gate is the recommended one; the
@@ -70,7 +70,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
   },
   {
-    id: 'svc-mcp-catalog', category: 'ai-copilot', title: 'MCP Servers — built-in server', severity: 'optional',
+    id: 'svc-mcp-catalog', category: 'ai-copilot', title: 'MCP Servers — built-in server', severity: 'recommended',
     // The deployable catalog list is a static built-in module (lib/mcp/catalog.ts)
     // and always renders. The built-in Loom MCP server endpoint is the only env
     // that gates the "use the built-in server" path.
@@ -80,7 +80,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     role: 'none (HTTP endpoint); deployed catalog servers use the MCP catalog UAMI',
   },
   {
-    id: 'svc-aoai-embeddings', category: 'ai-copilot', title: 'AOAI embeddings deployment (RAG / vector index)', severity: 'optional',
+    id: 'svc-aoai-embeddings', category: 'ai-copilot', title: 'AOAI embeddings deployment (RAG / vector index)', severity: 'recommended',
     required: ['LOOM_AOAI_EMBED_DEPLOYMENT'], warnOnMiss: true,
     remediation: 'Set LOOM_AOAI_EMBED_DEPLOYMENT (e.g. text-embedding-3-small) so Index-my-data and vector search can embed (embedding_not_configured). Deploy the model from the AI Foundry hub if absent.',
     provisionedBy: 'modules/admin-plane (agentFoundryEnabled → embedding model deployment) → apps[] env',
@@ -102,7 +102,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     // its judge deployment resolves LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT →
     // strong → mini → default — never a hardcoded model name.
     id: 'svc-copilot-evaluator', category: 'ai-copilot',
-    title: 'Copilot quality evaluator (eval harness job)', severity: 'optional',
+    title: 'Copilot quality evaluator (eval harness job)', severity: 'recommended',
     required: ['LOOM_COPILOT_EVALUATOR_JOB_ID'], warnOnMiss: true,
     remediation: 'Deploy the copilot-evaluator Container App Job (modules/admin-plane/copilot-evaluator-job.bicep — default-ON via the functionAppsConfig bag) and build its image with scripts/csa-loom/deploy-copilot-evaluator-job.sh; LOOM_COPILOT_EVALUATOR_JOB_ID is then wired automatically so admin "Run now" + the corpus-staging workflow can start executions. The job runs as the Console UAMI, which already holds Search Index Data Reader (AI Search), Cognitive Services OpenAI User (AOAI judge) and Cosmos DB Built-in Data Contributor (loom-copilot-evals); the only grant the module adds is Contributor scoped to the job itself, which is what ARM requires to start an execution. Opt out with LOOM_COPILOT_EVAL_ENABLED=false; tune the judge with LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT + LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 5000 judged Q/day).',
     provisionedBy: 'modules/admin-plane/copilot-evaluator-job.bicep (wired in admin-plane/main.bicep via functionAppsConfig; LOOM_COPILOT_EVALUATOR_JOB_ID on the Console apps[] env)',
@@ -130,7 +130,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     // wants to tune depth/attempts. The backing services are the ones the
     // ontology + warehouse gates already cover (svc-weave-ontology, svc-synapse).
     id: 'svc-graphrag-nl2sql-repair', category: 'ai-copilot',
-    title: 'GraphRAG grounding depth + NL2SQL self-healing attempts (tuning)', severity: 'optional',
+    title: 'GraphRAG grounding depth + NL2SQL self-healing attempts (tuning)', severity: 'recommended',
     required: ['LOOM_GRAPHRAG_MAX_HOPS', 'LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS'],
     warnOnMiss: true,
     optionalDefault: true,
@@ -148,7 +148,7 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },
   },
   {
-    id: 'svc-iq-mcp', category: 'ai-copilot', title: 'Fabric IQ MCP bridge', severity: 'optional',
+    id: 'svc-iq-mcp', category: 'ai-copilot', title: 'Fabric IQ MCP bridge', severity: 'recommended',
     required: ['LOOM_IQ_MCP_ENABLED'], warnOnMiss: true,
     remediation: 'Set LOOM_IQ_MCP_ENABLED=true (+ LOOM_IQ_MCP_TOKEN when the bridge requires auth) so the IQ MCP panel exposes the ontology tools to Copilot. The built-in Loom tools work without it.',
     provisionedBy: 'modules/admin-plane (built-in MCP Container App) → apps[] env',

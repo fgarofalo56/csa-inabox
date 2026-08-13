@@ -11,7 +11,7 @@ export const CATALOG_GOVERNANCE_ENV_CHECKS: EnvSpec[] = [
 
   // ── catalog & governance backends (new surfaces) ──
   {
-    id: 'svc-deploy-planner', category: 'catalog-governance', title: 'Deployment planner — plan store (Cosmos)', severity: 'optional',
+    id: 'svc-deploy-planner', category: 'catalog-governance', title: 'Deployment planner — plan store (Cosmos)', severity: 'recommended',
     // Plans live in the tenant-settings container (doc id deploy-plan:<tenant>),
     // so the Cosmos config + probe cover reachability. This check confirms the
     // Loom store is configured (the only requirement for the planner to persist).
@@ -21,7 +21,7 @@ export const CATALOG_GOVERNANCE_ENV_CHECKS: EnvSpec[] = [
     role: 'Cosmos DB Built-in Data Contributor (UAMI)',
   },
   {
-    id: 'svc-org-visuals', category: 'catalog-governance', title: 'Organizational visuals — Blob store + metadata', severity: 'optional',
+    id: 'svc-org-visuals', category: 'catalog-governance', title: 'Organizational visuals — Blob store + metadata', severity: 'recommended',
     // Metadata + enabled toggle live in the org-visuals Cosmos container; the
     // bundle bytes live in the org-visuals Blob container (LOOM_ORG_VISUALS_URL,
     // auto-derived by bicep). Without the Blob URL, listing/metadata still works
@@ -32,7 +32,7 @@ export const CATALOG_GOVERNANCE_ENV_CHECKS: EnvSpec[] = [
     role: 'Storage Blob Data Contributor (UAMI) on the org-visuals container',
   },
   {
-    id: 'svc-purview-uc', category: 'catalog-governance', title: 'Purview Unified Catalog endpoint', severity: 'optional',
+    id: 'svc-purview-uc', category: 'catalog-governance', title: 'Purview Unified Catalog endpoint', severity: 'recommended',
     required: ['LOOM_PURVIEW_UC_ENDPOINT'], warnOnMiss: true,
     remediation: 'Set LOOM_PURVIEW_UC_ENDPOINT (https://<account>.purview.azure.com) so unified-catalog surfaces call the Purview UC data plane. The classic Data Map path (LOOM_PURVIEW_ACCOUNT) works without it.',
     provisionedBy: 'main.bicep (purviewEnabled) → admin-plane apps[] env',
@@ -45,7 +45,7 @@ export const CATALOG_GOVERNANCE_ENV_CHECKS: EnvSpec[] = [
   // absent while UC / dbt / ADF column lineage keep flowing (default-ON).
   {
     id: 'svc-openlineage', category: 'catalog-governance',
-    title: 'Spark column lineage (OpenLineage)', severity: 'optional',
+    title: 'Spark column lineage (OpenLineage)', severity: 'recommended',
     required: ['LOOM_OPENLINEAGE_AUTH_MODE'], warnOnMiss: true,
     optionalDefault: true,
     availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },   // X2 field

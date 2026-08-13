@@ -21,7 +21,49 @@
 import { isUnreachableServiceUrl } from '@/lib/azure/unreachable-url';
 
 export type AuditStatus = 'pass' | 'warn' | 'fail';
-export type AuditSeverity = 'critical' | 'recommended' | 'optional';
+/**
+ * How much a capability weighs in the readiness / health score.
+ *
+ * THERE IS NO `optional`. It was removed in #3347 and MUST NOT come back —
+ * `scripts/ci/check-no-optional-severity.mjs` fails the build if it does.
+ *
+ * WHY. The operator's standing instruction is "nothing should be optional;
+ * everything should be opt-out by default". The label never changed any
+ * behaviour — the readiness scorer gives `blocked` a value of 0 regardless of
+ * severity — so its only effect was on how a HUMAN read the number. And it was
+ * used exactly that way: on 2026-08-12 a readiness gap was reported as "13
+ * blocked, all optional severity", phrasing that excused thirteen capabilities
+ * the deploy was supposed to wire and didn't. A blocked capability labelled
+ * `optional` is the defect, not a mitigation (auto-bind-by-default.md §5:
+ * infra prerequisites are DEPLOYED, not requested; ux-baseline.md G2: zero
+ * day-one gates).
+ *
+ * CLASSIFY WITH THIS RULE — the same rule every time, not case by case:
+ *
+ *   critical    — GLOBAL blast radius. Without it the Console cannot boot,
+ *                 authenticate, or persist state; no workload is usable. This
+ *                 is not a synonym for "important": `critical` is load-bearing
+ *                 in the code — `scoreWorkload` marks an ENTIRE workload
+ *                 `blocked` if any critical member is blocked, and `evalEnv`
+ *                 escalates a miss from `warn` to `fail`. Reserve it for
+ *                 platform-wide failure. Today: session-secret, entra-app,
+ *                 uami, cosmos-config, subscription, bootstrap-admin.
+ *
+ *   recommended — EVERYTHING ELSE the deploy provisions by default. A blocked
+ *                 one is a real defect to fix IN THE DEPLOY, but its failure is
+ *                 scoped to the capability it backs, not to the platform. Note
+ *                 the core data-plane (svc-adls, svc-synapse, svc-adx,
+ *                 svc-eventhubs, svc-aoai, svc-keyvault) has always sat here —
+ *                 "core service, scoped failure" is `recommended`, and that
+ *                 precedent is why the reclassified capabilities join it.
+ *
+ * A capability that is genuinely opt-in — a cost-material one the operator
+ * chose to keep off, or a tenant-level consent only a Global Admin can grant —
+ * is declared with the EXPLICIT `EnvSpec.optIn` flag plus a comment giving the
+ * reason (auto-bind-by-default.md, "Allowed (narrowly, with disclosure)").
+ * That is a registry fact a reader can audit; a severity label is not.
+ */
+export type AuditSeverity = 'critical' | 'recommended';
 export type AuditCategory =
   | 'identity'
   | 'data-plane'
@@ -416,10 +458,17 @@ export interface EnvSpec {
   /** When true, an unsatisfied gate reports the neutral 'opt-in' status instead
    * of 'blocked' — for a feature that is opt-in BY DESIGN (stands up real extra
    * cost / is a non-default engine) whose absence removes NO capability, so it
-   * must never read as a red misconfiguration (issue #2753). Deliberately
-   * explicit, NOT inferred from severity:'optional' — most optional gates are
-   * "not deployed yet", a real blocker to fix; only a handful (the Trino AKS
-   * carve-out) are opt-in-by-design. cloud-unavailable still outranks it.
+   * must never read as a red misconfiguration (issue #2753).
+   *
+   * THIS FLAG IS THE ONLY WAY TO DECLARE AN OPT-IN, and it always was: the
+   * status is computed from `spec.optIn === true`, never from a severity label
+   * (gates/registry/index.ts). Since #3347 removed the `optional` severity that
+   * is also the only remaining expression of the idea — which is the point.
+   * Adding a gate here is a POLICY decision (a cost-material opt-in the operator
+   * chose, or a genuine tenant-level consent — auto-bind-by-default.md,
+   * "Allowed (narrowly, with disclosure)") and MUST be justified in the spec's
+   * own comment. It is never a workaround for a capability the deploy failed to
+   * wire: that is a defect in the deploy. cloud-unavailable still outranks it.
    *
    * The s3proxy gateway used to be listed here and is NOT any more (#2682 /
    * FINISHLINE D16): its opt-in was never a design decision, it was a symptom of

@@ -106,7 +106,7 @@ export async function gateRegistryChecks(): Promise<CheckResult[]> {
     try {
       const miss = await g.evaluate();
       out.push({
-        id: g.id, category: 'workloads', severity: 'optional',
+        id: g.id, category: 'workloads', severity: 'recommended',
         title: g.title,
         status: miss ? 'warn' : 'pass',
         detail: miss ? (miss.detail || `Missing: ${miss.missing}.`) : 'Gate satisfied.',
@@ -115,7 +115,7 @@ export async function gateRegistryChecks(): Promise<CheckResult[]> {
       });
     } catch (e: any) {
       out.push({
-        id: g.id, category: 'workloads', severity: 'optional',
+        id: g.id, category: 'workloads', severity: 'recommended',
         title: g.title, status: 'warn',
         detail: `Gate evaluation failed: ${e?.message || String(e)}`,
         remediation: g.remediation,
