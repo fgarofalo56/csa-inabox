@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.95.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.0...csa-inabox-v0.95.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **deploy:** a `full` run deploys the apps — `deploy_apps_enabled` defaults TRUE ([#3362](https://github.com/fgarofalo56/csa-inabox/issues/3362)) ([aa782c8](https://github.com/fgarofalo56/csa-inabox/commit/aa782c8aaa72d40d458ee95e92bf74a8c3281036)), closes [#3332](https://github.com/fgarofalo56/csa-inabox/issues/3332)
+* **deploy:** disarm three dormant cross-RG lake derefs — bind-vs-grant split for duckdb / iceberg / risingwave ([#3357](https://github.com/fgarofalo56/csa-inabox/issues/3357)) ([#3365](https://github.com/fgarofalo56/csa-inabox/issues/3365)) ([c9c15d8](https://github.com/fgarofalo56/csa-inabox/commit/c9c15d85c2d70797e8fbe3db02e5b796b8be7cc3))
+* **security:** approving an access request no longer makes the requester a tenant admin (P0) ([#3363](https://github.com/fgarofalo56/csa-inabox/issues/3363)) ([d09912f](https://github.com/fgarofalo56/csa-inabox/commit/d09912f0f3cb8a06c0334968652841bd6b83eb70))
+
 ## [0.95.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.94.1...csa-inabox-v0.95.0) (2026-08-13)
 
 
