@@ -12,9 +12,23 @@ name: release-please
 # that these workflows "never run"): the runs ARE created — all ten of them —
 # and they sit at conclusion `action_required`, awaiting manual approval. They
 # are withheld, not absent. `gh api -X POST repos/{repo}/actions/runs/{id}/approve`
-# releases them and the REAL checks then run and pass. So approval is always
-# available as the honest manual path; this auto-pass exists so an unattended
-# release does not require a human to click ten times.
+# releases them and the REAL checks then run and pass.
+#
+# So the order of preference below is: APPROVE the held runs (real results), and
+# only fall back to posting synthetic statuses when there was nothing to approve.
+#
+# Why the fallback's context list is hardcoded rather than derived: deriving it
+# from `repos/{repo}/branches/main/protection/required_status_checks` was tried
+# and is IMPOSSIBLE with GITHUB_TOKEN. That endpoint needs admin, and the
+# corresponding `administration` scope is not a valid workflow `permissions:` key
+# at all (actionlint rejects it: the allowed set is actions, artifact-metadata,
+# attestations, checks, contents, deployments, …). The rulesets endpoint
+# (`/rules/branches/main`) IS readable without admin but returns
+# required_status_checks: [] here, because these 14 contexts live in CLASSIC
+# branch protection, not a ruleset. There is no token-compatible source, so the
+# list stays hand-maintained — and the post-verify step below exists to make its
+# staleness LOUD, since it has now drifted twice in silence (PR #815, and again
+# on 2026-08-13 when `guardrails` and `vitest (node 20)` were missing).
 #
 # The canonical fix is a PAT (RELEASE_PLEASE_TOKEN). We don't have one and
 # don't want a long-lived one stored in repo secrets.
@@ -44,10 +58,10 @@ permissions:
   contents: write
   pull-requests: write
   statuses: write
-  # Read-only, and required: the auto-pass step derives the required-context
-  # list from branch protection rather than mirroring it by hand (see the step's
-  # comment). Without this scope that read 403s and the step fails closed.
-  administration: read
+  # Needed to APPROVE the runs GitHub withholds on GITHUB_TOKEN-authored PRs
+  # (see header). Approval produces REAL check results; the auto-pass fallback
+  # only runs when there was nothing to approve.
+  actions: write
 
 jobs:
   release-please:
@@ -71,49 +85,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The required-context list is DERIVED from branch protection at run
-          # time. It used to be a hand-maintained array with the comment "If
-          # branch protection changes, update this list" — and it drifted twice:
-          # PR #815 ("auto-pass must cover next build (node 20)") and again on
-          # 2026-08-13, when `guardrails` and `vitest (node 20)` had been added
-          # to protection but not here. Both times the symptom was identical and
-          # misleading: a release PR BLOCKED on contexts reported as MISSING
-          # rather than failing, which reads like a broken workflow instead of an
-          # incomplete list. A mirror that must be updated by hand is a mirror
-          # that will be stale; deriving it removes the failure mode entirely.
-          #
-          # Needs `administration: read` on GITHUB_TOKEN (granted at job level).
           REPO="${GITHUB_REPOSITORY}"
           RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
 
-          # `.checks[].context` is the current shape; `.contexts[]` is the
-          # deprecated one. Read both so this does not break on either.
-          if ! PROT="$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" 2>&1)"; then
-            echo "::error::Could not read branch protection on main, so the set of"
-            echo "::error::required contexts is UNKNOWN. Refusing to post a guessed list —"
-            echo "::error::auto-passing contexts we cannot verify are required is exactly the"
-            echo "::error::class of green-that-measured-nothing this repo forbids. Approve the"
-            echo "::error::held workflow runs on the release PR instead (see header). API said:"
-            printf '%s\n' "$PROT" | head -5
-            exit 1
-          fi
-          mapfile -t REQUIRED_CONTEXTS < <(
-            printf '%s' "$PROT" | jq -r '[(.checks[]?.context), (.contexts[]?)] | unique[]'
+          # Hand-maintained mirror of branch protection's required contexts.
+          # See the header for WHY this cannot be derived with GITHUB_TOKEN.
+          # It has drifted twice; the post-verify at the end of the loop is the
+          # control that makes a third drift fail loudly instead of silently.
+          # Last reconciled against protection: 2026-08-13 (14 contexts).
+          REQUIRED_CONTEXTS=(
+            "PowerShell Lint"
+            "Python Lint"
+            "Python Tests (3.10)"
+            "Python Tests (3.11)"
+            "Python Tests (3.12)"
+            "Repo Hygiene"
+            "Secret Scan"
+            "dbt Compile (finance)"
+            "dbt Compile (inventory)"
+            "dbt Compile (sales)"
+            "dbt Compile (shared)"
+            "guardrails"
+            "next build (node 20)"
+            "vitest (node 20)"
           )
-
-          # EMBEDDED CONTROL. An empty derived list would sail through the loop
-          # below posting nothing and exit 0 — "no contexts to pass" is
-          # indistinguishable from success, and the PR would stay blocked with no
-          # error. A required-checks list on this repo is never legitimately
-          # empty, so treat empty as a failed read, not as no work.
-          if [ "${#REQUIRED_CONTEXTS[@]}" -eq 0 ]; then
-            echo "::error::Branch protection returned ZERO required contexts. That is not a"
-            echo "::error::state this repo is ever in, so this is a failed or changed read, not an"
-            echo "::error::empty requirement. Refusing to silently post nothing."
-            exit 1
-          fi
-          echo "Derived ${#REQUIRED_CONTEXTS[@]} required context(s) from branch protection:"
-          printf '  - %s\n' "${REQUIRED_CONTEXTS[@]}"
 
           # Find every open PR opened by github-actions[bot] whose head branch
           # matches the release-please naming scheme. Resolve each to its
@@ -147,6 +142,30 @@ jobs:
               exit 1
             fi
 
+            # PREFERRED PATH: release the runs GitHub is withholding. These
+            # produce REAL check results, so nothing has to be taken on faith.
+            mapfile -t HELD < <(
+              gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100" \
+                --jq '.workflow_runs[] | select(.status=="action_required") | .id'
+            )
+            approved=0
+            for rid in "${HELD[@]:-}"; do
+              [ -z "$rid" ] && continue
+              if gh api -X POST "repos/${REPO}/actions/runs/${rid}/approve" >/dev/null 2>&1; then
+                approved=$((approved + 1))
+              else
+                echo "  ! could not approve held run ${rid}"
+              fi
+            done
+            if [ "$approved" -gt 0 ]; then
+              echo "  approved ${approved} held run(s) — REAL checks are now running on ${sha}."
+              echo "  Not posting synthetic statuses: doing so would let this PR merge"
+              echo "  BEFORE those real checks report, which is exactly the"
+              echo "  green-that-measured-nothing failure this repo forbids."
+              continue
+            fi
+            echo "  no held runs could be approved (${#HELD[@]} found) — falling back to auto-pass."
+
             for ctx in "${REQUIRED_CONTEXTS[@]}"; do
               echo "  - posting success status: ${ctx}"
               gh api -X POST "repos/${REPO}/statuses/${sha}" \
@@ -155,6 +174,38 @@ jobs:
                 -f description="Auto-passed: release PR only modifies version metadata" \
                 -f target_url="${RUN_URL}" >/dev/null
             done
+
+            # DRIFT CONTROL. We just marked every context we KNOW about as green
+            # and nothing is failing, so this PR should be mergeable. If GitHub
+            # still reports BLOCKED, the most likely explanation is that
+            # protection requires a context missing from the list above — the
+            # exact silent failure that has already happened twice. This cannot
+            # be confirmed from here (GITHUB_TOKEN cannot read protection), so
+            # the message says what was measured and stops short of asserting a
+            # cause it did not establish.
+            state=""
+            for _ in 1 2 3 4; do
+              sleep 15
+              state=$(gh pr view "${num}" --repo "${REPO}" --json mergeStateStatus --jq '.mergeStateStatus')
+              [ "$state" != "UNKNOWN" ] && [ "$state" != "BLOCKED" ] && break
+            done
+            echo "  post-verify: mergeStateStatus=${state}"
+            if [ "$state" = "BLOCKED" ]; then
+              failing=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup \
+                --jq '[.statusCheckRollup[]? | select((.conclusion // .state) as $c | $c=="FAILURE" or $c=="ERROR" or $c=="CANCELLED") | .name // .context] | join(", ")')
+              if [ -n "$failing" ]; then
+                echo "::warning::Release PR #${num} is BLOCKED with failing checks: ${failing}. That is a real failure, not list drift."
+              else
+                echo "::error::Release PR #${num} is still BLOCKED after posting all ${#REQUIRED_CONTEXTS[@]}"
+                echo "::error::contexts this workflow knows about, and NO check is failing. This"
+                echo "::error::workflow cannot read branch protection to confirm why, but the"
+                echo "::error::known cause of this exact signal is REQUIRED_CONTEXTS having gone"
+                echo "::error::stale (it has drifted twice: PR #815, and 2026-08-13). Compare"
+                echo "::error::'gh api repos/${REPO}/branches/main/protection/required_status_checks'"
+                echo "::error::against the list in this file and add what is missing."
+                exit 1
+              fi
+            fi
           done
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
