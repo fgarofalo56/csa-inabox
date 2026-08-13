@@ -21,7 +21,11 @@ name: loom-parity-autopilot
 #   - SP with a GitHub OIDC federated credential for this repo + Key Vault
 #     Secrets User on the loom KV.
 #   - GH secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-#   - GH vars:    LOOM_VERIFY_URL, LOOM_AUTOMATION_*, LOOM_KV_NAME (optional).
+#   - GH vars:    LOOM_VERIFY_URL, LOOM_AUTOMATION_UPN / _NAME, LOOM_KV_NAME
+#                 (all optional).
+#   - LOOM_AUTOMATION_OID is NOT a setup step (#3373) — it is DERIVED at run
+#     time from the console's own LOOM_TENANT_ADMIN_OID. The repo var is an
+#     optional OVERRIDE. The SP needs Reader on the admin RG to read it.
 
 on:
   workflow_dispatch:
@@ -66,7 +70,11 @@ permissions:
 
 env:
   LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://csa-loom.limitlessdata.ai' }}
-  LOOM_AUTOMATION_OID:  ${{ vars.LOOM_AUTOMATION_OID  || '' }}
+  # LOOM_AUTOMATION_OID is DERIVED at run time (#3373) — see the "Resolve
+  # automation identity" step. Not set at workflow scope, so the value written
+  # to $GITHUB_ENV there is the one every `${{ env.LOOM_AUTOMATION_OID }}` below
+  # reads. The repo variable survives as an explicit OVERRIDE only.
+  LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
   LOOM_AUTOMATION_UPN:  ${{ vars.LOOM_AUTOMATION_UPN  || 'parity-autopilot@automation.local' }}
   LOOM_AUTOMATION_NAME: ${{ vars.LOOM_AUTOMATION_NAME || 'Loom Parity Autopilot [automation]' }}
   KV_SECRET_NAME: 'session-secret'
@@ -123,6 +131,19 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '20'
+
+      # RESOLVE THE AUTOMATION IDENTITY — produced, never requested (#3373).
+      # Derived from the console's own LOOM_TENANT_ADMIN_OID, the only value a
+      # minted session (no `groups` claim) can match in feature-gate.ts
+      # `isTenantAdmin`. `vars.LOOM_AUTOMATION_OID` had no writer anywhere in
+      # this repo; it is retained here as an explicit override only.
+      - name: Resolve automation identity (derive from the console's tenant-admin binding)
+        id: automation_oid
+        env:
+          EXPLICIT_OID: ${{ env.LOOM_AUTOMATION_OID_OVERRIDE }}
+          # Blank is fine — the script discovers the console's resource group.
+          CONSOLE_RG: ${{ vars.LOOM_ADMIN_RG }}
+        run: node scripts/ci/resolve-automation-oid.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

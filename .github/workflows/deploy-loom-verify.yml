@@ -238,16 +238,21 @@ jobs:
 
           # LOOM_AUTOMATION_OID — required. The object id baked into the minted
           # session cookie, i.e. WHO the harness claims to be in audit logs.
-          OID="${VAR_OID:-}"
-          SRC=repo-var
-          if [ -z "$OID" ]; then OID=$(pick "$JOB_ENV" LOOM_AUTOMATION_OID); SRC=job; fi
-          if [ -z "$OID" ]; then
-            echo "::error::LOOM_AUTOMATION_OID could not be resolved. deploy-loom-verify-job.sh declares it \${LOOM_AUTOMATION_OID:?}. It is the tenant-admin object id the minted session asserts — set the LOOM_AUTOMATION_OID repo var (same value loom-ui-verify.yml uses). This workflow will not guess an identity."
-            exit 1
-          fi
-          echo "::add-mask::$OID"
-          echo "LOOM_AUTOMATION_OID=$OID" >> "$GITHUB_ENV"
-          echo "  LOOM_AUTOMATION_OID <- $SRC (masked)"
+          #
+          # #3373 — this used to be `repo var -> live job -> refuse`, and the
+          # repo var had NO WRITER anywhere in this repo (`gh variable set`
+          # appears nowhere in the tree), so on a fresh estate the only reachable
+          # branch was the refusal. The value is now DERIVED from the console's
+          # own LOOM_TENANT_ADMIN_OID — the only thing a minted session can match
+          # in feature-gate.ts `isTenantAdmin`, and a value the deploy already
+          # produces. The repo var is retained as an explicit override; the
+          # live job's value is kept as a last-resort carry-forward so a working
+          # job is never stripped; and the refusal survives for the genuinely
+          # unresolvable case. It still never guesses an identity.
+          CARRIED_OID=$(pick "$JOB_ENV" LOOM_AUTOMATION_OID)
+          EXPLICIT_OID="${VAR_OID:-}" CARRIED_OID="$CARRIED_OID" \
+            CONSOLE_APP="$CONSOLE_APP" CONSOLE_RG="$ADMIN_RG" \
+            node scripts/ci/resolve-automation-oid.mjs
 
           echo "JOB_EXISTED=$JOB_EXISTS" >> "$GITHUB_ENV"
 

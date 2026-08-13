@@ -104,9 +104,38 @@ Navigate to **GitHub → repo → Settings → Secrets and variables → Actions
 | Variable | `LOOM_VERIFY_URL` | Console Front Door URL (e.g. `https://<your-console-hostname>`) |
 | Variable | `LOOM_KV_NAME` | Key Vault name (e.g. `kv-loom-m56yejezt7bjo`) — optional; the workflow auto-discovers if absent |
 | Variable | `LOOM_ADMIN_RG` | Admin-plane resource group — used for KV auto-discovery |
-| Variable | `LOOM_AUTOMATION_OID` | Object ID of the SP (or any stable UUID for audit logs) |
+| Variable | `LOOM_AUTOMATION_OID` | **Not required (#3373).** Derived at run time from the console's own `LOOM_TENANT_ADMIN_OID`. Set it only to OVERRIDE that, and only to a value that EQUALS the console's binding — see below |
 | Variable | `LOOM_AUTOMATION_UPN` | UPN for the minted session (e.g. `loom-verify@automation.local`) |
 | Variable | `LOOM_AUTOMATION_NAME` | Display name in the minted session (e.g. `Loom Verify [automation]`) |
+
+### `LOOM_AUTOMATION_OID` is derived, not configured
+
+Set nothing. Each verify workflow runs `scripts/ci/resolve-automation-oid.mjs`,
+which reads `LOOM_TENANT_ADMIN_OID` off the live `loom-console` container app
+and uses that. The deploy already produces that value
+(`FIAB_TENANT_ADMIN_OID` → `main.bicep loomTenantAdminOid` →
+`admin-plane effectiveTenantAdminOid` → the app), and the same expression
+already feeds the in-cluster synthetic monitor
+(`synthetic-monitor-job.bicep automationOid`).
+
+It is **not** "the SP's object ID, or any stable UUID for audit logs" — an
+earlier revision of this table said that and it was wrong in a way that fails
+silently. The minted `loom_session` cookie carries no `groups` claim, so
+`apps/fiab-console/lib/auth/feature-gate.ts isTenantAdmin()` can only admit it
+through `session.claims.oid === LOOM_TENANT_ADMIN_OID`, compared with strict
+equality. Any other UUID — including the deploy SP's own object id — mints a
+perfectly valid session that then 403s on every admin-gated route (#3109).
+
+The refusal is retained for the genuinely unresolvable case, and it never
+substitutes an identity. If the console has no `LOOM_TENANT_ADMIN_OID` bound,
+the fix is the DEPLOY (`FIAB_TENANT_ADMIN_OID`, or dispatch
+`deploy-fiab-commercial.yml` with `tenant_admin_oid=<a human user's object
+id>`) — not a repo variable. Binding only `LOOM_TENANT_ADMIN_GROUP_ID` will not
+help: the group arm needs a `groups` claim no minted session carries.
+
+Per-cloud: each boundary derives its OWN console's binding, so Commercial and
+Gov no longer share one repo-wide identity that could only be a tenant admin in
+one of the two tenants.
 
 ---
 

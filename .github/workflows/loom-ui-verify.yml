@@ -12,9 +12,14 @@ name: loom-ui-verify
 #   - Create/choose a service principal (e.g. loom-ui-verify-sp)
 #   - Add a GitHub OIDC federated credential for this repo + this workflow
 #   - Grant it: Key Vault Secrets User on the loom KV (for SESSION_SECRET)
+#               AND Reader on the admin RG (to read the console's tenant-admin
+#               binding — see LOOM_AUTOMATION_OID below)
 #   - Set GH secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-#   - Set GH vars:    LOOM_VERIFY_URL, LOOM_AUTOMATION_OID, LOOM_AUTOMATION_UPN,
+#   - Set GH vars:    LOOM_VERIFY_URL, LOOM_AUTOMATION_UPN,
 #                     LOOM_AUTOMATION_NAME, LOOM_KV_NAME (default: auto-discover)
+#   - LOOM_AUTOMATION_OID is NOT a setup step (#3373). It is DERIVED at run time
+#     from the console's own LOOM_TENANT_ADMIN_OID, which the deploy produces.
+#     The repo var is an optional OVERRIDE.
 
 on:
   workflow_dispatch:
@@ -61,7 +66,14 @@ env:
   # --- resolve console URL: workflow input → repo var → hardcoded default ---
   LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://csa-loom.limitlessdata.ai' }}
   # --- automation identity (baked into the minted session cookie) -----------
-  LOOM_AUTOMATION_OID:  ${{ vars.LOOM_AUTOMATION_OID  || '' }}
+  # LOOM_AUTOMATION_OID is DELIBERATELY NOT SET HERE (#3373). It is DERIVED from
+  # the console's own LOOM_TENANT_ADMIN_OID by the "Resolve automation identity"
+  # step below, which writes it to $GITHUB_ENV — so every `${{ env.LOOM_AUTOMATION_OID }}`
+  # further down reads the produced value, and this workflow needs no repo
+  # variable to run. `vars.LOOM_AUTOMATION_OID` survives as an explicit OVERRIDE
+  # only. Setting it at workflow scope again would re-create the collision the
+  # rename removed.
+  LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
   LOOM_AUTOMATION_UPN:  ${{ vars.LOOM_AUTOMATION_UPN  || 'loom-verify@automation.local' }}
   LOOM_AUTOMATION_NAME: ${{ vars.LOOM_AUTOMATION_NAME || 'Loom Verify [automation]' }}
   # --- Key Vault / secret names (stable across deployments per bicep) -------
@@ -345,6 +357,41 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '20'
+
+      # -----------------------------------------------------------------------
+      # 4b. RESOLVE THE AUTOMATION IDENTITY — PRODUCED, never requested (#3373).
+      #
+      #     This workflow used to read `vars.LOOM_AUTOMATION_OID` with no
+      #     fallback, and NOTHING in this repo could ever write that variable
+      #     (`gh variable set` / the actions/variables API appear nowhere in the
+      #     tree). So the lane that produces every browser-E2E receipt was gated
+      #     on a value a human had to type into repo settings — verbatim the
+      #     state `auto-bind-by-default.md` §5 forbids.
+      #
+      #     The value is not free-form. The minted cookie carries no `groups`
+      #     claim, so apps/fiab-console/lib/auth/feature-gate.ts can only admit
+      #     it via `session.claims.oid === LOOM_TENANT_ADMIN_OID` on the console
+      #     container app — and THAT is produced by the deploy
+      #     (FIAB_TENANT_ADMIN_OID -> loomTenantAdminOid -> effectiveTenantAdminOid).
+      #     So it is read back from the producer here instead of retyped.
+      #
+      #     The repo variable is retained as an explicit override, and the
+      #     refusal is kept: the script never substitutes the runner's own
+      #     service-principal object id, which is a GUID that matches nobody
+      #     (#3109). It fails closed with a classified, concrete remediation.
+      # -----------------------------------------------------------------------
+      - name: Resolve automation identity (derive from the console's tenant-admin binding)
+        id: automation_oid
+        env:
+          EXPLICIT_OID: ${{ env.LOOM_AUTOMATION_OID_OVERRIDE }}
+          # Blank is fine — the script then discovers the console's resource
+          # group with `az containerapp list` rather than guessing a region into
+          # a name. No `format('rg-…-{0}', inputs.region)` fallback here: on the
+          # weekly cron `inputs.region` is EMPTY, which would build a resource
+          # group name that cannot exist and turn a resolvable state into a red
+          # run.
+          CONSOLE_RG: ${{ inputs.admin_rg || vars.LOOM_ADMIN_RG }}
+        run: node scripts/ci/resolve-automation-oid.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
