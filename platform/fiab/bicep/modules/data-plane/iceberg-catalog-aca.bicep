@@ -23,21 +23,37 @@
 //     injects Entra auth on the upstream hop, and writes a data-access audit
 //     row for every read/write.
 //   - IDENTITY-BASED storage auth: a user-assigned managed identity with
-//     **Storage Blob Data Reader** on the DLZ lake, declared IN THIS MODULE via
-//     a guarded guid() role assignment. NO storage account keys, NO connection
-//     strings, NO secrets in app settings.
+//     **Storage Blob Data Reader** on the DLZ lake. NO storage account keys, NO
+//     connection strings, NO secrets in app settings. The GRANT is NOT made
+//     here — see BIND vs GRANT below.
+//
+// BIND vs GRANT (#3357). This module BINDS the lake — `LOOM_LAKE_ACCOUNT` below
+// is a plain string, so the catalog is wired to its account on EVERY topology —
+// and it makes NO role assignment. It used to declare
+// `resource lake … existing` with NO condition and NO scope, which resolves in
+// THIS module's resource group; the lake is in the DLZ RG, and on a dlz-attach
+// estate in a different SUBSCRIPTION. That is the exact shape that failed two
+// full Commercial deploys on 2026-08-13 from transform-runner-aca.bicep
+// (#3333/#3329), and this file carried the THINNEST margin of the three
+// instances in #3357: the `existing` was unconditional, so only
+// `assignLakeRole: false` at the call site — leaving the symbol unreferenced —
+// kept ARM from ever resolving it. Dormant is not fixed; the dereference is
+// gone. The Storage Blob Data Reader grant (same role, unchanged — READER is
+// the least privilege that works for a catalog that never writes) now lives in
+// data-plane/serving-tier-lake-rbac.bicep, which the orchestrator invokes with
+// an explicit `scope: resourceGroup(<lakeRg>)`.
 //
 // R0 PARAM-CAP RULE: admin-plane/main.bicep is at the ARM 256-parameter
 // ceiling, so this module takes a single typed CONFIG-OBJECT bag rather than a
 // spray of top-level params, and deploys OUT OF BAND (standalone entrypoint,
 // orphan-allowlisted in scripts/ci/check-bicep-sync.mjs) exactly like the
-// sibling compute/loom-unity-app.bicep.
+// sibling compute/loom-unity-app.bicep. A standalone run grants the identity
+// Storage Blob Data Reader on the lake separately — this module will not do it:
 //
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep \
 //     -p location=<region> \
 //        catalogConfig='{ "environmentId": "<cae-id>", "uamiId": "<uami-id>", \
-//                         "uamiPrincipalId": "<uami-principal-id>", \
 //                         "acrLoginServer": "<acr>.azurecr.io", \
 //                         "image": "<acr>.azurecr.io/loom-unity:<tag>", \
 //                         "lakeStorageAccountName": "<dlz-adls-account>" }'
@@ -58,7 +74,6 @@ param location string = resourceGroup().location
 Required keys:
   environmentId          Container Apps managed-environment resource id (in-VNet).
   uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake read).
-  uamiPrincipalId        That identity's PRINCIPAL (object) id — used for the role assignment.
   acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.
   image                  Catalog container image (pin an explicit tag, never :latest).
   lakeStorageAccountName DLZ ADLS Gen2 account the catalog reads table metadata from.
@@ -71,8 +86,6 @@ Optional keys:
   minReplicas            Default 1 — the catalog is on the metadata hot path (never scale-to-zero).
   maxReplicas            Default 1 (single-writer local metadata store; raise with Postgres).
   cpu / memory           Container resources (default 1.0 vCPU / 2Gi).
-  assignLakeRole         Set false to skip the in-module role assignment when the
-                         identity is granted out-of-band by an estate policy.
   authMode               'entra' (DEFAULT) | 'disabled'. This app runs the SAME Unity
                          Catalog OSS image as compute/loom-unity-app.bicep, so it
                          inherits the same svc-loom-unity-authz finding: with no Entra
@@ -106,7 +119,6 @@ param complianceTags object = {}
 // ── Config-bag unpacking (typed locals; every optional key has a real default) ─
 var environmentId = catalogConfig.environmentId
 var uamiId = catalogConfig.uamiId
-var uamiPrincipalId = catalogConfig.uamiPrincipalId
 var acrLoginServer = catalogConfig.acrLoginServer
 var image = catalogConfig.image
 var lakeStorageAccountName = catalogConfig.lakeStorageAccountName
@@ -117,7 +129,6 @@ var minReplicas = int(catalogConfig.?minReplicas ?? 1)
 var maxReplicas = int(catalogConfig.?maxReplicas ?? 1)
 var cpu = string(catalogConfig.?cpu ?? '1.0')
 var memory = string(catalogConfig.?memory ?? '2Gi')
-var assignLakeRole = bool(catalogConfig.?assignLakeRole ?? true)
 
 // ── svc-loom-unity-authz — Entra bearer authorization (DEFAULT ON) ───────────
 // This app IS the Unity Catalog OSS container, so the anonymous-catalog finding
@@ -156,27 +167,10 @@ var consolePrincipalId = string(catalogConfig.?consolePrincipalId ?? '')
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
-// Storage Blob Data Reader — the catalog only READS table metadata + data files
-// to answer catalog requests and vend scoped credentials. It never writes to the
-// lake (Loom's Spark jobs own the writes), so READER is the least privilege that
-// works. Built-in role id is cloud-invariant.
-var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
-
-resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
-  name: lakeStorageAccountName
-}
-
-// Guarded guid() name — deterministic per (scope, identity, role) so a re-deploy
-// is idempotent and two modules granting the same pair never collide.
-resource lakeReadRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (assignLakeRole) {
-  name: guid(lake.id, uamiPrincipalId, storageBlobDataReaderRoleId)
-  scope: lake
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
-    principalId: uamiPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
+// NO `resource lake … existing` HERE, DELIBERATELY (#3357) — see BIND vs GRANT
+// in the file header. The Storage Blob Data Reader grant lives in
+// data-plane/serving-tier-lake-rbac.bicep at the lake's own RG scope; the
+// binding (LOOM_LAKE_ACCOUNT, below) stays here and is unconditional.
 
 var envVars = concat(
   [
@@ -282,7 +276,6 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
       }
     }
   }
-  dependsOn: assignLakeRole ? [ lakeReadRole ] : []
 }
 
 @description('Internal FQDN — set on the Console app as LOOM_ICEBERG_CATALOG_URL (prefix https://).')

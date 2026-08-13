@@ -330,7 +330,12 @@ test('a registration the analyzer no longer reproduces is STALE — the register
 });
 
 test('every KNOWN_DORMANT entry records why it is dormant and where it is tracked', () => {
-  assert.ok(KNOWN_DORMANT.length > 0);
+  // NO `length > 0` assertion. The register is designed to shrink to zero as the
+  // debt is paid — it reached zero on 2026-08-14 when #3357 converted the last
+  // three modules — and an emptiness floor here would have made paying that debt
+  // fail CI. The register's machinery stays proven by the three fixture tests
+  // above (which pass their own synthetic register) and by verifyControls(),
+  // neither of which depends on this array being populated.
   for (const r of KNOWN_DORMANT) {
     assert.match(r.module, /^modules\/.+\.bicep$/);
     assert.ok(r.symbol && r.binding);

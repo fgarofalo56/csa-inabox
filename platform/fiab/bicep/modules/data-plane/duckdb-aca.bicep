@@ -18,11 +18,23 @@
 //     audit row per query. Flight requires a short-lived, Entra-scoped ticket
 //     the BFF mints (and audits) — there is no anonymous path.
 //   - IDENTITY-BASED storage auth: a user-assigned managed identity with
-//     **Storage Blob Data Reader** on the DLZ lake, declared IN THIS MODULE via
-//     a guarded guid() role assignment. NO storage keys, NO SAS, NO connection
-//     strings. The engine is read-only by construction (app/sqlguard.py).
+//     **Storage Blob Data Reader** on the DLZ lake. NO storage keys, NO SAS, NO
+//     connection strings. The engine is read-only by construction
+//     (app/sqlguard.py). The GRANT is NOT made here — see BIND vs GRANT below.
 //   - The Flight ticket signing key is injected as a Key Vault secretRef, never
 //     as a literal app setting.
+//
+// BIND vs GRANT (#3357). This module BINDS the lake — LOOM_LAKE_ACCOUNT below is
+// a plain string, so the engine is wired to its account on EVERY topology — and
+// it makes NO role assignment. It used to declare `resource lake … existing`,
+// which resolves in THIS module's resource group; the lake is in the DLZ RG, and
+// on a dlz-attach estate in a different SUBSCRIPTION. That is the exact shape
+// that failed two full Commercial deploys on 2026-08-13 from
+// transform-runner-aca.bicep (#3333/#3329). Here it was dormant only because
+// every call site passed `assignLakeRole: false` — dormant is not fixed, so the
+// dereference is gone. The Storage Blob Data Reader grant now lives in
+// data-plane/serving-tier-lake-rbac.bicep, which the orchestrator invokes with
+// an explicit `scope: resourceGroup(<lakeRg>)`.
 //
 // R0 PARAM-CAP RULE: admin-plane/main.bicep is at the ARM 256-parameter
 // ceiling, so this module takes a single typed CONFIG-OBJECT bag.
@@ -34,13 +46,13 @@
 // fresh install. `admin-plane/main.bicep` now invokes it (`duckdbTierActive`,
 // var-gated, no new top-level params) and binds LOOM_DUCKDB_URL +
 // LOOM_FLIGHTSQL_URL on the Console. The standalone invocation below still
-// works for an out-of-band redeploy:
+// works for an out-of-band redeploy (grant the identity Storage Blob Data Reader
+// on the lake separately — this module will not do it):
 //
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/data-plane/duckdb-aca.bicep \
 //     -p location=<region> \
 //        duckdbConfig='{ "environmentId": "<cae-id>", "uamiId": "<uami-id>", \
-//                        "uamiPrincipalId": "<uami-principal-id>", \
 //                        "acrLoginServer": "<acr>.azurecr.io", \
 //                        "image": "<acr>.azurecr.io/loom-duckdb:<tag>", \
 //                        "lakeStorageAccountName": "<dlz-adls-account>" }'
@@ -59,7 +71,6 @@ param location string = resourceGroup().location
 Required keys:
   environmentId          Container Apps managed-environment resource id (in-VNet).
   uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake read).
-  uamiPrincipalId        That identity's PRINCIPAL (object) id — used for the role assignment.
   acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.
   image                  loom-duckdb container image (pin an explicit tag, never :latest).
   lakeStorageAccountName DLZ ADLS Gen2 account the engine reads Delta/Iceberg/Parquet from.
@@ -81,9 +92,7 @@ Optional keys:
   threads / memoryLimit  Engine sizing (defaults 4 / '3GB').
   minReplicas            Default 1 — the serving tier is interactive (never scale-to-zero).
   maxReplicas            Default 3.
-  cpu / memory           Container resources (default 2.0 vCPU / 4Gi).
-  assignLakeRole         Set false to skip the in-module role assignment when the
-                         identity is granted out-of-band by an estate policy.''')
+  cpu / memory           Container resources (default 2.0 vCPU / 4Gi).''')
 param duckdbConfig object
 
 @description('Compliance/cost tags. The loom-next-level tag is unioned in.')
@@ -92,7 +101,6 @@ param complianceTags object = {}
 // ── Config-bag unpacking (typed locals; every optional key has a real default) ─
 var environmentId = duckdbConfig.environmentId
 var uamiId = duckdbConfig.uamiId
-var uamiPrincipalId = duckdbConfig.uamiPrincipalId
 var acrLoginServer = duckdbConfig.acrLoginServer
 var image = duckdbConfig.image
 var lakeStorageAccountName = duckdbConfig.lakeStorageAccountName
@@ -108,42 +116,30 @@ var minReplicas = int(duckdbConfig.?minReplicas ?? 1)
 var maxReplicas = int(duckdbConfig.?maxReplicas ?? 3)
 var cpu = string(duckdbConfig.?cpu ?? '2.0')
 var memory = string(duckdbConfig.?memory ?? '4Gi')
-var assignLakeRole = bool(duckdbConfig.?assignLakeRole ?? true)
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
-// Storage Blob Data Reader — the serving tier only READS lake files. The SQL
-// guard in the app refuses every write verb, and READER makes that structural
-// rather than advisory. Built-in role id is cloud-invariant.
-var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
-
-// CROSS-RG SAFETY (round-2 fix): this `existing` reference resolves in THIS
-// module's resource group. The lake almost never lives there — single-sub puts
-// it in the DLZ RG and dlz-attach puts it in a different SUBSCRIPTION — so an
-// unconditional declaration made the role assignment fail whenever a lake was
-// actually bound. The orchestrator (admin-plane/main.bicep) therefore passes
-// `assignLakeRole: false` and relies on the DLZ-scoped grant the Console UAMI
-// already holds; a standalone out-of-band deploy INTO the lake's own RG can
-// still pass true. An empty `lakeStorageAccountName` (tenant topology, no lake
-// bound yet) no longer breaks the template — the engine starts and serves the
-// DuckLake/Postgres catalog path, which needs no lake at all.
-var grantLakeRole = assignLakeRole && !empty(lakeStorageAccountName) && !empty(uamiPrincipalId)
-
-resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = if (grantLakeRole) {
-  name: empty(lakeStorageAccountName) ? 'placeholderaccount' : lakeStorageAccountName
-}
-
-// Guarded guid() name — deterministic per (scope, identity, role) so a
-// re-deploy is idempotent and two modules granting the same pair never collide.
-resource lakeReadRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantLakeRole) {
-  name: guid(lake.id, uamiPrincipalId, storageBlobDataReaderRoleId)
-  scope: lake
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
-    principalId: uamiPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
+// NO `resource lake … existing` HERE, DELIBERATELY (#3357).
+//
+// An unscoped `existing` resolves in THIS module's resource group. The lake
+// almost never lives there — single-sub puts it in the DLZ RG, dlz-attach puts
+// it in a different SUBSCRIPTION — so the reference fails with ResourceNotFound
+// and takes the WHOLE deployment down with it. That is exactly what happened on
+// 2026-08-13 from transform-runner-aca.bicep (#3333), twice.
+//
+// This module carried the identical shape. It never fired only because
+// admin-plane/main.bicep passed `assignLakeRole: false`, which left the
+// `existing` unreferenced so ARM never resolved it. Dormant is not fixed — it is
+// one boolean from the outage, which is precisely how transform-runner sat until
+// `dbtRunnerImageReady` flipped.
+//
+// BIND stays here, GRANT moves out. `LOOM_LAKE_ACCOUNT` below is a plain string,
+// so the engine is wired to its lake on EVERY topology, including ones where
+// this deployment could not create a role assignment
+// (.claude/rules/auto-bind-by-default.md — bind always, grant where possible).
+// The Storage Blob Data Reader grant — same role, unchanged — now lives in
+// data-plane/serving-tier-lake-rbac.bicep, which the orchestrator invokes with
+// an explicit `scope: resourceGroup(<lakeRg>)`.
 
 var baseEnv = [
   // Identity-based ADLS access — DuckDB's CREDENTIAL_CHAIN Azure secret
@@ -247,7 +243,6 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
       }
     }
   }
-  dependsOn: grantLakeRole ? [ lakeReadRole ] : []
 }
 
 @description('Internal FQDN — set on the Console app as LOOM_DUCKDB_URL (prefix https://).')

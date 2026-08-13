@@ -144,57 +144,44 @@ export const CROSS_RG_TYPES = new Set([
 
 /**
  * PRE-EXISTING instances, registered on 2026-08-13 when this guard first ran.
- * Tracked in #3357.
  *
- * All three are the SAME defect as transform-runner and are NOT fixed here —
- * #3333 asks for the guard, and rewriting three unrelated data-plane modules in
- * the guard's own PR is how a mechanical change becomes an unreviewable one.
- * They are recorded item by item, with the MEASURED reason each is currently
- * dormant, and tracked separately.
+ * CURRENTLY EMPTY — the debt is PAID. The three entries this register was
+ * created with (duckdb-aca, iceberg-catalog-aca, loom-risingwave-aca, all
+ * tracked in #3357) were converted to the bind-vs-grant split on 2026-08-14 and
+ * removed from here in the same PR: the app modules keep the BINDING (a plain
+ * string env var, which can never fail a deployment) and lost the `existing`
+ * dereference entirely, while the grant moved to a module the orchestrator
+ * invokes with an explicit `scope: resourceGroup(<lakeRg>)` — the pattern
+ * s3-gateway-lake-rbac.bicep and transform-runner-lake-rbac.bicep model, now
+ * joined by serving-tier-lake-rbac.bicep.
  *
- * DORMANT IS NOT FIXED. In every case the only consumer of the `existing`
- * symbol is a role assignment gated on `assignLakeRole`, and every call site in
- * admin-plane/main.bicep passes `assignLakeRole: false`. That is one boolean
- * away from the outage: transform-runner was dormant in exactly this way until
- * `dbtRunnerImageReady` flipped to true, and it then failed two full Commercial
- * deploys. The correct fix for all three is the six-times-adopted one — move
- * the grant into a dedicated module invoked with `scope: resourceGroup(<lakeRg>)`,
- * as `risingwaveLakeRbac` already does for RisingWave's grant.
+ * An empty register is the SUCCESS state, not a broken scan. Nothing here is a
+ * population floor: the guard's real anti-rot protections are the embedded
+ * POSITIVE/NEGATIVE controls in `verifyControls()`, which run on a synthetic
+ * tree and therefore keep proving the matcher works no matter what this array
+ * contains. Adding a `length > 0` assertion anywhere would make paying the debt
+ * impossible, which is the opposite of what a ratchet is for.
  *
  * THIS REGISTER CANNOT ROT. An entry that the analyzer no longer reproduces is
  * a HARD FAILURE, not a silent pass (see `staleRegistrations`) — so it shrinks
  * as the debt is paid and can never outlive it. It is keyed on
  * (module, symbol, binding), never on a line number, so it neither drifts with
  * an unrelated edit nor covers a DIFFERENT dereference added to the same file.
+ *
+ * DORMANT IS NOT FIXED — the reason those three were removed by REPAIR rather
+ * than by re-classification. In each case the only consumer of the `existing`
+ * symbol was a role assignment gated on `assignLakeRole`, and every call site in
+ * admin-plane/main.bicep passed `assignLakeRole: false`, so ARM never resolved
+ * the reference. That is one boolean away from the outage: transform-runner was
+ * dormant in exactly this way until `dbtRunnerImageReady` flipped to true, and
+ * it then failed two full Commercial deploys (31691482472, 31693148605).
+ *
+ * Shape for any future entry:
+ *   { module: 'modules/<path>.bicep', symbol, binding, dormantBecause, issue }
+ * `dormantBecause` must be a MEASURED reason (a file:line that proves it), never
+ * an assumption, and `issue` must be the ticket that tracks the repair.
  */
-export const KNOWN_DORMANT = [
-  {
-    module: 'modules/data-plane/duckdb-aca.bicep',
-    symbol: 'lake',
-    binding: 'duckdbConfig.lakeStorageAccountName',
-    dormantBecause: "admin-plane/main.bicep:6244 passes assignLakeRole: false, so grantLakeRole is never true",
-    issue: '#3357',
-  },
-  {
-    module: 'modules/data-plane/iceberg-catalog-aca.bicep',
-    symbol: 'lake',
-    binding: 'catalogConfig.lakeStorageAccountName',
-    dormantBecause:
-      "admin-plane/main.bicep:6298 passes assignLakeRole: false; the `existing` itself is UNCONDITIONAL " +
-      'and only its role assignment is gated, so this is the thinnest margin of the three',
-    issue: '#3357',
-  },
-  {
-    module: 'modules/data-plane/loom-risingwave-aca.bicep',
-    symbol: 'lake',
-    binding: 'risingwaveConfig.lakeStorageAccountName',
-    dormantBecause:
-      "admin-plane/main.bicep:6928 passes assignLakeRole: false and grants from risingwaveLakeRbac at " +
-      'scope: resourceGroup(loomDlzRg) — the correct pattern is already in place, only the dead ' +
-      'in-module dereference remains',
-    issue: '#3357',
-  },
-];
+export const KNOWN_DORMANT = [];
 
 const registrationKey = (f) => `${f.module}||${f.symbol}||${f.binding}`;
 

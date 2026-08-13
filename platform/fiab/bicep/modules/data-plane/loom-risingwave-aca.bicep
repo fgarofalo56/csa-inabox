@@ -69,11 +69,11 @@
 //     Console's), so the code-execution apps cannot obtain the credential.
 //   - IDENTITY-BASED lake auth: a user-assigned managed identity with **Storage
 //     Blob Data Contributor** on the DLZ lake (the streaming sink WRITES Delta /
-//     Iceberg). Granted here via a guarded guid() role assignment when the lake
-//     is in THIS resource group; the orchestrator instead passes
-//     assignLakeRole:false and grants it from a DLZ-RG-scoped module, because
-//     the lake normally lives outside the admin RG. Either way: NO storage keys,
-//     NO SAS, NO connection strings in app settings.
+//     Iceberg). The GRANT is NOT made here — the orchestrator makes it from
+//     `risingwaveLakeRbac`, a module it invokes at
+//     `scope: resourceGroup(loomDlzRg)`, because the lake lives outside the
+//     admin RG. This module only BINDS the account name. NO storage keys, NO
+//     SAS, NO connection strings in app settings.
 //   - Source/sink credentials a specific connector still needs (e.g. an Event
 //     Hubs SASL connection string on a local-auth namespace) are injected
 //     per-DDL as Key-Vault-resolved values by the BFF, never baked here.
@@ -120,7 +120,6 @@
 //     -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
 //     -p location=<region> \
 //        risingwaveConfig='{ "environmentId": "<cae-id>", "uamiId": "<uami-id>", \
-//                            "uamiPrincipalId": "<uami-principal-id>", \
 //                            "uamiClientId": "<uami-client-id>", \
 //                            "acrLoginServer": "<acr>.azurecr.io", \
 //                            "image": "<acr>.azurecr.io/loom-risingwave:<tag>", \
@@ -156,17 +155,15 @@ Required keys:
   image                  loom-risingwave container image (pin an explicit tag, never :latest).
 
 Optional keys:
-  uamiPrincipalId        That identity's PRINCIPAL (object) id — required only when
-                         assignLakeRole is true (it names the role assignment).
   uamiClientId           That identity's CLIENT id — emitted as AZURE_CLIENT_ID so the
                          engine picks the RIGHT identity off IMDS when the container has
                          more than one assigned. Empty => omitted.
   lakeStorageAccountName DLZ ADLS Gen2 account the streaming sink writes Delta/Iceberg to.
-                         Empty => no LOOM_LAKE_ACCOUNT and no role assignment; the engine
-                         still runs (single-node local state) and the Postgres wire serves.
-                         The lake usually lives in the DLZ resource group, in which case the
-                         orchestrator passes assignLakeRole:false and grants the role from a
-                         DLZ-scoped module instead.
+                         Empty => no LOOM_LAKE_ACCOUNT; the engine still runs (single-node
+                         local state) and the Postgres wire serves. This module only BINDS
+                         the account — the Storage Blob Data Contributor grant is made by
+                         `risingwaveLakeRbac`, which the orchestrator invokes at the lake's
+                         own RG scope.
   frontendPort           Postgres-wire frontend port (default 4566).
   minReplicas            Default 1 — the streaming tier holds MV state (CANNOT scale to zero:
                          a stopped replica loses every materialized view and its progress).
@@ -181,8 +178,6 @@ Optional keys:
   stateStore             Optional RW_STATE_STORE override (e.g. hummock+... on ADLS) for a
                          durable, scaled deployment; empty => single-node local state.
   dataDirectory          Optional RW_DATA_DIRECTORY when stateStore is set.
-  assignLakeRole         Default true. Set false to skip the in-module role assignment when
-                         the lake is in another resource group / granted out-of-band.
   rootPasswordSecretUri  REQUIRED (or the @secure() rootPassword param). Key Vault secret URI
                          https://<vault>.vault.azure.net/secrets/<name> holding the Postgres-wire
                          root password. Rendered as a Key-Vault-backed Container Apps SECRET
@@ -219,7 +214,6 @@ param complianceTags object = {}
 // ── Config-bag unpacking (typed locals; every optional key has a real default) ─
 var environmentId = risingwaveConfig.environmentId
 var uamiId = risingwaveConfig.uamiId
-var uamiPrincipalId = string(risingwaveConfig.?uamiPrincipalId ?? '')
 var uamiClientId = string(risingwaveConfig.?uamiClientId ?? '')
 var acrLoginServer = risingwaveConfig.acrLoginServer
 var image = risingwaveConfig.image
@@ -239,9 +233,6 @@ var cpu = string(risingwaveConfig.?cpu ?? '2.0')
 var memory = string(risingwaveConfig.?memory ?? '4.0Gi')
 var stateStore = string(risingwaveConfig.?stateStore ?? '')
 var dataDirectory = string(risingwaveConfig.?dataDirectory ?? '')
-// The lake role can only be assigned from THIS module when the account lives in
-// THIS resource group and we know the principal id.
-var assignLakeRole = bool(risingwaveConfig.?assignLakeRole ?? true) && !empty(lakeStorageAccountName) && !empty(uamiPrincipalId)
 
 // ── Mandatory root credential ────────────────────────────────────────────────
 // KV-backed is the default and preferred shape; the @secure() inline param is
@@ -274,26 +265,22 @@ var readinessInitialDelay = max(1, min(60, int(risingwaveConfig.?readinessInitia
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
-// Storage Blob Data Contributor — the streaming SINK writes Delta/Iceberg to the
-// lake, so it needs WRITE (unlike the read-only DuckDB tier). Built-in role id
-// is cloud-invariant.
-var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-
-resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = if (assignLakeRole) {
-  name: lakeStorageAccountName
-}
-
-// Guarded guid() name — deterministic per (scope, identity, role) so a re-deploy
-// is idempotent and two modules granting the same pair never collide.
-resource lakeWriteRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (assignLakeRole) {
-  name: guid(lake.id, uamiPrincipalId, storageBlobDataContributorRoleId)
-  scope: lake
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
-    principalId: uamiPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
+// NO `resource lake … existing` HERE, DELIBERATELY (#3357).
+//
+// An unscoped `existing` resolves in THIS module's resource group, and the lake
+// is in the DLZ RG — on a dlz-attach estate, a different SUBSCRIPTION. That is
+// the shape that failed two full Commercial deploys on 2026-08-13 from
+// transform-runner-aca.bicep (#3333/#3329). Here it was already DEAD CODE: the
+// orchestrator has granted Storage Blob Data Contributor from `risingwaveLakeRbac`
+// at `scope: resourceGroup(loomDlzRg)` — the correct pattern — while passing
+// `assignLakeRole: false`, so this declaration only ever sat waiting for someone
+// to flip that boolean. Removed rather than left loaded.
+//
+// The BIND stays here: LOOM_LAKE_ACCOUNT below is a plain string, so the engine
+// is wired to its lake on every topology
+// (.claude/rules/auto-bind-by-default.md — bind always, grant where possible).
+// The role is UNCHANGED — Contributor, because the streaming sink WRITES
+// Delta/Iceberg (unlike the read-only DuckDB and Iceberg-catalog tiers).
 
 var lakeEnv = empty(lakeStorageAccountName) ? [] : [
   // Identity-based lake access — the container authenticates as the UAMI via
@@ -457,7 +444,6 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
       }
     }
   }
-  dependsOn: assignLakeRole ? [ lakeWriteRole ] : []
 }
 
 @description('Internal FQDN — set on the Console app as LOOM_RISINGWAVE_URL (append :<frontendPort>).')

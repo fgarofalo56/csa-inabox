@@ -6225,10 +6225,11 @@ module ducklakeCatalog '../data-plane/ducklake-catalog-postgres.bicep' = if (duc
 // window, which is disclosed on the runtime-flag description. Admins get the
 // DISABLE toggle, never an enablement gate.
 //
-// LAKE ROLE: `assignLakeRole: false`. The lake lives in the DLZ RG (and on a
-// dlz-attach estate a different SUBSCRIPTION), so the the module own in-RG role
-// assignment cannot resolve it; the Console UAMI this app runs as already holds
-// Storage Blob Data Contributor on the lake via console-azure-connections-rbac.
+// LAKE ROLE: NOT made by the app module. duckdb-aca.bicep no longer declares an
+// `existing` storage reference at all (#3357) — an unscoped one resolves in THIS
+// (admin) RG and the lake is in the DLZ RG, or on a dlz-attach estate a
+// different SUBSCRIPTION. Its Storage Blob Data Reader grant is made by
+// `servingTierLakeRbac` below, at the lake's own RG scope.
 // =====================================================================
 module duckdbTier '../data-plane/duckdb-aca.bicep' = if (duckdbTierActive) {
   name: 'loom-duckdb'
@@ -6237,11 +6238,9 @@ module duckdbTier '../data-plane/duckdb-aca.bicep' = if (duckdbTierActive) {
     duckdbConfig: {
       environmentId: containerPlatformModule.outputs.caeId
       uamiId: identity.outputs.uamiConsoleId
-      uamiPrincipalId: identity.outputs.uamiConsolePrincipalId
       acrLoginServer: registry.outputs.acrLoginServer
       image: '${registry.outputs.acrLoginServer}/loom-duckdb:${appImageTags.?duckdb ?? 'v0.1'}'
       lakeStorageAccountName: loomStorageAccount
-      assignLakeRole: false
       minReplicas: 0
       cpu: '1.0'
       memory: '2Gi'
@@ -6270,11 +6269,12 @@ module duckdbTier '../data-plane/duckdb-aca.bicep' = if (duckdbTierActive) {
 //
 // COST: minReplicas 0 — same override, same rationale, as duckdbTier above.
 //
-// LAKE ROLE: `assignLakeRole: false`. The lake lives in the DLZ RG (and on a
-// dlz-attach estate a different SUBSCRIPTION), so the the module own in-RG role
-// assignment cannot resolve it — and it does not need to: this app runs as the
-// CONSOLE UAMI, which console-azure-connections-rbac already grants Storage Blob
-// Data Contributor on that lake. Same choice as duckdbTier above.
+// LAKE ROLE: NOT made by the app module. iceberg-catalog-aca.bicep no longer
+// declares an `existing` storage reference at all (#3357) — it used to declare
+// an UNCONDITIONAL one, the thinnest margin of the three instances in that
+// issue, spared only because `assignLakeRole: false` left the symbol
+// unreferenced. Its Storage Blob Data Reader grant is made by
+// `servingTierLakeRbac` below, at the lake's own RG scope.
 //
 // AUTHORIZATION: the module defaults to authMode=entra and deploys SEALED
 // (sentinel `.invalid` audience nothing can mint) when no app registration can
@@ -6291,11 +6291,9 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
     catalogConfig: {
       environmentId: containerPlatformModule.outputs.caeId
       uamiId: identity.outputs.uamiConsoleId
-      uamiPrincipalId: identity.outputs.uamiConsolePrincipalId
       acrLoginServer: registry.outputs.acrLoginServer
       image: '${registry.outputs.acrLoginServer}/loom-unity:${appImageTags.?unity ?? 'v0.1'}'
       lakeStorageAccountName: loomStorageAccount
-      assignLakeRole: false
       // 1, NOT 0. iceberg-catalog runs the loom-unity image on an EPHEMERAL H2
       // store (LOOM_UNITY_DB_LOCAL=1 -> /tmp/loom-unity-db), so scaling to zero
       // DESTROYS the catalog: the warehouse, its namespaces and every grant are
@@ -6313,6 +6311,42 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
       consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     }
     complianceTags: complianceTags
+  }
+}
+
+// Lake grant for the two READ-ONLY serving tiers (loom-duckdb + iceberg-catalog).
+// Scoped to the DLZ RG — the lake is NOT in the admin RG — exactly like
+// s3GatewayLakeRbac / transformRunnerLakeRbac / labelRbacGrants /
+// azureConnectionsRbac / orgVisualsRbac / risingwaveLakeRbac / aasShim.
+//
+// Both app modules used to declare their own `resource lake … existing`, which
+// resolves in the ADMIN resource group. That is the defect that failed two full
+// Commercial deploys on 2026-08-13 (#3333, fixed for transform-runner by #3329);
+// here it stayed dormant only because both call sites passed
+// `assignLakeRole: false`, leaving the symbol unreferenced so ARM never resolved
+// it. Dormant is not fixed — transform-runner sat exactly that way until one
+// boolean flipped — so the dereference is gone from both modules and the grant
+// lives here (#3357).
+//
+// ONE invocation, BOTH tiers: they run as the SAME identity (the Console UAMI)
+// and need the SAME role on the SAME account, so `guid(lake.id, principal, role)`
+// is IDENTICAL for both. Two per-app calls would race to PUT one assignment.
+//
+// ROLE UNCHANGED — Storage Blob Data Reader, the role both modules already
+// declared. Neither writes to the lake (DuckDB's sqlguard refuses every write
+// verb; the catalog only reads metadata), and nobody is upgraded to Contributor
+// by this move. On every current topology the Console UAMI already holds
+// Contributor here via azureConnectionsRbac, which subsumes Reader — so this is
+// a confirming no-op today. It exists so the read access these tiers actually
+// need is DECLARED at the right scope and survives a future narrowing of that
+// blanket grant, or a move to dedicated per-app identities.
+module servingTierLakeRbac '../data-plane/serving-tier-lake-rbac.bicep' = if ((duckdbTierActive || icebergCatalogActive) && !skipRoleGrants && loomStorageGrantable) {
+  name: 'loom-serving-tier-lake-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    storageAccountName: loomStorageAccount
+    principalId: identity.outputs.uamiConsolePrincipalId
+    assignRole: !skipRoleGrants
   }
 }
 
@@ -6447,11 +6481,15 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
 // LAKE ROLE — deliberately NOT granted here. Both apps run as the CONSOLE UAMI,
 // and console-azure-connections-rbac (azure-connections-rbac.bicep, scoped to
 // loomDlzRg) already grants that principal Storage Blob Data Contributor on the
-// lake on every deploy. Adding a second assignment would be redundant, and
+// lake on every deploy. A second CONTRIBUTOR assignment would be redundant, and
 // because the guid() name is deterministic per (scope, principal, role) the two
-// new modules would have raced to create the SAME role-assignment resource.
-// Both therefore pass assignLakeRole:false / omit the in-module grant — the same
-// choice duckdbTier above makes, for the same reason.
+// modules would have raced to create the SAME role-assignment resource.
+// Both therefore omit the in-module grant — and, per #3357, they also declare no
+// `resource … existing` for the lake at all, which is what makes that omission
+// safe rather than merely dormant. Same shape as duckdbTier / icebergCatalog
+// above, whose distinct READER grant is made once by servingTierLakeRbac at the
+// lake's own RG scope (a different role id, so a different guid — no race with
+// the Contributor assignment above).
 
 // =====================================================================
 // Script-visual executor (wave-4) — loom-script-runner Container App.
@@ -6864,8 +6902,12 @@ module loomUnity '../compute/loom-unity-app.bicep' = if (loomUnityActive) {
 // LEAST-PRIVILEGE identity: a dedicated uami-loom-risingwave with AcrPull on the
 // ACR plus Storage Blob Data Contributor on the DLZ lake (the streaming SINK
 // writes Delta/Iceberg). The lake lives in the DLZ resource group, so the grant
-// is made by a DLZ-RG-scoped module below rather than inside the app module
-// (assignLakeRole:false) — a roleAssignment cannot cross RGs from here.
+// is made by a DLZ-RG-scoped module below rather than inside the app module — a
+// roleAssignment cannot cross RGs from here. Per #3357 the app module also
+// declares no `resource … existing` for the lake at all; it only BINDS the
+// account name. It previously carried a dead one, unreferenced because this call
+// site passed `assignLakeRole: false` — the exact dormant shape that took the
+// estate down from transform-runner once its own gating boolean flipped.
 // =====================================================================
 resource risingwaveUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (risingwaveActive) {
   name: 'uami-loom-risingwave-${location}'
@@ -6924,8 +6966,6 @@ module risingwave '../data-plane/loom-risingwave-aca.bicep' = if (risingwaveActi
       memory: '4.0Gi'
       minReplicas: 1
       maxReplicas: 1
-      // The lake is in the DLZ RG — granted by risingwaveLakeRbac above.
-      assignLakeRole: false
       // MANDATORY root credential, Key-Vault-backed. The engine resolves this
       // with its own UAMI at revision start; the value is never in the template,
       // the deployment history, or `az containerapp show`.
