@@ -6073,10 +6073,30 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
     imageTag: appImageTags.?transformRunner ?? 'v0.1'
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
-    uamiPrincipalId: identity.outputs.uamiConsolePrincipalId
     artifactsStorageAccountName: loomStorageAccount
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
+  }
+}
+
+// Lake grant for the transform runner. Scoped to the DLZ RG — the lake is NOT in
+// the admin RG — exactly like s3GatewayLakeRbac / labelRbacGrants /
+// azureConnectionsRbac / orgVisualsRbac / risingwaveLakeRbac / aasShim.
+//
+// transformRunner was the ONE lake consumer of seven that kept its `existing`
+// storage reference INSIDE the app module and never consulted
+// `loomStorageGrantable`. That is what failed the whole Commercial deploy on
+// 2026-08-13 with ResourceNotFound the moment the runner was activated: it went
+// looking for the DLZ lake in the admin resource group. Moving the grant out to
+// a scoped module closes the last instance of a defect this repo had already
+// diagnosed, documented and fixed six times over.
+module transformRunnerLakeRbac '../data-plane/transform-runner-lake-rbac.bicep' = if (transformRunnerActive && !skipRoleGrants && loomStorageGrantable) {
+  name: 'loom-transform-runner-lake-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    storageAccountName: loomStorageAccount
+    principalId: identity.outputs.uamiConsolePrincipalId
+    assignRole: !skipRoleGrants
   }
 }
 

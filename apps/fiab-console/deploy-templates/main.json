@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13912905322529000969"
+      "templateHash": "4601563019860780593"
     }
   },
   "definitions": {
@@ -2539,7 +2539,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "3874698137515207088"
+              "templateHash": "10789314261785099388"
             }
           },
           "definitions": {
@@ -17740,9 +17740,6 @@
                   "uamiClientId": {
                     "value": "[reference('identity').outputs.uamiConsoleClientId.value]"
                   },
-                  "uamiPrincipalId": {
-                    "value": "[reference('identity').outputs.uamiConsolePrincipalId.value]"
-                  },
                   "artifactsStorageAccountName": {
                     "value": "[parameters('loomStorageAccount')]"
                   },
@@ -17760,7 +17757,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "17934884158288175319"
+                      "templateHash": "10395916436997691520"
                     }
                   },
                   "parameters": {
@@ -17801,18 +17798,11 @@
                         "description": "Runner UAMI client ID (injected as AZURE_CLIENT_ID for managed-identity auth)"
                       }
                     },
-                    "uamiPrincipalId": {
-                      "type": "string",
-                      "defaultValue": "",
-                      "metadata": {
-                        "description": "Runner UAMI principal (object) ID — used for the artifact-store role assignment. Empty skips the grant."
-                      }
-                    },
                     "artifactsStorageAccountName": {
                       "type": "string",
                       "defaultValue": "",
                       "metadata": {
-                        "description": "Storage account that holds the transform artifacts container (manifest.json / run_results.json / plan snapshots). Empty skips the role assignment; artifacts then stay in the per-run temp dir and are returned inline to the Console."
+                        "description": "Storage account that holds the transform artifacts container (manifest.json / run_results.json / plan snapshots). Bound unconditionally as LOOM_TRANSFORM_ARTIFACTS_ACCOUNT — the runner is wired to its artifact store on every topology. Empty only when the deployment genuinely has no lake, in which case artifacts stay in the per-run temp dir and are returned inline to the Console."
                       }
                     },
                     "appInsightsConnectionString": {
@@ -17828,23 +17818,7 @@
                       }
                     }
                   },
-                  "variables": {
-                    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
-                    "grantArtifactsAccess": "[and(not(empty(parameters('artifactsStorageAccountName'))), not(empty(parameters('uamiPrincipalId'))))]"
-                  },
                   "resources": [
-                    {
-                      "condition": "[variables('grantArtifactsAccess')]",
-                      "type": "Microsoft.Authorization/roleAssignments",
-                      "apiVersion": "2022-04-01",
-                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('artifactsStorageAccountName')), 'placeholderaccount', parameters('artifactsStorageAccountName')))]",
-                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('artifactsStorageAccountName')), 'placeholderaccount', parameters('artifactsStorageAccountName'))), parameters('uamiPrincipalId'), variables('storageBlobDataContributorRoleId'))]",
-                      "properties": {
-                        "principalId": "[parameters('uamiPrincipalId')]",
-                        "principalType": "ServicePrincipal",
-                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
-                      }
-                    },
                     {
                       "type": "Microsoft.App/containerApps",
                       "apiVersion": "2025-02-02-preview",
@@ -17969,6 +17943,99 @@
                 "identity",
                 "monitoring",
                 "registry"
+              ]
+            },
+            "transformRunnerLakeRbac": {
+              "condition": "[and(and(variables('transformRunnerActive'), not(parameters('skipRoleGrants'))), variables('loomStorageGrantable'))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "loom-transform-runner-lake-rbac",
+              "resourceGroup": "[parameters('loomDlzRg')]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "storageAccountName": {
+                    "value": "[parameters('loomStorageAccount')]"
+                  },
+                  "principalId": {
+                    "value": "[reference('identity').outputs.uamiConsolePrincipalId.value]"
+                  },
+                  "assignRole": {
+                    "value": "[not(parameters('skipRoleGrants'))]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.45.15.27210",
+                      "templateHash": "4563212753068025012"
+                    }
+                  },
+                  "parameters": {
+                    "storageAccountName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "ADLS Gen2 account holding the transform artifacts container. MUST exist in THIS module's resource group / subscription — the caller supplies that via `scope:`."
+                      }
+                    },
+                    "principalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "PRINCIPAL (object) id of the identity the transform runner runs as. Today that is the Console UAMI; a future dedicated runner identity drops in here unchanged."
+                      }
+                    },
+                    "assignRole": {
+                      "type": "bool",
+                      "defaultValue": true,
+                      "metadata": {
+                        "description": "Set false to skip the grant when an estate assigns lake roles out-of-band (a PIM-managed grant process). Artifact writes then 403 until that grant lands — fail-closed, by design, never a silent downgrade to local-only artifacts."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+                    "active": "[and(and(parameters('assignRole'), not(empty(parameters('storageAccountName')))), not(empty(parameters('principalId'))))]"
+                  },
+                  "resources": [
+                    {
+                      "condition": "[variables('active')]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('storageAccountName')), 'placeholderaccount', parameters('storageAccountName')))]",
+                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('storageAccountName')), 'placeholderaccount', parameters('storageAccountName'))), parameters('principalId'), variables('storageBlobDataContributorRoleId'))]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]",
+                        "principalId": "[parameters('principalId')]",
+                        "principalType": "ServicePrincipal"
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "granted": {
+                      "type": "bool",
+                      "metadata": {
+                        "description": "TRUE when the Storage Blob Data Contributor grant was actually applied."
+                      },
+                      "value": "[variables('active')]"
+                    },
+                    "roleDefinitionId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Role the transform runner identity holds on the lake."
+                      },
+                      "value": "[variables('storageBlobDataContributorRoleId')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "identity"
               ]
             },
             "mapsTiles": {
