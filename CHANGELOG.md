@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.95.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.3...csa-inabox-v0.95.4) (2026-08-13)
+
+
+### Bug Fixes
+
+* **release:** approve the withheld runs instead of faking their results ([#3387](https://github.com/fgarofalo56/csa-inabox/issues/3387)) ([7a383a7](https://github.com/fgarofalo56/csa-inabox/commit/7a383a71a5e8352006f22cd995197a48cdd0c96d))
+
 ## [0.95.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.2...csa-inabox-v0.95.3) (2026-08-13)
 
 
