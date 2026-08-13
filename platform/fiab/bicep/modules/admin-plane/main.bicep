@@ -5581,6 +5581,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // The name is fixed by copilot-evaluator-job.bicep, so the id is
             // deterministic.
             { name: 'LOOM_COPILOT_EVALUATOR_JOB_ID', value: copilotEvaluatorActive ? resourceId('Microsoft.App/jobs', 'loom-copilot-evaluator') : '' }
+            // #3321 — these two lived ONLY in the ELSE branch of this ternary
+            // (the !empty(effectiveMsalClientId) FALSE path), so an estate with a
+            // working MSAL client id — i.e. every correctly-configured one — never
+            // received them. Measured live: loomIqMcpEnabled was passed TRUE and
+            // LOOM_IQ_MCP_ENABLED was absent from all 435 console env vars, while
+            // its neighbours from the TRUE branch were present.
+            { name: 'LOOM_IQ_MCP_ENABLED', value: string(loomIqMcpEnabled) }
+            { name: 'LOOM_PIPELINE_CI_ENABLED', value: string(loomPipelineCiEnabled) }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_UAMI_PRINCIPAL_ID', value: identity.outputs.uamiConsolePrincipalId }
