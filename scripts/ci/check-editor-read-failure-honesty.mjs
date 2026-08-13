@@ -28,6 +28,25 @@
  *
  * SCOPE: apps/fiab-console/{lib,app}/**\/*.tsx  (client surfaces)
  *
+ * SCOPE LIMIT — READ THIS BEFORE TRUSTING THIS GUARD'S "OK" (#3281)
+ *   RULE 2 judges `useQuery` consumers. Measured 2026-08-12: 34 surfaces use
+ *   useQuery and 506 use the `useState` + `useEffect` + `clientFetch` shape,
+ *   which RULE 2 never looks at. So this file's success line — "4058 files
+ *   scanned … none new" — describes ~6% of the surfaces that can commit this
+ *   defect, and the scan count reads like coverage it does not have.
+ *
+ *   The other 506 are judged by the SIBLING guard
+ *   `scripts/ci/check-empty-claim-read-evidence.mjs`, which parses the render
+ *   structurally and asks whether an empty-state claim is reachable on a path
+ *   where the read failed. Neither guard subsumes the other: this one is about
+ *   the QUERY having no error branch at all; that one is about the CLAIM being
+ *   reachable after a failure even when an error bar exists elsewhere on the
+ *   page (the live /catalog/domains bug had both an honest banner and a grid
+ *   asserting "no business domains defined", three DOM nodes apart).
+ *
+ *   Do not widen RULE 2 by regex. That was tried and produced only false
+ *   positives; the post-mortem is in `check-loaded-flag-honesty.mjs`.
+ *
  * WHAT IT FORBIDS
  *   RULE 1 (data loss). In a file that PATCHes item state back to
  *          /api/{items,cosmos-items}/…, a try/catch whose try reads item state
