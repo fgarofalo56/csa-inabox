@@ -192,7 +192,7 @@ jobs:
             echo "  post-verify: mergeStateStatus=${state}"
             if [ "$state" = "BLOCKED" ]; then
               failing=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup \
-                --jq '[.statusCheckRollup[]? | select((.conclusion // .state) as $c | $c=="FAILURE" or $c=="ERROR" or $c=="CANCELLED") | .name // .context] | join(", ")')
+                --jq '[.statusCheckRollup[]? | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED")) | .name // .context] | join(", ")')
               if [ -n "$failing" ]; then
                 echo "::warning::Release PR #${num} is BLOCKED with failing checks: ${failing}. That is a real failure, not list drift."
               else
