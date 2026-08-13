@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "7089170870471597325"
+      "templateHash": "6823444445579660690"
     }
   },
   "definitions": {
@@ -2554,7 +2554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "17070917071617890791"
+              "templateHash": "17777700274855714145"
             }
           },
           "definitions": {
@@ -16652,7 +16652,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "11808116100646806135"
+                      "templateHash": "3614515216360489680"
                     }
                   },
                   "parameters": {
@@ -16810,7 +16810,7 @@
                         "workloadProfileName": "[if(contains(parameters('apps')[copyIndex()], 'workloadProfile'), parameters('apps')[copyIndex()].workloadProfile, 'Consumption')]",
                         "configuration": {
                           "activeRevisionsMode": "[if(and(contains(parameters('apps')[copyIndex()], 'multiRevision'), parameters('apps')[copyIndex()].multiRevision), 'Multiple', 'Single')]",
-                          "ingress": "[if(contains(parameters('apps')[copyIndex()], 'ingressPort'), createObject('external', if(contains(parameters('apps')[copyIndex()], 'external'), parameters('apps')[copyIndex()].external, false()), 'targetPort', parameters('apps')[copyIndex()].ingressPort, 'transport', 'http', 'allowInsecure', false(), 'traffic', createArray(createObject('latestRevision', true(), 'weight', 100))), null())]",
+                          "ingress": "[if(contains(parameters('apps')[copyIndex()], 'ingressPort'), union(createObject('external', if(contains(parameters('apps')[copyIndex()], 'external'), parameters('apps')[copyIndex()].external, false()), 'targetPort', parameters('apps')[copyIndex()].ingressPort, 'transport', 'http', 'allowInsecure', false(), 'traffic', createArray(createObject('latestRevision', true(), 'weight', 100))), if(and(contains(parameters('apps')[copyIndex()], 'multiRevision'), parameters('apps')[copyIndex()].multiRevision), createObject('stickySessions', createObject('affinity', 'none')), createObject())), null())]",
                           "registries": [
                             {
                               "server": "[parameters('acrLoginServer')]",
