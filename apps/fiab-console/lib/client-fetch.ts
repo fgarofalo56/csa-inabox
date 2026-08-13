@@ -29,7 +29,7 @@
  * Pure transport — cloud-invariant, no Fabric/Azure host knowledge here.
  */
 
-import { reauthDestination, WELCOME_PATH } from '@/lib/auth/returning-user';
+import { reauthDestination, isPreAuthSurface } from '@/lib/auth/returning-user';
 import type { ValidateApiPath } from '@/lib/api-routes.generated';
 
 /** Default client-side per-request timeout (ms). Raised from the original 6s to
@@ -296,18 +296,21 @@ let _reauthInFlight = false;
  *     Entra before the Request-access affordance ever rendered.
  *
  * Guarded two ways: `_reauthInFlight` so concurrent 401s from a page's parallel
- * fetches don't stack multiple navigations; and a same-surface check so a 401
- * fired FROM the /welcome landing (e.g. its own shell /api/me probe) never
- * re-navigates to /welcome and loops — on the landing surface the reauth is a
- * no-op and the page just renders its Sign-in / Request-access choice.
+ * fetches don't stack multiple navigations; and a PRE-AUTH SURFACE check so a
+ * 401 fired FROM a page whose whole job is to end an unauthenticated journey
+ * never navigates away from it. That set is `/welcome` (bouncing it to itself
+ * loops) and `/auth/blocked` (the #3334 circuit breaker's terminal page —
+ * navigating to /auth/sign-in from there trips the breaker again and lands
+ * straight back, a visible redirect ping-pong). On either surface the reauth is
+ * a no-op and the page just renders its choice in place.
  */
 function triggerTopLevelReauth(): void {
   if (typeof window === 'undefined') return;
   if (_reauthInFlight) return;
   const dest = reauthDestination(document.cookie);
-  // Already on the pre-auth landing surface → do nothing (break the redirect
-  // loop; the page renders Sign in + Request access in place).
-  if (window.location.pathname === WELCOME_PATH) return;
+  // Already on a terminal pre-auth surface → do nothing (break the redirect
+  // loop; the page renders its own guidance and actions in place).
+  if (isPreAuthSurface(window.location.pathname)) return;
   _reauthInFlight = true;
   window.location.assign(dest);
 }

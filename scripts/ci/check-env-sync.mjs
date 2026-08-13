@@ -483,6 +483,15 @@ const ALLOWLIST = new Set([
   'LOOM_SKILL_LEARNER_MIN_SAMPLES', // CTS-11 opt-in tuning knob: min recurring prompts on a pane before the skill self-evolution learner proposes a SUGGESTED skill (default 5 in lib/azure/skill-learner.ts); admin-reviewed, never auto-published. (LOOM_SKILL_LEARNER_ENABLED matched by /_ENABLED$/, LOOM_SKILL_LEARNER_MAX_* by /_MAX_.../)
   'LOOM_AGENT_MEMORY_RETENTION_DAYS', // B-N14d opt-in tuning knob: default lifetime of an agent memory (default 180 in lib/copilot/agent-memory-core.ts; 0 = keep forever). Read via an injected `env` param, never a gate — unset just uses the code default. (LOOM_AGENT_MEMORY_MAX_RETENTION_DAYS matched by /_MAX_.../; LOOM_AGENT_MEMORY_CAP / _TOPK are read dynamically by the AIF-14 client.)
   'LOOM_AGENT_MEMORY_CAP',          // B-N14d/AIF-14 tuning knob: per-scope memory count cap (default 200); unset = code default, never a gate
+  // #3334 sign-in circuit breaker — the counting WINDOW, in seconds. A pure
+  // tuning knob with a code default (600, mirroring AUTHFLOW_MAX_AGE_SECS) in
+  // lib/auth/auth-breaker.ts, and NOT a gate: the breaker is default-ON and
+  // fully functional with all three of its vars unset. Emitting it from bicep
+  // would put a value the deploy has no opinion about into the app env, where
+  // a bicep re-render could then drift it. The siblings are already matched by
+  // the patterns above — LOOM_AUTH_BREAKER_ENABLED by /_ENABLED$/ and
+  // LOOM_AUTH_BREAKER_MAX_ATTEMPTS by /_MAX_[A-Z0-9_]+$/.
+  'LOOM_AUTH_BREAKER_WINDOW_SECS',
   // Same family, same rationale — surfaced by the comment-blindness fix, which
   // found it "emitted" by landing-zone/cosmos.bicep:295, a comment explaining
   // what the cap DOES. lib/azure/agent-memory-client.ts:26 reads it as

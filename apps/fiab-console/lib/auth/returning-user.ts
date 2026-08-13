@@ -33,6 +33,37 @@ export const RETURNING_USER_MAX_AGE_SECS = 60 * 60 * 24 * 180;
 /** Pre-auth landing surface: renders Sign in + Request access, never auto-AAD. */
 export const WELCOME_PATH = '/welcome';
 
+/** Terminal surface of the sign-in circuit breaker (#3334). Never auto-AAD. */
+export const SIGN_IN_BLOCKED_PATH = '/auth/blocked';
+
+/**
+ * Surfaces on which a top-level reauth navigation must be a NO-OP.
+ *
+ * These are the pages whose entire job is to be the END of an unauthenticated
+ * journey. Navigating away from one on a 401 re-enters the loop it just left:
+ *
+ *   - `/welcome` — the pre-auth landing. Bouncing it to itself loops.
+ *   - `/auth/blocked` — the circuit breaker's terminal page. It is reached
+ *     BECAUSE sign-in is looping; a 401 from anything the app shell mounts
+ *     around it would navigate to /auth/sign-in, which would trip the breaker
+ *     again and redirect straight back here. Bounded, but still a redirect
+ *     ping-pong the user would watch forever. So: no-op.
+ *
+ * Compared with `startsWith` so a query string or trailing slash cannot smuggle
+ * a surface out of the set.
+ */
+const PRE_AUTH_SURFACES = [WELCOME_PATH, SIGN_IN_BLOCKED_PATH] as const;
+
+/**
+ * True when `pathname` is a surface that must never trigger a top-level reauth
+ * navigation. Pure + total; a null/empty pathname is not a pre-auth surface.
+ */
+export function isPreAuthSurface(pathname: string | null | undefined): boolean {
+  if (!pathname) return false;
+  return PRE_AUTH_SURFACES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+
 /** BFF sign-in initiator (302s to AAD) — the seamless SSO destination. */
 export const SIGN_IN_PATH = '/auth/sign-in';
 
