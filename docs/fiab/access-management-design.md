@@ -1,7 +1,8 @@
 # Access management — design
 
-> **Status:** design proposal. Nothing in §3 onward is built yet.
-> **Author:** research + design pass, 2026-08-13.
+> **Status:** design proposal. Nothing in §4 onward is built yet.
+> **Author:** research + design pass, 2026-08-13. Revised after review — see
+> "Revision note" below.
 > **Scope:** how an admin grants, scopes, pauses, and revokes access to CSA Loom
 > — for users inside the tenant, guests from another Entra tenant, and
 > unmanaged/social identities — in Commercial, GCC, GCC-High, and IL5.
@@ -10,6 +11,16 @@
 > *this* deployment is labelled **MEASURED** (I ran the read) or **INFERRED**
 > (I read the code path but did not execute it). Read-only inspection only —
 > no tenant object was created, modified, or deleted to produce this document.
+>
+> **Revision note (post-review).** The first draft asserted that the `groups`
+> claim was unbounded in the session cookie. **That was wrong.** It was measured
+> against a checkout predating `#3331`; on current `main`,
+> `encodeSessionCookie` re-encodes without `groups` above
+> `MAX_COOKIE_VALUE_BYTES = 3500` and `encodeSessionCookieRaw` is unexported, so
+> all four cookie writers are capped. The claim is struck. This document has been
+> rebased onto current `main` and every remaining finding re-verified there.
+> The P0 in §3 was real and is now **fixed** (#3363); the half that remains open
+> is that the deploy still provisions no onboarding group.
 
 ---
 
@@ -120,8 +131,29 @@ The operator's ask, distilled:
 
 Three of those four already have working machinery (§2). The gap is not "build
 onboarding" — it is **(c) grant Loom permissions**, plus **(d) revoke/pause**,
-plus the fact that the pieces that do exist are not a coherent flow and one of
-them is dangerously wired (§3).
+plus the fact that the pieces that do exist are not a coherent flow.
+
+> ### The single most actionable finding in this document
+>
+> **The revoke / pause / offboard backend already exists, fully implemented and
+> unit-tested, and nobody wired a button to it.**
+>
+> `app/api/admin/directory-users/[id]/lifecycle/route.ts` implements pause
+> (`accountEnabled:false`), resume, and delete against Microsoft Graph. It has
+> tests. **MEASURED on `origin/main`: it has zero UI callers** —
+> `git grep -l directory-users -- '**/*.tsx'` returns no matches. The only
+> reference outside its own directory is a generated type file.
+>
+> The operator's ask was largely *"I have no way to do this."* For pause and
+> revoke specifically, the honest answer is: **you do — it was built and never
+> surfaced.** §5.2 is a wiring job, not a build job, and it is the fastest path
+> to answering half the original request.
+>
+> The same is true, differently, of provisioning: **invite-as-guest and
+> create-tenant-user already work and are already wired to buttons** (#2758). So
+> the belief that "nothing happens on approve" is out of date. What is genuinely
+> missing is only the **grant** step and the **admission tier** — a much smaller
+> problem than it looked.
 
 ---
 
@@ -155,19 +187,17 @@ null                ← everyone else
 Membership is read from the `loom_session` cookie's `groups` claim (AES-256-GCM,
 8h, claims-only — no access token, because Front Door drops `Set-Cookie` past
 ~4 KB), with a Microsoft Graph `transitiveMembers` fallback used when that claim
-is empty/absent — the >200-group overage case. `#3175` populates the claim
-(`app/auth/callback/route.ts:277-283` + `groupMembershipClaims=SecurityGroup` on
-the app registration).
+is empty/absent. `#3175` populates the claim
+(`app/auth/callback/route.ts` + `groupMembershipClaims=SecurityGroup` on the app
+registration); `#3331` bounds it — `encodeSessionCookie` re-encodes **without**
+`groups` when the payload would exceed `MAX_COOKIE_VALUE_BYTES = 3500`
+(`session.ts:52`, `:154-160`), and `encodeSessionCookieRaw` is not exported, so
+all four cookie writers go through the cap. A group-heavy user therefore
+degrades to the Graph fallback rather than failing to sign in.
 
-> **Correction to a premise I was given.** My brief stated that `#3331` bounds
-> the cookie. **MEASURED: it does not, on `main` at `ee33f9c9`.** There is no
-> size cap, no `slice()`, and no group-count limit anywhere on `claims.groups` —
-> the array is written verbatim into the cookie, and the only length reference in
-> the callback is a *log line*. A user in ~150 groups is **below** Entra's ~200
-> overage threshold, so the inline claim is emitted, ~150 × 36 chars ≈ 5.4 KB —
-> past Front Door's header limit. The `Set-Cookie` is silently dropped and **they
-> cannot sign in at all**. This is the exact failure mode `session.ts:6-11`
-> documents for the access token. Tracked as a companion defect in §3.2.
+**So the fallback is not a rare >200-group edge case — it is the normal path for
+anyone in more than ~70 groups.** That makes its correctness load-bearing for
+this design, and it is broken in two ways (§3.2 B and C).
 
 **Three structural observations that drive the whole design:**
 
@@ -178,13 +208,13 @@ the app registration).
 2. **Every rung of the ladder is an Entra security group.** That is the right
    primitive and the design below keeps it — it means both the claim path and
    the Graph-fallback path already work, and nothing new has to be invented.
-3. **But the fallback only covers *domain* tiers.** MEASURED: `isTenantAdmin`
-   (`feature-gate.ts:66-72`) and `checkCapability` (`:85`) read `claims.groups`
-   **directly, with no Graph fallback**. So a group-overage user who genuinely
-   *is* in `LOOM_TENANT_ADMIN_GROUP_ID` is **denied tenant admin**, and their
-   only way in is `LOOM_TENANT_ADMIN_OID`. Any design that keys on group
-   membership must work on **both** paths — today the most important one does
-   not. §3.2.
+3. **But the fallback only covers *domain* tiers.** MEASURED on `origin/main`:
+   `isTenantAdmin` (`feature-gate.ts:68`) and `checkCapability` (`:85`) read
+   `claims.groups` **directly, with no Graph fallback**. Since `#3331` drops the
+   claim entirely for a group-heavy user, such a user who genuinely *is* in
+   `LOOM_TENANT_ADMIN_GROUP_ID` is **denied tenant admin**, and their only way in
+   is `LOOM_TENANT_ADMIN_OID`. Any design that keys on group membership must work
+   on **both** paths — today the most important one does not. §3.2 B.
 
 `/welcome` is the pre-auth landing surface that offers "Request access" to
 people who cannot authenticate at all (`lib/auth/returning-user.ts`).
@@ -212,73 +242,79 @@ lives at `app/api/admin/access-requests/`. Worth renaming; not load-bearing.
 
 `app/api/admin/directory-users/[id]/lifecycle/route.ts` implements pause /
 resume / delete against Graph, with tests — and has **zero UI callers**
-(measured: the only reference outside its own directory is a generated type
+(MEASURED on `origin/main`: `git grep -l directory-users -- '**/*.tsx'` returns
+no matches; the only reference outside its own directory is a generated type
 file). The revoke/pause backend the operator wants **already exists**; nobody
-wired a button to it.
+wired a button to it. See the callout in §1 — this is the highest-leverage item
+in the whole document.
 
 ---
 
-## §3 — P0 defect found during this research
+## §3 — P0 found during this research — **FIXED in #3363, half of it still open**
 
-**Approving an access request can silently make the requester a Loom tenant
+**Approving an access request could silently make the requester a Loom tenant
 admin.**
 
-The chain, each link measured except the last:
+The chain as it stood when this research began:
 
-1. `_lib/provision.ts` → `onboardingGroupId()` returns
+1. `_lib/provision.ts` → `onboardingGroupId()` returned
    `LOOM_ONBOARDING_ENTRA_GROUP_ID || LOOM_TENANT_ADMIN_GROUP_ID`.
-2. **MEASURED:** `LOOM_ONBOARDING_ENTRA_GROUP_ID` is not set on the live
-   `loom-console` Container App, and `grep` across `platform/` and `deploy/`
-   finds **zero** references — no bicep module, param file, or workflow ever
-   sets it. It is read at runtime and written nowhere.
-3. **MEASURED:** `LOOM_TENANT_ADMIN_GROUP_ID` *is* set on the live app. So the
-   fallback resolves to the tenant-admin group.
+2. **MEASURED:** `LOOM_ONBOARDING_ENTRA_GROUP_ID` was not set on the live
+   `loom-console` Container App, and `grep` across `platform/fiab/bicep` and
+   `.github/workflows` found **zero** references — no bicep module, param file,
+   or workflow ever set it. Read at runtime, written nowhere.
+3. **MEASURED:** `LOOM_TENANT_ADMIN_GROUP_ID` *was* set. So the fallback
+   resolved to the tenant-admin group.
 4. **MEASURED:** the Console UAMI holds `GroupMember.ReadWrite.All`, so
-   `addPrincipalToGroup` will succeed rather than 403.
+   `addPrincipalToGroup` would succeed rather than 403.
 5. **MEASURED:** `isTenantAdmin()` keys on membership of
    `LOOM_TENANT_ADMIN_GROUP_ID`.
 6. **INFERRED** (code path read; not executed — that would mutate the tenant):
-   clicking **Invite as guest** or **Create tenant user** adds the new principal
-   to the tenant-admin group, making them a Loom tenant admin in one click.
+   clicking **Invite as guest** or **Create tenant user** would add the new
+   principal to the tenant-admin group, making them a Loom tenant admin in one
+   click.
 
-The route's own comment says the group add is "so they inherit its access" — the
-intent was clearly a low-privilege onboarding group. The fallback inverts it.
+The route's own comment said the group add was "so they inherit its access" —
+the intent was clearly a low-privilege onboarding group. The fallback inverted it.
 
-**Blast radius today: nil.** MEASURED — the tenant-admin group currently has 3
-members and **0 guests**, and no `userType: Guest` object is in it. This is a
-latent defect, not an active compromise.
+**Blast radius: nil.** MEASURED at the time — the tenant-admin group had 3
+members and **0 guests**, and no `userType: Guest` object was in it. Latent, not
+an active compromise.
 
-**Aggravating factors:**
+### 3.1 What is fixed, and what is not
 
-- The five Graph **write** helpers (`inviteExternalGuest`, `createTenantUser`,
-  `addPrincipalToGroup`, `setUserAccountEnabled`, `deleteTenantUser`) do **not**
-  call `assertEnabled()`. All seven `assertEnabled()` call sites are read paths.
-  The identity write surface has **no env kill-switch**, unlike every other
-  Graph write client in the codebase.
-- `grant-identity-graph-approles.sh` grants the three write roles whenever
-  `LOOM_ACCESS_GOV_DIRECTORY_WRITE` is unset (it defaults to `true`), and the
-  post-deploy bootstrap workflow never sets it — yet the workflow step's own
-  comment documents only the three *read* roles. The high-privilege grant is
-  invisible at the workflow layer.
+**FIXED — [#3363](https://github.com/fgarofalo56/csa-inabox/pull/3363), merged
+2026-08-13, live in the running image.** `onboardingGroupId()` now fails closed:
+it returns `undefined` when `LOOM_ONBOARDING_ENTRA_GROUP_ID` is unset and logs a
+warning naming the escalation it is refusing. Verified on `origin/main` — there
+is no longer any path from an approval to the tenant-admin group.
 
-**Fix (immediate, ahead of everything else in this doc):** make
-`onboardingGroupId()` fail closed — return `undefined` when
-`LOOM_ONBOARDING_ENTRA_GROUP_ID` is unset, never fall back to the admin group —
-and have the deploy create and wire a real `Loom Users` group (§7).
+**STILL OPEN — and it is the half that makes the feature work.** MEASURED on
+current `origin/main`: `LOOM_ONBOARDING_ENTRA_GROUP_ID` is *still* set by no
+bicep module, param file, or workflow. So on every deployment the approval path
+now provisions the principal **with no Entra group grant at all** — safe, but
+inert. The requester is created and can sign in (the app requires no assignment,
+§0.1) with **no Loom role**.
+
+That is the correct failure direction, and it is exactly the gap this design
+closes: **the deploy must create a `Loom Users` group and wire the env var**
+(§7). Until it does, "approve" still does not grant anything — which is the
+operator's original complaint, now for a different reason.
 
 ### 3.2 Companion defects found while researching this
 
 Each is independently tracked; each blocks or degrades the design above.
+Re-verified against `origin/main` after the rebase.
 
 | # | Defect | Impact on this design | Evidence |
 |---|---|---|---|
-| A | **`groups` claim is unbounded in the session cookie.** No cap, no truncation. ~150 groups ≈ 5.4 KB > Front Door's header limit → `Set-Cookie` dropped → **cannot sign in at all**. | The design keys authorization on group membership. A user in many groups cannot authenticate. | No cap anywhere in `session.ts` / `callback/route.ts`; only a length **log** at `callback/route.ts:417` |
-| B | **Graph overage fallback covers only domain tiers.** `isTenantAdmin` and `checkCapability` read the claim with no fallback. | A >200-group tenant admin is locked out of admin surfaces unless `LOOM_TENANT_ADMIN_OID` is set. | `feature-gate.ts:66-72`, `:85` vs `domain-role.ts:132-141` |
-| C | **Two divergent `graphBase()` implementations.** `msal.ts:381-386` switches on `AZURE_CLOUD`, ignores `LOOM_GRAPH_BASE`, and has **no IL5/DoD branch**. It is the one `userIsTransitiveGroupMember` uses. | **On IL5/DoD the group-membership fallback calls the wrong Graph host and — given the fail-closed posture — silently answers `false`.** Cloud-parity defect (§10). | `msal.ts:381-386` vs `graph-identity-client.ts:67`; consumer at `workspace-roles-client.ts:498` |
-| D | **`loomIdentityPickerEnabled` is `false` in every shipped param file** — env-gated in `commercial-full`/`tenant-dmlz`, hard-`false` in `commercial.bicepparam:137`, absent (→ module default `false`) in `gcc`/`gcc-high`/`il5`. | `<IdentityPicker>` — which the wizard depends on — renders its 503 "not configured" gate on a **stock deploy in all four clouds**. | grep across `platform/fiab/bicep/params/` |
-| E | **The identity WRITE surface has no env kill-switch.** All 7 `assertEnabled()` call sites are read paths. | No way to disable directory writes without revoking Graph consent. | `graph-identity-client.ts` — 5 write helpers, 0 gated |
-| F | **`directory-users/[id]/lifecycle` has zero UI callers.** Pause/resume/delete are built and tested but unreachable. | The revoke/pause backend already exists; §5.2 is wiring, not building. | only reference outside its dir is a generated type |
-| G | **Stale "Loom does not modify tenant group membership on your behalf"** in the Approve-only response and in `docs/fiab/admin/access-requests.md`. | Factually contradicted by the sibling routes since #2758. | `app/api/admin/access-requests/[id]/route.ts:43` |
+| A | **The deploy never provisions an onboarding group.** `LOOM_ONBOARDING_ENTRA_GROUP_ID` referenced by zero bicep modules, param files, or workflows. | Post-#3363, approvals grant **no role at all**. The feature is safe but inert. | `git grep` on `origin/main` over `platform/fiab/bicep` + `.github/workflows` → 0 hits |
+| B | **Graph overage fallback covers only domain tiers.** `isTenantAdmin` and `checkCapability` read `claims.groups` with no fallback — and #3331 legitimately *drops* that claim for group-heavy users. | A group-heavy tenant admin is locked out of admin surfaces unless `LOOM_TENANT_ADMIN_OID` is set. | `feature-gate.ts:68`, `:85` vs `domain-role.ts:132-141` |
+| C | **Two divergent `graphBase()` implementations.** `msal.ts` switches on `AZURE_CLOUD`, ignores `LOOM_GRAPH_BASE`, and has **only** an `azureusgovernment → graph.microsoft.us` branch — **no `dod-graph.microsoft.us`**. It is the one `userIsTransitiveGroupMember` uses. | **On IL5/DoD the group-membership fallback calls the L4 host and, fail-closed, silently answers `false`.** Cloud-parity defect (§10). | `msal.ts` `graphBase()` vs `graph-identity-client.ts:67`; consumer at `workspace-roles-client.ts:498` |
+| D | **`loomIdentityPickerEnabled` is off in every shipped param file** — env-gated defaulting `'false'` in `commercial-full`/`tenant-dmlz`, hard-`false` in `commercial`, **absent** (→ module default `false`) in `gcc`/`gcc-high`/`il5`. | `<IdentityPicker>` — which the wizard depends on — renders its 503 gate on a **stock deploy in all four clouds**. | `git grep` over `platform/fiab/bicep/params/` on `origin/main` |
+| E | **The identity WRITE surface has no env kill-switch.** All 7 `assertEnabled()` call sites are read paths; the 5 write helpers are ungated. | No way to disable directory writes without revoking Graph consent. | `graph-identity-client.ts` — 5 write helpers, 0 gated |
+| F | **`directory-users/[id]/lifecycle` has zero UI callers.** Pause / resume / delete are built **and tested** but unreachable from the product. | The revoke/pause backend the operator asked for **already exists**; §5.2 is wiring, not building. See the callout in §1. | `git grep -l directory-users -- '**/*.tsx'` on `origin/main` → no matches |
+| G | **Stale "Loom does not modify tenant group membership on your behalf"** in the Approve-only response and in `docs/fiab/admin/access-requests.md`. | Factually contradicted by the sibling routes since #2758. | `app/api/admin/access-requests/[id]/route.ts` |
 
 Defect **C** is the one that most threatens the `cloud-parity.md` claim: without
 it fixed, group-based authorization is quietly broken in IL5/DoD for exactly the
@@ -589,7 +625,7 @@ so it is re-runnable and idempotent):
 
 | Param | Today (MEASURED) | Required |
 |---|---|---|
-| `loomIdentityPickerEnabled` | `false` in **all six** param files — hard-`false` in `commercial.bicepparam:137` | **`true` in all clouds.** The wizard's identity picker is unusable otherwise (defect D). Note siblings `loomWorkspaceM365LinkEnabled` and `loomSharepointShortcutsEnabled` already default `true` — the picker is the inconsistent one. |
+| `loomIdentityPickerEnabled` | off in **all six** param files — env-gated defaulting `'false'` in `commercial-full`/`tenant-dmlz`, hard-`false` in `commercial`, absent in `gcc`/`gcc-high`/`il5` | **`true` in all clouds.** The wizard's identity picker is unusable otherwise (defect D). Note siblings `loomWorkspaceM365LinkEnabled` and `loomSharepointShortcutsEnabled` already default `true` — the picker is the inconsistent one. |
 | `loomDomainGroupProvisioningEnabled` | module default `false`, absent from every param file | `true` — the design provisions groups |
 
 `LOOM_GRAPH_BASE` already exists and is set unconditionally per boundary at
@@ -898,19 +934,21 @@ domain admin, or domain contributor.** Do not add it to
 
 | # | Work | Why this order |
 |---|---|---|
-| 0 | **Fix the §3 privilege-escalation fallback** | P0. Independent of everything else. |
-| 0b | **Fix defects A, B, C** (§3.2): bound the `groups` cookie, add the Graph fallback to `isTenantAdmin`/`checkCapability`, unify `graphBase()` | All three break group-based authorization — the primitive the whole design rests on. C is the Gov blocker. |
-| 1 | Deploy provisions the four groups + env wiring + flips `loomIdentityPickerEnabled` | Nothing below works without it |
-| 2 | App roles + `appRoleAssignmentRequired` + admission tier | The missing front door |
-| 3 | Session-revocation list | §9.6 — revocation is a lie without it |
-| 4 | Extract a shared `WizardShell` | Avoids a 21st hand-rolled wizard (§11.1) |
-| 5 | Requests wizard (§5.1) + in-product request path for authenticated-but-ungranted users | The operator's headline ask |
-| 6 | People tab (§5.2) | Mostly wiring the orphaned lifecycle route (defect F) |
-| 7 | Settings tab + gate registry (§5.3) | Includes the Gov `allowInvitesFrom` Fix-it |
-| 8 | Expiry reconciler | Time-bound access becomes real |
-| 9 | Gov receipts (GCC-High + IL5, via Actions) | `cloud-parity.md` — untested is not done |
-| 10 | ID Governance detection + optional handoff | Enhancement |
-| 11 | Correct the stale docs + instruction string (defect G) | Cheap, and they actively mislead |
+| ~~0~~ | ~~Fix the §3 privilege-escalation fallback~~ | ✅ **DONE — #3363**, merged and live. Fails closed. |
+| 1 | **Fix defects B and C** (§3.2): add the Graph fallback to `isTenantAdmin`/`checkCapability`; unify `graphBase()` onto `LOOM_GRAPH_BASE` with a DoD branch | Both break group-based authorization — the primitive the whole design rests on. Now urgent, because #3331 makes the fallback the *normal* path for group-heavy users, not an edge case. **C is the Gov blocker.** |
+| 2 | **Deploy provisions the `Loom Users` group + sets `LOOM_ONBOARDING_ENTRA_GROUP_ID`** (defect A) | The open half of the P0. Until this lands, approvals grant **nothing** — safe but inert. |
+| 3 | The remaining three role groups + env wiring + flip `loomIdentityPickerEnabled` on (defect D) | Nothing below works without it |
+| 4 | App roles + `appRoleAssignmentRequired` + admission tier | The missing front door |
+| 5 | Session-revocation list | §9.6 — revocation is a lie without it |
+| 6 | **Wire the People tab to the orphaned lifecycle route** (defect F) | Moved up: pure wiring, backend already built and tested, answers half the operator's ask on its own |
+| 7 | Extract a shared `WizardShell` | Avoids a 21st hand-rolled wizard (§11.1) |
+| 8 | Requests wizard (§5.1) + in-product request path for authenticated-but-ungranted users | The operator's headline ask |
+| 9 | Settings tab + gate registry (§5.3) | Includes the Gov `allowInvitesFrom` Fix-it |
+| 10 | Write-surface kill-switch (defect E) | Least-privilege hardening |
+| 11 | Expiry reconciler | Time-bound access becomes real |
+| 12 | Gov receipts (GCC-High + IL5, via Actions) | `cloud-parity.md` — untested is not done |
+| 13 | ID Governance detection + optional handoff | Enhancement |
+| 14 | Correct the stale docs + instruction string (defect G) | Cheap, and they actively mislead |
 
 ---
 
@@ -934,9 +972,18 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals(a
 # Which Graph app roles does the Console UAMI actually hold?
 az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/<uami-sp-id>/appRoleAssignments"
 
-# §3 regression guard — must print a group id once fixed
+# §3 defect A regression guard — must print a group id once fixed.
+# Until it does, approvals provision the principal with NO Loom role.
 az containerapp show -n loom-console -g <rg> \
   --query "properties.template.containers[0].env[?name=='LOOM_ONBOARDING_ENTRA_GROUP_ID'].value|[0]"
+
+# §3 P0 guard (#3363) — must return 0. Any hit means the escalating
+# fallback to the tenant-admin group has come back.
+grep -c "LOOM_TENANT_ADMIN_GROUP_ID" \
+  apps/fiab-console/app/api/admin/access-requests/_lib/provision.ts
+
+# Defect F guard — must return no .tsx once the People tab is wired.
+git grep -l "directory-users" -- 'apps/fiab-console/**/*.tsx'
 ```
 
 ## Appendix B — Related rules
