@@ -72,15 +72,42 @@
  * detector has stopped detecting, this guard fails even on a repo with nothing
  * disabled. `--self-test` runs the fuller mutation suite.
  *
+ * TWO HOSTS (the blind spot this guard cannot fix from one workflow)
+ * -----------------------------------------------------------------
+ * Landed as a single step in loom-guardrails.yml, this guard had one lane it
+ * could never watch: ITS OWN. Switch off loom-guardrails.yml in the UI — the
+ * exact one-click, no-commit act #3345 is about — and the guard stops running,
+ * so nothing reports that the guard stopped running. `gh run list` shows its
+ * old green runs and the repo reads clean. A control that cannot observe its
+ * own removal is the `guard_adoption_gap` shape.
+ *
+ * It also only executed on `pull_request` / `push`, so a lane switched off
+ * during a quiet stretch stayed invisible until someone happened to open a PR
+ * — and "the repo went quiet" is CORRELATED with the incident this exists for
+ * (deploy-integrity.md's 2026-08-05: machinery down, merges stalled).
+ *
+ * Both halves close with a SECOND host on a different trigger, so the two
+ * workflows observe each other:
+ *
+ *   loom-guardrails.yml  pull_request + push       → catches hygiene-guard off
+ *   hygiene-guard.yml    push(main) + weekly cron  → catches loom-guardrails off,
+ *                                                    and runs when nobody merges
+ *
+ * {@link analyzeHosts} makes that invariant mechanical rather than a comment:
+ * every run asserts this script is invoked from at least MIN_HOSTS DISTINCT
+ * workflow files, counting only `run:` bodies (a whole-line `#` comment naming
+ * the script does NOT count — a check a comment can satisfy is the defect being
+ * closed). Delete either wiring and the guard fails on the PR that does it.
+ *
  * MODES
- *   node scripts/ci/check-workflow-lane-states.mjs              # CHECK (control runs first)
+ *   node scripts/ci/check-workflow-lane-states.mjs              # CHECK (control + hosts run first)
  *   node scripts/ci/check-workflow-lane-states.mjs --self-test  # prove it can fail
  *   node scripts/ci/check-workflow-lane-states.mjs --list       # print every state, judge nothing
  *
  * Env: GH_TOKEN (needs `actions: read`), GITHUB_REPOSITORY (owner/repo).
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -88,6 +115,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ALLOWLIST_PATH = join(__dirname, 'workflow-lane-states-allowlist.json');
 const ALLOWLIST_REL = 'scripts/ci/workflow-lane-states-allowlist.json';
 const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
+const WORKFLOW_DIR = join(__dirname, '..', '..', '.github', 'workflows');
+
+/**
+ * This script's own filename, as a workflow would name it. Derived, not
+ * hard-coded: a renamed script must not silently stop finding its own wiring
+ * and report "0 hosts" as a mystery.
+ */
+const SELF_BASENAME = 'check-workflow-lane-states.mjs';
+
+/**
+ * Two, because one host cannot observe its own disablement (see TWO HOSTS in
+ * the header). This is a floor, not a target — more hosts is fine.
+ */
+const MIN_HOSTS = 2;
 
 /**
  * A reason has to be a REASON. 60 characters is not a style preference: it is
@@ -233,6 +274,92 @@ export function analyze({ workflows, totalCount, allowlist, now }) {
   return { violations, nonActive, examined: workflows.length };
 }
 
+// ── multi-homing: this guard must be invoked from >= 2 workflow files ───────
+
+/**
+ * Count the DISTINCT workflow files that actually invoke this script.
+ *
+ * PURE — takes the already-read files so the self-test can drive it with
+ * synthetic content and prove each branch.
+ *
+ * Whole-line `#` comments are stripped before matching, and this is the whole
+ * difficulty of writing the check honestly. The header of loom-guardrails.yml
+ * names this script in prose; the allowlist names it; another guard's
+ * remediation text could name it. If a bare substring search counted, then
+ *
+ *     # TODO: wire scripts/ci/check-workflow-lane-states.mjs into a second lane
+ *
+ * would satisfy the requirement, and a check a COMMENT can satisfy is exactly
+ * the defect class this file exists to close. Same convention as
+ * check-ci-guard-reachability.mjs, deliberately.
+ *
+ * @param {{files: Array<{name:string, text:string}>}} input
+ * @returns {{violations:Array<{kind:string,subject:string,why:string}>, hosts:string[]}}
+ */
+export function analyzeHosts({ files }) {
+  const violations = [];
+
+  if (!Array.isArray(files) || files.length === 0) {
+    return {
+      hosts: [],
+      violations: [
+        {
+          kind: 'hosts-unreadable',
+          subject: '.github/workflows',
+          why:
+            'no workflow files could be read, so the number of lanes invoking this guard is UNKNOWN. ' +
+            'Unknown fails closed here rather than being rendered as "wiring is fine" ' +
+            '(`unknown_as_negative_class`).',
+        },
+      ],
+    };
+  }
+
+  const hosts = [];
+  for (const f of files) {
+    const code = String(f.text || '')
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith('#'))
+      .join('\n');
+    if (code.includes(SELF_BASENAME)) hosts.push(f.name);
+  }
+
+  if (hosts.length < MIN_HOSTS) {
+    violations.push({
+      kind: 'single-host',
+      subject: hosts.length ? hosts.join(', ') : '(nothing)',
+      why:
+        `invoked from ${hosts.length} workflow file(s); at least ${MIN_HOSTS} are required. ` +
+        'A guard hosted in ONE workflow cannot detect that workflow being switched off — the one ' +
+        'click this guard exists to catch would silence the guard itself, and `gh run list` would ' +
+        'keep showing its last green run. Re-add the step to a second lane on a DIFFERENT trigger ' +
+        '(loom-guardrails.yml on pull_request/push, hygiene-guard.yml on push+cron) so the two ' +
+        'observe each other. Comments do not count; the step must be in a `run:` body.',
+    });
+  }
+
+  return { violations, hosts };
+}
+
+/** Read `.github/workflows/*.yml|*.yaml`. Errors are RETURNED, never swallowed. */
+function readWorkflowFiles(dir = WORKFLOW_DIR) {
+  let names;
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith('.yml') || n.endsWith('.yaml'));
+  } catch (e) {
+    return { error: `cannot read ${dir} — ${String(e?.message || e).slice(0, 200)}` };
+  }
+  const files = [];
+  for (const n of names) {
+    try {
+      files.push({ name: n, text: readFileSync(join(dir, n), 'utf8') });
+    } catch (e) {
+      return { error: `cannot read ${n} — ${String(e?.message || e).slice(0, 200)}` };
+    }
+  }
+  return { files };
+}
+
 // ── the embedded known-true control ─────────────────────────────────────────
 
 /**
@@ -376,6 +503,55 @@ function selfTest() {
   });
   say(kinds(truncated.violations) === 'truncated', 'a half-read page FAILS rather than reporting the rest absent');
 
+  // ── multi-homing (TWO HOSTS) ──────────────────────────────────────────────
+  // Synthetic files, so these assertions hold whatever the real wiring is.
+  const RUN_STEP = `        run: node scripts/ci/${SELF_BASENAME}\n`;
+  const COMMENT_ONLY = `      # someday wire scripts/ci/${SELF_BASENAME} in here\n`;
+  const hostKinds = (files) =>
+    analyzeHosts({ files }).violations.map((v) => v.kind).sort().join(',') || '(none)';
+
+  say(
+    hostKinds([
+      { name: 'a.yml', text: RUN_STEP },
+      { name: 'b.yml', text: RUN_STEP },
+    ]) === '(none)',
+    'two lanes invoking the guard is SILENT',
+  );
+  say(
+    hostKinds([
+      { name: 'a.yml', text: RUN_STEP },
+      { name: 'b.yml', text: 'run: echo unrelated\n' },
+    ]) === 'single-host',
+    'ONE lane invoking the guard FAILS — a single host cannot observe its own disablement',
+  );
+  say(
+    hostKinds([
+      { name: 'a.yml', text: RUN_STEP },
+      { name: 'b.yml', text: COMMENT_ONLY },
+    ]) === 'single-host',
+    'a whole-line COMMENT naming the script does NOT count as a host',
+  );
+  say(
+    hostKinds([{ name: 'a.yml', text: 'run: echo nothing\n' }]) === 'single-host',
+    'zero lanes invoking the guard FAILS',
+  );
+  say(hostKinds([]) === 'hosts-unreadable', 'an unreadable workflow dir FAILS rather than reading as wired');
+
+  // The wiring as it actually stands in this checkout — the one non-synthetic
+  // assertion here, because "the function works" and "the repo is wired" are
+  // different claims and only the second one keeps the guard alive.
+  const realWf = readWorkflowFiles();
+  if (realWf.error) {
+    say(false, `the real .github/workflows is readable — ${realWf.error}`);
+  } else {
+    const real = analyzeHosts({ files: realWf.files });
+    say(
+      real.violations.length === 0,
+      `this checkout wires the guard into ${real.hosts.length} lane(s) [${real.hosts.join(', ') || 'none'}] ` +
+        `— needs >= ${MIN_HOSTS}`,
+    );
+  }
+
   console.log(ok ? '[workflow-lane-states] self-test OK' : '[workflow-lane-states] self-test FAILED');
   return ok ? 0 : 1;
 }
@@ -467,6 +643,28 @@ function main() {
     return 1;
   }
 
+  // Then the wiring. This is a local fs read — deterministic, no network — and
+  // it asserts the invariant that makes the guard observable: >= 2 distinct
+  // workflow files invoke it, on different triggers, so neither can be switched
+  // off without the other one going red. Checked BEFORE the API call so a
+  // collapsed-to-one-host wiring fails even on a token-less runner.
+  const wf = readWorkflowFiles();
+  if (wf.error) {
+    console.error(
+      `[workflow-lane-states] UNREADABLE — ${wf.error}\n\n` +
+        '  The workflow directory could not be read, so how many lanes invoke this guard is UNKNOWN.\n' +
+        '  Unknown fails closed. (Is the repo checked out in this job?)\n',
+    );
+    return 1;
+  }
+  const hostCheck = analyzeHosts({ files: wf.files });
+  if (hostCheck.violations.length > 0) {
+    for (const v of hostCheck.violations) {
+      console.error(`[workflow-lane-states] FAIL  ${v.subject}  [${v.kind}]\n      ${v.why}`);
+    }
+    return 1;
+  }
+
   const listed = fetchWorkflows();
   if (listed.error) {
     console.error(
@@ -522,7 +720,8 @@ function main() {
   console.log(
     `[workflow-lane-states] OK — ${examined} workflow(s) read (total_count=${listed.totalCount}), ` +
       `${declared} non-active and all ${declared === 1 ? 'is' : 'are'} declared in ${ALLOWLIST_REL}; ` +
-      'embedded control detected its known-true fixture.',
+      'embedded control detected its known-true fixture; ' +
+      `hosted by ${hostCheck.hosts.length} lane(s): ${hostCheck.hosts.join(', ')}.`,
   );
   if (declared > 0) {
     for (const w of nonActive) console.log(`    ${w.state}  ${w.path}`);
