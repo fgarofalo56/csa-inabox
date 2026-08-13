@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
 import { enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
-import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS, sessionSlidingEnabled } from '@/lib/auth/session';
+import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS, sessionSlidingEnabled, sessionGroupsDroppedForSize } from '@/lib/auth/session';
 import {
   authCsrfEnabled,
   AUTHFLOW_COOKIE_NAME,
@@ -404,6 +404,19 @@ export async function GET(req: NextRequest) {
       ? Math.floor(Date.now() / 1000) + MAX_AGE_SECS
       : Math.floor((result.expiresOn?.getTime() ?? Date.now() + 3600_000) / 1000);
     const cookieValue = encodeSessionCookie({ claims, exp });
+    // An oversized `groups` claim is dropped by encodeSessionCookie so the cookie
+    // stays deliverable (see lib/auth/session). Say so — the user silently moving
+    // from the inline-claim path to the Graph membership fallback is a real change
+    // in how their authorization resolves, and it must not be invisible.
+    const groupsDropped = sessionGroupsDroppedForSize({ claims, exp });
+    if (groupsDropped) {
+      console.warn(
+        '[auth/callback] groups claim dropped from the session cookie —',
+        claims.groups?.length ?? 0,
+        'entries would exceed the browser cookie limit; group authorization for this',
+        'user resolves via the Graph fallback (lib/auth/domain-role).',
+      );
+    }
     // Security bar: do NOT log the raw UPN (PII) — it lands in stdout / Log
     // Analytics on every login. Emit a non-reversible, deployment-stable
     // fingerprint instead (salted with SESSION_SECRET, which is guaranteed
