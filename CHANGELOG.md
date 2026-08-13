@@ -25,6 +25,21 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.94.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.4...csa-inabox-v0.94.0) (2026-08-13)
+
+
+### Features
+
+* **harness:** add the missing rework cycle — two sprints shipped 0 of 32 points ([#3314](https://github.com/fgarofalo56/csa-inabox/issues/3314)) ([06af36c](https://github.com/fgarofalo56/csa-inabox/commit/06af36cbd59bd4b479111e18e4c39c61109fd40c))
+* **readiness:** default-ON the three capability flags whose Graph grants ALREADY exist ([#3316](https://github.com/fgarofalo56/csa-inabox/issues/3316)) ([ce3d4b3](https://github.com/fgarofalo56/csa-inabox/commit/ce3d4b33a66f918f87a62a991aa09fa88d636134)), closes [#3133](https://github.com/fgarofalo56/csa-inabox/issues/3133)
+
+
+### Bug Fixes
+
+* **deploy:** keep_resources defaults TRUE on every lane — a full run reconciles, it does not destroy ([#3313](https://github.com/fgarofalo56/csa-inabox/issues/3313)) ([e49193a](https://github.com/fgarofalo56/csa-inabox/commit/e49193a4a1d842b40e57ba0baecd869279ebad54))
+* **readiness:** flip the TOP-LEVEL params too — the module-default fix was INERT ([#3319](https://github.com/fgarofalo56/csa-inabox/issues/3319)) ([2824cb3](https://github.com/fgarofalo56/csa-inabox/commit/2824cb3dd16d0792664b6e5da7a3c2b355d003a7))
+* **readiness:** MIP default-ON — the Graph consent it was waiting for is ALREADY granted ([#3320](https://github.com/fgarofalo56/csa-inabox/issues/3320)) ([9c4430f](https://github.com/fgarofalo56/csa-inabox/commit/9c4430f976d1f52ccc3a4396165e5a187e236d35)), closes [#3133](https://github.com/fgarofalo56/csa-inabox/issues/3133)
+
 ## [0.93.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.3...csa-inabox-v0.93.4) (2026-08-12)
 
 
