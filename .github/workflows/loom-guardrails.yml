@@ -222,6 +222,27 @@ jobs:
       - name: role-assignment-determinism (a re-run is a real no-op — #3039)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-role-assignment-determinism.mjs
+      # role-assignment-determinism says the grant can be RE-applied. This says
+      # the module can FIND the thing it is granting on. A `resource … existing`
+      # with no `scope:` resolves in the resource group the deployment is running
+      # in — so an app module that dereferences the DLZ lake goes looking for it
+      # in the ADMIN resource group and ARM fails the WHOLE deployment with
+      # ResourceNotFound. That is what took the Commercial estate down twice on
+      # 2026-08-13 (transform-runner, fixed by #3329). Six of the seven lake
+      # consumers already had the scoped-module fix and s3-gateway-lake-rbac.bicep
+      # documents the failure mode in prose — the lesson was written down, the
+      # guard was not. #3333.
+      #
+      # It compares the orchestrator's OWN statements: a value passed to a module
+      # invoked at `scope: resourceGroup(X)` that uses it as an unscoped
+      # `existing` name is that file declaring the resource lives in X; passing
+      # the same value to another module at a different scope that also
+      # dereferences it is the contradiction. Runs an embedded POSITIVE control
+      # (the real pre-#3329 code) and NEGATIVE control (the adopted fix) first,
+      # and refuses to report a pass if either stops holding.
+      - name: module-existing-scope (no module hunts a resource in the wrong RG — #3333)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-module-existing-scope.mjs
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-image-producer-coverage.mjs
