@@ -818,6 +818,19 @@ jobs:
       - name: 'acr-dataplane-ready self-test (403 != ready; DNS failure != refusal)'
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-acr-dataplane-ready.sh
+      # Its sibling — the TOKEN half of the same window — had 25 call sites and no
+      # test at all, so its retry budget was a number nobody could change safely.
+      # 6x10s was too small for the AAD->ACR token-exchange tail: run 31732873272
+      # exhausted it at +97s and rolled the estate back two commits, while sibling
+      # roll 31730667086 minted a token in ~3s off an identically-timed probe. The
+      # budget is now 12x15s, matching the 180s the network probe above already
+      # gets. This test pins BOTH defaults by counting the loop's real `az`
+      # invocations against a PATH stub — mutation-proved: restoring 6x10s fails
+      # two cases. A grep for `ATTEMPTS=12` would have passed on a file where the
+      # literal is present but unreachable.
+      - name: 'acr-login-retry self-test (the 180s token budget is measured, not grepped)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-acr-login-retry.sh
       # `set +e; CMD; RC=$?; set -e` is correct ONLY when -e was on to begin with.
       # These scripts start `set -uo pipefail` deliberately, because they implement
       # multi-valued exit contracts (0 ok / 3 absent / 4 unknown) that -e destroys.

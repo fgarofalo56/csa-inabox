@@ -620,7 +620,23 @@ jobs:
           #
           # acr-login-retry.sh retries ONLY that named transient set and fails
           # closed on anything else, so a real credential fault still goes red.
-          bash scripts/ci/acr-login-retry.sh --acr "${{ env.ACR_NAME }}" >/dev/null
+          #
+          # #3383 raised that helper's default budget from ~60s to ~180s, matching
+          # the --timeout-seconds 180 the network probe above already gets. Run
+          # 31732873272 exhausted the old 60s here and rolled the estate back two
+          # commits; sibling roll 31730667086 minted its token in ~3s off an
+          # identically-timed probe. Same code, same registry, same identity —
+          # only the tail differed. Budgeting the two halves of one propagation
+          # window asymmetrically, while documenting them as separate windows,
+          # was the defect.
+          #
+          # NOT `>/dev/null`. Silencing the success path is why the failing and
+          # succeeding runs looked like they took DIFFERENT code paths in the
+          # logs — the success emitted nothing between the probe and cosign, so
+          # the obvious (wrong) reading was that a regression had removed the
+          # login entirely. A step whose quiet path is indistinguishable from an
+          # absent step costs more in misdiagnosis than it saves in log noise.
+          bash scripts/ci/acr-login-retry.sh --acr "${{ env.ACR_NAME }}"
 
           # ── Resolve the manifest digest. Bounded retry; FAILS CLOSED.
           #
