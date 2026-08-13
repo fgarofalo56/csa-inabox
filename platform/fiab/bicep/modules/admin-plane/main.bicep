@@ -1148,12 +1148,47 @@ var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
 // only (an AKS boundary deploys this workload via the cluster GitOps path) and
 // only once the apps tier is on.
 var s3GatewayEnabled = true
-// `loomStorageGrantable`, not merely `!empty(loomStorageAccount)`: the gateway
-// module also creates a data-plane role assignment on the lake account, so it
-// can only stand up when that account is in THIS subscription. On a multi-sub
-// estate the dlz-attach pass deploys it beside the lake instead (see the
-// dlzAttachS3Gateway note above) — the console binding is unaffected either way.
-var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && loomStorageGrantable
+// BINDING vs GRANTING — the two were conflated here, and the conflation is what
+// left this capability with NO deploy path at all on the live estate (#3337).
+//
+// The old condition was `… && loomStorageGrantable`, i.e. "deploy the gateway
+// only when the lake is in THIS subscription". `loomStorageGrantable` answers a
+// question about RBAC, and it was being used to answer a question about
+// DEPLOYABILITY. Those are different:
+//
+//   * BINDING the gateway to the lake is cross-subscription SAFE. Look at what
+//     `s3-gateway-aca.bicep` actually dereferences: a Key Vault (passed by id,
+//     in this RG) and nothing else. `lakeStorageAccountName` reaches it as a
+//     PLAIN STRING that becomes a container env var. A string can never fail a
+//     deployment — this module has none of the unscoped `existing` shape that
+//     failed two Commercial deploys on 2026-08-13 (#3333, #3329, #3365).
+//   * GRANTING is genuinely impossible in-deployment when the lake is in another
+//     subscription, which is why `s3GatewayLakeRbac` below keeps
+//     `loomStorageGrantable` — that condition is now load-bearing rather than
+//     redundant, and the cross-sub case is owned by
+//     `main.bicep`'s `dlzLakeGrantPass` (data-plane/dlz-lake-grant-pass.bicep,
+//     #3336), which runs at `resourceGroup(<lakeSub>, <lakeRg>)`.
+//
+// MEASURED CONSEQUENCE of the conflation, live Commercial 2026-08-13: the lake
+// is bound (`loomStorageAccount = saloomdefault…`) but lives in the DLZ
+// SUBSCRIPTION, so `loomStorageAccountSameSub` is false, so `loomStorageGrantable`
+// is false, so this path closed — while `main.bicep`'s `dlzAttachS3Gateway`
+// closed too because it requires `topology == 'dlz-attach'` and this estate is
+// `tenant`. BOTH paths shut: no `loom-s3-gateway` container app existed while 28
+// other Loom apps ran.
+//
+// WHAT REPLACES IT. `!empty(loomStorageAccount)` is the deploy condition (a proxy
+// with no account to front would be a wired URL that 404s every bucket —
+// no-vaporware), AND `loomStorageWillBeGranted` — the grant must have an OWNER,
+// here or in the cross-sub pass. This is NOT a softening: shipping the gateway
+// bound-but-ungranted would be a wired URL that 403s every bucket, which is worse
+// than the honest block, so the gateway still does not deploy when nobody can
+// grant. It then honest-gates with a Fix-it naming the exact role and scope
+// (svc-s3-gateway in the gate registry).
+//
+// On tenant topology with NO lake at all, `loomStorageAccount` is empty and the
+// gateway is still deployed by the dlz-attach pass when a DLZ later attaches.
+var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && !empty(loomStorageAccount) && loomStorageWillBeGranted
 
 // ── N2b/N3 — loom-duckdb serving tier (default-ON) ────────────────────────────
 // The engine that runs DuckLake's `ATTACH 'ducklake:postgres:<dsn>'` and every
@@ -1505,6 +1540,17 @@ param loomStorageAccountSameSub bool = true
 // Grants may only be attempted when the account is BOTH configured and local.
 // Every consumer below uses this instead of `!empty(loomStorageAccount)`.
 var loomStorageGrantable = !empty(loomStorageAccount) && loomStorageAccountSameSub
+
+@description('True when a DIFFERENT pass in the same deployment owns the lake grants this module cannot make — platform/fiab/bicep/main.bicep\'s `dlzLakeGrantPass` (modules/data-plane/dlz-lake-grant-pass.bicep, #3336), invoked at `resourceGroup(<lakeSub>, <lakeRg>)` with coordinates read from the adopt plan. Set by the orchestrator ONLY after the deploy lane has MEASURED that the deploying identity holds Microsoft.Authorization/roleAssignments/write at the lake (scripts/csa-loom/probe-lake-grant-rights.mjs). It does NOT arm any grant in THIS module — every module here still keys on loomStorageGrantable, so nothing new can fail in this subscription. It exists so a capability whose grant has an owner ELSEWHERE is not also blocked from DEPLOYING here, which is the defect that left svc-s3-gateway with no deploy path on any tenant estate whose lake is cross-sub (#3337).')
+param loomStorageGrantedElsewhere bool = false
+
+// "The lake grant has an owner" — in THIS deployment scope, or in the cross-sub
+// pass. Consumers that must not ship bound-but-ungranted (per no-vaporware.md a
+// wired URL that 403s every bucket is worse than an honest block) gate their
+// DEPLOY on this; consumers that CREATE a role assignment in this subscription
+// still gate on `loomStorageGrantable`, which is the only honest answer to
+// "can I write RBAC here".
+var loomStorageWillBeGranted = !empty(loomStorageAccount) && (loomStorageGrantable || loomStorageGrantedElsewhere)
 
 @description('ADLS Gen2 storage account name for ADX continuous-export (Delta / OneLake-style availability). Backs LOOM_RTI_EXPORT_ADLS and grants the ADX cluster MI Storage Blob Data Contributor. Defaults to loomStorageAccount when empty.')
 param loomRtiExportAdls string = ''
@@ -7887,6 +7933,25 @@ output copilotMafPrincipalId string = (copilotMafEnabled && (boundary == 'GCC-Hi
 // scripts/csa-loom/patch-navigator-env.sh consume it the same way they consume
 // uamiConsolePrincipalId. Empty when the tier is disabled/inactive.
 output risingwavePrincipalId string = risingwaveActive ? risingwaveUami!.properties.principalId : ''
+
+// #3336/#3337 — the S3 gateway's DEDICATED storage identity, so the
+// cross-subscription lake grant pass in platform/fiab/bicep/main.bicep can grant
+// it Storage Blob Data Reader at the lake's own RG/subscription. Exposed for the
+// same reason as `risingwavePrincipalId` directly above: a grant that must be
+// made in another scope needs the principal id, and guessing the UAMI name is how
+// a deployment ends up asserting a resource that is not there.
+//
+// This identity is MINTED BY THIS DEPLOYMENT (s3-gateway-aca.bicep creates
+// `uami-loom-s3gw-<location>` unconditionally inside the module), which is what
+// makes it safe for the cross-sub pass to grant: a freshly created principal
+// cannot already hold an equivalent assignment, so ARM's
+// (scope, principal, roleDefinition) uniqueness cannot be violated. See the
+// header of data-plane/dlz-lake-grant-pass.bicep for why that property is a
+// hard requirement for anything that pass grants.
+//
+// Empty when the gateway did not deploy on this run — the pass then makes no
+// grant, which is a skip and not a failure.
+output s3GatewayStorageUamiPrincipalId string = s3GatewayActive ? s3Gateway!.outputs.storageUamiPrincipalId : ''
 
 // The ONE shared default action group (rev-2 alert standard; same id the apps
 // consume as LOOM_ALERT_ACTION_GROUP_ID). Exposed so subscription-scoped
