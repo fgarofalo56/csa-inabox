@@ -51,7 +51,16 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/admin-plane/monitor-ops-agent-aca.bicep', 'standalone entrypoint (G3 Operations Agent, OSS / air-gapped-Gov fallback): the SAME evaluator container run as a Microsoft.App/jobs Scheduled job (KEDA cron scaler) for sovereign regions where Consumption Functions + Teams + Logic Apps are unavailable — dispatches via the trigger\'s Azure Monitor action group (email/webhook) instead of Teams. Deployed out-of-band into a Gov landing zone. Azure-native only (Container Apps Jobs + KEDA cron). No Fabric/Power Automate dependency'],
   ['platform/fiab/bicep/modules/shared/diagnostic-settings.bicep', 'shared scope:<resource> diagnostic-settings helper template (loom-law-monitoring runbook documents it); TODO wire callers per-resource'],
   ['platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep', 'opt-in MCP-catalog ACA app; deployed when the MCP catalog is enabled'],
-  ['platform/fiab/bicep/modules/compute/loom-directlake-app.bicep', 'standalone entrypoint (HYP-5 Loom Direct Lake): internal-ingress Rust/axum columnar scan+frame ACA app (Apache DataFusion + delta-rs), minReplicas>=1 (NOT scale-to-zero — warm-cache retention is the point). Deployed out-of-band (admin-plane/main.bicep at the 256-param ceiling), then LOOM_DIRECTLAKE_URL set on the console app; the /api/directlake/scan BFF honest-gates + the semantic layer falls back to AAS/Synapse-Serverless until wired. Azure-native, no Fabric/OneLake/Power BI dependency'],
+  // compute/loom-directlake-app.bicep was here. REMOVED (#3291): admin-plane/
+  // main.bicep now INVOKES it (`directLakeSvcActive`, default-ON via the
+  // loomBackends bag) and emits LOOM_DIRECTLAKE_URL from the module's own fqdn
+  // output. The old entry justified the orphan as "main.bicep at the 256-param
+  // ceiling"; measured at the time of the fix that was 238 params with 18 of
+  // headroom, and the wiring added ZERO new params because a child module's
+  // params do not count against its parent's. While it sat here the guard could
+  // not catch what was actually true: the BFF's honest 503 named a bicep module
+  // no orchestrator ran and an image no CI built, so the remediation it handed
+  // the operator was not executable (auto-bind-by-default.md sec 5).
   ['platform/fiab/bicep/modules/copilot/browser-tool.bicep', 'standalone entrypoint (AIF-18): scale-to-zero Playwright browser-automation ACA Job, deployed out-of-band (az deployment -f browser-tool.bicep) then LOOM_BROWSER_TOOL_JOB set to its resource id; the browser_automation agent tool honest-gates until wired'],
   ['platform/fiab/bicep/modules/landing-zone/databricks-scim-bootstrap.bicep', 'opt-in Databricks SCIM bootstrap; run out-of-band during DLZ setup'],
   ['platform/fiab/bicep/modules/landing-zone/workspace-identity.bicep', 'opt-in per-workspace identity module; deployed on demand by the workspace provisioner'],

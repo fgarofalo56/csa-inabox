@@ -183,6 +183,29 @@ jobs:
           echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-trino:$TAG"
           az acr build --registry "$ACR" --no-logs             --image "loom-trino:$TAG" --image "loom-trino:$SHA_TAG" --image "loom-trino:latest"             apps/loom-trino
 
+      # HYP-5 — the Direct Lake columnar scan/frame service (Rust/axum + Apache
+      # DataFusion + delta-rs). DEFAULT-ON in EVERY boundary since #3291 wired
+      # compute/loom-directlake-app.bicep into admin-plane/main.bicep, so the Gov
+      # template pulls <acr>/loom-directlake:<appImageTags.directLakeSvc, default
+      # v0.1> exactly as Commercial does.
+      #
+      # CLOUD PARITY IS THE POINT HERE, not a checkbox (.claude/rules/
+      # cloud-parity.md). Fabric / Power BI Premium has no Azure Government data
+      # plane and this repo's own admin-plane comments record AAS as "Gov-scarce
+      # + on a retirement track" — so for a sovereign customer this OSS service
+      # is not a parity nicety, it IS the Direct-Lake-class story. Building it
+      # Commercial-only would give the boundary with the greatest need the least
+      # product.
+      #
+      # Reuses the same firewall lease as the two builds above; the release step
+      # below covers all three.
+      - name: Build loom-directlake on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-directlake:$TAG"
+          az acr build --registry "$ACR" --no-logs --image "loom-directlake:$TAG" --image "loom-directlake:$SHA_TAG" --image "loom-directlake:latest" apps/loom-directlake
+
       # ── Mirror third-party upstream images into the Gov ACR (#2682) ──────────
       # No sovereign Container App may pull a third-party image from a public
       # registry. `az acr import` is a server-side copy under the SAME firewall
@@ -231,7 +254,7 @@ jobs:
         continue-on-error: true
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-duckdb:$TAG" "loom-trino:$TAG"
+            "loom-duckdb:$TAG" "loom-trino:$TAG" "loom-directlake:$TAG"
 
       # Apply mode: HARD GATE. The next step deploys a Container App and the one
       # after it `az containerapp update`s the LIVE loom-console. Neither may run
@@ -248,7 +271,7 @@ jobs:
         if: ${{ inputs.apply == 'true' }}
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-duckdb:$TAG" "loom-trino:$TAG"
+            "loom-duckdb:$TAG" "loom-trino:$TAG" "loom-directlake:$TAG"
 
       - name: What-if the loom-duckdb Container App (never touches other resources)
         run: |

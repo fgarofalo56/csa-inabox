@@ -120,6 +120,17 @@ export const APP_IMAGE_TAGS = Object.freeze([
   // here a scheduled reconcile would redeploy it at the BICEP DEFAULT rather than
   // the tag actually running — the exact drift this table exists to prevent.
   { key: 'trino', repo: 'loom-trino', envVar: 'LOOM_TRINO_TAG' },
+  // loom-directlake (#3291). The HYP-5 Direct Lake columnar scan/frame service
+  // is now DEFAULT-ON via compute/loom-directlake-app.bicep, wired from
+  // admin-plane/main.bicep, so `appImageTags.directLakeSvc` is read on every
+  // boundary and its image is a prerequisite of the apps phase.
+  //
+  // NOTE THE KEY. `directLake` (above) pins loom-direct-lake-shim — a DIFFERENT
+  // app in a DIFFERENT repo (apps/fiab-direct-lake-shim, C#/TOM). Reusing that
+  // key here would have recreated the exact one-key-two-repos defect the
+  // dbtRunner split was opened to fix (#2775), where pinning the key to either
+  // running tag necessarily rewrote the other.
+  { key: 'directLakeSvc', repo: 'loom-directlake', envVar: 'LOOM_DIRECTLAKE_SVC_TAG' },
 ]);
 
 /** key -> entry, for callers that have a key in hand. */

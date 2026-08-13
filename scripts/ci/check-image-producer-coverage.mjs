@@ -78,7 +78,16 @@ const ANNOTATION = /::(?:warning|notice|error|debug)::/;
 const KNOWN_UNBUILT = new Map([
   ['fiab-prpt-renderer', 'integration/prpt-renderer.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep, so no deploy references the image yet. Needs a producer before it is wired.'],
   ['loom-capacity-broker', 'compute/loom-capacity-broker-app.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep. Needs a producer before it is wired.'],
-  ['loom-directlake', 'compute/loom-directlake-app.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep. Needs a producer before it is wired.'],
+  // loom-directlake was here. REMOVED (#3291): the HYP-5 Direct Lake columnar
+  // scan/frame service now has real producers — full-app-deploy-commercial.yml
+  // (Commercial), build-fiab-images-acr-tasks.yml (both matrices), and
+  // gov-provision-dataplane-images.yml (GCC-High / IL5) — because
+  // admin-plane/main.bicep now INVOKES compute/loom-directlake-app.bicep
+  // (directLakeSvcActive, default-ON) and binds LOOM_DIRECTLAKE_URL from its
+  // fqdn output. This entry was the loan; the producers are the repayment, and
+  // they landed in the SAME change as the wiring precisely because this file's
+  // header says a wired-but-unbuilt image fails the Container App PUT with
+  // MANIFEST_UNKNOWN.
   ['loom-onelake', 'compute/loom-onelake-app.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep — its own header still carries the "TODO wire into main.bicep" block. Needs a producer before it is wired.'],
   ['loom-mcp', 'Dev-tool stdio MCP server (loom-devtools). Distributed via npm + the loom-skills marketplace and run locally / self-hosted (`claude mcp add` or the optional Dockerfile). By design it is NOT a platform-deployed Container App — no bicep references its image, so there is no admin-plane deploy to hit MANIFEST_UNKNOWN. The Dockerfile is a self-host convenience, not an estate image; this entry is permanent, not a pending-wiring gap.'],
 ]);

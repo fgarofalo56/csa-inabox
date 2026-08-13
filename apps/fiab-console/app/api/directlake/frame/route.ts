@@ -50,16 +50,22 @@ export async function POST(req: NextRequest) {
   const denied = requireTenantAdmin(session);
   if (denied) return denied;
 
-  // ── Honest gate FIRST (no-vaporware): without the service there is nothing
-  // real to call, so name the exact env var + the bicep module that deploys it.
+  // ── Honest gate FIRST (no-vaporware). #3291: this message used to tell the
+  // operator to go deploy a bicep module — a remediation that could not be
+  // executed, because no orchestrator invoked it and no CI built its image.
+  // The service is now deployed by admin-plane/main.bicep DEFAULT-ON, so an
+  // empty value has exactly two true causes and the message names both rather
+  // than assigning work the platform already does (auto-bind-by-default.md §5).
   const base = process.env.LOOM_DIRECTLAKE_URL?.trim();
   if (!base) {
     return apiError(
-      'The Loom Direct Lake service is not deployed. Set LOOM_DIRECTLAKE_URL ' +
-        '(the internal FQDN of the loom-directlake Container App) — provisioned by ' +
-        'platform/fiab/bicep/modules/compute/loom-directlake-app.bicep. The semantic-model / ' +
-        'report layer falls back to its existing backend (Azure Analysis Services fast-path or ' +
-        'Synapse Serverless) until it is set. No Microsoft Fabric / Power BI capacity required.',
+      'The Loom Direct Lake service is not reachable from this console: LOOM_DIRECTLAKE_URL is empty. ' +
+        'It is bound automatically by a push-button deploy (admin-plane/main.bicep deploys the ' +
+        'loom-directlake Container App by default), so an empty value means EITHER an admin set ' +
+        "loomBackends.directLake='disabled', OR this estate has not been redeployed since the app was " +
+        'wired in. The semantic-model / report layer falls back to its existing backend (Azure Analysis ' +
+        'Services fast-path or Synapse Serverless) in the meantime. No Microsoft Fabric / Power BI ' +
+        'capacity is required either way.',
       503,
     );
   }

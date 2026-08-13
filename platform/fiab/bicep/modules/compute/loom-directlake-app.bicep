@@ -35,28 +35,36 @@
 // is intentionally NOT built here.
 //
 // ---------------------------------------------------------------------------
-// STANDALONE ENTRYPOINT (bicep-sync): admin-plane/main.bicep is at the hard ARM
-// 256-parameter ceiling, so — like event-grid-webhooks.bicep / gh-runner-job
-// .bicep / adt-instance.bicep — this module is deployed OUT-OF-BAND and is
-// allowlisted in scripts/ci/check-bicep-sync.mjs (ORPHAN_ALLOWLIST). After
-// deploy, set LOOM_DIRECTLAKE_URL on the console app to this app's internal
-// FQDN (prefixed https://). Example wiring when admin-plane frees param budget:
+// DEPLOYED BY THE ORCHESTRATOR (#3291). admin-plane/main.bicep INVOKES this
+// module as `loomDirectLake`, gated on `directLakeSvcActive` (default-ON via
+// loomBackends.directLake; opt out with 'disabled'), and binds
+// LOOM_DIRECTLAKE_URL on the Console app from this module's `fqdn` output.
 //
-//   module loomDirectLake 'compute/loom-directlake-app.bicep' = if (directLakeActive) {
-//     name: 'loom-directlake'
-//     params: {
-//       name: 'loom-directlake'
-//       location: location
-//       environmentId: containerPlatformModule.outputs.caeId
-//       directLakeUamiId: loomDirectLakeUami.outputs.id      // Storage Blob Data Reader + AcrPull
-//       acrLoginServer: registry.outputs.acrLoginServer
-//       image: '${registry.outputs.acrLoginServer}/loom-directlake:${appImageTags.directLake}'
-//       storageAccountName: dlzStorageAccountName
-//       complianceTags: complianceTags
-//     }
-//   }
-//   // console env:
-//   { name: 'LOOM_DIRECTLAKE_URL', value: directLakeActive ? 'https://${loomDirectLake!.outputs.fqdn}' : '' }
+// IT DID NOT ALWAYS. Until #3291 this header carried a "STANDALONE ENTRYPOINT"
+// block claiming the module was deployed out-of-band because
+// "admin-plane/main.bicep is at the hard ARM 256-parameter ceiling", and the
+// module sat in check-bicep-sync.mjs's ORPHAN_ALLOWLIST repeating that reason.
+// Both were wrong, and together they kept a real capability dark since it
+// shipped:
+//   * NO orchestrator invoked this module, so it never deployed anywhere.
+//   * NO CI lane built the loom-directlake image, so there was nothing to pull.
+//   * `LOOM_DIRECTLAKE_URL` was hard-coded '' in admin-plane/main.bicep.
+// So the console BFF's well-written honest 503 pointed the operator at THIS
+// file — a remediation that could not be executed. Under
+// .claude/rules/auto-bind-by-default.md §5 ("infra prerequisites are DEPLOYED,
+// not requested") an unreachable remediation is not an honest gate, it IS the
+// defect.
+//
+// The ceiling claim was also measurably false: admin-plane/main.bicep held 238
+// params with 18 of headroom, and wiring this module added ZERO new params —
+// the ARM 256 cap is per-deployment, and a child module's params do not count
+// against its parent's. The same misconception had already been corrected for
+// loom-migrate, loom-risingwave and loom-unity.
+//
+// The image is now produced by full-app-deploy-commercial.yml (Commercial),
+// build-fiab-images-acr-tasks.yml (both matrices) and
+// gov-provision-dataplane-images.yml (GCC-High / IL5), and the crate is
+// compiled + unit-tested on every PR by loom-directlake-ci.yml.
 // ---------------------------------------------------------------------------
 
 targetScope = 'resourceGroup'

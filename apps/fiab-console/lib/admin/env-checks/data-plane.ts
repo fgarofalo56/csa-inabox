@@ -37,11 +37,19 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     role: 'Storage Blob Data Contributor (uami-loom-onelake) on the DLZ lake + Cosmos data-plane on the registry containers',
   },
   {
+    // #3291 — this row was labelled `optionalDefault: true` ("this estate simply
+    // opted out") while the truth was that NO estate could ever opt IN: the URL
+    // was hard-coded '' in bicep, the module was invoked by no orchestrator, and
+    // no CI lane built the image. Per the `loom_optional_severity_is_the_defect`
+    // finding, "optional" is exactly the label under which a dead capability
+    // hides. It is now deployed DEFAULT-ON in every boundary, so an unset URL
+    // genuinely does mean an admin opt-out — and `optionalDefault` finally tells
+    // the truth rather than excusing a gap.
     id: 'svc-loom-directlake', category: 'data-plane', title: 'Loom Direct Lake — columnar cache/scan engine (Hyperscale)', severity: 'recommended',
     required: ['LOOM_DIRECTLAKE_URL'], warnOnMiss: true, optionalDefault: true,
-    remediation: 'Set LOOM_DIRECTLAKE_URL to the internal-ingress Loom Direct Lake ACA app (Arrow + delta-rs framing/transcoding + DuckDB/DataFusion scan; the OSS outcome-equivalent of Direct Lake — no VertiPaq, no Power BI). Also set LOOM_SEMANTIC_BACKEND=loom-columnar-cache to route DAX-class queries to it. Deploy compute/loom-directlake-app.bicep on compute/hband-shared.bicep. Unset → the semantic-model / report layer uses the AAS fast-path or the Synapse-Serverless cold path unchanged.',
-    provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-directlake + shared Redis) + modules/compute/loom-directlake-app.bicep (out-of-band) → LOOM_DIRECTLAKE_URL on the Console app',
-    role: 'Storage Blob Data Reader (uami-loom-directlake) on the DLZ lake; Redis Data Contributor on the shared cache (wired by hband-shared.bicep)',
+    remediation: 'The loom-directlake Container App is deployed by default in every boundary (loomBackends.directLake = \'enabled\') and admin-plane/main.bicep binds LOOM_DIRECTLAKE_URL to its internal FQDN, so no operator action is normally required. An empty value means either (a) an admin set loomBackends.directLake=\'disabled\', or (b) this estate has not been redeployed since #3291 wired it — re-run the apps-enabled deploy. Set LOOM_SEMANTIC_BACKEND=loom-columnar-cache to route DAX-class queries to it. Unset → the semantic-model / report layer uses the AAS fast-path or the Synapse-Serverless cold path unchanged (Arrow + delta-rs framing/transcoding + DataFusion scan; the OSS outcome-equivalent of Direct Lake — no VertiPaq, no Power BI).',
+    provisionedBy: 'modules/compute/loom-directlake-app.bicep, invoked by modules/admin-plane/main.bicep (directLakeSvcActive, default-ON) → LOOM_DIRECTLAKE_URL bound from the module\'s fqdn output',
+    role: 'Storage Blob Data Reader (uami-loom-directlake) on the DLZ lake + AcrPull on the admin-plane ACR — and nothing else (least privilege). The shared Redis cross-replica residency index is HYP-6 and is not required by this service.',
   },
   // ── N2b — DuckDB serving tier (the interactive fast path BELOW Spark) ──
   {

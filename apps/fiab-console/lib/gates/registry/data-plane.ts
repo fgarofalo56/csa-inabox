@@ -31,7 +31,14 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
   'svc-loom-directlake': {
     surfaces: [{ path: '/items/semantic-model', label: 'Direct Lake columnar cache (scale-out)' }],
     fixit: { kind: 'env-picker' },
-    autoResolveNote: 'Unset → the AAS fast-path or Synapse-Serverless cold path serves DAX-class queries unchanged.',
+    // #3291 — this row used to be permanently unresolvable. `LOOM_DIRECTLAKE_URL`
+    // was hard-coded '' in admin-plane/main.bicep, compute/loom-directlake-app.bicep
+    // was invoked by no orchestrator, and no CI lane built the loom-directlake
+    // image, so nothing a deploy could do would ever set it. It is now deployed
+    // DEFAULT-ON in every boundary and the URL comes from the app module's fqdn
+    // output, so on a from-scratch install this row is GREEN without operator action.
+    autoResolveNote:
+      'A push-button deploy provisions the loom-directlake Container App and binds LOOM_DIRECTLAKE_URL automatically (loomBackends.directLake, default enabled). Unset only when an admin opts out with loomBackends.directLake=\'disabled\', in which case the AAS fast-path or Synapse-Serverless cold path serves DAX-class queries unchanged.',
   },
   // ── DR0 + CMK1 — restore/at-rest posture (verified live by probe-dr-restore-posture) ──
   'svc-dr-restore-posture': {

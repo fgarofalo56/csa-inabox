@@ -146,28 +146,69 @@ same row count.
    `external:false`, `targetPort: 8080`, ACR pull via a dedicated UAMI, **and
    `minReplicas: 1` (NOT scale-to-zero — warm-cache retention is the point)**.
    Outputs the internal FQDN the console reads as `LOOM_DIRECTLAKE_URL`.
-2. **Console env** — `LOOM_DIRECTLAKE_URL` (and the `LOOM_SEMANTIC_BACKEND`
-   selector's third value `loom-columnar-cache`) wired per the PRP. This skeleton
-   ships the module as a **standalone entrypoint** (allowlisted in
-   `scripts/ci/check-bicep-sync.mjs`) deployed out-of-band, because
-   `admin-plane/main.bicep` is at the ARM **256-parameter ceiling**; the console
-   env var is allowlisted in `scripts/ci/check-env-sync.mjs` as an opt-in gate.
-3. **Honest gate** — when `LOOM_DIRECTLAKE_URL` is empty/unset, the BFF returns
-   **503** naming the env var **and** the bicep module, and the semantic-model /
-   report layer silently falls back to its current backend (AAS fast-path or
-   Synapse-Serverless cold path). Never a Fabric gate.
+2. **Console env** — `admin-plane/main.bicep` invokes the module as
+   `loomDirectLake` (gated on `directLakeSvcActive`, **DEFAULT-ON** via
+   `loomBackends.directLake`; opt out with `'disabled'`) and binds
+   `LOOM_DIRECTLAKE_URL` from the module's own `fqdn` output. No operator step.
+   Set `LOOM_SEMANTIC_BACKEND=loom-columnar-cache` to route DAX-class queries here.
+3. **Image** — produced by `full-app-deploy-commercial.yml` (Commercial),
+   `build-fiab-images-acr-tasks.yml` (both matrices) and
+   `gov-provision-dataplane-images.yml` (GCC-High / IL5). Tag key:
+   `appImageTags.directLakeSvc` (**not** `directLake`, which pins the unrelated
+   `loom-direct-lake-shim` image).
+4. **Honest gate** — when `LOOM_DIRECTLAKE_URL` is empty the BFF returns **503**
+   and the semantic-model / report layer silently falls back to its current
+   backend (AAS fast-path or Synapse-Serverless cold path). Never a Fabric gate.
+
+> **It was not always deployed (#3291).** Until that fix this module was an
+> orphan: no orchestrator invoked it, `LOOM_DIRECTLAKE_URL` was hard-coded `''`,
+> and **no CI lane built the image** — so the BFF's honest 503 named a
+> remediation the operator could not execute, and the capability was dark from
+> the day it shipped. The stated reason (`admin-plane/main.bicep` at the ARM
+> 256-parameter ceiling) was measurably false: 238 params, 18 of headroom, and
+> wiring the module added **zero** new params.
 
 **Redis wiring is HYP-6** (segment-residency cross-replica index) — deliberately
 NOT built here.
 
-## Local-build note (honest)
+## Build + test gate
 
-This service was authored in an environment with **no Rust toolchain**, so
-`cargo build` / `cargo test` were **not run locally**. The code is complete and
-the crate versions pin a graph that resolves to one arrow + one datafusion (via
-`deltalake 0.24`); the **Dockerfile builds it server-side in ACR/CI**, which is
-the build gate. The unit tests in `src/scan.rs` are written to run under
-`cargo test`. Any compile fix surfaced by the first CI build lands as a
-follow-up — flagged here rather than claimed green.
+`.github/workflows/loom-directlake-ci.yml` runs `cargo build --locked` and
+`cargo test --locked` on both feature sets (`engine`-only and the shipped
+`engine + azure`), plus the `--release` profile the Dockerfile actually
+compiles, on every PR touching this crate.
+
+**That lane did not exist until #3291, and this crate had never been compiled
+anywhere** — `grep -rl 'cargo ' .github/workflows` returned zero files, and the
+image had no producer either. The first run found three compile errors in the
+`#[cfg(test)]` module (two missing `Debug` bounds and an `E0716` borrow of a
+temporary `schema()`); the shipped binary itself built clean on both feature
+sets. That is the whole argument for the lane: nothing else in the repository
+could ever have surfaced them.
+
+## Known vulnerability — `thrift 0.17.0` (Dependabot #94, GHSA-2f9f-gq7v-9h6m)
+
+**Status: open, accepted, and NOT fixable by any dependency bump available
+today.** Recorded here so it is a disclosed trade rather than a surprise.
+
+* Severity **moderate**, class *Memory Allocation with Excessive Size Value* —
+  a DoS on a parser fed a malformed value. Not RCE, not information disclosure.
+* The chain is `loom-directlake → deltalake 0.24 → parquet 53.4.1 → thrift 0.17`.
+  `thrift` is pulled by **`parquet` and nothing else** in the lock.
+* First patched `thrift` is **0.23.0**. Measured against crates.io: **every**
+  `parquet` release up to and including **58.4.0** declares a non-optional
+  `thrift = "^0.17"`, which cannot resolve to 0.23; `parquet` drops the `thrift`
+  crate entirely only at **59.0.0**. The newest `deltalake` (**0.32.4**) pins
+  `arrow ^58` / `parquet ^58`. **No published delta-rs release can reach
+  parquet 59**, so there is no version combination that clears this advisory
+  while the `abfss://` Delta path exists — which is the point of the service.
+* **Exposure is bounded by construction**: ingress is `external: false` (the
+  Console BFF over the CAE VNet is the only caller), both BFF routes are
+  tenant-admin gated, the container runs non-root (uid 10001) with an ACA memory
+  cap, and it parses only the customer's **own** lake files. A malformed Parquet
+  file in your own lake can restart your own replica.
+* **Re-check trigger**: when `deltalake` publishes a release requiring
+  `arrow`/`parquet` **≥ 59**, bump this crate and regenerate `Cargo.lock`. That
+  is the single condition that resolves it.
 
 [axum]: https://github.com/tokio-rs/axum
