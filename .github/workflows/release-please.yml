@@ -47,14 +47,43 @@ name: release-please
 # producer — and every one it posts is named in a `::warning::`, so the residue
 # is visible on every single release instead of being silent.
 #
+# WHY A COMMIT STATUS IS STILL POSTED — and why that is NOT the old auto-pass
+# --------------------------------------------------------------------------
+# MEASURED 2026-08-13 on PR #3407 (head b4bd723e), because assuming it would
+# have been exactly the mistake #3387 made. `license-scan.yml` was dispatched
+# against the PR branch — chosen because its `pull_request` path filter means
+# the PR event does NOT trigger it, so there was no confound. Result:
+#   * run 31752006228, event=workflow_dispatch, head_sha = the PR head SHA;
+#   * concluded `success`;
+#   * its check run IS on the commit
+#     (GET /commits/{sha}/check-runs -> "license gate + THIRD-PARTY-NOTICES");
+#   * its check suite 86143211123 IS associated with the PR (pull_requests:[3407]);
+#   * and it is STILL ABSENT from `gh pr view --json statusCheckRollup`
+#     (28 entries before and after; the commit had 29 check runs).
+# So GitHub does not fold a workflow_dispatch check suite into the PR's rollup,
+# which is the same surface branch protection evaluates. Scoping that honestly:
+# the context measured is not itself a REQUIRED one, so what is established is
+# "the rollup omits it", not "protection provably ignores it" — but the rollup
+# is what protection reads, so the design does not bet on the difference.
+#
+# Therefore the dispatched run supplies the RESULT, and this workflow carries
+# that result across as a commit status whose `target_url` points AT THE REAL
+# JOB that produced it. The difference from what #3393 records:
+#   BEFORE: a status posted for every context unconditionally, backed by nothing.
+#   NOW:    a status posted ONLY for a context whose own check run, on this exact
+#           commit, concluded `success`. A red or absent result posts nothing and
+#           fails this run.
+# If the bridge ever becomes unnecessary (GitHub starts folding dispatch suites
+# into the rollup, or the repo moves to #3393 option 2's GitHub App token, whose
+# PRs trigger workflows natively), delete step 4 — the dispatch keeps working.
+#
 # WHY THIS IS NOT "a dispatched run whose result is discarded":
 #   * A failed `gh workflow run` aborts the job (the error text is captured and
 #     printed, never `2>/dev/null`'d away).
 #   * A dispatch that produces NO run inside the polling budget is an `::error::`
 #     + exit 1. An absent result is not a green one.
-#   * A concluded-failing required check on the release PR is an `::error::` +
-#     exit 1 on the next run of this workflow, and blocks the merge in the
-#     meantime because branch protection sees the red check run.
+#   * A required context whose real check run did not conclude `success` gets NO
+#     status posted and fails this run — so it blocks the release both ways.
 #   * Nothing here uses `continue-on-error`, `|| true`, or `2>/dev/null`.
 #
 # Dispatch is IDEMPOTENT: if a run of a producing workflow already exists on the
@@ -126,9 +155,11 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    # Raised from 15: the step below polls for dispatched runs to appear
-    # (~3 min worst case) on top of the existing post-verify wait.
-    timeout-minutes: 30
+    # Raised from 15: the step below dispatches the producing workflows and then
+    # WAITS for them to conclude (budget 30 min) before bridging any result. It
+    # is deliberately long — a status must never be posted ahead of the run that
+    # justifies it.
+    timeout-minutes: 45
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
@@ -219,13 +250,10 @@ jobs:
             gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \
               --jq '.workflow_runs[].path'
           }
-          # Names of every check run already registered on a SHA. This is the
-          # SAME set branch protection evaluates for required contexts, so it is
-          # the honest measurement of coverage — not an inference from "we
-          # dispatched something".
-          checkruns_for_sha() {
-            gh api --paginate "repos/${REPO}/commits/$1/check-runs?per_page=100" \
-              --jq '.check_runs[].name'
+          # path <TAB> status <TAB> conclusion <TAB> url for every run on a SHA.
+          runs_tsv() {
+            gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \
+              --jq '.workflow_runs[] | [.path, .status, (.conclusion // ""), .html_url] | @tsv'
           }
 
           for num in "${RELEASE_PRS[@]}"; do
@@ -323,41 +351,99 @@ jobs:
             fi
 
             # ---------------------------------------------------------------
-            # 3. MEASURE which required contexts now have a REAL check run on
-            #    the head SHA. Never inferred from "we dispatched it" — read.
+            # 3. WAIT for every producing run on this SHA to CONCLUDE.
+            #    Nothing is posted until there is a real result to post.
             # ---------------------------------------------------------------
-            real=(); pending=(); residual=()
-            for _ in 1 2 3 4 5 6 7 8; do
-              names="$(checkruns_for_sha "${sha}")"
-              real=(); pending=(); residual=()
-              for entry in "${REQUIRED_CHECKS[@]}"; do
-                ctx="${entry%%|*}"; wf="${entry#*|}"
-                if printf '%s\n' "${names}" | grep -qxF "${ctx}"; then
-                  real+=("${ctx}")
-                elif [ -n "${wf}" ]; then
-                  pending+=("${ctx}")
-                else
-                  residual+=("${ctx}")
+            unfinished="pending"
+            for _ in $(seq 1 120); do
+              runs="$(runs_tsv "${sha}")"
+              unfinished=""
+              for wf in "${PRODUCERS[@]}"; do
+                st="$(printf '%s\n' "${runs}" | awk -F'\t' -v p=".github/workflows/${wf}" '$1==p {print $2}' | tail -1)"
+                if [ "${st}" != "completed" ]; then
+                  unfinished="${unfinished}${wf}(${st:-no-run}) "
                 fi
               done
-              if [ "${#pending[@]}" -eq 0 ]; then break; fi
+              if [ -z "${unfinished}" ]; then break; fi
               sleep 15
             done
 
-            echo "  coverage on ${sha}: ${#real[@]} real check run(s), ${#pending[@]} not yet registered, ${#residual[@]} with no producer."
-            for ctx in ${real[@]+"${real[@]}"};     do echo "    REAL     ${ctx}"; done
-            for ctx in ${pending[@]+"${pending[@]}"}; do echo "    WAITING  ${ctx}"; done
-
-            if [ "${#pending[@]}" -gt 0 ]; then
-              # NOT auto-passed. A required context with no check run yet keeps
-              # the PR blocked, which is the correct state — the run exists and
-              # will report. Synthesising here would race the real result and
-              # re-create exactly the #3393 defect.
-              echo "::warning::${#pending[@]} required context(s) on PR #${num} have a dispatched run but no registered check run yet: ${pending[*]}. They are deliberately NOT auto-passed; the PR stays blocked until they report."
+            if [ -n "${unfinished}" ]; then
+              # NOT a pass and NOT a failure — the runs are real and still going.
+              # Post NOTHING: the PR stays blocked, which is correct, and the next
+              # release-please run (or a manual workflow_dispatch of this file)
+              # picks up the concluded results and bridges them.
+              echo "::warning::PR #${num}: still waiting on real runs after 30 min: ${unfinished}"
+              echo "::warning::No status was posted for ANY required context — an unfinished run"
+              echo "::warning::is not a green one. Re-run this workflow (or push to main) once"
+              echo "::warning::they finish and their results will be bridged onto ${sha}."
+              continue
             fi
+            echo "  every producing run on ${sha} has concluded."
 
             # ---------------------------------------------------------------
-            # 4. RESIDUAL synthetic statuses — contexts no workflow can publish.
+            # 4. BRIDGE each REAL result onto the head SHA as a commit status.
+            #
+            #    WHY A BRIDGE IS STILL NEEDED — measured 2026-08-13, see header:
+            #    a workflow_dispatch check run lands on the commit and its check
+            #    suite is even associated with the PR, but it does NOT appear in
+            #    the PR's statusCheckRollup, so branch protection does not count
+            #    it. So the dispatched run supplies the RESULT and this step
+            #    carries that result across, naming the run that produced it.
+            #    This is NOT the old auto-pass: nothing is posted for a context
+            #    whose real check run did not conclude `success`.
+            # ---------------------------------------------------------------
+            cr_tsv="$(gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100" \
+              --jq '.check_runs[] | [.name, .status, (.conclusion // ""), .html_url] | @tsv')"
+            declare -A CR_CONCL=() CR_URL=()
+            while IFS=$'\t' read -r cr_name cr_status cr_concl cr_url; do
+              if [ -z "${cr_name}" ]; then continue; fi
+              CR_CONCL["${cr_name}"]="${cr_status}/${cr_concl}"
+              CR_URL["${cr_name}"]="${cr_url}"
+            done <<< "${cr_tsv}"
+
+            bridged=(); broken=(); residual=()
+            for entry in "${REQUIRED_CHECKS[@]}"; do
+              ctx="${entry%%|*}"; wf="${entry#*|}"
+              if [ -z "${wf}" ]; then residual+=("${ctx}"); continue; fi
+              verdict="${CR_CONCL[${ctx}]:-ABSENT}"
+              if [ "${verdict}" != "completed/success" ]; then
+                echo "    NOT-GREEN ${ctx} -> ${verdict}"
+                # Post an explicit FAILURE rather than merely withholding a
+                # success. Withholding alone would leave any status a PREVIOUS
+                # run of this workflow bridged for the same SHA standing — so a
+                # job that was green and is now red (a re-run, a flake) could
+                # still be sitting green on the commit. Overwrite it.
+                gh api -X POST "repos/${REPO}/statuses/${sha}" \
+                  -f state=failure \
+                  -f context="${ctx}" \
+                  -f description="Real run on this commit did not conclude success (${verdict})" \
+                  -f target_url="${CR_URL[${ctx}]:-${RUN_URL}}" >/dev/null
+                broken+=("${ctx}=${verdict}")
+                continue
+              fi
+              echo "    GREEN     ${ctx} -> ${CR_URL[${ctx}]}"
+              gh api -X POST "repos/${REPO}/statuses/${sha}" \
+                -f state=success \
+                -f context="${ctx}" \
+                -f description="Real run on this exact commit concluded success — see target URL" \
+                -f target_url="${CR_URL[${ctx}]}" >/dev/null
+              bridged+=("${ctx}")
+            done
+
+            if [ "${#broken[@]}" -gt 0 ]; then
+              echo "::error::PR #${num}: ${#broken[@]} required context(s) did NOT conclude success"
+              echo "::error::on ${sha}: ${broken[*]}"
+              echo "::error::'ABSENT' means the producing workflow ran but published no check run"
+              echo "::error::under that exact name — a REQUIRED_CHECKS mapping defect, not a pass."
+              echo "::error::Anything else is a genuine red result. No status was posted for these,"
+              echo "::error::so the release stays blocked, which is the point."
+              exit 1
+            fi
+            echo "  bridged ${#bridged[@]} real result(s) onto ${sha}."
+
+            # ---------------------------------------------------------------
+            # 5. RESIDUAL synthetic statuses — contexts no workflow can publish.
             #    This list should be EMPTY. Every entry is shouted so the residue
             #    is visible on every release instead of being silent (#3393).
             # ---------------------------------------------------------------
@@ -372,7 +458,7 @@ jobs:
                   -f target_url="${RUN_URL}" >/dev/null
               done
             else
-              echo "::notice::0 synthetic statuses posted for PR #${num} — every required context has a producing workflow, and ${#real[@]} of ${#REQUIRED_CHECKS[@]} already have a real check run on this SHA (the rest are listed above as WAITING and will report on their own)."
+              echo "::notice::0 synthetic statuses posted for PR #${num} — all ${#bridged[@]} required contexts were bridged from real runs that concluded success on ${sha}."
             fi
 
             # DRIFT / DIAGNOSIS CONTROL. Distinguish, without guessing, between
@@ -382,15 +468,24 @@ jobs:
             for _ in 1 2 3 4; do
               sleep 15
               state=$(gh pr view "${num}" --repo "${REPO}" --json mergeStateStatus --jq '.mergeStateStatus')
-              [ "$state" != "UNKNOWN" ] && [ "$state" != "BLOCKED" ] && break
+              if [ "$state" != "UNKNOWN" ] && [ "$state" != "BLOCKED" ]; then break; fi
             done
             echo "  post-verify: mergeStateStatus=${state}"
             if [ "$state" = "BLOCKED" ]; then
+              # Scope the diagnosis to the REQUIRED contexts. A non-required job
+              # going red must not be reported as "BLOCKED with failing required
+              # checks" — that would assert a cause this code did not establish.
+              req_json="$(printf '%s\n' "${REQUIRED_CHECKS[@]}" | cut -d'|' -f1 \
+                | jq -R -s -c 'split("\n") | map(select(length > 0))')"
               rollup=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup --jq '.statusCheckRollup')
-              failing=$(printf '%s' "$rollup" \
-                | jq -r '[.[]? | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT")) | .name // .context] | join(", ")')
-              inflight=$(printf '%s' "$rollup" \
-                | jq -r '[.[]? | select(((.status // "") == "QUEUED") or ((.status // "") == "IN_PROGRESS") or ((.state // "") == "PENDING")) | .name // .context] | join(", ")')
+              failing=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+                '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
+                       | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT"))
+                       | .name // .context] | unique | join(", ")')
+              inflight=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+                '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
+                       | select(((.status // "") == "QUEUED") or ((.status // "") == "IN_PROGRESS") or ((.state // "") == "PENDING"))
+                       | .name // .context] | unique | join(", ")')
               # The most common BLOCKED cause: branch protection requires an
               # approving review (required_approving_review_count=1 as of
               # 2026-08-13). GITHUB_TOKEN cannot read branch protection, but
@@ -400,29 +495,26 @@ jobs:
               # R7 violation this post-verify exists to prevent.
               review=$(gh pr view "${num}" --repo "${REPO}" --json reviewDecision --jq '.reviewDecision // ""')
               if [ -n "$failing" ]; then
-                echo "::error::Release PR #${num} is BLOCKED with FAILING required checks: ${failing}."
-                echo "::error::These are REAL runs dispatched by this workflow, not synthetic"
-                echo "::error::statuses — the release is genuinely broken and must not merge."
+                echo "::error::Release PR #${num} is BLOCKED with FAILING required contexts: ${failing}."
+                echo "::error::Every status this workflow posts is bridged from a real run that"
+                echo "::error::concluded success on this exact commit, so a red one here is a"
+                echo "::error::genuine result — the release is broken and must not merge."
                 exit 1
               elif [ -n "$inflight" ]; then
-                echo "::notice::Release PR #${num} is BLOCKED because the REAL checks this workflow dispatched are still running: ${inflight}. That is the expected state immediately after a dispatch — they will report on their own."
+                echo "::notice::Release PR #${num} is BLOCKED because required contexts are still pending: ${inflight}. Nothing was bridged for them, which is correct — they will be picked up by the next run of this workflow once their real runs conclude."
               elif [ "$review" = "REVIEW_REQUIRED" ]; then
                 echo "::notice::Release PR #${num} is BLOCKED solely because branch protection requires an approving review, and no check is failing. This is the expected steady state — GITHUB_TOKEN cannot approve a PR. A human (or a PAT-backed reviewer) must approve #${num} to release. NOT context drift."
               else
-                echo "::error::Release PR #${num} is still BLOCKED. No required check is failing,"
-                echo "::error::none is in flight, and reviewDecision is '${review}' so a missing"
-                echo "::error::approval is NOT the cause either. Two known causes of THIS narrowed"
-                echo "::error::signal:"
-                echo "::error::  1. REQUIRED_CHECKS has gone stale (it has drifted twice: PR #815,"
-                echo "::error::     and 2026-08-13). Compare"
-                echo "::error::     'gh api repos/${REPO}/branches/main/protection/required_status_checks'"
-                echo "::error::     against the table in this file and add what is missing."
-                echo "::error::  2. Branch protection is not honouring the check runs produced by"
-                echo "::error::     the workflow_dispatch runs above, in which case the contexts"
-                echo "::error::     listed as REAL earlier in this log are green on the commit but"
-                echo "::error::     not counted. Compare the REAL list against the PR's rollup."
-                echo "::error::This workflow cannot read branch protection to confirm which, so it"
-                echo "::error::states both rather than asserting one it did not establish."
+                echo "::error::Release PR #${num} is still BLOCKED. No required context is"
+                echo "::error::failing, none is pending, and reviewDecision is '${review}' so a"
+                echo "::error::missing approval is NOT the cause either. The known cause of THIS"
+                echo "::error::narrowed signal is REQUIRED_CHECKS having gone stale (it has drifted"
+                echo "::error::twice: PR #815, and 2026-08-13) — protection requires a context this"
+                echo "::error::file does not know about, so nothing was ever posted for it. Compare"
+                echo "::error::'gh api repos/${REPO}/branches/main/protection/required_status_checks'"
+                echo "::error::against the table in this file and add what is missing."
+                echo "::error::This workflow cannot read branch protection to confirm that, so it"
+                echo "::error::names the known cause without asserting it is the only one."
                 exit 1
               fi
             fi
