@@ -29,6 +29,12 @@ permissions:
   # emitted a ::warning:: nobody read, and exited 0. A gate that cannot reach
   # its own evidence has verified nothing (`gates_that_measure_nothing`).
   pull-requests: read
+  # workflow-lane-states reads GET /repos/{owner}/{repo}/actions/workflows, the
+  # ONLY place a workflow's `state` is exposed — `gh run list` cannot show a
+  # disabled lane because a disabled lane produces no runs. That endpoint needs
+  # actions:read. Without it the guard 404s/403s and reports UNREADABLE rather
+  # than "nothing disabled", which is the correct failure but a useless one.
+  actions: read
 
 concurrency:
   group: loom-guardrails-${{ github.ref }}
@@ -656,11 +662,40 @@ jobs:
       # !inputs.keep_resources` — and a scheduled event carries NO inputs, so
       # `!inputs.keep_resources` is `!''` = TRUE. The daily crons (gcch 10:00Z,
       # gcc 08:00Z) would have destroyed the sovereign estate on every green run.
-      # Invisible from `gh run list` because both lanes are disabled_manually,
-      # and invisible from run history because it had never fired.
+      # Invisible from `gh run list` because both lanes were disabled_manually
+      # at the time, and invisible from run history because it had never fired.
+      # (Measured 2026-08-13: deploy-fiab-gcch is active again; deploy-fiab-gcc
+      # is still disabled_manually. The workflow-lane-states step below is what
+      # keeps that sentence from going stale unnoticed again.)
       - name: 'teardown-not-on-schedule (a cron must never be able to tear down an estate)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-teardown-not-on-schedule.mjs
+      # The sibling of the guard above, and the reason it had to be written at
+      # all: a DISABLED workflow produces no runs, so `gh run list` shows no
+      # failures and the dashboard row is indistinguishable from a lane with
+      # nothing to do. Disabling happens in the UI — one click, no commit, no
+      # review, no record — and every other signal keeps reading green
+      # (`red_lane_disabled_not_fixed`). The state exists only in the workflows
+      # API, and until now nothing in CI read it. Every non-active workflow must
+      # now be declared in scripts/ci/workflow-lane-states-allowlist.json with an
+      # owner, a written reason, and an EXPIRING review date.
+      #
+      # This guard never enables anything and must not be made to: deploy-fiab-gcc
+      # carries a daily 08:00 UTC cron over a sovereign boundary, so turning a lane
+      # back on is an operator decision taken after reading its teardown `if:`.
+      # Self-test first — it carries the mutant fixtures (undeclared lane,
+      # placeholder reason, missing owner, expired/absent reviewBy, drifted state,
+      # stale entry, duplicate path, empty read, truncated page). The plain run
+      # ALSO executes an embedded known-true control before judging the real
+      # population, so when the disabled count reaches zero the detector is still
+      # exercised every run rather than passing vacuously.
+      - name: 'workflow-lane-states (a switched-off lane must be DECLARED, not discovered — #3345)'
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/check-workflow-lane-states.mjs --self-test
+          node scripts/ci/check-workflow-lane-states.mjs
       # If the registry NAME comes from a variable, the login-server SUFFIX must
       # too. mirror-upstream-images.sh read back `${ACR}.azurecr.io/${DST}` — the
       # name was right for Gov, the suffix was Commercial. All three upstream

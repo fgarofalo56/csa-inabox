@@ -1,0 +1,50 @@
+{
+  "$comment": [
+    "DELIBERATELY NON-ACTIVE WORKFLOWS — consumed by scripts/ci/check-workflow-lane-states.mjs.",
+    "",
+    "WHY THIS FILE EXISTS (#3345). A disabled workflow produces no runs, so it is",
+    "invisible to `gh run list` and to the Actions dashboard: a switched-off lane and a",
+    "lane with nothing to do render identically. The state lives in one place only —",
+    "  gh api repos/OWNER/REPO/actions/workflows --paginate \\",
+    "    --jq '.workflows[] | select(.state != \"active\") | \"\\(.state)\\t\\(.path)\"'",
+    "Disabling happens in the GitHub UI: one click, no commit, no review, no record.",
+    "This file IS the record. Anything non-active and absent from here fails the build.",
+    "",
+    "RULES OF THE ALLOWLIST (enforced by the script, not by convention):",
+    "  1. `path` and `state` must match what the API reports. A state that drifts from",
+    "     the recorded one FAILS — the old reason does not get to cover a new fact.",
+    "  2. `owner` is required. #3345 asks for an owner per disablement, not just a note.",
+    "  3. `reason` must be at least 60 characters and free of TODO/TBD/WIP placeholders.",
+    "     State what was turned off, what was MEASURED about it, and what has to be true",
+    "     to turn it back on. Do not state a motive you did not establish",
+    "     (.claude/rules/deploy-integrity.md R7).",
+    "  4. `reviewBy` (YYYY-MM-DD) is required and EXPIRES. Past its date the guard fails",
+    "     until someone re-enables, retires, or re-dates with a fresh read. Without an",
+    "     expiry a disablement is permanent by default, which is how a lane stays dark",
+    "     for months while every dashboard reads green.",
+    "  5. An entry whose lane is ACTIVE again — or gone from the API — FAILS. A register",
+    "     nobody drains stops describing reality.",
+    "",
+    "RE-ENABLING IS NOT THIS GUARD'S JOB, and must never be made to be. Read the lane's",
+    "`schedule:` and its teardown `if:` FIRST. Both sovereign lanes once carried a",
+    "cron-reachable teardown (`!inputs.keep_resources` is `!''` = TRUE on a schedule),",
+    "so \"just turn it back on\" would have destroyed a sovereign estate. See",
+    "scripts/ci/check-teardown-not-on-schedule.mjs. Enabling is an operator decision."
+  ],
+  "allowed": [
+    {
+      "path": ".github/workflows/csa-loom-spark-probe2.yml",
+      "state": "disabled_manually",
+      "owner": "fgarofalo56",
+      "reason": "Dispatch-only Spark/Livy diagnostic, disabled 2026-08-06 (the workflow's updated_at is 2026-08-06T22:32:46-04:00). MEASURED: its last six runs are all `push` + `failure`, and GitHub's own verdict on run 31127336999 is 'This run likely failed because of a workflow file issue' — the file was invalid YAML from the day it was written (#3034), so every commit produced a red run that executed nothing. Commit 6a8242bf (#3061) repaired the YAML at 2026-08-06T22:32:44-04:00, two seconds before the disablement timestamp. ENABLEMENT RISK: none measurable — `on:` is `workflow_dispatch` only, there is no `schedule:` and no teardown step, so nothing fires unattended. Its own header calls it a byte-for-byte copy of csa-loom-spark-livy-probe.yml and a candidate for retirement; retiring it is the cleaner end-state, and that is an operator call, not a YAML fix.",
+      "reviewBy": "2026-11-11"
+    },
+    {
+      "path": ".github/workflows/deploy-fiab-gcc.yml",
+      "state": "disabled_manually",
+      "owner": "fgarofalo56",
+      "reason": "GCC sovereign deploy lane, disabled 2026-08-08 (workflow updated_at 2026-08-08T04:36:15-04:00, the same day as its last two dispatch runs). The motive was not recorded in-repo and is not inferred here. MEASURED, from the file as it stands on main: it carries a daily `cron: '0 8 * * *'`; its Teardown step at line 431 is gated `github.event_name != 'schedule'`, so a scheduled run CANNOT tear the estate down (that condition was inverted on both sovereign lanes until check-teardown-not-on-schedule.mjs, and this lane now passes it); its Provision step at line 254 is gated `github.event_name == 'schedule' || inputs.run_mode == 'full'`, so a scheduled run DOES apply the template. Also measured: `gh secret list` carries AZURE_GOV_* but no AZURE_GCC_CLIENT_ID / _CLIENT_SECRET / _TENANT_ID / _SUBSCRIPTION_ID, and the precheck added by #3219 on 2026-08-11 — after this lane was switched off — exits 1 on a scheduled run when those are absent. So re-enabling today yields a daily FAILING 08:00 UTC run that deploys nothing, rather than a green no-op. Under .claude/rules/cloud-parity.md a dark Gov lane is not a lesser problem than a red Commercial one, so this entry expires rather than persists; #3349 and #3380 track the Gov visibility and adopt-discovery gaps behind it.",
+      "reviewBy": "2026-11-11"
+    }
+  ]
+}
