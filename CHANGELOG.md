@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.94.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.94.0...csa-inabox-v0.94.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **readiness:** LOOM_IQ_MCP_ENABLED + LOOM_PIPELINE_CI_ENABLED were in the WRONG ternary branch ([#3323](https://github.com/fgarofalo56/csa-inabox/issues/3323)) ([b0cf131](https://github.com/fgarofalo56/csa-inabox/commit/b0cf1316fd5974b852f485f410fcf1e9f05f3785)), closes [#3321](https://github.com/fgarofalo56/csa-inabox/issues/3321) [#3133](https://github.com/fgarofalo56/csa-inabox/issues/3133)
+
 ## [0.94.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.93.4...csa-inabox-v0.94.0) (2026-08-13)
 
 
