@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "6597219381997303563"
+      "templateHash": "5457349715275933839"
     }
   },
   "definitions": {
@@ -2539,7 +2539,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10890164368199753850"
+              "templateHash": "16306308549380957188"
             }
           },
           "definitions": {
@@ -3604,7 +3604,7 @@
             },
             "loomIqMcpEnabled": {
               "type": "bool",
-              "defaultValue": false,
+              "defaultValue": true,
               "metadata": {
                 "description": "Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret."
               }
@@ -4650,7 +4650,7 @@
             },
             "loomWorkspaceM365LinkEnabled": {
               "type": "bool",
-              "defaultValue": false,
+              "defaultValue": true,
               "metadata": {
                 "description": "Enable workspace ↔ Microsoft 365 group linking (workspace settings → \"Teams and SharePoint\" tab). When true, sets LOOM_WORKSPACE_M365_LINK=true on the Console and documents the additional Group.ReadWrite.All Graph AppRole the Console UAMI needs to CREATE a group for a workspace. Linking an EXISTING group needs only Group.Read.All (already covered by the identity picker grant). Default false so existing deployments do not get a surprise consent prompt."
               }
@@ -4664,7 +4664,7 @@
             },
             "loomSharepointShortcutsEnabled": {
               "type": "bool",
-              "defaultValue": false,
+              "defaultValue": true,
               "metadata": {
                 "description": "Enable OneLake-shortcut sources to SharePoint document libraries and OneDrive folders via Microsoft Graph (lakehouse editor → New shortcut → SharePoint / OneDrive). When true, sets LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true on the Console and documents the Graph Sites.Read.All + Files.Read.All AppRoles the Console UAMI needs (scripts/csa-loom/grant-shortcut-graph-approles.sh + admin consent). Azure-native parity with Fabric OneLake OneDrive/SharePoint shortcuts; NO Fabric dependency. When false, the SharePoint source renders but the browse/create return 503 with the exact remediation (no mock data)."
               }

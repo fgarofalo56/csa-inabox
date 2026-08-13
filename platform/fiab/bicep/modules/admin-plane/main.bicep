@@ -649,7 +649,7 @@ param copilotMafEnabled bool = false
 param dbtRunnerEnabled bool = false
 
 @description('Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret.')
-param loomIqMcpEnabled bool = false
+param loomIqMcpEnabled bool = true
 
 @description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes (/api/deployment-pipelines/loom/**) so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task/extension (Fabric "fabric-devops-pipelines" parity). Console users always reach these routes via their MSAL session; this flag only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret (set a dedicated LOOM_CI_TOKEN Key Vault secret to isolate CI from the broader internal-trust token).')
 param loomPipelineCiEnabled bool = false
@@ -1931,13 +1931,13 @@ param loomPowerBiAdminLabels bool = false
 param loomIdentityPickerEnabled bool = false
 
 @description('Enable workspace ↔ Microsoft 365 group linking (workspace settings → "Teams and SharePoint" tab). When true, sets LOOM_WORKSPACE_M365_LINK=true on the Console and documents the additional Group.ReadWrite.All Graph AppRole the Console UAMI needs to CREATE a group for a workspace. Linking an EXISTING group needs only Group.Read.All (already covered by the identity picker grant). Default false so existing deployments do not get a surprise consent prompt.')
-param loomWorkspaceM365LinkEnabled bool = false
+param loomWorkspaceM365LinkEnabled bool = true
 
 @description('Enable per-domain Entra security-group provisioning for the D2 domain-admin / domain-contributor RBAC tiers. When true, sets LOOM_DOMAIN_GROUP_PROVISIONING=true on the Console and ORs the Group.ReadWrite.All Graph AppRole into the identity-graph-rbac documented set (the same AppRole workspace M365 linking uses). The Console then auto-creates loom-domain-<id>-admins + loom-domain-<id>-contributors security groups at domain-create time and binds them on /admin/permissions (Domain access). Default false — domains still work via the legacy admins[]/contributors model; when false POST /api/admin/domains?provisionGroups returns 503 with the exact remediation.')
 param loomDomainGroupProvisioningEnabled bool = false
 
 @description('Enable OneLake-shortcut sources to SharePoint document libraries and OneDrive folders via Microsoft Graph (lakehouse editor → New shortcut → SharePoint / OneDrive). When true, sets LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true on the Console and documents the Graph Sites.Read.All + Files.Read.All AppRoles the Console UAMI needs (scripts/csa-loom/grant-shortcut-graph-approles.sh + admin consent). Azure-native parity with Fabric OneLake OneDrive/SharePoint shortcuts; NO Fabric dependency. When false, the SharePoint source renders but the browse/create return 503 with the exact remediation (no mock data).')
-param loomSharepointShortcutsEnabled bool = false
+param loomSharepointShortcutsEnabled bool = true
 
 @description('Resource-group name prefix for dedicated per-workspace backing resource groups created from the workspace create wizard (Advanced → "Provision a dedicated resource group"). The wizard appends a short workspace id. The Console UAMI needs Contributor at subscription scope to create them.')
 param loomWorkspaceRgPrefix string = 'rg-loom-ws-'
