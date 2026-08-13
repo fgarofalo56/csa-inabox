@@ -416,6 +416,19 @@
       "remediation": "Authenticate azd itself before `azd provision`, in this order: `azd config set cloud.name <AzureCloud|AzureUSGovernment>` then `azd auth login --client-id <id> --client-secret <secret> --tenant-id <tid>`. Setting the cloud AFTER logging in yields a token the target ARM endpoint will not accept. Retrying cannot help — this is a missing credential, not a transient fault."
     },
     {
+      "id": "config.azd-missing-subscription",
+      "class": "config",
+      "anyOf": [
+        "initializing provisioning manager: prompt required",
+        "missing required inputs:",
+        "1 required input is missing"
+      ],
+      "observed": "`azd provision --no-prompt` aborted before it reached ARM because a required azd input was unset. Measured on deploy-fiab-gcch runs 31688699259 (2026-08-12) and 31712233603 (2026-08-13), both scheduled: 'ERROR: deployment failed: initializing provisioning manager: prompt required / 1 required input is missing. / Missing required inputs: subscription -> Environment: AZURE_SUBSCRIPTION_ID'. The gcch lane authenticated azd correctly (config.azd-not-logged-in was already fixed) but never set a subscription: azd keeps its own environment, separate from the az CLI, so azure/login@v2 + `azd auth login` hand it a TOKEN and no subscription. --no-prompt then converts the would-be prompt into a hard failure. deploy-retry.mjs DID run and classified this UNKNOWN, which fails closed correctly but named no cause - this signal closes that gap.",
+      "remediationKind": "operator-action",
+      "remediation": "Set the missing input in the azd environment before `azd provision`, e.g. `azd env set AZURE_SUBSCRIPTION_ID <subscription-guid>` (or `azd env set AZURE_LOCATION <region>` etc. for whichever input the message names - read the 'Missing required inputs' list, it is exact). azd will NOT inherit this from `az account set`: its environment is its own. Retrying cannot help, this is a missing input, not a transient fault. In CSA Loom's own sovereign lanes this was a workflow defect - the value must come from the boundary's subscription secret and must be treated as FATAL when empty, never skipped.",
+      "$note": "anyOf is matched case-insensitively against the whole captured output (failure-taxonomy.ts lowercases both sides), so these entries are lowercase on purpose."
+    },
+    {
       "id": "config.waf-managed-ruleset-no-exclusions",
       "class": "config",
       "anyOf": [

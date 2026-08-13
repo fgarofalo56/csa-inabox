@@ -434,6 +434,9 @@ jobs:
         # happened. The sibling preflight step already resolves the tag from the
         # same repo variable; only the step that actually deploys was missing it.
         env:
+          # azd REQUIRES this and cannot derive it (#3137). See the guard in the
+          # azd branch below for the measured failure this prevents.
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
           LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG || 'v0.1' }}
           LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG || 'v0.1' }}
           LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG || 'v0.1' }}
@@ -524,6 +527,20 @@ jobs:
               fi
               azd env set "$1" "$2"
             }
+            # AZURE_SUBSCRIPTION_ID is NOT routed through azdset(). azd cannot
+            # derive it and does not inherit it from the az CLI — its environment
+            # is its own store, so azure/login@v2 + `azd auth login` give it a
+            # TOKEN and no subscription. Skipping it on empty is precisely how
+            # this lane failed on 2026-08-12 (run 31688699259) and 2026-08-13
+            # (31712233603):
+            #   ERROR: deployment failed: initializing provisioning manager: prompt required
+            #   Missing required inputs:  subscription -> Environment: AZURE_SUBSCRIPTION_ID
+            # so for THIS variable an empty value is fatal, loudly, before azd runs.
+            if [ -z "${AZURE_SUBSCRIPTION_ID:-}" ]; then
+              echo "::error::AZURE_GOV_SUBSCRIPTION_ID is empty. azd provision REQUIRES a subscription and cannot derive one; it would abort with 'prompt required'. Set the AZURE_GOV_SUBSCRIPTION_ID repository secret."
+              exit 1
+            fi
+            azd env set AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
             azdset AZURE_CLOUD "$AZURE_CLOUD"
             azdset AZURE_LOCATION "$AZURE_LOCATION"
             azdset CSA_LOOM_BOUNDARY "$CSA_LOOM_BOUNDARY"
