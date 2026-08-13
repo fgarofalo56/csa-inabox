@@ -25,6 +25,27 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.95.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.3...csa-inabox-v0.95.4) (2026-08-13)
+
+
+### Bug Fixes
+
+* **release:** approve the withheld runs instead of faking their results ([#3387](https://github.com/fgarofalo56/csa-inabox/issues/3387)) ([7a383a7](https://github.com/fgarofalo56/csa-inabox/commit/7a383a71a5e8352006f22cd995197a48cdd0c96d))
+
+## [0.95.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.2...csa-inabox-v0.95.3) (2026-08-13)
+
+
+### Bug Fixes
+
+* **deploy:** the ACR token half of the propagation window got 60s while its network half got 180s (P0 [#3383](https://github.com/fgarofalo56/csa-inabox/issues/3383)) ([#3386](https://github.com/fgarofalo56/csa-inabox/issues/3386)) ([110d9c7](https://github.com/fgarofalo56/csa-inabox/commit/110d9c78d296edd71cf07486defad3d5fbae8fa6))
+* **docs:** redact the operator tenant domain — docs-hygiene is red on main ([#3385](https://github.com/fgarofalo56/csa-inabox/issues/3385)) ([de66c79](https://github.com/fgarofalo56/csa-inabox/commit/de66c790716703888d21ff92d01a7855af0f6d32))
+* **security:** MSAL bootstrap reuses before it mints, and prunes only what it can prove is superseded ([#3335](https://github.com/fgarofalo56/csa-inabox/issues/3335)) ([#3359](https://github.com/fgarofalo56/csa-inabox/issues/3359)) ([c4bbfea](https://github.com/fgarofalo56/csa-inabox/commit/c4bbfea5a7ea93c095b89906287b9b222c8390ce))
+
+
+### Documentation
+
+* **access:** end-to-end access-management design + a P0 found while researching it ([#3360](https://github.com/fgarofalo56/csa-inabox/issues/3360)) ([2ccc8fb](https://github.com/fgarofalo56/csa-inabox/commit/2ccc8fb85366bb29e9c1ca440a08bdfeaf069704))
+
 ## [0.95.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.1...csa-inabox-v0.95.2) (2026-08-13)
 
 
