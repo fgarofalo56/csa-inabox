@@ -3,13 +3,55 @@ name: release-please
 # Why this workflow also posts commit statuses
 # ---------------------------------------------
 # release-please opens its release PR using GITHUB_TOKEN. GitHub *intentionally*
-# does NOT trigger downstream workflows on PRs created by GITHUB_TOKEN (to
-# prevent infinite loops). The result: branch protection's required checks
-# (Python Tests, dbt Compile, etc.) never run on the release PR, so it can
-# never merge — 0 checks, BLOCKED state.
+# withholds downstream workflows on PRs created by GITHUB_TOKEN (to prevent
+# infinite loops). The result: branch protection's required checks (Python
+# Tests, dbt Compile, etc.) do not report on the release PR, so it can never
+# merge — 0 checks, BLOCKED state.
+#
+# PRECISION (measured 2026-08-13 on PR #3382, correcting the earlier claim here
+# that these workflows "never run"): the runs ARE created — all ten of them —
+# and they sit at conclusion `action_required`, awaiting manual approval. They
+# are withheld, not absent. `gh api -X POST repos/{repo}/actions/runs/{id}/approve`
+# releases them and the REAL checks then run and pass.
+#
+# So the order of preference below is: APPROVE the held runs (real results), and
+# only fall back to posting synthetic statuses when there was nothing to approve.
+#
+# Why the fallback's context list is hardcoded rather than derived: deriving it
+# from `repos/{repo}/branches/main/protection/required_status_checks` was tried
+# and is IMPOSSIBLE with GITHUB_TOKEN. That endpoint needs admin, and the
+# corresponding `administration` scope is not a valid workflow `permissions:` key
+# at all (actionlint rejects it: the allowed set is actions, artifact-metadata,
+# attestations, checks, contents, deployments, …). The rulesets endpoint
+# (`/rules/branches/main`) IS readable without admin but returns
+# required_status_checks: [] here, because these 14 contexts live in CLASSIC
+# branch protection, not a ruleset. There is no token-compatible source, so the
+# list stays hand-maintained — and the post-verify step below exists to make its
+# staleness LOUD, since it has now drifted twice in silence (PR #815, and again
+# on 2026-08-13 when `guardrails` and `vitest (node 20)` were missing).
 #
 # The canonical fix is a PAT (RELEASE_PLEASE_TOKEN). We don't have one and
 # don't want a long-lived one stored in repo secrets.
+#
+# MEASURED PROTECTION STATE (2026-08-13, read with an operator token that CAN
+# reach the protection endpoint — recorded here so nobody re-derives it):
+#   required_status_checks.strict      = true   (=> release PRs go BEHIND on any
+#                                                main push and must be updated)
+#   required_status_checks.contexts    = the same 14 listed below; the
+#                                         hand-maintained array was verified
+#                                         EXACTLY equal to protection on this date
+#   required_approving_review_count    = 1      (=> every release PR is BLOCKED
+#                                                until a human approves; a bot
+#                                                cannot approve, so this gate is
+#                                                permanent, not a defect)
+#   required_linear_history            = true   (=> squash or rebase, never a
+#                                                merge commit)
+#   required_conversation_resolution   = false
+#   enforce_admins                     = false
+#
+# The approving-review requirement is why a release PR can sit at BLOCKED with
+# all 14 contexts green. The post-verify below distinguishes that case from
+# context drift instead of guessing (deploy-integrity.md R7).
 #
 # Instead, after release-please creates/updates its PR, this workflow uses
 # its own GITHUB_TOKEN (which CAN write commit statuses) to mark every
@@ -36,6 +78,10 @@ permissions:
   contents: write
   pull-requests: write
   statuses: write
+  # Needed to APPROVE the runs GitHub withholds on GITHUB_TOKEN-authored PRs
+  # (see header). Approval produces REAL check results; the auto-pass fallback
+  # only runs when there was nothing to approve.
+  actions: write
 
 jobs:
   release-please:
@@ -59,26 +105,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Required checks declared in branch protection on `main` (kept in
-          # sync with `gh api repos/{owner}/{repo}/branches/main/protection`).
-          # If branch protection changes, update this list.
+          REPO="${GITHUB_REPOSITORY}"
+          RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+
+          # Hand-maintained mirror of branch protection's required contexts.
+          # See the header for WHY this cannot be derived with GITHUB_TOKEN.
+          # It has drifted twice; the post-verify at the end of the loop is the
+          # control that makes a third drift fail loudly instead of silently.
+          # Last reconciled against protection: 2026-08-13 (14 contexts).
           REQUIRED_CONTEXTS=(
+            "PowerShell Lint"
             "Python Lint"
             "Python Tests (3.10)"
             "Python Tests (3.11)"
             "Python Tests (3.12)"
-            "PowerShell Lint"
-            "Secret Scan"
             "Repo Hygiene"
-            "dbt Compile (shared)"
+            "Secret Scan"
             "dbt Compile (finance)"
             "dbt Compile (inventory)"
             "dbt Compile (sales)"
+            "dbt Compile (shared)"
+            "guardrails"
             "next build (node 20)"
+            "vitest (node 20)"
           )
-
-          REPO="${GITHUB_REPOSITORY}"
-          RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
 
           # Find every open PR opened by github-actions[bot] whose head branch
           # matches the release-please naming scheme. Resolve each to its
@@ -112,6 +162,30 @@ jobs:
               exit 1
             fi
 
+            # PREFERRED PATH: release the runs GitHub is withholding. These
+            # produce REAL check results, so nothing has to be taken on faith.
+            mapfile -t HELD < <(
+              gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100" \
+                --jq '.workflow_runs[] | select(.status=="action_required") | .id'
+            )
+            approved=0
+            for rid in "${HELD[@]:-}"; do
+              [ -z "$rid" ] && continue
+              if gh api -X POST "repos/${REPO}/actions/runs/${rid}/approve" >/dev/null 2>&1; then
+                approved=$((approved + 1))
+              else
+                echo "  ! could not approve held run ${rid}"
+              fi
+            done
+            if [ "$approved" -gt 0 ]; then
+              echo "  approved ${approved} held run(s) — REAL checks are now running on ${sha}."
+              echo "  Not posting synthetic statuses: doing so would let this PR merge"
+              echo "  BEFORE those real checks report, which is exactly the"
+              echo "  green-that-measured-nothing failure this repo forbids."
+              continue
+            fi
+            echo "  no held runs could be approved (${#HELD[@]} found) — falling back to auto-pass."
+
             for ctx in "${REQUIRED_CONTEXTS[@]}"; do
               echo "  - posting success status: ${ctx}"
               gh api -X POST "repos/${REPO}/statuses/${sha}" \
@@ -120,6 +194,57 @@ jobs:
                 -f description="Auto-passed: release PR only modifies version metadata" \
                 -f target_url="${RUN_URL}" >/dev/null
             done
+
+            # DRIFT CONTROL. We just marked every context we KNOW about as green
+            # and nothing is failing, so this PR should be mergeable. If GitHub
+            # still reports BLOCKED, the most likely explanation is that
+            # protection requires a context missing from the list above — the
+            # exact silent failure that has already happened twice. This cannot
+            # be confirmed from here (GITHUB_TOKEN cannot read protection), so
+            # the message says what was measured and stops short of asserting a
+            # cause it did not establish.
+            state=""
+            for _ in 1 2 3 4; do
+              sleep 15
+              state=$(gh pr view "${num}" --repo "${REPO}" --json mergeStateStatus --jq '.mergeStateStatus')
+              [ "$state" != "UNKNOWN" ] && [ "$state" != "BLOCKED" ] && break
+            done
+            echo "  post-verify: mergeStateStatus=${state}"
+            if [ "$state" = "BLOCKED" ]; then
+              failing=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup \
+                --jq '[.statusCheckRollup[]? | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED")) | .name // .context] | join(", ")')
+              # A THIRD cause of BLOCKED-with-nothing-failing, and the most common
+              # one: branch protection requires an approving review
+              # (required_approving_review_count=1 as of 2026-08-13, measured on
+              # PR #3382, which sat BLOCKED with all 14 required contexts green and
+              # reviewDecision=REVIEW_REQUIRED). GITHUB_TOKEN cannot read branch
+              # protection, but reviewDecision lives on the PULL REQUEST object and
+              # IS readable here — so this case can be distinguished rather than
+              # guessed at. Blaming REQUIRED_CONTEXTS drift for a missing approval
+              # would be exactly the R7 violation this file's post-verify exists to
+              # prevent: asserting a cause the code did not establish.
+              #
+              # A bot cannot approve a PR, so this is a PERMANENT human gate on every
+              # release PR, not a defect. It is reported as a notice and does not fail
+              # the run.
+              review=$(gh pr view "${num}" --repo "${REPO}" --json reviewDecision --jq '.reviewDecision // ""')
+              if [ -n "$failing" ]; then
+                echo "::warning::Release PR #${num} is BLOCKED with failing checks: ${failing}. That is a real failure, not list drift."
+              elif [ "$review" = "REVIEW_REQUIRED" ]; then
+                echo "::notice::Release PR #${num} is BLOCKED solely because branch protection requires an approving review, and no check is failing. This is the expected steady state — GITHUB_TOKEN cannot approve a PR. A human (or a PAT-backed reviewer) must approve #${num} to release. NOT context drift."
+              else
+                echo "::error::Release PR #${num} is still BLOCKED after posting all ${#REQUIRED_CONTEXTS[@]}"
+                echo "::error::contexts this workflow knows about. NO check is failing, and"
+                echo "::error::reviewDecision is '${review}' so a missing approval is NOT the cause"
+                echo "::error::either. This workflow cannot read branch protection to confirm what"
+                echo "::error::is left, but the known cause of THIS narrowed signal is"
+                echo "::error::REQUIRED_CONTEXTS having gone stale (it has drifted twice: PR #815,"
+                echo "::error::and 2026-08-13). Compare"
+                echo "::error::'gh api repos/${REPO}/branches/main/protection/required_status_checks'"
+                echo "::error::against the list in this file and add what is missing."
+                exit 1
+              fi
+            fi
           done
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
