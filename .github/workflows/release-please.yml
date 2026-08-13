@@ -33,6 +33,26 @@ name: release-please
 # The canonical fix is a PAT (RELEASE_PLEASE_TOKEN). We don't have one and
 # don't want a long-lived one stored in repo secrets.
 #
+# MEASURED PROTECTION STATE (2026-08-13, read with an operator token that CAN
+# reach the protection endpoint — recorded here so nobody re-derives it):
+#   required_status_checks.strict      = true   (=> release PRs go BEHIND on any
+#                                                main push and must be updated)
+#   required_status_checks.contexts    = the same 14 listed below; the
+#                                         hand-maintained array was verified
+#                                         EXACTLY equal to protection on this date
+#   required_approving_review_count    = 1      (=> every release PR is BLOCKED
+#                                                until a human approves; a bot
+#                                                cannot approve, so this gate is
+#                                                permanent, not a defect)
+#   required_linear_history            = true   (=> squash or rebase, never a
+#                                                merge commit)
+#   required_conversation_resolution   = false
+#   enforce_admins                     = false
+#
+# The approving-review requirement is why a release PR can sit at BLOCKED with
+# all 14 contexts green. The post-verify below distinguishes that case from
+# context drift instead of guessing (deploy-integrity.md R7).
+#
 # Instead, after release-please creates/updates its PR, this workflow uses
 # its own GITHUB_TOKEN (which CAN write commit statuses) to mark every
 # required check on the PR head SHA as a success with a clear note that
@@ -193,14 +213,33 @@ jobs:
             if [ "$state" = "BLOCKED" ]; then
               failing=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup \
                 --jq '[.statusCheckRollup[]? | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED")) | .name // .context] | join(", ")')
+              # A THIRD cause of BLOCKED-with-nothing-failing, and the most common
+              # one: branch protection requires an approving review
+              # (required_approving_review_count=1 as of 2026-08-13, measured on
+              # PR #3382, which sat BLOCKED with all 14 required contexts green and
+              # reviewDecision=REVIEW_REQUIRED). GITHUB_TOKEN cannot read branch
+              # protection, but reviewDecision lives on the PULL REQUEST object and
+              # IS readable here — so this case can be distinguished rather than
+              # guessed at. Blaming REQUIRED_CONTEXTS drift for a missing approval
+              # would be exactly the R7 violation this file's post-verify exists to
+              # prevent: asserting a cause the code did not establish.
+              #
+              # A bot cannot approve a PR, so this is a PERMANENT human gate on every
+              # release PR, not a defect. It is reported as a notice and does not fail
+              # the run.
+              review=$(gh pr view "${num}" --repo "${REPO}" --json reviewDecision --jq '.reviewDecision // ""')
               if [ -n "$failing" ]; then
                 echo "::warning::Release PR #${num} is BLOCKED with failing checks: ${failing}. That is a real failure, not list drift."
+              elif [ "$review" = "REVIEW_REQUIRED" ]; then
+                echo "::notice::Release PR #${num} is BLOCKED solely because branch protection requires an approving review, and no check is failing. This is the expected steady state — GITHUB_TOKEN cannot approve a PR. A human (or a PAT-backed reviewer) must approve #${num} to release. NOT context drift."
               else
                 echo "::error::Release PR #${num} is still BLOCKED after posting all ${#REQUIRED_CONTEXTS[@]}"
-                echo "::error::contexts this workflow knows about, and NO check is failing. This"
-                echo "::error::workflow cannot read branch protection to confirm why, but the"
-                echo "::error::known cause of this exact signal is REQUIRED_CONTEXTS having gone"
-                echo "::error::stale (it has drifted twice: PR #815, and 2026-08-13). Compare"
+                echo "::error::contexts this workflow knows about. NO check is failing, and"
+                echo "::error::reviewDecision is '${review}' so a missing approval is NOT the cause"
+                echo "::error::either. This workflow cannot read branch protection to confirm what"
+                echo "::error::is left, but the known cause of THIS narrowed signal is"
+                echo "::error::REQUIRED_CONTEXTS having gone stale (it has drifted twice: PR #815,"
+                echo "::error::and 2026-08-13). Compare"
                 echo "::error::'gh api repos/${REPO}/branches/main/protection/required_status_checks'"
                 echo "::error::against the list in this file and add what is missing."
                 exit 1
