@@ -1936,6 +1936,7 @@ nav:
           - Governance:
               - Catalog: fiab/governance/catalog.md
               - Access requests (approval inbox): fiab/governance/access-requests.md
+              - Access management (design): fiab/access-management-design.md
               - Tagging & Classification: fiab/governance/tagging-classification.md
               - Workspace RBAC: fiab/governance/workspace-rbac.md
               - Access-request approvals: fiab/governance/access-request-approvals.md
