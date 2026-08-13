@@ -8,6 +8,7 @@ export const meta = {
     { title: 'Build', detail: 'one engineer per story, each in its OWN git worktree' },
     { title: 'Test', detail: 'testers verify independently — the author never grades their own work' },
     { title: 'Review', detail: 'adversarial reviewers try to REFUTE each story; majority kills it' },
+    { title: 'Rework', detail: 'refused stories get the findings back and are RE-reviewed — one bounded cycle' },
     { title: 'Report', detail: 'ship list, merge order, and what still owes a live receipt' },
   ],
 };
@@ -347,9 +348,121 @@ one more review round.`,
   },
 );
 
+// ── PHASE 5b: REWORK ─────────────────────────────────────────────────────────
+//
+// WHY THIS EXISTS. Sprint 1 approved 0 of 16 points; Sprint 3 approved 0 of 16
+// again — after the Sprint-1 calibration (smaller stories, reviewer checklist
+// handed over up front) had already been applied. The reviews were not wrong
+// either time: they found real, SPECIFIC, and mostly SMALL defects — an R7 false
+// assertion on one code path, a test whose NAME claimed coverage it did not have,
+// an UNKNOWN rendered as a negative.
+//
+// The defect was in the PIPELINE, not the engineers. A story that earned REWORK
+// died there, because Review handed straight to Report. No real team works that
+// way: the reviewer's defects go back to the author, get fixed, and get
+// re-reviewed inside the same sprint. Two sprints produced 32 points of work and
+// shipped none of it, while the fixes were often a handful of lines.
+//
+// Bounded to ONE cycle on purpose. If a second adversarial pass still refuses it,
+// the story is genuinely not ready and belongs in the next sprint with what was
+// learned — an unbounded loop would just relitigate a real rejection.
+let results2 = results;
+const firstPassRework = results.filter(
+  (r) => r?.built?.status === 'implemented' && !r.approved,
+);
+
+if (firstPassRework.length > 0) {
+  phase('Rework');
+  log(`${firstPassRework.length} story(ies) earned REWORK on the first pass — feeding the defects back rather than dropping them.`);
+
+  const reworked = await parallel(firstPassRework.map((bundle) => async () => {
+    const defects = [
+      bundle.tests?.verdict === 'SHIP' ? null : `QA: ${bundle.tests?.reasoning ?? 'no QA reasoning recorded'}`,
+      ...(bundle.votes || [])
+        .filter((v) => v.verdict !== 'SHIP')
+        .map((v) => `${v.verdict}: ${v.reasoning}`),
+    ].filter(Boolean).join('\n\n');
+
+    const fixed = await agent(
+      `You are the engineer who wrote CSA Loom story ${bundle.story.ref}, addressing review.
+
+STORY: ${bundle.story.title}
+BRANCH: ${bundle.built.branch || `sprint/${bundle.story.ref}`}
+Your change: ${bundle.built.summary}
+
+The QA pass and the adversarial reviewers REFUSED it. Their findings, verbatim:
+
+${defects}
+
+These are not opinions to argue with — they were measured. Fix every one on the
+SAME branch. Most are small; the review is specific about what and where.
+
+Rules that apply to the fix as much as the original:
+ - Fix the CAUSE, not the symptom. If a message asserted something the code never
+   established, make the message true — do not delete the check.
+ - If a test's NAME claimed coverage it did not have, make the test cover it.
+   Renaming it to match the gap is not a fix.
+ - UNKNOWN is never reported as NEGATIVE. If the code could not determine
+   something, it must say it could not determine it.
+ - Re-run the proof after fixing, and MUTATION-PROVE anything guard-shaped:
+   break the fix, confirm by \`git diff\` that the mutation actually applied,
+   watch the guard fail, restore, watch it pass.
+
+${RULES}
+
+Report what you changed and the evidence it now holds. If a finding is genuinely
+WRONG, say so and show the measurement that refutes it — do not silently ignore it.`,
+      { label: `rework:${bundle.story.ref}`, phase: 'Rework', schema: BUILD_SCHEMA, isolation: 'worktree' },
+    );
+
+    if (!fixed || fixed.status !== 'implemented') return { ...bundle, reworkFailed: true };
+
+    // RE-REVIEW. The same adversarial bar — a rework pass that graded itself
+    // would be exactly the "author grades their own work" failure this pipeline
+    // exists to prevent.
+    const reVotes = (await parallel([
+      ['correctness', 'The previous round was REFUSED. Verify EVERY original finding is genuinely fixed — not renamed, not deleted, not argued away. Then try to refute the fix itself.'],
+      ['honesty', 'Does the fix CLAIM more than it established? Re-check the exact findings that were raised: false assertions, tests whose names overstate coverage, UNKNOWN rendered as negative, guards that cannot fail.'],
+    ].map(([lens, brief]) => () =>
+      agent(
+        `You are a principal engineer RE-REVIEWING CSA Loom story ${bundle.story.ref} after rework, through the ${lens} lens.
+
+${brief}
+
+ORIGINAL FINDINGS THAT MUST NOW BE FIXED:
+${defects}
+
+The engineer says: ${fixed.summary}
+Proof offered: ${fixed.proof}
+Branch: ${fixed.branch || bundle.built.branch}
+
+Read the diff and RUN things. ${RULES}
+
+SHIP only if every original finding is actually resolved and you verified it
+yourself. If any remains, REWORK and say which.`,
+        { label: `re-review:${lens}:${bundle.story.ref}`, phase: 'Rework', schema: VERDICT_SCHEMA, isolation: 'worktree' },
+      )))).filter(Boolean);
+
+    const reShip = reVotes.filter((v) => v.verdict === 'SHIP').length;
+    return {
+      ...bundle,
+      built: fixed,
+      votes: reVotes,
+      shipVotes: reShip,
+      reworked: true,
+      approved: reShip >= 2,
+    };
+  }));
+
+  const byRef = new Map(reworked.filter(Boolean).map((r) => [r.story.ref, r]));
+  results2 = results.map((r) => (r && byRef.has(r.story?.ref) ? byRef.get(r.story.ref) : r));
+  const rescued = reworked.filter((r) => r?.approved).length;
+  log(`Rework cycle: ${rescued}/${firstPassRework.length} rescued to SHIP.`);
+}
+
 // ── PHASE 6: REPORT ──────────────────────────────────────────────────────────
 phase('Report');
-const done = results.filter(Boolean);
+const done = results2.filter(Boolean);
 const approved = done.filter((r) => r.approved);
 const rework = done.filter((r) => r?.built?.status === 'implemented' && !r.approved);
 const blocked = done.filter((r) => r?.built && r.built.status !== 'implemented');
