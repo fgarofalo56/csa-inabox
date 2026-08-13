@@ -245,3 +245,62 @@ test('poll CLI: MODE=poll routes to the poll classifier and exits 1 on timeout',
   assert.equal(fresh.status, 0);
   assert.match(fresh.stdout, /FRESH index/i);
 });
+
+// ── gateway 5xx: INDETERMINATE, not a verdict (#3396) ────────────────────────
+//
+// Measured on copilot-quality-evals 2026-08-13: 4 of 12 runs red on
+// `reindex POST … -> HTTP 504` with a Front Door HTML body, ~30s in — including
+// on `push` to main. The POST handler cannot be the slow party: it does an auth
+// check, a stat-only corpus count, fires the job and returns 202. So the edge
+// answered for the console and we do NOT know whether a replica saw the request.
+// Failing asserts it did not; tolerating asserts it did. Neither was measured.
+
+/** A real Front Door edge error page — HTML, not the console's JSON. */
+const FD_EDGE_HTML =
+  '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN"' +
+  '"http://www.w3.org/TR/html4/strict.dtd">\n<HTML><HEAD><TITLE>The request timed out.</TITLE>';
+
+test('504 with a gateway HTML body → poll (indeterminate), never a bare pass', () => {
+  const r = classifyReindexResult({ code: 504, body: FD_EDGE_HTML });
+  assert.equal(r.verdict, 'poll');
+  assert.equal(r.level, 'warning');
+  // R7: it must say it does not know, not assert an outcome in either direction.
+  assert.match(r.message, /UNKNOWN/);
+  assert.match(r.message, /not asserting either way/i);
+  assert.doesNotMatch(r.message, /index (was|is) refreshed/i);
+});
+
+test('502 and 503 gateway bodies poll too (same edge class)', () => {
+  for (const code of [502, 503]) {
+    assert.equal(classifyReindexResult({ code, body: '<html>edge</html>' }).verdict, 'poll');
+  }
+});
+
+// The narrowing that keeps this from becoming a hole. If the CONSOLE answered,
+// its answer IS the measurement — polling past it would let the app fail quietly.
+test('a 5xx the CONSOLE answered (parseable JSON) still fails loud', () => {
+  const r = classifyReindexResult({ code: 502, body: JSON.stringify({ ok: false, error: 'kaboom' }) });
+  assert.equal(r.verdict, 'fail');
+  assert.match(r.message, /NOT refreshed/i);
+});
+
+test('500 is NEVER indeterminate — it is the app’s own code', () => {
+  assert.equal(classifyReindexResult({ code: 500, body: '<html>whatever</html>' }).verdict, 'fail');
+});
+
+test('the empty-corpus 502 outranks the gateway branch even with an HTML-ish body', () => {
+  const r = classifyReindexResult({ code: 502, body: '<html>No corpus chunks discovered</html>' });
+  assert.equal(r.verdict, 'fail');
+  assert.match(r.message, /NO CORPUS/);
+});
+
+test('CLI exit code for the indeterminate verdict is 75, distinct from 0 and 1', () => {
+  const gw = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: { ...process.env, MODE: 'post', HTTP_CODE: '504', RESP_BODY: FD_EDGE_HTML },
+  });
+  // 0 would skip the poll and pass silently; 1 would fail on an unmeasured
+  // premise. Both are the bugs this exit code exists to avoid.
+  assert.equal(gw.status, 75);
+  assert.match(gw.stdout, /::warning::/);
+});

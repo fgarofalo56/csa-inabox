@@ -75,6 +75,15 @@ const NOT_CONFIGURED_RE =
 const NO_CORPUS_RE = /no corpus chunks/i;
 
 /**
+ * Status codes an EDGE (Front Door) or ingress emits on the origin's behalf.
+ * A body carrying one of these tells us about the path, not about the console.
+ *
+ * 500 is excluded on purpose: it is what the app itself returns, and treating it
+ * as indeterminate would hand the console a way to fail silently.
+ */
+const GATEWAY_CODES = new Set([502, 503, 504]);
+
+/**
  * @param {{ code: number|string, body?: string }} input
  * @returns {{ verdict: 'ok'|'accepted'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
  */
@@ -178,6 +187,34 @@ export function classifyReindexResult({ code, body }) {
         verdict: 'tolerate',
         level: 'warning',
         message: `reindex honest-gated (HTTP ${n}): ${summarize(parsed) || firstLine(raw)}. Not a failure — infra not provisioned; the eval measures whatever backend is available.`,
+      };
+    }
+    // A GATEWAY 5xx with no application body settles NOTHING, so do not pretend
+    // it does — measure instead (#3396). Front Door / ACA ingress answered on
+    // the console's behalf, which means we do not know whether the POST ever
+    // reached a replica. Both readings are live:
+    //   - it reached one  -> the job IS running and the index will converge;
+    //   - it did not      -> nothing started and the index stays stale.
+    // Failing here asserts the second; tolerating asserts the first. Neither is
+    // established, so this returns 'poll' and lets the DURABLE freshness signal
+    // decide. That signal answers the real question — `state:'fresh'` means "the
+    // indexed corpus matches the staged docs", a claim about CONTENT, not about
+    // whether a job ran — so a converged index passes honestly, and one that
+    // never converges times out and fails honestly (classifyReindexPoll).
+    //
+    // Deliberately NARROW: gateway status codes only, and only when the body is
+    // NOT parseable application JSON. The console's own 5xx (the empty-corpus
+    // 502 above, or any JSON error) still fails loud on the spot — it answered,
+    // so its answer is the measurement.
+    if (GATEWAY_CODES.has(n) && !parsed) {
+      return {
+        verdict: 'poll',
+        level: 'warning',
+        message:
+          `reindex POST hit a GATEWAY ${n} with no application body (${firstLine(raw) || '(empty body)'}). ` +
+          'The edge answered for the console, so whether the POST reached a replica is UNKNOWN — ' +
+          'not asserting either way. Polling the durable corpus-freshness signal to settle it; ' +
+          'if the index does not converge, the poll times out and this step fails.',
       };
     }
     return {
@@ -310,6 +347,10 @@ function main() {
         });
   if (level === 'notice') console.log(message);
   else console.log(`::${level}::${message}`);
+  // 0 = proceed, 1 = fail the step, 75 = INDETERMINATE, go poll (EX_TEMPFAIL).
+  // reindex-loom-docs.sh keys on 75 explicitly; any other non-zero is a failure
+  // there, so a typo in this mapping fails the step rather than skipping it.
+  if (verdict === 'poll') process.exit(75);
   process.exit(verdict === 'fail' ? 1 : 0);
 }
 
