@@ -179,6 +179,81 @@ one module keep each cadence independently tunable via
 produced by the deploy. There is no new env var to set; `accessSweeperEnabled`
 defaults to `true`.
 
+### 3.5 `csa-loom-spark-keepwarm` GitHub `schedule:` → `loom-spark-keepwarm` (Shape A) — 2026-08-13, #3226
+
+Not an `azure-functions/` workload, but the same conclusion from the other
+direction: **GitHub Actions `schedule:` is not a scheduler you can build a
+capability on.** Recorded here because this file is the estate's register of
+what runs on an ACA job cron, and #3340 needs that register to be complete.
+
+The Spark warm-pool heartbeat declared `*/5 * * * *`. Measured over 200
+consecutive scheduled runs (`2026-08-04T04:31:08Z` → `2026-08-13T20:22:43Z`,
+231.9 h of wall clock):
+
+```
+declared   */5m         expected ticks   2782
+delivered  200 runs     delivery rate    7.19%
+min gap    22.0 min     median gap       56.9 min   (11.4x declared)
+p25 gap    43.1 min     p75 gap          79.7 min
+p90 gap   131.6 min     p95 gap         155.0 min     max gap  349.9 min
+intervals exceeding the 15-min idle TTL:  199 / 199   (100%)
+```
+
+The warm-session idle TTL is 15 min (`LOOM_SPARK_POOL_IDLE_TTL` default 900s,
+`lib/azure/spark-session-pool.ts`), as is the Spark pool's own
+`autoPause.delayInMinutes` (`landing-zone/synapse.bicep` `sparkPoolAutoPauseDelay`
+default 15, and both tiers in `synapse-spark-pools.bicep`). **Not one interval in
+the measured window was short enough to beat it.** GitHub delays and drops
+high-frequency schedules on busy repositories; the defect was the design that
+assumed the declared number.
+
+**And the heartbeat was warming nothing anyway.** Measured on the live
+Commercial estate, run `31740555128`, `2026-08-13T20:22:48Z`:
+
+```
+keep-warm HTTP 200
+{"ok":true,"skipped":true,"reason":"warm pool disabled (LOOM_SPARK_POOL_ENABLED=false)"}
+warm pool topped up          <- the workflow's own verdict line
+```
+
+The workflow mapped HTTP 200 straight to success, so a documented skip printed
+as a topped-up pool. That is the green-tick-over-a-no-op `no-vaporware.md`
+exists to stop, and `deploy-integrity.md` R7 forbids: it asserted a state it had
+not established.
+
+| Before | After |
+| --- | --- |
+| GitHub `schedule: */5 * * * *` — 7.19% delivered, median 56.9 min | `Microsoft.App/jobs` Schedule trigger, Azure's scheduler, `*/5 * * * *` |
+| No bicep at all | `modules/admin-plane/spark-keepwarm-job.bicep`, wired in `admin-plane/main.bicep` |
+| `LOOM_INTERNAL_TOKEN` as a **GitHub repo secret** (a holder outside the estate) | Shared **`LOOM_INTERNAL_TOKEN`** secretRef, the deterministic guid the deploy already mints |
+| Public hop from a GitHub-hosted runner | Runs inside the console's CAE as the console UAMI; no GitHub dependency, no repo secret (`loomUrl` follows the sibling convention: Front Door when enabled, else CAE-internal `http://loom-console`) |
+| `curl` in a workflow step; HTTP 200 → "topped up" | `node e2e/run-spark-keepwarm.mjs`; `skipped` exits **1** |
+| Ran 288×/day nominal (200/day actual) against a disabled pool | Not deployed at all unless `sparkPoolEnabled=true` |
+
+**Why the job is gated on `sparkPoolEnabled`.** The job is ~free; the warm pool
+it drives is not. A Synapse Spark instance runs a minimum of 3 nodes
+([Learn](https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-pool-configurations#nodes))
+at the deployed default node size Small = 4 vCore, so one continuously-warm
+session pins ≥ 12 vCores. At the measured `centralus` retail Consumption rate of
+**$0.14766 / vCore-hour** (Azure Retail Prices API, meter `vCore`, product
+"Azure Synapse Analytics Serverless Apache Spark Pool - Memory Optimized") that
+is **~$1.77/hour ≈ ~$1,293/month** per warm session at `LOOM_SPARK_POOL_MIN=1` —
+derived from published rates, not a measured bill. `platform/fiab/bicep/main.bicep`
+therefore leaves `sparkPoolEnabled` **false**, and no shipped `.bicepparam`
+overrides it. With the pool off we now deploy **no job** rather than run a
+heartbeat that reports success over a no-op.
+
+**Exactly one scheduler (#3340).** The workflow's `schedule:` block is removed in
+the same change; it survives as a `workflow_dispatch`-only manual probe that now
+reports the console's actual verdict. The ACA job is the sole scheduler.
+
+**Cloud parity.** Gated only on `sparkKeepWarmEnabled && sparkPoolEnabled &&
+containerPlatform == 'containerApps' && deployAppsEnabled` — the same branch the
+GCC-High and IL5 params take (`containerPlatform = 'containerApps'`,
+`deployAppsEnabled = true` in both). `sparkPoolEnabled` is unset in every shipped
+param file, so the warm pool is equally off, and equally enable-able with the
+same one-line flip, in every boundary.
+
 ## 4. Fleet status — every workload under `azure-functions/`
 
 | Workload | Trigger | Status |

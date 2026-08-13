@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "636702638166219798"
+      "templateHash": "10607659798083454941"
     }
   },
   "definitions": {
@@ -2554,7 +2554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "14779192726383126588"
+              "templateHash": "12410298222311590187"
             }
           },
           "definitions": {
@@ -2657,6 +2657,20 @@
                   "nullable": true,
                   "metadata": {
                     "description": "Schedule cron for the Entra GROUP-SYNC reconcile (AG-9) — standard 5-field, UTC. Default hourly at :25, matching the retired timer. The pass no-ops honestly when LOOM_GRAPH_GROUP_SYNC_ENABLED is off."
+                  }
+                },
+                "sparkKeepWarmEnabled": {
+                  "type": "bool",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Drive the Spark warm-pool heartbeat (#3226) from an in-VNet scheduled Container App Job instead of a GitHub Actions schedule. Default ON, but the job only deploys when the warm pool is ALSO enabled (root param sparkPoolEnabled) — with the pool off there is nothing to warm, so no job is created and no cost is incurred. The GitHub `schedule:` this replaces declared */5 and MEASURED a 56.9-min median gap over 200 runs (7.19% delivery), so it never once beat the 15-min idle TTL. Set false only to deliberately return to a heartbeat-less warm pool, which decays cold within 15 minutes."
+                  }
+                },
+                "sparkKeepWarmCron": {
+                  "type": "string",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Schedule cron for the Spark warm-pool heartbeat — STANDARD 5-FIELD, UTC (Container Apps jobs). Default every 5 minutes: it must stay comfortably under BOTH the warm-session idle TTL (LOOM_SPARK_POOL_IDLE_TTL, default 900s) and the Spark pool autoPause delay (default 15 min), and */5 gives 3x margin."
                   }
                 }
               }
@@ -4956,6 +4970,8 @@
             "accessSweepCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'accessSweepCron'), '*/15 * * * *')]",
             "accessReviewSweepCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'accessReviewSweepCron'), '5 * * * *')]",
             "accessGroupSyncCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'accessGroupSyncCron'), '25 * * * *')]",
+            "sparkKeepWarmEnabled": "[coalesce(tryGet(parameters('functionAppsConfig'), 'sparkKeepWarmEnabled'), true())]",
+            "sparkKeepWarmCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'sparkKeepWarmCron'), '*/5 * * * *')]",
             "copilotEvalJudgeDailyCap": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvalJudgeDailyCap'), 5000)]",
             "adxSkuName": "[coalesce(tryGet(parameters('adxConfig'), 'adxSkuName'), 'Dev(No SLA)_Standard_E2a_v4')]",
             "adxEnableOptimizedAutoscale": "[coalesce(tryGet(parameters('adxConfig'), 'adxEnableOptimizedAutoscale'), false())]",
@@ -5199,6 +5215,7 @@
             "costAnomalyActive": "[and(and(variables('costAnomalyEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "assetReconcilerActive": "[and(and(variables('assetReconcilerEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "accessSweeperActive": "[and(and(variables('accessSweeperEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
+            "sparkKeepWarmActive": "[and(and(and(variables('sparkKeepWarmEnabled'), variables('sparkPoolEnabled')), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "secretExpiryActive": "[and(and(variables('secretExpiryEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "reportSubscriptionsActive": "[and(and(parameters('reportSubscriptionsEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "copilotEvaluatorActive": "[and(and(variables('copilotEvaluatorEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
@@ -24788,6 +24805,217 @@
                       "type": "string",
                       "metadata": {
                         "description": "The access-governance sweeper Job name."
+                      },
+                      "value": "[parameters('jobName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "containerPlatformModule",
+                "frontDoor",
+                "identity",
+                "registry"
+              ]
+            },
+            "sparkKeepWarm": {
+              "condition": "[variables('sparkKeepWarmActive')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "spark-keepwarm-job",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "environmentId": {
+                    "value": "[reference('containerPlatformModule').outputs.caeId.value]"
+                  },
+                  "consoleUamiId": {
+                    "value": "[reference('identity').outputs.uamiConsoleId.value]"
+                  },
+                  "consoleUamiClientId": {
+                    "value": "[reference('identity').outputs.uamiConsoleClientId.value]"
+                  },
+                  "acrLoginServer": {
+                    "value": "[reference('registry').outputs.acrLoginServer.value]"
+                  },
+                  "jobName": {
+                    "value": "loom-spark-keepwarm"
+                  },
+                  "loomUrl": "[if(variables('fdOn'), createObject('value', reference('frontDoor').outputs.frontDoorPublicUrl.value), createObject('value', 'http://loom-console'))]",
+                  "cronExpression": {
+                    "value": "[variables('sparkKeepWarmCron')]"
+                  },
+                  "internalToken": {
+                    "value": "[variables('loomInternalToken')]"
+                  },
+                  "complianceTags": {
+                    "value": "[parameters('complianceTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.45.15.27210",
+                      "templateHash": "6384663454998159601"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Deployment region (e.g. centralus / usgovvirginia)."
+                      }
+                    },
+                    "environmentId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Container Apps managed-environment (CAE) resource id — the console VNet-integrated env."
+                      }
+                    },
+                    "consoleUamiId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console resource id — ACR pull + the identity the job runs as."
+                      }
+                    },
+                    "consoleUamiClientId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console clientId (LOOM_UAMI_CLIENT_ID)."
+                      }
+                    },
+                    "acrLoginServer": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "ACR login server, e.g. acrloomk6mvh5sm6z7do.azurecr.io."
+                      }
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "defaultValue": "loom-spark-keepwarm",
+                      "metadata": {
+                        "description": "Job name."
+                      }
+                    },
+                    "image": {
+                      "type": "string",
+                      "defaultValue": "[format('{0}/loom-uat:latest', parameters('acrLoginServer'))]",
+                      "metadata": {
+                        "description": "Runner image. Default = the loom-uat image (carries e2e/run-spark-keepwarm.mjs). The first scheduled execution fails honestly until that image is pushed — build it in the post-deploy app phase."
+                      }
+                    },
+                    "loomUrl": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "In-VNet console base URL the runner POSTs (Front Door / vanity URL, or the internal http://loom-console)."
+                      }
+                    },
+                    "cronExpression": {
+                      "type": "string",
+                      "defaultValue": "*/5 * * * *",
+                      "metadata": {
+                        "description": "Schedule cron (standard 5-field, UTC). Must stay comfortably under the warm-session idle TTL (LOOM_SPARK_POOL_IDLE_TTL, default 900s = 15 min) AND under the Spark pool autoPause delay (default 15 min) — */5 gives 3x margin. Container Apps jobs do NOT use the 6-field NCRONTAB."
+                      }
+                    },
+                    "internalToken": {
+                      "type": "securestring",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Shared VNet-internal trust token (LOOM_INTERNAL_TOKEN) — the deterministic guid main.bicep also wires to the Console, so the two match. Delivered as a Container Apps secretRef; never logged or output."
+                      }
+                    },
+                    "replicaTimeout": {
+                      "type": "int",
+                      "defaultValue": 240,
+                      "metadata": {
+                        "description": "Max seconds one heartbeat may take before the execution is terminated. 240s — a tick that provisions a fresh Livy session is the slow case, and it must finish well inside the */5 cadence so ticks never overlap."
+                      }
+                    },
+                    "complianceTags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Compliance/cost tags."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "programTags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
+                    "internalTokenSecret": "[if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'loom-internal-token', 'value', parameters('internalToken'))))]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.App/jobs",
+                      "apiVersion": "2025-02-02-preview",
+                      "name": "[parameters('jobName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[variables('programTags')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('consoleUamiId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "environmentId": "[parameters('environmentId')]",
+                        "configuration": {
+                          "triggerType": "Schedule",
+                          "replicaTimeout": "[parameters('replicaTimeout')]",
+                          "replicaRetryLimit": 0,
+                          "scheduleTriggerConfig": {
+                            "cronExpression": "[parameters('cronExpression')]",
+                            "parallelism": 1,
+                            "replicaCompletionCount": 1
+                          },
+                          "registries": [
+                            {
+                              "server": "[parameters('acrLoginServer')]",
+                              "identity": "[parameters('consoleUamiId')]"
+                            }
+                          ],
+                          "secrets": "[variables('internalTokenSecret')]"
+                        },
+                        "template": {
+                          "containers": [
+                            {
+                              "name": "spark-keepwarm",
+                              "image": "[parameters('image')]",
+                              "command": [
+                                "node",
+                                "e2e/run-spark-keepwarm.mjs"
+                              ],
+                              "resources": {
+                                "cpu": "[json('0.25')]",
+                                "memory": "0.5Gi"
+                              },
+                              "env": "[concat(createArray(createObject('name', 'LOOM_URL', 'value', parameters('loomUrl')), createObject('name', 'LOOM_UAMI_CLIENT_ID', 'value', parameters('consoleUamiClientId'))), if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'LOOM_INTERNAL_TOKEN', 'secretRef', 'loom-internal-token'))))]"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "jobId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The Spark keep-warm Job resource id."
+                      },
+                      "value": "[resourceId('Microsoft.App/jobs', parameters('jobName'))]"
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The Spark keep-warm Job name."
                       },
                       "value": "[parameters('jobName')]"
                     }
