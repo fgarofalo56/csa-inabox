@@ -3,10 +3,18 @@ name: release-please
 # Why this workflow also posts commit statuses
 # ---------------------------------------------
 # release-please opens its release PR using GITHUB_TOKEN. GitHub *intentionally*
-# does NOT trigger downstream workflows on PRs created by GITHUB_TOKEN (to
-# prevent infinite loops). The result: branch protection's required checks
-# (Python Tests, dbt Compile, etc.) never run on the release PR, so it can
-# never merge — 0 checks, BLOCKED state.
+# withholds downstream workflows on PRs created by GITHUB_TOKEN (to prevent
+# infinite loops). The result: branch protection's required checks (Python
+# Tests, dbt Compile, etc.) do not report on the release PR, so it can never
+# merge — 0 checks, BLOCKED state.
+#
+# PRECISION (measured 2026-08-13 on PR #3382, correcting the earlier claim here
+# that these workflows "never run"): the runs ARE created — all ten of them —
+# and they sit at conclusion `action_required`, awaiting manual approval. They
+# are withheld, not absent. `gh api -X POST repos/{repo}/actions/runs/{id}/approve`
+# releases them and the REAL checks then run and pass. So approval is always
+# available as the honest manual path; this auto-pass exists so an unattended
+# release does not require a human to click ten times.
 #
 # The canonical fix is a PAT (RELEASE_PLEASE_TOKEN). We don't have one and
 # don't want a long-lived one stored in repo secrets.
@@ -36,6 +44,10 @@ permissions:
   contents: write
   pull-requests: write
   statuses: write
+  # Read-only, and required: the auto-pass step derives the required-context
+  # list from branch protection rather than mirroring it by hand (see the step's
+  # comment). Without this scope that read 403s and the step fails closed.
+  administration: read
 
 jobs:
   release-please:
@@ -59,26 +71,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Required checks declared in branch protection on `main` (kept in
-          # sync with `gh api repos/{owner}/{repo}/branches/main/protection`).
-          # If branch protection changes, update this list.
-          REQUIRED_CONTEXTS=(
-            "Python Lint"
-            "Python Tests (3.10)"
-            "Python Tests (3.11)"
-            "Python Tests (3.12)"
-            "PowerShell Lint"
-            "Secret Scan"
-            "Repo Hygiene"
-            "dbt Compile (shared)"
-            "dbt Compile (finance)"
-            "dbt Compile (inventory)"
-            "dbt Compile (sales)"
-            "next build (node 20)"
-          )
-
+          # The required-context list is DERIVED from branch protection at run
+          # time. It used to be a hand-maintained array with the comment "If
+          # branch protection changes, update this list" — and it drifted twice:
+          # PR #815 ("auto-pass must cover next build (node 20)") and again on
+          # 2026-08-13, when `guardrails` and `vitest (node 20)` had been added
+          # to protection but not here. Both times the symptom was identical and
+          # misleading: a release PR BLOCKED on contexts reported as MISSING
+          # rather than failing, which reads like a broken workflow instead of an
+          # incomplete list. A mirror that must be updated by hand is a mirror
+          # that will be stale; deriving it removes the failure mode entirely.
+          #
+          # Needs `administration: read` on GITHUB_TOKEN (granted at job level).
           REPO="${GITHUB_REPOSITORY}"
           RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+
+          # `.checks[].context` is the current shape; `.contexts[]` is the
+          # deprecated one. Read both so this does not break on either.
+          if ! PROT="$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" 2>&1)"; then
+            echo "::error::Could not read branch protection on main, so the set of"
+            echo "::error::required contexts is UNKNOWN. Refusing to post a guessed list —"
+            echo "::error::auto-passing contexts we cannot verify are required is exactly the"
+            echo "::error::class of green-that-measured-nothing this repo forbids. Approve the"
+            echo "::error::held workflow runs on the release PR instead (see header). API said:"
+            printf '%s\n' "$PROT" | head -5
+            exit 1
+          fi
+          mapfile -t REQUIRED_CONTEXTS < <(
+            printf '%s' "$PROT" | jq -r '[(.checks[]?.context), (.contexts[]?)] | unique[]'
+          )
+
+          # EMBEDDED CONTROL. An empty derived list would sail through the loop
+          # below posting nothing and exit 0 — "no contexts to pass" is
+          # indistinguishable from success, and the PR would stay blocked with no
+          # error. A required-checks list on this repo is never legitimately
+          # empty, so treat empty as a failed read, not as no work.
+          if [ "${#REQUIRED_CONTEXTS[@]}" -eq 0 ]; then
+            echo "::error::Branch protection returned ZERO required contexts. That is not a"
+            echo "::error::state this repo is ever in, so this is a failed or changed read, not an"
+            echo "::error::empty requirement. Refusing to silently post nothing."
+            exit 1
+          fi
+          echo "Derived ${#REQUIRED_CONTEXTS[@]} required context(s) from branch protection:"
+          printf '  - %s\n' "${REQUIRED_CONTEXTS[@]}"
 
           # Find every open PR opened by github-actions[bot] whose head branch
           # matches the release-please naming scheme. Resolve each to its
