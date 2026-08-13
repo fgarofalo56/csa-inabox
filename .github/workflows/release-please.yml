@@ -359,9 +359,19 @@ jobs:
               runs="$(runs_tsv "${sha}")"
               unfinished=""
               for wf in "${PRODUCERS[@]}"; do
-                st="$(printf '%s\n' "${runs}" | awk -F'\t' -v p=".github/workflows/${wf}" '$1==p {print $2}' | tail -1)"
-                if [ "${st}" != "completed" ]; then
-                  unfinished="${unfinished}${wf}(${st:-no-run}) "
+                # A workflow counts as finished only when EVERY run of it on this
+                # SHA is `completed`. Picking "the latest run" would need an
+                # ordering assumption about the API's response, and a re-dispatch
+                # or a re-run leaves more than one — so this waits for all of
+                # them instead, which cannot mistake an in-flight run for a done
+                # one.
+                counts="$(printf '%s\n' "${runs}" | awk -F'\t' -v p=".github/workflows/${wf}" \
+                  '$1==p {t++; if ($2!="completed") n++} END {printf "%d %d", t+0, n+0}')"
+                tot="${counts% *}"; nf="${counts#* }"
+                if [ "${tot}" -eq 0 ]; then
+                  unfinished="${unfinished}${wf}(no-run) "
+                elif [ "${nf}" -gt 0 ]; then
+                  unfinished="${unfinished}${wf}(${nf}/${tot}-unfinished) "
                 fi
               done
               if [ -z "${unfinished}" ]; then break; fi
@@ -436,8 +446,8 @@ jobs:
               echo "::error::on ${sha}: ${broken[*]}"
               echo "::error::'ABSENT' means the producing workflow ran but published no check run"
               echo "::error::under that exact name — a REQUIRED_CHECKS mapping defect, not a pass."
-              echo "::error::Anything else is a genuine red result. No status was posted for these,"
-              echo "::error::so the release stays blocked, which is the point."
+              echo "::error::Anything else is a genuine red result. Each of these was posted as a"
+              echo "::error::FAILURE status on ${sha}, so the release is blocked, which is the point."
               exit 1
             fi
             echo "  bridged ${#bridged[@]} real result(s) onto ${sha}."
