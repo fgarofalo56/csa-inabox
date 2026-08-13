@@ -25,6 +25,22 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.96.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.4...csa-inabox-v0.96.0) (2026-08-13)
+
+
+### Features
+
+* **ci:** a switched-off workflow must be DECLARED, not discovered (refs [#3345](https://github.com/fgarofalo56/csa-inabox/issues/3345)) ([#3389](https://github.com/fgarofalo56/csa-inabox/issues/3389)) ([37a3d73](https://github.com/fgarofalo56/csa-inabox/commit/37a3d734624df29f5ab5300589dc7aa01bdf72e2))
+
+
+### Bug Fixes
+
+* **ci:** a gateway 504 on the reindex POST is INDETERMINATE — measure it, don't guess ([#3396](https://github.com/fgarofalo56/csa-inabox/issues/3396)) ([#3397](https://github.com/fgarofalo56/csa-inabox/issues/3397)) ([685ce36](https://github.com/fgarofalo56/csa-inabox/commit/685ce36f78c60ea49220f40b2177e24229664350))
+* **ci:** cancelled is not failed — one classifier, six sites, both directions ([#3368](https://github.com/fgarofalo56/csa-inabox/issues/3368)) ([#3394](https://github.com/fgarofalo56/csa-inabox/issues/3394)) ([5d6a181](https://github.com/fgarofalo56/csa-inabox/commit/5d6a181d20600a49fb7fc438503916d5165764e6))
+* **ci:** DERIVE LOOM_AUTOMATION_OID from the console's own tenant-admin binding — the value is produced by the deploy, not typed by a human ([#3395](https://github.com/fgarofalo56/csa-inabox/issues/3395)) ([416e64a](https://github.com/fgarofalo56/csa-inabox/commit/416e64a4f6bb66ff02e1c72f1a61aa5b70e952f4))
+* **deploy:** azd provision never got a subscription — GCC-High has failed EVERY scheduled run (P0) ([#3390](https://github.com/fgarofalo56/csa-inabox/issues/3390)) ([3df38e5](https://github.com/fgarofalo56/csa-inabox/commit/3df38e5054935a64d1addb822c4d24a47f2e8389)), closes [#3137](https://github.com/fgarofalo56/csa-inabox/issues/3137) [#3345](https://github.com/fgarofalo56/csa-inabox/issues/3345)
+* **spark:** keep-warm on a scheduler that actually fires — and it was warming nothing anyway ([#3226](https://github.com/fgarofalo56/csa-inabox/issues/3226)) ([#3392](https://github.com/fgarofalo56/csa-inabox/issues/3392)) ([81dea6a](https://github.com/fgarofalo56/csa-inabox/commit/81dea6ad5cc13b6e604dcf90097759357d631c1f))
+
 ## [0.95.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.3...csa-inabox-v0.95.4) (2026-08-13)
 
 
