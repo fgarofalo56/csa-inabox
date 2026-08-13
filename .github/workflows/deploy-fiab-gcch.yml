@@ -656,6 +656,7 @@ jobs:
         run: |
           node .github/scripts/deploy-notify-failure.mjs \
             --workflow deploy-fiab-gcch \
+            --result "${{ job.status }}" \
             --failure-json "$GITHUB_WORKSPACE/deploy-failure.json"
 
   # rel-T32 (B8): Gov post-deploy bootstrap. The SAME reusable bootstrap the

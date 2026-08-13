@@ -451,6 +451,7 @@ jobs:
         run: |
           node .github/scripts/deploy-notify-failure.mjs \
             --workflow deploy-fiab-gcc \
+            --result "${{ job.status }}" \
             --failure-json "$GITHUB_WORKSPACE/deploy-failure.json"
 
   # rel-T32 (B8): GCC post-deploy bootstrap — the SAME reusable bootstrap the

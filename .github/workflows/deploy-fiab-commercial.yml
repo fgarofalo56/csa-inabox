@@ -1439,6 +1439,7 @@ jobs:
         run: |
           node .github/scripts/deploy-notify-failure.mjs \
             --workflow deploy-fiab-commercial \
+            --result "${{ job.status }}" \
             --failure-json "$GITHUB_WORKSPACE/deploy-failure.json"
 
   # rel-T32/T34: auto-chain the post-deploy bootstrap after a REAL, app-bearing,

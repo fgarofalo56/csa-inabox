@@ -1190,10 +1190,55 @@ jobs:
         run: |
           echo "full-app-deploy-commercial run ${{ github.run_id }}: build=${{ needs.build.result }}, close-acr=${{ needs.close-acr.result }}, redeploy=${{ needs.redeploy-with-apps.result }}" >> "$GITHUB_STEP_SUMMARY"
       - name: Notify on failure (dedicated, OPEN issue)
-        if: ${{ needs.redeploy-with-apps.result != 'success' || needs.build.result == 'failure' }}
+        # #3368 — this WAS
+        #     needs.redeploy-with-apps.result != 'success' || needs.build.result == 'failure'
+        # and the job is `if: always()`, so it runs on a CANCELLED run too.
+        # `!= 'success'` is true for `cancelled` and for `skipped`, so run
+        # 31710130307 — which the operator cancelled by hand to deconflict a
+        # duplicate ACR-lease holder — filed #3356 as a P0 "the deploy path is
+        # failing". It was not. A false P0 costs what a real one costs, and R1
+        # says a broken deploy path preempts all feature work.
+        #
+        # Each needed job is now tested for a GENUINE failure by name. That is
+        # not a narrowing: a job SKIPPED because an upstream failed is still
+        # reported, via the upstream's own `== 'failure'`. What is no longer
+        # reported is a cancellation, which establishes nothing.
+        #
+        # The step below ALSO passes --result, and deploy-notify-failure.mjs
+        # refuses to file on anything but a genuine failure — so if this
+        # expression ever regresses, the worst case is a log line, not a P0.
+        if: >-
+          ${{ needs.resolve.result == 'failure'
+           || needs.build.result == 'failure'
+           || needs.close-acr.result == 'failure'
+           || needs.redeploy-with-apps.result == 'failure' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           node .github/scripts/deploy-notify-failure.mjs \
             --workflow full-app-deploy-commercial \
+            --result failure \
             --failure-json "$GITHUB_WORKSPACE/deploy-failure.json"
+
+      # A cancellation is LOGGED, never filed (#3368 acceptance criterion 1).
+      # Without this the distinction is invisible: the run just ends quietly and
+      # the next reader cannot tell "nobody cancelled it" from "somebody did".
+      - name: Log a cancellation (never filed as a failure)
+        if: >-
+          ${{ needs.resolve.result == 'cancelled'
+           || needs.build.result == 'cancelled'
+           || needs.close-acr.result == 'cancelled'
+           || needs.redeploy-with-apps.result == 'cancelled' }}
+        run: |
+          set -euo pipefail
+          # --report-only: this step LOGS. The notify step above is the thing
+          # that acts on a genuine failure, so this must not add a second red
+          # when a run has BOTH a failed job and a cancelled one.
+          node scripts/ci/run-outcome.mjs \
+            --report-only \
+            --what 'full-app-deploy-commercial' \
+            --result '${{ needs.resolve.result }}' \
+            --result '${{ needs.build.result }}' \
+            --result '${{ needs.close-acr.result }}' \
+            --result '${{ needs.redeploy-with-apps.result }}'
+          echo "This run was CANCELLED, not failed. No deploy-failure issue was opened, because a cancellation establishes nothing about the health of the deploy path (#3368)." >> "$GITHUB_STEP_SUMMARY"

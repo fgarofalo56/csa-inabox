@@ -37,10 +37,28 @@
  *   Every API call is awaited and its status checked. A notifier that cannot
  *   notify exits non-zero.
  *
+ * CANCELLED IS NOT FAILED (#3368)
+ *
+ *   On 2026-08-13 this script filed #3356 — "full-app-deploy-commercial is
+ *   failing", P0-shaped, citing R1 — from run 31710130307, whose conclusion is
+ *   `cancelled`. The operator had cancelled it themselves to deconflict a
+ *   duplicate ACR-lease holder; the deploy path was never broken. The caller's
+ *   predicate was `needs.<job>.result != 'success'` inside an `if: always()`
+ *   job, and `!= 'success'` is true for `cancelled` and for `skipped`.
+ *
+ *   Fixing that one `if:` would leave the class open, so the refusal lives
+ *   HERE, at the chokepoint every caller goes through: `--result` is REQUIRED,
+ *   and unless it classifies as a GENUINE failure this script logs and files
+ *   NOTHING. A caller whose `if:` regresses can no longer manufacture a P0,
+ *   and a new caller that forgets `--result` fails loudly (exit 2) instead of
+ *   filing blind. Classification is shared with every other consumer in
+ *   scripts/ci/run-outcome.mjs — one table, not N predicates.
+ *
  * USAGE (from a workflow `if: failure()` step)
  *   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
  *   node .github/scripts/deploy-notify-failure.mjs \
- *     --workflow deploy-fiab-commercial --failure-json deploy-failure.json
+ *     --workflow deploy-fiab-commercial --result "${{ job.status }}" \
+ *     --failure-json deploy-failure.json
  *
  * Tests: node --test .github/scripts/__tests__/deploy-notify-failure.test.mjs
  */
@@ -48,6 +66,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { classifyOutcome } from '../../scripts/ci/run-outcome.mjs';
 
 /** The only label guaranteed to exist in this repo; creating one we do not have would fail the notify. */
 export const FAILURE_LABEL = 'deploy-validation';
@@ -145,6 +165,38 @@ export async function notifyFailure({ repo, workflow, body, request }) {
   return { issueNumber: created.number, created: true };
 }
 
+/**
+ * Should this outcome be FILED as a deploy-failure P0, or merely logged?
+ *
+ * PURE, and the single decision point for #3368. Returns the classification
+ * alongside the verdict so the caller can print a message that is TRUE for the
+ * state it actually observed (deploy-integrity.md R7) instead of asserting a
+ * failure it never established.
+ *
+ * @param {string|null|undefined} result a GitHub job `result` / run `conclusion`
+ * @returns {{file: boolean, category: string, why: string}}
+ */
+export function shouldFile(result) {
+  const c = classifyOutcome(result);
+  if (c.genuineFailure) {
+    return { file: true, category: c.category, why: `the run ${c.label}` };
+  }
+  if (c.category === 'success') {
+    return {
+      file: false,
+      category: c.category,
+      why: 'the run SUCCEEDED — there is nothing to file. The caller\'s `if:` condition is wrong.',
+    };
+  }
+  return {
+    file: false,
+    category: c.category,
+    why:
+      `the run ${c.label}. A cancellation, a skip or an unfinished run is NOT evidence that the deploy ` +
+      'path is broken, and filing it as a P0 costs exactly what a real P0 costs (#3368). Logged, not filed.',
+  };
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
 function ghRequest(apiBase, token) {
@@ -172,6 +224,11 @@ function arg(name, argv) {
   return i === -1 ? null : argv[i + 1];
 }
 
+/** Present at all? Distinct from `arg()`, because an EMPTY value is meaningful. */
+function hasArg(name, argv) {
+  return argv.indexOf(`--${name}`) !== -1;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const workflow = arg('workflow', argv) ?? process.env.GITHUB_WORKFLOW;
@@ -185,6 +242,33 @@ async function main() {
         'a notifier that quietly does nothing is worse than none.\n',
     );
     process.exit(2);
+  }
+
+  // #3368 — the outcome must be SUPPLIED, not assumed. An invocation with no
+  // --result cannot tell a failure from a cancellation, and this script's whole
+  // job is to assert one of them. Missing is a hard usage error rather than a
+  // default, because a default is how six callers get it right and the seventh
+  // silently does not.
+  if (!hasArg('result', argv)) {
+    process.stderr.write(
+      'deploy-notify-failure: --result is REQUIRED (pass "${{ job.status }}" or the specific ' +
+        'needs.<job>.result that failed). Without it this script cannot tell a genuine failure from a ' +
+        'cancellation, and it filed a false P0 that way once already (#3356 / #3368). Refusing to file.\n',
+    );
+    process.exit(2);
+  }
+
+  const result = arg('result', argv) ?? '';
+  const decision = shouldFile(result);
+  if (!decision.file) {
+    // NOT an error: this is the designed outcome for a cancelled run. Exit 0 so
+    // a cancellation does not itself turn a run red, but say plainly what was
+    // observed and what was therefore not done.
+    process.stdout.write(
+      `::notice::deploy-notify-failure: no issue filed for ${workflow} — ${decision.why} ` +
+        `(observed result: "${result || '<empty>'}", category: ${decision.category})\n`,
+    );
+    return;
   }
 
   let failure = null;

@@ -310,18 +310,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - uses: actions/checkout@v7
       - name: Evaluate results
         env:
-          FS_RESULT: ${{ needs.trivy-fs.result }}
-          IMG_RESULT: ${{ needs.trivy-image.result }}
           CFG_RESULT: ${{ needs.trivy-config.result }}
         run: |
-          echo "trivy-fs:     ${FS_RESULT}"
-          echo "trivy-image:  ${IMG_RESULT}"
-          echo "trivy-config: ${CFG_RESULT}"
-          # Only the CRITICAL gates (fs + image) fail the summary.
+          set -euo pipefail
+          echo "trivy-config (informational, not gated): ${CFG_RESULT}"
+          # Only the CRITICAL gates (fs + image) decide this check.
           # Config scan is informational and is allowed to fail on its own.
-          if [[ "${FS_RESULT}" != "success" || "${IMG_RESULT}" != "success" ]]; then
-            echo "::error::Trivy CRITICAL gate failed."
-            exit 1
-          fi
+          #
+          # #3368 — this WAS `if [[ "$FS_RESULT" != "success" || ... ]]; then
+          # echo "::error::Trivy CRITICAL gate failed."`. This job is
+          # `if: always()`, so on a CANCELLED run the results are `cancelled`,
+          # `!= "success"` was true, and a required security check asserted a
+          # scan FAILURE over a scan that never ran — a claim it had not
+          # established (deploy-integrity.md R7).
+          #
+          # --require-verdict keeps the EXIT STATUS identical to before: a
+          # cancelled or skipped scan still fails this check closed, because
+          # letting it pass would hide a real gap. What changes is the claim.
+          node scripts/ci/run-outcome.mjs \
+            --require-verdict \
+            --what 'Trivy CRITICAL gate (fs + image)' \
+            --result '${{ needs.trivy-fs.result }}' \
+            --result '${{ needs.trivy-image.result }}'
