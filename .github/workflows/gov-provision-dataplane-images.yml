@@ -254,9 +254,9 @@ jobs:
         run: |
           set -euo pipefail
           CFG=$(cat <<JSON
-          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID","uamiPrincipalId":"$UAMI_PRINCIPAL",
+          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID",
            "acrLoginServer":"$ACR_LOGIN","image":"$ACR_LOGIN/loom-duckdb:$TAG",
-           "lakeStorageAccountName":"","assignLakeRole":false,
+           "lakeStorageAccountName":"",
            "minReplicas":0,"cpu":"1.0","memory":"2Gi"}
           JSON
           )
@@ -272,9 +272,9 @@ jobs:
         run: |
           set -euo pipefail
           CFG=$(cat <<JSON
-          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID","uamiPrincipalId":"$UAMI_PRINCIPAL",
+          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID",
            "acrLoginServer":"$ACR_LOGIN","image":"$ACR_LOGIN/loom-duckdb:$TAG",
-           "lakeStorageAccountName":"","assignLakeRole":false,
+           "lakeStorageAccountName":"",
            "minReplicas":0,"cpu":"1.0","memory":"2Gi"}
           JSON
           )

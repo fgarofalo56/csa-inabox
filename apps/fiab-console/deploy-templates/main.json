@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "4601563019860780593"
+      "templateHash": "13471869508536746440"
     }
   },
   "definitions": {
@@ -2539,7 +2539,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10789314261785099388"
+              "templateHash": "1887830589724016941"
             }
           },
           "definitions": {
@@ -19293,11 +19293,9 @@
                     "value": {
                       "environmentId": "[reference('containerPlatformModule').outputs.caeId.value]",
                       "uamiId": "[reference('identity').outputs.uamiConsoleId.value]",
-                      "uamiPrincipalId": "[reference('identity').outputs.uamiConsolePrincipalId.value]",
                       "acrLoginServer": "[reference('registry').outputs.acrLoginServer.value]",
                       "image": "[format('{0}/loom-duckdb:{1}', reference('registry').outputs.acrLoginServer.value, coalesce(tryGet(parameters('appImageTags'), 'duckdb'), 'v0.1'))]",
                       "lakeStorageAccountName": "[parameters('loomStorageAccount')]",
-                      "assignLakeRole": false,
                       "minReplicas": 0,
                       "cpu": "1.0",
                       "memory": "2Gi"
@@ -19314,7 +19312,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "1848448667151254898"
+                      "templateHash": "9717619388522419726"
                     }
                   },
                   "parameters": {
@@ -19336,7 +19334,7 @@
                     "duckdbConfig": {
                       "type": "object",
                       "metadata": {
-                        "description": "R0 config bag — every setting for the DuckDB serving tier in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake read).\n  uamiPrincipalId        That identity's PRINCIPAL (object) id — used for the role assignment.\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  loom-duckdb container image (pin an explicit tag, never :latest).\n  lakeStorageAccountName DLZ ADLS Gen2 account the engine reads Delta/Iceberg/Parquet from.\n\nOptional keys:\n  targetPort             Internal HTTP ingress port (default 8080).\n  flightPort             Flight SQL gRPC port (default 8815). Set flightEnabled=false to disable.\n  flightEnabled          Default true — the ADBC/JDBC serving wire.\n  flightAllowBareSql     Default true — serve DoGet(Ticket(b'SELECT ...')) for plain\n                         Arrow Flight clients that never call GetFlightInfo. Set\n                         false so ONLY the GetFlightInfo->handle->DoGet handshake is\n                         served, which makes the single-use/TTL statement handle a\n                         real replay boundary. Conformant Flight SQL / ADBC / JDBC\n                         clients are unaffected either way.\n  ticketSecretUri        Key Vault secret URI holding the Flight ticket HMAC key.\n                         Empty => Flight runs on in-VNet trust and every access\n                         row is honestly marked ticketVerified:false.\n  maxRows                Hard per-response row cap (default 200000).\n  threads / memoryLimit  Engine sizing (defaults 4 / '3GB').\n  minReplicas            Default 1 — the serving tier is interactive (never scale-to-zero).\n  maxReplicas            Default 3.\n  cpu / memory           Container resources (default 2.0 vCPU / 4Gi).\n  assignLakeRole         Set false to skip the in-module role assignment when the\n                         identity is granted out-of-band by an estate policy."
+                        "description": "R0 config bag — every setting for the DuckDB serving tier in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake read).\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  loom-duckdb container image (pin an explicit tag, never :latest).\n  lakeStorageAccountName DLZ ADLS Gen2 account the engine reads Delta/Iceberg/Parquet from.\n\nOptional keys:\n  targetPort             Internal HTTP ingress port (default 8080).\n  flightPort             Flight SQL gRPC port (default 8815). Set flightEnabled=false to disable.\n  flightEnabled          Default true — the ADBC/JDBC serving wire.\n  flightAllowBareSql     Default true — serve DoGet(Ticket(b'SELECT ...')) for plain\n                         Arrow Flight clients that never call GetFlightInfo. Set\n                         false so ONLY the GetFlightInfo->handle->DoGet handshake is\n                         served, which makes the single-use/TTL statement handle a\n                         real replay boundary. Conformant Flight SQL / ADBC / JDBC\n                         clients are unaffected either way.\n  ticketSecretUri        Key Vault secret URI holding the Flight ticket HMAC key.\n                         Empty => Flight runs on in-VNet trust and every access\n                         row is honestly marked ticketVerified:false.\n  maxRows                Hard per-response row cap (default 200000).\n  threads / memoryLimit  Engine sizing (defaults 4 / '3GB').\n  minReplicas            Default 1 — the serving tier is interactive (never scale-to-zero).\n  maxReplicas            Default 3.\n  cpu / memory           Container resources (default 2.0 vCPU / 4Gi)."
                       }
                     },
                     "complianceTags": {
@@ -19350,7 +19348,6 @@
                   "variables": {
                     "environmentId": "[parameters('duckdbConfig').environmentId]",
                     "uamiId": "[parameters('duckdbConfig').uamiId]",
-                    "uamiPrincipalId": "[parameters('duckdbConfig').uamiPrincipalId]",
                     "acrLoginServer": "[parameters('duckdbConfig').acrLoginServer]",
                     "image": "[parameters('duckdbConfig').image]",
                     "lakeStorageAccountName": "[parameters('duckdbConfig').lakeStorageAccountName]",
@@ -19366,10 +19363,7 @@
                     "maxReplicas": "[int(coalesce(tryGet(parameters('duckdbConfig'), 'maxReplicas'), 3))]",
                     "cpu": "[string(coalesce(tryGet(parameters('duckdbConfig'), 'cpu'), '2.0'))]",
                     "memory": "[string(coalesce(tryGet(parameters('duckdbConfig'), 'memory'), '4Gi'))]",
-                    "assignLakeRole": "[bool(coalesce(tryGet(parameters('duckdbConfig'), 'assignLakeRole'), true()))]",
                     "tags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
-                    "storageBlobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
-                    "grantLakeRole": "[and(and(variables('assignLakeRole'), not(empty(variables('lakeStorageAccountName')))), not(empty(variables('uamiPrincipalId'))))]",
                     "baseEnv": [
                       {
                         "name": "LOOM_LAKE_ACCOUNT",
@@ -19407,18 +19401,6 @@
                     "envVars": "[if(empty(variables('ticketSecretUri')), variables('baseEnv'), concat(variables('baseEnv'), createArray(createObject('name', 'LOOM_FLIGHT_TICKET_SECRET', 'secretRef', 'flight-ticket-secret'))))]"
                   },
                   "resources": [
-                    {
-                      "condition": "[variables('grantLakeRole')]",
-                      "type": "Microsoft.Authorization/roleAssignments",
-                      "apiVersion": "2022-04-01",
-                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', if(empty(variables('lakeStorageAccountName')), 'placeholderaccount', variables('lakeStorageAccountName')))]",
-                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', if(empty(variables('lakeStorageAccountName')), 'placeholderaccount', variables('lakeStorageAccountName'))), variables('uamiPrincipalId'), variables('storageBlobDataReaderRoleId'))]",
-                      "properties": {
-                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderRoleId'))]",
-                        "principalId": "[variables('uamiPrincipalId')]",
-                        "principalType": "ServicePrincipal"
-                      }
-                    },
                     {
                       "type": "Microsoft.App/containerApps",
                       "apiVersion": "2025-02-02-preview",
@@ -19498,10 +19480,7 @@
                             ]
                           }
                         }
-                      },
-                      "dependsOn": [
-                        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', if(empty(variables('lakeStorageAccountName')), 'placeholderaccount', variables('lakeStorageAccountName'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', if(empty(variables('lakeStorageAccountName')), 'placeholderaccount', variables('lakeStorageAccountName'))), variables('uamiPrincipalId'), variables('storageBlobDataReaderRoleId')))]"
-                      ]
+                      }
                     }
                   ],
                   "outputs": {
@@ -19560,11 +19539,9 @@
                     "value": {
                       "environmentId": "[reference('containerPlatformModule').outputs.caeId.value]",
                       "uamiId": "[reference('identity').outputs.uamiConsoleId.value]",
-                      "uamiPrincipalId": "[reference('identity').outputs.uamiConsolePrincipalId.value]",
                       "acrLoginServer": "[reference('registry').outputs.acrLoginServer.value]",
                       "image": "[format('{0}/loom-unity:{1}', reference('registry').outputs.acrLoginServer.value, coalesce(tryGet(parameters('appImageTags'), 'unity'), 'v0.1'))]",
                       "lakeStorageAccountName": "[parameters('loomStorageAccount')]",
-                      "assignLakeRole": false,
                       "minReplicas": 1,
                       "cpu": "1.0",
                       "memory": "2Gi",
@@ -19583,7 +19560,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "16806251740098481418"
+                      "templateHash": "12361071752704220113"
                     }
                   },
                   "parameters": {
@@ -19605,7 +19582,7 @@
                     "catalogConfig": {
                       "type": "object",
                       "metadata": {
-                        "description": "R0 config bag — every setting for the Iceberg REST Catalog app in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake read).\n  uamiPrincipalId        That identity's PRINCIPAL (object) id — used for the role assignment.\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  Catalog container image (pin an explicit tag, never :latest).\n  lakeStorageAccountName DLZ ADLS Gen2 account the catalog reads table metadata from.\n\nOptional keys:\n  targetPort             Internal ingress port (default 8080).\n  warehouse              Unity Catalog catalog name backing the Loom namespaces (default 'loom').\n  catalogDbUrl           Postgres JDBC URL for durable catalog metadata. Empty => the\n                         container's local (ephemeral) store; set this for production.\n  minReplicas            Default 1 — the catalog is on the metadata hot path (never scale-to-zero).\n  maxReplicas            Default 1 (single-writer local metadata store; raise with Postgres).\n  cpu / memory           Container resources (default 1.0 vCPU / 2Gi).\n  assignLakeRole         Set false to skip the in-module role assignment when the\n                         identity is granted out-of-band by an estate policy.\n  authMode               'entra' (DEFAULT) | 'disabled'. This app runs the SAME Unity\n                         Catalog OSS image as compute/loom-unity-app.bicep, so it\n                         inherits the same svc-loom-unity-authz finding: with no Entra\n                         issuer/audience pinned the catalog was readable AND writable\n                         anonymously by anything on the CAE VNet. Entra bearer\n                         authorization is now ON by default; when no audience can\n                         be pinned the catalog deploys SEALED (up, sentinel\n                         `.invalid` audience, every caller rejected) rather than\n                         open or crash-looping. 'disabled' is an explicit, audited\n                         opt-out that logs a SECURITY WARNING on every boot.\n  entraTenantId          Tenant whose tokens are accepted (default: deployment tenant).\n  entraClientId          Entra app registration fronting the catalog — normally the\n                         SAME one the Console signs in with (LOOM_MSAL_CLIENT_ID).\n                         Audiences derive as api://<clientId>,<clientId>.\n  entraAudiences         Explicit comma-separated audience override.\n  consolePrincipalId     AUTO-BIND: the Entra OBJECT ID (principalId) of the Console\n                         managed identity — the `sub` claim of the app-only token it\n                         mints. The entrypoint registers it as an ENABLED Unity Catalog\n                         user at boot, because upstream AuthService.verifyPrincipal\n                         resolves the caller from `email` else `sub` and refuses any\n                         principal that is not `admin` or an enabled user. Without it an\n                         authorization-enabled catalog is correct-but-unusable: the\n                         Console token exchange answers 401. Pass principalId, NOT clientId.\n  authorityHost          Entra authority host override; empty => derived per cloud\n                         from environment().authentication.loginEndpoint."
+                        "description": "R0 config bag — every setting for the Iceberg REST Catalog app in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake read).\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  Catalog container image (pin an explicit tag, never :latest).\n  lakeStorageAccountName DLZ ADLS Gen2 account the catalog reads table metadata from.\n\nOptional keys:\n  targetPort             Internal ingress port (default 8080).\n  warehouse              Unity Catalog catalog name backing the Loom namespaces (default 'loom').\n  catalogDbUrl           Postgres JDBC URL for durable catalog metadata. Empty => the\n                         container's local (ephemeral) store; set this for production.\n  minReplicas            Default 1 — the catalog is on the metadata hot path (never scale-to-zero).\n  maxReplicas            Default 1 (single-writer local metadata store; raise with Postgres).\n  cpu / memory           Container resources (default 1.0 vCPU / 2Gi).\n  authMode               'entra' (DEFAULT) | 'disabled'. This app runs the SAME Unity\n                         Catalog OSS image as compute/loom-unity-app.bicep, so it\n                         inherits the same svc-loom-unity-authz finding: with no Entra\n                         issuer/audience pinned the catalog was readable AND writable\n                         anonymously by anything on the CAE VNet. Entra bearer\n                         authorization is now ON by default; when no audience can\n                         be pinned the catalog deploys SEALED (up, sentinel\n                         `.invalid` audience, every caller rejected) rather than\n                         open or crash-looping. 'disabled' is an explicit, audited\n                         opt-out that logs a SECURITY WARNING on every boot.\n  entraTenantId          Tenant whose tokens are accepted (default: deployment tenant).\n  entraClientId          Entra app registration fronting the catalog — normally the\n                         SAME one the Console signs in with (LOOM_MSAL_CLIENT_ID).\n                         Audiences derive as api://<clientId>,<clientId>.\n  entraAudiences         Explicit comma-separated audience override.\n  consolePrincipalId     AUTO-BIND: the Entra OBJECT ID (principalId) of the Console\n                         managed identity — the `sub` claim of the app-only token it\n                         mints. The entrypoint registers it as an ENABLED Unity Catalog\n                         user at boot, because upstream AuthService.verifyPrincipal\n                         resolves the caller from `email` else `sub` and refuses any\n                         principal that is not `admin` or an enabled user. Without it an\n                         authorization-enabled catalog is correct-but-unusable: the\n                         Console token exchange answers 401. Pass principalId, NOT clientId.\n  authorityHost          Entra authority host override; empty => derived per cloud\n                         from environment().authentication.loginEndpoint."
                       }
                     },
                     "complianceTags": {
@@ -19619,7 +19596,6 @@
                   "variables": {
                     "environmentId": "[parameters('catalogConfig').environmentId]",
                     "uamiId": "[parameters('catalogConfig').uamiId]",
-                    "uamiPrincipalId": "[parameters('catalogConfig').uamiPrincipalId]",
                     "acrLoginServer": "[parameters('catalogConfig').acrLoginServer]",
                     "image": "[parameters('catalogConfig').image]",
                     "lakeStorageAccountName": "[parameters('catalogConfig').lakeStorageAccountName]",
@@ -19630,7 +19606,6 @@
                     "maxReplicas": "[int(coalesce(tryGet(parameters('catalogConfig'), 'maxReplicas'), 1))]",
                     "cpu": "[string(coalesce(tryGet(parameters('catalogConfig'), 'cpu'), '1.0'))]",
                     "memory": "[string(coalesce(tryGet(parameters('catalogConfig'), 'memory'), '2Gi'))]",
-                    "assignLakeRole": "[bool(coalesce(tryGet(parameters('catalogConfig'), 'assignLakeRole'), true()))]",
                     "authMode": "[string(coalesce(tryGet(parameters('catalogConfig'), 'authMode'), 'entra'))]",
                     "entraTenantId": "[string(coalesce(tryGet(parameters('catalogConfig'), 'entraTenantId'), tenant().tenantId))]",
                     "entraClientId": "[string(coalesce(tryGet(parameters('catalogConfig'), 'entraClientId'), ''))]",
@@ -19644,22 +19619,9 @@
                     "effectiveAudiences": "[if(not(empty(variables('entraAudiences'))), variables('entraAudiences'), if(variables('authSealed'), variables('sealedAudience'), ''))]",
                     "consolePrincipalId": "[string(coalesce(tryGet(parameters('catalogConfig'), 'consolePrincipalId'), ''))]",
                     "tags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
-                    "storageBlobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
                     "envVars": "[concat(createArray(createObject('name', 'LOOM_UNITY_PORT', 'value', string(variables('targetPort'))), createObject('name', 'LOOM_ICEBERG_WAREHOUSE', 'value', variables('warehouse')), createObject('name', 'LOOM_LAKE_ACCOUNT', 'value', variables('lakeStorageAccountName')), createObject('name', 'LOOM_LAKE_AUTH_MODE', 'value', 'managed-identity'), createObject('name', 'LOOM_UNITY_AUTHORITY_HOST', 'value', variables('authorityHost'))), if(variables('authEnabled'), createArray(createObject('name', 'LOOM_UNITY_AUTH', 'value', 'enable'), createObject('name', 'LOOM_UNITY_ENTRA_TENANT_ID', 'value', variables('entraTenantId')), createObject('name', 'LOOM_UNITY_ENTRA_CLIENT_ID', 'value', variables('entraClientId')), createObject('name', 'LOOM_UNITY_AUDIENCES', 'value', variables('effectiveAudiences'))), createArray(createObject('name', 'LOOM_UNITY_AUTH', 'value', 'disable'))), if(and(variables('authEnabled'), not(empty(variables('consolePrincipalId')))), createArray(createObject('name', 'LOOM_UNITY_CONSOLE_PRINCIPAL_ID', 'value', variables('consolePrincipalId'))), createArray()), if(empty(variables('catalogDbUrl')), createArray(createObject('name', 'LOOM_UNITY_DB_LOCAL', 'value', '1')), createArray(createObject('name', 'LOOM_UNITY_DB_URL', 'value', variables('catalogDbUrl')))))]"
                   },
                   "resources": [
-                    {
-                      "condition": "[variables('assignLakeRole')]",
-                      "type": "Microsoft.Authorization/roleAssignments",
-                      "apiVersion": "2022-04-01",
-                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName'))]",
-                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName')), variables('uamiPrincipalId'), variables('storageBlobDataReaderRoleId'))]",
-                      "properties": {
-                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderRoleId'))]",
-                        "principalId": "[variables('uamiPrincipalId')]",
-                        "principalType": "ServicePrincipal"
-                      }
-                    },
                     {
                       "type": "Microsoft.App/containerApps",
                       "apiVersion": "2025-02-02-preview",
@@ -19725,10 +19687,7 @@
                             "maxReplicas": "[variables('maxReplicas')]"
                           }
                         }
-                      },
-                      "dependsOn": [
-                        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName')), variables('uamiPrincipalId'), variables('storageBlobDataReaderRoleId')))]"
-                      ]
+                      }
                     }
                   ],
                   "outputs": {
@@ -19789,6 +19748,99 @@
                 "entraAppReg",
                 "identity",
                 "registry"
+              ]
+            },
+            "servingTierLakeRbac": {
+              "condition": "[and(and(or(variables('duckdbTierActive'), variables('icebergCatalogActive')), not(parameters('skipRoleGrants'))), variables('loomStorageGrantable'))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "loom-serving-tier-lake-rbac",
+              "resourceGroup": "[parameters('loomDlzRg')]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "storageAccountName": {
+                    "value": "[parameters('loomStorageAccount')]"
+                  },
+                  "principalId": {
+                    "value": "[reference('identity').outputs.uamiConsolePrincipalId.value]"
+                  },
+                  "assignRole": {
+                    "value": "[not(parameters('skipRoleGrants'))]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.45.15.27210",
+                      "templateHash": "12041746367430335623"
+                    }
+                  },
+                  "parameters": {
+                    "storageAccountName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "ADLS Gen2 account the serving tiers read. MUST exist in THIS module's resource group / subscription — the caller supplies that via `scope:`."
+                      }
+                    },
+                    "principalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "PRINCIPAL (object) id of the identity the serving tiers run as. Today that is the Console UAMI; a future dedicated serving identity drops in here unchanged."
+                      }
+                    },
+                    "assignRole": {
+                      "type": "bool",
+                      "defaultValue": true,
+                      "metadata": {
+                        "description": "Set false to skip the grant when an estate assigns lake roles out-of-band (a PIM-managed grant process). The tiers then serve 403s on lake-backed reads until that grant lands — fail-closed, by design, never a silent downgrade."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "storageBlobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+                    "active": "[and(and(parameters('assignRole'), not(empty(parameters('storageAccountName')))), not(empty(parameters('principalId'))))]"
+                  },
+                  "resources": [
+                    {
+                      "condition": "[variables('active')]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('storageAccountName')), 'placeholderaccount', parameters('storageAccountName')))]",
+                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('storageAccountName')), 'placeholderaccount', parameters('storageAccountName'))), parameters('principalId'), variables('storageBlobDataReaderRoleId'))]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderRoleId'))]",
+                        "principalId": "[parameters('principalId')]",
+                        "principalType": "ServicePrincipal"
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "granted": {
+                      "type": "bool",
+                      "metadata": {
+                        "description": "TRUE when the Storage Blob Data Reader grant was actually applied."
+                      },
+                      "value": "[variables('active')]"
+                    },
+                    "roleDefinitionId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Role the serving-tier identity holds on the lake. READER — never Contributor."
+                      },
+                      "value": "[variables('storageBlobDataReaderRoleId')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "identity"
               ]
             },
             "s3Gateway": {
@@ -22531,7 +22583,6 @@
                       "memory": "4.0Gi",
                       "minReplicas": 1,
                       "maxReplicas": 1,
-                      "assignLakeRole": false,
                       "rootPasswordSecretUri": "[format('{0}secrets/{1}', reference('keyvault').outputs.keyVaultUri.value, variables('risingwaveRootPasswordSecretName'))]"
                     }
                   },
@@ -22546,7 +22597,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "18419236035665793397"
+                      "templateHash": "14205101444292352117"
                     }
                   },
                   "parameters": {
@@ -22568,7 +22619,7 @@
                     "risingwaveConfig": {
                       "type": "object",
                       "metadata": {
-                        "description": "R0 config bag — every setting for the streaming-SQL tier in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake write).\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  loom-risingwave container image (pin an explicit tag, never :latest).\n\nOptional keys:\n  uamiPrincipalId        That identity's PRINCIPAL (object) id — required only when\n                         assignLakeRole is true (it names the role assignment).\n  uamiClientId           That identity's CLIENT id — emitted as AZURE_CLIENT_ID so the\n                         engine picks the RIGHT identity off IMDS when the container has\n                         more than one assigned. Empty => omitted.\n  lakeStorageAccountName DLZ ADLS Gen2 account the streaming sink writes Delta/Iceberg to.\n                         Empty => no LOOM_LAKE_ACCOUNT and no role assignment; the engine\n                         still runs (single-node local state) and the Postgres wire serves.\n                         The lake usually lives in the DLZ resource group, in which case the\n                         orchestrator passes assignLakeRole:false and grants the role from a\n                         DLZ-scoped module instead.\n  frontendPort           Postgres-wire frontend port (default 4566).\n  minReplicas            Default 1 — the streaming tier holds MV state (CANNOT scale to zero:\n                         a stopped replica loses every materialized view and its progress).\n  maxReplicas            Default 1 — single-node RisingWave is not horizontally sharded here.\n  cpu / memory           Container resources (default 2.0 vCPU / 4.0Gi) — the SMALLEST viable\n                         always-on footprint and an ACA-Consumption-legal pair.\n                         ACA Consumption only accepts memory == 2x cpu, so the\n                         previous 2.0/8Gi default was NOT DEPLOYABLE — preflight\n                         rejected it with ContainerAppInvalidResourceTotal. For a\n                         heavier streaming workload use 4.0 vCPU / 8Gi (the next\n                         valid step up, and the profile ceiling), not 2.0/8Gi.\n  stateStore             Optional RW_STATE_STORE override (e.g. hummock+... on ADLS) for a\n                         durable, scaled deployment; empty => single-node local state.\n  dataDirectory          Optional RW_DATA_DIRECTORY when stateStore is set.\n  assignLakeRole         Default true. Set false to skip the in-module role assignment when\n                         the lake is in another resource group / granted out-of-band.\n  rootPasswordSecretUri  REQUIRED (or the @secure() rootPassword param). Key Vault secret URI\n                         https://<vault>.vault.azure.net/secrets/<name> holding the Postgres-wire\n                         root password. Rendered as a Key-Vault-backed Container Apps SECRET\n                         resolved by uamiId at revision start — the value never enters the\n                         template, the deployment history, or `az containerapp show`. The UAMI\n                         needs \"Key Vault Secrets User\" on that vault.\n  allowedCidrs           Optional ACA ingress IP allow-list (defence-in-depth against the wider\n                         VNet). NOT a substitute for the credential OR the in-image port seal:\n                         every app in a Container Apps environment draws its pod IP from the SAME\n                         infrastructure subnet, so any CIDR that admits the Console also admits\n                         the code-execution apps — and ingress rules only govern the ingress path,\n                         not a direct pod-IP connect. Empty (default) => internal ingress plus the\n                         image's own single-listener seal are the network controls.\n  livenessInitialDelay   Seconds before the first liveness probe (default 10; CLAMPED to the ACA\n                         cap of 60 — ARM preflight rejects anything higher with\n                         ContainerAppProbeInitialDelaySecondsOutOfRange, which is why the previous\n                         150s default made this module UNDEPLOYABLE). The long sealed bootstrap\n                         (the engine boots TWICE — once with every listener on loopback to install\n                         the credential and assert zero routable ports, once serving, so the\n                         routable port does not exist for the first ~15s measured) is absorbed by\n                         the dedicated STARTUP probe below, which suppresses liveness/readiness\n                         until it succeeds — so this delay no longer needs to cover the boot.\n  readinessInitialDelay  Seconds before the first readiness probe (default 10; clamped to 60 the\n                         same way)."
+                        "description": "R0 config bag — every setting for the streaming-SQL tier in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake write).\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  loom-risingwave container image (pin an explicit tag, never :latest).\n\nOptional keys:\n  uamiClientId           That identity's CLIENT id — emitted as AZURE_CLIENT_ID so the\n                         engine picks the RIGHT identity off IMDS when the container has\n                         more than one assigned. Empty => omitted.\n  lakeStorageAccountName DLZ ADLS Gen2 account the streaming sink writes Delta/Iceberg to.\n                         Empty => no LOOM_LAKE_ACCOUNT; the engine still runs (single-node\n                         local state) and the Postgres wire serves. This module only BINDS\n                         the account — the Storage Blob Data Contributor grant is made by\n                         `risingwaveLakeRbac`, which the orchestrator invokes at the lake's\n                         own RG scope.\n  frontendPort           Postgres-wire frontend port (default 4566).\n  minReplicas            Default 1 — the streaming tier holds MV state (CANNOT scale to zero:\n                         a stopped replica loses every materialized view and its progress).\n  maxReplicas            Default 1 — single-node RisingWave is not horizontally sharded here.\n  cpu / memory           Container resources (default 2.0 vCPU / 4.0Gi) — the SMALLEST viable\n                         always-on footprint and an ACA-Consumption-legal pair.\n                         ACA Consumption only accepts memory == 2x cpu, so the\n                         previous 2.0/8Gi default was NOT DEPLOYABLE — preflight\n                         rejected it with ContainerAppInvalidResourceTotal. For a\n                         heavier streaming workload use 4.0 vCPU / 8Gi (the next\n                         valid step up, and the profile ceiling), not 2.0/8Gi.\n  stateStore             Optional RW_STATE_STORE override (e.g. hummock+... on ADLS) for a\n                         durable, scaled deployment; empty => single-node local state.\n  dataDirectory          Optional RW_DATA_DIRECTORY when stateStore is set.\n  rootPasswordSecretUri  REQUIRED (or the @secure() rootPassword param). Key Vault secret URI\n                         https://<vault>.vault.azure.net/secrets/<name> holding the Postgres-wire\n                         root password. Rendered as a Key-Vault-backed Container Apps SECRET\n                         resolved by uamiId at revision start — the value never enters the\n                         template, the deployment history, or `az containerapp show`. The UAMI\n                         needs \"Key Vault Secrets User\" on that vault.\n  allowedCidrs           Optional ACA ingress IP allow-list (defence-in-depth against the wider\n                         VNet). NOT a substitute for the credential OR the in-image port seal:\n                         every app in a Container Apps environment draws its pod IP from the SAME\n                         infrastructure subnet, so any CIDR that admits the Console also admits\n                         the code-execution apps — and ingress rules only govern the ingress path,\n                         not a direct pod-IP connect. Empty (default) => internal ingress plus the\n                         image's own single-listener seal are the network controls.\n  livenessInitialDelay   Seconds before the first liveness probe (default 10; CLAMPED to the ACA\n                         cap of 60 — ARM preflight rejects anything higher with\n                         ContainerAppProbeInitialDelaySecondsOutOfRange, which is why the previous\n                         150s default made this module UNDEPLOYABLE). The long sealed bootstrap\n                         (the engine boots TWICE — once with every listener on loopback to install\n                         the credential and assert zero routable ports, once serving, so the\n                         routable port does not exist for the first ~15s measured) is absorbed by\n                         the dedicated STARTUP probe below, which suppresses liveness/readiness\n                         until it succeeds — so this delay no longer needs to cover the boot.\n  readinessInitialDelay  Seconds before the first readiness probe (default 10; clamped to 60 the\n                         same way)."
                       }
                     },
                     "rootPassword": {
@@ -22601,7 +22652,6 @@
                     ],
                     "environmentId": "[parameters('risingwaveConfig').environmentId]",
                     "uamiId": "[parameters('risingwaveConfig').uamiId]",
-                    "uamiPrincipalId": "[string(coalesce(tryGet(parameters('risingwaveConfig'), 'uamiPrincipalId'), ''))]",
                     "uamiClientId": "[string(coalesce(tryGet(parameters('risingwaveConfig'), 'uamiClientId'), ''))]",
                     "acrLoginServer": "[parameters('risingwaveConfig').acrLoginServer]",
                     "image": "[parameters('risingwaveConfig').image]",
@@ -22613,7 +22663,6 @@
                     "memory": "[string(coalesce(tryGet(parameters('risingwaveConfig'), 'memory'), '4.0Gi'))]",
                     "stateStore": "[string(coalesce(tryGet(parameters('risingwaveConfig'), 'stateStore'), ''))]",
                     "dataDirectory": "[string(coalesce(tryGet(parameters('risingwaveConfig'), 'dataDirectory'), ''))]",
-                    "assignLakeRole": "[and(and(bool(coalesce(tryGet(parameters('risingwaveConfig'), 'assignLakeRole'), true())), not(empty(variables('lakeStorageAccountName')))), not(empty(variables('uamiPrincipalId'))))]",
                     "rootPasswordSecretUri": "[string(coalesce(tryGet(parameters('risingwaveConfig'), 'rootPasswordSecretUri'), ''))]",
                     "rootPasswordFromKeyVault": "[not(empty(variables('rootPasswordSecretUri')))]",
                     "rootPasswordInline": "[and(empty(variables('rootPasswordSecretUri')), not(empty(parameters('rootPassword'))))]",
@@ -22622,7 +22671,6 @@
                     "livenessInitialDelay": "[max(1, min(60, int(coalesce(tryGet(parameters('risingwaveConfig'), 'livenessInitialDelay'), 10))))]",
                     "readinessInitialDelay": "[max(1, min(60, int(coalesce(tryGet(parameters('risingwaveConfig'), 'readinessInitialDelay'), 10))))]",
                     "tags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
-                    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
                     "lakeEnv": "[if(empty(variables('lakeStorageAccountName')), createArray(), createArray(createObject('name', 'LOOM_LAKE_ACCOUNT', 'value', variables('lakeStorageAccountName'))))]",
                     "identityEnv": "[if(empty(variables('uamiClientId')), createArray(), createArray(createObject('name', 'AZURE_CLIENT_ID', 'value', variables('uamiClientId'))))]",
                     "stateEnv": "[if(empty(variables('stateStore')), createArray(), createArray(createObject('name', 'RW_STATE_STORE', 'value', variables('stateStore')), createObject('name', 'RW_DATA_DIRECTORY', 'value', if(empty(variables('dataDirectory')), 'loom-risingwave', variables('dataDirectory')))))]",
@@ -22644,18 +22692,6 @@
                     "ingressConfig": "[if(empty(variables('allowedCidrs')), variables('ingressBase'), union(variables('ingressBase'), createObject('ipSecurityRestrictions', variables('ingressIpRules'))))]"
                   },
                   "resources": [
-                    {
-                      "condition": "[variables('assignLakeRole')]",
-                      "type": "Microsoft.Authorization/roleAssignments",
-                      "apiVersion": "2022-04-01",
-                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName'))]",
-                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName')), variables('uamiPrincipalId'), variables('storageBlobDataContributorRoleId'))]",
-                      "properties": {
-                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]",
-                        "principalId": "[variables('uamiPrincipalId')]",
-                        "principalType": "ServicePrincipal"
-                      }
-                    },
                     {
                       "type": "Microsoft.App/containerApps",
                       "apiVersion": "2025-02-02-preview",
@@ -22728,10 +22764,7 @@
                             "maxReplicas": "[variables('maxReplicas')]"
                           }
                         }
-                      },
-                      "dependsOn": [
-                        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('lakeStorageAccountName')), variables('uamiPrincipalId'), variables('storageBlobDataContributorRoleId')))]"
-                      ]
+                      }
                     }
                   ],
                   "outputs": {

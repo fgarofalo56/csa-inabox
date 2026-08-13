@@ -464,7 +464,7 @@ jobs:
               az deployment group what-if -g "$RG" \
               -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
               -p location="$LOCATION" \
-                 risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
+                 risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
                  complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-risingwave\"}"
           fi
 
@@ -538,7 +538,7 @@ jobs:
           az deployment group create -g "$RG" -n "loom-risingwave-$(date -u +%Y%m%d%H%M%S)" \
             -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
             -p location="$LOCATION" \
-               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
+               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
                complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-risingwave\"}" \
             --mode Incremental -o none
           FQDN=$(az containerapp show -n "$RISINGWAVE_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')

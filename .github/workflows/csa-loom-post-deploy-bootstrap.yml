@@ -2099,11 +2099,14 @@ jobs:
             # Container Apps managed environment (in-VNet) hosting the console.
             CAE_ID=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
               --query "[0].id" -o tsv 2>/dev/null)
-            # Console UAMI — resource id + principal (object) id (ACR pull + lake read).
+            # Console UAMI — resource id (ACR pull + lake read). The PRINCIPAL id
+            # is no longer needed here: per #3357 the catalog module makes no role
+            # assignment, so it takes no principal. Its Storage Blob Data Reader
+            # grant is made by data-plane/serving-tier-lake-rbac.bicep on the main
+            # admin-plane deploy, at the LAKE's own RG scope.
             UAMI_NAME=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
               --query "[?starts_with(name,'uami-loom-console')].name | [0]" -o tsv 2>/dev/null)
             UAMI_ID=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query id -o tsv 2>/dev/null)
-            UAMI_PRINCIPAL=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query principalId -o tsv 2>/dev/null)
             # ACR + the loom-unity image tag the console release already runs (the
             # catalog runs the SAME Unity Catalog OSS image, so no new build).
             ACR_LOGIN=$(az acr list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].loginServer" -o tsv 2>/dev/null)
@@ -2120,8 +2123,8 @@ jobs:
               # entraClientId = the Console's own MSAL app so the catalog accepts
               # Loom-issued bearers (else it deploys SEALED — up but every caller
               # rejected — per the module's auth-by-default posture).
-              CFG=$(printf '{"environmentId":"%s","uamiId":"%s","uamiPrincipalId":"%s","acrLoginServer":"%s","image":"%s","lakeStorageAccountName":"%s","authMode":"entra","entraClientId":"%s"}' \
-                "$CAE_ID" "$UAMI_ID" "$UAMI_PRINCIPAL" "$ACR_LOGIN" "$UNITY_IMG" "$LAKE_ACCT" "${LOOM_MSAL_CLIENT_ID:-}")
+              CFG=$(printf '{"environmentId":"%s","uamiId":"%s","acrLoginServer":"%s","image":"%s","lakeStorageAccountName":"%s","authMode":"entra","entraClientId":"%s"}' \
+                "$CAE_ID" "$UAMI_ID" "$ACR_LOGIN" "$UNITY_IMG" "$LAKE_ACCT" "${LOOM_MSAL_CLIENT_ID:-}")
               echo "Deploying Iceberg REST Catalog into $ADMIN_RG (image=$UNITY_IMG lake=$LAKE_ACCT)…"
               az deployment group create --subscription "$ADMIN_SUB" -g "$ADMIN_RG" \
                 --name iceberg-catalog-$(date +%s) \
@@ -2129,7 +2132,7 @@ jobs:
                 -p location="${{ inputs.region }}" catalogConfig="$CFG" \
                 -o none \
                 && echo "  Iceberg REST Catalog deployed." \
-                || echo "::warning::Iceberg catalog bicep deploy failed (deploy SP rights on $ADMIN_RG? cross-RG lake RBAC? image tag $IMG_TAG present in ACR?) — re-run; /admin/catalog stays on the dual-metadata fallback."
+                || echo "::warning::Iceberg catalog bicep deploy failed (deploy SP rights on $ADMIN_RG? image tag $IMG_TAG present in ACR?) — re-run; /admin/catalog stays on the dual-metadata fallback."
               ICEBERG_APP=iceberg-catalog
             fi
           fi
