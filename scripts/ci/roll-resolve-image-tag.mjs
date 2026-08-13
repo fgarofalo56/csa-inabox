@@ -38,6 +38,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { classifyAcrProbeError, resolveImageTag } from './roll-gate-decision.mjs';
+import { classifyOutcome } from './run-outcome.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
 const BUILD_WORKFLOW = 'build-fiab-images-acr-tasks.yml';
@@ -105,7 +106,17 @@ function probeBuildJob(runId) {
     const jobs = JSON.parse(out).jobs || [];
     const job = jobs.find((j) => j.name === `Build ${APP} via ACR Tasks`);
     if (!job) return 'absent';
-    return job.conclusion === 'success' ? 'success' : 'failure';
+    // #3368 — this WAS `job.conclusion === 'success' ? 'success' : 'failure'`,
+    // which labelled a CANCELLED or still-running build job as a FAILED one.
+    // The documented contract here already has an `unknown` state; that
+    // ternary made it unreachable. resolveImageTag only ever tests for
+    // `'success'`, so behaviour is unchanged either way — but the contract is
+    // now true, and a future reader of this value is not misled about whether
+    // the build was measured to fail or simply never finished.
+    const c = classifyOutcome(job.conclusion);
+    if (c.category === 'success') return 'success';
+    if (c.genuineFailure) return 'failure';
+    return 'unknown';
   } catch {
     return 'unknown';
   }

@@ -617,3 +617,105 @@ jobs:
             which builds the image and creates/refreshes the job (infra module:
             `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep`),
             then re-run this workflow.
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # NO VERDICT IS NOT A FAILING VERDICT (#3368)
+  #
+  # The `evals` job above carries `concurrency: {group:
+  # copilot-quality-evals-estate, cancel-in-progress: false}` — a deliberate
+  # repo-wide serialisation so only one 153-turn sweep runs at a time. GitHub
+  # keeps at most ONE pending run per group and CANCELS the older pending one.
+  # So an unrelated PR merging behind you displaces your queued run: it ends
+  # `cancelled`, with ZERO STEPS EXECUTED.
+  #
+  # Every reporting step inside `evals` — including the `if: always()` ones — is
+  # skipped in that case, because the job itself never started. The result is a
+  # red X on the PR that is INDISTINGUISHABLE from a genuine quality failure,
+  # over a run that measured nothing at all. Measured on #3362.
+  #
+  # This job is NOT in the estate concurrency group, so it survives the
+  # displacement and says which of the three states actually occurred. It never
+  # fails the run: `evals` already carries its own verdict when it produced one,
+  # and adding a second red would be the same conflation in the other direction.
+  # ───────────────────────────────────────────────────────────────────────────
+  report-outcome:
+    name: Eval outcome (verdict / no verdict)
+    needs: [evals]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Classify the evals outcome
+        id: outcome
+        run: |
+          set -euo pipefail
+          # --report-only: this step LABELS, it does not gate. The `evals` job's
+          # own conclusion is the gate and is untouched, so a genuine failure is
+          # already red without a second red here — and adding one would be the
+          # same conflation in the other direction.
+          node scripts/ci/run-outcome.mjs \
+            --report-only \
+            --what 'Copilot quality evals' \
+            --result '${{ needs.evals.result }}'
+
+      - name: Say so in the job summary
+        run: |
+          set -euo pipefail
+          case '${{ steps.outcome.outputs.category }}' in
+            success)
+              echo "### Copilot quality evals — PASS" >> "$GITHUB_STEP_SUMMARY" ;;
+            failure)
+              echo "### Copilot quality evals — FAIL (a real verdict; see the eval job)" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              {
+                echo "### Copilot quality evals — NO VERDICT"
+                echo ""
+                echo "The eval job ended \`${{ needs.evals.result }}\` and produced no scores."
+                echo "This is **not** a quality regression and **not** a pass — nothing was measured."
+              } >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
+      # The sticky comment the reviewer actually reads. Same header as the two
+      # inside `evals`, so a later real verdict REPLACES this note rather than
+      # stacking under it.
+      #
+      # Scoped to `cancelled` specifically, not to every no-verdict: `skipped`
+      # is the DESIGNED outcome for a fork PR (the job needs Azure secrets a
+      # fork cannot have), the token there is read-only so the comment would
+      # fail the job, and "your run was displaced" would be false anyway. A
+      # skip already has its own honest-gate comment inside `evals`.
+      - name: Sticky PR comment — no verdict (queue-displaced or cancelled)
+        if: >-
+          ${{ github.event_name == 'pull_request'
+           && github.event.pull_request.head.repo.full_name == github.repository
+           && needs.evals.result == 'cancelled' }}
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        with:
+          header: copilot-quality-evals
+          message: |
+            ## Copilot quality evals — **no verdict**
+
+            The eval job ended `${{ needs.evals.result }}` **without producing scores**.
+            This is neither a pass nor a failure: nothing was measured.
+
+            The most likely cause is queue displacement. This workflow serialises
+            estate-wide on `copilot-quality-evals-estate`
+            (`cancel-in-progress: false`) so only one 153-question sweep runs at a
+            time against the shared AOAI deployment. GitHub keeps one pending run
+            per group and cancels the older one, so a PR merging behind yours can
+            displace your queued run before it executes a single step.
+
+            **Do not read the red X as a quality regression, and do not read it as
+            a pass.** Re-run this workflow to get an actual verdict:
+
+            ```
+            gh workflow run copilot-quality-evals.yml --ref <this branch>
+            ```
+
+            <sub>Distinguishing cancelled from failed: #3368.</sub>
+

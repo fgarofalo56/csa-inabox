@@ -765,7 +765,7 @@ jobs:
         run: |
           set -euo pipefail
           node .github/scripts/deploy-notify-failure.mjs \
-            --workflow loom-dataplane-roll --failure-json deploy-failure.json
+            --workflow loom-dataplane-roll --result "${{ job.status }}" --failure-json deploy-failure.json
 
       - name: Summary
         if: always()

@@ -186,14 +186,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - uses: actions/checkout@v7
       - name: Check matrix outcomes
-        env:
-          PY_RESULT: ${{ needs.python-sbom.result }}
-          DOCKER_RESULT: ${{ needs.docker-sbom.result }}
         run: |
-          echo "python-sbom: ${PY_RESULT}"
-          echo "docker-sbom: ${DOCKER_RESULT}"
-          if [[ "${PY_RESULT}" != "success" || "${DOCKER_RESULT}" != "success" ]]; then
-            echo "::error::One or more SBOM jobs failed."
-            exit 1
-          fi
+          set -euo pipefail
+          # #3368 — this WAS `if [[ "$PY_RESULT" != "success" || ... ]]; then
+          # echo "::error::One or more SBOM jobs failed."`. The job is
+          # `if: always()`, so a CANCELLED run made `!= "success"` true and the
+          # check asserted a job FAILURE that never happened (R7).
+          #
+          # --require-verdict preserves the fail-closed exit status exactly; it
+          # is only the claim that is now true to what was observed.
+          node scripts/ci/run-outcome.mjs \
+            --require-verdict \
+            --what 'SBOM generation' \
+            --result '${{ needs.python-sbom.result }}' \
+            --result '${{ needs.docker-sbom.result }}'

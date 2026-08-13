@@ -243,12 +243,19 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # #3368 — `skipped` was already distinguished here, but `cancelled`
+          # fell into the else branch and was reported as "One or more dbt
+          # projects failed to parse or compile" — a claim about work that never
+          # ran (deploy-integrity.md R7).
           if [ "$MATRIX_RESULT" = "success" ]; then
             status_icon="PASS"
             status_line="All dbt projects parsed and compiled cleanly."
           elif [ "$MATRIX_RESULT" = "skipped" ]; then
             status_icon="SKIP"
             status_line="Matrix was skipped (likely because discovery failed)."
+          elif [ "$MATRIX_RESULT" = "cancelled" ]; then
+            status_icon="NO VERDICT"
+            status_line="The matrix was **cancelled**, so nothing was parsed or compiled. This is neither a pass nor a failure — re-run to get a verdict."
           else
             status_icon="FAIL"
             status_line="One or more dbt projects failed to parse or compile."
@@ -266,7 +273,7 @@ jobs:
             echo "- Matrix result: \`$MATRIX_RESULT\`"
             echo "- Full logs: [run #${{ github.run_id }}]($RUN_URL)"
             echo ""
-            if [ "$MATRIX_RESULT" != "success" ]; then
+            if [ "$MATRIX_RESULT" = "failure" ]; then
               echo "**Triage:** see \`docs/runbooks/dbt-ci.md\` for reproduction steps."
               echo "Failing jobs upload their \`target/\` and \`logs/\` directories as artifacts named \`dbt-target-<index>-<attempt>\`."
             fi
