@@ -23,6 +23,9 @@
  *   2. `.github/workflows/<name>.yml`        — must exist
  *   3. `gh workflow run <name>[.yml]`        — must exist AND declare
  *                                              `workflow_dispatch`
+ *   3b. a `gh workflow run` inside a FENCE    — must also supply every
+ *                                              `required: true` dispatch input
+ *                                              (GitHub rejects it otherwise)
  *   4. `platform/fiab/bicep/...`             — must exist (allowing *.generated.*
  *                                              which is an OUTPUT, not a source)
  *   5. `param <name> = …` in a published      — `<name>` must be DECLARED by the
@@ -274,6 +277,123 @@ export function acceptsDispatch(workflowPath) {
   return /^\s{2,}workflow_dispatch:/m.test(readFileSync(p, 'utf8'));
 }
 
+/**
+ * The `required: true` inputs a workflow declares under `workflow_dispatch`.
+ * Returns null when the file cannot be read.
+ *
+ * WHY THIS EXISTS — "dispatchable" was overstating what check 3 measured.
+ * MEASURED 2026-08-13: `deploy-fiab-commercial.yml` declares `region` with
+ * `required: true` (it has no default, because the region IS the identity of
+ * the estate — #3029). Two published runbooks — `runbooks/secrets-bootstrap.md`
+ * and `runbooks/first-deploy.md` — told the operator to run
+ * `gh workflow run deploy-fiab-commercial -f run_mode=whatif-only`, with no
+ * region. GitHub REJECTS that dispatch outright. The workflow exists and
+ * declares `workflow_dispatch`, so check 3 passed it, and the summary line
+ * claimed "every documented dispatch is dispatchable" while the FIRST command
+ * in the onboarding runbook could not run. That is precisely R8 drift, and it
+ * is a set difference, so it is decided here.
+ *
+ * SCOPED TO `workflow_dispatch`, DELIBERATELY. Several workflows (e.g.
+ * `csa-loom-post-deploy-bootstrap.yml`) declare BOTH `workflow_call` and
+ * `workflow_dispatch` with different required sets. Reading the union would
+ * demand inputs a `gh workflow run` cannot pass, which is a false positive that
+ * would get the guard disabled rather than obeyed.
+ */
+export function requiredDispatchInputs(workflowPath) {
+  const p = workflowPath.split('/').join(sep);
+  if (!existsSync(p)) return null;
+  const lines = readFileSync(p, 'utf8').split(/\r?\n/);
+
+  // Walk to `workflow_dispatch:` → `inputs:`, then collect each input name and
+  // whether its block carries `required: true`. Indentation-driven rather than
+  // YAML-parsed: these guards run in lanes where node_modules is not installed,
+  // so depending on js-yaml here would make the guard skip exactly when it is
+  // needed (same reasoning as check-bicepparam-env-reaches-deploy.mjs).
+  let dispatchIndent = null;
+  let inputsIndent = null;
+  let nameIndent = null;
+  let current = null;
+  const required = new Set();
+
+  for (const raw of lines) {
+    if (!raw.trim() || /^\s*#/.test(raw)) continue;
+    const indent = raw.length - raw.trimStart().length;
+    const body = raw.trim();
+
+    if (dispatchIndent === null) {
+      if (/^workflow_dispatch:$/.test(body)) dispatchIndent = indent;
+      continue;
+    }
+    // Dedent out of the workflow_dispatch block ends the scan.
+    if (indent <= dispatchIndent && !/^workflow_dispatch:$/.test(body)) break;
+
+    if (inputsIndent === null) {
+      if (/^inputs:$/.test(body)) inputsIndent = indent;
+      continue;
+    }
+    if (indent <= inputsIndent) break;
+
+    if (nameIndent === null) nameIndent = indent;
+    if (indent === nameIndent) {
+      const m = /^([A-Za-z0-9_-]+):$/.exec(body);
+      current = m ? m[1] : null;
+      continue;
+    }
+    if (current && /^required:\s*true\s*$/.test(body)) required.add(current);
+  }
+  return required;
+}
+
+/**
+ * The input names a documented `gh workflow run` command supplies, via any of
+ * gh's spellings: `-f k=v`, `--field k=v`, `-F k=v`, `--raw-field k=v`.
+ */
+export function suppliedDispatchInputs(commandText) {
+  const supplied = new Set();
+  for (const m of commandText.matchAll(
+    /(?:-f|-F|--field|--raw-field)[ \t]+([A-Za-z0-9_-]+)=/g,
+  )) {
+    supplied.add(m[1]);
+  }
+  return supplied;
+}
+
+/**
+ * Line numbers (1-indexed) that sit INSIDE a fenced code block.
+ *
+ * Dispatch-completeness is enforced only for commands in a fence, because a
+ * fence is what a reader copy-pastes. Prose that names a workflow mid-sentence
+ * ("dispatch `gh workflow run deploy-gov.yml` for the Gov lane") is a
+ * reference, not a runnable recipe, and demanding every required flag there
+ * would be a false positive.
+ */
+export function fencedLines(text) {
+  const inFence = new Set();
+  let open = false;
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      open = !open;
+      return;
+    }
+    if (open) inFence.add(i + 1);
+  });
+  return inFence;
+}
+
+/**
+ * Full command text starting at `lineNo`, following `\` line continuations, so
+ * a multi-line `gh workflow run ... \` recipe is read as one command.
+ */
+export function commandTextAt(lines, lineNo) {
+  const parts = [];
+  for (let i = lineNo - 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    parts.push(line);
+    if (!/\\\s*$/.test(line)) break;
+  }
+  return parts.join(' ');
+}
+
 // ── driver ───────────────────────────────────────────────────────────────────
 //
 // Guarded by an isMain check so the exported helpers above can be imported by
@@ -292,6 +412,7 @@ if (isMain) {
   for (const file of files) {
     const text = readFileSync(file, 'utf8');
     const lines = text.split(/\r?\n/);
+    const fences = fencedLines(text);
     for (const { kind, re, resolve: res } of EXTRACTORS) {
       for (const m of text.matchAll(new RegExp(re.source, re.flags))) {
         const target = res(m[1], m[1]).split('/').join(sep);
@@ -315,6 +436,39 @@ if (isMain) {
             src: src.trim(),
             why: 'exists but declares no `workflow_dispatch` trigger — `gh workflow run` on it fails',
           });
+        }
+        // Check 3b — a COPY-PASTEABLE dispatch must supply every required input.
+        // Existence + a workflow_dispatch trigger is not enough: GitHub rejects
+        // a dispatch that omits a `required: true` input, so the published
+        // command fails before it reaches Azure. Fenced blocks only (see
+        // fencedLines) — prose references are not recipes.
+        if (kind === 'workflow-dispatch' && acceptsDispatch(normalized) === true) {
+          if (fences.has(upto)) {
+            const required = requiredDispatchInputs(normalized);
+            // A workflow we could not read is a FAILURE, not a skip — same
+            // reasoning as the unresolvable-template case in check 5.
+            if (required === null) {
+              failures.push({
+                file, line: upto, kind, ref: normalized, src: src.trim(),
+                why: 'could not be read to determine its required dispatch inputs',
+              });
+            } else if (required.size > 0) {
+              const supplied = suppliedDispatchInputs(commandTextAt(lines, upto));
+              const missing = [...required].filter((r) => !supplied.has(r));
+              if (missing.length > 0) {
+                failures.push({
+                  file,
+                  line: upto,
+                  kind: 'workflow-dispatch-inputs',
+                  ref: normalized,
+                  src: src.trim(),
+                  why:
+                    `omits required dispatch input(s) ${missing.map((x) => `\`${x}\``).join(', ')} — ` +
+                    'GitHub REJECTS this command, so the documented step cannot run',
+                });
+              }
+            }
+          }
         }
       }
     }
@@ -357,7 +511,8 @@ if (isMain) {
   }
 
   console.log(
-    '[docs-deploy-refs] OK — every script, workflow and bicep path resolves, every documented dispatch is\n' +
-      '                   dispatchable, and every published param assignment binds to a declared parameter.',
+    '[docs-deploy-refs] OK — every script, workflow and bicep path resolves, every fenced dispatch is\n' +
+      '                   dispatchable AND supplies its required inputs, and every published param\n' +
+      '                   assignment binds to a declared parameter.',
   );
 }

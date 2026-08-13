@@ -1,5 +1,11 @@
 # Quick Start (~90 minutes)
 
+> **Want the complete picture instead?**
+> [Prerequisites and first deploy](prerequisites.md) is the authoritative page —
+> every prerequisite with a verification, the credential set per cloud,
+> greenfield *and* brownfield, and what to do when a step fails. This Quick Start
+> is the condensed Commercial happy path.
+
 The supported happy path: from `git clone` to a working CSA Loom Console URL in
 Azure Commercial. The full deploy runs ~70–110 minutes depending on region and
 capacity SKU.

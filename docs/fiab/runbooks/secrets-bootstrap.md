@@ -1,10 +1,16 @@
 # Secrets bootstrap — per boundary
 
-The 3 boundary deploy workflows
-(`deploy-fiab-{commercial,gcc,gcch}.yml`) each authenticate to a
+> **Start with [Prerequisites and first deploy](../deployment/prerequisites.md).**
+> That is the authoritative page — prerequisites → deploy → verify, with every
+> secret and variable, how to obtain it, and how to confirm it took. This runbook
+> is the per-boundary credential detail it links to.
+
+The 4 boundary deploy workflows
+(`deploy-fiab-{commercial,gcc,gcch,il5}.yml`) each authenticate to a
 different Azure subscription. Each requires its own SP credentials.
 Without these secrets, the workflow precheck skips with a clear
-warning rather than failing.
+warning rather than failing — except `deploy-fiab-gcc.yml`, whose
+**scheduled** runs fail rather than report a green no-op.
 
 ## Required secrets per boundary
 
@@ -16,7 +22,13 @@ warning rather than failing.
 | `AZURE_CLIENT_SECRET` | SP secret |
 | `AZURE_TENANT_ID` | Entra tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Target subscription |
-| `FIAB_ADMIN_GROUP_ID` | Entra group object ID for CSA Loom Admins |
+| `FIAB_ADMIN_GROUP_ID` | Entra group object ID for CSA Loom Admins. Read as `secrets.FIAB_ADMIN_GROUP_ID \|\| vars.FIAB_ADMIN_GROUP_ID` — a repo **variable** of the same name works too |
+
+Plus one repo **variable**, which is not a secret and is easy to miss:
+
+| Variable | Purpose |
+|---|---|
+| `FIAB_TENANT_ADMIN_OID` | Your Entra **user** object id. Bootstrap admin who bypasses the feature-permission gate. The deploy **refuses to render the Container Apps** when neither this nor `FIAB_ADMIN_GROUP_ID` resolves, because a Console with both empty has an admin gate nobody can pass. Set it: `gh variable set FIAB_TENANT_ADMIN_OID` |
 
 ### GCC
 
@@ -29,6 +41,9 @@ warning rather than failing.
 | `FIAB_GCC_ADMIN_GROUP_ID` | Entra group object ID for CSA Loom Admins (GCC) |
 
 ### GCC-High / IL5 (Azure Government)
+
+Both Gov boundaries share one secret set. `deploy-fiab-gcch.yml` and
+`deploy-fiab-il5.yml` read the same names.
 
 | Secret | Purpose |
 |---|---|
@@ -68,12 +83,24 @@ ADMIN_GROUP=$(az ad group create \
   --query id -o tsv)
 echo "Add operators to this group: $ADMIN_GROUP"
 
-# 4. Populate GitHub secrets
-gh secret set AZURE_CLIENT_ID --body "<appId from step 1>"
-gh secret set AZURE_CLIENT_SECRET --body "<password from step 1>"
-gh secret set AZURE_TENANT_ID --body "$TENANT_ID"
-gh secret set AZURE_SUBSCRIPTION_ID --body "$SUB_ID"
-gh secret set FIAB_ADMIN_GROUP_ID --body "$ADMIN_GROUP"
+# 4. Populate GitHub secrets.
+#    Omit --body: `gh` then prompts and reads from stdin, so the value never
+#    lands in your shell history or a process listing.
+gh secret set AZURE_CLIENT_ID
+gh secret set AZURE_CLIENT_SECRET
+gh secret set AZURE_TENANT_ID
+gh secret set AZURE_SUBSCRIPTION_ID
+gh secret set FIAB_ADMIN_GROUP_ID
+
+# 5. And the bootstrap-admin variable (a repo variable, not a secret).
+gh variable set FIAB_TENANT_ADMIN_OID   # az ad signed-in-user show --query id -o tsv
+```
+
+Verify presence — `gh secret list` prints names and timestamps, never values:
+
+```bash
+gh secret list | grep -E 'AZURE_|FIAB_'
+gh variable list | grep -E 'FIAB_'
 ```
 
 ## GCC-specific notes
@@ -144,9 +171,18 @@ After secrets are in place, dispatch the corresponding workflow in
 `whatif-only` mode:
 
 ```bash
-gh workflow run deploy-fiab-commercial -f run_mode=whatif-only
-gh workflow run deploy-fiab-gcc -f run_mode=whatif-only
-gh workflow run deploy-fiab-gcch -f run_mode=whatif-only   # requires environment approval
+# `region` is REQUIRED on the Commercial lane and has no default — GitHub
+# REJECTS a dispatch that omits it. The region IS the identity of the estate
+# (rg-csa-loom-admin-<region>, vnet-csa-loom-hub-<region>,
+# uami-loom-console-<region> all derive from it), so a wrong value does not
+# fail — it succeeds against a different, empty estate (#3029).
+gh workflow run deploy-fiab-commercial.yml -f run_mode=whatif-only -f region=<region>
+
+# The Gov/GCC lanes pin AZURE_LOCATION in the workflow env, so they take no
+# region input.
+gh workflow run deploy-fiab-gcc.yml   -f run_mode=whatif-only
+gh workflow run deploy-fiab-gcch.yml  -f run_mode=whatif-only   # requires environment approval
+gh workflow run deploy-fiab-il5.yml   -f run_mode=whatif-only
 ```
 
 A green run with the "Note dry-run completion" step proves:

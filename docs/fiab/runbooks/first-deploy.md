@@ -1,5 +1,10 @@
 # Loom first deploy — operator runbook
 
+> **Start with [Prerequisites and first deploy](../deployment/prerequisites.md).**
+> That is the authoritative page — prerequisites → deploy → verify, greenfield
+> and brownfield, all four clouds. This runbook is the operator-side detail it
+> links to, including the tenant-state decisions in phase 2.
+
 Step-by-step for an operator standing up CSA Loom in a new
 subscription for the first time. Assumes you have:
 
@@ -20,8 +25,11 @@ boundary.
 Verify by dispatching the workflow in `whatif-only` mode (no spend):
 
 ```bash
-gh workflow run deploy-fiab-commercial -f run_mode=whatif-only
-gh run watch $(gh run list --workflow deploy-fiab-commercial --limit 1 --json databaseId --jq '.[0].databaseId') --exit-status
+# `region` is REQUIRED and has no default — GitHub REJECTS a dispatch that
+# omits it. An earlier revision of this runbook gave this command without it,
+# which cannot run.
+gh workflow run deploy-fiab-commercial.yml -f run_mode=whatif-only -f region=<region>
+gh run watch $(gh run list --workflow deploy-fiab-commercial.yml --limit 1 --json databaseId --jq '.[0].databaseId') --exit-status
 ```
 
 Expected: green run in under 1 minute. If red, see [Deploy failure

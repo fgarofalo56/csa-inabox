@@ -1,5 +1,10 @@
 # Greenfield deployment — empty subscription to working Console
 
+> **New here? Start with [Prerequisites and first deploy](prerequisites.md).**
+> That page is the spine — the three human prerequisites with exact commands and
+> verifications, the credential set per cloud, and the verify checklist. This
+> page is the greenfield depth it links to.
+
 **Greenfield** means: the target subscription contains no Azure resource CSA
 Loom would adopt, and no existing `rg-csa-loom-admin-*` hub. Every backing
 service is deployed new.

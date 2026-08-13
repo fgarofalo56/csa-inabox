@@ -7,6 +7,14 @@ Loom Console URL in your tenant. The platform is shipped as
 infrastructure-as-code; you deploy it into your own Azure
 subscription via one of two paths.
 
+!!! tip "Start here — [Prerequisites and first deploy](prerequisites.md)"
+    One page, in order: **prerequisites → deploy → verify.** It names the three
+    things you genuinely have to do (and states plainly that everything else is
+    deployed for you), gives the exact command and a verification for each, lists
+    every secret and variable per cloud, and carries greenfield and brownfield as
+    complete separate walkthroughs. Every other page in this section is depth it
+    links to.
+
 ## Start here — greenfield or brownfield?
 
 This is the first decision, and it is not a preference. It is determined by what
@@ -243,6 +251,12 @@ approvals so customers can promote Dev → Stage → Prod.
 </div>
 
 ## Prerequisites checklist
+
+The authoritative, step-by-step version — with the exact command and a
+verification for each, plus the GitHub secrets and variables the deploy
+workflows consume — is
+[Prerequisites and first deploy → the prerequisites, in full](prerequisites.md#part-1--the-prerequisites-in-full).
+The table below is the summary.
 
 Before you start, you need:
 

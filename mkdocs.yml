@@ -1471,6 +1471,7 @@ nav:
       # ------------------------------------------------------------
       - Deployment:
           - Index: fiab/deployment/index.md
+          - "Prerequisites and First Deploy (START HERE)": fiab/deployment/prerequisites.md
           - Greenfield (empty subscription): fiab/deployment/greenfield.md
           - Brownfield (adopt existing infrastructure): fiab/deployment/brownfield.md
           - Discovery and Adoption Reference: fiab/deployment/discovery-and-adoption.md
