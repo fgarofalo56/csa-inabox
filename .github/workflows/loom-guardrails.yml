@@ -990,6 +990,32 @@ jobs:
         run: |
           node scripts/ci/check-msal-rotation-consistency.mjs --self-test
           node scripts/ci/check-msal-rotation-consistency.mjs
+      # #3335 — MEASURED on the live Commercial app registration 2026-08-13:
+      # NINE live password credentials, five minted that day, each `--years 2`.
+      # The bootstrap minted UNCONDITIONALLY on every invocation and nothing
+      # pruned; the mint rate follows the DEPLOY rate (deploy-fiab-commercial
+      # ran 11 times that day and calls the bootstrap via workflow_call). The
+      # in-bicep sibling carried the OPPOSITE defect — a bare `credential reset`
+      # with no --append, which deletes every credential including the one the
+      # running console is serving.
+      #
+      # This is the STATIC half. The live half is the credential ceiling the
+      # bootstrap asserts on the real count; that can only fail once a
+      # regression has reached an estate, so this one fails at review time. Both
+      # analyzers were run against the pre-fix files and reported the defects at
+      # the exact lines the issue names (bootstrap:268, bicep:178).
+      # Self-test first: it carries the mutant fixtures (bare reset,
+      # unconditional mint, missing/discarded ceiling, prune with no dry run,
+      # an echoed ${SECRET}, a delete without --key-id, and a subject with no
+      # mint at all) and proves the analyser flags each before the real files
+      # are judged. Runtime behaviour is covered separately by
+      # scripts/ci/__tests__/msal-credential-lifecycle.test.mjs, which drives
+      # the REAL script against a stub `az`.
+      - name: 'msal-credential-hygiene (mints are appended + gated by reuse, ceiling can fail, prune is dry-runnable, no value ever printed — #3335)'
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-msal-credential-hygiene.mjs --self-test
+          node scripts/ci/check-msal-credential-hygiene.mjs
       # #3042 — the meta-guard for THIS file: every `run:` step above must
       # carry `if: ${{ !cancelled() }}`, or one failing guard hides the rest
       # behind benign-looking `skipped` steps again. Self-test first (mutant
