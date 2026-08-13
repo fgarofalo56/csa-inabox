@@ -108,6 +108,43 @@ jobs:
       dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
       region: ${{ steps.bootstrap_coords.outputs.region }}
 
+    # ── IMAGE TAGS: ONE DEFINITION FOR THE WHOLE JOB (#3161) ────────────────
+    # il5.bicepparam resolves all sixteen `appImageTags` entries with
+    # `readEnvironmentVariable('LOOM_<X>_TAG', '<default>')`, which CANNOT FAIL.
+    # So while the deploying step had no `env:` block, every full IL5 deploy
+    # would have SUCCEEDED while writing the param default over whatever the
+    # apps were running — the same silent revert as the gcc-high lane, fixed on
+    # both boundaries together per cloud-parity.md.
+    #
+    # THE LITERALS MATCH il5.bicepparam, LINE FOR LINE, AND THAT MATTERS. The
+    # first fix (#3303) wrote `|| 'v0.1'` on all sixteen, but six of this
+    # boundary's declared defaults are not v0.1 — so with the repo variables
+    # unset (their normal state) the workflow silently OVERRODE the param file
+    # for loom-console and five siblings. Fixing an invisible override with a
+    # different invisible override. loom-console keeps 'v3.0' because
+    # gov-build-images.yml builds that tag expressly for this boundary; the
+    # other five moved to 'v0.1' in il5.bicepparam itself, because no producer
+    # has ever pushed the 'v0.7' they used to declare.
+    # scripts/ci/check-bicepparam-env-reaches-deploy.mjs fails on either half:
+    # a tag out of scope, or a fallback that disagrees with the param file.
+    env:
+      LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG || 'v0.1' }}
+      LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG || 'v3.0' }}
+      LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG || 'v0.1' }}
+      LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
+      LOOM_MAF_TAG: ${{ vars.LOOM_MAF_TAG || 'v0.1' }}
+      LOOM_MCP_BRIDGE_TAG: ${{ vars.LOOM_MCP_BRIDGE_TAG || 'v0.1' }}
+      LOOM_MCP_TAG: ${{ vars.LOOM_MCP_TAG || 'v0.1' }}
+      LOOM_MIGRATE_TAG: ${{ vars.LOOM_MIGRATE_TAG || 'v0.1' }}
+      LOOM_MIRRORING_TAG: ${{ vars.LOOM_MIRRORING_TAG || 'v0.1' }}
+      LOOM_ORCHESTRATOR_TAG: ${{ vars.LOOM_ORCHESTRATOR_TAG || 'v0.1' }}
+      LOOM_RISINGWAVE_TAG: ${{ vars.LOOM_RISINGWAVE_TAG || 'v0.1' }}
+      LOOM_SCRIPT_RUNNER_TAG: ${{ vars.LOOM_SCRIPT_RUNNER_TAG || 'v0.1' }}
+      LOOM_SETUP_ORCHESTRATOR_TAG: ${{ vars.LOOM_SETUP_ORCHESTRATOR_TAG || 'v0.1' }}
+      LOOM_TRINO_TAG: ${{ vars.LOOM_TRINO_TAG || 'v0.1' }}
+      LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
+      LOOM_WRANGLER_TAG: ${{ vars.LOOM_WRANGLER_TAG || 'v0.1' }}
+
     steps:
       - uses: actions/checkout@v7
 
@@ -213,6 +250,11 @@ jobs:
       - name: Adopt the estate's live internal trust token (never re-mint it)
         run: bash scripts/csa-loom/resolve-internal-token.sh --export > /dev/null
 
+      # #3161 round 2 — THE PREVIEW MUST RESOLVE THE SAME TAGS AS THE APPLY.
+      # `whatif-only` is this lane's DEFAULT run_mode, so this step's output IS
+      # the artifact an operator reads before approving a full run, and it
+      # resolved `appImageTags` from a different source than the apply. Both now
+      # read the job-level `env:` at the top of this job.
       - name: Bicep what-if (IL5 params)
         run: |
           az deployment sub what-if \
@@ -256,9 +298,11 @@ jobs:
       # from-scratch path (no ACR yet, nothing to adopt) working.
       - name: Image preflight — IL5 ACR must already hold every referenced tag
         if: inputs.run_mode == 'full'
-        env:
-          LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
-          LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
+        # The LOOM_*_TAG values this step reads now come from the job-level
+        # `env:` (#3161) — the same source the what-if and the apply use. They
+        # were declared here, on this step only, so a pinned repo variable was
+        # asserted by the preflight and then resolved differently by the deploy:
+        # the preflight passing READ AS "the pin took effect" when it had not.
         run: |
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
@@ -324,37 +368,47 @@ jobs:
       # the normal post-teardown state; a preflight here would fail the nightly
       # ring for a non-problem. The dlz-attach branch below targets a brand-new
       # subscription, which is greenfield by definition.
+      # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
+      # Same gate as the gcc-high lane, on the same boundary-parity reasoning.
+      # Having the tag in scope is necessary and NOT sufficient: in scope with
+      # the param default is exactly the state that reverts a pinned app. This
+      # reads what the estate is ACTUALLY running (read-only
+      # `az containerapp list`) and refuses only the state nobody chose — a
+      # default-sourced tag about to overwrite an app running something else.
+      #
+      # SCOPED TO THE RECONCILE PATH. With keep_resources=false this lane TEARS
+      # THE ESTATE DOWN before redeploying, so nothing is adopted and a
+      # different (or missing) running tag is the normal post-teardown state —
+      # gating there would fail the ring for a non-problem, the same reasoning
+      # that keeps the adopted-image preflight inside redeploy-gov.sh's
+      # --skip-teardown branch.
+      - name: Image-tag revert gate — never flatten a pinned app to the default
+        if: inputs.run_mode == 'full' && inputs.keep_resources && inputs.topology != 'dlz-attach'
+        run: |
+          set -euo pipefail
+          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
+            --param-file platform/fiab/bicep/params/il5.bicepparam \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       - name: Teardown -> redeploy -> smoke (full mode only)
         if: inputs.run_mode == 'full'
         env:
           FIAB_GOV_ADMIN_GROUP_ID: ${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
           LOOM_MSAL_CLIENT_ID: ${{ env.LOOM_RESOLVED_MSAL_CLIENT_ID }}
           LOOM_MSAL_CLIENT_SECRET: ${{ secrets.LOOM_GOV_MSAL_CLIENT_SECRET }}
-          # #3161 — il5.bicepparam reads these with readEnvironmentVariable() and
-          # they were absent here, so every full IL5 deploy fell back to `v0.1`
-          # and rewrote loom-unity / iceberg-catalog / loom-trino off any pinned
-          # tag, silently. Same defect as the gcc-high lane; fixed in both,
-          # because a fix in one boundary only is exactly what cloud-parity.md
-          # calls INCOMPLETE rather than done.
+          # #3161 — il5.bicepparam reads sixteen image tags with
+          # readEnvironmentVariable() and they were absent here, so every full
+          # IL5 deploy would have fallen back to the default and rewritten
+          # loom-unity / iceberg-catalog / loom-trino off any pinned tag,
+          # silently. Same defect as the gcc-high lane; fixed in both, because a
+          # fix in one boundary only is exactly what cloud-parity.md calls
+          # INCOMPLETE rather than done. Those sixteen now live in the job-level
+          # `env:` at the top of this job, shared with the what-if, so the
+          # preview and the apply cannot resolve different tags.
+          #
           # keep_resources=true (the default) RECONCILES in place; false is an
           # explicit teardown->redeploy. Empty string = no flag = teardown.
           SKIP_TEARDOWN_FLAG: ${{ inputs.keep_resources && '--skip-teardown' || '' }}
-          LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG || 'v0.1' }}
-          LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG || 'v0.1' }}
-          LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG || 'v0.1' }}
-          LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
-          LOOM_MAF_TAG: ${{ vars.LOOM_MAF_TAG || 'v0.1' }}
-          LOOM_MCP_BRIDGE_TAG: ${{ vars.LOOM_MCP_BRIDGE_TAG || 'v0.1' }}
-          LOOM_MCP_TAG: ${{ vars.LOOM_MCP_TAG || 'v0.1' }}
-          LOOM_MIGRATE_TAG: ${{ vars.LOOM_MIGRATE_TAG || 'v0.1' }}
-          LOOM_MIRRORING_TAG: ${{ vars.LOOM_MIRRORING_TAG || 'v0.1' }}
-          LOOM_ORCHESTRATOR_TAG: ${{ vars.LOOM_ORCHESTRATOR_TAG || 'v0.1' }}
-          LOOM_RISINGWAVE_TAG: ${{ vars.LOOM_RISINGWAVE_TAG || 'v0.1' }}
-          LOOM_SCRIPT_RUNNER_TAG: ${{ vars.LOOM_SCRIPT_RUNNER_TAG || 'v0.1' }}
-          LOOM_SETUP_ORCHESTRATOR_TAG: ${{ vars.LOOM_SETUP_ORCHESTRATOR_TAG || 'v0.1' }}
-          LOOM_TRINO_TAG: ${{ vars.LOOM_TRINO_TAG || 'v0.1' }}
-          LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
-          LOOM_WRANGLER_TAG: ${{ vars.LOOM_WRANGLER_TAG || 'v0.1' }}
         run: |
           set -e
           # RETRY WITH CLASSIFICATION (#3017, deploy-integrity R6): same harness
