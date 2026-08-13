@@ -458,7 +458,15 @@ param dabRuntimeEnabled bool = true
 param dbtRunnerEnabled bool = true
 
 @description('Set true once the transformation runner images have been built + pushed to ACR by the app-deploy workflow: loom-dbt-runner (apps/fiab-dbt-runner) AND, for N4, loom-transform-runner (apps/loom-transform-runner — dbt-core + SQLMesh + ODBC Driver 18). Gates BOTH Container App deployments so a clean first deploy (no images yet) does not fail on an unresolvable image ref — the dbt-job run surface honest-gates on LOOM_DBT_RUNNER_URL and the transformation-project plan/apply surface on LOOM_TRANSFORM_RUNNER_URL until the images are ready, then this flips on. Default false.')
-param dbtRunnerImageReady bool = false
+// VERIFIED BUILT AND RUNNING 2026-08-13. Both images exist in the estate ACR
+// and their Container Apps are live:
+//   loom-dbt-r2            acrloomk6mvh5sm6z7do.azurecr.io/loom-dbt-runner:v0.1        Healthy/Running
+//   loom-transform-runner  acrloomk6mvh5sm6z7do.azurecr.io/loom-transform-runner:v0.1  Succeeded
+// While this stayed false, main.bicep threaded `dbtRunnerEnabled && dbtRunnerImageReady`
+// = FALSE to the admin plane, so dbtRunnerActive was false and BOTH
+// LOOM_DBT_RUNNER_URL and LOOM_TRANSFORM_RUNNER_URL deployed EMPTY on a console
+// whose runners were up — svc-dbt blocked with the backend already running.
+param dbtRunnerImageReady bool = true
 
 @description('Deploy the loom-udf-runtime Container App (User Data Functions execution host, stock MCR image on the dab-runtime.bicep pattern) so the user-data-function invoke path (LOOM_UDF_FUNCTION_BASE) works day-one. Default on (opt-out); set false to leave the UDF invoke route honestly 503-gated (or supply a BYO host via loomUdfFunctionBase). Container Apps only. No Fabric dependency.')
 param udfRuntimeEnabled bool = true

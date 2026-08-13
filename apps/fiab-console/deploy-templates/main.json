@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "7177041275533053323"
+      "templateHash": "13912905322529000969"
     }
   },
   "definitions": {
@@ -1043,7 +1043,7 @@
     },
     "dbtRunnerImageReady": {
       "type": "bool",
-      "defaultValue": false,
+      "defaultValue": true,
       "metadata": {
         "description": "Set true once the transformation runner images have been built + pushed to ACR by the app-deploy workflow: loom-dbt-runner (apps/fiab-dbt-runner) AND, for N4, loom-transform-runner (apps/loom-transform-runner — dbt-core + SQLMesh + ODBC Driver 18). Gates BOTH Container App deployments so a clean first deploy (no images yet) does not fail on an unresolvable image ref — the dbt-job run surface honest-gates on LOOM_DBT_RUNNER_URL and the transformation-project plan/apply surface on LOOM_TRANSFORM_RUNNER_URL until the images are ready, then this flips on. Default false."
       }
