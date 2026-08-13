@@ -1,0 +1,150 @@
+# loom-directlake CI — compile + test the Rust columnar scan/frame service
+#
+# WHY THIS EXISTS (#3291). `apps/loom-directlake` shipped a Cargo manifest, a
+# Cargo.lock, a Dockerfile, a bicep module, a bundled parquet fixture, unit tests
+# and three production console consumers — and NOTHING in this repository had
+# ever compiled it. `grep -rl "cargo " .github/workflows` returned ZERO files
+# before this one. The image was never built either (it is one of the five
+# entries in scripts/ci/check-image-producer-coverage.mjs KNOWN_UNBUILT), so
+# there was no lane anywhere — CI, image build, or deploy — in which a Rust
+# compile error could surface.
+#
+# That is the precondition #3291 had to close BEFORE the service could be wired
+# into admin-plane/main.bicep: the moment a Container App references an image,
+# a build failure stops being invisible and becomes a failed deploy. This lane
+# turns "we assume it compiles" into a measured fact on every PR that touches
+# the crate.
+#
+# SCOPE: `cargo build --locked` (both feature sets) + `cargo test`. It does NOT
+# talk to Azure — the `engine`-only build and the bundled `fixtures/sales.parquet`
+# make the core scan path executable with zero cloud, which is exactly what the
+# crate's own feature split was designed for.
+#
+# --locked is deliberate and load-bearing: it fails if Cargo.lock does not
+# already satisfy Cargo.toml, which is the same guarantee the Dockerfile's
+# `cargo build --release --locked` needs at image-build time. A lane that let
+# cargo silently re-resolve would go green on a tree whose image build fails.
+
+name: loom-directlake CI (cargo build + test)
+
+on:
+  pull_request:
+    paths:
+      - 'apps/loom-directlake/**'
+      - '.github/workflows/loom-directlake-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/loom-directlake/**'
+      - '.github/workflows/loom-directlake-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loom-directlake-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: cargo build + test (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The core path: fixture:// + file:// parquet + DataFusion. No Azure,
+          # no delta-rs. This is the feature set the crate's own unit tests target.
+          - features: engine-only
+            flags: '--no-default-features --features engine'
+          # The SHIPPED feature set — what the Dockerfile compiles and what the
+          # Container App runs. `azure` pulls delta-rs (deltalake 0.24) for the
+          # abfss:// Delta path. If this one is red, the image cannot be built.
+          - features: default (engine + azure)
+            flags: ''
+    defaults:
+      run:
+        working-directory: apps/loom-directlake
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      # Native deps the Dockerfile's build stage installs. Kept in sync with
+      # apps/loom-directlake/Dockerfile deliberately: if a *-sys crate needs a
+      # C toolchain here it needs one there too, and a divergence between the
+      # two is how a green CI lane ships an unbuildable image.
+      - name: Install native build dependencies (mirrors the Dockerfile)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config build-essential libssl-dev
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/loom-directlake/target
+          key: loom-directlake-${{ matrix.features }}-${{ hashFiles('apps/loom-directlake/Cargo.lock') }}
+          restore-keys: |
+            loom-directlake-${{ matrix.features }}-
+
+      # --locked, NOT --offline: the lock must already satisfy the manifest.
+      - name: cargo build --locked ${{ matrix.flags }}
+        run: cargo build --locked ${{ matrix.flags }}
+
+      - name: cargo test --locked ${{ matrix.flags }}
+        run: cargo test --locked ${{ matrix.flags }}
+
+  # A release build is what the Dockerfile actually runs (`cargo build --release
+  # --locked`), and release-only failures are real: `lto = "thin"` +
+  # `codegen-units = 1` exercise code paths a debug build never reaches. The
+  # image producer added in #3291 runs this compile inside ACR Tasks, where a
+  # failure costs a whole deploy — so it is proven here first.
+  release-build:
+    name: cargo build --release (the profile the image ships)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: apps/loom-directlake
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+
+      - name: Install native build dependencies (mirrors the Dockerfile)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config build-essential libssl-dev
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/loom-directlake/target
+          key: loom-directlake-release-${{ hashFiles('apps/loom-directlake/Cargo.lock') }}
+          restore-keys: |
+            loom-directlake-release-
+
+      - name: cargo build --release --locked
+        run: cargo build --release --locked
