@@ -20,9 +20,13 @@ name: csa-loom-exercise-services
 #
 # Requirements (one-time, per docs/fiab/agent-unattended-access.md):
 #   - GH secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-#   - GH vars:    LOOM_VERIFY_URL, LOOM_AUTOMATION_OID (must be a tenant admin
-#                 — LOOM_TENANT_ADMIN_OID or in LOOM_TENANT_ADMIN_GROUP_ID),
-#                 LOOM_KV_NAME or LOOM_ADMIN_RG (for KV auto-discovery)
+#   - GH vars:    LOOM_VERIFY_URL, LOOM_KV_NAME or LOOM_ADMIN_RG (for KV
+#                 auto-discovery)
+#   - LOOM_AUTOMATION_OID is NOT a setup step (#3373). It is DERIVED at run time
+#     from the console's own LOOM_TENANT_ADMIN_OID — the only value a minted
+#     session can match, since it carries no `groups` claim. Membership of
+#     LOOM_TENANT_ADMIN_GROUP_ID does not substitute. The repo var is an
+#     optional OVERRIDE. The SP needs Reader on the admin RG to read it.
 
 on:
   workflow_dispatch:
@@ -55,7 +59,11 @@ permissions:
 
 env:
   LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://csa-loom.limitlessdata.ai' }}
-  LOOM_AUTOMATION_OID:  ${{ vars.LOOM_AUTOMATION_OID  || '' }}
+  # LOOM_AUTOMATION_OID is DERIVED at run time (#3373) — see the "Resolve
+  # automation identity" step. Not set at workflow scope, so the value written
+  # to $GITHUB_ENV there is the one every `${{ env.LOOM_AUTOMATION_OID }}` below
+  # reads. The repo variable survives as an explicit OVERRIDE only.
+  LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
   LOOM_AUTOMATION_UPN:  ${{ vars.LOOM_AUTOMATION_UPN  || 'loom-exercise@automation.local' }}
   LOOM_AUTOMATION_NAME: ${{ vars.LOOM_AUTOMATION_NAME || 'Loom Exercise [automation]' }}
   KV_SECRET_NAME: 'session-secret'
@@ -122,6 +130,22 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '20'
+
+      # RESOLVE THE AUTOMATION IDENTITY — produced, never requested (#3373).
+      # `vars.LOOM_AUTOMATION_OID` had no writer anywhere in this repo, so this
+      # daily probe was gated on a hand-typed variable. The value is derived
+      # from the console's own LOOM_TENANT_ADMIN_OID — the only thing a minted
+      # session (which carries no `groups` claim) can match in
+      # feature-gate.ts `isTenantAdmin`. exercise-services.mjs already refuses
+      # to run without it and 403s when it is not a tenant admin; deriving it
+      # from the binding makes both of those states unreachable by accident.
+      - name: Resolve automation identity (derive from the console's tenant-admin binding)
+        id: automation_oid
+        env:
+          EXPLICIT_OID: ${{ env.LOOM_AUTOMATION_OID_OVERRIDE }}
+          # Blank is fine — the script discovers the console's resource group.
+          CONSOLE_RG: ${{ inputs.admin_rg || vars.LOOM_ADMIN_RG }}
+        run: node scripts/ci/resolve-automation-oid.mjs
 
       # The exercise driver is dependency-free (Node builtins only) — no
       # pnpm install needed. It POSTs the run, polls for the report, prints

@@ -34,6 +34,25 @@ name: perf-gate
 #   LOOM_AUTOMATION_OID   Entra objectId of a TENANT-ADMIN principal. The
 #                         /api/admin/performance/run route is tenant-admin-gated, so
 #                         the minted session's oid must resolve as an admin.
+#
+#                         NOT CONVERTED BY #3373 — stated here rather than left to be
+#                         discovered. Every OTHER consumer of this value now DERIVES
+#                         it from the console's own LOOM_TENANT_ADMIN_OID via
+#                         scripts/ci/resolve-automation-oid.mjs, so no human supplies
+#                         it. This workflow cannot, for two measured reasons:
+#                           - it reads a repo SECRET, not `vars.`, so it was never
+#                             part of the un-writable-variable defect; and
+#                           - it runs on ubuntu-latest with `permissions: contents:
+#                             read` and NO azure/login step, so it holds no Azure
+#                             credential with which to read the container app.
+#                         Converting it means adding `id-token: write` + azure/login,
+#                         which for a `workflow_call` also obliges every caller to
+#                         pass those secrets. As of 2026-08-13 this workflow has ZERO
+#                         callers in .github/workflows and ZERO runs in its history,
+#                         so that change could not be verified by running it. It is
+#                         left alone deliberately: an untested change to a
+#                         never-executed lane is worse than a documented gap.
+#                         When a caller appears, wire azure/login + the resolver.
 # OPTIONAL SECRETS:
 #   LOOM_AUTOMATION_UPN   UPN stamped into the session (default automation@loom).
 # ─────────────────────────────────────────────────────────────────────────────

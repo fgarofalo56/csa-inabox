@@ -140,9 +140,34 @@ jobs:
             az monitor log-analytics query -w "$LAW" --analytics-query "union isfuzzy=true AGWFirewallLogs, FrontDoorWebApplicationFirewallLog | where TimeGenerated > ago(2h) | take 10" -o json 2>&1 | head -c 400 || true
           fi
 
+      # RESOLVE THE AUTOMATION IDENTITY — produced, never requested (#3373).
+      #
+      # This step also closes a CLOUD-PARITY defect (cloud-parity.md). This lane
+      # used to read `vars.LOOM_AUTOMATION_OID` — a single repo-wide variable
+      # shared with the COMMERCIAL workflows. Commercial and Gov are different
+      # Entra tenants, so one object id cannot be the tenant admin in both: the
+      # admin-gated probe below (/api/admin/domains/purview-status) could only
+      # ever pass in one of them. Deriving from the GOV console's own
+      # LOOM_TENANT_ADMIN_OID gives each boundary its own correct identity, with
+      # no repo variable and nothing hard-coded per cloud — `az containerapp
+      # show` follows whatever `az cloud set` selected above.
+      #
+      # If the Gov deploy lanes bind only loomTenantAdminGroupId (they did as of
+      # #3109) this step FAILS CLOSED and says so precisely, because the group
+      # arm of feature-gate.ts `isTenantAdmin` needs a `groups` claim that a
+      # minted session never carries. That is a true, actionable red rather than
+      # today's silent 403 on the admin probe.
+      - name: Resolve automation identity (derive from the Gov console's tenant-admin binding)
+        id: automation_oid
+        env:
+          EXPLICIT_OID: ${{ vars.LOOM_GOV_AUTOMATION_OID }}
+          CONSOLE_APP: ${{ env.APP }}
+          CONSOLE_RG: ${{ env.RG }}
+        run: node scripts/ci/resolve-automation-oid.mjs
+
       - name: Probe BFF routes with a minted session
         env:
-          OID: ${{ vars.LOOM_AUTOMATION_OID }}
+          OID: ${{ env.LOOM_AUTOMATION_OID }}
         run: |
           set -euo pipefail
           node - <<'EOF'

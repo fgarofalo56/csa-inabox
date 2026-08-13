@@ -56,11 +56,18 @@ notebooks unusable. The `spark` probe catches exactly that, by default, every da
 
 - GH secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
   (OIDC federated SP with Key Vault Secrets User on the loom KV).
-- GH vars: `LOOM_VERIFY_URL`, `LOOM_AUTOMATION_OID`, and `LOOM_KV_NAME` (or
-  `LOOM_ADMIN_RG` for auto-discovery).
-- `LOOM_AUTOMATION_OID` **must be a tenant admin** (`LOOM_TENANT_ADMIN_OID` or a
-  member of `LOOM_TENANT_ADMIN_GROUP_ID`) — the exercise route is admin-gated
-  because probes execute real work against shared tenant backends.
+- GH vars: `LOOM_VERIFY_URL`, and `LOOM_KV_NAME` (or `LOOM_ADMIN_RG` for
+  auto-discovery).
+- `LOOM_AUTOMATION_OID` is **derived, not configured** (#3373): the workflow
+  runs `scripts/ci/resolve-automation-oid.mjs`, which reads
+  `LOOM_TENANT_ADMIN_OID` off the live `loom-console` container app. Setting the
+  repo variable is an override only.
+- It **must be the tenant admin** — specifically it must EQUAL the console's
+  `LOOM_TENANT_ADMIN_OID`, because the exercise route is admin-gated and probes
+  execute real work against shared tenant backends. Membership of
+  `LOOM_TENANT_ADMIN_GROUP_ID` does **not** substitute: the minted session
+  carries no `groups` claim, so the group arm of `isTenantAdmin()` can never
+  fire for automation. Deriving the value makes both mistakes unreachable.
 
 ## Tuning
 
