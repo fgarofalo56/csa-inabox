@@ -686,6 +686,53 @@ jobs:
           echo "::notice::[dlz-adopt] adopting: $KEYS"
           echo "adopted=$KEYS" >> "$GITHUB_OUTPUT"
 
+      # ── CAN THIS DEPLOY IDENTITY ACTUALLY GRANT AT THE LAKE? (#3336) ───────
+      #
+      # MEASURED, never assumed, and never asked of the operator. When the lake
+      # was adopted from another subscription, admin-plane's grant modules skip
+      # (`loomStorageAccountSameSub` is false) and the cross-sub pass in
+      # main.bicep has to make them from a `scope: resourceGroup(<lakeSub>,
+      # <lakeRg>)` module. That pass needs BOTH
+      # `Microsoft.Resources/deployments/write` and
+      # `Microsoft.Authorization/roleAssignments/write` over there — and an
+      # identity holding neither does not get a skipped grant, it gets
+      # AuthorizationFailed and the WHOLE deployment fails. That is the P0 that
+      # failed two full Commercial deploys on 2026-08-13 (#3333/#3329), so the
+      # pass is armed ONLY on a positive measurement.
+      #
+      # The probe reads the SAME adopt plan bicep reads (not the discovered
+      # DLZ_SUB/DLZ_RG — an explicit LOOM_ADOPT_JSON may name a different
+      # account, and measuring rights at a resource group nothing deploys to
+      # would be a green light for the wrong scope). It then asks ARM, as this
+      # very credential, what it may do at that exact scope, and classifies
+      # allowed / denied / unknown / not-applicable with the reason printed.
+      #
+      # It exits 0 on every DECIDED outcome — a customer whose deploy SP lacks
+      # the right is a supported estate, not a broken run, and their gateway
+      # honest-gates with a Fix-it naming the grant. It exits non-zero only when
+      # its own embedded controls fail, i.e. when no verdict it produced could be
+      # trusted in either direction. Nothing here is `|| true`.
+      #
+      # Runs AFTER the adopt step (it needs the plan) and BEFORE the compose step
+      # (which passes the verdict), so both the what-if and the apply carry it.
+      - name: Measure cross-subscription lake grant rights (#3336)
+        id: lake_rights
+        env:
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -euo pipefail
+          # LOOM_ADOPT_JSON reaches this step through $GITHUB_ENV, written by the
+          # adopt step above. Defaulted on its own line rather than inline: a
+          # `${VAR:-{\}}` default needs a brace escaped inside a parameter
+          # expansion, which is exactly the kind of quoting that silently
+          # produces a literal instead of an empty object.
+          PLAN="${LOOM_ADOPT_JSON:-}"
+          [ -n "$PLAN" ] || PLAN='{}'
+          node scripts/csa-loom/probe-lake-grant-rights.mjs \
+            --adopt-json "$PLAN" \
+            --deploy-subscription "${DEPLOY_SUB:-}" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Compose deployment arguments (ONE source for what-if and apply)
         id: params
         env:
@@ -724,6 +771,11 @@ jobs:
           HUB_ACR_LOGIN: ${{ steps.hubcoords.outputs.hub_acr_login }}
           HUB_CAE_ID: ${{ steps.hubcoords.outputs.hub_cae_id }}
           HUB_KV_ID: ${{ steps.hubcoords.outputs.hub_kv_id }}
+          # #3336 — the MEASURED verdict from the lake-rights probe above. Never
+          # an input, never a default the operator can flip blind: this value is
+          # only ever what ARM said this credential may do at the lake.
+          CROSS_SUB_LAKE_GRANTS: ${{ steps.lake_rights.outputs.cross_sub_lake_grants }}
+          CROSS_SUB_LAKE_VERDICT: ${{ steps.lake_rights.outputs.verdict }}
         run: |
           set -euo pipefail
           DEPLOY_NAME="csa-loom-ci-${{ github.run_id }}"
@@ -742,6 +794,16 @@ jobs:
           add --parameters "hubFirewallEnabled=$FIREWALL_ENABLED"
           add --parameters "deployAppsEnabled=$DEPLOY_APPS_ENABLED"
           add --parameters "skipRoleGrants=$SKIP_ROLE_GRANTS"
+          # #3336 — arm the cross-subscription lake grant pass ONLY on a measured
+          # "allowed". Passed unconditionally (as an explicit true/false) rather
+          # than appended only when true: an omitted parameter falls back to the
+          # bicep default, which is the same `false`, but then the DEPLOY LOG
+          # would not record what was measured. `unknown` and `denied` both
+          # render false here — the difference between them is in the probe's
+          # printed reason, and collapsing them into one silent omission is how
+          # "could not measure" becomes indistinguishable from "measured no".
+          add --parameters "crossSubLakeGrantsEnabled=${CROSS_SUB_LAKE_GRANTS:-false}"
+          echo "::notice::[lake-grants] crossSubLakeGrantsEnabled=${CROSS_SUB_LAKE_GRANTS:-false} (measured verdict: ${CROSS_SUB_LAKE_VERDICT:-not-run})"
           add --parameters "frontDoorEnabled=$FRONT_DOOR_ENABLED"
           add --parameters "existingVpnGatewayName=$EXISTING_VPN_GATEWAY_NAME"
           add --parameters "apimGatewayDnsLinkName=$APIM_DNS_LINK_NAME"

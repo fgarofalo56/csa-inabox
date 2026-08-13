@@ -357,6 +357,9 @@ param complianceTags object
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('#3336 — arm the CROSS-SUBSCRIPTION lake grant pass (modules/data-plane/dlz-lake-grant-pass.bicep). This is a MEASUREMENT, not a preference: the deploy lane runs scripts/csa-loom/probe-lake-grant-rights.mjs AS THE DEPLOYING IDENTITY against ARM\'s Microsoft.Authorization/permissions endpoint at the adopted lake\'s resource group, and passes the answer here. The customer performs NO step (auto-bind-by-default.md) — the platform establishes its own rights and acts on them. DEFAULT FALSE, deliberately: a nested deployment into another subscription needs Microsoft.Resources/deployments/write there and the grant needs Microsoft.Authorization/roleAssignments/write, and an identity holding neither does not get a skipped grant — it gets AuthorizationFailed and the WHOLE deployment fails, which is exactly the P0 that failed two Commercial deploys on 2026-08-13 (#3333). False reproduces today\'s behaviour EXACTLY (no cross-sub module is deployed), so an un-measured caller — a hand-run az deployment, a what-if, the Setup Orchestrator before it learns this param — can never be made worse by this flag existing. Only relevant when the lake was ADOPTED from another subscription; on a same-sub estate loomStorageAccountSameSub is true, admin-plane makes its own grants, and this pass is skipped regardless of the value.')
+param crossSubLakeGrantsEnabled bool = false
+
 // loom-next-level I1 (R0 bag pattern — this file sits near the 256-param ARM
 // cap, so per-workspace-identity settings ride ONE typed bag; I2+ extend the
 // type with properties, never new top-level params).
@@ -591,6 +594,28 @@ var existingDatabricksHostname = adoptExtra(adopt, 'databricks', 'hostname')
 var existingAdfFactory = adoptName(adopt, 'adf')
 var existingAdfRg = adoptRg(adopt, 'adf')
 var existingAdfSub = adoptSub(adopt, 'adf')
+
+// ---------- #3336: the ADOPTED LAKE's coordinates, and whether it is cross-sub ----------
+// The adopt plan (scripts/csa-loom/discover-dlz-adopt-plan.sh -> LOOM_ADOPT_JSON
+// -> params/*.bicepparam `adopt`) is the ONLY place that knows where the lake
+// actually lives. `loomStorageAccount` above already reads its NAME from here;
+// these read the rg + sub so the cross-subscription grant pass can be invoked at
+// the lake's own scope instead of guessing a convention.
+var lakeAdoptName = adoptName(adopt, 'storage-adls')
+var lakeAdoptRg = adoptRg(adopt, 'storage-adls')
+var lakeAdoptSub = adoptSub(adopt, 'storage-adls')
+
+// Cross-sub is the case admin-plane's grant modules CANNOT serve. Mirrors the
+// negation of the `loomStorageAccountSameSub` expression passed to admin-plane —
+// an adopted lake with no explicit `sub` is same-sub by the plan's own
+// convention, so it is NOT cross-sub.
+var lakeIsCrossSub = !empty(lakeAdoptName) && !empty(lakeAdoptSub) && lakeAdoptSub != subscription().subscriptionId
+
+// `!empty(lakeAdoptRg)` is not belt-and-braces: `scope: resourceGroup(sub, '')`
+// is a deployment that cannot be submitted, and this pass must never be the
+// thing that fails a deploy. Everything here is statically known at compile
+// time (params + the adopt object), so there is no cycle with adminPlane.
+var crossSubLakeGrantsActive = deployAdminPlane && crossSubLakeGrantsEnabled && !skipRoleGrants && lakeIsCrossSub && !empty(lakeAdoptRg)
 
 // ---------- provision<Service>: the SUPPRESSION half of adopt-or-create ----------
 // A BYO value that only rebinds the Console env while the module still creates a
@@ -1368,6 +1393,12 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomStorageAccountSameSub: empty(adoptName(adopt, 'storage-adls'))
       ? true
       : (empty(adoptSub(adopt, 'storage-adls')) || adoptSub(adopt, 'storage-adls') == subscription().subscriptionId)
+    // #3336 — "the grant this module cannot make HAS AN OWNER." True exactly when
+    // `dlzLakeGrantPass` below will run. It arms NO grant inside admin-plane
+    // (every module there still keys on loomStorageGrantable); it only stops a
+    // capability being blocked from DEPLOYING because the grant belongs to a
+    // different, correctly-scoped pass — the #3337 defect.
+    loomStorageGrantedElsewhere: crossSubLakeGrantsActive
     // Tenant/multi-sub: no LOCAL DLZ exists yet (DLZs attach later), so the ADX
     // cluster's DLZ-scoped Event Hub / storage grants must NOT fire — they would
     // target the non-existent rg-csa-loom-dlz-single-<loc> RG (ResourceGroupNotFound).
@@ -1970,6 +2001,68 @@ module dlzItemCreateRbac 'modules/admin-plane/dlz-attach-itemcreate-rbac.bicep' 
     skipRoleGrants: skipRoleGrants
   }
 }]
+
+// =====================================================================
+// #3336 — CROSS-SUBSCRIPTION LAKE GRANT PASS.
+//
+// THE HOLE. When the lake is discovered in a Data Landing Zone SUBSCRIPTION,
+// `loomStorageAccountSameSub` resolves false, `loomStorageGrantable` follows, and
+// every lake grant module inside admin-plane skips. Correct in isolation — a
+// deployment scoped to the admin subscription cannot create a role assignment in
+// another one — but NOTHING ELSE PICKED THE GRANT UP. Capabilities were left
+// bound-and-ungranted, or (svc-s3-gateway, #3337) with no deploy path at all.
+//
+// THE MECHANISM ALREADY EXISTED. This template is `targetScope = 'subscription'`
+// and the four loops directly above already deploy modules into OTHER
+// subscriptions via `scope: resourceGroup(subId, rg)`. Lake grants simply never
+// used it. This is the named owner they were missing, and the lake's `sub` + `rg`
+// come from the ADOPT PLAN — the same document that produced the binding — so the
+// grant lands where the console is actually pointed rather than where a naming
+// convention guesses.
+//
+// WHY IT DEPENDS ON adminPlane. It grants the S3 gateway's DEDICATED identity,
+// which admin-plane mints on this same run. That output creates the dependency
+// edge, so ARM orders this after the gateway exists. The gateway is
+// minReplicas:0 / internal-ingress, so the window between the app existing and
+// the grant landing is not a serving window; the deployment does not report
+// success until the grant is applied.
+//
+// FAILURE POSTURE — the thing this file must not get wrong.
+// `crossSubLakeGrantsEnabled` is false unless the deploy lane MEASURED that the
+// deploying identity holds `Microsoft.Authorization/roleAssignments/write` at
+// this exact resource group (scripts/csa-loom/probe-lake-grant-rights.mjs, run as
+// that identity against ARM's own permissions endpoint). When the measurement
+// says no, this module is NOT DEPLOYED — which is categorically different from a
+// discarded error: there is no `|| true`, no `2>/dev/null`, no
+// `continue-on-error` anywhere on this path, and an armed pass that then fails
+// still fails the deployment loudly. MEASURED on the live Commercial estate
+// 2026-08-13: the deploying principal holds Owner (actions ['*'], notActions [])
+// inherited from a management group, effective at the lake storage account in the
+// DLZ subscription — so on this estate the measurement passes and the grant lands.
+//
+// SOVEREIGN BOUNDARIES (cloud-parity.md). Nothing here is Commercial-specific:
+// the built-in role id is cloud-invariant and the condition is driven entirely by
+// the adopt plan, so the moment a sovereign lane discovers a cross-sub lake this
+// pass serves it identically. What is NOT yet at parity is the DISCOVERY: only
+// deploy-fiab-commercial.yml runs the adopt step today, so the sovereign lanes
+// never produce a cross-sub `adopt` and never reach this code. That gap is named
+// in the PR rather than implied fixed.
+// =====================================================================
+module dlzLakeGrantPass 'modules/data-plane/dlz-lake-grant-pass.bicep' = if (crossSubLakeGrantsActive) {
+  name: 'dlz-lake-grant-pass'
+  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)
+  params: {
+    storageAccountName: lakeAdoptName
+    // Ternary, not a bare `adminPlane!.outputs.…`: the `deployAdminPlane ? … : …`
+    // shape is the one this file already relies on for `var hub`, and it keeps
+    // the reference unevaluable when the admin plane is skipped.
+    // crossSubLakeGrantsActive already requires deployAdminPlane, so the false
+    // branch is unreachable in practice — it exists so the output can never be
+    // dereferenced without the module that produces it.
+    s3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.s3GatewayStorageUamiPrincipalId : ''
+    assignRoles: !skipRoleGrants
+  }
+}
 
 // =====================================================================
 // DLZ-ATTACH topology (audit-t157)

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13471869508536746440"
+      "templateHash": "2754021274470886361"
     }
   },
   "definitions": {
@@ -857,6 +857,13 @@
       "defaultValue": false,
       "metadata": {
         "description": "Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists."
+      }
+    },
+    "crossSubLakeGrantsEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "#3336 — arm the CROSS-SUBSCRIPTION lake grant pass (modules/data-plane/dlz-lake-grant-pass.bicep). This is a MEASUREMENT, not a preference: the deploy lane runs scripts/csa-loom/probe-lake-grant-rights.mjs AS THE DEPLOYING IDENTITY against ARM's Microsoft.Authorization/permissions endpoint at the adopted lake's resource group, and passes the answer here. The customer performs NO step (auto-bind-by-default.md) — the platform establishes its own rights and acts on them. DEFAULT FALSE, deliberately: a nested deployment into another subscription needs Microsoft.Resources/deployments/write there and the grant needs Microsoft.Authorization/roleAssignments/write, and an identity holding neither does not get a skipped grant — it gets AuthorizationFailed and the WHOLE deployment fails, which is exactly the P0 that failed two Commercial deploys on 2026-08-13 (#3333). False reproduces today's behaviour EXACTLY (no cross-sub module is deployed), so an un-measured caller — a hand-run az deployment, a what-if, the Setup Orchestrator before it learns this param — can never be made worse by this flag existing. Only relevant when the lake was ADOPTED from another subscription; on a same-sub estate loomStorageAccountSameSub is true, admin-plane makes its own grants, and this pass is skipped regardless of the value."
       }
     },
     "workspaceIdentityConfig": {
@@ -2039,6 +2046,11 @@
     "existingAdfFactory": "[__bicep.adoptName(parameters('adopt'), 'adf')]",
     "existingAdfRg": "[__bicep.adoptRg(parameters('adopt'), 'adf')]",
     "existingAdfSub": "[__bicep.adoptSub(parameters('adopt'), 'adf')]",
+    "lakeAdoptName": "[__bicep.adoptName(parameters('adopt'), 'storage-adls')]",
+    "lakeAdoptRg": "[__bicep.adoptRg(parameters('adopt'), 'storage-adls')]",
+    "lakeAdoptSub": "[__bicep.adoptSub(parameters('adopt'), 'storage-adls')]",
+    "lakeIsCrossSub": "[and(and(not(empty(variables('lakeAdoptName'))), not(empty(variables('lakeAdoptSub')))), not(equals(variables('lakeAdoptSub'), subscription().subscriptionId)))]",
+    "crossSubLakeGrantsActive": "[and(and(and(and(variables('deployAdminPlane'), parameters('crossSubLakeGrantsEnabled')), not(parameters('skipRoleGrants'))), variables('lakeIsCrossSub')), not(empty(variables('lakeAdoptRg'))))]",
     "provisionAiSearch": "[and(parameters('aiSearchEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'aisearch'), 'create'))]",
     "provisionApim": "[and(parameters('apimEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'apim'), 'create'))]",
     "provisionAdx": "[and(parameters('adxEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'adx'), 'create'))]",
@@ -2346,6 +2358,9 @@
           },
           "loomStorageAccount": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls'))), createObject('value', __bicep.adoptName(parameters('adopt'), 'storage-adls')), if(variables('useSingleDlz'), createObject('value', take(format('saloomdefault{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24)), createObject('value', '')))]",
           "loomStorageAccountSameSub": "[if(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls')), createObject('value', true()), createObject('value', or(empty(__bicep.adoptSub(parameters('adopt'), 'storage-adls')), equals(__bicep.adoptSub(parameters('adopt'), 'storage-adls'), subscription().subscriptionId))))]",
+          "loomStorageGrantedElsewhere": {
+            "value": "[variables('crossSubLakeGrantsActive')]"
+          },
           "loomEventHubNamespace": "[if(and(variables('useSingleDlz'), parameters('loomEventHubEnabled')), createObject('value', format('evhns-loom-default-{0}', parameters('location'))), createObject('value', ''))]",
           "loomDlzRg": "[if(variables('useSingleDlz'), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', variables('adminPlaneRgName')))]",
           "loomAsaRg": "[if(not(empty(variables('existingAsaJob'))), createObject('value', variables('existingAsaRg')), if(and(variables('useSingleDlz'), parameters('loomStreamAnalyticsEnabled')), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', '')))]",
@@ -2539,7 +2554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "1887830589724016941"
+              "templateHash": "8910986684844764189"
             }
           },
           "definitions": {
@@ -4148,6 +4163,13 @@
                 "description": "True when loomStorageAccount lives in THIS subscription, so RBAC grants against it can be created by this deployment. False for a multi-sub / dlz-attach estate whose lake is in another subscription: the console still BINDS to the account (LOOM_ADLS_ACCOUNT and every derived URL are plain strings) but the grant modules skip, because a subscription-scoped deployment cannot create a role assignment in another subscription. Splitting these two concerns is what lets a multi-sub estate be wired at all — before this flag, loomStorageAccount had to stay EMPTY on that topology purely to keep the grants from firing, which left LOOM_ADLS_ACCOUNT blank and hard-blocked svc-adls, medallion Silver/Gold, sample-data, RTI-export, CSV-imports and the S3 gateway. The old workaround was patch-navigator-env.sh AFTER the deploy, which the next deploy then reverted (auto-bind-by-default.md §5)."
               }
             },
+            "loomStorageGrantedElsewhere": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "True when a DIFFERENT pass in the same deployment owns the lake grants this module cannot make — platform/fiab/bicep/main.bicep's `dlzLakeGrantPass` (modules/data-plane/dlz-lake-grant-pass.bicep, #3336), invoked at `resourceGroup(<lakeSub>, <lakeRg>)` with coordinates read from the adopt plan. Set by the orchestrator ONLY after the deploy lane has MEASURED that the deploying identity holds Microsoft.Authorization/roleAssignments/write at the lake (scripts/csa-loom/probe-lake-grant-rights.mjs). It does NOT arm any grant in THIS module — every module here still keys on loomStorageGrantable, so nothing new can fail in this subscription. It exists so a capability whose grant has an owner ELSEWHERE is not also blocked from DEPLOYING here, which is the defect that left svc-s3-gateway with no deploy path on any tenant estate whose lake is cross-sub (#3337)."
+              }
+            },
             "loomRtiExportAdls": {
               "type": "string",
               "defaultValue": "",
@@ -5032,7 +5054,7 @@
             "ducklakePgPassword": "[format('Dl7{0}!Qz', uniqueString(parameters('loomGeneratedSecretSeed'), 'loom-ducklake-pg-v1'))]",
             "ducklakeCatalogUrlSecretName": "loom-ducklake-catalog-url",
             "s3GatewayEnabled": true,
-            "s3GatewayActive": "[and(and(and(variables('s3GatewayEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), variables('loomStorageGrantable'))]",
+            "s3GatewayActive": "[and(and(and(and(variables('s3GatewayEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), not(empty(parameters('loomStorageAccount')))), variables('loomStorageWillBeGranted'))]",
             "duckdbTierEnabled": true,
             "duckdbTierActive": "[and(and(variables('duckdbTierEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "loomUnityEnabled": "[not(equals(coalesce(tryGet(parameters('loomBackends'), 'unity'), 'enabled'), 'disabled'))]",
@@ -5051,6 +5073,7 @@
             "loomBatchRg": "[if(not(empty(coalesce(tryGet(parameters('byoExisting'), 'batchRg'), ''))), parameters('byoExisting').batchRg, parameters('loomDlzRg'))]",
             "loomConsoleBaseUrl": "",
             "loomStorageGrantable": "[and(not(empty(parameters('loomStorageAccount'))), parameters('loomStorageAccountSameSub'))]",
+            "loomStorageWillBeGranted": "[and(not(empty(parameters('loomStorageAccount'))), or(variables('loomStorageGrantable'), parameters('loomStorageGrantedElsewhere')))]",
             "byoAiSearchRg": "[if(not(empty(parameters('existingAiSearchRg'))), parameters('existingAiSearchRg'), resourceGroup().name)]",
             "byoApimRg": "[if(not(empty(parameters('existingApimRg'))), parameters('existingApimRg'), resourceGroup().name)]",
             "byoAdxRg": "[if(not(empty(parameters('existingAdxClusterRg'))), parameters('existingAdxClusterRg'), resourceGroup().name)]",
@@ -28781,6 +28804,10 @@
               "type": "string",
               "value": "[if(variables('risingwaveActive'), reference('risingwaveUami').principalId, '')]"
             },
+            "s3GatewayStorageUamiPrincipalId": {
+              "type": "string",
+              "value": "[if(variables('s3GatewayActive'), reference('s3Gateway').outputs.storageUamiPrincipalId.value, '')]"
+            },
             "alertActionGroupId": {
               "type": "string",
               "value": "[reference('defaultAlerts').outputs.actionGroupId.value]"
@@ -47685,6 +47712,107 @@
               }
             }
           ]
+        }
+      },
+      "dependsOn": [
+        "adminPlane"
+      ]
+    },
+    "dlzLakeGrantPass": {
+      "condition": "[variables('crossSubLakeGrantsActive')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "dlz-lake-grant-pass",
+      "subscriptionId": "[variables('lakeAdoptSub')]",
+      "resourceGroup": "[variables('lakeAdoptRg')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[variables('lakeAdoptName')]"
+          },
+          "s3GatewayPrincipalId": "[if(variables('deployAdminPlane'), createObject('value', reference('adminPlane').outputs.s3GatewayStorageUamiPrincipalId.value), createObject('value', ''))]",
+          "assignRoles": {
+            "value": "[not(parameters('skipRoleGrants'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "15979500963039502057"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "ADLS Gen2 lake account. MUST exist in THIS module's resource group / subscription — the caller supplies both via `scope: resourceGroup(<lakeSub>, <lakeRg>)`, read from the adopt plan's storage-adls target."
+              }
+            },
+            "s3GatewayPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "PRINCIPAL (object) id of the S3 gateway's DEDICATED storage identity — data-plane/s3-gateway-aca.bicep's `storageUamiPrincipalId`, surfaced by admin-plane as `s3GatewayStorageUamiPrincipalId`. Empty skips the grant (the gateway did not deploy on this run), which is a no-op and never an error."
+              }
+            },
+            "assignRoles": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Set false to skip every grant in this pass when an estate assigns lake roles out-of-band (a PIM-managed process). The gateway then serves 403s until that grant lands — fail-closed by design, and the console honest-gates rather than presenting a wired URL that cannot read a bucket."
+              }
+            }
+          },
+          "variables": {
+            "storageBlobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+            "grantS3Gateway": "[and(and(parameters('assignRoles'), not(empty(parameters('storageAccountName')))), not(empty(parameters('s3GatewayPrincipalId'))))]",
+            "anyGrant": "[variables('grantS3Gateway')]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('grantS3Gateway')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('storageAccountName')), 'placeholderaccount', parameters('storageAccountName')))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', if(empty(parameters('storageAccountName')), 'placeholderaccount', parameters('storageAccountName'))), parameters('s3GatewayPrincipalId'), variables('storageBlobDataReaderRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderRoleId'))]",
+                "principalId": "[parameters('s3GatewayPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ],
+          "outputs": {
+            "s3GatewayGranted": {
+              "type": "bool",
+              "metadata": {
+                "description": "TRUE when the S3 gateway's Storage Blob Data Reader grant was actually applied by this pass."
+              },
+              "value": "[variables('grantS3Gateway')]"
+            },
+            "grantsApplied": {
+              "type": "int",
+              "metadata": {
+                "description": "Number of role assignments this pass applied. 0 means every consumer was empty or assignRoles was false — a deliberate skip, never a swallowed failure."
+              },
+              "value": "[if(variables('grantS3Gateway'), 1, 0)]"
+            },
+            "s3GatewayRoleDefinitionId": {
+              "type": "string",
+              "metadata": {
+                "description": "Role the S3 gateway identity holds on the lake. READER — never Contributor."
+              },
+              "value": "[variables('storageBlobDataReaderRoleId')]"
+            }
+          }
         }
       },
       "dependsOn": [
