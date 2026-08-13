@@ -25,7 +25,7 @@ import type { EnvSpec } from '@/lib/admin/env-checks/core';
 import { isUnreachableServiceUrl } from '@/lib/azure/unreachable-url';
 
 const SPEC: EnvSpec = {
-  id: 'test-spec', category: 'data-plane', title: 'Test', severity: 'optional',
+  id: 'test-spec', category: 'data-plane', title: 'Test', severity: 'recommended',
   required: ['FEDLAKE_SPEC_PROBE_URL'], warnOnMiss: true,
   rejectUnreachableUrls: ['FEDLAKE_SPEC_PROBE_URL'],
   remediation: 'set it',

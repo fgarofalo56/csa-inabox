@@ -37,7 +37,7 @@ import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 type Category = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment';
 interface EditableEnvVar {
-  key: string; category: Category; severity: 'critical' | 'recommended' | 'optional';
+  key: string; category: Category; severity: 'critical' | 'recommended';
   label: string; valueHint: string; secret: boolean; required: boolean; il5Restricted?: boolean;
   provisionedBy?: string; role?: string; derived?: boolean; optIn?: boolean;
 }

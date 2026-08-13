@@ -127,7 +127,7 @@ export default function AdminGatesPage() {
     }
     // Blocked first (actionable), then cloud-unavailable, then opt-in, then
     // configured; within a band: severity, then id.
-    const sevRank = { critical: 0, recommended: 1, optional: 2 } as Record<string, number>;
+    const sevRank = { critical: 0, recommended: 1 } as Record<string, number>;
     const stRank = { blocked: 0, 'cloud-unavailable': 1, 'opt-in': 2, configured: 3 } as Record<string, number>;
     return [...out].sort((a, b) =>
       (stRank[a.status] - stRank[b.status]) ||

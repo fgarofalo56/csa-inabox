@@ -289,7 +289,14 @@ export const GATE_PROBE_MAP: Record<string, string> = {
 
 // ── weighting ────────────────────────────────────────────────────────────────
 
-const SEVERITY_WEIGHT: Record<AuditSeverity, number> = { critical: 3, recommended: 2, optional: 1 };
+// There is no `optional` weight — the tier was deleted in #3347 (see the
+// AuditSeverity doc in env-checks/core.ts). It weighed 1, so a blocked
+// capability carrying it cost the score a third of what a blocked critical did
+// while the operator was told the deploy had "wired everything up". The 113
+// capabilities that held it are now `recommended` and weigh 2, which roughly
+// doubled the denominator (155 → 268). The score therefore moves DOWN slightly
+// at any given blocked count; that is the correction landing, not a regression.
+const SEVERITY_WEIGHT: Record<AuditSeverity, number> = { critical: 3, recommended: 2 };
 // 'opt-in' scores as 1 (a healthy, deliberately-not-deployed additive feature is
 // NOT a deduction against the deployment — its absence removes no capability).
 const STATE_VALUE: Record<ReadinessState, number> = { ready: 1, partial: 0.5, blocked: 0, 'opt-in': 1 };

@@ -180,7 +180,7 @@ async function probeAoai(): Promise<CheckResult> {
 //    with a precise remediation. Unset env ⇒ optional 'warn', never 'fail'. ────
 
 async function probePurviewDataMap(): Promise<CheckResult> {
-  const base = { id: 'probe-purview-datamap', category: 'catalog-governance' as const, title: 'Purview Data Map authorized (Domains mirror)', severity: 'optional' as const };
+  const base = { id: 'probe-purview-datamap', category: 'catalog-governance' as const, title: 'Purview Data Map authorized (Domains mirror)', severity: 'recommended' as const };
   if (!has('LOOM_PURVIEW_ACCOUNT')) {
     return {
       ...base, status: 'warn',
@@ -232,7 +232,7 @@ async function probePurviewDataMap(): Promise<CheckResult> {
 }
 
 async function probeGovernanceSearchIndex(): Promise<CheckResult> {
-  const base = { id: 'probe-search-governance-index', category: 'catalog-governance' as const, title: 'AI Search governance index (loom-governance-items)', severity: 'optional' as const };
+  const base = { id: 'probe-search-governance-index', category: 'catalog-governance' as const, title: 'AI Search governance index (loom-governance-items)', severity: 'recommended' as const };
   if (!has('LOOM_AI_SEARCH_SERVICE')) {
     return {
       ...base, status: 'warn',
@@ -283,7 +283,7 @@ async function probeGovernanceSearchIndex(): Promise<CheckResult> {
 }
 
 async function probeDatabricks(): Promise<CheckResult> {
-  const base = { id: 'probe-databricks', category: 'azure-services' as const, title: 'Databricks reachable (notebooks / SQL / Warp)', severity: 'optional' as const };
+  const base = { id: 'probe-databricks', category: 'azure-services' as const, title: 'Databricks reachable (notebooks / SQL / Warp)', severity: 'recommended' as const };
   const { databricksConfigGate, listWarehouses } = await import('@/lib/azure/databricks-client');
   if (databricksConfigGate()) {
     return {
@@ -387,7 +387,7 @@ async function probeDeltaSharing(): Promise<CheckResult> {
 }
 
 async function probeDlpGraphRoles(): Promise<CheckResult> {
-  const base = { id: 'probe-dlp-graph-roles', category: 'catalog-governance' as const, title: 'DLP / Information-Protection Graph roles', severity: 'optional' as const };
+  const base = { id: 'probe-dlp-graph-roles', category: 'catalog-governance' as const, title: 'DLP / Information-Protection Graph roles', severity: 'recommended' as const };
   // DLP is ON by default (opt-out). Only an explicit LOOM_DLP_ENABLED=false
   // disables the live Graph DLP reads — flag that as a deliberate opt-out.
   if (env('LOOM_DLP_ENABLED') === 'false') {
@@ -423,7 +423,7 @@ async function probeDlpGraphRoles(): Promise<CheckResult> {
 }
 
 async function probePostureFunction(): Promise<CheckResult> {
-  const base = { id: 'probe-posture-function', category: 'catalog-governance' as const, title: 'Govern posture-refresh Function reachable', severity: 'optional' as const };
+  const base = { id: 'probe-posture-function', category: 'catalog-governance' as const, title: 'Govern posture-refresh Function reachable', severity: 'recommended' as const };
   const url = env('LOOM_POSTURE_FUNCTION_URL');
   if (!url) {
     return {
@@ -537,7 +537,8 @@ export async function runSelfAudit(now: string): Promise<AuditReport> {
     }
   }
 
-  const weight: Record<AuditSeverity, number> = { critical: 3, recommended: 2, optional: 1 };
+  // No `optional` tier — deleted in #3347 (AuditSeverity doc in env-checks/core.ts).
+  const weight: Record<AuditSeverity, number> = { critical: 3, recommended: 2 };
   const scoreOf: Record<AuditStatus, number> = { pass: 1, warn: 0.5, fail: 0 };
   let num = 0, den = 0;
   for (const r of results) { num += weight[r.severity] * scoreOf[r.status]; den += weight[r.severity]; }

@@ -28,7 +28,8 @@ import {
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 type AuditStatus = 'pass' | 'warn' | 'fail';
-type AuditSeverity = 'critical' | 'recommended' | 'optional';
+// Mirrors lib/admin/env-checks/core.ts — there is no `optional` tier (#3347).
+type AuditSeverity = 'critical' | 'recommended';
 type AuditCategory = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment' | 'builders' | 'catalog-governance' | 'ai-copilot' | 'workloads' | 'observability';
 interface CheckResult {
   id: string; category: AuditCategory; title: string; severity: AuditSeverity; status: AuditStatus;
@@ -223,7 +224,7 @@ export function HealthPane() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                     <Body1Strong>{r.title}</Body1Strong>
                     <Badge appearance="outline" size="small"
-                      color={r.severity === 'critical' ? 'danger' : r.severity === 'recommended' ? 'warning' : 'informative'}>
+                      color={r.severity === 'critical' ? 'danger' : 'warning'}>
                       {r.severity}
                     </Badge>
                     {r.fixId && <Badge appearance="tint" size="small" color="brand">auto-fixable</Badge>}

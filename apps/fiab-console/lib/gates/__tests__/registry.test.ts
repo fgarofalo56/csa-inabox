@@ -120,8 +120,8 @@ describe('gate registry completeness', () => {
 
 describe('gate live status (evalEnv-backed)', () => {
   it('reports blocked with the preferred missing var when a RECOMMENDED gate is unset', () => {
-    // svc-synapse is severity:'recommended' — NOT the opt-in class (optional +
-    // warnOnMiss), so an unset required var is still a real 'blocked'.
+    // svc-synapse does not carry the EnvSpec.optIn flag, so an unset required
+    // var is still a real 'blocked' — not the neutral opt-in class.
     delete process.env.LOOM_SYNAPSE_WORKSPACE;
     const st = gateStatus('svc-synapse')!;
     expect(st.status).toBe('blocked');
