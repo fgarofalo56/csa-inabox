@@ -91,34 +91,38 @@ scripts/csa-loom/bootstrap-dlz-rgs.sh eastus2 \
 
 ## Phase 3 — full provision (30-60 min)
 
-> **This workflow is a CI validation lane by default, not the customer install
-> path.** `keep_resources` defaults to **false**, and in `run_mode=full` the
-> teardown step then fires on success — it enumerates `rg-csa-loom-*` across the
-> subscription and deletes every match, purging Key Vaults and Cognitive
-> Services accounts. `deploy_apps_enabled` also defaults to **false**, so
-> without it no Container Apps are created and there is no Console to open.
+> **What a `full` dispatch does now.** `keep_resources` defaults to **true**
+> (#3028) — a full run RECONCILES the estate and tears nothing down; teardown
+> additionally requires `confirm_teardown_rg` to exactly equal the resolved
+> admin resource group. `deploy_apps_enabled` defaults to **true** (#3332) — the
+> Container Apps are created/updated and every `LOOM_*` env var is re-rendered
+> on them, so a full run actually produces a Console you can open.
 >
-> **For a real install, follow [Greenfield deployment](../deployment/greenfield.md)**
-> — the three-phase `az deployment sub create` path. Use the dispatch below only
-> when you want the workflow to drive it, and only with both overrides set.
+> **For a real from-scratch install, follow [Greenfield deployment](../deployment/greenfield.md)**
+> — the three-phase `az deployment sub create` path. On a brand-new subscription
+> the ACR is created EMPTY, so the app phase has to come after the image build;
+> dispatch this workflow with `-f deploy_apps_enabled=false` for phase 1 if you
+> want the workflow to drive that path.
 
 Once decisions are locked, dispatch the full deploy:
 
 ```bash
 gh workflow run deploy-fiab-commercial \
   -f run_mode=full \
-  -f keep_resources=true \
-  -f deploy_apps_enabled=true
+  -f region=<the estate's region>
 
 # Watch — provisioning takes ~25-45 minutes for first run
 RUN_ID=$(gh run list --workflow deploy-fiab-commercial --limit 1 --json databaseId --jq '.[0].databaseId')
 gh run watch $RUN_ID --exit-status
 ```
 
-> `deploy_apps_enabled=true` only works when the app images already exist in the
-> deployment's ACR. On a from-scratch subscription the ACR is created empty —
-> run the image phase first
-> ([Greenfield, phase 2](../deployment/greenfield.md#phase-2-build-the-images-and-bring-the-apps-up-1525-min)).
+> `deploy_apps_enabled=true` (the default) only works when the app images
+> already exist in the deployment's ACR. On a from-scratch subscription the ACR
+> is created empty — run the image phase first
+> ([Greenfield, phase 2](../deployment/greenfield.md#phase-2-build-the-images-and-bring-the-apps-up-1525-min)),
+> or dispatch phase 1 with `-f deploy_apps_enabled=false`. The run's image
+> preflight checks the registry before anything reaches ARM rather than failing
+> mid-deploy on `MANIFEST_UNKNOWN`.
 >
 > If the target subscription already holds a Loom hub, add
 > `-f allow_existing_hub=true` to reconcile it rather than being rejected by the
@@ -130,9 +134,10 @@ What this provisions:
   APIM, catalog, AI defense, app deployments)
 - Single-sub DLZ RG with all 7 sub-modules (network, storage,
   Databricks, Synapse, Event Hubs, ADX database, Cosmos)
-- Container Apps for every app — **only when `deploy_apps_enabled=true`**
+- Container Apps for every app — **unless you set `deploy_apps_enabled=false`**
 - Smoke test executes against the live apps
-- Teardown on success — **unless `keep_resources=true`**
+- No teardown — **unless you set `keep_resources=false` AND type
+  `confirm_teardown_rg`**
 
 ## Phase 4 — verification (15 min)
 

@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: 'whatif-only validates Bicep + auth (no spend); full provisions + smokes + (conditionally) tears down.'
+        description: 'whatif-only PREVIEWS the Bicep and applies NOTHING (no spend, no change). full APPLIES the template: it provisions/reconciles the infrastructure AND — because deploy_apps_enabled now defaults true — creates or updates the Container Apps (loom-console + siblings) and re-renders every LOOM_* env var on them, then smokes the estate. It does NOT tear anything down (keep_resources defaults true).'
         type: choice
         default: whatif-only
         options:
@@ -49,9 +49,9 @@ on:
         type: boolean
         default: true
       deploy_apps_enabled:
-        description: 'Create the Container Apps (loom-console + siblings) pointing at images in ACR. Requires images already built/pushed (run full-app-deploy build first). Off by default = infra-only.'
+        description: 'Create/update the Container Apps (loom-console + siblings) as part of this deploy. TRUE is the default because it is the ONLY way any LOOM_* env var reaches the running console — with FALSE, run_mode=full applies infrastructure and touches no container app at all, which is a green run that changes nothing you can see (#3332). Running images are NOT rewritten: the run pins each app to the tag it is already on, and refuses up front if any running tag is ambiguous. Set FALSE only for phase 1 of a from-scratch install, where the ACR is still EMPTY and a Container App pull could only fail.'
         type: boolean
-        default: false
+        default: true
       skip_role_grants:
         description: 'Skip RBAC role-assignment creation (set true on a re-deploy where grants already exist, to avoid RoleAssignmentExists).'
         type: boolean
@@ -151,6 +151,13 @@ jobs:
       admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
       dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
       region: ${{ steps.bootstrap_coords.outputs.region }}
+      # #3332 — the value that ACTUALLY reached ARM, not the raw input. The
+      # post-deploy-bootstrap job below gates on "a Console Container App now
+      # exists to wire", and only the resolver's verdict answers that: it is
+      # what `--parameters deployAppsEnabled=…` was composed from. Reading
+      # `inputs.deploy_apps_enabled` there would be a second, unmeasured copy of
+      # the same decision, free to disagree with the one the deploy used.
+      deploy_apps_enabled: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
 
     steps:
       - uses: actions/checkout@v7
@@ -1376,7 +1383,14 @@ jobs:
   # KEPT deploy. Runs the ONE reusable bootstrap (secrets: inherit) with computed
   # coordinates + boundary=Commercial. Guard rationale:
   #   - run_mode == full         → not a whatif-only preview (nothing to bootstrap)
-  #   - deploy_apps_enabled      → a Console Container App actually exists to wire
+  #   - deploy_apps_enabled      → a Console Container App actually exists to wire.
+  #                                Read from the deploy job's OUTPUT (the resolver's
+  #                                verdict, i.e. the value composed into
+  #                                `--parameters deployAppsEnabled=…`) rather than
+  #                                from `inputs.deploy_apps_enabled`. #3332 flipped
+  #                                that input's default to true, and a raw-input
+  #                                read here would be a second copy of the decision
+  #                                that ARM never saw.
   #   - keep_resources           → the deploy did NOT tear down (teardown skips on
   #                                keep_resources), so the console is still live
   # dlz-attach never stamps a console, so it never satisfies deploy_apps_enabled
@@ -1385,7 +1399,7 @@ jobs:
   post-deploy-bootstrap:
     name: Post-deploy bootstrap (Commercial)
     needs: deploy-validate
-    if: ${{ inputs.run_mode == 'full' && inputs.deploy_apps_enabled && inputs.keep_resources && needs.deploy-validate.result == 'success' }}
+    if: ${{ inputs.run_mode == 'full' && needs.deploy-validate.outputs.deploy_apps_enabled == 'true' && inputs.keep_resources && needs.deploy-validate.result == 'success' }}
     uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml
     secrets: inherit
     with:

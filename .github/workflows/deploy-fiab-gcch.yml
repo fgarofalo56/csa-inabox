@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: 'Run mode — whatif-only validates Bicep + auth without provisioning; full does provision + smoke + teardown.'
+        description: 'whatif-only PREVIEWS the Bicep and applies NOTHING. full APPLIES the template: it provisions/reconciles the infrastructure AND creates or updates the Container Apps (loom-console + siblings), re-rendering every LOOM_* env var on them, then smokes the estate. It does NOT tear anything down (keep_resources defaults true). There is no separate apps flag on this lane — gcc-high.bicepparam sets deployAppsEnabled=true, so full always includes the app tier.'
         type: choice
         default: whatif-only
         options:

@@ -20,7 +20,7 @@
  *        -> 2 RED: "dispatch + UNKNOWN hub count -> REFUSES",
  *                  "schedule + UNKNOWN hub count -> proceeds, and says so"
  *   C. flip the scheduled deployAppsEnabled default to 'true' (the outage-shaped
- *      change) -> 2 RED: the YAML-drift test and the image-tag tripwire.
+ *      change) -> 2 RED: the divergence test and the image-tag tripwire.
  *
  * Both CONTROL tests at the bottom stayed GREEN under all three, and the file
  * restored byte-identical to green afterwards -- so a change that merely widens
@@ -39,6 +39,8 @@ import {
   resolveFeatureFlags,
   parseHubCount,
   SCHEDULE_FLAG_DEFAULTS,
+  DISPATCH_FLAG_DEFAULTS,
+  FLAG_DEFAULT_DIVERGENCES,
   FLAG_INPUT_NAMES,
 } from '../deploy-trigger-policy.mjs';
 
@@ -246,10 +248,11 @@ test('scheduled reconcile still STARTS deployAppsEnabled at FALSE (fail-safe bas
 });
 
 // ---------------------------------------------------------------------------
-// DRIFT -- the defaults here must equal the workflow's own dispatch defaults
+// DRIFT -- the dispatch table must equal the workflow's own defaults, and the
+// schedule table may diverge from it only where that is written down
 // ---------------------------------------------------------------------------
 
-test('SCHEDULE_FLAG_DEFAULTS match the workflow_dispatch defaults in the YAML', () => {
+test('DISPATCH_FLAG_DEFAULTS match the workflow_dispatch defaults in the YAML', () => {
   const yaml = readWorkflow();
   for (const [param, inputName] of Object.entries(FLAG_INPUT_NAMES)) {
     // Match the input's own block: `  <name>:` then its `default:` before the
@@ -259,10 +262,49 @@ test('SCHEDULE_FLAG_DEFAULTS match the workflow_dispatch defaults in the YAML', 
     const def = /^\s*default:\s*(\S+)\s*$/m.exec(block[1]);
     assert.ok(def, `input ${inputName} has no default: in the workflow`);
     assert.equal(
-      def[1], SCHEDULE_FLAG_DEFAULTS[param],
-      `${inputName} default drifted: workflow says ${def[1]}, SCHEDULE_FLAG_DEFAULTS says ${SCHEDULE_FLAG_DEFAULTS[param]}`,
+      def[1], DISPATCH_FLAG_DEFAULTS[param],
+      `${inputName} default drifted: workflow says ${def[1]}, DISPATCH_FLAG_DEFAULTS says ${DISPATCH_FLAG_DEFAULTS[param]}`,
     );
   }
+});
+
+test('the schedule and dispatch tables diverge on EXACTLY the documented keys', () => {
+  // #3332 gave `deploy_apps_enabled` a dispatch default of true while leaving
+  // the schedule base false. Two tables where there was one is how a deliberate
+  // decision decays into drift, so the divergence is enumerated and asserted in
+  // BOTH directions:
+  //   - a SEVENTH flag quietly diverging fails here (it is not in the list);
+  //   - this one quietly CONVERGING fails here too (it is in the list but the
+  //     values now match), which is the outage-shaped change: a schedule that
+  //     starts at true hands ARM an unpinned flag on any path that skips the
+  //     resolver.
+  const diverged = Object.keys(FLAG_INPUT_NAMES)
+    .filter((param) => SCHEDULE_FLAG_DEFAULTS[param] !== DISPATCH_FLAG_DEFAULTS[param])
+    .sort();
+  assert.deepEqual(
+    diverged, Object.keys(FLAG_DEFAULT_DIVERGENCES).sort(),
+    'the set of flags whose schedule default differs from their dispatch default changed. ' +
+    'Every divergence must be listed in FLAG_DEFAULT_DIVERGENCES with its reason.',
+  );
+  for (const [param, why] of Object.entries(FLAG_DEFAULT_DIVERGENCES)) {
+    assert.ok(String(why).trim().length > 40, `FLAG_DEFAULT_DIVERGENCES.${param} needs a real reason`);
+  }
+});
+
+test('a dispatch that supplies NO apps flag still deploys the apps (#3332)', () => {
+  // The bug: `deploy_apps_enabled` defaulted false, so an operator selecting
+  // run_mode=full and changing nothing else got `deployAppsEnabled=false`,
+  // app-deployments.bicep was skipped, and the run went green having created or
+  // updated ZERO Container Apps and applied ZERO LOOM_* env vars.
+  //
+  // GitHub always materialises a declared boolean input on a workflow_dispatch,
+  // so the value seen here is the input's `default:` -- which the YAML-drift
+  // test above pins to DISPATCH_FLAG_DEFAULTS.
+  const { flags } = resolveFeatureFlags({
+    eventName: 'workflow_dispatch',
+    inputs: { deploy_apps_enabled: DISPATCH_FLAG_DEFAULTS.deployAppsEnabled },
+  });
+  assert.equal(flags.deployAppsEnabled, 'true');
 });
 
 test('the workflow no longer decides the trigger question from an input', () => {
