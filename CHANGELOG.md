@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.95.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.1...csa-inabox-v0.95.2) (2026-08-13)
+
+
+### Bug Fixes
+
+* **readiness:** delete the `optional` severity — 113 capabilities reclassified to `recommended` ([#3378](https://github.com/fgarofalo56/csa-inabox/issues/3378)) ([5c2e5f9](https://github.com/fgarofalo56/csa-inabox/commit/5c2e5f9aba7602e6bef622d862bed26dc81713f2)), closes [#3347](https://github.com/fgarofalo56/csa-inabox/issues/3347)
+
+
+### Documentation
+
+* **deploy:** ONE authoritative prerequisites-&gt;deploy-&gt;verify page + a guard that caught 3 undispatchable commands ([#3348](https://github.com/fgarofalo56/csa-inabox/issues/3348)) ([#3377](https://github.com/fgarofalo56/csa-inabox/issues/3377)) ([acfcc3a](https://github.com/fgarofalo56/csa-inabox/commit/acfcc3a1ccefaa72de6261d9a47e2480a6489831))
+
 ## [0.95.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.0...csa-inabox-v0.95.1) (2026-08-13)
 
 
