@@ -112,11 +112,19 @@ param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 // account (azure-maps.bicep, default for Commercial/GCC). Set it to bring your
 // own existing account; the module is skipped and the env binds to your name.
 param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')
-// /admin/security Information Protection + DLP tabs — both default OFF
-// until the post-deploy bootstrap workflow grants the Graph AppRoles
-// AND a Tenant Administrator clicks Grant admin consent. After that,
-// flip these to true and redeploy admin-plane.
-param loomMipEnabled = false
+// /admin/security Information Protection + DLP tabs.
+//
+// MIP was OFF here with the note "flip these to true after the Graph AppRoles
+// are granted and a Tenant Administrator consents". That precondition is MET
+// and was verified on the live Console UAMI (85e5d083-...), which holds
+// InformationProtectionPolicy.Read.All among its 15 Graph app-role
+// assignments. The flag was simply never flipped afterwards, so svc-mip sat
+// BLOCKED on /admin/readiness with the permission already in place —
+// scoring 0 and dragging the estate below 100.
+//
+// Nothing is optional and nothing is left for a user to wire
+// (auto-bind-by-default §5, ux-baseline G2). ON.
+param loomMipEnabled = true
 // DLP defaults ON: the post-deploy bootstrap grants the DLP AppRoles by
 // default, so the /admin/security DLP tab is wired out of the box (alerts +
 // violations + Azure-native restrict-access). The policy segment + simulate
