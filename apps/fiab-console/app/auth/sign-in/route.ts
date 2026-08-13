@@ -31,6 +31,22 @@ import {
   encodeAuthFlowCookie,
   setAuthFlowCookieHeader,
 } from '@/lib/auth/authflow';
+import { getSession } from '@/lib/auth/session';
+import {
+  AUTH_BREAKER_COOKIE,
+  AUTH_BLOCKED_PATH,
+  HOP_PARAM,
+  authBreakerEnabled,
+  authBreakerMaxAttempts,
+  clearAttemptCookieHeader,
+  decodeAttemptCookie,
+  hopFromParam,
+  recordAttempt,
+  requestIsHttps,
+  setAttemptCookieHeader,
+  stateWithHop,
+} from '@/lib/auth/auth-breaker';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,6 +81,24 @@ function redirectUri(req: NextRequest): string {
   return `${proto}://${host}/auth/callback`;
 }
 
+/**
+ * `getSession()` for the breaker's "is this actually a loop?" question.
+ *
+ * A live session at /auth/sign-in means the browser HOLDS a working session, so
+ * this is an account switch and not a loop. Wrapped because a failure to READ
+ * the session must never be reported as "no session" — that would silently turn
+ * an account switch into a counted loop attempt. On a throw we return undefined
+ * (unknown), and the caller treats unknown the same as absent for counting but
+ * the distinction is recorded here rather than being lost in a bare `catch`.
+ */
+function getSessionSafely(): ReturnType<typeof getSession> | undefined {
+  try {
+    return getSession();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function GET(req: NextRequest) {
   // Per-IP anonymous rate limit (rel-T16) — a sign-in initiator is cheap to spam
   // (302 to AAD). Default ON; two-tier (in-memory burst + durable window).
@@ -97,6 +131,59 @@ export async function GET(req: NextRequest) {
       { status: 503 },
     );
   }
+  // ── CIRCUIT BREAKER (#3334) ───────────────────────────────────────────────
+  // Everything above this point is untouched. Below, before we hand the browser
+  // back to Entra, decide whether this browser is in a sign-in LOOP.
+  //
+  // The count is of COMPLETED Entra round trips that left the browser
+  // unauthenticated — never of sign-in initiations. A user who abandons the
+  // Entra page, or fumbles a password, never reaches /auth/callback, so nothing
+  // stamped an outcome, nothing increments, and the breaker cannot fire on
+  // them. See lib/auth/auth-breaker for the two counting channels (cookie +
+  // the stateless hop carried in the OAuth `state`) and why one is not enough.
+  const breakerOn = authBreakerEnabled();
+  const secure = requestIsHttps(req.headers);
+  let attemptCookie: string | null = null;
+  let hop = 0;
+  if (breakerOn) {
+    // A live session here means this browser demonstrably HOLDS a working
+    // session — an account switch, not a loop. Reset and proceed untouched.
+    const live = getSessionSafely();
+    if (live) {
+      attemptCookie = clearAttemptCookieHeader(secure);
+    } else {
+      const prev = decodeAttemptCookie(req.cookies.get(AUTH_BREAKER_COOKIE)?.value);
+      const carried = hopFromParam(new URL(req.url).searchParams.get(HOP_PARAM));
+      const decision = recordAttempt(prev, Math.floor(Date.now() / 1000), carried);
+      if (decision.tripped) {
+        // Both interpolated values are already bounded by construction —
+        // `effective` is a clamped integer and `cause` was narrowed to the
+        // closed AUTH_CAUSES union — so neither can carry CR/LF. logSafe stays
+        // anyway: the log-injection guard is a NAME scan that cannot see that
+        // reasoning, and a wrapper that is merely redundant is cheaper than a
+        // guard everyone learns to argue with. Do not strip it.
+        console.warn(
+          '[auth/sign-in] CIRCUIT BREAKER tripped —',
+          logSafe(decision.effective),
+          'completed sign-in round trips left this browser unauthenticated within',
+          'the window; cause:',
+          logSafe(decision.cause),
+          '— serving the terminal diagnosis page instead of redirecting to Entra.',
+        );
+        // Terminal. This response NEVER redirects to Entra, so the loop stops
+        // here. The cause + count also ride the query string so the page still
+        // diagnoses correctly when the browser is dropping cookies entirely
+        // (which is one of the loop causes it has to survive).
+        const to = `${AUTH_BLOCKED_PATH}?cause=${encodeURIComponent(decision.cause)}&n=${decision.effective}`;
+        const res = NextResponse.redirect(new URL(to, req.url), 303);
+        res.headers.append('set-cookie', setAttemptCookieHeader(decision.state, secure));
+        return res;
+      }
+      attemptCookie = setAttemptCookieHeader(decision.state, secure);
+      hop = decision.nextHop;
+    }
+  }
+
   // Login-CSRF hardening (rel-T12): mint {state, PKCE verifier + S256 challenge,
   // nonce} and persist {state, verifier, nonce} in the short-lived, single-use
   // `loom_authflow` cookie BEFORE bolting the matching params onto the authorize
@@ -108,7 +195,16 @@ export async function GET(req: NextRequest) {
   // params AND set the cookie together. If either is absent the flow falls back
   // byte-for-byte to the prior behavior (no params, no cookie), and the callback's
   // own no_session_secret gate still fires downstream unchanged.
-  const flow = authCsrfEnabled() ? newAuthFlow() : null;
+  const minted = authCsrfEnabled() ? newAuthFlow() : null;
+  // Carry the breaker's STATELESS hop counter in the OAuth `state` (#3334).
+  // Entra echoes `state` verbatim, so this survives a browser that returns no
+  // cookies at all — the exact condition under which the cookie counter above
+  // is blind, and the condition `state_mismatch` describes. The random half is
+  // untouched (32 CSPRNG bytes) and the authflow cookie stores the WHOLE
+  // suffixed string, so the callback's byte-for-byte safeEqual is unchanged.
+  // With LOOM_AUTH_CSRF_ENABLED=false there is no state at all, so this channel
+  // is simply absent and the cookie counter carries the breaker alone.
+  const flow = minted && breakerOn ? { ...minted, state: stateWithHop(minted.state, hop) } : minted;
   const authFlowCookie = flow ? encodeAuthFlowCookie(flow) : null;
   const client = getMsalClient();
   const url = await client.getAuthCodeUrl({
@@ -120,8 +216,11 @@ export async function GET(req: NextRequest) {
       : {}),
   });
   const res = NextResponse.redirect(url);
+  // append, never set — the authflow and breaker cookies are TWO Set-Cookie
+  // headers and `set` would collapse them into one, silently dropping the first.
   if (flow && authFlowCookie) {
-    res.headers.set('set-cookie', setAuthFlowCookieHeader(authFlowCookie));
+    res.headers.append('set-cookie', setAuthFlowCookieHeader(authFlowCookie));
   }
+  if (attemptCookie) res.headers.append('set-cookie', attemptCookie);
   return res;
 }

@@ -13,9 +13,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   hasReturningUserHint,
+  isPreAuthSurface,
   reauthDestination,
   returningUserCookieHeader,
   RETURNING_USER_COOKIE,
+  SIGN_IN_BLOCKED_PATH,
   SIGN_IN_PATH,
   WELCOME_PATH,
 } from '../returning-user';
@@ -64,6 +66,34 @@ describe('returning-user reauth decision', () => {
       expect(reauthDestination('')).toBe(WELCOME_PATH);
       expect(reauthDestination(null)).toBe('/welcome');
       expect(reauthDestination('loom_session=x')).toBe('/welcome');
+    });
+  });
+
+  describe('isPreAuthSurface (#3334)', () => {
+    // These are the pages whose job is to END an unauthenticated journey. A
+    // top-level reauth navigation away from one re-enters the loop it just
+    // left — for /auth/blocked that is a visible ping-pong between the terminal
+    // page and the tripped breaker.
+    it('covers the pre-auth landing and the circuit breaker terminal page', () => {
+      expect(isPreAuthSurface(WELCOME_PATH)).toBe(true);
+      expect(isPreAuthSurface(SIGN_IN_BLOCKED_PATH)).toBe(true);
+      expect(SIGN_IN_BLOCKED_PATH).toBe('/auth/blocked');
+    });
+
+    it('is false for every ordinary surface, including sign-in itself', () => {
+      expect(isPreAuthSurface('/')).toBe(false);
+      expect(isPreAuthSurface('/auth/sign-in')).toBe(false);
+      expect(isPreAuthSurface('/workspaces')).toBe(false);
+      expect(isPreAuthSurface(null)).toBe(false);
+      expect(isPreAuthSurface('')).toBe(false);
+    });
+
+    it('cannot be smuggled past by a lookalike path', () => {
+      expect(isPreAuthSurface('/welcome-back')).toBe(false);
+      expect(isPreAuthSurface('/auth/blockedx')).toBe(false);
+      expect(isPreAuthSurface('/x/welcome')).toBe(false);
+      // A nested route under a pre-auth surface is still pre-auth.
+      expect(isPreAuthSurface('/auth/blocked/details')).toBe(true);
     });
   });
 

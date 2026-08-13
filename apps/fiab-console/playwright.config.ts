@@ -384,6 +384,31 @@ export default defineConfig({
       },
     },
     {
+      // #3334 — G1 receipt for the sign-in CIRCUIT BREAKER. Drives the loop in
+      // a real browser (real cookie store, real cross-site top-level
+      // navigations) and asserts it reaches the terminal /auth/blocked page.
+      //
+      // Deliberately has NO `mint` dependency and an EMPTY storageState: the
+      // breaker only ever counts UNAUTHENTICATED round trips, and a minted
+      // session turns /auth/sign-in into an account switch — the one path that
+      // must never trip. Depending on `mint` here would make the spec assert
+      // the opposite of what it is for.
+      //
+      // Entra is never actually reached: the authorize hop is intercepted and
+      // answered locally, so this runs unattended with no credentials and no
+      // MFA. `trace: 'on'` because this project's whole output is the receipt.
+      name: 'auth-loop-breaker',
+      testDir: './e2e',
+      testMatch: /auth-loop-breaker\.spec\.ts/,
+      use: {
+        storageState: { cookies: [], origins: [] },
+        trace: 'on',
+        video: 'retain-on-failure',
+        viewport: { width: 1400, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://csa-loom.limitlessdata.ai',
+      },
+    },
+    {
       // F1 — the external-engine federation deep dive (Iceberg REST Catalog +
       // Trino + Unity). Drives the live federation data path AND the browser
       // surfaces, and writes measured timings to

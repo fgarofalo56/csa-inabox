@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
 import { enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
-import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS, sessionSlidingEnabled, sessionGroupsDroppedForSize } from '@/lib/auth/session';
+import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS, sessionSlidingEnabled, sessionGroupsDroppedForSize, setSessionCookieHeader } from '@/lib/auth/session';
 import {
   authCsrfEnabled,
   AUTHFLOW_COOKIE_NAME,
@@ -16,6 +16,17 @@ import {
   clearAuthFlowCookieHeader,
   safeEqual,
 } from '@/lib/auth/authflow';
+import {
+  AUTH_BREAKER_COOKIE,
+  HOP_PARAM,
+  authBreakerEnabled,
+  decodeAttemptCookie,
+  hopFromState,
+  requestIsHttps,
+  setAttemptCookieHeader,
+  stampOutcome,
+  type AuthFailureCause,
+} from '@/lib/auth/auth-breaker';
 import { returningUserCookieHeader } from '@/lib/auth/returning-user';
 import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
@@ -283,13 +294,37 @@ export function groupsFromIdToken(idTokenClaims: Record<string, unknown> | undef
 }
 
 export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  // ── CIRCUIT BREAKER stamp (#3334) ─────────────────────────────────────────
+  // Every terminal branch below records the outcome IT ESTABLISHED into the
+  // `loom_authtry` cookie. The callback does NOT count and does NOT decide — it
+  // only states what it observed. /auth/sign-in attributes and counts, because
+  // only sign-in can observe the other half of the fact ("and yet we are being
+  // asked to authenticate again"). That split is what keeps the breaker from
+  // firing on a user who simply abandoned the Entra page.
+  //
+  // deploy-integrity R7: each cause maps 1:1 to one branch here. Nothing is
+  // inferred, and the one genuinely ambiguous case (neither the authflow cookie
+  // nor a state param came back) has its own cause that says so.
+  const breakerOn = authBreakerEnabled();
+  const breakerSecure = requestIsHttps(req.headers);
+  const prevAttempt = breakerOn
+    ? decodeAttemptCookie(req.cookies.get(AUTH_BREAKER_COOKIE)?.value)
+    : null;
+  const stamp = (cause: AuthFailureCause, cookieHeaderBytes?: number): string[] =>
+    breakerOn
+      ? [setAttemptCookieHeader(
+          stampOutcome(prevAttempt, cause, Math.floor(Date.now() / 1000), cookieHeaderBytes),
+          breakerSecure,
+        )]
+      : [];
+
   // Per-IP anonymous rate limit (rel-T16) — bound the code-exchange endpoint.
   // On limit, redirect back with an honest error rather than a raw 429 JSON
   // (this is a browser redirect target). Default ON; two-tier.
   const limited = await enforceRateLimitForKey(clientIp(req.headers), 'auth');
-  if (limited) return htmlRedirect('/?auth_error=rate_limited');
+  if (limited) return htmlRedirect('/?auth_error=rate_limited', undefined, stamp('rate_limited'));
 
-  const url = new URL(req.url);
   const code = url.searchParams.get('code');
   const aadError = url.searchParams.get('error');
   // The single-use authflow cookie is cleared on EVERY terminal response below
@@ -304,15 +339,15 @@ export async function GET(req: NextRequest) {
     // never carry markup at all — and it keeps the ?auth_error= contract stable
     // for the sign-in page that reads it.
     const safeCode = (aadError.match(/^[A-Za-z0-9_.-]{1,64}/)?.[0]) || 'unknown';
-    return htmlRedirect(`/?auth_error=aad_${safeCode}`, undefined, clearAuthflow);
+    return htmlRedirect(`/?auth_error=aad_${safeCode}`, undefined, [...clearAuthflow, ...stamp('aad_error')]);
   }
-  if (!code) return htmlRedirect(`/?auth_error=missing_code`, undefined, clearAuthflow);
+  if (!code) return htmlRedirect(`/?auth_error=missing_code`, undefined, [...clearAuthflow, ...stamp('missing_code')]);
   const msalClientId = process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   const msalClientSecret = process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
   if (!msalClientId || !process.env.AZURE_TENANT_ID)
-    return htmlRedirect(`/?auth_error=not_configured`, undefined, clearAuthflow);
-  if (!msalClientSecret) return htmlRedirect(`/?auth_error=no_client_secret`, undefined, clearAuthflow);
-  if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`, undefined, clearAuthflow);
+    return htmlRedirect(`/?auth_error=not_configured`, undefined, [...clearAuthflow, ...stamp('not_configured')]);
+  if (!msalClientSecret) return htmlRedirect(`/?auth_error=no_client_secret`, undefined, [...clearAuthflow, ...stamp('no_client_secret')]);
+  if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`, undefined, [...clearAuthflow, ...stamp('no_session_secret')]);
 
   // Login-CSRF validation (rel-T12). SESSION_SECRET is guaranteed present here, so
   // a hardened sign-in WILL have set the encrypted `loom_authflow` cookie. Require
@@ -320,10 +355,16 @@ export async function GET(req: NextRequest) {
   // (a stale in-flight login started before this shipped, OR a forged callback with
   // no matching state) or a mismatch is rejected by bouncing to /auth/sign-in — the
   // sign-in route re-mints the cookie and restarts a clean flow, so it self-heals in
-  // ONE hop and cannot loop (the cookie is Path=/auth + SameSite=Lax, so it always
-  // rides the top-level GET back to /auth/callback). The PKCE verifier + nonce are
-  // carried forward from the cookie for the exchange + id_token check below. The
-  // whole block is skipped when LOOM_AUTH_CSRF_ENABLED=false (byte-for-byte rollback).
+  // ONE hop.
+  //
+  // #3334 — the comment that stood here claimed this "cannot loop" because the
+  // cookie is Path=/auth + SameSite=Lax and therefore always rides the top-level
+  // GET back. That reasoning is sound and the claim is still FALSE, because it
+  // assumes the premise it needs: it holds only WHILE the cookie round-trips. On
+  // 2026-08-13 a cookie stopped round-tripping and this bounce looped forever,
+  // silently. The bounce is unchanged; what is new is that the outcome is
+  // stamped and the hop count is forwarded, so /auth/sign-in can terminate the
+  // loop with a diagnosis instead of restarting it.
   const csrfOn = authCsrfEnabled();
   const flow = csrfOn ? decodeAuthFlowCookie(req.cookies.get(AUTHFLOW_COOKIE_NAME)?.value) : null;
   if (csrfOn) {
@@ -333,7 +374,25 @@ export async function GET(req: NextRequest) {
         haveCookie: !!flow,
         haveStateParam: !!stateParam,
       });
-      return htmlRedirect(`/auth/sign-in?auth_error=state_mismatch`, undefined, clearAuthflow);
+      // Distinguish the four cases the code can actually tell apart, rather than
+      // collapsing them into one `state_mismatch` that would assert more than
+      // was established (R7). The ambiguous one is named as ambiguous.
+      const cause: AuthFailureCause = !flow && !stateParam
+        ? 'no_state_returned'
+        : !flow
+          ? 'authflow_cookie_missing'
+          : !stateParam
+            ? 'state_param_missing'
+            : 'state_mismatch';
+      // The stateless hop rides the `state` Entra echoed back, so it survives a
+      // browser that returns no cookies — which is precisely this failure mode.
+      const hop = hopFromState(stateParam);
+      const hopQuery = breakerOn && hop !== null ? `&${HOP_PARAM}=${hop}` : '';
+      return htmlRedirect(
+        `/auth/sign-in?auth_error=state_mismatch${hopQuery}`,
+        undefined,
+        [...clearAuthflow, ...stamp(cause)],
+      );
     }
   }
   try {
@@ -347,7 +406,7 @@ export async function GET(req: NextRequest) {
       ...(flow ? { codeVerifier: flow.verifier } : {}),
     });
     if (!result?.account || !result.accessToken)
-      return htmlRedirect(`/?auth_error=no_token`, undefined, clearAuthflow);
+      return htmlRedirect(`/?auth_error=no_token`, undefined, [...clearAuthflow, ...stamp('no_token')]);
 
     // OIDC nonce (rel-T12): the id_token's `nonce` claim MUST echo the nonce we
     // sent, defeating id_token replay. MSAL already decoded the id_token into
@@ -357,7 +416,16 @@ export async function GET(req: NextRequest) {
       const idNonce = (result.idTokenClaims as { nonce?: string } | undefined)?.nonce;
       if (!safeEqual(idNonce, flow.nonce)) {
         console.warn('[auth/callback] id_token nonce mismatch — restarting login');
-        return htmlRedirect(`/auth/sign-in?auth_error=nonce_mismatch`, undefined, clearAuthflow);
+        // Same bounded-restart contract as the state failure above: the hop the
+        // browser just echoed back is forwarded so sign-in can terminate a loop
+        // even with no cookie round-trip.
+        const nonceHop = hopFromState(url.searchParams.get('state'));
+        const nonceHopQuery = breakerOn && nonceHop !== null ? `&${HOP_PARAM}=${nonceHop}` : '';
+        return htmlRedirect(
+          `/auth/sign-in?auth_error=nonce_mismatch${nonceHopQuery}`,
+          undefined,
+          [...clearAuthflow, ...stamp('nonce_mismatch')],
+        );
       }
     }
     const account = result.account;
@@ -455,13 +523,30 @@ export async function GET(req: NextRequest) {
     // lapse reauth keeps this returning user on the seamless SSO path (rather
     // than the /welcome landing surface reserved for never-authenticated
     // visitors). Carries no identity — just "has signed in before".
-    return htmlRedirect('/', cookieValue, [...clearAuthflow, returningUserCookieHeader()]);
+    //
+    // #3334 — the breaker stamp records `session_issued` plus the MEASURED byte
+    // length of the Set-Cookie header emitted here. It deliberately does NOT
+    // clear the attempt counter: on 2026-08-13 this exact branch ran, and
+    // logged, successfully on EVERY hop of an infinite loop, because the browser
+    // discarded the over-length cookie. Clearing here would blind the breaker to
+    // the one loop that actually happened. The counter is cleared at
+    // /auth/sign-in when a LIVE session is observed — i.e. when the browser has
+    // demonstrably kept it — and at /auth/sign-out and /auth/reset.
+    //
+    // setSessionCookieHeader() renders the identical string htmlRedirect emits,
+    // so the length is the real header length (name + value + attributes), which
+    // is the quantity RFC 6265's 4096-byte cap applies to.
+    return htmlRedirect('/', cookieValue, [
+      ...clearAuthflow,
+      returningUserCookieHeader(),
+      ...stamp('session_issued', setSessionCookieHeader(cookieValue).length),
+    ]);
   } catch (e) {
     // Error hygiene (rel-T12): keep the raw AAD/exchange detail on the SERVER only.
     // Do NOT reflect it into the browser URL — a generic `exchange_failed` code is
     // enough for the user; the detail lives in console.error for operators.
     const msg = (e as Error).message ?? 'unknown';
     console.error('[auth/callback] exception:', logSafe(msg));
-    return htmlRedirect(`/?auth_error=exchange_failed`, undefined, clearAuthflow);
+    return htmlRedirect(`/?auth_error=exchange_failed`, undefined, [...clearAuthflow, ...stamp('exchange_failed')]);
   }
 }

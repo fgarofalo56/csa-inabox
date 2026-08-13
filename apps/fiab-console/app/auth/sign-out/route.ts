@@ -5,6 +5,7 @@
 
 import { NextRequest } from 'next/server';
 import { clearSessionCookieHeader } from '@/lib/auth/session';
+import { authBreakerEnabled, clearAttemptCookieHeader, requestIsHttps } from '@/lib/auth/auth-breaker';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,13 +28,17 @@ function logoutUrl(req: NextRequest): string {
 export async function GET(req: NextRequest) {
   const target = logoutUrl(req);
   const body = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${target}"><title>Signing out…</title></head><body><script>window.location.replace(${JSON.stringify(target)});</script></body></html>`;
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'set-cookie': clearSessionCookieHeader(),
-    },
-  });
+  // A DELIBERATE sign-out is an unambiguous "this browser is not stuck in a
+  // sign-in loop" signal (#3334), so clear the breaker's attempt counter too —
+  // otherwise a sign-out/sign-in cycle inside the counting window would carry
+  // stale attempts forward. Two Set-Cookie headers, so append rather than a
+  // record literal (which would collapse them).
+  const headers = new Headers({ 'content-type': 'text/html; charset=utf-8' });
+  headers.append('set-cookie', clearSessionCookieHeader());
+  if (authBreakerEnabled()) {
+    headers.append('set-cookie', clearAttemptCookieHeader(requestIsHttps(req.headers)));
+  }
+  return new Response(body, { status: 200, headers });
 }
 
 export const POST = GET;
