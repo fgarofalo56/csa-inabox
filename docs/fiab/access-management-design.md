@@ -31,7 +31,9 @@ zero code changes. It takes about two minutes.
 
 ### 0.1 What is already true in this tenant (MEASURED 2026-08-13)
 
-I read these directly from Microsoft Graph against `limitlessdata.ai` (Commercial):
+I read these directly from Microsoft Graph against the operator's Commercial
+tenant. Your own values may differ — Appendix A carries the read-only commands
+that produce this table for your tenant.
 
 | Setting | Value | What it means |
 |---|---|---|
@@ -45,7 +47,7 @@ I read these directly from Microsoft Graph against `limitlessdata.ai` (Commercia
 
 **Consequence:** because inbound B2B is open and the Loom app does not require
 assignment, the *only* thing standing between a `@microsoft.com` person and
-CSA Loom is **the existence of a redeemed guest object in `limitlessdata.ai`**.
+CSA Loom is **the existence of a redeemed guest object in `<your-tenant-domain>`**.
 Create that, and they are in.
 
 ### 0.2 The click-path (portal)
@@ -56,12 +58,12 @@ Create that, and they are in.
 2. **Entra ID → Users → New user → Invite external user.**
 3. Email: the person's `@microsoft.com` address. Display name: their name.
 4. **Review + invite.** Entra creates a `userType: Guest` object with a UPN of
-   the form `alias_microsoft.com#EXT#@limitlessdata.ai` and emails them a
+   the form `alias_microsoft.com#EXT#@<your-tenant-domain>` and emails them a
    redemption link ([Learn](https://learn.microsoft.com/entra/external-id/b2b-quickstart-add-guest-users-portal)).
 5. The guest clicks the link, consents, and is redirected. Since July–December
    2025 the guest authenticates against **their own** tenant's sign-in page and
    is returned here after ([Learn](https://learn.microsoft.com/entra/external-id/what-is-b2b#manage-b2b-collaboration-with-other-organizations)).
-6. They browse to `https://csa-loom.limitlessdata.ai` and sign in. They are in.
+6. They browse to `https://<your-console-hostname>` and sign in. They are in.
 
 ### 0.3 The same thing as Graph calls
 
@@ -72,7 +74,7 @@ Content-Type: application/json
 {
   "invitedUserEmailAddress": "someone@microsoft.com",
   "invitedUserDisplayName": "Someone",
-  "inviteRedirectUrl": "https://csa-loom.limitlessdata.ai",
+  "inviteRedirectUrl": "https://<your-console-hostname>",
   "sendInvitationMessage": true
 }
 ```
@@ -462,10 +464,10 @@ identity picker.
 ┌ Step 2 · How ──────────────────────────────────────────────┐
 │ ( ) Invite as guest        ← DEFAULT, pre-selected         │
 │     Keeps their own credentials + MFA. No licence cost.    │
-│     Recommended for anyone outside limitlessdata.ai.       │
+│     Recommended for anyone outside your own tenant.        │
 │ ( ) Create a tenant member                                 │
-│     New account under [ limitlessdata.ai ▾ ]  ← dropdown   │
-│     of VERIFIED domains from GET /organization.            │
+│     New account under [ <your-tenant-domain> ▾ ]           │
+│     ← a dropdown of VERIFIED domains from /organization.   │
 │     Consumes a licence. For staff, not collaborators.      │
 │ ( ) Deny  → required note                                  │
 └────────────────────────────────────────────────────────────┘
