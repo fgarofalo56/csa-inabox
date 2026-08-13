@@ -425,6 +425,7 @@ jobs:
             "loom-unity:${LOOM_UNITY_TAG}"
 
       - name: Provision (with full Gov dispatch)
+        id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         # #3161 — gcc-high.bicepparam reads these with readEnvironmentVariable(),
         # and this step had NO env: block at all. So every full Gov deploy fell
@@ -561,6 +562,62 @@ jobs:
               --remediate \
               -- azd provision --no-prompt
           fi
+
+          # ── The smoke test's target: RESOLVED, never assumed (#3137) ────────
+          # The smoke step below used to carry
+          #     env:
+          #       CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+          # A workflow `env:` value is a LITERAL — Actions substitutes `${{ }}`
+          # during workflow processing and passes the rest through verbatim, and
+          # nothing in that path is a shell. So the smoke script received that
+          # TEXT as its console URL. Non-empty, so its own
+          # `${CONSOLE_URL:?CONSOLE_URL must be set}` guard passed, and every
+          # probe curled a nonsense address: a step that runs and cannot pass.
+          # It had never fired because this lane had never got past THIS step.
+          # Two more defects sat behind it — the smoke step has no
+          # `working-directory`, so azd would have run outside the project; and
+          # main.bicep declares `output consoleUrl` (camelCase), which azd writes
+          # back under the name AS DECLARED, so `grep CONSOLE_URL` could never
+          # have matched. Guard: scripts/ci/check-workflow-env-substitution.mjs.
+          #
+          # WHICH url — consoleUrl is `https://loom-console.<caeDefaultDomain>`
+          # and container-platform.bicep creates the managed environment with
+          # `internal: true`, so it resolves through Private DNS inside the hub
+          # VNet and nowhere else. This job runs on ubuntu-latest. Probing it
+          # would report connection failures as Console failures, which is
+          # exactly what redeploy-gov.sh Phase 4 refuses to do. The resolver
+          # therefore answers only with a PUBLIC ingress and fails closed
+          # otherwise; on this lane gcc-high.bicepparam sets frontDoorEnabled and
+          # deployAppsEnabled true, so one exists by construction.
+          PARAMS="$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc-high.bicepparam"
+          # An UNREADABLE param file is UNKNOWN, not "apps are off": `grep` inside
+          # an `if` is exempt from `set -e`, so a missing path would silently take
+          # the else branch and skip the smoke test with a confident wrong reason.
+          if [ ! -r "$PARAMS" ]; then
+            echo "::error::cannot read $PARAMS, so it is NOT established whether this deploy stands up a Console. Refusing to skip the smoke test on an unread file."
+            exit 1
+          fi
+          if grep -qE '^[[:space:]]*param[[:space:]]+deployAppsEnabled[[:space:]]*=[[:space:]]*true' "$PARAMS"; then
+            EXPECT_CONSOLE=true
+          else
+            EXPECT_CONSOLE=false
+          fi
+          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
+            echo "console_url=" >> "$GITHUB_OUTPUT"
+            echo "::notice::topology=dlz-attach stamps no Console, so there is no endpoint to smoke-test."
+          elif [ "$EXPECT_CONSOLE" != "true" ]; then
+            echo "console_url=" >> "$GITHUB_OUTPUT"
+            echo "::warning::$(basename "$PARAMS") does not set deployAppsEnabled=true, so this deploy stands up no Console. The external smoke test is skipped and this run does NOT establish that the boundary serves Loom."
+          else
+            # Two separate command substitutions, not a pipeline: each one's
+            # failure is its own and `set -e` stops on either. The values are
+            # held in a shell variable and never echoed — the azd environment
+            # carries AZURE_SUBSCRIPTION_ID.
+            AZD_VALUES=$(azd env get-values --output json)
+            SMOKE_URL=$(printf '%s' "$AZD_VALUES" | node "$GITHUB_WORKSPACE/scripts/ci/resolve-smoke-console-url.mjs")
+            echo "console_url=$SMOKE_URL" >> "$GITHUB_OUTPUT"
+            echo "::notice::smoke-test target (public ingress): $SMOKE_URL"
+          fi
         working-directory: platform/fiab/azd
 
       # Front Door -> ACA env Private Link approval (#3203). CLOUD PARITY: the
@@ -628,10 +685,16 @@ jobs:
           echo "::notice::Gov: published main.json → $BLOB_URL and wired day-one Add-landing-zone deploy env."
 
       - name: Smoke test (Gov-specific)
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # Runs only when the Provision step RESOLVED a reachable target. That
+        # output is empty in exactly two DECLARED states — topology=dlz-attach
+        # (no Console is stamped) and a param file that deploys no apps — and
+        # the resolver FAILS the provision step rather than emitting an empty
+        # value in every other case, so this condition cannot silently absorb a
+        # resolution defect.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.provision.outputs.console_url != ''
         run: bash .github/scripts/fiab-smoke-test.sh
         env:
-          CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+          CONSOLE_URL: ${{ steps.provision.outputs.console_url }}
           BOUNDARY: GCC-High
 
       # NEVER ON THE SCHEDULE. This condition used to read
