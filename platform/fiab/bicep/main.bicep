@@ -466,16 +466,14 @@ param dbtRunnerEnabled bool = true
 // = FALSE to the admin plane, so dbtRunnerActive was false and BOTH
 // LOOM_DBT_RUNNER_URL and LOOM_TRANSFORM_RUNNER_URL deployed EMPTY on a console
 // whose runners were up — svc-dbt blocked with the backend already running.
-// REVERTED TO false 2026-08-13 — turning this on BROKE THE DEPLOY PATH (P0).
-// It activates transformRunner, whose module dereferences the lake storage
-// account and fails:
-//   transform-runner: ResourceNotFound — Microsoft.Storage/storageAccounts/
-//   saloomdefaulttr4nm4dcgsq under rg-csa-loom-admin-centralus was not found
-// That account does not exist ANYWHERE in the subscription, yet the Console
-// carries LOOM_ADLS_ACCOUNT=saloomdefaulttr4nm4dcgsq. The images ARE built and
-// running (loom-dbt-r2 Healthy on loom-dbt-runner:v0.1) — the blocker is the
-// dangling lake reference, not image readiness. Re-enable once that is fixed.
-param dbtRunnerImageReady bool = false
+// The loom-dbt-runner + loom-transform-runner images ARE built and their apps
+// ARE running live (loom-dbt-r2 Healthy on loom-dbt-runner:v0.1), so gating on
+// 'image not ready' was stale. Flipping this once before (#3325) broke the
+// deploy: it activated transform-runner, whose module resolved the DLZ lake as
+// an `existing` resource in the ADMIN resource group -> ResourceNotFound. That
+// is fixed at the source (artifactsStorageGrantable, this commit), so the flag
+// is safe to carry now.
+param dbtRunnerImageReady bool = true
 
 @description('Deploy the loom-udf-runtime Container App (User Data Functions execution host, stock MCR image on the dab-runtime.bicep pattern) so the user-data-function invoke path (LOOM_UDF_FUNCTION_BASE) works day-one. Default on (opt-out); set false to leave the UDF invoke route honestly 503-gated (or supply a BYO host via loomUdfFunctionBase). Container Apps only. No Fabric dependency.')
 param udfRuntimeEnabled bool = true

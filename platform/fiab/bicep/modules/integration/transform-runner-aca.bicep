@@ -46,10 +46,7 @@ param uamiId string
 @description('Runner UAMI client ID (injected as AZURE_CLIENT_ID for managed-identity auth)')
 param uamiClientId string
 
-@description('Runner UAMI principal (object) ID — used for the artifact-store role assignment. Empty skips the grant.')
-param uamiPrincipalId string = ''
-
-@description('Storage account that holds the transform artifacts container (manifest.json / run_results.json / plan snapshots). Empty skips the role assignment; artifacts then stay in the per-run temp dir and are returned inline to the Console.')
+@description('Storage account that holds the transform artifacts container (manifest.json / run_results.json / plan snapshots). Bound unconditionally as LOOM_TRANSFORM_ARTIFACTS_ACCOUNT — the runner is wired to its artifact store on every topology. Empty only when the deployment genuinely has no lake, in which case artifacts stay in the per-run temp dir and are returned inline to the Console.')
 param artifactsStorageAccountName string = ''
 
 @description('App Insights connection string')
@@ -58,28 +55,24 @@ param appInsightsConnectionString string
 @description('Compliance tags')
 param complianceTags object
 
-// Storage Blob Data Contributor — the runner writes dbt/SQLMesh artifacts
-// (target/manifest.json, run_results.json, plan snapshots) to the deployment's
-// own ADLS so L6 lineage + plan history survive the ephemeral container. The
-// guid() name is derived from (scope, principal, role) so a re-deploy — or an
-// identical grant already made elsewhere for the same Console UAMI — collapses
-// onto the SAME assignment instead of erroring on a duplicate.
-var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-var grantArtifactsAccess = !empty(artifactsStorageAccountName) && !empty(uamiPrincipalId)
-
-resource artifactsStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (grantArtifactsAccess) {
-  name: empty(artifactsStorageAccountName) ? 'placeholderaccount' : artifactsStorageAccountName
-}
-
-resource artifactsRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantArtifactsAccess) {
-  name: guid(artifactsStorage.id, uamiPrincipalId, storageBlobDataContributorRoleId)
-  scope: artifactsStorage
-  properties: {
-    principalId: uamiPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
-  }
-}
+// The lake grant does NOT live here. An `existing` storage reference declared
+// inside this module resolves in the APP's resource group, and the lake is not
+// there — it is in the DLZ RG, and on a dlz-attach estate in another
+// subscription entirely. Declaring it here is what broke the Commercial deploy
+// on 2026-08-13 the moment this runner was activated:
+//
+//   transform-runner -> DeploymentFailed
+//     -> ResourceNotFound: …/storageAccounts/saloomdefault… under resource
+//        group 'rg-csa-loom-admin-centralus' was not found
+//
+// The grant now lives in data-plane/transform-runner-lake-rbac.bicep, which the
+// orchestrator invokes with an explicit `scope: resourceGroup(<lakeRg>)` — the
+// same pattern the other six lake consumers in admin-plane already used.
+//
+// The BINDING stays here: LOOM_TRANSFORM_ARTIFACTS_ACCOUNT below is a plain
+// string, so the runner is wired to its artifact store on EVERY topology,
+// including the ones where this deployment cannot create the role assignment
+// (auto-bind-by-default.md — bind always, grant where it is possible).
 
 resource transformRunner 'Microsoft.App/containerApps@2025-02-02-preview' = {
   name: 'loom-transform-runner'
