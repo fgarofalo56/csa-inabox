@@ -215,6 +215,12 @@ type functionAppsConfigT = {
 
   @description('Schedule cron for the Entra GROUP-SYNC reconcile (AG-9) — standard 5-field, UTC. Default hourly at :25, matching the retired timer. The pass no-ops honestly when LOOM_GRAPH_GROUP_SYNC_ENABLED is off.')
   accessGroupSyncCron: string?
+
+  @description('Drive the Spark warm-pool heartbeat (#3226) from an in-VNet scheduled Container App Job instead of a GitHub Actions schedule. Default ON, but the job only deploys when the warm pool is ALSO enabled (root param sparkPoolEnabled) — with the pool off there is nothing to warm, so no job is created and no cost is incurred. The GitHub `schedule:` this replaces declared */5 and MEASURED a 56.9-min median gap over 200 runs (7.19% delivery), so it never once beat the 15-min idle TTL. Set false only to deliberately return to a heartbeat-less warm pool, which decays cold within 15 minutes.')
+  sparkKeepWarmEnabled: bool?
+
+  @description('Schedule cron for the Spark warm-pool heartbeat — STANDARD 5-FIELD, UTC (Container Apps jobs). Default every 5 minutes: it must stay comfortably under BOTH the warm-session idle TTL (LOOM_SPARK_POOL_IDLE_TTL, default 900s) and the Spark pool autoPause delay (default 15 min), and */5 gives 3x margin.')
+  sparkKeepWarmCron: string?
 }
 
 @description('Scheduled/background Function-app settings bag (R0). Existing label-propagation + report-subscription cron settings live here; future per-Function enable/cron/settings (E2 copilot-evaluator, C3 cost-anomaly, L3 lineage-ingest, S1 secret-expiry) add properties to functionAppsConfigT — never a new top-level param.')
@@ -451,6 +457,10 @@ var accessSweeperEnabled = functionAppsConfig.?accessSweeperEnabled ?? true
 var accessSweepCron = functionAppsConfig.?accessSweepCron ?? '*/15 * * * *'
 var accessReviewSweepCron = functionAppsConfig.?accessReviewSweepCron ?? '5 * * * *'
 var accessGroupSyncCron = functionAppsConfig.?accessGroupSyncCron ?? '25 * * * *'
+// #3226 — the Spark warm-pool heartbeat. Default-ON, but see sparkKeepWarmActive
+// below: the job is only created when the warm pool itself is enabled.
+var sparkKeepWarmEnabled = functionAppsConfig.?sparkKeepWarmEnabled ?? true
+var sparkKeepWarmCron = functionAppsConfig.?sparkKeepWarmCron ?? '*/5 * * * *'
 // E1 2026-08-06: 500 exhausted by ~05:50 UTC at measured merge velocity (27–31
 // full 153-Q passes/day), zero-judging every gated run — see the sizing note in
 // copilot-evaluator-job.bicep. Must match that the module default.
@@ -7266,6 +7276,58 @@ module accessGroupSync 'access-governance-sweeper-job.bicep' = if (accessSweeper
     sweepMode: 'group-sync'
     loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
     cronExpression: accessGroupSyncCron
+    internalToken: loomInternalToken
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// #3226 — Spark warm-pool heartbeat on a scheduler that ACTUALLY FIRES.
+//
+// Was: `.github/workflows/csa-loom-spark-keepwarm.yml` `schedule: */5 * * * *`.
+// MEASURED over 200 consecutive scheduled runs (2026-08-04 -> 2026-08-13,
+// 231.9 h): 200 delivered of 2782 declared ticks (7.19%), median gap 56.9 min,
+// min 22.0 min, max 349.9 min — and 199 of 199 intervals exceeded the 15-min
+// warm-session idle TTL (LOOM_SPARK_POOL_IDLE_TTL default 900s) and the Spark
+// pool's own autoPause delay (synapse.bicep sparkPoolAutoPauseDelay default 15).
+// GitHub delays and drops high-frequency schedules on busy repos, so the
+// heartbeat never once beat the TTL it exists to beat.
+//
+// Now: an in-VNet ACA Job on Azure's scheduler, which honours minute-granular
+// crons (Learn documents `*/1 * * * *`), with zero GitHub dependency — the
+// IL5-safe path, same as loom-synthetic-monitor and the three loom-access-*
+// sweeps. The GitHub `schedule:` block is REMOVED in the same change so the
+// heartbeat has exactly ONE scheduler (#3340) — never a duplicate timer.
+//
+// Gated on sparkPoolEnabled as well as the usual ACA conditions. That gate is
+// deliberate and is the whole cost story: the JOB is ~free (0.25 vCPU for a few
+// seconds per tick, scale-to-zero), but the warm pool it drives is not — a
+// Synapse Spark instance runs a minimum of 3 nodes at the deployed default node
+// size Small (4 vCore), so one continuously-warm session pins >= 12 vCores at a
+// measured centralus retail rate of $0.14766/vCore-hour ~= $1.77/hr ~=
+// ~$1,293/month. With the pool off there is nothing to warm, so we create NO job
+// rather than run 288 no-op executions a day printing a false success — which is
+// exactly what the retired workflow did (live estate, 2026-08-13T20:22:48Z:
+// {"ok":true,"skipped":true,"reason":"warm pool disabled (LOOM_SPARK_POOL_ENABLED=false)"}
+// logged under "warm pool topped up").
+//
+// Runs the loom-uat image (the console image is slimmed of e2e/); until that
+// image is pushed the scheduled execution fails honestly — build it via
+// deploy-loom-uat-job.sh in the post-deploy app phase.
+// =====================================================================
+var sparkKeepWarmActive = sparkKeepWarmEnabled && sparkPoolEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module sparkKeepWarm 'spark-keepwarm-job.bicep' = if (sparkKeepWarmActive) {
+  name: 'spark-keepwarm-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    jobName: 'loom-spark-keepwarm'
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: sparkKeepWarmCron
     internalToken: loomInternalToken
     complianceTags: complianceTags
   }

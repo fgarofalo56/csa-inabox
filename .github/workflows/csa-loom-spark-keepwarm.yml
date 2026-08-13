@@ -1,42 +1,49 @@
 name: csa-loom-spark-keepwarm
 
 # ---------------------------------------------------------------------------
-# Keep a Synapse/Databricks Spark session PERPETUALLY WARM so notebook runs are
-# instant instead of paying the multi-minute cold start — AND drive Spark
-# reliability maintenance on the SAME durable heartbeat.
+# MANUAL PROBE ONLY. The real heartbeat is an in-VNet Container App Job.
 #
-# The console's in-process warm-pool sweeper (`spark-session-pool.ts`) is
-# unreliable in a serverless Container App — the Node process only lives while
-# serving requests, replicas recycle, and every roll resets the pool to cold.
-# This external heartbeat is the SOLE durable driver on ACA: pinging the
-# internal-token-gated keep-warm endpoint every 5 minutes (the SAME pattern the
-# scheduler tick uses) makes each hit (a) start the sweeper after a recycle,
-# (b) re-adopt cross-replica warm sessions, (c) top the pool back up to `min`,
-# and (d) run the A11 auto-recovery tick — detect a FAULTED / "Succeeded but
-# can't launch" Spark pool and delete+recreate it (thrash-guarded, operator-
-# alerted; gated by the a11-spark-autorecover runtime flag + the
-# LOOM_SPARK_AUTORECOVER_ENABLED env). The #1796 leaked-session reaper + the A12
-# session-quota hard-kill ride the same in-request sweep. So a warm session is
-# always standing by AND a faulted pool self-heals within one cycle.
+# What this workflow does: pings the internal-token-gated keep-warm endpoint
+# ONCE, on demand, and reports honestly what the console said. Use it to check
+# the warm pool's state from outside the VNet without waiting for a cron tick.
+#
+# What it no longer does: drive the heartbeat. That is now
+# `loom-spark-keepwarm`, a Microsoft.App/jobs Schedule-triggered Container App
+# Job deployed by platform/fiab/bicep/modules/admin-plane/spark-keepwarm-job
+# .bicep on Azure's scheduler, in-VNet, with zero GitHub dependency.
+#
+# ── Why the schedule was removed (#3226) ───────────────────────────────────
+# This workflow declared `schedule: */5 * * * *`. MEASURED over 200 consecutive
+# scheduled runs (2026-08-04T04:31:08Z -> 2026-08-13T20:22:43Z, 231.9 h):
+#
+#     declared   */5m         expected ticks   2782
+#     delivered  200 runs     delivery rate    7.19%
+#     min gap    22.0 min     median gap       56.9 min   (11.4x declared)
+#     p90 gap   131.6 min     max gap         349.9 min
+#     intervals exceeding the 15-min idle TTL:  199 / 199  (100%)
+#
+# GitHub delays and drops high-frequency schedules on busy repositories. The
+# warm-session idle TTL is 15 minutes (LOOM_SPARK_POOL_IDLE_TTL default 900s),
+# as is the Spark pool's autoPause delay (synapse.bicep sparkPoolAutoPauseDelay
+# default 15) — so this heartbeat NEVER once beat the TTL it exists to beat.
+# Keeping a second `schedule:` here would also violate #3340 (a job has exactly
+# ONE scheduler); the ACA job is that one.
+#
+# ── The endpoint this hits ─────────────────────────────────────────────────
+# Each hit makes the console (a) start the in-process sweeper after a replica
+# recycle, (b) re-adopt cross-replica warm sessions, (c) reconcile 'warming'
+# slots against live Livy state and top the pool back up to `min`, and (d) run
+# the A11 auto-recovery tick — detect a FAULTED / "Succeeded but can't launch"
+# Spark pool and delete+recreate it (thrash-guarded, operator-alerted; gated by
+# the a11-spark-autorecover runtime flag + LOOM_SPARK_AUTORECOVER_ENABLED). The
+# #1796 leaked-session reaper + the A12 session-quota hard-kill ride the same
+# in-request sweep.
 #
 # Auth: LOOM_INTERNAL_TOKEN (GitHub secret) as a Bearer token. The console is
 # reachable via Front Door; the console itself reaches Livy in-VNet.
 # ---------------------------------------------------------------------------
 
 on:
-  schedule:
-    # DECLARED */5. MEASURED median 51m, min 25m, max 140m over 59 consecutive
-    # intervals (2026-08-08 -> 2026-08-11) — 10.2x the declared cadence. GitHub
-    # delays and drops high-frequency schedules on busy repositories; this has
-    # NEVER run at 5-minute cadence.
-    #
-    # The old comment here said "5m keeps min=1 topped up". That is false: a 15m
-    # idle TTL expires ~3x between consecutive runs at the median and ~9x at the
-    # observed max, so the keep-warm cannot do the thing it claims. The defect is
-    # the DESIGN that assumed the declared number, not the workflow — recorded
-    # here so nobody designs against */5 again. See #3226 for the options, which
-    # trade money against latency and are an operator decision.
-    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       console_url:
@@ -54,7 +61,7 @@ permissions:
 
 jobs:
   keepwarm:
-    name: 'Spark keep-warm heartbeat'
+    name: 'Spark keep-warm probe'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -63,22 +70,58 @@ jobs:
           CONSOLE_URL: ${{ inputs.console_url || 'https://csa-loom.limitlessdata.ai' }}
           INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
         run: |
+          set -o pipefail
           if [ -z "$INTERNAL_TOKEN" ]; then
-            echo "::warning::LOOM_INTERNAL_TOKEN secret not set — cannot keep the Spark pool warm. Add it to repo secrets."
-            exit 0
+            echo "::error::LOOM_INTERNAL_TOKEN secret not set — this probe cannot authenticate. Add it to repo secrets."
+            exit 1
           fi
           code=$(curl -sS -o /tmp/kw.json -w '%{http_code}' -X POST \
             -H "Authorization: Bearer $INTERNAL_TOKEN" \
             -H 'Content-Type: application/json' \
             --max-time 90 \
-            "${CONSOLE_URL}/api/internal/spark/keep-warm" || echo 000)
+            "${CONSOLE_URL}/api/internal/spark/keep-warm") || code=000
           echo "keep-warm HTTP $code"
-          cat /tmp/kw.json 2>/dev/null | head -c 600 || true
-          echo ""
-          # A 200 (warmed/topped-up) or an honest skip is success; auth/others fail loudly.
+          body=''
+          if [ -f /tmp/kw.json ]; then body=$(head -c 600 /tmp/kw.json); fi
+          echo "body: $body"
+
+          # ── Report what the console ACTUALLY said (deploy-integrity.md R7).
+          # This block used to map HTTP 200 -> "warm pool topped up"
+          # unconditionally. Measured on the live Commercial estate
+          # 2026-08-13T20:22:48Z, the console replied
+          #   {"ok":true,"skipped":true,"reason":"warm pool disabled (LOOM_SPARK_POOL_ENABLED=false)"}
+          # and this workflow logged "warm pool topped up" for it. A 200 that
+          # warmed NOTHING is not a success — that is precisely the green-tick-
+          # over-a-no-op that .claude/rules/no-vaporware.md forbids.
           case "$code" in
-            200) echo "warm pool topped up";;
-            401) echo "::error::keep-warm 401 — LOOM_INTERNAL_TOKEN mismatch between the secret and the console env"; exit 1;;
-            000) echo "::warning::console unreachable ($CONSOLE_URL) — transient; next tick retries";;
-            *)   echo "::warning::keep-warm returned $code — see body above";;
+            200)
+              case "$body" in
+                *'"skipped":true'*)
+                  echo "::error::the console SKIPPED the warm-up — NOTHING was warmed. Body: $body"
+                  echo "::error::most likely LOOM_SPARK_POOL_ENABLED=false on loom-console (root bicep param sparkPoolEnabled defaults false; see #3226 for the cost of enabling it)."
+                  exit 1
+                  ;;
+                *'"keptWarm":true'*)
+                  echo "warm pool topped up"
+                  ;;
+                *)
+                  echo "::error::HTTP 200 with an unrecognised body — cannot confirm the pool was warmed. Body: $body"
+                  exit 1
+                  ;;
+              esac
+              ;;
+            401)
+              echo "::error::keep-warm 401 — LOOM_INTERNAL_TOKEN mismatch between the secret and the console env"
+              exit 1
+              ;;
+            000)
+              # R7: we know the request did not complete. We do NOT know that the
+              # console is down — DNS, TLS, egress and a timeout all land here.
+              echo "::error::the request to ${CONSOLE_URL} did not complete (curl failed or timed out). Cause not established from here."
+              exit 1
+              ;;
+            *)
+              echo "::error::keep-warm returned $code — see body above"
+              exit 1
+              ;;
           esac
