@@ -77,10 +77,48 @@ export async function finalizeApproval(opts: {
   return doc;
 }
 
-/** The onboarding group object id an approved principal is added to, if set. */
+/**
+ * The onboarding group object id an approved principal is added to, if set.
+ *
+ * SECURITY — this MUST NOT fall back to the tenant-admin group.
+ *
+ * It used to read:
+ *
+ *   LOOM_ONBOARDING_ENTRA_GROUP_ID || LOOM_TENANT_ADMIN_GROUP_ID
+ *
+ * `LOOM_ONBOARDING_ENTRA_GROUP_ID` is set by NO bicep module, param file or
+ * workflow (measured 2026-08-13: `grep -rn … platform/fiab/bicep .github/workflows`
+ * returns 0). So the first operand was always empty and the fallback was
+ * UNCONDITIONAL: approving an access request added the requester to the group
+ * `isTenantAdmin()` keys on — i.e. **approving a request made the requester a
+ * Loom tenant admin**. Both `create-user` and `invite-guest` call this, and the
+ * Console UAMI holds `GroupMember.ReadWrite.All`, so the write would have
+ * succeeded. Blast radius was nil only because the path had not been used
+ * successfully yet (the admin group had 3 members and 0 guests) — luck, not
+ * design.
+ *
+ * Now it fails CLOSED: with no onboarding group configured this returns
+ * undefined, and the caller provisions the principal WITHOUT a group grant
+ * rather than granting the wrong one. A user who lands with no group is
+ * inconvenienced; a guest who lands as tenant admin is an incident.
+ *
+ * The real fix is that the deploy should PROVISION a dedicated onboarding group
+ * and set `LOOM_ONBOARDING_ENTRA_GROUP_ID` (auto-bind-by-default.md §5 — infra
+ * prerequisites are DEPLOYED, not requested). Tracked separately; this change is
+ * the security stop-gap, not the whole answer.
+ */
 export function onboardingGroupId(): string | undefined {
-  const g = (process.env.LOOM_ONBOARDING_ENTRA_GROUP_ID || process.env.LOOM_TENANT_ADMIN_GROUP_ID || '').trim();
-  return g || undefined;
+  const g = (process.env.LOOM_ONBOARDING_ENTRA_GROUP_ID || '').trim();
+  if (g) return g;
+  // Deliberately NOT falling through to LOOM_TENANT_ADMIN_GROUP_ID. Say so, so
+  // an operator seeing "provisioned, no group" knows why and what to set.
+  console.warn(
+    '[access-requests] LOOM_ONBOARDING_ENTRA_GROUP_ID is not set — the approved',
+    'principal will be provisioned WITHOUT an Entra group grant. Refusing to fall',
+    'back to LOOM_TENANT_ADMIN_GROUP_ID: that would make the requester a Loom',
+    'tenant admin. Set LOOM_ONBOARDING_ENTRA_GROUP_ID to a dedicated onboarding group.',
+  );
+  return undefined;
 }
 
 /** The Loom URL a redeemed guest lands on. Prefer the request's own origin (the
