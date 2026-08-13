@@ -440,6 +440,7 @@ jobs:
           LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG || 'v0.1' }}
           LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG || 'v0.1' }}
           LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG || 'v0.1' }}
+          LOOM_DIRECTLAKE_SVC_TAG: ${{ vars.LOOM_DIRECTLAKE_SVC_TAG || 'v0.1' }}
           LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
           LOOM_MAF_TAG: ${{ vars.LOOM_MAF_TAG || 'v0.1' }}
           LOOM_MCP_BRIDGE_TAG: ${{ vars.LOOM_MCP_BRIDGE_TAG || 'v0.1' }}

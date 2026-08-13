@@ -17,10 +17,11 @@
  * prove the path end-to-end with zero Azure once the service is deployed.
  *
  * ── AUTH ────────────────────────────────────────────────────────────────────
- * Tenant-admin gated (getSession + requireTenantAdmin — copied from the sibling
- * /api/admin/capacity/guardrails route, NOT a bare getSession check). Driving the
- * Direct Lake scan/framing service is a substrate-admin action in this skeleton;
- * HYP-7 wires the per-user semantic-model query path behind the
+ * Route-toolkit: withTenantAdmin (R3). Byte-compatible with the hand-rolled
+ * `getSession() -> requireTenantAdmin()` prologue this route used to carry —
+ * same 401, same canonical 403 `admin_only` envelope. Driving the Direct Lake
+ * scan/framing service is a substrate-admin action in this skeleton; HYP-7
+ * wires the per-user semantic-model query path behind the
  * LOOM_SEMANTIC_BACKEND=loom-columnar-cache selector.
  *
  * 200 → { ok:true, stats, arrowIpcBase64 }   (JSON stats + transcoded Arrow IPC)
@@ -29,10 +30,8 @@
  * 502 → service unreachable / engine error
  * 503 → service not deployed (names LOOM_DIRECTLAKE_URL + the bicep module)
  */
-import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
-import { apiOk, apiError, apiUnauthorized } from '@/lib/api/respond';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { apiOk, apiError } from '@/lib/api/respond';
 import { normalizeScanBody, buildScanUrl, type RawScanBody } from '@/lib/directlake/scan-request';
 
 export const runtime = 'nodejs';
@@ -41,12 +40,7 @@ export const dynamic = 'force-dynamic';
 /** Front Door caps a request at 30s; leave headroom under it. */
 const SCAN_TIMEOUT_MS = 25_000;
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const denied = requireTenantAdmin(session);
-  if (denied) return denied;
-
+export const POST = withTenantAdmin(async (req) => {
   // ── Honest gate FIRST (no-vaporware). #3291: this message used to tell the
   // operator to go deploy a bicep module — a remediation that could not be
   // executed, because no orchestrator invoked it and no CI built its image.
@@ -123,4 +117,4 @@ export async function POST(req: NextRequest) {
   }
 
   return apiOk({ stats: json.stats, arrowIpcBase64: json.arrowIpcBase64 });
-}
+});

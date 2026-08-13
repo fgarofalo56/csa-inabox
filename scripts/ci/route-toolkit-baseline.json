@@ -297,8 +297,6 @@
     "apps/fiab-console/app/api/deployment-pipelines/route.ts": 1,
     "apps/fiab-console/app/api/developer/tokens/[id]/route.ts": 1,
     "apps/fiab-console/app/api/developer/tokens/route.ts": 1,
-    "apps/fiab-console/app/api/directlake/frame/route.ts": 1,
-    "apps/fiab-console/app/api/directlake/scan/route.ts": 1,
     "apps/fiab-console/app/api/downloads/route.ts": 1,
     "apps/fiab-console/app/api/dq/monitors/route.ts": 1,
     "apps/fiab-console/app/api/dq/results/route.ts": 1,

@@ -251,7 +251,10 @@ test('the derived verify set is the roll ∪ contract images, and EXCLUDES loom-
   const m = r.out.match(/SC1 verify set \((\d+) images\): (.*)/);
   assert.ok(m, `no verify-set notice in output:\n${r.out}`);
   const apps = m[2].trim().split(/\s+/);
-  assert.equal(apps.length, 17);
+  // 17 -> 18 in #3291: loom-directlake joined the deploy contract when
+  // admin-plane/main.bicep started deploying it DEFAULT-ON, so it is now an
+  // image the roll must signature-verify like any other.
+  assert.equal(apps.length, 18);
   assert.ok(!apps.includes('loom-uat'), 'loom-uat must not be roll-blocking');
   // Non-weakening: every app the roll actually ships is still in the set.
   for (const app of [

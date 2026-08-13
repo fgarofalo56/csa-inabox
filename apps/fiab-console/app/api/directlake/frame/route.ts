@@ -22,9 +22,10 @@
  * with zero Azure once the service is deployed.
  *
  * ── AUTH ────────────────────────────────────────────────────────────────────
- * Tenant-admin gated (getSession + requireTenantAdmin), matching the sibling
+ * Route-toolkit: withTenantAdmin (R3), matching the sibling
  * /api/directlake/scan route — driving the Direct Lake framing service is a
- * substrate-admin action.
+ * substrate-admin action. Byte-compatible with the hand-rolled
+ * `getSession() -> requireTenantAdmin()` prologue this route used to carry.
  *
  * 200 → { ok:true, frame }          (source_kind, delta_version, columns[], elapsed_ms)
  * 400 → bad request (missing path)
@@ -32,10 +33,8 @@
  * 502 → service unreachable / engine error
  * 503 → service not deployed (names LOOM_DIRECTLAKE_URL + the bicep module)
  */
-import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
-import { apiOk, apiError, apiUnauthorized } from '@/lib/api/respond';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { apiOk, apiError } from '@/lib/api/respond';
 import { normalizeFrameBody, buildFrameUrl, type RawFrameBody } from '@/lib/directlake/scan-request';
 
 export const runtime = 'nodejs';
@@ -44,12 +43,7 @@ export const dynamic = 'force-dynamic';
 /** Framing is metadata-only, but Front Door still caps a request at 30s. */
 const FRAME_TIMEOUT_MS = 25_000;
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const denied = requireTenantAdmin(session);
-  if (denied) return denied;
-
+export const POST = withTenantAdmin(async (req) => {
   // ── Honest gate FIRST (no-vaporware). #3291: this message used to tell the
   // operator to go deploy a bicep module — a remediation that could not be
   // executed, because no orchestrator invoked it and no CI built its image.
@@ -126,4 +120,4 @@ export async function POST(req: NextRequest) {
   }
 
   return apiOk({ frame: json.frame });
-}
+});
