@@ -18,6 +18,13 @@ on:
   schedule:
     # Weekly stale-branch report on Mondays 06:00 UTC.
     - cron: '0 6 * * 1'
+  # On demand, so the workflow-lane-liveness job below can produce a LIVE receipt
+  # without waiting up to a week for the Monday cron. deploy-integrity.md R2
+  # closes #3345 on an observed run, not on a merge, and a guard whose first real
+  # execution is "sometime next Monday" is a guard nobody has watched work.
+  # On a dispatch this runs no-stray-root-files + workflow-lane-liveness; the
+  # stale-branch report stays cron-only and large-file-guard stays PR-only.
+  workflow_dispatch:
 
 permissions:
   contents: read
