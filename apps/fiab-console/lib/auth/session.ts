@@ -1,14 +1,22 @@
 /**
  * Cookie-backed session for the BFF — v1.18.
  *
- * Cookie payload is intentionally MINIMAL: just the user's identity
- * claims (oid, name, email, upn) + expiry. ~100 bytes encoded.
+ * Cookie payload is intentionally MINIMAL: the user's identity claims
+ * (oid, tid, name, email, upn), their Entra `groups` (#3175), and the
+ * expiry.
  *
  * Why: MSAL's access token is ~3KB which inflates the encrypted
  * + base64-encoded cookie value past Front Door's per-header size
  * limit (~4KB) and FD silently drops the Set-Cookie header. The
  * resulting cookie was never reaching the browser even though every
  * other layer of the stack was emitting it correctly.
+ *
+ * `groups` is the one UNBOUNDED field and it reproduced that exact
+ * failure on 2026-08-13 (a 99-object Global Admin → 5383 bytes → a
+ * permanent sign-in loop). `encodeSessionCookie` therefore enforces
+ * MAX_COOKIE_VALUE_BYTES and degrades to the Graph membership fallback
+ * rather than minting an undeliverable cookie. Anything added to
+ * UserClaims inherits that bound — keep it that way.
  *
  * When the BFF needs an access token for downstream OBO calls (Graph,
  * Synapse, etc.), it acquires one on demand via the MSAL confidential-
@@ -22,6 +30,26 @@ import crypto from 'node:crypto';
 import type { UserClaims } from './msal';
 
 export const COOKIE_NAME = 'loom_session';
+/**
+ * Hard ceiling for the ENCODED `loom_session` cookie value (bytes).
+ *
+ * RFC 6265 §6.1 obliges a user agent to support at least 4096 bytes per cookie
+ * *including the name and attributes*, and every major browser implements that
+ * as a hard cap — an over-length Set-Cookie is DISCARDED SILENTLY, with no error
+ * anywhere in the stack. Azure Front Door applies the same ~4KB per-header
+ * ceiling and drops the header just as quietly (the incident recorded in this
+ * file's header comment, when the MSAL access token still rode in the cookie).
+ *
+ * 3500 leaves ~596 bytes of headroom for `loom_session=` + `Path` + `Max-Age` +
+ * `HttpOnly` + `Secure` + `SameSite` — the attributes count against the 4096.
+ *
+ * This is NOT a style preference. When the value exceeds the cap the browser
+ * keeps NO session, `/` sees an unauthenticated request, and the user is bounced
+ * back to sign-in — an infinite login loop in which the server logs a perfectly
+ * successful `[auth/callback] session encoded` line every time. See #3175's
+ * regression: the `groups` claim pushed a Global Admin's cookie to 5383 bytes.
+ */
+export const MAX_COOKIE_VALUE_BYTES = 3500;
 /**
  * Session cookie lifetime (seconds) — BOTH the cookie `Max-Age` and, when
  * sliding sessions are enabled, the session payload `exp` window. Overridable
@@ -86,13 +114,60 @@ export function tenantScopeId(session: { claims: UserClaims }): string {
   return session.claims.tid || session.claims.oid;
 }
 
-export function encodeSessionCookie(payload: SessionPayload): string {
+function encodeSessionCookieRaw(payload: SessionPayload): string {
   const iv = crypto.randomBytes(IV_LEN);
   const cipher = crypto.createCipheriv(ALG, getKey(), iv);
   const plaintext = Buffer.from(JSON.stringify(payload), 'utf-8');
   const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
   return Buffer.concat([iv, tag, encrypted]).toString('base64url');
+}
+
+/**
+ * Encode the session cookie, GUARANTEEING the result is small enough to actually
+ * reach the browser.
+ *
+ * The only unbounded field in the payload is `claims.groups` — one 36-char GUID
+ * per Entra directory object the user belongs to. `groupMembershipClaims:
+ * SecurityGroup` (set on the app registration by #3175) makes Entra emit security
+ * groups AND directory roles, so a Global Admin can easily carry ~100 entries:
+ * measured 5383 bytes against a 4096-byte cap, which the browser discarded
+ * silently and turned into a permanent sign-in loop.
+ *
+ * When the payload does not fit we drop `groups` and re-encode. Dropping it is
+ * correct rather than merely convenient: `groups` is left UNDEFINED, which is the
+ * SAME state Entra itself produces for the >200-group overage case (it replaces
+ * the inline claim with `_claim_names`/`_claim_sources`), and which
+ * `groupsClaimUnavailable()` in lib/auth/domain-role.ts already routes to an
+ * authoritative Graph membership lookup. So a heavily-grouped user keeps working
+ * authorization via the designed fallback, and a normally-grouped user keeps the
+ * fast inline-claim path #3175 restored.
+ *
+ * `[]` would be WRONG here — it asserts "this user is in no groups", a fact we
+ * never established, and it is indistinguishable from a real answer to every
+ * caller that does `session.claims.groups || []`.
+ *
+ * A session that STILL does not fit without groups is a payload bug, not a
+ * membership size: we return the over-length value rather than mint a corrupt
+ * session, and the guard below plus the callback's own length log make it visible.
+ */
+export function encodeSessionCookie(payload: SessionPayload): string {
+  const encoded = encodeSessionCookieRaw(payload);
+  if (encoded.length <= MAX_COOKIE_VALUE_BYTES) return encoded;
+  if (!payload.claims.groups?.length) return encoded;
+  const { groups: _dropped, ...claimsWithoutGroups } = payload.claims;
+  return encodeSessionCookieRaw({ ...payload, claims: claimsWithoutGroups });
+}
+
+/**
+ * Whether a payload's groups claim would be dropped by {@link encodeSessionCookie}
+ * to keep the cookie deliverable. Exposed so the auth callback can say so in its
+ * log line — an oversized membership silently switching to the Graph fallback is
+ * exactly the kind of state that must not be invisible to an operator.
+ */
+export function sessionGroupsDroppedForSize(payload: SessionPayload): boolean {
+  if (!payload.claims.groups?.length) return false;
+  return encodeSessionCookieRaw(payload).length > MAX_COOKIE_VALUE_BYTES;
 }
 
 export function getSession(): SessionPayload | null {
