@@ -13,11 +13,22 @@ pydantic-settings>=2.3.0,<3.0.0
 
 # ── Authentication (Azure AD / Entra ID JWT) ────────────────────────────────
 PyJWT>=2.8.0,<3.0.0
-# GHSA-537c-gmf6-5ccf (HIGH) — the cryptography WHEELS bundle a vulnerable
-# OpenSSL for every version < 48.0.1. The previous ceiling was <47.0.0, so the
-# constraint itself made the advisory unfixable: no version in the allowed range
-# is patched. Raised the floor AND the ceiling together.
-cryptography>=48.0.1,<49.0.0
+# Three advisories, and they have DIFFERENT fix versions: CVE-2026-69249 (HIGH)
+# and CVE-2026-69248 (MEDIUM) are fixed in 49.0.0, CVE-2026-69247 (HIGH — a
+# Bleichenbacher oracle in pkcs7_decrypt_*) not until 50.0.0. The floor is the
+# HIGHER of the three, as it is for setuptools in the backend Dockerfile.
+#
+# This is the SECOND time the ceiling on this line WAS the defect. The previous
+# pin was >=48.0.1,<49.0.0, written to clear GHSA-537c-gmf6-5ccf (the wheels
+# bundled a vulnerable OpenSSL below 48.0.1) — and that <49.0.0 ceiling then
+# excluded EVERY patched version of all three CVEs above, making them unfixable
+# BY CONSTRUCTION: no release pip was permitted to choose was patched, so Trivy
+# kept reporting an image that no dependency upgrade could ever clear. The
+# identical mistake is recorded one bump earlier in this file's history, when
+# <47.0.0 blocked the 48.0.1 fix. The rule both incidents teach: a fix landing
+# in the next MAJOR is unreachable unless the ceiling moves WITH the floor, so
+# raise them together — and re-check the ceiling whenever an advisory lands.
+cryptography>=50.0.0,<51.0.0
 
 # ── Caching (JWKS TTL cache) ────────────────────────────────────────────────
 cachetools>=5.3.0,<8.0.0
