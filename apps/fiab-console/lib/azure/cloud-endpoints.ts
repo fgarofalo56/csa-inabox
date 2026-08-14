@@ -32,73 +32,40 @@
  *
  * No Fabric / Power BI endpoints are introduced here — every helper is
  * Azure-native (per no-fabric-dependency.md).
+ *
+ * SPLIT (#3381) — this file crossed the 1500-LOC monolith-creep threshold, and
+ * the Graph concern had earned its own module anyway (its boundary semantics
+ * genuinely diverge from ARM's: IL5 folds to GCC-High for ARM, but must NOT for
+ * Graph). Two modules were extracted, and EVERYTHING they export is re-exported
+ * below, so every `from '@/lib/azure/cloud-endpoints'` import — and the vitest
+ * mocks keyed to that path — keep working unchanged:
+ *
+ *     ./cloud-boundary        the sovereign discriminator (detectLoomCloud, …)
+ *     ./cloud-endpoints-graph the Microsoft Graph resolver (getGraphHost, …)
+ *
+ * Dependency direction is one-way, so there is no import cycle:
+ *     cloud-boundary <- cloud-endpoints-graph <- cloud-endpoints
  */
 
-export type CloudName = 'AzureCloud' | 'AzureUSGovernment' | 'AzureDOD';
+import {
+  detectLoomCloud,
+  detectCloud,
+  isGovCloud,
+} from './cloud-boundary';
 
-/**
- * The four sovereign boundaries Loom targets, as a single canonical
- * discriminator. Unlike `CloudName` (which collapses GCC into `AzureCloud`
- * because GCC runs on Commercial Azure endpoints), `LoomCloud` keeps GCC
- * distinct so the console can badge it correctly and `getGraphHost()` can make
- * the 3-way Graph split (Commercial+GCC share, GCC-High differs, DoD differs
- * again).
- */
-export type LoomCloud = 'Commercial' | 'GCC' | 'GCC-High' | 'DoD';
+// ---------------------------------------------------------------------------
+// Re-exports — the public surface of this module is unchanged by the split.
+// ---------------------------------------------------------------------------
 
-/**
- * Detect the active sovereign boundary. `LOOM_CLOUD` is the canonical, enum
- * signal (`Commercial | GCC | GCC-High | DoD`; `IL5` is accepted as an alias of
- * `GCC-High` since both run on `AzureUSGovernment` endpoints). When `LOOM_CLOUD`
- * is absent we fall back to the legacy `AZURE_CLOUD` value so existing
- * deployments keep their exact behaviour. Unknown values default to Commercial
- * (never crash — this is a host resolver, not a validator).
- */
-export function detectLoomCloud(): LoomCloud {
-  const lc = (process.env.LOOM_CLOUD || '').trim().toLowerCase();
-  if (lc) {
-    switch (lc) {
-      case 'commercial':
-        return 'Commercial';
-      case 'gcc':
-        return 'GCC';
-      case 'gcc-high':
-      case 'gcchigh':
-      case 'il5':
-        return 'GCC-High';
-      case 'dod':
-        return 'DoD';
-      // Unknown LOOM_CLOUD value — fall through to AZURE_CLOUD below.
-    }
-  }
-  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
-    case 'azureusgovernment':
-      return 'GCC-High';
-    case 'azuredod':
-      return 'DoD';
-    default:
-      return 'Commercial';
-  }
-}
-
-/** Normalise to the Azure-endpoint cloud (GCC collapses to Commercial). */
-export function detectCloud(): CloudName {
-  switch (detectLoomCloud()) {
-    case 'GCC-High':
-      return 'AzureUSGovernment';
-    case 'DoD':
-      return 'AzureDOD';
-    default:
-      // Commercial + GCC both run on Commercial Azure endpoints.
-      return 'AzureCloud';
-  }
-}
-
-/** True when running in an Azure Government boundary (GCC-High / IL5 / DoD). */
-export function isGovCloud(): boolean {
-  const c = detectCloud();
-  return c === 'AzureUSGovernment' || c === 'AzureDOD';
-}
+export type { CloudName, LoomCloud } from './cloud-boundary';
+export { detectLoomCloud, detectCloud, isGovCloud, cloudBoundaryLabel } from './cloud-boundary';
+export {
+  getGraphHost,
+  getGraphScope,
+  graphBase,
+  graphScope,
+  graphDlpPolicyApiAvailable,
+} from './cloud-endpoints-graph';
 
 // ---------------------------------------------------------------------------
 // ARM control plane
@@ -177,50 +144,9 @@ export function adfFactoryDeepLinkId(subscriptionId: string, resourceGroup: stri
 // Microsoft Graph (national-cloud aware)
 // ---------------------------------------------------------------------------
 //
-// Graph has DISTINCT service roots per sovereign cloud (verified against
-// Microsoft Learn — https://learn.microsoft.com/graph/deployments):
-//
-//   | National cloud                      | Microsoft Graph root            |
-//   |-------------------------------------|---------------------------------|
-//   | Global (Commercial / GCC)           | https://graph.microsoft.com     |
-//   | US Government L4 (GCC High)          | https://graph.microsoft.us      |
-//   | US Government L5 (DoD / IL5)         | https://dod-graph.microsoft.us  |
-//
-// Access tokens are NOT interchangeable across roots, so the scope must match
-// the chosen base. A client that hard-codes graph.microsoft.com fails in Gov.
-
-/** Friendly cloud-boundary label for UI/MessageBar copy (e.g. "GCC High (L4)"). */
-export function cloudBoundaryLabel(): string {
-  // Prefer the explicit deployment boundary when bicep wires it through; this
-  // distinguishes GCC-High from IL5 (both map to AzureUSGovernment otherwise).
-  const explicit = (process.env.LOOM_CLOUD_BOUNDARY || '').trim();
-  if (explicit) {
-    switch (explicit.toLowerCase()) {
-      case 'commercial': return 'Commercial';
-      case 'gcc': return 'GCC';
-      case 'gcc-high': case 'gcchigh': return 'GCC High (L4)';
-      case 'il5': case 'dod': return 'DoD (IL5/L5)';
-      default: return explicit;
-    }
-  }
-  switch (detectCloud()) {
-    case 'AzureUSGovernment': return 'US Government (GCC High / IL5)';
-    case 'AzureDOD': return 'DoD (IL5/L5)';
-    default: return 'Commercial';
-  }
-}
-
-/**
- * Whether Microsoft Graph exposes the `/beta/security/dataLossPreventionPolicies`
- * policy-management surface for the active cloud. This preview segment is NOT
- * available in the US Government / DoD Graph roots as of 2026 — DLP policy
- * authoring there remains Purview-compliance-portal + Security & Compliance
- * PowerShell only. DLP ALERTS (`/v1.0/security/alerts_v2`) and restrict-access
- * RBAC enforcement still work in every cloud.
- */
-export function graphDlpPolicyApiAvailable(): boolean {
-  return !isGovCloud();
-}
+// MOVED to ./cloud-endpoints-graph by #3381 and re-exported at the top of this
+// file. `cloudBoundaryLabel()` moved to ./cloud-boundary in the same split.
+// See those modules for the Learn-grounded per-cloud root table.
 
 // ---------------------------------------------------------------------------
 // Fabric-family availability (Power BI / Fabric / Activator)
@@ -313,26 +239,9 @@ export function cogScope(): string {
 // ---------------------------------------------------------------------------
 // Microsoft Graph (Entra principal search, directory reads)
 // ---------------------------------------------------------------------------
-
-/**
- * Microsoft Graph data-plane base URL including the `/v1.0` version segment
- * (no trailing slash). Commercial / GCC use `graph.microsoft.com`; GCC-High /
- * IL5 / DoD (`AzureUSGovernment` / `AzureDOD`) use `graph.microsoft.us`.
- * `LOOM_GRAPH_BASE` overrides for non-standard sovereign clouds.
- */
-export function graphBase(): string {
-  const explicit = process.env.LOOM_GRAPH_BASE;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  return isGovCloud()
-    ? 'https://graph.microsoft.us/v1.0'
-    : 'https://graph.microsoft.com/v1.0';
-}
-
-/** AAD `.default` scope for Microsoft Graph tokens (host root, not the /v1.0 path). */
-export function graphScope(): string {
-  const host = graphBase().replace(/\/v1\.0\/?$/, '');
-  return `${host}/.default`;
-}
+//
+// MOVED to ./cloud-endpoints-graph by #3381 (`graphBase()` / `graphScope()`),
+// re-exported at the top of this file so no caller changed.
 
 // ---------------------------------------------------------------------------
 // Service Bus / Event Hubs (data plane)
@@ -606,28 +515,6 @@ export function getSearchSuffix(): string {
   return isGovCloud() ? 'search.azure.us' : 'search.windows.net';
 }
 
-/**
- * Microsoft Graph host (full URL with scheme, no trailing slash). Per
- * Microsoft Learn `graph/deployments`, GCC uses the worldwide
- * `graph.microsoft.com` host (same as Commercial); GCC-High uses
- * `graph.microsoft.us`; DoD uses `dod-graph.microsoft.us`.
- */
-export function getGraphHost(): string {
-  switch (detectLoomCloud()) {
-    case 'DoD':
-      return 'https://dod-graph.microsoft.us';
-    case 'GCC-High':
-      return 'https://graph.microsoft.us';
-    default:
-      // Commercial + GCC both use the worldwide Graph endpoint.
-      return 'https://graph.microsoft.com';
-  }
-}
-
-/** AAD `.default` scope for Microsoft Graph tokens (host-derived per cloud). */
-export function getGraphScope(): string {
-  return `${getGraphHost()}/.default`;
-}
 
 /**
  * Azure SQL / Synapse TDS AAD token audience host (no scheme, no `.default`).

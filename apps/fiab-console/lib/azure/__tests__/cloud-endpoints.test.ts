@@ -12,6 +12,8 @@ import {
   searchAadScope,
   getGraphHost,
   getGraphScope,
+  graphBase,
+  graphScope,
   getSqlSuffix,
   synapseSqlSuffix,
   getAasSuffix,
@@ -525,3 +527,137 @@ describe('assertPowerPlatformAvailable — honest gate, never an invented host',
     expect(powerPlatformEndpoints().flowBase).toBe('https://flow.example.us');
   });
 });
+
+/**
+ * Microsoft Graph boundary resolution (#3381).
+ *
+ * The TABLE above already pins `getGraphHost` / `getGraphScope` per cloud. What
+ * it did NOT cover — and what shipped broken — is the pair of inputs a real
+ * deploy actually supplies: `LOOM_GRAPH_BASE` (which main.bicep:5363 sets on
+ * EVERY boundary, to a bare root with no `/v1.0`) and `LOOM_CLOUD_BOUNDARY`
+ * (main.bicep:5393, the only signal that keeps IL5 distinct after
+ * main.bicep:4743 folds it into `LOOM_CLOUD='GCC-High'` for ARM's sake).
+ *
+ * Grounding: https://learn.microsoft.com/graph/deployments — Commercial/GCC
+ * `graph.microsoft.com`, US Gov L4 `graph.microsoft.us`, US Gov L5 (DoD)
+ * `dod-graph.microsoft.us`; tokens are not interchangeable across roots.
+ *
+ * The runnable mutation ledger for this behaviour lives in
+ * `apps/fiab-console/tests/graph-endpoint-boundaries.test.mjs` (node:test,
+ * no toolchain required).
+ */
+describe('Microsoft Graph — sovereign boundary resolution', () => {
+  const ORIG_BASE = process.env.LOOM_GRAPH_BASE;
+  const ORIG_BOUNDARY = process.env.LOOM_CLOUD_BOUNDARY;
+
+  afterEach(() => {
+    if (ORIG_BASE === undefined) delete process.env.LOOM_GRAPH_BASE;
+    else process.env.LOOM_GRAPH_BASE = ORIG_BASE;
+    if (ORIG_BOUNDARY === undefined) delete process.env.LOOM_CLOUD_BOUNDARY;
+    else process.env.LOOM_CLOUD_BOUNDARY = ORIG_BOUNDARY;
+  });
+
+  it('graphBase() carries /v1.0 on every cloud', () => {
+    delete process.env.LOOM_GRAPH_BASE;
+    delete process.env.LOOM_CLOUD_BOUNDARY;
+    for (const c of CLOUDS) {
+      withCloud(c);
+      expect(graphBase()).toBe(`${getGraphHost()}/v1.0`);
+      expect(graphScope()).toBe(`${getGraphHost()}/.default`);
+      expect(graphScope()).toBe(getGraphScope());
+    }
+  });
+
+  it('DoD resolves to the L5 host however the boundary is signalled', () => {
+    // Three signals, because three code paths used to disagree about which of
+    // them meant "DoD". `AZURE_CLOUD=AzureDOD` is the one that used to fall
+    // through msal.ts's else-branch to the WORLDWIDE host.
+    const signals: Array<[string, Record<string, string>]> = [
+      ['LOOM_CLOUD=DoD', { LOOM_CLOUD: 'DoD' }],
+      ['AZURE_CLOUD=AzureDOD', { AZURE_CLOUD: 'AzureDOD' }],
+      ['LOOM_CLOUD_BOUNDARY=IL5 over LOOM_CLOUD=GCC-High', { LOOM_CLOUD: 'GCC-High', LOOM_CLOUD_BOUNDARY: 'IL5' }],
+    ];
+    for (const [label, env] of signals) {
+      delete process.env.LOOM_CLOUD;
+      delete process.env.AZURE_CLOUD;
+      delete process.env.LOOM_CLOUD_BOUNDARY;
+      delete process.env.LOOM_GRAPH_BASE;
+      Object.assign(process.env, env);
+      expect(getGraphHost(), label).toBe('https://dod-graph.microsoft.us');
+      expect(graphBase(), label).toBe('https://dod-graph.microsoft.us/v1.0');
+      expect(getGraphScope(), label).toBe('https://dod-graph.microsoft.us/.default');
+    }
+  });
+
+  it('resolves the exact env main.bicep emits, per boundary', () => {
+    // Transcribed from platform/fiab/bicep/modules/admin-plane/main.bicep:
+    //   :4739 AZURE_CLOUD  :4743 LOOM_CLOUD  :5363 LOOM_GRAPH_BASE  :5393 LOOM_CLOUD_BOUNDARY
+    // These decide whether a REAL estate works, so they are what is asserted.
+    const wired: Array<[string, Record<string, string>, string]> = [
+      ['Commercial', { AZURE_CLOUD: 'AzureCloud', LOOM_CLOUD: 'Commercial', LOOM_CLOUD_BOUNDARY: 'Commercial', LOOM_GRAPH_BASE: 'https://graph.microsoft.com' }, 'https://graph.microsoft.com'],
+      ['GCC', { AZURE_CLOUD: 'AzureCloud', LOOM_CLOUD: 'GCC', LOOM_CLOUD_BOUNDARY: 'GCC', LOOM_GRAPH_BASE: 'https://graph.microsoft.com' }, 'https://graph.microsoft.com'],
+      ['GCC-High', { AZURE_CLOUD: 'AzureUSGovernment', LOOM_CLOUD: 'GCC-High', LOOM_CLOUD_BOUNDARY: 'GCC-High', LOOM_GRAPH_BASE: 'https://graph.microsoft.us' }, 'https://graph.microsoft.us'],
+      ['IL5', { AZURE_CLOUD: 'AzureUSGovernment', LOOM_CLOUD: 'GCC-High', LOOM_CLOUD_BOUNDARY: 'IL5', LOOM_GRAPH_BASE: 'https://dod-graph.microsoft.us' }, 'https://dod-graph.microsoft.us'],
+    ];
+    for (const [label, env, host] of wired) {
+      delete process.env.LOOM_CLOUD;
+      delete process.env.AZURE_CLOUD;
+      delete process.env.LOOM_CLOUD_BOUNDARY;
+      delete process.env.LOOM_GRAPH_BASE;
+      Object.assign(process.env, env);
+      expect(getGraphHost(), label).toBe(host);
+      // The URL the group-membership fallback actually builds. Before the fix
+      // this lost its version segment on EVERY boundary, Commercial included,
+      // because bicep sets LOOM_GRAPH_BASE to a bare root.
+      expect(`${graphBase()}/groups/g1/transitiveMembers/u1`, label).toBe(
+        `${host}/v1.0/groups/g1/transitiveMembers/u1`,
+      );
+    }
+  });
+
+  it('LOOM_GRAPH_BASE wins and is normalised to a ROOT — /v1.0 is not dropped', () => {
+    // The regression: the old body returned the override verbatim, so a caller
+    // doing `${graphBase()}/groups/{id}` built an unversioned URL. bicep sets
+    // this variable to a bare root on EVERY boundary, Commercial included.
+    delete process.env.LOOM_CLOUD_BOUNDARY;
+    withCloud('Commercial');
+    for (const supplied of [
+      'https://dod-graph.microsoft.us',
+      'https://dod-graph.microsoft.us/',
+      'https://dod-graph.microsoft.us/v1.0',
+    ]) {
+      process.env.LOOM_GRAPH_BASE = supplied;
+      expect(getGraphHost()).toBe('https://dod-graph.microsoft.us');
+      expect(graphBase()).toBe('https://dod-graph.microsoft.us/v1.0');
+      expect(getGraphScope()).toBe('https://dod-graph.microsoft.us/.default');
+    }
+  });
+
+  it('LOOM_CLOUD_BOUNDARY=IL5 reaches the L5 Graph host without disturbing the ARM fold', () => {
+    // Exactly the env main.bicep emits for an IL5 estate, minus LOOM_GRAPH_BASE
+    // (copilot/maf.bicep wires the boundary but not the Graph base).
+    delete process.env.LOOM_GRAPH_BASE;
+    withCloud('GCC-High');
+    process.env.LOOM_CLOUD_BOUNDARY = 'IL5';
+    expect(getGraphHost()).toBe('https://dod-graph.microsoft.us');
+    expect(graphBase()).toBe('https://dod-graph.microsoft.us/v1.0');
+    // ...while ARM stays on the ordinary Government host. Widening
+    // detectLoomCloud() instead would have moved ARM to
+    // management.azure.microsoft.scloud, which is NOT where an IL5 estate lives.
+    expect(detectLoomCloud()).toBe('GCC-High');
+    expect(getArmEndpoint()).toBe('https://management.usgovcloudapi.net');
+  });
+
+  it('CONTROL: the three Graph roots stay pairwise distinct', () => {
+    // A resolver hard-coded to one host would satisfy every per-cloud
+    // assertion that happens to expect that host. This one it cannot.
+    delete process.env.LOOM_GRAPH_BASE;
+    delete process.env.LOOM_CLOUD_BOUNDARY;
+    const hosts = (['Commercial', 'GCC-High', 'DoD'] as const).map((c) => {
+      withCloud(c);
+      return getGraphHost();
+    });
+    expect(new Set(hosts).size).toBe(3);
+  });
+});
+

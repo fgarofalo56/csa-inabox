@@ -23,7 +23,7 @@ import {
   type ICachePlugin,
   type TokenCacheContext,
 } from '@azure/msal-node';
-import { getPbiScope } from '@/lib/azure/cloud-endpoints';
+import { getPbiScope, getGraphHost } from '@/lib/azure/cloud-endpoints';
 import { safeRecord } from '@/lib/security/safe-object';
 
 function authorityHost(): string {
@@ -377,12 +377,24 @@ export function getSpConfidentialClient(
   });
 }
 
-/** Microsoft Graph base host for the active sovereign cloud (token audience). */
+/**
+ * Microsoft Graph base host for the active sovereign cloud (token audience).
+ *
+ * A service ROOT — no `/v1.0` — because both callers use it that way:
+ * `app/api/setup/identity/route.ts` builds `${graph}/.default` and
+ * `${graph}/v1.0/applications…`, and `app/api/auth/cli-session/route.ts`
+ * builds `${graphBase()}/.default`.
+ *
+ * DELEGATES to `getGraphHost()` — the one Graph resolver — rather than
+ * re-deriving the mapping. The previous body was a two-branch switch on
+ * `AZURE_CLOUD` with no DoD case (#3381), so on a DoD boundary it fell through
+ * to the COMMERCIAL host and on an IL5 estate it answered with the L4 host.
+ * Both are cross-boundary calls that fail closed silently on the
+ * group-membership path (`lib/auth/domain-role.ts` → `userIsTransitiveGroupMember`),
+ * which reads as "not a member" rather than "could not ask".
+ */
 export function graphBase(): string {
-  const cloud = (process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase();
-  return cloud === 'azureusgovernment'
-    ? 'https://graph.microsoft.us'
-    : 'https://graph.microsoft.com';
+  return getGraphHost();
 }
 
 export interface UserClaims {

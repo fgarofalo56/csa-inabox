@@ -59,12 +59,19 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
+import { getGraphHost } from '@/lib/azure/cloud-endpoints';
 
 // ----------------------------------------------------------------------------
 // Sovereign-correct base + scope derivation
 // ----------------------------------------------------------------------------
 
-const GRAPH_BASE = (process.env.LOOM_GRAPH_BASE || 'https://graph.microsoft.com').replace(/\/+$/, '');
+// Graph root resolves through the ONE cloud resolver (#3381). The previous
+// `LOOM_GRAPH_BASE || 'https://graph.microsoft.com'` defaulted to the
+// Commercial host on any boundary that did not carry that variable;
+// `getGraphHost()` still honours LOOM_GRAPH_BASE first, then falls back to the
+// per-boundary map (Commercial/GCC, GCC-High L4, DoD/IL5 L5) instead of to
+// Commercial.
+const GRAPH_BASE = getGraphHost();
 const GRAPH_V1 = `${GRAPH_BASE}/v1.0`;
 const GRAPH_SCOPE = `${GRAPH_BASE}/.default`;
 

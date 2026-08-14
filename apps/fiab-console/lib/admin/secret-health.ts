@@ -24,7 +24,7 @@ import {
   type TokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { kvScope } from '@/lib/azure/cloud-endpoints';
+import { kvScope, getGraphHost } from '@/lib/azure/cloud-endpoints';
 import { vaultUrl } from '@/lib/azure/kv-secrets-client';
 
 export type SecretBand = 'expired' | 'critical' | 'warn30' | 'warn60' | 'ok' | 'no-expiry';
@@ -110,7 +110,13 @@ export async function getSecretHealthReport(): Promise<SecretHealthReport> {
     gates.graph = 'LOOM_MSAL_CLIENT_ID is not set — the MSAL app-registration credential inventory is unavailable. It is wired automatically by modules/admin-plane/main.bicep (entra-app-registration.bicep).';
   } else {
     try {
-      const graphBase = (process.env.LOOM_GRAPH_BASE || 'https://graph.microsoft.com').replace(/\/+$/, '');
+      // Graph root via the one cloud resolver (#3381) — the previous
+      // `LOOM_GRAPH_BASE || 'https://graph.microsoft.com'` fell back to the
+      // COMMERCIAL host whenever that variable was absent, so any Gov surface
+      // that reaches this without bicep's env (a local run, a job that does not
+      // carry LOOM_GRAPH_BASE) asked the wrong national cloud and reported the
+      // MSAL credential inventory as unavailable.
+      const graphBase = getGraphHost();
       const token = await tokenFor(`${graphBase}/.default`);
       const res = await fetchWithTimeout(
         `${graphBase}/v1.0/applications(appId='${encodeURIComponent(msalClientId)}')?$select=displayName,passwordCredentials`,
