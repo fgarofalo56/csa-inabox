@@ -4,18 +4,23 @@
  * PATCH  /api/workloads-catalog?id=…      — update an org catalog row (e.g. toggle `included`).
  * DELETE /api/workloads-catalog?id=…      — remove a custom workload from the org catalog.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import { workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
+import { WORKLOAD_SEEDS } from '@/lib/apps/workloads-catalog-seed';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Route-toolkit: withSession (R3). The hand-rolled prologue on all four verbs
+// returned `NextResponse.json({ ok:false, error:'unauthenticated' }, { status:401 })`;
+// withSession returns apiUnauthorized() === apiError('unauthenticated', 401) ===
+// `NextResponse.json({ ok:false, error:'unauthenticated' }, { status:401 })` —
+// same keys, same order, same status. Verified against lib/api/respond.ts:43,
+// not assumed (the codemod could not run in a worktree: no `typescript` dep).
+export const GET = withSession(async (_req, { session: s }) => {
   const c = await workloadsCatalogContainer();
   let { resources } = await c.items
     .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
@@ -38,12 +43,50 @@ export async function GET() {
       resources = refetched.resources;
     }
   }
-  return NextResponse.json({ ok: true, workloads: resources });
-}
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // Seed-derived backstop (#3375) — mirrors the registry backstop that
+  // /api/apps-catalog has carried since the apps-catalog A+ cluster.
+  //
+  // Before this, a fresh subscription reached here with BOTH the tenant rows and
+  // the GLOBAL rows empty (the Cosmos seed is VNet-only and the GLOBAL seed route
+  // is a tenant-admin POST), so the workloads catalog rendered EMPTY and the
+  // operator runbook told them to open the browser dev console and POST
+  // /api/admin/bootstrap-catalogs by hand. Populating from the shared seed here
+  // makes that operator step unnecessary: the platform does it on first read,
+  // from inside the VNet where Cosmos is reachable
+  // (.claude/rules/auto-bind-by-default.md §5, ux-baseline.md G2).
+  //
+  // Idempotent and non-destructive: only workloads MISSING for this tenant are
+  // written, so an operator who removed or re-categorised a curated workload does
+  // not get it silently resurrected on the next read.
+  const present = new Set(resources.map((r: any) => r.id));
+  const missing = WORKLOAD_SEEDS.filter((w) => !present.has(w.id));
+  if (missing.length > 0) {
+    const now = new Date().toISOString();
+    for (const w of missing) {
+      await c.items
+        .upsert({
+          ...w,
+          tenantId: s.claims.oid,
+          publisher: 'CSA',
+          iconUrl: null,
+          createdBy: 'workloads-catalog-backstop',
+          createdAt: now,
+          updatedAt: now,
+          seededFromRegistryAt: now,
+        })
+        .catch(() => {});
+    }
+    const refetched = await c.items
+      .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
+      .fetchAll();
+    resources = refetched.resources;
+  }
+
+  return NextResponse.json({ ok: true, workloads: resources });
+});
+
+export const POST = withSession(async (req, { session: s }) => {
   const body = await req.json().catch(() => ({}));
   if (!body?.name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   const c = await workloadsCatalogContainer();
@@ -64,12 +107,10 @@ export async function POST(req: NextRequest) {
   };
   const { resource } = await c.items.create(doc);
   return NextResponse.json({ ok: true, workload: resource }, { status: 201 });
-}
+});
 
 /** Update an org catalog row this tenant owns — currently the `included` toggle. */
-export async function PATCH(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req, { session: s }) => {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
   const body = await req.json().catch(() => ({}));
@@ -88,12 +129,10 @@ export async function PATCH(req: NextRequest) {
   };
   const { resource } = await c.item(id, s.claims.oid).replace(updated);
   return NextResponse.json({ ok: true, workload: resource });
-}
+});
 
 /** Remove a custom org catalog row this tenant owns. */
-export async function DELETE(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req, { session: s }) => {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
   const c = await workloadsCatalogContainer();
@@ -104,4 +143,4 @@ export async function DELETE(req: NextRequest) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
     return apiServerError(e);
   }
-}
+});

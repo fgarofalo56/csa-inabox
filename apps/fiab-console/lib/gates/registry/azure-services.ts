@@ -427,7 +427,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
   // ── health-coverage convergence (#2093) — the audit-added backend specs ──
   'svc-powerplatform': {
     surfaces: [{ path: '/items/power-app', label: 'Power Platform control plane (power-* items)' }],
-    fixit: { kind: 'role-grant', grantNote: 'A Power Platform admin must register the Console UAMI as a management app (New-PowerAppManagementApp; scripts/csa-loom/grant-powerplatform-sp.ps1) — a one-time tenant action, not an env write.' },
+    fixit: { kind: 'role-grant', grantNote: 'A Power Platform admin must register the Console UAMI as a management app (scripts/csa-loom/grant-powerplatform-sp.sh, or New-PowerAppManagementApp in PowerShell) — a one-time tenant action, not an env write.' },
   },
   'svc-stream-analytics': {
     surfaces: [{ path: '/items/eventstream', label: 'Eventstream processing (ASA jobs)' }],
