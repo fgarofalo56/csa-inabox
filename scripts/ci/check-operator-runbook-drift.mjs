@@ -141,13 +141,26 @@ export const RULES = [
     // no-fabric-dependency.md: presenting the opt-in toggles as interactive
     // setup frames an opt-in backend as a day-one prerequisite.
     //
-    // Matches unambiguous CLICK-PATH markers only — the Fabric admin-portal
-    // URL, a "Tenant settings" navigation step, or a "-> Enabled" toggle
-    // directive. NAMING the setting while pointing at the opt-in doc carries
-    // none of these and must stay legal, otherwise this guard would force the
-    // runbook to be silent about where the opt-in lives.
+    // Matches unambiguous CLICK-PATH markers only — a navigate-to-the-Fabric-
+    // portal instruction, a "Tenant settings" navigation step, or a
+    // "-> Enabled" toggle directive. NAMING the setting while pointing at the
+    // opt-in doc carries none of these and must stay legal, otherwise this
+    // guard would force the runbook to be silent about where the opt-in lives.
+    //
+    // The first branch used to be a bare `/app\.fabric\.microsoft\.com/i` host
+    // literal. Two things were wrong with that, and one fix addresses both:
+    //   - PRECISION: a bare host match tripped on a legitimate cross-reference
+    //     that merely NAMED the portal, which is the exact over-broad shape the
+    //     other two branches were written to avoid.
+    //   - CodeQL js/regex/missing-regexp-anchor (high) flagged the unanchored
+    //     hostname. The rule assumes such a pattern validates a URL, where
+    //     matching anywhere is an origin-check bypass. It never did here (this
+    //     scans markdown prose and makes no security decision) — but requiring
+    //     a navigation IMPERATIVE alongside a non-hostname `fabric.microsoft`
+    //     fragment is both the more precise detector AND no longer a bare host,
+    //     so the fix is real rather than a suppression.
     forbidden: [
-      { all: [/app\.fabric\.microsoft\.com/i] },
+      { all: [/\b(go to|open|navigate to|browse to|sign in to)\b/i, /fabric\.microsoft/i] },
       { all: [/tenant settings/i, /service principals|developer settings/i] },
       { all: [/(→|->)\s*\*{0,2}Enabled/i, /service principals|power bi apis/i] },
     ],
@@ -219,6 +232,9 @@ export function selfTest() {
     'The Fabric tenant toggle is documented in tenant-admin-walkthroughs.md as an opt-in.',
     'tenant toggle ("Service principals can use Fabric APIs"), the Power BI',
     'together with the LOOM_BI_BACKEND / LOOM_<ITEM>_BACKEND=fabric switches.',
+    // Precision boundary: NAMING the portal host in a cross-reference, with no
+    // navigation imperative, is legitimate and must not trip.
+    'The Fabric admin portal (app.fabric.microsoft.com) is covered there, not here.',
   ];
 
   for (const rule of RULES) {

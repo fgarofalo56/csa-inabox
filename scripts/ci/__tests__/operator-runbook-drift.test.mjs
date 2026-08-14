@@ -79,10 +79,22 @@ test('detects the dev-console bootstrap-catalogs POST', () => {
 test('detects the Fabric admin-portal click-path', () => {
   const r = rule('fabric-tenant-toggle');
   assert.equal(violations('1. Go to https://app.fabric.microsoft.com', r).length, 1);
+  assert.equal(violations('2. Open https://app.fabric.microsoft.us/admin-portal', r).length, 1);
   assert.equal(violations('3. Left nav -> Tenant settings -> Developer settings.', r).length, 1);
   assert.equal(
     violations('- "Service principals can call Fabric public APIs" -> Enabled, same group', r).length,
     1,
+  );
+});
+
+test('a bare portal-host MENTION with no navigation imperative does not trip', () => {
+  // Precision boundary + the CodeQL js/regex/missing-regexp-anchor fix: the
+  // branch requires a navigate verb alongside the fabric.microsoft fragment,
+  // so a cross-reference that merely names the host stays legal.
+  const r = rule('fabric-tenant-toggle');
+  assert.deepEqual(
+    violations('The Fabric admin portal (app.fabric.microsoft.com) is covered there, not here.', r),
+    [],
   );
 });
 
