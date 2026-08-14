@@ -238,12 +238,24 @@ Trivy, CodeQL, a Dependabot security alert, or an external report):
 
 **Option A — patched version available** (the common case):
 
-1. Bump the floor in `pyproject.toml` to the fixed version (preserving
-   the upper bound). Example: `cryptography>=42.0.4,<47.0.0`.
+1. Raise the floor in `pyproject.toml` to the fixed version **and raise the
+   upper bound with it** when the fix landed in a new major. Then verify the
+   fixed version actually falls inside the resulting range — if it does not,
+   the constraint makes the advisory unfixable by construction and the alert
+   will never clear no matter how often the locks are regenerated. Example:
+   a fix in 50.0.0 needs `cryptography>=50.0.0,<51.0.0`, **not**
+   `cryptography>=50.0.0,<49.0.0` or a stale `<49.0.0` left in place.
 2. Regenerate the affected locks:
     ```bash
     ./scripts/update-locks.sh portal copilot  # only the impacted extras
     ```
+   If this reports `ResolutionImpossible`, a package already pinned in the
+   lock caps the one being bumped (e.g. `msal==1.36.0` requires
+   `cryptography<49`). `pip-compile` reuses the existing lock as constraints,
+   so the blocker must be released explicitly — add
+   `--upgrade-package <blocker>` to the `pip-compile` invocation in
+   `requirements/README.md` for the package named in the error, which keeps
+   every other pin frozen and the diff reviewable.
 3. Open a PR titled `fix(security): bump <pkg> to <ver> for CVE-YYYY-NNNN`.
 4. Confirm the Trivy CRITICAL gate now passes on the PR.
 5. Merge and cut a patch release (`vX.Y.Z+1`).
