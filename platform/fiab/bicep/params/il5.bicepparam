@@ -170,12 +170,31 @@ param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
 // Loom version + image tags
 param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v3.0')
 param appImageTags = {
+  // console keeps 'v3.0': gov-build-images.yml special-cases
+  // `TAG_LIST="$TAG_LIST v3.0"` for boundary=il5 EXPRESSLY because this line
+  // asks for it, so the tag provably exists in a Gov ACR.
   console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v3.0')
-  mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.7')
-  orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.7')
-  activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
-  mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
-  directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // ── THE NEXT FIVE WERE 'v0.7', AND NOTHING HAS EVER PUSHED 'v0.7' (#3161) ──
+  // gov-build-images.yml — the only producer for a Gov ACR — pushes
+  // `$TAG` (default v0.1) + `:<short-sha>` + `:latest`, plus `:v3.0` for
+  // loom-console on il5. There is no v0.7 anywhere in that matrix, so these
+  // five declared a tag an IL5 apps-enabled deploy could not pull
+  // (MANIFEST_UNKNOWN), on a lane whose bicepparam sets deployAppsEnabled=true.
+  // It was never observed only because this lane has never had a successful
+  // full run.
+  //
+  // It was also being MASKED rather than fixed: deploy-fiab-il5.yml's #3161 env
+  // block wrote `|| 'v0.1'` on all sixteen lines, so with the repo variables
+  // unset the workflow silently overrode these five to v0.1 — the deploy worked
+  // and this file said something else. Two wrongs cancelling is not a fix; the
+  // param file, the workflow and the build lane now name the SAME tag, and
+  // scripts/ci/check-bicepparam-env-reaches-deploy.mjs fails on any future
+  // disagreement between the first two.
+  mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.1')
+  orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.1')
+  activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.1')
+  mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.1')
+  directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.1')
   // ── THESE KEYS MUST BE PRESENT (cloud-parity blocker, measured 2026-08-06) ──
   // A .bicepparam object assignment REPLACES the template default, it does not
   // merge with it. admin-plane/main.bicep dereferences these five with a PLAIN
