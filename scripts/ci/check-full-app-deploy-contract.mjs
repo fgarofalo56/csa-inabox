@@ -94,6 +94,9 @@ export function parseMatrixApps(src) {
  * @returns {string|null} the job's yaml block, or null if absent
  */
 export function parseJobBlock(src, jobName) {
+  // PHYSICAL-LINES-OK: slices a YAML JOB BLOCK by key indentation. The one shell
+// construct it reads — the `APPS=( … )` array — is matched with a newline-crossing
+// regex already, and a bash array inside parens needs no backslashes (#3420).
   const lines = String(src).split(/\r?\n/);
   const start = lines.findIndex((l) => new RegExp(`^ {2}${jobName}:\\s*$`).test(l));
   if (start < 0) return null;

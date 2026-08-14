@@ -120,6 +120,11 @@ export function extractDeploySources(text) {
     if (!found.has(clean)) found.set(clean, how);
   };
 
+  // PHYSICAL-LINES-OK: DELIBERATELY so. One rule below matches the trailing
+  // build CONTEXT of an `az acr build`, anchored as a line containing only a path
+  // (`^\s*(path)\s*$`) — i.e. it exists to read the CONTINUATION LINE ITSELF.
+  // Folding would merge it into the command and the anchor would stop matching,
+  // so folding here removes a finding rather than adding one (#3420).
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\r$/, '');
     if (isInert(line)) continue;

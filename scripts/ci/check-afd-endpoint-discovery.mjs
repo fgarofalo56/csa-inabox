@@ -59,6 +59,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 const SCAN_DIRS = ['.github/workflows', '.github/scripts', 'scripts'];
@@ -87,25 +88,17 @@ const RESOLVER_RHS = /fd-resolve-purge-target/;
  * Join backslash-continued lines so a multi-line `az` invocation is analysed as
  * one command. Returns `[{ text, line }]` where `line` is the 1-based line the
  * command STARTS on — the line a human needs to open.
+ *
+ * PROMOTED to scripts/ci/_logical-lines.mjs (#3420). This was the THIRD private
+ * implementation of one idea in this directory, and private copies are exactly
+ * how two guards over the same construct came to disagree for their entire
+ * lives. This one also read a trailing `\` unconditionally, so `foo \\` — an
+ * ESCAPED backslash, where the command ends — swallowed the next line, and a
+ * comment ending in `\` swallowed the line below it, which every guard here then
+ * skipped as a comment. The shared version handles both. Re-exported because
+ * this module's self-test imports the name.
  */
-export function logicalLines(src) {
-  const raw = String(src ?? '').split('\n');
-  const out = [];
-  let buf = null;
-  for (let i = 0; i < raw.length; i++) {
-    const line = raw[i].replace(/\r$/, '');
-    if (buf === null) buf = { text: line, line: i + 1 };
-    else buf.text += ` ${line.trim()}`;
-    if (/\\$/.test(buf.text.trimEnd())) {
-      buf.text = buf.text.trimEnd().replace(/\\$/, '');
-      continue;
-    }
-    out.push(buf);
-    buf = null;
-  }
-  if (buf) out.push(buf);
-  return out;
-}
+export const logicalLines = readLogicalLines;
 
 /**
  * Is this logical line an actual command, rather than a comment or an emitted string?

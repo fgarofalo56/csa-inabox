@@ -100,6 +100,9 @@ let examined = 0; // steps that emit ::error:: — the population this check jud
 const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
 
 for (const file of files) {
+  // PHYSICAL-LINES-OK: judges YAML STEP STRUCTURE (`continue-on-error:`) and a
+// whole-command `exit 0` as the last effective line. Neither continues with a
+// backslash: a YAML key cannot, and `exit 0` is a complete simple command (#3420).
   const lines = readFileSync(join(WORKFLOW_DIR, file), 'utf8').split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     if (!STEP_START.test(lines[i])) continue;

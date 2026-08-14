@@ -121,6 +121,10 @@ const DISCARDS = /\|\|\s*(true|:|echo)\b|2>\s*\/dev\/null/;
  *  start lines so findings can name a real position. */
 export function logicalCommands(text) {
   const out = [];
+  // PHYSICAL-LINES-OK: deliberately so — this guard's whole point is to catch a
+  // marker fragment sitting on a line with NO command token — a MALFORMED
+  // continuation or a wrapped argument. Folding would reunite the fragment with its
+  // command and hide exactly the shape it exists to find (#3420).
   const lines = text.split(/\r?\n/);
   let buf = '';
   let start = 0;
