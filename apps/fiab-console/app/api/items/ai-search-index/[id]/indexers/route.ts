@@ -10,7 +10,6 @@
  * used to scope the indexer list). Real AI Search REST. 412 when unbound.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   listIndexers, listDataSources, listSkillsets, runIndexer, resetIndexer,
   getIndexer, updateIndexerSchedule, validateScheduleInterval,
@@ -22,6 +21,7 @@ import { readIndexerHealth } from '@/lib/azure/search-indexer-health';
 import {
   resolveSearchBinding, searchBindingErrorResponse, SEARCH_ITEM_TYPE,
 } from '@/lib/azure/search-binding';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,10 +34,8 @@ function gateOr(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   let indexName: string; let service: string | undefined;
   try {
     ({ indexName, service } = await resolveSearchBinding(id, SEARCH_ITEM_TYPE, session.claims.oid));
@@ -58,12 +56,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       .sort((a, b) => Number(b.targetsThisIndex) - Number(a.targetsThisIndex));
     return NextResponse.json({ ok: true, indexers, dataSources, skillsets, boundTo: indexName });
   } catch (e: any) { return gateOr(e); }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
   const action = body?.action;
   const indexer = typeof body?.indexer === 'string' ? body.indexer.trim() : '';
@@ -129,4 +125,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { status, health } = await readIndexerHealth(indexer, service);
     return NextResponse.json({ ok: true, action: 'status', indexer, status, health });
   } catch (e: any) { return gateOr(e); }
-}
+});
