@@ -35,8 +35,25 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # #3423 — this was `group: <workflow>-<ref>` + `cancel-in-progress: true`.
+  # Every push to main shares `refs/heads/main`, so each merge CANCELLED the
+  # previous commit's scan, and a cancelled job never runs its `if: always()`
+  # SARIF upload steps either. Measured: 20 of 81 image-scan jobs cancelled
+  # across 30 runs; 7 of the last 25 commits on main carry a "produced NO
+  # verdict" summary — permanently unscanned, with no Code Scanning entry.
+  #
+  # On a PR only the head commit matters, so superseding by ref is right. On main
+  # every commit is a thing that shipped and its verdict is the only record that
+  # it was scanned, so main runs get a PER-SHA group and never contend.
+  #
+  # Merely flipping `cancel-in-progress` to false would NOT have fixed this:
+  # GitHub holds only one PENDING run per group and documents that "any existing
+  # pending job or workflow in the same concurrency group will be canceled", so
+  # under a fast merge cadence commits would still lose their scan — just while
+  # queued rather than mid-run. The per-SHA group is what actually guarantees a
+  # verdict per commit.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -301,7 +318,17 @@ jobs:
           category: trivy-config
 
   # ───────────────────────────────────────────────────────────────────────
-  # 4. Summary — single required check for branch protection.
+  # 4. Summary — aggregates the three scans into one reportable verdict.
+  #
+  # NOT a required status check. This comment previously claimed it was the
+  # "single required check for branch protection"; measured against main on
+  # 2026-08-13 that is false — `Trivy Summary` is absent from all 14 contexts in
+  # classic branch protection, and the only ruleset (15128883) carries no
+  # `required_status_checks` rule at all. Whether it SHOULD gate is an open
+  # posture question in #3423, deliberately sequenced after the concurrency fix
+  # above: this check fails closed on a cancelled scan (#3368, correctly), so
+  # requiring it while a quarter of scans were being cancelled would have
+  # blocked merges on concurrency alone.
   # ───────────────────────────────────────────────────────────────────────
   trivy-summary:
     name: Trivy Summary
