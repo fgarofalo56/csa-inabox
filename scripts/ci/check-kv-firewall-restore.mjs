@@ -57,6 +57,7 @@
  */
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.argv[2] || process.cwd();
 const IS_DEFAULT = !process.argv[2];
@@ -125,16 +126,34 @@ const RAW_MUTATION = [
   },
 ];
 
-/** Does `line` EXECUTE the helper with `verb`? Not an echo, not a mention. */
+/**
+ * Does `line` EXECUTE the helper with `verb`? Not an echo, not a mention.
+ *
+ * THE EXCLUSIONS ARE POSITIONAL, and they have to be (#3420). "This line is
+ * prose" was originally decided by looking for `::warning::` ANYWHERE on the
+ * line. That is safe on a physical line and wrong on a logical one, because a
+ * real invocation routinely carries a message in its own fallback:
+ *
+ *     bash "$(dirname …)/kv-firewall-window.sh" open --vault "$KV_NAME" \
+ *       || echo "::warning::Could not open the Key Vault write window"
+ *
+ * Folded, that one command contains `::warning::`, and an anywhere-test threw
+ * away FOUR genuine `open` call sites across three files the moment this guard
+ * started reading logical lines — turning a correctness fix into a quieter
+ * guard. The annotation now only counts as prose when it appears BEFORE the
+ * helper path, i.e. when the path is inside the message rather than the message
+ * being the command's fallback.
+ */
 function isHelperCall(line, verb) {
-  if (/::(?:warning|notice|error|debug)::/.test(line)) return false;
-  if (/^\s*(?:echo|printf)\b/.test(line)) return false;
+  if (/^\s*(?:echo|printf)\b/.test(line)) return false; // anchored: safe either way
   const path = 'kv-firewall-window\\.sh';
   const shapes = [
     new RegExp(`(?:^|[;&|(]|\\s)(?:ba)?sh\\s+[^\\n]*${path}["']?\\s+${verb}\\b`),
     new RegExp(`(?:^|[;&|(]|\\s)\\.?/?[^\\s"']*${path}["']?\\s+${verb}\\b`),
   ];
-  return shapes.some((re) => re.test(line));
+  const m = shapes.map((re) => re.exec(line)).find(Boolean);
+  if (!m) return false;
+  return !/::(?:warning|notice|error|debug)::/.test(line.slice(0, m.index));
 }
 
 function walk(dir, out) {
@@ -183,18 +202,31 @@ for (const abs of files) {
 
   const raw = readFileSync(abs, 'utf8');
   const code = stripComments(raw, /\.(mjs|js)$/.test(rel));
-  const codeLines = code.split('\n');
+  // LOGICAL lines, not physical (#3420). Every matcher below needs TWO tokens
+  // on one command — `az keyvault update` + `--public-network-access`, or the
+  // helper path + its verb — and both are routinely wrapped:
+  //
+  //     az keyvault update \
+  //       --name "$KV" \
+  //       --public-network-access Enabled
+  //
+  // Judged per physical line neither half matches, so the raw mutation the
+  // chokepoint exists to forbid reads as absent. The `[^\n]*` inside
+  // RAW_MUTATION says "same command" and only meant "same physical line" until
+  // the fold below made the two the same thing.
+  const logical = readLogicalLines(code);
+  const codeLines = logical.map((l) => l.text);
 
   // Rule 1 — chokepoint.
   for (const { id, re } of RAW_MUTATION) {
-    codeLines.forEach((line, i) => {
-      if (!re.test(line)) return;
+    for (const { line, text } of logical) {
+      if (!re.test(text)) continue;
       violations.push({
         rel,
-        line: i + 1,
+        line,
         msg: `raw \`${id}\` — the Key Vault firewall must be toggled through ${HELPER}, whose \`close\` VERIFIES the lock applied. An inline mutation is unverified by construction (#2855).`,
       });
-    });
+    }
   }
 
   // Rule 2 — pairing.
@@ -204,7 +236,7 @@ for (const abs of files) {
   if (opens > 0 && closes === 0) {
     violations.push({
       rel,
-      line: codeLines.findIndex((l) => isHelperCall(l, 'open')) + 1,
+      line: logical[codeLines.findIndex((l) => isHelperCall(l, 'open'))]?.line ?? 1,
       msg: `opens a Key Vault firewall window (${opens}x) and never runs \`kv-firewall-window.sh close\`. A window with no verified restore leaves the secret vault publicly reachable (#2855). A comment naming the close does not count — it must be executed.`,
     });
   }

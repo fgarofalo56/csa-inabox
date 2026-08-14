@@ -62,6 +62,7 @@ import {
   type SynapseTarget,
 } from '@/lib/azure/synapse-permissions-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { graphBase as cloudGraphBase, getGraphScope } from '@/lib/azure/cloud-endpoints';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -96,8 +97,10 @@ function resolveDedicated(): { target: SynapseTarget } | { gate: NextResponse } 
 const graphCredential = uamiArmCredential();
 
 function graphBase(): string {
-  // graph.microsoft.com (commercial) / graph.microsoft.us (Gov) — env-driven.
-  return (process.env.LOOM_GRAPH_BASE || 'https://graph.microsoft.com').replace(/\/+$/, '') + '/v1.0';
+  // Graph root + /v1.0 via the one cloud resolver (#3381). The previous body
+  // was `LOOM_GRAPH_BASE || 'https://graph.microsoft.com'`, which defaulted to
+  // the Commercial host on every boundary that did not carry that variable.
+  return cloudGraphBase();
 }
 
 async function enrichUpns(
@@ -114,7 +117,7 @@ async function enrichUpns(
   if (userIds.length === 0) return assignments;
   let token: string;
   try {
-    const t = await graphCredential.getToken('https://graph.microsoft.com/.default');
+    const t = await graphCredential.getToken(getGraphScope());
     if (!t?.token) return assignments;
     token = t.token;
   } catch {

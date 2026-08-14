@@ -72,6 +72,7 @@
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 import { APP_IMAGE_TAGS } from './reconcile-policy.mjs';
 
 const ROOT = process.cwd();
@@ -343,7 +344,20 @@ export function isInertLine(line) {
  */
 export function paramFilesUsedIn(text, paramNames) {
   const used = new Set();
-  for (const line of normalize(text).split('\n')) {
+  // LOGICAL lines (#3420). This needs the ARGUMENT FLAG and the param FILENAME
+  // on one command, and an `az deployment sub create` is always wrapped:
+  //
+  //     az deployment sub create \
+  //       --template-file platform/fiab/bicep/main.bicep \
+  //       --parameters \
+  //         platform/fiab/bicep/params/gcc-high.bicepparam
+  //
+  // A physical-line read then finds no param file for the step — and finding
+  // none does not report a violation, it SKIPS the workflow, so the question
+  // "does the deploy set every env var this param file reads?" is never asked.
+  // That is the #3161 shape this guard exists for: 16 image tags silently
+  // defaulted because a read had a default and therefore could not fail.
+  for (const { text: line } of readLogicalLines(normalize(text))) {
     if (isInertLine(line)) continue;
     const isArg = /--parameters\b|--param-file\b|(^|\s)-p\s/.test(line);
     const isParamKey = /^\s*[A-Za-z_]*[Pp][Aa][Rr][Aa][Mm][A-Za-z_]*:\s*\S/.test(line);

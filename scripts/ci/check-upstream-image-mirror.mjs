@@ -157,6 +157,8 @@ function main() {
   for (const rel of listBicepFiles()) {
     let src;
     try { src = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'); } catch { continue; }
+    // PHYSICAL-LINES-OK: the corpus here is `.bicep`, which has no backslash line
+    // continuation (#3420).
     src.split('\n').forEach((line, i) => {
       if (isProse(line)) return;
       const at = `${rel}:${i + 1}`;

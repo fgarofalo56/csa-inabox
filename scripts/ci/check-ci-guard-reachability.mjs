@@ -90,6 +90,9 @@ export const EXEMPT = new Map([]);
 /** Strip whole-line comments so prose cannot satisfy a reachability claim. */
 export function stripCommentLines(src) {
   return src
+    // PHYSICAL-LINES-OK: needs only a control's PRESENCE inside a `run:` body —
+  // one token, `body.includes(name)`. A second token on a continuation cannot
+  // change the answer, and the run bodies are re-joined before matching (#3420).
     .split(/\r?\n/)
     .filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l))
     .join('\n');

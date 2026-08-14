@@ -83,7 +83,6 @@
     "apps/fiab-console/app/api/admin/performance/tunables/route.ts": 1,
     "apps/fiab-console/app/api/admin/permissions/capabilities/route.ts": 1,
     "apps/fiab-console/app/api/admin/permissions/grants/route.ts": 1,
-    "apps/fiab-console/app/api/admin/permissions/principals/route.ts": 1,
     "apps/fiab-console/app/api/admin/platform-settings/route.ts": 1,
     "apps/fiab-console/app/api/admin/policy-code/reconcile/route.ts": 1,
     "apps/fiab-console/app/api/admin/protection-policies/[id]/route.ts": 1,

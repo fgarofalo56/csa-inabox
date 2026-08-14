@@ -69,6 +69,7 @@
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const rootFlag = process.argv.indexOf('--root');
 const ROOT = rootFlag >= 0 ? process.argv[rootFlag + 1] : process.cwd();
@@ -106,25 +107,16 @@ function isProse(line) {
  * is judged as ONE command. Without this, `--agent-pool` on line 1 and
  * `--no-logs` on line 3 look like unrelated facts, and R2 could never fire on
  * the real formatting these workflows use.
+ *
+ * PROMOTED to scripts/ci/_logical-lines.mjs (#3420). This was the fourth private
+ * implementation of one idea in this directory. It read a trailing `\`
+ * unconditionally, so `foo \\` — an escaped backslash, where the command ends —
+ * spliced the next line into it. The prose filter stays here, applied to the
+ * folded command, because "is this an executable line" is this guard's question
+ * and not the primitive's.
  */
-function joinContinuations(lines) {
-  const out = [];
-  let buf = null;
-  let startLine = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    if (isProse(raw)) {
-      if (buf !== null) { out.push({ text: buf, line: startLine }); buf = null; }
-      continue;
-    }
-    const trimmed = raw.trim();
-    const continues = trimmed.endsWith('\\');
-    const body = continues ? trimmed.slice(0, -1) : trimmed;
-    if (buf === null) { buf = body; startLine = i + 1; } else { buf += ' ' + body; }
-    if (!continues) { out.push({ text: buf, line: startLine }); buf = null; }
-  }
-  if (buf !== null) out.push({ text: buf, line: startLine });
-  return out;
+function joinContinuations(src) {
+  return readLogicalLines(src).filter(({ text }) => !isProse(text));
 }
 
 const wfDir = join(ROOT, WORKFLOW_DIR);
@@ -149,7 +141,7 @@ for (const file of readdirSync(wfDir).filter((f) => f.endsWith('.yml') || f.ends
   }
   govBuilders++;
 
-  const commands = joinContinuations(lines);
+  const commands = joinContinuations(src);
 
   // ── R1: the wedged pool must not be named on an executable line ────────────
   const wedged = [];

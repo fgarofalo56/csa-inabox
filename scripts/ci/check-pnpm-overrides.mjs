@@ -42,6 +42,8 @@ const PROJECTS = ['apps/fiab-console'];
 /** Minimal reader for the flat `overrides:` map in pnpm-workspace.yaml. */
 function parseWorkspaceOverrides(text) {
   const out = {};
+  // PHYSICAL-LINES-OK: parses the `overrides:` YAML mapping in
+  // pnpm-workspace.yaml by indentation. Not shell; no continuations (#3420).
   const lines = text.split('\n');
   let inBlock = false;
   for (const raw of lines) {

@@ -309,6 +309,8 @@ function main() {
     for (const f of findings) {
       const key = String(f.filepath || '').replace(/\\/g, '/').replace(/^\.github\/workflows\//, '');
       if ((current[key] ?? 0) > (baseline[key] ?? 0)) {
+        // PHYSICAL-LINES-OK: the only split here truncates actionlint's own JSON message
+        // for display. The analysis is actionlint's, not this file's (#3420).
         console.error(`   - ${key}:${f.line}:${f.column}  ${String(f.message).split('\n')[0].slice(0, 160)}`);
       }
     }

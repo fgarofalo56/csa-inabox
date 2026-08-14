@@ -1000,6 +1000,8 @@ async function probeEstate(estate) {
         // on git's output ordering, and reduced rather than Math.min(...spread)
         // so a badly-behind estate cannot blow the argument limit.
         const oldest = git(['log', '--format=%cI', `${liveSha}..HEAD`])
+          // PHYSICAL-LINES-OK: this splits `git log` OUTPUT, not a shell body. Command
+        // output has no backslash continuations (#3420).
           .split('\n')
           .map((s) => Date.parse(s.trim()))
           .reduce((min, t) => (Number.isFinite(t) && t < min ? t : min), Number.POSITIVE_INFINITY);
