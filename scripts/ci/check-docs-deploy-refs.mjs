@@ -90,6 +90,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, sep, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { continuesToNextLine } from './_logical-lines.mjs';
 
 const ROOTS = ['docs/fiab/deployment', 'docs/fiab/runbooks'];
 
@@ -383,13 +384,20 @@ export function fencedLines(text) {
 /**
  * Full command text starting at `lineNo`, following `\` line continuations, so
  * a multi-line `gh workflow run ... \` recipe is read as one command.
+ *
+ * The continuation TEST is shared with scripts/ci/_logical-lines.mjs (#3420)
+ * rather than re-spelled as `/\\\s*$/`. That local form treated an EVEN run of
+ * trailing backslashes — `foo \\`, an escaped backslash where the command ends
+ * — as a splice, and swallowed the following line into the command. The joining
+ * is kept local because this helper starts at a caller-chosen line and preserves
+ * the raw text (backslashes included) that its matchers expect.
  */
 export function commandTextAt(lines, lineNo) {
   const parts = [];
   for (let i = lineNo - 1; i < lines.length; i += 1) {
     const line = lines[i];
     parts.push(line);
-    if (!/\\\s*$/.test(line)) break;
+    if (!continuesToNextLine(line)) break;
   }
   return parts.join(' ');
 }

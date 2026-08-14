@@ -935,6 +935,23 @@ jobs:
       - name: 'httpcode-probe-aborts (a probe that dies at the assignment never reaches its own branch)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-httpcode-probe-aborts.mjs
+      # The SYSTEMATIC question the two steps above surfaced (#3420). Both guards
+      # cover the same shell construct and, for their entire lives, disagreed
+      # about it: httpcode-probe-aborts folded `\` continuations from the day it
+      # was written, curl-httpcode-fallback did not — which is why it reported
+      # "0 concatenating fallbacks" against a tree carrying ELEVEN live `|| echo`
+      # sites, every one of them on a continuation line the matcher skipped
+      # before it was ever tested. A guard blind this way does not merely miss a
+      # finding, it reports the codebase CLEAN, and the zero gets read as
+      # evidence. Nineteen individual patches would re-create the gap the moment
+      # guard #105 is written, so there is now one shared primitive
+      # (scripts/ci/_logical-lines.mjs) and this step asserts every guard that
+      # judges shell/YAML bodies either uses it or says in one line why physical
+      # lines are right for it. Ships with an embedded control (3 fixtures that
+      # MUST flag, 3 that MUST NOT) so it cannot go quiet once the debt is zero.
+      - name: 'guard-logical-lines (a token on a `\` continuation is invisible to a physical-line guard)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-guard-logical-lines.mjs
       # The probe itself is mutation-proved offline against stub az/curl: 403 DENIED
       # is NOT ready, a connect failure is exit 2 (not 1), and reinstating
       # `CODE="$(curl … || echo 000)"` — which concatenates to `000000` and makes

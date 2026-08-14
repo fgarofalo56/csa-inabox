@@ -75,6 +75,8 @@ if (!Array.isArray(apps) || apps.length === 0) {
 // `workflow_dispatch:` and its `paths:` list is interleaved with comments, so a
 // lazy match stops at the first comment and reports "no path filter" — which
 // this rule would then have to treat as a failure, on a healthy workflow.
+// PHYSICAL-LINES-OK: parses the `on: push: paths:` YAML LIST by indentation.
+// YAML sequence items are not spliced by a trailing backslash (#3420).
 const wfLines = text.split(/\r?\n/);
 const paths = [];
 const pushIdx = wfLines.findIndex((l) => /^\s{2}push:\s*$/.test(l));

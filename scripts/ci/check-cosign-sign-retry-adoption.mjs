@@ -41,6 +41,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 const HELPER = 'cosign-sign-retry.sh';
@@ -83,17 +84,38 @@ for (const rel of files) {
     continue;
   }
   if (text.includes(HELPER)) helperRefs++;
-  if (!/cosign\s+sign\b/.test(text)) continue;
 
-  text.split(/\r?\n/).forEach((raw, i) => {
-    if (/^\s*#/.test(raw)) return; // leading comment
-    if (/^\s*-?\s*(name|description|title|summary):/.test(raw)) return; // YAML key
-    if (/^\s*echo\b/.test(raw)) return; // a message
-    if (/::(error|warning|notice)::/.test(raw)) return; // an annotation
-    if (!/\bcosign\s+sign\b/.test(raw)) return;
-    if (raw.includes(HELPER)) return; // this IS the adoption
-    violations.push({ file: rel, line: i + 1, text: raw.trim().slice(0, 140) });
-  });
+  // FOLD FIRST, THEN PRE-FILTER (#3420). The cheap whole-file gate below is
+  // continuation-blind in exactly the way the per-line matcher was: in
+  //     cosign \
+  //       sign --yes "$REF"
+  // the characters between `cosign` and `sign` include a BACKSLASH, which
+  // `\s+` does not match, so `/cosign\s+sign\b/` is false for the whole file
+  // and the loop never runs. Measured while taking this guard's mutation
+  // receipt: the per-line fix alone left it still reporting clean. A pre-filter
+  // that skips a file is a guard verdict like any other and has to see the same
+  // text the matcher does.
+  const logical = readLogicalLines(text);
+  const folded = logical.map((l) => l.text).join('\n');
+  if (!/cosign\s+sign\b/.test(folded)) continue;
+
+  // Two ways a physical-line read gets this wrong, and they point in OPPOSITE
+  // directions: `cosign \` + `sign …` splices the command phrase out of reach
+  // of the matcher, and the helper exclusion needs to see the whole command
+  // rather than its first line. 7 of the 97 `cosign sign` sites in this tree
+  // end in a backslash.
+  for (const { line, text: raw } of logical) {
+    if (/^\s*#/.test(raw)) continue; // leading comment
+    if (/^\s*-?\s*(name|description|title|summary):/.test(raw)) continue; // YAML key
+    if (/^\s*echo\b/.test(raw)) continue; // a message
+    const at = raw.search(/\bcosign\s+sign\b/);
+    if (at < 0) continue;
+    // POSITIONAL — an annotation AFTER the command is its own fallback, not
+    // evidence that the line is prose (#3420).
+    if (/::(error|warning|notice)::/.test(raw.slice(0, at))) continue;
+    if (raw.includes(HELPER)) continue; // this IS the adoption
+    violations.push({ file: rel, line, text: raw.trim().slice(0, 140) });
+  }
 }
 
 if (files.length === 0) {

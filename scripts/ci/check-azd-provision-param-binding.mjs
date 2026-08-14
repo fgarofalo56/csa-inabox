@@ -55,6 +55,7 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve, relative, join, sep } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 
@@ -131,25 +132,24 @@ export function parseInfra(text) {
  * @returns {{line:number, text:string}[]}
  */
 export function findAzdProvisionInvocations(text) {
-  const rawLines = String(text).split(/\r?\n/);
-  /** @type {{line:number, text:string}[]} */
-  const joined = [];
-  let buffer = '';
-  let startLine = 0;
-  for (let i = 0; i < rawLines.length; i++) {
-    const raw = rawLines[i];
-    if (buffer === '' && /^\s*#/.test(raw)) continue; // full-line comment
-    if (buffer === '') startLine = i + 1;
-    const continues = /\\\s*$/.test(raw);
-    buffer += (buffer === '' ? '' : ' ') + raw.replace(/\\\s*$/, '').trim();
-    if (continues) continue;
-    joined.push({ line: startLine, text: buffer });
-    buffer = '';
-  }
-  if (buffer !== '') joined.push({ line: startLine, text: buffer });
+  // Folding is shared with scripts/ci/_logical-lines.mjs (#3420) rather than
+  // spelled out again here. This was the SIXTH private implementation of one
+  // idea in scripts/ci/, and private copies are exactly how two guards over the
+  // same shell construct came to disagree for their entire lives. The local one
+  // tested `/\\\s*$/`, so `foo \\` — an ESCAPED backslash, where the command
+  // actually ends — spliced the next line into the invocation.
+  //
+  // The full-line-comment skip stays HERE, and is load-bearing: the workflows
+  // that carried this defect now carry comments naming `azd provision`
+  // verbatim, so dropping comment lines is what keeps the guard from flagging
+  // its own documentation (selfTest case 2 is the control for it). The shared
+  // primitive terminates a logical line at a leading comment rather than letting
+  // it swallow the line below, so filtering here sees whole comments and whole
+  // commands, never a comment glued to the command under it.
+  const joined = readLogicalLines(text).filter(({ text: t }) => !/^\s*#/.test(t));
 
   const pattern = new RegExp(String.raw`(^|[\s;&|(])azd\s+(${PROVISIONING_SUBCOMMANDS.join('|')})(\s|$)`);
-  return joined.filter((j) => pattern.test(j.text)).map((j) => ({ line: j.line, text: j.text.slice(0, 200) }));
+  return joined.filter((j) => pattern.test(j.text)).map((j) => ({ line: j.line, text: j.text.trim().slice(0, 200) }));
 }
 
 /**

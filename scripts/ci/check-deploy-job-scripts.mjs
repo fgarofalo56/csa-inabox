@@ -51,6 +51,7 @@
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const SCRIPT_DIR = 'scripts/csa-loom';
 
@@ -60,24 +61,16 @@ const SCRIPT_DIR = 'scripts/csa-loom';
  * `--container-name` on its own line would look like a separate statement.
  *
  * Returns [{ text, line }] where `line` is the 1-based line the command starts on.
+ *
+ * PROMOTED to scripts/ci/_logical-lines.mjs (#3420). This was the FIFTH private
+ * implementation of one idea in this directory, and private copies are exactly
+ * how two guards over the same construct came to disagree for their entire
+ * lives. This one used `/\\$/`, so `foo \\` — an ESCAPED backslash, where the
+ * command ends — spliced the following line into it, and a comment ending in `\`
+ * swallowed the line below (which `isComment` below then skipped entirely).
+ * Re-exported because this module's self-test imports the name.
  */
-export function logicalLines(src) {
-  const raw = src.split('\n').map((l) => l.replace(/\r$/, ''));
-  const out = [];
-  let buf = null;
-  for (let i = 0; i < raw.length; i++) {
-    const line = raw[i];
-    if (buf === null) buf = { text: '', line: i + 1 };
-    const continued = /\\$/.test(line);
-    buf.text += (buf.text ? ' ' : '') + (continued ? line.slice(0, -1) : line).trim();
-    if (!continued) {
-      out.push(buf);
-      buf = null;
-    }
-  }
-  if (buf) out.push(buf);
-  return out;
-}
+export const logicalLines = readLogicalLines;
 
 /** Is this logical line shell-commented out? */
 const isComment = (text) => /^\s*#/.test(text);

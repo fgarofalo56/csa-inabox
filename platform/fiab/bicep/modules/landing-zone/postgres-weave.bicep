@@ -137,11 +137,35 @@ resource cfgPreload 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@20
 // Sequenced after the preload config so the two configuration writes don't race
 // (PG flexible-server serialises configuration changes; an explicit dependsOn
 // makes the order deterministic in the ARM graph).
+//
+// VECTOR IS ALLOWLISTED ALONGSIDE AGE (#3372). pgvector-client.ts and
+// feature-store-client.ts both resolve their host as
+// `LOOM_PGVECTOR_HOST || LOOM_POSTGRES_HOST`, so pgvector needs SOME PG flexible
+// server in the estate with the VECTOR extension allowlisted. Before this change
+// the only module that allowlisted VECTOR was landing-zone/postgres-flexible.bicep
+// (Lakebase), which is a deliberately STANDALONE, METERED, opt-in module its own
+// header says is "NOT wired into an orchestrator" — so on a default deploy nothing
+// allowlisted VECTOR and nothing set either host var. Serving both extensions from
+// THIS server keeps the fix cost-neutral (one B1ms flexible server, not a second
+// one) and makes pgvector work by default on every boundary, which is what
+// auto-bind-by-default.md §5 requires.
+//
+// `azure.extensions` is a comma-separated SET and both `age` and `vector` are in
+// the allowed values for PG16 — grounded in
+// learn.microsoft.com/azure/postgresql/parameters/concepts-parameters#supported-parameters
+// and .../extensions/how-to-allow-extensions (the CLI example passes
+// `--value "<extension_name>,<extension_name>"`).
+//
+// Allowlisting is NOT installing: CREATE EXTENSION still has to run. The
+// post-deploy bootstrap already does that for AGE; the app-side "Enable pgvector"
+// action performs `CREATE EXTENSION vector` over the pg wire protocol, and this
+// allowlist is the prerequisite that makes it succeed instead of erroring.
+// Adding a name here costs nothing at rest.
 resource cfgExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   parent: pg
   name: 'azure.extensions'
   properties: {
-    value: 'AGE'
+    value: 'AGE,VECTOR'
     source: 'user-override'
   }
   dependsOn: [

@@ -1595,6 +1595,13 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // above, which is what makes federated lake access actually federate the
       // lake. minReplicas 0, so idle cost is nothing.
       icebergCatalog: 'enabled'
+      // #3371 — the operator's weaveOntologyEnabled decision, carried into the
+      // admin plane WITHOUT a new admin-plane param (that module is at 238/256
+      // and the R0 rule sends new settings to a bag). admin-plane/main.bicep
+      // deploys its OWN Weave PG when the DLZ did not supply one, and it must
+      // honour an explicit opt-out rather than deploying a server the operator
+      // turned off. Read there as `loomBackends.?weaveOntology`.
+      weaveOntology: weaveOntologyEnabled ? 'enabled' : 'disabled'
     }, observabilityConfig.?backendOverrides ?? {})
   }
 }

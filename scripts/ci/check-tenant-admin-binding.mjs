@@ -161,6 +161,9 @@ function bindingCoverage(text) {
  */
 function countMainBicepInvocations(text) {
   const code = text
+    // PHYSICAL-LINES-OK: the `az deployment sub create` count is taken with a
+    // WHOLE-TEXT `match()` after this strip, not per line, and the remaining
+    // analysis is over bicep, which has no backslash continuation (#3420).
     .split('\n')
     .filter((l) => !/^\s*#/.test(l))
     .map((l) => l.replace(/"[^"]*"/g, '""'))

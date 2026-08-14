@@ -26,6 +26,7 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const DIR = '.github/workflows';
 const TABLE = 'ContainerAppConsoleLogs_CL';
@@ -46,24 +47,41 @@ const ANCHORED_MARKER = /Log_s\s+startswith\s+'[^']+'/;
 const problems = [];
 for (const f of readdirSync(DIR).filter((n) => n.endsWith('.yml') || n.endsWith('.yaml'))) {
   const body = readFileSync(join(DIR, f), 'utf8');
-  body.split('\n').forEach((line, i) => {
+  // LOGICAL lines (#3420). Three tokens have to co-occur on ONE command here —
+  // the table, `--analytics-query`, and the scoping predicate — and an
+  // `az monitor log-analytics query` is almost always wrapped:
+  //
+  //     az monitor log-analytics query \
+  //       --workspace "$WS" \
+  //       --analytics-query "ContainerAppConsoleLogs_CL | take 5"
+  //
+  // Per physical line the flag and the table sit together but a scope written
+  // on a further continuation does not, and an unscoped query whose table name
+  // lands on a different line than the flag is not seen at all.
+  for (const { line, text: raw } of readLogicalLines(body)) {
     // Ignore comment-only lines: a guard that counts its own explanatory prose is
     // the sibling defect (a comment satisfying a check).
-    if (/^\s*#/.test(line)) return;
-    if (!line.includes(TABLE)) return;
+    if (/^\s*#/.test(raw)) continue;
+    if (!raw.includes(TABLE)) continue;
     // Only an actual query invocation is in scope. A bare table name can appear in a
     // shell loop (`for TBL in ContainerAppConsoleLogs_CL ...`) or in prose; neither
     // reads the table. Requiring the flag is what distinguishes them.
-    if (!line.includes('--analytics-query')) return;
-    if (DESCRIBES_ONLY.test(line)) return;
-    if (SCOPED.test(line)) return;
+    const at = raw.indexOf('--analytics-query');
+    if (at < 0) continue;
+    // POSITIONAL, not anywhere-on-the-line. On a folded command an annotation in
+    // the invocation's OWN fallback (`… || echo "::error::query failed"`) sits
+    // after the flag and must not be read as "this line is only prose" — that
+    // over-broad test silently dropped four real call sites in the sibling
+    // Key Vault guard when it adopted logical lines (#3420).
+    if (DESCRIBES_ONLY.test(raw.slice(0, at)) || /^\s*echo/.test(raw)) continue;
+    if (SCOPED.test(raw)) continue;
     // An anchored, distinctive marker is an acceptable alternative scope: it cannot
     // be produced incidentally the way a plain `has 'word'` filter can. The rule is
     // ANCHORED (startswith), not `contains` -- `contains` is what let the runner's
     // own annotation satisfy the login-health query.
-    if (ANCHORED_MARKER.test(line)) return;
-    problems.push(`${DIR}/${f}:${i + 1}  ${TABLE} query is not scoped by ContainerAppName_s`);
-  });
+    if (ANCHORED_MARKER.test(raw)) continue;
+    problems.push(`${DIR}/${f}:${line}  ${TABLE} query is not scoped by ContainerAppName_s`);
+  }
 }
 
 if (problems.length) {

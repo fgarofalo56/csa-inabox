@@ -104,6 +104,10 @@ for (const script of scripts) {
   for (const wf of workflows) {
     const text = readFileSync(join(ROOT, WORKFLOW_DIR, wf), 'utf8');
     if (!text.includes(rel)) continue;
+    // PHYSICAL-LINES-OK: asks whether a workflow EXECUTES a script — the
+    // interpreter and the path are adjacent by construction (`bash path/to.sh`),
+    // and the arguments that land on continuations are not part of the question.
+    // Presence of one token, so a continuation cannot hide it (#3420).
     const lines = text.split('\n');
     if (lines.some((l) => isExecution(l.replace(/\r$/, ''), rel))) executors.push(wf);
     else mentions.push(wf);
