@@ -524,10 +524,17 @@ jobs:
           # current. An adopted image built before the unitycatalog-server 0.5.1
           # overlay (#2974) enforces authorization and then 500s on
           # GET /permissions. Run gov-build-images.yml (apps=loom-unity) first.
+          #
+          # `${VAR:?msg}`, not a bare `${VAR}`. These names are produced by the
+          # adopt step's $GITHUB_ENV write, so a bare read under `set -u` would
+          # abort here with the shell's terse "unbound variable" if adoption
+          # were ever skipped or errored — and an empty expansion would send
+          # `loom-duckdb:` to the registry probe. The `:?` form fails CLOSED and
+          # names the producer that should have run (deploy-integrity R6).
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent \
-            "loom-duckdb:${LOOM_DUCKDB_TAG}" \
-            "loom-unity:${LOOM_UNITY_TAG}"
+            "loom-duckdb:${LOOM_DUCKDB_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
+            "loom-unity:${LOOM_UNITY_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}"
 
       # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
       # Having the tag in scope is necessary and NOT sufficient. In scope with
