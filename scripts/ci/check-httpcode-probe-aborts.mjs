@@ -45,6 +45,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 const BASELINE_FILE = new URL('./httpcode-probe-baseline.json', import.meta.url);
@@ -68,8 +69,26 @@ function tracked() {
   }
 }
 
-const EXEMPT = new Set(['scripts/ci/check-httpcode-probe-aborts.mjs']);
-const SET_E = /^\s*set\s+-[a-z]*e/m;
+/**
+ * EMPTY BY DESIGN, and asserted below. The previous entry named this guard's own
+ * `.mjs` path while `tracked()` globs `*.sh` only, so it could never apply — a
+ * line of protection that read as protection and was not one (#3420). Any entry
+ * added here must be a file this guard actually scans; the assertion after the
+ * scan fails if it is not.
+ */
+const EXEMPT = new Set([]);
+
+/**
+ * Does the script's header enable errexit?
+ *
+ * `-[A-Za-z]*e` and NOT `-[a-z]*e`: the lowercase-only class could not match
+ * `set -Eeuo pipefail`, because the uppercase `E` (ERR-trap inheritance, and a
+ * common companion to `-e`) precedes the lowercase `e` and the class rejected
+ * it. That was latent rather than live — no such file exists in this tree today
+ * — but a latent hole in a matcher is how the population silently shrinks the
+ * day someone writes the idiom (#3420).
+ */
+const SET_E = /^\s*set\s+-[A-Za-z]*e|^\s*set\s+-o\s+errexit\b/m;
 const ASSIGN_CURL = /^\s*\w+="?\$\(\s*curl\b/;
 const GUARDED = /\|\|\s*(true|:)\s*$/;
 
@@ -87,27 +106,32 @@ for (const rel of files) {
   }
   if (!SET_E.test(text)) continue; // no -e, no abort
 
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\s*#/.test(lines[i])) continue;
-    if (!ASSIGN_CURL.test(lines[i])) continue;
-    // A command substitution can span backslash continuations; judge the whole.
-    let j = i;
-    let block = lines[i];
-    while (block.trimEnd().endsWith('\\') && j + 1 < lines.length) {
-      j += 1;
-      block += `\n${lines[j]}`;
-    }
-    if (block.includes('%{http_code}')) {
-      probes++;
-      if (!GUARDED.test(block.trim())) violations.push({ file: rel, line: i + 1 });
-    }
-    i = j;
+  // A command substitution can span backslash continuations; judge the whole.
+  // Folding is shared with check-curl-httpcode-fallback.mjs rather than
+  // reimplemented — two private copies of this idea is exactly how the two
+  // guards over this construct came to disagree for their entire lives (#3420).
+  for (const { line, text: block } of readLogicalLines(text)) {
+    if (/^\s*#/.test(block)) continue;
+    if (!ASSIGN_CURL.test(block)) continue;
+    if (!block.includes('%{http_code}')) continue;
+    probes++;
+    if (!GUARDED.test(block.trim())) violations.push({ file: rel, line });
   }
 }
 
 if (files.length === 0) {
   console.error('::error::httpcode-probe-aborts: scanned ZERO tracked shell scripts. Refusing to report a pass.');
+  process.exit(1);
+}
+// An exemption for a file this guard never scans is not protection — it reads
+// as protection while doing nothing. Fail on one rather than carry it (#3420).
+const unreachableExempt = [...EXEMPT].filter((e) => !files.includes(e));
+if (unreachableExempt.length > 0) {
+  console.error(
+    `::error::httpcode-probe-aborts: ${unreachableExempt.length} EXEMPT entr(ies) name a file this guard never ` +
+      'scans, so the exemption can never apply. Remove it, or widen the glob if the file really should be judged: ' +
+      unreachableExempt.join(', '),
+  );
   process.exit(1);
 }
 if (probes === 0) {

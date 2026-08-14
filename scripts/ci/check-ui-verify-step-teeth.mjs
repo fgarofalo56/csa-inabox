@@ -176,6 +176,10 @@ export function consumingText(body) {
 
 /** Parse every step in the workflow into a comparable record. */
 export function parseSteps(yaml) {
+  // PHYSICAL-LINES-OK: slices YAML step bodies by indentation and then tests
+  // single-token PRESENCE (`playwright test`, `e2e-receipt.mjs`) against the whole
+  // joined run block, plus YAML keys (`continue-on-error:`, `if:`) that never
+  // continue with a backslash (#3420).
   const lines = yaml.split(/\r?\n/);
   const steps = [];
   for (let i = 0; i < lines.length; i++) {

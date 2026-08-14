@@ -152,6 +152,9 @@ let examined = 0;
 const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
 
 for (const file of files) {
+  // PHYSICAL-LINES-OK: locates the `script: |` block by YAML indentation and then
+// COMPILES its body as JavaScript. JS has no backslash line-continuation, and the
+// block is passed to the compiler whole (#3420).
   const lines = readFileSync(join(WORKFLOW_DIR, file), 'utf8').split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     if (!STEP_START.test(lines[i])) continue;

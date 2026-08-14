@@ -60,6 +60,9 @@ let examined = 0;
 const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
 
 for (const file of files) {
+  // PHYSICAL-LINES-OK: judges `uses: github/codeql-action/<sub>@<ref>` — a YAML
+// key whose value is one token. A `uses:` line never continues with a backslash
+// (#3420 names this guard specifically as the presence-only case).
   const lines = readFileSync(join(WORKFLOW_DIR, file), 'utf8').split(/\r?\n/);
   /** ref -> [{sub, line}] for this file */
   const byRef = new Map();

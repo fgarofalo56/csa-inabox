@@ -130,6 +130,10 @@ for (const file of files) {
   if (!new RegExp(SUFFIXES).test(text) && !text.includes('ACR_SUFFIX')) continue;
 
   const rel = relative(ROOT, file).split(sep).join('/');
+  // PHYSICAL-LINES-OK: this matches ADJACENCY inside one shell WORD — `${ACR}${SUFFIX}/`
+// — and `registryBefore()` walks backwards from the suffix through characters that
+// must touch it. Folding injects whitespace at the seam, which would BREAK that
+// walk rather than fix it. Nobody splits a registry hostname mid-word (#3420).
   const lines = text.split(/\r?\n/);
   const pins = literalPins(text);
 

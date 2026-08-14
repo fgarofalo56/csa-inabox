@@ -108,6 +108,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 
@@ -130,10 +131,13 @@ function tracked() {
   }
 }
 
-// This guard and its own documentation legitimately contain the bad shapes.
-// Belt-and-braces only: `tracked()` globs shell/YAML, so a `.mjs` is never
-// listed in the first place — the entry documents intent, it is not protection.
-export const EXEMPT = new Set(['scripts/ci/check-curl-httpcode-fallback.mjs']);
+/**
+ * EMPTY BY DESIGN, and asserted in main(). The previous entry named this guard's
+ * own `.mjs` path while `tracked()` globs shell/YAML only, so it could never
+ * apply — a line that read as protection and was not one (#3420). Any entry
+ * added here must be a file this guard actually scans.
+ */
+export const EXEMPT = new Set([]);
 
 export const HTTP_CODE = /%\{http_code\}/;
 export const CURL = /\bcurl\b/;
@@ -159,32 +163,15 @@ export const FAIL_FLAG = /(?:^|\s)(?:--fail(?![-\w])|-[A-Za-z]*f[A-Za-z]*)(?=\s|
 /**
  * Join backslash continuations into LOGICAL lines, keeping the 1-based line
  * number of the first physical line so annotations point at the invocation.
- * This is what the sibling check-httpcode-probe-aborts.mjs has always done; not
- * doing it here is what hid eleven live violations (see the header).
+ *
+ * PROMOTED to scripts/ci/_logical-lines.mjs (#3420). This file and its sibling
+ * check-httpcode-probe-aborts.mjs each carried a PRIVATE implementation of this
+ * idea, and for their entire lives they disagreed: the sibling folded
+ * continuations from day one, this one did not, which is what hid eleven live
+ * violations (see the header). Two copies is how that divergence was possible,
+ * so there is now exactly one. Re-exported because the test imports this name.
  */
-export function logicalLines(text) {
-  const phys = text.split(/\r?\n/);
-  const out = [];
-  let buf = null;
-  let start = 0;
-  for (let i = 0; i < phys.length; i++) {
-    const line = phys[i];
-    if (buf === null) {
-      buf = line;
-      start = i;
-    } else {
-      buf += ' ' + line.replace(/^\s+/, '');
-    }
-    if (/\\\s*$/.test(line)) {
-      buf = buf.replace(/\\\s*$/, ' ');
-      continue;
-    }
-    out.push({ line: start + 1, text: buf });
-    buf = null;
-  }
-  if (buf !== null) out.push({ line: start + 1, text: buf });
-  return out;
-}
+export const logicalLines = readLogicalLines;
 
 /**
  * Judge one file's text. Returns the probe-line count (for the empty-population
@@ -303,6 +290,17 @@ function main() {
 
   if (files.length === 0) {
     console.error('::error::curl-httpcode-fallback: scanned ZERO tracked files. Refusing to report a pass.');
+    process.exit(1);
+  }
+  // An exemption for a file this guard never scans is not protection — it reads
+  // as protection while doing nothing. Fail on one rather than carry it (#3420).
+  const unreachableExempt = [...EXEMPT].filter((e) => !files.includes(e));
+  if (unreachableExempt.length > 0) {
+    console.error(
+      `::error::curl-httpcode-fallback: ${unreachableExempt.length} EXEMPT entr(ies) name a file this guard never ` +
+        'scans, so the exemption can never apply. Remove it, or widen the glob if the file really should be judged: ' +
+        unreachableExempt.join(', '),
+    );
     process.exit(1);
   }
   if (probeLines === 0) {

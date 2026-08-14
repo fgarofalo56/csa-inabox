@@ -33,6 +33,7 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 /** The bicep module that owns the token expression. */
 export const OWNER_BICEP = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
@@ -102,17 +103,30 @@ export function stripCommentLines(src) {
 /**
  * Does this workflow actually APPLY the platform template (as opposed to
  * merely mentioning it)? Requires `--template-file` and the platform path on
- * the SAME executable line, plus a real `az deployment sub create`.
+ * the SAME executable COMMAND, plus a real `az deployment sub create`.
+ *
+ * THE SAME COMMAND, NOT THE SAME PHYSICAL LINE (#3420). An `az deployment sub
+ * create` is always wrapped, and both halves of this predicate can land on
+ * different continuations:
+ *
+ *     az deployment sub create \
+ *       --template-file \
+ *         platform/fiab/bicep/main.bicep
+ *
+ * A physical-line read then answers FALSE, and answering false here does not
+ * report a violation — it SKIPS the lane entirely, so R2 never asks whether the
+ * lane resolves the internal token. That is the silent direction: a deploy lane
+ * that applies main.bicep without the token reads as "not a deploy lane". The
+ * `az deployment sub create` pre-filter is folded for the same reason.
  *
  * @param {string} src workflow contents
  * @returns {boolean}
  */
 export function appliesPlatformTemplate(src) {
   const code = stripCommentLines(src);
-  if (!/az deployment sub create/.test(code)) return false;
-  return code
-    .split('\n')
-    .some((l) => l.includes('--template-file') && l.includes('platform/fiab/bicep/main.bicep'));
+  const logical = readLogicalLines(code).map((l) => l.text);
+  if (!/az\s+deployment\s+sub\s+create/.test(logical.join('\n'))) return false;
+  return logical.some((l) => l.includes('--template-file') && l.includes('platform/fiab/bicep/main.bicep'));
 }
 
 /**

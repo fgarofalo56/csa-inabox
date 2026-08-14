@@ -111,6 +111,9 @@ export function boundAdminParams(runText) {
 
 /** The multi-line right-hand side of `var <name> = …` in a bicep file. */
 export function bicepVarExpression(text, name) {
+  // PHYSICAL-LINES-OK: the corpus is `admin-plane/main.bicep`. Bicep has no
+  // backslash line continuation — a wrapped ternary is continued by INDENTATION,
+  // which `bicepVarExpression()` follows explicitly (#3420).
   const lines = text.split('\n');
   const i = lines.findIndex((l) => new RegExp(`^\\s*var\\s+${name}\\s*=`).test(l));
   if (i < 0) return null;

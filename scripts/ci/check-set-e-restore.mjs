@@ -79,6 +79,11 @@ for (const file of files) {
   if (!/^\s*set\s+[-+]/m.test(text)) continue;
   const rel = relative(ROOT, file).split(sep).join('/');
 
+  // PHYSICAL-LINES-OK: on two counts. It matches `^\s*set\s+-e\s*$` — a WHOLE,
+  // complete simple command that cannot be split by a continuation — and it tracks
+  // HEREDOC bodies, whose terminator is found by physical line and whose contents
+  // are a different script whose trailing backslashes are literal text. Folding
+  // would corrupt the heredoc window (#3420).
   const lines = text.split(/\r?\n/);
   const headerHasE = headerEnablesErrexit(
     // Only the FIRST `set` line counts as the header; a `set -e` further down is
