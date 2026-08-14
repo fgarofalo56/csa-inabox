@@ -18,11 +18,24 @@ on:
   schedule:
     # Weekly stale-branch report on Mondays 06:00 UTC.
     - cron: '0 6 * * 1'
+  # On demand, so the workflow-lane-liveness job below can produce a LIVE receipt
+  # without waiting up to a week for the Monday cron. deploy-integrity.md R2
+  # closes #3345 on an observed run, not on a merge, and a guard whose first real
+  # execution is "sometime next Monday" is a guard nobody has watched work.
+  # On a dispatch this runs no-stray-root-files + workflow-lane-liveness; the
+  # stale-branch report stays cron-only and large-file-guard stays PR-only.
+  workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  # workflow-lane-liveness reads GET /repos/{owner}/{repo}/actions/workflows —
+  # the ONLY place a workflow's `state` is exposed. A disabled lane produces no
+  # runs, so `gh run list` cannot see it. Read-only; without it the guard 403s
+  # and reports UNREADABLE rather than "nothing disabled", which is the correct
+  # failure but a useless one.
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -233,3 +246,69 @@ jobs:
           else
             gh issue create --title "$TITLE" --body "$BODY" --label "hygiene,housekeeping"
           fi
+
+
+  # SECOND HOST for scripts/ci/check-workflow-lane-states.mjs (#3345).
+  #
+  # A disabled workflow produces NO runs, so `gh run list` cannot see it: a
+  # switched-off lane and a lane with nothing to do render identically. The
+  # state exists only in the workflows API. loom-guardrails.yml has enforced
+  # that since #3389 -- but it enforced it from ONE place, which left the guard
+  # with exactly one lane it could never watch: loom-guardrails.yml itself.
+  # Switch THAT off in the UI (one click, no commit, no review -- the precise
+  # act #3345 is about) and the guard stops running, so nothing reports that
+  # the guard stopped running.
+  #
+  # So the two lanes now observe each other, on deliberately different triggers:
+  #   loom-guardrails.yml  pull_request + push       -> catches this lane off
+  #   hygiene-guard.yml    push(main) + weekly cron  -> catches that lane off
+  # check-workflow-lane-states.mjs asserts that >= 2 distinct workflow files
+  # invoke it (analyzeHosts), counting `run:` bodies only -- a comment naming
+  # the script does not count -- so deleting either wiring fails the PR that
+  # does it rather than silently collapsing back to a single point.
+  #
+  # The cron half also matters on its own: until now the guard only ran when
+  # someone opened a PR, so a lane switched off during a quiet stretch stayed
+  # invisible -- and "the repo went quiet" is correlated with the incident this
+  # exists for (deploy-integrity.md, 2026-08-05: machinery down, merges stalled).
+  #
+  # NOT on pull_request on purpose: loom-guardrails already gates every PR, and
+  # a second identical gate would add latency without adding a signal.
+  #
+  # This job NEVER enables a workflow and must not be made to. deploy-fiab-gcc
+  # carries a daily 08:00 UTC cron over a sovereign boundary; turning a lane back
+  # on is an operator decision taken after reading its `schedule:` and its
+  # teardown `if:` (see scripts/ci/check-teardown-not-on-schedule.mjs).
+  workflow-lane-liveness:
+    name: Workflow lane states (a switched-off lane must be DECLARED)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      # Self-test first: it carries the mutant fixtures (undeclared lane,
+      # placeholder reason, missing owner, expired/absent reviewBy, drifted
+      # state, stale entry, duplicate path, empty read, truncated page, and the
+      # single-host wiring case). The plain run then executes the embedded
+      # known-true control BEFORE judging the real population, so when the
+      # disabled count reaches zero the detector is still exercised every run
+      # rather than passing vacuously.
+      #
+      # No `continue-on-error`, no `|| true`, no `2>/dev/null`: a lane-state
+      # guard whose result is discarded is `gates_that_cannot_fail` wearing a
+      # new hat. Both commands run under the default `bash -e`, so a failing
+      # self-test fails the step rather than letting the live check paper over
+      # a dead detector.
+      - name: workflow-lane-states (self-test, then the live population)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/check-workflow-lane-states.mjs --self-test
+          node scripts/ci/check-workflow-lane-states.mjs
