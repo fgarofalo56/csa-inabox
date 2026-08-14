@@ -1060,6 +1060,52 @@ var risingwaveActive = risingwaveEnabled && containerPlatform == 'containerApps'
 var directLakeSvcEnabled = (loomBackends.?directLake ?? 'enabled') != 'disabled'
 var directLakeSvcActive = directLakeSvcEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
+// ── Weave (Semantic Ontology) Postgres + Apache AGE — TOPOLOGY-INDEPENDENT ────
+// Backs LOOM_WEAVE_PG_FQDN (weave-ontology-store.ts object/link/action write-back)
+// AND LOOM_PGVECTOR_HOST (pgvector-client.ts / feature-store-client.ts).
+//
+// THE DEFECT THIS CLOSES (#3371, and the pgvector half of #3372). The ONLY module
+// that deployed a Weave PG server was landing-zone/postgres-weave.bicep, invoked
+// from landing-zone/main.bicep. main.bicep gates the landing zone on
+//     var deployLandingZones = effectiveTopology != 'tenant'
+//     var useSingleDlz       = deployLandingZones && effectiveTopology == 'single-sub'
+// and derived the FQDN as `(useSingleDlz && weaveOntologyEnabled) ? … : ''`.
+//
+// MEASURED: every shipped param file — commercial.bicepparam, commercial-full,
+// gcc, gcc-high, il5 and tenant-dmlz — sets `topology = 'tenant'`. So
+// useSingleDlz is FALSE on all of them, no landing zone deploys, NO Weave PG
+// server exists, and the FQDN ternary takes the empty branch while
+// weaveOntologyEnabled still defaults true. The capability was ON with a blank
+// host on EVERY boundary we ship, Commercial included — not only in Gov as
+// #3371 framed it. cloud-parity.md calls that INCOMPLETE, and
+// auto-bind-by-default.md §5 calls "the operator sets LOOM_WEAVE_PG_FQDN" the
+// violation.
+//
+// THE FIX IS THE ONE THIS FILE ALREADY USES TWICE. `consoleCosmos`
+// (deployConsoleCosmos && !useSingleDlz) and `uatResultsStore` are both
+// admin-plane-scoped precisely so they exist in tenant / single-sub / multi-sub
+// alike; the uatResultsStore comment names this exact bug class — "the
+// topology-dependence that made LOOM_UAT_RESULTS_ACCOUNT blank on every shipped
+// bicepparam is gone". This is that, for Weave.
+//
+// WHY `empty(loomWeavePgFqdn)` IS THE RIGHT CONDITION: a non-empty value means
+// the orchestrator already has a DLZ-hosted server for us to bind, so deploying
+// a second one would be the "silently duplicate" failure deploy-integrity.md R5
+// forbids. Empty means nobody supplied one — so the platform deploys it rather
+// than asking. No new param: the opt-out rides the existing loomBackends bag
+// (main.bicep sets `weaveOntology` from its weaveOntologyEnabled param), which
+// is the R0-sanctioned lever now that this file sits at 238/256.
+//
+// COST: one Standard_B1ms Burstable flexible server with 32 GB storage — the
+// cheapest functional size, and the same SKU the DLZ path already deploys. It
+// serves BOTH the AGE graph and pgvector (postgres-weave.bicep now allowlists
+// AGE,VECTOR), so this is one server for two capabilities rather than two.
+// ADMIN OPT-OUT: observabilityConfig.backendOverrides = { weaveOntology: 'disabled' }
+// (or the weaveOntologyEnabled=false root param, which maps to the same key).
+var weaveOntologyBackendEnabled = (loomBackends.?weaveOntology ?? 'enabled') != 'disabled'
+var weavePgSuppliedByDlz = !empty(loomWeavePgFqdn)
+var weavePgLocalActive = weaveOntologyBackendEnabled && !weavePgSuppliedByDlz
+
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
 // rationale as wranglerEnabled/scriptRunnerEnabled above): deploys the
@@ -4069,12 +4115,42 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_POSTGRES_AAD_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://ossrdbms-aad.database.usgovcloudapi.net/.default' : 'https://ossrdbms-aad.database.windows.net/.default' }
             { name: 'LOOM_POSTGRES_HOST_SUFFIX', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com' }
             // Weave (Semantic Ontology) graph store — object/link/action instance
-            // write-back over Apache AGE (lib/azure/weave-ontology-store.ts). When
-            // LOOM_WEAVE_PG_FQDN is empty the Ontology editor's Objects / Write-back
-            // actions surfaces show the honest-gate MessageBar (no Fabric required).
-            { name: 'LOOM_WEAVE_PG_FQDN', value: loomWeavePgFqdn }
-            { name: 'LOOM_WEAVE_PG_DATABASE', value: loomWeavePgDatabase }
-            { name: 'LOOM_WEAVE_GRAPH', value: loomWeaveGraph }
+            // write-back over Apache AGE (lib/azure/weave-ontology-store.ts).
+            //
+            // #3371 — PRODUCED BY THE DEPLOY ON EVERY TOPOLOGY. These were
+            // `loomWeavePgFqdn` etc. verbatim, and the orchestrator only ever
+            // computed a non-empty value on `topology='single-sub'` — which NO
+            // shipped .bicepparam uses. Now: bind the DLZ-supplied server when the
+            // orchestrator gave us one, otherwise the admin-plane server this
+            // module deploys (weavePgLocalActive). Empty only when an admin sets
+            // loomBackends.weaveOntology='disabled' — the documented opt-out,
+            // which still honest-gates the Ontology editor cleanly.
+            { name: 'LOOM_WEAVE_PG_FQDN', value: weavePgLocalActive ? weavePg!.outputs.weavePgFqdn : loomWeavePgFqdn }
+            // The DB + graph names are module literals ('loom-weave' /
+            // 'loom_ontology'), NOT optional: weave-ontology-store.ts has no
+            // default for either, so a bound FQDN with a blank database is a
+            // connection to nowhere. The database name comes from the module
+            // output; the graph name is the literal the post-deploy bootstrap
+            // creates with SELECT create_graph(), mirroring main.bicep.
+            { name: 'LOOM_WEAVE_PG_DATABASE', value: weavePgLocalActive ? weavePg!.outputs.weavePgDatabase : loomWeavePgDatabase }
+            { name: 'LOOM_WEAVE_GRAPH', value: weavePgLocalActive ? 'loom_ontology' : loomWeaveGraph }
+            // #3372 — pgvector host. pgvector-client.ts:74 and
+            // feature-store-client.ts:130 BOTH resolve their host as
+            // `LOOM_PGVECTOR_HOST || LOOM_POSTGRES_HOST || ''`, so the honest
+            // statement of the old defect is not "LOOM_PGVECTOR_HOST was unset" —
+            // the code has a designed fallback — it is that BOTH sides of that
+            // fallback were empty on every shipped param file. LOOM_POSTGRES_HOST
+            // (above) carries the same `useSingleDlz` cliff, and the Lakebase
+            // module that would have set it is explicitly standalone/opt-in.
+            //
+            // The Weave server above IS a PG flexible server in the estate and
+            // now allowlists VECTOR alongside AGE, so it satisfies pgvector with
+            // no second metered resource. When a DLZ supplied the Weave server we
+            // point at that one; when Lakebase IS deployed, loomPostgresHost is
+            // set and the client's own fallback still prefers this explicit value
+            // — which is correct, because this is the server with VECTOR
+            // allowlisted.
+            { name: 'LOOM_PGVECTOR_HOST', value: weavePgLocalActive ? weavePg!.outputs.weavePgFqdn : loomWeavePgFqdn }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             // F14 Customer-Managed Keys — the ARM resource id of the admin-plane
             // Key Vault (scopes the KV Crypto role check) and the Console UAMI
@@ -7196,6 +7272,44 @@ module loomDirectLake '../compute/loom-directlake-app.bicep' = if (directLakeSvc
   dependsOn: [
     directLakeAcrPull
   ]
+}
+
+// #3371 / #3372 — the Weave PG + pgvector server, deployed IN THE ADMIN PLANE so
+// it exists on every topology (see the weavePgLocalActive derivation above for
+// the measurement that every shipped .bicepparam is topology='tenant' and
+// therefore never got one).
+//
+// Same module the DLZ path uses, so the two topologies deploy the IDENTICAL
+// resource shape — server name, Entra-only auth, AGE preload, extension
+// allowlist and firewall posture all come from one definition. Only the RG
+// differs, which is the point: `uniqueString(resourceGroup().id)` inside the
+// module derives the name from whichever RG hosts it, so the admin-plane server
+// and a DLZ server can never collide.
+//
+// The FQDN is read from the module's OWN output rather than reconstructed from a
+// deterministic name. main.bicep has to reconstruct because `adminPlane` deploys
+// BEFORE `singleDlz` and referencing the DLZ output there would create a cycle;
+// here the module is a CHILD of this file, so the real output is available and a
+// name-reconstruction that could silently drift out of sync with the module is
+// unnecessary. Preferring the measured value over a recomputed one is the same
+// reasoning deploy-integrity.md R7 applies to error strings.
+//
+// privateEndpointsEnabled: false matches the DLZ call site — there is no PE
+// wiring for this service on either path, so the server keeps its
+// Azure-services firewall rule with Entra-only token auth gating every
+// connection. Passing true here would produce a server the Console cannot
+// reach. Documented compliance carve-out, same as the DLZ comment.
+module weavePg '../landing-zone/postgres-weave.bicep' = if (weavePgLocalActive) {
+  name: 'admin-postgres-weave'
+  params: {
+    location: location
+    boundary: boundary
+    domainName: 'default'
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+    privateEndpointsEnabled: false
+  }
 }
 
 // =====================================================================
