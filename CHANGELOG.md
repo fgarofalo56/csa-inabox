@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.97.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.0...csa-inabox-v0.97.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **ai-search:** a dead indexer reported `status: running` — derive health, never read the object field ([#3435](https://github.com/fgarofalo56/csa-inabox/issues/3435)) ([6de8fa0](https://github.com/fgarofalo56/csa-inabox/commit/6de8fa042b19bb1114f131694f16fbe57df3fc47))
+* **ci:** 12 of 14 required contexts sat on lanes that cancelled their own main runs ([#3428](https://github.com/fgarofalo56/csa-inabox/issues/3428)) ([bc10271](https://github.com/fgarofalo56/csa-inabox/commit/bc1027126ffa3a892c1ee6fb96d586728866d687)), closes [#3426](https://github.com/fgarofalo56/csa-inabox/issues/3426)
+* **ci:** guards judged shell by PHYSICAL line, so a token on a backslash continuation was invisible ([#3420](https://github.com/fgarofalo56/csa-inabox/issues/3420)) ([#3427](https://github.com/fgarofalo56/csa-inabox/issues/3427)) ([fffaa6b](https://github.com/fgarofalo56/csa-inabox/commit/fffaa6b423c785e413856fbd08d3dfa52a5dc670))
+* **deploy:** the copilot-function lane cancelled its own deploys and its error asserted a lie ([#3431](https://github.com/fgarofalo56/csa-inabox/issues/3431)) ([1b555a0](https://github.com/fgarofalo56/csa-inabox/commit/1b555a02ed60a3feff8983949f85bc5ea844a909)), closes [#3429](https://github.com/fgarofalo56/csa-inabox/issues/3429)
+* **deploy:** the operator runbook asked for two grants the bootstrap already performs ([#3375](https://github.com/fgarofalo56/csa-inabox/issues/3375)) ([#3437](https://github.com/fgarofalo56/csa-inabox/issues/3437)) ([4cf948e](https://github.com/fgarofalo56/csa-inabox/commit/4cf948e21a28ae6c24f97620b504d55edfe4d3fd))
+* **deploy:** the SC1 gate ran on a CANCELLED run and blamed images the run never built ([#3418](https://github.com/fgarofalo56/csa-inabox/issues/3418)) ([#3422](https://github.com/fgarofalo56/csa-inabox/issues/3422)) ([1fc4a56](https://github.com/fgarofalo56/csa-inabox/commit/1fc4a5602ad215a660a2064d42517d6154fac5b3))
+* **deploy:** the sovereign azd path could not bind ANY of main.bicep's 22 required params (P0) ([#3421](https://github.com/fgarofalo56/csa-inabox/issues/3421)) ([b610b8c](https://github.com/fgarofalo56/csa-inabox/commit/b610b8cbbc8380af569ae90542a332b8d1d5f35c))
+* **directlake:** WIRE IT — svc-loom-directlake had no orchestrator, no image producer, and had never been compiled ([#3291](https://github.com/fgarofalo56/csa-inabox/issues/3291)) ([#3404](https://github.com/fgarofalo56/csa-inabox/issues/3404)) ([eae3452](https://github.com/fgarofalo56/csa-inabox/commit/eae34522cfdea607a5d69cff5524b956448447c0))
+* **gov:** svc-transform-runner + svc-copilot-evaluator had NO Gov image producer ([#3416](https://github.com/fgarofalo56/csa-inabox/issues/3416)) ([#3425](https://github.com/fgarofalo56/csa-inabox/issues/3425)) ([e18a0b1](https://github.com/fgarofalo56/csa-inabox/commit/e18a0b1bb9d34dfd03663649041c898f4587b59d))
+* **graph:** sovereign Graph host had no DoD branch — and the same helper dropped /v1.0 on EVERY boundary, Commercial included ([#3434](https://github.com/fgarofalo56/csa-inabox/issues/3434)) ([5aa9a00](https://github.com/fgarofalo56/csa-inabox/commit/5aa9a00bdad73d117ba6d58db2bc9b95f0658d79))
+* **reads:** two probes whose FAILURE was indistinguishable from an answer ([#3413](https://github.com/fgarofalo56/csa-inabox/issues/3413), [#3414](https://github.com/fgarofalo56/csa-inabox/issues/3414)) ([#3417](https://github.com/fgarofalo56/csa-inabox/issues/3417)) ([4766aad](https://github.com/fgarofalo56/csa-inabox/commit/4766aad74ecc5402d7abf14f5cadceabc1081f4c))
+* **security:** Trivy cancelled its own main-branch scans — 7 of 25 commits shipped with no verdict ([#3423](https://github.com/fgarofalo56/csa-inabox/issues/3423)) ([#3424](https://github.com/fgarofalo56/csa-inabox/issues/3424)) ([d009879](https://github.com/fgarofalo56/csa-inabox/commit/d009879ff1fe66cbf1d0e44fd80e7432814ac09d))
+
 ## [0.97.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.96.0...csa-inabox-v0.97.0) (2026-08-14)
 
 
