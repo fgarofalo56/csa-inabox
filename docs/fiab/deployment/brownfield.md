@@ -333,6 +333,60 @@ untouched for that pass rather than failing the deploy with an
 `InvalidTemplate` index error — or worse, wiping a live record with an empty
 PUT.
 
+### Container image tags — adopted from the running estate, never typed
+
+A brownfield reconcile re-PUTs every Container App that is already running, and
+the image reference in that PUT comes from `appImageTags` in the boundary's
+`.bicepparam`, each entry read with
+`readEnvironmentVariable('LOOM_<APP>_TAG', '<default>')`. That read **cannot
+fail** — the default is the point of the second argument — so a deploy with no
+value in scope silently writes the default over whatever the app was running,
+reverting any SHA-pinned roll with nothing in the log (#3161).
+
+The deploy therefore **measures the tags instead of asking for them**. Every
+lane runs a read-only resolver before its first tag consumer, which exports one
+`LOOM_<APP>_TAG` per declared entry into the job environment:
+
+| Boundary | Resolver | Notes |
+|---|---|---|
+| Commercial | `scripts/ci/reconcile-resolve.mjs` | also resolves the region and `deployAppsEnabled` |
+| GCC-High | `scripts/ci/adopt-image-tags.mjs` | `deploy-fiab-gcch.yml` |
+| IL5 | `scripts/ci/adopt-image-tags.mjs` | `deploy-fiab-il5.yml`; `LOOM_CONSOLE_TAG` defaults to `v3.0` here, read from `il5.bicepparam` itself |
+| GCC | — | `gcc.bicepparam` reads no image tags, so there is nothing to adopt |
+
+Precedence, per tag: an explicitly set repo variable `LOOM_<APP>_TAG` wins
+(**adoption never undoes a deliberate roll forward**); otherwise the tag the app
+is *actually running*; otherwise the param file's own declared default, which is
+the honest answer when nothing is running that repository — deploying it
+**creates** the app, so there is no image to preserve.
+
+**Nothing is invented.** An app pinned by digest, one repository served at two
+different tags, or a container-app query that failed are reported UNRESOLVED and
+left at the param default with **no claim** that writing it is safe. The
+separate gate `scripts/ci/assert-no-silent-image-tag-revert.mjs` then re-reads
+the estate itself and refuses a write **sourced from the param file's own
+default** that would move a live app off a tag nobody asked to change — the
+#3161 flattening. For a digest-pinned app it asks the registry the one
+answerable question — *does the tag this deploy would write resolve, right now,
+to the digest the app is running?* — and proceeds only on `same`; a different
+digest is refused, and an unreadable registry stays UNKNOWN and is also refused.
+
+**Known gap, stated rather than implied.** The gate tells an operator pin from a
+default by comparing the value against the param file's declared default, and
+adoption's whole purpose is to make them differ. So a tag the resolver
+*successfully adopted* is classified as a pin and can be reported `no-op`,
+`move` or `create` — never refused. If the estate moves between the resolver's
+read and the gate's read (a roll landing in that window), the deploy proceeds
+and re-asserts the older tag. Adoption cannot re-open the `v0.1` flattening —
+an UNRESOLVED key falls back to the declared default, which the gate still
+refuses — but a divergence between the two reads is currently permitted.
+Closing it needs a per-key provenance marker distinguishing an adopted value
+from an operator pin, and is tracked as a follow-up.
+
+**You do not need to set any `LOOM_*_TAG` repo variable for a brownfield
+reconcile to keep what is running.** Set one only when you mean to *change* the
+image.
+
 ### The ADX grant caveat
 
 The grants an ADX cluster needs — **Event Hubs Data Receiver** on the DLZ Event

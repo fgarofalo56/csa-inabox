@@ -32,7 +32,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { decideTagWrites, declaredTagDefaults, KEY_BY_ENV_VAR } from '../assert-no-silent-image-tag-revert.mjs';
+import { decideTagWrites, declaredTagDefaults, digestPinsByKey, KEY_BY_ENV_VAR } from '../assert-no-silent-image-tag-revert.mjs';
 import { resolveRunningImageTags } from '../reconcile-policy.mjs';
 
 const ACR = 'acrloomxxxx.azurecr.us';
@@ -150,6 +150,99 @@ test('LOOM_ALLOW_IMAGE_TAG_REVERT proceeds but the refusals are still ENUMERATED
   });
   assert.equal(r.decision, 'proceed');
   assert.equal(r.refusals.length, 1, 'an acknowledged revert is still a reverted tag and must stay visible');
+});
+
+// ---------------------------------------------------------------------------
+// THE DIGEST CASE, RESOLVED RATHER THAN GUESSED (#3449)
+// ---------------------------------------------------------------------------
+//
+// gov-build-images.yml sets Gov Container Apps to `<acr>/<app>@sha256:…`, so on
+// GCC-High loom-unity runs by digest permanently and the tag comparison above
+// has nothing to compare. The registry can still answer the ONE question that
+// decides the invariant: does the tag this deploy would write resolve, right
+// now, to the digest the app is running?
+//
+// Mutations these controls kill:
+//   - treat any digestCheck as permission to proceed -> the `different` control
+//     goes red, and a genuine content revert would ship.
+//   - treat `unknown` as `same` (an unreadable registry as an all-clear) ->
+//     the unreadable control goes red — the #3090 collapse exactly.
+//   - drop the digestChecks branch entirely -> the `same` control goes red and
+//     GCC-High goes back to refusing every scheduled run.
+
+const DIG_A = 'sha256:aaaa000000000000000000000000000000000000000000000000000000000000';
+const DIG_B = 'sha256:bbbb111111111111111111111111111111111111111111111111111111111111';
+const digestEstate = () => running([
+  ['loom-unity', `${ACR}/loom-unity@${DIG_A}`],
+  ['loom-trino', `${ACR}/loom-trino:v0.1`],
+]);
+
+test('CONTROL: the candidate tag resolving to the SAME digest the app runs is a no-op, not a revert', () => {
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: digestEstate(),
+    digestChecks: { unity: { status: 'same', running: DIG_A, candidate: DIG_A } },
+  });
+  assert.equal(r.decision, 'proceed');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').verdict, 'no-op');
+  assert.match(row(r, 'LOOM_UNITY_TAG').why, /SAME digest/);
+});
+
+test('CONTROL: the candidate tag resolving to a DIFFERENT digest is REFUSED — a revert the tag names hid', () => {
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: digestEstate(),
+    digestChecks: { unity: { status: 'different', running: DIG_A, candidate: DIG_B } },
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').verdict, 'REFUSE');
+  assert.match(row(r, 'LOOM_UNITY_TAG').why, /DIFFERENT digest/);
+});
+
+test('CONTROL: a registry that could not be READ leaves the digest case UNKNOWN and still refuses', () => {
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: digestEstate(),
+    digestChecks: { unity: { status: 'unknown', running: DIG_A, detail: 'resolve-acr-digest exit 4' } },
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').running, 'UNKNOWN');
+  assert.match(row(r, 'LOOM_UNITY_TAG').why, /could not be read/);
+});
+
+test('an EXPLICIT pin onto a different digest is a MOVE, not a revert — intent is still honoured', () => {
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'abc1234', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: digestEstate(),
+    digestChecks: { unity: { status: 'different', running: DIG_A, candidate: DIG_B } },
+  });
+  assert.equal(r.decision, 'proceed');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').verdict, 'move');
+});
+
+test('digestPinsByKey names the digest-pinned keys, and holds two digests on one repo as ambiguous', () => {
+  const one = digestPinsByKey([
+    { name: 'loom-unity', image: `${ACR}/loom-unity@${DIG_A}` },
+    { name: 'loom-trino', image: `${ACR}/loom-trino:v0.1` },
+  ]);
+  assert.deepEqual([...one.keys()], ['unity']);
+  assert.equal(one.get('unity').digest, DIG_A);
+
+  // Two containers serving one repository at two DIFFERENT digests cannot have
+  // a single answer to "would writing tag T change the image?", so the key is
+  // left out and stays UNKNOWN rather than being decided from one of them.
+  const two = digestPinsByKey([
+    { name: 'loom-unity', image: `${ACR}/loom-unity@${DIG_A}` },
+    { name: 'iceberg-catalog', image: `${ACR}/loom-unity@${DIG_B}` },
+  ]);
+  assert.equal(two.size, 0);
+
+  // A failed probe is not an estate with no digest pins.
+  assert.equal(digestPinsByKey(null).size, 0);
 });
 
 // ---------------------------------------------------------------------------

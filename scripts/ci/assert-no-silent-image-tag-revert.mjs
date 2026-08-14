@@ -52,6 +52,32 @@
  * forbids. The digest case is not hypothetical: an ACA revision pins the digest
  * it was created with, so a rolled app frequently reports no tag at all.
  *
+ * ── THE DIGEST CASE, RESOLVED RATHER THAN GUESSED (#3449) ───────────────────
+ *
+ * `gov-build-images.yml` sets Gov Container Apps to `<acr>/<app>@sha256:…`, so
+ * on GCC-High `loom-unity` — the sovereign catalog, which has no Databricks
+ * Unity Catalog to fall back to — runs by digest permanently, and this guard
+ * refused every scheduled run because of it (#3449). "Set LOOM_UNITY_TAG to the
+ * tag you intend" was not a remedy either: the operator does not know which tag
+ * names that digest any more than this script did.
+ *
+ * So ASK THE REGISTRY — but ask the question that can actually be answered.
+ * "Which tag names this digest?" has no unique answer (a digest may carry none,
+ * one, or several tags). "Would writing THIS tag change what the app runs?" has
+ * exactly one: resolve the candidate tag in ACR and compare its digest to the
+ * one the app is running.
+ *
+ *   same digest      -> writing it CANNOT change the running image. no-op.
+ *   different digest -> it WOULD change it, from a param default nobody set.
+ *                       REFUSE — and this is a case the tag comparison alone
+ *                       could never have caught.
+ *   registry silent  -> still UNKNOWN, still refused. An unreadable registry is
+ *                       not permission to proceed (R7); it is the reason the
+ *                       roll lane's `2>/dev/null` printed a false verdict.
+ *
+ * Nothing here invents a tag. The candidate is the tag the deploy was already
+ * going to write; the registry only says whether writing it is a content no-op.
+ *
  * ── WHAT IT PRINTS EVEN WHEN IT PASSES ──────────────────────────────────────
  *
  * A row per tag — value, where the value came from, what is running, verdict —
@@ -60,24 +86,30 @@
  * about to write. A guard that only speaks when it refuses would have left that
  * unchanged.
  *
- * READ-ONLY. `az containerapp list` is the only Azure call it makes.
+ * READ-ONLY, with one disclosed exception. `az containerapp list` is the only
+ * call it makes UNLESS an app is digest-pinned; then it also reads the ACR data
+ * plane, which on every Loom registry (publicNetworkAccess=Disabled at rest,
+ * #2603) requires taking the shared firewall lease and releasing it on exit. A
+ * lease it cannot verify re-locked FAILS the step rather than being shrugged
+ * off — same contract as assert-acr-image-tags.sh.
  *
  * Usage:
  *   node scripts/ci/assert-no-silent-image-tag-revert.mjs \
  *     --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
- *     --rg rg-csa-loom-admin-usgovvirginia [--subscription <id>]
+ *     --rg rg-csa-loom-admin-usgovvirginia [--subscription <id>] [--acr <name>]
  *
  * Escape hatch: LOOM_ALLOW_IMAGE_TAG_REVERT=true downgrades a refusal to a loud
- * warning. It is deliberately an explicit, logged act — the FIRST remediation
- * offered is to set the repo variable to the tag you actually intend, because
- * stating the intent is the thing that was missing.
+ * warning. It is deliberately an explicit, logged act — and it is now the LAST
+ * remedy offered rather than the first, because scripts/ci/adopt-image-tags.mjs
+ * makes the ordinary case need no human input at all.
  *
  * Run: node --test scripts/ci/__tests__/silent-image-tag-revert.test.mjs
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { APP_IMAGE_TAGS } from './reconcile-policy.mjs';
-import { resolveRunningImageTags } from './reconcile-policy.mjs';
+import { resolveRunningImageTags, parseImageRef } from './reconcile-policy.mjs';
 import { classify } from './deploy-classify.mjs';
 
 /** envVar -> declared default, parsed out of a `.bicepparam`. */
@@ -100,16 +132,56 @@ export const REPO_BY_ENV_VAR = Object.freeze(
 );
 
 /**
+ * The digest each `appImageTags` key is running, for the keys that are pinned by
+ * digest rather than by tag.
+ *
+ * Derived from the SAME `az containerapp list` projection resolveRunningImageTags
+ * consumes, so the two can never disagree about which apps are digest-pinned.
+ * When one repository is served by several containers they must all be on the
+ * same digest for the question "would writing tag T change the image?" to have a
+ * single answer; two digests is a genuine ambiguity and is left UNKNOWN.
+ *
+ * @param {Array<{name?:string, image?:string}>|null|undefined} containers
+ * @returns {Map<string,{digest:string, apps:string[]}>} key -> running digest
+ */
+export function digestPinsByKey(containers) {
+  const out = new Map();
+  if (!Array.isArray(containers)) return out;
+  const repoToKey = new Map(APP_IMAGE_TAGS.map((e) => [e.repo, e.key]));
+  /** @type {Map<string, {digests:Set<string>, apps:string[]}>} */
+  const byKey = new Map();
+  for (const c of containers) {
+    const ref = parseImageRef(String(c?.image ?? ''));
+    if (!ref || !ref.digest) continue;
+    const key = repoToKey.get(ref.repo);
+    if (!key) continue;
+    const acc = byKey.get(key) || { digests: new Set(), apps: [] };
+    acc.digests.add(ref.digest);
+    acc.apps.push(String(c?.name ?? ''));
+    byKey.set(key, acc);
+  }
+  for (const [key, acc] of byKey) {
+    if (acc.digests.size !== 1) continue; // ambiguous — stays UNKNOWN
+    out.set(key, { digest: [...acc.digests][0], apps: acc.apps });
+  }
+  return out;
+}
+
+/**
  * The pure decision. No I/O, so every branch is testable without Azure.
  *
  * @param {object} a
  * @param {Map<string,string>} a.declared   envVar -> the param file's default
  * @param {Record<string,string|undefined>} a.env  the environment the deploy will run in
  * @param {ReturnType<typeof resolveRunningImageTags>} a.resolution
+ * @param {Record<string,{status:'same'|'different'|'unknown', running?:string, candidate?:string, detail?:string}>} [a.digestChecks]
+ *        key -> what the REGISTRY said about writing the candidate tag over a
+ *        digest-pinned app. Absent = the question was never asked, which is not
+ *        the same as "unknown" and is reported the same way (refuse) either way.
  * @param {boolean} [a.allowRevert]
  * @returns {{rows: Array, refusals: Array, decision:'proceed'|'refuse'}}
  */
-export function decideTagWrites({ declared, env = {}, resolution, allowRevert = false } = {}) {
+export function decideTagWrites({ declared, env = {}, resolution, digestChecks = {}, allowRevert = false } = {}) {
   const rows = [];
   const unknownByKey = new Map((resolution?.unknown || []).map((u) => [u.key, u.why]));
   const pinned = resolution?.pinned || {};
@@ -149,9 +221,37 @@ export function decideTagWrites({ declared, env = {}, resolution, allowRevert = 
       continue;
     }
     if (unknownByKey.has(key)) {
+      // The registry may already have settled this. `digestChecks` carries the
+      // ONE answerable question — does the tag this deploy would write resolve,
+      // right now, to the digest the app is running? — and nothing else. A
+      // `same` verdict is not a guess about which tag "means" the digest; it is
+      // a measurement that writing this one cannot change the image.
+      const dc = digestChecks[key];
+      if (dc && dc.status === 'same') {
+        rows.push({
+          envVar, repo, value, source, running: `digest ${String(dc.running).slice(0, 19)}…`, verdict: 'no-op',
+          why: `${repo} runs a digest-pinned image, and '${value}' resolves in ACR to that SAME digest ` +
+               `(${dc.running}), so writing it cannot change what the app runs`,
+        });
+        continue;
+      }
+      if (dc && dc.status === 'different') {
+        rows.push({
+          envVar, repo, value, source, running: `digest ${String(dc.running).slice(0, 19)}…`,
+          verdict: source === 'pin' ? 'move' : 'REFUSE',
+          why: source === 'pin'
+            ? `an explicit pin moves ${repo} from digest ${dc.running} to '${value}' (${dc.candidate})`
+            : `${repo} runs digest ${dc.running} and '${value}' resolves in ACR to a DIFFERENT digest ` +
+              `(${dc.candidate}) — this deploy would change the running image from the param file's own ` +
+              'default, which nobody asked for',
+        });
+        continue;
+      }
       rows.push({
         envVar, repo, value, source, running: 'UNKNOWN', verdict: source === 'pin' ? 'move' : 'REFUSE',
-        why: unknownByKey.get(key),
+        why: dc && dc.status === 'unknown'
+          ? `${unknownByKey.get(key)}; and the registry could not be read to settle it — ${dc.detail}`
+          : unknownByKey.get(key),
       });
       continue;
     }
@@ -219,6 +319,120 @@ function summary(lines) {
   appendFileSync(f, `${lines.join('\n')}\n`);
 }
 
+/**
+ * The `acrloom*` registry in the admin RG, or '' when there provably is none.
+ *
+ * Discovered here rather than handed in by an earlier step ON PURPOSE. A verdict
+ * assembled from another step's output is a verdict that can be talked out of a
+ * refusal by breaking that step; every input to this decision is read by this
+ * script itself. Returns null when the read FAILED — which is not "no registry".
+ */
+function discoverAcr(rg, subscription) {
+  const args = ['acr', 'list', '-g', rg, '--query', "[?starts_with(name,'acrloom')]|[0].name", '-o', 'tsv'];
+  if (subscription) args.push('--subscription', subscription);
+  try {
+    // `az -o tsv` carries a trailing CR on some hosts; strip it or every later
+    // string comparison silently fails (`az_tsv_carriage_return_breaks_loops`).
+    const out = execFileSync('az', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const name = String(out).replace(/\r/g, '').trim();
+    return name === 'None' ? '' : name;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask the REGISTRY whether writing `repo:tag` would change a digest-pinned app.
+ *
+ * Delegates the lookup to scripts/ci/resolve-acr-digest.sh — the shared
+ * three-state resolver the roll lane uses — rather than growing a second
+ * dialect of "is this tag there?". Its exit codes ARE the contract:
+ *   0 -> digest on stdout, 3 -> the registry ANSWERED absent, 4 -> UNREADABLE.
+ * Anything else is an outcome this caller does not understand, and an
+ * unrecognised verdict is never spent as a pass (#3090).
+ *
+ * @returns {Record<string,{status:'same'|'different'|'unknown', running:string, candidate?:string, detail?:string}>}
+ */
+function resolveDigestChecks({ pins, candidates, acr, repoByKey }) {
+  const checks = {};
+  const lease = join(process.cwd(), 'scripts', 'csa-loom', 'acr-firewall-lease.sh');
+  let held = false;
+  try {
+    const out = execFileSync('bash', [lease, 'acquire', '--acr', acr], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    // Never discard the lease's own words — that discarding is what turned a
+    // permission denial into "the tag does not exist" (#3090, R7).
+    if (out) console.log(String(out).trimEnd());
+    held = true;
+  } catch (e) {
+    const detail = `${String(e?.stdout || '')}${String(e?.stderr || e?.message || e)}`.slice(0, 400);
+    console.log(`::warning::image-tag-revert: ACR firewall lease acquire failed — ${detail}`);
+    // No lease means the data plane is unreachable from a hosted runner, so
+    // every lookup would fail for a reason that says NOTHING about the images.
+    // Report that as UNKNOWN once instead of N times with a misleading cause.
+    for (const [key, pin] of pins) {
+      checks[key] = { status: 'unknown', running: pin.digest, detail: `the ACR firewall lease on '${acr}' could not be acquired: ${detail}` };
+    }
+    return checks;
+  }
+  try {
+    for (const [key, pin] of pins) {
+      const tag = candidates[key];
+      const repo = repoByKey[key];
+      if (!tag || !repo) continue;
+      let out = '';
+      let code = 0;
+      try {
+        // stderr INHERITED on purpose: resolve-acr-digest.sh writes the
+        // registry's own answer and its attempt/backoff trace there, and that
+        // trace is the evidence for whichever verdict this produces.
+        out = execFileSync('bash', [join(process.cwd(), 'scripts', 'ci', 'resolve-acr-digest.sh'),
+          '--acr', acr, '--image', `${repo}:${tag}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+      } catch (e) {
+        code = typeof e?.status === 'number' ? e.status : -1;
+        out = String(e?.stdout || '');
+      }
+      if (code === 0) {
+        const digest = String(out).replace(/\r/g, '').trim().split('\n').pop();
+        checks[key] = digest === pin.digest
+          ? { status: 'same', running: pin.digest, candidate: digest }
+          : { status: 'different', running: pin.digest, candidate: digest };
+        continue;
+      }
+      if (code === 3) {
+        // The registry ANSWERED that the tag is not there. That is not "same"
+        // and not "different" — it is a deploy about to reference an image that
+        // does not exist, which the image preflight also refuses. UNKNOWN here,
+        // with the registry's own answer recorded.
+        checks[key] = { status: 'unknown', running: pin.digest, detail: `${repo}:${tag} is NOT in the registry, so it cannot be compared to the running digest` };
+        continue;
+      }
+      checks[key] = {
+        status: 'unknown', running: pin.digest,
+        detail: code === 4
+          ? `the registry could not be READ for ${repo}:${tag} (resolve-acr-digest exit 4) — this establishes nothing about the image`
+          : `resolve-acr-digest exited ${code} for ${repo}:${tag}, which is not one of its documented outcomes (0/3/4); an unrecognised verdict is not a pass`,
+      };
+    }
+  } finally {
+    if (held) {
+      // No `|| true`: a lease that cannot be verified re-locked means the
+      // registry may be publicly reachable, and that must be loud (#3088/C24).
+      try {
+        const out = execFileSync('bash', [lease, 'release', '--acr', acr], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        if (out) console.log(String(out).trimEnd());
+      } catch (e) {
+        console.error(
+          `::error::image-tag-revert: the ACR firewall lease on '${acr}' could NOT be verified re-locked after the ` +
+            `digest lookups. The registry may be PUBLICLY REACHABLE. ` +
+            `${String(e?.stdout || '')}${String(e?.stderr || e?.message || e)}`.slice(0, 500),
+        );
+        checks.__leaseReleaseFailed = true;
+      }
+    }
+  }
+  return checks;
+}
+
 function main() {
   const paramFile = arg('param-file');
   const rg = arg('rg');
@@ -252,7 +466,46 @@ function main() {
     console.log(`::warning::image-tag-revert: could not read the Container Apps in ${rg} — ${probe.error}`);
   }
 
-  const { rows, refusals, decision } = decideTagWrites({ declared, env: process.env, resolution, allowRevert });
+  // TWO PASSES, and the order matters. The first establishes WHICH TAG this
+  // deploy would write for each key — the registry cannot be asked whether a
+  // write is a no-op until the candidate is known. Only then, and only for the
+  // apps that are digest-pinned (so the tag comparison has nothing to compare),
+  // is the registry consulted. Every other key is decided without touching ACR.
+  const firstPass = decideTagWrites({ declared, env: process.env, resolution, allowRevert });
+  const pins = digestPinsByKey(probe.error ? null : probe.containers);
+  let digestChecks = {};
+  let leaseReleaseFailed = false;
+  if (pins.size > 0) {
+    const candidates = Object.fromEntries(
+      firstPass.rows.filter((r) => r.repo && KEY_BY_ENV_VAR[r.envVar]).map((r) => [KEY_BY_ENV_VAR[r.envVar], r.value]),
+    );
+    const acr = arg('acr') || discoverAcr(rg, subscription);
+    if (acr === null) {
+      console.log(
+        `::warning::image-tag-revert: ${pins.size} app(s) run digest-pinned images, and the registries in ${rg} ` +
+          'could not be enumerated, so the registry could not be asked whether the tags this deploy would write ' +
+          'name those same digests. Those keys stay UNKNOWN.',
+      );
+    } else if (!acr) {
+      console.log(
+        `::warning::image-tag-revert: ${pins.size} app(s) run digest-pinned images but ${rg} holds no acrloom* ` +
+          'registry, so their digests cannot be resolved to a tag. Those keys stay UNKNOWN.',
+      );
+    } else {
+      digestChecks = resolveDigestChecks({
+        pins, candidates, acr, repoByKey: Object.fromEntries(APP_IMAGE_TAGS.map((e) => [e.key, e.repo])),
+      });
+      leaseReleaseFailed = digestChecks.__leaseReleaseFailed === true;
+      delete digestChecks.__leaseReleaseFailed;
+      for (const [key, c] of Object.entries(digestChecks)) {
+        console.log(`[image-tag] digest ${key.padEnd(18)} ${c.status}${c.detail ? ` — ${c.detail}` : ''}`);
+      }
+    }
+  }
+
+  const { rows, refusals, decision } = decideTagWrites({
+    declared, env: process.env, resolution, digestChecks, allowRevert,
+  });
 
   // Print repo:tag only. The registry host is a live-estate identifier and this
   // repository is public (docs-hygiene) — same rule reconcile-resolve.mjs follows.
@@ -273,6 +526,14 @@ function main() {
   summary(md);
 
   if (refusals.length === 0) {
+    if (leaseReleaseFailed) {
+      console.error(
+        '::error::image-tag-revert: no tag would be silently reverted, but the ACR firewall lease could not be ' +
+          'verified re-locked. Failing the step: leaving a sovereign registry publicly reachable is not something ' +
+          'a passing verdict may hide.',
+      );
+      return 1;
+    }
     console.log(
       `image-tag-revert OK — ${rows.length} tag(s) checked against what ${rg} is actually running; none would be ` +
         'silently moved off a tag nobody asked to change.',
@@ -282,8 +543,10 @@ function main() {
 
   for (const r of refusals) {
     console.error(
-      `::error::image-tag-revert: ${r.envVar} — ${r.why}. Set the repo variable ${r.envVar} to the tag you intend ` +
-        `(currently resolving to '${r.value}' from the param file default).`,
+      `::error::image-tag-revert: ${r.envVar} — ${r.why}. This deploy resolves it to '${r.value}'. ` +
+        'scripts/ci/adopt-image-tags.mjs is what normally makes this unnecessary by exporting the tag the estate ' +
+        'is running; if it ran and this key is still unresolved, the estate did not answer for it — fix that, or ' +
+        `set the repo variable ${r.envVar} to state the tag you intend.`,
     );
   }
   if (allowRevert) {
@@ -291,12 +554,13 @@ function main() {
       `::warning::image-tag-revert: ${refusals.length} silent revert(s) ACKNOWLEDGED via LOOM_ALLOW_IMAGE_TAG_REVERT=true. ` +
         'Proceeding, and recording that this was an explicit choice rather than an unnoticed default.',
     );
-    return 0;
+    return leaseReleaseFailed ? 1 : 0;
   }
   console.error(
     `::error::image-tag-revert: REFUSING. ${refusals.length} image tag(s) would be written from the param file's own ` +
-      'default over a live app running something else — the exact silent revert #3161 describes. Remediate by pinning ' +
-      'the repo variable(s) above, or acknowledge explicitly with LOOM_ALLOW_IMAGE_TAG_REVERT=true.',
+      'default over a live app running something else — the exact silent revert #3161 describes. The deploy is ' +
+      'supposed to ADOPT what is running (scripts/ci/adopt-image-tags.mjs, #3449) so no human input is needed; a ' +
+      'refusal here means adoption did not happen or could not establish what is live.',
   );
   return 1;
 }

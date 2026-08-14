@@ -75,6 +75,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runRatchet, loadBaseline } from './_ratchet-count.mjs';
 import { parseWorkflow, mapKeys, scalarValue } from './_workflow-yaml.mjs';
 import { unassignedReferences, isPosixShell, githubEnvWrites, sourcesAFile, envFileWrites } from './_shell-vars.mjs';
+import { producerEnvWrites } from './_github-env-producers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
@@ -128,12 +129,22 @@ export function scanWorkflow(text) {
     // Names any step of this job publishes into the job's environment, and
     // names any step writes into an env-style FILE (only consulted for steps
     // that actually source one — see below).
+    //
+    // TWO MECHANISMS, and for a long time only one was seen (#3449).
+    // `githubEnvWrites` reads SHELL TEXT for `NAME=… >> "$GITHUB_ENV"`. A step
+    // whose body is `node scripts/ci/adopt-image-tags.mjs` writes seventeen
+    // names to that same file from inside Node, where no shell scanner can
+    // reach — so a correct Gov deploy read as four unassigned variables on a
+    // lane held at ZERO. `producerEnvWrites` supplies the missing half from the
+    // shared table in `_github-env-producers.mjs`, the same table
+    // check-bicepparam-env-reaches-deploy.mjs consults for the same fact.
     const ghEnv = new Set();
     const fileEnv = new Set();
     for (const st of stepList) {
       const body = scalarValue(st?.run);
       if (!body) continue;
       for (const n of githubEnvWrites(body)) ghEnv.add(n);
+      for (const n of producerEnvWrites(body)) ghEnv.add(n);
       for (const n of envFileWrites(body)) fileEnv.add(n);
     }
 
@@ -203,6 +214,37 @@ jobs:
         run: Write-Host "$SomePwshVar"
 `;
 
+// ── the #3449 control, in TWO halves that MUST disagree ──────────────────────
+//
+// A Node `$GITHUB_ENV` producer is invisible to a shell-text scanner, so
+// `producerEnvWrites` credits it from a declared table. A credit that cannot be
+// observed CHANGING the verdict is indistinguishable from the guard having
+// stopped looking (`guard_with_zero_population_needs_embedded_control`), so
+// these two fixtures differ by exactly one line — the producer step — and the
+// self-test asserts the verdict MOVES between them.
+//
+// If the producer table is emptied, the regex stops matching, or the wiring in
+// scanWorkflow is removed, WITH goes red. If the credit is widened into an
+// unconditional "any LOOM_ name is fine", WITHOUT goes red. Both directions are
+// covered, so neither mutation passes quietly.
+const PRODUCER_STEP = `      - name: Adopt the image tags this estate is running
+        run: |
+          set -euo pipefail
+          node scripts/ci/adopt-image-tags.mjs --param-file p.bicepparam --rg rg-x
+`;
+const fixtureNodeProducer = (withProducer) => `
+name: fixture
+on: workflow_dispatch
+jobs:
+  deploy-validate:
+    runs-on: ubuntu-latest
+    steps:
+${withProducer ? PRODUCER_STEP : ''}      - name: Image preflight
+        run: |
+          set -uo pipefail
+          bash scripts/ci/assert-acr-image-tags.sh --acr acr1 "loom-unity:$LOOM_UNITY_TAG"
+`;
+
 function selfTest() {
   let ok = true;
   const say = (pass, msg) => {
@@ -224,6 +266,18 @@ function selfTest() {
     `the fixed shape is silent — env scopes, $GITHUB_ENV, :- defaults, single quotes, pwsh (got [${clean.findings.map((f) => f.name).join(', ')}])`,
   );
   say(clean.steps >= 3, `bash steps were actually examined (${clean.steps})`);
+
+  // #3449 — the Node-producer credit, proven by the verdict MOVING.
+  const without = scanWorkflow(fixtureNodeProducer(false)).findings;
+  say(
+    without.some((f) => f.name === 'LOOM_UNITY_TAG'),
+    `a $GITHUB_ENV name with NO producer step is still reported — found [${without.map((f) => f.name).join(', ') || 'nothing'}]`,
+  );
+  const withProducer = scanWorkflow(fixtureNodeProducer(true)).findings;
+  say(
+    withProducer.length === 0,
+    `the SAME read is silent once the Node producer step is present — got [${withProducer.map((f) => f.name).join(', ')}]`,
+  );
 
   console.log(ok ? '[workflow-unset-vars] self-test OK' : '[workflow-unset-vars] self-test FAILED');
   return ok ? 0 : 1;
