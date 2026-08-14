@@ -26,8 +26,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # #3426 — per-SHA on push/dispatch. This lane publishes FOUR required
+  # contexts (PowerShell Lint, Python Lint, Repo Hygiene, Secret Scan), and with
+  # a ref-keyed group + cancel-in-progress:true every merge cancelled the
+  # previous commit's run: 4 of the last 30 main runs cancelled (2026-08-14).
+  # A cancelled required check is an ABSENCE, not a pass. See
+  # scripts/ci/check-required-lane-concurrency.mjs, which now enforces this.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

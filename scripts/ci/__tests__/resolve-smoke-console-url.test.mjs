@@ -30,6 +30,7 @@ import {
   isUsableUrl,
   normalizeKey,
   pickSmokeUrl,
+  unwrapOutputValue,
 } from '../resolve-smoke-console-url.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../resolve-smoke-console-url.mjs', import.meta.url));
@@ -142,4 +143,82 @@ test('CLI fails closed on the non-JSON `KEY="value"` stream', () => {
   assert.equal(r.status, 1);
   assert.equal(r.stdout, '');
   assert.match(r.stderr, /not JSON/);
+});
+
+// ── ARM deployment-output shape (#3415) ────────────────────────────────────
+//
+// #3415 removed azd from the sovereign lanes, so the outputs now arrive from
+// `az deployment sub show --query properties.outputs`, which wraps every value
+// as { "type": …, "value": … } instead of the flat map azd wrote. These pin the
+// widening AND, more importantly, pin that it does not weaken the three states
+// the tests above establish: an ARM-shaped EMPTY public URL is still not a
+// match, and an ARM-shaped internal-only deploy is still refused.
+
+/**
+ * The same GCC-High deploy as GCCH_ENV, in ARM's output shape. There are no
+ * AZURE_* values here — ARM returns only what main.bicep declared as `output`.
+ */
+const GCCH_ARM_OUTPUTS = {
+  consoleUrl: {
+    type: 'String',
+    value: 'https://loom-console.icystone-1234abcd.usgovvirginia.azurecontainerapps.us',
+  },
+  frontDoorPublicUrl: { type: 'String', value: 'https://loom-console-abcdefgh-h1h2.z01.azurefd.us' },
+  vanityPublicUrl: { type: 'String', value: '' },
+  mcpServerUrl: {
+    type: 'String',
+    value: 'https://loom-mcp.icystone-1234abcd.usgovvirginia.azurecontainerapps.us',
+  },
+};
+
+test('ARM output shape resolves the public ingress (the post-#3415 source)', () => {
+  const picked = pickSmokeUrl(GCCH_ARM_OUTPUTS);
+  assert.equal(picked.kind, 'public');
+  assert.equal(picked.key, 'frontDoorPublicUrl');
+  assert.equal(picked.url, GCCH_ARM_OUTPUTS.frontDoorPublicUrl.value);
+});
+
+test('ARM shape: an EMPTY public output is STILL not a match — "Front Door did not deploy" must not hide inside the wrapper', () => {
+  const picked = pickSmokeUrl({
+    consoleUrl: GCCH_ARM_OUTPUTS.consoleUrl,
+    frontDoorPublicUrl: { type: 'String', value: '' },
+    vanityPublicUrl: { type: 'String', value: '' },
+  });
+  assert.equal(picked.kind, 'internal', 'an empty ARM-wrapped public URL must not count as a public ingress');
+  assert.equal(picked.key, 'consoleUrl');
+});
+
+test('ARM shape: internal-only is STILL refused, not degraded into the internal URL', () => {
+  const r = runCli(JSON.stringify({ consoleUrl: GCCH_ARM_OUTPUTS.consoleUrl }));
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /REFUSING to answer/);
+});
+
+test('ARM shape: CLI prints ONLY the resolved URL on stdout', () => {
+  const r = runCli(JSON.stringify(GCCH_ARM_OUTPUTS));
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, GCCH_ARM_OUTPUTS.frontDoorPublicUrl.value);
+});
+
+test('unwrapOutputValue is narrow — it only unwraps a plain object that HAS a `value`', () => {
+  assert.equal(unwrapOutputValue({ type: 'String', value: 'https://x.example.us' }), 'https://x.example.us');
+  assert.equal(unwrapOutputValue('https://x.example.us'), 'https://x.example.us', 'a flat azd value passes through');
+  assert.equal(unwrapOutputValue(''), '');
+  // No `value` property -> passed through untouched, so the unwrapper cannot
+  // coerce it into a match.
+  const noValue = { type: 'String' };
+  assert.equal(unwrapOutputValue(noValue), noValue);
+  const arr = ['https://x.example.us'];
+  assert.equal(unwrapOutputValue(arr), arr, 'an array is not an ARM output wrapper');
+  assert.equal(unwrapOutputValue(null), null);
+});
+
+test('unwrapping cannot invent a match from a NON-url ARM output (CONTROL)', () => {
+  const picked = pickSmokeUrl({
+    consoleUrl: { type: 'String', value: 'not-a-url' },
+    frontDoorPublicUrl: { type: 'Object', value: { host: 'x.example.us' } },
+  });
+  assert.equal(picked.kind, null);
+  assert.equal(picked.url, null);
 });

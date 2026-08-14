@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Resolve the console URL an EXTERNAL smoke test may probe, from the azd
- * environment the provision step just wrote.
+ * Resolve the console URL an EXTERNAL smoke test may probe, from the outputs the
+ * provision step just wrote — ARM deployment outputs since #3415, or a flat azd
+ * environment (the pre-#3415 shape, still accepted).
  *
  * WHY THIS EXISTS (#3137)
  * -----------------------
@@ -57,6 +58,10 @@
  * on failure prints KEY NAMES ONLY — never a value it did not select.
  *
  * Usage:
+ *   # ARM deployment outputs (the sovereign lanes, since #3415):
+ *   az deployment sub show --name <n> --subscription <s> --query properties.outputs -o json \
+ *     | node scripts/ci/resolve-smoke-console-url.mjs
+ *   # flat azd environment (still accepted):
  *   azd env get-values --output json | node scripts/ci/resolve-smoke-console-url.mjs
  * Tests:
  *   node --test scripts/ci/__tests__/resolve-smoke-console-url.test.mjs
@@ -88,11 +93,36 @@ export function isUsableUrl(value) {
   return /^https?:\/\/[^\s]+$/.test(value.trim());
 }
 
+/**
+ * TWO INPUT SHAPES, ONE RULE (#3415).
+ *
+ * `azd env get-values --output json` returns a FLAT map:
+ *     { "consoleUrl": "https://…" }
+ * `az deployment sub show --query properties.outputs` returns ARM's own shape:
+ *     { "consoleUrl": { "type": "String", "value": "https://…" } }
+ *
+ * #3415 removed azd from the sovereign lanes, so the outputs now arrive
+ * ARM-shaped. This unwraps `{ value }` and passes everything else through.
+ *
+ * It is a widening, not a guess, and deliberately narrow in two ways: it only
+ * unwraps a plain object that HAS a `value` property, and it does not care what
+ * that value is — an ARM output of `{"type":"String","value":""}` unwraps to the
+ * empty string and is then rejected by `isUsableUrl`, which is exactly the
+ * "Front Door did not deploy" state this file must not hide.
+ */
+export function unwrapOutputValue(raw) {
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw) && 'value' in raw) {
+    return raw.value;
+  }
+  return raw;
+}
+
 function lookup(values, wanted) {
   const target = normalizeKey(wanted);
   for (const [key, value] of Object.entries(values)) {
     if (normalizeKey(key) !== target) continue;
-    if (isUsableUrl(value)) return { key, url: String(value).trim() };
+    const unwrapped = unwrapOutputValue(value);
+    if (isUsableUrl(unwrapped)) return { key, url: String(unwrapped).trim() };
     // Present but empty/garbage is NOT a match — an empty `frontDoorPublicUrl`
     // is precisely the "Front Door did not deploy" state this must not hide.
     return null;
@@ -125,9 +155,9 @@ export async function main() {
   const raw = (await readStdin()).trim();
   if (raw === '') {
     console.error(
-      '[resolve-smoke-console-url] STDIN was EMPTY. Expected the JSON object from\n' +
-        '  azd env get-values --output json\n' +
-        'Nothing is asserted about the estate: this run did not read the azd environment at all.',
+      '[resolve-smoke-console-url] STDIN was EMPTY. Expected a JSON object of deployment outputs from\n' +
+        '  az deployment sub show --query properties.outputs -o json   (or: azd env get-values --output json)\n' +
+        'Nothing is asserted about the estate: this run did not read the outputs at all.',
     );
     process.exit(1);
   }
@@ -138,8 +168,8 @@ export async function main() {
   } catch (err) {
     console.error(
       `[resolve-smoke-console-url] STDIN is not JSON (${err.message}). ` +
-        '`azd env get-values --output json` is the documented machine-readable form; ' +
-        'the bare `azd env get-values` KEY="value" stream is not parsed here.',
+        'Expected the machine-readable form: `az deployment sub show --query properties.outputs -o json` ' +
+        '(or `azd env get-values --output json`); the bare `azd env get-values` KEY="value" stream is not parsed here.',
     );
     process.exit(1);
   }
@@ -149,8 +179,9 @@ export async function main() {
   }
 
   const picked = pickSmokeUrl(values);
-  // KEY NAMES ONLY. The azd environment holds AZURE_SUBSCRIPTION_ID and other
-  // values that must never reach a log.
+  // KEY NAMES ONLY. The azd environment holds AZURE_SUBSCRIPTION_ID, and ARM
+  // deployment outputs can hold anything main.bicep declared — neither may
+  // reach a log.
   const keyList = Object.keys(values).sort().join(', ') || '(none)';
 
   if (picked.kind === 'public') {
@@ -162,7 +193,7 @@ export async function main() {
   if (picked.kind === 'internal') {
     console.error(
       `[resolve-smoke-console-url] REFUSING to answer with \`${picked.key}\`.\n` +
-        '  The only console URL this environment carries is the VNet-INTERNAL one: the Container Apps\n' +
+        '  The only console URL these outputs carry is the VNet-INTERNAL one: the Container Apps\n' +
         '  managed environment is created with `internal: true`, so that FQDN resolves through Private\n' +
         '  DNS inside the hub VNet and nowhere else. A GitHub-hosted runner cannot reach it, and\n' +
         '  probing it would report connection failures as Console failures.\n' +
@@ -171,17 +202,17 @@ export async function main() {
         '  frontDoorEnabled = true and deployAppsEnabled = true, so Front Door should have produced one.\n' +
         '  Check the Front Door module output and the "Approve the Front Door -> ACA private-endpoint\n' +
         '  connection" step.\n' +
-        `  Keys present in the azd environment: ${keyList}`,
+        `  Keys present in the outputs: ${keyList}`,
     );
     process.exit(1);
   }
 
   console.error(
-    '[resolve-smoke-console-url] NO console URL of any kind in the azd environment.\n' +
+    '[resolve-smoke-console-url] NO console URL of any kind in the deployment outputs.\n' +
       `  Looked for (case/separator-insensitive): ${[...PUBLIC_KEYS, ...INTERNAL_KEYS].join(', ')}\n` +
       '  This does NOT establish that the deploy failed — it establishes that the provision wrote back\n' +
       '  no console output, which means the smoke test has no target and must not invent one.\n' +
-      `  Keys present in the azd environment: ${keyList}`,
+      `  Keys present in the outputs: ${keyList}`,
   );
   process.exit(1);
 }
