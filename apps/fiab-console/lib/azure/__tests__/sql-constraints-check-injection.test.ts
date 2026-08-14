@@ -121,6 +121,63 @@ describe('addConstraint CHECK — breakout attempts are refused before any DB ca
 });
 
 // ---------------------------------------------------------------------------
+// Delimited identifiers — the bypass the first version of the scan had.
+//
+// A `'` inside [ ] (or " " under QUOTED_IDENTIFIER ON) is an ordinary NAME
+// character to T-SQL, not a string delimiter. A scanner that tracks only '…'
+// therefore desynchronises from the parser: the attacker's apostrophes make it
+// believe a clause-closing `)` is "inside a string", and the depth check never
+// sees it. Both payloads below were ACCEPTED by the first revision.
+// ---------------------------------------------------------------------------
+
+describe('addConstraint CHECK — a quote inside a delimited identifier cannot desync the scan', () => {
+  it.each([
+    ['brackets hide the ")" and the payload behind fake literal state', "[c'] OR 1=1) DROP TABLE Orders --'"],
+    ['brackets bracket the payload on both sides', "[a'] ) DROP TABLE Orders [b']"],
+    ['double-quoted identifier used the same way', '"c") DROP TABLE Orders --"'],
+    ['an unterminated bracket identifier', '[abc > 0'],
+    ['an unterminated double-quoted identifier', '"abc > 0'],
+  ])('rejects when %s', async (_label, expression) => {
+    const r = await add(expression);
+    expect(r).toMatchObject({ ok: false, status: 400 });
+    expect(ep).not.toHaveBeenCalled();
+  });
+
+  it('the desync payload is refused even with the catalog reads succeeding', async () => {
+    mockHappyPath();
+    const r = await add("[c'] OR 1=1) DROP TABLE Orders --'");
+    expect(r).toMatchObject({ ok: false, status: 400 });
+    expect(ep.mock.calls.map((c) => String(c[2] ?? ''))).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The same root cause produced FALSE POSITIVES: SQL Server permits these
+// characters in a delimited name, and the old scan rejected ordinary
+// constraints while blaming a string literal the user never wrote.
+// ---------------------------------------------------------------------------
+
+describe('addConstraint CHECK — legitimate delimited identifiers are accepted', () => {
+  it.each([
+    ['an apostrophe in a column name', "[Owner's Name] <> ''"],
+    ['another apostrophe name', "[Driver's License] IS NOT NULL"],
+    ['a semicolon in a column name', '[Note; internal] IS NOT NULL'],
+    ['a double dash in a column name', '[rate--adj] > 0'],
+    ['an open paren in a column name', '[Formula(] > 0'],
+    ['a "]]" escape inside a bracket identifier', '[a]]b] > 0'],
+    ['a double-quoted identifier holding an apostrophe', '"Owner\'s Name" IS NOT NULL'],
+    ['a scalar UDF call (engine-permitted, see the threat-model note)', 'dbo.Fn([col]) = 1'],
+  ])('accepts %s', async (_label, expression) => {
+    mockHappyPath();
+    const r = await add(expression);
+    expect(r).toMatchObject({ ok: true });
+    expect(ep.mock.calls[1][2]).toBe(
+      `ALTER TABLE [dbo].[Orders] WITH CHECK ADD CONSTRAINT [CK_X] CHECK (${expression});`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Legitimate expressions must still work — a containment rule that rejects real
 // constraints would just be removed by the next person who hit it.
 // ---------------------------------------------------------------------------
