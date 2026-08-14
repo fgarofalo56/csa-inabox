@@ -394,7 +394,7 @@ async function probeDlpGraphRoles(): Promise<CheckResult> {
     return {
       ...base, status: 'warn',
       detail: 'DLP/Information-Protection Graph integration explicitly disabled (LOOM_DLP_ENABLED=false).',
-      remediation: 'Remove LOOM_DLP_ENABLED=false (DLP defaults ON) AND grant the Console UAMI the Graph app roles SecurityAlert.Read.All + SecurityIncident.Read.All + InformationProtectionPolicy.Read.All (scripts/csa-loom/grant-graph-approles.sh), then a Tenant Admin grants admin consent. The Loom-native policy library authors + saves regardless.',
+      remediation: 'Remove LOOM_DLP_ENABLED=false — DLP defaults ON. The Graph app roles (SecurityAlert.Read.All + SecurityIncident.Read.All + InformationProtectionPolicy.Read.All) are assigned to the Console UAMI by the csa-loom-post-deploy-bootstrap "Grant MIP+DLP Graph AppRoles" step; you do not grant them by hand. The Loom-native policy library authors + saves regardless.',
       redeploy: true,
       docs: 'https://learn.microsoft.com/graph/permissions-reference',
     };
@@ -402,21 +402,27 @@ async function probeDlpGraphRoles(): Promise<CheckResult> {
   try {
     const { listDlpViolations } = await import('@/lib/azure/dlp-graph-client');
     await withTimeout(listDlpViolations({ top: 1 }), 8000);
-    return { ...base, status: 'pass', detail: 'Graph security/DLP reachable — the Console UAMI holds the required app roles + admin consent.' };
+    return { ...base, status: 'pass', detail: 'Graph security/DLP reachable — the Console UAMI holds the required app roles.' };
   } catch (e: any) {
     const msg = e?.message || String(e);
     const roleGap = /missing application roles|securityalert\.read\.all|403|401|consent/i.test(msg);
     return {
       ...base, status: 'warn',
-      detail: roleGap ? `Graph rejected the DLP read — missing roles or admin consent: ${msg}` : `DLP Graph probe inconclusive: ${msg}`,
-      remediation: 'Grant the Console UAMI Graph app roles SecurityAlert.Read.All + SecurityIncident.Read.All + InformationProtectionPolicy.Read.All (scripts/csa-loom/grant-graph-approles.sh), then a Tenant Admin issues admin consent (Entra → Enterprise applications → Console UAMI → Permissions). Some tenants only expose security/alerts_v2 (not the /beta DLP policy segment) — the route surfaces that honestly.',
+      detail: roleGap ? `Graph rejected the DLP read — the Console UAMI is missing the required app roles: ${msg}` : `DLP Graph probe inconclusive: ${msg}`,
+      remediation: 'Re-run csa-loom-post-deploy-bootstrap.yml. Its "Grant MIP+DLP Graph AppRoles" step assigns SecurityAlert.Read.All + SecurityIncident.Read.All + InformationProtectionPolicy.Read.All to the Console UAMI — for a MANAGED IDENTITY the app-role assignment IS the grant, so there is no separate admin-consent click to make. If that step reported 403, the deploy principal lacks AppRoleAssignment.ReadWrite.All on Microsoft Graph; a Global Administrator grants it ONCE and every later bootstrap run succeeds unattended. Some tenants only expose security/alerts_v2 (not the /beta DLP policy segment) — the route surfaces that honestly.',
       redeploy: true,
       docs: 'https://learn.microsoft.com/graph/permissions-reference#securityalertreadall',
       fixScript: [
-        '# Grant the Console UAMI the Graph DLP/security app roles, then a Tenant Admin admin-consents.',
+        '# The bootstrap already performs this grant — re-run it rather than granting by hand.',
+        '# gh workflow run csa-loom-post-deploy-bootstrap.yml',
+        '#',
+        '# ONLY if that job printed a 403 on the AppRole step, a Global Administrator runs this ONCE',
+        '# so the bootstrap can assign Graph app roles unattended thereafter:',
         `az account set --subscription "${CTX.sub}"`,
-        'bash scripts/csa-loom/grant-graph-approles.sh   # SecurityAlert.Read.All + SecurityIncident.Read.All + InformationProtectionPolicy.Read.All',
-        '# Then: Entra admin center → Enterprise applications → Console UAMI → Permissions → Grant admin consent.',
+        'GRAPH_SP_ID=$(az ad sp list --filter "appId eq \'00000003-0000-0000-c000-000000000000\'" --query "[0].id" -o tsv)',
+        'APPROLE_RW=$(az ad sp show --id "$GRAPH_SP_ID" --query "appRoles[?value==\'AppRoleAssignment.ReadWrite.All\'].id | [0]" -o tsv)',
+        '# az rest --method POST --url ".../servicePrincipals/<DEPLOY_SP_OBJID>/appRoleAssignments" \\',
+        '#   --body "{\\"principalId\\":\\"<DEPLOY_SP_OBJID>\\",\\"resourceId\\":\\"$GRAPH_SP_ID\\",\\"appRoleId\\":\\"$APPROLE_RW\\"}"',
       ].join('\n'),
     };
   }

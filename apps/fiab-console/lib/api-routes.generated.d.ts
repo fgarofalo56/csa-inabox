@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1674 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1675 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -771,6 +771,7 @@ export type StaticApiRoute =
   | '/api/setup/scan-purview'
   | '/api/setup/subscriptions'
   | '/api/setup/tenant-topology'
+  | '/api/setup/validate-adoption'
   | '/api/setup/wire-existing'
   | '/api/setup/workflow-run-status'
   | '/api/spark/session-pool'

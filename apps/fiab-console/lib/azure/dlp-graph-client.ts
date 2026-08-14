@@ -140,7 +140,7 @@ function notConfiguredHint(missing: string): DlpNotConfiguredHint {
         reason: 'Required to surface recent DLP alerts under the Alerts tab.',
       },
     ],
-    followUp: 'DLP is ON by default (admin opt-out via LOOM_DLP_ENABLED=false). To surface live Purview DLP reads/violations: (1) run scripts/csa-loom/grant-graph-approles.sh — it grants both AppRoles to the Console UAMI in one shot, (2) Tenant Admin issues admin consent at https://portal.azure.com → Entra ID → Enterprise applications → Console UAMI → Permissions. The Loom-native policy library + best-practice default policy author + save regardless of Graph consent. Note: the policy simulation endpoint is /beta-only and may return 404 in tenants that haven\'t opted into the Graph DLP preview — the BFF route surfaces that gap explicitly instead of faking results.',
+    followUp: 'DLP is ON by default (admin opt-out via LOOM_DLP_ENABLED=false). The Graph AppRoles behind the live Purview DLP reads are assigned to the Console UAMI by csa-loom-post-deploy-bootstrap.yml ("Grant MIP+DLP Graph AppRoles") — for a MANAGED IDENTITY that assignment IS the grant, so there is NO admin-consent click and no script to run by hand. If that step reported 403, a Global Administrator grants the deploy principal AppRoleAssignment.ReadWrite.All on Microsoft Graph ONCE and the next bootstrap run completes unattended. The Loom-native policy library + best-practice default policy author + save regardless. Note: the policy simulation endpoint is /beta-only and may return 404 in tenants that haven\'t opted into the Graph DLP preview — the BFF route surfaces that gap explicitly instead of faking results.',
   };
 }
 
@@ -239,11 +239,13 @@ function graphSecurityRoleHint(status: number): DlpNotConfiguredHint {
   h.bicepStatus =
     `LOOM_DLP_ENABLED=true, but Microsoft Graph answered ${status} on /v1.0/security/alerts_v2 — ` +
     'the Console UAMI is missing the Graph Security application roles SecurityAlert.Read.All and ' +
-    'SecurityIncident.Read.All (or admin consent has not been issued for them).';
+    'SecurityIncident.Read.All.';
   h.followUp =
-    'Run scripts/csa-loom/grant-graph-approles.sh (the csa-loom-post-deploy-bootstrap "Grant MIP+DLP Graph AppRoles" step grants both roles), ' +
-    'then have a Tenant Administrator click Entra ID → Enterprise applications → Console UAMI → Permissions → ' +
-    '"Grant admin consent for <tenant>". DLP violations load automatically once consent lands. Read-only roles ' +
+    'Re-run csa-loom-post-deploy-bootstrap.yml — its "Grant MIP+DLP Graph AppRoles" step assigns both roles ' +
+    'to the Console UAMI. For a MANAGED IDENTITY the app-role assignment IS the grant: there is no ' +
+    '"Grant admin consent" click for it (that is the app-registration pattern). If the step reported 403, ' +
+    'a Global Administrator grants the deploy principal AppRoleAssignment.ReadWrite.All on Microsoft Graph ' +
+    'ONCE, after which the bootstrap succeeds unattended. Read-only roles ' +
     '(Read.All) are sufficient — the panel performs no write/remediation against Graph Security.';
   return h;
 }

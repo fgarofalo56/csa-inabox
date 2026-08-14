@@ -35,16 +35,20 @@ import {
   Badge,
   Body1,
   Body1Strong,
+  Button,
   Caption1,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   MessageBarTitle,
+  Spinner,
   Subtitle2,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import {
   BuildingMultiple24Regular,
+  CheckmarkCircle16Regular,
   Sparkle24Regular,
   Warning16Filled,
 } from '@fluentui/react-icons';
@@ -90,13 +94,35 @@ const useStyles = makeStyles({
   hash: { fontFamily: tokens.fontFamilyMonospace },
 });
 
-export function PlanReviewStep({ plan, rows }: { plan: DeploymentPlan; rows: ServiceScanRow[] }) {
+export function PlanReviewStep({
+  plan,
+  rows,
+  onValidate,
+  validating = false,
+}: {
+  plan: DeploymentPlan;
+  rows: ServiceScanRow[];
+  /** Runs the adopt-fitness probe. Absent → the Fix-it button is not offered. */
+  onValidate?: () => Promise<void> | void;
+  validating?: boolean;
+}) {
   const styles = useStyles();
   const greenfield = isGreenfieldPlan(plan);
   const counts = planCounts(plan.services);
   const blockers = planBlockers(plan);
   const coverage = coverageSummary(plan.scanResults);
   const byKey = useMemo(() => new Map(rows.map((r) => [r.service.key, r])), [rows]);
+
+  /**
+   * Only offer the Fix-it when at least one adopt decision has NO verdict yet.
+   * A plan blocked because a resource was measured and found `unusable` is not
+   * fixed by measuring it again, and offering the button there would imply it
+   * might be.
+   */
+  const needsValidation = useMemo(
+    () => Object.values(plan.services).some((d) => d.mode === 'adopt' && !d.fitness),
+    [plan.services],
+  );
 
   const adopts = Object.entries(plan.services).filter(([, d]) => d.mode === 'adopt');
   const uncertainCreates = Object.entries(plan.services).filter(([, d]) => d.mode === 'create' && d.uncertain);
@@ -152,6 +178,23 @@ export function PlanReviewStep({ plan, rows }: { plan: DeploymentPlan; rows: Ser
             Validation is not advisory — a resource Loom could not confirm is usable is not adopted, because a
             mid-deploy failure leaves a partial estate you would have to unpick by hand.
           </MessageBarBody>
+          {/* G2 inline Fix-it. Until #3376 this bar said "run the validation
+              step" and there was no step to run — the blocker could never
+              clear. This button IS that step: it reads every adopted resource
+              and attaches its verdict. */}
+          {onValidate && needsValidation && (
+            <MessageBarActions>
+              <Button
+                appearance="primary"
+                size="small"
+                disabled={validating}
+                icon={validating ? <Spinner size="tiny" /> : <CheckmarkCircle16Regular />}
+                onClick={() => void onValidate()}
+              >
+                {validating ? 'Validating…' : 'Validate these resources'}
+              </Button>
+            </MessageBarActions>
+          )}
         </MessageBar>
       )}
 

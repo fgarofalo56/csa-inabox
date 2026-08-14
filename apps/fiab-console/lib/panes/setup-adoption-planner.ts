@@ -27,6 +27,7 @@ import { useCallback, useState } from 'react';
 import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS, describeNonJsonResponse } from '@/lib/client-fetch';
 import {
   applyDecision,
+  applyFitness,
   buildPlanFromDiscovery,
   type ServiceScanRow,
 } from '@/lib/deploy/plan-builder';
@@ -75,6 +76,8 @@ export interface AdoptionPlannerState {
   rows: ServiceScanRow[] | null;
   plan: DeploymentPlan | null;
   loading: boolean;
+  /** True while the adopt-fitness probe is running. Distinct from `loading`. */
+  validating: boolean;
   error: ScanError | null;
 }
 
@@ -83,6 +86,8 @@ export interface AdoptionPlanner extends AdoptionPlannerState {
   /** Runs the scan for the current scope and builds the initial plan. */
   runScan: (args: AdoptionPlannerArgs, names: Record<string, string>) => Promise<void>;
   decide: (serviceKey: string, mode: ServiceMode, target?: ServiceTarget) => void;
+  /** Reads every adopted resource and attaches its fitness verdict to the plan. */
+  validateAdoptions: () => Promise<void>;
   reset: () => void;
 }
 
@@ -92,6 +97,7 @@ export function useAdoptionPlanner(): AdoptionPlanner {
   const [rows, setRows] = useState<ServiceScanRow[] | null>(null);
   const [plan, setPlan] = useState<DeploymentPlan | null>(null);
   const [loading, setLoading] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [error, setError] = useState<ScanError | null>(null);
 
   const runScan = useCallback(
@@ -184,6 +190,79 @@ export function useAdoptionPlanner(): AdoptionPlanner {
     [],
   );
 
+  /**
+   * THE validation step (#3376).
+   *
+   * `planBlockers()` blocks every `adopt` decision carrying no fitness verdict
+   * with the words "run the validation step". Until this existed there WAS no
+   * validation step: `evaluateFitness()` had zero production callers, so the
+   * blocker could never clear and a brownfield tenant — where `adopt` is the
+   * DEFAULT recommendation — could not reach Deploy at all.
+   *
+   * Posts the whole plan; the route reads each adopted resource with the
+   * operator's own ARM token and returns a verdict per service, which is
+   * attached via `applyFitness` (which itself refuses to attach to a non-adopt
+   * decision). A verdict of `unknown` is attached too — "I could not verify
+   * this" is a result, and it must be shown rather than left looking unrun.
+   */
+  const validateAdoptions = useCallback(async (): Promise<void> => {
+    let current: DeploymentPlan | null = null;
+    setPlan((p) => {
+      current = p;
+      return p;
+    });
+    if (!current) return;
+    const target = current as DeploymentPlan;
+    const adoptCount = Object.values(target.services).filter((d) => d.mode === 'adopt').length;
+    if (adoptCount === 0) return;
+
+    setValidating(true);
+    setError(null);
+    try {
+      const res = await clientFetch(
+        '/api/setup/validate-adoption',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            hubRegion: target.region,
+            hubTenantId: target.tenantId,
+            plan: { services: target.services },
+          }),
+        },
+        CROSS_SUB_FETCH_TIMEOUT_MS,
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) {
+        setError({
+          title: 'Could not validate the resources you chose to adopt',
+          message:
+            body?.error ||
+            body?.hint ||
+            describeNonJsonResponse(res.status, 'The adoption validation service'),
+        });
+        return;
+      }
+      setPlan((p) => {
+        if (!p) return p;
+        let next = p;
+        for (const r of body.results ?? []) {
+          if (r?.serviceKey && r?.verdict) {
+            next = applyFitness(next, r.serviceKey, { verdict: r.verdict, checks: r.checks ?? [] });
+          }
+        }
+        return next;
+      });
+    } catch (e: any) {
+      setError({
+        title: 'Could not validate the resources you chose to adopt',
+        message: e?.message ?? String(e),
+      });
+    } finally {
+      setValidating(false);
+    }
+  }, []);
+
   const reset = useCallback(() => {
     setLedger(null);
     setRows(null);
@@ -191,7 +270,7 @@ export function useAdoptionPlanner(): AdoptionPlanner {
     setError(null);
   }, []);
 
-  return { scope, ledger, rows, plan, loading, error, setScope, runScan, decide, reset };
+  return { scope, ledger, rows, plan, loading, validating, error, setScope, runScan, decide, validateAdoptions, reset };
 }
 
 /** Wizard boundary label → the plan's canonical boundary key. */

@@ -688,11 +688,12 @@ export default function PoliciesPage() {
         {vGate && (
           <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody>
-              <MessageBarTitle>Live DLP violations need Graph consent</MessageBarTitle>
-              {vGate} DLP is on by default — to surface live Purview DLP violations, grant the Console UAMI the
-              <code> SecurityAlert.Read.All</code> + <code>SecurityIncident.Read.All</code> Graph AppRoles
-              (post-deploy bootstrap <code>grant-graph-approles.sh</code>) and have a Tenant Admin grant admin
-              consent. The policy library and best-practice default policy below author and save regardless.
+              <MessageBarTitle>Live DLP violations need the Console UAMI&apos;s Graph app roles</MessageBarTitle>
+              {vGate} DLP is on by default. The <code>SecurityAlert.Read.All</code> +{' '}
+              <code>SecurityIncident.Read.All</code> Graph AppRoles are assigned to the Console UAMI by the
+              post-deploy bootstrap&apos;s &quot;Grant MIP+DLP Graph AppRoles&quot; step — re-run that job rather
+              than granting them by hand. A managed-identity app-role assignment IS the grant, so there is no
+              admin-consent click. The policy library and best-practice default policy below author and save regardless.
             </MessageBarBody>
           </MessageBar>
         )}
