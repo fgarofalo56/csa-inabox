@@ -1407,4 +1407,10 @@ function main() {
   );
 }
 
-main();
+// Run as a script, not as an import side effect (#3436). Without this,
+// `import`ing this module to unit-test its helpers runs the WHOLE scan and can
+// process.exit() inside the test runner — which surfaces as a runner that dies
+// with no failed assertion, the same non-diagnostic shape as a `set -u` abort.
+if (process.argv[1] && process.argv[1].endsWith('check-empty-claim-read-evidence.mjs')) {
+  main();
+}
