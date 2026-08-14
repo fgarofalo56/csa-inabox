@@ -17,10 +17,8 @@
  * first /api/apps-catalog GET = [] handles new tenants automatically.
  */
 
-import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
-import { apiOk, apiError, apiUnauthorized } from '@/lib/api/respond';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { apiOk, apiError } from '@/lib/api/respond';
 import { appsCatalogContainer, workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
 import { ensureDataProductsIndex } from '@/lib/azure/loom-data-products-search';
 import { listBundleIds, getBundleItemTypes } from '@/lib/apps/content-bundles';
@@ -98,12 +96,12 @@ const APPS = buildApps();
 
 const WORKLOADS = WORKLOAD_SEEDS;
 
-export async function POST(_req: NextRequest) {
-  const s = getSession();
-  if (!s) return apiUnauthorized();
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
-
+// Route-toolkit: withTenantAdmin (R3). Replaces the hand-rolled prologue
+// `getSession() -> apiUnauthorized(); requireTenantAdmin(s) -> gate`, which is
+// what withTenantAdmin runs verbatim (it composes withSession, so the 401 is
+// the same apiUnauthorized() and the 403 is the same requireTenantAdmin gate
+// object returned unchanged).
+export const POST = withTenantAdmin(async () => {
   const now = new Date().toISOString();
   const stamp = { tenantId: TENANT, createdBy: 'bootstrap-catalogs', createdAt: now, updatedAt: now };
 
@@ -167,4 +165,4 @@ export async function POST(_req: NextRequest) {
     );
   }
   return apiOk(summary);
-}
+});

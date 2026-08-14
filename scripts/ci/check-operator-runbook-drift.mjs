@@ -155,7 +155,17 @@ export const RULES = [
   },
 ];
 
-/** Lines of `text` that trip `rule`, as {line, snippet}. */
+/** Lines of `text` that trip `rule`, as {line, snippet}.
+ *
+ * PHYSICAL-LINES-OK: the only line-by-line corpus here is MARKDOWN prose (the
+ * runbook). Markdown has no backslash line-continuation, so a token cannot hide
+ * on a folded line the way it does in shell. The workflow and the TS route are
+ * never split into lines at all — `hasEvidence()` regex-tests their WHOLE file
+ * text — so a `\` continuation in the bootstrap's `run:` bodies is invisible to
+ * this guard by construction rather than by luck. Adopting readLogicalLines()
+ * would fold nothing (no continuations exist in the corpus it is applied to) and
+ * would misreport the markdown's line numbers in violation messages.
+ */
 export function violations(text, rule) {
   const out = [];
   const lines = text.split(/\r?\n/);

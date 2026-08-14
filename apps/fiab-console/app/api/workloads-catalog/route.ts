@@ -4,8 +4,8 @@
  * PATCH  /api/workloads-catalog?id=…      — update an org catalog row (e.g. toggle `included`).
  * DELETE /api/workloads-catalog?id=…      — remove a custom workload from the org catalog.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import { workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
 import { WORKLOAD_SEEDS } from '@/lib/apps/workloads-catalog-seed';
 import crypto from 'node:crypto';
@@ -14,9 +14,13 @@ import { apiServerError } from '@/lib/api/respond';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Route-toolkit: withSession (R3). The hand-rolled prologue on all four verbs
+// returned `NextResponse.json({ ok:false, error:'unauthenticated' }, { status:401 })`;
+// withSession returns apiUnauthorized() === apiError('unauthenticated', 401) ===
+// `NextResponse.json({ ok:false, error:'unauthenticated' }, { status:401 })` —
+// same keys, same order, same status. Verified against lib/api/respond.ts:43,
+// not assumed (the codemod could not run in a worktree: no `typescript` dep).
+export const GET = withSession(async (_req, { session: s }) => {
   const c = await workloadsCatalogContainer();
   let { resources } = await c.items
     .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
@@ -80,11 +84,9 @@ export async function GET() {
   }
 
   return NextResponse.json({ ok: true, workloads: resources });
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req, { session: s }) => {
   const body = await req.json().catch(() => ({}));
   if (!body?.name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   const c = await workloadsCatalogContainer();
@@ -105,12 +107,10 @@ export async function POST(req: NextRequest) {
   };
   const { resource } = await c.items.create(doc);
   return NextResponse.json({ ok: true, workload: resource }, { status: 201 });
-}
+});
 
 /** Update an org catalog row this tenant owns — currently the `included` toggle. */
-export async function PATCH(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req, { session: s }) => {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
   const body = await req.json().catch(() => ({}));
@@ -129,12 +129,10 @@ export async function PATCH(req: NextRequest) {
   };
   const { resource } = await c.item(id, s.claims.oid).replace(updated);
   return NextResponse.json({ ok: true, workload: resource });
-}
+});
 
 /** Remove a custom org catalog row this tenant owns. */
-export async function DELETE(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req, { session: s }) => {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
   const c = await workloadsCatalogContainer();
@@ -145,4 +143,4 @@ export async function DELETE(req: NextRequest) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
     return apiServerError(e);
   }
-}
+});
