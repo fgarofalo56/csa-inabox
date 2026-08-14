@@ -15,8 +15,7 @@
  * remediation payload so the UI displays the precise admin step.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { withCapability } from '@/lib/api/route-toolkit';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { graphBase, getGraphScope } from '@/lib/azure/cloud-endpoints';
@@ -38,11 +37,17 @@ async function graphToken(): Promise<string> {
   return t.token;
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  const gate = await enforceCapability(s, 'admin.permissions', 'Contributor');
-  if (gate) return gate;
-
+// Route-toolkit: withCapability (C22 / #3088) — migrated by #3381's boy-scout
+// touch ratchet. BEHAVIOUR-PRESERVING, checked rather than assumed:
+//   - no session  -> withSession returns apiUnauthorized(), which is the same
+//     401 `{ok:false,error:'unauthenticated'}` body enforceCapability(null,…)
+//     returned on line 190 of lib/auth/feature-gate.ts.
+//   - session, no capability -> enforceCapability's 403 envelope, unchanged.
+//   - allowed -> the handler below, unchanged.
+// The one DIFFERENCE is an improvement: withSession wraps the handler in
+// try/catch -> apiServerError, so an unexpected throw is a safe 500 with a
+// server-side log instead of an unhandled Next error.
+export const GET = withCapability('admin.permissions', 'Contributor', async (req: NextRequest) => {
   const q = (req.nextUrl.searchParams.get('q') || '').trim();
   const kind = req.nextUrl.searchParams.get('kind') === 'group' ? 'group' : 'user';
   if (!q) return NextResponse.json({ ok: true, results: [] });
@@ -101,4 +106,4 @@ export async function GET(req: NextRequest) {
     description: p.description,
   }));
   return NextResponse.json({ ok: true, results });
-}
+});

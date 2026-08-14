@@ -107,10 +107,20 @@ const LITERAL_RE = new RegExp(FORBIDDEN_LITERALS.map((s) => s.replace(/\./g, '\\
 // NOT counted. Keep the marker adjacent to a one-line justification.
 const INLINE_ALLOW_MARKER = 'cloud-endpoint-literal-ok';
 
-// Whole-file exemptions (repo-relative POSIX paths). cloud-endpoints.ts DEFINES
-// the suffixes; test files are excluded structurally (see isTestFile).
+// Whole-file exemptions (repo-relative POSIX paths). These modules DEFINE the
+// per-cloud suffixes; every other file must call into them. Test files are
+// excluded structurally (see isTestFile).
+//
+// KEEP IN SYNC with DEFINER_FILES in
+// apps/fiab-console/tests/graph-endpoint-boundaries.test.mjs — that suite's
+// sibling sweep skips the same set, and if the two lists drift, one of them
+// starts measuring nothing.
 const FILE_ALLOWLIST = new Set([
   'apps/fiab-console/lib/azure/cloud-endpoints.ts',
+  // Split out of cloud-endpoints.ts by #3381 (file-size ratchet + the Graph
+  // boundary genuinely diverging from ARM's). It carries the three Learn-
+  // documented Graph roots for the same reason its parent does.
+  'apps/fiab-console/lib/azure/cloud-endpoints-graph.ts',
 ]);
 
 const isTestFile = (rel) => /(^|\/)__tests__\//.test(rel) || /\.(test|spec)\.tsx?$/.test(rel);
