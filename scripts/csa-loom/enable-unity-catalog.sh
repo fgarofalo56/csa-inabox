@@ -122,9 +122,12 @@ if [[ -n "$WORKSPACE_HOST" ]]; then
   echo ">>> Ensuring default catalog '${DEFAULT_CATALOG}' exists on ${WORKSPACE_HOST}"
   # The deploy identity is metastore admin (account_admin → metastore admin), so
   # CREATE CATALOG succeeds. Tolerate 409/ALREADY_EXISTS.
+  # `|| true` fixes the exit status under `set -e`; NOT `|| echo "000"`, which
+  # appends to the code curl already printed and yields "000000" (#3414).
   CREATE_CODE="$(curl -s -o /tmp/uc_catalog.json -w '%{http_code}' --max-time 60 \
     "${auth[@]}" -X POST "${WS_API}/catalogs" \
-    -d "$(jq -n --arg n "$DEFAULT_CATALOG" '{name:$n, comment:"Loom default catalog (auto-provisioned)"}')" || echo "000")"
+    -d "$(jq -n --arg n "$DEFAULT_CATALOG" '{name:$n, comment:"Loom default catalog (auto-provisioned)"}')")" || true
+  [ -n "$CREATE_CODE" ] || CREATE_CODE="000"
   if [[ "$CREATE_CODE" == "200" || "$CREATE_CODE" == "201" ]]; then
     echo "    created catalog '${DEFAULT_CATALOG}'."
   elif [[ "$CREATE_CODE" == "409" ]] || grep -qi "already exists\|ALREADY_EXISTS" /tmp/uc_catalog.json 2>/dev/null; then

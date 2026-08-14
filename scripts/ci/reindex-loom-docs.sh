@@ -110,11 +110,16 @@ if [ -z "$INTERNAL_TOKEN" ]; then
 fi
 
 # ── 1. POST: ask for the rebuild ────────────────────────────────────────────
+# `|| true` fixes the EXIT STATUS only. It must NOT be `|| echo 000`: curl
+# already PRINTS `000` from `-w` on a connect failure, so the fallback would
+# concatenate to "000000" and the classifier would be handed a string that is
+# not a status code (#3414).
 CODE=$(curl -sS -o "$POST_BODY_FILE" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $INTERNAL_TOKEN" \
   -H 'Content-Type: application/json' \
   --max-time 120 \
-  "$ENDPOINT" || echo 000)
+  "$ENDPOINT") || true
+[ -n "$CODE" ] || CODE=000
 echo "reindex POST $ENDPOINT -> HTTP $CODE"
 head -c 800 "$POST_BODY_FILE" || true
 echo ""
@@ -153,10 +158,14 @@ REACHED=false
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   sleep "$POLL_INTERVAL_S"
+  # `|| true`, never `|| echo 000` — the fallback concatenated onto the `000`
+  # curl already printed, so GCODE was "000000" and the unreachable branch just
+  # below it, which exists precisely for that case, never fired (#3414).
   GCODE=$(curl -sS -o "$POLL_BODY_FILE" -w '%{http_code}' \
     -H "Authorization: Bearer $INTERNAL_TOKEN" \
     --max-time 60 \
-    "$ENDPOINT" || echo 000)
+    "$ENDPOINT") || true
+  [ -n "$GCODE" ] || GCODE=000
   if [ "$GCODE" = "000" ]; then
     echo "  poll: unreachable (curl 000)"
     continue
