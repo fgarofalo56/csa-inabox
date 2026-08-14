@@ -40,8 +40,15 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # #3426 — per-SHA on push/dispatch. This lane is the WORST case measured: it
+  # publishes SEVEN required contexts (Python Tests 3.10/3.11/3.12 and dbt
+  # Compile shared/finance/inventory/sales), and with a ref-keyed group +
+  # cancel-in-progress:true, 11 of its last 30 main runs were cancelled
+  # (2026-08-14) — 11 commits on main with no verdict from seven mandatory
+  # checks. A cancelled required check is an ABSENCE, not a pass. See
+  # scripts/ci/check-required-lane-concurrency.mjs, which now enforces this.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
