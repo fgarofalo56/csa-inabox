@@ -757,6 +757,22 @@ jobs:
       - name: 'azd-service-paths (every azd service project resolves to a real directory)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-azd-service-paths.mjs
+      # The FIFTH defect on that same code path, and the one nothing in front of
+      # it could ever have reached: azd binds Bicep parameters through
+      # `<module>.parameters.json` with `${VAR}` substitution, and
+      # platform/fiab/bicep/ has no such file (nor a main.bicepparam). main.bicep
+      # declares 22 parameters with NO default, so `azd provision --no-prompt` on
+      # the DEFAULT sovereign topology could not bind a single one — while the
+      # per-boundary .bicepparam that supplies all 22 was consumed only on
+      # dlz-attach. #3415 deleted the azd branch; this keeps it deleted.
+      # POPULATION IS ZERO BY DESIGN, so the guard carries an embedded
+      # known-violating fixture and runs it on every invocation — a rule with
+      # nothing left to match must still prove it can match.
+      - name: 'azd-provision-param-binding (azd cannot provision a module it cannot bind — #3415)'
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-azd-provision-param-binding.mjs --self-test
+          node scripts/ci/check-azd-provision-param-binding.mjs
       # #3166's real finding was not "14 sites bypass the resolver" — it was that
       # the ONLY thing guardrails ran was the resolver's own self-test. That proves
       # the resolver WORKS; nothing proved it is USED, so every bypass sailed
