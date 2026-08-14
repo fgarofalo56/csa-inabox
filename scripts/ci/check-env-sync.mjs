@@ -442,8 +442,14 @@ const ALLOWLIST = new Set([
   'LOOM_MIRROR_SOURCE_CONNECTION_ID', // opt-in mirror source binding
   'LOOM_OPEN_MIRROR_POOL',          // opt-in open-mirror pool
   'LOOM_PGVECTOR_DATABASE',         // opt-in pgvector db
-  'LOOM_PGVECTOR_HOST',             // opt-in pgvector host
-  'LOOM_POSTGRES_HOST',             // opt-in postgres host
+  // LOOM_PGVECTOR_HOST was here, reasoned as an "opt-in pgvector host". #3372
+  // measured that it was emitted by NO template on ANY cloud (0 occurrences in
+  // the compiled deploy-templates/main.json), so "opt-in" described a var the
+  // operator had to set by hand — auto-bind-by-default.md §5's exact violation.
+  // admin-plane/main.bicep now emits it from the Weave PG server it deploys on
+  // every topology, so it is DELIVERED and must stay that way: it is deliberately
+  // NOT allowlisted, which makes this guard fail if the emission is ever removed.
+  'LOOM_POSTGRES_HOST',             // Lakebase server FQDN — genuinely opt-in/metered (landing-zone/postgres-flexible.bicep is a standalone entrypoint by design); pgvector no longer depends on it, see LOOM_PGVECTOR_HOST above
   'LOOM_PURVIEW_AUTOSCAN',          // opt-in Purview auto-register flag
   'LOOM_PURVIEW_DEFAULT_DOMAIN_NAME', // Purview domain default (code default)
   'LOOM_PURVIEW_ENDPOINT',          // optional operator override: explicit Purview data-plane base URL (default: ARM-derived endpoints → cloud-aware convention host; purview-endpoints.ts)
@@ -826,6 +832,320 @@ export function computeMissing() {
   return { reads, emitted, missing };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// LAYER 3 (#3370/#3371/#3372) — DELIVERED, BUT THE VALUE IS ALWAYS EMPTY.
+//
+// Layers 1 and 2 above ask "is the NAME in bicep?" and "does the CONSOLE APP get
+// an entry for it?". Both pass on this:
+//
+//     { name: 'LOOM_ONELAKE_URL', value: '' }
+//
+// The name is in bicep. The console receives the entry. The value is, and can
+// only ever be, the empty string — and the bicep comment beside it said, in so
+// many words, that the OPERATOR sets the real value afterwards via
+// /admin/env-config. That is the literal text auto-bind-by-default.md §5
+// forbids: "'Set LOOM_X' as the terminal user-facing state is a violation — the
+// value must be produced by the deploy."
+//
+// So a var could be consumed by the console, emitted by bicep, delivered to the
+// right app, pass every guard in this file, and still be guaranteed unset on
+// every deploy in both clouds. That is the gap this layer closes.
+//
+// TWO SHAPES ARE INERT, and both were live in the tree when this was written:
+//
+//   (a) HARD-CODED EMPTY LITERAL — `value: ''`, or a ternary whose branches are
+//       both ''. Found on LOOM_ONELAKE_URL / LOOM_BROKER_URL / LOOM_BROKER_REDIS.
+//
+//   (b) A PARAM NOBODY PASSES — `value: someParam` where admin-plane declares
+//       `param someParam string = ''` and no caller anywhere in the bicep tree
+//       ever passes `someParam:`. Found on LOOM_COPYJOB_CONTROL_SQL_SERVER,
+//       whose module was additionally gated `if (… && !empty(thatParam))`, so
+//       the module could never run either. This shape is strictly nastier than
+//       (a) because the declaration LOOKS configurable — you have to check the
+//       call sites to learn it is dead.
+//
+// WHY NOT JUST BAN EMPTY DEFAULTS: a conditional emission
+// (`x ? 'https://…' : ''`) is CORRECT and common — it is how a documented
+// opt-out honest-gates. The rule is not "never empty", it is "not empty on
+// EVERY path". A var with at least one branch that can produce a real value is
+// not reported.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Every `{ name: 'LOOM_X', … }` entry in the loom-console `env` block, paired
+ * with the raw source text of its `value:` expression (null for `secretRef`
+ * entries, which are delivered from Key Vault and carry no inline value).
+ *
+ * @returns {Map<string, string|null>}
+ */
+export function collectConsoleEnvExpressions() {
+  const main = fs.readFileSync(CONSOLE_APP_FILE, 'utf8');
+  const marker = main.indexOf("name: 'loom-console'");
+  if (marker < 0) {
+    throw new Error(
+      "check-env-sync: no `name: 'loom-console'` app entry in admin-plane/main.bicep — " +
+        'the console app declaration moved. Fix collectConsoleEnvExpressions(); do not ' +
+        'let this guard silently measure nothing.',
+    );
+  }
+  const appObj = balancedSlice(main, main.lastIndexOf('{', marker), '{', '}');
+  const envIdx = appObj.indexOf('env:');
+  if (envIdx < 0) throw new Error('check-env-sync: loom-console app entry has no env: block.');
+  const afterEnv = appObj.slice(envIdx);
+  const paren = afterEnv.indexOf('(');
+  const brack = afterEnv.indexOf('[');
+  const envBlock =
+    paren >= 0 && (brack < 0 || paren < brack)
+      ? balancedSlice(afterEnv, paren, '(', ')')
+      : balancedSlice(afterEnv, brack, '[', ']');
+
+  return parseEnvEntries(envBlock);
+}
+
+/**
+ * Pure parser, exported so the embedded control can drive it with synthetic
+ * input. Splitting it from the file read is what lets the control prove the
+ * CLASSIFIER works rather than merely proving the repo is currently clean —
+ * a guard whose population happens to be empty must still be able to fail
+ * (`guard_with_zero_population_needs_embedded_control`).
+ *
+ * @param {string} envBlock bicep source of an `env` array
+ * @returns {Map<string, string|null>} name → raw `value:` expression, or null
+ */
+export function parseEnvEntries(envBlock) {
+  const out = new Map();
+  const nameRe = /name:\s*'(LOOM_[A-Z0-9_]+)'/g;
+  let m;
+  while ((m = nameRe.exec(envBlock)) !== null) {
+    const open = envBlock.lastIndexOf('{', m.index);
+    if (open < 0) continue;
+    const entry = balancedSlice(envBlock, open, '{', '}');
+    if (!entry) continue;
+    const vIdx = entry.indexOf('value:');
+    if (vIdx < 0) {
+      out.set(m[1], null); // secretRef (or any non-inline delivery)
+      continue;
+    }
+    // Everything between `value:` and the entry's closing brace.
+    out.set(m[1], entry.slice(vIdx + 'value:'.length, entry.length - 1).trim());
+  }
+  return out;
+}
+
+/** `param foo string = ''` style declarations whose default is the empty string. */
+export function collectEmptyDefaultParams(src) {
+  const out = new Set();
+  const re = /^param\s+([A-Za-z_][A-Za-z0-9_]*)\s+string\s*=\s*''\s*$/gm;
+  let m;
+  while ((m = re.exec(src)) !== null) out.add(m[1]);
+  return out;
+}
+
+/**
+ * Param names that SOME bicep file passes as a module argument (`foo: …`).
+ * Scanned across the whole tree, excluding the declaring file itself, because a
+ * param is only alive if a CALLER supplies it.
+ */
+export function collectPassedParamNames(excludeFile) {
+  const passed = new Set();
+  for (const f of walk(BICEP_ROOT, ['.bicep'])) {
+    if (path.resolve(f) === path.resolve(excludeFile)) continue;
+    const src = stripBicepDocs(fs.readFileSync(f, 'utf8'));
+    const re = /^\s{2,}([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\S/gm;
+    let m;
+    while ((m = re.exec(src)) !== null) passed.add(m[1]);
+  }
+  return passed;
+}
+
+/** True when `expr` is the empty-string literal, or a ternary of empty strings. */
+export function isAlwaysEmptyLiteral(expr) {
+  const e = String(expr).trim();
+  if (e === "''") return true;
+  // `cond ? '' : ''` — both branches empty.
+  return /^[^?]*\?\s*''\s*:\s*''$/.test(e);
+}
+
+/** True when `expr` is a bare identifier (a param/var reference, nothing else). */
+export function isBareIdentifier(expr) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(expr).trim());
+}
+
+/**
+ * PRE-EXISTING INERT VARS — a shrinking RATCHET, not an allowlist.
+ *
+ * Each entry is a var the deploy delivers to the console with a value that can
+ * only ever be ''. Adding a name here is NOT a fix and must be a reviewable act
+ * in a diff; the fix is to make the deploy produce the value.
+ */
+export const KNOWN_INERT = new Map([
+  [
+    'LOOM_ONELAKE_URL',
+    "#3370 — hard-coded ''. compute/loom-onelake-app.bicep exists and apps/loom-onelake has a Dockerfile, but NO orchestrator invokes the module and NO CI lane builds the image (it is absent from the APPS list in build-fiab-images-acr-tasks.yml, full-app-deploy-commercial.yml and gov-provision-dataplane-images.yml). Fixing it means the full #3291 treatment — UAMI + AcrPull + module invocation + image lanes in both clouds — not a one-line wiring change. loom-onelake-client.ts honest-503s and the per-item library path still works, so this is capability loss, not breakage.",
+  ],
+  [
+    'LOOM_BROKER_URL',
+    '#3370 — same shape as LOOM_ONELAKE_URL for compute/loom-capacity-broker-app.bicep + apps/loom-capacity-broker. capacity-broker-client.ts reads LOOM_CAPACITY_BROKER_URL || LOOM_BROKER_URL and falls back to unthrottled job submission.',
+  ],
+  [
+    "LOOM_BROKER_REDIS",
+    '#3370 — the Redis ledger for the capacity broker, which lives on the compute/hband-shared.bicep substrate no orchestrator deploys. spark-lease-store.ts reads it as one of THREE alternatives (LOOM_SPARK_POOL_REDIS || LOOM_BROKER_REDIS || LOOM_DIRECTLAKE_REDIS) with a documented in-process single-replica fallback, so it is a genuine alternative rather than a required value — but it is still not produced by any deploy.',
+  ],
+  [
+    'LOOM_COPYJOB_CONTROL_SQL_SERVER',
+    "#3372 — shape (b): admin-plane declares `param loomCopyJobControlSqlServer string = ''` and gates `module copyJobControl` on `copyJobControlEnabled && !empty(...)`, but NO orchestrator passes either, so the module never runs and the var is always ''. The issue proposed passing 'the Azure SQL logical server the estate already deploys for plan-backing' — MEASURED FALSE: `grep -rn \"Microsoft.Sql/servers@\" platform/fiab/bicep` returns exactly one hit and it is `existing`. No module in this repo creates a SQL logical server, so closing this needs a deliberate decision to deploy one (metered, needs an Entra admin), not a wiring change.",
+  ],
+]);
+
+/**
+ * MEASUREMENT BASELINE — always-empty vars this layer found on the day it was
+ * written (2026-08-14) that have NOT been individually triaged.
+ *
+ * This is deliberately a SEPARATE set from {@link KNOWN_INERT}. Every name in
+ * KNOWN_INERT carries a reason someone established. These carry only the
+ * measurement, and saying so is the point: deploy-integrity.md R7 forbids
+ * asserting a cause that was not established, and writing 31 confident
+ * rationales I had not verified would have been exactly that.
+ *
+ * WHAT IS ACTUALLY KNOWN ABOUT ALL OF THEM: each is bound to an admin-plane
+ * `param … string = ''` that NO caller anywhere under platform/fiab/bicep ever
+ * passes (or is a hard-coded ''), so the console receives the entry with an
+ * empty value on every boundary and every topology.
+ *
+ * WHAT IS NOT KNOWN: whether each SHOULD be produced by the deploy. Several are
+ * plainly BYO/external values the platform cannot invent — a customer's Azure
+ * DevOps organisation (LOOM_SQL_GIT_ADO_ORG), their GitHub host, their MLflow
+ * tracking URI — and auto-bind-by-default.md §5 is about infra prerequisites the
+ * PLATFORM could deploy, not about external coordinates. Others look genuinely
+ * derivable and are probably defects; LOOM_CLOUD_TIER is the clearest, because
+ * domains-client.ts:536 uses it to block the Fabric Admin API on IL5 (not
+ * FedRAMP IL5 approved) and an always-empty value means that compliance gate has
+ * never engaged on any deploy. It is filed separately rather than fixed blind.
+ *
+ * This set may only SHRINK. Triaging one means deleting it here and either
+ * fixing the emission or moving it to KNOWN_INERT with a real reason.
+ */
+export const UNTRIAGED_INERT = new Set([
+  'LOOM_ADO_HOST',
+  'LOOM_ASA_TEST_WRITE_URI',
+  'LOOM_BAP_BASE',
+  'LOOM_CLOUD_TIER',
+  'LOOM_COPILOT_STUDIO_ENVIRONMENT_ID',
+  'LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID',
+  'LOOM_DATABRICKS_SQL_WAREHOUSE_ID',
+  'LOOM_DBX_DQ_MONITOR_API',
+  'LOOM_DEVCENTER_PROJECT',
+  'LOOM_DLZ_TEMPLATE_QUERY_STRING',
+  'LOOM_DLZ_TEMPLATE_URI',
+  'LOOM_EXTRA_SUBSCRIPTIONS',
+  'LOOM_FLOW_BASE',
+  'LOOM_GITHUB_HOST',
+  'LOOM_HDINSIGHT_LINKED_SERVICE',
+  'LOOM_IOT_HUB_RESOURCE_ID',
+  'LOOM_MCP_CATALOG_REGISTRY',
+  'LOOM_MLFLOW_TRACKING_URI',
+  'LOOM_OPS_ADMIN_ENTRA_GROUP',
+  'LOOM_PAGINATED_RENDER_URL',
+  'LOOM_PARAM_APPCONFIG',
+  'LOOM_POSTURE_FUNCTION_URL',
+  'LOOM_POWERAPPS_BASE',
+  'LOOM_POWERAPPS_PLAYER_BASE',
+  'LOOM_PURVIEW_UNIFIED_ACCOUNT',
+  'LOOM_REPORT_RENDERER',
+  'LOOM_SQL_GIT_ADO_ORG',
+  'LOOM_SQL_GIT_ADO_PROJECT',
+  'LOOM_SQL_GIT_ADO_REPO',
+  'LOOM_SQL_GIT_GITHUB_REPO',
+  'LOOM_SQL_GIT_PROVIDER',
+]);
+
+/**
+ * Vars delivered to the console whose value is always empty and which are not
+ * already ratcheted in {@link KNOWN_INERT}.
+ */
+export function computeInert() {
+  const exprs = collectConsoleEnvExpressions();
+  const adminSrc = fs.readFileSync(CONSOLE_APP_FILE, 'utf8');
+  const emptyDefaults = collectEmptyDefaultParams(adminSrc);
+  const passed = collectPassedParamNames(CONSOLE_APP_FILE);
+
+  const inert = [];
+  for (const [name, expr] of [...exprs].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (expr === null) continue; // secretRef — delivered from Key Vault
+    // The SAME taxonomy layers 1 and 2 use. A var in those categories — a
+    // tuning knob with a code default, a backend selector that means
+    // "Azure-native default" when unset, a KV-injected secret, a cloud-derived
+    // scope/suffix — is SUPPOSED to be empty on a default deploy. Reusing the
+    // reviewed categories here instead of hand-writing a fresh reason per var
+    // keeps one taxonomy in the file, and keeps this layer aimed at what it is
+    // for: a value the PLATFORM could have produced and did not.
+    if (isAllowlisted(name)) continue;
+    let why = null;
+    if (isAlwaysEmptyLiteral(expr)) {
+      why = `hard-coded empty value (${expr})`;
+    } else if (isBareIdentifier(expr) && emptyDefaults.has(expr) && !passed.has(expr)) {
+      why = `bound to param '${expr}', which defaults to '' and no caller ever passes`;
+    }
+    if (!why) continue;
+    if (KNOWN_INERT.has(name)) continue;
+    if (UNTRIAGED_INERT.has(name)) continue;
+    inert.push({ name, why });
+  }
+  return { total: exprs.size, inert, exprs, emptyDefaults, passed };
+}
+
+/**
+ * EMBEDDED CONTROL. Runs the real classifier over synthetic input with KNOWN
+ * answers, so the layer cannot report a pass because its parser broke or
+ * because the repo happens to be clean. Every case here is a shape that was
+ * actually live in the tree (or is the correct-code shape that must NOT be
+ * flagged).
+ *
+ * @returns {string[]} failure descriptions; empty means the control held
+ */
+export function runInertControl() {
+  const failures = [];
+  const FIXTURE = `[
+    { name: 'LOOM_CONTROL_DEAD_LITERAL', value: '' }
+    { name: 'LOOM_CONTROL_DEAD_TERNARY', value: someFlag ? '' : '' }
+    { name: 'LOOM_CONTROL_DEAD_PARAM', value: controlNeverPassed }
+    { name: 'LOOM_CONTROL_LIVE_CONDITIONAL', value: someFlag ? 'https://\${x.outputs.fqdn}' : '' }
+    { name: 'LOOM_CONTROL_LIVE_LITERAL', value: 'entra' }
+    { name: 'LOOM_CONTROL_LIVE_PARAM', value: controlIsPassed }
+    { name: 'LOOM_CONTROL_SECRETREF', secretRef: 'some-kv-secret' }
+  ]`;
+  const entries = parseEnvEntries(FIXTURE);
+
+  // The parser must see every entry — a silent parse miss is how this class of
+  // guard historically "passed".
+  if (entries.size !== 7) {
+    failures.push(`parseEnvEntries found ${entries.size} entries in the control fixture, expected 7`);
+  }
+  if (entries.get('LOOM_CONTROL_SECRETREF') !== null) {
+    failures.push('secretRef entry was not recognised as having no inline value');
+  }
+
+  const emptyDefaults = new Set(['controlNeverPassed', 'controlIsPassed']);
+  const passed = new Set(['controlIsPassed']);
+  const verdict = (name) => {
+    const expr = entries.get(name);
+    if (expr === null || expr === undefined) return false;
+    if (isAlwaysEmptyLiteral(expr)) return true;
+    return isBareIdentifier(expr) && emptyDefaults.has(expr) && !passed.has(expr);
+  };
+
+  const MUST_FLAG = ['LOOM_CONTROL_DEAD_LITERAL', 'LOOM_CONTROL_DEAD_TERNARY', 'LOOM_CONTROL_DEAD_PARAM'];
+  const MUST_NOT_FLAG = [
+    'LOOM_CONTROL_LIVE_CONDITIONAL',
+    'LOOM_CONTROL_LIVE_LITERAL',
+    'LOOM_CONTROL_LIVE_PARAM',
+    'LOOM_CONTROL_SECRETREF',
+  ];
+  for (const n of MUST_FLAG) if (!verdict(n)) failures.push(`classifier FAILED to flag ${n}`);
+  for (const n of MUST_NOT_FLAG) if (verdict(n)) failures.push(`classifier WRONGLY flagged ${n}`);
+  return failures;
+}
+
 function main() {
   const { reads, emitted, missing } = computeMissing();
   console.log(`[env-sync] LOOM_* read by console:   ${reads.size}`);
@@ -868,6 +1188,92 @@ function main() {
     console.error('platform/fiab/bicep/modules/admin-plane/main.bicep (or to the shared env in');
     console.error('app-deployments.bicep if every app needs it). Adding it to KNOWN_UNDELIVERED');
     console.error('is NOT a fix — that set is a shrinking ratchet of pre-existing debt.');
+    process.exit(1);
+  }
+
+  // #3370/#3371/#3372 — LAYER 3: delivered, but the value is always ''.
+  // The control runs FIRST and unconditionally: if the classifier is broken,
+  // a clean report from it means nothing and must not be printed as a pass.
+  const controlFailures = runInertControl();
+  if (controlFailures.length) {
+    console.error(
+      '\n::error::check-env-sync LAYER-3 CONTROL FAILED — the always-empty classifier no ' +
+        'longer behaves on inputs with known answers, so its verdict on the real tree is ' +
+        'worthless. Fix the classifier; do not let this check pass on a broken matcher.',
+    );
+    for (const f of controlFailures) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+
+  const {
+    total: envEntryCount,
+    inert,
+    exprs: consoleEnvExprs,
+    emptyDefaults: emptyDefaultParams,
+    passed: passedParamNames,
+  } = computeInert();
+  console.log(`[env-sync] LOOM_* env entries parsed on loom-console: ${envEntryCount}`);
+  console.log(`[env-sync] always-empty (unratcheted): ${inert.length}`);
+  // SELF-CHECK: same reasoning as the delivered<100 check above. If the entry
+  // parser suddenly resolves a handful of entries, it has drifted off the env
+  // block and this layer is measuring nothing.
+  if (envEntryCount < 100) {
+    console.error(
+      `::error::check-env-sync parsed only ${envEntryCount} console env entries for the ` +
+        'always-empty check. That is far too few — parseEnvEntries() has drifted off the ' +
+        'env block. Fix the extraction; do not let this check pass on nothing.',
+    );
+    process.exit(1);
+  }
+  // SELF-CHECK: the ratchet must stay attached to reality. If a name in
+  // KNOWN_INERT / UNTRIAGED_INERT is no longer even present in the console env
+  // block, the set is describing a tree that no longer exists — which is how a
+  // stale ratchet turns into silent coverage. Fixing a var means DELETING its
+  // entry here.
+  const presentNames = new Set(consoleEnvExprs.keys());
+  const ratcheted = [...KNOWN_INERT.keys(), ...UNTRIAGED_INERT];
+  const staleRatchet = ratcheted.filter((n) => !presentNames.has(n));
+  if (staleRatchet.length) {
+    console.error(
+      '\n::error::check-env-sync ratcheted names that are no longer emitted on the console ' +
+        'app at all. Either they were fixed (delete the entry — the ratchet must shrink) or ' +
+        'the emission moved and this set is now describing nothing:',
+    );
+    for (const n of staleRatchet) console.error(`  - ${n}`);
+    process.exit(1);
+  }
+  // SELF-CHECK: the ratchet must also still be DOING something. Every ratcheted
+  // name is there because the classifier flags it; if the classifier stopped
+  // flagging ALL of them while they are still emitted, it has gone blind and
+  // the `inert.length === 0` result below would be a false pass — the exact
+  // "gate that measures nothing" failure this repo keeps re-finding.
+  const stillFlagged = ratcheted.filter((n) => {
+    const expr = consoleEnvExprs.get(n);
+    if (expr === null || expr === undefined) return false;
+    if (isAllowlisted(n)) return false;
+    if (isAlwaysEmptyLiteral(expr)) return true;
+    return isBareIdentifier(expr) && emptyDefaultParams.has(expr) && !passedParamNames.has(expr);
+  });
+  if (ratcheted.length > 0 && stillFlagged.length === 0) {
+    console.error(
+      '\n::error::check-env-sync LAYER 3 flags NONE of its own ratcheted names, all of which ' +
+        'are still emitted. The classifier has gone blind and a clean result here means ' +
+        'nothing. Fix it; do not let this check pass on a matcher that detects nothing.',
+    );
+    process.exit(1);
+  }
+  if (inert.length) {
+    console.error('\n[env-sync] FAIL — these LOOM_* vars ARE delivered to the loom-console app,');
+    console.error('but their value can only ever be the empty string, on every boundary and');
+    console.error('every topology. The console receives the entry and reads nothing, so the');
+    console.error('terminal state is an operator setting the value by hand — the violation');
+    console.error('auto-bind-by-default.md §5 names exactly ("the value must be produced by');
+    console.error('the deploy"):');
+    for (const { name, why } of inert) console.error(`  - ${name}: ${why}`);
+    console.error('\nFix: make the deploy produce the value — invoke the module that owns the');
+    console.error('resource and emit the var from its output (see the loomDirectLake /');
+    console.error('weavePg wiring in admin-plane/main.bicep for the two worked examples).');
+    console.error('Adding a name to KNOWN_INERT is NOT a fix; that set is a shrinking ratchet.');
     process.exit(1);
   }
 
