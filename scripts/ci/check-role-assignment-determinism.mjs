@@ -62,6 +62,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -364,22 +365,185 @@ export function findCrossFileCandidates(records) {
   return out;
 }
 
+// ── D3 ───────────────────────────────────────────────────────────────────────
+
+/**
+ * THE GAP D1/D2 COULD NOT SEE, and which took Commercial down on 2026-08-14.
+ *
+ * D1 and D2 audit bicep against bicep. On run 31780698652 this guard reported
+ * "OK — 164 role assignment(s); every name is a deterministic guid(…) and no two
+ * declarations collide on one ARM triple" and the deploy failed anyway:
+ *
+ *   RoleAssignmentExists: The role assignment already exists. The ID of the
+ *   existing role assignment is 0a2b7dc58eb449709418694f83a6c164.
+ *
+ * The competing writer was not another bicep declaration. It was
+ * `az role assignment create`, which mints a RANDOM v4 GUID when no `--name` is
+ * passed — measured: every one of the 15 template-computed names in that run's
+ * what-if is a v5 (ARM `guid()` is name-based), and both recorded strays are v4.
+ * The repo has ~40 such call sites and NOT ONE passes `--name`, so a CLI grant
+ * and a template grant of one triple can never agree on a name. Whichever lands
+ * first owns the triple; the other fails forever.
+ *
+ * THE RULE. An imperative `az role assignment create` for a role the bicep ALSO
+ * grants must PROBE first — `az role assignment list` for that assignee/scope/
+ * role — and create only on an established absence. Then the normal case is a
+ * no-op and no competing name is minted. Creating on absence is still allowed
+ * (dropping a genuinely missing grant is worse), and is now self-healing:
+ * deploy-retry --remediate converges a stray on the next infra deploy.
+ *
+ * WHAT IT DELIBERATELY DOES NOT CLAIM (R7). A `--role` given as a display name
+ * ("Storage Blob Data Contributor") or as an unresolvable variable is NOT
+ * judged — this guard cannot establish which role definition it is, and a
+ * finding it cannot substantiate is how a guard gets switched off. Those are
+ * printed by `--list` as unresolved, so the reviewer sees the residue.
+ */
+export const IMPERATIVE_ROOTS = ['.github/workflows', 'scripts'];
+const IMPERATIVE_EXT = /\.(ya?ml|sh)$/;
+const CREATE_TOKEN = 'az role assignment create';
+const PROBE_TOKEN = 'az role assignment list';
+/** How far back a probe may sit and still be governing this create. */
+export const PROBE_WINDOW = 12;
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function imperativeFiles(root = REPO_ROOT, roots = IMPERATIVE_ROOTS) {
+  const out = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === '__fixtures__') continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (IMPERATIVE_EXT.test(e.name)) out.push(p);
+    }
+  };
+  for (const r of roots) {
+    const abs = path.join(root, r);
+    if (fs.existsSync(abs)) walk(abs);
+  }
+  return out.sort();
+}
+
+/**
+ * A create that only appears inside an `echo`/annotation is a REFERENCE, not an
+ * execution — the same distinction check-deploy-script-reachability.mjs draws,
+ * and for the same reason: a naive grep scores the string as a hit.
+ */
+export function isExecuted(text) {
+  const at = text.indexOf(CREATE_TOKEN);
+  if (at < 0) return false;
+  const before = text.slice(0, at);
+  if (/^\s*#/.test(text)) return false;
+  return !/(^|[;&|]\s*)(echo|printf)\s/.test(before) && !/::(error|warning|notice)/.test(before);
+}
+
+/** `ACRPULL_ROLE=7f951dda-…` / `ROLE="7f951dda-…"` within the same file. */
+export function shellGuidVars(logical) {
+  const map = new Map();
+  for (const l of logical) {
+    const m = /(?:^|\s|\()([A-Za-z_][A-Za-z0-9_]*)=["']?([0-9a-fA-F-]{36})["']?(?:\s|$|\))/.exec(l.text);
+    if (m && GUID_RE.test(m[2])) map.set(m[1], m[2].toLowerCase());
+  }
+  return map;
+}
+
+/** The role definition GUID a `--role <token>` resolves to, or null. */
+export function resolveRoleArg(text, vars) {
+  const m = /--role\s+("[^"]*"|'[^']*'|\S+)/.exec(text);
+  if (!m) return null;
+  const raw = m[1].replace(/^["']|["']$/g, '');
+  if (GUID_RE.test(raw)) return raw.toLowerCase();
+  const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(raw);
+  if (v && vars.has(v[1])) return vars.get(v[1]);
+  return null;
+}
+
+/**
+ * @returns {{findings: object[], population: number, unresolved: object[]}}
+ *   `population` is every EXECUTED create found, resolvable or not — the number
+ *   that must not silently fall to zero.
+ */
+export function findImperativeCollisions(records, root = REPO_ROOT, roots = IMPERATIVE_ROOTS) {
+  const bicepRoles = new Set(records.map((r) => r.roleKey).filter((k) => k && GUID_RE.test(k)));
+  const findings = [];
+  const unresolved = [];
+  let population = 0;
+
+  for (const abs of imperativeFiles(root, roots)) {
+    const rel = path.relative(root, abs).split(path.sep).join('/');
+    const logical = readLogicalLines(fs.readFileSync(abs, 'utf8'));
+    const vars = shellGuidVars(logical);
+
+    for (let i = 0; i < logical.length; i += 1) {
+      const l = logical[i];
+      if (!isExecuted(l.text)) continue;
+      population += 1;
+
+      const role = resolveRoleArg(l.text, vars);
+      if (!role) {
+        unresolved.push({ file: rel, line: l.line });
+        continue;
+      }
+      if (!bicepRoles.has(role)) continue;
+
+      const probed = logical
+        .slice(Math.max(0, i - PROBE_WINDOW), i)
+        .some((p) => p.text.includes(PROBE_TOKEN));
+      if (probed) continue;
+
+      findings.push({
+        check: 'D3',
+        file: rel,
+        line: l.line,
+        detail:
+          `\`az role assignment create --role ${role}\` runs with no \`az role assignment list\` probe in the ` +
+          `preceding ${PROBE_WINDOW} logical lines, and the bicep ALSO grants that role definition. The CLI mints ` +
+          'a RANDOM v4 name for the (scope, principalId, roleDefinitionId) triple while the template computes a ' +
+          'deterministic v5 one, and ARM enforces uniqueness on the TRIPLE — so whichever writer lands first ' +
+          'blocks the other on EVERY future run (measured: deploy-fiab-commercial 31780698652, #3439). Probe ' +
+          'first and create only on an established absence.',
+      });
+    }
+  }
+  return { findings, population, unresolved };
+}
+
 // ── driver ───────────────────────────────────────────────────────────────────
 
 export function scan(root = BICEP_ROOT) {
   const records = inventory(root);
-  return { records, findings: [...findNonDeterministicNames(records), ...findTripleCollisions(records)] };
+  const imperative = findImperativeCollisions(records);
+  return {
+    records,
+    imperative,
+    findings: [
+      ...findNonDeterministicNames(records),
+      ...findTripleCollisions(records),
+      ...imperative.findings,
+    ],
+  };
 }
 
 const isMain =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
-  const { records, findings } = scan();
+  const { records, imperative, findings } = scan();
   if (records.length === 0) {
     process.stderr.write(
       'check-role-assignment-determinism: discovered ZERO role assignments under ' +
         `${path.relative(REPO_ROOT, BICEP_ROOT)} — discovery is broken, not clean.\n`,
+    );
+    process.exit(1);
+  }
+  // D3's FINDINGS may legitimately reach zero (every site probes). Its
+  // POPULATION may not: this repo executes `az role assignment create` in both
+  // cloud lanes, so zero executed creates means the matcher drifted off the
+  // code, and a verdict from a scanner that has stopped scanning is not a
+  // verdict (guard_with_zero_population_needs_embedded_control).
+  if (imperative.population === 0) {
+    process.stderr.write(
+      'check-role-assignment-determinism: discovered ZERO executed `az role assignment create` calls under ' +
+        `${IMPERATIVE_ROOTS.join(', ')} — D3 is not scanning anything, which is not the same as a clean tree.\n`,
     );
     process.exit(1);
   }
@@ -395,17 +559,24 @@ if (isMain) {
       `\ncross-file triple CANDIDATES (unproven — symbolic names are module-local): ${cross.length}\n`,
     );
     for (const c of cross) process.stdout.write(`  ${c.key}\n    ${c.where.join('\n    ')}\n`);
+    process.stdout.write(
+      `\nimperative \`az role assignment create\` calls EXECUTED: ${imperative.population}\n` +
+        `  of which the --role could NOT be resolved to a role definition GUID (not judged): ` +
+        `${imperative.unresolved.length}\n`,
+    );
+    for (const u of imperative.unresolved) process.stdout.write(`  ${u.file}:${u.line}\n`);
   }
   for (const f of findings) process.stdout.write(`${f.check}  ${f.file}:${f.line}\n      ${f.detail}\n\n`);
   if (findings.length > 0) {
     process.stderr.write(
       `check-role-assignment-determinism: ${findings.length} finding(s) across ${records.length} ` +
-        'role assignment(s). See deploy-integrity.md R4/R6 and issue #3039.\n',
+        'role assignment(s). See deploy-integrity.md R4/R6 and issues #3039, #3439.\n',
     );
     process.exit(1);
   }
   process.stdout.write(
     `check-role-assignment-determinism: OK — ${records.length} role assignment(s); every name is a ` +
-      'deterministic guid(…) and no two declarations collide on one ARM triple.\n',
+      'deterministic guid(…) and no two declarations collide on one ARM triple. ' +
+      `${imperative.population} imperative create(s) checked for the same collision against the CLI (D3).\n`,
   );
 }

@@ -273,11 +273,76 @@ export function backoffMs(baseSeconds, jitter, rnd = Math.random) {
 }
 
 /**
+ * Where the RoleAssignmentExists converger lives. Absolute so the plan runs the
+ * same from any working directory, and resolved from this module rather than
+ * `process.cwd()` — a relative path here is how a remediation silently becomes
+ * "node: cannot find module" on a runner whose cwd is not the repo root.
+ */
+export const CONVERGE_ROLE_ASSIGNMENT = path.resolve(
+  import.meta.dirname,
+  '..',
+  'csa-loom',
+  'converge-role-assignment.mjs',
+);
+
+/**
+ * ARM prints the blocking assignment as 32 undashed hex chars ("The ID of the
+ * existing role assignment is 0a2b7dc58eb449709418694f83a6c164."). Accept the
+ * canonical dashed form too — the message is not contractual.
+ */
+const EXISTING_ASSIGNMENT_RE =
+  /existing role assignment is\s+([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+/**
  * What the PLATFORM can do about this failure itself (auto-bind-by-default §5).
  * Pure: returns the plan, does not execute it. `null` when there is nothing the
  * platform may safely perform unattended.
+ *
+ * `opts.subscription` is the --arm-subscription the drill-down used, so a
+ * cross-subscription (DLZ) deploy converges in the subscription the failure
+ * actually came from rather than whichever one `az` happens to have selected.
  */
-export function planRemediation(diagnosis, stderr) {
+export function planRemediation(diagnosis, stderr, opts = {}) {
+  // RoleAssignmentExists (#3439). ARM enforces uniqueness on the (scope,
+  // principalId, roleDefinitionId) TRIPLE, not on the assignment NAME, so a
+  // grant already held under a foreign name blocks the template's create on
+  // EVERY future reconcile — deterministic, and retrying cannot help. The
+  // taxonomy used to hand the operator `az role assignment delete --ids …`;
+  // §5 says a remediation the platform could have executed is a defect.
+  if (diagnosis.signalId === 'config.role-assignment-exists') {
+    const hit = EXISTING_ASSIGNMENT_RE.exec(stderr ?? '');
+    if (!hit) {
+      return {
+        kind: 'converge-role-assignment',
+        assignmentName: null,
+        argv: null,
+        why:
+          'The failure is a RoleAssignmentExists, but the id of the EXISTING assignment could not be read from ' +
+          'the message, so nothing is deleted — picking a role assignment to remove on a guess would take access ' +
+          'away on something this code never established.',
+      };
+    }
+    const name = hit[1].toLowerCase();
+    return {
+      kind: 'converge-role-assignment',
+      assignmentName: name,
+      argv: [
+        process.execPath,
+        CONVERGE_ROLE_ASSIGNMENT,
+        '--assignment-name',
+        name,
+        ...(opts.subscription ? ['--subscription', String(opts.subscription)] : []),
+        '--apply',
+      ],
+      why:
+        `The grant is already in place under assignment ${name.slice(0, 8)}…, which is NOT the deterministic name ` +
+        'the template computes, so ARM refuses the create forever. The converger proves the stray belongs to a ' +
+        'Loom user-assigned managed identity, removes it, and verifies it is gone; the retry then recreates the ' +
+        'identical triple under the name the template owns. Net effect on the estate: zero permission change, one ' +
+        'name converged. It refuses and fails closed on anything it cannot establish.',
+    };
+  }
+
   if (diagnosis.class !== 'registration') return null;
   // "The subscription is not registered to use namespace 'Microsoft.Kusto'."
   // az also renders it without quotes on some surfaces.
@@ -572,7 +637,14 @@ async function main() {
         : {}),
     });
     if (args.remediate && !remediated) {
-      const plan = planRemediation(diagnosis, lastStderr);
+      // classifyInput, NOT lastStderr. The diagnosis itself is made from the
+      // ARM leaf text, and the leaf is where the remediable detail lives — the
+      // existing role assignment id for #3439, and the provider namespace when
+      // a registration refusal surfaces only as a nested operation. Planning
+      // from a narrower string than the one that produced the diagnosis is how
+      // a remediation reports "could not read it from the message" about text
+      // it was never shown.
+      const plan = planRemediation(diagnosis, classifyInput, { subscription: args.armSubscription });
       if (plan?.argv) {
         remediated = true;
         ghAnnotate('notice', `deploy-retry: performing remediation — ${plan.why}`);

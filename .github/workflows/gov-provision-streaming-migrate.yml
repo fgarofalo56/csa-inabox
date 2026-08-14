@@ -300,11 +300,30 @@ jobs:
             echo "MIG_ID=$MIG_ID"; echo "RW_ID=$RW_ID"; echo "RW_CID=$RW_CID"
           } >> "$GITHUB_ENV"
           # AcrPull on the Loom ACR — the migrate identity's ONLY role, and one of
-          # the risingwave identity's two. `az role assignment create` is
-          # idempotent (RoleAssignmentExists is tolerated).
+          # the risingwave identity's two.
+          #
+          # PROBE BEFORE CREATE (#3439, cloud-parity.md). The comment that used to
+          # sit here said "`az role assignment create` is idempotent
+          # (RoleAssignmentExists is tolerated)" — true of the CLI, FALSE of the
+          # template, and that false premise is what broke Commercial for a
+          # fortnight. admin-plane/main.bicep declares AcrPull on this registry for
+          # BOTH of these identities (loomMigrateUami, risingwaveUami) under
+          # deterministic guid() names; a CLI create mints a random v4 name for the
+          # same (scope, principalId, roleDefinitionId) triple and ARM then refuses
+          # the template's create forever. Same defect, Gov boundary.
           for PID in "$MIG_PID" "$RW_PID"; do
-            az role assignment create --assignee-object-id "$PID" --assignee-principal-type ServicePrincipal \
-              --role "$ACRPULL_ROLE" --scope "$ACR_ID" -o none 2>/dev/null || true
+            EXISTING=$(az role assignment list --assignee-object-id "$PID" \
+              --scope "$ACR_ID" --role "$ACRPULL_ROLE" --query "length(@)" -o tsv 2>&1 | tr -d '\r')
+            if [ "$EXISTING" = "0" ]; then
+              echo "::warning::AcrPull is ABSENT for ${PID:0:8}… — creating it. That mints a CLI name, not the template's; scripts/csa-loom/converge-role-assignment.mjs converges it on the next infra deploy (#3439)."
+              az role assignment create --assignee-object-id "$PID" --assignee-principal-type ServicePrincipal \
+                --role "$ACRPULL_ROLE" --scope "$ACR_ID" -o none 2>&1 | grep -vi "already" || true
+            elif [ -n "$EXISTING" ] && [ "$EXISTING" -gt 0 ] 2>/dev/null; then
+              echo "::notice::AcrPull already granted for ${PID:0:8}… — leaving the existing assignment alone."
+            else
+              # R7: an unreadable probe is not an absent grant.
+              echo "::warning::could not read whether AcrPull exists for ${PID:0:8}… (az said: ${EXISTING}). NOT creating one on an unestablished absence."
+            fi
           done
           # Storage Blob Data Contributor for the streaming sink (risingwave only).
           if [ -n "${LAKE:-}" ]; then

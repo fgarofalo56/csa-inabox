@@ -174,6 +174,17 @@ describe('auto-bind-by-default §5 — the platform performs what it can', () =>
       ['ERROR: (EnterpriseTenantAlreadyExists) an account already exists for this tenant', 'config'],
       ['ERROR: (VnetAddressRangeInUse) overlaps with an existing subnet', 'config'],
       ['ERROR: (PrincipalNotFound) does not exist in the directory', 'eventual-consistency'],
+      // #3439: the grant is already in place under a name the template did not
+      // choose. ARM enforces uniqueness on the (scope, principalId,
+      // roleDefinitionId) triple, not the name, so the create is blocked
+      // forever. deploy-retry --remediate now runs
+      // scripts/csa-loom/converge-role-assignment.mjs and retries, instead of
+      // printing an `az role assignment delete` for a human to run.
+      [
+        'RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is ' +
+          '0a2b7dc58eb449709418694f83a6c164.',
+        'config',
+      ],
     ];
     for (const [input, cls] of platformFixes) {
       const d = classifyDeployFailure(input);

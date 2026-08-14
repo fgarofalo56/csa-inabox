@@ -39,6 +39,11 @@ import {
   findTripleCollisions,
   findVersionedSeeds,
   findCrossFileCandidates,
+  findImperativeCollisions,
+  imperativeFiles,
+  isExecuted,
+  resolveRoleArg,
+  shellGuidVars,
   inventory,
   scan,
   BICEP_ROOT,
@@ -264,4 +269,126 @@ test('roleKey falls back to the expression rather than guessing', () => {
 test('BICEP_ROOT points at the tree the guard claims to cover', () => {
   assert.ok(BICEP_ROOT.endsWith(path.join('platform', 'fiab', 'bicep')));
   assert.ok(fs.existsSync(BICEP_ROOT));
+});
+
+// ── D3 — the gap D1/D2 could not see (#3439) ─────────────────────────────────
+//
+// On run 31780698652 D1+D2 reported "OK — 164 role assignment(s) … no two
+// declarations collide" and the deploy failed RoleAssignmentExists anyway. The
+// competing writer was `az role assignment create`, which mints a random v4
+// name for a triple whose deterministic v5 name the template owns. D1/D2 audit
+// bicep against bicep and are structurally blind to it.
+
+const ACRPULL = '7f951dda-4ed3-4680-a7ca-43fe172d538d';
+
+/** A tiny repo root carrying one shell file under scripts/. */
+function scratchRepo(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-ra-imp-'));
+  for (const [rel, body] of Object.entries(files)) {
+    const abs = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body, 'utf8');
+  }
+  return dir;
+}
+
+/** A record set whose only bicep-granted role is AcrPull. */
+const acrPullRecords = [{ roleKey: ACRPULL, file: 'm.bicep', nameLine: 1 }];
+
+test('EMBEDDED CONTROL — an unprobed create over a bicep-granted role IS flagged', () => {
+  // The real defect, reduced. If this control ever stops firing, the guard has
+  // drifted off the code and its zero on the real tree means nothing
+  // (guard_with_zero_population_needs_embedded_control).
+  const dir = scratchRepo({
+    'scripts/bad.sh': `#!/usr/bin/env bash\naz role assignment create --assignee-object-id "$PID" \\\n  --role ${ACRPULL} --scope "$ACR_ID"\n`,
+  });
+  const { findings, population } = findImperativeCollisions(acrPullRecords, dir, ['scripts']);
+  assert.equal(population, 1);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].check, 'D3');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('EMBEDDED CONTROL — the SAME create with a probe above it is NOT flagged', () => {
+  // The negative half. Without it, a matcher that flags everything would score
+  // identically to one that works.
+  const dir = scratchRepo({
+    'scripts/good.sh':
+      `#!/usr/bin/env bash\n` +
+      `N=$(az role assignment list --assignee-object-id "$PID" --scope "$ACR_ID" --role ${ACRPULL} --query "length(@)" -o tsv)\n` +
+      `if [ "$N" = "0" ]; then\n` +
+      `  az role assignment create --assignee-object-id "$PID" --role ${ACRPULL} --scope "$ACR_ID"\n` +
+      `fi\n`,
+  });
+  const { findings, population } = findImperativeCollisions(acrPullRecords, dir, ['scripts']);
+  assert.equal(population, 1, 'the create must still be COUNTED — a probe excuses it, it does not hide it');
+  assert.deepEqual(findings, []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('D3 — a role the bicep does NOT grant cannot collide, so it is not flagged', () => {
+  const dir = scratchRepo({
+    'scripts/other.sh': `az role assignment create --assignee-object-id "$PID" --role ${OTHER_ROLE} --scope "$S"\n`,
+  });
+  const { findings, population } = findImperativeCollisions(acrPullRecords, dir, ['scripts']);
+  assert.equal(population, 1);
+  assert.deepEqual(findings, []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('D3 reads LOGICAL lines — a probe or a --role on a continuation is still seen', () => {
+  // The class _logical-lines.mjs exists for: a guard keyed to physical lines
+  // reported ELEVEN live sites as zero because the second token was on a `\`
+  // continuation (#3417, #3420).
+  const dir = scratchRepo({
+    'scripts/cont.sh': `az role assignment create --assignee-object-id "$PID" \\\n  --role ${ACRPULL} \\\n  --scope "$S"\n`,
+  });
+  const { findings } = findImperativeCollisions(acrPullRecords, dir, ['scripts']);
+  assert.equal(findings.length, 1, 'a --role on a continuation must still be resolved and judged');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('D3 — a create mentioned inside an echo is a REFERENCE, not an execution', () => {
+  const dir = scratchRepo({
+    'scripts/doc.sh': `echo "run az role assignment create --role ${ACRPULL} --scope X as an Owner"\n`,
+    'scripts/comment.sh': `# az role assignment create --role ${ACRPULL} --scope X\n`,
+  });
+  const { findings, population } = findImperativeCollisions(acrPullRecords, dir, ['scripts']);
+  assert.equal(population, 0, 'a string is not a call — the same distinction check-deploy-script-reachability draws');
+  assert.deepEqual(findings, []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('D3 resolves --role through a shell variable, and refuses to judge what it cannot resolve', () => {
+  const vars = shellGuidVars([{ line: 1, text: `ACRPULL_ROLE="${ACRPULL}"` }]);
+  assert.equal(vars.get('ACRPULL_ROLE'), ACRPULL);
+  assert.equal(resolveRoleArg(`az role assignment create --role "$ACRPULL_ROLE" --scope X`, vars), ACRPULL);
+  assert.equal(resolveRoleArg(`az role assignment create --role ${ACRPULL} --scope X`, new Map()), ACRPULL);
+  // A display name is NOT guessed at a role definition id (R7).
+  assert.equal(resolveRoleArg(`az role assignment create --role "Storage Blob Data Reader" --scope X`, new Map()), null);
+  assert.equal(resolveRoleArg(`az role assignment create --role "$UNKNOWN" --scope X`, new Map()), null);
+});
+
+test('isExecuted separates the call from the string that describes it', () => {
+  assert.equal(isExecuted('az role assignment create --role x'), true);
+  assert.equal(isExecuted('  MSYS_NO_PATHCONV=1 az role assignment create --role x'), true);
+  assert.equal(isExecuted('echo "az role assignment create --role x"'), false);
+  assert.equal(isExecuted('# az role assignment create --role x'), false);
+  assert.equal(isExecuted('echo "::warning::az role assignment create --role x"'), false);
+  assert.equal(isExecuted('nothing here'), false);
+});
+
+test('D3 scans the real tree, and its POPULATION is non-trivial', () => {
+  // The findings may legitimately be zero (every site probes). The population
+  // may not: this repo executes `az role assignment create` in both cloud
+  // lanes, so zero would mean the matcher stopped matching.
+  const files = imperativeFiles();
+  assert.ok(files.length > 20, `discovered only ${files.length} workflow/script files`);
+  const { population, findings } = findImperativeCollisions(inventory());
+  assert.ok(population > 10, `discovered only ${population} executed creates — D3 is not scanning`);
+  assert.deepEqual(
+    findings,
+    [],
+    `the real tree must be clean by D3:\n${findings.map((f) => `${f.file}:${f.line}`).join('\n')}`,
+  );
 });

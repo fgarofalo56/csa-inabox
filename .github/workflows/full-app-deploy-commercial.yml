@@ -321,6 +321,7 @@ jobs:
           # Use the RG the resolve job actually adopted — AZURE_LOCATION may be
           # the (stale) `region` input default while the estate is elsewhere.
           RG='${{ needs.resolve.outputs.rg }}'
+          ACRPULL=7f951dda-4ed3-4680-a7ca-43fe172d538d
 
           # AcrPush to deploy SP (push images)
           SP_OID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
@@ -329,16 +330,51 @@ jobs:
             --role 8311e382-0749-4cb8-b61a-304f252e45ec \
             --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
 
-          # AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) to every Loom UAMI
+          # ── AcrPull to every Loom UAMI — PROBE BEFORE CREATE (#3439) ─────────
+          # This loop took the whole Commercial infra deploy down for a fortnight
+          # and the reason was in its own title: "(idempotent)". It is idempotent
+          # with respect to ITSELF — `RoleAssignmentExists` was swallowed by
+          # `grep -vi already || true` — and NOT with respect to the template.
+          #
+          # `az role assignment create` with no --name mints a RANDOM v4 GUID.
+          # ARM enforces uniqueness on the (scope, principalId, roleDefinitionId)
+          # TRIPLE, not on the name, and admin-plane/main.bicep declares AcrPull
+          # on THIS registry for six of the identities this wildcard matches
+          # (script-runner, mcp, migrate, unity, risingwave, direct-lake) under
+          # deterministic v5 `guid()` names. Whichever writer lands first owns the
+          # triple; the other can never create it. On run 31780698652 that was
+          # uami-loom-directlake vs guid(acr.id, uami.id, AcrPull) — the deploy
+          # failed RoleAssignmentExists on every scheduled run thereafter.
+          #
+          # So: PROBE first and no-op when the grant is already there, which is
+          # the normal case (phase 1 of the from-scratch path provisions infra —
+          # and these grants — before this workflow runs at all). Only mint when
+          # the grant is genuinely ABSENT, because dropping a real grant here
+          # would leave a Container App unable to pull its image; failing OPEN on
+          # image pull is worse than a name that needs converging. A minted name
+          # is now self-healing rather than permanent: deploy-retry --remediate
+          # runs scripts/csa-loom/converge-role-assignment.mjs on the next infra
+          # deploy, which deletes the stray and lets the template take the name.
           for UAMI in $(az identity list --resource-group "$RG" \
-              --query "[?starts_with(name, 'uami-loom-')].principalId" -o tsv); do
-            az role assignment create --assignee-object-id "$UAMI" \
-              --assignee-principal-type ServicePrincipal \
-              --role 7f951dda-4ed3-4680-a7ca-43fe172d538d \
-              --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
+              --query "[?starts_with(name, 'uami-loom-')].principalId" -o tsv | tr -d '\r'); do
+            EXISTING=$(az role assignment list --assignee-object-id "$UAMI" \
+              --scope "$ACR_ID" --role "$ACRPULL" --query "length(@)" -o tsv 2>&1 | tr -d '\r')
+            if [ "$EXISTING" = "0" ]; then
+              echo "::warning::AcrPull is ABSENT for ${UAMI:0:8}… on this registry, so it is being created here. That mints a CLI name, not the template's; scripts/csa-loom/converge-role-assignment.mjs converges it on the next infra deploy (#3439)."
+              az role assignment create --assignee-object-id "$UAMI" \
+                --assignee-principal-type ServicePrincipal \
+                --role "$ACRPULL" \
+                --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
+            elif [ -n "$EXISTING" ] && [ "$EXISTING" -gt 0 ] 2>/dev/null; then
+              echo "::notice::AcrPull already granted for ${UAMI:0:8}… — leaving the existing assignment alone."
+            else
+              # R7: an unreadable probe is NOT an absent grant. Creating on an
+              # unreadable read is precisely how the stray got minted.
+              echo "::warning::could not read whether AcrPull exists for ${UAMI:0:8}… (az said: ${EXISTING}). NOT creating one on an unestablished absence; if the pull later fails, that read is the thing to fix."
+            fi
           done
 
-          echo "::notice::AcrPush + AcrPull roles granted."
+          echo "::notice::AcrPush + AcrPull roles reconciled."
           # 90s for Azure RBAC propagation across all assignments
           sleep 90
 
