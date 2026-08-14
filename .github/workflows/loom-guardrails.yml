@@ -807,6 +807,22 @@ jobs:
       - name: 'guard-import-side-effects (a CI guard must run as a script, never on import — #3436)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-guard-import-side-effects.mjs
+      # Under `output: 'standalone'` with HOSTNAME=0.0.0.0, `req.url` and
+      # `req.nextUrl.origin` carry the CONTAINER's authority — so any URL built
+      # on them and handed to a client points at 0.0.0.0:3000. It has bitten
+      # twice: #3442 (the auth breaker fired correctly and redirected the
+      # browser somewhere unreachable, so the diagnosis page never rendered) and
+      # #3443 (a copy-paste connection snippet, in a file whose own docstring
+      # declares "No internal hosts"). Both were one line, under a comment
+      # stating the correct rule, and invisible to every fixture — the harnesses
+      # set `host` and `x-forwarded-host` to the same value as the request URL,
+      # making the broken and correct constructions byte-identical.
+      #
+      # The guard strips comments first: 6 of the 7 hits in the sweep that found
+      # #3443 were prose EXPLAINING the pattern, plus one deliberate control.
+      - name: 'external-origin-urls (a client-facing URL must use the FORWARDED origin — #3442, #3443)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-external-origin-urls.mjs
       # The sibling half of the same problem. That guard proves each required
       # lane RENDERS a verdict; this one proves the release lane cannot merge on
       # a verdict nothing rendered, and cannot close an issue nobody claimed.
