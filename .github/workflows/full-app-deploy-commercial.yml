@@ -668,15 +668,27 @@ jobs:
   # ── SC1: verify-before-roll — every image the roll will ship must carry a
   # valid keyless cosign signature from a trusted build workflow before the
   # roll job may proceed. Runs while the ACR is still open (before close-acr).
-  # `always()` preserves the pre-SC1 lenient behavior for PARTIAL build
+  # `!cancelled()` preserves the pre-SC1 lenient behavior for PARTIAL build
   # failures (fail-fast is off; the roll ships whatever :TAG images exist) —
   # but each existing :TAG image must verify. When skip_build=true the deploy
   # rolls pre-existing images and this job is skipped — the roll step emits a
   # loud warning for that path.
+  #
+  # It is `!cancelled()` and NOT `always()` deliberately (#3418). `always()` is
+  # documented to run the job even when the RUN was cancelled — so on run
+  # 31710130307, `build` was cancelled having produced nothing, this gate ran
+  # anyway, graded the pre-existing `loom-console:v0.1` already sitting in the
+  # registry, and emitted "SC1 SUPPLY-CHAIN GATE FAILED" about images the run
+  # never built. That verdict was about a tag this run had no hand in, which is
+  # the deploy-integrity.md R7 error: an error must not state as fact something
+  # it did not establish. On a cancelled run there is nothing to grade, so the
+  # gate should render no verdict at all. `!cancelled()` still runs on FAILURE,
+  # so the lenient partial-build behavior above is unchanged. close-acr keeps
+  # its own `always()` and still re-locks the registry when this job is skipped.
   verify-images:
     name: Verify image signatures (cosign)
     needs: [resolve, build]
-    if: ${{ always() && !inputs.skip_build && needs.resolve.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.skip_build && needs.resolve.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       # Needed for scripts/ci/deploy-classify.mjs and
@@ -711,6 +723,7 @@ jobs:
       - name: Verify every image the roll ships is signed by a trusted workflow
         env:
           CONTRACT_REFS: ${{ needs.resolve.outputs.contract_refs }}
+          BUILD_RESULT: ${{ needs.build.result }}
         run: |
           set -uo pipefail
           if [[ "${{ inputs.skip_supply_chain }}" == "true" ]]; then
@@ -762,6 +775,21 @@ jobs:
           fi
           read -ra APPS <<< "$VERIFY_APPS"
           echo "::notice::SC1 verify set (${#APPS[@]} images): ${APPS[*]}"
+          # ── PROVENANCE (#3418, deploy-integrity.md R7) ────────────────────
+          # State WHAT is being graded. If `build` did not succeed, the :$TAG
+          # images in the registry were not produced by this run, and every
+          # verdict below is about a pre-existing tag. A verdict that does not
+          # say what it graded is how the wrong remedy gets chased: on run
+          # 31710130307 this gate reported a supply-chain FAILURE for
+          # loom-console when the true statement was "this run built nothing;
+          # the tag already in the registry is unsigned" — a different claim
+          # with a different fix.
+          if [[ "$BUILD_RESULT" == "success" ]]; then
+            PROVENANCE="built by this run"
+          else
+            PROVENANCE="PRE-EXISTING registry tag — the build job did not succeed (result: $BUILD_RESULT), so this run did not produce it"
+            echo "::warning::SC1 is grading PRE-EXISTING :$TAG images. The build job's result is '$BUILD_RESULT', so this run produced no images and every verdict below is about tags that were already in the registry."
+          fi
           FAILED=()
           UNPROVEN=()
           for APP in "${APPS[@]}"; do
@@ -808,7 +836,7 @@ jobs:
                 --output text >/dev/null 2>&1; then
               echo "✓ $REF signature verified"
             else
-              echo "::error::$REF ($APP:$TAG) has NO valid cosign signature from a trusted build workflow."
+              echo "::error::$REF ($APP:$TAG, $PROVENANCE) has NO valid cosign signature from a trusted build workflow."
               FAILED+=("$APP")
             fi
           done
@@ -817,10 +845,17 @@ jobs:
             exit 1
           fi
           if (( ${#FAILED[@]} > 0 )); then
-            echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — unsigned image(s): ${FAILED[*]}. The roll job is BLOCKED. These :$TAG images were not produced by the gated CI path (or predate SC1, e.g. a failed build leg left a stale pre-SC1 :$TAG behind). Fix: re-run this workflow so the build job scans+signs them (check the per-app 'Cosign sign' step logs), or (emergency only) re-dispatch with skip_supply_chain=true."
+            if [[ "$BUILD_RESULT" == "success" ]]; then
+              echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — unsigned image(s): ${FAILED[*]}. The roll job is BLOCKED. These :$TAG images were not produced by the gated CI path (or predate SC1, e.g. a failed build leg left a stale pre-SC1 :$TAG behind). Fix: re-run this workflow so the build job scans+signs them (check the per-app 'Cosign sign' step logs), or (emergency only) re-dispatch with skip_supply_chain=true."
+            else
+              # R7: do NOT assert these images "were not produced by the gated
+              # CI path" — this run did not build them and cannot speak to how
+              # they got there. Say only what was established.
+              echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — unsigned PRE-EXISTING image(s): ${FAILED[*]}. THIS RUN BUILT NO IMAGES (build result: $BUILD_RESULT); the :$TAG tags graded above were already in the registry, and how they got there is NOT established here. The roll job is BLOCKED. Fix: re-run this workflow so the build job produces, scans and signs a fresh :$TAG, or (emergency only) re-dispatch with skip_supply_chain=true."
+            fi
             exit 1
           fi
-          echo "::notice::SC1 supply-chain gate PASSED — every existing :$TAG image is cosign-signed by a trusted workflow."
+          echo "::notice::SC1 supply-chain gate PASSED — every existing :$TAG image is cosign-signed by a trusted workflow ($PROVENANCE)."
 
       # ── The image contract (refs #2958) ───────────────────────────────────
       # The cosign gate above is deliberately LENIENT about a missing image: it
@@ -926,7 +961,16 @@ jobs:
     # PASSED (it exits 0 with a loud warning when skip_supply_chain is set,
     # so the emergency valve still rolls). skip_build rolls pre-existing
     # images with no verification — the roll step warns loudly for that path.
-    if: always() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build)
+    #
+    # `!cancelled()` and NOT `always()` (#3418). Both upstream guards carry a
+    # `|| inputs.skip_build` escape hatch, so on a skip_build=true dispatch
+    # they are BOTH true no matter what the upstream jobs did — including when
+    # those jobs were cancelled. Under `always()` that meant cancelling a
+    # skip_build roll did not stop it: the run went on to roll the Container
+    # Apps anyway. `!cancelled()` still runs the roll on an upstream FAILURE
+    # where the guards above allow it (the lenient partial-build path), but a
+    # cancelled run now actually stops.
+    if: ${{ !cancelled() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
