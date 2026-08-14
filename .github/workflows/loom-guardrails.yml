@@ -46,8 +46,22 @@ permissions:
   actions: read
 
 concurrency:
-  group: loom-guardrails-${{ github.ref }}
-  cancel-in-progress: true
+  # #3426 — this was `group: loom-guardrails-${{ github.ref }}` +
+  # `cancel-in-progress: true`. Every push to main shares `refs/heads/main`, so
+  # each merge CANCELLED the previous commit's run. Measured 2026-08-14: 7 of
+  # the last 30 main runs cancelled — including 5d572e16 (the #3137 merge) —
+  # i.e. 7 commits that landed with NO verdict from a REQUIRED check.
+  #
+  # A cancelled run is not a pass and is not a failure. It is an ABSENCE, and
+  # `gh run list` renders it as a grey row that reads like "superseded by a
+  # newer push" (the misreading #3368 and #3418 were filed for).
+  #
+  # PR branches still cancel superseded runs — that is what this group is FOR.
+  # push/dispatch go per-SHA. `cancel-in-progress: false` alone would not be
+  # enough: GitHub keeps only one PENDING run per group and cancels any other,
+  # so the sha has to be in the group itself.
+  group: loom-guardrails-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   guardrails:
@@ -739,6 +753,22 @@ jobs:
         run: |
           node scripts/ci/check-workflow-lane-states.mjs --self-test
           node scripts/ci/check-workflow-lane-states.mjs
+      # #3423 was `trivy.yml` cancelling its own main-branch scans; #3424 fixed
+      # that ONE lane and shipped no ratchet. Within hours the identical defect
+      # was measured on the lanes that publish 12 of the 14 REQUIRED contexts —
+      # test.yml (11 of 30 main runs cancelled), loom-guardrails.yml (7), and
+      # validate.yml (4). Those commits landed on main with no verdict at all
+      # from a mandatory check, and a cancelled run reads as "superseded", not
+      # as "never graded" (#3368, #3418).
+      #
+      # The guard keys on the REQUIRED manifest already committed in
+      # release-please.yml rather than on branch protection, which needs an
+      # admin token this job does not have — a gate that cannot reach its
+      # evidence has verified nothing. So a newly-added required context is
+      # covered automatically and there is no allowlist to go stale.
+      - name: 'required-lane-concurrency (a required check must render a verdict for EVERY main commit — #3426)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-required-lane-concurrency.mjs
       # If the registry NAME comes from a variable, the login-server SUFFIX must
       # too. mirror-upstream-images.sh read back `${ACR}.azurecr.io/${DST}` — the
       # name was right for Gov, the suffix was Commercial. All three upstream
