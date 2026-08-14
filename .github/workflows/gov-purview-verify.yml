@@ -331,8 +331,11 @@ jobs:
             # data plane is what matters. Probe it before declaring failure:
             # a Collection Admin can GET the root-collection metadata policy.
             DTOKEN=$(az account get-access-token --resource https://purview.azure.net --query accessToken -o tsv | tr -d '\r')
+            # `|| true` fixes the exit status only; `|| echo 000` would append
+            # to what curl already printed and report "000000" (#3414).
             PHTTP=$(curl -sS -o /tmp/pol-probe.json -w '%{http_code}' -H "Authorization: Bearer $DTOKEN" \
-              "$BASE/policystore/metadataPolicies?collectionName=$PVW&api-version=$POLICY_API" || echo 000)
+              "$BASE/policystore/metadataPolicies?collectionName=$PVW&api-version=$POLICY_API") || true
+            [ -n "$PHTTP" ] || PHTTP=000
             if [ "$PHTTP" = "200" ]; then
               echo "::notice::ARM addRootCollectionAdmin denied (rc=$RC) but the deploy SP already reads the root metadata policy (HTTP 200) — it IS a Collection Admin (added out-of-band); continuing to the grant step."
               exit 0
