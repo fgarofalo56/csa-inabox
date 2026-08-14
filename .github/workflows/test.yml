@@ -25,6 +25,19 @@ on:
       - '.github/workflows/test.yml'
   schedule:
     - cron: '37 3 * * 1'
+  # REQUIRED-CHECK DISPATCH (#3393). release-please opens its PR with
+  # GITHUB_TOKEN, and GitHub *intentionally* suppresses the downstream
+  # `pull_request` trigger on such PRs — the runs are never created, so the four
+  # required contexts this workflow publishes (Python Tests 3.10/3.11/3.12 and
+  # dbt Compile shared/finance/inventory/sales) never report and used to be
+  # replaced by SYNTHETIC statuses that no test produced.
+  # `workflow_dispatch` (with `repository_dispatch`) is the ONE documented
+  # exception to that suppression — GITHUB_TOKEN *can* trigger it — so
+  # release-please.yml dispatches this workflow against the release branch and
+  # gets REAL results. Under a dispatch `github.event_name != 'pull_request'`,
+  # so the change-detection step below takes its "always run" branch: the FULL
+  # suite runs, which is the conservative direction.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
