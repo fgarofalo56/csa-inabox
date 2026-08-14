@@ -167,21 +167,54 @@ jobs:
   # deploy-staleness reported the estate 5 commits behind, while every gate that
   # matters to the console was green.
   #
-  # This job answers one question — did the loom-console job succeed? — and the
-  # roll below runs only if it did. Nothing about the roll's own gates changes:
-  # image-exists, cosign verify, vitest, health, version, build-marker and the
-  # in-VNet UAT all still have to pass. Whether a SIBLING image built says nothing
-  # about whether this console image is fit to deploy.
+  # This job decides ONE thing — should the roll proceed? — and on the
+  # workflow_run path it decides it by asking whether the loom-console job
+  # succeeded. Nothing about the roll's own gates changes: image-exists, cosign
+  # verify, vitest, health, version, build-marker and the in-VNet UAT all still
+  # have to pass. Whether a SIBLING image built says nothing about whether this
+  # console image is fit to deploy.
   #
-  # It is a separate job so that "the console image is also broken" SKIPS the roll
-  # rather than reddening it — that case is already reported by the build workflow
-  # and does not need a second red run saying the same thing.
+  # It is a separate job so that "the console image is also broken" SKIPS the
+  # roll rather than reddening it — that case is already reported by the build
+  # workflow and does not need a second red run saying the same thing.
+  #
+  # ── ON workflow_dispatch THIS JOB DOES NOT ESTABLISH THAT A BUILD RAN (#3388) ─
+  #
+  # A dispatch names a TAG, not an upstream run, so there is no `workflow_run`
+  # payload to read. This job used to short-circuit dispatch straight to
+  # proceed=true under the name "Did the console image build?" — a green check
+  # asserting a fact it had never looked up, in violation of deploy-integrity R7
+  # ("an error must not state as fact something it did not establish"). Since
+  # essentially every roll in this repo is dispatched, that meant the check was
+  # green on the one path where it measured nothing, and run 31740009089 spent
+  # its diagnostic time downstream discovering "the specified tag does not
+  # exist".
+  #
+  # It now GOES AND LOOKS: for a 40-hex tag it queries the producer
+  # (build-fiab-images-acr-tasks) for that head SHA and reports what the
+  # loom-console matrix job actually concluded. When it cannot resolve an
+  # answer — a "latest"/prefix tag, no completed producer run for the SHA, an
+  # unreadable API — it says UNKNOWN in exactly those words rather than
+  # implying yes.
+  #
+  # It still proceeds in every dispatch case, deliberately: a dispatch is the
+  # emergency valve (roll an older good tag, roll an image rebuilt out of band)
+  # and this job is not the enforcement point. `Gate — the image must EXIST in
+  # ACR (unskippable)` is, and it is authoritative — it is what caught
+  # 31740009089. What changes here is that the log states the assumption
+  # instead of hiding it.
   gate:
-    name: Did the console image build?
+    name: Should this roll proceed?
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' }}
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
+      # What this job actually ESTABLISHED about the console image build, as
+      # opposed to what it assumed. One of: success | failed | not-applicable
+      # (workflow_run success — the run conclusion already covers it) |
+      # unknown-*. Surfaced as an output so a reader (or a later step) sees the
+      # evidence class, not just the yes/no.
+      console_build: ${{ steps.check.outputs.console_build }}
     steps:
       - id: check
         env:
@@ -189,18 +222,82 @@ jobs:
           EVENT: ${{ github.event_name }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          PRODUCER: build-fiab-images-acr-tasks.yml
         run: |
-          set -euo pipefail
-          # A manual dispatch, or an upstream run that fully succeeded, proceeds
-          # exactly as before this change.
-          if [ "$EVENT" = 'workflow_dispatch' ] || [ "$CONCLUSION" = 'success' ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
+          set -uo pipefail
           ERR="$(mktemp)"
+
+          # Read the loom-console matrix job's conclusion(s) out of a run.
+          # Echoes one of: the conclusions, or an empty string. Returns non-zero
+          # ONLY when the API itself could not be read — an empty answer is a
+          # distinct case the callers below handle explicitly, because an empty
+          # list reading as "not found" is this repo's recurring defect (#2819).
+          console_conclusions() {
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$1/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name | test("loom-console")) | .conclusion' 2>"$ERR"
+          }
+
+          # ── DISPATCH: look it up, and say UNKNOWN when it cannot be looked up ──
+          if [ "$EVENT" = 'workflow_dispatch' ]; then
+            # The roll proceeds either way — see the header. The ACR image-exists
+            # gate is the enforcement point; this is evidence, reported honestly.
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            TAG="${IMAGE_TAG:-}"
+
+            if ! printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "console_build=unknown-tag-not-a-sha" >> "$GITHUB_OUTPUT"
+              echo "::notice::UNKNOWN whether a console image was built: the dispatched tag '${TAG}' is not a 40-hex commit SHA, so there is no producer run to look up. That is not a 'no' — a floating tag like 'latest' is a perfectly normal roll. The ACR image-exists gate below is what establishes there is something to roll (#3388)."
+              exit 0
+            fi
+
+            if ! PRUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PRODUCER}/runs?head_sha=${TAG}&per_page=100" --jq '[.workflow_runs[] | select(.status == "completed")] | sort_by(.run_started_at) | last | .id // empty' 2>"$ERR")"; then
+              echo "console_build=unknown-producer-unreadable" >> "$GITHUB_OUTPUT"
+              echo "::notice::UNKNOWN whether a console image was built for ${TAG}: could not read ${PRODUCER} runs. Detail: $(head -c 400 "$ERR")"
+              exit 0
+            fi
+
+            if [ -z "${PRUN//[[:space:]]/}" ]; then
+              echo "console_build=unknown-no-producer-run" >> "$GITHUB_OUTPUT"
+              echo "::notice::UNKNOWN whether a console image was built for ${TAG}: ${PRODUCER} has no COMPLETED run for that head SHA. The image may still exist (built out of band, or retagged); it may equally never have been built. The ACR image-exists gate below decides (#3388)."
+              exit 0
+            fi
+
+            if ! JOBS="$(console_conclusions "$PRUN")"; then
+              echo "console_build=unknown-jobs-unreadable" >> "$GITHUB_OUTPUT"
+              echo "::notice::UNKNOWN whether a console image was built for ${TAG}: found producer run ${PRUN} but could not read its jobs. Detail: $(head -c 400 "$ERR")"
+              exit 0
+            fi
+
+            if [ -z "${JOBS//[[:space:]]/}" ]; then
+              echo "console_build=unknown-no-console-job" >> "$GITHUB_OUTPUT"
+              echo "::notice::UNKNOWN whether a console image was built for ${TAG}: producer run ${PRUN} reported NO job matching 'loom-console'. Either that matrix job was renamed or this query is wrong — either way nothing here establishes a build (#3388)."
+              exit 0
+            fi
+
+            echo "loom-console conclusion(s) in producer run ${PRUN}: ${JOBS}"
+            if printf '%s' "$JOBS" | grep -qvx 'success'; then
+              echo "console_build=failed" >> "$GITHUB_OUTPUT"
+              echo "::warning::The console image build for ${TAG} did NOT succeed (producer run ${PRUN}: ${JOBS}). Rolling anyway because a dispatch is the emergency valve and an image may exist from an earlier build of this tag — but if the next gate says 'the specified tag does not exist', THIS is why (#3388)."
+            else
+              echo "console_build=success" >> "$GITHUB_OUTPUT"
+              echo "::notice::Console image for ${TAG} built successfully (producer run ${PRUN})."
+            fi
+            exit 0
+          fi
+
+          # ── workflow_run: unchanged behaviour ────────────────────────────────
+          # The upstream run's own conclusion already answers this when it is a
+          # success; only a failed run needs the per-job lookup.
+          if [ "$CONCLUSION" = 'success' ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "console_build=not-applicable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # FAILS CLOSED on an unreadable answer. An empty list previously read as
           # "not found" across this repo (#2819); here it means UNKNOWN, and
           # unknown must not roll.
-          if ! JOBS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100"                         --jq '.jobs[] | select(.name | test("loom-console")) | .conclusion' 2>"$ERR")"; then
+          if ! JOBS="$(console_conclusions "$RUN_ID")"; then
             echo "::error::Could not read the jobs of upstream run ${RUN_ID}, so whether loom-console built is UNKNOWN — refusing to roll. Detail: $(head -c 400 "$ERR")"
             exit 1
           fi
@@ -212,9 +309,11 @@ jobs:
           if printf '%s' "$JOBS" | grep -qvx 'success'; then
             echo "::notice::Upstream run ${RUN_ID} failed and loom-console is part of why — nothing new to roll. The build workflow already reports this; not reddening a second run for it."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "console_build=failed" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::Upstream run ${RUN_ID} failed on a SIBLING image, but loom-console SUCCEEDED — rolling. A broken sibling does not make this console image unfit; the roll's own gates still decide that (#3260)."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "console_build=success" >> "$GITHUB_OUTPUT"
           fi
 
   roll-and-validate:
