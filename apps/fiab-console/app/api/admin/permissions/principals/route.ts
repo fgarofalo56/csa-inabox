@@ -19,16 +19,21 @@ import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { graphBase, getGraphScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const credential = uamiArmCredential();
 
-const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
-
+// Graph root + /v1.0 and the token audience both resolve per sovereign
+// boundary (#3381). Both were hard-coded Commercial literals, so this route
+// called the worldwide Graph host from GCC-High, IL5 and DoD alike — a
+// cross-boundary request whose token is not even interchangeable (Learn:
+// graph/deployments). Resolved at CALL time so env set after module load
+// (tests, and any lazy-init path) is honoured.
 async function graphToken(): Promise<string> {
-  const t = await credential.getToken('https://graph.microsoft.com/.default');
+  const t = await credential.getToken(getGraphScope());
   if (!t?.token) throw new Error('Failed to acquire Graph token');
   return t.token;
 }
@@ -57,9 +62,10 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const graphV1 = graphBase();
   const endpoint = kind === 'group'
-    ? `${GRAPH_BASE}/groups?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,description,mail`
-    : `${GRAPH_BASE}/users?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}') or startswith(userPrincipalName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,userPrincipalName,mail`;
+    ? `${graphV1}/groups?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,description,mail`
+    : `${graphV1}/users?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}') or startswith(userPrincipalName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,userPrincipalName,mail`;
 
   const res = await fetch(endpoint, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },

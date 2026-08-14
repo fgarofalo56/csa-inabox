@@ -14,8 +14,25 @@
  *   must migrate to the cloud-endpoints resolver so a single deployment builds
  *   the right sovereign host for every cloud.
  *
- * SCOPE — apps/fiab-console/lib/azure/** and apps/fiab-console/app/api/**,
- *   SOURCE files only. Excluded:
+ * SCOPE — SOURCE files only, under:
+ *     apps/fiab-console/lib/azure/**   apps/fiab-console/app/api/**
+ *     apps/fiab-console/lib/auth/**    apps/fiab-console/lib/admin/**
+ *     apps/fiab-console/lib/apps/**
+ *
+ *   THE LAST THREE WERE ADDED BY #3381, AND THE OMISSION IS WHY THAT BUG
+ *   SURVIVED. `lib/auth/msal.ts:381` held a two-branch Graph-host switch with
+ *   no DoD case — a wired-in `graph.microsoft.com` on the fallback branch, the
+ *   exact literal this guard forbids — and the guard never saw it, because
+ *   `lib/auth` was not in SCOPE_DIRS. Same for `lib/admin/secret-health.ts` and
+ *   the Graph host baked into `lib/apps/content-bundles/`. A guard that reads
+ *   as "every straggler literal must migrate" while scanning two of the five
+ *   directories that hold them is the presence-not-enforcement shape.
+ *
+ *   Adding scope GROWS the ratchet baseline once (grandfathering what is
+ *   already there); it does not fix those literals, it makes them visible and
+ *   stops NEW ones landing beside them.
+ *
+ *   Excluded:
  *     - lib/azure/cloud-endpoints.ts itself (it DEFINES the per-cloud suffixes)
  *     - test files (`**\/__tests__\/**`, `*.test.ts(x)`, `*.spec.ts(x)`) —
  *       endpoint-assertion tests legitimately embed a RESOLVED host as their
@@ -60,7 +77,10 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const APP_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
 const BASELINE_FILE = path.join(__dirname, 'cloud-endpoint-literals-baseline.json');
 
-const SCOPE_DIRS = ['lib/azure', 'app/api'];
+// Every console directory that builds an Azure/Graph URL. `lib/auth`,
+// `lib/admin` and `lib/apps` were added by #3381 — see the SCOPE note above for
+// why their absence was the mechanism, not an oversight of degree.
+const SCOPE_DIRS = ['lib/azure', 'app/api', 'lib/auth', 'lib/admin', 'lib/apps'];
 
 // Commercial host suffixes that must flow through cloud-endpoints.ts instead.
 const FORBIDDEN_LITERALS = [

@@ -315,23 +315,34 @@ export function cogScope(): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Microsoft Graph data-plane base URL including the `/v1.0` version segment
- * (no trailing slash). Commercial / GCC use `graph.microsoft.com`; GCC-High /
- * IL5 / DoD (`AzureUSGovernment` / `AzureDOD`) use `graph.microsoft.us`.
- * `LOOM_GRAPH_BASE` overrides for non-standard sovereign clouds.
+ * Microsoft Graph data-plane base URL INCLUDING the `/v1.0` version segment
+ * (no trailing slash). Callers append a bare resource path — `${graphBase()}/groups/…`
+ * — so the version segment is load-bearing.
+ *
+ * Derives from `getGraphHost()` (the one Graph resolver) so the boundary split
+ * — Commercial/GCC `graph.microsoft.com`, GCC-High `graph.microsoft.us`,
+ * DoD/IL5 `dod-graph.microsoft.us` — is stated once, and so `LOOM_GRAPH_BASE`
+ * is honoured with the SAME normalisation everywhere.
+ *
+ * TWO DEFECTS THIS SHAPE FIXES (both measured, #3381):
+ *   1. The previous body branched on `isGovCloud()`, which folds DoD into
+ *      GCC-High — so a DoD boundary got the L4 host `graph.microsoft.us`, and
+ *      Learn is explicit that tokens are not interchangeable across roots.
+ *   2. The previous `LOOM_GRAPH_BASE` branch returned the override VERBATIM,
+ *      dropping `/v1.0`. `main.bicep:5363` sets that variable on EVERY boundary
+ *      to a bare root (`https://graph.microsoft.com`, `…/graph.microsoft.us`,
+ *      `…/dod-graph.microsoft.us`), so on a bicep-wired estate every caller
+ *      built an unversioned URL — `https://graph.microsoft.com/groups/{id}` —
+ *      which Graph does not serve. Appending `/v1.0` here restores it for all
+ *      of them at once.
  */
 export function graphBase(): string {
-  const explicit = process.env.LOOM_GRAPH_BASE;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  return isGovCloud()
-    ? 'https://graph.microsoft.us/v1.0'
-    : 'https://graph.microsoft.com/v1.0';
+  return `${getGraphHost()}/v1.0`;
 }
 
 /** AAD `.default` scope for Microsoft Graph tokens (host root, not the /v1.0 path). */
 export function graphScope(): string {
-  const host = graphBase().replace(/\/v1\.0\/?$/, '');
-  return `${host}/.default`;
+  return getGraphScope();
 }
 
 // ---------------------------------------------------------------------------
@@ -607,13 +618,76 @@ export function getSearchSuffix(): string {
 }
 
 /**
- * Microsoft Graph host (full URL with scheme, no trailing slash). Per
- * Microsoft Learn `graph/deployments`, GCC uses the worldwide
- * `graph.microsoft.com` host (same as Commercial); GCC-High uses
- * `graph.microsoft.us`; DoD uses `dod-graph.microsoft.us`.
+ * Normalise a Graph base to a bare service ROOT — scheme + host, no trailing
+ * slash and no version segment. Accepts either shape an operator or a bicep
+ * module might supply (`https://graph.microsoft.us` or
+ * `https://graph.microsoft.us/v1.0`) so `getGraphHost()` is the root and
+ * `graphBase()` can append `/v1.0` exactly once. Idempotent.
+ */
+function normalizeGraphRoot(value: string): string {
+  return value.trim().replace(/\/+$/, '').replace(/\/(v1\.0|beta)$/i, '');
+}
+
+/**
+ * The boundary that decides the GRAPH host — which is NOT always the boundary
+ * that decides the Azure (ARM/Cosmos/SQL) hosts, and that difference is the
+ * whole bug behind #3381.
+ *
+ * `detectLoomCloud()` deliberately folds `IL5` into `GCC-High` because an IL5
+ * estate runs on the ordinary Azure Government endpoints
+ * (`management.usgovcloudapi.net`, `documents.azure.us`, …) — that fold is
+ * correct for ARM and must stay. `platform/fiab/bicep/modules/admin-plane/
+ * main.bicep:4743` encodes exactly that:
+ *     { name: 'LOOM_CLOUD', value: boundary == 'IL5' ? 'GCC-High' : boundary }
+ *
+ * Microsoft Graph is the one service where L4 and L5 diverge (Learn:
+ * https://learn.microsoft.com/graph/deployments — "US Government L4 (GCC High)"
+ * = graph.microsoft.us, "US Government L5 (DOD)" = dod-graph.microsoft.us, and
+ * "Access tokens acquired for a national cloud deployment are not
+ * interchangeable"). So an IL5 estate is invisible to `detectLoomCloud()` and
+ * would silently answer with the L4 host.
+ *
+ * `LOOM_CLOUD_BOUNDARY` is the signal that survives the fold — bicep wires it
+ * verbatim (`main.bicep:5393`, `copilot/maf.bicep:105`), so `IL5` stays `IL5`.
+ * The repo already treats IL5 as L5 everywhere else it matters:
+ * `main.bicep:5363` and `identity-graph-rbac.bicep:50-53` both map
+ * `boundary == 'IL5'` to `dod-graph.microsoft.us`, and `cloudBoundaryLabel()`
+ * badges it "DoD (IL5/L5)". This resolver makes the runtime agree with them.
+ */
+function graphBoundary(): LoomCloud {
+  switch ((process.env.LOOM_CLOUD_BOUNDARY || '').trim().toLowerCase()) {
+    case 'il5':
+    case 'dod':
+      return 'DoD';
+    case 'gcc-high':
+    case 'gcchigh':
+      return 'GCC-High';
+    // Anything else (unset, Commercial, GCC, a value we do not enumerate)
+    // falls through to the generic cloud detector.
+  }
+  return detectLoomCloud();
+}
+
+/**
+ * Microsoft Graph service ROOT (scheme + host, no trailing slash, NO version
+ * segment). THE single source of truth for the Graph host in the console —
+ * `graphBase()`, `graphScope()`, `getGraphScope()`, `lib/auth/msal.ts`, and
+ * every per-client `graphBase()` derive from this and must not re-implement it.
+ *
+ * Per Microsoft Learn `graph/deployments`:
+ *   Commercial + GCC → https://graph.microsoft.com   (GCC uses the worldwide host)
+ *   GCC-High (L4)    → https://graph.microsoft.us
+ *   DoD / IL5 (L5)   → https://dod-graph.microsoft.us
+ *
+ * `LOOM_GRAPH_BASE` wins outright (mirrors `armBase()`'s `LOOM_ARM_ENDPOINT`
+ * precedence) so an unenumerated or private-link boundary is reachable without
+ * a code change; it is normalised to a root so a value carrying `/v1.0` cannot
+ * produce a double-versioned URL.
  */
 export function getGraphHost(): string {
-  switch (detectLoomCloud()) {
+  const explicit = process.env.LOOM_GRAPH_BASE;
+  if (explicit && explicit.trim()) return normalizeGraphRoot(explicit);
+  switch (graphBoundary()) {
     case 'DoD':
       return 'https://dod-graph.microsoft.us';
     case 'GCC-High':
