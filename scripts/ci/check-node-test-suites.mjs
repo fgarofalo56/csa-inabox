@@ -56,10 +56,18 @@
  *       loop where the author would most want it caught.
  *
  *   So discovery stays a dependency-free walk, and the CLASS-level protection
- *   the index would have given lives in the self-test instead: `no discovered
- *   suite is git-ignored` fails the day any un-skipped gitignored directory
- *   starts contributing suites, whatever it is named. Runtime keeps the cheap
- *   path; the guard's own tests carry the teeth.
+ *   the index would have given lives in the self-test instead, as a PAIR:
+ *
+ *     - `no discovered suite is git-ignored` fails the day any un-skipped
+ *       gitignored directory starts contributing suites, whatever it is named.
+ *     - `no TRACKED suite is excluded by SKIP_DIRS` is its inverse, and closes
+ *       a blind side the first one cannot see: `git check-ignore` reports a
+ *       TRACKED file as NOT ignored even when it matches an ignore pattern, so
+ *       a suite force-added under `temp/`/`dist`/`build` would be both
+ *       undiscovered and undetected. It is also the half with a real population
+ *       on a clean CI checkout; the first half only has teeth locally.
+ *
+ *   Runtime keeps the cheap path; the guard's own tests carry the teeth.
  *
  * USAGE
  *   node scripts/ci/check-node-test-suites.mjs           # discover + run (CI)

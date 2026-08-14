@@ -223,11 +223,20 @@ test('isOwnedByOtherRunner: matches the dir itself and its children only', () =>
 
 // ── the real repo ───────────────────────────────────────────────────────────
 
+/**
+ * The REPO_ROOT walk, computed once. It costs ~300ms, and `node --test` runs
+ * ~107 files concurrently — one of which (reindex-loom-docs) asserts a
+ * wall-clock budget around a spawned `sh` + real `curl`. Five independent walks
+ * would put ~1.5s of avoidable CPU contention into that same pool.
+ */
+let realTree;
+const realSuites = () => (realTree ??= discoverSuites(REPO_ROOT));
+
 test('the four suites orphaned in #2835 are discovered in the real tree', () => {
   // Named explicitly: these are the suites that had NO lane. If a future
   // refactor moves or renames one, this fails loudly instead of silently
   // dropping it back out of CI.
-  const found = discoverSuites(REPO_ROOT);
+  const found = realSuites();
   for (const orphan of [
     'apps/loom-unity/tests/entrypoint.test.mjs',
     'apps/loom-onelake/tests/resolver.test.mjs',
@@ -239,7 +248,7 @@ test('the four suites orphaned in #2835 are discovered in the real tree', () => 
 });
 
 test('the ALREADY-covered suites stay discovered (no coverage was traded away)', () => {
-  const found = discoverSuites(REPO_ROOT);
+  const found = realSuites();
   assert.ok(found.includes('apps/loom-sharing/tests/entrypoint.test.mjs'));
   assert.ok(found.some((f) => f.startsWith('scripts/ci/__tests__/')));
 });
@@ -286,9 +295,12 @@ test('CONTROL: the ignore probe actually discriminates (it is not a no-op)', () 
     'scripts/ci/check-node-test-suites.mjs',
   ]);
   assert.ok(r.ok, `the ignore probe could not answer, so the guard below measures nothing: ${r.reason}`);
+  // Compared as SETS: `check-ignore -z` happens to echo in input order, but that
+  // is not documented API, and pinning an implementation detail buys no strength
+  // here — membership is the whole claim.
   assert.deepEqual(
-    r.ignored,
-    ['temp/wt-probe/scripts/ci/__tests__/probe.test.mjs', 'apps/deep/temp/probe.test.mjs'],
+    new Set(r.ignored),
+    new Set(['temp/wt-probe/scripts/ci/__tests__/probe.test.mjs', 'apps/deep/temp/probe.test.mjs']),
     'check-ignore no longer flags temp/ — either .gitignore lost the `temp/` pattern or the probe broke',
   );
   assert.ok(
@@ -305,10 +317,17 @@ test('no discovered suite is git-ignored — the CLASS behind #3487, not just te
   // called — this fails and names it, instead of the runner silently executing
   // another branch's tests as if they were ours.
   //
+  // HONEST SCOPE: this is a LOCAL-DEVELOPER guard, not a CI one. On a clean CI
+  // checkout every discovered path is tracked, so `ignored` is necessarily []
+  // and this is structurally unable to fail there. That is the right target —
+  // local is the only place the bug manifests, which is exactly why it survived
+  // — but it means the CONTROL above, not this test, is what proves the probe
+  // works in CI.
+  //
   // Untracked-but-real suites are deliberately NOT caught here: a brand-new
   // unstaged test file is not ignored, so it still runs. That asymmetry is the
   // whole point of keeping the walk.
-  const found = discoverSuites(REPO_ROOT);
+  const found = realSuites();
   const r = gitIgnoredPaths(REPO_ROOT, found);
   assert.ok(r.ok, `could not determine ignore status, so this control measured nothing: ${r.reason}`);
   assert.deepEqual(
@@ -318,15 +337,45 @@ test('no discovered suite is git-ignored — the CLASS behind #3487, not just te
   );
 });
 
-test('the real tree still yields a full suite population (the floor did not move)', () => {
-  // FAIL CLOSED #1 turns zero into a hard error, but a partial collapse — an
-  // exclusion that quietly ate most of the tree — would stay under it. Discovery
-  // matched exactly the 107 tracked suites when this was measured; the floor is
-  // deliberately well below that so it tracks a collapse, not routine churn.
-  const found = discoverSuites(REPO_ROOT);
+test('no TRACKED suite is excluded by SKIP_DIRS — the INVERSE of the check above', () => {
+  // The blind side of the test above, and the reason both are needed.
+  // `git check-ignore` reports a TRACKED file as NOT ignored even when it
+  // matches an ignore pattern — so a suite force-added past the ignore
+  // (`git add -f`) under `temp/`, `dist`, `build`, `out` or `.claude` would be
+  // skipped by discovery AND invisible to the ignored-among-discovered check.
+  // It would simply stop running, with nothing red anywhere: precisely the "a
+  // test nobody runs" shape this file's header says it exists to prevent.
+  //
+  // Unlike the check above, this has a real population in CI (107 tracked
+  // suites at the time of writing), so it is the one that actually has teeth on
+  // a clean checkout. It also subsumes any bare `found.length >= N` floor: 90
+  // of 107 suites live in scripts/ci/__tests__, so an exclusion that ate all of
+  // apps/ would take 107 -> ~101 and sail past a count-based floor while this
+  // names every missing file.
+  const found = realSuites();
+  const tracked = spawnSync('git', ['ls-files', '-z'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    maxBuffer: 1 << 28,
+  });
+  assert.equal(
+    tracked.status,
+    0,
+    `git ls-files failed, so this measured nothing: ${(tracked.stderr || '').trim() || tracked.error?.message}`,
+  );
+  const eligible = tracked.stdout
+    .split('\0')
+    .filter(Boolean)
+    .filter((p) => /\.test\.(mjs|cjs|js)$/.test(p))
+    .filter((p) => !isOwnedByOtherRunner(p));
   assert.ok(
-    found.length >= 50,
-    `discovery collapsed to ${found.length} suites — an exclusion is eating first-party source`,
+    eligible.length > 50,
+    `only ${eligible.length} tracked suites — the population collapsed, so this control would be vacuous`,
+  );
+  assert.deepEqual(
+    eligible.filter((p) => !found.includes(p)),
+    [],
+    'an exclusion is hiding a TRACKED suite — it is in the repo and will never run',
   );
 });
 
