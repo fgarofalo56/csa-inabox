@@ -39,6 +39,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 const ROOTS = ['.github/workflows', 'scripts'];
@@ -98,16 +99,31 @@ let loginsSeen = 0;
 for (const file of files) {
   let text;
   try { text = readFileSync(file, 'utf8'); } catch { continue; }
-  if (!LOGIN.test(text)) continue;
   const rel = relative(ROOT, file).split(sep).join('/');
 
-  text.split(/\r?\n/).forEach((raw, i) => {
-    if (/^\s*#/.test(raw)) return; // prose about the rule is not the rule
-    if (!LOGIN.test(raw)) return;
+  // FOLD FIRST, THEN PRE-FILTER (#3420). `az acr \` + `login …` puts a
+  // backslash between the words, so LOGIN is false for the raw file and the
+  // cheap gate would skip it before the matcher ran. A pre-filter that skips a
+  // file is a verdict too.
+  const logical = readLogicalLines(text);
+  if (!LOGIN.test(logical.map((l) => l.text).join('\n'))) continue;
+
+  // `consumesStatus` reads what comes AFTER the login up to the next `;` — and
+  // `|| echo "unreachable"` / `&& REACHABLE=1` is exactly the argument that
+  // gets pushed onto a continuation:
+  //
+  //     az acr login --name "$ACR" \
+  //       || echo "::warning::registry unreachable"
+  //
+  // Per physical line the `||` is on a line with no login on it, so the status
+  // consumption this guard exists to detect was invisible.
+  for (const { line, text: raw } of logical) {
+    if (/^\s*#/.test(raw)) continue; // prose about the rule is not the rule
+    if (!LOGIN.test(raw)) continue;
     loginsSeen++;
     const why = consumesStatus(raw);
-    if (why) violations.push({ file: rel, line: i + 1, why, text: raw.trim().slice(0, 150) });
-  });
+    if (why) violations.push({ file: rel, line, why, text: raw.trim().slice(0, 150) });
+  }
 }
 
 if (files.length === 0) {

@@ -98,6 +98,9 @@ const ALLOW_MARKER = /#\s*env-substitution-ok\s*:/;
  * @returns {{line:number, key:string, value:string}[]}
  */
 export function findEnvSubstitutions(source) {
+  // PHYSICAL-LINES-OK: tracks `env:` MAPPING scope by YAML indentation. Folding
+  // continuations would destroy the indentation this analysis is built on, and a
+  // YAML key never continues with a backslash (#3420).
   const lines = source.split(/\r?\n/);
   const findings = [];
   // Indent of the `env:` mapping we are currently inside, or null.

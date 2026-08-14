@@ -77,6 +77,19 @@ export function parseRequiredManifest(src) {
  * @returns {{present:boolean, group:string|null, cancelInProgress:string|null}}
  */
 export function parseConcurrency(src) {
+  // PHYSICAL-LINES-OK: this file judges YAML only — the `concurrency:` mapping
+  // keys (`group`, `cancel-in-progress`) here, and the quoted
+  // `"<context>|<producer>.yml"` manifest rows in `parseRequiredManifest` above.
+  // A YAML scalar continues by INDENTATION, never by a trailing `\`, so folding
+  // would join nothing.
+  //
+  // And it would do worse than nothing: the block boundary below is `!/^\s/` —
+  // "dedented back to a top-level key" — while folding replaces a continuation's
+  // own indentation with the indent of the line that STARTED the logical line.
+  // A joined line would therefore report the wrong indentation and the block
+  // could run past its end. `parseRequiredManifest`'s row matcher is anchored at
+  // `$` for the same reason. Physical lines are the correct reading here, not a
+  // tolerated one (#3420).
   const lines = String(src).split(/\r?\n/);
   const at = lines.findIndex((l) => /^concurrency:\s*$/.test(stripComments(l)));
   if (at < 0) return { present: false, group: null, cancelInProgress: null };

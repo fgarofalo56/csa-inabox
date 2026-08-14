@@ -69,6 +69,9 @@ const SHARED_TMP_ROOTS = ['/tmp', '/var/tmp', '/dev/shm'];
  * @returns {string[]} lines with comment bodies blanked (indices preserved)
  */
 export function stripComments(src) {
+  // PHYSICAL-LINES-OK: the shell-side patterns (`mkdir -p /tmp/...`, a fixed /tmp
+  // path) are single tokens, so presence is the whole question. The two-token rule
+  // (`os.tmpdir()` + a join) is JavaScript, which has no line continuation (#3420).
   return src.split('\n').map((line) => {
     const trimmed = line.trimStart();
     if (trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('*')

@@ -289,6 +289,12 @@ export function assertDiscoveryHealthy(dir = WF_DIR, root = REPO_ROOT) {
  * block scalar.
  */
 export function runBlocks(source) {
+  // PHYSICAL-LINES-OK: this slices YAML `run:` BLOCK SCALARS by indentation, and
+  // every rule over the body is single-token PRESENCE within the block (a
+  // mutating `az`, a retry loop, a `-z "$VAR"` test, an `echo "::"` claim) —
+  // never "two tokens on one line". C3 also counts a 12-line proximity window
+  // from the emptiness test to the claim, which is deliberately a window of
+  // PHYSICAL lines: folding would silently change how far it reaches (#3420).
   const lines = source.split(/\r?\n/);
   const blocks = [];
   let i = 0;

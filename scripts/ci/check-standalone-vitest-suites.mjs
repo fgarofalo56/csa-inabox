@@ -172,6 +172,8 @@ export function discoverPackages(repoRoot = REPO_ROOT) {
 export function parseVitestSummary(output) {
   const clean = String(output).replace(/\[[0-9;]*m/g, '');
   if (/No test files found/i.test(clean)) return { passed: 0, failed: 0, skipped: 0, executed: 0 };
+  // PHYSICAL-LINES-OK: parses vitest's own OUTPUT (`Tests 12 passed`), not a
+  // shell body. Program output has no backslash continuations (#3420).
   const line = clean.split(/\r?\n/).reverse().find((l) => /^\s*Tests\s+\d/.test(l));
   if (!line) return null;
   const num = (re) => {

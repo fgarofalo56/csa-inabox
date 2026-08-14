@@ -318,6 +318,9 @@ export function analyzeHosts({ files }) {
   const hosts = [];
   for (const f of files) {
     const code = String(f.text || '')
+      // PHYSICAL-LINES-OK: reads the `on:` trigger block and the GitHub API's
+      // workflow `state`, plus tab-separated `git` output. No shell body, no
+      // continuations (#3420).
       .split(/\r?\n/)
       .filter((line) => !line.trim().startsWith('#'))
       .join('\n');

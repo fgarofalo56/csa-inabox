@@ -230,7 +230,12 @@ test('a --container-name that is only in a trailing comment does not satisfy rul
 
 test('logicalLines joins backslash continuations and keeps the start line', () => {
   const joined = logicalLines('a \\\n  b \\\n  c\nd\n');
-  assert.equal(joined[0].text, 'a b c');
+  // The seam is whitespace of unspecified WIDTH — the shared primitive
+  // (scripts/ci/_logical-lines.mjs, adopted in #3420) turns the backslash into a
+  // space and the join adds one. Every matcher in this file crosses a seam with
+  // `\s+` or splits on `/\s+/`, so the width is not part of the contract and
+  // pinning it here would only pin an implementation detail.
+  assert.match(joined[0].text, /^a\s+b\s+c$/);
   assert.equal(joined[0].line, 1);
   assert.equal(joined[1].text, 'd');
   assert.equal(joined[1].line, 4);

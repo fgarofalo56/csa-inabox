@@ -50,6 +50,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -295,8 +296,20 @@ export function findInvocation(jobBlock, needle) {
   let found = false;
   const neutered = [];
   for (const chunk of chunks) {
-    const runLine = chunk
-      .split(/\r?\n/)
+    // LOGICAL lines (#3420). The `|| true` test below is the whole point of this
+    // function, and it is EXACTLY the token a shell author puts on a
+    // continuation:
+    //
+    //     run: node scripts/ci/check-node-test-suites.mjs \
+    //       || true
+    //
+    // Judged per physical line the run line carries the needle and no `||`, and
+    // the `|| true` line carries no needle — so a step wired so it CANNOT FAIL
+    // reads as fully-toothed. `csa_loom_guard_blind_continuation_lines_scripts`
+    // records a guard passing 10/10 on a tree carrying three live `|| true`s;
+    // this is that shape, in the gate that runs every test suite in the repo.
+    const runLine = readLogicalLines(chunk)
+      .map((l) => l.text)
       .find((l) => l.includes(needle) && !/^\s*#/.test(l));
     if (!runLine) continue;
     found = true;
