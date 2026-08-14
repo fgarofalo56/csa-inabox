@@ -73,7 +73,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readLogicalLines } from './_logical-lines.mjs';
-import { APP_IMAGE_TAGS } from './reconcile-policy.mjs';
+import { producerEnvWrites } from './_github-env-producers.mjs';
 
 const ROOT = process.cwd();
 const PARAM_DIR = join(ROOT, 'platform', 'fiab', 'bicep', 'params');
@@ -111,25 +111,17 @@ export const DEPLOY_VERBS = Object.freeze([
 
 /**
  * Steps that run one of these EXPORT tag env vars into `$GITHUB_ENV` for every
- * later step in the job. The key list is IMPORTED from reconcile-policy.mjs
- * rather than restated, so it cannot drift from what the producer actually
- * writes (`tagEnvLines` emits one `LOOM_<APP>_TAG=` line per resolved key).
+ * later step in the job.
  *
- * NOTE what this credits and what it does not. reconcile-resolve.mjs emits a
- * line only for an app that is RUNNING; an app that is absent gets no export
- * and the param file's default applies. That is correct — there is no running
- * image to preserve — and it is why crediting the producer with the full key
- * set is honest here rather than generous.
- *
- * adopt-image-tags.mjs (#3449) emits a line for EVERY tag its param file
- * declares — adopted, explicitly requested, or the file's own default — because
- * the Gov consumers read those variables under `set -u`. So for that producer
- * the full key set is not merely honest, it is exactly what it writes.
+ * THE TABLE LIVES IN `./_github-env-producers.mjs` (#3449) and is re-exported
+ * here for the callers that already import it from this module. It moved
+ * because check-workflow-unset-vars.mjs needs the SAME fact — "a Node script
+ * assigned this name" — and had no way to know it: it detects only the literal
+ * `echo "NAME=…" >> "$GITHUB_ENV"` shell form, so `adopt-image-tags.mjs`'s
+ * seventeen writes read as unassigned and it refused a correct Gov lane. Two
+ * guards asking one question get one table, or they drift.
  */
-export const GITHUB_ENV_PRODUCERS = Object.freeze([
-  { re: /reconcile-resolve\.mjs/, keys: APP_IMAGE_TAGS.map((e) => e.envVar) },
-  { re: /adopt-image-tags\.mjs/, keys: APP_IMAGE_TAGS.map((e) => e.envVar) },
-]);
+export { GITHUB_ENV_PRODUCERS } from './_github-env-producers.mjs';
 
 /**
  * Normalise CRLF before ANY indent- or line-anchored matching.
@@ -254,9 +246,7 @@ export function githubEnvExports(stepBody) {
     if (!line.includes('GITHUB_ENV')) continue;
     for (const m of line.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=/g)) out.add(m[1]);
   }
-  for (const p of GITHUB_ENV_PRODUCERS) {
-    if (p.re.test(body)) for (const k of p.keys) out.add(k);
-  }
+  for (const k of producerEnvWrites(body)) out.add(k);
   return out;
 }
 
