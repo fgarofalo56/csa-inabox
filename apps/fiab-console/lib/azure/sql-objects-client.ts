@@ -1055,6 +1055,74 @@ function validConstraintName(name: string): string | null {
 }
 
 /**
+ * Validate that a CHECK expression can only ever be the OPERAND of the
+ * `CHECK (…)` clause it is spliced into. Returns an error string, or null when
+ * the expression is proven contained.
+ *
+ * WHY THIS IS A SCAN AND NOT A QUOTE (CodeQL js/sql-injection #789):
+ *   A CHECK expression is the one fragment of this module's DDL that can be
+ *   neither bound as a parameter nor quoted — it IS SQL by definition
+ *   (`[Total] > 0`), so `bracket` / `escapeSqlLiteral` do not apply to it.
+ *   Containment is therefore STRUCTURAL, the same closed-grammar-or-refuse shape
+ *   `lib/azure/copy-job-sql.ts` uses. Until this existed the expression went into
+ *   `executeParameterized` verbatim, and "it is placed only inside CHECK(…)" was
+ *   treated as the defence. Placement is not a defence; the operand can leave
+ *   the clause on its own.
+ *
+ * The emitted statement is
+ *   ALTER TABLE [s].[t] WITH CHECK ADD CONSTRAINT [c] CHECK (<expr>);
+ * so `<expr>` escapes its clause in exactly four ways, all refused here:
+ *   1. a `)` that closes CHECK(…) early — i.e. one that drives paren depth
+ *      negative — after which the rest of the input is STATEMENT position
+ *      (`1=1); DROP TABLE Orders; --`);
+ *   2. a `;` outside a string literal, chaining a second statement;
+ *   3. a line (`--`) or block comment introducer outside a literal, which
+ *      comments out the trailing `);` so an unbalanced payload still parses;
+ *   4. an unterminated string literal (or unbalanced `(`), which swallows the
+ *      trailing `);` into the literal and leaves the tail as code.
+ *
+ * The scan is literal-aware — it honours `''` doubling — so a legitimate
+ * expression may contain any of these characters INSIDE a string
+ * (`[Note] <> ';'` is accepted). That is why this is a grammar scan rather than
+ * a keyword/character blocklist: a blocklist would both leak (there is always
+ * another spelling) and reject real constraints.
+ *
+ * What survives is a single balanced scalar expression. T-SQL itself forbids
+ * subqueries, EXEC, and non-deterministic calls inside a CHECK constraint, so
+ * containment within the clause is sufficient — the engine enforces the rest.
+ */
+function validCheckExpression(expr: string): string | null {
+  let depth = 0;
+  let inLiteral = false;
+  for (let i = 0; i < expr.length; i++) {
+    const ch = expr[i];
+    const next = expr[i + 1];
+    if (inLiteral) {
+      // Inside '…': only a quote is significant, and a doubled '' is an escaped
+      // quote that keeps us inside the literal rather than closing it.
+      if (ch !== "'") continue;
+      if (next === "'") { i++; continue; }
+      inLiteral = false;
+      continue;
+    }
+    if (ch === "'") { inLiteral = true; continue; }
+    if (ch === ';') return 'CHECK expression cannot contain ";" (statement terminator)';
+    if (ch === '-' && next === '-') return 'CHECK expression cannot contain a line comment ("--")';
+    if (ch === '/' && next === '*') return 'CHECK expression cannot contain a block comment';
+    if (ch === '*' && next === '/') return 'CHECK expression cannot contain a block comment';
+    if (ch === '(') { depth++; continue; }
+    if (ch === ')') {
+      depth--;
+      // Negative depth means this ")" would have closed the CHECK( we are inside.
+      if (depth < 0) return 'CHECK expression has unbalanced parentheses — it cannot close the CHECK(…) clause';
+    }
+  }
+  if (inLiteral) return 'CHECK expression has an unterminated string literal';
+  if (depth !== 0) return 'CHECK expression has unbalanced parentheses';
+  return null;
+}
+
+/**
  * List every PK / UNIQUE / FK / CHECK constraint on a table, resolved by
  * object_id (bound `@p0`). One query unions the three catalog views; PK/UQ key
  * columns come from `sys.index_columns`, FK columns from `sys.foreign_key_columns`,
@@ -1201,9 +1269,13 @@ async function resolveColumns(
 
 /**
  * Build + execute an `ALTER TABLE … ADD CONSTRAINT …` for a PK/UQ/FK/CHECK.
- * All identifiers are catalog-resolved + bracket-quoted; the constraint name is
- * validated; the only verbatim free-text is a CHECK expression (placed only in
- * the `CHECK(…)` clause). Returns the emitted DDL as a receipt on success.
+ * All identifiers are catalog-resolved + bracket-quoted and the constraint name
+ * is validated. The CHECK expression is the one free-text fragment: it can be
+ * neither bound nor quoted (it is SQL by definition), so it is contained by the
+ * grammar scan in {@link validCheckExpression}, which runs BEFORE any DB call.
+ * Being "placed only inside CHECK(…)" is NOT itself a defence — an unbalanced
+ * expression closes that clause and reaches statement position (js/sql-injection
+ * #789). Returns the emitted DDL as a receipt on success.
  *
  * `backendKind` selects the DDL dialect:
  *   - `sqldb` (default) : full engine, ENFORCED constraints — Azure SQL Database
@@ -1231,6 +1303,13 @@ export async function addConstraint(
   }
   if (backendKind === 'synapse-dedicated' && spec?.type === 'FK') {
     return { ok: false, error: 'FOREIGN KEY constraints are not supported on a Synapse dedicated SQL pool', status: 400 };
+  }
+  // The CHECK expression is interpolated verbatim into the DDL below, so prove
+  // it cannot leave its CHECK(…) clause BEFORE spending any DB round-trip on it
+  // — same up-front placement as the constraint-name check above.
+  if (spec?.type === 'CK') {
+    const exprErr = validCheckExpression((spec.expression || '').trim());
+    if (exprErr) return { ok: false, error: exprErr, status: 400 };
   }
   try {
     const tbl = await resolveTable(server, database, tableObjectId);
