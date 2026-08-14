@@ -525,9 +525,31 @@ export async function executeQueryBatch(
 
 /**
  * Parameterized query — returns the raw recordset (array of row objects) so
- * the object navigator can read named catalog columns. Inputs are bound as
- * `@p0`, `@p1`, … so no string-injection path exists for the catalog reads.
- * Used only by the sql-objects navigator (`sys.*` catalog queries).
+ * callers can read named catalog columns.
+ *
+ * SECURITY CONTRACT — read this before adding a call site.
+ *
+ *   `params` are bound as `@p0`, `@p1`, … and are safe: a bound value can never
+ *   be re-parsed as SQL. **That guarantee covers the VALUES ONLY.**
+ *
+ *   `sqlText` is TRUSTED-CALLER INPUT and is executed verbatim. Binding does
+ *   nothing for text spliced into the statement itself, so a caller that builds
+ *   `sqlText` by concatenation owns that injection risk entirely. Callers MUST
+ *   assemble `sqlText` from static SQL plus — for the fragments that cannot be
+ *   bound — either the audited helpers in `@/lib/sql/quoting`
+ *   (`bracket`/`quoteIdent` for identifiers, `quoteLiteral`/`escapeSqlLiteral`
+ *   for literals) or a closed-grammar validator that throws rather than emit
+ *   something unproven (the shape `lib/azure/copy-job-sql.ts` and
+ *   `validCheckExpression` in `lib/sql/check-expression.ts` use).
+ *
+ *   An earlier revision of this comment asserted that "no string-injection path
+ *   exists" and that this was "used only by the sql-objects navigator". Both
+ *   were wrong: the first was true of `params` and false of `sqlText`, and the
+ *   second was false of six call sites. Read as a whole-function guarantee, it
+ *   is exactly how a caller-supplied CHECK expression reached `.query()` here
+ *   verbatim (CodeQL js/sql-injection #789, fixed in `addConstraint`). The claim
+ *   is corrected rather than restated — this function cannot make `sqlText` safe
+ *   and no longer pretends to.
  */
 export async function executeParameterized<T = Record<string, unknown>>(
   server: string,

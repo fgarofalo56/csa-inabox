@@ -8,7 +8,9 @@
  * resolved by {@link guardSqlDbRequest}. Every authored statement is built from
  * catalog-verified, bracket-quoted identifiers (table + columns resolved by
  * integer object_id / column_id). The CHECK expression is the only free-text
- * field and is placed only inside `CHECK(…)`.
+ * field; it cannot be bound or quoted, so `addConstraint` proves it balanced and
+ * statement-free before emitting any DDL. Placement inside `CHECK(…)` is not by
+ * itself a defence (js/sql-injection #789).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { guardSqlDbRequest, sqlDbError } from '../_shared';

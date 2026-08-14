@@ -31,6 +31,7 @@
 
 import { AzureSqlError, executeParameterized, executeWithCredential, executeQuery, type SqlExplicitAuth, type QueryResult } from './azure-sql-client';
 import { bracket as qbracket } from '@/lib/sql/quoting';
+import { validCheckExpression } from '@/lib/sql/check-expression';
 
 export type SqlObjectGroup = 'table' | 'view' | 'procedure' | 'function' | 'table-type';
 
@@ -1201,9 +1202,16 @@ async function resolveColumns(
 
 /**
  * Build + execute an `ALTER TABLE … ADD CONSTRAINT …` for a PK/UQ/FK/CHECK.
- * All identifiers are catalog-resolved + bracket-quoted; the constraint name is
- * validated; the only verbatim free-text is a CHECK expression (placed only in
- * the `CHECK(…)` clause). Returns the emitted DDL as a receipt on success.
+ * All identifiers are catalog-resolved + bracket-quoted and the constraint name
+ * is validated. The CHECK expression is the one free-text fragment: it can be
+ * neither bound nor quoted (it is SQL by definition), so it is contained by the
+ * grammar scan in {@link validCheckExpression}, which runs BEFORE any DB call.
+ * Being "placed only inside CHECK(…)" is NOT itself a defence — an unbalanced
+ * expression closes that clause and reaches statement position (js/sql-injection
+ * #789). What the scan guarantees is containment WITHIN the clause; it does not
+ * claim the expression cannot read beyond the row (a CHECK may call a scalar
+ * UDF, which the engine permits by design). Returns the emitted DDL as a receipt
+ * on success.
  *
  * `backendKind` selects the DDL dialect:
  *   - `sqldb` (default) : full engine, ENFORCED constraints — Azure SQL Database
@@ -1231,6 +1239,13 @@ export async function addConstraint(
   }
   if (backendKind === 'synapse-dedicated' && spec?.type === 'FK') {
     return { ok: false, error: 'FOREIGN KEY constraints are not supported on a Synapse dedicated SQL pool', status: 400 };
+  }
+  // The CHECK expression is interpolated verbatim into the DDL below, so prove
+  // it cannot leave its CHECK(…) clause BEFORE spending any DB round-trip on it
+  // — same up-front placement as the constraint-name check above.
+  if (spec?.type === 'CK') {
+    const exprErr = validCheckExpression((spec.expression || '').trim());
+    if (exprErr) return { ok: false, error: exprErr, status: 400 };
   }
   try {
     const tbl = await resolveTable(server, database, tableObjectId);
