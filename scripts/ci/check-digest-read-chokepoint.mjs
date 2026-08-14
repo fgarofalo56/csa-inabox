@@ -104,9 +104,15 @@ for (const rel of files) {
     continue;
   }
   if (text.includes(RESOLVER)) resolverRefs++;
-  if (!DIGEST_CMD.test(text)) continue;
 
-  for (const { line, text: raw } of readLogicalLines(text)) {
+  // FOLD FIRST, THEN PRE-FILTER (#3420). A whole-file gate is blind in the same
+  // way the per-line matcher was — `az acr \` + `repository show …` puts a
+  // backslash between the words, so DIGEST_CMD is false for the raw file and
+  // the loop never runs. A pre-filter that skips a file is a verdict too.
+  const logical = readLogicalLines(text);
+  if (!DIGEST_CMD.test(logical.map((l) => l.text).join('\n'))) continue;
+
+  for (const { line, text: raw } of logical) {
     // Prose about the rule is not the rule. Comment markers for yml/sh (#) and
     // js (// or *) — only when they LEAD the line, so an inline `#` in a string
     // is never mistaken for a comment.

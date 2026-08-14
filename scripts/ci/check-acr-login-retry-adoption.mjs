@@ -41,6 +41,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 const HELPER = 'acr-login-retry.sh';
@@ -87,24 +88,45 @@ for (const rel of files) {
     continue;
   }
   if (text.includes(HELPER)) helperRefs++;
-  if (!text.includes('az acr login')) continue;
 
-  text.split(/\r?\n/).forEach((raw, i) => {
+  // FOLD FIRST, THEN PRE-FILTER (#3420). `az acr \` + `login …` puts a
+  // BACKSLASH between the words, so neither `text.includes('az acr login')` nor
+  // `\baz\s+acr\s+login\b` is true of the raw file, and the cheap gate below
+  // would skip the file before the matcher ever ran. The sibling cosign guard
+  // was measured doing exactly that. A pre-filter that skips a file is a guard
+  // verdict and must see the same text the matcher does.
+  const logical = readLogicalLines(text);
+  const folded = logical.map((l) => l.text).join('\n');
+  if (!/\baz\s+acr\s+login\b/.test(folded)) continue;
+
+  // Two ways a physical-line read gets this wrong, pointing in OPPOSITE
+  // directions:
+  //   * false negative — the spliced command phrase above.
+  //   * false positive — the adoption exclusion is `raw.includes(HELPER)`, so a
+  //     login whose fallback invokes the helper on a continuation would be
+  //     flagged on line 1 alone.
+  for (const { line, text: raw } of logical) {
     // PROSE ABOUT THE RULE IS NOT THE RULE. Three shapes, each of which the
     // first version of this guard flagged — it reported loom-guardrails.yml's
     //   - name: 'acr-reachability-oracle (az acr login is a credential, not a probe)'
     // as a bare login, which is a step TITLE describing this very class of bug.
     // A guard that cries wolf about its own documentation gets skimmed, and a
     // skimmed guard is the one whose real finding is missed.
-    if (/^\s*#/.test(raw)) return; // leading comment (never an inline `#`)
-    if (/^\s*-?\s*(name|description|title|summary):/.test(raw)) return; // YAML key
-    if (/^\s*echo\b/.test(raw)) return; // a message, not an invocation
-    if (/::(error|warning|notice)::/.test(raw)) return; // an annotation string
-    if (!/\baz\s+acr\s+login\b/.test(raw)) return;
+    if (/^\s*#/.test(raw)) continue; // leading comment (never an inline `#`)
+    if (/^\s*-?\s*(name|description|title|summary):/.test(raw)) continue; // YAML key
+    if (/^\s*echo\b/.test(raw)) continue; // a message, not an invocation
+    const at = raw.search(/\baz\s+acr\s+login\b/);
+    if (at < 0) continue;
+    // POSITIONAL: an annotation string BEFORE the login means the login is
+    // quoted inside a message. One AFTER it is the command's own fallback and
+    // must not excuse it — an anywhere-on-the-line test silently dropped four
+    // real call sites in check-kv-firewall-restore.mjs when that guard adopted
+    // logical lines (#3420).
+    if (/::(error|warning|notice)::/.test(raw.slice(0, at))) continue;
     // A line that invokes the helper is the adoption, not a bypass.
-    if (raw.includes(HELPER)) return;
-    violations.push({ file: rel, line: i + 1, text: raw.trim().slice(0, 140) });
-  });
+    if (raw.includes(HELPER)) continue;
+    violations.push({ file: rel, line, text: raw.trim().slice(0, 140) });
+  }
 }
 
 if (files.length === 0) {
