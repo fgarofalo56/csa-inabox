@@ -175,3 +175,47 @@ test('a tree whose workflows contain no build invocation FAILS rather than passi
   assert.match(r.out, /no workflow contains an image-build invocation/);
   rmSync(root, { recursive: true, force: true });
 });
+
+// ── LOGICAL LINES (#3420 / #3427) ───────────────────────────────────────────
+// #3427 declared this guard PHYSICAL-LINES-OK on the grounds that its predicates
+// are single-token PRESENCE. `isBuildReference` is not: it discards a line
+// carrying `echo`, and a folded command routinely puts its own failure message
+// on the same physical line as the build context. The scanner now folds and
+// scopes the prose test to the text BEFORE the match; these hold both halves.
+
+test('a build whose context shares a physical line with its own `|| echo` still counts', () => {
+  const folded = `name: producer
+on: workflow_dispatch
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          az acr build --registry "$ACR" --image x:1 \\
+            apps/alpha || echo "::error::apps/alpha build failed"
+`;
+  const root = fixture({ apps: ['alpha'], workflows: { 'p.yml': folded } });
+  const r = run(root);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /ok\s+alpha\s+p\.yml/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('an echo folded across two lines is still prose, not a build', () => {
+  const foldedEcho = `name: producer
+on: workflow_dispatch
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "nothing here builds \\
+            apps/alpha yet"
+          az acr build --registry "$ACR" --image o:1 apps/other
+`;
+  const root = fixture({ apps: ['alpha', 'other'], workflows: { 'p.yml': foldedEcho } });
+  const r = run(root);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /UNBUILT\s+alpha/);
+  rmSync(root, { recursive: true, force: true });
+});
