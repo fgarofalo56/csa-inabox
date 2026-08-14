@@ -36,13 +36,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { clearSessionCookieHeader } from '@/lib/auth/session';
 import { clearAuthFlowCookieHeader } from '@/lib/auth/authflow';
-import { clearAttemptCookieHeader, requestIsHttps } from '@/lib/auth/auth-breaker';
+import { clearAttemptCookieHeader, externalOrigin, requestIsHttps } from '@/lib/auth/auth-breaker';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const res = NextResponse.redirect(new URL('/auth/sign-in', req.url), 303);
+  // The origin comes from the forwarded headers, NOT from `req.url`. Under
+  // `output: 'standalone'` with HOSTNAME/PORT set, `req.url` carries this
+  // container's own listen address, so `new URL('/auth/sign-in', req.url)`
+  // emitted `Location: https://0.0.0.0:3000/auth/sign-in` — i.e. the ONE escape
+  // hatch out of a tripped breaker led somewhere the browser cannot reach. See
+  // the evidence chain on externalOrigin() in lib/auth/auth-breaker.
+  const res = NextResponse.redirect(new URL('/auth/sign-in', externalOrigin(req.headers)), 303);
+  res.headers.set('cache-control', 'no-store');
   // Three distinct Set-Cookie headers — append, never set.
   res.headers.append('set-cookie', clearAttemptCookieHeader(requestIsHttps(req.headers)));
   res.headers.append('set-cookie', clearAuthFlowCookieHeader());
