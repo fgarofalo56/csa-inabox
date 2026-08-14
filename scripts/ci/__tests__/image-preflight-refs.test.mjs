@@ -193,7 +193,7 @@ test('the SHIPPED exclusions are exactly orchestrator (never) and mapsTiles (gov
 // The real paramfile, the real estate — the case that pins #2958's finding
 // ---------------------------------------------------------------------------
 
-test('commercial.bicepparam + the live running set => exactly the five unpinned apps of #2958', () => {
+test('commercial.bicepparam + the live running set => exactly the unpinned apps of #2958 (five, +loom-directlake since #3291)', () => {
   const paramSrc = readFileSync(
     path.join(REPO_ROOT, 'platform/fiab/bicep/params/commercial.bicepparam'),
     'utf8',
@@ -237,19 +237,29 @@ test('commercial.bicepparam + the live running set => exactly the five unpinned 
   // preflighted (or signature-verified) `loom-trino:v0.1`. Caught by
   // check-full-app-deploy-contract.mjs the moment loom-trino joined the build
   // matrix. Same shape as loom-duckdb and loom-unity before it.
+  //
+  // loom-directlake joined in #3291 — the FOURTH instance of the same shape and
+  // the most complete one: the module was invoked by no orchestrator, its env
+  // var was hard-coded '' in admin-plane/main.bicep, AND no CI lane built the
+  // image at all, so the capability was dark from the day it shipped. It is now
+  // deployed DEFAULT-ON (`directLakeSvcActive`) with its own
+  // `appImageTags.directLakeSvc` key, so the Commercial deploy really does pull
+  // `loom-directlake:v0.1` and this row must cover it.
   assert.deepEqual(r.unpinned, [
     'loom-copilot-maf:v0.1',
     'loom-duckdb:v0.1',
     'loom-risingwave:v0.1',
     'loom-unity:v0.1',
     'loom-trino:v0.1',
+    'loom-directlake:v0.1',
   ]);
   assert.deepEqual(
     r.skipped.map((s) => s.ref),
     ['loom-orchestrator:v0.1', 'loom-maps-tileserver:v1'],
   );
   assert.equal(r.pinned.length, 12);
-  assert.equal(r.refs.length, 17);
+  // 17 -> 18 with loom-directlake (#3291): 12 pinned + 6 unpinned.
+  assert.equal(r.refs.length, 18);
 });
 
 test('on GCC-High the SAME inputs additionally assert the maps tile server', () => {

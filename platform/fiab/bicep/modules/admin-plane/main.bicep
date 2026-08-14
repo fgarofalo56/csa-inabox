@@ -644,6 +644,14 @@ param appImageTags object = {
   // full-app-deploy-commercial.yml on Commercial and gov-build-images.yml on the
   // Gov boundaries. Same `?? 'v0.1'` read.
   unity: 'v0.1'
+  // loom-directlake — HYP-5 Direct Lake columnar scan/frame service
+  // (compute/loom-directlake-app.bicep), DEFAULT-ON. A SEPARATE key from
+  // `directLake` above, which pins loom-direct-lake-shim: two different repos,
+  // two different apps, and one key driving both is the exact defect the
+  // dbtRunner split (#2775) was opened to fix. Built by
+  // full-app-deploy-commercial.yml (Commercial) and
+  // gov-provision-dataplane-images.yml (GCC-High / IL5). Same `?? 'v0.1'` read.
+  directLakeSvc: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -1010,6 +1018,47 @@ var loomMigrateActive = loomMigrateEnabled && containerPlatform == 'containerApp
 // ADMIN OPT-OUT: loomBackends.risingwave = 'disabled'.
 var risingwaveEnabled = (loomBackends.?risingwave ?? 'enabled') != 'disabled'
 var risingwaveActive = risingwaveEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// ── HYP-5 loom-directlake columnar scan/frame tier — DEFAULT-ON deploy toggle ─
+// Backs LOOM_DIRECTLAKE_URL (/api/directlake/{scan,frame} + the semantic layer's
+// columnar-cache-query.ts import-class path).
+//
+// THE DEFECT THIS CLOSES (#3291). This was the THIRD instance of the identical
+// shape already fixed for `loomMigrate` and `risingwave` above, and it was the
+// worst of the three: compute/loom-directlake-app.bicep was an out-of-band
+// standalone entrypoint that NO orchestrator invoked, `LOOM_DIRECTLAKE_URL` was
+// emitted here as a hard-coded empty string, and NO CI lane built the
+// loom-directlake image — so the honest 503 the BFF returned named a bicep
+// module the platform never deployed and an image nobody ever produced. Under
+// auto-bind-by-default.md §5 ("infra prerequisites are DEPLOYED, not
+// requested") an unreachable remediation is not an honest gate, it is the
+// defect. The service had also never been COMPILED anywhere in the repository —
+// .github/workflows/loom-directlake-ci.yml is the lane that now proves it does.
+//
+// THE STATED REASON FOR OUT-OF-BAND DEPLOYMENT WAS FALSE. Both the module header
+// and scripts/ci/check-env-sync.mjs justified it as "admin-plane/main.bicep at
+// the 256-param ceiling". Measured at the time of this change: 238 params, 18 of
+// headroom — and invoking a module needs no new parent param at all when the
+// values come from existing ones, which is why this block adds ZERO params. The
+// ARM 256 cap is per-deployment; a child module's params do not count against
+// its parent's. Same misconception previously corrected for loomMigrate,
+// risingwave and loom-unity.
+//
+// COST: like risingwave, this tier CANNOT scale to zero — retaining framed
+// columns warm between scans is the ENTIRE point of a Direct-Lake-equivalent
+// (PRP §6.3). The module's own defaults are minReplicas 1 / 2.0 vCPU / 4Gi; the
+// call site below pins the smallest ACA-Consumption-legal always-on footprint
+// and caps maxReplicas at 2 to bound the aggregate warm-cache memory bill.
+// BUDGET THE ACTIVE RATE (~$150/mo/cloud, same arithmetic as risingwave).
+//
+// WHY DEFAULT-ON AND NOT OPT-IN (cloud-parity.md): Direct Lake's outcome is
+// exactly what a sovereign customer cannot buy — Fabric/Power BI Premium has no
+// Gov data plane, and this repo's own comments record AAS as "Gov-scarce + on a
+// retirement track". Shipping the OSS equivalent opt-in would give the boundary
+// with the greatest need the least product. Same argument as Loom Unity.
+// ADMIN OPT-OUT: loomBackends.directLake = 'disabled'.
+var directLakeSvcEnabled = (loomBackends.?directLake ?? 'enabled') != 'disabled'
+var directLakeSvcActive = directLakeSvcEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
@@ -2192,6 +2241,16 @@ param loomBackends object = {
   // Set 'disabled' to skip the app; the lakehouse Interop tab still writes
   // Delta<->Iceberg dual metadata into the lake and every surface honest-gates.
   icebergCatalog: 'enabled'
+  // HYP-5 Loom Direct Lake columnar scan/frame service — DEFAULT-ON, opt-OUT.
+  // Same bag, same 256-param-ceiling reason as trino / icebergCatalog / unity.
+  // 'enabled' (the default) deploys compute/loom-directlake-app.bicep and emits
+  // LOOM_DIRECTLAKE_URL, which is what turns /api/directlake/{scan,frame} from a
+  // permanent honest-503 into a real Arrow IPC scan over the customer's own
+  // ADLS Gen2 Delta tables. Set 'disabled' to skip the app; the semantic-model /
+  // report layer then falls back silently to the AAS fast-path or the
+  // Synapse-Serverless cold path, exactly as it does today. NOT scale-to-zero —
+  // see the cost disclosure on directLakeSvcActive.
+  directLake: 'enabled'
   pipeline: 'synapse'
   // Model-strategy M4 — OPT-IN APIM AI-gateway for AOAI/Foundry traffic. Folded
   // here (NOT standalone params) to stay under the ARM 256-param ceiling, the
@@ -4497,24 +4556,30 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // bicep actually emitted it.
             { name: 'LOOM_UC_BACKEND', value: loomUnityActive && (boundary == 'GCC-High' || boundary == 'IL5') ? 'oss' : '' }
             // ── Hyperscale band (HYP-16 cross-cutting platform) ──
-            // The three H-band substrate services (Loom OneLake / Loom Direct Lake
-            // / Loom Capacity Broker) are STANDALONE ACA apps deployed out-of-band
-            // via compute/loom-{onelake,directlake,capacity-broker}-app.bicep on the
-            // shared substrate from compute/hband-shared.bicep (Redis Premium +
-            // dedicated least-privilege UAMIs) — main.bicep is at the 256-param
-            // ceiling, so those modules are NOT wired here. Each URL is emitted with
-            // an empty default so a from-scratch deploy is COHERENT (env-sync guard
-            // satisfied) and defaults to OFF: unset → the console lib client
-            // honest-503 gates and SILENTLY falls back to the existing per-item
-            // library path (OneLake), the AAS/Synapse-Serverless semantic path
-            // (Direct Lake), or unthrottled job submission (Broker) — never a Fabric
-            // gate, never a regression (no-fabric-dependency.md, default-ON/opt-out).
-            // After deploying the standalone modules the operator sets the real
-            // values here via /admin/env-config (or `az containerapp update`); the
-            // per-service app module output supplies each value. LOOM_BROKER_REDIS /
-            // LOOM_DIRECTLAKE_REDIS is <hband-redis-host>:6380 from hband-shared.
+            // Loom OneLake and Loom Capacity Broker are STILL standalone ACA apps
+            // deployed out-of-band via compute/loom-{onelake,capacity-broker}-app
+            // .bicep on the shared substrate from compute/hband-shared.bicep
+            // (Redis Premium + dedicated least-privilege UAMIs). Their URLs are
+            // emitted empty so a from-scratch deploy is COHERENT (env-sync guard
+            // satisfied): unset → the console lib client honest-503 gates and
+            // SILENTLY falls back to the existing per-item library path (OneLake)
+            // or unthrottled job submission (Broker) — never a Fabric gate, never
+            // a regression (no-fabric-dependency.md, default-ON/opt-out). After
+            // deploying the standalone modules the operator sets the real values
+            // here via /admin/env-config; LOOM_BROKER_REDIS is
+            // <hband-redis-host>:6380 from hband-shared.
+            //
+            // LOOM_DIRECTLAKE_URL IS NO LONGER ONE OF THEM (#3291). It was, and
+            // that was the bug: the value was hard-coded '' here while the BFF's
+            // 503 told the operator to deploy a bicep module no orchestrator
+            // invoked, backed by an image no CI built. The service is now
+            // deployed by THIS orchestrator (directLakeSvcActive, default-ON) and
+            // the URL comes from the app module's own fqdn output — per
+            // auto-bind-by-default.md §5 the value is PRODUCED BY THE DEPLOY.
+            // Empty only when an admin sets loomBackends.directLake='disabled',
+            // which is the documented opt-out and still honest-gates cleanly.
             { name: 'LOOM_ONELAKE_URL', value: '' }
-            { name: 'LOOM_DIRECTLAKE_URL', value: '' }
+            { name: 'LOOM_DIRECTLAKE_URL', value: directLakeSvcActive ? 'https://${loomDirectLake!.outputs.fqdn}' : '' }
             { name: 'LOOM_BROKER_URL', value: '' }
             { name: 'LOOM_BROKER_REDIS', value: '' }
             // Governance → Data quality (run/results/monitors) and Master data
@@ -7035,6 +7100,101 @@ module risingwave '../data-plane/loom-risingwave-aca.bicep' = if (risingwaveActi
   dependsOn: [
     risingwaveAcrPull
     keyvault
+  ]
+}
+
+// =====================================================================
+// HYP-5 — loom-directlake: the Direct Lake columnar scan/frame service (#3291).
+//
+// Backs LOOM_DIRECTLAKE_URL for /api/directlake/{scan,frame} and the semantic
+// layer's import-class path (lib/azure/columnar-cache-query.ts). A Rust/axum
+// Container App (apps/loom-directlake) that FRAMES a Delta source (metadata-only
+// version pin via delta-rs) and TRANSCODES the projected columns to an Arrow IPC
+// stream through Apache DataFusion — the Azure-native, OSS outcome-equivalent of
+// Microsoft Fabric's Direct Lake. It contacts NO Fabric / OneLake / Power BI
+// service (no-fabric-dependency.md); the abfss:// path reads the customer's OWN
+// ADLS Gen2 via Managed Identity.
+//
+// This is the wiring the module header used to describe in a COMMENT while
+// nothing executed it. See directLakeSvcActive above for the full defect record
+// and for why the "256-param ceiling" justification did not hold.
+//
+// LEAST-PRIVILEGE identity: a dedicated uami-loom-directlake holding exactly two
+// grants — AcrPull on the admin-plane ACR (to pull its image) and Storage Blob
+// Data READER on the DLZ lake (to read Delta+Parquet). Reader, not Contributor:
+// this service only ever reads, and unlike script-runner it executes no
+// user-supplied code, so its IMDS token is not a sandbox escape surface.
+//
+// The lake lives in the DLZ resource group — frequently in a DIFFERENT
+// SUBSCRIPTION — so the grant is made by a DLZ-RG-scoped module below and NOT by
+// a `resource … existing` inside the app module. That is the exact defect that
+// took the whole Commercial deploy down from transform-runner on 2026-08-13
+// (ResourceNotFound against the admin RG); compute/loom-directlake-app.bicep
+// correctly declares no lake reference at all and only BINDS the account name.
+// =====================================================================
+resource directLakeUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (directLakeSvcActive) {
+  name: 'uami-loom-directlake-${location}'
+  location: location
+  tags: complianceTags
+}
+
+resource directLakeAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (directLakeSvcActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, directLakeUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: directLakeUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+// Storage Blob Data READER on the DLZ lake, scoped to the RG the lake actually
+// lives in. Reuses the same least-privilege read-grant module the S3 gateway
+// uses — its `principalId` param is just "the principal to grant". Skipped when
+// no lake account is bound or when this deployment cannot write RBAC here
+// (loomStorageGrantable); the service still deploys and still serves the
+// fixture:// and file:// scan paths, and only an abfss:// scan honest-gates
+// inside the container — fail-closed and legible, never a silent wrong answer.
+module directLakeLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (directLakeSvcActive && !skipRoleGrants && loomStorageGrantable) {
+  name: 'loom-directlake-lake-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    storageAccountName: loomStorageAccount
+    principalId: directLakeUami!.properties.principalId
+    assignRole: !skipRoleGrants
+  }
+}
+
+module loomDirectLake '../compute/loom-directlake-app.bicep' = if (directLakeSvcActive) {
+  name: 'loom-directlake'
+  params: {
+    name: 'loom-directlake'
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    directLakeUamiId: directLakeUami!.id
+    uamiClientId: directLakeUami!.properties.clientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-directlake:${appImageTags.?directLakeSvc ?? 'v0.1'}'
+    // The DLZ lake the abfss:// Delta path reads. Empty (no lake bound yet) ⇒
+    // the container still starts and still serves fixture:// + file://; only an
+    // abfss:// scan honest-gates, which is the module's documented contract.
+    storageAccountName: loomStorageAccount
+    // Smallest always-on footprint that keeps a warm frame resident. maxReplicas
+    // 2 (module default is 3) caps the aggregate warm-cache memory bill on a
+    // default-ON tier; raise per-tenant where scan fan-out justifies it.
+    maxReplicas: 2
+    complianceTags: complianceTags
+  }
+  // AcrPull must land BEFORE the first revision is created or a from-scratch
+  // deploy races role propagation and the revision fails its image pull — the
+  // same ordering loomMigrate / loomUnity / risingwave all carry. (A dependsOn
+  // on a false-condition resource is a no-op in ARM, so this is safe under
+  // skipRoleGrants.)
+  dependsOn: [
+    directLakeAcrPull
   ]
 }
 

@@ -22,9 +22,10 @@
  * with zero Azure once the service is deployed.
  *
  * ── AUTH ────────────────────────────────────────────────────────────────────
- * Tenant-admin gated (getSession + requireTenantAdmin), matching the sibling
+ * Route-toolkit: withTenantAdmin (R3), matching the sibling
  * /api/directlake/scan route — driving the Direct Lake framing service is a
- * substrate-admin action.
+ * substrate-admin action. Byte-compatible with the hand-rolled
+ * `getSession() -> requireTenantAdmin()` prologue this route used to carry.
  *
  * 200 → { ok:true, frame }          (source_kind, delta_version, columns[], elapsed_ms)
  * 400 → bad request (missing path)
@@ -32,10 +33,8 @@
  * 502 → service unreachable / engine error
  * 503 → service not deployed (names LOOM_DIRECTLAKE_URL + the bicep module)
  */
-import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
-import { apiOk, apiError, apiUnauthorized } from '@/lib/api/respond';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { apiOk, apiError } from '@/lib/api/respond';
 import { normalizeFrameBody, buildFrameUrl, type RawFrameBody } from '@/lib/directlake/scan-request';
 
 export const runtime = 'nodejs';
@@ -44,22 +43,23 @@ export const dynamic = 'force-dynamic';
 /** Framing is metadata-only, but Front Door still caps a request at 30s. */
 const FRAME_TIMEOUT_MS = 25_000;
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const denied = requireTenantAdmin(session);
-  if (denied) return denied;
-
-  // ── Honest gate FIRST (no-vaporware): without the service there is nothing
-  // real to call, so name the exact env var + the bicep module that deploys it.
+export const POST = withTenantAdmin(async (req) => {
+  // ── Honest gate FIRST (no-vaporware). #3291: this message used to tell the
+  // operator to go deploy a bicep module — a remediation that could not be
+  // executed, because no orchestrator invoked it and no CI built its image.
+  // The service is now deployed by admin-plane/main.bicep DEFAULT-ON, so an
+  // empty value has exactly two true causes and the message names both rather
+  // than assigning work the platform already does (auto-bind-by-default.md §5).
   const base = process.env.LOOM_DIRECTLAKE_URL?.trim();
   if (!base) {
     return apiError(
-      'The Loom Direct Lake service is not deployed. Set LOOM_DIRECTLAKE_URL ' +
-        '(the internal FQDN of the loom-directlake Container App) — provisioned by ' +
-        'platform/fiab/bicep/modules/compute/loom-directlake-app.bicep. The semantic-model / ' +
-        'report layer falls back to its existing backend (Azure Analysis Services fast-path or ' +
-        'Synapse Serverless) until it is set. No Microsoft Fabric / Power BI capacity required.',
+      'The Loom Direct Lake service is not reachable from this console: LOOM_DIRECTLAKE_URL is empty. ' +
+        'It is bound automatically by a push-button deploy (admin-plane/main.bicep deploys the ' +
+        'loom-directlake Container App by default), so an empty value means EITHER an admin set ' +
+        "loomBackends.directLake='disabled', OR this estate has not been redeployed since the app was " +
+        'wired in. The semantic-model / report layer falls back to its existing backend (Azure Analysis ' +
+        'Services fast-path or Synapse Serverless) in the meantime. No Microsoft Fabric / Power BI ' +
+        'capacity is required either way.',
       503,
     );
   }
@@ -120,4 +120,4 @@ export async function POST(req: NextRequest) {
   }
 
   return apiOk({ frame: json.frame });
-}
+});

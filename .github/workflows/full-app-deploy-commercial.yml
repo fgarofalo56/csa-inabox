@@ -454,6 +454,26 @@ jobs:
           # image is a thin pin over the upstream engine binary.
           - app: loom-risingwave
             ctx: ./apps/loom-risingwave
+          # HYP-5 — the Direct Lake columnar scan/frame service (Rust/axum +
+          # Apache DataFusion + delta-rs). DEFAULT-ON since #3291 wired
+          # compute/loom-directlake-app.bicep into admin-plane/main.bicep and
+          # bound LOOM_DIRECTLAKE_URL, so this image is a hard prerequisite of
+          # phase 2 exactly like loom-migrate / loom-risingwave above.
+          #
+          # It had NO producer at all before this entry — it was one of the five
+          # names in check-image-producer-coverage.mjs KNOWN_UNBUILT, tolerated
+          # only because no orchestrator referenced it. That tolerance ends the
+          # moment the module is invoked, which is why the producer and the
+          # wiring land together.
+          #
+          # BUILD COST NOTE: this is a from-source Rust release build with
+          # `lto = "thin"` + `codegen-units = 1` over the arrow/datafusion/
+          # delta-rs graph — it is the slowest image in this matrix by a wide
+          # margin. It is proven to compile by .github/workflows/
+          # loom-directlake-ci.yml on every PR that touches the crate, so a
+          # failure here means the ACR agent pool, not the code.
+          - app: loom-directlake
+            ctx: ./apps/loom-directlake
     steps:
       - uses: actions/checkout@v7
       - name: Azure login

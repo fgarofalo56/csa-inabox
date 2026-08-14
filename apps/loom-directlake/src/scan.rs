@@ -106,6 +106,11 @@ impl From<arrow::error::ArrowError> for ScanError {
 }
 
 /// Classify the source URI into one of the three handled kinds.
+///
+/// `Debug` is derived because `classify` returns `Result<Source, ScanError>` and
+/// the unit tests below assert on the ERROR arm with `unwrap_err()`, which
+/// requires the OK type to be `Debug`. It holds only `String`s, so this is free.
+#[derive(Debug)]
 enum Source {
     Fixture(String),
     Parquet(String),
@@ -398,8 +403,10 @@ mod tests {
         let b = fixture_batch().unwrap();
         assert_eq!(b.num_rows(), 8, "fixture must have 8 rows");
         assert_eq!(b.num_columns(), 5, "fixture must have 5 columns");
-        let names: Vec<&str> =
-            b.schema().fields().iter().map(|f| f.name().as_str()).collect();
+        // `b.schema()` returns an owned Arc<Schema> temporary; binding it keeps
+        // the borrowed field names alive past the end of the statement (E0716).
+        let schema = b.schema();
+        let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(names, vec!["region", "product", "quarter", "units", "amount"]);
     }
 
@@ -455,7 +462,14 @@ mod tests {
     #[tokio::test]
     async fn scan_unknown_fixture_is_bad_request() {
         let req = ScanRequest { path: "fixture://nope".into(), projection: None, limit: None };
-        assert!(matches!(execute_scan(&req).await.unwrap_err(), ScanError::BadRequest(_)));
+        // `.err().expect(..)` rather than `.unwrap_err()`: unwrap_err would
+        // require `ScanResult: Debug`, and deriving that would dump the entire
+        // Arrow IPC byte vector into any assertion message.
+        let err = execute_scan(&req)
+            .await
+            .err()
+            .expect("an unknown fixture name must be rejected, not scanned");
+        assert!(matches!(err, ScanError::BadRequest(_)));
     }
 
     #[tokio::test]

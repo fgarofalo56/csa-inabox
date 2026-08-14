@@ -269,6 +269,11 @@ param appImageTags = {
   // dispatched with a Gov boundary rather than silently no-op'ing).
   loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
   risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
+  // loom-directlake (#3291) -- the HYP-5 Direct Lake columnar scan/frame service,
+  // DEFAULT-ON via compute/loom-directlake-app.bicep. A SEPARATE key from
+  // `directLake` above, which pins the loom-direct-lake-shim image: two apps,
+  // two repos, one key would recreate the #2775 defect.
+  directLakeSvc: readEnvironmentVariable('LOOM_DIRECTLAKE_SVC_TAG', 'v0.1')
   // loom-unity (#2681) — the Unity-Catalog-compatible OSS metastore.
   // admin-plane/main.bicep now deploys it DEFAULT-ON on every boundary (it was
   // an out-of-band standalone entrypoint before), so this image is a hard

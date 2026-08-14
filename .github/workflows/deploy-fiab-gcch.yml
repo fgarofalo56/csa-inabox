@@ -153,6 +153,12 @@ jobs:
     env:
       LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG || 'v0.1' }}
       LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG || 'v0.1' }}
+      # loom-directlake (#3291) — a SEPARATE key from LOOM_DIRECTLAKE_TAG below,
+      # which pins loom-direct-lake-shim: two apps, two repos. Its fallback is
+      # 'v0.1' because that is what gcc-high.bicepparam's `directLakeSvc`
+      # declares — the two must agree or check-bicepparam-env-reaches-deploy.mjs
+      # fails the merge on the fallback-mismatch rule (#3161).
+      LOOM_DIRECTLAKE_SVC_TAG: ${{ vars.LOOM_DIRECTLAKE_SVC_TAG || 'v0.1' }}
       LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG || 'v0.1' }}
       LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
       LOOM_MAF_TAG: ${{ vars.LOOM_MAF_TAG || 'v0.1' }}

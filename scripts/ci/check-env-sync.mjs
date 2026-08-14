@@ -383,7 +383,16 @@ const ALLOWLIST = new Set([
   'LOOM_DEVCENTER_URI',             // opt-in DevCenter uri
   'LOOM_DIRECT_LAKE_COSMOS_CONTAINER', // opt-in Direct Lake mirror
   'LOOM_DIRECT_LAKE_COSMOS_DB',     // opt-in Direct Lake mirror
-  'LOOM_DIRECTLAKE_URL',            // opt-in Loom Direct Lake columnar scan service (HYP-5); honest-503 gate when unset, semantic layer falls back to AAS/Synapse-Serverless. Deploy compute/loom-directlake-app.bicep out-of-band (admin-plane/main.bicep at the 256-param ceiling), then set on the console app
+  // LOOM_DIRECTLAKE_URL was here. REMOVED (#3291): it is now EMITTED by
+  // platform/fiab/bicep/modules/admin-plane/main.bicep from the loomDirectLake
+  // module's own fqdn output (directLakeSvcActive, default-ON), so it no longer
+  // qualifies as "an OPT-IN feature intentionally unset by default" — which is
+  // the only thing this list is for. The old entry also carried the false
+  // justification this guard helped keep alive for a year: "deploy
+  // compute/loom-directlake-app.bicep out-of-band (admin-plane/main.bicep at the
+  // 256-param ceiling)". Measured at the time of the fix: 238 params, 18 of
+  // headroom, and wiring the module added ZERO new params. An allowlist entry
+  // that repeats an unverified reason is how a dead capability stays invisible.
   'LOOM_DQ_SOURCE_CONNECTION_STRING', // handled by _CONNECTION_STRING pattern; kept for clarity
   'LOOM_DSPM_AI_AGENT_ITEM_TYPES',  // classifier config list (code default)
   'LOOM_DSPM_AI_WINDOW_DAYS',       // opt-in default usage-window override (code default 14)
