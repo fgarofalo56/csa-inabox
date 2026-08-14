@@ -59,12 +59,18 @@ jobs:
           else
             body='{}'
           fi
+          # `|| true` fixes the EXIT STATUS only (the default runner shell is
+          # `bash -e`); it must NOT be `|| echo 000`, which appends to stdout
+          # (#3414). curl already PRINTS `000` from `-w` on a connect failure,
+          # so the old `|| echo 000` concatenated to "000000" and the `000` arm
+          # of the case below — the whole reason it exists — could never match.
           code=$(curl -sS -o /tmp/learn.json -w '%{http_code}' -X POST \
             -H "Authorization: Bearer $INTERNAL_TOKEN" \
             -H 'Content-Type: application/json' \
             --max-time 600 \
             --data "$body" \
-            "${CONSOLE_URL}/api/internal/copilot/skills/learn" || echo 000)
+            "${CONSOLE_URL}/api/internal/copilot/skills/learn") || true
+          [ -n "$code" ] || code=000
           echo "skill-learner HTTP $code"
           cat /tmp/learn.json 2>/dev/null | head -c 1200 || true
           echo ""

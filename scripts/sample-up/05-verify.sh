@@ -22,11 +22,21 @@ PORTAL_WEB_URL="${PORTAL_WEB_URL:-http://localhost:3000}"
 echo "[sample-up 5/5 verify] vertical=${VERTICAL}"
 
 if command -v curl >/dev/null 2>&1; then
-    if curl -sSf -o /dev/null -w "portal backend: %{http_code}\n" \
-            --max-time 5 "${PORTAL_API_URL}/health" 2>/dev/null; then
-        echo "  portal backend reachable at ${PORTAL_API_URL}"
+    # NO `-f` (#3414). This probe READS the status, so `-f` would have collapsed
+    # "backend is up and answering HTTP 500" into the same single outcome as
+    # "nothing is listening" — the two states an operator most needs told apart
+    # when a local stack half-starts. Branch on the captured code instead.
+    # `|| true` fixes only the exit status (the script runs under `set -e`); an
+    # EMPTY capture is the one case that needs a default.
+    HEALTH_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+        --max-time 5 "${PORTAL_API_URL}/health" 2>/dev/null)" || true
+    [ -n "$HEALTH_CODE" ] || HEALTH_CODE="000"
+    if [ "$HEALTH_CODE" = "200" ]; then
+        echo "  portal backend reachable at ${PORTAL_API_URL} (HTTP 200)"
+    elif [ "$HEALTH_CODE" = "000" ]; then
+        echo "  info: nothing answered at ${PORTAL_API_URL} (did you run 'make portal-dev'?)"
     else
-        echo "  info: portal backend not reachable at ${PORTAL_API_URL} (did you run 'make portal-dev'?)"
+        echo "  info: portal backend ANSWERED at ${PORTAL_API_URL} with HTTP ${HEALTH_CODE} — it is running, but /health is not 200"
     fi
 fi
 

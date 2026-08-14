@@ -90,9 +90,12 @@ fi
 BASE="https://${SEARCH_SERVICE}.${SEARCH_SUFFIX}"
 
 # Already present? (200 → done; idempotent.)
+# `|| true`, not `|| echo 000` — curl PRINTS the code on both paths, so the old
+# fallback concatenated and an unreachable service reported "000000" (#3414).
 GET_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
   "${BASE}/indexes/${INDEX_NAME}?api-version=${SEARCH_API}" \
-  -H "Authorization: Bearer $TOKEN" 2>/dev/null || echo 000)
+  -H "Authorization: Bearer $TOKEN" 2>/dev/null) || true
+[ -n "$GET_STATUS" ] || GET_STATUS=000
 if [ "$GET_STATUS" = "200" ]; then
   echo "  Index '$INDEX_NAME' already exists — nothing to do."
   exit 0
@@ -130,7 +133,8 @@ PUT_STATUS=$(curl -sS -o /tmp/idx.json -w "%{http_code}" -X PUT \
   "${BASE}/indexes/${INDEX_NAME}?api-version=${SEARCH_API}" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "$BODY" 2>/dev/null || echo 000)
+  -d "$BODY" 2>/dev/null) || true
+[ -n "$PUT_STATUS" ] || PUT_STATUS=000
 if [ "$PUT_STATUS" = "200" ] || [ "$PUT_STATUS" = "201" ]; then
   echo "  Index '$INDEX_NAME' created (HTTP $PUT_STATUS)."
 else

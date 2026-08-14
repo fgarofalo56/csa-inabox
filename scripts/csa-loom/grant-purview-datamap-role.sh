@@ -165,9 +165,13 @@ if [ "${PURVIEW_TOGGLE_PUBLIC:-0}" = "1" ]; then
       _POLL_MAX=480
       _TOKEN_PROBE="$(az account get-access-token --resource "$RESOURCE" --query accessToken -o tsv 2>/dev/null || true)"
       while [ "$_POLL_WAIT" -lt "$_POLL_MAX" ]; do
+        # `|| true`, not `|| echo "000"` — curl PRINTS the code from `-w` on a
+        # connect failure too, so the fallback concatenated and this loop
+        # reported "HTTP 000000 after Ns" (#3414).
         _HTTP=$(curl -sS -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer $_TOKEN_PROBE" \
-          "${BASE}/policystore/metadataPolicies?collectionName=${PURVIEW_ACCOUNT}&api-version=${API_VERSION}" 2>/dev/null || echo "000")
+          "${BASE}/policystore/metadataPolicies?collectionName=${PURVIEW_ACCOUNT}&api-version=${API_VERSION}" 2>/dev/null) || true
+        [ -n "$_HTTP" ] || _HTTP="000"
         if [ "$_HTTP" = "200" ] || [ "$_HTTP" = "401" ]; then
           # 200 = ready; 401 = reachable but token needs refresh (still recoverable).
           # NOTE: do NOT break on 403 — a PE-protected account returns 403

@@ -92,12 +92,18 @@ if [[ -z "$DEPLOY_PRINCIPAL_TOKEN" ]]; then
   echo "  ⏭️  SKIP — DEPLOY_PRINCIPAL_TOKEN not set; skipping authed create"
 else
   WORKSPACE_NAME="ci-smoke-$(date +%s)"
-  RESPONSE=$(curl -fsS -o /tmp/ws-resp -w "%{http_code}" --max-time 60 \
+  # Uses http_code() like every other probe here (#3414). It used to be a raw
+  # `curl -fsS … -w "%{http_code}" … || echo "000"`, which is BOTH defects the
+  # helper above exists to prevent: on any non-2xx `-f` made curl exit non-zero,
+  # so `|| echo` concatenated and the reported status was "400000"/"500000"
+  # rather than a code — and `-f` also suppressed the body, so the `cat` in the
+  # failure message below printed nothing. The test failed correctly and then
+  # described the failure with a fabricated code and no evidence.
+  RESPONSE=$(http_code -o /tmp/ws-resp --max-time 60 \
     -X POST "${CONSOLE_URL}/api/workspaces" \
     -H "Authorization: Bearer $DEPLOY_PRINCIPAL_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"$WORKSPACE_NAME\",\"capacitySku\":\"F2\",\"region\":\"eastus2\",\"domainName\":\"ci\"}" \
-    || echo "000") || true
+    -d "{\"name\":\"$WORKSPACE_NAME\",\"capacitySku\":\"F2\",\"region\":\"eastus2\",\"domainName\":\"ci\"}")
   if [[ "$RESPONSE" != "201" ]]; then
     fail "expected 201, got $RESPONSE; body: $(cat /tmp/ws-resp 2>/dev/null)"
   else
@@ -174,9 +180,18 @@ done
 # deployment's copilotMafEndpoint output) is reported for the receipt.
 if [[ "$BOUNDARY" == "GCC-High" || "$BOUNDARY" == "IL5" ]]; then
   echo "Test 8: Copilot orchestrate route enforces auth (MAF tier wiring)"
-  RESPONSE=$(curl -fsS -o /dev/null -w "%{http_code}" --max-time 30 \
+  # THIS TEST COULD NOT PASS (#3414). It asserts a REFUSAL — 401/403 is the
+  # success case — and it was written as `curl -fsS … -w "%{http_code}" … ||
+  # echo "000"`, the exact pairing that made Test 2 unpassable and is documented
+  # at the top of this file. `-f` makes curl exit non-zero on the very 401 this
+  # test wants, so `|| echo` concatenated and RESPONSE was "401000", which
+  # matches neither "401" nor "403". A working auth gate read as a failure.
+  # It survived because the guard that exists for this shape
+  # (scripts/ci/check-curl-httpcode-fallback.mjs) matched physical lines and the
+  # `|| echo` sat on a continuation.
+  RESPONSE=$(http_code -o /dev/null --max-time 30 \
     -X POST "${CONSOLE_URL}/api/copilot/orchestrate" \
-    -H "Content-Type: application/json" -d '{}' || echo "000") || true
+    -H "Content-Type: application/json" -d '{}')
   if [[ "$RESPONSE" != "401" && "$RESPONSE" != "403" ]]; then
     fail "expected 401/403 (unauth) at /api/copilot/orchestrate, got $RESPONSE"
   else

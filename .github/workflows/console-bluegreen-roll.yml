@@ -193,21 +193,78 @@ jobs:
           echo "::notice::$APP is now in multiple-revision mode (affinity cleared from '${AFFINITY:-<unset>}')."
 
       # ── Capture the current production (BLUE) revision — the rollback target ──
+      #
+      # R7 / #3413 — THIS VALUE IS THE ROLLBACK TARGET, not a diagnostic. The
+      # auto-rollback step at the bottom of this job re-pins 100% of ingress
+      # traffic to whatever this step records, so a silently-wrong BLUE does not
+      # degrade a message: it points a rollback at a revision that was never
+      # production.
+      #
+      # The pre-#3413 shape read it as
+      #     BLUE=$(az … ingress traffic show … -o tsv 2>/dev/null | tr -d '\r' || true)
+      # and then branched on `-z "$BLUE"`. That test was doing DOUBLE DUTY — it
+      # was the genuine fresh-app signal AND the swallowed-error signal. An auth
+      # failure, an ARM throttle, a transient 5xx and a wrong `-n`/`-g` pair all
+      # arrived as the same empty string, and the fallback branch then ran under
+      # a comment asserting "Fresh app (latestRevision:true, unnamed)" — a cause
+      # the code never established, and one no reader could disprove from the
+      # log afterwards, because both cases printed the same nothing.
+      #
+      # The fallback is not a harmless default either. It takes the NEWEST ACTIVE
+      # revision, and this job's own rollback step warns about the state that
+      # makes that wrong: "rollback 1/2 FAILED — green … is still ACTIVE at 0%
+      # traffic". On an app left in that state by an earlier failed roll, the
+      # newest active revision is exactly the one that never served traffic.
+      #
+      # So each read branches on `az`'s EXIT STATUS, never on emptiness, and per
+      # #2819 "the read SUCCEEDED and came back EMPTY" is its own class:
+      #   read FAILED    -> the rollback target is UNKNOWN. Fail the step. This
+      #                     happens BEFORE the build and before any revision is
+      #                     created, so blue keeps 100% of traffic and nothing
+      #                     has to be undone. Unknown must not proceed to a roll.
+      #   read SUCCEEDED,
+      #   value EMPTY    -> the genuine fresh-app case, and the ONLY thing that
+      #                     licenses the newest-active-revision fallback.
       - name: Capture blue (current production) revision
         id: blue
         run: |
+          # `-e` is KEPT here (unlike the health-gate and rollback steps below,
+          # which drop it to reach their own classification): every failable
+          # command in this step is already explicitly guarded by an `if`, so
+          # `-e` costs nothing and still catches anything added carelessly later.
           set -euo pipefail
           RG="${{ steps.resolve.outputs.rg }}"
+          ERR="$(mktemp)"
+          # A newline inside a `::error::` ends the annotation and everything
+          # after it is dropped, so truncate first, then flatten — the same
+          # helper the health-gate and rollback steps use.
+          err_detail() { head -c 400 "$ERR" | tr '\n' ' '; }
+
           # The blue revision is the one currently taking >0% ingress traffic.
-          BLUE=$(az containerapp ingress traffic show -n "$APP" -g "$RG" \
-            --query "sort_by([?weight>\`0\`], &weight)[-1].revisionName" -o tsv 2>/dev/null | tr -d '\r' || true)
-          if [[ -z "$BLUE" || "$BLUE" == "None" ]]; then
-            # Fresh app (latestRevision:true, unnamed) — fall back to the newest active revision.
-            BLUE=$(az containerapp revision list -n "$APP" -g "$RG" \
-              --query "sort_by([?properties.active], &properties.createdTime)[-1].name" -o tsv | tr -d '\r')
+          # `2>"$ERR"` rather than `2>/dev/null`, and NO `|| true`: the exit
+          # status is the signal and the stderr is the evidence for the message.
+          if ! BLUE="$(az containerapp ingress traffic show -n "$APP" -g "$RG" \
+                --query "sort_by([?weight>\`0\`], &weight)[-1].revisionName" -o tsv 2>"$ERR" | tr -d '\r')"; then
+            echo "::error::Could not READ the ingress traffic split for $APP in $RG, so the ROLLBACK TARGET is UNKNOWN — and this step will not guess one. A guessed blue is how an auto-rollback re-pins production traffic to a revision that was never production, so the roll stops HERE, before the image build and before any new revision exists: traffic is untouched and blue still holds 100%. This says nothing about whether the app is fresh; it says the read failed. Candidates: no such app/resource group under those names, this workflow's identity lacks Reader on it, or a transient ARM error worth a re-run. Check: az containerapp ingress traffic show -n $APP -g $RG . Detail: $(err_detail)"
+            exit 1
           fi
+
+          if [ -z "${BLUE//[[:space:]]/}" ] || [ "$BLUE" = 'None' ]; then
+            # Reachable ONLY now that the read is known to have succeeded.
+            echo "::notice::The ingress traffic read SUCCEEDED and reported NO weighted revision (value: '${BLUE:-<empty>}') — the fresh-app case, where ingress runs on latestRevision:true and no revision is named in the weights. Falling back to the newest ACTIVE revision BECAUSE THE READ SUCCEEDED AND CAME BACK EMPTY, not because anything failed."
+            if ! BLUE="$(az containerapp revision list -n "$APP" -g "$RG" \
+                  --query "sort_by([?properties.active], &properties.createdTime)[-1].name" -o tsv 2>"$ERR" | tr -d '\r')"; then
+              echo "::error::The ingress traffic read reported no weighted revision, and the fresh-app fallback read of $APP's revision list in $RG then FAILED — so the rollback target is UNKNOWN and the roll stops here, before the build, with traffic untouched. Check: az containerapp revision list -n $APP -g $RG . Detail: $(err_detail)"
+              exit 1
+            fi
+            if [ -z "${BLUE//[[:space:]]/}" ] || [ "$BLUE" = 'None' ]; then
+              BLUE=''
+              echo "::warning::BOTH reads SUCCEEDED and neither named a revision: $APP has no weighted ingress revision and no ACTIVE revision. Recording blue as empty — an ESTABLISHED absence, not a swallowed error. There is genuinely nothing to roll back to on an app whose first revision this roll will create, and the rollback step reports that state rather than claiming the weights are correct."
+            fi
+          fi
+
           echo "blue=$BLUE" >> "$GITHUB_OUTPUT"
-          echo "::notice::BLUE (rollback target) = $BLUE"
+          echo "::notice::BLUE (rollback target) = ${BLUE:-<none — established by two successful reads, see above>}"
 
       # ── Build the green image on the ACR (server-side; open→build→re-lock) ────
       - name: Build + push green image
