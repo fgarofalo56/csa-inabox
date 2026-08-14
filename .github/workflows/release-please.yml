@@ -42,10 +42,57 @@ name: release-please
 #   vitest (node 20)                 fiab-console-ci.yml         vitest
 #   guardrails                       loom-guardrails.yml         guardrails (no `name:`)
 #
-# All 14 contexts have a producer, so in the healthy path this workflow posts
-# ZERO synthetic statuses. The synthetic path survives only for contexts with no
-# producer — and every one it posts is named in a `::warning::`, so the residue
-# is visible on every single release instead of being silent.
+# All 14 contexts have a producer — reconfirmed against LIVE branch protection on
+# 2026-08-14, which returned exactly these 14 and no others. So the synthetic
+# path had a population of ZERO and could only ever fire on a context that lost
+# its producer. It has been DELETED (#3393): a required context with no producer
+# now posts a `failure` status and fails this run. Fail-closed, no allowlist to
+# go stale, and — by construction — this workflow can no longer post a `success`
+# status that a real check run on this exact commit did not justify.
+#
+# WHAT #3419 ACTUALLY DID, AND WHY THE TIMEOUT NOW FAILS (measured 2026-08-14)
+# ---------------------------------------------------------------------------
+# Run 31786503229 dispatched all four producers against PR #3419's head SHA
+# 1c80ca70. All four ran for real and concluded success. But the wait budget was
+# 120 x 15s = 30 min, and fiab-console-ci.yml concluded at 09:41:45 — 78 seconds
+# AFTER the step gave up at 09:40:27. So the step `continue`d, posted NOTHING for
+# any of the 14 contexts, and **the job still concluded `success`**. A run that
+# verified nothing reported green: the repo's #1 recorded defect class, sitting
+# inside the fix for the previous instance of it.
+#
+# The commit then merged at 09:43:28 with ZERO commit statuses AND zero approving
+# reviews against `required_approving_review_count: 1` — i.e. by an admin bypass
+# (`enforce_admins: false`), not because any gate was satisfied. That is the real
+# shape of the residual risk: not a synthetic green, but a gate that produces
+# nothing and a human who then has to go around it.
+#
+# Two changes follow from that measurement:
+#   * The budget is sized from evidence, not guessed: over the last 10 successful
+#     runs of each producer the slowest observed was fiab-console-ci at 2083s
+#     (34m43s). The budget is 180 x 15s = 45 min, and `timeout-minutes` 60.
+#   * An unverified outcome is a FAILED run. Timing out, or bridging nothing, now
+#     exits non-zero. The PR still cannot merge on it either way — but the lane
+#     now SAYS so where the operator looks, instead of showing green.
+#
+# One consequence, stated rather than discovered later: `concurrency` keeps at
+# most one pending run, so pushes to main during a long wait collapse into a
+# single follow-up run. Nothing is lost — release-please recomputes the whole
+# commit range every time — and a head SHA that stops moving is precisely what
+# lets a 35-minute CI cycle finish at all under `strict: true`.
+#
+# THE OTHER HALF OF #3393: A RELEASE MERGE MUST CLOSE NOTHING
+# ----------------------------------------------------------
+# release-please's PR body is the aggregated changelog, and conventional-changelog
+# renders every footer reference as ", closes #N" whatever action word the author
+# wrote. PR #3431 deliberately wrote `Refs #3429`; the body said `closes [#3429]`;
+# merging PR #3419 closed #3429 — an open P0 — two seconds later. Across the whole
+# committed CHANGELOG.md, 37 of 66 `closes` claims name an issue the attributed
+# commit never asked to close.
+#
+# The step below rewrites those keywords to `refs` in the PR body BEFORE anything
+# else can happen, and then reads the body back to confirm none survived. Per R2
+# and task-tracking.md an issue closes on DEPLOYED-and-verified, never on a merge,
+# so a release merge closing nothing is the correct behaviour and not a trade-off.
 #
 # WHY A COMMIT STATUS IS STILL POSTED — and why that is NOT the old auto-pass
 # --------------------------------------------------------------------------
@@ -155,11 +202,12 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    # Raised from 15: the step below dispatches the producing workflows and then
-    # WAITS for them to conclude (budget 30 min) before bridging any result. It
-    # is deliberately long — a status must never be posted ahead of the run that
-    # justifies it.
-    timeout-minutes: 45
+    # Raised from 45: the step below dispatches the producing workflows and then
+    # WAITS for them to conclude before bridging any result. The budget is sized
+    # from the slowest observed producer run (fiab-console-ci, 2083s) plus
+    # headroom for queueing. It is deliberately long — a status must never be
+    # posted ahead of the run that justifies it.
+    timeout-minutes: 60
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
@@ -167,6 +215,80 @@ jobs:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # The neutralizer below is a repo script, so the tree has to be here
+          # before it runs. Nothing else in this job needs the checkout.
+          persist-credentials: false
+
+      - name: A release merge must close NOTHING — strip closing keywords from the PR body
+        # Runs BEFORE the required-checks step, and before that step's
+        # metadata-allowlist abort, so a release PR is never left sitting with a
+        # live closing keyword in its body no matter how the rest of the job goes.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+
+          mapfile -t RELEASE_PRS < <(
+            gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName \
+              | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number'
+          )
+          if [ "${#RELEASE_PRS[@]}" -eq 0 ]; then
+            echo "No open release-please PRs — nothing to neutralize."
+            exit 0
+          fi
+
+          for num in "${RELEASE_PRS[@]}"; do
+            echo "=== PR #${num}: closing-keyword sweep ==="
+            gh api "repos/${REPO}/pulls/${num}" --jq '.body' > body.raw.txt
+            # An unreadable/empty body is NOT a clean one. release-please always
+            # writes a body; zero bytes means the read failed, and calling that
+            # "no keywords found" is the exact unknown-as-negative class.
+            if [ ! -s body.raw.txt ]; then
+              echo "::error::PR #${num}: read back a ZERO-BYTE body. That is an unreadable"
+              echo "::error::signal, not a clean one — refusing to declare it free of closing"
+              echo "::error::keywords on the strength of a read that produced nothing."
+              exit 1
+            fi
+            # A JSON-null body is a real (if surprising) state, not a read
+            # failure — a failed `gh api` would have aborted this step already.
+            # It carries no text and therefore no closing keyword, so it is
+            # reported and skipped rather than treated as an error.
+            if [ "$(cat body.raw.txt)" = "null" ]; then
+              echo "  PR #${num} has a null body — nothing to neutralize."
+              continue
+            fi
+
+            node scripts/ci/neutralize-release-close-keywords.mjs body.raw.txt > body.clean.txt
+            if cmp -s body.raw.txt body.clean.txt; then
+              echo "  no closing keywords present — body left byte-identical."
+            else
+              echo "  closing keyword(s) found; rewriting them to 'refs':"
+              # `diff` exits 1 precisely BECAUSE the files differ, which is the
+              # expected case in this branch. Written as an explicit `if` rather
+              # than `diff … || true`: a `|| true` in a step is the shape this
+              # repo has been burned by, and it would also swallow diff's exit 2
+              # (a real error) alongside the benign 1.
+              if ! diff -u body.raw.txt body.clean.txt; then
+                :
+              fi
+              gh pr edit "${num}" --repo "${REPO}" --body-file body.clean.txt
+            fi
+
+            # READ IT BACK. Do not assert the edit worked (R7) — establish it.
+            gh api "repos/${REPO}/pulls/${num}" --jq '.body' > body.verify.txt
+            if [ ! -s body.verify.txt ]; then
+              echo "::error::PR #${num}: verification read returned a ZERO-BYTE body."
+              exit 1
+            fi
+            node scripts/ci/neutralize-release-close-keywords.mjs --check body.verify.txt
+            echo "  verified on the LIVE body: 0 closing keywords remain on PR #${num}."
+          done
+          rm -f body.raw.txt body.clean.txt body.verify.txt
 
       - name: Run the required checks for real on every open release PR
         # Always run — discover open release PRs from the API rather than
@@ -255,6 +377,13 @@ jobs:
             gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \
               --jq '.workflow_runs[] | [.path, .status, (.conclusion // ""), .html_url] | @tsv'
           }
+
+          # UNVERIFIED counts release PRs this run failed to render a full verdict
+          # for. It is checked AFTER the loop and turns the job red. On 2026-08-14
+          # run 31786503229 hit exactly this case and concluded `success` — a run
+          # that verified nothing, showing green in `gh run list`, which is the
+          # signal the operator actually reads.
+          UNVERIFIED=0
 
           for num in "${RELEASE_PRS[@]}"; do
             sha=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.sha')
@@ -355,7 +484,7 @@ jobs:
             #    Nothing is posted until there is a real result to post.
             # ---------------------------------------------------------------
             unfinished="pending"
-            for _ in $(seq 1 120); do
+            for _ in $(seq 1 180); do
               runs="$(runs_tsv "${sha}")"
               unfinished=""
               for wf in "${PRODUCERS[@]}"; do
@@ -379,14 +508,36 @@ jobs:
             done
 
             if [ -n "${unfinished}" ]; then
-              # NOT a pass and NOT a failure — the runs are real and still going.
-              # Post NOTHING: the PR stays blocked, which is correct, and the next
-              # release-please run (or a manual workflow_dispatch of this file)
-              # picks up the concluded results and bridges them.
-              echo "::warning::PR #${num}: still waiting on real runs after 30 min: ${unfinished}"
-              echo "::warning::No status was posted for ANY required context — an unfinished run"
-              echo "::warning::is not a green one. Re-run this workflow (or push to main) once"
-              echo "::warning::they finish and their results will be bridged onto ${sha}."
+              # The runs are real and still going, so nothing is posted: an
+              # unfinished run is not a green one and the PR stays blocked, which
+              # is correct. What is NOT correct is this job then reporting
+              # success, which is what it did on run 31786503229 — it gave up 78
+              # seconds before fiab-console-ci.yml concluded, bridged nothing, and
+              # went green. So this counts as UNVERIFIED and the job fails below.
+              #
+              # Distinguish the two causes rather than blaming the slower one
+              # (R7). `strict: true` means release-please rewrites the PR — and
+              # its head SHA — on every push to main, which throws away every run
+              # this step was waiting on. That is a different problem from CI
+              # being slow, and it has a different answer.
+              now_sha=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.sha')
+              if [ "${now_sha}" != "${sha}" ]; then
+                echo "::error::PR #${num}: head SHA moved from ${sha} to ${now_sha} WHILE this"
+                echo "::error::step was waiting. Every run it was waiting on belongs to a commit"
+                echo "::error::that is no longer the PR head, so none of them can be bridged."
+                echo "::error::Cause is SHA churn, not slow CI: branch protection has strict=true,"
+                echo "::error::so release-please rebuilds this PR on every push to main. A release"
+                echo "::error::needs a quiet window on main long enough for one CI cycle (~35 min)."
+              else
+                echo "::error::PR #${num}: real runs on ${sha} had NOT concluded after 45 min:"
+                echo "::error::${unfinished}"
+                echo "::error::No status was posted for ANY required context — an unfinished run is"
+                echo "::error::not a green one. Re-run this workflow once they finish and their"
+                echo "::error::results will be bridged onto ${sha}."
+              fi
+              echo "::error::This run verified NOTHING for PR #${num}, so it fails rather than"
+              echo "::error::reporting green (#3393)."
+              UNVERIFIED=$((UNVERIFIED + 1))
               continue
             fi
             echo "  every producing run on ${sha} has concluded."
@@ -412,10 +563,10 @@ jobs:
               CR_URL["${cr_name}"]="${cr_url}"
             done <<< "${cr_tsv}"
 
-            bridged=(); broken=(); residual=()
+            bridged=(); broken=(); producerless=()
             for entry in "${REQUIRED_CHECKS[@]}"; do
               ctx="${entry%%|*}"; wf="${entry#*|}"
-              if [ -z "${wf}" ]; then residual+=("${ctx}"); continue; fi
+              if [ -z "${wf}" ]; then producerless+=("${ctx}"); continue; fi
               verdict="${CR_CONCL[${ctx}]:-ABSENT}"
               if [ "${verdict}" != "completed/success" ]; then
                 echo "    NOT-GREEN ${ctx} -> ${verdict}"
@@ -453,23 +604,38 @@ jobs:
             echo "  bridged ${#bridged[@]} real result(s) onto ${sha}."
 
             # ---------------------------------------------------------------
-            # 5. RESIDUAL synthetic statuses — contexts no workflow can publish.
-            #    This list should be EMPTY. Every entry is shouted so the residue
-            #    is visible on every release instead of being silent (#3393).
+            # 5. A REQUIRED CONTEXT WITH NO PRODUCER IS A HARD FAILURE.
+            #
+            #    This used to post a SYNTHETIC `success` for such a context and
+            #    shout about it in a ::warning::. A warning does not stop a merge;
+            #    a green status is a green status however loudly it is annotated,
+            #    and #3393 is on file precisely because release PRs merged on
+            #    statuses no test produced. The synthetic path is GONE.
+            #
+            #    The population is zero today — all 14 required contexts, read
+            #    from live branch protection on 2026-08-14, have a producer — so
+            #    deleting it removes no working behaviour. If protection later
+            #    adds a context this file has no producer for, the release stops
+            #    dead with a red status and a named remediation. Fail closed.
             # ---------------------------------------------------------------
-            if [ "${#residual[@]}" -gt 0 ]; then
-              echo "::warning::${#residual[@]} required context(s) have NO workflow that can publish them, so a SYNTHETIC status is being posted for each. This is the part of #3393 that is NOT fixed:"
-              for ctx in "${residual[@]}"; do
-                echo "::warning::  SYNTHETIC (no real run produced this): ${ctx}"
+            if [ "${#producerless[@]}" -gt 0 ]; then
+              for ctx in "${producerless[@]}"; do
+                echo "::error::PR #${num}: required context '${ctx}' has NO producing workflow."
                 gh api -X POST "repos/${REPO}/statuses/${sha}" \
-                  -f state=success \
+                  -f state=failure \
                   -f context="${ctx}" \
-                  -f description="SYNTHETIC — no workflow publishes this context; release PR only bumps version metadata" \
+                  -f description="No workflow in this repo publishes this context — nothing can verify it" \
                   -f target_url="${RUN_URL}" >/dev/null
               done
-            else
-              echo "::notice::0 synthetic statuses posted for PR #${num} — all ${#bridged[@]} required contexts were bridged from real runs that concluded success on ${sha}."
+              echo "::error::${#producerless[@]} required context(s) cannot be verified by any run:"
+              echo "::error::${producerless[*]}"
+              echo "::error::This workflow will NOT invent a success for them. Either add the"
+              echo "::error::workflow that publishes each one and map it in REQUIRED_CHECKS, or"
+              echo "::error::remove the context from branch protection. Until then the release is"
+              echo "::error::blocked, which is the correct state for something nothing tests."
+              exit 1
             fi
+            echo "::notice::0 synthetic statuses posted for PR #${num} — all ${#bridged[@]} required contexts were bridged from real runs that concluded success on ${sha}."
 
             # DRIFT / DIAGNOSIS CONTROL. Distinguish, without guessing, between
             # (a) a real failing check, (b) real checks still running, (c) the
@@ -530,8 +696,20 @@ jobs:
             fi
           done
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        if: ${{ steps.release.outputs.release_created }}
+          # THE VERDICT OF THIS RUN. A release PR that could not be fully graded
+          # leaves this job RED. It used to leave it green: run 31786503229 timed
+          # out 78 seconds early on 2026-08-14, bridged nothing for any of the 14
+          # required contexts, and reported success — and the release then merged
+          # on an admin bypass carrying zero statuses. A run that verified nothing
+          # must not look like a run that verified everything (#3393).
+          if [ "${UNVERIFIED}" -ne 0 ]; then
+            echo "::error::${UNVERIFIED} release PR(s) were NOT fully verified by this run."
+            echo "::error::No required context was bridged for them, so they cannot merge on"
+            echo "::error::anything this workflow produced — and this run fails so that fact is"
+            echo "::error::visible in the run list instead of showing as a green release lane."
+            exit 1
+          fi
+
       - name: Log release info
         if: ${{ steps.release.outputs.release_created }}
         run: |
