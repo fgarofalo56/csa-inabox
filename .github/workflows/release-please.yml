@@ -1,23 +1,96 @@
 name: release-please
 
-# Why this workflow also posts commit statuses
-# ---------------------------------------------
+# How a release PR gets its required checks
+# -----------------------------------------
 # release-please opens its release PR using GITHUB_TOKEN. GitHub *intentionally*
-# withholds downstream workflows on PRs created by GITHUB_TOKEN (to prevent
-# infinite loops). The result: branch protection's required checks (Python
-# Tests, dbt Compile, etc.) do not report on the release PR, so it can never
-# merge — 0 checks, BLOCKED state.
+# suppresses downstream workflow triggers on events caused by GITHUB_TOKEN (to
+# prevent infinite loops). The result: branch protection's 14 required checks
+# (Python Tests, dbt Compile, next build, guardrails, …) do not report on the
+# release PR, so it can never merge — 0 checks, BLOCKED state.
 #
-# PRECISION (measured 2026-08-13 on PR #3382, correcting the earlier claim here
-# that these workflows "never run"): the runs ARE created — all ten of them —
-# and they sit at conclusion `action_required`, awaiting manual approval. They
-# are withheld, not absent. `gh api -X POST repos/{repo}/actions/runs/{id}/approve`
-# releases them and the REAL checks then run and pass.
+# CORRECTED 2026-08-13 (#3393). An earlier revision of this header claimed the
+# runs "ARE created — all ten of them — and sit at conclusion action_required,
+# awaiting manual approval", and #3387 built an approve-the-held-runs path on
+# that claim. That claim was WRONG and the path it justified found zero every
+# time, by construction:
+#   * The runs are **never created**. Suppression is not a hold state.
+#   * `action_required` is a *different* mechanism — the approval hold for fork
+#     PRs from first-time contributors. There is nothing queued to approve.
+#   * Measured on PR #3391 (run 31743342098, head f4e5677f) and again on
+#     PR #3402 / 0.96.0 (head ee77fae4): **0 CheckRuns, 14 StatusContexts.**
+#     Every "check" was a synthetic status this workflow posted to itself.
+# That approve-branch has been REMOVED — it advertised a capability this
+# workflow does not have (#3393 option 3).
 #
-# So the order of preference below is: APPROVE the held runs (real results), and
-# only fall back to posting synthetic statuses when there was nothing to approve.
+# THE FIX (#3393 option 1): `workflow_dispatch` and `repository_dispatch` are
+# the ONE documented exception to the GITHUB_TOKEN suppression rule — GITHUB_TOKEN
+# *can* trigger them (GitHub Actions changelog 2022-09-08; docs "GITHUB_TOKEN"
+# and "Triggering a workflow"). So this workflow now DISPATCHES each producing
+# workflow against the release branch. Those runs are real, their check runs land
+# on the PR's head SHA, and their results are real results.
 #
-# Why the fallback's context list is hardcoded rather than derived: deriving it
+#   required context                 published by                job
+#   -------------------------------  --------------------------  ------------------
+#   Python Lint                      validate.yml                python-lint
+#   PowerShell Lint                  validate.yml                powershell-lint
+#   Secret Scan                      validate.yml                secret-scan
+#   Repo Hygiene                     validate.yml                hygiene
+#   Python Tests (3.10|3.11|3.12)    test.yml                    python-tests (matrix)
+#   dbt Compile (shared|finance|      test.yml                   dbt-compile (matrix)
+#                inventory|sales)
+#   next build (node 20)             fiab-console-ci.yml         build
+#   vitest (node 20)                 fiab-console-ci.yml         vitest
+#   guardrails                       loom-guardrails.yml         guardrails (no `name:`)
+#
+# All 14 contexts have a producer, so in the healthy path this workflow posts
+# ZERO synthetic statuses. The synthetic path survives only for contexts with no
+# producer — and every one it posts is named in a `::warning::`, so the residue
+# is visible on every single release instead of being silent.
+#
+# WHY A COMMIT STATUS IS STILL POSTED — and why that is NOT the old auto-pass
+# --------------------------------------------------------------------------
+# MEASURED 2026-08-13 on PR #3407 (head b4bd723e), because assuming it would
+# have been exactly the mistake #3387 made. `license-scan.yml` was dispatched
+# against the PR branch — chosen because its `pull_request` path filter means
+# the PR event does NOT trigger it, so there was no confound. Result:
+#   * run 31752006228, event=workflow_dispatch, head_sha = the PR head SHA;
+#   * concluded `success`;
+#   * its check run IS on the commit
+#     (GET /commits/{sha}/check-runs -> "license gate + THIRD-PARTY-NOTICES");
+#   * its check suite 86143211123 IS associated with the PR (pull_requests:[3407]);
+#   * and it is STILL ABSENT from `gh pr view --json statusCheckRollup`
+#     (28 entries before and after; the commit had 29 check runs).
+# So GitHub does not fold a workflow_dispatch check suite into the PR's rollup,
+# which is the same surface branch protection evaluates. Scoping that honestly:
+# the context measured is not itself a REQUIRED one, so what is established is
+# "the rollup omits it", not "protection provably ignores it" — but the rollup
+# is what protection reads, so the design does not bet on the difference.
+#
+# Therefore the dispatched run supplies the RESULT, and this workflow carries
+# that result across as a commit status whose `target_url` points AT THE REAL
+# JOB that produced it. The difference from what #3393 records:
+#   BEFORE: a status posted for every context unconditionally, backed by nothing.
+#   NOW:    a status posted ONLY for a context whose own check run, on this exact
+#           commit, concluded `success`. A red or absent result posts nothing and
+#           fails this run.
+# If the bridge ever becomes unnecessary (GitHub starts folding dispatch suites
+# into the rollup, or the repo moves to #3393 option 2's GitHub App token, whose
+# PRs trigger workflows natively), delete step 4 — the dispatch keeps working.
+#
+# WHY THIS IS NOT "a dispatched run whose result is discarded":
+#   * A failed `gh workflow run` aborts the job (the error text is captured and
+#     printed, never `2>/dev/null`'d away).
+#   * A dispatch that produces NO run inside the polling budget is an `::error::`
+#     + exit 1. An absent result is not a green one.
+#   * A required context whose real check run did not conclude `success` gets NO
+#     status posted and fails this run — so it blocks the release both ways.
+#   * Nothing here uses `continue-on-error`, `|| true`, or `2>/dev/null`.
+#
+# Dispatch is IDEMPOTENT: if a run of a producing workflow already exists on the
+# PR's current head SHA, it is not re-dispatched. release-please only changes
+# that SHA when it updates the PR, so pushes to main do not re-burn CI minutes.
+#
+# Why the required-context list is hardcoded rather than derived: deriving it
 # from `repos/{repo}/branches/main/protection/required_status_checks` was tried
 # and is IMPOSSIBLE with GITHUB_TOKEN. That endpoint needs admin, and the
 # corresponding `administration` scope is not a valid workflow `permissions:` key
@@ -29,9 +102,6 @@ name: release-please
 # list stays hand-maintained — and the post-verify step below exists to make its
 # staleness LOUD, since it has now drifted twice in silence (PR #815, and again
 # on 2026-08-13 when `guardrails` and `vitest (node 20)` were missing).
-#
-# The canonical fix is a PAT (RELEASE_PLEASE_TOKEN). We don't have one and
-# don't want a long-lived one stored in repo secrets.
 #
 # MEASURED PROTECTION STATE (2026-08-13, read with an operator token that CAN
 # reach the protection endpoint — recorded here so nobody re-derives it):
@@ -51,42 +121,45 @@ name: release-please
 #
 # The approving-review requirement is why a release PR can sit at BLOCKED with
 # all 14 contexts green. The post-verify below distinguishes that case from
-# context drift instead of guessing (deploy-integrity.md R7).
-#
-# Instead, after release-please creates/updates its PR, this workflow uses
-# its own GITHUB_TOKEN (which CAN write commit statuses) to mark every
-# required check on the PR head SHA as a success with a clear note that
-# release PRs only modify version metadata files (CHANGELOG.md,
-# pyproject.toml, .release-please-manifest.json, and the version-only bump in
-# apps/fiab-console/package.json via extra-files) and therefore none of the
-# code/data/IaC checks are meaningful for them.
-#
-# This is honest — we're not faking results from real test runs that failed.
-# The PR diff is reviewable in seconds and only ever touches three files.
+# "real checks still running" and from context drift instead of guessing
+# (deploy-integrity.md R7).
 
 on:
   push:
     branches:
       - main
-  # Allow manual re-runs to re-post statuses if the head SHA drifts after a
-  # rebase (release-please's `prs` output captures the SHA at action time, but
-  # a subsequent rebase by release-please itself can land a *different* SHA on
-  # the PR — leaving the previously-posted statuses pinned to a stale commit).
+  # Allow manual re-runs to re-evaluate / re-dispatch if the head SHA drifts
+  # after a rebase (release-please's `prs` output captures the SHA at action
+  # time, but a subsequent rebase by release-please itself can land a *different*
+  # SHA on the PR — leaving the previous run's checks pinned to a stale commit).
   workflow_dispatch:
+
+# Serialize: two concurrent runs would both see "no run on this SHA" and
+# double-dispatch every producing workflow. `cancel-in-progress: false` because
+# this job creates git tags and GitHub releases — it must not be killed mid-flight.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
 
 permissions:
   contents: write
   pull-requests: write
   statuses: write
-  # Needed to APPROVE the runs GitHub withholds on GITHUB_TOKEN-authored PRs
-  # (see header). Approval produces REAL check results; the auto-pass fallback
-  # only runs when there was nothing to approve.
+  # `gh workflow run` POSTs to actions/workflows/{file}/dispatches, and the
+  # dispatch-verification poll reads actions/runs — both need actions:write.
   actions: write
+  # The coverage measurement reads repos/{repo}/commits/{sha}/check-runs. Without
+  # this the read 403s and we would be guessing at coverage instead of measuring it.
+  checks: read
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Raised from 15: the step below dispatches the producing workflows and then
+    # WAITS for them to conclude (budget 30 min) before bridging any result. It
+    # is deliberately long — a status must never be posted ahead of the run that
+    # justifies it.
+    timeout-minutes: 45
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
@@ -95,7 +168,7 @@ jobs:
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Mark required checks as passed on every open release PR
+      - name: Run the required checks for real on every open release PR
         # Always run — discover open release PRs from the API rather than
         # trusting `steps.release.outputs.prs`, which is empty on no-op runs
         # and stale on rebased runs. This makes the step idempotent and
@@ -108,27 +181,56 @@ jobs:
           REPO="${GITHUB_REPOSITORY}"
           RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
 
-          # Hand-maintained mirror of branch protection's required contexts.
+          # Hand-maintained mirror of branch protection's required contexts,
+          # each paired with the workflow FILE whose job publishes it.
           # See the header for WHY this cannot be derived with GITHUB_TOKEN.
           # It has drifted twice; the post-verify at the end of the loop is the
           # control that makes a third drift fail loudly instead of silently.
           # Last reconciled against protection: 2026-08-13 (14 contexts).
-          REQUIRED_CONTEXTS=(
-            "PowerShell Lint"
-            "Python Lint"
-            "Python Tests (3.10)"
-            "Python Tests (3.11)"
-            "Python Tests (3.12)"
-            "Repo Hygiene"
-            "Secret Scan"
-            "dbt Compile (finance)"
-            "dbt Compile (inventory)"
-            "dbt Compile (sales)"
-            "dbt Compile (shared)"
-            "guardrails"
-            "next build (node 20)"
-            "vitest (node 20)"
+          #
+          # The producer was established by READING each workflow's job `name:`
+          # (a matrix job's check-run name is `<name> (<matrix values>)`; a job
+          # with no `name:` reports under its job id — that is why `guardrails`
+          # is spelled lowercase).
+          #
+          # An EMPTY producer means "no workflow in this repo publishes this
+          # context". Those — and ONLY those — still get a synthetic status, and
+          # each one is named in a ::warning:: so the residue cannot go quiet.
+          REQUIRED_CHECKS=(
+            "PowerShell Lint|validate.yml"
+            "Python Lint|validate.yml"
+            "Python Tests (3.10)|test.yml"
+            "Python Tests (3.11)|test.yml"
+            "Python Tests (3.12)|test.yml"
+            "Repo Hygiene|validate.yml"
+            "Secret Scan|validate.yml"
+            "dbt Compile (finance)|test.yml"
+            "dbt Compile (inventory)|test.yml"
+            "dbt Compile (sales)|test.yml"
+            "dbt Compile (shared)|test.yml"
+            "guardrails|loom-guardrails.yml"
+            "next build (node 20)|fiab-console-ci.yml"
+            "vitest (node 20)|fiab-console-ci.yml"
           )
+
+          # Derive the unique producer set from the table above — one source of
+          # truth, so adding a context can never forget to dispatch its workflow.
+          # NOTE ON `set -e` IN THIS STEP: every early-exit below is written as an
+          # explicit `if`, never `[ … ] && break`. A failing `[ … ]` at the head
+          # of an && list is exempt from errexit, but that exemption is subtle
+          # enough that this repo has been bitten by the neighbouring case
+          # (a failure skipping later guards, which then read as passes).
+          PRODUCERS=()
+          for entry in "${REQUIRED_CHECKS[@]}"; do
+            wf="${entry#*|}"
+            if [ -z "$wf" ]; then continue; fi
+            already=0
+            for seen in ${PRODUCERS[@]+"${PRODUCERS[@]}"}; do
+              if [ "$seen" = "$wf" ]; then already=1; break; fi
+            done
+            if [ "$already" -eq 0 ]; then PRODUCERS+=("$wf"); fi
+          done
+          echo "Producing workflows: ${PRODUCERS[*]}"
 
           # Find every open PR opened by github-actions[bot] whose head branch
           # matches the release-please naming scheme. Resolve each to its
@@ -143,6 +245,17 @@ jobs:
             exit 0
           fi
 
+          # Paths of every workflow run already recorded against a SHA.
+          runs_for_sha() {
+            gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \
+              --jq '.workflow_runs[].path'
+          }
+          # path <TAB> status <TAB> conclusion <TAB> url for every run on a SHA.
+          runs_tsv() {
+            gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \
+              --jq '.workflow_runs[] | [.path, .status, (.conclusion // ""), .html_url] | @tsv'
+          }
+
           for num in "${RELEASE_PRS[@]}"; do
             sha=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.sha')
             branch=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.ref')
@@ -150,98 +263,268 @@ jobs:
             echo "=== Release PR #${num} (${branch}) head SHA ${sha} ==="
 
             # Sanity-check: release PRs must only touch version-metadata files.
-            # If they touch anything else, abort — we don't want to auto-pass
-            # checks for a PR that actually changes code.
-            files=$(gh api "repos/${REPO}/pulls/${num}/files" --jq '.[].filename' | sort -u)
+            # If they touch anything else, abort — we don't want to drive this
+            # release path for a PR that actually changes code. The allowlist is
+            # UNCHANGED and deliberately NOT widened (#3393 requirement).
+            #
+            # Written as an explicit loop rather than `grep -Ev … || true`: the
+            # `|| true` was there only because `grep -v` exits 1 when it filters
+            # everything out (the GOOD case), but a `|| true` in a gate is the
+            # shape this repo has been burned by, so it is gone.
+            files="$(gh api "repos/${REPO}/pulls/${num}/files" --jq '.[].filename' | sort -u)"
+            if [ -z "$files" ]; then
+              echo "::error::Release PR #${num} reported ZERO changed files. That is an"
+              echo "::error::UNREADABLE signal, not a green one — refusing to proceed rather"
+              echo "::error::than treating 'I could not see any' as 'there are none'."
+              exit 1
+            fi
+            mapfile -t file_list <<< "$files"
             echo "Files changed:"
-            printf '  %s\n' $files
-            unexpected=$(printf '%s\n' $files | grep -Ev '^(CHANGELOG\.md|pyproject\.toml|\.release-please-manifest\.json|apps/fiab-console/package\.json)$' || true)
+            printf '  %s\n' "${file_list[@]}"
+            allowed_re='^(CHANGELOG\.md|pyproject\.toml|\.release-please-manifest\.json|apps/fiab-console/package\.json)$'
+            unexpected=""
+            for f in "${file_list[@]}"; do
+              if ! printf '%s' "$f" | grep -Eq "$allowed_re"; then
+                unexpected="${unexpected}${f} "
+              fi
+            done
             if [ -n "$unexpected" ]; then
               echo "::error::Release PR #${num} touches non-metadata files; refusing to auto-pass required checks:"
-              echo "$unexpected"
+              echo "  ${unexpected}"
               exit 1
             fi
 
-            # PREFERRED PATH: release the runs GitHub is withholding. These
-            # produce REAL check results, so nothing has to be taken on faith.
-            mapfile -t HELD < <(
-              gh api "repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100" \
-                --jq '.workflow_runs[] | select(.status=="action_required") | .id'
-            )
-            approved=0
-            for rid in "${HELD[@]:-}"; do
-              [ -z "$rid" ] && continue
-              if gh api -X POST "repos/${REPO}/actions/runs/${rid}/approve" >/dev/null 2>&1; then
-                approved=$((approved + 1))
-              else
-                echo "  ! could not approve held run ${rid}"
+            # ---------------------------------------------------------------
+            # 1. DISPATCH the producing workflows against the release branch.
+            #    Idempotent: skip any workflow that already has a run on this SHA.
+            # ---------------------------------------------------------------
+            existing_paths="$(runs_for_sha "${sha}")"
+            dispatched=()
+            for wf in "${PRODUCERS[@]}"; do
+              if printf '%s\n' "${existing_paths}" | grep -qxF ".github/workflows/${wf}"; then
+                echo "  = ${wf}: a run already exists on ${sha} — not re-dispatching."
+                continue
               fi
+              echo "  > dispatching ${wf} against ${branch}"
+              # stderr is CAPTURED, never discarded: a dispatch that fails must
+              # say why (deploy-integrity R7), and must stop the job.
+              if ! dispatch_err="$(gh workflow run "${wf}" --repo "${REPO}" --ref "${branch}" 2>&1)"; then
+                echo "::error::Dispatching ${wf} against ${branch} FAILED: ${dispatch_err}"
+                echo "::error::This is fatal — without it the required contexts that ${wf}"
+                echo "::error::publishes would have no real result, and posting a synthetic one"
+                echo "::error::in their place is the exact defect #3393 records."
+                echo "::error::If the message mentions a missing workflow_dispatch trigger, the"
+                echo "::error::release branch was cut from a main commit that predates the"
+                echo "::error::trigger being added: close PR #${num} and let release-please"
+                echo "::error::recreate it from current main."
+                exit 1
+              fi
+              dispatched+=("${wf}")
             done
-            if [ "$approved" -gt 0 ]; then
-              echo "  approved ${approved} held run(s) — REAL checks are now running on ${sha}."
-              echo "  Not posting synthetic statuses: doing so would let this PR merge"
-              echo "  BEFORE those real checks report, which is exactly the"
-              echo "  green-that-measured-nothing failure this repo forbids."
+
+            # ---------------------------------------------------------------
+            # 2. CONFIRM each dispatch actually produced a run on this SHA.
+            #    A dispatch that creates nothing is a FAILURE, not a pass.
+            # ---------------------------------------------------------------
+            if [ "${#dispatched[@]}" -gt 0 ]; then
+              missing=("${dispatched[@]}")
+              for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                sleep 15
+                existing_paths="$(runs_for_sha "${sha}")"
+                still=()
+                for wf in "${missing[@]}"; do
+                  if ! printf '%s\n' "${existing_paths}" | grep -qxF ".github/workflows/${wf}"; then
+                    still+=("${wf}")
+                  fi
+                done
+                missing=(${still[@]+"${still[@]}"})
+                if [ "${#missing[@]}" -eq 0 ]; then break; fi
+              done
+              if [ "${#missing[@]}" -gt 0 ]; then
+                echo "::error::Dispatched ${missing[*]} against ${branch}, but NO workflow run"
+                echo "::error::appeared on ${sha} within 3 minutes. An absent result is NOT a"
+                echo "::error::green one, so this run fails rather than falling back to a"
+                echo "::error::synthetic status (#3393)."
+                exit 1
+              fi
+              echo "  all ${#dispatched[@]} dispatched workflow(s) produced a run on ${sha}."
+            fi
+
+            # ---------------------------------------------------------------
+            # 3. WAIT for every producing run on this SHA to CONCLUDE.
+            #    Nothing is posted until there is a real result to post.
+            # ---------------------------------------------------------------
+            unfinished="pending"
+            for _ in $(seq 1 120); do
+              runs="$(runs_tsv "${sha}")"
+              unfinished=""
+              for wf in "${PRODUCERS[@]}"; do
+                # A workflow counts as finished only when EVERY run of it on this
+                # SHA is `completed`. Picking "the latest run" would need an
+                # ordering assumption about the API's response, and a re-dispatch
+                # or a re-run leaves more than one — so this waits for all of
+                # them instead, which cannot mistake an in-flight run for a done
+                # one.
+                counts="$(printf '%s\n' "${runs}" | awk -F'\t' -v p=".github/workflows/${wf}" \
+                  '$1==p {t++; if ($2!="completed") n++} END {printf "%d %d", t+0, n+0}')"
+                tot="${counts% *}"; nf="${counts#* }"
+                if [ "${tot}" -eq 0 ]; then
+                  unfinished="${unfinished}${wf}(no-run) "
+                elif [ "${nf}" -gt 0 ]; then
+                  unfinished="${unfinished}${wf}(${nf}/${tot}-unfinished) "
+                fi
+              done
+              if [ -z "${unfinished}" ]; then break; fi
+              sleep 15
+            done
+
+            if [ -n "${unfinished}" ]; then
+              # NOT a pass and NOT a failure — the runs are real and still going.
+              # Post NOTHING: the PR stays blocked, which is correct, and the next
+              # release-please run (or a manual workflow_dispatch of this file)
+              # picks up the concluded results and bridges them.
+              echo "::warning::PR #${num}: still waiting on real runs after 30 min: ${unfinished}"
+              echo "::warning::No status was posted for ANY required context — an unfinished run"
+              echo "::warning::is not a green one. Re-run this workflow (or push to main) once"
+              echo "::warning::they finish and their results will be bridged onto ${sha}."
               continue
             fi
-            echo "  no held runs could be approved (${#HELD[@]} found) — falling back to auto-pass."
+            echo "  every producing run on ${sha} has concluded."
 
-            for ctx in "${REQUIRED_CONTEXTS[@]}"; do
-              echo "  - posting success status: ${ctx}"
+            # ---------------------------------------------------------------
+            # 4. BRIDGE each REAL result onto the head SHA as a commit status.
+            #
+            #    WHY A BRIDGE IS STILL NEEDED — measured 2026-08-13, see header:
+            #    a workflow_dispatch check run lands on the commit and its check
+            #    suite is even associated with the PR, but it does NOT appear in
+            #    the PR's statusCheckRollup, so branch protection does not count
+            #    it. So the dispatched run supplies the RESULT and this step
+            #    carries that result across, naming the run that produced it.
+            #    This is NOT the old auto-pass: nothing is posted for a context
+            #    whose real check run did not conclude `success`.
+            # ---------------------------------------------------------------
+            cr_tsv="$(gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100" \
+              --jq '.check_runs[] | [.name, .status, (.conclusion // ""), .html_url] | @tsv')"
+            declare -A CR_CONCL=() CR_URL=()
+            while IFS=$'\t' read -r cr_name cr_status cr_concl cr_url; do
+              if [ -z "${cr_name}" ]; then continue; fi
+              CR_CONCL["${cr_name}"]="${cr_status}/${cr_concl}"
+              CR_URL["${cr_name}"]="${cr_url}"
+            done <<< "${cr_tsv}"
+
+            bridged=(); broken=(); residual=()
+            for entry in "${REQUIRED_CHECKS[@]}"; do
+              ctx="${entry%%|*}"; wf="${entry#*|}"
+              if [ -z "${wf}" ]; then residual+=("${ctx}"); continue; fi
+              verdict="${CR_CONCL[${ctx}]:-ABSENT}"
+              if [ "${verdict}" != "completed/success" ]; then
+                echo "    NOT-GREEN ${ctx} -> ${verdict}"
+                # Post an explicit FAILURE rather than merely withholding a
+                # success. Withholding alone would leave any status a PREVIOUS
+                # run of this workflow bridged for the same SHA standing — so a
+                # job that was green and is now red (a re-run, a flake) could
+                # still be sitting green on the commit. Overwrite it.
+                gh api -X POST "repos/${REPO}/statuses/${sha}" \
+                  -f state=failure \
+                  -f context="${ctx}" \
+                  -f description="Real run on this commit did not conclude success (${verdict})" \
+                  -f target_url="${CR_URL[${ctx}]:-${RUN_URL}}" >/dev/null
+                broken+=("${ctx}=${verdict}")
+                continue
+              fi
+              echo "    GREEN     ${ctx} -> ${CR_URL[${ctx}]}"
               gh api -X POST "repos/${REPO}/statuses/${sha}" \
                 -f state=success \
                 -f context="${ctx}" \
-                -f description="Auto-passed: release PR only modifies version metadata" \
-                -f target_url="${RUN_URL}" >/dev/null
+                -f description="Real run on this exact commit concluded success — see target URL" \
+                -f target_url="${CR_URL[${ctx}]}" >/dev/null
+              bridged+=("${ctx}")
             done
 
-            # DRIFT CONTROL. We just marked every context we KNOW about as green
-            # and nothing is failing, so this PR should be mergeable. If GitHub
-            # still reports BLOCKED, the most likely explanation is that
-            # protection requires a context missing from the list above — the
-            # exact silent failure that has already happened twice. This cannot
-            # be confirmed from here (GITHUB_TOKEN cannot read protection), so
-            # the message says what was measured and stops short of asserting a
-            # cause it did not establish.
+            if [ "${#broken[@]}" -gt 0 ]; then
+              echo "::error::PR #${num}: ${#broken[@]} required context(s) did NOT conclude success"
+              echo "::error::on ${sha}: ${broken[*]}"
+              echo "::error::'ABSENT' means the producing workflow ran but published no check run"
+              echo "::error::under that exact name — a REQUIRED_CHECKS mapping defect, not a pass."
+              echo "::error::Anything else is a genuine red result. Each of these was posted as a"
+              echo "::error::FAILURE status on ${sha}, so the release is blocked, which is the point."
+              exit 1
+            fi
+            echo "  bridged ${#bridged[@]} real result(s) onto ${sha}."
+
+            # ---------------------------------------------------------------
+            # 5. RESIDUAL synthetic statuses — contexts no workflow can publish.
+            #    This list should be EMPTY. Every entry is shouted so the residue
+            #    is visible on every release instead of being silent (#3393).
+            # ---------------------------------------------------------------
+            if [ "${#residual[@]}" -gt 0 ]; then
+              echo "::warning::${#residual[@]} required context(s) have NO workflow that can publish them, so a SYNTHETIC status is being posted for each. This is the part of #3393 that is NOT fixed:"
+              for ctx in "${residual[@]}"; do
+                echo "::warning::  SYNTHETIC (no real run produced this): ${ctx}"
+                gh api -X POST "repos/${REPO}/statuses/${sha}" \
+                  -f state=success \
+                  -f context="${ctx}" \
+                  -f description="SYNTHETIC — no workflow publishes this context; release PR only bumps version metadata" \
+                  -f target_url="${RUN_URL}" >/dev/null
+              done
+            else
+              echo "::notice::0 synthetic statuses posted for PR #${num} — all ${#bridged[@]} required contexts were bridged from real runs that concluded success on ${sha}."
+            fi
+
+            # DRIFT / DIAGNOSIS CONTROL. Distinguish, without guessing, between
+            # (a) a real failing check, (b) real checks still running, (c) the
+            # permanent human-approval gate, and (d) REQUIRED_CHECKS drift.
             state=""
             for _ in 1 2 3 4; do
               sleep 15
               state=$(gh pr view "${num}" --repo "${REPO}" --json mergeStateStatus --jq '.mergeStateStatus')
-              [ "$state" != "UNKNOWN" ] && [ "$state" != "BLOCKED" ] && break
+              if [ "$state" != "UNKNOWN" ] && [ "$state" != "BLOCKED" ]; then break; fi
             done
             echo "  post-verify: mergeStateStatus=${state}"
             if [ "$state" = "BLOCKED" ]; then
-              failing=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup \
-                --jq '[.statusCheckRollup[]? | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED")) | .name // .context] | join(", ")')
-              # A THIRD cause of BLOCKED-with-nothing-failing, and the most common
-              # one: branch protection requires an approving review
-              # (required_approving_review_count=1 as of 2026-08-13, measured on
-              # PR #3382, which sat BLOCKED with all 14 required contexts green and
-              # reviewDecision=REVIEW_REQUIRED). GITHUB_TOKEN cannot read branch
-              # protection, but reviewDecision lives on the PULL REQUEST object and
-              # IS readable here — so this case can be distinguished rather than
-              # guessed at. Blaming REQUIRED_CONTEXTS drift for a missing approval
-              # would be exactly the R7 violation this file's post-verify exists to
-              # prevent: asserting a cause the code did not establish.
-              #
-              # A bot cannot approve a PR, so this is a PERMANENT human gate on every
-              # release PR, not a defect. It is reported as a notice and does not fail
-              # the run.
+              # Scope the diagnosis to the REQUIRED contexts. A non-required job
+              # going red must not be reported as "BLOCKED with failing required
+              # checks" — that would assert a cause this code did not establish.
+              req_json="$(printf '%s\n' "${REQUIRED_CHECKS[@]}" | cut -d'|' -f1 \
+                | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+              rollup=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup --jq '.statusCheckRollup')
+              failing=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+                '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
+                       | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT"))
+                       | .name // .context] | unique | join(", ")')
+              inflight=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+                '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
+                       | select(((.status // "") == "QUEUED") or ((.status // "") == "IN_PROGRESS") or ((.state // "") == "PENDING"))
+                       | .name // .context] | unique | join(", ")')
+              # The most common BLOCKED cause: branch protection requires an
+              # approving review (required_approving_review_count=1 as of
+              # 2026-08-13). GITHUB_TOKEN cannot read branch protection, but
+              # reviewDecision lives on the PULL REQUEST object and IS readable
+              # here — so this case is distinguished, not guessed at. Blaming
+              # REQUIRED_CHECKS drift for a missing approval would be exactly the
+              # R7 violation this post-verify exists to prevent.
               review=$(gh pr view "${num}" --repo "${REPO}" --json reviewDecision --jq '.reviewDecision // ""')
               if [ -n "$failing" ]; then
-                echo "::warning::Release PR #${num} is BLOCKED with failing checks: ${failing}. That is a real failure, not list drift."
+                echo "::error::Release PR #${num} is BLOCKED with FAILING required contexts: ${failing}."
+                echo "::error::Every status this workflow posts is bridged from a real run that"
+                echo "::error::concluded success on this exact commit, so a red one here is a"
+                echo "::error::genuine result — the release is broken and must not merge."
+                exit 1
+              elif [ -n "$inflight" ]; then
+                echo "::notice::Release PR #${num} is BLOCKED because required contexts are still pending: ${inflight}. Nothing was bridged for them, which is correct — they will be picked up by the next run of this workflow once their real runs conclude."
               elif [ "$review" = "REVIEW_REQUIRED" ]; then
                 echo "::notice::Release PR #${num} is BLOCKED solely because branch protection requires an approving review, and no check is failing. This is the expected steady state — GITHUB_TOKEN cannot approve a PR. A human (or a PAT-backed reviewer) must approve #${num} to release. NOT context drift."
               else
-                echo "::error::Release PR #${num} is still BLOCKED after posting all ${#REQUIRED_CONTEXTS[@]}"
-                echo "::error::contexts this workflow knows about. NO check is failing, and"
-                echo "::error::reviewDecision is '${review}' so a missing approval is NOT the cause"
-                echo "::error::either. This workflow cannot read branch protection to confirm what"
-                echo "::error::is left, but the known cause of THIS narrowed signal is"
-                echo "::error::REQUIRED_CONTEXTS having gone stale (it has drifted twice: PR #815,"
-                echo "::error::and 2026-08-13). Compare"
+                echo "::error::Release PR #${num} is still BLOCKED. No required context is"
+                echo "::error::failing, none is pending, and reviewDecision is '${review}' so a"
+                echo "::error::missing approval is NOT the cause either. The known cause of THIS"
+                echo "::error::narrowed signal is REQUIRED_CHECKS having gone stale (it has drifted"
+                echo "::error::twice: PR #815, and 2026-08-13) — protection requires a context this"
+                echo "::error::file does not know about, so nothing was ever posted for it. Compare"
                 echo "::error::'gh api repos/${REPO}/branches/main/protection/required_status_checks'"
-                echo "::error::against the list in this file and add what is missing."
+                echo "::error::against the table in this file and add what is missing."
+                echo "::error::This workflow cannot read branch protection to confirm that, so it"
+                echo "::error::names the known cause without asserting it is the only one."
                 exit 1
               fi
             fi

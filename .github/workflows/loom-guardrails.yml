@@ -18,6 +18,15 @@ on:
     branches:
       - main
       - "feat/**"
+  # REQUIRED-CHECK DISPATCH (#3393). release-please's PR is authored by
+  # GITHUB_TOKEN and GitHub suppresses its `pull_request` trigger, so the
+  # required `guardrails` context never ran on a release PR and was replaced by
+  # a SYNTHETIC status. `workflow_dispatch` is the documented exception
+  # GITHUB_TOKEN *may* trigger, so release-please.yml dispatches this workflow
+  # against the release branch. No step here reads PR context (the `gh pr view`
+  # calls inside scripts/ci resolve FIXED PR numbers, not the current one), so
+  # every guard behaves identically under a dispatch.
+  workflow_dispatch:
 
 permissions:
   contents: read

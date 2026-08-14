@@ -28,6 +28,17 @@ on:
   pull_request:
   push:
     branches: [main]
+  # REQUIRED-CHECK DISPATCH (#3393). release-please's PR is authored by
+  # GITHUB_TOKEN, whose events GitHub suppresses — so `next build (node 20)` and
+  # `vitest (node 20)` never ran on a release PR and were replaced by SYNTHETIC
+  # statuses. That is precisely where the residual risk lived: release-please
+  # bumps the version in apps/fiab-console/package.json via extra-files, and
+  # NOTHING compiled that bumped tree before it landed on main.
+  # `workflow_dispatch` is the documented exception GITHUB_TOKEN *may* trigger.
+  # Under a dispatch the change-detection step below takes its non-PR branch
+  # (`range=HEAD~1...HEAD`), and the release commit DOES touch
+  # apps/fiab-console/package.json — so the full real `next build` + vitest run.
+  workflow_dispatch:
 
 # CONCURRENCY: keyed per-COMMIT on main, per-ref on PRs.
 #
