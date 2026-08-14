@@ -18,6 +18,15 @@ on:
     branches:
       - main
       - "feat/**"
+  # REQUIRED-CHECK DISPATCH (#3393). release-please's PR is authored by
+  # GITHUB_TOKEN and GitHub suppresses its `pull_request` trigger, so the
+  # required `guardrails` context never ran on a release PR and was replaced by
+  # a SYNTHETIC status. `workflow_dispatch` is the documented exception
+  # GITHUB_TOKEN *may* trigger, so release-please.yml dispatches this workflow
+  # against the release branch. No step here reads PR context (the `gh pr view`
+  # calls inside scripts/ci resolve FIXED PR numbers, not the current one), so
+  # every guard behaves identically under a dispatch.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -115,6 +124,17 @@ jobs:
       - name: editor-read-failure-honesty (a failed read must never look like empty content — C19 data loss)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-editor-read-failure-honesty.mjs
+      # The sibling above resolves `useQuery` fetchers, which is 34 of ~540
+      # surfaces — #3281 measured 506 that use useState+useEffect+fetch and were
+      # invisible to it, while the gate still printed OK over 4058 scanned files.
+      # Widening it BY REGEX was tried first and produced only false positives
+      # (see check-loaded-flag-honesty.mjs). This guard instead parses the TSX
+      # structurally and asks whether the empty-state claim is reachable on a
+      # path where the read FAILED. Its embedded controls run on every
+      # invocation, so a drifted analyser cannot present a clean codebase.
+      - name: empty-claim-read-evidence (an empty-state claim must be gated on the read having SUCCEEDED — #3281)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-empty-claim-read-evidence.mjs
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-quadratic-trims.mjs
@@ -670,6 +690,29 @@ jobs:
       - name: 'teardown-not-on-schedule (a cron must never be able to tear down an estate)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-teardown-not-on-schedule.mjs
+      # Same lanes, the step immediately AFTER the one everyone was fixing. Both
+      # sovereign smoke tests read
+      #     env:
+      #       CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+      # A workflow `env:` value is a LITERAL — `${{ }}` is substituted during
+      # workflow processing and everything else is passed through verbatim — so
+      # that TEXT became the console URL. Non-empty, so the smoke script's own
+      # `${CONSOLE_URL:?}` guard passed and every probe curled a nonsense
+      # address: a step that runs and cannot pass (#3137). actionlint cannot see
+      # it (an `env:` value is never a `run:` body, so no shellcheck rule
+      # applies) and check-workflow-unset-vars.mjs cannot either (the name IS
+      # assigned — with garbage).
+      #
+      # The self-test runs FIRST and separately: this guard's population is ZERO
+      # once #3137 is fixed, so "no findings" would otherwise be
+      # indistinguishable from a matcher that stopped matching. The self-test
+      # drives the analyser over the verbatim defect and fails if it is silent.
+      - name: 'workflow-env-substitution self-test (must detect the #3137 CONSOLE_URL defect)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-workflow-env-substitution.mjs --self-test
+      - name: 'workflow-env-substitution (an `env:` value must not carry shell substitution — #3137)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-workflow-env-substitution.mjs
       # The sibling of the guard above, and the reason it had to be written at
       # all: a DISABLED workflow produces no runs, so `gh run list` shows no
       # failures and the dashboard row is indistinguishable from a lane with

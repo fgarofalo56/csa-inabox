@@ -251,6 +251,7 @@ jobs:
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
       - name: Provision
+        id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
           # azd REQUIRES this and cannot derive it (#3137). See the guard in the
@@ -358,6 +359,53 @@ jobs:
               --remediate \
               -- azd provision --no-prompt
           fi
+
+          # ── The smoke test's target: RESOLVED, never assumed (#3137) ────────
+          # Byte-identical defect to deploy-fiab-gcch.yml, fixed the same way:
+          # the smoke step below carried
+          #     env:
+          #       CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+          # A workflow `env:` value is a LITERAL, so that TEXT reached the smoke
+          # script as its console URL and every probe curled a nonsense address.
+          # Guard: scripts/ci/check-workflow-env-substitution.mjs.
+          #
+          # THIS LANE'S EXTRA STATE, stated rather than papered over:
+          # gcc.bicepparam deliberately never sets deployAppsEnabled (there is no
+          # GCC image producer — #3078), so this deploy stands up the hub and
+          # ZERO Container Apps. There is no Console to probe and no Front Door
+          # public ingress (frontDoorPublicUrl is gated on deployAppsEnabled).
+          # The expectation is READ FROM THE PARAM FILE rather than hardcoded, so
+          # the day #3078 lands and apps are enabled, a missing public URL fails
+          # this step instead of silently continuing to skip the smoke test.
+          PARAMS="$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc.bicepparam"
+          # An UNREADABLE param file is UNKNOWN, not "apps are off": `grep` inside
+          # an `if` is exempt from `set -e`, so a missing path would silently take
+          # the else branch and skip the smoke test with a confident wrong reason.
+          if [ ! -r "$PARAMS" ]; then
+            echo "::error::cannot read $PARAMS, so it is NOT established whether this deploy stands up a Console. Refusing to skip the smoke test on an unread file."
+            exit 1
+          fi
+          if grep -qE '^[[:space:]]*param[[:space:]]+deployAppsEnabled[[:space:]]*=[[:space:]]*true' "$PARAMS"; then
+            EXPECT_CONSOLE=true
+          else
+            EXPECT_CONSOLE=false
+          fi
+          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
+            echo "console_url=" >> "$GITHUB_OUTPUT"
+            echo "::notice::topology=dlz-attach stamps no Console, so there is no endpoint to smoke-test."
+          elif [ "$EXPECT_CONSOLE" != "true" ]; then
+            echo "console_url=" >> "$GITHUB_OUTPUT"
+            echo "::warning::$(basename "$PARAMS") does not set deployAppsEnabled=true (#3078), so this deploy stands up no Console. The external smoke test is skipped and this run does NOT establish that the GCC boundary serves Loom."
+          else
+            # Two separate command substitutions, not a pipeline: each one's
+            # failure is its own and `set -e` stops on either. The values are
+            # held in a shell variable and never echoed — the azd environment
+            # carries AZURE_SUBSCRIPTION_ID.
+            AZD_VALUES=$(azd env get-values --output json)
+            SMOKE_URL=$(printf '%s' "$AZD_VALUES" | node "$GITHUB_WORKSPACE/scripts/ci/resolve-smoke-console-url.mjs")
+            echo "console_url=$SMOKE_URL" >> "$GITHUB_OUTPUT"
+            echo "::notice::smoke-test target (public ingress): $SMOKE_URL"
+          fi
         working-directory: platform/fiab/azd
 
       # Front Door -> ACA env Private Link approval (#3203). CLOUD PARITY: the
@@ -437,10 +485,14 @@ jobs:
           fi
 
       - name: Smoke test (GCC-specific — no Direct Lake)
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # Runs only when the Provision step RESOLVED a reachable target. Empty in
+        # exactly two DECLARED states — topology=dlz-attach, and gcc.bicepparam
+        # deploying no apps (#3078) — and the resolver FAILS the provision step
+        # in every other case, so this cannot silently absorb a resolution defect.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.provision.outputs.console_url != ''
         run: bash .github/scripts/fiab-smoke-test.sh
         env:
-          CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+          CONSOLE_URL: ${{ steps.provision.outputs.console_url }}
           SKIP_DIRECT_LAKE_TEST: true   # No F-SKU in GCC
 
       # NEVER ON THE SCHEDULE — identical defect to deploy-fiab-gcch.yml. The
