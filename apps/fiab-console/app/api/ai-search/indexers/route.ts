@@ -10,14 +10,15 @@
  * Honest 503 gate when LOOM_AI_SEARCH_SERVICE is unset. Real AI Search REST.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
-  listIndexers, createIndexer, deleteIndexer, runIndexer, resetIndexer, getIndexerStatus,
+  listIndexers, createIndexer, deleteIndexer, runIndexer, resetIndexer,
   getIndexer, updateIndexerSchedule, validateScheduleInterval,
   resetIndexerDocs, resetIndexerSkills, resyncIndexer, updateIndexerFieldMappings,
   searchConfigGate, SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
 import { buildFieldMappings, normalizeResyncOptions } from '@/lib/azure/search-indexer-shapes';
+import { readIndexerHealth } from '@/lib/azure/search-indexer-health';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,17 +36,13 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
   const g = gate(); if (g) return g;
   try { return NextResponse.json({ ok: true, indexers: await listIndexers() }); }
   catch (e: any) { return fail(e); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
 
@@ -101,8 +98,12 @@ export async function POST(req: NextRequest) {
         );
         return NextResponse.json({ ok: true, action: 'setSchedule', indexer, definition: def });
       }
-      const status = await getIndexerStatus(indexer);
-      return NextResponse.json({ ok: true, action: 'status', indexer, status });
+      // #3384 — the raw payload's top-level `status` is 'running' for an
+      // indexer that has failed 50 times in a row. It is still returned (it is
+      // real service state), but the ONLY signal a caller may branch on is
+      // `health`, derived from lastResult + executionHistory + doc count.
+      const { status, health } = await readIndexerHealth(indexer);
+      return NextResponse.json({ ok: true, action: 'status', indexer, status, health });
     } catch (e: any) { return fail(e); }
   }
 
@@ -129,14 +130,12 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, indexer });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const name = req.nextUrl.searchParams.get('name');
   if (!name) return NextResponse.json({ ok: false, error: 'name query param required' }, { status: 400 });
   try { await deleteIndexer(name); return NextResponse.json({ ok: true }); }
   catch (e: any) { return fail(e); }
-}
+});

@@ -61,6 +61,7 @@ import {
   reorderSkill, availableSourcePaths, contextOptions,
   buildKnowledgeStore, emptyKnowledgeStore, knowledgeStoreIsEmpty, parseSkillset,
 } from '@/lib/azure/skillset-chain';
+import { type IndexerHealth, indexerHealthColor } from '@/lib/azure/search-indexer-shapes';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
@@ -97,10 +98,21 @@ interface DebugSessionRow { name: string; indexerName?: string; status?: string;
 
 type CreateGroup = 'index' | 'indexer' | 'datasource' | 'skillset' | 'synonymmap' | 'alias' | 'debugsession';
 
-function statusColor(status?: string) {
-  if (status === 'success') return 'success' as const;
-  if (status === 'inProgress') return 'warning' as const;
-  if (status === 'transientFailure' || status === 'error') return 'danger' as const;
+/**
+ * Badge colour for a DEBUG SESSION status (`running` / `complete` / …).
+ *
+ * #3384 — this used to be a single `statusColor` shared with the indexer badge.
+ * That was the bug in miniature: for a debug session `running` genuinely means
+ * "in flight", but for an INDEXER the top-level `running` means only "the
+ * indexer object is enabled" and says nothing about whether any run succeeded.
+ * One colour function over two different meanings painted a 50-failure indexer
+ * neutral. Indexer badges now use `indexerHealthColor` over the derived
+ * verdict; this one is scoped to debug sessions and nothing else.
+ */
+function debugSessionColor(status?: string) {
+  if (status === 'success' || status === 'complete') return 'success' as const;
+  if (status === 'inProgress' || status === 'running') return 'warning' as const;
+  if (status === 'transientFailure' || status === 'persistentFailure' || status === 'error' || status === 'failed') return 'danger' as const;
   return 'informative' as const;
 }
 
@@ -488,7 +500,7 @@ export function AiSearchServiceTree({
   const [debugStorageConn, setDebugStorageConn] = useState('');
 
   // Per-indexer last status (lazy, on demand).
-  const [indexerStatus, setIndexerStatus] = useState<Record<string, string>>({});
+  const [indexerHealth, setIndexerHealth] = useState<Record<string, IndexerHealth>>({});
 
   // ---- create dialog ----
   const [createGroup, setCreateGroup] = useState<CreateGroup | null>(null);
@@ -695,8 +707,23 @@ export function AiSearchServiceTree({
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setError(body.error || `${action} failed`); setBusy(false); return; }
       if (action === 'status') {
-        const st = body.status?.lastResult?.status || body.status?.status || 'unknown';
-        setIndexerStatus((m) => ({ ...m, [indexer]: st }));
+        // #3384 — this used to be
+        //     const st = body.status?.lastResult?.status || body.status?.status || 'unknown';
+        // whose SECOND fallback is the top-level service field: an indexer with
+        // no lastResult rendered the literal string "running" as its status.
+        // The route now returns a derived `health` verdict; a payload without
+        // one is recorded as an explicit unknown, never as a service string.
+        const h: IndexerHealth | undefined = body.health;
+        setIndexerHealth((m) => ({
+          ...m,
+          [indexer]: h ?? {
+            verdict: 'unknown',
+            healthy: false,
+            observed: 'The status route returned no health verdict, so nothing was observed about this indexer.',
+            consecutiveFailures: 0,
+            runsExamined: 0,
+          },
+        }));
       }
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
@@ -839,7 +866,11 @@ export function AiSearchServiceTree({
                       <span>{ix.name}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         {ix.targetIndexName && <Caption1>→ {ix.targetIndexName}</Caption1>}
-                        {indexerStatus[ix.name] && <Badge size="small" appearance="filled" color={statusColor(indexerStatus[ix.name])}>{indexerStatus[ix.name]}</Badge>}
+                        {indexerHealth[ix.name] && (
+                          <Tooltip content={indexerHealth[ix.name].observed} relationship="description">
+                            <Badge size="small" appearance="filled" color={indexerHealthColor(indexerHealth[ix.name].verdict)}>{indexerHealth[ix.name].verdict}</Badge>
+                          </Tooltip>
+                        )}
                         <Tooltip content="Run now" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy} onClick={() => indexerAction('run', ix.name)} aria-label={`Run ${ix.name}`} /></Tooltip>
                         <Tooltip content="Reset (full reindex next run)" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowCounterclockwise16Regular />} disabled={busy} onClick={() => indexerAction('reset', ix.name)} aria-label={`Reset ${ix.name}`} /></Tooltip>
                         <Tooltip content="Check status" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={() => indexerAction('status', ix.name)} aria-label={`Status of ${ix.name}`} /></Tooltip>
@@ -977,7 +1008,7 @@ export function AiSearchServiceTree({
                           <span>{dbg.name}</span>
                           <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                             {dbg.indexerName && <Caption1>↳ {dbg.indexerName}</Caption1>}
-                            {(dbg.status || dbg.provisioningState) && <Badge size="small" appearance="filled" color={statusColor(dbg.status)}>{dbg.status || dbg.provisioningState}</Badge>}
+                            {(dbg.status || dbg.provisioningState) && <Badge size="small" appearance="filled" color={debugSessionColor(dbg.status)}>{dbg.status || dbg.provisioningState}</Badge>}
                             {debugPortalUrl && <Tooltip content="Open session trace in portal (visual skill graph is portal-only)" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => window.open(`${debugPortalUrl}/${encodeURIComponent(dbg.name)}`, '_blank', 'noopener')} aria-label={`Open ${dbg.name} in portal`} /></Tooltip>}
                             <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => delDebugSession(dbg.name)} aria-label={`Delete ${dbg.name}`} /></Tooltip>
                           </span>

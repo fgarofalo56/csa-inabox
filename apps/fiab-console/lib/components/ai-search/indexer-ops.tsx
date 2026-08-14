@@ -33,9 +33,10 @@ import {
   History20Regular, ArrowRouting20Regular,
 } from '@fluentui/react-icons';
 import {
-  type FieldMappingRow, type IndexerRun,
+  type FieldMappingRow, type IndexerRun, type IndexerHealth,
   MAPPING_FUNCTIONS, MAPPING_FUNCTION_LABELS, emptyFieldMappingRow,
   functionHasParameters, parseIndexerMappings, parseExecutionHistory, runDuration,
+  indexerHealthColor,
   RESYNC_OPTIONS, RESYNC_OPTION_LABELS,
 } from '@/lib/azure/search-indexer-shapes';
 
@@ -68,6 +69,10 @@ function runColor(status: string): 'success' | 'warning' | 'danger' | 'informati
   if (status === 'inProgress') return 'informative';
   if (status === 'transientFailure') return 'warning';
   if (status === 'reset') return 'informative';
+  // #3384 — `persistentFailure` used to fall through to 'informative', i.e. a
+  // permanently-broken run rendered NEUTRAL. Every terminal failure status is
+  // now coloured as a failure.
+  if (status === 'persistentFailure' || status === 'failed') return 'danger';
   return status === 'error' ? 'danger' : 'informative';
 }
 
@@ -92,6 +97,7 @@ export function IndexerOpsPanel({ route, indexer, skillsetName }: IndexerOpsPane
   // Execution history
   const [history, setHistory] = useState<IndexerRun[] | null>(null);
   const [overall, setOverall] = useState<string | undefined>(undefined);
+  const [health, setHealth] = useState<IndexerHealth | null>(null);
   const [histLoading, setHistLoading] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
 
@@ -116,6 +122,12 @@ export function IndexerOpsPanel({ route, indexer, skillsetName }: IndexerOpsPane
     if (j?.ok) {
       const parsed = parseExecutionHistory(j.status);
       setHistory(parsed.executionHistory);
+      // #3384 — the header badge used to render `parsed.overallStatus`, i.e.
+      // the raw top-level field, which reads "running" on an indexer that has
+      // failed all 50 of its retained runs. The badge now renders the derived
+      // HEALTH verdict from the route; the raw field is kept only as the
+      // caption beside it, labelled for what it is.
+      setHealth(j.health ?? null);
       setOverall(parsed.overallStatus);
     } else {
       setHistory([]);
@@ -269,12 +281,32 @@ export function IndexerOpsPanel({ route, indexer, skillsetName }: IndexerOpsPane
         {/* Execution history */}
         <AccordionItem value="history">
           <AccordionHeader icon={<History20Regular />}>
-            Execution history — {indexer}{overall ? <Badge size="small" appearance="tint" color={runColor(overall)} style={{ marginLeft: tokens.spacingHorizontalS }}>{overall}</Badge> : null}
+            Execution history — {indexer}
+            {health ? (
+              <Badge size="small" appearance="tint" color={indexerHealthColor(health.verdict)} style={{ marginLeft: tokens.spacingHorizontalS }}>
+                {health.verdict}
+              </Badge>
+            ) : null}
           </AccordionHeader>
           <AccordionPanel>
             <div className={s.card}>
+              {/* #3384 — the derived verdict, ALWAYS above the grid. A pipeline
+                  that has failed every retained run must be impossible to miss,
+                  and the raw service field ("running") must never stand in for
+                  health. Non-healthy verdicts carry their remediation inline. */}
+              {health && health.verdict !== 'healthy' && (
+                <MessageBar intent={health.verdict === 'failed' ? 'error' : health.verdict === 'degraded' ? 'warning' : 'info'} layout="multiline">
+                  <MessageBarBody>
+                    <strong>{health.verdict}</strong> — {health.observed}
+                    {health.remediation ? <><br />{health.remediation}</> : null}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               <div className={s.head}>
-                <Caption1>Per-run start/end, items processed / failed, and expandable warnings + errors from <code>GET /indexers/{indexer}/status</code>.</Caption1>
+                <Caption1>
+                  Per-run start/end, items processed / failed, and expandable warnings + errors from <code>GET /indexers/{indexer}/status</code>.
+                  {overall ? ` Service indexer status: "${overall}" — this reports only that the indexer object is enabled, not that any run succeeded.` : ''}
+                </Caption1>
                 <div className={s.spacer} />
                 <Button size="small" icon={<ArrowSync16Regular />} disabled={histLoading} onClick={loadStatus}>Refresh</Button>
               </div>
