@@ -136,7 +136,7 @@ function notConfiguredHint(missing: string): MipNotConfiguredHint {
         reason: 'Required for the "apply label to a Loom item" action.',
       },
     ],
-    followUp: 'Operator action: (1) set LOOM_MIP_ENABLED=true on the loom-console Container App, (2) run scripts/csa-loom/grant-graph-approles.sh (or the post-deploy-bootstrap.yml job "Grant MIP+DLP Graph AppRoles") to grant the Console UAMI both Graph AppRoles, (3) Tenant Admin issues admin consent at https://portal.azure.com → Entra ID → Enterprise applications → Console UAMI → Permissions. Until consented, every call returns 403.',
+    followUp: 'Set LOOM_MIP_ENABLED=true on the loom-console Container App. The two Graph AppRoles are assigned to the Console UAMI by csa-loom-post-deploy-bootstrap.yml ("Grant MIP+DLP Graph AppRoles") — for a MANAGED IDENTITY that assignment IS the grant, so there is NO admin-consent click and nothing to run by hand. If that bootstrap step reported 403, the deploy principal lacks AppRoleAssignment.ReadWrite.All on Microsoft Graph; a Global Administrator grants it ONCE, then re-running the bootstrap completes unattended.',
   };
 }
 

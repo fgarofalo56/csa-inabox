@@ -307,9 +307,11 @@ export function SensitivityLabelDialog({
                         </li>
                         <li>
                           <Text>
-                            Grant the Console UAMI the Microsoft Graph app-roles via{' '}
-                            <span className={s.code}>scripts/csa-loom/grant-graph-approles.sh</span>{' '}
-                            (or the post-deploy-bootstrap "Grant MIP+DLP Graph AppRoles" job), then admin-consent.
+                            The Microsoft Graph app-roles are assigned to the Console UAMI by the
+                            post-deploy-bootstrap{' '}
+                            <span className={s.code}>Grant MIP+DLP Graph AppRoles</span> job — re-run it rather
+                            than granting them by hand. A managed-identity app-role assignment IS the grant;
+                            there is no admin-consent step.
                           </Text>
                         </li>
                       </ol>

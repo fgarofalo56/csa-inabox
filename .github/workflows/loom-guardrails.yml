@@ -94,6 +94,9 @@ jobs:
       - name: fitness-messages (every adoption check records what it OBSERVED; unknown never claims non-existence)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-fitness-messages.mjs
+      - name: platform-runs-it (no in-product string tells the operator to run a script a workflow already runs)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-platform-runs-it-not-you.mjs
       - name: route-guards (cross-tenant BFF authorization)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-route-guards.mjs

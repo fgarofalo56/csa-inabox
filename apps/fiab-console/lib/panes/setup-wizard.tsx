@@ -1484,7 +1484,12 @@ export function SetupWizardPane() {
                 every resource Loom will bind to and what it changes about each,
                 every "deploy new" reached without full coverage, and blockers. */}
             {planner.plan && planner.rows && (
-              <PlanReviewStep plan={planner.plan} rows={planner.rows} />
+              <PlanReviewStep
+                plan={planner.plan}
+                rows={planner.rows}
+                onValidate={planner.validateAdoptions}
+                validating={planner.validating}
+              />
             )}
 
             {/* Visual architecture diagram of the planned deployment (reuses the

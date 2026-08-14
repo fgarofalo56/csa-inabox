@@ -148,6 +148,26 @@ export function canManageResourceGroup(perms: ArmPermission[]): boolean {
   return RG_MANAGE_ACTIONS.every((a) => isActionAllowed(perms, a));
 }
 
+/**
+ * PURE: given the caller's ARM permission entries at ANY scope, can they create
+ * a role assignment there?
+ *
+ * This is the `canGrant` half of the adoption fitness context
+ * (`lib/deploy/fitness-probe.ts`). It decides between two very different
+ * remediations on an adopted resource: when the caller CAN grant, the deploy
+ * creates the Console identity's role assignment itself with the operator's own
+ * token (`platform-will-fix`, per auto-bind-by-default.md §5); when it cannot,
+ * fitness.ts names an Owner / User Access Administrator as the human action.
+ *
+ * Owner → true. Contributor → FALSE, and that is correct rather than a bug:
+ * Contributor carries `Microsoft.Authorization/*\/write` in its notActions, and
+ * `isActionAllowed` subtracts notActions. Reader → false.
+ */
+export function canGrantRolesAtScope(perms: ArmPermission[]): boolean {
+  if (!perms || perms.length === 0) return false;
+  return isActionAllowed(perms, 'Microsoft.Authorization/roleAssignments/write');
+}
+
 /** PURE: which of the required RPs are NOT in the Registered set. */
 export function missingProviders(
   registered: Record<string, string | undefined>,

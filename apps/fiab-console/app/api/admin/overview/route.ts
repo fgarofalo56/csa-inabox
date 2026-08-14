@@ -82,11 +82,11 @@ export type OverviewTiles = Record<OverviewTileKey, TileCount>;
 const COSMOS_HINT =
   'Cosmos not reachable — set LOOM_COSMOS_ENDPOINT (admin-plane/main.bicep apps[] env) and grant the Console UAMI "Cosmos DB Built-in Data Contributor" at account scope.';
 const USERS_HINT =
-  'Set LOOM_IDENTITY_PICKER_ENABLED=true and grant the Console UAMI Graph User.Read.All (run scripts/csa-loom/grant-identity-graph-approles.sh, then admin-consent).';
+  'Set LOOM_IDENTITY_PICKER_ENABLED=true. The Console UAMI\'s Graph User.Read.All is assigned by the csa-loom-post-deploy-bootstrap "Grant Identity Picker Graph AppRoles" step — re-run that job rather than granting it by hand.';
 const ARM_HINT =
   'Set LOOM_SUBSCRIPTION_ID (+ any LOOM_*_RG) and grant the Console UAMI "Monitoring Reader"/"Reader" on the Loom subscription.';
 const MIP_HINT =
-  'Set LOOM_MIP_ENABLED=true and grant the Console UAMI Graph InformationProtectionPolicy.Read.All (run scripts/csa-loom/grant-graph-approles.sh, then admin-consent).';
+  'Set LOOM_MIP_ENABLED=true. The Console UAMI\'s Graph InformationProtectionPolicy.Read.All is assigned by the csa-loom-post-deploy-bootstrap "Grant MIP+DLP Graph AppRoles" step — re-run that job rather than granting it by hand (a managed-identity app-role assignment needs no admin consent).';
 
 /**
  * Run one tile's backend fetch, converting any failure into an honest gate.

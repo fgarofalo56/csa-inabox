@@ -503,19 +503,19 @@ reconciled — the Databricks workspace URL, a cross-region ADX cluster URI.
 
 ## Step 4 — what is validated, per service
 
-**Today, day-0 adoption validates existence only.** A candidate qualifies
-because its ARM type matches. SKU, region, network reachability and RBAC are
-**not** checked before the deploy runs on the adopt path.
+**Day-0 adoption is validated by the platform.** `POST /api/setup/validate-adoption`
+reads each resource you chose to adopt and attaches a fitness verdict to the
+plan before anything deploys. You do not run these checks by hand.
 
-The one place fitness *is* checked today is the **day-2 attach** flow —
+The one place fitness *is* also checked is the **day-2 attach** flow —
 `/admin/landing-zones` → *Attach existing service* — whose preflight checks
 reachability, network posture, and emits the exact
 `az role assignment create` when a grant is missing. That surface is
 registry-level (it records an attachment and wires runtime env); it is not the
 day-0 deploy input.
 
-> **The blocking gate is wired; the evaluator is not (#3014 — merged, not
-> deployed until the next roll).** `POST /api/setup/deploy` now calls
+> **How the gate and the evaluator fit together (#3014, #3376 — merged, not
+> deployed until the next roll).** `POST /api/setup/deploy` calls
 > `assertPlanIsDeployable()` before ANY deploy tier fires: an adopt decision
 > whose fitness verdict is `unusable` or `unknown` is refused with 422 and the
 > observed blocking checks, and a structurally incoherent plan (adopt of a
@@ -524,15 +524,14 @@ day-0 deploy input.
 > `app/api/setup/__tests__/deploy-fitness-gate.test.ts` goes red if that caller
 > is removed.
 >
-> What still has **no production producer** is `evaluateFitness()` itself: no
-> route reads the live resource and attaches a verdict to the plan, so an
-> adoption nobody evaluated passes the gate un-checked (deliberate — refusing
-> every un-evaluated adoption before an evaluator exists would dead-end
-> brownfield). Until the evaluator lands, the checks below are **yours to run
-> by hand** for anything you adopt.
+> The verdict itself now comes from `lib/deploy/fitness-probe.ts` via
+> `POST /api/setup/validate-adoption`, using **your** delegated ARM token (the
+> Console identity is the fallback). One control-plane `GET` per adopted
+> resource resolves C1–C3 and most of C5, two scoped authorization reads resolve
+> C4, and Cognitive Services accounts get a second `GET` for their model
+> deployments.
 
-The five criteria, as implemented in `fitness.ts` and as the gate applies them
-when a verdict is present:
+The five criteria, as implemented in `fitness.ts` and as the gate applies them:
 
 | Check | Establishes | Example failure |
 |---|---|---|
@@ -542,25 +541,35 @@ when a verdict is present:
 | **C4 RBAC** | the deploy identity holds — or can grant — the role the service needs | no `Microsoft.Authorization/roleAssignments/write` at that scope |
 | **C5 Family-specific** | the service-specific precondition | ADLS **without hierarchical namespace**; a Databricks workspace already assigned to a *different* Unity Catalog metastore; an AOAI account with no chat/embed deployment |
 
-**Run these yourself before you adopt.** The checks that most often bite, and
-how to run them by hand:
+### What the probe reads, and what it still cannot
 
-```bash
-# ADLS Gen2 must have HNS. This is create-time-only and cannot be turned on later.
-az storage account show -n <name> -g <rg> --query "isHnsEnabled"
+Everything below is read for you. The `az` commands are listed only so you can
+reproduce a verdict you disagree with — running them is not a step in the
+deployment.
 
-# AI Search tier — Free cannot host Loom's indexes.
-az search service show -n <name> -g <rg> --query "sku.name"
+| Resolved by the probe | The read behind it |
+|---|---|
+| ADLS hierarchical namespace (create-time-only) | `properties.isHnsEnabled` |
+| SKU / tier for every service, incl. AI Search and Databricks | `sku.name` / `sku.tier` |
+| Network posture — public, IP-restricted, private-endpoint | `properties.publicNetworkAccess`, `networkAcls.defaultAction`, `privateEndpointConnections` |
+| AOAI chat + embedding deployments | the `/deployments` sub-resource |
+| ADX streaming ingestion, Synapse managed VNet, Event Hubs throughput units, Stream Analytics job state, Cosmos serverless capability, APIM VNet mode, Purview tenant | each service's own `properties` |
+| Whether Loom holds the role, or you can grant it | `roleAssignments` filtered to the Console principal, plus your effective `permissions` at that scope |
 
-# AOAI/Foundry: Loom needs a chat AND an embedding deployment to exist.
-az cognitiveservices account deployment list -n <name> -g <rg> -o table
+**Still `unknown`, and therefore still blocking.** These need a data plane the
+plan-time probe holds no token for. They return the `unknown` verdict with the
+exact remediation — never a silent pass, and never `unusable`:
 
-# Databricks must be Premium (Unity Catalog + SCIM require it).
-az databricks workspace show -n <name> -g <rg> --query "sku.name"
+| Check | Why the control plane cannot answer it |
+|---|---|
+| `aisearch.indexHeadroom` | index count/quota is a data-plane `servicestats` read |
+| `purview.rootCollectionAdmin`, `purview.capacityUnits` | Purview data-plane collection + capacity APIs |
+| `databricks.metastoreAssignment` | the Databricks **account** API, not ARM |
+| `cosmos.containerNameCollision`, `aml.computeQuota` | two-level sub-resource enumeration |
 
-# Network posture — public, IP-restricted, or private-endpoint only.
-az resource show --ids <resource-id> --query "properties.publicNetworkAccess"
-```
+If you adopt one of those services today the plan still blocks, and the verdict
+tells you which read failed. That gap is tracked — it is a shortfall in Loom,
+not an instruction to you.
 
 ---
 
@@ -645,13 +654,24 @@ source temp/<name>.byo-exports.sh   # or export them again
 bash scripts/csa-loom/grant-navigator-rbac.sh
 ```
 
-**What it covers, and what it does not.** `grant-navigator-rbac.sh` grants AI
-Search, APIM, AOAI, Cosmos, Event Hubs, Synapse and Data Factory. It does
-**not** grant ADX/Kusto, Databricks, Stream Analytics or Maps on an adopted
-resource — grant those by hand (the role per service is in
-[Discovery and adoption](discovery-and-adoption.md#9-what-loom-changes-about-an-adopted-resource)).
-The ADX case is the one that most often looks like a product bug rather than a
-missing grant — see [the ADX grant caveat](#the-adx-grant-caveat).
+**What it covers.** `grant-navigator-rbac.sh` grants the Console identity its
+per-service role on every adopted resource: AI Search, APIM, AOAI, Cosmos,
+Event Hubs, Synapse, Data Factory, and — since #3376 — **ADX/Kusto, Databricks,
+Stream Analytics and Azure Maps**. Nothing in that list is yours to grant by
+hand. ADX gets two grants, because an ARM role alone does not confer KQL
+management: Contributor on the cluster *and* an `AllDatabasesAdmin` Kusto
+principal assignment, both at the adopted cluster's own subscription and
+resource group.
+
+> **Separate, still-open gap — the ADX *cluster's own* identity.** The grants
+> above are for the **Console** identity acting *on* your cluster. They do
+> nothing for the reverse direction: an adopted ADX cluster's managed identity
+> still needs **Event Hubs Data Receiver** on the DLZ namespace and **Storage
+> Blob Data Contributor** on the DLZ lake to ingest, because `adx-cluster.bicep`
+> carries those grants as module params and is skipped entirely when
+> `existingAdxClusterName` is set. See
+> [the ADX grant caveat](#the-adx-grant-caveat) — that section is still
+> accurate and this script does not close it.
 
 **If it fails:**
 

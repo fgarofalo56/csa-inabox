@@ -8,10 +8,24 @@
 # This script adds the navigator grants that bootstrap does NOT cover:
 #   - Event Hubs namespace : Azure Event Hubs Data Owner + Contributor
 #   - Cosmos (DLZ account) : DocumentDB Account Contributor (control-plane CRUD)
-#   - ADX cluster          : AllDatabasesAdmin principal-assignment (KQL mgmt)
+#   - ADX cluster          : Contributor + AllDatabasesAdmin principal-assignment
 #   - AI Search service    : Search Service Contributor + Index Data Contributor
 #   - AOAI account         : Cognitive Services Contributor (Foundry editor)
+#   - Databricks workspace : Contributor (ARM management plane)
+#   - Stream Analytics job : Contributor
+#   - Azure Maps account   : Contributor
 #   - DLZ resource group   : Reader (ARM list for DLZ-hosted navigators)
+#
+# BYO / ADOPTED resources are covered by the SAME run. Every service Loom binds
+# — including ADX/Kusto, Databricks, Stream Analytics and Azure Maps — is granted
+# here at the adopted resource's own subscription + RG. Nothing on the adopted
+# path is left for the operator to grant by hand (.claude/rules/
+# auto-bind-by-default.md §5). ADX needs BOTH an ARM Contributor role AND a Kusto
+# principal assignment: the ARM role alone does NOT grant KQL management.
+#
+# Still csa-loom-post-deploy-bootstrap.yml's job (data-plane, not ARM):
+# Databricks SCIM, Synapse SQL data-plane, Graph AppRoles, Power Platform +
+# Dataverse.
 #
 # Resource names are DISCOVERED (reuse-first), so this works whether the
 # resource was provisioned by Loom or already existed. Idempotent.
@@ -27,6 +41,13 @@ DLZ_RG="${DLZ_RG:-rg-csa-loom-dlz-single-eastus2}"
 UAMI_PRINCIPAL="${CONSOLE_UAMI_PRINCIPAL:-00000000-0000-0000-0000-00000000000a}"
 UAMI_CLIENT="${CONSOLE_UAMI_CLIENT:-00000000-0000-0000-0000-00000000000b}"
 TENANT_ID="${AZURE_TENANT_ID:-$(az account show --query tenantId -o tsv 2>/dev/null)}"
+# ARM endpoint for the CURRENT cloud. Hard-coding management.azure.com makes
+# every `az rest` below a Commercial-only call, which cloud-parity.md forbids —
+# Gov is management.usgovcloudapi.net. Read it from the active cloud profile and
+# strip az's trailing slash; fall back to Commercial only if the read fails.
+ARM_ENDPOINT="$(az cloud show --query endpoints.resourceManager -o tsv 2>/dev/null | tr -d '\r')"
+ARM_ENDPOINT="${ARM_ENDPOINT%/}"
+ARM_ENDPOINT="${ARM_ENDPOINT:-https://management.azure.com}"
 
 az account set --subscription "$SUB" 2>/dev/null || true
 echo "== CSA Loom navigator RBAC =="
@@ -87,6 +108,29 @@ byo_grant "$COG_CONTRIB"    "${EXISTING_AOAI:-${EXISTING_AOAI_ACCOUNT:-}}" "${EX
 byo_grant "$APIM_CONTRIB"   "${EXISTING_APIM:-}"    "${EXISTING_APIM_RG:-}"    "${EXISTING_APIM_SUB:-}"    "Microsoft.ApiManagement/service"   "API Management Service Contributor (reused)"
 byo_grant "$CONTRIBUTOR"    "${EXISTING_SYNAPSE:-}" "${EXISTING_SYNAPSE_RG:-}" "${EXISTING_SYNAPSE_SUB:-}" "Microsoft.Synapse/workspaces"      "Contributor on Synapse workspace (reused)"
 byo_grant "$ADF_CONTRIB"    "${EXISTING_ADF:-}"     "${EXISTING_ADF_RG:-}"     "${EXISTING_ADF_SUB:-}"     "Microsoft.DataFactory/factories"   "Data Factory Contributor (reused)"
+# ADX / Databricks / Stream Analytics / Azure Maps reused resources. Roles are
+# the canonical ones from apps/fiab-console/lib/azure/attached-service-kinds.ts
+# (all four map to roleGuid CONTRIBUTOR) so attach-preflight names exactly what
+# is granted here. Previously these four were left for the operator to grant by
+# hand on the adopted path — that was an auto-bind-by-default.md §5 violation.
+byo_grant "$CONTRIBUTOR"    "${EXISTING_KUSTO_CLUSTER:-}"        "${EXISTING_KUSTO_RG:-}"      "${EXISTING_KUSTO_SUB:-}"      "Microsoft.Kusto/clusters"                 "Contributor on ADX cluster (reused)"
+byo_grant "$CONTRIBUTOR"    "${EXISTING_DATABRICKS:-}"           "${EXISTING_DATABRICKS_RG:-}" "${EXISTING_DATABRICKS_SUB:-}" "Microsoft.Databricks/workspaces"          "Contributor on Databricks workspace (reused)"
+byo_grant "$CONTRIBUTOR"    "${EXISTING_ASA_JOB:-}"              "${EXISTING_ASA_RG:-}"        "${EXISTING_ASA_SUB:-}"        "Microsoft.StreamAnalytics/streamingjobs"  "Contributor on Stream Analytics job (reused)"
+byo_grant "$CONTRIBUTOR"    "${EXISTING_AZURE_MAPS_ACCOUNT:-}"   "${EXISTING_AZURE_MAPS_RG:-}" "${EXISTING_AZURE_MAPS_SUB:-}" "Microsoft.Maps/accounts"                  "Contributor on Azure Maps account (reused)"
+# BYO ADX also needs the Kusto principal assignment. The ARM Contributor role
+# above is management-plane only — it does NOT grant KQL management (.show /
+# .create / .drop across databases). Same deterministic ARM PUT the discovery
+# block near the end uses, but at the ADOPTED cluster's own sub + RG.
+if [[ -n "${EXISTING_KUSTO_CLUSTER:-}" && -n "${EXISTING_KUSTO_RG:-}" ]]; then
+  BYO_KUSTO_SUB="${EXISTING_KUSTO_SUB:-$SUB}"
+  BYO_PA_URL="${ARM_ENDPOINT}/subscriptions/$BYO_KUSTO_SUB/resourceGroups/${EXISTING_KUSTO_RG}/providers/Microsoft.Kusto/clusters/${EXISTING_KUSTO_CLUSTER}/principalAssignments/loom-console-alladmin?api-version=2024-04-13"
+  BYO_PA_BODY="{\"properties\":{\"principalId\":\"$UAMI_PRINCIPAL\",\"principalType\":\"App\",\"role\":\"AllDatabasesAdmin\",\"tenantId\":\"$TENANT_ID\"}}"
+  MSYS_NO_PATHCONV=1 az rest --method put --url "$BYO_PA_URL" --body "$BYO_PA_BODY" -o none 2>&1 \
+    | grep -vi "already\|exists\|Conflict" || true
+  echo "  ✓ BYO ADX AllDatabasesAdmin (reused ${EXISTING_KUSTO_CLUSTER})"
+elif [[ -n "${EXISTING_KUSTO_CLUSTER:-}" ]]; then
+  echo "  - BYO ADX AllDatabasesAdmin: set EXISTING_KUSTO_RG to grant — skipping"
+fi
 # Cosmos reused account also needs the data-plane Built-in Data Contributor.
 if [[ -n "${EXISTING_COSMOS_ACCOUNT:-}" && -n "${EXISTING_COSMOS_ACCOUNT_RG:-}" ]]; then
   echo "  BYO Cosmos data-plane: Built-in Data Contributor (reused ${EXISTING_COSMOS_ACCOUNT})"
@@ -238,7 +282,7 @@ fi
 # UAMI's OBJECT id with principalType App — matching adx-db-inner.bicep.
 KUSTO_NAME="$(q kusto cluster list -g "$ADMIN_RG" --query "[0].name" -o tsv)"
 if [[ -n "$KUSTO_NAME" ]]; then
-  PA_URL="https://management.azure.com/subscriptions/$SUB/resourceGroups/$ADMIN_RG/providers/Microsoft.Kusto/clusters/$KUSTO_NAME/principalAssignments/loom-console-alladmin?api-version=2024-04-13"
+  PA_URL="${ARM_ENDPOINT}/subscriptions/$SUB/resourceGroups/$ADMIN_RG/providers/Microsoft.Kusto/clusters/$KUSTO_NAME/principalAssignments/loom-console-alladmin?api-version=2024-04-13"
   PA_BODY="{\"properties\":{\"principalId\":\"$UAMI_PRINCIPAL\",\"principalType\":\"App\",\"role\":\"AllDatabasesAdmin\",\"tenantId\":\"$TENANT_ID\"}}"
   MSYS_NO_PATHCONV=1 az rest --method put --url "$PA_URL" --body "$PA_BODY" -o none 2>&1 \
     | grep -vi "already\|exists\|Conflict" || true
@@ -249,5 +293,7 @@ fi
 
 echo
 echo "== Navigator RBAC complete. Allow ~60s for AAD propagation before validation. =="
-echo "   Note: Databricks (SCIM), Synapse (data-plane), APIM, Graph, Power Platform,"
-echo "   and Dataverse grants are handled by csa-loom-post-deploy-bootstrap.yml."
+echo "   Adopted (BYO) ADX/Kusto, Databricks, Stream Analytics and Azure Maps are"
+echo "   granted HERE — no hand-grants are left for the operator on the adopted path."
+echo "   Still handled by csa-loom-post-deploy-bootstrap.yml (data-plane, not ARM):"
+echo "   Databricks SCIM, Synapse SQL data-plane, Graph AppRoles, Power Platform + Dataverse."

@@ -39,8 +39,8 @@ const MIP_GATE_BODY = JSON.stringify({
       },
     ],
     followUp:
-      'Operator action: (1) set LOOM_MIP_ENABLED=true on the loom-console Container App, '
-      + '(2) run scripts/csa-loom/grant-graph-approles.sh, (3) Tenant Admin issues admin consent.',
+      'Set LOOM_MIP_ENABLED=true on the loom-console Container App. The two Graph AppRoles are assigned '
+      + 'to the Console UAMI by csa-loom-post-deploy-bootstrap.yml ("Grant MIP+DLP Graph AppRoles").',
   },
 });
 
