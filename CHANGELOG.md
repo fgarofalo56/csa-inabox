@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.97.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.96.0...csa-inabox-v0.97.0) (2026-08-14)
+
+
+### Features
+
+* **ci:** judge the 506 surfaces the read-honesty guard could not see ([#3281](https://github.com/fgarofalo56/csa-inabox/issues/3281)) ([#3409](https://github.com/fgarofalo56/csa-inabox/issues/3409)) ([dcea0b8](https://github.com/fgarofalo56/csa-inabox/commit/dcea0b8e6eeebe091b883aa0afbfe70871e67ad6))
+
+
+### Bug Fixes
+
+* **bluegreen:** the roll lane has failed 4/4 on a conflict the template never expressed ([#3399](https://github.com/fgarofalo56/csa-inabox/issues/3399)) ([#3401](https://github.com/fgarofalo56/csa-inabox/issues/3401)) ([817a829](https://github.com/fgarofalo56/csa-inabox/commit/817a829bca3ce758c0ff9ad440fab203e08c9d43))
+* **ci:** the lane-state guard had ONE host — so it could not see its own lane switched off ([#3403](https://github.com/fgarofalo56/csa-inabox/issues/3403)) ([d859df4](https://github.com/fgarofalo56/csa-inabox/commit/d859df45965265abe5a80cb5ef632fde0242c5f0)), closes [#3345](https://github.com/fgarofalo56/csa-inabox/issues/3345)
+* **cloud-parity:** the Gov image-tag fix was half a fix — three blind spots and an invisible override ([#3161](https://github.com/fgarofalo56/csa-inabox/issues/3161)) ([#3410](https://github.com/fgarofalo56/csa-inabox/issues/3410)) ([474cfc1](https://github.com/fgarofalo56/csa-inabox/commit/474cfc1a82e9ae92573e11a4ed1be05cbed1c910))
+* **deploy:** the Gov smoke test's CONSOLE_URL was dead shell text — the step after the one everyone was fixing (P0) ([#3405](https://github.com/fgarofalo56/csa-inabox/issues/3405)) ([5d572e1](https://github.com/fgarofalo56/csa-inabox/commit/5d572e16ede1047d190343ea3bf3055c728cb991))
+* **release:** release PRs run REAL required checks — dispatch instead of synthetic statuses ([#3393](https://github.com/fgarofalo56/csa-inabox/issues/3393)) ([#3407](https://github.com/fgarofalo56/csa-inabox/issues/3407)) ([a7d1df5](https://github.com/fgarofalo56/csa-inabox/commit/a7d1df51f12f83a5da7c9c0db4dd560167560e78))
+* **roll:** the "did the console image build?" gate went green without looking ([#3388](https://github.com/fgarofalo56/csa-inabox/issues/3388)) ([#3406](https://github.com/fgarofalo56/csa-inabox/issues/3406)) ([106f78e](https://github.com/fgarofalo56/csa-inabox/commit/106f78ea3ef3f374c9fbe800f3c1177d767a0738))
+* **roll:** the blue-green gate failed closed and then named a cause it never established ([#3411](https://github.com/fgarofalo56/csa-inabox/issues/3411)) ([#3412](https://github.com/fgarofalo56/csa-inabox/issues/3412)) ([f630e86](https://github.com/fgarofalo56/csa-inabox/commit/f630e8683194d03e28c915fb5e2b68561a66d9fb))
+
 ## [0.96.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.95.4...csa-inabox-v0.96.0) (2026-08-13)
 
 
