@@ -46,6 +46,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, relative, sep } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT = process.cwd();
 const RESOLVER = 'resolve-acr-digest.sh';
@@ -74,6 +75,19 @@ function tracked() {
 const EXEMPT = /(^|\/)(scripts\/ci\/resolve-acr-digest\.sh|scripts\/ci\/test-resolve-acr-digest\.sh)$|__tests__|\/tests\//;
 
 // A DIGEST read: the az command AND a digest projection on the same command.
+//
+// ON THE SAME *COMMAND*, NOT THE SAME PHYSICAL LINE (#3420). `az acr repository
+// show` is routinely wrapped, and `--query digest` is exactly the argument that
+// ends up on a continuation:
+//
+//     az acr repository show \
+//       --name "$ACR" --image "$REPO:$TAG" \
+//       --query digest -o tsv
+//
+// Judged per physical line, line 1 carries DIGEST_CMD and no DIGEST_QUERY and
+// line 3 carries DIGEST_QUERY and no DIGEST_CMD, so NEITHER line matches and the
+// bypass is invisible. 18 of the 49 `az acr repository` sites in this tree end
+// in a backslash, so this was not a hypothetical. Continuations are folded first.
 const DIGEST_CMD = /az\s+acr\s+(?:repository\s+show|manifest\s+show-metadata)\b/;
 const DIGEST_QUERY = /--query\s+["']?(?:\.)?digest["']?|\.digest\b|"digest"/;
 
@@ -92,15 +106,15 @@ for (const rel of files) {
   if (text.includes(RESOLVER)) resolverRefs++;
   if (!DIGEST_CMD.test(text)) continue;
 
-  text.split(/\r?\n/).forEach((raw, i) => {
+  for (const { line, text: raw } of readLogicalLines(text)) {
     // Prose about the rule is not the rule. Comment markers for yml/sh (#) and
     // js (// or *) — only when they LEAD the line, so an inline `#` in a string
     // is never mistaken for a comment.
-    if (/^\s*(#|\/\/|\*)/.test(raw)) return;
-    if (!DIGEST_CMD.test(raw)) return;
-    if (!DIGEST_QUERY.test(raw)) return; // existence/metadata read, not a digest
-    violations.push({ file: rel, line: i + 1, text: raw.trim().slice(0, 150) });
-  });
+    if (/^\s*(#|\/\/|\*)/.test(raw)) continue;
+    if (!DIGEST_CMD.test(raw)) continue;
+    if (!DIGEST_QUERY.test(raw)) continue; // existence/metadata read, not a digest
+    violations.push({ file: rel, line, text: raw.trim().slice(0, 150) });
+  }
 }
 
 if (files.length === 0) {
