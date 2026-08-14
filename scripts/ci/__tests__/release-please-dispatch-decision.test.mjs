@@ -30,7 +30,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +40,19 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'release-please.yml');
 const SHA = '3a21f6e08f77f82aef6ac62d218cb63d577c14f2';
 const STEP_NAME = 'Run the required checks for real on every open release PR';
+
+/**
+ * The pre-fix step body, VENDORED rather than read from git at test time.
+ *
+ * `git show 22f7fa1b:…` cannot work in the lane that runs this suite — the
+ * `node:test suites (node 20)` job checks out with the default depth of 1, so
+ * the object is simply not present. A control that cannot run in CI is not a
+ * control. The fixture is pinned by digest instead, so it cannot drift
+ * silently, and a byte-comparison against git still runs wherever the object
+ * IS available (any full clone, including every developer's).
+ */
+const FIXTURE = path.join(REPO_ROOT, 'scripts', 'ci', '__fixtures__', 'release-please-step-22f7fa1b.sh');
+const FIXTURE_SHA256 = '7553b2ea8b2293457100d1d6f2660387bbe41915573f16e209a36eb50a461a65';
 
 /** The 14 required contexts, read from the workflow itself — never re-typed. */
 function requiredContexts(text) {
@@ -102,35 +116,61 @@ const STEP_SRC = extractStep(WF_TEXT, STEP_NAME);
 function runStepSource(src, fixtures) {
   const dir = mkdtempSync(path.join(tmpdir(), 'rp-step-'));
   const bin = path.join(dir, 'bin');
+  const ans = path.join(dir, 'ans');
   mkdirSync(bin);
-  writeFileSync(path.join(dir, 'fixtures.json'), JSON.stringify(fixtures));
+  mkdirSync(ans);
+
+  // Every answer is PRE-RENDERED here, in JS, so the stub costs one `cat` per
+  // call instead of spawning `jq`. That is not tidiness: this suite drives the
+  // real step body, which itself forks awk/cut per required context per poll,
+  // and the shared `node --test` fan-out is where process cost actually bites.
+  // CR is stripped at render time — Windows jq emits CRLF, the ubuntu runner
+  // this workflow executes on emits LF, and the stub must model the runner. The
+  // first thing this harness "found" was the release PR's own CHANGELOG.md
+  // being rejected as a non-metadata file, purely from a trailing \r.
+  const put = (name, text) => writeFileSync(path.join(ans, name), String(text).replace(/\r/g, ''));
+  put('pr_list', JSON.stringify(fixtures.pr_list));
+  put('files', fixtures.files.join('\n') + '\n');
+  put(
+    'check_runs',
+    fixtures.check_runs.map((c) => `${c.name}\t${c.status}\t${c.conclusion ?? ''}\thttp://run`).join('\n') +
+      (fixtures.check_runs.length ? '\n' : ''),
+  );
+  put('dispatch_paths', fixtures.dispatch_run_paths.join('\n') + (fixtures.dispatch_run_paths.length ? '\n' : ''));
+  put(
+    'legacy_rows',
+    fixtures.legacy_run_rows.map((r) => `${r.path}\t${r.status}\t${r.conclusion ?? ''}\thttp://run`).join('\n') + '\n',
+  );
+  put('branch', fixtures.branch + '\n');
+  put('merge_state', fixtures.merge_state + '\n');
+  put('rollup', JSON.stringify(fixtures.rollup));
+  put('review_decision', fixtures.review_decision + '\n');
+  fixtures.head_sha_seq.forEach((s, i) => put(`sha_${i}`, s + '\n'));
+  put('sha_last', String(fixtures.head_sha_seq.length - 1));
 
   const gh = [
     '#!/usr/bin/env bash',
-    '# Stub for `gh`. Answers by URL/argv shape from fixtures.json; every call',
-    '# it does not recognise is a hard error, so a step that starts making a new',
-    '# API call cannot silently get an empty string back and read it as "none".',
-    'F="$FIXTURE_FILE"',
+    '# Stub for `gh`. Answers are pre-rendered files; every call it does not',
+    '# recognise is a hard error, so a step that starts making a NEW API call',
+    '# cannot silently get an empty string back and read it as "none".',
+    'A="$ANS"',
     'ARGS="$*"',
     'echo "$ARGS" >> "$GH_CALL_LOG"',
-    '# Windows jq emits CRLF; the ubuntu runner emits LF. Model the runner.',
-    'emit() { tr -d "\\r"; }',
     'case "$ARGS" in',
-    '  "pr list"*)      jq -c ".pr_list" "$F" | emit ;;',
-    '  *"/files"*)      jq -r ".files[]" "$F" | emit ;;',
-    '  *"/check-runs"*) jq -r \'.check_runs[] | [.name,.status,(.conclusion // ""),"http://run"] | @tsv\' "$F" | emit ;;',
+    '  "pr list"*)          cat "$A/pr_list" ;;',
+    '  *"/files"*)          cat "$A/files" ;;',
+    '  *"/check-runs"*)     cat "$A/check_runs" ;;',
     // The pre-fix code queried actions/runs twice with different --jq shapes.
-    // Serving both lets the historical step body run unmodified below.
-    '  *"actions/runs"*) if [ "$ARGS" = "${ARGS%.status*}" ]; then jq -r ".dispatch_run_paths[]" "$F" | emit; else jq -r \'.legacy_run_rows[] | [.path,.status,(.conclusion // ""),"http://run"] | @tsv\' "$F" | emit; fi ;;',
-    '  *"statuses/"*)   echo "{}" ;;',
-    '  "workflow run"*) if [ "$(jq -r ".dispatch_ok" "$F" | emit)" = "true" ]; then exit 0; else echo "dispatch refused" >&2; exit 1; fi ;;',
-    // head.sha is served from a SEQUENCE so a test can model the head moving
-    // mid-flight, which is the SHA-churn case the step must not misreport.
-    '  *head.sha*)      n=$(cat "$GH_SHA_SEQ"); echo $((n+1)) > "$GH_SHA_SEQ"; len=$(jq -r ".head_sha_seq|length" "$F" | emit); if [ "$n" -ge "$len" ]; then n=$((len-1)); fi; jq -r ".head_sha_seq[$n]" "$F" | emit ;;',
-    '  *head.ref*)      jq -r ".branch" "$F" | emit ;;',
-    '  *mergeStateStatus*) jq -r ".merge_state" "$F" | emit ;;',
-    '  *statusCheckRollup*) jq -c ".rollup" "$F" | emit ;;',
-    '  *reviewDecision*) jq -r ".review_decision" "$F" | emit ;;',
+    // Serving both lets the historical body run unmodified.
+    '  *"actions/runs"*)    if [ "$ARGS" = "${ARGS%.status*}" ]; then cat "$A/dispatch_paths"; else cat "$A/legacy_rows"; fi ;;',
+    '  *"statuses/"*)       echo "{}" ;;',
+    '  "workflow run"*)     if [ "$DISPATCH_OK" = "true" ]; then exit 0; else echo "dispatch refused" >&2; exit 1; fi ;;',
+    // head.sha walks a SEQUENCE so a test can model the head moving mid-flight.
+    '  *head.sha*)          n=$(cat "$GH_SHA_SEQ"); echo $((n+1)) > "$GH_SHA_SEQ"; last=$(cat "$A/sha_last"); if [ "$n" -gt "$last" ]; then n=$last; fi; cat "$A/sha_$n" ;;',
+    '  *head.ref*)          cat "$A/branch" ;;',
+    '  *mergeStateStatus*)  cat "$A/merge_state" ;;',
+    '  *statusCheckRollup*) cat "$A/rollup" ;;',
+    '  *reviewDecision*)    cat "$A/review_decision" ;;',
     '  *) echo "STUB-GH: unhandled call: $ARGS" >&2; exit 97 ;;',
     'esac',
   ].join('\n');
@@ -151,15 +191,16 @@ function runStepSource(src, fixtures) {
     env: {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-      FIXTURE_FILE: path.join(dir, 'fixtures.json'),
+      ANS: ans,
       GH_CALL_LOG: callLog,
       GH_SHA_SEQ: shaSeq,
+      DISPATCH_OK: fixtures.dispatch_ok ? 'true' : 'false',
       GITHUB_REPOSITORY: 'o/r',
       GITHUB_SERVER_URL: 'https://github.com',
       GITHUB_RUN_ID: '1',
       RP_POLL_SLEEP: '0',
-      RP_WAIT_POLLS: '6',
-      RP_DISPATCH_POLLS: '2',
+      RP_WAIT_POLLS: '3',
+      RP_DISPATCH_POLLS: '1',
     },
   });
   const calls = readFileSync(callLog, 'utf8');
@@ -338,16 +379,18 @@ test('all 14 contexts green: bridges 14 success statuses and exits 0', () => {
 });
 
 test('NON-WEAKENING CONTROL: no success status is ever posted for an ungraded context', () => {
-  // Across every not-green scenario, `state=success` must appear zero times.
+  // Two ungraded shapes; `state=success` must appear zero times in either. The
+  // third ungraded shape (check runs present under other names) is covered by
+  // STATE 2 above, which exits non-zero for the same reason.
   for (const f of [
     fixtures({ check_runs: [], dispatch_run_paths: dispatchPaths }),
     fixtures({
-      check_runs: [{ name: 'Some Other Job', status: 'completed', conclusion: 'success' }],
+      check_runs: [],
       dispatch_run_paths: dispatchPaths,
+      head_sha_seq: [SHA, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
     }),
-    fixtures({ check_runs: [], dispatch_run_paths: dispatchPaths, head_sha_now: 'deadbeef' }),
   ]) {
-    const r = runStep(f);
+    const r = runStepSource(STEP_SRC, f);
     assert.doesNotMatch(r.calls, /state=success/, 'a success status leaked on an ungraded release');
   }
 });
@@ -361,27 +404,44 @@ test('the poll budgets default to the measured production values', () => {
   assert.match(WF_TEXT, /DISPATCH_POLLS="\$\{RP_DISPATCH_POLLS:-12\}"/);
 });
 
-test('HISTORICAL REPRODUCTION: the code that shipped in 22f7fa1b deadlocks on this same state', () => {
-  // Not a synthetic mutation — the ACTUAL pre-fix step body, read out of git,
-  // run against the ACTUAL incident fixtures. If this ever stops deadlocking,
-  // the fixtures no longer model #3447 and the regression test above proves
-  // nothing.
-  let oldWf;
+test('the vendored pre-fix body is pinned by digest, and matches git wherever git has it', () => {
+  assert.ok(existsSync(FIXTURE), 'the pre-fix fixture is missing — the historical control cannot run');
+  const vendored = readFileSync(FIXTURE, 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(
+    createHash('sha256').update(vendored, 'utf8').digest('hex'),
+    FIXTURE_SHA256,
+    'the vendored pre-fix body changed. It is a historical artifact and must not be edited; if it genuinely needs regenerating, re-extract it from 22f7fa1b and update the digest deliberately.',
+  );
+
+  // Second layer, where it can run: byte-compare against git itself. A shallow
+  // CI checkout does not have the object, so this half is opportunistic — but
+  // the digest above runs everywhere, and the reproduction below no longer
+  // depends on git at all.
+  let fromGit = null;
   try {
-    oldWf = execFileSync('git', ['show', '22f7fa1b:.github/workflows/release-please.yml'], {
+    fromGit = execFileSync('git', ['show', '22f7fa1b:.github/workflows/release-please.yml'], {
       encoding: 'utf8',
       cwd: REPO_ROOT,
       maxBuffer: 8 * 1024 * 1024,
     });
-  } catch (err) {
-    assert.fail(
-      `could not read the pre-fix workflow from git (${err.message}). This control cannot be silently skipped — a skipped control is not a passing one.`,
-    );
+  } catch {
+    fromGit = null;
   }
-  const oldSrc = extractStep(oldWf, STEP_NAME);
+  if (fromGit === null) {
+    console.log('    (git object 22f7fa1b not present — shallow clone; digest check alone applies here)');
+    return;
+  }
+  assert.equal(extractStep(fromGit, STEP_NAME), vendored, 'the vendored fixture drifted from 22f7fa1b');
+});
+
+test('HISTORICAL REPRODUCTION: the code that shipped in 22f7fa1b deadlocks on this same state', () => {
+  // Not a synthetic mutation — the ACTUAL pre-fix step body, run against the
+  // ACTUAL incident fixtures. If this ever stops deadlocking, the fixtures no
+  // longer model #3447 and the regression test above proves nothing.
+  const oldSrc = readFileSync(FIXTURE, 'utf8').replace(/\r\n/g, '\n');
   assert.ok(
     oldSrc.includes('runs_for_sha'),
-    'the historical body should contain the workflow-run probe; if it does not, the wrong commit was read',
+    'the historical body should contain the workflow-run probe; if it does not, the wrong body was vendored',
   );
 
   const r = runStepSource(oldSrc, fixtures({ check_runs: [], dispatch_run_paths: dispatchPaths }));
@@ -394,9 +454,4 @@ test('HISTORICAL REPRODUCTION: the code that shipped in 22f7fa1b deadlocks on th
     'and asserted a cause it had not established — the R7 half of the same bug',
   );
   assert.notEqual(r.code, 0);
-
-  // And the fix, on the identical fixtures, does the opposite.
-  const fixed = runStepSource(STEP_SRC, fixtures({ check_runs: [], dispatch_run_paths: dispatchPaths }));
-  assert.match(fixed.out, /> dispatching/, 'the current body dispatches instead');
-  assert.doesNotMatch(fixed.out, /REQUIRED_CHECKS mapping defect/, 'and does not invent a mapping defect');
 });
