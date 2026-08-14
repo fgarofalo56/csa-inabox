@@ -122,7 +122,14 @@ export const RULES = [
     ],
     evidence: {
       file: WORKLOADS_ROUTE,
-      all: [/WORKLOAD_SEEDS/],
+      // Word-anchored, and keyed to the backstop's OWN marker rather than only
+      // the import name. MUTATION-PROVEN: an earlier version used a bare
+      // /WORKLOAD_SEEDS/ substring, which a rename to WORKLOAD_SEEDS_GONE still
+      // satisfied — the probe reported the backstop present while it was gone.
+      // `\b` rejects the rename, and `workloads-catalog-backstop` (written as
+      // `createdBy` by the backstop block alone) means deleting the LOGIC trips
+      // even when an unused import lingers behind.
+      all: [/WORKLOAD_SEEDS\b/, /workloads-catalog-backstop/],
       missing:
         'GET /api/workloads-catalog no longer carries its seed-derived backstop, so a fresh ' +
         'tenant renders an EMPTY workloads catalog again and the dev-console POST would be needed.',

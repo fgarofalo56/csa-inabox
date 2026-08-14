@@ -150,6 +150,25 @@ test('hasEvidence is FALSE when the bootstrap stops calling dataverse-add-appuse
 
 test('hasEvidence is FALSE when the workloads route loses its seed backstop', () => {
   const ev = rule('catalog-dev-console-post').evidence;
-  assert.equal(hasEvidence('import { WORKLOAD_SEEDS } from "@/lib/apps/workloads-catalog-seed";', ev), true);
+  const real =
+    'import { WORKLOAD_SEEDS } from "@/lib/apps/workloads-catalog-seed";\n' +
+    'createdBy: "workloads-catalog-backstop",';
+  assert.equal(hasEvidence(real, ev), true);
+  // The backstop block deleted, a stale import left behind.
+  assert.equal(
+    hasEvidence('import { WORKLOAD_SEEDS } from "@/lib/apps/workloads-catalog-seed";', ev),
+    false,
+  );
+  // REGRESSION (mutation-found): a bare /WORKLOAD_SEEDS/ substring probe let a
+  // rename to WORKLOAD_SEEDS_GONE keep the guard green while the backstop was
+  // gone. The word boundary must reject it.
+  assert.equal(
+    hasEvidence(
+      'import { WORKLOAD_SEEDS_GONE } from "@/lib/apps/workloads-catalog-seed";\n' +
+        'createdBy: "workloads-catalog-backstop",',
+      ev,
+    ),
+    false,
+  );
   assert.equal(hasEvidence('return NextResponse.json({ ok: true, workloads: resources });', ev), false);
 });
