@@ -28,11 +28,20 @@ vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: () => {} }));
 
 function req(url: string, init: RequestInit = {}) {
   const u = new URL(url);
+  // A real request ALWAYS carries Host — HTTP/1.1 requires it, and behind Front
+  // Door it also carries x-forwarded-host. This helper used to build empty
+  // Headers, which made the fixture model a request that cannot exist, and that
+  // is precisely what hid #3443: with no Host, a route reading the forwarded
+  // origin and a route reading its own URL are indistinguishable here while
+  // differing completely in production, where `nextUrl.origin` is the
+  // container's 0.0.0.0:3000 listen address. Callers can still override.
+  const headers = new Headers(init.headers || {});
+  if (!headers.has('host')) headers.set('host', u.host);
   return {
     url,
     method: (init.method || 'GET') as string,
     nextUrl: u,
-    headers: new Headers(init.headers || {}),
+    headers,
     json: async () => (init.body ? JSON.parse(String(init.body)) : {}),
   } as any;
 }
@@ -135,11 +144,33 @@ describe('GET /api/flightsql/connect', () => {
     expect(body.loomTransportNote).toContain('audited HTTP tier');
   });
 
-  it('points ticket acquisition at the audited route on the caller\'s OWN origin', async () => {
+  it('points ticket acquisition at the audited route on the FORWARDED origin', async () => {
     const { GET } = await import('../connect/route');
     const res = await GET(req('https://loom.contoso.com/api/flightsql/connect'), {} as any);
     const body = await res.json();
     expect(body.ticketMintUrl).toBe('https://loom.contoso.com/api/flightsql/session');
+  });
+
+  // #3443 REGRESSION. The production shape the old fixture could not express:
+  // `output: 'standalone'` with HOSTNAME=0.0.0.0 makes `nextUrl.origin` the
+  // CONTAINER's listen address, while the forwarded host carries the address the
+  // client actually reached. Reading the former handed clients
+  // https://0.0.0.0:3000/api/flightsql/session — in a copy-paste snippet, from a
+  // route whose own docstring forbids internal hosts.
+  //
+  // The two origins are DELIBERATELY different here. That is the whole point: a
+  // fixture where they agree cannot tell a correct route from a broken one.
+  it('#3443 — uses the forwarded host even when the request URL is the container address', async () => {
+    const { GET } = await import('../connect/route');
+    const res = await GET(
+      req('http://0.0.0.0:3000/api/flightsql/connect', {
+        headers: { host: '0.0.0.0:3000', 'x-forwarded-host': 'loom.contoso.com', 'x-forwarded-proto': 'https' },
+      }),
+      {} as any,
+    );
+    const body = await res.json();
+    expect(body.ticketMintUrl).toBe('https://loom.contoso.com/api/flightsql/session');
+    expect(body.ticketMintUrl).not.toContain('0.0.0.0');
   });
 
   it('never emits a secret or an internal container host in ANY snippet', async () => {

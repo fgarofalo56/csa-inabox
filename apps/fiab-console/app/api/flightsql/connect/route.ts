@@ -22,6 +22,7 @@
  */
 import { apiOk } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
+import { externalOrigin } from '@/lib/auth/auth-breaker';
 import {
   buildFlightSnippets,
   resolveFlightEndpoint,
@@ -37,7 +38,16 @@ export const GET = withSession(async (req) => {
   const sampleSql = (req.nextUrl.searchParams.get('sql') || '').trim().slice(0, 500);
   // The audited mint route, on the ORIGIN the caller actually reached us on —
   // never an internal container address.
-  const ticketMintUrl = new URL('/api/flightsql/session', req.nextUrl.origin).toString();
+  //
+  // #3443: this read `req.nextUrl.origin`, which is EXACTLY the internal
+  // container address this comment and invariant 2 above both forbid. Under
+  // `output: 'standalone'` with `HOSTNAME=0.0.0.0`, Next builds the handler's
+  // request URL from its own listen address (next-server.js:1312) and `NextURL`
+  // has no `x-forwarded-*` handling — so clients were handed
+  // `https://0.0.0.0:3000/api/flightsql/session` in a copy-paste snippet.
+  // `externalOrigin` reads the forwarded host, the same header this app already
+  // trusts for the OAuth redirect_uri. Same defect as #3442, different route.
+  const ticketMintUrl = new URL('/api/flightsql/session', externalOrigin(req.headers)).toString();
 
   const snippets = buildFlightSnippets({
     endpoint,
