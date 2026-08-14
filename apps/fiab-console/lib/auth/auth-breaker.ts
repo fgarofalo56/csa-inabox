@@ -65,11 +65,26 @@
  *   - Loop B, cookies working        → cookie counter fires (hop chain breaks
  *                                      because a successful callback redirects
  *                                      to `/`, not to sign-in).
- *   - Loop B, no cookie round-trips  → does not reach here and does not loop:
- *                                      `loom_seen` is also absent, so
- *                                      `reauthDestination()` sends the browser
- *                                      to `/welcome`, which never auto-forwards
- *                                      to Entra.
+ *   - Loop B, `loom_authtry` dropped → NOT COVERED. This is a known residual
+ *                                      gap, recorded rather than papered over.
+ *
+ * On that last case, precisely (deploy-integrity R7 — do not assert what was not
+ * established). An earlier revision of this comment claimed it "does not loop,
+ * because `loom_seen` is also absent, so `reauthDestination()` sends the browser
+ * to `/welcome`". That was an INFERENCE about one cookie from the behaviour of a
+ * different one, and it does not hold: `loom_seen` is `Path=/`, `Max-Age` 180
+ * days, written at some PREVIOUS successful login, while `loom_authtry` is
+ * `Path=/auth`, `Max-Age` 600s, minted now. A jar that still sends an old cookie
+ * while refusing new ones is ordinary (per-domain cookie-count eviction, an
+ * extension that blocks `Set-Cookie`, a policy applied after the first sign-in).
+ *
+ * In that state Loop B has NO counting channel: the callback succeeds, so it
+ * redirects to `/` and never mints a `?h=` hop, and the counter cookie it stamps
+ * is discarded. `loom_seen` is present, so the 401 reauth goes to `/auth/sign-in`
+ * rather than `/welcome`, and the loop runs unbounded. Bounding it needs a
+ * channel that survives a browser keeping nothing, on a path that does not pass
+ * back through `/auth/sign-in` — which is a larger change than this module, and
+ * is tracked separately rather than being implied fixed here.
  *
  * ── R7 (deploy-integrity): an error must not assert what it did not establish ──
  *
@@ -270,6 +285,63 @@ export function requestIsHttps(headers: Headers): boolean {
   if (proto) return proto.split(',')[0].trim().toLowerCase() === 'https';
   const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? '';
   return !host.startsWith('localhost') && !host.startsWith('127.0.0.1');
+}
+
+/**
+ * The origin the BROWSER actually reached us on — never the container's own
+ * listen address.
+ *
+ * ── Why this exists (the defect it fixes) ───────────────────────────────────
+ *
+ * The breaker's terminal redirect and `/auth/reset` were built with
+ * `new URL(path, req.url)`. In THIS deployment shape that is the internal listen
+ * address, so the breaker would have fired correctly and then sent the browser
+ * somewhere it cannot reach — replacing an infinite silent loop with a dead-end
+ * connection error, and never rendering the diagnosis page that is the entire
+ * point of #3334. Traced through Next 15.5.21's own source:
+ *
+ *   1. `next.config.mjs` sets `output: 'standalone'`; the Dockerfile runs
+ *      `node server.js` with `HOSTNAME=0.0.0.0` and `PORT=3000`.
+ *   2. The standalone server template (`next/dist/build/utils.js`) reads exactly
+ *      those two env vars and passes them to `startServer({ hostname, port })`.
+ *   3. `base-server.js` sets `this.fetchHostname = formatHostname(this.hostname)`.
+ *   4. `next-server.js#attachRequestMeta` then computes
+ *      ``initURL = `${protocol}://${this.fetchHostname}:${this.port}${req.url}` ``
+ *      whenever `fetchHostname && port` are set — which they are.
+ *   5. `NextRequestAdapter.fromNodeNextRequest` builds the route handler's
+ *      request URL from that `initURL`.
+ *
+ * So inside a route handler `req.url` — and `req.nextUrl.origin`, since `NextURL`
+ * contains no forwarded-header handling at all — is `https://0.0.0.0:3000`, not
+ * the public host. `NextResponse.redirect()` copies that straight into `Location`.
+ *
+ * Nothing in the pre-existing sign-in flow hit this, because every other
+ * outward-facing URL in it is already built from `x-forwarded-host` by a
+ * hand-rolled `origin()`/`redirectUri()` helper (auth/callback, auth/sign-in's
+ * `redirect_uri`, auth/sign-out). This is the same rule, named once.
+ *
+ * ── Trust ──────────────────────────────────────────────────────────────────
+ *
+ * `x-forwarded-host` is attacker-supplied in principle. It adds NO new trust
+ * here: it is the identical header this same flow already uses to build the
+ * OAuth `redirect_uri`, which is far more security-sensitive (and which Entra
+ * independently rejects with AADSTS50011 when it is not a registered URI). The
+ * redirect target is always a fixed relative path on that origin, so a forged
+ * host can only bounce the forger's own browser. Next itself backfills
+ * `x-forwarded-host` from `Host` when no proxy set one
+ * (`base-server.js`: `req.headers['x-forwarded-host'] ??= req.headers['host']`),
+ * so this is never worse than reading `Host` directly.
+ *
+ * Only the FIRST value is taken: chained proxies append, so the header can be a
+ * comma-separated list, and the left-most entry is the one the client used.
+ */
+export function externalOrigin(headers: Headers): string {
+  const raw = headers.get('x-forwarded-host') ?? headers.get('host') ?? '';
+  const host = raw.split(',')[0].trim();
+  // No Host at all is not a real browser request; keep the dev default rather
+  // than emitting a Location with an empty authority.
+  if (!host) return 'http://localhost:3000';
+  return `${requestIsHttps(headers) ? 'https' : 'http'}://${host}`;
 }
 
 function cookieFlags(secure: boolean): string {

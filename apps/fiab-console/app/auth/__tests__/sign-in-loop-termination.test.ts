@@ -121,6 +121,21 @@ import { AUTH_BREAKER_COOKIE, authBreakerMaxAttempts } from '@/lib/auth/auth-bre
 
 const ORIGIN = 'https://loom.example.test';
 
+/**
+ * What Next actually puts in `req.url` for this console, and therefore what the
+ * handlers see: `output: 'standalone'` + `HOSTNAME=0.0.0.0` + `PORT=3000` makes
+ * `next-server.js#attachRequestMeta` build the request URL from the CONTAINER'S
+ * OWN listen address, not from the Host header.
+ *
+ * The harness used to build requests on ORIGIN, which made `req.url` and the
+ * forwarded headers the same string — so a redirect built from `req.url` and one
+ * built from `x-forwarded-host` were indistinguishable here. That is precisely
+ * how the unreachable `Location: https://0.0.0.0:3000/auth/blocked` shipped in
+ * #3364 passed this suite. Modelling the real divergence is what stops the
+ * fixture from agreeing with the code by construction.
+ */
+const INTERNAL_ORIGIN = 'https://0.0.0.0:3000';
+
 // ── A cookie jar with the Path / Max-Age semantics that actually matter ─────
 
 interface Jar {
@@ -175,7 +190,11 @@ function request(jar: Jar, url: string): NextRequest {
   });
   const cookie = cookieHeader(jar, u.pathname);
   if (cookie) headers.set('cookie', cookie);
-  return new NextRequest(u, { headers });
+  // The URL carries the INTERNAL listen address (what Next hands the handler);
+  // the headers carry the public host (what the browser used). See
+  // INTERNAL_ORIGIN — keeping these two apart is what makes the harness able to
+  // catch a redirect built from the wrong one.
+  return new NextRequest(new URL(`${u.pathname}${u.search}`, INTERNAL_ORIGIN), { headers });
 }
 
 /**
@@ -307,6 +326,12 @@ describe('#3334 — the sign-in loop terminates', () => {
 
     expect(walk.terminated, `never terminated; trail: ${walk.trail.join(' -> ')}`).toBe(true);
     expect(walk.terminalPath).toBe('/auth/blocked');
+    // Terminating is worthless if the browser cannot REACH the page it was sent
+    // to. The Location must be on the origin the request arrived on, never on
+    // the container's own listen address (#3364 shipped the latter).
+    const terminalUrl = walk.trail[walk.trail.length - 1];
+    expect(terminalUrl.startsWith(`${ORIGIN}/auth/blocked`), `unreachable Location: ${terminalUrl}`).toBe(true);
+    expect(terminalUrl).not.toContain('0.0.0.0');
     // Bounded by the configured maximum, with a little slack for the initiating
     // hop and the terminal redirect itself.
     expect(walk.hops).toBeLessThanOrEqual(authBreakerMaxAttempts() * 2 + 4);
@@ -363,6 +388,34 @@ describe('#3334 — the sign-in loop terminates', () => {
     const jar = newJar([AUTHFLOW_COOKIE_NAME, AUTH_BREAKER_COOKIE, 'loom_session', 'loom_seen']);
     const walk = await walkSignIn(jar);
     expect(walk.terminated).toBe(false);
+  });
+
+  it('LOOP A — with NO cookies the verdict cannot persist, so every fresh entry is RE-BOUNDED', async () => {
+    // The honest contract, asserted rather than implied.
+    //
+    // With the counter cookie present the breaker is terminal: re-entering
+    // /auth/sign-in keeps landing on /auth/blocked (proved by the "terminal
+    // response is TERMINAL" case below). With a browser that keeps NOTHING there
+    // is by construction no channel to persist the verdict in — the hop counter
+    // lives in the OAuth `state`, and a fresh entry mints a fresh state — so the
+    // breaker RE-ARMS.
+    //
+    // What that does and does not mean: the loop is never unbounded and never
+    // silent — each user-initiated entry runs at most maxAttempts round trips and
+    // ends on a diagnosis page. It is bounded-per-entry, not terminal-across-
+    // entries. Anything stronger would need server-side state keyed on something
+    // other than the browser (an IP, shared by everyone behind one egress), which
+    // is a worse trade. Recorded here so the limit is a measured property rather
+    // than a surprise.
+    const jar = newJar([AUTHFLOW_COOKIE_NAME, AUTH_BREAKER_COOKIE, 'loom_session', 'loom_seen']);
+    for (let entry = 1; entry <= 3; entry++) {
+      const walk = await walkSignIn(jar);
+      expect(walk.terminated, `entry ${entry} never terminated; trail: ${walk.trail.join(' -> ')}`).toBe(true);
+      expect(walk.terminalPath, `entry ${entry}`).toBe('/auth/blocked');
+      expect(walk.hops, `entry ${entry} was not re-bounded`).toBeLessThanOrEqual(
+        authBreakerMaxAttempts() * 2 + 4,
+      );
+    }
   });
 
   it('LOOP B — sign-in SUCCEEDS every time and the session cookie never lands', async () => {

@@ -94,6 +94,16 @@ test.describe('#3334 — sign-in circuit breaker', () => {
       })
       .toBe('/auth/blocked');
 
+    // REACHABILITY, asserted separately so a regression reads as itself rather
+    // than as a 60-second timeout on the poll above. #3364 built this redirect
+    // with `new URL(path, req.url)`; under `output: 'standalone'` with
+    // HOSTNAME/PORT set, `req.url` is the container's OWN listen address, so the
+    // breaker fired correctly and then sent the browser to
+    // https://0.0.0.0:3000/auth/blocked — terminating the loop into a connection
+    // error instead of the diagnosis page.
+    expect(new URL(page.url()).origin, 'terminal page served on an unreachable origin')
+      .toBe(new URL(baseURL!).origin);
+
     // NON-VACUITY: the loop must actually have run. One hop would mean the
     // browser was blocked before it ever bounced, which proves nothing.
     expect(probe.authorizeHops, 'the browser never actually looped').toBeGreaterThanOrEqual(2);

@@ -40,6 +40,7 @@ import {
   authBreakerMaxAttempts,
   clearAttemptCookieHeader,
   decodeAttemptCookie,
+  externalOrigin,
   hopFromParam,
   recordAttempt,
   requestIsHttps,
@@ -174,10 +175,34 @@ export async function GET(req: NextRequest) {
         // here. The cause + count also ride the query string so the page still
         // diagnoses correctly when the browser is dropping cookies entirely
         // (which is one of the loop causes it has to survive).
+        //
+        // The origin comes from `externalOrigin(req.headers)`, NOT from
+        // `req.url`. Under `output: 'standalone'` with HOSTNAME/PORT set — this
+        // console's shape — Next builds the handler's request URL from its own
+        // listen address, so `new URL(to, req.url)` emits
+        // `Location: https://0.0.0.0:3000/auth/blocked` and the terminal page
+        // never renders. See the evidence chain on externalOrigin().
         const to = `${AUTH_BLOCKED_PATH}?cause=${encodeURIComponent(decision.cause)}&n=${decision.effective}`;
-        const res = NextResponse.redirect(new URL(to, req.url), 303);
+        const res = NextResponse.redirect(new URL(to, externalOrigin(req.headers)), 303);
+        // A per-browser diagnosis must never be served to a different browser
+        // from a shared cache. Front Door has cached HTML on this estate before.
+        res.headers.set('cache-control', 'no-store');
         res.headers.append('set-cookie', setAttemptCookieHeader(decision.state, secure));
         return res;
+      }
+      if (decision.effective > 0) {
+        // EVERY counted attempt is logged, not only the one that trips. Without
+        // this a loop is invisible in the logs until hop 5, and entirely
+        // invisible in the cases the breaker cannot count (see the coverage
+        // note in lib/auth/auth-breaker) — a silent loop that became a silent
+        // block is only half a fix. Both values are bounded by construction;
+        // logSafe stays for the same reason it does on the trip line above.
+        console.warn(
+          '[auth/sign-in] sign-in attempt',
+          logSafe(`${decision.effective}/${authBreakerMaxAttempts()}`),
+          '— a completed Entra round trip left this browser unauthenticated; cause:',
+          logSafe(decision.cause),
+        );
       }
       attemptCookie = setAttemptCookieHeader(decision.state, secure);
       hop = decision.nextHop;

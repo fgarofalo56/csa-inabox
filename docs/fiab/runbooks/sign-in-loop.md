@@ -98,6 +98,8 @@ rather than a fix.
 ## 5. Server-side signals
 
 ```
+[auth/sign-in] sign-in attempt N/MAX — a completed Entra round trip left this
+               browser unauthenticated; cause: <code>
 [auth/sign-in] CIRCUIT BREAKER tripped — N completed sign-in round trips left
                this browser unauthenticated within the window; cause: <code>
 [auth/callback] state validation failed — restarting login { haveCookie, haveStateParam }
@@ -105,6 +107,11 @@ rather than a fix.
 [auth/callback] exception: <message>
 [auth/callback] session encoded for upn# <fingerprint> — cookie length <n>
 ```
+
+The **first** line is emitted on every counted attempt, not only on the one that
+trips — so a loop is visible from hop 1, and a loop that never reaches the
+ceiling still leaves a trail. It is emitted only when a completed round trip was
+evidenced, so an ordinary sign-in produces none of them.
 
 The last line is the one that made 2026-08-13 confusing: it is emitted on a
 **successful** encode, so a clean run of it on every hop of a loop is the
@@ -129,6 +136,28 @@ the breaker is fully functional with none of them set.
 - Unit: `apps/fiab-console/lib/auth/__tests__/auth-breaker.test.ts`
 - Loop termination (drives the real handlers, carries its own
   breaker-off control): `apps/fiab-console/app/auth/__tests__/sign-in-loop-termination.test.ts`
+- Terminal-redirect reachability (drives the real handlers with the
+  production request shape, carries its own embedded control):
+  `apps/fiab-console/app/auth/__tests__/sign-in-redirect-origin.test.ts`
 - Browser (G1): `pnpm exec playwright test --project=auth-loop-breaker`
   against a console running an image that carries #3334. Unattended — Entra is
   never reached, so no credentials and no MFA.
+
+---
+
+## 8. Known limits (measured, not assumed)
+
+**A browser that keeps NO cookies at all is bounded per entry, not blocked
+permanently.** The counter cookie is discarded and the stateless hop counter
+lives in the OAuth `state`, which a fresh sign-in re-mints — so there is nothing
+left to persist the verdict in. Each user-initiated attempt still runs at most
+`LOOM_AUTH_BREAKER_MAX_ATTEMPTS` round trips and still ends on `/auth/blocked`
+with a cause. It is never unbounded and never silent.
+
+**Loop B with `loom_authtry` specifically dropped is not counted.** If the code
+exchange SUCCEEDS every time and the browser keeps neither `loom_session` nor
+`loom_authtry`, but does still send an older `loom_seen`, there is no counting
+channel at all: a successful callback redirects to `/` and mints no `?h=` hop.
+The reauth then goes to `/auth/sign-in` rather than `/welcome` and the loop runs
+unbounded. Closing this needs a channel that survives a browser keeping nothing
+on a path that does not pass back through `/auth/sign-in`.
