@@ -10,6 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -158,6 +159,57 @@ test('discover: a directory merely PREFIXED by an excluded one is still walked',
   assert.deepEqual(discoverSuites(root), ['portal/react-webapp-legacy/tests/a.test.mjs']);
 });
 
+test('discover: gitignored scratch under temp/ is skipped at ANY depth (#3487)', () => {
+  // BOTH directions in one assertion, because a skip that also dropped the real
+  // suite would "fix" the count while destroying the guard. On a working tree
+  // this was 1083 discovered / 976 of them stale copies out of `temp/`, running
+  // other branches' tests and failing — invisible to CI, which checks out clean.
+  const root = fixture([
+    'apps/a/tests/real.test.mjs', // MUST survive
+    'temp/wt-somebranch/scripts/ci/__tests__/roll-plan.test.mjs',
+    'temp/acr-ctx-copilot-evaluator.366/tools/x/inputs.test.js',
+    'apps/a/temp/scratch.test.mjs', // `temp/` is gitignored at any depth too
+  ]);
+  assert.deepEqual(discoverSuites(root), ['apps/a/tests/real.test.mjs']);
+});
+
+test('discover: a SKIP_DIRS name is matched EXACTLY, never as a prefix', () => {
+  // Live hazard, not hypothetical: this repo tracks `templates/`, `template/`
+  // and `temporary-credentials/`. A substring match on `temp` would silently
+  // swallow all three — the over-broad-exclusion shape that trades coverage for
+  // a tidier count. `outbox`/`building` guard the same way for `out`/`build`.
+  const root = fixture([
+    'templates/example/tests/a.test.mjs',
+    'template/tests/b.test.mjs',
+    'temporary-credentials/tests/c.test.mjs',
+    'apps/a/outbox/d.test.mjs',
+    'apps/a/building/e.test.mjs',
+    'temp/nope.test.mjs', // the exact name IS skipped
+  ]);
+  assert.deepEqual(discoverSuites(root), [
+    'apps/a/building/e.test.mjs',
+    'apps/a/outbox/d.test.mjs',
+    'template/tests/b.test.mjs',
+    'templates/example/tests/a.test.mjs',
+    'temporary-credentials/tests/c.test.mjs',
+  ]);
+});
+
+test('discover: a suite is found even when temp/ is the ONLY other content', () => {
+  // The population floor (FAIL CLOSED #1) must not get easier to reach. A tree
+  // whose only non-scratch suite is one file still yields that file, so the new
+  // exclusion cannot turn a working repo into a silent zero.
+  const root = fixture(['scripts/ci/__tests__/only.test.mjs', 'temp/a/b/c/stale.test.mjs']);
+  assert.deepEqual(discoverSuites(root), ['scripts/ci/__tests__/only.test.mjs']);
+});
+
+test('discover: a tree containing ONLY temp/ suites yields [] — fails closed, never silently green', () => {
+  // The honest cost of the exclusion, asserted rather than assumed: if scratch
+  // were somehow all there was, discovery returns nothing and main()'s FAIL
+  // CLOSED #1 stops the lane. Empty is a hard error here, never a quiet pass.
+  assert.deepEqual(discoverSuites(fixture(['temp/wt-x/a.test.mjs'])), []);
+});
+
 test('discover: an empty tree yields [] so main() can fail closed on it', () => {
   assert.deepEqual(discoverSuites(fixture([])), []);
 });
@@ -190,6 +242,92 @@ test('the ALREADY-covered suites stay discovered (no coverage was traded away)',
   const found = discoverSuites(REPO_ROOT);
   assert.ok(found.includes('apps/loom-sharing/tests/entrypoint.test.mjs'));
   assert.ok(found.some((f) => f.startsWith('scripts/ci/__tests__/')));
+});
+
+/**
+ * Which of `relPaths` git considers ignored, relative to `root`.
+ *
+ * `git check-ignore` exits 0 when at least one path is ignored and 1 when none
+ * are — so 1 is a real answer, not an error. Anything else (128: no work tree,
+ * git absent) is UNKNOWN, and this returns ok:false rather than an empty list,
+ * because reading "I could not tell" as "nothing is ignored" is how a control
+ * becomes a no-op that reports green.
+ */
+function gitIgnoredPaths(root, relPaths) {
+  if (relPaths.length === 0) return { ok: true, ignored: [], reason: 'nothing to check' };
+  const r = spawnSync('git', ['check-ignore', '-z', '--stdin'], {
+    cwd: root,
+    input: relPaths.map((p) => `${p}\0`).join(''),
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (r.error) {
+    return { ok: false, ignored: [], reason: `could not spawn git: ${r.error.message}` };
+  }
+  if (r.status !== 0 && r.status !== 1) {
+    return {
+      ok: false,
+      ignored: [],
+      reason: `git check-ignore exited ${r.status}: ${(r.stderr || '').trim() || '(no stderr)'}`,
+    };
+  }
+  return { ok: true, ignored: (r.stdout || '').split('\0').filter(Boolean), reason: '' };
+}
+
+// EMBEDDED CONTROL for the assertion below. On a clean CI checkout `temp/` does
+// not exist, so "no discovered suite is git-ignored" has a population of ZERO
+// and would pass identically if gitIgnoredPaths always returned []. This proves
+// the mechanism DISCRIMINATES, every run, independent of the tree's contents —
+// check-ignore answers on paths that need not exist on disk.
+test('CONTROL: the ignore probe actually discriminates (it is not a no-op)', () => {
+  const r = gitIgnoredPaths(REPO_ROOT, [
+    'temp/wt-probe/scripts/ci/__tests__/probe.test.mjs',
+    'apps/deep/temp/probe.test.mjs',
+    'scripts/ci/check-node-test-suites.mjs',
+  ]);
+  assert.ok(r.ok, `the ignore probe could not answer, so the guard below measures nothing: ${r.reason}`);
+  assert.deepEqual(
+    r.ignored,
+    ['temp/wt-probe/scripts/ci/__tests__/probe.test.mjs', 'apps/deep/temp/probe.test.mjs'],
+    'check-ignore no longer flags temp/ — either .gitignore lost the `temp/` pattern or the probe broke',
+  );
+  assert.ok(
+    !r.ignored.includes('scripts/ci/check-node-test-suites.mjs'),
+    'the probe calls a tracked first-party file ignored — it is over-matching',
+  );
+});
+
+test('no discovered suite is git-ignored — the CLASS behind #3487, not just temp/', () => {
+  // The generalisation of the fix. `temp` in SKIP_DIRS closes the instance; this
+  // closes the class, and is the reason discovery was NOT narrowed to
+  // `git ls-files` (see the runner's header). The day any un-skipped gitignored
+  // directory starts contributing suites — `scratch/`, `.work/`, whatever it is
+  // called — this fails and names it, instead of the runner silently executing
+  // another branch's tests as if they were ours.
+  //
+  // Untracked-but-real suites are deliberately NOT caught here: a brand-new
+  // unstaged test file is not ignored, so it still runs. That asymmetry is the
+  // whole point of keeping the walk.
+  const found = discoverSuites(REPO_ROOT);
+  const r = gitIgnoredPaths(REPO_ROOT, found);
+  assert.ok(r.ok, `could not determine ignore status, so this control measured nothing: ${r.reason}`);
+  assert.deepEqual(
+    r.ignored,
+    [],
+    `discovery is walking gitignored scratch again — these are not first-party suites:\n  ${r.ignored.slice(0, 10).join('\n  ')}`,
+  );
+});
+
+test('the real tree still yields a full suite population (the floor did not move)', () => {
+  // FAIL CLOSED #1 turns zero into a hard error, but a partial collapse — an
+  // exclusion that quietly ate most of the tree — would stay under it. Discovery
+  // matched exactly the 107 tracked suites when this was measured; the floor is
+  // deliberately well below that so it tracks a collapse, not routine churn.
+  const found = discoverSuites(REPO_ROOT);
+  assert.ok(
+    found.length >= 50,
+    `discovery collapsed to ${found.length} suites — an exclusion is eating first-party source`,
+  );
 });
 
 test('every exclusion names a runner and the workflow that executes it', () => {
