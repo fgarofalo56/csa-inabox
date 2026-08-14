@@ -52,10 +52,21 @@
  * ── WHAT THIS DOES ─────────────────────────────────────────────────────────
  *
  *   Given the assignment name ARM printed, it resolves that assignment, proves
- *   it is a Loom-owned managed-identity grant, deletes it, and verifies the
- *   delete landed. The next deploy attempt recreates the SAME triple under the
- *   template's deterministic name, so the effective permission set is unchanged
- *   and the estate converges on the template as the single owner.
+ *   it is a user-assigned managed identity's grant IN THIS SUBSCRIPTION, deletes
+ *   it, and verifies the delete landed. The next deploy attempt recreates the
+ *   SAME triple under the template's deterministic name, so the effective
+ *   permission set is unchanged and the estate converges on the template as the
+ *   single owner.
+ *
+ *   NOTE ON THE STRENGTH OF THAT CHECK (R7). `az identity list` enumerates EVERY
+ *   user-assigned managed identity in the subscription, not only `uami-loom-*`.
+ *   Under deploy-integrity.md R5 a brownfield subscription contains identities
+ *   Loom does not own, so this establishes "a UAMI in this subscription" and NOT
+ *   "a Loom identity" — and it says exactly that, in the code and in the
+ *   operator-facing message. Narrowing to a name prefix was considered and not
+ *   done: the template's grantees are not guaranteed to carry one, and a
+ *   converger that silently refuses a legitimate collision would leave the
+ *   deploy wedged for a reason nobody could see.
  *
  *   deploy-retry.mjs --remediate invokes it automatically and then retries the
  *   deploy ONCE (auto-bind-by-default.md §5: a remediation the platform could
@@ -224,7 +235,7 @@ export function decide({ assignmentName, listAssignments, listIdentities }) {
       action: 'none',
       reason:
         'the user-assigned managed identities could not be READ, so it is NOT established that this grant belongs ' +
-        `to a Loom identity. ${redact(ids.error ?? '')}`.trim(),
+        `to a managed identity in this subscription. ${redact(ids.error ?? '')}`.trim(),
     };
   }
   if (!ids.principalIds.some((p) => String(p).toLowerCase() === String(hit.principalId).toLowerCase())) {
@@ -243,8 +254,10 @@ export function decide({ assignmentName, listAssignments, listIdentities }) {
     action: 'delete',
     assignmentId: hit.id,
     reason:
-      `${redact(hit.id)} grants roleDefinitionId ${redact(hit.roleDefinitionId ?? 'unknown')} to a Loom user-assigned ` +
-      `managed identity at ${redact(hit.scope ?? 'unknown scope')} under a v${uuidVersion(hit.name) ?? '?'} name. ` +
+      `${redact(hit.id)} grants roleDefinitionId ${redact(hit.roleDefinitionId ?? 'unknown')} to a user-assigned ` +
+      `managed identity IN THIS SUBSCRIPTION at ${redact(hit.scope ?? 'unknown scope')} under a ` +
+      `v${uuidVersion(hit.name) ?? '?'} name. (That is what the read establishes: "az identity list" is not ` +
+      'filtered to uami-loom-*, so this is not a claim that Loom owns it.) ' +
       'The template declares the same triple under its own deterministic name and cannot create it while this ' +
       'one exists. Deleting it lets the retry recreate the identical grant under the name the template owns.',
   };

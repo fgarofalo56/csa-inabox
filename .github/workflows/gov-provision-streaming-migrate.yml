@@ -311,19 +311,16 @@ jobs:
           # deterministic guid() names; a CLI create mints a random v4 name for the
           # same (scope, principalId, roleDefinitionId) triple and ARM then refuses
           # the template's create forever. Same defect, Gov boundary.
+          #
+          # NOTE for reviewers: D3 in check-role-assignment-determinism.mjs does
+          # NOT flag this file. `ACRPULL_ROLE` is defined in a YAML `env:` block,
+          # and D3 only resolves shell `KEY=<guid>` assignments, so it files this
+          # site as unresolved and never judges it. This lane therefore has the
+          # FIX but no regression net — tracked separately.
+          # shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
+          . scripts/csa-loom/_grant-role-if-absent.sh
           for PID in "$MIG_PID" "$RW_PID"; do
-            EXISTING=$(az role assignment list --assignee-object-id "$PID" \
-              --scope "$ACR_ID" --role "$ACRPULL_ROLE" --query "length(@)" -o tsv 2>&1 | tr -d '\r')
-            if [ "$EXISTING" = "0" ]; then
-              echo "::warning::AcrPull is ABSENT for ${PID:0:8}… — creating it. That mints a CLI name, not the template's; scripts/csa-loom/converge-role-assignment.mjs converges it on the next infra deploy (#3439)."
-              az role assignment create --assignee-object-id "$PID" --assignee-principal-type ServicePrincipal \
-                --role "$ACRPULL_ROLE" --scope "$ACR_ID" -o none 2>&1 | grep -vi "already" || true
-            elif [ -n "$EXISTING" ] && [ "$EXISTING" -gt 0 ] 2>/dev/null; then
-              echo "::notice::AcrPull already granted for ${PID:0:8}… — leaving the existing assignment alone."
-            else
-              # R7: an unreadable probe is not an absent grant.
-              echo "::warning::could not read whether AcrPull exists for ${PID:0:8}… (az said: ${EXISTING}). NOT creating one on an unestablished absence."
-            fi
+            grant_role_if_absent "$PID" "$ACRPULL_ROLE" "$ACR_ID" "AcrPull for ${PID:0:8}… on the Loom ACR"
           done
           # Storage Blob Data Contributor for the streaming sink (risingwave only).
           if [ -n "${LAKE:-}" ]; then

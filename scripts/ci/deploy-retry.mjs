@@ -337,9 +337,12 @@ export function planRemediation(diagnosis, stderr, opts = {}) {
       why:
         `The grant is already in place under assignment ${name.slice(0, 8)}…, which is NOT the deterministic name ` +
         'the template computes, so ARM refuses the create forever. The converger proves the stray belongs to a ' +
-        'Loom user-assigned managed identity, removes it, and verifies it is gone; the retry then recreates the ' +
-        'identical triple under the name the template owns. Net effect on the estate: zero permission change, one ' +
-        'name converged. It refuses and fails closed on anything it cannot establish.',
+        'user-assigned managed identity in this subscription, removes it, and verifies it is gone; the retry then ' +
+        'recreates the identical triple under the name the template owns. Intended net effect on the estate: zero ' +
+        'permission change, one name converged. RESIDUAL, stated because this is the one destructive action in the ' +
+        'lane: the grant is absent between the delete and the retry\'s create, so if that retry fails for another ' +
+        'reason — or the runner is cancelled in between — it stays absent until the next deploy re-creates it. ' +
+        'Bounded and self-healing, not zero. It refuses and fails closed on anything it cannot establish.',
     };
   }
 

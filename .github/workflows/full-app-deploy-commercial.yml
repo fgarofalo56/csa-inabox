@@ -346,32 +346,19 @@ jobs:
           # uami-loom-directlake vs guid(acr.id, uami.id, AcrPull) — the deploy
           # failed RoleAssignmentExists on every scheduled run thereafter.
           #
-          # So: PROBE first and no-op when the grant is already there, which is
-          # the normal case (phase 1 of the from-scratch path provisions infra —
-          # and these grants — before this workflow runs at all). Only mint when
-          # the grant is genuinely ABSENT, because dropping a real grant here
-          # would leave a Container App unable to pull its image; failing OPEN on
-          # image pull is worse than a name that needs converging. A minted name
-          # is now self-healing rather than permanent: deploy-retry --remediate
-          # runs scripts/csa-loom/converge-role-assignment.mjs on the next infra
-          # deploy, which deletes the stray and lets the template take the name.
+          # The probe logic lives in ONE tested place rather than inline here.
+          # The first cut of this fix duplicated it into this file and into the
+          # Gov lane, and both copies carried the same fail-open: `2>&1` folded
+          # az's stderr into the count, so a CLI update notice made the value
+          # neither "0" nor a positive integer and the grant was silently NOT
+          # created. See the helper's header — it now captures stderr separately,
+          # decides on az's exit status, and creates when it cannot read, because
+          # a redundant create is refused by ARM while a skipped one is an outage.
+          # shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
+          . scripts/csa-loom/_grant-role-if-absent.sh
           for UAMI in $(az identity list --resource-group "$RG" \
               --query "[?starts_with(name, 'uami-loom-')].principalId" -o tsv | tr -d '\r'); do
-            EXISTING=$(az role assignment list --assignee-object-id "$UAMI" \
-              --scope "$ACR_ID" --role "$ACRPULL" --query "length(@)" -o tsv 2>&1 | tr -d '\r')
-            if [ "$EXISTING" = "0" ]; then
-              echo "::warning::AcrPull is ABSENT for ${UAMI:0:8}… on this registry, so it is being created here. That mints a CLI name, not the template's; scripts/csa-loom/converge-role-assignment.mjs converges it on the next infra deploy (#3439)."
-              az role assignment create --assignee-object-id "$UAMI" \
-                --assignee-principal-type ServicePrincipal \
-                --role "$ACRPULL" \
-                --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
-            elif [ -n "$EXISTING" ] && [ "$EXISTING" -gt 0 ] 2>/dev/null; then
-              echo "::notice::AcrPull already granted for ${UAMI:0:8}… — leaving the existing assignment alone."
-            else
-              # R7: an unreadable probe is NOT an absent grant. Creating on an
-              # unreadable read is precisely how the stray got minted.
-              echo "::warning::could not read whether AcrPull exists for ${UAMI:0:8}… (az said: ${EXISTING}). NOT creating one on an unestablished absence; if the pull later fails, that read is the thing to fix."
-            fi
+            grant_role_if_absent "$UAMI" "$ACRPULL" "$ACR_ID" "AcrPull for ${UAMI:0:8}… on the admin-plane ACR"
           done
 
           echo "::notice::AcrPush + AcrPull roles reconciled."
