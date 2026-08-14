@@ -25,6 +25,7 @@ import { appsCatalogContainer, workloadsCatalogContainer } from '@/lib/azure/cos
 import { ensureDataProductsIndex } from '@/lib/azure/loom-data-products-search';
 import { listBundleIds, getBundleItemTypes } from '@/lib/apps/content-bundles';
 import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
+import { WORKLOAD_SEEDS } from '@/lib/apps/workloads-catalog-seed';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -95,21 +96,7 @@ export function buildApps() {
 
 const APPS = buildApps();
 
-const WORKLOADS = [
-  { id:'wl-data-engineering', name:'Data Engineering', description:'Synapse + ADF + Spark pools for ETL/ELT at scale.', category:'Included', included:true, featureSlugs:['synapse-serverless-sql-pool','synapse-dedicated-sql-pool','synapse-spark-pool','synapse-pipeline','adf-pipeline','spark-job-definition','environment','copy-job'] },
-  { id:'wl-data-factory', name:'Data Factory', description:'ADF pipelines, triggers, datasets, mapping data flows.', category:'Included', included:true, featureSlugs:['adf-pipeline','adf-dataset','adf-trigger'] },
-  { id:'wl-data-science', name:'Data Science', description:'AI Foundry hub, ML models + experiments, prompt flow, evaluations, compute clusters.', category:'Included', included:true, featureSlugs:['ai-foundry-hub','ml-model','ml-experiment','prompt-flow','evaluation','compute','dataset'], homeHref:'/experience/data-science/home' },
-  { id:'wl-data-warehouse', name:'Data Warehouse', description:'Synapse Dedicated SQL pool (MPP T-SQL) with auto-pause + on-demand resume.', category:'Included', included:true, featureSlugs:['synapse-dedicated-sql-pool','warehouse','azure-sql-server','azure-sql-database'] },
-  { id:'wl-databases', name:'Databases', description:'Azure SQL family, SQL Server 2025 features, Cosmos DB, Mirrored databases.', category:'Included', included:true, featureSlugs:['azure-sql-database','azure-sql-managed-instance','sql-server-2025-vector-index','mirrored-database'] },
-  { id:'wl-industry', name:'Industry Solutions', description:'Pre-built reference architectures for Healthcare, Financial, Casino, IoT.', category:'Included', included:true, featureSlugs:['data-product-template','data-product-instance'] },
-  { id:'wl-power-bi', name:'Power BI', description:'Semantic models, reports, dashboards, paginated reports, scorecards.', category:'Included', included:true, featureSlugs:['semantic-model','report','dashboard','paginated-report','scorecard'] },
-  { id:'wl-realtime', name:'Real-Time Intelligence', description:'Event Hubs, Eventhouse, KQL databases + querysets + dashboards, Activator rules.', category:'Included', included:true, featureSlugs:['eventhouse','kql-database','kql-queryset','kql-dashboard','eventstream','activator'] },
-  { id:'wl-power-platform', name:'Power Platform', description:'Environments, Dataverse, Power Apps, Power Automate, Power Pages, AI Builder.', category:'Included', included:true, featureSlugs:['dataverse-table','power-app','power-automate-flow','power-page','ai-builder-model'] },
-  { id:'wl-copilot-studio', name:'Copilot Studio', description:'Agents, knowledge sources, topics, actions, channels, analytics, CSA template library.', category:'Included', included:true, featureSlugs:['copilot-studio-agent','copilot-studio-knowledge','copilot-studio-topic','copilot-studio-action','copilot-studio-channel','copilot-studio-analytics','copilot-template-library'] },
-  { id:'wl-csa-fedramp', name:'FedRAMP Compliance Engine', description:'NIST 800-53 control mapping + continuous audit telemetry + IL5 deployment variant.', category:'CSA', included:false, featureSlugs:['scorecard','kql-dashboard','activator'] },
-  { id:'wl-csa-geoanalytics', name:'Geoanalytics', description:'H3/S2 spatial indexing, ST_* functions over Lakehouse, Azure Maps integration.', category:'CSA', included:false, featureSlugs:['geo-map','geo-dataset','geo-query','geo-pipeline'] },
-  { id:'wl-csa-graph', name:'Graph + Vector', description:'Cosmos Gremlin, Cypher (via ADX make-graph), GQL, vector store across Cosmos/AI Search/pgvector.', category:'CSA', included:false, featureSlugs:['cosmos-gremlin-graph','cypher-graph','gql-graph','vector-store'] },
-];
+const WORKLOADS = WORKLOAD_SEEDS;
 
 export async function POST(_req: NextRequest) {
   const s = getSession();

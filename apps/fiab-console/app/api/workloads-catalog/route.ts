@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
+import { WORKLOAD_SEEDS } from '@/lib/apps/workloads-catalog-seed';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -38,6 +39,46 @@ export async function GET() {
       resources = refetched.resources;
     }
   }
+
+  // Seed-derived backstop (#3375) — mirrors the registry backstop that
+  // /api/apps-catalog has carried since the apps-catalog A+ cluster.
+  //
+  // Before this, a fresh subscription reached here with BOTH the tenant rows and
+  // the GLOBAL rows empty (the Cosmos seed is VNet-only and the GLOBAL seed route
+  // is a tenant-admin POST), so the workloads catalog rendered EMPTY and the
+  // operator runbook told them to open the browser dev console and POST
+  // /api/admin/bootstrap-catalogs by hand. Populating from the shared seed here
+  // makes that operator step unnecessary: the platform does it on first read,
+  // from inside the VNet where Cosmos is reachable
+  // (.claude/rules/auto-bind-by-default.md §5, ux-baseline.md G2).
+  //
+  // Idempotent and non-destructive: only workloads MISSING for this tenant are
+  // written, so an operator who removed or re-categorised a curated workload does
+  // not get it silently resurrected on the next read.
+  const present = new Set(resources.map((r: any) => r.id));
+  const missing = WORKLOAD_SEEDS.filter((w) => !present.has(w.id));
+  if (missing.length > 0) {
+    const now = new Date().toISOString();
+    for (const w of missing) {
+      await c.items
+        .upsert({
+          ...w,
+          tenantId: s.claims.oid,
+          publisher: 'CSA',
+          iconUrl: null,
+          createdBy: 'workloads-catalog-backstop',
+          createdAt: now,
+          updatedAt: now,
+          seededFromRegistryAt: now,
+        })
+        .catch(() => {});
+    }
+    const refetched = await c.items
+      .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
+      .fetchAll();
+    resources = refetched.resources;
+  }
+
   return NextResponse.json({ ok: true, workloads: resources });
 }
 

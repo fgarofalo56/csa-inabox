@@ -549,6 +549,13 @@ jobs:
       - name: docs-deploy-refs (every script/workflow/bicep path a deploy doc names exists)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-docs-deploy-refs.mjs
+      # auto-bind-by-default.md §5 / ux-baseline.md G2 — an action the PLATFORM
+      # performs must not be an instruction the operator follows. Bidirectional:
+      # it also fails when the automation is deleted, so a runbook that correctly
+      # says nothing can never sit on top of a platform that does nothing (#3375).
+      - name: operator-runbook-drift (the runbook must not re-acquire automated steps)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-operator-runbook-drift.mjs
       - name: health-coverage (every Azure client + item family has a health check mapping)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-health-coverage.mjs
