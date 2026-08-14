@@ -39,6 +39,36 @@
  *   The child's exit status is propagated verbatim. Nothing here is wrapped in
  *   `|| true`, and stderr is never discarded.
  *
+ * WHY A FILESYSTEM WALK AND NOT `git ls-files` (#3487, considered and rejected)
+ *
+ *   Enumerating the index would exclude every gitignored path by construction —
+ *   `temp/`, build output, and any future scratch directory nobody listed — and
+ *   it is ~370x faster (0.17s against a 64s walk on a tree carrying 40 nested
+ *   worktrees). It was rejected anyway, on two measured grounds:
+ *
+ *     - `git ls-files` lists the INDEX, not the disk. Deleting a tracked file
+ *       without staging the deletion still lists it (verified), so a mid-rebase
+ *       or sparse checkout would hand `node --test` a path that does not exist
+ *       and break a REQUIRED check for a reason unrelated to any test.
+ *     - It inverts this file's founding premise — "picked up the day it lands".
+ *       A new suite would stay invisible until `git add`, which is the "a test
+ *       nobody runs" shape this guard exists to catch, in the local pre-commit
+ *       loop where the author would most want it caught.
+ *
+ *   So discovery stays a dependency-free walk, and the CLASS-level protection
+ *   the index would have given lives in the self-test instead, as a PAIR:
+ *
+ *     - `no discovered suite is git-ignored` fails the day any un-skipped
+ *       gitignored directory starts contributing suites, whatever it is named.
+ *     - `no TRACKED suite is excluded by SKIP_DIRS` is its inverse, and closes
+ *       a blind side the first one cannot see: `git check-ignore` reports a
+ *       TRACKED file as NOT ignored even when it matches an ignore pattern, so
+ *       a suite force-added under `temp/`/`dist`/`build` would be both
+ *       undiscovered and undetected. It is also the half with a real population
+ *       on a clean CI checkout; the first half only has teeth locally.
+ *
+ *   Runtime keeps the cheap path; the guard's own tests carry the teeth.
+ *
  * USAGE
  *   node scripts/ci/check-node-test-suites.mjs           # discover + run (CI)
  *   node scripts/ci/check-node-test-suites.mjs --list    # discover only
@@ -59,8 +89,31 @@ export const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const TEST_FILE_RE = /\.test\.(mjs|cjs|js)$/;
 
 /**
- * Directories never worth walking (build output, VCS, dependency trees).
- * These hold no first-party source, so skipping them cannot hide a suite.
+ * Directories never worth walking (build output, VCS, dependency trees,
+ * gitignored scratch). These hold no first-party source, so skipping them
+ * cannot hide a suite.
+ *
+ * Matched on the directory's EXACT name at any depth, never as a prefix. That
+ * distinction is load-bearing here: this repo tracks `templates/`, `template/`
+ * and `temporary-credentials/`, all of which a substring match on `temp` would
+ * swallow. `discover: a SKIP_DIRS name is matched EXACTLY, never as a prefix`
+ * locks that in.
+ *
+ * `temp` (#3487) — the repo convention is that gitignored scratch lives in
+ * `./temp/`, and in practice that is where git worktrees accumulate. Measured on
+ * a working tree: 40 nested checkouts plus 6 build-context copies, so discovery
+ * returned 1083 suites of which 976 were stale copies of THIS repo's tests from
+ * other branches. The runner then executed them and failed, while CI — which
+ * checks out clean, where `temp/` does not exist — stayed green. That is the
+ * `.claude` case exactly (~100 agent worktrees under `.claude/worktrees/`),
+ * which is why `.claude` was already here.
+ *
+ * Skipping `temp` cannot hide a first-party suite, and not merely because none
+ * is there today: `.gitignore` carries `temp/` with no leading slash, so git
+ * ignores a directory of that name at ANY depth. A tracked suite could not live
+ * under one without a `git add -f`. Verified: `git check-ignore` matches
+ * `temp/x`, `apps/foo/temp/x` and `scripts/ci/temp/deep/x` to that one pattern,
+ * and zero tracked paths carry a `temp` segment.
  */
 const SKIP_DIRS = new Set([
   '.git',
@@ -76,6 +129,7 @@ const SKIP_DIRS = new Set([
   'playwright-report',
   '__pycache__',
   '.claude',
+  'temp',
   '.pytest_cache',
   '.mypy_cache',
 ]);
