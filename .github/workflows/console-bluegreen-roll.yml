@@ -384,48 +384,190 @@ jobs:
           echo "::notice::GREEN = $GREEN"
 
       # ── Health-gate green: healthState Healthy + /api/version reports new SHA ──
+      #
+      # THE GATE'S DIRECTION IS UNCHANGED, deliberately (#3411). Every path here
+      # that is not a PROVEN-Healthy green sets `gate=fail`, and the traffic
+      # shift below is `if: steps.gate.outputs.gate == 'pass'`, so unknown health
+      # never takes traffic and blue keeps 100%. What changes is only WHICH
+      # SENTENCE the operator reads at 3am.
+      #
+      # R7 (deploy-integrity.md) — nothing below asserts a cause it did not
+      # establish. The pre-#3411 shape read every value as
+      #     H=$(az … -o tsv 2>/dev/null | tr -d '\r' || true)
+      # and then branched on `-z "$H"`, so an auth failure, an ARM throttle, a
+      # transient 5xx and a wrong revision name all arrived as the SAME empty
+      # string — and the summary rendered that empty string as "green never
+      # reached Healthy", a claim about the REVISION when the truth may have
+      # been about the RUNNER'S ABILITY TO READ IT. Identical class to the roll
+      # that reported "the tag does not exist" when it meant "I could not reach
+      # the registry", the incident deploy-integrity.md R7 is written from.
+      #
+      # So each read now branches on `az`'s EXIT STATUS, keeps its stderr, and
+      # resolves to one of three named classes — and per #2819 a read that
+      # SUCCEEDED and returned EMPTY is its own class, never folded into "no".
       - name: Health-gate green revision
         id: gate
         run: |
-          set -euo pipefail
+          # `-e` is deliberately absent (as in `Ensure multiple-revision mode`
+          # above): every failable command below is explicitly guarded by `if`,
+          # and the step must reach its own classification rather than abort out
+          # of the middle of a poll loop.
+          set -uo pipefail
           RG="${{ steps.resolve.outputs.rg }}"
           GREEN="${{ steps.green.outputs.green }}"
           SHA="${{ steps.build.outputs.sha }}"
-          FQDN=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$GREEN" \
-            --query properties.fqdn -o tsv 2>/dev/null | tr -d '\r' || true)
-          echo "::notice::green FQDN=${FQDN:-<none>}"
+          ERR="$(mktemp)"
+          BODYF="$(mktemp)"
+
+          # az writes multi-line errors, and a newline inside a `::error::` ends
+          # the annotation — everything after it is dropped from the thing the
+          # operator actually reads. Truncate first, then flatten.
+          err_detail() { head -c 400 "$ERR" | tr '\n' ' '; }
+
+          # Echoes one ARM property of the green revision. Returns non-zero ONLY
+          # when the READ itself failed; an empty answer is a successful read of
+          # an empty value, and the callers below treat it as its own case.
+          rev_field() {
+            az containerapp revision show -n "$APP" -g "$RG" --revision "$GREEN" \
+              --query "$1" -o tsv 2>"$ERR" | tr -d '\r'
+          }
+
+          # ── green's own FQDN: three outcomes, three sentences ────────────────
+          # The old code had one outcome ("") and no sentence at all — an
+          # unreadable FQDN silently skipped the /api/version probe below without
+          # ever saying the probe had been skipped, let alone why.
+          if FQDN="$(rev_field properties.fqdn)"; then
+            if [ -z "${FQDN//[[:space:]]/}" ]; then
+              FQDN=''
+              NO_PROBE_REASON="the read of properties.fqdn SUCCEEDED and came back EMPTY — ACA published no FQDN for revision $GREEN"
+              echo "::warning::No FQDN for green ($GREEN): $NO_PROBE_REASON."
+            else
+              NO_PROBE_REASON=''
+              echo "::notice::green FQDN=$FQDN"
+            fi
+          else
+            FQDN=''
+            NO_PROBE_REASON="properties.fqdn could NOT BE READ, so this step will not claim the revision has no FQDN. Detail: $(err_detail)"
+            echo "::warning::Could not read green's FQDN: $NO_PROBE_REASON"
+          fi
+
+          # ── healthState poll ────────────────────────────────────────────────
+          # Counted, not sticky: the classification after the loop has to tell
+          # "every read FAILED" from "reads SUCCEEDED and returned empty" from
+          # "ACA reported a real, non-Healthy state". A transient read failure is
+          # retried rather than fatal — this is already a retry loop, and the
+          # time budget is unchanged from the pre-#3411 behaviour.
           HEALTHY=0
+          READS_OK=0
+          READS_FAIL=0
+          OBSERVED=''   # last NON-EMPTY healthState ACA actually reported
+          LAST_ERR=''   # detail from the most recent FAILED read
+          POLLS=0
           for i in $(seq 1 "$HEALTH_RETRIES"); do
-            H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$GREEN" \
-              --query properties.healthState -o tsv 2>/dev/null | tr -d '\r' || true)
-            RUN=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$GREEN" \
-              --query properties.runningState -o tsv 2>/dev/null | tr -d '\r' || true)
-            echo "$(date -u +%H:%M:%S) green healthState=$H runningState=$RUN"
-            if [[ "$H" == "Unhealthy" ]]; then echo "::warning::green Unhealthy"; break; fi
-            if [[ "$H" == "Healthy" ]]; then HEALTHY=1; break; fi
+            POLLS="$i"
+            if H="$(rev_field properties.healthState)"; then
+              READS_OK=$((READS_OK + 1))
+              if [ -n "${H//[[:space:]]/}" ]; then
+                OBSERVED="$H"
+                HTXT="$H"
+              else
+                HTXT='<read OK, value EMPTY — ACA published no healthState>'
+              fi
+            else
+              READS_FAIL=$((READS_FAIL + 1))
+              LAST_ERR="$(err_detail)"
+              H=''
+              HTXT="<UNREADABLE — $LAST_ERR>"
+            fi
+            if RUN="$(rev_field properties.runningState)"; then
+              RUNTXT="${RUN:-<read OK, value EMPTY>}"
+            else
+              RUNTXT='<UNREADABLE>'
+            fi
+            echo "$(date -u +%H:%M:%S) poll $i/$HEALTH_RETRIES green healthState=$HTXT runningState=$RUNTXT"
+            if [ "$H" = 'Unhealthy' ]; then echo "::warning::ACA reported green as Unhealthy."; break; fi
+            if [ "$H" = 'Healthy' ]; then HEALTHY=1; break; fi
             sleep 30
           done
-          if [[ "$HEALTHY" != "1" ]]; then echo "gate=fail" >> "$GITHUB_OUTPUT"; echo "::error::green never reached Healthy"; exit 0; fi
 
-          # Secondary gate — probe /api/version on green's OWN FQDN and confirm the
-          # NEW build SHA is actually serving (proves the image, not just liveness).
-          # If the FQDN is unreachable from the runner (internal ingress), fall back
-          # to healthState with a loud notice; a REACHABLE-but-wrong SHA hard-fails.
-          if [[ -n "$FQDN" ]]; then
+          if [ "$HEALTHY" != '1' ]; then
+            echo "gate=fail" >> "$GITHUB_OUTPUT"
+            FAILNOTE=''
+            if [ "$READS_FAIL" -gt 0 ]; then
+              FAILNOTE=" ($READS_FAIL of $POLLS poll(s) could not be read at all; last read failure: $LAST_ERR)"
+            fi
+            if [ "$READS_OK" -eq 0 ]; then
+              echo "::error::UNKNOWN whether green ($GREEN) is healthy — could not read green's healthState. ALL $READS_FAIL attempt(s) to read it FAILED, so nothing here establishes anything about the revision. Failing the gate, because unknown health must not take traffic; blue keeps 100%. Do NOT read this as 'the revision is unhealthy' — that is the claim this message used to make wrongly (#3411). Detail: $LAST_ERR"
+            elif [ -z "$OBSERVED" ]; then
+              echo "::error::UNKNOWN whether green ($GREEN) is healthy — $READS_OK read(s) of properties.healthState SUCCEEDED and every one came back EMPTY, i.e. ACA published no healthState for that revision name. That is a different fact from an unhealthy revision (#2819): the shapes that produce it are a revision name resolved wrongly upstream, or a revision ACA has not begun reporting on. Failing the gate; blue keeps 100%.$FAILNOTE"
+            else
+              echo "::error::green ($GREEN) never reached Healthy — the last healthState ACA reported was '$OBSERVED' after $POLLS poll(s) at 30s. This one IS a statement about the revision: the read SUCCEEDED and that is what it said.$FAILNOTE"
+            fi
+            exit 0
+          fi
+
+          # ── Secondary gate: does green's OWN FQDN serve the NEW build SHA? ──
+          # Proves the IMAGE, not merely liveness. DIRECTION UNCHANGED:
+          #   serves the wanted SHA  -> probe passes
+          #   serves a DIFFERENT SHA -> hard fail (gate=fail), as before
+          #   anything else          -> the gate rests on healthState, as before
+          # What changes is the last sentence. The old line asserted ONE cause —
+          # "not directly reachable (likely internal ingress)" — for an empty
+          # $BODY that `curl -fsS … 2>/dev/null || true` produced from ANY of: a
+          # 401, a 403, a 404, a 500, a 302 to a sign-in page, a DNS failure, a
+          # TLS failure or a timeout. Reading `%{http_code}` and curl's exit code
+          # tells those apart, so a green that is up and answering 500 can never
+          # again be logged as unreachable. `-f` is gone for the same reason: a
+          # probe whose PURPOSE is to observe the status must treat 4xx/5xx as
+          # answers, not as errors (scripts/ci/check-curl-httpcode-fallback.mjs).
+          if [ -n "$FQDN" ]; then
             PROBE_OK=0
+            PROBE_CLASS='unknown-probe-no-attempt-completed'
+            PROBE_DETAIL='no attempt completed'
             for i in $(seq 1 10); do
-              BODY=$(curl -fsS --max-time 10 "https://$FQDN/api/version" 2>/dev/null || true)
-              if [[ -n "$BODY" ]]; then
-                SERVED=$(echo "$BODY" | python3 -c "import sys,json; print((json.load(sys.stdin).get('build') or {}).get('sha',''))" 2>/dev/null | tr -d '\r' || true)
-                echo "green /api/version build.sha=$SERVED (want $SHA)"
-                if [[ "$SERVED" == "$SHA" ]]; then PROBE_OK=1; break; fi
-                if [[ -n "$SERVED" && "$SERVED" != "$SHA" ]]; then echo "gate=fail" >> "$GITHUB_OUTPUT"; echo "::error::green serves SHA '$SERVED', expected '$SHA'"; exit 0; fi
+              CODE="$(curl -sS -o "$BODYF" -w '%{http_code}' --max-time 10 "https://$FQDN/api/version" 2>"$ERR")"
+              RC=$?
+              [ -n "$CODE" ] || CODE='000'
+              if [ "$RC" -ne 0 ] || [ "$CODE" = '000' ]; then
+                PROBE_CLASS='unknown-probe-no-http-response'
+                PROBE_DETAIL="curl exit $RC, http_code $CODE — $(err_detail)"
+              elif [ "$CODE" != '200' ]; then
+                PROBE_CLASS="unknown-probe-http-$CODE"
+                PROBE_DETAIL="green ANSWERED with HTTP $CODE, so it is reachable — this is a status, not an unreachability"
+              elif ! SERVED="$(python3 -c 'import sys,json; print((json.load(sys.stdin).get("build") or {}).get("sha",""))' <"$BODYF" 2>"$ERR")"; then
+                PROBE_CLASS='unknown-probe-body-unparseable'
+                PROBE_DETAIL="HTTP 200, but the body did not parse as JSON — $(err_detail)"
+              elif [ -z "${SERVED//[[:space:]]/}" ]; then
+                PROBE_CLASS='unknown-probe-no-sha-field'
+                PROBE_DETAIL='HTTP 200 and valid JSON, but build.sha was absent or empty'
+              elif [ "$SERVED" = "$SHA" ]; then
+                PROBE_OK=1
+                echo "probe $i/10: green /api/version build.sha=$SERVED — matches the rolled SHA."
+                break
+              else
+                echo "gate=fail" >> "$GITHUB_OUTPUT"
+                echo "::error::green ($GREEN) is reachable and serving, but /api/version reports build.sha '$SERVED' when this roll deployed '$SHA' — the revision is running the WRONG IMAGE. Established, not inferred: HTTP 200, body parsed as JSON, sha field present. Traffic stays on blue."
+                exit 0
               fi
+              echo "probe $i/10: $PROBE_CLASS — $PROBE_DETAIL"
               sleep 15
             done
-            if [[ "$PROBE_OK" != "1" ]]; then
-              echo "::notice::green FQDN not directly reachable (likely internal ingress) — gating on healthState only."
+            if [ "$PROBE_OK" != '1' ]; then
+              # The candidate list is chosen by the class. Offering "ingress is
+              # internal" after green ANSWERED would be the same defect in a
+              # softer voice: a cause floated for an observation that rules it
+              # out. Candidates are offered only where they are still live, and
+              # are labelled as candidates either way.
+              case "$PROBE_CLASS" in
+                unknown-probe-no-http-response|unknown-probe-no-attempt-completed)
+                  CANDIDATES="No HTTP response ever came back, so the transport is what failed. Candidates, NONE of them established here: ingress is internal, so the runner cannot reach a revision FQDN at all; the revision FQDN has not propagated in DNS yet; egress from the runner is blocked; TLS was rejected. curl's exit code above is what tells them apart (6=DNS, 7=connect, 28=timeout, 35/60=TLS)." ;;
+                *)
+                  CANDIDATES="green DID answer, so it is reachable and 'internal ingress' is NOT the explanation. What remains open is WHAT answered: the app itself erroring, an auth or redirect layer in front of the route, or a route that exists but does not report build.sha." ;;
+              esac
+              echo "::warning::The /api/version probe never confirmed the rolled SHA on green's own FQDN, so this gate rests on healthState ALONE. Observed on the last attempt: class=$PROBE_CLASS; $PROBE_DETAIL. $CANDIDATES"
             fi
+          else
+            echo "::warning::The /api/version probe was NOT attempted, so this gate rests on healthState ALONE — $NO_PROBE_REASON"
           fi
           echo "gate=pass" >> "$GITHUB_OUTPUT"
           echo "::notice::green PASSED the health gate"
@@ -481,17 +623,45 @@ jobs:
           echo "::notice::Gov console rolled with a freshly staged Copilot corpus, but the loom-docs index was NOT refreshed here — LOOM_VERIFY_URL / LOOM_INTERNAL_TOKEN address the Commercial estate. Refresh it by dispatching loom-docs-reindex.yml with console_url set to the Gov console base URL (refs #2929)."
 
       # ── Auto-rollback: green failed the gate → deactivate it; blue never moved ─
+      #
+      # R7 (#3411) — this step used to announce "Deactivating green." in the
+      # progressive tense and then run the deactivate as
+      #     az containerapp revision deactivate … -o none 2>/dev/null || true
+      # discarding whether it happened at all. A failed deactivate leaves green
+      # ACTIVE at 0% traffic, silently, where it counts against the app's
+      # revision cap — and the one reader who needed to know that was told the
+      # opposite. Same for the belt-and-braces traffic re-pin below it.
+      #
+      # Nothing here asserts an action any more: each attempt is made, its exit
+      # status captured, and its OUTCOME reported with a remediation on failure.
       - name: Auto-rollback (green failed the gate)
         if: ${{ steps.gate.outputs.gate != 'pass' }}
         run: |
-          set -euo pipefail
+          # `-e` is deliberately absent: BOTH remediation attempts below must be
+          # made and reported even when the first one fails. The step still ends
+          # in an unconditional `exit 1` — a failed gate is a failed roll.
+          set -uo pipefail
           RG="${{ steps.resolve.outputs.rg }}"
           GREEN="${{ steps.green.outputs.green }}"
           BLUE="${{ steps.blue.outputs.blue }}"
-          echo "::error::green ($GREEN) failed the health gate — traffic never left blue ($BLUE). Deactivating green."
-          az containerapp revision deactivate -n "$APP" -g "$RG" --revision "$GREEN" -o none 2>/dev/null || true
-          # Belt-and-braces: re-pin 100% to blue in case anything shifted.
-          if [[ -n "$BLUE" && "$BLUE" != "None" ]]; then
-            az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$BLUE=100" -o none 2>/dev/null || true
+          ERR="$(mktemp)"
+          err_detail() { head -c 400 "$ERR" | tr '\n' ' '; }
+
+          echo "::error::green ($GREEN) failed the health gate — traffic never left blue ($BLUE). Rolling back now; what follows is the OUTCOME of each rollback action, reported rather than assumed."
+
+          if az containerapp revision deactivate -n "$APP" -g "$RG" --revision "$GREEN" -o none 2>"$ERR"; then
+            echo "::notice::rollback 1/2 — green ($GREEN) DEACTIVATED."
+          else
+            echo "::error::rollback 1/2 FAILED — green ($GREEN) could NOT be deactivated, so it is still ACTIVE at 0% traffic and still counts against this app's revision cap. Deactivate it by hand: az containerapp revision deactivate -n $APP -g $RG --revision $GREEN . Detail: $(err_detail)"
+          fi
+
+          if [ -n "$BLUE" ] && [ "$BLUE" != 'None' ]; then
+            if az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$BLUE=100" -o none 2>"$ERR"; then
+              echo "::notice::rollback 2/2 — traffic re-pinned 100% to blue ($BLUE)."
+            else
+              echo "::error::rollback 2/2 FAILED — could not re-pin traffic to blue ($BLUE). This is belt-and-braces (the traffic-shift step never ran, so the weights should already be untouched), but they are now UNVERIFIED rather than confirmed. Check: az containerapp ingress traffic show -n $APP -g $RG . Detail: $(err_detail)"
+            fi
+          else
+            echo "::warning::rollback 2/2 SKIPPED — no blue revision was recorded (blue='$BLUE'), so there is nothing to re-pin. The traffic weights are whatever ACA already had; this step is not claiming they are correct."
           fi
           exit 1

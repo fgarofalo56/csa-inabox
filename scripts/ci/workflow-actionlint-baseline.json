@@ -6,7 +6,7 @@
     "bicep-whatif.yml": 14,
     "build-fiab-images-acr-tasks.yml": 2,
     "build-fiab-images.yml": 6,
-    "console-bluegreen-roll.yml": 2,
+    "console-bluegreen-roll.yml": 1,
     "copilot-auto-merge.yml": 3,
     "copilot-quality-evals.yml": 2,
     "csa-loom-attempt-interactive-grants.yml": 1,
