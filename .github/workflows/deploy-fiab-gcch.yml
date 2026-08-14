@@ -127,52 +127,59 @@ jobs:
       dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
       region: ${{ steps.bootstrap_coords.outputs.region }}
 
-    # ── IMAGE TAGS: ONE DEFINITION FOR THE WHOLE JOB (#3161) ────────────────
-    # gcc-high.bicepparam resolves all sixteen `appImageTags` entries with
+    # ── IMAGE TAGS: THE DEPLOY MEASURES THEM, NOBODY TYPES THEM (#3449) ─────
+    # gcc-high.bicepparam resolves all seventeen `appImageTags` entries with
     # `readEnvironmentVariable('LOOM_<X>_TAG', 'v0.1')`, which CANNOT FAIL — the
-    # default is the point of the second argument. So while the deploying step
-    # had no `env:` block, every full Gov deploy SUCCEEDED while writing the
-    # mutable `v0.1` onto loom-unity, iceberg-catalog and loom-trino, reverting
-    # any SHA-pinned roll with nothing in the log.
+    # default is the point of the second argument. #3161 put those variables in
+    # scope here as `${{ vars.LOOM_<X>_TAG || 'v0.1' }}`, which closed the "not
+    # in scope" half and left the harder one open: with the repo variables unset
+    # (their normal state) every SCHEDULED reconcile still proposed the param
+    # file's own default over whatever the estate was running. Run 31793715708
+    # is the receipt — the silent-revert gate refused three tags (loom-console
+    # on `28de89fb`, loom-wrangler-host on `7ba2ec0f`, loom-unity digest-pinned)
+    # and this lane failed on EVERY scheduled run (#3449).
     #
-    # WHY JOB LEVEL RATHER THAN A BLOCK PER STEP. Three steps in this job have
-    # to agree about which tag this deploy means — the image preflight (which
-    # asserts the tag EXISTS), the what-if (the artifact an operator reads
-    # before approving a full run), and the apply. #3303 gave the block to the
-    # apply only, so the preflight went on asserting `${LOOM_CONSOLE_TAG:-v0.1}`
-    # against a deploy that used the repo variable, and the what-if previewed a
-    # third thing. Three copies of a value are three chances to disagree; the
-    # variable belongs to the job.
+    # The gate was right. Its remedy was not: "set the repo variable" asks a
+    # human for a value the platform had already measured — the gate reads the
+    # running tag in order to compare against it. auto-bind-by-default.md §5:
+    # "'Set LOOM_X' as the terminal user-facing state is a violation — the value
+    # must be produced by the deploy."
     #
-    # Every literal below is gcc-high.bicepparam's OWN declared default (v0.1 for
-    # all sixteen on this boundary). A literal that differs from the param file
-    # would be a second, invisible source of truth for which image the estate
-    # runs — the same defect with the sign flipped, and the one the IL5 lane
-    # actually shipped. scripts/ci/check-bicepparam-env-reaches-deploy.mjs fails
-    # on either half: a tag out of scope, or a fallback that disagrees.
+    # So the seventeen literals are GONE and `Adopt the image tags…` below is
+    # the SINGLE WRITER of every LOOM_*_TAG, exporting into $GITHUB_ENV the tag
+    # each app is ACTUALLY running (or the param file's own default where there
+    # is nothing to preserve). What remains here is only the REQUEST channel.
+    #
+    # WHY THE REQUEST VARIABLES ARE NOT NAMED `LOOM_*_TAG`. Two independent
+    # reasons, either fatal:
+    #   1. a job-level `env:` key BEATS a `$GITHUB_ENV` write (GitHub docs,
+    #      Variables: "the variable at the lowest level takes precedence"), so
+    #      keeping the name here would silently discard every adopted value —
+    #      the adoption would run, print, and change nothing.
+    #   2. `${{ vars.X }}` with X unset is the EMPTY STRING, not absent, and
+    #      `readEnvironmentVariable('LOOM_CONSOLE_TAG','v0.1')` returns that
+    #      empty string rather than the default — image ref `<acr>/loom-console:`.
+    # One name reaches bicep, one thing writes it.
     env:
-      LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG || 'v0.1' }}
-      LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG || 'v0.1' }}
+      REQUESTED_LOOM_ACTIVATOR_TAG: ${{ vars.LOOM_ACTIVATOR_TAG }}
+      REQUESTED_LOOM_CONSOLE_TAG: ${{ vars.LOOM_CONSOLE_TAG }}
       # loom-directlake (#3291) — a SEPARATE key from LOOM_DIRECTLAKE_TAG below,
-      # which pins loom-direct-lake-shim: two apps, two repos. Its fallback is
-      # 'v0.1' because that is what gcc-high.bicepparam's `directLakeSvc`
-      # declares — the two must agree or check-bicepparam-env-reaches-deploy.mjs
-      # fails the merge on the fallback-mismatch rule (#3161).
-      LOOM_DIRECTLAKE_SVC_TAG: ${{ vars.LOOM_DIRECTLAKE_SVC_TAG || 'v0.1' }}
-      LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG || 'v0.1' }}
-      LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
-      LOOM_MAF_TAG: ${{ vars.LOOM_MAF_TAG || 'v0.1' }}
-      LOOM_MCP_BRIDGE_TAG: ${{ vars.LOOM_MCP_BRIDGE_TAG || 'v0.1' }}
-      LOOM_MCP_TAG: ${{ vars.LOOM_MCP_TAG || 'v0.1' }}
-      LOOM_MIGRATE_TAG: ${{ vars.LOOM_MIGRATE_TAG || 'v0.1' }}
-      LOOM_MIRRORING_TAG: ${{ vars.LOOM_MIRRORING_TAG || 'v0.1' }}
-      LOOM_ORCHESTRATOR_TAG: ${{ vars.LOOM_ORCHESTRATOR_TAG || 'v0.1' }}
-      LOOM_RISINGWAVE_TAG: ${{ vars.LOOM_RISINGWAVE_TAG || 'v0.1' }}
-      LOOM_SCRIPT_RUNNER_TAG: ${{ vars.LOOM_SCRIPT_RUNNER_TAG || 'v0.1' }}
-      LOOM_SETUP_ORCHESTRATOR_TAG: ${{ vars.LOOM_SETUP_ORCHESTRATOR_TAG || 'v0.1' }}
-      LOOM_TRINO_TAG: ${{ vars.LOOM_TRINO_TAG || 'v0.1' }}
-      LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
-      LOOM_WRANGLER_TAG: ${{ vars.LOOM_WRANGLER_TAG || 'v0.1' }}
+      # which pins loom-direct-lake-shim: two apps, two repos.
+      REQUESTED_LOOM_DIRECTLAKE_SVC_TAG: ${{ vars.LOOM_DIRECTLAKE_SVC_TAG }}
+      REQUESTED_LOOM_DIRECTLAKE_TAG: ${{ vars.LOOM_DIRECTLAKE_TAG }}
+      REQUESTED_LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG }}
+      REQUESTED_LOOM_MAF_TAG: ${{ vars.LOOM_MAF_TAG }}
+      REQUESTED_LOOM_MCP_BRIDGE_TAG: ${{ vars.LOOM_MCP_BRIDGE_TAG }}
+      REQUESTED_LOOM_MCP_TAG: ${{ vars.LOOM_MCP_TAG }}
+      REQUESTED_LOOM_MIGRATE_TAG: ${{ vars.LOOM_MIGRATE_TAG }}
+      REQUESTED_LOOM_MIRRORING_TAG: ${{ vars.LOOM_MIRRORING_TAG }}
+      REQUESTED_LOOM_ORCHESTRATOR_TAG: ${{ vars.LOOM_ORCHESTRATOR_TAG }}
+      REQUESTED_LOOM_RISINGWAVE_TAG: ${{ vars.LOOM_RISINGWAVE_TAG }}
+      REQUESTED_LOOM_SCRIPT_RUNNER_TAG: ${{ vars.LOOM_SCRIPT_RUNNER_TAG }}
+      REQUESTED_LOOM_SETUP_ORCHESTRATOR_TAG: ${{ vars.LOOM_SETUP_ORCHESTRATOR_TAG }}
+      REQUESTED_LOOM_TRINO_TAG: ${{ vars.LOOM_TRINO_TAG }}
+      REQUESTED_LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG }}
+      REQUESTED_LOOM_WRANGLER_TAG: ${{ vars.LOOM_WRANGLER_TAG }}
 
     steps:
       - uses: actions/checkout@v7
@@ -335,6 +342,46 @@ jobs:
             echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
           fi
 
+      # ── ADOPT THE IMAGE TAGS THIS ESTATE IS RUNNING (#3449) ────────────────
+      # THE SINGLE WRITER of every LOOM_*_TAG this job uses. It must run before
+      # the first consumer, because four steps downstream all resolve image tags
+      # and must resolve the SAME ones: the adopted-image preflight, the
+      # what-if an operator approves, the ACR tag assertion, and the apply.
+      #
+      # Read-only (`az containerapp list`). Per key it exports, in order:
+      #   REQUESTED_LOOM_<X>_TAG if the operator set the repo variable — intent
+      #     outranks the estate, so a deliberate roll forward is never undone by
+      #     a reconcile;
+      #   otherwise the tag the app is ACTUALLY running — which is what makes a
+      #     scheduled reconcile a no-op for the image and removes the human step
+      #     the silent-revert gate used to demand;
+      #   otherwise gcc-high.bicepparam's OWN declared default — the honest case
+      #     where nothing is running that repository, so there is nothing to
+      #     preserve and deploying it CREATES the app.
+      #
+      # It never invents a tag. A digest-pinned app, one repository running at
+      # two tags, or a failed query are reported UNRESOLVED and left at the param
+      # default WITHOUT any claim that writing it is safe — the revert gate below
+      # re-reads the estate itself and decides that, from its own measurement.
+      #
+      # NOT gated on run_mode: `whatif-only` is this lane's DEFAULT, and a
+      # preview that resolves different tags than the apply is a lying preview
+      # (deploy-integrity R7).
+      #
+      # NOT gated on topology either, unlike the two sibling gates below. Those
+      # skip on dlz-attach because nothing is ADOPTED there; this step is not a
+      # gate, it is the producer of a variable other steps read under `set -u`
+      # ("Image preflight — Gov ACR …" interpolates `${LOOM_DUCKDB_TAG}` bare and
+      # has no topology guard). Skipping here would abort that step instead of
+      # relaxing anything. It reads the same hub RG that preflight asserts
+      # against, so the two cannot describe different estates.
+      - name: Adopt the image tags this estate is running (no repo variable required)
+        run: |
+          set -euo pipefail
+          node scripts/ci/adopt-image-tags.mjs \
+            --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       # ADOPTED-IMAGE PREFLIGHT. This deploy ADOPTS the Container Apps that are
       # already running in rg-csa-loom-admin-<loc> and rewrites their image
       # references to the tags the .bicepparam pulls. An ARM PUT naming a tag that
@@ -384,7 +431,8 @@ jobs:
       # `vars.LOOM_*_TAG`, so with any tag pinned the what-if showed image churn
       # that would not happen — or hid churn that would. A preview that asserts
       # something it did not establish is deploy-integrity.md R7 applied to the
-      # artifact people actually read. The job-level `env:` above now feeds both.
+      # artifact people actually read. `Adopt the image tags…` above is now the
+      # single writer that feeds this preview, the preflights and the apply.
       - name: Bicep what-if
         run: |
           az deployment sub what-if \
@@ -433,11 +481,14 @@ jobs:
       # (no-vaporware.md) builds the registry contents in the next phase.
       - name: Image preflight — Gov ACR must already hold every referenced tag
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
-        # The two LOOM_*_TAG values this step reads now come from the job-level
-        # `env:` (#3161), which is the same source the what-if and the apply use.
-        # They were declared here, on this step only, so a pinned repo variable
-        # was asserted by the preflight and then ignored by the deploy — the
-        # preflight passing READ AS "the pin took effect" when it had not.
+        # The two LOOM_*_TAG values this step reads come from `Adopt the image
+        # tags…` (#3449) — the same $GITHUB_ENV the what-if and the apply read.
+        # They were once declared here, on this step only, so a pinned repo
+        # variable was asserted by the preflight and then ignored by the deploy:
+        # the preflight passing READ AS "the pin took effect" when it had not.
+        # They are interpolated BARE under `set -u`, which is why the adopter
+        # exports a value for every declared tag rather than only the running
+        # ones — an unexported variable would abort this step.
         run: |
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
@@ -519,9 +570,11 @@ jobs:
         # every full Gov deploy fell back to the default and wrote the MUTABLE
         # `v0.1` onto loom-unity, iceberg-catalog (same image) and loom-trino —
         # silently reverting any SHA-pinned roll of those apps, with nothing in
-        # the log to say it had happened. Those sixteen now live in the job-level
-        # `env:` at the top of this job, shared with the preflight and the
-        # what-if so all three name the same tag.
+        # the log to say it had happened. #3161 put them in scope; #3449 made
+        # the deploy MEASURE them — `Adopt the image tags…` writes all seventeen
+        # into $GITHUB_ENV from the running estate, shared with the preflights
+        # and the what-if so every step names the same tag and none of them
+        # needs an operator to type one.
         env:
           # THE azd BRANCH IS GONE (#3415). Until this change, every topology
           # except `dlz-attach` — i.e. the DEFAULT sovereign path — ran

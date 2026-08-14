@@ -120,9 +120,15 @@ export const DEPLOY_VERBS = Object.freeze([
  * and the param file's default applies. That is correct — there is no running
  * image to preserve — and it is why crediting the producer with the full key
  * set is honest here rather than generous.
+ *
+ * adopt-image-tags.mjs (#3449) emits a line for EVERY tag its param file
+ * declares — adopted, explicitly requested, or the file's own default — because
+ * the Gov consumers read those variables under `set -u`. So for that producer
+ * the full key set is not merely honest, it is exactly what it writes.
  */
 export const GITHUB_ENV_PRODUCERS = Object.freeze([
   { re: /reconcile-resolve\.mjs/, keys: APP_IMAGE_TAGS.map((e) => e.envVar) },
+  { re: /adopt-image-tags\.mjs/, keys: APP_IMAGE_TAGS.map((e) => e.envVar) },
 ]);
 
 /**
