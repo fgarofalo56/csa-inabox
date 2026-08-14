@@ -88,6 +88,7 @@ import { type ServiceChoiceMap } from '@/lib/panes/setup-service-choices';
 import { ScopeStepBody, AdoptionStepBody } from '@/lib/components/setup/planner-step-bodies';
 import { renderBicepParam } from '@/lib/setup/bicep-preview';
 import { PlanReviewStep } from '@/lib/components/setup/plan-review-step';
+import { RegionField } from '@/lib/components/setup/region-field';
 import { useAdoptionPlanner, PLAN_BOUNDARY } from '@/lib/panes/setup-adoption-planner';
 import type { DeploymentPlan } from '@/lib/deploy/plan-model';
 import { planBlockers } from '@/lib/deploy/plan-model';
@@ -1855,51 +1856,6 @@ function SummaryCell({ label, value, sub }: { label: string; value?: string; sub
 
 /**
  * Region picker: a closed dropdown over the supported regions for the active
- * cloud boundary. Sources from the live ARM `/locations` for the chosen
- * subscription when available (regionSource==='arm'), else the static
- * per-boundary fallback. Never a free-text box (loom-no-freeform-config.md).
+ * cloud boundary. Extracted to `lib/components/setup/region-field.tsx`,
+ * alongside its siblings PlanReviewStep and the planner step bodies.
  */
-function RegionField(props: {
-  styles: ReturnType<typeof useStyles>;
-  regions: AzureRegion[];
-  regionsLoading: boolean;
-  regionSource: 'arm' | 'static';
-  value?: string;
-  isGov: boolean;
-  onSelect: (v: string) => void;
-}) {
-  const { styles, regions, regionsLoading, regionSource, value, isGov, onSelect } = props;
-  const selected = value ? regions.find((r) => r.name === value) : undefined;
-  return (
-    <Field
-      label="Region"
-      required
-      hint={
-        regionsLoading
-          ? 'Loading regions…'
-          : regionSource === 'arm'
-            ? "Live list of regions enabled for the selected subscription (Azure Resource Manager)."
-            : isGov
-              ? 'Azure Government regions for this boundary.'
-              : 'Azure Public regions for this boundary.'
-      }
-    >
-      {regionsLoading ? (
-        <div className={styles.inlineLoad}><Spinner size="tiny" /> <Caption1>Listing regions…</Caption1></div>
-      ) : (
-        <Dropdown
-          placeholder="Select region"
-          value={selected ? `${selected.display} (${selected.name})` : value}
-          selectedOptions={value ? [value] : []}
-          onOptionSelect={(_, d) => onSelect(d.optionValue as string)}
-        >
-          {regions.map((r) => (
-            <Option key={r.name} value={r.name} text={`${r.display} (${r.name})`}>
-              {r.display} — {r.name}
-            </Option>
-          ))}
-        </Dropdown>
-      )}
-    </Field>
-  );
-}
