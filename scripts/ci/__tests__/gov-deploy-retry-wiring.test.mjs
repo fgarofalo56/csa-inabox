@@ -37,11 +37,25 @@ const WF_DIR = path.resolve(__dirname, '..', '..', '..', '.github', 'workflows')
  * matches the START of the invocation (so the `-- ` prefix test is meaningful).
  * `az deployment sub create` deliberately does NOT match `what-if`/`validate`
  * (reads on the deploy path — classified elsewhere).
+ *
+ * #3415 removed `azd provision` from the gcc and gcch lanes: it ran against
+ * platform/fiab/bicep/main.bicep, which has no `main.parameters.json` beside it,
+ * so azd could not bind any of that template's 22 required parameters. Both
+ * lanes now run ONE `az deployment sub create` on every topology, so the second
+ * mutation per lane is gone rather than moved — which is why the expectation is
+ * REMOVED here rather than retargeted. The rule those rows enforced is not
+ * weakened: the surviving `az deployment sub create` row covers the path that
+ * replaced them, on every topology, and a re-introduced `azd provision` would
+ * now fail scripts/ci/check-azd-provision-param-binding.mjs outright.
+ *
+ * The self-check at the bottom still uses `azd provision` in its in-memory
+ * mutant, deliberately: the detector must keep proving it can see a bare
+ * sibling branch even though no workflow has one today.
  */
 const EXPECTATIONS = [
   { file: 'deploy-fiab-commercial.yml', mutations: [/\baz\s+deployment\s+sub\s+create\b/] },
-  { file: 'deploy-fiab-gcc.yml', mutations: [/\baz\s+deployment\s+sub\s+create\b/, /\bazd\s+provision\b/] },
-  { file: 'deploy-fiab-gcch.yml', mutations: [/\baz\s+deployment\s+sub\s+create\b/, /\bazd\s+provision\b/] },
+  { file: 'deploy-fiab-gcc.yml', mutations: [/\baz\s+deployment\s+sub\s+create\b/] },
+  { file: 'deploy-fiab-gcch.yml', mutations: [/\baz\s+deployment\s+sub\s+create\b/] },
   {
     file: 'deploy-fiab-il5.yml',
     mutations: [/\baz\s+deployment\s+sub\s+create\b/, /\bbash\s+scripts\/csa-loom\/redeploy-gov\.sh\b/],
