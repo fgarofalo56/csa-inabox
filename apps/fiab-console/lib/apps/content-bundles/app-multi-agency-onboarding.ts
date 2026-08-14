@@ -46,7 +46,7 @@
 
 import type { AppBundle } from './types';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
-import { armBase } from '@/lib/azure/cloud-endpoints';
+import { armBase, graphBase, getGraphHost } from '@/lib/azure/cloud-endpoints';
 
 // ─── Warehouse: DLZ Onboarding Registry ─────────────────────────────────
 // Operational system-of-record for the onboarding workflow the Setup
@@ -346,7 +346,7 @@ const NB_CELLS: NotebookCell[] = [
       '# https://learn.microsoft.com/graph/api/privilegedaccessgroup-post-eligibilityschedulerequests\n' +
       'import os, requests, datetime as dt\n' +
       '\n' +
-      'GRAPH = os.environ.get("LOOM_GRAPH_BASE", "https://graph.microsoft.com/v1.0")\n' +
+      `GRAPH = os.environ.get("LOOM_GRAPH_BASE", "${graphBase()}")\n` +
       'token = os.environ["LOOM_GRAPH_TOKEN"]  # MI token, scope GroupMember.ReadWrite.All\n' +
       'MCP_PRINCIPAL_ID = os.environ["LOOM_MCP_PRINCIPAL_ID"]\n' +
       'MCP_OPERATORS_GROUP_ID = os.environ["LOOM_MCP_OPERATORS_GROUP_ID"]\n' +
@@ -624,7 +624,10 @@ const PIPELINE_ACTIVITIES = [
     config: {
       url: "@concat(pipeline().parameters.graphBase, '/identityGovernance/privilegedAccess/group/eligibilityScheduleRequests')",
       method: 'POST',
-      authentication: { type: 'MSI', resource: 'https://graph.microsoft.com' },
+      // MSI token audience must match the Graph ROOT of the active boundary —
+      // a Commercial audience is rejected outright in GCC-High/IL5 (Learn:
+      // graph/deployments, "tokens ... are not interchangeable").
+      authentication: { type: 'MSI', resource: getGraphHost() },
       body: {
         accessId: 'member',
         principalId: '@pipeline().parameters.mcpPrincipalId',
@@ -853,7 +856,7 @@ const bundle: AppBundle = {
       content: {
         kind: 'adf-pipeline',
         parameters: {
-          graphBase: { type: 'string', defaultValue: 'https://graph.microsoft.com/v1.0' },
+          graphBase: { type: 'string', defaultValue: graphBase() },
           armBase: { type: 'string', defaultValue: armBase() },
           dlzSubscriptionId: { type: 'string', defaultValue: 'cccc2222-2222-2222-2222-2222222222cc' },
           domainName: { type: 'string', defaultValue: 'Field Services' },

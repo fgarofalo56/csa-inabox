@@ -15,29 +15,39 @@
  * remediation payload so the UI displays the precise admin step.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { withCapability } from '@/lib/api/route-toolkit';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { graphBase, getGraphScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const credential = uamiArmCredential();
 
-const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
-
+// Graph root + /v1.0 and the token audience both resolve per sovereign
+// boundary (#3381). Both were hard-coded Commercial literals, so this route
+// called the worldwide Graph host from GCC-High, IL5 and DoD alike — a
+// cross-boundary request whose token is not even interchangeable (Learn:
+// graph/deployments). Resolved at CALL time so env set after module load
+// (tests, and any lazy-init path) is honoured.
 async function graphToken(): Promise<string> {
-  const t = await credential.getToken('https://graph.microsoft.com/.default');
+  const t = await credential.getToken(getGraphScope());
   if (!t?.token) throw new Error('Failed to acquire Graph token');
   return t.token;
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  const gate = await enforceCapability(s, 'admin.permissions', 'Contributor');
-  if (gate) return gate;
-
+// Route-toolkit: withCapability (C22 / #3088) — migrated by #3381's boy-scout
+// touch ratchet. BEHAVIOUR-PRESERVING, checked rather than assumed:
+//   - no session  -> withSession returns apiUnauthorized(), which is the same
+//     401 `{ok:false,error:'unauthenticated'}` body enforceCapability(null,…)
+//     returned on line 190 of lib/auth/feature-gate.ts.
+//   - session, no capability -> enforceCapability's 403 envelope, unchanged.
+//   - allowed -> the handler below, unchanged.
+// The one DIFFERENCE is an improvement: withSession wraps the handler in
+// try/catch -> apiServerError, so an unexpected throw is a safe 500 with a
+// server-side log instead of an unhandled Next error.
+export const GET = withCapability('admin.permissions', 'Contributor', async (req: NextRequest) => {
   const q = (req.nextUrl.searchParams.get('q') || '').trim();
   const kind = req.nextUrl.searchParams.get('kind') === 'group' ? 'group' : 'user';
   if (!q) return NextResponse.json({ ok: true, results: [] });
@@ -57,9 +67,10 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const graphV1 = graphBase();
   const endpoint = kind === 'group'
-    ? `${GRAPH_BASE}/groups?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,description,mail`
-    : `${GRAPH_BASE}/users?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}') or startswith(userPrincipalName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,userPrincipalName,mail`;
+    ? `${graphV1}/groups?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,description,mail`
+    : `${graphV1}/users?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}') or startswith(userPrincipalName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,userPrincipalName,mail`;
 
   const res = await fetch(endpoint, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
@@ -95,4 +106,4 @@ export async function GET(req: NextRequest) {
     description: p.description,
   }));
   return NextResponse.json({ ok: true, results });
-}
+});

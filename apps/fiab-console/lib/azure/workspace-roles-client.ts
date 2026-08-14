@@ -40,6 +40,7 @@ import crypto from 'node:crypto';
 import { armBase, armScope, graphBase, graphScope } from './cloud-endpoints';
 import { workspaceRolesContainer } from './cosmos-client';
 import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 import {
   ROLE_TO_RBAC,
   pickHighestRole,
@@ -467,10 +468,49 @@ export async function resolveEffectiveRole(
     return pickHighestRole(inherited);
   }
   for (const a of groupAssignments) {
-    const isMember = await graphUserInGroup(token, a.principalId, userId);
-    if (isMember) inherited.push(a.role);
+    // 'unknown' (Graph unreachable) contributes nothing — same fail-closed
+    // posture as before, when this read a bare `false`.
+    if ((await graphUserInGroup(token, a.principalId, userId)) === 'member') inherited.push(a.role);
   }
   return pickHighestRole(inherited);
+}
+
+/**
+ * The three genuinely-different answers a Graph membership check can produce.
+ *
+ * `unknown` exists because #3381's acceptance criteria call it out by name: a
+ * fail-closed `false` returned because the endpoint could not be REACHED is
+ * indistinguishable, to every caller and every log reader, from a `false` that
+ * Graph actually measured. That ambiguity is what made the wrong-Graph-host bug
+ * silent — an IL5 console asking `graph.microsoft.us` about an L5 tenant got a
+ * non-answer and reported "not a member". Authorization still fails closed on
+ * `unknown`; the difference is that it is now SAYABLE.
+ */
+export type GraphMembership = 'member' | 'not-member' | 'unknown';
+
+/**
+ * Transitive (nested-aware) group membership as a TRI-STATE. Prefer this over
+ * `userIsTransitiveGroupMember` anywhere the caller can surface or log the
+ * difference between a measured negative and an unreachable directory.
+ */
+export async function userTransitiveGroupMembership(
+  userId: string,
+  groupId: string,
+): Promise<GraphMembership> {
+  if (!userId || !groupId) return 'not-member';
+  let token: string;
+  try {
+    token = await graphToken();
+  } catch (e: unknown) {
+    // COULD NOT ASK — no token. Callers fail closed, but the cause is named.
+    // logSafeError, not raw interpolation: an Error's message reaches the log
+    // verbatim and a newline in it forges a second record (js/log-injection).
+    console.warn(
+      `[graph-membership] UNKNOWN (not a measured negative): could not acquire a Graph token for ${logSafe(graphScope(), 120)} — ${logSafeError(e)}`,
+    );
+    return 'unknown';
+  }
+  return graphUserInGroup(token, groupId, userId);
 }
 
 /**
@@ -478,22 +518,23 @@ export async function resolveEffectiveRole(
  * acquiring its own Graph token. This is the standalone entry point used by the
  * domain-tier resolver (lib/auth/domain-role.ts) when the cached `groups` claim
  * is empty/truncated (the Entra >200-group overage case) and we must confirm
- * domain admin/contributor group membership against Graph directly. Returns
- * false (never throws) when Graph is unavailable so callers fail closed.
+ * domain admin/contributor group membership against Graph directly.
+ *
+ * FAIL-CLOSED and unchanged: `unknown` collapses to `false`, so an unreachable
+ * directory never grants a role. The collapse is deliberate and is the correct
+ * posture for an authorization check — `userTransitiveGroupMembership()` is the
+ * tri-state form for callers that need to tell the two apart.
  */
 export async function userIsTransitiveGroupMember(userId: string, groupId: string): Promise<boolean> {
-  if (!userId || !groupId) return false;
-  let token: string;
-  try {
-    token = await graphToken();
-  } catch {
-    return false;
-  }
-  return graphUserInGroup(token, groupId, userId);
+  return (await userTransitiveGroupMembership(userId, groupId)) === 'member';
 }
 
-/** True when `userId` is a transitive member of `groupId` (handles nested groups). */
-async function graphUserInGroup(token: string, groupId: string, userId: string): Promise<boolean> {
+/**
+ * Transitive membership against Graph. Returns `unknown` — never a bare
+ * `false` — whenever the directory could not answer, so the caller's
+ * fail-closed decision is distinguishable from a measured "not a member".
+ */
+async function graphUserInGroup(token: string, groupId: string, userId: string): Promise<GraphMembership> {
   // Microsoft Graph: members/{id} existence check across the transitive closure.
   const url = `${graphBase()}/groups/${groupId}/transitiveMembers/${userId}?$select=id`;
   try {
@@ -501,11 +542,19 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
     });
-    if (res.ok) return true;
-    if (res.status === 404) return false;
+    if (res.ok) return 'member';
+    if (res.status === 404) return 'not-member';
     // On 4xx/5xx other than 404 fall back to paged enumeration once.
-  } catch {
-    return false;
+  } catch (e: unknown) {
+    // COULD NOT ASK — transport failure. Naming the host makes a
+    // wrong-national-cloud call (the #3381 defect) diagnosable from one log
+    // line instead of looking like an ordinary negative. The thrown error can
+    // carry the request URL (and therefore a request-derived group id), so it
+    // goes through logSafeError rather than into the template raw.
+    console.warn(
+      `[graph-membership] UNKNOWN (not a measured negative): transitiveMembers request to ${logSafe(graphBase(), 120)} failed — ${logSafeError(e)}`,
+    );
+    return 'unknown';
   }
   // Fallback: enumerate transitive members (covers tenants where the direct
   // membership-by-id check is not permitted on the resource type).
@@ -519,9 +568,10 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
   // "truncate, keep the rows" reflex must not become "assume the answer". This
   // is an AUTHORIZATION check: returning true on a partial list would grant a
   // role from a membership we never actually saw. So a truncated walk answers
-  // `false` — identical to this function's existing posture for a Graph error
-  // or a non-404 status — and `warnIfTruncated` logs the honest cause so the
-  // deadline is diagnosable as a deadline, not silently read as "not a member".
+  // `unknown` — which `userIsTransitiveGroupMember` collapses to `false`,
+  // exactly the previous behaviour — and `warnIfTruncated` logs the honest
+  // cause so the deadline is diagnosable as a deadline, not read as "not a
+  // member". The tri-state is what makes those two sayably different (#3381).
   const budget = new PagingBudget(`graph transitiveMembers ${groupId}`);
   let next: string =
     `${graphBase()}/groups/${groupId}/transitiveMembers?$select=id&$top=999&$count=true`;
@@ -532,19 +582,28 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
       cache: 'no-store',
     }, timeoutMs));
     if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch
-    if (!res.ok) return false;
+    if (!res.ok) {
+      // Graph answered, but not with an enumeration — we measured NOTHING.
+      console.warn(
+        `[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ${logSafe(graphBase(), 120)} returned HTTP ${Number(res.status)}`,
+      );
+      return 'unknown';
+    }
     const json: any = await res.json();
     for (const m of json?.value || []) {
       scanned += 1;
-      if (m?.id === userId) return true;
+      if (m?.id === userId) return 'member';
     }
-    if (!json?.['@odata.nextLink']) break; // finished cleanly — NOT a truncation
+    if (!json?.['@odata.nextLink']) {
+      // Finished cleanly with no match — this IS a measured negative.
+      return 'not-member';
+    }
     next = json['@odata.nextLink'];
   }
-  // Only reachable without a match. A truncation here means "we never finished
-  // looking", so say so loudly; the returned `false` stays fail-closed.
+  // Loop exited without finishing: either the page budget ran out or the wall
+  // clock did. Either way we never saw the whole closure, so this is UNKNOWN.
   budget.warnIfTruncated(scanned);
-  return false;
+  return budget.truncatedBy ? 'unknown' : 'not-member';
 }
 
 /**
