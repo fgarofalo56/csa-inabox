@@ -551,6 +551,15 @@ export const WATCHED = [
       // through a shared helper. Editing it changes whether the lane can
       // authenticate at all.
       'scripts/ci/acr-login-retry.sh',
+      // refs #3439 — the AcrPull probe-before-create helper. This lane used to
+      // carry that logic inline; consolidating it into one tested place (after a
+      // reviewer found the SAME fail-open duplicated into two workflows) made the
+      // helper a deploy source of this lane, and check-deploy-paths-coverage
+      // flagged the gap on the very next push. NOT CI_PLUMBING: it decides
+      // whether an AcrPull grant is CREATED, so editing it plainly changes the
+      // deployed estate — a bug here leaves a Container App unable to pull its
+      // image. That is the opposite of "cannot change the estate".
+      'scripts/csa-loom/_grant-role-if-absent.sh',
     ],
     maxDays: 21,
   },

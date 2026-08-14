@@ -299,6 +299,78 @@ test('CLI usage errors exit 2, distinct from every class exit code', () => {
 
 // ── PLATFORM-PERFORMED REMEDIATION (auto-bind-by-default §5) ─────────────────
 
+// The RoleAssignmentExists leaf, verbatim from deploy-fiab-commercial run
+// 31780698652 (2026-08-14). ARM enforces uniqueness on the (scope, principalId,
+// roleDefinitionId) TRIPLE, not on the NAME, so an AcrPull grant already held
+// for uami-loom-directlake under a CLI-minted name blocked the create the
+// template makes under its own deterministic name — on every run, forever.
+const ROLE_ASSIGNMENT_EXISTS =
+  'RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is ' +
+  "0a2b7dc58eb449709418694f83a6c164. [Microsoft.Authorization/roleAssignments '54ecee13-3330-50e1-9ba9-314abdca3540']";
+
+test('EMBEDDED CONTROL: the measured leaf still classifies as config.role-assignment-exists', () => {
+  // Without this the three tests below could all pass against a signal that no
+  // longer matches the text ARM actually emits — a remediation keyed to a
+  // signal nothing produces is the hollow-gate shape this repo keeps hitting.
+  const d = classify(ROLE_ASSIGNMENT_EXISTS);
+  assert.equal(d.signalId, 'config.role-assignment-exists');
+  assert.equal(d.retryable, false, 'retrying a deterministic leaf cannot go green — the name must converge');
+});
+
+test('planRemediation converges a RoleAssignmentExists instead of printing a delete command', () => {
+  const plan = planRemediation(classify(ROLE_ASSIGNMENT_EXISTS), ROLE_ASSIGNMENT_EXISTS);
+  assert.equal(plan.kind, 'converge-role-assignment');
+  // The EXISTING assignment ARM named — never the name the template asked for.
+  assert.equal(plan.assignmentName, '0a2b7dc58eb449709418694f83a6c164');
+  assert.ok(plan.argv.includes('--apply'), 'the platform performs it; a dry run would leave the deploy red');
+  assert.ok(plan.argv.includes('0a2b7dc58eb449709418694f83a6c164'));
+  assert.ok(
+    !plan.argv.includes('54ecee13-3330-50e1-9ba9-314abdca3540'),
+    'deleting the name the TEMPLATE wants would be deleting the wrong thing',
+  );
+  assert.match(plan.argv[1], /converge-role-assignment\.mjs$/);
+  assert.equal(path.isAbsolute(plan.argv[1]), true, 'a cwd-relative path is how a remediation becomes MODULE_NOT_FOUND');
+});
+
+test('planRemediation refuses to GUESS which assignment to DELETE when ARM named none', () => {
+  const err = 'RoleAssignmentExists: The role assignment already exists.';
+  const plan = planRemediation(classify(err), err);
+  assert.equal(plan.kind, 'converge-role-assignment');
+  assert.equal(plan.assignmentName, null);
+  assert.equal(plan.argv, null, 'nothing is deleted on a name that was never established');
+});
+
+test('planRemediation scopes the converge to the subscription the drill-down read', () => {
+  const plan = planRemediation(classify(ROLE_ASSIGNMENT_EXISTS), ROLE_ASSIGNMENT_EXISTS, { subscription: 'dlz-sub' });
+  assert.ok(plan.argv.includes('--subscription'));
+  assert.ok(plan.argv.includes('dlz-sub'));
+});
+
+test('the remediation must be planned from the DRILL-DOWN text, not from stderr alone', () => {
+  // On run 31780698652 `az deployment sub create` wrote only bicep linter
+  // warnings and "At least one resource deployment operation failed" to stderr.
+  // The assignment id lives exclusively in the ARM leaf the drill-down fetched,
+  // so planning from stderr alone yields a plan that can do nothing.
+  const STDERR_ONLY =
+    'WARNING: platform/fiab/bicep/main.bicep(14,7) : Warning no-unused-params: Parameter "environment" is ' +
+    'declared but never used.\nERROR: At least one resource deployment operation failed.';
+  const d = classify(ROLE_ASSIGNMENT_EXISTS); // the diagnosis comes from the LEAF
+  assert.equal(planRemediation(d, STDERR_ONLY).argv, null, 'stderr alone carries no id — nothing may be deleted');
+  assert.ok(planRemediation(d, `${STDERR_ONLY}\n${ROLE_ASSIGNMENT_EXISTS}`).argv, 'the combined text does');
+});
+
+test('SOURCE ASSERTION — the call site passes the combined classify input, not lastStderr', () => {
+  // Behavioural proof of the call site needs a live ARM drill-down, which is not
+  // available here; this is deliberately a source-level check and is labelled as
+  // one rather than implying an end-to-end receipt (R7). It exists so a revert
+  // to `planRemediation(diagnosis, lastStderr)` cannot pass silently — that
+  // single argument is the difference between the platform converging the
+  // collision and reporting that it could not read an id.
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  assert.match(src, /planRemediation\(diagnosis,\s*classifyInput,/);
+  assert.doesNotMatch(src, /planRemediation\(diagnosis,\s*lastStderr\)/);
+});
+
 test('planRemediation extracts the provider namespace and builds the real command', () => {
   const err = "ERROR: (MissingSubscriptionRegistration) The subscription is not registered to use namespace 'Microsoft.Kusto'.";
   const plan = planRemediation(classify(err), err);

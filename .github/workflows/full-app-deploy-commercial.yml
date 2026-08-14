@@ -321,6 +321,7 @@ jobs:
           # Use the RG the resolve job actually adopted — AZURE_LOCATION may be
           # the (stale) `region` input default while the estate is elsewhere.
           RG='${{ needs.resolve.outputs.rg }}'
+          ACRPULL=7f951dda-4ed3-4680-a7ca-43fe172d538d
 
           # AcrPush to deploy SP (push images)
           SP_OID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
@@ -329,16 +330,38 @@ jobs:
             --role 8311e382-0749-4cb8-b61a-304f252e45ec \
             --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
 
-          # AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) to every Loom UAMI
+          # ── AcrPull to every Loom UAMI — PROBE BEFORE CREATE (#3439) ─────────
+          # This loop took the whole Commercial infra deploy down for a fortnight
+          # and the reason was in its own title: "(idempotent)". It is idempotent
+          # with respect to ITSELF — `RoleAssignmentExists` was swallowed by
+          # `grep -vi already || true` — and NOT with respect to the template.
+          #
+          # `az role assignment create` with no --name mints a RANDOM v4 GUID.
+          # ARM enforces uniqueness on the (scope, principalId, roleDefinitionId)
+          # TRIPLE, not on the name, and admin-plane/main.bicep declares AcrPull
+          # on THIS registry for six of the identities this wildcard matches
+          # (script-runner, mcp, migrate, unity, risingwave, direct-lake) under
+          # deterministic v5 `guid()` names. Whichever writer lands first owns the
+          # triple; the other can never create it. On run 31780698652 that was
+          # uami-loom-directlake vs guid(acr.id, uami.id, AcrPull) — the deploy
+          # failed RoleAssignmentExists on every scheduled run thereafter.
+          #
+          # The probe logic lives in ONE tested place rather than inline here.
+          # The first cut of this fix duplicated it into this file and into the
+          # Gov lane, and both copies carried the same fail-open: `2>&1` folded
+          # az's stderr into the count, so a CLI update notice made the value
+          # neither "0" nor a positive integer and the grant was silently NOT
+          # created. See the helper's header — it now captures stderr separately,
+          # decides on az's exit status, and creates when it cannot read, because
+          # a redundant create is refused by ARM while a skipped one is an outage.
+          # shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
+          . scripts/csa-loom/_grant-role-if-absent.sh
           for UAMI in $(az identity list --resource-group "$RG" \
-              --query "[?starts_with(name, 'uami-loom-')].principalId" -o tsv); do
-            az role assignment create --assignee-object-id "$UAMI" \
-              --assignee-principal-type ServicePrincipal \
-              --role 7f951dda-4ed3-4680-a7ca-43fe172d538d \
-              --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
+              --query "[?starts_with(name, 'uami-loom-')].principalId" -o tsv | tr -d '\r'); do
+            grant_role_if_absent "$UAMI" "$ACRPULL" "$ACR_ID" "AcrPull for ${UAMI:0:8}… on the admin-plane ACR"
           done
 
-          echo "::notice::AcrPush + AcrPull roles granted."
+          echo "::notice::AcrPush + AcrPull roles reconciled."
           # 90s for Azure RBAC propagation across all assignments
           sleep 90
 

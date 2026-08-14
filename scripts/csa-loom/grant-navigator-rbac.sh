@@ -67,6 +67,13 @@ LOGIC_CONTRIB="87a39d53-fc1b-424a-814c-f7e04687dc9e"   # Logic App Contributor
 ADF_CONTRIB="673868aa-7521-48a0-acc6-0f60742d39f5"     # Data Factory Contributor
 APIM_CONTRIB="312a565d-c81f-4fd8-895a-4e21e48d571c"    # API Management Service Contributor
 
+# Probe-before-create for the grants whose role definitions the bicep ALSO
+# declares (#3439). See the helper's header: `az role assignment create` mints a
+# random v4 name, the template computes a deterministic v5 one, and ARM enforces
+# uniqueness on the triple — so a CLI grant can block the template forever.
+# shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
+. "$(dirname "${BASH_SOURCE[0]}")/_grant-role-if-absent.sh"
+
 grant() { # grant ROLE_GUID SCOPE LABEL
   local role="$1" scope="$2" label="$3"
   [[ -z "$scope" ]] && { echo "  - $label: scope not found, skipping"; return; }
@@ -224,11 +231,8 @@ if [[ -n "$RPTSUB_FUNC" ]]; then
     RS_ADLS="${REPORT_SUBS_ADLS_ACCT:-$(q storage account list -g "$RS_ADLS_RG" --query "[?starts_with(name,'st')].name | [0]" -o tsv)}"
     if [[ -n "$RS_ADLS" ]]; then
       RS_ADLS_SCOPE="/subscriptions/$SUB/resourceGroups/$RS_ADLS_RG/providers/Microsoft.Storage/storageAccounts/$RS_ADLS"
-      MSYS_NO_PATHCONV=1 az role assignment create \
-        --assignee-object-id "$RS_PRINCIPAL" --assignee-principal-type ServicePrincipal \
-        --role "$STORAGE_BLOB_CONTRIB" --scope "$RS_ADLS_SCOPE" -o none 2>&1 \
-        | grep -vi "already exists\|RoleAssignmentExists" || true
-      echo "  ✓ Storage Blob Data Contributor granted to $RPTSUB_FUNC ($RS_ADLS)"
+      grant_role_if_absent "$RS_PRINCIPAL" "$STORAGE_BLOB_CONTRIB" "$RS_ADLS_SCOPE" \
+        "Storage Blob Data Contributor granted to $RPTSUB_FUNC ($RS_ADLS)"
     else
       echo "  - ADLS account not found in $RS_ADLS_RG — report exports won't archive (delivery still works)"
     fi
@@ -236,11 +240,8 @@ if [[ -n "$RPTSUB_FUNC" ]]; then
     RS_LA="${REPORT_SUBS_LOGIC_APP:-$(q logic workflow list -g "$ADMIN_RG" --query "[?starts_with(name,'logic-loom-report-subs')].name | [0]" -o tsv)}"
     if [[ -n "$RS_LA" ]]; then
       RS_LA_SCOPE="/subscriptions/$SUB/resourceGroups/$ADMIN_RG/providers/Microsoft.Logic/workflows/$RS_LA"
-      MSYS_NO_PATHCONV=1 az role assignment create \
-        --assignee-object-id "$RS_PRINCIPAL" --assignee-principal-type ServicePrincipal \
-        --role "$LOGIC_CONTRIB" --scope "$RS_LA_SCOPE" -o none 2>&1 \
-        | grep -vi "already exists\|RoleAssignmentExists" || true
-      echo "  ✓ Logic App Contributor granted to $RPTSUB_FUNC ($RS_LA)"
+      grant_role_if_absent "$RS_PRINCIPAL" "$LOGIC_CONTRIB" "$RS_LA_SCOPE" \
+        "Logic App Contributor granted to $RPTSUB_FUNC ($RS_LA)"
     else
       echo "  - report-subscription Logic App not found in $ADMIN_RG — skipping (delivery gated)"
     fi

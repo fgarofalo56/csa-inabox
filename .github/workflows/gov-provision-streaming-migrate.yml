@@ -300,11 +300,27 @@ jobs:
             echo "MIG_ID=$MIG_ID"; echo "RW_ID=$RW_ID"; echo "RW_CID=$RW_CID"
           } >> "$GITHUB_ENV"
           # AcrPull on the Loom ACR — the migrate identity's ONLY role, and one of
-          # the risingwave identity's two. `az role assignment create` is
-          # idempotent (RoleAssignmentExists is tolerated).
+          # the risingwave identity's two.
+          #
+          # PROBE BEFORE CREATE (#3439, cloud-parity.md). The comment that used to
+          # sit here said "`az role assignment create` is idempotent
+          # (RoleAssignmentExists is tolerated)" — true of the CLI, FALSE of the
+          # template, and that false premise is what broke Commercial for a
+          # fortnight. admin-plane/main.bicep declares AcrPull on this registry for
+          # BOTH of these identities (loomMigrateUami, risingwaveUami) under
+          # deterministic guid() names; a CLI create mints a random v4 name for the
+          # same (scope, principalId, roleDefinitionId) triple and ARM then refuses
+          # the template's create forever. Same defect, Gov boundary.
+          #
+          # NOTE for reviewers: D3 in check-role-assignment-determinism.mjs does
+          # NOT flag this file. `ACRPULL_ROLE` is defined in a YAML `env:` block,
+          # and D3 only resolves shell `KEY=<guid>` assignments, so it files this
+          # site as unresolved and never judges it. This lane therefore has the
+          # FIX but no regression net — tracked separately.
+          # shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
+          . scripts/csa-loom/_grant-role-if-absent.sh
           for PID in "$MIG_PID" "$RW_PID"; do
-            az role assignment create --assignee-object-id "$PID" --assignee-principal-type ServicePrincipal \
-              --role "$ACRPULL_ROLE" --scope "$ACR_ID" -o none 2>/dev/null || true
+            grant_role_if_absent "$PID" "$ACRPULL_ROLE" "$ACR_ID" "AcrPull for ${PID:0:8}… on the Loom ACR"
           done
           # Storage Blob Data Contributor for the streaming sink (risingwave only).
           if [ -n "${LAKE:-}" ]; then

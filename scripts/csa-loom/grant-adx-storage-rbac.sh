@@ -60,10 +60,12 @@ fi
 
 SCOPE="/subscriptions/$SUB_ARG/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$ACCT"
 echo "== Granting Storage Blob Data Reader on '$ACCT' (sub $SUB_ARG / $RG) =="
-MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$MI_PRINCIPAL" \
-  --assignee-principal-type ServicePrincipal --role "$SBDR" --scope "$SCOPE" -o none 2>&1 \
-  | grep -viE "already exists|RoleAssignmentExists" || true
-echo "  ✓ Storage Blob Data Reader"
+# Probe-before-create (#3439): the bicep grants this same role definition under
+# a deterministic guid() name, and a CLI create mints a random one for the same
+# ARM triple — whichever lands first blocks the other forever.
+# shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
+. "$(dirname "${BASH_SOURCE[0]}")/_grant-role-if-absent.sh"
+grant_role_if_absent "$MI_PRINCIPAL" "$SBDR" "$SCOPE" "Storage Blob Data Reader"
 
 # --- Register the MI for NativeIngestion on the cluster (data plane) ---
 CLUSTER_URI="https://${CLUSTER}.${LOCATION}.kusto.windows.net"
