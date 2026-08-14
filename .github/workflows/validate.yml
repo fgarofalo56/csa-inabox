@@ -15,6 +15,15 @@ on:
       - '.github/workflows/**'
   pull_request:
     branches: [main]
+  # REQUIRED-CHECK DISPATCH (#3393). release-please's PR is authored by
+  # GITHUB_TOKEN and GitHub suppresses the `pull_request` trigger on it, so the
+  # four required contexts published here (Secret Scan, PowerShell Lint, Python
+  # Lint, Repo Hygiene) never ran and were replaced by synthetic statuses.
+  # `workflow_dispatch` is the documented exception GITHUB_TOKEN *may* trigger,
+  # so release-please.yml dispatches this workflow against the release branch.
+  # None of those four jobs read PR context, and none of them `needs:` the
+  # `changes` job, so they behave identically under a dispatch.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
