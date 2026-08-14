@@ -300,6 +300,18 @@ jobs:
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-image-producer-coverage.mjs
+      # image-producer-coverage says the image gets BUILT. This says it gets built
+      # FOR AZURE GOVERNMENT TOO. loom-transform-runner — the dbt/SQLMesh execution
+      # surface — had exactly one producer, full-app-deploy-commercial.yml, which
+      # logs in with the COMMERCIAL SP, while main.bicep's cloud-blind
+      # `dbtRunnerImageReady = true` asserted the image was in "this boundary's
+      # ACR" for every boundary at once. A sovereign apps-enabled deploy would
+      # have failed its Container App PUT with MANIFEST_UNKNOWN (#3416).
+      # cloud-parity.md is BLOCKING; this is its mechanical form for images.
+      # Carries embedded controls so it cannot go quiet once the debt is zero.
+      - name: gov-image-producer-parity (every built image also builds for Gov — #3416)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-gov-image-producer-parity.mjs
       # image-producer-coverage says the image gets BUILT. This says the build can
       # actually EXECUTE: the `loombuild` ACR agent pool on the Gov registry has a
       # backing queue stuck in "being deleted", so builds sent to it are accepted,
@@ -549,6 +561,13 @@ jobs:
       - name: docs-deploy-refs (every script/workflow/bicep path a deploy doc names exists)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-docs-deploy-refs.mjs
+      # auto-bind-by-default.md §5 / ux-baseline.md G2 — an action the PLATFORM
+      # performs must not be an instruction the operator follows. Bidirectional:
+      # it also fails when the automation is deleted, so a runbook that correctly
+      # says nothing can never sit on top of a platform that does nothing (#3375).
+      - name: operator-runbook-drift (the runbook must not re-acquire automated steps)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-operator-runbook-drift.mjs
       - name: health-coverage (every Azure client + item family has a health check mapping)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-health-coverage.mjs

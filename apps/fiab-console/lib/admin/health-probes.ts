@@ -348,7 +348,7 @@ async function probePowerPlatform(h: ProbeHelpers): Promise<CheckResult> {
       return {
         ...base, status: 'warn',
         detail: `Power Platform not configured (missing ${gate.missing}) — the power-* item types + Copilot Studio have no control plane.`,
-        remediation: 'Set LOOM_UAMI_CLIENT_ID (the Console UAMI). The SP must also be allowed by the "Service principals can use Power Platform APIs" tenant setting (scripts/csa-loom/grant-powerplatform-sp.ps1 — operator-run).',
+        remediation: 'Set LOOM_UAMI_CLIENT_ID (the Console UAMI). The SP must also be allowed by the "Service principals can use Power Platform APIs" tenant setting (scripts/csa-loom/grant-powerplatform-sp.sh — operator-run).',
         redeploy: true,
       };
     }
@@ -360,7 +360,7 @@ async function probePowerPlatform(h: ProbeHelpers): Promise<CheckResult> {
     return {
       ...base, status: 'warn',
       detail: denied ? `Power Platform rejected the call (the known SP-not-allowed 403): ${msg}` : `Power Platform probe failed: ${msg}`,
-      remediation: 'A Power Platform admin must register the Console UAMI as a Power Platform management app: run scripts/csa-loom/grant-powerplatform-sp.ps1 (New-PowerAppManagementApp), or enable "Service principals can use Power Platform APIs". This is a one-time operator action — the UAMI cannot self-register.',
+      remediation: 'A Power Platform admin must register the Console UAMI as a Power Platform management app: run scripts/csa-loom/grant-powerplatform-sp.sh (the BAP adminApplications PUT; New-PowerAppManagementApp is the PowerShell equivalent), or enable "Service principals can use Power Platform APIs". This is a one-time operator action — the UAMI cannot self-register.',
       redeploy: true,
       docs: 'https://learn.microsoft.com/power-platform/admin/powerplatform-api-create-service-principal',
       portalSteps: [

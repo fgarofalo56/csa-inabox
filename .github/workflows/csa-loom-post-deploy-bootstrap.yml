@@ -1793,11 +1793,125 @@ jobs:
             fi
           fi
 
+      - name: Assign Power Platform Administrator directory role to the Console UAMI (Graph)
+        run: |
+          # WHY THIS STEP EXISTS (#3375)
+          #
+          #   docs/fiab/operator-interactive-setup.md used to ask the operator to
+          #   click this grant in the Power Platform / Entra admin centre — and the
+          #   same doc's tail recorded that it had ALREADY been done via Microsoft
+          #   Graph by hand, naming this exact role template id. A portal paragraph
+          #   for an action the platform can perform is a defect under
+          #   .claude/rules/auto-bind-by-default.md §5 and ux-baseline.md G2, so the
+          #   bootstrap performs it here instead.
+          #
+          # WHAT IT DOES
+          #
+          #   Assigns the built-in Entra directory role "Power Platform
+          #   Administrator" (role template id 11648597-926c-4cf3-9c36-bcebb0ba8dcc
+          #   — https://learn.microsoft.com/entra/identity/role-based-access-control/permissions-reference)
+          #   to the Console UAMI's service principal at tenant scope ("/").
+          #
+          #   Per Create unifiedRoleAssignment
+          #   (https://learn.microsoft.com/graph/api/rbacapplication-post-roleassignments)
+          #   `roleDefinitionId` accepts the service-wide roleTemplateId directly, and
+          #   the principal "can be a user or service principal" — so no intermediary
+          #   role-assignable group is needed (the by-hand run used one; a direct
+          #   assignment is the same grant with one less object to keep in sync).
+          #
+          # IDEMPOTENCY
+          #
+          #   Pre-checks with a filtered GET; a re-run on an already-assigned tenant
+          #   makes no POST. If the pre-check is inconclusive the POST still runs and
+          #   a duplicate is recognised from Graph's conflict response, so re-running
+          #   can never produce a spurious failure.
+          #
+          # FAILS CLOSED, CLASSIFIED
+          #
+          #   Every non-success outcome is classified (403 = the bootstrap principal
+          #   lacks RoleManagement.ReadWrite.Directory; 400-conflict = already
+          #   assigned; anything else = reported verbatim). Nothing is discarded and
+          #   no message asserts a cause the code did not establish
+          #   (deploy-integrity.md R7). A 403 is NON-FATAL and prints the one-time
+          #   Global-Admin remediation, matching the MIP/DLP AppRole step below:
+          #   the Power Platform surfaces then keep their honest gate
+          #   (lib/gates/registry svc-powerplatform) rather than the deploy failing.
+          set -uo pipefail
+          PP_ADMIN_ROLE_TEMPLATE_ID="11648597-926c-4cf3-9c36-bcebb0ba8dcc"
+
+          if [ -z "${CONSOLE_UAMI_PRINCIPAL:-}" ]; then
+            echo "::warning title=Power Platform Administrator role not assigned::Console UAMI principal id is empty — cannot assign the directory role. Set the LOOM_CONSOLE_UAMI_PRINCIPAL repo var or check the UAMI discovery step above."
+            exit 0
+          fi
+
+          GRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
+          if [ -z "$GRAPH_TOKEN" ]; then
+            echo "::warning title=Power Platform Administrator role not assigned::Could not acquire a Microsoft Graph token for the bootstrap principal. This step did NOT establish whether the role is assigned."
+            exit 0
+          fi
+
+          # ── Pre-check: is the assignment already present? ────────────────────
+          # An inconclusive pre-check (non-200) must NOT be read as "not assigned"
+          # — we fall through to the POST, which distinguishes the two for real.
+          CHECK_URL="https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?\$filter=principalId%20eq%20'${CONSOLE_UAMI_PRINCIPAL}'%20and%20roleDefinitionId%20eq%20'${PP_ADMIN_ROLE_TEMPLATE_ID}'"
+          CHECK_CODE=$(curl -sS -w "%{http_code}" -o /tmp/pprole-check.json -X GET "$CHECK_URL" \
+            -H "Authorization: Bearer $GRAPH_TOKEN" \
+            -H "ConsistencyLevel: eventual")
+          if [ "$CHECK_CODE" = "200" ] && grep -q '"roleDefinitionId"' /tmp/pprole-check.json 2>/dev/null; then
+            echo "  Power Platform Administrator already assigned to the Console UAMI (idempotent — no change)."
+            exit 0
+          fi
+          if [ "$CHECK_CODE" != "200" ]; then
+            echo "  Pre-check inconclusive (HTTP $CHECK_CODE) — attempting the assignment; a duplicate is detected from the POST response."
+          fi
+
+          # ── Assign ───────────────────────────────────────────────────────────
+          PAYLOAD=$(printf '{"@odata.type":"#microsoft.graph.unifiedRoleAssignment","principalId":"%s","roleDefinitionId":"%s","directoryScopeId":"/"}' \
+            "$CONSOLE_UAMI_PRINCIPAL" "$PP_ADMIN_ROLE_TEMPLATE_ID")
+          R=$(curl -sS -w "%{http_code}" -o /tmp/pprole.json -X POST \
+            "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments" \
+            -H "Authorization: Bearer $GRAPH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          if [ "$R" = "201" ]; then
+            echo "  Power Platform Administrator assigned to the Console UAMI at tenant scope."
+            echo "  NOTE: Entra -> Power Platform propagation takes ~5-15 minutes before the BAP API stops returning 403."
+          elif grep -qi "conflicting object\|already exist" /tmp/pprole.json 2>/dev/null; then
+            echo "  Power Platform Administrator already assigned (idempotent — Graph reported a conflicting object)."
+          elif [ "$R" = "403" ]; then
+            echo "  Assignment returned 403: $(cat /tmp/pprole.json)"
+            echo "::warning title=Power Platform Administrator role not assigned (403)::The bootstrap principal cannot write directory role assignments. Power Platform + Copilot Studio surfaces keep their honest gate (svc-powerplatform) until a Global Administrator runs the one-time grant below, then this job is re-run."
+            echo ""
+            echo "  ===================================================================="
+            echo "  ONE-TIME TENANT ACTION — a Global Administrator runs ONCE:"
+            echo "    Grant the deploy SP the Microsoft Graph application permission"
+            echo "    RoleManagement.ReadWrite.Directory (app role id"
+            echo "    9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8), OR assign the deploy SP"
+            echo "    the Privileged Role Administrator directory role."
+            echo "    Then re-run this job — the assignment succeeds unattended thereafter."
+            echo "  ===================================================================="
+          else
+            echo "::warning title=Power Platform Administrator role not assigned::Graph returned HTTP $R. This step did NOT establish the cause; the response body follows."
+            cat /tmp/pprole.json
+            echo
+          fi
+
       - name: Register Console UAMI as Power Platform Management App (unblocks PP + Copilot Studio editors)
         run: |
           # PP admin API for SP access requires the SP to be registered as a
           # tenant-wide PP management app — separate from the Power Platform
-          # Admin Entra role. PUT is idempotent (returns 200 on re-run).
+          # Admin Entra role assigned in the step above.
+          #
+          # This one is GENUINELY human-only in the general case: Microsoft
+          # documents that "a service principal can't register itself. By design,
+          # an administrator using username and password context must register the
+          # application."
+          # https://learn.microsoft.com/power-platform/admin/powerplatform-api-create-service-principal
+          # The PUT is attempted anyway because it succeeds where the deploy
+          # principal is already a registered management app, and it is idempotent
+          # (returns 200 on re-run). When it does not succeed the surfaces keep
+          # their registered honest gate (svc-powerplatform) with its Fix-it.
           PP_TOKEN=$(az account get-access-token --resource https://api.bap.microsoft.com --query accessToken -o tsv)
           R=$(curl -sS -w "%{http_code}" -o /tmp/pp.json -X PUT \
             "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/adminApplications/$CONSOLE_UAMI_CLIENT?api-version=2020-10-01" \
@@ -1810,7 +1924,18 @@ jobs:
           if [[ "$R" == "200" ]] || [[ "$R" == "201" ]]; then
             echo "  Power Platform + Copilot Studio editors unlocked."
           else
-            echo "  PP registration returned $R — deploy SP may lack PP Admin role."
+            # R7 — do not assert a cause this step did not establish. The most
+            # common reason is the documented SP-cannot-self-register constraint,
+            # not a missing role; say what we know and name both possibilities.
+            echo "  PP management app PUT returned $R — NOT registered."
+            echo "  Microsoft requires an administrator USER context for this registration"
+            echo "  (a service principal cannot self-register), so a non-200 here is the"
+            echo "  EXPECTED outcome on a tenant where a human has not yet run:"
+            echo "    New-PowerAppManagementApp -ApplicationId <console-uami-client-id>"
+            echo "  (scripts/csa-loom/grant-powerplatform-sp.ps1). Until then the Power"
+            echo "  Platform surfaces show their registered honest gate + Fix-it"
+            echo "  (lib/gates/registry svc-powerplatform). See"
+            echo "  docs/fiab/tenant-admin-walkthroughs.md."
           fi
 
       - name: Register MSAL SP as Dataverse Application User in every env that has Dataverse
@@ -1823,8 +1948,22 @@ jobs:
           if [ -z "${LOOM_MSAL_CLIENT_ID:-}" ]; then
             echo "  LOOM_MSAL_CLIENT_ID not set — skipping Dataverse AppUser registration"
           else
+            # The script's exit status was previously discarded with `|| true`, so a
+            # failed registration was indistinguishable from a clean run and the
+            # operator was told (in the runbook) to go do it by hand. Capture the
+            # status and SURFACE it instead — still non-fatal, because a tenant with
+            # no Dataverse environment is a legitimate no-op, but never silent
+            # (deploy-integrity.md: a discarded result is a gate that cannot fail).
+            set +e
             LOOM_MSAL_CLIENT_ID="$LOOM_MSAL_CLIENT_ID" \
-              bash scripts/csa-loom/dataverse-add-appuser.sh || true
+              bash scripts/csa-loom/dataverse-add-appuser.sh
+            DV_RC=$?
+            set -e
+            if [ "$DV_RC" -eq 0 ]; then
+              echo "  Dataverse Application User registration completed (idempotent)."
+            else
+              echo "::warning title=Dataverse Application User registration incomplete (exit $DV_RC)::dataverse-add-appuser.sh did not complete. Most common cause: the bootstrap identity is not yet Dataverse System Administrator on an environment where Dataverse was added AFTER the environment was created (the one-time 'Promote To Admin' click — docs/fiab/dataverse-app-user.md Step 1). The Dataverse-backed editors keep their honest gate until this succeeds; re-run this job after the promotion."
+            fi
           fi
 
       - name: Grant MIP+DLP Graph AppRoles (Information Protection + DLP for /admin/security)
