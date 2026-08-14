@@ -50,6 +50,7 @@
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const rootFlag = process.argv.indexOf('--root');
 const ROOT = rootFlag >= 0 ? process.argv[rootFlag + 1] : process.cwd();
@@ -88,20 +89,32 @@ const ANNOTATION = /::(?:warning|notice|error|debug)::/;
  * True when `line` does real work mentioning `needle` — i.e. it is not a YAML
  * comment, not an `echo`, and not a workflow annotation.
  *
- * The `echo` test is `\becho\b` over the WHOLE line, not `^\s*echo`: in a
- * workflow the echo is almost always nested inside a step, as
- * `- run: echo "…"`, so anchoring at the start of the line lets an echoed
- * mention through and scores it as real work. That is the "a mention is not a
- * build" narrowing check-image-producer-coverage.mjs settled on, and the
- * fixture test 'a commented-out / echoed staging line does NOT satisfy the
- * guard' pins it.
+ * The `echo` test is `\becho\b` rather than `^\s*echo`: in a workflow the echo
+ * is almost always nested inside a step, as `- run: echo "…"`, so anchoring at
+ * the start of the line lets an echoed mention through and scores it as real
+ * work. That is the "a mention is not a build" narrowing
+ * check-image-producer-coverage.mjs settled on, and the fixture test 'a
+ * commented-out / echoed staging line does NOT satisfy the guard' pins it.
+ *
+ * It is applied to the text BEFORE the needle only — see the note in the body.
+ * That keeps the fixture's intent exactly (an echoed mention has its `echo`
+ * ahead of the needle) while not discarding a real invocation that carries a
+ * message in its own fallback.
  */
 function isRealMention(line, needle) {
-  if (!line.includes(needle)) return false;
+  const at = line.indexOf(needle);
+  if (at < 0) return false;
   const trimmed = line.trim();
   if (trimmed.startsWith('#')) return false;
-  if (ANNOTATION.test(line)) return false;
-  if (/\becho\b/.test(line)) return false;
+  // POSITIONAL (#3420). On a LOGICAL line an invocation routinely carries its
+  // own message — `az acr build … apps/fiab-console || echo "build failed"` —
+  // and an anywhere-on-the-line `echo`/annotation test would throw the real
+  // build away as prose. Only text BEFORE the needle can make the needle a
+  // quoted mention rather than a real one. The same over-broad test silently
+  // dropped four genuine call sites in check-kv-firewall-restore.mjs.
+  const before = line.slice(0, at);
+  if (ANNOTATION.test(before)) return false;
+  if (/\becho\b/.test(before)) return false;
   return true;
 }
 
@@ -159,8 +172,24 @@ export function scanConsoleCorpusStaging(root = ROOT) {
     } catch {
       continue;
     }
-    if (!BUILD_INVOCATION.test(text)) continue;
-    const lines = text.split(/\r?\n/);
+    // LOGICAL lines (#3420). `declaresConsoleBuild` needs the build invocation
+    // AND the console context on ONE command, and an `az acr build` is almost
+    // always wrapped:
+    //
+    //     az acr build --registry "$ACR" \
+    //       --image loom-console:v1 \
+    //       apps/fiab-console
+    //
+    // Per physical line, line 1 has the invocation and no context and line 3
+    // has the context and no invocation — so the workflow is not recognised as
+    // a console builder at all, is dropped from `builders`, and the question
+    // this guard exists to ask (does it stage the corpus?) is never asked of
+    // it. That is the silent direction: an unstaged builder reads as "not a
+    // builder". Fold BEFORE the whole-file pre-filter too, since `az acr \` +
+    // `build` would defeat that gate the same way.
+    const logical = readLogicalLines(text);
+    const lines = logical.map((l) => l.text);
+    if (!BUILD_INVOCATION.test(lines.join('\n'))) continue;
     const buildsConsole = lines.some((l) => declaresConsoleBuild(l));
     if (!buildsConsole) continue;
 
