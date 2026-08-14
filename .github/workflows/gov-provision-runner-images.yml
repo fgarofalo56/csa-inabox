@@ -1,0 +1,370 @@
+name: gov-provision-runner-images
+# CSA Loom — GOV IMAGE PRODUCER for the transformation runner + Copilot evaluator.
+#
+# WHY THIS EXISTS (#3416). Two images had a Commercial producer and NO Gov
+# producer of any kind, so the capability behind each worked in Commercial and
+# could not work in Azure Government. `.claude/rules/cloud-parity.md` names that
+# exact shape: "a capability that works in Commercial and not in Gov is
+# INCOMPLETE, not Commercial-first".
+#
+#   loom-transform-runner    apps/loom-transform-runner
+#     N4 dual-engine transformation runtime (dbt-core + SQLMesh + ODBC 18) — the
+#     execution surface behind the `transformation-project` item. Commercial
+#     producer: full-app-deploy-commercial.yml. Gov producer: NONE until now.
+#
+#   loom-copilot-evaluator   azure-functions/copilot-evaluator/Dockerfile
+#     The in-VNet scheduled Container App Job that scores Copilot retrieval +
+#     grounding against the E1 golden sets. Commercial producer:
+#     deploy-copilot-evaluator.yml, which delegates the `az acr build` to
+#     scripts/csa-loom/deploy-copilot-evaluator-job.sh. Gov producer: NONE until
+#     now. (#3416 also listed full-app-deploy-commercial.yml as a producer of
+#     this image — it is not. That lane only DISPATCHES eval runs against an
+#     already-deployed job; it contains no build for it.)
+#
+# THIS IS NOT A COSMETIC GAP FOR loom-transform-runner. On `main` today:
+#   platform/fiab/bicep/main.bicep            dbtRunnerEnabled = true
+#                                             dbtRunnerImageReady = true
+#   params/gcc-high.bicepparam                containerPlatform = 'containerApps'
+#                                             deployAppsEnabled = true
+#   admin-plane/main.bicep                    dbtRunnerActive = dbtRunnerEnabled
+#                                               && containerApps && deployApps
+#                                             transformRunnerActive = dbtRunnerActive
+#                                             module transformRunner = if (transformRunnerActive)
+# so an apps-enabled GCC-High / IL5 deploy DOES invoke
+# integration/transform-runner-aca.bicep, which pulls
+# `<acr>.azurecr.us/loom-transform-runner:<appImageTags.?transformRunner ?? 'v0.1'>`.
+# `dbtRunnerImageReady` was flipped true on 2026-08-13 on COMMERCIAL evidence
+# (the comment in main.bicep names the Commercial registry), and that boolean is
+# cloud-blind — it asserts "the runner images are published to this boundary's
+# ACR" for every boundary at once. With no Gov producer that assertion is false
+# in Gov, and a Container App pointing at an absent manifest fails its ARM PUT
+# with MANIFEST_UNKNOWN, taking the surrounding deployment down with it. Run
+# this lane BEFORE any apps-enabled Gov deploy.
+#
+# loom-copilot-evaluator is a Container App JOB (admin-plane/main.bicep ->
+# copilot-evaluator-job.bicep, copilotEvaluatorActive, default-ON on every
+# Container Apps boundary). A Job PUT survives a missing manifest — it is the
+# scheduled EXECUTIONS that fail — so this one degrades rather than blocking the
+# deploy. Degrading silently is still the defect: nightly Copilot quality
+# scoring simply never runs in Gov.
+#
+# ── MECHANISM ────────────────────────────────────────────────────────────────
+# `az acr build` runs SERVER-SIDE inside Azure. It is the ONLY mechanism that
+# reaches a Gov ACR provisioned with publicNetworkAccess=Disabled — a
+# runner-local `docker build` + `docker push` from a GitHub-hosted runner cannot
+# get through the private endpoint. Same shape as
+# gov-provision-dataplane-images.yml, which is the prior art this lane copies.
+#
+# ── WHAT THIS LANE DELIBERATELY DOES NOT DO ─────────────────────────────────
+# It PRODUCES IMAGES ONLY. It creates no Container App and no Container App Job,
+# and it writes no env var. Both consumers are deployed by the ORCHESTRATOR
+# (admin-plane/main.bicep), and creating either out of band would be state a
+# later `az deployment sub create` re-render silently drops. Ordering is:
+#   Phase 1  az deployment sub create … deployAppsEnabled=false   (infra only)
+#   Phase 2  THIS WORKFLOW (+ the sibling gov image producers)    (build images)
+#   Phase 3  az deployment sub create … deployAppsEnabled=true    (apps come up)
+#
+# ── TAG CONTRACT — the thing that must match ────────────────────────────────
+#   loom-transform-runner  admin-plane/main.bicep reads
+#                          `appImageTags.?transformRunner ?? 'v0.1'`, and both
+#                          gcc-high.bicepparam and il5.bicepparam now state the
+#                          key explicitly as
+#                          readEnvironmentVariable('LOOM_TRANSFORM_RUNNER_TAG','v0.1').
+#                          `image_tag` therefore DEFAULTS TO v0.1. Override it
+#                          only together with LOOM_TRANSFORM_RUNNER_TAG on the
+#                          deploy.
+#   loom-copilot-evaluator copilot-evaluator-job.bicep pins
+#                          `image = '${acrLoginServer}/loom-copilot-evaluator:latest'`
+#                          and admin-plane/main.bicep does not override it, so
+#                          the deploy-referenced tag really is the FLOATING
+#                          `latest`. This lane stamps `latest` because that is
+#                          the contract, not because a floating tag is good
+#                          practice — pinning it is a bicep change and belongs in
+#                          its own PR. The short SHA is pushed alongside both
+#                          images purely as provenance.
+#
+# ── STATUS: THIS WORKFLOW HAS NEVER BEEN EXECUTED (honest disclosure) ───────
+# It is new in the #3416 fix and has zero runs. No CI job dispatches it and
+# `workflow_dispatch` lanes are never exercised by push/PR CI, so a green check
+# on the PR that adds it says NOTHING about whether it builds anything. Treat
+# the first `apply=true` dispatch as the test. Run it with `apply=false` first —
+# that path performs only coordinate discovery plus a REPORT-ONLY image
+# preflight, touches nothing, and is the cheapest way to validate that the RG /
+# ACR resolution is right for the estate.
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Sovereign boundary to target.'
+        type: choice
+        options: [gcc-high, il5]
+        default: gcc-high
+      apply:
+        description: 'false = discovery + report-only image preflight (safe, touches nothing); true = build both images into the boundary ACR.'
+        required: false
+        default: 'false'
+      resource_group:
+        description: 'Admin-plane RG. Blank = rg-csa-loom-admin-<location>, the name main.bicep computes.'
+        required: false
+        default: ''
+      acr:
+        description: 'ACR NAME (not login server). Blank = discovered from the admin RG.'
+        required: false
+        default: ''
+      location:
+        description: 'Region for the default RG name. Blank = usgovvirginia, which both Gov param files pin.'
+        required: false
+        default: ''
+      image_tag:
+        description: 'Tag the GOV TEMPLATE pulls for loom-transform-runner. Blank = v0.1, exactly what gcc-high/il5.bicepparam resolve appImageTags.transformRunner to. Override ONLY together with LOOM_TRANSFORM_RUNNER_TAG on the deploy.'
+        required: false
+        default: ''
+  # Callable so a Gov deploy pipeline can chain phase 2.
+  workflow_call:
+    inputs:
+      boundary:
+        type: string
+        default: gcc-high
+      apply:
+        type: string
+        default: 'false'
+      resource_group:
+        type: string
+        default: ''
+      acr:
+        type: string
+        default: ''
+      location:
+        type: string
+        default: ''
+      image_tag:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# Both builds take the SAME per-registry ACR firewall lease, so two concurrent
+# runs against one boundary would fight over it. Queue instead of cancelling —
+# a cancelled run still releases the lease from its `always()` step, and dropping
+# a run silently is how an image quietly never gets built.
+concurrency:
+  group: gov-provision-runner-images-${{ inputs.boundary }}
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: Produce loom-transform-runner + loom-copilot-evaluator in the ${{ inputs.boundary }} ACR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Resolve boundary coordinates (RG / ACR / tags)
+        run: |
+          set -euo pipefail
+
+          # READ HELPER — distinguishes ABSENT from UNREADABLE.
+          #
+          # NEVER write `VAR="${VAR:-$(az … 2>/dev/null)}"` here. Under
+          # `set -euo pipefail` the assignment inherits the substitution's exit
+          # status, so an `az` failure aborts the step with NO message at all —
+          # and `2>/dev/null` has already thrown away the reason. That exact
+          # line is what made gov-provision-streaming-migrate.yml's only run die
+          # as a bare `exit code 3` with its own honest-skip branch unreachable
+          # (deploy-integrity R7: an error must not assert what it did not
+          # establish). This is the corrected `lookup()` from that lane,
+          # generalised to take the command instead of hard-coding `az identity
+          # show`: rc 0 -> value on stdout; a recognised not-found -> rc 0 with
+          # EMPTY stdout, which the caller handles; anything else -> rc 1 with
+          # the verbatim Azure error, which fails the step loudly.
+          lookup() {
+            local what="$1"; shift
+            local out rc
+            set +e
+            out=$("$@" 2>&1)
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then printf '%s' "$out" | tr -d '\r'; return 0; fi
+            if printf '%s' "$out" | grep -qiE "was not found|ResourceNotFound|ResourceGroupNotFound|could not be found"; then
+              return 0   # genuinely absent -> empty value, handled by the caller
+            fi
+            echo "::error::could NOT read $what — its existence is UNPROVEN, not disproven. Azure said:" >&2
+            printf '%s\n' "$out" >&2
+            return 1
+          }
+
+          LOC="${{ inputs.location }}"
+          [ -n "$LOC" ] || LOC=usgovvirginia
+
+          RG="${{ inputs.resource_group }}"
+          # Same deterministic name main.bicep computes:
+          #   var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${LOC}"
+          RG_PROBE=$(lookup "admin resource group '$RG'" az group show -n "$RG" --query name -o tsv)
+          if [ -z "$RG_PROBE" ]; then
+            echo "::error::admin resource group '$RG' does not exist in this Gov subscription."
+            echo "::error::Run phase 1 (az deployment sub create … deployAppsEnabled=false) first, or pass resource_group."
+            exit 1
+          fi
+
+          ACR="${{ inputs.acr }}"
+          if [ -z "$ACR" ]; then
+            ACR=$(lookup "container registries in $RG" az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv)
+          fi
+          if [ -z "$ACR" ]; then
+            echo "::error::no registry named acrloom* found in $RG. The registry exists on every Loom estate, so this is either the wrong RG or a non-default registry name — pass the acr input."
+            exit 1
+          fi
+          ACR_LOGIN=$(lookup "login server for $ACR" az acr show -n "$ACR" -g "$RG" --query loginServer -o tsv)
+          [ -n "$ACR_LOGIN" ] || { echo "::error::registry '$ACR' resolved but has no login server — it may be mid-delete."; exit 1; }
+
+          # TAG CONTRACT (see the header). TAG is what the Gov template pulls for
+          # loom-transform-runner; EVAL_TAG is fixed at `latest` because
+          # copilot-evaluator-job.bicep hard-pins that and admin-plane does not
+          # override it. SHA_TAG is provenance only — nothing resolves it.
+          TAG="${{ inputs.image_tag }}"
+          [ -n "$TAG" ] || TAG=v0.1
+          EVAL_TAG=latest
+          SHA_TAG=$(git rev-parse --short=8 HEAD)
+
+          {
+            echo "RG=$RG"; echo "ACR=$ACR"; echo "ACR_LOGIN=$ACR_LOGIN"
+            echo "TAG=$TAG"; echo "EVAL_TAG=$EVAL_TAG"; echo "SHA_TAG=$SHA_TAG"
+          } >> "$GITHUB_ENV"
+
+          echo "::notice::boundary=${{ inputs.boundary }} rg=$RG acr=$ACR location=$LOC apply=${{ inputs.apply }}"
+          echo "::notice::TEMPLATE PULLS   $ACR_LOGIN/loom-transform-runner:$TAG   (admin-plane appImageTags.transformRunner)"
+          echo "::notice::TEMPLATE PULLS   $ACR_LOGIN/loom-copilot-evaluator:$EVAL_TAG   (copilot-evaluator-job.bicep image default)"
+          echo "::notice::THIS LANE PUSHES both of the above, plus :$SHA_TAG on each for provenance — tags match."
+
+      # ── BUILD ────────────────────────────────────────────────────────────────
+      # One firewall lease covers both builds; the release step below runs
+      # `if: always()` and covers both, exactly like the three builds in
+      # gov-provision-dataplane-images.yml share one lease.
+      - name: Build loom-transform-runner on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          # #2603: lease the ACR firewall rather than toggling it bare, so this
+          # run's re-lock cannot deny another run's in-flight push.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          # #3210 — `az acr login` is the WRONG oracle for "can I reach the data
+          # plane": it authenticates through an ARM-mediated token exchange and
+          # returns 0 while the registry is still denying the runner by IP.
+          # acr-dataplane-ready.sh probes GET https://<acr><suffix>/v2/ on the
+          # same HTTP path the data-plane tools use and derives the suffix from
+          # the ACTIVE cloud, so it works unchanged against .azurecr.us
+          # (.claude/rules/cloud-parity.md).
+          bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR" --timeout-seconds 180 \
+            || echo "::warning::ACR data plane not confirmed reachable; the next data-plane call may be denied."
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR"
+          echo "::notice::TEMPLATE PULLS $ACR_LOGIN/loom-transform-runner:$TAG"
+          # RETRY WITH CLASSIFICATION (deploy-integrity R6). NOT a bare
+          # `az acr build`: on the Commercial producer one dropped TCP connection
+          # ("Connection aborted. ConnectionResetError(104)", run 31460135118)
+          # failed a build outright and left the estate a commit behind until a
+          # human re-ran it. deploy-retry.mjs is this repo's retry primitive and
+          # retries ONLY the classes named in --class-allow, so a quota denial or
+          # an OOM-killed compile still fails on attempt 1 with a classified,
+          # actionable message instead of burning three attempts. An
+          # unclassifiable failure fails CLOSED — a retry that cannot fail is
+          # forbidden.
+          #
+          # `latest` is stamped for symmetry with the sibling lanes, but NOTHING
+          # resolves it for this image — the template asks for $TAG.
+          node scripts/ci/deploy-retry.mjs \
+            --class-allow transient \
+            --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 90m \
+            --step "az acr build (loom-transform-runner)" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            -- az acr build --registry "$ACR" --no-logs \
+            --image "loom-transform-runner:$TAG" \
+            --image "loom-transform-runner:$SHA_TAG" \
+            --image "loom-transform-runner:latest" \
+            apps/loom-transform-runner
+
+      # Build context is the REPO ROOT, not the function directory. The
+      # evaluator's Dockerfile COPYs three shared console modules
+      # (lib/foundry/model-tier-router, lib/foundry/model-availability-matrix,
+      # lib/azure/cloud-endpoints) and the E1 golden eval sets from
+      # content/evals, all of which sit OUTSIDE azure-functions/copilot-evaluator
+      # — its own header states the requirement and prints this exact command.
+      # The repo-root .dockerignore keeps the uploaded tarball sane.
+      #
+      # Reuses the firewall lease the step above acquired — do NOT acquire a
+      # second one; the release step below covers both.
+      - name: Build loom-copilot-evaluator on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice::TEMPLATE PULLS $ACR_LOGIN/loom-copilot-evaluator:$EVAL_TAG"
+          node scripts/ci/deploy-retry.mjs \
+            --class-allow transient \
+            --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 90m \
+            --step "az acr build (loom-copilot-evaluator)" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            -- az acr build --registry "$ACR" --no-logs \
+            --image "loom-copilot-evaluator:$EVAL_TAG" \
+            --image "loom-copilot-evaluator:$SHA_TAG" \
+            --file azure-functions/copilot-evaluator/Dockerfile \
+            .
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        # C24 (#3088): NO `|| true`. `release` VERIFIES the registry is back to
+        # publicNetworkAccess=Disabled + defaultAction=Deny before reporting
+        # success and exits non-zero when it cannot confirm that. Discarding the
+        # result would restore the measured defect: a green re-lock step over a
+        # publicly reachable registry. If this goes red, read the remediation the
+        # script prints — the registry may still be OPEN.
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "${ACR:-}"
+
+      # ── IMAGE PREFLIGHT ─────────────────────────────────────────────────────
+      # Discovery mode: report which referenced tags are missing WITHOUT failing,
+      # so an operator can run this lane read-only to find out whether the Gov
+      # ACR is ready for an apps-enabled deploy. Nothing was built in this mode,
+      # so a miss is expected and is information, not a verdict.
+      - name: Image preflight — report-only (discovery mode)
+        if: ${{ inputs.apply != 'true' }}
+        continue-on-error: true
+        run: |
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            "loom-transform-runner:$TAG" "loom-copilot-evaluator:$EVAL_TAG"
+
+      # Apply mode: HARD GATE, and it is the whole point of the lane.
+      # `az acr build` exiting 0 is NOT proof the tag resolves — that gap is
+      # exactly how a Gov template shipped pointing at a tag nothing produced
+      # (see gov-provision-dataplane-images.yml's TAG CONTRACT header), and on
+      # the Gov `loombuild` agent pool a build has been observed to exit 0 having
+      # pushed NOTHING (#2706). Read the registry back or claim nothing.
+      - name: Image preflight — assert every referenced tag exists (BLOCKING)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            "loom-transform-runner:$TAG" "loom-copilot-evaluator:$EVAL_TAG"
+
+      - name: Report what still needs the subscription-scoped deploy
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          echo "::notice::Images only. The transform-runner Container App and the copilot-evaluator Container App Job are deployed by admin-plane/main.bicep on the apps-enabled deploy — run that next."
+          echo "::notice::Then re-run gov-gates to confirm svc-transform-runner and svc-copilot-evaluator move off the blocked list."

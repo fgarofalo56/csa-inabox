@@ -48,20 +48,17 @@
  * right reasons. CI never passes it. It cannot be used to hollow the check out:
  * the two self-checks below fail on an empty apps set and on a workflow set with
  * no build invocation, which is what a bogus root produces.
+ *
+ * SIBLING: check-gov-image-producer-parity.mjs (#3416) asks the SECOND half of
+ * this question — not "is it built" but "is it built for Azure Government too".
+ * Both share the scanner in _image-producer-scan.mjs so the two cannot drift.
  */
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { APPS_DIR, discoverApps, loadBuilders, producersFor } from './_image-producer-scan.mjs';
 
 const rootFlag = process.argv.indexOf('--root');
 const ROOT = rootFlag >= 0 ? process.argv[rootFlag + 1] : process.cwd();
-const APPS_DIR = 'apps';
-const WORKFLOW_DIR = '.github/workflows';
-
-/** A workflow that runs one of these actually produces an image. */
-const BUILD_INVOCATION = /(az\s+acr\s+build|docker\s+build|docker\/build-push-action)/;
-
-/** Workflow-command markers. A line carrying one of these is OUTPUT, not a build. */
-const ANNOTATION = /::(?:warning|notice|error|debug)::/;
 
 /**
  * KNOWN-UNBUILT — apps with a Dockerfile and no CI producer, each with the
@@ -92,144 +89,131 @@ const KNOWN_UNBUILT = new Map([
   ['loom-mcp', 'Dev-tool stdio MCP server (loom-devtools). Distributed via npm + the loom-skills marketplace and run locally / self-hosted (`claude mcp add` or the optional Dockerfile). By design it is NOT a platform-deployed Container App — no bicep references its image, so there is no admin-plane deploy to hit MANIFEST_UNKNOWN. The Dockerfile is a self-host convenience, not an estate image; this entry is permanent, not a pending-wiring gap.'],
 ]);
 
-/** Does `line` reference `context` in a position that can reach a build? */
-function isBuildReference(line, context) {
-  if (/^\s*#/.test(line)) return false;        // YAML comment
-  if (!line.includes(context)) return false;
-  if (ANNOTATION.test(line)) return false;     // ::warning:: etc.
-  if (/\becho\b/.test(line)) return false;     // echoed, not built
-  return true;
-}
+/**
+ * Does `line` reference `context` in a position that can reach a build?
+ * (Implementation shared with the Gov-parity sibling — _image-producer-scan.mjs.)
+ *
+ * #3427 landed a `PHYSICAL-LINES-OK` pragma here, on the grounds that every
+ * predicate is single-token PRESENCE and a continuation cannot hide a token from
+ * an any-line search. The first half is right; the second is not, and the pragma
+ * is gone because the scanner now folds. `isBuildReference` is NOT a presence
+ * test — it excludes a line carrying `echo` / `::warning::`, and that exclusion
+ * is what a continuation defeats:
+ *
+ *     az acr build --registry "$ACR" apps/foo || echo "::error::apps/foo failed"
+ *
+ * reads as PROSE on physical lines and the producer disappears. The pragma's own
+ * counter-argument — that folding lets a wrapped command's `echo` suppress a real
+ * build — is answered by scoping the prose test to the text BEFORE the match,
+ * which is what _image-producer-scan.mjs does.
+ */
 
-const appsRoot = join(ROOT, APPS_DIR);
-const apps = existsSync(appsRoot)
-  ? readdirSync(appsRoot)
-    .filter((d) => {
-      try {
-        return statSync(join(appsRoot, d)).isDirectory() && existsSync(join(appsRoot, d, 'Dockerfile'));
-      } catch {
-        return false;
+/**
+ * #3436 — the scan runs from `main()`, behind an entrypoint fence, so importing
+ * this module (a test, a sibling guard) does not execute a full repo walk and
+ * `process.exit()` as a side effect.
+ */
+function main() {
+  const apps = discoverApps(ROOT);
+
+  // Self-check, same shape as check-deploy-script-reachability.mjs: a guard that
+  // silently finds nothing to check IS the failure mode it exists to prevent.
+  if (apps.length === 0) {
+    console.error('[image-producer-coverage] FAIL — no apps/<name>/Dockerfile found.');
+    console.error('  Either the tree moved or this check is pointed at the wrong directory.');
+    process.exit(1);
+  }
+
+  const { builders, workflowCount } = loadBuilders(ROOT);
+
+  if (builders.length === 0) {
+    console.error('[image-producer-coverage] FAIL — no workflow contains an image-build invocation at all.');
+    console.error(`  Looked for an az acr build / docker build / build-push-action across ${workflowCount} workflow(s). That cannot be right;`);
+    console.error('  the matcher has drifted from how this repo builds images.');
+    process.exit(1);
+  }
+
+  const rows = [];
+  const failures = [];
+
+  for (const app of apps) {
+    const context = `${APPS_DIR}/${app}`;
+    const { producers, mentions } = producersFor(builders, context);
+
+    const allowed = KNOWN_UNBUILT.has(app);
+
+    if (producers.length > 0) {
+      if (allowed) {
+        failures.push({
+          app,
+          kind: 'stale-allowlist',
+          detail: `is in KNOWN_UNBUILT but IS now built by ${producers.join(', ')} — remove the entry. An allowlist that outlives its gap stops being a record and starts being noise.`,
+        });
+        rows.push({ app, status: 'STALE-ALLOW', via: producers.join(', ') });
+        continue;
       }
-    })
-    .sort()
-  : [];
-
-// Self-check, same shape as check-deploy-script-reachability.mjs: a guard that
-// silently finds nothing to check IS the failure mode it exists to prevent.
-if (apps.length === 0) {
-  console.error('[image-producer-coverage] FAIL — no apps/<name>/Dockerfile found.');
-  console.error('  Either the tree moved or this check is pointed at the wrong directory.');
-  process.exit(1);
-}
-
-const workflows = existsSync(join(ROOT, WORKFLOW_DIR))
-  ? readdirSync(join(ROOT, WORKFLOW_DIR)).filter((f) => /\.ya?ml$/.test(f)).sort()
-  : [];
-
-const builders = [];
-for (const wf of workflows) {
-  const text = readFileSync(join(ROOT, WORKFLOW_DIR, wf), 'utf8');
-  // PHYSICAL-LINES-OK: every predicate is single-token PRESENCE evaluated with
-  // `.some()` over the whole file (a build invocation anywhere; the app's context
-  // path anywhere). A continuation cannot hide a token from an any-line search,
-  // and folding would let an `echo` elsewhere in a wrapped command suppress a real
-  // build reference (#3420).
-  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''));
-  if (lines.some((l) => !/^\s*#/.test(l) && BUILD_INVOCATION.test(l))) builders.push({ wf, lines });
-}
-
-if (builders.length === 0) {
-  console.error('[image-producer-coverage] FAIL — no workflow contains an image-build invocation at all.');
-  console.error(`  Looked for ${BUILD_INVOCATION} across ${workflows.length} workflow(s). That cannot be right;`);
-  console.error('  the matcher has drifted from how this repo builds images.');
-  process.exit(1);
-}
-
-const rows = [];
-const failures = [];
-
-for (const app of apps) {
-  const context = `${APPS_DIR}/${app}`;
-  const producers = builders
-    .filter(({ lines }) => lines.some((l) => isBuildReference(l, context)))
-    .map(({ wf }) => wf);
-  // Named only in prose/echo by a building workflow — reported distinctly,
-  // because "the reference is real, the build is not" is the exact trap.
-  const mentions = builders
-    .filter(({ wf, lines }) => !producers.includes(wf) && lines.some((l) => l.includes(context)))
-    .map(({ wf }) => wf);
-
-  const allowed = KNOWN_UNBUILT.has(app);
-
-  if (producers.length > 0) {
-    if (allowed) {
-      failures.push({
-        app,
-        kind: 'stale-allowlist',
-        detail: `is in KNOWN_UNBUILT but IS now built by ${producers.join(', ')} — remove the entry. An allowlist that outlives its gap stops being a record and starts being noise.`,
-      });
-      rows.push({ app, status: 'STALE-ALLOW', via: producers.join(', ') });
+      rows.push({ app, status: 'ok', via: producers.join(', ') });
       continue;
     }
-    rows.push({ app, status: 'ok', via: producers.join(', ') });
-    continue;
-  }
 
-  if (allowed) {
-    rows.push({ app, status: 'known-unbuilt', via: mentions.length ? `mentioned only in ${mentions.join(', ')}` : '-' });
-    continue;
-  }
+    if (allowed) {
+      rows.push({ app, status: 'known-unbuilt', via: mentions.length ? `mentioned only in ${mentions.join(', ')}` : '-' });
+      continue;
+    }
 
-  failures.push({
-    app,
-    kind: 'unbuilt',
-    detail: mentions.length
-      ? `named in ${mentions.join(', ')} but only as text (comment / echo / ::warning::) — a mention is not a build`
-      : 'no workflow builds it',
-  });
-  rows.push({ app, status: 'UNBUILT', via: mentions.join(', ') || '-' });
-}
-
-for (const app of KNOWN_UNBUILT.keys()) {
-  // The allowlist describes THIS repo. Under --root the checker is aimed at a
-  // fixture tree that legitimately contains none of these apps, so "the entry
-  // names an app that is not here" is only a finding for the real tree.
-  if (rootFlag < 0 && !apps.includes(app)) {
     failures.push({
       app,
-      kind: 'phantom-allowlist',
-      detail: `is in KNOWN_UNBUILT but apps/${app}/Dockerfile does not exist — remove the entry.`,
+      kind: 'unbuilt',
+      detail: mentions.length
+        ? `named in ${mentions.join(', ')} but only as text (comment / echo / ::warning::) — a mention is not a build`
+        : 'no workflow builds it',
     });
+    rows.push({ app, status: 'UNBUILT', via: mentions.join(', ') || '-' });
   }
-  if (!String(KNOWN_UNBUILT.get(app) || '').trim()) {
-    failures.push({ app, kind: 'unreasoned-allowlist', detail: 'has an empty reason. An allowlist entry without a reason is a mute, not a record.' });
+
+  for (const app of KNOWN_UNBUILT.keys()) {
+    // The allowlist describes THIS repo. Under --root the checker is aimed at a
+    // fixture tree that legitimately contains none of these apps, so "the entry
+    // names an app that is not here" is only a finding for the real tree.
+    if (rootFlag < 0 && !apps.includes(app)) {
+      failures.push({
+        app,
+        kind: 'phantom-allowlist',
+        detail: `is in KNOWN_UNBUILT but apps/${app}/Dockerfile does not exist — remove the entry.`,
+      });
+    }
+    if (!String(KNOWN_UNBUILT.get(app) || '').trim()) {
+      failures.push({ app, kind: 'unreasoned-allowlist', detail: 'has an empty reason. An allowlist entry without a reason is a mute, not a record.' });
+    }
   }
+
+  console.log(`[image-producer-coverage] ${apps.length} app image(s), ${builders.length} building workflow(s):`);
+  for (const r of rows) {
+    console.log(`  ${r.status === 'ok' ? 'ok           ' : r.status.padEnd(13)} ${r.app.padEnd(24)} ${r.via}`);
+  }
+  if (KNOWN_UNBUILT.size) {
+    console.log(`\n  ${KNOWN_UNBUILT.size} app(s) are KNOWN-UNBUILT and tolerated only because no orchestrated deploy`);
+    console.log('  references their image yet. Each needs a producer BEFORE it is wired into');
+    console.log('  admin-plane/main.bicep, or the deploy fails its Container App PUT.');
+  }
+
+  if (failures.length === 0) {
+    console.log('\n[image-producer-coverage] OK — every app image is either produced by a workflow or a recorded, reasoned gap.');
+    process.exit(0);
+  }
+
+  console.error(`\n[image-producer-coverage] FAIL — ${failures.length} problem(s).\n`);
+  for (const f of failures) {
+    console.error(`  apps/${f.app}`);
+    console.error(`    ${f.detail}`);
+  }
+  console.error('\n  An image no workflow builds does not exist. The bicep module that deploys it');
+  console.error('  fails its Container App PUT with MANIFEST_UNKNOWN, and every fix merged into');
+  console.error('  that app is inert by construction.');
+  console.error('  Fix: add a workflow that BUILDS it (.github/workflows/deploy-loom-sharing.yml');
+  console.error('  is the template for a standalone out-of-band app), or — if it genuinely cannot');
+  console.error('  be built yet — add it to KNOWN_UNBUILT above WITH the reason.\n');
+  process.exit(1);
 }
 
-console.log(`[image-producer-coverage] ${apps.length} app image(s), ${builders.length} building workflow(s):`);
-for (const r of rows) {
-  console.log(`  ${r.status === 'ok' ? 'ok           ' : r.status.padEnd(13)} ${r.app.padEnd(24)} ${r.via}`);
-}
-if (KNOWN_UNBUILT.size) {
-  console.log(`\n  ${KNOWN_UNBUILT.size} app(s) are KNOWN-UNBUILT and tolerated only because no orchestrated deploy`);
-  console.log('  references their image yet. Each needs a producer BEFORE it is wired into');
-  console.log('  admin-plane/main.bicep, or the deploy fails its Container App PUT.');
-}
-
-if (failures.length === 0) {
-  console.log('\n[image-producer-coverage] OK — every app image is either produced by a workflow or a recorded, reasoned gap.');
-  process.exit(0);
-}
-
-console.error(`\n[image-producer-coverage] FAIL — ${failures.length} problem(s).\n`);
-for (const f of failures) {
-  console.error(`  apps/${f.app}`);
-  console.error(`    ${f.detail}`);
-}
-console.error('\n  An image no workflow builds does not exist. The bicep module that deploys it');
-console.error('  fails its Container App PUT with MANIFEST_UNKNOWN, and every fix merged into');
-console.error('  that app is inert by construction.');
-console.error('  Fix: add a workflow that BUILDS it (.github/workflows/deploy-loom-sharing.yml');
-console.error('  is the template for a standalone out-of-band app), or — if it genuinely cannot');
-console.error('  be built yet — add it to KNOWN_UNBUILT above WITH the reason.\n');
-process.exit(1);
+if (resolve(process.argv[1] || '') === resolve(fileURLToPath(import.meta.url))) main();
