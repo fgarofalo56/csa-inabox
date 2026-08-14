@@ -133,9 +133,6 @@ jobs:
               "subscriptionId": "${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}"
             }
 
-      - name: Setup azd
-        uses: Azure/setup-azd@v2
-
       - name: Setup Bicep
         run: az bicep install
 
@@ -254,111 +251,92 @@ jobs:
         id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
-          # azd REQUIRES this and cannot derive it (#3137). See the guard in the
-          # azd branch below for the measured failure this prevents.
+          # THE azd BRANCH IS GONE (#3415) — byte-identical fix to the GCC-High
+          # lane. Every topology except `dlz-attach` ran `azd provision
+          # --no-prompt` against platform/fiab/bicep/main.bicep, which declares
+          # 22 parameters with NO default. azd binds Bicep parameters through
+          # `<module>.parameters.json` with `${VAR}` substitution (Learn,
+          # "Explore the azd up workflow"), and this repo has no
+          # platform/fiab/bicep/main.parameters.json and no main.bicepparam
+          # beside the module — so nothing could bind them, and the
+          # `azd env set CSA_LOOM_*` calls had no path into the template
+          # (main.bicep calls readEnvironmentVariable zero times).
+          #
+          # THIS LANE IS `disabled_manually` (#3345), so this is a CODE-IDENTITY
+          # fix, not a measured-failure fix, and it is stated as such. It is made
+          # here rather than deferred because the defect is the same defect in
+          # the same template: leaving it would mean re-enabling this lane onto a
+          # deploy path already known not to work, and would force the #3415
+          # ratchet to carry an exemption that lets exactly this back in.
+          #
+          # AZURE_SUBSCRIPTION_ID is still required and still cannot be derived
+          # (#3137) — it is the subscription this deploy targets when no
+          # dlz-attach target subscription was named. The guard below is written
+          # against `az deployment sub create`, because that is what runs now
+          # (deploy-integrity R7).
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
         run: |
           set -e
           # RETRY WITH CLASSIFICATION (#3017, deploy-integrity R6): same harness
           # as Commercial — this ran bare, and the failure notifier below reads
           # deploy-failure.json, which nothing on this workflow produced.
-          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
-            # dlz-attach: provision the DLZ directly INTO the new target sub,
-            # mirroring Commercial. azd would deploy into the logged-in (hub) sub,
-            # so the DLZ RG/module (single-arg resourceGroup()) would land in the
-            # wrong subscription. az deployment sub create scoped to the target sub
-            # makes subscription() resolve to it, per main.bicep's dlz-attach scope.
-            node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
-              --class-allow transient,eventual-consistency \
-              --max-attempts 4 --backoff 45 --jitter 0.3 --wall-clock 110m \
-              --step "az deployment sub create (gcc $CSA_LOOM_TOPOLOGY)" \
-              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
-              --remediate \
-              --arm-deployment "csa-loom-gcc-ci-${{ github.run_id }}" --arm-scope sub \
-              --arm-subscription "$CSA_LOOM_TARGET_SUBSCRIPTION" \
-              -- az deployment sub create \
-              --name csa-loom-gcc-ci-${{ github.run_id }} \
-              --location "$AZURE_LOCATION" \
-              --subscription "$CSA_LOOM_TARGET_SUBSCRIPTION" \
-              --template-file "$GITHUB_WORKSPACE/platform/fiab/bicep/main.bicep" \
-              --parameters "$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc.bicepparam" \
-              --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
-              --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
-              ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
-              --parameters topology="$CSA_LOOM_TOPOLOGY" \
-              --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
-          else
-            # AUTHENTICATE azd ITSELF (#3221). Azure/login@v2 authenticates the
-            # az CLI and Azure/setup-azd@v2 installs azd — but azd keeps its OWN
-            # credential store, and nothing ever logged into it. The azd branch of
-            # this lane therefore died at:
-            #     ERROR: not logged in, run `azd auth login` to login
-            # measured on run 31468942301, the first run ever to get past the
-            # `azd env set` defect (#3217) and actually reach `azd provision`.
-            #
-            # Order matters and is documented: set the cloud FIRST, then log in.
-            # Learn, Use Azure Developer CLI in sovereign clouds: "When switching
-            # between clouds, run `azd auth login` to authenticate with the set
-            # cloud." A login performed against the wrong cloud yields a token the
-            # target ARM endpoint will not accept.
-            azd config set cloud.name AzureCloud
-            azd auth login \
-              --client-id "${{ secrets.AZURE_GCC_CLIENT_ID }}" \
-              --client-secret "${{ secrets.AZURE_GCC_CLIENT_SECRET }}" \
-              --tenant-id "${{ secrets.AZURE_GCC_TENANT_ID }}"
-            azd auth status
-            azd env new csa-loom-gcc-ci-${{ github.run_id }} --no-prompt
-            # `azd env set X $VAR` with an EMPTY $VAR drops the argument entirely,
-            # so azd sees one token and hard-errors:
-            #     ERROR: invalid key=value format: CSA_LOOM_TOPOLOGY
-            # Measured on deploy-fiab-gcch run 31465019347, dispatched with this
-            # workflow's OWN defaults — `topology` defaults to '' and its help says
-            # "Empty=derive". So the documented default could not get past this line.
-            #
-            # Empty means DERIVE, which means: do not set the variable at all and let
-            # main.bicep's default apply. Setting it to a literal empty string would
-            # be a different thing and would not derive.
-            azdset() {
-              if [ -z "${2:-}" ]; then
-                echo "::notice::azd env set $1 — SKIPPED (empty; the template derives it)"
-                return 0
-              fi
-              azd env set "$1" "$2"
-            }
-            # AZURE_SUBSCRIPTION_ID is NOT routed through azdset(). azd cannot
-            # derive it and does not inherit it from the az CLI — its environment
-            # is its own store, so azure/login@v2 + `azd auth login` give it a
-            # TOKEN and no subscription. Skipping it on empty is precisely how the
-            # SIBLING GCC-High lane failed on 2026-08-12 (run 31688699259) and
-            # 2026-08-13 (31712233603):
-            #   ERROR: deployment failed: initializing provisioning manager: prompt required
-            #   Missing required inputs:  subscription -> Environment: AZURE_SUBSCRIPTION_ID
-            # This lane carried the byte-identical defect. It has not failed on it
-            # only because it is disabled_manually (#3345) and its last runs
-            # predate the azd branch being reachable — so this is a code-identity
-            # fix, not a measured-failure fix, and it is stated as such.
-            if [ -z "${AZURE_SUBSCRIPTION_ID:-}" ]; then
-              echo "::error::AZURE_GCC_SUBSCRIPTION_ID is empty. azd provision REQUIRES a subscription and cannot derive one; it would abort with 'prompt required'. Set the AZURE_GCC_SUBSCRIPTION_ID repository secret."
-              exit 1
-            fi
-            azd env set AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
-            azdset AZURE_CLOUD "$AZURE_CLOUD"
-            azdset AZURE_LOCATION "$AZURE_LOCATION"
-            azdset CSA_LOOM_BOUNDARY "$CSA_LOOM_BOUNDARY"
-            azdset CSA_LOOM_DEPLOYMENT_MODE "$CSA_LOOM_DEPLOYMENT_MODE"
-            azdset CSA_LOOM_TOPOLOGY "$CSA_LOOM_TOPOLOGY"
-            azdset CSA_LOOM_CAPACITY_SKU "$CSA_LOOM_CAPACITY_SKU"
-            azdset CSA_LOOM_ADMIN_GROUP_ID "${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}"
-            # azd names its own nested deployment — no --arm-deployment to drill
-            # into; classification runs on azd's own output. Two attempts only.
-            node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
-              --class-allow transient,eventual-consistency \
-              --max-attempts 2 --backoff 60 --jitter 0.3 --wall-clock 110m \
-              --step "azd provision (gcc)" \
-              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
-              --remediate \
-              -- azd provision --no-prompt
+          # ONE INVOCATION, EVERY TOPOLOGY (#3415). The topology-specific parts
+          # are PARAMETERS, not a second deploy path. The template file, param
+          # file and inline overrides are the SAME ones the `az deployment sub
+          # what-if` above previews, so the preview and the apply describe the
+          # same deployment. The one deliberate difference is `--subscription`:
+          # the what-if passes it only when a target subscription was named,
+          # this passes the RESOLVED value always, so the apply can never land
+          # at an ambient default the log does not name.
+          #
+          # WHICH SUBSCRIPTION. dlz-attach provisions the DLZ directly INTO the
+          # new target sub so `subscription()` resolves to it (per main.bicep's
+          # dlz-attach scope) — the DLZ RG/module uses single-arg
+          # resourceGroup(), so deploying from the hub sub would land it in the
+          # wrong subscription. Every other topology targets the hub sub. Same
+          # precedence the what-if uses.
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          # #3137, restated for the command that actually runs. `--subscription`
+          # is passed EXPLICITLY rather than relying on the ambient az login
+          # context, so an empty value would send the deploy nowhere while the
+          # log claimed otherwise. Fail loudly, before anything is attempted.
+          if [ -z "${DEPLOY_SUB:-}" ]; then
+            echo "::error::No target subscription. az deployment sub create is subscription-scoped and cannot derive one. On topology=dlz-attach this comes from the target_subscription input; otherwise from the AZURE_GCC_SUBSCRIPTION_ID repository secret. Both are empty."
+            exit 1
           fi
+          # RETRY TUNING, PRESERVED PER TOPOLOGY: dlz-attach stamps a landing
+          # zone into a fresh subscription and rides replication lag (4 attempts
+          # / 45s, unchanged); every other topology reconciles the whole hub —
+          # idempotent but not cheap (2 / 60s, the tuning the branch this
+          # replaces carried, kept deliberately rather than silently widened).
+          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
+            MAX_ATTEMPTS=4; BACKOFF=45
+          else
+            MAX_ATTEMPTS=2; BACKOFF=60
+          fi
+          # --arm-deployment now applies on EVERY topology. The azd branch had no
+          # drill-down at all (azd names its own nested deployment), so a failed
+          # default-topology deploy handed the classifier bicep linter noise
+          # instead of the ARM leaf errors.
+          node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
+            --class-allow transient,eventual-consistency \
+            --max-attempts "$MAX_ATTEMPTS" --backoff "$BACKOFF" --jitter 0.3 --wall-clock 110m \
+            --step "az deployment sub create (gcc ${CSA_LOOM_TOPOLOGY:-derived})" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            --remediate \
+            --arm-deployment "csa-loom-gcc-ci-${{ github.run_id }}" --arm-scope sub \
+            --arm-subscription "$DEPLOY_SUB" \
+            -- az deployment sub create \
+            --name csa-loom-gcc-ci-${{ github.run_id }} \
+            --location "$AZURE_LOCATION" \
+            --subscription "$DEPLOY_SUB" \
+            --template-file "$GITHUB_WORKSPACE/platform/fiab/bicep/main.bicep" \
+            --parameters "$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc.bicepparam" \
+            --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
+            --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
+            ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
+            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
           # ── The smoke test's target: RESOLVED, never assumed (#3137) ────────
           # Byte-identical defect to deploy-fiab-gcch.yml, fixed the same way:
@@ -398,15 +376,21 @@ jobs:
             echo "::warning::$(basename "$PARAMS") does not set deployAppsEnabled=true (#3078), so this deploy stands up no Console. The external smoke test is skipped and this run does NOT establish that the GCC boundary serves Loom."
           else
             # Two separate command substitutions, not a pipeline: each one's
-            # failure is its own and `set -e` stops on either. The values are
-            # held in a shell variable and never echoed — the azd environment
-            # carries AZURE_SUBSCRIPTION_ID.
-            AZD_VALUES=$(azd env get-values --output json)
-            SMOKE_URL=$(printf '%s' "$AZD_VALUES" | node "$GITHUB_WORKSPACE/scripts/ci/resolve-smoke-console-url.mjs")
+            # failure is its own and `set -e` stops on either.
+            #
+            # SOURCE CHANGED WITH #3415: this read `azd env get-values --output
+            # json`, which only existed because the deploy above ran under azd.
+            # There is no azd environment now, so the outputs come from the ARM
+            # deployment itself. `az deployment sub show` returns them ARM-shaped
+            # ({"type":…,"value":…}); the resolver accepts that shape too.
+            ARM_OUTPUTS=$(az deployment sub show \
+              --name "csa-loom-gcc-ci-${{ github.run_id }}" \
+              --subscription "$DEPLOY_SUB" \
+              --query properties.outputs -o json)
+            SMOKE_URL=$(printf '%s' "$ARM_OUTPUTS" | node "$GITHUB_WORKSPACE/scripts/ci/resolve-smoke-console-url.mjs")
             echo "console_url=$SMOKE_URL" >> "$GITHUB_OUTPUT"
             echo "::notice::smoke-test target (public ingress): $SMOKE_URL"
           fi
-        working-directory: platform/fiab/azd
 
       # Front Door -> ACA env Private Link approval (#3203). CLOUD PARITY: the
       # sovereign lanes previously passed an EMPTY scriptIdentityId so the ARM
