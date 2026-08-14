@@ -364,12 +364,24 @@ the honest answer when nothing is running that repository — deploying it
 different tags, or a container-app query that failed are reported UNRESOLVED and
 left at the param default with **no claim** that writing it is safe. The
 separate gate `scripts/ci/assert-no-silent-image-tag-revert.mjs` then re-reads
-the estate itself and refuses the deploy if that write would move a live app off
-a tag nobody asked to change. For a digest-pinned app it asks the registry the
-one answerable question — *does the tag this deploy would write resolve, right
-now, to the digest the app is running?* — and proceeds only on `same`; a
-different digest is refused, and an unreadable registry stays UNKNOWN and is
-also refused.
+the estate itself and refuses a write **sourced from the param file's own
+default** that would move a live app off a tag nobody asked to change — the
+#3161 flattening. For a digest-pinned app it asks the registry the one
+answerable question — *does the tag this deploy would write resolve, right now,
+to the digest the app is running?* — and proceeds only on `same`; a different
+digest is refused, and an unreadable registry stays UNKNOWN and is also refused.
+
+**Known gap, stated rather than implied.** The gate tells an operator pin from a
+default by comparing the value against the param file's declared default, and
+adoption's whole purpose is to make them differ. So a tag the resolver
+*successfully adopted* is classified as a pin and can be reported `no-op`,
+`move` or `create` — never refused. If the estate moves between the resolver's
+read and the gate's read (a roll landing in that window), the deploy proceeds
+and re-asserts the older tag. Adoption cannot re-open the `v0.1` flattening —
+an UNRESOLVED key falls back to the declared default, which the gate still
+refuses — but a divergence between the two reads is currently permitted.
+Closing it needs a per-key provenance marker distinguishing an adopted value
+from an operator pin, and is tracked as a follow-up.
 
 **You do not need to set any `LOOM_*_TAG` repo variable for a brownfield
 reconcile to keep what is running.** Set one only when you mean to *change* the

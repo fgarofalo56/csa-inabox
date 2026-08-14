@@ -73,8 +73,37 @@
  * UNRESOLVED: this script exports the param default and says, loudly, that it
  * did not establish what is running. Deciding whether writing that default is
  * safe is assert-no-silent-image-tag-revert.mjs's job, and it makes that call
- * from its OWN independent live read. Two measurements, not one measurement
- * trusted twice — this script cannot talk the guard out of a refusal.
+ * from its OWN independent live read.
+ *
+ * ── WHAT THAT SEPARATION DOES *NOT* BUY — READ THIS BEFORE TRUSTING IT ──────
+ *
+ * An earlier version of this header claimed "this script cannot talk the guard
+ * out of a refusal." That is FALSE and was retracted in the same PR that
+ * introduced it. Measured against the real code:
+ *
+ *     adoption reads loom-console = 28de89fb -> exports LOOM_CONSOLE_TAG=28de89fb
+ *     a roll moves the app to 99aa11bb before the gate step runs
+ *     gate: decision=proceed  source=pin  verdict=move
+ *
+ * The gate classifies a tag as an operator PIN whenever it differs from the
+ * param file's declared default — and making it differ is precisely what
+ * adoption does. So an ADOPTED key can only ever come out `no-op`, `move` or
+ * `create`; it can no longer come out REFUSE. Before adoption existed, only a
+ * human setting a repo variable could produce `pin`; now a measurement is
+ * indistinguishable from intent.
+ *
+ * WHAT THAT DOES AND DOES NOT EXPOSE. It does NOT re-open the #3161 flattening:
+ * when this script cannot establish a tag it exports the param DEFAULT, which
+ * the gate still reads as `fallback` and still REFUSES over a live app running
+ * something else (pinned by the unreadable-estate control in the tests). The
+ * exposure is bounded to DIVERGENCE between the two reads — a roll landing in
+ * the window between this step and the gate — which is permitted as a `move`
+ * and would rewrite the app off the roll that just landed.
+ *
+ * Closing it needs a per-key PROVENANCE marker so the gate can tell an adopted
+ * value from an operator pin. That is tracked as a follow-up, not done here,
+ * and it is stated in this header rather than left for the next reader to
+ * rediscover.
  *
  * READ-ONLY. `az containerapp list` is the only Azure call it makes.
  *

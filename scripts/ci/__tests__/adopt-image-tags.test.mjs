@@ -24,6 +24,15 @@
  *     the every-declared-tag control goes red, and the Gov consumers that run
  *     under `set -u` would abort on the missing variable.
  *
+ * ONE TEST HERE PINS A LIMITATION RATHER THAN A PROTECTION — the `KNOWN GAP`
+ * case at the bottom. It replaces a control that asserted adoption "does not
+ * blind the guard" and passed with `decideAdoptions` deleted entirely: it had
+ * chosen the one stale value (equal to the param default) that routes through
+ * the pre-existing `fallback` branch and therefore could not exercise the
+ * claim. The claim was also false. Recorded here rather than quietly dropped,
+ * because a control that cannot fail is the defect class this repo keeps
+ * re-finding, and deleting the evidence of one is how it comes back.
+ *
  * The running-image side is NOT re-implemented here: it comes from
  * resolveRunningImageTags() in reconcile-policy.mjs, the same function the
  * Commercial lane uses in production, and the declared defaults come from
@@ -204,7 +213,7 @@ test('requestVarFor is mechanical and collides with no tag name bicep reads', ()
 });
 
 // ---------------------------------------------------------------------------
-// THE PAIRING: adoption satisfies the guard, and does NOT blind it
+// THE PAIRING: what adoption does and does NOT do to the gate
 // ---------------------------------------------------------------------------
 
 test('CONTROL: run 31793715708 — adoption turns the two TAG refusals into no-ops', () => {
@@ -233,30 +242,54 @@ test('CONTROL: run 31793715708 — adoption turns the two TAG refusals into no-o
   assert.ok(after.rows.every((x) => x.verdict === 'no-op'), JSON.stringify(after.rows));
 });
 
-test('CONTROL: adoption does NOT blind the guard — a STALE adopted value is still refused', () => {
-  // The two scripts probe the estate independently. If the adopter's read is
-  // stale (the estate moved between the two reads, or the adopter was fed a
-  // different estate), the guard is comparing the FINAL env against ITS OWN
-  // fresh read and the disagreement surfaces. A guard that trusted the
-  // adopter's verdict instead of re-measuring would report this green.
+test('KNOWN GAP: an ADOPTED value that diverges from a later read is a `move`, NOT a refusal', () => {
+  // THIS TEST PINS A LIMITATION, NOT A PROTECTION, and it replaces one that
+  // asserted the opposite and could not fail.
+  //
+  // The retracted control fed adoption an estate running `v0.1` — so the
+  // adopted value EQUALLED the param default, routed through the pre-existing
+  // `fallback` branch, and refused for reasons that had nothing to do with
+  // staleness. It passed with `decideAdoptions` deleted entirely.
+  //
+  // What the code actually does: decideTagWrites classifies a tag as an
+  // operator `pin` whenever it differs from the declared default, and making
+  // it differ is exactly what adoption does. So an adopted key can produce
+  // `no-op`, `move` or `create` — never REFUSE. A roll landing between the
+  // adopt step and the gate step is therefore permitted as a `move`, and the
+  // deploy rewrites the app off the roll that just landed.
+  //
+  // Closing that needs per-key PROVENANCE (adopted vs operator-pinned) and is
+  // a tracked follow-up. Until then this asserts the real behaviour, so it
+  // goes RED the day provenance lands — which is exactly when someone should
+  // be made to look at it.
   const d = new Map([['LOOM_CONSOLE_TAG', 'v0.1']]);
-  const stale = decideAdoptions({
-    declared: d, env: {}, resolution: running([['loom-console', `${ACR}/loom-console:v0.1`]]),
+  const adopted = decideAdoptions({
+    declared: d, env: {}, resolution: running([['loom-console', `${ACR}/loom-console:28de89fb`]]),
   });
-  assert.equal(envOf(stale).LOOM_CONSOLE_TAG, 'v0.1');
-  const nowRunning = running([['loom-console', `${ACR}/loom-console:28de89fb`]]);
-  const verdict = decideTagWrites({ declared: d, env: envOf(stale), resolution: nowRunning });
-  assert.equal(verdict.decision, 'refuse');
+  assert.equal(envOf(adopted).LOOM_CONSOLE_TAG, '28de89fb', 'precondition: the adopted value differs from the default');
+
+  const movedSince = running([['loom-console', `${ACR}/loom-console:99aa11bb`]]);
+  const verdict = decideTagWrites({ declared: d, env: envOf(adopted), resolution: movedSince });
+  assert.equal(verdict.decision, 'proceed');
+  assert.equal(verdict.rows[0].source, 'pin', 'an adopted value is indistinguishable from an operator pin');
+  assert.equal(verdict.rows[0].verdict, 'move');
 });
 
-test('CONTROL: adoption cannot rescue a deploy whose estate is unreadable', () => {
-  // The adopter exports the param defaults on a failed probe. If that were
-  // enough to satisfy the guard, an unreadable control plane would become a
-  // silent green — the exact UNKNOWN-as-NEGATIVE collapse.
+test('CONTROL: adoption cannot launder the #3161 flattening — an UNRESOLVED key still refuses', () => {
+  // This is the protection that IS real, and the one the bounded-exposure
+  // claim rests on. When adoption cannot establish what is running it exports
+  // the param DEFAULT, which the gate reads as `fallback` — so the original
+  // silent-revert refusal is untouched by adoption existing.
+  //
+  // Mutation that kills it: make decideAdoptions invent a tag for an
+  // unresolved key (e.g. fall through to the running digest), and the verdict
+  // flips to `move` and the deploy proceeds.
   const d = new Map([['LOOM_CONSOLE_TAG', 'v0.1']]);
   const blind = decideAdoptions({ declared: d, env: {}, resolution: resolveRunningImageTags(null) });
+  assert.equal(envOf(blind).LOOM_CONSOLE_TAG, 'v0.1', 'an unresolved key falls back to the declared default');
   const verdict = decideTagWrites({
     declared: d, env: envOf(blind), resolution: running([['loom-console', `${ACR}/loom-console:28de89fb`]]),
   });
   assert.equal(verdict.decision, 'refuse');
+  assert.equal(verdict.rows[0].source, 'fallback');
 });

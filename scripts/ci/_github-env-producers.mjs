@@ -30,26 +30,42 @@
  * re-finding: the correct helper existed, the sibling never adopted it. So the
  * table moved here and both guards read it.
  *
- * ── WHAT THIS CREDITS, AND WHY THAT IS HONEST RATHER THAN GENEROUS ──────────
+ * ── WHAT THIS CREDITS — MEASURED, NOT ASSERTED ──────────────────────────────
  *
- * A guard cannot execute the producer, so it credits a DECLARED key list. That
- * is a real compromise and it is bounded in two ways:
+ * A guard cannot execute the producer, so it credits a DECLARED key list: the
+ * FULL `APP_IMAGE_TAGS` set, currently 20 names, computed rather than typed out
+ * so it cannot drift from the table the producers themselves iterate.
  *
- *   1. The key list is COMPUTED from `APP_IMAGE_TAGS` — the same table the
- *      producers themselves iterate — not typed out here. It cannot drift from
- *      what they write without the shared table changing underneath both.
- *   2. `adopt-image-tags.mjs` provably emits one line per DECLARED tag, pinned
- *      by the `EVERY declared tag gets an env line` control in
- *      scripts/ci/__tests__/adopt-image-tags.test.mjs. For that producer the
- *      credited set is exactly the written set.
+ * THE CREDIT IS WIDER THAN WHAT EITHER PRODUCER WRITES. An earlier revision of
+ * this file claimed "for that producer the credited set is exactly the written
+ * set." That is FALSE and is retracted here. `adopt-image-tags.mjs` writes only
+ * the tags the `.bicepparam` on its command line DECLARES:
  *
- * `reconcile-resolve.mjs` is looser: it emits a line only for an app that is
- * RUNNING, and an absent app legitimately falls through to the param file's
- * default. Crediting the full key set for it is still correct for the question
- * both guards ask — an absent app's variable is not READ under `set -u` by any
- * step in that lane (measured: deploy-fiab-commercial.yml contains zero
- * `LOOM_*_TAG` shell references) — but it is a credit, not a measurement, and
- * is recorded as such here rather than in a comment nobody re-reads.
+ *     param file            declared   credited but never written
+ *     gcc-high.bicepparam        17    LOOM_DBT_RUNNER_TAG,
+ *     il5.bicepparam             17    LOOM_TRANSFORM_RUNNER_TAG,
+ *                                      LOOM_MAPS_TILES_TAG
+ *     gcc.bicepparam              0    all 20
+ *
+ * `reconcile-resolve.mjs` is looser still: it emits a line only for an app that
+ * is RUNNING, and an absent app legitimately falls through to the param file's
+ * default.
+ *
+ * THE CONSEQUENCE, STATED PLAINLY. A `run:` step that reads one of the
+ * over-credited names under `set -u` — say
+ * `"loom-dbt-runner:$LOOM_DBT_RUNNER_TAG"` in a Gov lane — passes
+ * check-workflow-unset-vars.mjs and then ABORTS AT RUNTIME with
+ * `LOOM_DBT_RUNNER_TAG: unbound variable`. That is the #3030 class this credit
+ * sits inside, so the gap is recorded here rather than left to be rediscovered
+ * from a red deploy.
+ *
+ * WHY IT IS STILL BOUNDED. The over-credit can only mislead about a name NO
+ * boundary param file declares, and every such read is by construction a read
+ * of a tag the deploy has no value for — a defect on its own terms. No such
+ * read exists in the tree today (measured). The narrowing fix — intersect the
+ * credit with the tags declared by the `--param-file` named in the same step
+ * body, which is already on the command line — is a tracked follow-up, not
+ * done here.
  *
  * ADDING AN ENTRY IS A REVIEWABLE ACT. A new row here widens two guards at
  * once. It belongs in a diff with the producer it describes, never on its own.
