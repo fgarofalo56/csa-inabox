@@ -669,6 +669,70 @@ async function probeBatch(h: ProbeHelpers): Promise<CheckResult> {
   }
 }
 
+/**
+ * AI Search INDEXER health — the monitor that #3384 proved was missing.
+ *
+ * On 2026-08-13 `research-knowledge-indexer` on dlz-aisearch-dev-eastus2 had
+ * failed all 50 of its retained runs ("Could not connect to Annotation Cache
+ * Index Storage Acount."), its index held ZERO documents, and it was still
+ * firing daily — while its top-level `status` field read `running`. Nothing in
+ * Loom asserted on `executionHistory`, so the estate had no signal at all: the
+ * failure was found by hand, seven weeks (of retained history) after the fact.
+ *
+ * This probe classifies EVERY indexer on the service through the same
+ * `classifyIndexerHealth` core the UI uses, so a dead pipeline is loud on
+ * /admin/readiness the day it dies. `status: running` is never the only signal
+ * anyone sees again.
+ */
+async function probeSearchIndexers(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-search-indexers', category: 'data-plane' as const, title: 'AI Search indexer health — consecutive failures + empty-index detection', severity: 'recommended' as const };
+  try {
+    const { searchConfigGate } = await import('@/lib/azure/search-index-client');
+    const g = searchConfigGate();
+    if (g) return { ...base, status: 'warn', detail: 'Azure AI Search not configured — no indexers to classify.', remediation: `Set ${g.missing}.`, redeploy: true, ...h.envVarFix([g.missing]) };
+
+    const { sweepIndexerHealth } = await import('@/lib/azure/search-indexer-health');
+    const rows = await withTimeout(sweepIndexerHealth(), 20000);
+    if (rows.length === 0) {
+      return { ...base, status: 'pass', detail: 'AI Search reachable; the service defines no indexers, so there is no ingestion pipeline to be silently dead.' };
+    }
+    const failed = rows.filter((r) => r.health.verdict === 'failed');
+    const degraded = rows.filter((r) => r.health.verdict === 'degraded');
+    const unknown = rows.filter((r) => r.health.verdict === 'unknown');
+    const line = (r: typeof rows[number]) => `${r.name}: ${r.health.observed}`;
+
+    if (failed.length) {
+      return {
+        ...base, status: 'fail',
+        detail: `${failed.length} of ${rows.length} AI Search indexer(s) are FAILING. ${failed.map(line).join(' | ')}`,
+        remediation: failed[0].health.remediation || 'Open the indexer execution history and act on the quoted service error.',
+        redeploy: false,
+      };
+    }
+    if (degraded.length || unknown.length) {
+      const bad = [...degraded, ...unknown];
+      return {
+        ...base, status: 'warn',
+        detail: `${bad.length} of ${rows.length} AI Search indexer(s) are not healthy. ${bad.map(line).join(' | ')}`,
+        remediation: bad[0].health.remediation || 'Open the indexer execution history for the per-run detail.',
+        redeploy: false,
+      };
+    }
+    return { ...base, status: 'pass', detail: `All ${rows.length} AI Search indexer(s) healthy — newest retained run succeeded on each. ${rows.map(line).join(' | ').slice(0, 400)}` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg);
+    return {
+      ...base, status: denied ? 'fail' : 'warn',
+      detail: `AI Search indexer sweep failed: ${msg}. No indexer was classified, so NOTHING is being claimed about pipeline health.`,
+      remediation: denied
+        ? 'Grant the Console UAMI "Search Service Contributor" on the AI Search service (indexer status is a data-plane read).'
+        : 'Verify LOOM_AI_SEARCH_SERVICE and that the search service is reachable from the Console.',
+      redeploy: false,
+      portalSteps: denied ? grantPortalSteps(h, 'the Azure AI Search service', 'Search Service Contributor') : undefined,
+    };
+  }
+}
+
 // ── runner ───────────────────────────────────────────────────────────────────
 
 /** Help Copilot corpus freshness (WS-G / G2). Compares the staged docs against
@@ -963,5 +1027,8 @@ async function probeLoomUnityAuthz(h: ProbeHelpers): Promise<CheckResult> {
     probeDrRestorePosture(h),
     // LU-2 — Loom Unity anonymous-access proof (an actual unauthenticated request).
     probeLoomUnityAuthz(h),
+    // #3384 — AI Search indexer health. A scheduled indexer that fails every run
+    // while reporting `status: running` had NO signal anywhere before this.
+    probeSearchIndexers(h),
   ]);
 }

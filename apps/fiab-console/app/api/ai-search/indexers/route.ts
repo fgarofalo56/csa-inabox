@@ -12,12 +12,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  listIndexers, createIndexer, deleteIndexer, runIndexer, resetIndexer, getIndexerStatus,
+  listIndexers, createIndexer, deleteIndexer, runIndexer, resetIndexer,
   getIndexer, updateIndexerSchedule, validateScheduleInterval,
   resetIndexerDocs, resetIndexerSkills, resyncIndexer, updateIndexerFieldMappings,
   searchConfigGate, SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
 import { buildFieldMappings, normalizeResyncOptions } from '@/lib/azure/search-indexer-shapes';
+import { readIndexerHealth } from '@/lib/azure/search-indexer-health';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -101,8 +102,12 @@ export async function POST(req: NextRequest) {
         );
         return NextResponse.json({ ok: true, action: 'setSchedule', indexer, definition: def });
       }
-      const status = await getIndexerStatus(indexer);
-      return NextResponse.json({ ok: true, action: 'status', indexer, status });
+      // #3384 — the raw payload's top-level `status` is 'running' for an
+      // indexer that has failed 50 times in a row. It is still returned (it is
+      // real service state), but the ONLY signal a caller may branch on is
+      // `health`, derived from lastResult + executionHistory + doc count.
+      const { status, health } = await readIndexerHealth(indexer);
+      return NextResponse.json({ ok: true, action: 'status', indexer, status, health });
     } catch (e: any) { return fail(e); }
   }
 

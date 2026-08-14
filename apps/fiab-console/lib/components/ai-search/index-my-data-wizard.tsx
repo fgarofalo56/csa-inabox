@@ -34,6 +34,7 @@ import {
 import { clientFetch } from '@/lib/client-fetch';
 import { SCHEDULE_PRESETS } from '@/lib/azure/search-field-shapes';
 import type { IndexableSourceType, ContentPreset } from '@/lib/azure/index-my-data';
+import { indexerHealthColor } from '@/lib/azure/search-indexer-shapes';
 
 const useStyles = makeStyles({
   surface: { maxWidth: '860px', width: '90vw' },
@@ -441,15 +442,28 @@ export function IndexMyDataWizard({
                   <MessageBarBody>
                     <MessageBarTitle>Pipeline created</MessageBarTitle>
                     Index <strong>{result.indexName}</strong> and its data source, skillset, and indexer are live. The indexer
-                    is running — vectors appear as documents finish processing.
+                    run is asynchronous — this step reports what the service has actually recorded so far, not an assumption
+                    that it will succeed.
                   </MessageBarBody>
                 </MessageBar>
+                {/* #3384 — the first-run verdict, always shown. A `pending`
+                    verdict here is normal and honest ("no terminal run yet");
+                    what is NOT allowed is implying success from silence. */}
+                {result.health && result.health.verdict !== 'healthy' && (
+                  <MessageBar intent={result.health.verdict === 'failed' ? 'error' : result.health.verdict === 'degraded' ? 'warning' : 'info'} layout="multiline">
+                    <MessageBarBody>
+                      <MessageBarTitle>First run: {result.health.verdict}</MessageBarTitle>
+                      {result.health.observed}
+                      {result.health.remediation ? <><br />{result.health.remediation}</> : null}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 <div className={s.kv}>
                   <Caption1>Index</Caption1><span className={s.code}>{result.created?.indexName || result.indexName}</span>
                   <Caption1>Indexer</Caption1><span className={s.code}>{result.created?.indexerName}</span>
                   <Caption1>Skillset</Caption1><span className={s.code}>{result.created?.skillsetName}</span>
                   <Caption1>Data source</Caption1><span className={s.code}>{result.created?.dataSourceName}</span>
-                  {result.status?.lastResult?.status && (<><Caption1>Indexer status</Caption1><span><Badge appearance="tint" color={result.status.lastResult.status === 'success' ? 'success' : 'warning'}>{result.status.lastResult.status}</Badge></span></>)}
+                  {result.health && (<><Caption1>Indexer health</Caption1><span><Badge appearance="tint" color={indexerHealthColor(result.health.verdict)}>{result.health.verdict}</Badge></span></>)}
                 </div>
                 <Divider />
                 <Body1Strong>Test query</Body1Strong>

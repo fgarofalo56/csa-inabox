@@ -12,12 +12,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  listIndexers, listDataSources, listSkillsets, runIndexer, resetIndexer, getIndexerStatus,
+  listIndexers, listDataSources, listSkillsets, runIndexer, resetIndexer,
   getIndexer, updateIndexerSchedule, validateScheduleInterval,
   resetIndexerDocs, resetIndexerSkills, resyncIndexer, updateIndexerFieldMappings,
   SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
 import { buildFieldMappings, normalizeResyncOptions } from '@/lib/azure/search-indexer-shapes';
+import { readIndexerHealth } from '@/lib/azure/search-indexer-health';
 import {
   resolveSearchBinding, searchBindingErrorResponse, SEARCH_ITEM_TYPE,
 } from '@/lib/azure/search-binding';
@@ -123,7 +124,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
       return NextResponse.json({ ok: true, action: 'setSchedule', indexer, definition: def });
     }
-    const status = await getIndexerStatus(indexer, service);
-    return NextResponse.json({ ok: true, action: 'status', indexer, status });
+    // #3384 — `status.status` is 'running' on an indexer that has failed every
+    // retained run. Callers branch on `health`, never on the raw field.
+    const { status, health } = await readIndexerHealth(indexer, service);
+    return NextResponse.json({ ok: true, action: 'status', indexer, status, health });
   } catch (e: any) { return gateOr(e); }
 }

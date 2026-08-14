@@ -893,6 +893,19 @@ jobs:
       - name: 'loaded-flag-honesty (a finally that promotes a FAILED read to loaded)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-loaded-flag-honesty.mjs
+      # An AI Search indexer's TOP-LEVEL `status` field is `running | error` and
+      # describes the indexer OBJECT — it says nothing about whether any run
+      # succeeded. research-knowledge-indexer reported `running` while all 50 of
+      # its retained runs had failed ("Could not connect to Annotation Cache
+      # Index Storage Acount."), its index held zero documents, and it was still
+      # firing daily. Two consumers read that field as health, so the whole
+      # failure was invisible. This guard forbids the read and requires every
+      # indexer-status route to emit the derived `health` verdict. R1's
+      # population is zero, so it self-defends with EMBEDDED CONTROLS (the real
+      # pre-fix snippets); R2's population is asserted non-zero. See #3384.
+      - name: 'indexer-health-honesty (object-level status rendered as pipeline health)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-indexer-health-honesty.mjs
       # `groups` was DECLARED on UserClaims, READ in six places, and WRITTEN
       # nowhere — so session.claims.groups was permanently undefined and EVERY
       # group-based authorization path in Loom was dead for months: tenant admin

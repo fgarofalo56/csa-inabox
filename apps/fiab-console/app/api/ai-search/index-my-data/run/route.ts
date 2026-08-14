@@ -36,8 +36,8 @@ import {
   createIndex, deleteIndex,
   createSkillset, deleteSkillset,
   createIndexer, deleteIndexer,
-  getIndexerStatus,
 } from '@/lib/azure/search-index-client';
+import { readIndexerHealth } from '@/lib/azure/search-indexer-health';
 import { trimSlashes } from '@/lib/util/trim';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -160,17 +160,56 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     );
   }
 
-  // Initial indexer status (creating an indexer also runs it).
-  let status: unknown = null;
-  try {
-    status = await getIndexerStatus(names.indexerName);
-  } catch { /* status best-effort — the run was accepted */ }
+  // --- Reconcile the FIRST RUN. Creating an indexer also runs it. -----------
+  //
+  // #3384: this block used to be
+  //
+  //     try { status = await getIndexerStatus(names.indexerName); }
+  //     catch { /* status best-effort — the run was accepted */ }
+  //
+  // and then returned `ok:true` with whatever `status` happened to hold —
+  // including `null`. Two separate untruths in three lines:
+  //
+  //   * "the run was accepted" was never established. The code knew the PUT
+  //     succeeded; it knew nothing about the run (deploy-integrity R7).
+  //   * a raw status whose top-level field reads `"status":"running"` while
+  //     `lastResult.status` is `"transientFailure"` was handed to the wizard,
+  //     which rendered nothing at all when `lastResult` was absent — so a
+  //     pipeline that failed its first run in five seconds looked like a
+  //     successful create.
+  //
+  // Now: the read failing is reported as a failed read (verdict `unknown`,
+  // carrying the real error), and a first run that has ALREADY failed is a
+  // 502 with the quoted service error and a concrete remediation. The created
+  // artifacts are named in the error body — they are deliberately NOT rolled
+  // back, because the pipeline exists and is repairable.
+  const { status, health } = await readIndexerHealth(names.indexerName);
+
+  if (health.verdict === 'failed' || health.verdict === 'degraded') {
+    return apiError(
+      `The pipeline was created, but its first indexer run did not succeed. ${health.observed}`,
+      502,
+      {
+        code: 'first_run_failed',
+        created: names,
+        indexName: names.indexName,
+        preset,
+        status,
+        health,
+        remediation: health.remediation,
+      },
+    );
+  }
 
   return apiOk({
     created: names,
     indexName: names.indexName,
     preset,
     status,
+    // The verdict every caller must branch on. `pending`/`unknown` here are the
+    // NORMAL first-response shapes (the run is asynchronous) — they mean "not
+    // yet proven", never "fine".
+    health,
     searchRoute: `/api/ai-search/indexes/${encodeURIComponent(names.indexName)}/search`,
   });
 });
