@@ -804,6 +804,20 @@ jobs:
       - name: 'guard-import-side-effects (a CI guard must run as a script, never on import — #3436)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-guard-import-side-effects.mjs
+      # The sibling half of the same problem. That guard proves each required
+      # lane RENDERS a verdict; this one proves the release lane cannot merge on
+      # a verdict nothing rendered, and cannot close an issue nobody claimed.
+      #
+      # Both defects were live on 2026-08-14 and both were invisible in review:
+      # release-please.yml posted SYNTHETIC success statuses for any context
+      # without a producer, its wait-timeout reported the job GREEN having
+      # bridged nothing at all (run 31786503229 gave up 78s early), and merging
+      # release PR #3419 closed #3429 — an open P0 — because the aggregated
+      # changelog renders every footer reference as ", closes #N" whatever the
+      # author wrote. #3431 had written `Refs #3429`.
+      - name: 'release-please-integrity (no invented status, no invented closure — #3393)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-release-please-integrity.mjs
       # If the registry NAME comes from a variable, the login-server SUFFIX must
       # too. mirror-upstream-images.sh read back `${ACR}.azurecr.io/${DST}` — the
       # name was right for Gov, the suffix was Commercial. All three upstream
