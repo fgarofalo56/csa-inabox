@@ -220,8 +220,15 @@ test('MUTATION: re-introducing a synthetic success post on the REAL file is caug
 
 test('MUTATION: making the timeout non-fatal again on the REAL file is caught', () => {
   const text = readFileSync(WORKFLOW, 'utf8');
-  const broken = text.replace('UNVERIFIED=$((UNVERIFIED + 1))', 'true # noted');
+  // replaceAll, not replace: the file now marks UNVERIFIED on several distinct
+  // failure paths, and this guard's invariant is only that the marker EXISTS.
+  // Removing one path is NOT caught here — deliberately. That case belongs to
+  // the behavioural suite, where each of the three ungraded states asserts a
+  // non-zero exit, so dropping any single increment fails a test there.
+  // Saying so rather than implying this structural check is finer than it is.
+  const broken = text.replaceAll('UNVERIFIED=$((UNVERIFIED + 1))', 'true # noted');
   assert.notEqual(broken, text, 'the mutation must actually apply');
+  assert.ok(!broken.includes('UNVERIFIED=$((UNVERIFIED + 1))'), 'every increment must really be gone');
   const ids = judgeWorkflow(broken).failures.map((f) => f.id);
   assert.ok(ids.includes('no-unverified-marker'), `expected no-unverified-marker, got ${ids}`);
 });
@@ -264,6 +271,8 @@ test('the guard reads LOGICAL lines — a continuation-split success post is sti
     '          node scripts/ci/neutralize-release-close-keywords.mjs a > b',
     '          node scripts/ci/neutralize-release-close-keywords.mjs --check c',
     '          UNVERIFIED=0',
+    '          gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100"',
+    '          gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&event=workflow_dispatch&per_page=100"',
     '          UNVERIFIED=$((UNVERIFIED + 1))',
     '          gh api -X POST "u" \\',
     '            -f state=failure',

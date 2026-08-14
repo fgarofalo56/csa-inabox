@@ -99,6 +99,51 @@ Measured on release PR #3419 (head `1c80ca70`, 2026-08-14): four producing
 workflows dispatched, **27 real check runs on the commit**, all 14 required
 contexts green from real runs, **zero synthetic statuses**. The mechanism works.
 
+### Correction — what "suppressed" actually means (2026-08-14)
+
+This ADR's first amendment, and the workflow header it described, both stated
+that GitHub's loop-prevention means the `pull_request` runs are **never
+created**, and that `action_required` is an unrelated mechanism affecting only
+fork PRs from first-time contributors. **That is wrong**, and it is corrected
+here rather than deleted, because it was asserted without being established —
+the same R7 failure this workflow keeps correcting elsewhere.
+
+Measured on release PR #3447, head `3a21f6e0`:
+
+| endpoint | result |
+| --- | --- |
+| `actions/runs?head_sha=3a21f6e0` | **10 runs**, all `event=pull_request`, `status=completed`, `conclusion=action_required` |
+| `commits/3a21f6e0/check-runs` | **`total_count = 0`** |
+
+Both of these are true at once, and every design mistake in this area came from
+keeping one and discarding the other:
+
+1. the `pull_request` runs **are** created for a `GITHUB_TOKEN`-authored release
+   PR, and they **do** sit at `action_required` — #3387's premise; and
+2. a held run has never **executed**, so it publishes **no check run** and grades
+   nothing — which is what actually matters.
+
+#3387 built an approve path for runs it could not find. The first amendment's
+fix then built a dispatch-skip probe that read the workflow-run list, counted
+those held runs as evidence, skipped dispatch, and **deadlocked the release lane
+on 2026-08-14** — a deterministic skip feeding a deterministic failure.
+
+Whether `GITHUB_TOKEN` can approve a held run is **still not established**, and
+nothing in the current design assumes it. Dispatch does not need the answer.
+Approving them is tracked separately, alongside the GitHub App option.
+
+### Consequence: one source of evidence
+
+The dispatch decision and the verdict now both read `commits/{sha}/check-runs`,
+so they cannot disagree about what counts as graded. The workflow-run list
+survives only to confirm a dispatch created something, pinned to
+`event=workflow_dispatch` — the query that excludes the held population.
+`scripts/ci/check-release-please-integrity.mjs` enforces both properties, and
+`scripts/ci/__tests__/release-please-dispatch-decision.test.mjs` executes the
+real step body against a stubbed API to prove the behaviour, because every
+structural invariant passed on the deadlocked file.
+
+
 ### The two defects that remained, and how they are closed
 
 **1. A run that verified nothing reported green.** The wait budget was 30

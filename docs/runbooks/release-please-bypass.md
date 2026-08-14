@@ -158,6 +158,26 @@ quiet window on `main` roughly one CI cycle long (~35 min). This is the
 structural limit of the current design; the durable fix is a GitHub App token
 (#3393 option 2), whose PRs trigger workflows natively.
 
+### "ZERO check runs exist on `<sha>`. Nothing has run"
+
+The commit has no graded checks at all. This is **not** a mapping problem and
+**not** a red result — look at the dispatch, not at the context table:
+
+```bash
+gh api "repos/fgarofalo56/csa-inabox/actions/runs?head_sha=<sha>" \
+  --jq '.workflow_runs[]|[.path,.event,.status,.conclusion]|@tsv'
+```
+
+Runs listed there with `conclusion: action_required` have been **created but
+never executed** — GitHub's approval hold. They publish no check run and grade
+nothing. That is exactly why the lane dispatches rather than relying on them,
+and why the dispatch decision reads check runs, never the run list.
+
+Measured on release PR #3447, head `3a21f6e0`: the run list returned 10 held
+`pull_request` runs while `commits/3a21f6e0/check-runs` returned `total_count=0`.
+A probe reading the first and a verdict reading the second can never agree; that
+disagreement deadlocked the lane until both were pointed at the same source.
+
 ### "required context '<X>' has NO producing workflow"
 
 Branch protection requires a context nothing in the repo publishes. Either add

@@ -11,23 +11,42 @@ name: release-please
 # CORRECTED 2026-08-13 (#3393). An earlier revision of this header claimed the
 # runs "ARE created — all ten of them — and sit at conclusion action_required,
 # awaiting manual approval", and #3387 built an approve-the-held-runs path on
-# that claim. That claim was WRONG and the path it justified found zero every
-# time, by construction:
-#   * The runs are **never created**. Suppression is not a hold state.
-#   * `action_required` is a *different* mechanism — the approval hold for fork
-#     PRs from first-time contributors. There is nothing queued to approve.
-#   * Measured on PR #3391 (run 31743342098, head f4e5677f) and again on
-#     PR #3402 / 0.96.0 (head ee77fae4): **0 CheckRuns, 14 StatusContexts.**
-#     Every "check" was a synthetic status this workflow posted to itself.
-# That approve-branch has been REMOVED — it advertised a capability this
-# workflow does not have (#3393 option 3).
+# that claim. That path found zero every time it ran. What was MEASURED then:
+# on PR #3391 (run 31743342098, head f4e5677f) and again on PR #3402 / 0.96.0
+# (head ee77fae4), **0 CheckRuns, 14 StatusContexts** — every "check" was a
+# synthetic status this workflow posted to itself. The approve-branch has been
+# REMOVED (#3393 option 3).
+#
+# RE-CORRECTED 2026-08-14. The explanation this header then gave for that zero —
+# "the runs are NEVER created; suppression is not a hold state; action_required
+# is a different mechanism, the approval hold for fork PRs from first-time
+# contributors" — is FALSE. It is left visible here rather than quietly edited,
+# because it was asserted without being established, which is the same R7
+# failure this file keeps correcting in other people's code. Measured on release
+# PR #3447, head 3a21f6e0:
+#
+#   actions/runs?head_sha=3a21f6e0  -> 10 runs, ALL event=pull_request,
+#                                      status=completed, conclusion=action_required
+#   commits/3a21f6e0/check-runs     -> total_count = 0
+#
+# So the `pull_request` runs ARE created for a GITHUB_TOKEN-authored release PR,
+# and they DO sit at `action_required`. #3387's premise was right about that
+# much. What is ALSO true, and is the part that actually matters: a held run has
+# never EXECUTED, so it publishes NO check run and grades NOTHING. Both facts
+# have to be held at once. Each previous header kept one and discarded the
+# other, and each built the wrong thing on the half it kept — #3387 an approve
+# path for runs it could not find, and #3448 a dispatch-skip probe that counted
+# those same held runs as evidence and DEADLOCKED the lane (see step 1).
+#
+# Whether GITHUB_TOKEN can approve a held run is NOT established here and is not
+# assumed anywhere below. Dispatch does not need the answer.
 #
 # THE FIX (#3393 option 1): `workflow_dispatch` and `repository_dispatch` are
 # the ONE documented exception to the GITHUB_TOKEN suppression rule — GITHUB_TOKEN
 # *can* trigger them (GitHub Actions changelog 2022-09-08; docs "GITHUB_TOKEN"
 # and "Triggering a workflow"). So this workflow now DISPATCHES each producing
-# workflow against the release branch. Those runs are real, their check runs land
-# on the PR's head SHA, and their results are real results.
+# workflow against the release branch. Those runs are real, they EXECUTE, their
+# check runs land on the PR's head SHA, and their results are real results.
 #
 #   required context                 published by                job
 #   -------------------------------  --------------------------  ------------------
@@ -367,15 +386,40 @@ jobs:
             exit 0
           fi
 
-          # Paths of every workflow run already recorded against a SHA.
-          runs_for_sha() {
-            gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \
-              --jq '.workflow_runs[].path'
+          # THE ONE SOURCE OF EVIDENCE. name <TAB> status <TAB> conclusion <TAB>
+          # url for every CHECK RUN on a SHA.
+          #
+          # WHY THIS REPLACED A WORKFLOW-RUN PROBE (deadlock, 2026-08-14)
+          # ------------------------------------------------------------
+          # The dispatch decision used to read `actions/runs?head_sha=…` while the
+          # verdict read `commits/{sha}/check-runs`. On PR #3447, head
+          # 3a21f6e0, those two sources disagreed catastrophically:
+          #
+          #   actions/runs?head_sha=3a21f6e0      -> 10 runs
+          #   commits/3a21f6e0/check-runs         -> total_count = 0
+          #
+          # All ten were `event: pull_request`, `status: completed`,
+          # `conclusion: action_required` — GitHub's approval hold. A held run has
+          # been CREATED but has never EXECUTED, so it publishes no check run. The
+          # dispatch half read "a run exists" and skipped; the verdict half read
+          # "nothing graded" and failed; and because the skip is deterministic the
+          # lane could never recover on its own. A gate that cannot pass is as
+          # broken as a gate that cannot fail.
+          #
+          # Both halves now read THIS function, so they cannot disagree about what
+          # counts as evidence.
+          check_runs_tsv() {
+            gh api --paginate "repos/${REPO}/commits/$1/check-runs?per_page=100" \
+              --jq '.check_runs[] | [.name, .status, (.conclusion // ""), .html_url] | @tsv'
           }
-          # path <TAB> status <TAB> conclusion <TAB> url for every run on a SHA.
-          runs_tsv() {
-            gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \
-              --jq '.workflow_runs[] | [.path, .status, (.conclusion // ""), .html_url] | @tsv'
+          # Workflow runs THIS JOB DISPATCHED, pinned to both the SHA and the
+          # event. Used ONLY to confirm a dispatch created something — never as
+          # evidence that a context was graded. `event=workflow_dispatch` is the
+          # load-bearing part: without it this query also returns the held
+          # `pull_request` runs above, which is the whole defect.
+          dispatch_runs_for_sha() {
+            gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&event=workflow_dispatch&per_page=100" \
+              --jq '.workflow_runs[].path'
           }
 
           # UNVERIFIED counts release PRs this run failed to render a full verdict
@@ -384,6 +428,21 @@ jobs:
           # that verified nothing, showing green in `gh run list`, which is the
           # signal the operator actually reads.
           UNVERIFIED=0
+
+          # POLL BUDGETS. Defaults are the production values: 15s between polls,
+          # 180 polls (45 min) for the check-run wait, 12 (3 min) for the
+          # dispatch confirmation. They are env-overridable ONLY so the test
+          # suite can drive this exact step body against a stubbed `gh` without
+          # burning 45 minutes per scenario.
+          #
+          # This seam cannot weaken the gate, and that is a property not a hope:
+          # every one of these bounds a WAIT. Shortening a wait can only produce
+          # MORE UNVERIFIED — that is, more red — never a status that was not
+          # bridged from a real check run. Lengthening one only waits longer.
+          # Neither direction can post a success.
+          POLL_SLEEP="${RP_POLL_SLEEP:-15}"
+          WAIT_POLLS="${RP_WAIT_POLLS:-180}"
+          DISPATCH_POLLS="${RP_DISPATCH_POLLS:-12}"
 
           for num in "${RELEASE_PRS[@]}"; do
             sha=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.sha')
@@ -425,16 +484,39 @@ jobs:
 
             # ---------------------------------------------------------------
             # 1. DISPATCH the producing workflows against the release branch.
-            #    Idempotent: skip any workflow that already has a run on this SHA.
+            #
+            #    The skip test asks the SAME question the verdict asks: does a
+            #    CHECK RUN for each required context this workflow publishes
+            #    already exist on this exact SHA? Not "does a workflow run
+            #    exist" — a held (`action_required`) or cancelled run exists and
+            #    grades nothing, and treating it as evidence is what deadlocked
+            #    PR #3447.
+            #
+            #    The test is deliberately asymmetric: it skips ONLY on positive
+            #    evidence that every context is already covered. Anything it
+            #    cannot establish — an unreadable list, a partially covered
+            #    producer — dispatches. Dispatching redundantly costs CI minutes;
+            #    skipping wrongly costs the release.
             # ---------------------------------------------------------------
-            existing_paths="$(runs_for_sha "${sha}")"
+            cr_names="$(check_runs_tsv "${sha}" | cut -f1)"
+            have_check_run() {
+              printf '%s\n' "${cr_names}" | grep -qxF "$1"
+            }
             dispatched=()
             for wf in "${PRODUCERS[@]}"; do
-              if printf '%s\n' "${existing_paths}" | grep -qxF ".github/workflows/${wf}"; then
-                echo "  = ${wf}: a run already exists on ${sha} — not re-dispatching."
+              uncovered=""
+              for entry in "${REQUIRED_CHECKS[@]}"; do
+                ctx="${entry%%|*}"
+                if [ "${entry#*|}" != "${wf}" ]; then continue; fi
+                if ! have_check_run "${ctx}"; then
+                  uncovered="${uncovered}${ctx}; "
+                fi
+              done
+              if [ -z "${uncovered}" ]; then
+                echo "  = ${wf}: every required context it publishes already has a check run on ${sha} — not re-dispatching."
                 continue
               fi
-              echo "  > dispatching ${wf} against ${branch}"
+              echo "  > dispatching ${wf} against ${branch} (no check run yet for: ${uncovered})"
               # stderr is CAPTURED, never discarded: a dispatch that fails must
               # say why (deploy-integrity R7), and must stop the job.
               if ! dispatch_err="$(gh workflow run "${wf}" --repo "${REPO}" --ref "${branch}" 2>&1)"; then
@@ -452,14 +534,20 @@ jobs:
             done
 
             # ---------------------------------------------------------------
-            # 2. CONFIRM each dispatch actually produced a run on this SHA.
-            #    A dispatch that creates nothing is a FAILURE, not a pass.
+            # 2. CONFIRM each dispatch actually produced a workflow_dispatch run
+            #    ON THIS SHA. A dispatch that creates nothing is a FAILURE.
+            #
+            #    `gh workflow run --ref <branch>` targets a BRANCH, so if the
+            #    branch head moved between the dispatch and this poll the run
+            #    lands on the NEW head and legitimately will not appear here.
+            #    That is SHA churn, not a failed dispatch, and saying "no run
+            #    appeared" would assert a cause this code did not establish (R7).
             # ---------------------------------------------------------------
             if [ "${#dispatched[@]}" -gt 0 ]; then
               missing=("${dispatched[@]}")
-              for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-                sleep 15
-                existing_paths="$(runs_for_sha "${sha}")"
+              for _ in $(seq 1 "${DISPATCH_POLLS}"); do
+                sleep "${POLL_SLEEP}"
+                existing_paths="$(dispatch_runs_for_sha "${sha}")"
                 still=()
                 for wf in "${missing[@]}"; do
                   if ! printf '%s\n' "${existing_paths}" | grep -qxF ".github/workflows/${wf}"; then
@@ -470,56 +558,82 @@ jobs:
                 if [ "${#missing[@]}" -eq 0 ]; then break; fi
               done
               if [ "${#missing[@]}" -gt 0 ]; then
-                echo "::error::Dispatched ${missing[*]} against ${branch}, but NO workflow run"
-                echo "::error::appeared on ${sha} within 3 minutes. An absent result is NOT a"
-                echo "::error::green one, so this run fails rather than falling back to a"
-                echo "::error::synthetic status (#3393)."
-                exit 1
+                now_sha=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.sha')
+                if [ "${now_sha}" != "${sha}" ]; then
+                  echo "::error::PR #${num}: dispatched ${missing[*]}, and no workflow_dispatch run"
+                  echo "::error::appeared on ${sha} — because the head SHA moved to ${now_sha} while"
+                  echo "::error::this step was working. The runs exist; they belong to the new head."
+                  echo "::error::This is SHA churn (branch protection strict=true rebuilds the PR on"
+                  echo "::error::every push to main), NOT a failed dispatch. The next run of this"
+                  echo "::error::workflow will grade ${now_sha}."
+                else
+                  echo "::error::PR #${num}: dispatched ${missing[*]} against ${branch}, the head SHA"
+                  echo "::error::is still ${sha}, and NO workflow_dispatch run appeared on it within"
+                  echo "::error::3 minutes. The dispatch produced nothing. An absent result is NOT a"
+                  echo "::error::green one, so nothing is posted (#3393)."
+                fi
+                UNVERIFIED=$((UNVERIFIED + 1))
+                continue
               fi
               echo "  all ${#dispatched[@]} dispatched workflow(s) produced a run on ${sha}."
             fi
 
             # ---------------------------------------------------------------
-            # 3. WAIT for every producing run on this SHA to CONCLUDE.
-            #    Nothing is posted until there is a real result to post.
+            # 3. WAIT until every REQUIRED CONTEXT has a completed CHECK RUN on
+            #    this SHA — the same evidence step 4 grades, so the two halves
+            #    cannot disagree about what "ready" means.
+            #
+            #    Waiting on workflow RUNS instead was the second half of the
+            #    #3447 deadlock: the ten held `pull_request` runs report
+            #    `status: completed`, so the wait declared "every producing run
+            #    has concluded" one second in, having graded nothing.
+            #
+            #    Early exit: if every check run on the commit is terminal and a
+            #    required context is still missing, more waiting cannot help.
+            #    That state must hold for 4 consecutive polls (60s) so a job
+            #    that simply has not registered its check run yet is not
+            #    mistaken for one that never will.
             # ---------------------------------------------------------------
-            unfinished="pending"
-            for _ in $(seq 1 180); do
-              runs="$(runs_tsv "${sha}")"
-              unfinished=""
-              for wf in "${PRODUCERS[@]}"; do
-                # A workflow counts as finished only when EVERY run of it on this
-                # SHA is `completed`. Picking "the latest run" would need an
-                # ordering assumption about the API's response, and a re-dispatch
-                # or a re-run leaves more than one — so this waits for all of
-                # them instead, which cannot mistake an in-flight run for a done
-                # one.
-                counts="$(printf '%s\n' "${runs}" | awk -F'\t' -v p=".github/workflows/${wf}" \
-                  '$1==p {t++; if ($2!="completed") n++} END {printf "%d %d", t+0, n+0}')"
-                tot="${counts% *}"; nf="${counts#* }"
-                if [ "${tot}" -eq 0 ]; then
-                  unfinished="${unfinished}${wf}(no-run) "
-                elif [ "${nf}" -gt 0 ]; then
-                  unfinished="${unfinished}${wf}(${nf}/${tot}-unfinished) "
+            missing_ctx=""; inflight_ctx=""; total_crs=0; quiescent_stable=0
+            for _ in $(seq 1 "${WAIT_POLLS}"); do
+              cr_now="$(check_runs_tsv "${sha}")"
+              total_crs=$(printf '%s' "${cr_now}" | grep -c . || true)
+              missing_ctx=""; inflight_ctx=""
+              for entry in "${REQUIRED_CHECKS[@]}"; do
+                ctx="${entry%%|*}"
+                line="$(printf '%s\n' "${cr_now}" | awk -F'\t' -v n="${ctx}" '$1==n {print; exit}')"
+                if [ -z "${line}" ]; then
+                  missing_ctx="${missing_ctx}${ctx}; "
+                elif [ "$(printf '%s' "${line}" | cut -f2)" != "completed" ]; then
+                  inflight_ctx="${inflight_ctx}${ctx}; "
                 fi
               done
-              if [ -z "${unfinished}" ]; then break; fi
-              sleep 15
+              if [ -z "${missing_ctx}" ] && [ -z "${inflight_ctx}" ]; then break; fi
+
+              # Is the whole commit quiescent — nothing at all still running?
+              nonterminal=$(printf '%s\n' "${cr_now}" | awk -F'\t' '$1!="" && $2!="completed" {n++} END {print n+0}')
+              if [ -n "${missing_ctx}" ] && [ -z "${inflight_ctx}" ] && [ "${nonterminal}" -eq 0 ] && [ "${total_crs}" -gt 0 ]; then
+                quiescent_stable=$((quiescent_stable + 1))
+                if [ "${quiescent_stable}" -ge 4 ]; then break; fi
+              else
+                quiescent_stable=0
+              fi
+              sleep "${POLL_SLEEP}"
             done
 
-            if [ -n "${unfinished}" ]; then
-              # The runs are real and still going, so nothing is posted: an
-              # unfinished run is not a green one and the PR stays blocked, which
-              # is correct. What is NOT correct is this job then reporting
-              # success, which is what it did on run 31786503229 — it gave up 78
-              # seconds before fiab-console-ci.yml concluded, bridged nothing, and
-              # went green. So this counts as UNVERIFIED and the job fails below.
+            if [ -n "${missing_ctx}" ] || [ -n "${inflight_ctx}" ]; then
+              # Nothing is posted: an unfinished or never-produced check run is
+              # not a green one and the PR stays blocked, which is correct. What
+              # is NOT correct is this job then reporting success — run
+              # 31786503229 did exactly that on 2026-08-14.
               #
-              # Distinguish the two causes rather than blaming the slower one
-              # (R7). `strict: true` means release-please rewrites the PR — and
-              # its head SHA — on every push to main, which throws away every run
-              # this step was waiting on. That is a different problem from CI
-              # being slow, and it has a different answer.
+              # THREE DISTINGUISHABLE STATES, said apart (deploy-integrity R7).
+              # The previous wording collapsed them into "the producing workflow
+              # ran but published no check run under that exact name — a
+              # REQUIRED_CHECKS mapping defect", which on PR #3447 was FALSE:
+              # `commits/3a21f6e0/check-runs` returned total_count=0, so nothing
+              # had run at all. That message sent the diagnosis at the mapping
+              # table instead of at the dispatch.
               now_sha=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.sha')
               if [ "${now_sha}" != "${sha}" ]; then
                 echo "::error::PR #${num}: head SHA moved from ${sha} to ${now_sha} WHILE this"
@@ -528,19 +642,36 @@ jobs:
                 echo "::error::Cause is SHA churn, not slow CI: branch protection has strict=true,"
                 echo "::error::so release-please rebuilds this PR on every push to main. A release"
                 echo "::error::needs a quiet window on main long enough for one CI cycle (~35 min)."
+              elif [ "${total_crs}" -eq 0 ]; then
+                echo "::error::PR #${num}: ZERO check runs exist on ${sha}. Nothing has run — this"
+                echo "::error::is NOT a REQUIRED_CHECKS mapping problem and NOT a red result."
+                echo "::error::What this establishes is only that no job has published anything"
+                echo "::error::against this commit. Look at the DISPATCH, not at the mapping table:"
+                echo "::error::  gh api repos/${REPO}/actions/runs?head_sha=${sha} --jq '.workflow_runs[]|[.path,.event,.status,.conclusion]|@tsv'"
+                echo "::error::A run listed there with conclusion 'action_required' has been created"
+                echo "::error::but never EXECUTED — GitHub's approval hold — and publishes no check"
+                echo "::error::run. That is why this workflow dispatches instead of relying on it."
+              elif [ -n "${inflight_ctx}" ]; then
+                echo "::error::PR #${num}: real check runs on ${sha} had NOT completed after 45 min:"
+                echo "::error::${inflight_ctx}"
+                echo "::error::They are running, not failing. No status was posted for ANY required"
+                echo "::error::context — an unfinished run is not a green one. Re-run this workflow"
+                echo "::error::once they finish and their results will be bridged onto ${sha}."
               else
-                echo "::error::PR #${num}: real runs on ${sha} had NOT concluded after 45 min:"
-                echo "::error::${unfinished}"
-                echo "::error::No status was posted for ANY required context — an unfinished run is"
-                echo "::error::not a green one. Re-run this workflow once they finish and their"
-                echo "::error::results will be bridged onto ${sha}."
+                echo "::error::PR #${num}: ${total_crs} check run(s) exist on ${sha} and all are"
+                echo "::error::terminal, but these required contexts have NO check run under that"
+                echo "::error::exact name: ${missing_ctx}"
+                echo "::error::THIS one is a REQUIRED_CHECKS mapping defect — the producing workflow"
+                echo "::error::ran and published under different names. The names actually present:"
+                printf '%s\n' "${cr_now}" | cut -f1 | sort -u | sed 's/^/::error::  /'
+                echo "::error::Reconcile the table in this file against those names."
               fi
               echo "::error::This run verified NOTHING for PR #${num}, so it fails rather than"
               echo "::error::reporting green (#3393)."
               UNVERIFIED=$((UNVERIFIED + 1))
               continue
             fi
-            echo "  every producing run on ${sha} has concluded."
+            echo "  every required context has a completed check run on ${sha}."
 
             # ---------------------------------------------------------------
             # 4. BRIDGE each REAL result onto the head SHA as a commit status.
@@ -595,10 +726,13 @@ jobs:
             if [ "${#broken[@]}" -gt 0 ]; then
               echo "::error::PR #${num}: ${#broken[@]} required context(s) did NOT conclude success"
               echo "::error::on ${sha}: ${broken[*]}"
-              echo "::error::'ABSENT' means the producing workflow ran but published no check run"
-              echo "::error::under that exact name — a REQUIRED_CHECKS mapping defect, not a pass."
-              echo "::error::Anything else is a genuine red result. Each of these was posted as a"
-              echo "::error::FAILURE status on ${sha}, so the release is blocked, which is the point."
+              echo "::error::Step 3 only reaches here once EVERY required context has a completed"
+              echo "::error::check run on this commit, so each of these is a REAL red result from a"
+              echo "::error::real run — the release is broken and must not merge. Each was posted as"
+              echo "::error::a FAILURE status on ${sha}, which is the point."
+              echo "::error::('ABSENT' here would mean the check run vanished between step 3 and"
+              echo "::error::this read. It is not reachable by a missing mapping — step 3 diagnoses"
+              echo "::error::that case separately and never gets here.)"
               exit 1
             fi
             echo "  bridged ${#bridged[@]} real result(s) onto ${sha}."
@@ -642,7 +776,7 @@ jobs:
             # permanent human-approval gate, and (d) REQUIRED_CHECKS drift.
             state=""
             for _ in 1 2 3 4; do
-              sleep 15
+              sleep "${POLL_SLEEP}"
               state=$(gh pr view "${num}" --repo "${REPO}" --json mergeStateStatus --jq '.mergeStateStatus')
               if [ "$state" != "UNKNOWN" ] && [ "$state" != "BLOCKED" ]; then break; fi
             done
