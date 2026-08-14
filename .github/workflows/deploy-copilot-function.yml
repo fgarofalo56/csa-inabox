@@ -31,9 +31,12 @@ permissions:
   contents: read
 
 concurrency:
-  # Only one deploy at a time; cancel an in-flight deploy if a newer commit lands
+  # #3429 — this was `cancel-in-progress: true`. Cancelling a DEPLOY mid-flight
+  # is the #2603 class: the run dies somewhere between "package uploaded" and
+  # "app restarted", and nothing records which. A deploy lane serialises; it
+  # does not abort. A newer commit waits its turn and then deploys on top.
   group: deploy-copilot-function
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -42,6 +45,10 @@ jobs:
     environment: copilot-function-prod
     env:
       FUNCTION_APP_NAME: func-csa-inabox-copilot-fg
+      # #3429 — the resource group was a bare literal inside the app-settings
+      # step, so the preflight and that step could disagree silently. One name,
+      # one place.
+      FUNCTION_APP_RG: rg-dlz-aiml-stack-dev
       FUNCTION_PATH: azure-functions/copilot-chat
       PYTHON_VERSION: "3.12"
     steps:
@@ -80,6 +87,70 @@ jobs:
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
 
+      - name: Preflight — resolve the Function App and say what was ACTUALLY established
+        # #3429. For seven consecutive runs (2026-07-02 .. 2026-08-11) this lane
+        # died in Azure/functions-action with:
+        #
+        #     Resource func-csa-inabox-copilot-fg of type Microsoft.Web/Sites
+        #     doesn't exist.
+        #
+        # That statement is FALSE. The app resolves publicly and serves HTTP 200
+        # on /api/health. What the action actually established is only "I could
+        # not see it from the credentials and subscription I was given" — a
+        # different claim with a different fix, and it sent the investigation
+        # looking for a deleted resource that was up and taking traffic.
+        #
+        # deploy-integrity.md R7: an error must not assert something it did not
+        # establish. R6: classify, and hand back a concrete remediation. So we
+        # resolve the app OURSELVES first and narrow the cause to one of four
+        # states before the action gets a chance to guess.
+        #
+        # Everything below is an ARM CONTROL-plane read. No data plane, no VNet,
+        # no secret values are printed — only names.
+        run: |
+          set -uo pipefail
+          # NOTE on -e: GitHub runs `run:` under `bash -e` and `set -uo pipefail`
+          # does NOT clear it, so every capture uses the `if ! VAR=$(...)` form,
+          # which errexit does not abort on.
+          if ! SUB_NAME=$(az account show --query name -o tsv 2>&1); then
+            echo "::error::preflight: could not read the active subscription, so NOTHING about the Function App has been established. az said: ${SUB_NAME}"
+            exit 1
+          fi
+          SUB_NAME=$(printf '%s' "$SUB_NAME" | tr -d '\r')
+          echo "Authenticated to subscription: ${SUB_NAME}"
+
+          if APP_STATE=$(az functionapp show --name "$FUNCTION_APP_NAME" --resource-group "$FUNCTION_APP_RG" --query state -o tsv 2>&1); then
+            echo "::notice::preflight OK — ${FUNCTION_APP_NAME} found in ${FUNCTION_APP_RG} (state: $(printf '%s' "$APP_STATE" | tr -d '\r'))."
+            exit 0
+          fi
+          SHOW_ERR="$APP_STATE"
+
+          # It was not readable at the expected address. Establish WHY, and do
+          # not claim absence we have not proven.
+          if ! RG_EXISTS=$(az group exists --name "$FUNCTION_APP_RG" -o tsv 2>&1); then
+            echo "::error::preflight: ${FUNCTION_APP_NAME} was not readable in ${FUNCTION_APP_RG}, AND the resource group could not be checked either — so whether it exists is UNKNOWN, not disproven. Grant the deploy principal at least Reader on the subscription. az said: ${RG_EXISTS}. Original read error: ${SHOW_ERR}"
+            exit 1
+          fi
+          RG_EXISTS=$(printf '%s' "$RG_EXISTS" | tr -d '\r')
+
+          # Is it visible ANYWHERE in this subscription under a different group?
+          ELSEWHERE=""
+          if HITS=$(az resource list --name "$FUNCTION_APP_NAME" --resource-type Microsoft.Web/sites --query "[].resourceGroup" -o tsv 2>/dev/null); then
+            ELSEWHERE=$(printf '%s' "$HITS" | tr -d '\r' | tr '\n' ' ')
+          fi
+
+          if [[ -n "$ELSEWHERE" ]]; then
+            echo "::error::preflight: ${FUNCTION_APP_NAME} EXISTS in subscription '${SUB_NAME}' but in resource group(s) [${ELSEWHERE}], not the configured ${FUNCTION_APP_RG}. Fix: set FUNCTION_APP_RG in this workflow to the correct group."
+            exit 1
+          fi
+
+          if [[ "$RG_EXISTS" == "true" ]]; then
+            echo "::error::preflight: resource group ${FUNCTION_APP_RG} EXISTS in subscription '${SUB_NAME}', and ${FUNCTION_APP_NAME} is not readable inside it. Two causes remain and this run cannot separate them: (a) the app is genuinely not in this subscription, or (b) the deploy principal lacks read access to it — the SP needs Website Contributor on the app (granted 2026-05-06 per this file's header; verify it survived). The app IS live regardless: https://${FUNCTION_APP_NAME}.azurewebsites.net/api/health answers 200. Check which subscription actually holds it before changing anything. Original read error: ${SHOW_ERR}"
+          else
+            echo "::error::preflight: resource group ${FUNCTION_APP_RG} does NOT exist in subscription '${SUB_NAME}', so this lane is pointed at the wrong subscription — the AZURE_SUBSCRIPTION_ID secret does not address the estate that holds ${FUNCTION_APP_NAME}. The app IS live: https://${FUNCTION_APP_NAME}.azurewebsites.net/api/health answers 200. Repoint the secret rather than re-creating the app. Original read error: ${SHOW_ERR}"
+          fi
+          exit 1
+
       - name: Deploy to Azure Functions
         uses: Azure/functions-action@c9cc8ee93d1285e2a17312cc8357dc1775955272 # v1
         with:
@@ -98,7 +169,7 @@ jobs:
           set -e
           az functionapp config appsettings set \
             --name "$FUNCTION_APP_NAME" \
-            --resource-group rg-dlz-aiml-stack-dev \
+            --resource-group "$FUNCTION_APP_RG" \
             --settings \
               COPILOT_MS_LEARN_ENABLED=true \
               COPILOT_MS_LEARN_MCP_URL=https://learn.microsoft.com/api/mcp \
