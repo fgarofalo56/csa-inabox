@@ -540,7 +540,7 @@ export async function executeQueryBatch(
  *   (`bracket`/`quoteIdent` for identifiers, `quoteLiteral`/`escapeSqlLiteral`
  *   for literals) or a closed-grammar validator that throws rather than emit
  *   something unproven (the shape `lib/azure/copy-job-sql.ts` and
- *   `validCheckExpression` in `lib/azure/sql-objects-client.ts` use).
+ *   `validCheckExpression` in `lib/sql/check-expression.ts` use).
  *
  *   An earlier revision of this comment asserted that "no string-injection path
  *   exists" and that this was "used only by the sql-objects navigator". Both

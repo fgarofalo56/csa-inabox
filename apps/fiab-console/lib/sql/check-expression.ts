@@ -34,6 +34,24 @@
  * Jumping the caller's cursor straight to the close keeps the whole scan O(n):
  * each character is visited once, either by the outer loop or by exactly one
  * region consumption.
+ *
+ * @internal Exported only so the adversarial tests can exercise it directly;
+ * {@link validCheckExpression} is the supported entry point. No other module
+ * imports it, and none should — the preconditions below are unchecked.
+ *
+ * @param expr  The full expression being scanned.
+ * @param start Index of the OPENING delimiter — not the first character inside
+ *              the region. Scanning begins at `start + 1`, so passing the inner
+ *              index would miss a region whose first character is the close
+ *              (`''`, the empty literal) and mis-report it as unterminated.
+ * @param close The closing delimiter as a SINGLE character (`'`, `]`, or `"`).
+ *              The scan compares one character at a time, so a multi-character
+ *              `close` can never match: the function would silently return -1
+ *              for every input. A caller that read that as "no region here"
+ *              rather than "unterminated" would scan on through text the engine
+ *              treats as opaque — which is exactly the desync this module
+ *              exists to prevent.
+ * @returns Index of the closing delimiter, or -1 if the region is unterminated.
  */
 export function consumeQuoted(expr: string, start: number, close: string): number {
   for (let j = start + 1; j < expr.length; j++) {
