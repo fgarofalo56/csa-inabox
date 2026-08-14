@@ -214,6 +214,38 @@ export function judgeWorkflow(text, opts = {}) {
     );
   }
 
+  // I6 — the two halves must not read different sources of truth.
+  //
+  // This is the invariant #3448 did NOT have, and its absence is why every
+  // structural check passed on the workflow that deadlocked the lane. The
+  // dispatch decision read `actions/runs?head_sha=…` (which returns HELD
+  // pull_request runs that grade nothing) while the verdict read
+  // `commits/{sha}/check-runs`. Skip-forever plus fail-forever.
+  //
+  // Keyed on the SAFE property: any workflow-run query in this file must pin
+  // the event to workflow_dispatch, i.e. to runs THIS job caused. An unpinned
+  // query is the one that conflates the two populations.
+  const crSource = idxOf(/commits\/\$\{?sha\}?\/check-runs|commits\/\$1\/check-runs/);
+  if (crSource.length === 0) {
+    fail(
+      'no-check-run-source',
+      'nothing reads `commits/{sha}/check-runs`. That is the only evidence a required context was actually graded — branch protection reads the same surface',
+    );
+  }
+  for (const i of idxOf(/actions\/runs\?head_sha=/)) {
+    // An `echo` is output, not an invocation. The step deliberately PRINTS an
+    // unpinned query in its diagnostic — telling the operator to go look at the
+    // held `pull_request` runs is exactly the right advice, and flagging that
+    // would be a guard punishing the message that explains the bug.
+    if (/^\s*echo\b/.test(lines[i].text)) continue;
+    if (!/event=workflow_dispatch/.test(lines[i].text)) {
+      fail(
+        'unpinned-run-query',
+        `line ${lines[i].line}: an \`actions/runs?head_sha=\` query with no \`event=workflow_dispatch\` pin. That list includes \`pull_request\` runs held at \`action_required\` — created, never executed, publishing no check run. Treating one as evidence deadlocked release PR #3447`,
+      );
+    }
+  }
+
   return { ok: failures.length === 0, failures };
 }
 
@@ -232,6 +264,9 @@ const GOOD = [
   '          node scripts/ci/neutralize-release-close-keywords.mjs body.raw.txt > body.clean.txt',
   '          node scripts/ci/neutralize-release-close-keywords.mjs --check body.verify.txt',
   '          UNVERIFIED=0',
+  '          gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100"',
+  '          gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&event=workflow_dispatch&per_page=100" \\',
+  '            --jq ".workflow_runs[].path"',
   '          if [ -n "${unfinished}" ]; then',
   '            UNVERIFIED=$((UNVERIFIED + 1))',
   '          fi',
@@ -301,6 +336,37 @@ export const SELF_TEST_CASES = [
     name: 'a manifest the parser can no longer read is caught',
     text: GOOD.replace('REQUIRED_CHECKS=(', 'REQUIRED_CHECKS_RENAMED=('),
     expect: 'manifest-parse',
+  },
+  {
+    name: 'an UNPINNED actions/runs query — the #3447 deadlock — is caught',
+    text: GOOD.replace('&event=workflow_dispatch', ''),
+    expect: 'unpinned-run-query',
+  },
+  {
+    name: 'losing the check-run source of truth is caught',
+    text: GOOD.replace('commits/${REPO_SHA_PLACEHOLDER}', 'x').replace(
+      'gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100"',
+      'gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&event=workflow_dispatch&per_page=100"',
+    ),
+    expect: 'no-check-run-source',
+  },
+  {
+    name: 'the unpinned query is caught even when split across a CONTINUATION (#3420)',
+    // The real file wraps this call. A physical-line reader would judge only
+    // the first line, never see the missing pin, and pass.
+    text: GOOD.replace(
+      '          gh api --paginate "repos/${REPO}/actions/runs?head_sha=$1&event=workflow_dispatch&per_page=100" \\\n            --jq ".workflow_runs[].path"',
+      '          gh api --paginate \\\n            "repos/${REPO}/actions/runs?head_sha=$1&per_page=100" \\\n            --jq ".workflow_runs[].path"',
+    ),
+    expect: 'unpinned-run-query',
+  },
+  {
+    // The counterpart control. The step PRINTS an unpinned query in its
+    // diagnostic on purpose — that is how an operator finds the held runs. If
+    // this ever starts failing, the guard has begun flagging its own advice.
+    name: 'an unpinned query merely ECHOED as operator advice is NOT flagged',
+    text: `${GOOD}\n          echo "::error::  gh api repos/o/r/actions/runs?head_sha=abc --jq .path"`,
+    expect: null,
   },
   {
     name: 'a success site on a BACKSLASH CONTINUATION is still seen (#3420)',
