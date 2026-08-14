@@ -109,6 +109,9 @@ for (const file of files) {
   // teardown workflow whose whole purpose is to tear down, so an unconditional
   // step there is correct, not a defect.
   if (!HAS_CRON.test(src)) { skippedNoCron++; continue; }
+  // PHYSICAL-LINES-OK: reads the `on:` trigger block and each step's `if:` guard
+  // by YAML indentation, including block-scalar `if: |` bodies. YAML keys and
+  // block scalars are not spliced by a trailing backslash (#3420).
   const lines = src.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     if (!STEP_START.test(lines[i])) continue;

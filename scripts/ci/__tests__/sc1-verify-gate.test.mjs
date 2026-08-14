@@ -73,6 +73,60 @@ export function extractRunBlock(src, stepName) {
   return body.join('\n');
 }
 
+/**
+ * The step's declared `env:` block — the sibling `extractRunBlock` walks past.
+ *
+ * #3422 measured why this has to exist. The step gained
+ * `BUILD_RESULT: ${{ needs.build.result }}`, this harness kept hand-building the
+ * child env, and the extracted script — which opens `set -uo pipefail` — died on
+ * line 60 with "BUILD_RESULT: unbound variable". A `set -u` abort emits no
+ * `not ok` and no TAP footer, so CI showed 359 `ok` lines, ZERO failures and
+ * exit 1, which reads as a crashed runner rather than as a harness that had
+ * drifted from the thing it grades.
+ *
+ * `CONTRACT_REFS` was already declared here and already supplied below — but by
+ * hand, matched by MAINTENANCE rather than derived. That is the same
+ * fixture-models-the-code failure class this file's header warns about: a
+ * fixture that tracks the shipped thing by human diligence tracks it until the
+ * first time nobody notices. So the coverage is now DERIVED and asserted, and
+ * the next added `env:` key fails with a named, legible message instead of an
+ * abort that emits no failure at all.
+ *
+ * @param {string} src
+ * @param {string} stepName
+ * @returns {string[]} the env keys the SHIPPED step declares
+ */
+export function extractStepEnv(src, stepName) {
+  const lines = String(src).split(/\r?\n/);
+  const at = lines.findIndex((l) => l.includes(`- name: ${stepName}`));
+  assert.ok(at >= 0, `step not found in the workflow: ${stepName}`);
+  const dashIndent = lines[at].indexOf('- name:');
+  const keyIndent = dashIndent + 2; // keys of the step map sit under `name:`
+  const keys = [];
+  let inEnv = false;
+  for (let i = at + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.trim() === '') continue;
+    const indent = (l.match(/^ */) || [''])[0].length;
+    if (indent <= dashIndent) break; // next step, or the end of `steps:`
+    if (indent === keyIndent) {
+      // A sibling key of `env:` — `run:`, `with:`, `if:`… `env:` opens the
+      // block, anything else closes it.
+      inEnv = /^\s*env:\s*$/.test(l);
+      continue;
+    }
+    if (!inEnv) continue;
+    if (/^\s*#/.test(l)) continue;
+    const m = l.match(/^\s*([A-Za-z_][A-Za-z0-9_]*):/);
+    assert.ok(
+      m,
+      `unparsed line in the \`env:\` block of step "${stepName}". The harness must FAIL rather than guess what the shipped step needs:\n${l}`,
+    );
+    keys.push(m[1]);
+  }
+  return keys;
+}
+
 /** GitHub expressions this harness knows how to stand in for. */
 const SUBSTITUTIONS = [
   [/\$\{\{ inputs\.skip_supply_chain \}\}/g, 'false'],
@@ -101,10 +155,11 @@ function renderScript() {
  * @param {string[]} [o.absent]     apps for which the registry ANSWERS "tag does not exist"
  * @param {string[]} [o.unreadable] apps for which the registry DENIES the read (R7: unproven)
  * @param {string[]} [o.unsigned]   apps for which `cosign verify` fails
+ * @param {string}  [o.buildResult] the `build` job's result this run is grading
  * @param {string}  [o.contractRefs]
  * @returns {{code:number, out:string}}
  */
-function runGate({ absent = [], unreadable = [], unsigned = [], dataplaneDenied = false, contractRefs } = {}) {
+function runGate({ absent = [], unreadable = [], unsigned = [], dataplaneDenied = false, buildResult = 'success', contractRefs } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'sc1-gate-'));
   const bin = path.join(dir, 'bin');
   mkdirSync(bin);
@@ -198,21 +253,39 @@ exit 0
       .split('\n')
       .join(' ');
 
+  const childEnv = {
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+    LOOM_ACR_DATAPLANE_READY_SCRIPT: path.join(bin, 'ready'),
+    STUB_DATAPLANE_DENIED: dataplaneDenied ? '1' : '0',
+    CONTRACT_REFS: refs,
+    BUILD_RESULT: buildResult,
+    STUB_ABSENT: absent.join(' '),
+    STUB_UNREADABLE: unreadable.join(' '),
+    STUB_UNSIGNED: unsigned.join(' '),
+  };
+
+  // DERIVED coverage, not hand-maintained: every `env:` key the SHIPPED step
+  // declares must be one this harness supplies EXPLICITLY. Ambient
+  // `process.env` does not count — a key that happens to be set on the runner
+  // would mask the drift on one machine and abort on another.
+  const declaredEnv = extractStepEnv(readFileSync(WORKFLOW, 'utf8'), STEP_NAME);
+  const uncovered = declaredEnv.filter((k) => !(k in childEnv));
+  assert.deepEqual(
+    uncovered,
+    [],
+    `the workflow step "${STEP_NAME}" declares env key(s) this harness does not supply: ${uncovered.join(', ')}.\n` +
+      "The extracted script runs under `set -uo pipefail`, so an unsupplied key aborts it on first reference — " +
+      'which surfaces as a suite that exits non-zero having emitted no failed assertion at all. ' +
+      `Add each key to runGate's childEnv (with a parameter if a test needs to vary it).\n` +
+      `declared: ${declaredEnv.join(', ') || '(none)'}\nsupplied: ${Object.keys(childEnv).join(', ')}`,
+  );
+
   try {
     const out = execFileSync('bash', [script], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-        LOOM_ACR_DATAPLANE_READY_SCRIPT: path.join(bin, 'ready'),
-        STUB_DATAPLANE_DENIED: dataplaneDenied ? '1' : '0',
-        CONTRACT_REFS: refs,
-        STUB_ABSENT: absent.join(' '),
-        STUB_UNREADABLE: unreadable.join(' '),
-        STUB_UNSIGNED: unsigned.join(' '),
-      },
+      env: { ...process.env, ...childEnv },
     });
     return verbose({ code: 0, out }, { absent, unreadable, unsigned });
   } catch (e) {
@@ -244,6 +317,8 @@ test('(d) every image present + signed → gate PASSES', () => {
   const r = runGate({});
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /SC1 supply-chain gate PASSED/);
+  // The verdict says WHAT it graded (#3418): these tags came from this run.
+  assert.match(r.out, /\(built by this run\)/);
 });
 
 test('the derived verify set is the roll ∪ contract images, and EXCLUDES loom-uat', () => {
@@ -328,4 +403,54 @@ test('#3210 — a DENIED data plane blocks the roll, and says so as REACHABILITY
     !/unsigned image\(s\)/.test(r.out),
     `a reachability failure must not be reported as an unsigned-image verdict:\n${r.out}`,
   );
+});
+
+// ── #3418 — PROVENANCE: the gate must say WHAT it graded ────────────────────
+// The gate runs even when `build` did not succeed, because a roll can ship
+// pre-existing :$TAG images. On run 31710130307 it reported a supply-chain
+// FAILURE for loom-console when the true statement was "this run built nothing;
+// the tag already in the registry is unsigned" — a different claim with a
+// different fix (deploy-integrity.md R7). These two cases prove the branch on
+// both sides: the verdict changes with `needs.build.result`, and the
+// this-run-built-it claim is made ONLY when this run built it.
+
+test('#3418 R7 — build did NOT succeed + all signed → PASSES, and says the tags are PRE-EXISTING', () => {
+  const r = runGate({ buildResult: 'failure' });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /SC1 supply-chain gate PASSED/);
+  assert.match(r.out, /PRE-EXISTING registry tag — the build job did not succeed \(result: failure\)/);
+  assert.match(r.out, /this run produced no images/);
+  // The success-branch claim must NOT appear when the build did not succeed.
+  assert.ok(
+    !/\(built by this run\)/.test(r.out),
+    `a run that built nothing must not claim it built these images:\n${r.out}`,
+  );
+});
+
+test('#3418 R7 — build did NOT succeed + unsigned → FAILS without claiming how the image got there', () => {
+  const r = runGate({ buildResult: 'failure', unsigned: ['loom-console'] });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /unsigned PRE-EXISTING image\(s\): loom-console/);
+  assert.match(r.out, /THIS RUN BUILT NO IMAGES \(build result: failure\)/);
+  assert.match(r.out, /The roll job is BLOCKED/);
+  // The whole point of the branch: this run cannot speak to the image's
+  // origin, so it must not assert one.
+  assert.ok(
+    !/were not produced by the gated CI path/.test(r.out),
+    `this run did not build the image and cannot establish its provenance:\n${r.out}`,
+  );
+});
+
+test('the harness supplies every env key the shipped step declares', () => {
+  // The guard inside runGate is what actually enforces this; asserting the
+  // extraction here makes the failure legible when the step gains a key.
+  const declared = extractStepEnv(readFileSync(WORKFLOW, 'utf8'), STEP_NAME);
+  // Non-weakening: an extractor that silently found NOTHING would make the
+  // coverage guard vacuous, which is exactly the shape that let #3422 through.
+  assert.ok(declared.length > 0, 'extractStepEnv found no env keys — the guard would be vacuous');
+  for (const k of ['CONTRACT_REFS', 'BUILD_RESULT']) {
+    assert.ok(declared.includes(k), `${k} is declared on the shipped step and must be extracted`);
+  }
+  // And it must not swallow the `run:` body as if it were env keys.
+  assert.ok(!declared.includes('set'), `extractStepEnv leaked run-body content: ${declared.join(', ')}`);
 });

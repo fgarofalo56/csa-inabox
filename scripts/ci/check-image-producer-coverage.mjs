@@ -129,6 +129,11 @@ const workflows = existsSync(join(ROOT, WORKFLOW_DIR))
 const builders = [];
 for (const wf of workflows) {
   const text = readFileSync(join(ROOT, WORKFLOW_DIR, wf), 'utf8');
+  // PHYSICAL-LINES-OK: every predicate is single-token PRESENCE evaluated with
+  // `.some()` over the whole file (a build invocation anywhere; the app's context
+  // path anywhere). A continuation cannot hide a token from an any-line search,
+  // and folding would let an `echo` elsewhere in a wrapped command suppress a real
+  // build reference (#3420).
   const lines = text.split('\n').map((l) => l.replace(/\r$/, ''));
   if (lines.some((l) => !/^\s*#/.test(l) && BUILD_INVOCATION.test(l))) builders.push({ wf, lines });
 }
