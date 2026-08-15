@@ -255,37 +255,70 @@ jobs:
         run: |
           set +e
           LAW=$(az monitor log-analytics workspace list -g "$CONSOLE_RG" --query "[?contains(name,'loom')].customerId | [0]" -o tsv 2>/dev/null | tr -d '\r')
-          HITS_RAW=""
+          HITS_ROW=""
+          HITS_ERR=""
+          HITS_RC=""
           if [ -n "$LAW" ]; then
+            # ONE query, TWO columns (#3498). This used to be two queries — a
+            # `| count` and a separate `| summarize max(TimeGenerated)`. The
+            # count read 4 and the timestamp read EMPTY on every run, so the
+            # verdict could not order the errors against the credential and
+            # failed closed on `last-hit=<unread>` indefinitely. Two reads of the
+            # same population can disagree about whether they ran; one row from
+            # one `summarize hits = count(), newest = max(TimeGenerated)` cannot.
+            #
             # NO `|| echo 0` here, on purpose: an empty result means the query did
             # not run, and the verdict script reports that as unknown rather than
             # as a clean zero (the second half of #2837).
-            HITS_RAW=$(az monitor log-analytics query --workspace "$LAW" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | count" \
-              -o tsv 2>/dev/null | tr -d '\r')
-            # #3160 — the count alone cannot tell a CURRENT outage from one that
-            # was rotated away days ago. Carry the newest hit's timestamp so the
-            # verdict can compare it against the newest MSAL credential.
-            HITS_LAST=$(az monitor log-analytics query -w "$LAW" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | summarize last=max(TimeGenerated) | project tostring(last)" \
-              -o tsv 2>/dev/null | tr -d '\r')
+            #
+            # stderr is CAPTURED, not discarded. `2>/dev/null` is precisely why
+            # #3498 was undiagnosable for four days: the query failed, the reason
+            # went to the void, and `<unread>` with no cause attached pointed two
+            # investigations at a credential that had just been rotated correctly.
+            #
+            # The EXIT CODE is the failure signal, never stderr-emptiness: the
+            # log-analytics extension writes "This command is from the following
+            # extension" to stderr on every SUCCESSFUL call, so an emptiness test
+            # reports a perfectly good query as failed — measured on run
+            # 31351602478 and commented at the sibling call site in
+            # loom-synthetic-monitor.yml. stdout goes to a file so `$?` is
+            # unambiguously az's and not `head`'s.
+            HITS_ERRF=$(mktemp)
+            HITS_OUTF=$(mktemp)
+            az monitor log-analytics query --workspace "$LAW" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | summarize hits = count(), newest = max(TimeGenerated) | project hits, lastHit = iff(isnull(newest), '', tostring(newest))" \
+              -o tsv > "$HITS_OUTF" 2>"$HITS_ERRF"
+            HITS_RC=$?
+            HITS_ROW=$(tr -d '\r' < "$HITS_OUTF" | head -1)
+            HITS_ERR=$(tr '\n' ' ' < "$HITS_ERRF" | tr -s ' ' | cut -c1-300)
           fi
-          MINEND=$(az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv 2>/dev/null | tr -d '\r')
-          CREDNEW=$(az ad app credential list --id "$MSAL_APP_ID" --query "max([].startDateTime)" -o tsv 2>/dev/null | tr -d '\r')
+          # Same treatment for the credential reads: they supply the OTHER half of
+          # the recency comparison, so an unexplained empty here is the same dead
+          # end as an unexplained empty above.
+          CRED_ERRF=$(mktemp)
+          CRED_OUTF=$(mktemp)
+          az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv > "$CRED_OUTF" 2>"$CRED_ERRF"
+          CRED_RC=$?
+          MINEND=$(tr -d '\r' < "$CRED_OUTF")
+          az ad app credential list --id "$MSAL_APP_ID" --query "max([].startDateTime)" -o tsv > "$CRED_OUTF" 2>>"$CRED_ERRF"
+          rc2=$?
+          [ "$rc2" -ne 0 ] && CRED_RC=$rc2
+          CREDNEW=$(tr -d '\r' < "$CRED_OUTF")
+          CRED_ERR=$(tr '\n' ' ' < "$CRED_ERRF" | tr -s ' ' | cut -c1-300)
 
-          LH_LAW="$LAW" LH_HITS_RAW="$HITS_RAW" LH_MIN_END="$MINEND" \
-          LH_HITS_LAST="${HITS_LAST:-}" LH_CRED_NEWEST="${CREDNEW:-}" \
+          LH_LAW="$LAW" LH_HITS_ROW="$HITS_ROW" LH_HITS_ERR="$HITS_ERR" LH_HITS_RC="$HITS_RC" \
+          LH_MIN_END="$MINEND" LH_CRED_NEWEST="${CREDNEW:-}" LH_CRED_ERR="$CRED_ERR" LH_CRED_RC="$CRED_RC" \
           LH_APP_ID="$MSAL_APP_ID" LH_CONSOLE_RG="$CONSOLE_RG" \
             bash scripts/ci/login-health-verdict.sh
           rc=$?
 
-          # login-health-verdict.sh writes `verdict=ok|unknown|broken` to
-          # $GITHUB_OUTPUT itself. Record its raw exit status as a SECOND,
+          # login-health-verdict.sh writes `verdict=ok|unknown|unproven|broken`
+          # to $GITHUB_OUTPUT itself. Record its raw exit status as a SECOND,
           # independent signal: the enforcing step fails closed if the two ever
           # disagree, or if no verdict was recorded at all.
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
 
-          echo "Recorded login-health rc=$rc. Enforcement is DEFERRED to 'Enforce login-health verdict + blocking suite results' at the end of this job (refs #2871) so the browser E2E below still runs and yields its own receipt. A BROKEN verdict still fails this run."
+          echo "Recorded login-health rc=$rc. Enforcement is DEFERRED to 'Enforce login-health verdict + blocking suite results' at the end of this job (refs #2871) so the browser E2E below still runs and yields its own receipt. A BROKEN or UNPROVEN verdict still fails this run."
           exit 0
 
       # -----------------------------------------------------------------------

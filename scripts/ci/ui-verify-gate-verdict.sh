@@ -51,6 +51,20 @@
 #     cancelled, so nothing is being masked and inventing a second failure would
 #     only obscure the real one.
 #
+# `unproven` IS A FAILURE, AND IT IS NOT `unknown` (#3498)
+# -------------------------------------------------------
+# The two look adjacent and are not. `unknown` is "nothing was measured" — no
+# hits are in hand, so there is nothing to fail on. `unproven` is "hits ARE in
+# hand and this run could not order them against the newest MSAL credential",
+# which blocks, because assuming they are historical is exactly how a live
+# AADSTS7000215 outage renders green.
+#
+# It gets its own token so THIS step's message can stop asserting a cause it did
+# not establish (deploy-integrity.md R7). Folded into `broken`, the job summary
+# read "the preflight found evidence that sign-in is down" when what actually
+# happened was that a Log Analytics query returned no timestamp — and that sent
+# two investigations at a credential which had just been rotated correctly.
+#
 # BLOCKING SUITE OUTCOMES
 # -----------------------
 # The gate also re-asserts the outcome of the steps that are supposed to block.
@@ -68,7 +82,8 @@
 # INPUTS (all optional; each absent value is handled explicitly above)
 #   UVG_PREFLIGHT_OUTCOME  steps.<preflight>.outcome
 #                          ''|skipped|cancelled = it never ran
-#   UVG_VERDICT            steps.<preflight>.outputs.verdict  (ok|unknown|broken)
+#   UVG_VERDICT            steps.<preflight>.outputs.verdict
+#                          (ok|unknown|unproven|broken)
 #   UVG_RC                 steps.<preflight>.outputs.rc — the raw exit status of
 #                          login-health-verdict.sh, recorded independently
 #   UVG_BLOCKING           comma-separated `label=outcome` pairs for the steps
@@ -107,6 +122,14 @@ case "$PREFLIGHT_OUTCOME" in
     case "$VERDICT" in
       broken)
         add_cause "LOGIN-HEALTH BROKEN — the preflight found evidence that sign-in is down (see its ::error:: annotations earlier in this run). The browser suite was still executed so its result is available above; this run is RED for the sign-in outage regardless of how the suite scored."
+        ;;
+      unproven)
+        # Blocks exactly as `broken` does, and says something different, because
+        # it IS something different (#3498).
+        add_cause "LOGIN-HEALTH UNPROVEN — invalid_client errors are present in the 7d window and the preflight could NOT establish whether any of them postdates the newest MSAL credential (see its ::error:: annotation earlier in this run, which names the read that failed). This run is RED because an unestablished recency must never be assumed historical — it is NOT a finding that sign-in is down. The fix is the READ, not a rotation; the gate cannot green itself."
+        if [ "$RC" = "0" ]; then
+          add_cause "login-health recorded verdict='unproven' but login-health-verdict.sh exited 0. An unprovable recency must fail closed; the two recorded signals disagree."
+        fi
         ;;
       ok|unknown)
         # A verdict of ok/unknown alongside a non-zero preflight status means the
