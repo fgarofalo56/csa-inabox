@@ -34,7 +34,11 @@
  *     come back.
  *   - comments.
  *
- * Usage: node scripts/ci/check-regex-anchor.mjs
+ * Usage:
+ *   node scripts/ci/check-regex-anchor.mjs              # CHECK
+ *   node scripts/ci/check-regex-anchor.mjs --self-test  # embedded controls only
+ *
+ * Tests: node --test scripts/ci/__tests__/regex-anchor.test.mjs
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -127,10 +131,80 @@ export function isPredicateUse(line) {
   return /\.test\s*\(/.test(line) || /\.match\s*\(/.test(line) || /\bnew RegExp\b/.test(line);
 }
 
-/** Regex literals on a line: `/…/flags`, skipping `//` comments and division. */
+/**
+ * Regex literals on a line: `/…/flags`, skipping `//` comments and division.
+ *
+ * THE ALTERNATIVES HERE MUST STAY MUTUALLY EXCLUSIVE. Until #3488 they were not,
+ * and this line was a ReDoS (CodeQL #757/#758, js/redos, HIGH) in the guard whose
+ * entire job is policing regexes:
+ *
+ *   outer  `[^/\\\n]` also matched `[`, so a `[` could open the bracket branch
+ *          OR be swallowed by the catch-all               -> #757
+ *   inner  `[^\]]`    also matched `\`, so a `\` could be taken by `\\.`
+ *          OR by the catch-all                            -> #758
+ *
+ * Two branches that can consume the same character force the engine to try every
+ * partition before it may fail, which is exponential. Measured on the shipped
+ * regex, one line, Node v24.18:
+ *
+ *   '/' + '[]'xN     N=20 91ms   N=24 1.4s   N=26 5.3s   N=28 >20s
+ *   '/[' + '\'xN     N=30 51ms   N=38 2.4s   N=42 19.1s  N=46 >20s
+ *
+ * A 100-character line cost 6.9s through scanSource(); four characters more ran
+ * past 25s. This guard runs in loom-guardrails on every PR, so any file added
+ * under SCAN could have hung the job indefinitely.
+ *
+ * AND THE TREE ALREADY CARRIED THE PAYLOAD. `lib/coe-library/templates-content.ts`
+ * line 25 is 1878 characters of embedded escaped JSON, inside SCAN, and the old
+ * regex never finished it (>120s, killed). CI stayed green only because
+ * scanSource() skips a line with no `.test(` / `.match(` / `new RegExp` on it, so
+ * regexLiteralsOn was never reached. Prefixing that one real line with `x.test(y);`
+ * hung the guard. The margin was a substring, not a design.
+ *
+ * The fix removes the overlap rather than capping length or adding a timeout:
+ * `[^\]]` -> `[^\]\\]` makes `\\.` the only way to consume a backslash, and
+ * `[^/\\\n]` -> `[^/\\\n\[]` makes the bracket branch the only way to consume a
+ * `[`. Every branch is now selected by the next character alone, so the scan is
+ * deterministic. Same inputs, N=100000: 1.2ms.
+ *
+ * DELIBERATE SEMANTIC CHANGE. Excluding `[` from the catch-all means an
+ * UNTERMINATED `[` no longer falls through to it, so `/a[b/` yields nothing where
+ * it used to yield `a[b`. In a real regex literal `[` always opens a character
+ * class, so a literal with an unterminated one does not parse in JS either — the
+ * new behaviour is the more correct one. It only differs on text that was never a
+ * regex literal, and it is pinned by a test.
+ *
+ * MEASURED, not assumed, over MAIN's tree at the time of the fix (corpus from
+ * `git ls-files`; the count is self-referential, because this file and its test
+ * now carry `[`-bearing examples that themselves differ, so the tree has to be
+ * named):
+ *   - the guard's VERDICT is unchanged — 4089 files / 1,045,200 lines in SCAN,
+ *     0 files whose scanSource() result differs;
+ *   - across 6252 files / 1,411,660 lines, regexLiteralsOn differs on 79, and a
+ *     variant carrying ONLY the inner fix differs on 0 — which attributes every
+ *     one of those 79 to the `[` rule above, mechanically rather than by eye.
+ *     All 79 are comments or strings; none is a real regex literal.
+ *
+ * KNOWN LIMIT, stated rather than hidden: an unterminated `[` still scans to
+ * end-of-line before failing, and every `/` is a start position, so the worst case
+ * is QUADRATIC in line length (20k chars: 428ms). This fix does not change that
+ * COMPLEXITY CLASS — the pre-fix regex measures the same ~4x per doubling — though
+ * it does roughly double the CONSTANT on that shape (20k chars: 155ms before,
+ * 428ms after), which is immaterial here: the longest line in the guard's
+ * population is 4159 chars and regexLiteralsOn over all 1,045,200 of them totals
+ * 97ms.
+ *
+ * No length cap is applied on purpose: a guard that silently skips long lines goes
+ * quiet, and a quiet guard reads as a clean tree. If the quadratic ever does
+ * matter, the answer already ships two files away — `_gate-consumption.mjs` has a
+ * single-pass, non-backtracking regex-literal scanner (an `inClass` flag, no
+ * alternation to backtrack over) doing this exact job in O(n). Swapping to it is a
+ * behaviour change on its own and belongs in its own PR, not smuggled into a
+ * security fix.
+ */
 export function regexLiteralsOn(line) {
   const out = [];
-  const re = /\/((?:\\.|\[(?:\\.|[^\]])*\]|[^/\\\n])+)\/[dgimsuvy]*/g;
+  const re = /\/((?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\n\[])+)\/[dgimsuvy]*/g;
   let m;
   while ((m = re.exec(line)) !== null) out.push(m[1]);
   return out;
@@ -206,7 +280,138 @@ function walk(dir, exts, out = []) {
   return out;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EMBEDDED CONTROL — proven on every run, before the repo is judged (#3488).
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A reintroduced ambiguity in regexLiteralsOn does not make this guard WRONG, it
+// makes it HANG — and a hung CI job reads as an infrastructure flake, not as a
+// defect, so it can burn days before anyone looks at the regex. These controls
+// convert that hang into a named failure with a bounded cost. Measured, guard
+// exit 1: a single-property regression fails in 3.4-6.2s, all three at once in
+// 26s (three fixtures, each retried up to 3x). Healthy: 106ms.
+//
+// TWO CALIBRATION FACTS, both measured rather than assumed:
+//
+//   1. V8 TIERS A REGEXP UP from the interpreter to compiled code once it has
+//      done enough work, so a fixture that runs SECOND is measured against a
+//      ~8x faster engine. The first cut of this control used '[]'x24/'\'x36 and
+//      the second fixture came in at 118ms against a 200ms budget while costing
+//      1193ms in a fresh process — it was passing on a BROKEN regex. So each
+//      fixture warms the pattern site first and both are sized for the WARMED
+//      state, which makes the verdict independent of fixture order. Measured
+//      warm on the broken regex, both orders: #757 1.29-1.37s, #758 1.93-2.02s.
+//
+//   2. THERE ARE THREE DISJOINTNESS PROPERTIES, not two, and each fixture only
+//      catches its own. The fix ADDED two exclusions — `\` from the inner
+//      catch-all and `[` from the outer — but the outer catch-all also excludes
+//      `\`, which was already there and is equally load-bearing: it is what
+//      keeps the escape branch the only thing that can consume a top-level
+//      backslash. Nothing tested that third one, and a control that cannot fail
+//      for a third of what it guards is the very defect this file exists to
+//      fix, rebuilt inside its own safety net.
+//
+//      Measured with ONLY that exclusion dropped (`[^/\\\n\[]` -> `[^/\n\[]`),
+//      warm, on `/` + `\`xN. The other two fixtures do not move at all, so
+//      runControls() returned [] in 0ms against an exponential regex:
+//
+//        Node 20.20.2  N=34 56ms   N=38 381ms   N=40 996ms   N=44 7.7s
+//        Node 24.18.0  N=34 59ms   N=38 413ms   N=40 1123ms  N=44 8.5s
+//
+//      (~2.6x per 2 pumps on both.) Fixed, same input at N=40000: 0.34ms.
+//      Fixture three closes it.
+//
+// Healthy cost is 0.00ms (below timer resolution) against a 200ms budget, so the
+// margin is four orders of magnitude and a GC pause cannot manufacture a
+// failure — the more so because a measurement over budget is retried.
+
+/** One input per disjointness property. Each must FAIL to match — backtracking
+ *  is the cost of the failing search, so a fixture with a closing `/` in it
+ *  returns fast on the broken regex too and would measure nothing. */
+export const REDOS_FIXTURES = [
+  { why: 'CodeQL #757 — outer catch-all vs the bracket branch (`[`)', input: `/${'[]'.repeat(27)}` },
+  { why: 'CodeQL #758 — inner catch-all vs the escape branch (`\\`)', input: `/[${'\\'.repeat(42)}` },
+  { why: 'outer catch-all vs the escape branch (`\\`)', input: `/${'\\'.repeat(40)}` },
+];
+
+/** Extraction fixtures, so a "simplification" that silences the timing control
+ *  by breaking the parser is caught in the same pass. */
+export const EXTRACT_FIXTURES = [
+  { why: 'plain literal', input: 'return /a|b$/i.test(k);', expect: ['a|b$'] },
+  { why: 'character class containing a slash', input: 'if (/[/]x/.test(s)) f();', expect: ['[/]x'] },
+  { why: 'escaped bracket outside a class', input: 'if (/\\[a\\]/.test(s)) f();', expect: ['\\[a\\]'] },
+  { why: 'escaped closing bracket INSIDE a class', input: 'if (/[a\\]b]/.test(s)) f();', expect: ['[a\\]b]'] },
+  // Documented #3488 behaviour change: `[` no longer falls through to the
+  // catch-all, so an UNTERMINATED `[` yields nothing. `/a[b/` is not a regex
+  // literal JS can parse either, so the only text this can appear in was never
+  // a regex to begin with.
+  { why: 'UNTERMINATED `[` yields nothing (deliberate, #3488)', input: 'if (/a[b/.test(s)) f();', expect: [] },
+];
+
+/** Milliseconds any one fixture may take. Deterministic: 0.00ms. Broken: >1.2s. */
+export const REDOS_BUDGET_MS = 200;
+
+/** Exercises the pattern site so the measurement does not depend on which
+ *  fixture ran first. Benign, and shaped like the code this guard reads. */
+const WARM_LINE = 'if (/^a|b$/.test(x)) f(/[a-z]+/);';
+
+/**
+ * Cost of one fixture, in ms, as the BEST of up to 3 attempts. A healthy regex
+ * clears the budget on attempt 1 and never retries; only a measurement that is
+ * already over budget is repeated, so a scheduler or GC spike cannot fail the
+ * run on its own while a genuine regression still fails.
+ */
+function costMs(input) {
+  let best = Infinity;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let w = 0; w < 5; w += 1) regexLiteralsOn(WARM_LINE);
+    const t0 = process.hrtime.bigint();
+    regexLiteralsOn(input);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    if (ms < best) best = ms;
+    if (best <= REDOS_BUDGET_MS) break;
+  }
+  return best;
+}
+
+/** Runs the controls. Returns failure descriptions (empty = healthy). */
+export function runControls() {
+  const failures = [];
+  for (const f of REDOS_FIXTURES) {
+    const ms = costMs(f.input);
+    if (ms > REDOS_BUDGET_MS) {
+      failures.push(
+        `ReDoS control: ${f.why} took ${ms.toFixed(0)}ms (budget ${REDOS_BUDGET_MS}ms) on ` +
+          `${f.input.length} chars — the alternatives in regexLiteralsOn overlap again.`,
+      );
+    }
+  }
+  for (const f of EXTRACT_FIXTURES) {
+    const got = regexLiteralsOn(f.input);
+    if (JSON.stringify(got) !== JSON.stringify(f.expect)) {
+      failures.push(`extraction control: ${f.why} — got ${JSON.stringify(got)}, expected ${JSON.stringify(f.expect)}`);
+    }
+  }
+  return failures;
+}
+
 function main() {
+  const controlFailures = runControls();
+  if (controlFailures.length > 0) {
+    console.error(
+      `::error::regex-anchor: the EMBEDDED CONTROL failed (${controlFailures.length}). regexLiteralsOn no longer ` +
+        'behaves as documented, so any verdict about the repo would be meaningless.',
+    );
+    for (const f of controlFailures) console.error(`   - ${f}`);
+    process.exit(1);
+  }
+
+  if (process.argv.includes('--self-test')) {
+    const n = REDOS_FIXTURES.length + EXTRACT_FIXTURES.length;
+    console.log(`[regex-anchor] self-test OK — ${n} control fixture(s) behaved as documented.`);
+    return;
+  }
+
   const violations = [];
   for (const { dir, exts } of SCAN) {
     for (const file of walk(join(ROOT, dir), exts)) {
