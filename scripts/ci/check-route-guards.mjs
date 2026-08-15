@@ -517,6 +517,10 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/copilot-studio-knowledge/[id]/route.ts',
   'apps/fiab-console/app/api/items/copilot-studio-topic/[id]/route.ts',
   'apps/fiab-console/app/api/items/copilot-template-library/[id]/route.ts',
+  // NOTE: this one is GRADUATED — see NOW_GUARDED below. It is kept here only
+  // because the class list is historical; the "no per-tenant Cosmos ownership to
+  // scope" premise was never true for it (ID-addressed, and its own siblings
+  // scope it), and it now runs withWorkspaceOwner.
   'apps/fiab-console/app/api/items/copy-job/[id]/runs/route.ts',
   'apps/fiab-console/app/api/items/cosmos-db/[id]/gremlin/route.ts',
   'apps/fiab-console/app/api/items/cosmos-db/[id]/metrics/route.ts',
@@ -765,6 +769,13 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/activator/[id]/stop/route.ts',
   'apps/fiab-console/app/api/items/lakehouse-shortcut/route.ts',
   'apps/fiab-console/app/api/items/data-pipeline/practice-seed/route.ts',
+  // copy-job run history — was allowlisted under SHARED_BACKEND_ITEM_ROUTES on a
+  // premise that did not hold for it: the class is "per-item-TYPE route over a
+  // shared backend with no per-tenant Cosmos ownership to scope", but this route
+  // is addressed by item ID and its own siblings ([id]/run, [id]/watermark) scope
+  // it by loading the item. It now runs withWorkspaceOwner, so it is listed here
+  // rather than allowlisted — dropping the wrapper must re-flag, not stay masked.
+  'apps/fiab-console/app/api/items/copy-job/[id]/runs/route.ts',
   // non-items routes fixed in the same sweep
   'apps/fiab-console/app/api/aml/environments/route.ts',
   'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',
