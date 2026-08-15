@@ -67,6 +67,42 @@ interface CertResponse {
 
 type CertAction = 'certify' | 'revoke' | 'promote' | 'unpromote' | 'measure-dq';
 
+/**
+ * The DERIVED certification state for a header badge, from the same route the
+ * Certification tab renders.
+ *
+ * The editor header read `state.certificationState` straight off the item — a
+ * field written ONLY by certify/revoke. So a product certified before its DQ
+ * score was ever really measured showed a green **Certified** badge in its own
+ * header while the tab two clicks away said **Validated / never measured**: one
+ * screen contradicting itself. Deriving both from one server evaluation is the
+ * fix; the route is a Cosmos point-read now (it executes no rules), so this is
+ * cheap enough to run on mount.
+ *
+ * Fails CLOSED: an unreachable or failed evaluation yields `null` and the caller
+ * shows NO certification badge, never a stale green one.
+ */
+export function useDerivedCertificationState(id: string, isNew?: boolean) {
+  const [state, setState] = useState<'draft' | 'validated' | 'certified' | null>(null);
+
+  useEffect(() => {
+    if (isNew || !id || id === 'new') { setState(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/certification`);
+        const j = await r.json();
+        if (!cancelled) setState(j?.ok ? (j.certification?.state ?? null) : null);
+      } catch {
+        if (!cancelled) setState(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id, isNew]);
+
+  return state;
+}
+
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, padding: tokens.spacingHorizontalL, maxWidth: '760px' },
   header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },

@@ -85,6 +85,7 @@ import {
 import { deleteOwnedItem, loadOwnedItem as loadOwnedItemByType } from '../../items/_lib/item-crud';
 import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
 import { readCertificationDq } from '@/lib/dataproducts/certification-dq';
+import { resolveOwnerTenantId } from '@/lib/dataproducts/owner-tenant';
 import type { DataContract } from '@/lib/dataproducts/contract';
 import {
   deleteDataProductBestEffort,
@@ -340,22 +341,9 @@ async function findItem(itemId: string): Promise<WithEtag | null> {
   return resources[0] ?? null;
 }
 
-/** Resolve the owning workspace's tenantId (best-effort) for the isOwner flag. */
-async function resolveOwnerTenantId(workspaceId: string): Promise<string | null> {
-  try {
-    const ws = await workspacesContainer();
-    const { resources } = await ws.items
-      .query<{ tenantId: string }>({
-        query: 'SELECT c.tenantId FROM c WHERE c.id = @id',
-        parameters: [{ name: '@id', value: workspaceId }],
-      })
-      .fetchAll();
-    return resources[0]?.tenantId ?? null;
-  } catch {
-    // Owner resolution is best-effort; the consumer view still renders.
-    return null;
-  }
-}
+/** The owning workspace's tenantId (best-effort) for the isOwner flag. ONE shared
+ *  implementation with every DQ measure site — see lib/dataproducts/owner-tenant.ts
+ *  for why the caller's oid is never a substitute for it. */
 
 /** Load the data-product item and verify it belongs to the caller's tenant. */
 async function loadOwnedItem(itemId: string, tenantId: string): Promise<WithEtag | null> {

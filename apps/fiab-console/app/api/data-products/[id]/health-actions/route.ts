@@ -32,8 +32,9 @@ import {
 import { prewarmPurviewShirForScan } from '@/lib/azure/shir-autoscale';
 import { adxConfigGate } from '@/lib/azure/data-quality-client';
 import {
-  measureCertificationDq, toDqMeasurement, DQ_MEASUREMENT_KEY,
+  measureCertificationDq, dqMeasurementPatch,
 } from '@/lib/dataproducts/certification-dq';
+import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -91,11 +92,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // on the ones that PASSED), and the same record it writes — so a rerun here
       // moves the badge the marketplace card and the certification panel show,
       // instead of producing a number that dies with this response.
-      const dq = await measureCertificationDq(session.claims.oid, item);
-      const measurement = toDqMeasurement(dq, session.claims.oid);
+      const dq = await measureCertificationDq(item);
+      // The SAME patch POST /certify `measure-dq` applies — the reading plus the
+      // reconciled discovery badge — so the two measuring writes cannot leave a
+      // product in different states depending on which button the user pressed.
+      const patch = dqMeasurementPatch(item, dq, session.claims.oid);
       const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, {
-        state: { ...state, [DQ_MEASUREMENT_KEY]: measurement },
+        state: { ...state, ...patch },
       });
+      if (updated) {
+        try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+      }
       const score = dq.dqResult;
       const measured = dq.dqGate
         ? dq.dqGate
@@ -113,8 +120,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           outcome: `${measured}${persistNote}`,
           dqScore: score,
           certificationDqScore: dq.dqScore,
+          certificationState: patch.certificationState,
           persisted: !!updated,
-          measuredAt: measurement.measuredAt,
+          measuredAt: patch.dqMeasurement.measuredAt,
           timestamp,
         },
       });

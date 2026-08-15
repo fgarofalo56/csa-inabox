@@ -994,6 +994,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
                       <Button size="small" onClick={() => router.push('/governance/data-quality')}>Data quality rules</Button>
                       <Button size="small" onClick={() => setTab('observability')}>Rerun DQ check</Button>
                     </div>
+                    <Caption1 className={s.muted}>Authoring rules requires the tenant-admin role; rerunning the check does not.</Caption1>
                   </Card>
                 ) : dqScore < 80 ? (
                   <Card className={s.card}>

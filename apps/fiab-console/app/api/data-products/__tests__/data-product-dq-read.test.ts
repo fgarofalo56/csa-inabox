@@ -28,6 +28,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const executeQuery = vi.fn();
 const tenantRead = vi.fn();
+/** Which tenant's DQ-rule document was opened. */
+const tenantDocIds: string[] = [];
+/** The tenant that owns the workspace — deliberately NOT the session oid below. */
+const OWNER_TENANT = 'owner-tenant';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/kusto-client', () => ({
@@ -60,12 +64,17 @@ vi.mock('@/app/api/items/_lib/item-crud', async () => {
       NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status }),
   };
 });
-vi.mock('@/lib/azure/loom-data-products-search', () => ({
-  upsertDataProductDoc: vi.fn(async () => {}),
-  deleteDataProductDoc: vi.fn(async () => {}),
-  docForDataProduct: vi.fn(() => ({})),
-  PUBLISH_STATUSES: ['Draft', 'Published', 'Deprecated'],
-}));
+vi.mock('@/lib/azure/loom-data-products-search', async (importOriginal) => {
+  // `docForDataProduct` is the REAL projection — it is the thing under test for
+  // the Discover badge, and a hand-written stand-in would be a fixture modelling
+  // the code rather than running it. Only the network write is a spy.
+  const actual = await importOriginal<typeof import('@/lib/azure/loom-data-products-search')>();
+  return {
+    ...actual,
+    upsertDataProductDoc: vi.fn(async () => {}),
+    deleteDataProductDoc: vi.fn(async () => {}),
+  };
+});
 vi.mock('@/lib/azure/purview-client', () => ({
   deleteDataProductBestEffort: vi.fn(async () => ({})),
   PurviewUnifiedCatalogGateError: class extends Error {},
@@ -76,11 +85,13 @@ vi.mock('@/lib/marketplace/listing-analytics', () => ({ recordListingView: vi.fn
 import { GET as certificationGET } from '../[id]/certification/route';
 import { GET as detailGET } from '../[id]/route';
 import { POST as certifyPOST } from '../[id]/certify/route';
+import { POST as healthActionsPOST } from '../[id]/health-actions/route';
 import { getSession } from '@/lib/auth/session';
 import {
   itemsContainer, workspacesContainer, accessRequestsContainer, tenantSettingsContainer,
 } from '@/lib/azure/cosmos-client';
 import { loadOwnedItem, updateOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { upsertDataProductDoc } from '@/lib/azure/loom-data-products-search';
 import { DQ_MEASUREMENT_KEY, DQ_GATE, DQ_ADX_GATE_ID } from '@/lib/dataproducts/certification-dq';
 
 function props(id: string) { return { params: Promise.resolve({ id }) }; }
@@ -132,14 +143,14 @@ function wireCosmos(item: any) {
     items: { query: () => ({ fetchAll: async () => ({ resources: item ? [item] : [] }) }) },
   });
   (workspacesContainer as any).mockResolvedValue({
-    items: { query: () => ({ fetchAll: async () => ({ resources: [{ tenantId: 'owner-tenant' }] }) }) },
-    item: () => ({ read: async () => ({ resource: { tenantId: 'owner-tenant' } }) }),
+    items: { query: () => ({ fetchAll: async () => ({ resources: [{ tenantId: OWNER_TENANT }] }) }) },
+    item: () => ({ read: async () => ({ resource: { tenantId: OWNER_TENANT } }) }),
   });
   (accessRequestsContainer as any).mockResolvedValue({
     items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
   });
   (tenantSettingsContainer as any).mockResolvedValue({
-    item: () => ({ read: tenantRead }),
+    item: (docId: string) => { tenantDocIds.push(docId); return { read: tenantRead }; },
   });
   tenantRead.mockResolvedValue({ resource: { items: MANY_RULES } });
 }
@@ -149,8 +160,11 @@ beforeEach(() => {
   executeQuery.mockReset();
   executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
   tenantRead.mockReset();
+  tenantDocIds.length = 0;
   process.env.LOOM_KUSTO_CLUSTER_URI = 'https://adx-test.eastus2.kusto.windows.net';
-  (getSession as any).mockReturnValue({ claims: { oid: 'viewer-tenant', upn: 'v@contoso.com' } });
+  // The caller is a shared-workspace COLLABORATOR, not the owner: `loadOwnedItem`
+  // gates on workspace WRITE access, so this session reaches every write below.
+  (getSession as any).mockReturnValue({ claims: { oid: 'collaborator-oid', upn: 'collab@contoso.com' } });
 });
 
 describe('GET /api/data-products/[id]/certification issues no per-rule ADX query', () => {
@@ -262,8 +276,59 @@ describe('GET /api/data-products/[id] issues no per-rule ADX query', () => {
     expect(executeQuery).toHaveBeenCalledTimes(0);
     expect(tenantRead).toHaveBeenCalledTimes(0);
     expect(j.isOwner).toBe(false);
-    expect(j.ownerTenantId).toBe('owner-tenant');
+    expect(j.ownerTenantId).toBe(OWNER_TENANT);
     expect(j.dqScore).toBe(75);
+  });
+});
+
+/**
+ * FINDING 1 — whose rules the write executes.
+ *
+ * `loadOwnedItem` reads like an ownership check but gates on workspace WRITE
+ * access, so a shared-workspace collaborator reaches every measuring write. When
+ * those passed `session.claims.oid`, the collaborator's own (usually empty)
+ * rule set was scored against the owner's tables — and, now that a measurement
+ * is DURABLE, "No data-quality rules apply to this data product" was written
+ * onto someone else's product across every read surface until the owner
+ * re-measured. Before the read-through change that wrong answer died with the
+ * response; persisting it made the same bug materially worse.
+ */
+describe('the measuring write uses the OWNER tenant, not the caller', () => {
+  it('measure-dq run by a collaborator reads the OWNER\'s rule document', async () => {
+    const item = product();
+    wireCosmos(item);
+    (loadOwnedItem as any).mockResolvedValue(item);
+    (updateOwnedItem as any).mockImplementation(
+      async (_i: string, _t: string, _o: string, patch: any) => ({ ...item, state: patch.state }),
+    );
+
+    const j = await (await certifyPOST(req({ action: 'measure-dq' }), props('dp-1'))).json();
+
+    // THE RECEIPT: the rule doc opened is the owner's, never `collaborator-oid`.
+    expect(tenantDocIds).toEqual([`dq-rules:${OWNER_TENANT}`]);
+    expect(tenantDocIds).not.toContain('dq-rules:collaborator-oid');
+    expect(j.dq.ruleCount).toBe(MANY_RULES.length);
+  });
+
+  it('refuses to measure at all when the owning workspace cannot be resolved', async () => {
+    const item = product();
+    wireCosmos(item);
+    (workspacesContainer as any).mockResolvedValue({
+      items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
+      item: () => ({ read: async () => ({ resource: undefined }) }),
+    });
+    (loadOwnedItem as any).mockResolvedValue(item);
+    (updateOwnedItem as any).mockImplementation(
+      async (_i: string, _t: string, _o: string, patch: any) => ({ ...item, state: patch.state }),
+    );
+
+    const j = await (await certifyPOST(req({ action: 'measure-dq' }), props('dp-1'))).json();
+
+    expect(j.dq.gate).toBe(DQ_GATE.ownerTenant);
+    expect(j.dq.score).toBeNull();
+    // No rule doc was opened for ANY tenant, least of all the caller's.
+    expect(tenantDocIds).toEqual([]);
+    expect(executeQuery).toHaveBeenCalledTimes(0);
   });
 });
 
@@ -319,5 +384,89 @@ describe('the measurement still happens — on the owner-gated write', () => {
     expect(persisted.gateId).toBe(DQ_ADX_GATE_ID);
     // ADX unprovisioned means the rules were never reached.
     expect(executeQuery).toHaveBeenCalledTimes(0);
+  });
+});
+
+/**
+ * FINDING 2 — the downgrade must reach the surface the false badge lives on.
+ *
+ * `state.certificationState` is written ONLY by certify/revoke, and it is what
+ * `loom-data-products-search.docForDataProduct` projects as the search doc's
+ * `certification` field, which Discover renders as the green "Certified" pill
+ * (`unified-discover.tsx`: `recommended: certification === 'certified'`). The
+ * certification GET derived `validated` and wrote nothing back, so a product
+ * whose rules all fail kept a certified pill at the point of discovery
+ * indefinitely — the headline of #3493 surviving inside the fix for it.
+ *
+ * These run the REAL projection (only the index write is a spy), so the
+ * assertion is on the document Discover would actually receive.
+ */
+describe('a measurement reconciles the DISCOVERY badge, not just the tab', () => {
+  /** Certified by a reviewer, fully certifiable except for whatever DQ says. */
+  function certified(extra: Record<string, unknown> = {}) {
+    return product({
+      certification: {
+        state: 'certified', score: 100,
+        certifiedBy: { oid: 'reviewer', name: 'rev@contoso.com' },
+        certifiedAt: '2026-07-01T00:00:00.000Z',
+      },
+      certificationState: 'certified',
+      ...extra,
+    });
+  }
+
+  function wireWrite(item: any) {
+    wireCosmos(item);
+    (loadOwnedItem as any).mockResolvedValue(item);
+    (updateOwnedItem as any).mockImplementation(
+      async (_i: string, _t: string, _o: string, patch: any) => ({ ...item, state: patch.state }),
+    );
+  }
+
+  it('measure-dq DOWNGRADES the stored state and re-projects it to the search index', async () => {
+    const item = certified();
+    wireWrite(item);
+    // Every rule measured below its threshold.
+    executeQuery.mockResolvedValue(oneRow({ pct: 10 }));
+
+    const j = await (await certifyPOST(req({ action: 'measure-dq' }), props('dp-1'))).json();
+
+    expect(j.certification.state).toBe('validated');
+    // 1. The stored field Discover reads is reconciled…
+    const persistedState = (updateOwnedItem as any).mock.calls[0][3].state;
+    expect(persistedState.certificationState).toBe('validated');
+    // 2. …and the search doc actually carries it, via the REAL projection.
+    expect(upsertDataProductDoc).toHaveBeenCalledTimes(1);
+    const doc = (upsertDataProductDoc as any).mock.calls[0][0];
+    expect(doc.certification).toBe('validated');
+    expect(doc.id).toBe('dp_dp-1');
+    // 3. The sign-off itself is untouched — that is what allows recovery.
+    expect(persistedState.certification.certifiedBy.oid).toBe('reviewer');
+    expect(persistedState.certification.state).toBe('certified');
+  });
+
+  it('and RESTORES it once the rules pass again, with no second signature', async () => {
+    const item = certified();
+    wireWrite(item);
+    executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
+
+    const j = await (await certifyPOST(req({ action: 'measure-dq' }), props('dp-1'))).json();
+
+    expect(j.certification.state).toBe('certified');
+    expect((updateOwnedItem as any).mock.calls[0][3].state.certificationState).toBe('certified');
+    expect((upsertDataProductDoc as any).mock.calls[0][0].certification).toBe('certified');
+  });
+
+  it('the Observability rerun reconciles identically — one shape, two buttons', async () => {
+    const item = certified();
+    wireWrite(item);
+    executeQuery.mockResolvedValue(oneRow({ pct: 10 }));
+
+    const j = await (await healthActionsPOST(req({ action: 'rerun-dq-check' }), props('dp-1'))).json();
+
+    expect(j.ok).toBe(true);
+    expect(j.result.certificationState).toBe('validated');
+    expect((updateOwnedItem as any).mock.calls[0][3].state.certificationState).toBe('validated');
+    expect((upsertDataProductDoc as any).mock.calls[0][0].certification).toBe('validated');
   });
 });

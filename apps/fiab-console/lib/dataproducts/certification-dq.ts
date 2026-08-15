@@ -31,6 +31,10 @@
  *   - {@link readCertificationDq} is a PURE read of that record — zero I/O, zero
  *     ADX — and is what the GET paths use.
  *
+ * Because the measurement is now DURABLE state, whose rules it runs matters far
+ * more than when it was ephemeral: it takes the OWNER's tenant, resolved from
+ * the item's workspace, and never the caller's oid. See `owner-tenant.ts`.
+ *
  * The enforcement path never trusts the record: POST /certify re-measures live
  * before a sign-off, so a badge is never granted on a stale number. The record
  * carries `measuredAt` (and {@link isDqMeasurementStale}) so a read surface says
@@ -48,13 +52,19 @@
 
 import { adxConfigGate, computeDqScore, type DqRuleResult, type DqScoreResult } from '@/lib/azure/data-quality-client';
 import { defaultDatabase } from '@/lib/azure/kusto-client';
+import { resolveOwnerTenantId } from '@/lib/dataproducts/owner-tenant';
+import {
+  evaluateCertification, deriveCertificationState, gatherCertInputs,
+  type CertifiableItem, type CertificationRecord, type CertificationState,
+} from '@/lib/dataproducts/certification';
 
 /** Why a DQ score could not be measured — the exact remediation (no-vaporware). */
 export const DQ_GATE = {
   adx: 'Data quality cannot be measured: Azure Data Explorer is not provisioned for this deployment, so the data-quality rules cannot be executed. Certification requires a measured score.',
-  noRules: 'No data-quality rules apply to this data product. Define rules scoped to its tables in Governance → Data quality so certification can measure them.',
+  noRules: 'No data-quality rules apply to this data product. Define rules scoped to its tables in Governance → Data quality (authoring rules is a tenant-admin action — ask your Loom admin if that page returns "forbidden") so certification can measure them.',
   unscoreable: 'The data-quality rules for this product ran but none produced a measurement (check the rule scopes and the bound table).',
   notMeasured: 'Data quality has not been measured for this data product yet. Run "Measure data quality" on the Certification tab (or Rerun DQ check on Data observability) to execute this tenant\'s rules against its tables.',
+  ownerTenant: 'Data quality could not be measured: the owning workspace of this data product could not be resolved, so there is no way to tell WHICH tenant\'s data-quality rules apply. Nothing was measured and nothing was recorded.',
 } as const;
 
 /**
@@ -137,7 +147,7 @@ export interface DqTarget {
  * — those two each had their own `(state.databaseName as string) || default`,
  * which passes a whitespace-only name straight into KQL instead of falling back.
  */
-export function resolveDqTarget(item: { state?: Record<string, unknown> } | null | undefined): DqTarget {
+export function resolveDqTarget(item: DqItem | null | undefined): DqTarget {
   const state = (item?.state || {}) as Record<string, unknown>;
   const datasets = (Array.isArray(state.datasets) ? state.datasets : []) as Dataset[];
   const tableNames = datasets
@@ -161,10 +171,23 @@ function gated(gate: string, opts: { gateId?: string; missing?: string[]; result
   };
 }
 
+/** The item shape every function here needs: its workspace (whose tenant owns the rules) + state. */
+export interface DqItem {
+  workspaceId?: string;
+  state?: Record<string, unknown>;
+}
+
 /**
- * EXECUTE the tenant's applicable DQ rules against the product's bound ADX
- * tables and return the passing-rule ratio. **Write paths only** — this is N
+ * EXECUTE the owning tenant's applicable DQ rules against the product's bound
+ * ADX tables and return the passing-rule ratio. **Write paths only** — this is N
  * live KQL round-trips; read paths use {@link readCertificationDq}.
+ *
+ * The tenant is NOT a parameter. Every call site used to pass
+ * `session.claims.oid`, which is the CALLER — and `loadOwnedItem` gates on
+ * workspace WRITE access, not ownership, so a shared-workspace collaborator
+ * measured someone else's product against their OWN (usually empty) rule set.
+ * It is resolved here from the item's workspace instead, and an unresolvable
+ * owner GATES rather than falling back to the caller (see `owner-tenant.ts`).
  *
  * The ratio — not the mean per-rule percentage — is what certification consumes.
  * A mean can sit above the bar while every rule is under its OWN threshold
@@ -172,11 +195,13 @@ function gated(gate: string, opts: { gateId?: string; missing?: string[]; result
  * 70 bar with zero rules passing), which is the same "green over failing rules"
  * defect this replaces.
  */
-export async function measureCertificationDq(
-  tenantId: string,
-  item: { state?: Record<string, unknown> } | null | undefined,
-): Promise<CertificationDq> {
+export async function measureCertificationDq(item: DqItem | null | undefined): Promise<CertificationDq> {
   const { database, tableNames } = resolveDqTarget(item);
+
+  // WHOSE rules? Never the caller's. Unknown owner = nothing measured, and
+  // nothing recorded — a wrong-tenant reading is now durable state (#3499).
+  const ownerTenantId = await resolveOwnerTenantId(item?.workspaceId);
+  if (!ownerTenantId) return gated(DQ_GATE.ownerTenant);
 
   // ADX executes the rules. Unprovisioned = unmeasurable, and unmeasurable is
   // NEVER a pass — this path used to return a silent 100.
@@ -190,7 +215,7 @@ export async function measureCertificationDq(
 
   let result: DqScoreResult;
   try {
-    result = await computeDqScore(tenantId, database, tableNames, { concurrency: DQ_MEASURE_CONCURRENCY });
+    result = await computeDqScore(ownerTenantId, database, tableNames, { concurrency: DQ_MEASURE_CONCURRENCY });
   } catch (e: any) {
     // R7 — report what actually happened; never assert "no rules" for a backend failure.
     const msg = e?.message || String(e);
@@ -226,6 +251,39 @@ export function isDqMeasurementStale(measuredAt: string | null | undefined, now 
 }
 
 /**
+ * The state patch a measurement produces — the ONE shape both measuring writes
+ * (POST /certify `measure-dq` and the Observability rerun) apply, so they cannot
+ * reconcile differently.
+ *
+ * It carries two fields:
+ *   - `dqMeasurement` — the reading itself, which every read surface renders.
+ *   - `certificationState` — the DISCOVERY badge. It is written nowhere else but
+ *     certify/revoke, and the marketplace search doc projects it as
+ *     `certification`, so a product whose rules started failing kept a green
+ *     "Certified" pill in Discover — and a green badge in its own editor header
+ *     while its Certification tab said Validated — indefinitely.
+ *
+ * `state.certification` (the SIGN-OFF, with `certifiedBy`) is deliberately left
+ * alone: `deriveCertificationState` needs it intact to restore `certified` once
+ * the rules pass again, without a second reviewer signature.
+ */
+export function dqMeasurementPatch(
+  item: DqItem & CertifiableItem,
+  dq: CertificationDq,
+  measuredBy?: string,
+): { dqMeasurement: DqMeasurementRecord; certificationState: CertificationState } {
+  const st = (item.state || {}) as Record<string, unknown>;
+  const existing = (st.certification && typeof st.certification === 'object'
+    ? st.certification as CertificationRecord
+    : undefined);
+  const evaluation = evaluateCertification(gatherCertInputs(item, dq.dqScore));
+  return {
+    dqMeasurement: toDqMeasurement(dq, measuredBy),
+    certificationState: deriveCertificationState(evaluation, existing),
+  };
+}
+
+/**
  * Project a live measurement into the record persisted on `state.dqMeasurement`.
  * A gated (unmeasurable) outcome is persisted too — with its reason — so the
  * read surfaces state WHY there is no score instead of an indistinguishable
@@ -255,7 +313,7 @@ export function toDqMeasurement(dq: CertificationDq, measuredBy?: string): DqMea
  * rather than making a read path pay for N KQL queries (#3493).
  */
 export function readCertificationDq(
-  item: { state?: Record<string, unknown> } | null | undefined,
+  item: DqItem | null | undefined,
   now = Date.now(),
 ): CertificationDq {
   const state = (item?.state || {}) as Record<string, unknown>;

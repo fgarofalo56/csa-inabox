@@ -37,13 +37,12 @@ import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import {
-  evaluateCertification, deriveCertificationState,
+  evaluateCertification, deriveCertificationState, gatherCertInputs,
   type CertificationRecord,
 } from '@/lib/dataproducts/certification';
 import {
-  measureCertificationDq, toDqMeasurement, DQ_MEASUREMENT_KEY,
+  measureCertificationDq, toDqMeasurement, dqMeasurementPatch, DQ_MEASUREMENT_KEY,
 } from '@/lib/dataproducts/certification-dq';
-import { gatherCertInputs } from '../certification/route';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -100,22 +99,38 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       return NextResponse.json({ ok: true, endorsed });
     }
 
-    // ── Measure DQ — execute the rules and RECORD the result ────────────────
+    // ── Measure DQ — execute the rules, RECORD the result, RECONCILE the badge ─
     // The one path that turns "no score yet" into a number. Owner-gated, and
     // explicit: the read surfaces render this record instead of paying for N
     // ADX queries per view (#3493). A gated outcome is persisted too, with its
     // reason, so the UI can tell "ADX unprovisioned" from "never measured".
+    //
+    // It also reconciles `state.certificationState` — the field the SEARCH DOC
+    // and therefore Discover's "Certified" pill read (loom-data-products-search
+    // `certification:`), and the only certification signal the editor header had.
+    // That field is written nowhere else but certify/revoke, so without this a
+    // product whose rules all fail kept a green Certified pill at the point of
+    // discovery forever: the literal headline of #3493, surviving the fix for it.
+    // `state.certification` — the SIGN-OFF — is deliberately NOT touched: it
+    // holds `certifiedBy`, which is what lets `deriveCertificationState` restore
+    // `certified` once the rules pass again, with no second signature.
     if (action === 'measure-dq') {
-      const dq = await measureCertificationDq(session.claims.oid, item);
-      const measurement = toDqMeasurement(dq, session.claims.oid);
+      const dq = await measureCertificationDq(item);
+      const patch = dqMeasurementPatch(item, dq, session.claims.oid);
+      const evaluation = evaluateCertification(gatherCertInputs(item, dq.dqScore));
       const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, {
-        state: { ...state, [DQ_MEASUREMENT_KEY]: measurement },
+        state: { ...state, ...patch },
       });
       if (!updated) return jerr('Cosmos write to record the DQ measurement failed', 500);
       void writeAudit(id, 'data-product-dq-measured', session.claims.oid, session.claims.upn,
-        `score=${dq.dqScore ?? 'null'} rules=${dq.dqResult?.passingRules ?? 0}/${dq.dqResult?.ruleCount ?? 0}`);
+        `score=${dq.dqScore ?? 'null'} rules=${dq.dqResult?.passingRules ?? 0}/${dq.dqResult?.ruleCount ?? 0} state=${patch.certificationState}`);
+      // Re-project discovery so the pill and the tab cannot disagree.
+      try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
       return NextResponse.json({
         ok: true,
+        certification: { state: patch.certificationState, score: evaluation.score },
+        checks: evaluation.checks,
+        certifiable: evaluation.certifiable,
         dq: {
           score: dq.dqScore,
           gate: dq.dqGate,
@@ -124,7 +139,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           ruleCount: dq.dqResult?.ruleCount ?? 0,
           passingRules: dq.dqResult?.passingRules ?? 0,
           breakdown: dq.dqResult?.breakdown ?? [],
-          measuredAt: measurement.measuredAt,
+          measuredAt: patch.dqMeasurement.measuredAt,
           stale: false,
         },
       });
@@ -132,7 +147,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     // ── Revoke — drop a prior sign-off back to the automated rung ───────────
     if (action === 'revoke') {
-      const dq = await measureCertificationDq(session.claims.oid, item);
+      const dq = await measureCertificationDq(item);
       const evaluation = evaluateCertification(gatherCertInputs(item, dq.dqScore));
       const record: CertificationRecord = {
         state: evaluation.validated ? 'validated' : 'draft',
@@ -168,7 +183,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // gates rather than passes (#3493). A failing check returns 422 with the
     // precise blockers — and NO write: a refused sign-off records nothing, so the
     // fresh reading is returned inline for the panel instead of being persisted.
-    const dq = await measureCertificationDq(session.claims.oid, item);
+    const dq = await measureCertificationDq(item);
     const { dqScore, dqGate, dqGateId, dqMissing } = dq;
     const evaluation = evaluateCertification(gatherCertInputs(item, dqScore));
     if (!evaluation.certifiable) {

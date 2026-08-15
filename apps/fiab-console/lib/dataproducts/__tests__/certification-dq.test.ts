@@ -21,6 +21,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const executeQuery = vi.fn();
 const tenantRead = vi.fn();
+/** Records which tenant's rule document was opened — the finding-1 receipt. */
+const tenantDocIds: string[] = [];
+const workspaceQuery = vi.fn();
 
 vi.mock('@/lib/azure/kusto-client', () => ({
   executeQuery: (...a: any[]) => executeQuery(...a),
@@ -32,14 +35,21 @@ vi.mock('@/lib/azure/kusto-client', () => ({
 }));
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
-  tenantSettingsContainer: async () => ({ item: () => ({ read: tenantRead }) }),
+  tenantSettingsContainer: async () => ({
+    item: (docId: string) => { tenantDocIds.push(docId); return { read: tenantRead }; },
+  }),
+  workspacesContainer: async () => ({
+    items: { query: () => ({ fetchAll: workspaceQuery }) },
+  }),
 }));
 
 import {
   measureCertificationDq, readCertificationDq, toDqMeasurement, resolveDqTarget,
-  isDqMeasurementStale, DQ_GATE, DQ_ADX_GATE_ID, DQ_MEASUREMENT_KEY,
+  isDqMeasurementStale, dqMeasurementPatch,
+  DQ_GATE, DQ_ADX_GATE_ID, DQ_MEASUREMENT_KEY,
   DQ_MEASUREMENT_STALE_MS, DQ_MAX_PERSISTED_BREAKDOWN,
 } from '../certification-dq';
+import { computeDqScore } from '@/lib/azure/data-quality-client';
 
 /** Single-row KQL result in the shape `firstNumber` reads. */
 function oneRow(map: Record<string, unknown>) {
@@ -54,8 +64,14 @@ function oneRow(map: Record<string, unknown>) {
   };
 }
 
-/** A data product bound to the `sales` ADX table. */
-const PRODUCT = { state: { datasets: [{ name: 'sales' }], databaseName: 'salesdb' } };
+/** A data product bound to the `sales` ADX table, in the OWNER's workspace. */
+const PRODUCT = {
+  workspaceId: 'ws-1',
+  state: { datasets: [{ name: 'sales' }], databaseName: 'salesdb' },
+};
+
+/** The tenant that owns `ws-1` — never the oid of whoever is calling. */
+const OWNER_TENANT = 'owner-tenant';
 
 /** Two ENABLED rules scoped to the product's table. */
 const TWO_RULES = [
@@ -75,6 +91,9 @@ const SAVED_ADX_URI = process.env.LOOM_KUSTO_CLUSTER_URI;
 beforeEach(() => {
   executeQuery.mockReset();
   tenantRead.mockReset();
+  tenantDocIds.length = 0;
+  workspaceQuery.mockReset();
+  workspaceQuery.mockResolvedValue({ resources: [{ tenantId: OWNER_TENANT }] });
   process.env.LOOM_KUSTO_CLUSTER_URI = 'https://adx-test.eastus2.kusto.windows.net';
 });
 
@@ -89,7 +108,7 @@ describe('measureCertificationDq — the score reflects PASSING rules', () => {
     // r1 measured 10% against a 95% threshold; r2 20% against 99% — both fail.
     executeQuery.mockResolvedValueOnce(oneRow({ pct: 10 })).mockResolvedValueOnce(oneRow({ pct: 20 }));
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBe(0);
     expect(dq.dqGate).toBeNull();
@@ -103,7 +122,7 @@ describe('measureCertificationDq — the score reflects PASSING rules', () => {
     stubRules(TWO_RULES);
     executeQuery.mockResolvedValueOnce(oneRow({ pct: 99 })).mockResolvedValueOnce(oneRow({ pct: 100 }));
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBe(100);
     expect(dq.dqResult!.passingRules).toBe(2);
@@ -116,7 +135,7 @@ describe('measureCertificationDq — the score reflects PASSING rules', () => {
     // passing rules — the same defect in a different coat.
     executeQuery.mockResolvedValueOnce(oneRow({ pct: 80 })).mockResolvedValueOnce(oneRow({ pct: 80 }));
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqResult!.score).toBe(80); // the measured mean
     expect(dq.dqScore).toBe(0); // what certification consumes
@@ -126,7 +145,7 @@ describe('measureCertificationDq — the score reflects PASSING rules', () => {
     stubRules(TWO_RULES);
     executeQuery.mockResolvedValueOnce(oneRow({ pct: 100 })).mockRejectedValueOnce(new Error('table not found'));
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBe(50); // 1 of 2 rules passing
     expect(dq.dqResult!.breakdown[1].detail).toMatch(/error: table not found/);
@@ -136,7 +155,7 @@ describe('measureCertificationDq — the score reflects PASSING rules', () => {
     stubRules([...TWO_RULES, { id: 'r3', name: 'off', scope: 'column:sales.x', check: 'not-null', threshold: 50, enabled: false }]);
     executeQuery.mockResolvedValueOnce(oneRow({ pct: 99 })).mockResolvedValueOnce(oneRow({ pct: 100 }));
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqResult!.ruleCount).toBe(2);
     expect(dq.dqScore).toBe(100);
@@ -147,7 +166,7 @@ describe('measureCertificationDq — population floor (no measurement is NEVER a
   it('zero rules → null + the no-rules gate, never 100', async () => {
     stubRules([]);
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBeNull();
     expect(dq.dqGate).toBe(DQ_GATE.noRules);
@@ -157,7 +176,7 @@ describe('measureCertificationDq — population floor (no measurement is NEVER a
   it('no rule doc at all (404) → null + the no-rules gate', async () => {
     tenantRead.mockRejectedValue(Object.assign(new Error('not found'), { code: 404 }));
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBeNull();
     expect(dq.dqGate).toBe(DQ_GATE.noRules);
@@ -166,7 +185,7 @@ describe('measureCertificationDq — population floor (no measurement is NEVER a
   it('rules exist but none apply to this product → null + the no-rules gate', async () => {
     stubRules([{ id: 'r9', name: 'other', scope: 'column:other_table.col', check: 'not-null', threshold: 90, enabled: true }]);
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBeNull();
     expect(dq.dqGate).toBe(DQ_GATE.noRules);
@@ -176,7 +195,7 @@ describe('measureCertificationDq — population floor (no measurement is NEVER a
     // A column-scoped check with a table-only scope can never be measured.
     stubRules([{ id: 'r1', name: 'bad scope', scope: 'table:sales', check: 'not-null', threshold: 90, enabled: true }]);
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBeNull();
     expect(dq.dqGate).toBe(DQ_GATE.unscoreable);
@@ -187,7 +206,7 @@ describe('measureCertificationDq — population floor (no measurement is NEVER a
     delete process.env.LOOM_KUSTO_CLUSTER_URI;
     stubRules(TWO_RULES);
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBeNull();
     expect(dq.dqGate).toMatch(/LOOM_KUSTO_CLUSTER_URI/);
@@ -200,7 +219,7 @@ describe('measureCertificationDq — population floor (no measurement is NEVER a
   it('a rule-store failure reports the real cause, never "no rules" (R7)', async () => {
     tenantRead.mockRejectedValue(Object.assign(new Error('Cosmos 503'), { code: 503 }));
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqScore).toBeNull();
     expect(dq.dqGate).toMatch(/Cosmos 503/);
@@ -213,7 +232,7 @@ describe('measureCertificationDq — target resolution', () => {
     stubRules(TWO_RULES);
     executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
 
-    await measureCertificationDq('tenant-1', PRODUCT);
+    await measureCertificationDq(PRODUCT);
 
     expect(executeQuery.mock.calls[0][0]).toBe('salesdb');
   });
@@ -222,9 +241,51 @@ describe('measureCertificationDq — target resolution', () => {
     stubRules(TWO_RULES);
     executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
 
-    await measureCertificationDq('tenant-1', { state: { datasets: [{ name: 'sales' }] } });
+    await measureCertificationDq({ workspaceId: 'ws-1', state: { datasets: [{ name: 'sales' }] } });
 
     expect(executeQuery.mock.calls[0][0]).toBe('loomdb-default');
+  });
+});
+
+/**
+ * WHOSE rules ran. `loadOwnedItem` gates on workspace WRITE access, not
+ * ownership, so every measure site passing `session.claims.oid` scored a
+ * collaborator's (usually empty) rule set against the owner's tables — and once
+ * the measurement became persisted state, wrote that onto the owner's product.
+ * The tenant is no longer a parameter; it is resolved from the item's workspace.
+ */
+describe('measureCertificationDq — the OWNER tenant supplies the rules, never the caller', () => {
+  it('loads the rule document of the workspace owner', async () => {
+    stubRules(TWO_RULES);
+    executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
+
+    await measureCertificationDq(PRODUCT);
+
+    expect(tenantDocIds).toEqual([`dq-rules:${OWNER_TENANT}`]);
+  });
+
+  it('an unresolvable owner measures NOTHING and records no reading', async () => {
+    // Workspace row missing / Cosmos unavailable. Falling back to the caller is
+    // exactly the defect; a guess written to someone else's product is worse
+    // than no answer (deploy-integrity R7).
+    workspaceQuery.mockResolvedValue({ resources: [] });
+    stubRules(TWO_RULES);
+
+    const dq = await measureCertificationDq(PRODUCT);
+
+    expect(dq.dqScore).toBeNull();
+    expect(dq.dqGate).toBe(DQ_GATE.ownerTenant);
+    expect(tenantDocIds).toEqual([]);
+    expect(executeQuery).not.toHaveBeenCalled();
+  });
+
+  it('an item with no workspace does not fall through to a default tenant', async () => {
+    stubRules(TWO_RULES);
+
+    const dq = await measureCertificationDq({ state: PRODUCT.state });
+
+    expect(dq.dqGate).toBe(DQ_GATE.ownerTenant);
+    expect(executeQuery).not.toHaveBeenCalled();
   });
 });
 
@@ -322,7 +383,7 @@ describe('toDqMeasurement — what the write persists', () => {
     stubRules(TWO_RULES);
     executeQuery.mockResolvedValueOnce(oneRow({ pct: 99 })).mockResolvedValueOnce(oneRow({ pct: 100 }));
 
-    const measured = await measureCertificationDq('tenant-1', PRODUCT);
+    const measured = await measureCertificationDq(PRODUCT);
     const back = readCertificationDq({ state: { [DQ_MEASUREMENT_KEY]: toDqMeasurement(measured, 'oid-1') } });
 
     expect(back.dqScore).toBe(measured.dqScore);
@@ -337,7 +398,7 @@ describe('toDqMeasurement — what the write persists', () => {
     stubRules(many);
     executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
 
-    const rec = toDqMeasurement(await measureCertificationDq('tenant-1', PRODUCT));
+    const rec = toDqMeasurement(await measureCertificationDq(PRODUCT));
 
     expect(rec.ruleCount).toBe(many.length);
     expect(rec.passingRules).toBe(many.length);
@@ -349,13 +410,70 @@ describe('toDqMeasurement — what the write persists', () => {
     delete process.env.LOOM_KUSTO_CLUSTER_URI;
     stubRules(TWO_RULES);
 
-    const rec = toDqMeasurement(await measureCertificationDq('tenant-1', PRODUCT), 'oid-1');
+    const rec = toDqMeasurement(await measureCertificationDq(PRODUCT), 'oid-1');
 
     expect(rec.score).toBeNull();
     expect(rec.gateId).toBe(DQ_ADX_GATE_ID);
     expect(rec.gate).toMatch(/LOOM_KUSTO_CLUSTER_URI/);
     expect(rec.measuredAt).toBeTruthy();
     expect(rec.measuredBy).toBe('oid-1');
+  });
+});
+
+/**
+ * `certificationState` is the DISCOVERY badge — the field the marketplace search
+ * doc projects as `certification` and Discover renders as a green pill. It is
+ * written only by certify/revoke, so a measurement that did not reconcile it
+ * left a certified pill over failing data at the point of discovery: the literal
+ * headline of #3493, surviving the fix for it.
+ */
+describe('dqMeasurementPatch — the badge is reconciled with the reading', () => {
+  /** Fully certifiable except for DQ, and already signed off by a reviewer. */
+  const CERTIFIED = {
+    workspaceId: 'ws-1',
+    description: 'x'.repeat(60),
+    state: {
+      owners: [{ id: 'o1' }], useCase: 'y'.repeat(40), glossaryLinks: [{ name: 'g' }],
+      datasets: [{ name: 'sales' }], databaseName: 'salesdb',
+      contract: { schema: [{ name: 'c' }], slo: { freshness: '1d' } },
+      accessPolicy: { tier: 'a' }, sampleData: { rows: 5 },
+      certification: {
+        state: 'certified', score: 100,
+        certifiedBy: { oid: 'reviewer' }, certifiedAt: '2026-07-01T00:00:00.000Z',
+      },
+      certificationState: 'certified',
+    },
+  };
+
+  it('DOWNGRADES the badge when the measured rules fail', async () => {
+    stubRules(TWO_RULES);
+    executeQuery.mockResolvedValueOnce(oneRow({ pct: 10 })).mockResolvedValueOnce(oneRow({ pct: 20 }));
+
+    const patch = dqMeasurementPatch(CERTIFIED, await measureCertificationDq(CERTIFIED), 'oid-1');
+
+    expect(patch.dqMeasurement.score).toBe(0);
+    expect(patch.certificationState).toBe('validated');
+  });
+
+  it('RESTORES the badge when they pass again — no second signature', async () => {
+    stubRules(TWO_RULES);
+    executeQuery.mockResolvedValueOnce(oneRow({ pct: 99 })).mockResolvedValueOnce(oneRow({ pct: 100 }));
+
+    const patch = dqMeasurementPatch(CERTIFIED, await measureCertificationDq(CERTIFIED), 'oid-1');
+
+    expect(patch.dqMeasurement.score).toBe(100);
+    expect(patch.certificationState).toBe('certified');
+  });
+
+  it('never touches the sign-off record — that is what makes restoring possible', async () => {
+    stubRules([]);
+
+    const patch = dqMeasurementPatch(CERTIFIED, await measureCertificationDq(CERTIFIED), 'oid-1');
+
+    expect(Object.keys(patch).sort()).toEqual(['certificationState', 'dqMeasurement']);
+    expect(patch.certificationState).toBe('validated');
+    // The reviewer's signature survives verbatim in state.certification.
+    expect((CERTIFIED.state.certification as any).certifiedBy.oid).toBe('reviewer');
   });
 });
 
@@ -373,7 +491,7 @@ describe('the measurement is bounded — the write path cannot serialise N × 30
       return oneRow({ pct: idx * 5 });
     });
 
-    const dq = await measureCertificationDq('tenant-1', PRODUCT);
+    const dq = await measureCertificationDq(PRODUCT);
 
     expect(dq.dqResult!.breakdown.map((b) => b.ruleId)).toEqual(rules.map((r) => r.id));
     expect(dq.dqResult!.breakdown.map((b) => b.percentage)).toEqual(rules.map((_, i) => i * 5));
@@ -395,8 +513,25 @@ describe('the measurement is bounded — the write path cannot serialise N × 30
       return oneRow({ pct: 100 });
     });
 
-    await measureCertificationDq('tenant-1', PRODUCT);
+    await measureCertificationDq(PRODUCT);
 
     expect(peak).toBeGreaterThan(1);
+  });
+
+  it('a degenerate lane count still EXECUTES the rules (the shared primitive floors it to 1)', async () => {
+    // A hand-rolled lane loop without that floor spawns ZERO workers, leaves the
+    // breakdown fully sparse, and returns "ruleCount: n, passingRules: 0,
+    // score: null" — reporting "rules ran but produced no measurement" for a run
+    // that executed nothing at all (deploy-integrity R7). Unreachable via
+    // measureCertificationDq's fixed constant, so it is pinned at the scorer.
+    stubRules(TWO_RULES);
+    executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
+
+    const r = await computeDqScore('t', 'salesdb', ['sales'], { concurrency: Number.NaN });
+
+    expect(executeQuery).toHaveBeenCalledTimes(2);
+    expect(r.ruleCount).toBe(2);
+    expect(r.passingRules).toBe(2);
+    expect(r.breakdown.every((b) => b !== undefined)).toBe(true);
   });
 });

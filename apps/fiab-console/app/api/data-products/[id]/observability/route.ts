@@ -26,7 +26,8 @@ import {
   PurviewError,
 } from '@/lib/azure/purview-client';
 import { adxConfigGate, computeDqScore, runHealthCharts } from '@/lib/azure/data-quality-client';
-import { resolveDqTarget } from '@/lib/dataproducts/certification-dq';
+import { resolveDqTarget, DQ_GATE, DQ_MEASURE_CONCURRENCY } from '@/lib/dataproducts/certification-dq';
+import { resolveOwnerTenantId } from '@/lib/dataproducts/owner-tenant';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -50,9 +51,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const firstDatasetGuid = datasets[0]?.guid || purviewDataProductId || '';
   // ONE shared derivation of the ADX target (certification-dq.resolveDqTarget) —
   // this route's own copy passed a whitespace-only databaseName straight into KQL
-  // instead of falling back to the default database.
+  // instead of falling back to the default database. `databaseTable` had the same
+  // bug one field over, so it is trimmed here too.
   const { database, tableNames } = resolveDqTarget(item);
-  const tableName = (state.databaseTable as string) || tableNames[0] || undefined;
+  const boundTable = typeof state.databaseTable === 'string' ? state.databaseTable.trim() : '';
+  const tableName = boundTable || tableNames[0] || undefined;
 
   const gate: Record<string, { missing: string }> = {};
   // Per-section failure reasons (a slow/failing ADX read degrades only itself).
@@ -87,15 +90,32 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   let healthCharts: Awaited<ReturnType<typeof runHealthCharts>> | null = null;
   let dqScore: Awaited<ReturnType<typeof computeDqScore>> | null = null;
   const adxGate = adxConfigGate();
+  // WHOSE rules. `loadOwnedItem` gates on workspace WRITE access, not ownership,
+  // so `session.claims.oid` here made a collaborator's Observability tab score
+  // the OWNER's tables against the COLLABORATOR's (usually empty) rule set.
+  const ownerTenantId = await resolveOwnerTenantId(item.workspaceId);
   if (adxGate) {
     gate.adx = { missing: adxGate.missing };
+  } else if (!ownerTenantId) {
+    // Health charts do not depend on the rule store, so they still run; only the
+    // score is withheld, with the reason (never a fabricated empty breakdown).
+    healthCharts = await runHealthCharts(database, tableName).catch((e) => {
+      sectionErrors.healthCharts = e?.message || String(e);
+      return null;
+    });
+    sectionErrors.dqScore = DQ_GATE.ownerTenant;
   } else {
     // Health charts and the DQ score are INDEPENDENT ADX reads. Settle them
     // separately so one slow / failing KQL query degrades only its own section
     // (honest per-section error) instead of 502-ing the whole report.
+    //
+    // BOUNDED. This is the one measuring route left, `useObservability` fires it
+    // on MOUNT from two editors, and a tenant with 200 rules would otherwise
+    // serialise 200 KQL queries on a 30 s Kusto budget behind a 30 s client
+    // abort: the gauge times out on every open and the cluster runs them anyway.
     const [healthR, dqR] = await Promise.allSettled([
       runHealthCharts(database, tableName),
-      computeDqScore(session.claims.oid, database, tableNames),
+      computeDqScore(ownerTenantId, database, tableNames, { concurrency: DQ_MEASURE_CONCURRENCY }),
     ]);
     if (healthR.status === 'fulfilled') healthCharts = healthR.value;
     else sectionErrors.healthCharts = healthR.reason?.message || String(healthR.reason);

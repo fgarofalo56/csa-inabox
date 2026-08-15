@@ -31,6 +31,11 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   tenantSettingsContainer: vi.fn(),
   auditLogContainer: vi.fn(async () => ({ items: { create: vi.fn(async () => ({})) } })),
   itemsContainer: vi.fn(),
+  // The DQ rules come from the tenant that OWNS the workspace, resolved here —
+  // never from `session.claims.oid`, which is only the caller (#3499).
+  workspacesContainer: vi.fn(async () => ({
+    items: { query: () => ({ fetchAll: async () => ({ resources: [{ tenantId: 'owner-tenant' }] }) }) },
+  })),
 }));
 vi.mock('@/lib/azure/kusto-client', () => ({
   executeQuery: (...a: any[]) => executeQuery(...a),
@@ -66,7 +71,6 @@ function fullItem(overrides: Record<string, unknown> = {}) {
     },
   } as any;
 }
-
 /** Single-row KQL result in the shape the scorer reads. */
 function oneRow(map: Record<string, unknown>) {
   const columns = Object.keys(map);
@@ -257,6 +261,38 @@ describe('certification refuses a product whose DQ rules do not PASS', () => {
 
     expect(res.status).toBe(422);
     expect((await res.json()).dqGate).toMatch(/LOOM_KUSTO_CLUSTER_URI/);
+    expect(updateOwnedItem).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The enforcement path must MEASURE, never read the stored measurement back.
+   * Nothing pinned that before: no certify fixture carried `state.dqMeasurement`,
+   * so "trust the record" would have failed closed by accident and a later
+   * "prefer a fresh-enough persisted reading" optimisation could re-open #3493
+   * through a side door with the whole suite green.
+   */
+  it('422 even when a PASSING measurement is already on the item — the sign-off re-measures', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'reviewer' } });
+    const item = fullItem({
+      dqMeasurement: {
+        score: 100, meanPercentage: 100, gate: null, gateId: null, missing: [],
+        ruleCount: 2, passingRules: 2, breakdown: [],
+        measuredAt: new Date().toISOString(),
+      },
+    });
+    (loadOwnedItem as any).mockResolvedValue(item);
+    allowSignOffWrite(item);
+    // The rules are FAILING right now — only a live run can know that.
+    stubDqFailing();
+
+    const res = await POST(req({ action: 'certify' }), ctx('dp-1'));
+
+    expect(res.status).toBe(422);
+    const j = await res.json();
+    expect(j.blockers.some((b: any) => b.id === 'dq')).toBe(true);
+    expect(j.blockers.find((b: any) => b.id === 'dq').detail).toMatch(/DQ score 0 is below the 70 bar/);
+    // The stored 100 was not consulted; the rules were actually executed.
+    expect(executeQuery).toHaveBeenCalledTimes(2);
     expect(updateOwnedItem).not.toHaveBeenCalled();
   });
 });
