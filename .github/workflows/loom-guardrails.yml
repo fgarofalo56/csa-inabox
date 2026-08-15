@@ -115,7 +115,7 @@ jobs:
       - name: containerlog-query-scope (a log query must not be able to count its own output)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-containerlog-query-scope.mjs
-      - name: no-freeform (raw-JSON config surfaces)
+      - name: no-freeform (raw-JSON config surfaces + hand-typed infrastructure values)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-no-freeform.mjs
       # `optional` never changed any behaviour — the readiness scorer gives a
