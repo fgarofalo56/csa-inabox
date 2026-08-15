@@ -134,13 +134,74 @@ jobs:
             req: csa_platform/semantic_model/requirements.txt
           - app: csa-unity-catalog-pattern
             req: csa_platform/unity_catalog_pattern/requirements.txt
+          # ---------------------------------------------------------------
+          # The compiled locks (#3485). These got the basename
+          # `requirements.txt` when they moved to
+          # requirements/locks/<extra>/requirements.txt so Trivy and Syft would
+          # finally parse them — which also made them match this workflow's
+          # `**/requirements.txt` trigger. They are resolved rather than
+          # excluded because they are the artifact most likely to be internally
+          # inconsistent, and because being hash-pinned makes this the
+          # strongest check available: `--dry-run` in hash-checking mode proves
+          # every pin still EXISTS upstream and its hash still matches, which
+          # nothing else asserts.
+          #
+          # THEY RUN ON 3.12, AND THAT IS NOT A PREFERENCE. Measured on
+          # 2026-08-15 across all ten: 10/10 resolve on python:3.12-slim,
+          # 9/10 on 3.11. `copilot` fails on 3.11 with
+          #     ERROR: In --require-hashes mode, all requirements must have
+          #     their versions pinned with ==. These do not: backports.tarfile
+          # because `jaraco-context` requires `backports.tarfile` only on
+          # python_version < "3.12", so a lock compiled on 3.12 correctly omits
+          # it and hash-checking mode then has nothing pinned to install. That
+          # is the lock being RIGHT for its target, not a defect: pip-compile
+          # runs in python:3.12-slim (scripts/update-locks.sh) and the shipped
+          # portal image is FROM the same 3.12 digest. Resolving them on 3.11
+          # would assert a property they do not claim and would red main for a
+          # non-defect.
+          - app: lock-base
+            req: requirements/locks/base/requirements.txt
+            python: '3.12'
+          - app: lock-bff
+            req: requirements/locks/bff/requirements.txt
+            python: '3.12'
+          - app: lock-copilot
+            req: requirements/locks/copilot/requirements.txt
+            python: '3.12'
+          - app: lock-dev
+            req: requirements/locks/dev/requirements.txt
+            python: '3.12'
+          - app: lock-functions
+            req: requirements/locks/functions/requirements.txt
+            python: '3.12'
+          - app: lock-governance
+            req: requirements/locks/governance/requirements.txt
+            python: '3.12'
+          - app: lock-platform
+            req: requirements/locks/platform/requirements.txt
+            python: '3.12'
+          - app: lock-portal
+            req: requirements/locks/portal/requirements.txt
+            python: '3.12'
+          - app: lock-postgres
+            req: requirements/locks/postgres/requirements.txt
+            python: '3.12'
+          - app: lock-streaming
+            req: requirements/locks/streaming/requirements.txt
+            python: '3.12'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - name: Set up Python 3.11
+      # 3.11 remains the default because every APP Dockerfile is
+      # `python:3.11-slim`; a row opts into another interpreter only when the
+      # file it resolves targets one, which the compiled locks do (3.12).
+      # Resolving a pin set on the wrong interpreter produces a verdict that is
+      # real and not about the thing — the defect class this workflow exists to
+      # close.
+      - name: Set up Python ${{ matrix.python || '3.11' }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python || '3.11' }}
 
       - name: Resolve ${{ matrix.req }}
         run: |
