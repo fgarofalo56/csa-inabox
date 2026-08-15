@@ -28,6 +28,7 @@ import {
   readArgs,
   matchBracket,
   selfTest,
+  judge,
   CONTROLS,
   TOUCH_EXEMPT,
   collect,
@@ -72,6 +73,10 @@ function withMutation(file, from, to, fn) {
     writeFileSync(file, original);
   }
 }
+
+/** One full-tree scan shared by every test that only needs the measurement. */
+let MEASURED = null;
+const measured = () => (MEASURED ??= collect());
 
 // ───────────────────────────────────────────────────────────────────────────
 // import hygiene
@@ -213,6 +218,83 @@ test('reading the PATH half of the request URL is never a violation', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// review round 2 — the shapes that evaded the first rewrite
+// ───────────────────────────────────────────────────────────────────────────
+
+test('a SAFE base argument means argument 0 is irrelevant — the guard must not punish its own remediation', () => {
+  // The path-preserving fix re-bases the request path onto externalOrigin().
+  // The first rewrite fell through the base branch into the one-argument rule
+  // and flagged it, so the boy-scout rule would have forced 28 files to write
+  // a construction the guard then rejected.
+  for (const remediation of [
+    'const u = new URL(new URL(req.url).pathname, externalOrigin(req.headers)).href;',
+    'const v = new URL(req.nextUrl.pathname + req.nextUrl.search, externalOrigin(req.headers)).toString();',
+    "const w = new URL(new URL(req.url).pathname + new URL(req.url).search, externalOrigin(req.headers));",
+  ])
+    assert.deepEqual(findViolations(remediation), [], remediation);
+
+  // …and an UNSAFE base is still caught, so the fix did not just disable the rule.
+  assert.equal(findViolations("const u = new URL('/x', req.url);").length, 1);
+  assert.equal(findViolations('const u = new URL(new URL(req.url).pathname, req.url);').length, 1);
+});
+
+test('OPTIONAL CHAINING on the root does not hide it — one character defeated the whole analysis', () => {
+  // Live house style in the scanned tree: monitor/alerts:79 uses `req?.url`;
+  // monitor/{health,diagnostics,inventory} and foundry/agents use
+  // `req?.nextUrl?.`. Every one is a PATH-half read today — one word from
+  // invisible.
+  for (const bad of [
+    'const o = new URL(req?.url).origin;',
+    'const o = req?.nextUrl.origin;',
+    'const h = request?.nextUrl?.href;',
+    'const o = req.nextUrl?.origin;',
+    "const u = new URL('/x', req?.url);",
+  ])
+    assert.equal(findViolations(bad).length > 0, true, bad);
+
+  for (const good of [
+    'const p = new URL(req?.url).pathname;',
+    "const q = req?.nextUrl?.searchParams.get('id');",
+  ])
+    assert.deepEqual(findViolations(good), [], good);
+});
+
+test('DESTRUCTURING is followed — one identifier apart from the idiom used in ten files', () => {
+  assert.equal(findViolations('const { origin } = new URL(req.url);').length, 1);
+  assert.equal(findViolations('const { origin } = req.nextUrl;').length, 1);
+  assert.equal(findViolations('const { host, pathname } = new URL(req.url);').length, 1);
+  assert.deepEqual(findViolations('const { searchParams } = new URL(req.url);'), []);
+  assert.deepEqual(findViolations('const { pathname, searchParams } = req.nextUrl;'), []);
+});
+
+test('all four helper declaration forms are followed — #3500 was a helper', () => {
+  const body = '{ return new URL(url).origin; }';
+  const forms = [
+    `function originOf(url: string) ${body}`,
+    `const originOf = (url: string) => ${body}`,
+    `const originOf = function (url) ${body}`,
+    `const H = { originOf(url) ${body} };`,
+  ];
+  for (const decl of forms) {
+    const call = decl.startsWith('const H') ? 'H.originOf(req.url)' : 'originOf(req.url)';
+    assert.equal(findViolations(`${decl}\nconst o = ${call};`).length, 1, decl);
+    assert.deepEqual(
+      findViolations(`${decl}\nconst o = ${call.replace('req.url', 'externalOrigin(req.headers)')};`),
+      [],
+      `${decl} — called only with a SAFE value`,
+    );
+  }
+});
+
+test('`req.nextUrl.clone()` keeps carrying the authority — the canonical Next redirect idiom, and #3442', () => {
+  assert.equal(
+    findViolations("const u = req.nextUrl.clone();\nu.pathname = '/x';\nreturn NextResponse.redirect(u);").length,
+    1,
+  );
+  assert.equal(findViolations('const u = req.nextUrl.clone();\nconst o = u.origin;').length, 1);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // END-TO-END: re-break the real routes #3500 fixed
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -236,7 +318,6 @@ test('#3467 REPRODUCED — re-breaking iceberg/connect with the SINGLE-ARGUMENT 
       assert.match(out, /catalog[/\\]iceberg[/\\]connect[/\\]route\.ts/);
     },
   );
-  assert.equal(run().code, 0, 'restore failed — the tree is left dirty');
 });
 
 test('#3500 REPRODUCED — re-breaking lakehouse/interop through a HELPER fails the guard', () => {
@@ -258,7 +339,6 @@ test('#3500 REPRODUCED — re-breaking lakehouse/interop through a HELPER fails 
   } finally {
     writeFileSync(LAKEHOUSE_INTEROP, original);
   }
-  assert.equal(run().code, 0, 'restore failed — the tree is left dirty');
 });
 
 test('#3443 REPRODUCED — re-breaking flightsql/connect with req.nextUrl.origin fails the guard', () => {
@@ -267,7 +347,6 @@ test('#3443 REPRODUCED — re-breaking flightsql/connect with req.nextUrl.origin
     assert.equal(code, 1, `the guard did NOT catch the re-broken route — it is blind.\n${out}`);
     assert.match(out, /flightsql[/\\]connect[/\\]route\.ts/);
   });
-  assert.equal(run().code, 0, 'restore failed — the tree is left dirty');
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -275,7 +354,7 @@ test('#3443 REPRODUCED — re-breaking flightsql/connect with req.nextUrl.origin
 // ───────────────────────────────────────────────────────────────────────────
 
 test('the measured population is real — `0 violations` is distinguishable from `0 files scanned`', () => {
-  const { files, current, detail, withCtor } = collect();
+  const { files, current, detail, withCtor } = measured();
   assert.ok(files.length > 4500, `only ${files.length} tracked files enumerated`);
   assert.ok(withCtor > 150, `only ${withCtor} files still contain \`new URL(\` after masking`);
   assert.ok(detail.length >= 20, `only ${detail.length} sites found — the detector has stopped detecting`);
@@ -288,19 +367,21 @@ test('the measured population is real — `0 violations` is distinguishable from
 
 test('the baseline is count-pinned per file, not file-scoped cover (#3468)', () => {
   const baseline = JSON.parse(readFileSync(BASELINE, 'utf8'));
-  const { current } = collect();
+  const { current } = measured();
   for (const [f, n] of Object.entries(baseline.entries)) {
     assert.ok(n > 0, `${f}: a zero baseline entry is meaningless`);
     assert.ok(f in current, `${f}: baseline entry is STALE — a drained entry is cover for the next violation`);
   }
-  // The pin is what makes it different from the old EXEMPT map: one MORE
-  // violation in an already-baselined file must still fail.
   const testFile = 'apps/fiab-console/app/auth/__tests__/sign-in-redirect-origin.test.ts';
   assert.ok(baseline.entries[testFile] > 0, 'the deliberate-control test file should be baselined, not exempted');
   assert.ok(baseline._owner && baseline._why && baseline._unblock, 'the baseline needs its ownership header');
 });
 
 test('a NEW violation in an already-baselined file still fails (the old EXEMPT `continue` did not)', () => {
+  // Kept END-TO-END rather than moved to judge(), because this is the exact
+  // property that replaces the old file-scoped EXEMPT map — its `continue`
+  // discarded every hit in the file, so a real violation added to the one
+  // exempt file inherited the cover silently.
   const target = app('app', 'auth', '__tests__', 'sign-in-redirect-origin.test.ts');
   const original = readFileSync(target, 'utf8');
   writeFileSync(target, `${original}\n// added by a test\nconst leaked = new URL(req.url).origin;\n`);
@@ -310,21 +391,115 @@ test('a NEW violation in an already-baselined file still fails (the old EXEMPT `
   } finally {
     writeFileSync(target, original);
   }
-  assert.equal(run().code, 0, 'restore failed — the tree is left dirty');
 });
 
-test('a DRAINED baseline entry fails the guard rather than sitting there as cover', () => {
-  // The old guard's one real virtue: a stale exemption is cover for the next
-  // violation in that file. A shrink-only ratchet does not fail on a shrink, so
-  // this has to be enforced separately.
-  const target = app('lib', 'scim', 'respond.ts');
-  withMutation(target, 'return new URL(req.url).origin;', 'return externalOrigin(req.headers);', () => {
-    const { code, out } = run();
-    assert.equal(code, 1, `a fully-drained baseline entry passed — it is now silent cover.\n${out}`);
-    assert.match(out, /no longer contain ANY site/);
-    assert.match(out, /lib[/\\]scim[/\\]respond\.ts/);
-  });
-  assert.equal(run().code, 0, 'restore failed — the tree is left dirty');
+// ───────────────────────────────────────────────────────────────────────────
+// RATCHET PROPERTIES — proven against judge() with a synthetic population.
+//
+// These used to mutate five real tracked files. `withMutation` restores in a
+// `finally`, but a SIGKILL — a CI timeout or an OOM, both with precedent in
+// this repo — would leave the checkout corrupted while ~90 other suites run
+// against it in parallel. There is no live race today; running them in-process
+// removes the class, and the END-TO-END path is still proven by the three
+// real-route reproductions above plus the net-new test.
+// ───────────────────────────────────────────────────────────────────────────
+
+const BASE = () => JSON.parse(readFileSync(BASELINE, 'utf8')).entries;
+/** A population that satisfies every floor, so only the rule under test can fail. */
+const healthy = (current) => ({
+  files: new Array(5598).fill('apps/fiab-console/x.ts'),
+  current,
+  detail: [],
+  withCtor: 233,
+});
+
+/** Run judge() with output captured, so a message can be asserted. */
+function judged(measured, opts = {}) {
+  const lines = [];
+  const { log, error } = console;
+  console.log = (...a) => lines.push(a.join(' '));
+  console.error = (...a) => lines.push(a.join(' '));
+  try {
+    const code = judge(measured, { argv: [], touchedFiles: null, ...opts });
+    return { code, out: lines.join('\n') };
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+}
+
+test('ratchet: the current tree holds, and a per-key RISE fails', () => {
+  const base = BASE();
+  assert.equal(judged(healthy({ ...base })).code, 0, 'the frozen population should hold');
+
+  const key = 'apps/fiab-console/app/auth/__tests__/sign-in-redirect-origin.test.ts';
+  const risen = judged(healthy({ ...base, [key]: base[key] + 1 }));
+  assert.equal(risen.code, 1, 'one MORE violation in a baselined file must fail');
+  assert.match(risen.out, /new violations above the ratchet baseline/);
+});
+
+test('ratchet: a NET-NEW file fails even when the TOTAL is unchanged', () => {
+  // The interesting case for a count ratchet: a global total would be satisfied
+  // by "one fixed, one added". `runRatchet` compares PER KEY, so it is not.
+  // Shrink an existing multi-site file by one (allowed) and add a new file with
+  // one — total 35 either way. No key is DRAINED, so the drain rule stays out
+  // of it and the per-key rise is what has to fail.
+  const base = BASE();
+  const multi = Object.entries(base).find(([, n]) => n > 1)[0];
+  const swapped = { ...base, [multi]: base[multi] - 1, 'apps/fiab-console/app/api/brand/new/route.ts': 1 };
+  assert.equal(
+    Object.values(swapped).reduce((a, b) => a + b, 0),
+    Object.values(base).reduce((a, b) => a + b, 0),
+    'the fixture must keep the total identical or it proves nothing',
+  );
+  const r = judged(healthy(swapped));
+  assert.equal(r.code, 1, 'a net-new file passed because the total was unchanged');
+  assert.match(r.out, /brand[/\\]new[/\\]route\.ts/);
+});
+
+test('ratchet: a partial SHRINK passes, a full DRAIN fails as cover', () => {
+  const base = BASE();
+  const multi = Object.entries(base).find(([, n]) => n > 1)[0];
+  assert.equal(judged(healthy({ ...base, [multi]: base[multi] - 1 })).code, 0, 'a partial fix must not fail');
+
+  const drained = { ...base };
+  delete drained['apps/fiab-console/lib/scim/respond.ts'];
+  const r = judged(healthy(drained));
+  assert.equal(r.code, 1, 'a fully-drained entry is silent cover for the next violation');
+  assert.match(r.out, /no longer contain ANY site/);
+  assert.match(r.out, /lib[/\\]scim[/\\]respond\.ts/);
+});
+
+test('ratchet: the boy-scout rule fires on a touched baselined file, and TOUCH_EXEMPT excuses it', () => {
+  const base = BASE();
+  const touched = 'apps/fiab-console/app/api/openapi.json/route.ts';
+  const r = judged(healthy({ ...base }), { touchedFiles: new Set([touched]) });
+  assert.equal(r.code, 1, 'touching a baselined file without clearing it must fail');
+  assert.match(r.out, /boy-scout/);
+
+  const exempt = [...TOUCH_EXEMPT.keys()][0];
+  assert.equal(
+    judged(healthy({ ...base }), { touchedFiles: new Set([exempt]) }).code,
+    0,
+    'the reasoned touch-exemption should excuse its own file',
+  );
+});
+
+test('the floors fire, and are not satisfiable by a detector that stopped detecting', () => {
+  const base = BASE();
+  // enumeration collapsed
+  assert.equal(judged({ ...healthy({ ...base }), files: ['a.ts'] }).code, 1);
+  // the mask ate the code
+  assert.equal(judged({ ...healthy({ ...base }), withCtor: 0 }).code, 1);
+  // the analyzer found nothing — a ratchet alone would read this as a clean sweep
+  const empty = judged(healthy({}));
+  assert.equal(empty.code, 1, 'zero sites must FAIL, not pass as a shrink');
+  assert.match(empty.out, /the analyzer found only 0 site\(s\)/);
+});
+
+test('the SUITE left the tree clean — every mutation above was restored', () => {
+  const { code, out } = run();
+  assert.equal(code, 0, `the tree is dirty after the mutation proofs.\n${out}`);
 });
 
 test('every touched-file exemption carries a reviewable reason', () => {

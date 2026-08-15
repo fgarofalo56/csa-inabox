@@ -58,15 +58,53 @@
  * local variables, function PARAMETERS at their call sites, and function
  * RETURN values, to a fixpoint.
  *
+ * ── WHAT THE DATAFLOW DOES *NOT* FOLLOW ────────────────────────────────────
+ * Stated here because the claim above is the guard's headline and an unstated
+ * limit reads as coverage. Measured, not assumed:
+ *
+ *   - "Local variables" means a SINGLE-IDENTIFIER `const/let/var` initialiser,
+ *     plus object destructuring. It does NOT follow: a bare re-assignment with
+ *     no declarator (`let o; o = new URL(req.url)` — the AUTHORITY READ is
+ *     still caught at the constructor, so this only loses a later `o.origin`),
+ *     a hop through a container (array/object/Map element), `String(u)`,
+ *     `Object.assign`, spread, a JSON round-trip, a ternary that yields the URL
+ *     itself, a default parameter value, or computed member access `u['origin']`.
+ *   - CROSS-FILE laundering. An imported helper that turns a string into an
+ *     origin is analysed only in ITS OWN file, where its parameter is untainted
+ *     unless a caller in that same file taints it. Worse, `collect()`'s
+ *     prefilter skips files containing neither `new URL(` nor `nextUrl`, so the
+ *     caller is never even read. This matters for the natural triage of the
+ *     baselined population: ~12 of the 35 are the same copy-pasted
+ *     `try { origin = new URL(req.url).origin } catch` block, and extracting a
+ *     shared helper would move all of them out of view. Mitigating, and the
+ *     reason this is a documented limit rather than a silent one: a mass
+ *     extraction drops the total under MIN_LIVE_SITES and the floor fires.
+ *   - THE REQUEST OBJECT ITSELF passed as an untyped argument. `H.urlOf(req)`
+ *     where the parameter is neither named `req`/`request` nor annotated
+ *     `Request` does not make that parameter a request. Both real incidents
+ *     annotated (`proxyCatalogUri(req: Request)`), and widening the NAME
+ *     heuristic further is the wrong direction — see below.
+ *   - `req` / `request` are treated as the inbound request BY NAME, whatever
+ *     their type, file-wide. This repo already names OUTGOING payload objects
+ *     `req` (`lib/azure/fabric-client.ts:972-974, 1203-1204`), so a false
+ *     positive there is possible. It is the conservative direction for a guard
+ *     and the ratchet surfaces it at review; it is recorded rather than fixed
+ *     because narrowing it would lose `withSession(async (req) => …)`, which
+ *     carries no annotation at all.
+ *
  * ── WHAT COUNTS AS A VIOLATION ─────────────────────────────────────────────
  * Deriving an AUTHORITY from a request-derived URL. Specifically:
  *
  *   V-base       new URL(<anything>, <request-derived>)   — the base supplies
- *                the authority, so the whole resulting URL carries it.
+ *                the authority, so the whole resulting URL carries it. When a
+ *                base is PRESENT AND SAFE, argument 0 is irrelevant: that is
+ *                the path-preserving remediation, not a defect.
  *   V-authority  <request-derived URL>.origin|.host|.hostname|.href|.protocol
- *                |.toString()   — read directly, through a local variable,
- *                through a parameter, or through a helper's return value.
- *   V-redirect   redirect(<request-derived URL object>)
+ *                |.toString()   — read directly, through optional chaining,
+ *                through a local variable, through a parameter, through a
+ *                helper's return value, or DESTRUCTURED out of it.
+ *   V-redirect   redirect(<request-derived URL object>) — including the
+ *                `req.nextUrl.clone()` idiom Next's own docs teach.
  *   V-interp     `${<request-derived URL object>}` — stringifies the authority.
  *
  * Reading the PATH half is fine and extremely common — `new URL(req.url)
@@ -391,6 +429,15 @@ function lineOf(src, offset) {
 const AUTHORITY_PROPS = new Set(['origin', 'host', 'hostname', 'href', 'protocol', 'toString', 'toJSON']);
 /** The PATH half. Reading these off a request URL is correct and common. */
 const PATH_PROPS = new Set(['pathname', 'search', 'searchParams', 'hash', 'port', 'username', 'password']);
+/**
+ * Members that return ANOTHER URL carrying the same authority. `clone()` is the
+ * canonical Next.js redirect idiom — `const u = req.nextUrl.clone(); u.pathname
+ * = '/x'; return NextResponse.redirect(u)` — and it is the shape of #3442. It
+ * was in neither table, so `kindOf`'s nextUrl branch fell through to `'str'`
+ * and the clone was never tracked as a URL. Zero occurrences in the tree today;
+ * this is forward-looking, because it is what Next's own docs teach.
+ */
+const URL_PRODUCING_PROPS = new Set(['clone']);
 
 /** Identifiers conventionally holding the inbound request, plus typed params. */
 function requestIdents(code) {
@@ -399,41 +446,91 @@ function requestIdents(code) {
   return set;
 }
 
-/** `function name(…) { … }` and `const name = (…) => { … }` / `=> expr`. */
+/**
+ * Keywords that take a parenthesised head followed by a brace block. Without
+ * this list the method-shorthand matcher below would register `if (cond) {` as
+ * a one-parameter function named `if` and taint its "parameter" everywhere the
+ * block reaches.
+ */
+const NOT_A_FUNCTION_NAME = new Set([
+  'if', 'for', 'while', 'switch', 'catch', 'with', 'do', 'else', 'try', 'finally',
+  'return', 'typeof', 'void', 'delete', 'new', 'await', 'yield', 'in', 'of',
+  'function', 'class', 'extends', 'import', 'export', 'default', 'case', 'super', 'this',
+]);
+
+/**
+ * Locally declared callables, so taint can flow into a PARAMETER at its call
+ * sites and out of a RETURN. Four declaration forms, because "follows the value
+ * through helpers" is this guard's headline claim and #3500 WAS a helper — so a
+ * gap here sits directly on the incident class:
+ *
+ *   function name(…) { … }
+ *   const name = (…) => { … }   /   => expr
+ *   const name = function (…) { … }
+ *   { name(…) { … } }            (object-literal / class method shorthand)
+ *
+ * Body detection is deliberately TIGHT — the `{` (or `=>`) must follow the
+ * parameter list with nothing between but whitespace and a return-type
+ * annotation. The looser "first `{` before the first `;`" it replaced would
+ * register `const x = (a || b) ? { y: 1 } : null;` as a function.
+ */
 function localFunctions(code) {
   const fns = [];
-  const push = (name, lparen) => {
+  const push = (name, lparen, form) => {
+    if (NOT_A_FUNCTION_NAME.has(name)) return;
     const close = matchBracket(code, lparen);
     if (close === -1) return;
     const params = readArgs(code, lparen).args.map((a) =>
       // strip type annotations, defaults and destructuring noise
       (a.text.split(':')[0].split('=')[0].replace(/[{}[\].\s]/g, '') || '').trim(),
     );
-    // body: `{ … }` (function or block-bodied arrow) or an expression body
-    let j = close + 1;
-    while (j < code.length && /[\s:)]/.test(code[j])) j++;
-    // skip a return-type annotation / `=>`
-    const arrow = code.indexOf('=>', close);
+    const after = code.slice(close + 1, close + 400);
     let bodyStart = -1;
     let bodyEnd = -1;
-    const braceFrom = code.indexOf('{', close);
-    const semiFrom = code.indexOf(';', close);
-    if (braceFrom !== -1 && (semiFrom === -1 || braceFrom < semiFrom)) {
-      bodyStart = braceFrom;
-      bodyEnd = matchBracket(code, braceFrom);
-    } else if (arrow !== -1 && (semiFrom === -1 || arrow < semiFrom)) {
-      bodyStart = arrow + 2;
-      bodyEnd = semiFrom === -1 ? code.length : semiFrom;
+    if (form === 'arrow') {
+      const am = after.match(/^\s*(?::[^=;{]*)?=>\s*/);
+      if (!am) return;
+      const at = close + 1 + am[0].length;
+      if (code[at] === '{') {
+        bodyStart = at;
+        bodyEnd = matchBracket(code, at);
+      } else {
+        // expression body — to the next `;` at depth 0
+        let depth = 0;
+        let i = at;
+        for (; i < code.length; i++) {
+          const c = code[i];
+          if (OPEN[c]) depth++;
+          else if (CLOSE[c]) {
+            if (depth === 0) break;
+            depth--;
+          } else if (c === ';' && depth === 0) break;
+        }
+        bodyStart = at;
+        bodyEnd = i;
+      }
+    } else {
+      const bm = after.match(/^\s*(?::[^;={]*)?\{/);
+      if (!bm) return;
+      const at = close + 1 + bm[0].length - 1;
+      bodyStart = at;
+      bodyEnd = matchBracket(code, at);
     }
-    if (bodyStart === -1 || bodyEnd === -1) return;
-    fns.push({ name, params, bodyStart, bodyEnd });
+    if (bodyStart === -1 || bodyEnd === -1 || bodyEnd <= bodyStart) return;
+    fns.push({ name, params, bodyStart, bodyEnd, form });
   };
-  for (const m of code.matchAll(/(?:^|[^\w.$])function\s*\*?\s*(\w+)\s*\(/g)) {
-    push(m[1], m.index + m[0].length - 1);
-  }
-  for (const m of code.matchAll(/(?:const|let|var)\s+(\w+)\s*(?::[^=;\n]*)?=\s*(?:async\s+)?\(/g)) {
-    push(m[1], m.index + m[0].length - 1);
-  }
+
+  for (const m of code.matchAll(/(?:^|[^\w.$])function\s*\*?\s*(\w+)\s*\(/g))
+    push(m[1], m.index + m[0].length - 1, 'function');
+  for (const m of code.matchAll(/(?:const|let|var)\s+(\w+)\s*(?::[^=;\n]*)?=\s*(?:async\s+)?\(/g))
+    push(m[1], m.index + m[0].length - 1, 'arrow');
+  for (const m of code.matchAll(/(?:const|let|var)\s+(\w+)\s*(?::[^=;\n]*)?=\s*(?:async\s+)?function\s*\*?\s*\w*\s*\(/g))
+    push(m[1], m.index + m[0].length - 1, 'function');
+  // method shorthand — only where a member can START: after `{`, `,`, `;` or a
+  // line break. `.catch(` and `foo.bar(` are excluded by the leading class.
+  for (const m of code.matchAll(/(?:^|[{,;\n])\s*(?:async\s+)?(?:get\s+|set\s+)?(\w+)\s*\(/g))
+    push(m[1], m.index + m[0].length - 1, 'method');
+
   return fns;
 }
 
@@ -460,9 +557,33 @@ export function analyze(src) {
   const fns = localFunctions(code);
   const reqAlt = [...req].map((r) => r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 
+  /**
+   * How a callable is invoked. A method shorthand is reached through its owner
+   * (`H.originOf(req.url)`), so the usual "no `.` before the name" guard — which
+   * exists to stop `foo.parse(x)` matching a local `parse` — would make every
+   * object-literal helper uncallable and therefore untaintable.
+   */
+  const methodNames = new Set(fns.filter((f) => f.form === 'method').map((f) => f.name));
+  const callRe = (name, flags = 'g') =>
+    new RegExp(
+      methodNames.has(name)
+        ? `(?:^|[^\\w$])(?:[A-Za-z_$][\\w$]*\\s*\\??\\.\\s*)?${name}\\s*\\(`
+        : `(?:^|[^\\w.$])${name}\\s*\\(`,
+      flags,
+    );
+
   // `<req>.url` (a string) / `<req>.nextUrl` (a URL object) — the roots.
-  const ROOT_STR = new RegExp(`\\b(?:${reqAlt})\\s*\\.\\s*url\\b`);
-  const ROOT_URL = new RegExp(`\\b(?:${reqAlt})\\s*\\.\\s*nextUrl\\b`);
+  //
+  // `\??\.` EVERYWHERE, not `\.`. One character defeated the whole analysis:
+  // `req?.url` and `req?.nextUrl?.origin` returned ZERO hits while
+  // `req.nextUrl?.origin` was caught, so it was an oversight, not a decision.
+  // And it is live house style in the scanned tree — `monitor/alerts:79` uses
+  // `req?.url`; `monitor/{health,diagnostics,inventory}` and `foundry/agents`
+  // use `req?.nextUrl?.`. Every one is a path-half read TODAY, i.e. one word
+  // away from invisible.
+  const DOT = '\\s*\\??\\.\\s*';
+  const ROOT_STR = new RegExp(`\\b(?:${reqAlt})${DOT}url\\b`);
+  const ROOT_URL = new RegExp(`\\b(?:${reqAlt})${DOT}nextUrl\\b`);
 
   /** ident -> [{from,to}] spans in which it holds a request-derived value. */
   const taintedStr = new Map();
@@ -523,21 +644,26 @@ export function analyze(src) {
       const rest = t.slice(close + 1);
       const prop = rest.match(/^\s*\??\.\s*(\w+)/);
       if (!prop) return 'url';
+      if (URL_PRODUCING_PROPS.has(prop[1])) return 'url';
       if (AUTHORITY_PROPS.has(prop[1])) return 'str';
       if (PATH_PROPS.has(prop[1])) return null;
       return 'url';
     }
 
-    let m = t.match(new RegExp(`^\\s*(?:${reqAlt})\\s*\\.\\s*nextUrl\\s*(?:\\??\\.\\s*(\\w+))?`));
+    let m = t.match(new RegExp(`^\\s*(?:${reqAlt})${DOT}nextUrl\\s*(?:\\??\\.\\s*(\\w+))?`));
     if (m) {
       if (!m[1]) return 'url';
+      if (URL_PRODUCING_PROPS.has(m[1])) return 'url';
       if (AUTHORITY_PROPS.has(m[1])) return 'str';
       if (PATH_PROPS.has(m[1])) return null;
       return 'str';
     }
-    if (new RegExp(`^\\s*(?:${reqAlt})\\s*\\.\\s*url\\s*$`).test(t)) return 'str';
+    if (new RegExp(`^\\s*(?:${reqAlt})${DOT}url\\s*$`).test(t)) return 'str';
 
-    m = t.match(/^\s*([A-Za-z_$][\w$]*)\s*\(/);
+    // a call to a local helper — `originOf(x)` or, for a method shorthand,
+    // `H.originOf(x)`. Gated on the name actually being a tainted-returning
+    // local, so an unrelated `foo.parse(x)` cannot match.
+    m = t.match(/^\s*(?:[A-Za-z_$][\w$]*\s*\??\.\s*)?([A-Za-z_$][\w$]*)\s*\(/);
     if (m) {
       if (returnsUrl.has(m[1])) return 'url';
       if (returnsStr.has(m[1])) return 'str';
@@ -547,6 +673,7 @@ export function analyze(src) {
       const at = off + t.indexOf(m[1]);
       if (inSpan(taintedUrl, m[1], at)) {
         if (!m[2]) return 'url';
+        if (URL_PRODUCING_PROPS.has(m[2])) return 'url';
         if (AUTHORITY_PROPS.has(m[2])) return 'str';
         if (PATH_PROPS.has(m[2])) return null;
         return 'url';
@@ -595,7 +722,7 @@ export function analyze(src) {
     //     the reason a syntactic pattern cannot be enough.
     for (const f of fns) {
       if (!f.params.length) continue;
-      const call = new RegExp(`(?:^|[^\\w.$])${f.name}\\s*\\(`, 'g');
+      const call = callRe(f.name);
       for (const m of code.matchAll(call)) {
         const lp = m.index + m[0].length - 1;
         if (lp > f.bodyStart && lp < f.bodyEnd) continue; // recursion
@@ -647,6 +774,15 @@ export function analyze(src) {
       record(m.index, 'base', 'the BASE argument is the request\'s own URL, so the whole result carries the container authority');
       continue;
     }
+    // When a BASE argument is present and SAFE, it — not argument 0 — supplies
+    // the authority, so the one-argument rule below must not run. Without this
+    // line the guard flagged `new URL(new URL(req.url).pathname,
+    // externalOrigin(req.headers))`, which is exactly the shape a path-
+    // preserving FIX takes: the guard would have punished the remediation it
+    // asks for, and the boy-scout rule makes 28 files write it. `kindOf` at the
+    // ctor branch already picked `args[1]` as the base; these two halves of the
+    // analysis had disagreed.
+    if (args.length >= 2) continue;
     if (!isTainted(args[0].text, args[0].start)) continue;
     const rest = code.slice(close + 1, close + 40);
     const prop = rest.match(/^\s*\??\.\s*(\w+)/);
@@ -655,8 +791,30 @@ export function analyze(src) {
   }
 
   // V-authority through `<req>.nextUrl.<authority>`
-  for (const m of code.matchAll(new RegExp(`\\b(?:${reqAlt})\\s*\\.\\s*nextUrl\\s*\\??\\.\\s*(\\w+)`, 'g'))) {
+  for (const m of code.matchAll(new RegExp(`\\b(?:${reqAlt})${DOT}nextUrl\\s*\\??\\.\\s*(\\w+)`, 'g'))) {
     if (AUTHORITY_PROPS.has(m[1])) record(m.index, 'authority', `reads .${m[1]} off req.nextUrl`);
+  }
+
+  // V-authority through DESTRUCTURING — `const { origin } = new URL(req.url)`.
+  // This is already the house idiom for the SAFE half: `const { searchParams }
+  // = new URL(req.url)` appears in ten files (copilot-studio-*, eventhouse,
+  // kql-database/follower, onelake/catalog, setup/regions). One identifier
+  // turns a caught construction into an invisible one, and the declaration
+  // matcher in the fixpoint requires an identifier after `const`, so an object
+  // pattern never tainted anything.
+  for (const m of code.matchAll(/(?:const|let|var)\s*\{([^{}]*)\}\s*(?::[^=;\n]*)?=\s*/g)) {
+    const from = m.index + m[0].length;
+    const fn = enclosing(fns, from);
+    if (kindOf(exprAt(from, fn ? fn.bodyEnd : code.length), from) !== 'url') continue;
+    const patternAt = m.index + m[0].indexOf('{') + 1;
+    for (const p of m[1].matchAll(/(\w+)\s*(?::\s*\w+)?/g)) {
+      if (!AUTHORITY_PROPS.has(p[1])) continue;
+      record(
+        patternAt + p.index,
+        'authority',
+        `destructures .${p[1]} out of a URL built on the request`,
+      );
+    }
   }
 
   // V-authority through a local variable / parameter holding such a URL
@@ -678,7 +836,7 @@ export function analyze(src) {
   // V-authority through a HELPER'S RETURN VALUE — `urlOf(req).origin`, where
   // the constructor lives in the helper and the authority read at the call site.
   for (const name of returnsUrl) {
-    const re = new RegExp(`(?:^|[^\\w.$])${name}\\s*\\(`, 'g');
+    const re = callRe(name);
     for (const m of code.matchAll(re)) {
       const lp = m.index + m[0].length - 1;
       const close = matchBracket(code, lp);
@@ -787,6 +945,47 @@ export const CONTROLS = [
     src: 'const u = new URL(req.url);\nconst o = u.origin;',
     expect: true,
   },
+  // ── #3468 review round 2 — shapes that evaded the first rewrite ─────────
+  {
+    name: 'bad: OPTIONAL CHAINING on the root — `new URL(req?.url).origin` (live house style: monitor/alerts:79)',
+    src: 'const o = new URL(req?.url).origin;',
+    expect: true,
+  },
+  {
+    name: 'bad: optional chaining on nextUrl — `req?.nextUrl.origin`',
+    src: 'const o = req?.nextUrl.origin;',
+    expect: true,
+  },
+  {
+    name: 'bad: optional chaining BOTH hops — `request?.nextUrl?.href` (live in monitor/{health,diagnostics,inventory}, foundry/agents)',
+    src: 'const h = request?.nextUrl?.href;',
+    expect: true,
+  },
+  {
+    name: 'bad: DESTRUCTURED authority — `const { origin } = new URL(req.url)`, one identifier from the safe idiom used in ten files',
+    src: 'const { origin } = new URL(req.url);',
+    expect: true,
+  },
+  {
+    name: 'bad: destructured off req.nextUrl',
+    src: 'const { origin } = req.nextUrl;',
+    expect: true,
+  },
+  {
+    name: 'bad: helper declared as `const name = function (…)`',
+    src: 'const originOf = function (url) { return new URL(url).origin; };\nconst o = originOf(req.url);',
+    expect: true,
+  },
+  {
+    name: 'bad: helper as an object-literal METHOD SHORTHAND, called through its owner',
+    src: 'const H = { originOf(url) { return new URL(url).origin; } };\nconst o = H.originOf(req.url);',
+    expect: true,
+  },
+  {
+    name: 'bad: `req.nextUrl.clone()` then redirect — the canonical Next idiom and the shape of #3442',
+    src: "const u = req.nextUrl.clone();\nu.pathname = '/x';\nreturn NextResponse.redirect(u);",
+    expect: true,
+  },
   {
     name: 'bad: through a helper PARAMETER typed Request',
     src: 'function base(r: Request) { return new URL(r.url).origin; }\nconst o = base(incoming);',
@@ -803,11 +1002,44 @@ export const CONTROLS = [
     expect: true,
   },
   // ── MUST NOT FLAG ──────────────────────────────────────────────────────
+  // THE REMEDIATION ITSELF. When a base argument is present and SAFE, IT
+  // supplies the authority — argument 0 being request-derived is the whole
+  // point of a path-preserving fix. The first rewrite fell through to the
+  // one-argument rule and flagged both of these, so the guard punished the
+  // change it asks for — and the boy-scout rule makes 28 files write it.
+  {
+    name: 'good: REMEDIATION SHAPE — request path re-based onto externalOrigin()',
+    src: 'const u = new URL(new URL(req.url).pathname, externalOrigin(req.headers)).href;',
+    expect: false,
+  },
+  {
+    name: 'good: REMEDIATION SHAPE — path + search re-based onto externalOrigin()',
+    src: 'const v = new URL(req.nextUrl.pathname + req.nextUrl.search, externalOrigin(req.headers)).toString();',
+    expect: false,
+  },
   { name: 'good: externalOrigin(req.headers) as the base', src: "const u = new URL('/x', externalOrigin(req.headers));", expect: false },
   { name: 'good: externalOrigin in a template', src: 'const s = `${externalOrigin(req.headers)}/api/catalog/iceberg`;', expect: false },
   { name: 'good: reading the PATH half is not an authority leak', src: 'const p = new URL(req.url).pathname;', expect: false },
+  { name: 'good: the PATH half through optional chaining too', src: 'const p = new URL(req?.url).pathname;', expect: false },
   { name: 'good: req.nextUrl.searchParams', src: "const q = req.nextUrl.searchParams.get('id');", expect: false },
+  { name: 'good: req?.nextUrl?.searchParams', src: "const q = req?.nextUrl?.searchParams.get('id');", expect: false },
+  {
+    name: 'good: DESTRUCTURED path half — the idiom in ten files, one identifier away from the flagged one',
+    src: 'const { searchParams } = new URL(req.url);',
+    expect: false,
+  },
+  { name: 'good: destructured pathname + searchParams off nextUrl', src: 'const { pathname, searchParams } = req.nextUrl;', expect: false },
   { name: 'good: a URL built on a configured public base', src: "const u = new URL('/x', process.env.LOOM_PUBLIC_BASE_URL);", expect: false },
+  {
+    name: 'good: a helper called ONLY with a safe value is not tainted by existing',
+    src: 'function originOf(url: string) { return new URL(url).origin; }\nconst safe = originOf(externalOrigin(req.headers));',
+    expect: false,
+  },
+  {
+    name: 'good: an unrelated member call must not match a same-named local',
+    src: 'const s = JSON.parse(raw);\nconst p = new URL(req.url).pathname;',
+    expect: false,
+  },
   { name: 'prose in a // comment', src: "// never build new URL('/x', req.url) here", expect: false },
   { name: 'prose in a block comment', src: '/**\n * see new URL(path, req.url) and new URL(req.url).origin\n */\nconst a = 1;', expect: false },
   {
@@ -897,8 +1129,25 @@ function main() {
     );
     return 1;
   }
+  return judge(collect());
+}
 
-  const { files, current, detail, withCtor } = collect();
+/**
+ * The floors + the ratchet, over an ALREADY-MEASURED population. Split out of
+ * main() so the ratchet's properties can be proven against a synthetic
+ * `current` map instead of by mutating tracked source files in a checkout that
+ * ~90 other suites are running against — a SIGKILL mid-test (CI timeout or OOM,
+ * both with precedent here) would otherwise leave the tree corrupted.
+ *
+ * @param {{files:string[], current:Record<string,number>, detail:object[], withCtor:number}} measured
+ * @param {{argv?:string[], baselineFile?:string, touchedFiles?:Set<string>|null}} [opts]
+ * @returns {number} exit code
+ */
+export function judge(
+  { files, current, detail = [], withCtor },
+  { argv = process.argv, baselineFile = BASELINE_FILE, touchedFiles } = {},
+) {
+  const regen = argv.includes('--update-baseline');
 
   // 2. population floors — `0 violations` must be distinguishable from
   //    `0 files scanned` and from `the mask blanked everything`.
@@ -918,7 +1167,7 @@ function main() {
     return 1;
   }
   const total = Object.values(current).reduce((a, b) => a + b, 0);
-  if (total < MIN_LIVE_SITES && !process.argv.includes('--update-baseline')) {
+  if (total < MIN_LIVE_SITES && !regen) {
     console.error(
       `::error::external-origin-urls: the analyzer found only ${total} site(s) (floor ${MIN_LIVE_SITES}). ` +
         'The measured population is 35 and a ratchet only fails on a RISE, so a detector that stopped ' +
@@ -938,7 +1187,7 @@ function main() {
   //    files on every unrelated PR, and an annotation that fires when nothing is
   //    wrong trains reviewers to ignore it. The full population still prints to
   //    the log, so the baselined sites are readable rather than hidden.
-  const { entries: baseline } = loadBaseline(BASELINE_FILE);
+  const { entries: baseline } = loadBaseline(baselineFile);
 
   // A baselined file with ZERO current sites is a dead entry, and a dead entry
   // is cover: the next real violation in that file inherits it silently. The
@@ -948,7 +1197,7 @@ function main() {
   // under --update-baseline, or the regen that REMOVES the stale key could
   // never run.
   const stale = Object.keys(baseline).filter((k) => !(k in current));
-  if (stale.length && !process.argv.includes('--update-baseline')) {
+  if (stale.length && !regen) {
     console.error(
       `::error::external-origin-urls: ${stale.length} baseline entr(ies) no longer contain ANY site: ` +
         `${stale.join(', ')}. A drained entry is cover for the next violation in that file — regen with ` +
@@ -970,11 +1219,12 @@ function main() {
 
   return runRatchet({
     name: 'external-origin-urls',
-    baselineFile: BASELINE_FILE,
+    baselineFile,
     meta: META,
     current,
+    argv,
     touched: {
-      files: gitTouchedFiles({ cwd: REPO_ROOT }),
+      files: touchedFiles !== undefined ? touchedFiles : gitTouchedFiles({ cwd: REPO_ROOT }),
       exempt: TOUCH_EXEMPT,
       message: () =>
         'build this URL on externalOrigin(req.headers) (@/lib/auth/auth-breaker) while you are in the file — ' +
