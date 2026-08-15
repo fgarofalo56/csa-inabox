@@ -174,20 +174,33 @@ export function isPredicateUse(line) {
  * new behaviour is the more correct one. It only differs on text that was never a
  * regex literal, and it is pinned by a test.
  *
- * MEASURED, not assumed, over the tree (corpus from `git ls-files`):
+ * MEASURED, not assumed, over MAIN's tree at the time of the fix (corpus from
+ * `git ls-files`; the count is self-referential, because this file and its test
+ * now carry `[`-bearing examples that themselves differ, so the tree has to be
+ * named):
  *   - the guard's VERDICT is unchanged — 4089 files / 1,045,200 lines in SCAN,
  *     0 files whose scanSource() result differs;
- *   - across 6252 files / 1,411,736 lines, regexLiteralsOn differs on 84, and a
- *     variant carrying ONLY the inner fix differs on 0 — so every one of those
- *     84 is the `[` rule above, on a comment or a string, never a real literal.
+ *   - across 6252 files / 1,411,660 lines, regexLiteralsOn differs on 79, and a
+ *     variant carrying ONLY the inner fix differs on 0 — which attributes every
+ *     one of those 79 to the `[` rule above, mechanically rather than by eye.
+ *     All 79 are comments or strings; none is a real regex literal.
  *
  * KNOWN LIMIT, stated rather than hidden: an unterminated `[` still scans to
  * end-of-line before failing, and every `/` is a start position, so the worst case
- * is QUADRATIC in line length (20k chars: 428ms). That is unchanged by this fix —
- * the pre-fix regex measured the same curve, ~4x per doubling — and it is a
- * different complexity class from the exponential this removes. No length cap is
- * applied on purpose: a guard that silently skips long lines goes quiet, and a
- * quiet guard reads as a clean tree.
+ * is QUADRATIC in line length (20k chars: 428ms). This fix does not change that
+ * COMPLEXITY CLASS — the pre-fix regex measures the same ~4x per doubling — though
+ * it does roughly double the CONSTANT on that shape (20k chars: 155ms before,
+ * 428ms after), which is immaterial here: the longest line in the guard's
+ * population is 4159 chars and regexLiteralsOn over all 1,045,200 of them totals
+ * 97ms.
+ *
+ * No length cap is applied on purpose: a guard that silently skips long lines goes
+ * quiet, and a quiet guard reads as a clean tree. If the quadratic ever does
+ * matter, the answer already ships two files away — `_gate-consumption.mjs` has a
+ * single-pass, non-backtracking regex-literal scanner (an `inClass` flag, no
+ * alternation to backtrack over) doing this exact job in O(n). Swapping to it is a
+ * behaviour change on its own and belongs in its own PR, not smuggled into a
+ * security fix.
  */
 export function regexLiteralsOn(line) {
   const out = [];
@@ -274,7 +287,9 @@ function walk(dir, exts, out = []) {
 // A reintroduced ambiguity in regexLiteralsOn does not make this guard WRONG, it
 // makes it HANG — and a hung CI job reads as an infrastructure flake, not as a
 // defect, so it can burn days before anyone looks at the regex. These controls
-// convert that hang into a named failure in about ten seconds.
+// convert that hang into a named failure with a bounded cost. Measured, guard
+// exit 1: a single-property regression fails in 3.4-6.2s, all three at once in
+// 26s (three fixtures, each retried up to 3x). Healthy: 106ms.
 //
 // TWO CALIBRATION FACTS, both measured rather than assumed:
 //
@@ -287,22 +302,36 @@ function walk(dir, exts, out = []) {
 //      state, which makes the verdict independent of fixture order. Measured
 //      warm on the broken regex, both orders: #757 1.29-1.37s, #758 1.93-2.02s.
 //
-//   2. Each fixture must catch its OWN alternation. #757's input is unambiguous
-//      once the outer `[` rule is in place, so it cannot detect an inner-only
-//      regression, and #758's cannot detect an outer-only one. Both are needed,
-//      and both must be independently over budget — which is what the warming
-//      buys.
+//   2. THERE ARE THREE DISJOINTNESS PROPERTIES, not two, and each fixture only
+//      catches its own. The fix ADDED two exclusions — `\` from the inner
+//      catch-all and `[` from the outer — but the outer catch-all also excludes
+//      `\`, which was already there and is equally load-bearing: it is what
+//      keeps the escape branch the only thing that can consume a top-level
+//      backslash. Nothing tested that third one, and a control that cannot fail
+//      for a third of what it guards is the very defect this file exists to
+//      fix, rebuilt inside its own safety net.
+//
+//      Measured with ONLY that exclusion dropped (`[^/\\\n\[]` -> `[^/\n\[]`),
+//      warm, on `/` + `\`xN. The other two fixtures do not move at all, so
+//      runControls() returned [] in 0ms against an exponential regex:
+//
+//        Node 20.20.2  N=34 56ms   N=38 381ms   N=40 996ms   N=44 7.7s
+//        Node 24.18.0  N=34 59ms   N=38 413ms   N=40 1123ms  N=44 8.5s
+//
+//      (~2.6x per 2 pumps on both.) Fixed, same input at N=40000: 0.34ms.
+//      Fixture three closes it.
 //
 // Healthy cost is 0.00ms (below timer resolution) against a 200ms budget, so the
 // margin is four orders of magnitude and a GC pause cannot manufacture a
 // failure — the more so because a measurement over budget is retried.
 
-/** Inputs the two CodeQL alerts named. Each must FAIL to match — backtracking
+/** One input per disjointness property. Each must FAIL to match — backtracking
  *  is the cost of the failing search, so a fixture with a closing `/` in it
  *  returns fast on the broken regex too and would measure nothing. */
 export const REDOS_FIXTURES = [
-  { why: 'CodeQL #757 — outer alternation, many `[]` after the `/`', input: `/${'[]'.repeat(27)}` },
-  { why: 'CodeQL #758 — inner alternation, many `\\` after the `/[`', input: `/[${'\\'.repeat(42)}` },
+  { why: 'CodeQL #757 — outer catch-all vs the bracket branch (`[`)', input: `/${'[]'.repeat(27)}` },
+  { why: 'CodeQL #758 — inner catch-all vs the escape branch (`\\`)', input: `/[${'\\'.repeat(42)}` },
+  { why: 'outer catch-all vs the escape branch (`\\`)', input: `/${'\\'.repeat(40)}` },
 ];
 
 /** Extraction fixtures, so a "simplification" that silences the timing control

@@ -20,6 +20,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   topLevelAlternatives,
   anchorsOf,
@@ -165,10 +166,26 @@ test('END TO END CONTROL: a comment describing the bug is NOT flagged', () => {
  * regex could not finish (>4s each, killed). CI stayed green only because
  * scanSource() skips lines with no `.test(` / `.match(` / `new RegExp` on them.
  *
- * These tests fail LOUDLY rather than hanging: the fixed regex answers each
- * fixture in ~0.05ms, so the budget sits four orders of magnitude clear of
- * runner noise, and the fixture sizes are picked so that a REGRESSED regex costs
- * ~1-2.5s — detectable, not a hung job.
+ * EVERY TEST IN THIS SECTION MUST FAIL IN BOUNDED TIME, NOT HANG. That is not a
+ * nicety. `loom-guardrails.yml` runs the guard step and `node --test
+ * scripts/ci/__tests__/*.test.mjs` in the SAME job, every step carries
+ * `if: ${{ !cancelled() }}`, and the job's budget is `timeout-minutes: 25`. So a
+ * test file that hangs does not stop at the guard's ~10s failure — it burns the
+ * whole 25 minutes, and GitHub reports the kill as `cancelled`, which in a run
+ * list reads like "superseded by a newer push" rather than "this job died".
+ * The workflow says so in its own comment above that timeout.
+ *
+ * The first cut of this section got that wrong: it asserted on
+ * `'[]'.repeat(100000)`, which is catastrophic on ANY regressed variant, and
+ * node:test's default reporter buffers per file — so against a regressed regex
+ * the run produced ZERO per-test output and was still going at 120s. The two
+ * budget assertions that DID fail never printed. Only sizes near the control's
+ * own fixtures are "over budget but finite"; anything larger is a hang, so the
+ * large-input case now runs in a child process under a hard timeout.
+ *
+ * The fixed regex answers each fixture in ~0.05ms, so the budget sits four
+ * orders of magnitude clear of runner noise, and the fixture sizes are picked so
+ * that a REGRESSED regex costs ~1-2.5s each — detectable, not a hung job.
  */
 
 test('THE #3488 BUG: the CodeQL fixtures answer well inside the budget', () => {
@@ -183,18 +200,45 @@ test('THE #3488 BUG: the CodeQL fixtures answer well inside the budget', () => {
 test('the fixtures must FAIL to match — a fixture that matches proves nothing', () => {
   // Catastrophic backtracking is the cost of the FAILING search. A fixture with
   // a closing '/' in it returns fast on the BROKEN regex too, so it would pass
-  // the timing test while measuring nothing. Both fixtures must find zero.
+  // the timing test while measuring nothing. All three must find zero.
   for (const f of REDOS_FIXTURES) {
     assert.deepEqual(regexLiteralsOn(f.input), [], f.why);
   }
 });
 
+test('there is one fixture per disjointness property, and there are THREE', () => {
+  // The outer catch-all excludes BOTH '[' and '\'. The first cut of this control
+  // covered only two of the three properties, and a mutant that dropped just the
+  // outer backslash exclusion was MISSED — runControls() returned [] in 0ms
+  // against an exponential regex. Each fixture only catches its own property:
+  // #757's input is unambiguous once the '[' rule is in place, so it cannot see
+  // an inner-only regression, and neither of the first two can see this one.
+  assert.equal(REDOS_FIXTURES.length, 3);
+});
+
 test('the crafted input scales: 100k repetitions still returns promptly', () => {
+  // IN A CHILD PROCESS, UNDER A HARD TIMEOUT. A 200k-char catastrophic input
+  // cannot be interrupted from inside this process, so asserting on it in-process
+  // turns a regression into a 25-minute job timeout reported as `cancelled`
+  // instead of a test failure. spawnSync kills the child and we assert on that.
+  //
+  // The backslash payload is built with String.fromCharCode(92) so nothing has to
+  // survive escaping through the -e argument.
+  const url = new URL('../check-regex-anchor.mjs', import.meta.url).href;
+  const code = `
+    import(${JSON.stringify(url)}).then((m) => {
+      m.regexLiteralsOn('/' + '[]'.repeat(100000));
+      m.regexLiteralsOn('/[' + String.fromCharCode(92).repeat(100000));
+      m.regexLiteralsOn('/' + String.fromCharCode(92).repeat(100000));
+      process.exit(0);
+    }).catch((e) => { console.error(e); process.exit(2); });
+  `;
   const t0 = process.hrtime.bigint();
-  regexLiteralsOn(`/${'[]'.repeat(100000)}`);
-  regexLiteralsOn(`/[${'\\'.repeat(100000)}`);
+  const r = spawnSync(process.execPath, ['-e', code], { timeout: 20000, encoding: 'utf8' });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  assert.ok(ms < 1000, `200k-char inputs took ${ms.toFixed(0)}ms`);
+
+  assert.equal(r.signal, null, `killed by the ${20000}ms timeout after ${ms.toFixed(0)}ms — 200k-char inputs did not return, so regexLiteralsOn is backtracking again`);
+  assert.equal(r.status, 0, `child exited ${r.status}: ${r.stderr}`);
 });
 
 test('the embedded control passes on the shipped implementation', () => {
