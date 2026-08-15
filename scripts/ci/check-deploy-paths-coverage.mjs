@@ -144,8 +144,15 @@ export function extractDeploySources(text) {
     // trailing build context on an `az acr build` continuation line
     const ctx = line.match(new RegExp(`^\\s*(${SRC_ROOTS}/[A-Za-z0-9._/-]+)\\s*$`));
     if (ctx) add(ctx[1], 'image-context');
-    // deployed asset: --definition "@path"; if templated (${D}.json) take the dir
-    for (const m of line.matchAll(new RegExp(`--definition\\s+["']?@(${SRC_ROOTS}/[A-Za-z0-9._/\\-\${}]+)`, 'g'))) {
+    // deployed asset: --definition "@path"; if templated (${D}.json) take the dir.
+    // The class carries `{`, `}` and `$` LITERALLY so a templated path survives to
+    // line 150, which slices it back to its literal directory. `-` sits last (a
+    // trailing `-` in a class is literal) and `$` sits before it, away from any
+    // `{`: this whole regex is built from a TEMPLATE literal, where `\$` would be
+    // consumed by the template and the regex would receive a bare `$` — the
+    // js/useless-regexp-character-escape shape (CodeQL #768). Harmless inside a
+    // class, but the next person to move the `$` outside one inherits an anchor.
+    for (const m of line.matchAll(new RegExp(`--definition\\s+["']?@(${SRC_ROOTS}/[A-Za-z0-9._/{}$-]+)`, 'g'))) {
       const p = m[1];
       add(p.includes('${') ? p.slice(0, p.indexOf('${')).replace(/\/$/, '') : p, 'asset');
     }

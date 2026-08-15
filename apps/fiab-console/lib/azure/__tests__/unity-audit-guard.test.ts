@@ -104,6 +104,26 @@ function realSources(): Map<string, string> {
   return new Map(CACHED);
 }
 
+/**
+ * Escape a literal string for embedding in a `new RegExp(...)`.
+ *
+ * The full metacharacter set, matching the repo's existing helper in
+ * `lib/azure/purview-classification-sync.ts` — NOT the ad-hoc `[.[\]/]` this
+ * file used until CodeQL #763/#764 (js/incomplete-sanitization) named it.
+ *
+ * The paths this escapes are compile-time constants, so no untrusted input ever
+ * reached it and the *security* finding was a false positive. The CORRECTNESS
+ * complaint was not: an escape that covers only the metacharacters today's
+ * constants happen to contain silently stops covering them the moment a
+ * transport lands under a path with a `(` or a `+`. That matters most at the
+ * `.not.toMatch` on the finally-check test below — a regex that under-matches
+ * makes a NEGATIVE assertion pass for the wrong reason, which is this repo's
+ * "assertion that cannot fail" class rather than a typo.
+ */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 describe('unity-audit-chokepoint guard — the real tree', () => {
   it('passes on the shipped sources (lib/ + app/ + scripts/, every file)', () => {
     const s = realSources();
@@ -389,7 +409,7 @@ describe('ATTACK: quieter regressions', () => {
     const found = analyzeUnityChokepoint(s).join('\n');
     for (const moved of governance) {
       expect(found, `${moved} grew a raw SQL exit without failing`)
-        .toMatch(new RegExp(`${moved.replace(/[.[\]/]/g, '\\$&')}: \\d+ raw executeStatement\\( exits \\(ratchet: 0\\)`));
+        .toMatch(new RegExp(`${escapeRegExp(moved)}: \\d+ raw executeStatement\\( exits \\(ratchet: 0\\)`));
     }
   });
 
@@ -665,7 +685,7 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
         .toMatch(new RegExp(`${t.recorder}\\( is not called from inside a \`finally\` block of ${t.fn}`));
       // …and the weaker "symbol appears in the file" check did NOT fire, which
       // is what makes this a real regression test for the finally match.
-      expect(found).not.toMatch(new RegExp(`${t.file.replace(/[.[\]/]/g, '\\$&')}: allowlisted`));
+      expect(found).not.toMatch(new RegExp(`${escapeRegExp(t.file)}: allowlisted`));
     }
   });
 });

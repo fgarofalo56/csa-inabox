@@ -366,6 +366,123 @@ export function discoverDeployTemplates(root) {
 // ── az plumbing ──────────────────────────────────────────────────────────────
 
 /**
+ * Characters a Windows command INTERPRETER re-interprets, and which therefore
+ * must never reach one inside an argument.
+ *
+ * This is an ALLOWLIST, not a denylist, because the denylist form is what keeps
+ * failing in this repo: it is only ever as complete as the last person's memory
+ * of cmd.exe's grammar. Everything the real arguments contain is here —
+ * letters, digits, drive letters (`:`), both separators, `.` `_` `-` `,` `@`
+ * `+` `=`, spaces, and the `()[]{}~'` that appear in real Windows paths
+ * (`C:\Program Files (x86)\…`). Everything else fails the guard.
+ *
+ * @see assertInterpreterSafeArgs for the measurements that justify each exclusion.
+ */
+const INTERPRETER_SAFE_ARG = /^[A-Za-z0-9 _.,:@+=\\/()[\]{}~'-]*$/;
+
+/**
+ * Refuse to hand a Windows command interpreter an argument it would re-parse.
+ *
+ * WHY THIS EXISTS (CodeQL #773 js/shell-command-injection-from-environment,
+ * #774 js/indirect-command-line-injection — same line, two different sources).
+ *
+ * On Windows `az` is `az.cmd`, and Node refuses to spawn a `.cmd` directly
+ * (CVE-2024-27980), so the only way to run it is through cmd.exe. cmd.exe then
+ * re-parses the command line — and it does NOT use the CRT quoting rules that
+ * libuv applies when it renders the args array. libuv only wraps an argument in
+ * quotes when it contains whitespace, so an argument with a metacharacter and no
+ * space arrives at cmd.exe naked. MEASURED on 2026-08-14 against this exact
+ * spawn shape (`spawnSync(ComSpec, ['/d','/c','echo', …args])`):
+ *
+ *     args ['C:\repo&echo', 'INJECTED-NO-SPACE']
+ *       → stdout "C:\repo\r\nINJECTED-NO-SPACE\r\n"   ← TWO lines: `echo` ran, then
+ *         a SECOND command ran. One `echo` with two arguments prints ONE line.
+ *     args ['C:\my repo&echo INJECTED-WITH-SPACE']
+ *       → stdout "\"C:\my repo&echo INJECTED-WITH-SPACE\"\r\n"  ← one line, verbatim:
+ *         the space made libuv quote it, and quoted `&` is inert.
+ *     args ['"%LOOM_PROBE%"'] with LOOM_PROBE='& echo INJECTED-VIA-PERCENT'
+ *       → stdout second line "INJECTED-VIA-PERCENT" ← percent expansion happens
+ *         INSIDE quotes and the expanded `&` executes. So `%` is unsafe even quoted.
+ *
+ * i.e. `& | < > ^ " %` (and `!` under delayed expansion) are a live
+ * arbitrary-command-execution primitive in the argument position. This guard's
+ * arguments are `-f <repo path>` and `--outfile <temp path>`; the repo path is
+ * derived from `process.argv[2]` (#774) and the temp path from `os.tmpdir()`,
+ * i.e. `TEMP`/`TMP` (#773). Neither is validated anywhere else.
+ *
+ * FAIL CLOSED, never sanitize. Escaping is what CodeQL flagged the FIRST version
+ * of this function for (js/incomplete-sanitization) and it would be wrong again:
+ * cmd.exe quoting is not backslash-based, so there is no escape to apply. A repo
+ * checked out under a path containing `&` cannot be verified here, and saying so
+ * is the honest outcome — running it anyway is not.
+ *
+ * @param {string[]} args
+ * @throws {Error} naming the offending argument and character.
+ */
+export function assertInterpreterSafeArgs(args) {
+  for (const a of args) {
+    if (typeof a !== 'string') throw new Error(`non-string argument ${JSON.stringify(a)} for the Windows interpreter`);
+    if (INTERPRETER_SAFE_ARG.test(a)) continue;
+    const bad = [...a].filter((c) => !INTERPRETER_SAFE_ARG.test(c));
+    throw new Error(
+      `refusing to run \`az\` through cmd.exe with an argument that cmd.exe would re-parse: ` +
+        `${JSON.stringify(a)} contains ${JSON.stringify(bad.join(''))}.\n` +
+        `  On Windows \`az\` is a .cmd and Node cannot spawn it directly, so the argument list is ` +
+        `re-parsed by cmd.exe; \`& | < > ^ " %\` in that position execute a SECOND command ` +
+        `(measured — see assertInterpreterSafeArgs). There is no correct escaping for it.\n` +
+        `  Run this guard from a path without those characters, or run it on Linux (which needs no ` +
+        `interpreter and takes the plain spawn path).`,
+    );
+  }
+}
+
+/**
+ * The Windows command interpreter to run `az.cmd` through — chosen, not trusted.
+ *
+ * `process.env.ComSpec` names the executable that ACTUALLY RUNS, so a process
+ * that can set it chooses the binary this guard executes (CodeQL #773, the
+ * "uncontrolled absolute path" half — the argument allowlist above does nothing
+ * about it, which is why #773 and #774 are two findings and not one). This
+ * prefers the interpreter derived from `%SystemRoot%` and, either way, accepts
+ * only an existing file actually named `cmd.exe` — so `ComSpec=C:\x\payload.exe`
+ * fails the guard instead of executing.
+ *
+ * @param {Record<string,string|undefined>} [env]
+ * @param {(p: string) => boolean} [exists]
+ * @returns {string} absolute path to cmd.exe
+ * @throws {Error} when neither candidate is a real cmd.exe.
+ */
+export function resolveWindowsInterpreter(env = process.env, exists = (p) => fs.existsSync(p)) {
+  // `path.win32`, EXPLICITLY, not the platform-native `path`. This function
+  // builds and judges a WINDOWS path, and the bare helpers are whatever the
+  // host is: under POSIX semantics `path.join('C:\\Windows','System32','cmd.exe')`
+  // yields `C:\Windows/System32/cmd.exe`, `isAbsolute` on it is FALSE, and
+  // `basename('C:\\x\\payload.exe')` is the WHOLE string — so every candidate is
+  // rejected and the resolver throws. On Windows `path === path.win32`, so this
+  // changes nothing at runtime there; what it changes is that the interpreter
+  // choice becomes DETERMINISTIC and therefore testable off-Windows, which is
+  // the only way the Linux CI lane can cover this security decision at all.
+  const w = path.win32;
+  const candidates = [
+    env.SystemRoot ? w.join(env.SystemRoot, 'System32', 'cmd.exe') : null,
+    env.windir ? w.join(env.windir, 'System32', 'cmd.exe') : null,
+    env.ComSpec || null,
+  ].filter(Boolean);
+  for (const c of candidates) {
+    if (w.basename(c).toLowerCase() !== 'cmd.exe') continue;
+    if (!w.isAbsolute(c)) continue;
+    if (!exists(c)) continue;
+    return c;
+  }
+  throw new Error(
+    `could not resolve a Windows command interpreter. Tried ${JSON.stringify(candidates)}; ` +
+      'each must be an absolute path to an existing file named cmd.exe. ' +
+      '`az` is a .cmd on Windows and Node cannot spawn it directly, so one is required — and this ' +
+      'guard will not execute whatever ComSpec happens to name (CodeQL #773).',
+  );
+}
+
+/**
  * Run `az` with args. NO output is discarded: stderr is captured and surfaced
  * on failure. (`2>/dev/null` on a mutating command is how #2836/#2855 stayed
  * invisible; it does not appear anywhere in this guard.)
@@ -375,18 +492,26 @@ export function discoverDeployTemplates(root) {
 function runAz(args) {
   const opts = { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 };
   // NO SHELL, and NO hand-rolled quoting. On Linux (where CI runs) `az` is a
-  // plain executable and the args array is passed through verbatim. On Windows
-  // `az` is a .cmd, which Node refuses to spawn directly — so go through
-  // cmd.exe with the args STILL as an array, letting Node do the argv quoting.
+  // plain executable and the args array is passed through verbatim — nothing
+  // re-parses it, so there is no injection surface at all.
   //
+  // On Windows `az` is a .cmd, which Node refuses to spawn directly, so it has
+  // to go through cmd.exe — and cmd.exe DOES re-parse the rendered command line.
   // The first version of this escaped `"` by hand for a `shell: true` command
   // string; CodeQL called it js/incomplete-sanitization and was right — that
   // form escapes quotes but not the backslashes before them, and cmd.exe quoting
-  // is not backslash-based anyway. Passing an array removes the question.
-  const res =
-    process.platform === 'win32'
-      ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'az', ...args], opts)
-      : spawnSync('az', args, opts);
+  // is not backslash-based anyway. Passing an array narrowed it but did NOT
+  // remove it: libuv quotes only arguments containing whitespace, so `path&calc`
+  // still reaches cmd.exe as a command separator (measured — see
+  // assertInterpreterSafeArgs). Hence the two guards below, and `/d` to suppress
+  // the AutoRun registry hook, which is a third way into this same interpreter.
+  if (process.platform === 'win32') {
+    const interpreter = resolveWindowsInterpreter();
+    assertInterpreterSafeArgs(['az', ...args]);
+    const res = spawnSync(interpreter, ['/d', '/c', 'az', ...args], opts);
+    return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: res.error };
+  }
+  const res = spawnSync('az', args, opts);
   return {
     status: res.status,
     stdout: res.stdout || '',
