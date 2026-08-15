@@ -83,7 +83,7 @@ vi.mock('@/lib/azure/purview-client', () => ({
 vi.mock('@/lib/marketplace/listing-analytics', () => ({ recordListingView: vi.fn(async () => {}) }));
 
 import { GET as certificationGET } from '../[id]/certification/route';
-import { GET as detailGET } from '../[id]/route';
+import { GET as detailGET, PATCH as detailPATCH, DELETE as detailDELETE } from '../[id]/route';
 import { POST as certifyPOST } from '../[id]/certify/route';
 import { POST as healthActionsPOST } from '../[id]/health-actions/route';
 import { getSession } from '@/lib/auth/session';
@@ -278,6 +278,52 @@ describe('GET /api/data-products/[id] issues no per-rule ADX query', () => {
     expect(j.isOwner).toBe(false);
     expect(j.ownerTenantId).toBe(OWNER_TENANT);
     expect(j.dqScore).toBe(75);
+  });
+});
+
+/**
+ * The auth prologues on this route family. NOTHING pinned them before — the
+ * #3499 guardrail pass migrated all four routes onto the route toolkit
+ * (`withSession`), rewriting six 401 guards, and `check-route-guards` does not
+ * watch these (its remit is authorization on id-addressed point reads, not the
+ * 401). A deleted or de-migrated prologue would otherwise be silent.
+ */
+describe('every migrated handler still refuses an unauthenticated caller', () => {
+  beforeEach(() => {
+    wireCosmos(product());
+    (getSession as any).mockReturnValue(null);
+  });
+
+  it('GET /[id] → 401', async () => {
+    expect((await detailGET({} as any, props('dp-1'))).status).toBe(401);
+  });
+
+  it('PATCH /[id] → 401 and no Cosmos write', async () => {
+    const res = await detailPATCH(req({ updateFrequency: 'Daily' }), props('dp-1'));
+    expect(res.status).toBe(401);
+    expect(updateOwnedItem).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /[id] → 401', async () => {
+    expect((await detailDELETE({} as any, props('dp-1'))).status).toBe(401);
+  });
+
+  it('GET /[id]/certification → 401', async () => {
+    expect((await certificationGET({} as any, props('dp-1'))).status).toBe(401);
+  });
+
+  it('POST /[id]/certify → 401 and nothing measured', async () => {
+    const res = await certifyPOST(req({ action: 'measure-dq' }), props('dp-1'));
+    expect(res.status).toBe(401);
+    expect(executeQuery).toHaveBeenCalledTimes(0);
+    expect(updateOwnedItem).not.toHaveBeenCalled();
+  });
+
+  it('POST /[id]/health-actions → 401 and nothing measured', async () => {
+    const res = await healthActionsPOST(req({ action: 'rerun-dq-check' }), props('dp-1'));
+    expect(res.status).toBe(401);
+    expect(executeQuery).toHaveBeenCalledTimes(0);
+    expect(updateOwnedItem).not.toHaveBeenCalled();
   });
 });
 

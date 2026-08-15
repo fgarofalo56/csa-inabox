@@ -32,7 +32,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
@@ -44,6 +43,7 @@ import {
   measureCertificationDq, toDqMeasurement, dqMeasurementPatch, DQ_MEASUREMENT_KEY,
 } from '@/lib/dataproducts/certification-dq';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,10 +69,8 @@ async function writeAudit(itemId: string, action: string, actorOid: string, acto
   } catch { /* audit is best-effort */ }
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
 
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || '') as Action;
@@ -228,4 +226,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

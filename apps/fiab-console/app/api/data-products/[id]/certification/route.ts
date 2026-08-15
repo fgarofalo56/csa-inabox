@@ -25,7 +25,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -34,6 +33,7 @@ import {
 } from '@/lib/dataproducts/certification';
 import { readCertificationDq } from '@/lib/dataproducts/certification-dq';
 import { apiError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,10 +56,8 @@ async function findItem(itemId: string): Promise<WorkspaceItem | null> {
  *  a product on one screen and refuse it on another. */
 export { gatherCertInputs } from '@/lib/dataproducts/certification';
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return apiError('Unauthorized', 401, { code: 'unauthorized' });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const item = await findItem(id);
     if (!item) return apiError('Data product not found', 404, { code: 'not_found' });
@@ -112,4 +110,4 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e: any) {
     return apiError(e?.message || 'Failed to evaluate certification', 500, { code: 'cosmos_error' });
   }
-}
+});

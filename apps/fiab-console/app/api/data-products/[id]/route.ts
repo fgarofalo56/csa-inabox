@@ -72,10 +72,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { type SessionPayload } from '@/lib/auth/session';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import {
   itemsContainer,
-  workspacesContainer,
   accessRequestsContainer,
   auditLogContainer,
 } from '@/lib/azure/cosmos-client';
@@ -93,7 +93,7 @@ import {
   PurviewNotConfiguredError,
 } from '@/lib/azure/purview-client';
 import { PUBLISH_STATUSES, type PublishStatus } from '@/lib/azure/loom-data-products-search';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { isUpdateFrequency, sanitizeExternalLinks } from '@/lib/dataproducts/attributes';
 import { sanitizeContract } from '@/lib/dataproducts/contract';
 import type { DataProductDoc as EditDoc } from '@/lib/dataproducts/edit-model';
@@ -107,6 +107,7 @@ import {
 import { sanitizePorts, portsSummary } from '@/lib/dataproducts/ports';
 import { apiError } from '@/lib/api/respond';
 import { recordListingView } from '@/lib/marketplace/listing-analytics';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -345,18 +346,33 @@ async function findItem(itemId: string): Promise<WithEtag | null> {
  *  implementation with every DQ measure site — see lib/dataproducts/owner-tenant.ts
  *  for why the caller's oid is never a substitute for it. */
 
-/** Load the data-product item and verify it belongs to the caller's tenant. */
-async function loadOwnedItem(itemId: string, tenantId: string): Promise<WithEtag | null> {
+/**
+ * Load the data product and AUTHORIZE the caller to mutate it.
+ *
+ * Was an owner-only partition point read —
+ * `workspacesContainer().item(item.workspaceId, callerOid)` plus
+ * `resource.tenantId !== tenantId` — which is the shape #2947 ratchets out. The
+ * `workspaces` container is partitioned on `/tenantId` and `Workspace.tenantId`
+ * holds the workspace CREATOR's oid, so that read can only ever answer "did this
+ * caller CREATE the workspace", never "may this caller ACCESS it". A tenant
+ * admin or a write-capable shared-ACL member was refused: for PATCH that is a
+ * live defect, because PATCH replaces the Cosmos doc directly and this function
+ * IS its authorization. (DELETE also re-checks through `deleteOwnedItem`, whose
+ * access ladder already admitted those callers — so the two disagreed.)
+ *
+ * Now the canonical ladder: owner → tenant admin → write-capable ACL member.
+ * WRITE-scoped deliberately — `allowReadRoles` is NOT passed, so a read-only
+ * Viewer can never mutate through it. 404-not-403 is preserved via the caller's
+ * own wording, so nothing leaks and no error string changes.
+ *
+ * This is the same ownership-vs-access confusion that produced the wrong-tenant
+ * DQ measurement in this PR (lib/dataproducts/owner-tenant.ts), one layer down.
+ */
+async function loadWritableItem(itemId: string, session: SessionPayload): Promise<WithEtag | null> {
   const item = await findItem(itemId);
   if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
+  const denied = await authorizeWorkspace(session, item.workspaceId);
+  if (denied) return null;
   return item;
 }
 
@@ -442,10 +458,8 @@ async function computePreconditions(
   };
 }
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const item = await findItem(id);
     if (!item) return err('Data product not found', 404, 'not_found');
@@ -491,7 +505,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch data product', 500, 'cosmos_error');
   }
-}
+});
 
 /**
  * Merge only the recognised fields. Each is independently optional so the client
@@ -499,10 +513,8 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
  * never holds an invalid frequency / malformed link. Owner-only: loads the item
  * via the tenant-scoped path, so a consumer (non-owner) gets 404 and can't write.
  */
-export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
 
   let body: any;
   try {
@@ -714,7 +726,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   }
 
   try {
-    const item = await loadOwnedItem(id, session.claims.oid);
+    const item = await loadWritableItem(id, session);
     if (!item) return err('Data product not found', 404, 'not_found');
 
     let mergedState: Record<string, unknown> = { ...(item.state ?? {}) };
@@ -819,7 +831,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   } catch (e: any) {
     return err(e?.message || 'Failed to update data product', 500, 'cosmos_error');
   }
-}
+});
 
 /**
  * Precondition-gated delete (F13). Owner-only: loads the item via the
@@ -828,12 +840,10 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
  * success the Cosmos record is the source of truth — Purview cleanup is
  * best-effort and never blocks.
  */
-export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
-    const item = await loadOwnedItem(id, session.claims.oid);
+    const item = await loadWritableItem(id, session);
     if (!item) return err('Data product not found', 404, 'not_found');
 
     const { preconditions, current } = await computePreconditions(item, id);
@@ -905,4 +915,4 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
   } catch (e: any) {
     return err(e?.message || 'Failed to delete data product', 500, 'cosmos_error');
   }
-}
+});

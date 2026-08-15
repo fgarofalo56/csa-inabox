@@ -17,7 +17,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   getLineageSubgraph,
@@ -29,6 +28,7 @@ import { adxConfigGate, computeDqScore, runHealthCharts } from '@/lib/azure/data
 import { resolveDqTarget, DQ_GATE, DQ_MEASURE_CONCURRENCY } from '@/lib/dataproducts/certification-dq';
 import { resolveOwnerTenantId } from '@/lib/dataproducts/owner-tenant';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,11 +37,9 @@ const ITEM_TYPE = 'data-product';
 
 interface Dataset { name?: string; guid?: string; qualifiedName?: string }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
 
-  const { id } = await ctx.params;
+  const { id } = params;
   const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
   if (!item) return NextResponse.json({ ok: false, error: 'data-product item not found' }, { status: 404 });
 
@@ -140,4 +138,4 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     gate: Object.keys(gate).length ? gate : undefined,
     sectionErrors: Object.keys(sectionErrors).length ? sectionErrors : undefined,
   });
-}
+});

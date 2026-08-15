@@ -20,7 +20,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   getLineageSubgraph,
@@ -36,6 +35,7 @@ import {
 } from '@/lib/dataproducts/certification-dq';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,11 +46,9 @@ type HealthAction = (typeof ACTIONS)[number];
 
 interface Dataset { name?: string; guid?: string }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const { id } = await ctx.params;
+  const { id } = params;
   const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
   if (!item) return NextResponse.json({ ok: false, error: 'data-product item not found' }, { status: 404 });
 
@@ -153,4 +151,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     return apiServerError(e);
   }
-}
+});
