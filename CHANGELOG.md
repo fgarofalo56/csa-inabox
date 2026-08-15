@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.97.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.2...csa-inabox-v0.97.3) (2026-08-15)
+
+
+### Bug Fixes
+
+* **ci:** a failing lane deleted its own reason (70% of TAP discarded), and iceberg handed engines the container's address ([#3500](https://github.com/fgarofalo56/csa-inabox/issues/3500)) ([2dda97b](https://github.com/fgarofalo56/csa-inabox/commit/2dda97b40efe5a76550405939f8320a1dd06e842))
+* **ci:** the external-origin guard was blind to the class it polices — 0 violations on a tree with two live defects ([#3532](https://github.com/fgarofalo56/csa-inabox/issues/3532)) ([2208baa](https://github.com/fgarofalo56/csa-inabox/commit/2208baaf01e10afd8d1e40df247267aa2866cf07))
+* **ci:** the resolve gate triggered on 21 requirements files and checked 7, so 14 could pass un-resolved ([#3507](https://github.com/fgarofalo56/csa-inabox/issues/3507)) ([0bf58f5](https://github.com/fgarofalo56/csa-inabox/commit/0bf58f5608bc3a1db3d905c03f46ad50ae363317)), closes [#3497](https://github.com/fgarofalo56/csa-inabox/issues/3497)
+* **governance:** certification counted rules that were ENABLED, not rules that PASSED, so the gate could not fail ([#3499](https://github.com/fgarofalo56/csa-inabox/issues/3499)) ([7cf9a6e](https://github.com/fgarofalo56/csa-inabox/commit/7cf9a6ea5f886d8f0e65e12ad3f99a111a50e128))
+* **security:** a file on disk chose which api.github.com endpoint we called, with our token attached ([#776](https://github.com/fgarofalo56/csa-inabox/issues/776), [#767](https://github.com/fgarofalo56/csa-inabox/issues/767), [#766](https://github.com/fgarofalo56/csa-inabox/issues/766), [#762](https://github.com/fgarofalo56/csa-inabox/issues/762)) ([#3504](https://github.com/fgarofalo56/csa-inabox/issues/3504)) ([63bac9f](https://github.com/fgarofalo56/csa-inabox/commit/63bac9fb28f2901ebbdfcc3b7fb53228d02a7d8a))
+* **security:** the guard about regex anchoring contained a ReDoS, and the payload was already committed ([#3502](https://github.com/fgarofalo56/csa-inabox/issues/3502)) ([aaa1712](https://github.com/fgarofalo56/csa-inabox/commit/aaa17122b9dda245e8c58200a78e1e0cf1589915))
+
 ## [0.97.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.1...csa-inabox-v0.97.2) (2026-08-14)
 
 
