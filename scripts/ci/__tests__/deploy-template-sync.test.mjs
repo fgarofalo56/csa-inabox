@@ -42,12 +42,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ARTIFACTS,
+  assertInterpreterSafeArgs,
   assertLooksLikeArmTemplate,
   compareArtifacts,
   countEscapedCrlf,
   discoverDeployTemplates,
   parseBicepCliVersion,
   parseGeneratorVersion,
+  resolveWindowsInterpreter,
 } from '../check-deploy-template-sync.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -322,3 +324,102 @@ test('discovery FINDS a newly added compiled template (so the coverage check can
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// ── the Windows interpreter hop (CodeQL #773 / #774) ─────────────────────────
+//
+// On Windows this guard cannot spawn `az` directly (it is a .cmd; Node refuses
+// since CVE-2024-27980), so it goes through cmd.exe — which RE-PARSES the
+// command line that libuv rendered. libuv quotes an argument only when it
+// contains whitespace, so a metacharacter in an argument with no space reaches
+// cmd.exe naked. MEASURED 2026-08-14 with the guard's own spawn shape:
+//
+//   ['/d','/c','echo','C:\repo&echo INJ']  → "C:\repo" then "INJ" on a SECOND
+//   line, i.e. a second command ran. One echo with two arguments prints ONE line.
+//
+// The arguments that reach it are `-f <repo path>` (from `process.argv[2]`,
+// #774) and `--outfile <temp path>` (from `os.tmpdir()`, i.e. TEMP/TMP, #773),
+// plus the interpreter itself, taken from `ComSpec` (#773's other half — an
+// argument allowlist does nothing about WHICH BINARY RUNS, which is why these
+// are two findings on one line and not a duplicate pair).
+//
+// These tests are pure and run on every platform, including the ubuntu-latest
+// runner where the win32 branch itself never executes — a check that could only
+// fire on a developer's machine would be a gate with no population in CI.
+
+test('the REAL argument lists this guard builds are accepted', () => {
+  // Exactly what runAz is called with, including a Windows repo path with a
+  // space and parentheses (`C:\Program Files (x86)\…` is a legal checkout root).
+  assertInterpreterSafeArgs(['az', 'bicep', 'version']);
+  assertInterpreterSafeArgs(['az', 'bicep', 'install', '--version', 'v0.45.15']);
+  assertInterpreterSafeArgs([
+    'az', 'bicep', 'build',
+    '-f', 'E:\\Repos\\GitHub\\csa-inabox\\platform\\fiab\\bicep\\main.bicep',
+    '--outfile', 'C:\\Users\\dev\\AppData\\Local\\Temp\\loom-tmplsync-a1b2c3\\compiled.json',
+  ]);
+  assertInterpreterSafeArgs(['az', 'bicep', 'build', '-f', 'C:\\Program Files (x86)\\loom\\main.bicep']);
+  // …and the real ones, on this machine, right now.
+  assertInterpreterSafeArgs(['az', 'bicep', 'build', '-f', path.join(REPO_ROOT, ARTIFACTS[0].source)]);
+  assertInterpreterSafeArgs(['az', 'bicep', 'build', '--outfile', path.join(os.tmpdir(), 'loom-tmplsync-x', 'compiled.json')]);
+});
+
+test('MEASURED PRIMITIVE: every character that executed a second command is REJECTED', () => {
+  // One case per metacharacter cmd.exe acts on in the argument position. `&`
+  // and `%` are the two that were demonstrated executing; the rest are the same
+  // grammar and are refused for the same reason rather than re-derived later.
+  for (const bad of ['&', '|', '<', '>', '^', '"', '%', '\n', '\r', '\t', '!', '`', ';', '*', '?', '\0']) {
+    assert.throws(
+      () => assertInterpreterSafeArgs(['az', 'bicep', 'build', '-f', `C:\\repo${bad}calc.exe\\main.bicep`]),
+      /refusing to run `az` through cmd\.exe/,
+      `${JSON.stringify(bad)} must not reach a command interpreter`,
+    );
+  }
+  // The exact string measured executing a second command.
+  assert.throws(() => assertInterpreterSafeArgs(['C:\\repo&echo', 'INJECTED']), /contains "&"/);
+  // …and the percent form, which expands and executes even INSIDE quotes.
+  assert.throws(() => assertInterpreterSafeArgs(['"%LOOM_PROBE%"']), /contains/);
+});
+
+test('it FAILS CLOSED — it never tries to escape or rewrite the argument', () => {
+  // Escaping is what CodeQL flagged the FIRST version of this code for
+  // (js/incomplete-sanitization): cmd.exe quoting is not backslash-based, so
+  // there is no correct escape. The only safe outcome is to refuse, and the
+  // message has to say what to do instead.
+  let err;
+  try {
+    assertInterpreterSafeArgs(['-f', 'C:\\r&d\\main.bicep']);
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err, 'an unsafe argument must THROW, not be sanitized into a pass');
+  assert.match(err.message, /C:\\\\r&d\\\\main\.bicep/);
+  assert.match(err.message, /run it on Linux/);
+  assert.throws(() => assertInterpreterSafeArgs([42]), /non-string argument/);
+});
+
+test('the interpreter is CHOSEN, not taken from ComSpec (#773)', () => {
+  const exists = (p) => ['C:\\Windows\\System32\\cmd.exe', 'C:\\alt\\cmd.exe', 'C:\\x\\payload.exe'].includes(p);
+  // ComSpec naming something that is not cmd.exe is REFUSED even though it exists…
+  assert.equal(
+    resolveWindowsInterpreter({ SystemRoot: 'C:\\Windows', ComSpec: 'C:\\x\\payload.exe' }, exists),
+    'C:\\Windows\\System32\\cmd.exe',
+  );
+  // …and refused when it is the ONLY candidate, rather than falling through to it.
+  assert.throws(
+    () => resolveWindowsInterpreter({ ComSpec: 'C:\\x\\payload.exe' }, exists),
+    /could not resolve a Windows command interpreter/,
+  );
+  // A real cmd.exe from ComSpec is fine when %SystemRoot% yields nothing.
+  assert.equal(resolveWindowsInterpreter({ ComSpec: 'C:\\alt\\cmd.exe' }, exists), 'C:\\alt\\cmd.exe');
+  // A cmd.exe-named path that does not exist is not executed on faith.
+  assert.throws(() => resolveWindowsInterpreter({ ComSpec: 'C:\\ghost\\cmd.exe' }, exists), /could not resolve/);
+  // A relative path can be resolved against the CWD; refuse it.
+  assert.throws(() => resolveWindowsInterpreter({ ComSpec: 'cmd.exe' }, () => true), /could not resolve/);
+  assert.throws(() => resolveWindowsInterpreter({}, exists), /could not resolve/);
+});
+
+test('on THIS machine the resolved interpreter is a real cmd.exe', { skip: process.platform !== 'win32' }, () => {
+  const p = resolveWindowsInterpreter();
+  assert.equal(path.basename(p).toLowerCase(), 'cmd.exe');
+  assert.ok(fs.existsSync(p), `${p} does not exist`);
+});
+

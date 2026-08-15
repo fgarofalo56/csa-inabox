@@ -79,6 +79,21 @@ test('a templated asset path contributes its literal directory', () => {
   assert.equal(src.get('platform/fiab/grafana'), 'asset');
 });
 
+test('the asset class keeps `-`, `{`, `}` and `$` LITERAL (CodeQL #768 rewrote it)', () => {
+  // #768: the class was written `[A-Za-z0-9._/\\-\${}]` inside a TEMPLATE literal,
+  // where `\$` is consumed by the template and the regex only ever saw a bare `$`.
+  // Inside a class that is a literal `$` and the guard worked — but the escape
+  // said one thing and the regex did another. Rewritten to `[A-Za-z0-9._/{}$-]`,
+  // which needs no escape at all. These pin what must not change with it:
+  // a HYPHENATED directory (the `-` must not become a range) that is also
+  // TEMPLATED (the `{`, `}` and `$` must all still be matched, or the path is
+  // truncated at the wrong place and the wrong directory is watched).
+  const templated = extractDeploySources('          --definition "@platform/fiab/grafana-alerts/${D}.json" \\\n');
+  assert.equal(templated.get('platform/fiab/grafana-alerts'), 'asset');
+  const literal = extractDeploySources('          --definition "@platform/fiab/grafana-alerts/cost-v2.json" \\\n');
+  assert.equal(literal.get('platform/fiab/grafana-alerts/cost-v2.json'), 'asset');
+});
+
 test('CONTROL: a YAML comment naming a script is NOT a deploy source', () => {
   const src = extractDeploySources('          # through scripts/csa-loom/kv-firewall-window.sh, whose close RE-READS\n');
   assert.equal(src.size, 0, 'a comment is a mention, not an execution');
