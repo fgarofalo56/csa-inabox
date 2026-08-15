@@ -49,7 +49,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { LinkedResourcesPanel } from '../components/linked-resources';
 import { DataContractStudioTab } from '../components/data-contract-designer';
 import { DataProductEditDialog } from '../data-product-edit-dialog';
-import { CertificationPanel } from '../components/certification-panel';
+import { CertificationPanel, useDerivedCertificationState } from '../components/certification-panel';
 import { PortsPanel } from '../components/ports-panel';
 import { VersionsPanel } from '../components/versions-panel';
 import { useStyles } from './styles';
@@ -121,6 +121,12 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // F19/F20 — Data Observability: live GET feeds the Overview DQ gauge AND the
   // Observability tab (lineage + health charts + DQ breakdown). One source of truth.
   const observability = useObservability(id);
+
+  // The certification rung shown in the header — DERIVED server-side from the
+  // same evaluation the Certification tab renders (see the badge below).
+  // `id === 'new'` short-circuits inside the hook, so it needs no `isNew` here
+  // (which is declared further down).
+  const derivedCertState = useDerivedCertificationState(id);
 
   // Bulk "Import from CSV" flyout (F2 import + F18 monitoring) — creates many
   // draft data-product items from a CSV in one shot. Available on /new and on
@@ -779,8 +785,13 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
           {/* DP-5 — the two-rung endorsement ladder (reconciles the legacy
               certified/endorsed booleans): Certified (reviewer-gated) outranks
-              Promoted (lightweight). Manage it on the Certification tab. */}
-          {state.certificationState === 'certified'
+              Promoted (lightweight). Manage it on the Certification tab.
+              The rung comes from the SERVER's live evaluation, not the stored
+              `state.certificationState` — that field is written only by
+              certify/revoke, so a product whose DQ has never been measured (or
+              whose rules now fail) used to keep a green Certified badge here
+              while the Certification tab said Validated. */}
+          {derivedCertState === 'certified'
             ? <Badge appearance="filled" color="success" icon={<ShieldCheckmark20Regular />}>Certified</Badge>
             : (state.endorsed || state.certified) && <Badge appearance="tint" color="brand">Promoted</Badge>}
           {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}

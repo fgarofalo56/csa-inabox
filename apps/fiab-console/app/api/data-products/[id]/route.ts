@@ -8,16 +8,23 @@
  *
  *   GET   /api/data-products/[id]
  *     → { ok, item, doc, ownerTenantId, isOwner,
- *         product, dqScore, dqGate, subscriberCount,
- *         displayName, workspaceId, preconditions, current }  (+ ETag header)
+ *         product, dqScore, dqGate, dqGateId, dqMissing, dqMeasuredAt, dqStale,
+ *         subscriberCount, displayName, workspaceId, preconditions, current }
+ *       (+ ETag header)
  *
  *     `item`/`doc`/`isOwner` drive the F15 consumer read view and the owner edit
  *     dialog. `product` is the owner details (F3) projection of the same record,
  *     plus two best-effort derived fields:
- *       - dqScore : real data-quality score from the tenant's DQ rules
- *                   (tenant-settings doc id `dq-rules:<tenantId>`); null when no
- *                   rules are configured — the UI shows an honest-gate instead
- *                   of a fabricated number (per no-vaporware.md).
+ *       - dqScore : the LAST MEASURED data-quality score — the tenant's DQ rules
+ *                   executed against the product's bound ADX tables, scored on
+ *                   the rules that PASSED their own threshold, read from
+ *                   `state.dqMeasurement` with `dqMeasuredAt`/`dqStale` saying
+ *                   when. null (with `dqGate` naming the reason and `dqGateId`
+ *                   naming the registry gate when one applies) when nothing has
+ *                   been measured; the UI shows the honest gate instead of a
+ *                   fabricated number (no-vaporware.md). The rules are NOT
+ *                   executed here — this GET serves non-owners for any product
+ *                   id, and per-rule ADX on that path is the #3493 amplifier.
  *       - subscriberCount : real count of approved access-requests.
  *
  *     `preconditions`/`current` (F13) are the four destructive-delete gates,
@@ -65,11 +72,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { type SessionPayload } from '@/lib/auth/session';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import {
   itemsContainer,
-  workspacesContainer,
-  tenantSettingsContainer,
   accessRequestsContainer,
   auditLogContainer,
 } from '@/lib/azure/cosmos-client';
@@ -78,6 +84,8 @@ import {
 } from '@/lib/azure/loom-data-products-search';
 import { deleteOwnedItem, loadOwnedItem as loadOwnedItemByType } from '../../items/_lib/item-crud';
 import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
+import { readCertificationDq } from '@/lib/dataproducts/certification-dq';
+import { resolveOwnerTenantId } from '@/lib/dataproducts/owner-tenant';
 import type { DataContract } from '@/lib/dataproducts/contract';
 import {
   deleteDataProductBestEffort,
@@ -85,7 +93,7 @@ import {
   PurviewNotConfiguredError,
 } from '@/lib/azure/purview-client';
 import { PUBLISH_STATUSES, type PublishStatus } from '@/lib/azure/loom-data-products-search';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { isUpdateFrequency, sanitizeExternalLinks } from '@/lib/dataproducts/attributes';
 import { sanitizeContract } from '@/lib/dataproducts/contract';
 import type { DataProductDoc as EditDoc } from '@/lib/dataproducts/edit-model';
@@ -99,6 +107,7 @@ import {
 import { sanitizePorts, portsSummary } from '@/lib/dataproducts/ports';
 import { apiError } from '@/lib/api/respond';
 import { recordListingView } from '@/lib/marketplace/listing-analytics';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -333,59 +342,38 @@ async function findItem(itemId: string): Promise<WithEtag | null> {
   return resources[0] ?? null;
 }
 
-/** Resolve the owning workspace's tenantId (best-effort) for the isOwner flag. */
-async function resolveOwnerTenantId(workspaceId: string): Promise<string | null> {
-  try {
-    const ws = await workspacesContainer();
-    const { resources } = await ws.items
-      .query<{ tenantId: string }>({
-        query: 'SELECT c.tenantId FROM c WHERE c.id = @id',
-        parameters: [{ name: '@id', value: workspaceId }],
-      })
-      .fetchAll();
-    return resources[0]?.tenantId ?? null;
-  } catch {
-    // Owner resolution is best-effort; the consumer view still renders.
-    return null;
-  }
-}
+/** The owning workspace's tenantId (best-effort) for the isOwner flag. ONE shared
+ *  implementation with every DQ measure site — see lib/dataproducts/owner-tenant.ts
+ *  for why the caller's oid is never a substitute for it. */
 
-/** Load the data-product item and verify it belongs to the caller's tenant. */
-async function loadOwnedItem(itemId: string, tenantId: string): Promise<WithEtag | null> {
+/**
+ * Load the data product and AUTHORIZE the caller to mutate it.
+ *
+ * Was an owner-only partition point read —
+ * `workspacesContainer().item(item.workspaceId, callerOid)` plus
+ * `resource.tenantId !== tenantId` — which is the shape #2947 ratchets out. The
+ * `workspaces` container is partitioned on `/tenantId` and `Workspace.tenantId`
+ * holds the workspace CREATOR's oid, so that read can only ever answer "did this
+ * caller CREATE the workspace", never "may this caller ACCESS it". A tenant
+ * admin or a write-capable shared-ACL member was refused: for PATCH that is a
+ * live defect, because PATCH replaces the Cosmos doc directly and this function
+ * IS its authorization. (DELETE also re-checks through `deleteOwnedItem`, whose
+ * access ladder already admitted those callers — so the two disagreed.)
+ *
+ * Now the canonical ladder: owner → tenant admin → write-capable ACL member.
+ * WRITE-scoped deliberately — `allowReadRoles` is NOT passed, so a read-only
+ * Viewer can never mutate through it. 404-not-403 is preserved via the caller's
+ * own wording, so nothing leaks and no error string changes.
+ *
+ * This is the same ownership-vs-access confusion that produced the wrong-tenant
+ * DQ measurement in this PR (lib/dataproducts/owner-tenant.ts), one layer down.
+ */
+async function loadWritableItem(itemId: string, session: SessionPayload): Promise<WithEtag | null> {
   const item = await findItem(itemId);
   if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
+  const denied = await authorizeWorkspace(session, item.workspaceId);
+  if (denied) return null;
   return item;
-}
-
-/** Minimal shape of the DQ-rules document (see /api/admin/data-quality-rules). */
-interface DqRule { id: string; name: string; enabled: boolean; check?: string; scope?: string }
-interface DqRulesDoc { id: string; tenantId: string; items?: DqRule[] }
-
-const DQ_GATE =
-  'No data-quality rules configured for this tenant. Define rules in Admin › Data Quality Rules to compute a real score.';
-
-/** Real DQ score from the caller's tenant rules; honest-gate when none exist. */
-async function computeDqScore(tenantId: string): Promise<{ dqScore: number | null; dqGate: string | null }> {
-  try {
-    const ts = await tenantSettingsContainer();
-    const { resource } = await ts.item(`dq-rules:${tenantId}`, tenantId).read<DqRulesDoc>();
-    const rules = resource?.items ?? [];
-    if (rules.length > 0) {
-      const enabled = rules.filter((r) => r.enabled).length;
-      return { dqScore: Math.round((enabled / rules.length) * 100), dqGate: null };
-    }
-  } catch {
-    // 404 = no rules doc yet → honest-gate, not an error.
-  }
-  return { dqScore: null, dqGate: DQ_GATE };
 }
 
 /** Real count of approved subscribers (access-requests). Best-effort → 0. */
@@ -470,10 +458,8 @@ async function computePreconditions(
   };
 }
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const item = await findItem(id);
     if (!item) return err('Data product not found', 404, 'not_found');
@@ -482,11 +468,16 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     // W18 — count a real consumer view (owner self-views excluded so the
     // publisher-analytics number reflects genuine demand). Fire-and-forget.
     if (!isOwner) void recordListingView(id);
-    const [{ dqScore, dqGate }, subscriberCount, gates] = await Promise.all([
-      computeDqScore(session.claims.oid),
+    const [subscriberCount, gates] = await Promise.all([
       countSubscribers(id),
       computePreconditions(item, id),
     ]);
+    // PURE read of the last persisted measurement. This GET is NOT ownership
+    // gated and takes any product id, so executing the tenant's DQ rules here
+    // (one live ADX query PER RULE, unbounded) let any authenticated user
+    // amplify a Cosmos point-read into serial KQL fan-out — #3493. Measurement
+    // happens on the owner-gated writes that persist it.
+    const { dqScore, dqGate, dqGateId, dqMissing, measuredAt, stale } = readCertificationDq(item);
     return NextResponse.json(
       {
         ok: true,
@@ -499,6 +490,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
         isOwner,
         dqScore,
         dqGate,
+        dqGateId,
+        dqMissing,
+        dqMeasuredAt: measuredAt,
+        dqStale: stale,
         subscriberCount,
         displayName: item.displayName,
         workspaceId: item.workspaceId,
@@ -510,7 +505,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch data product', 500, 'cosmos_error');
   }
-}
+});
 
 /**
  * Merge only the recognised fields. Each is independently optional so the client
@@ -518,10 +513,8 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
  * never holds an invalid frequency / malformed link. Owner-only: loads the item
  * via the tenant-scoped path, so a consumer (non-owner) gets 404 and can't write.
  */
-export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
 
   let body: any;
   try {
@@ -733,7 +726,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   }
 
   try {
-    const item = await loadOwnedItem(id, session.claims.oid);
+    const item = await loadWritableItem(id, session);
     if (!item) return err('Data product not found', 404, 'not_found');
 
     let mergedState: Record<string, unknown> = { ...(item.state ?? {}) };
@@ -838,7 +831,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   } catch (e: any) {
     return err(e?.message || 'Failed to update data product', 500, 'cosmos_error');
   }
-}
+});
 
 /**
  * Precondition-gated delete (F13). Owner-only: loads the item via the
@@ -847,12 +840,10 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
  * success the Cosmos record is the source of truth — Purview cleanup is
  * best-effort and never blocks.
  */
-export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
-    const item = await loadOwnedItem(id, session.claims.oid);
+    const item = await loadWritableItem(id, session);
     if (!item) return err('Data product not found', 404, 'not_found');
 
     const { preconditions, current } = await computePreconditions(item, id);
@@ -924,4 +915,4 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
   } catch (e: any) {
     return err(e?.message || 'Failed to delete data product', 500, 'cosmos_error');
   }
-}
+});

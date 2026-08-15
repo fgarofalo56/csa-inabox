@@ -5,7 +5,6 @@
   "entries": {
     "apps/fiab-console/app/api/apps/[id]/install/route.ts": 3,
     "apps/fiab-console/app/api/apps/supercharge/seed/route.ts": 1,
-    "apps/fiab-console/app/api/data-products/[id]/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/subscribers/route.ts": 1,
     "apps/fiab-console/app/api/data-products/import/route.ts": 3,
     "apps/fiab-console/app/api/deployment-pipelines/loom/_lib/pipeline-store.ts": 2,

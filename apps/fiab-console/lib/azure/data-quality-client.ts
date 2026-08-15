@@ -21,6 +21,7 @@
  */
 
 import { kqlEscapeDouble, kqlVerbatimDouble } from '@/lib/azure/kql-escape';
+import { mapWithConcurrency } from '@/lib/util/concurrency';
 import { executeQuery, kustoConfigGate, getTableCslSchema, qName, KustoError } from './kusto-client';
 import { tenantSettingsContainer } from './cosmos-client';
 import {
@@ -206,17 +207,34 @@ async function scoreRule(database: string, rule: DqRule): Promise<{ percentage: 
   }
 }
 
+export interface DqScoreOptions {
+  /**
+   * How many rules execute CONCURRENTLY. Default 1 = strictly sequential (the
+   * historical behaviour every existing caller keeps). Rules are still ISSUED in
+   * scope order and the breakdown is always index-ordered (the shared
+   * `mapWithConcurrency` preserves input order), so a caller that raises this
+   * gets the same result faster, never a different one.
+   */
+  concurrency?: number;
+}
+
 /**
  * Compute the composite DQ score for a data product. `tableNames` are the
  * product's dataset table names (ADX tables); only rules scoped to one of these
  * tables are evaluated. Returns score=null + ruleCount=0 when no matching,
  * enabled rule exists (the UI then shows an honest "no rules" note rather than a
  * fabricated number).
+ *
+ * Cost note: this is ONE live ADX round-trip per applicable rule, each on the
+ * Kusto client's 30 s budget — and with no `tableNames` it scores every enabled
+ * rule in the tenant. Callers on a request path must be owner-gated + bounded
+ * (`concurrency`), never a read any authenticated user can amplify (#3493).
  */
 export async function computeDqScore(
   tenantId: string,
   database: string,
   tableNames: string[],
+  opts: DqScoreOptions = {},
 ): Promise<DqScoreResult> {
   const computedAt = new Date().toISOString();
   const rules = await loadRules(tenantId);
@@ -233,17 +251,21 @@ export async function computeDqScore(
     return { score: null, ruleCount: 0, passingRules: 0, breakdown: [], computedAt };
   }
 
-  const breakdown: DqRuleResult[] = [];
-  for (const rule of applicable) {
+  // The shared bounded-fan-out primitive (lib/util/concurrency): index-preserving,
+  // unit-tested, and it floors a NaN/0 limit to 1 lane. A hand-rolled loop that
+  // skipped that floor would leave `breakdown` fully sparse and report
+  // "ruleCount: n, passingRules: 0, score: null" for a run that executed NOTHING
+  // — asserting a measurement that never happened (deploy-integrity R7).
+  const breakdown = await mapWithConcurrency(applicable, opts.concurrency ?? 1, async (rule) => {
     try {
       const { percentage, detail } = await scoreRule(database, rule);
       const passed = percentage != null && percentage >= rule.threshold;
-      breakdown.push({ ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage, passed, detail });
+      return { ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage, passed, detail };
     } catch (e: any) {
       const msg = e instanceof KustoError ? e.message : (e?.message || String(e));
-      breakdown.push({ ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage: null, passed: false, detail: `error: ${msg}` });
+      return { ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage: null, passed: false, detail: `error: ${msg}` };
     }
-  }
+  });
 
   const scored = breakdown.map((b) => b.percentage).filter((p): p is number => p != null);
   const score = scored.length ? Math.round((scored.reduce((a, b) => a + b, 0) / scored.length) * 10) / 10 : null;

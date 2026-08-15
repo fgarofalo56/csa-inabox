@@ -768,10 +768,10 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `dq/monitors/route.ts` | GET POST DELETE | owner-scoped | ● | Cosmos |
+| `dq/monitors/route.ts` | GET POST DELETE | owner-scoped | ● | ADX, Cosmos |
 | `dq/results/route.ts` | GET | owner-scoped |  | — |
 | `dq/rules/route.ts` | — | public |  | — |
-| `dq/run/route.ts` | POST | owner-scoped | ● | — |
+| `dq/run/route.ts` | POST | owner-scoped | ● | ADX |
 
 ## duckdb
 
@@ -1248,7 +1248,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/data-quality/[id]/checks/route.ts` | GET POST | owner-scoped | ● | — |
 | `items/data-quality/[id]/diff/route.ts` | POST | owner-scoped |  | — |
 | `items/data-quality/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
-| `items/data-quality/[id]/run/route.ts` | GET POST | owner-scoped | ● | — |
+| `items/data-quality/[id]/run/route.ts` | GET POST | owner-scoped | ● | ADX |
 | `items/data-science/home/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/databricks-cluster/[id]/events/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-cluster/[id]/libraries/route.ts` | GET POST DELETE | session-only |  | Databricks |

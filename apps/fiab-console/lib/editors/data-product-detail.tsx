@@ -55,6 +55,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 import type {
   DataProductDoc, DataProductDetailResponse, DataProductOwner,
 } from '@/lib/types/data-product';
@@ -566,6 +567,7 @@ const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   gaugeWrap: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL },
   healthCards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalS },
+  cardActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
   subsBar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
 });
 
@@ -650,6 +652,10 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
   const [isOwner, setIsOwner] = useState<boolean | null>(null);
   const [dqScore, setDqScore] = useState<number | null>(null);
   const [dqGate, setDqGate] = useState<string | null>(null);
+  const [dqGateId, setDqGateId] = useState<string | null>(null);
+  const [dqMissing, setDqMissing] = useState<string[]>([]);
+  const [dqMeasuredAt, setDqMeasuredAt] = useState<string | null>(null);
+  const [dqStale, setDqStale] = useState(false);
   const [subscriberCount, setSubscriberCount] = useState(0);
   const [loading, setLoading] = useState(id !== 'new');
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -678,6 +684,10 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     setIsOwner(d.isOwner ?? null);
     setDqScore(d.dqScore ?? null);
     setDqGate(d.dqGate ?? null);
+    setDqGateId(d.dqGateId ?? null);
+    setDqMissing(d.dqMissing ?? []);
+    setDqMeasuredAt(d.dqMeasuredAt ?? null);
+    setDqStale(!!d.dqStale);
     setSubscriberCount(d.subscriberCount ?? 0);
     const init: Record<string, string> = {};
     (d.product?.owners ?? []).forEach((o) => { init[o.id] = o.label ?? ''; });
@@ -941,14 +951,29 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
               {dqScore !== null ? (
                 <div className={s.gaugeWrap}>
                   <DqGauge score={dqScore} />
-                  <Body1>Score computed from this tenant&apos;s enabled data-quality rules.</Body1>
+                  <Body1>
+                    {/* The score is the share of this product's data-quality rules
+                        that PASSED their own threshold when they were last run —
+                        NOT how many rules are switched on (#3493). */}
+                    Share of this product&apos;s data-quality rules that passed when last measured
+                    {dqMeasuredAt ? ` (${new Date(dqMeasuredAt).toLocaleString()})` : ''}.
+                    {dqStale ? ' This reading is stale — rerun the DQ check on Data observability for a current one.' : ''}
+                  </Body1>
                 </div>
+              ) : dqGateId ? (
+                <HonestGate
+                  gateId={dqGateId}
+                  surface="Data quality"
+                  missing={dqMissing}
+                  detail={dqGate ?? undefined}
+                  onResolved={load}
+                />
               ) : (
-                <MessageBar intent="warning">
+                <MessageBar intent="warning" layout="multiline">
                   <MessageBarBody>
                     <MessageBarTitle>No data-quality score yet</MessageBarTitle>
                     {dqGate || 'Configure data-quality rules to compute a real score.'}{' '}
-                    <Button appearance="transparent" size="small" onClick={() => router.push('/admin/data-quality-rules')}>Open Data Quality Rules</Button>
+                    <Button appearance="transparent" size="small" onClick={() => router.push('/governance/data-quality')}>Open Data quality rules</Button>
                   </MessageBarBody>
                 </MessageBar>
               )}
@@ -960,15 +985,22 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
               <div className={s.healthCards} style={{ marginTop: tokens.spacingVerticalS }}>
                 {dqScore === null ? (
                   <Card className={s.card}>
-                    <CardHeader header={<Body1>Configure data-quality rules</Body1>}
-                      description={<Caption1>No rules are defined for this tenant.</Caption1>} />
-                    <Button size="small" onClick={() => router.push('/admin/data-quality-rules')}>Fix</Button>
+                    {/* One card stack must not contradict the MessageBar above it:
+                        "no rules are defined" is only ONE of the reasons a score
+                        is missing, and it is the only one this button can fix. */}
+                    <CardHeader header={<Body1>Get a data-quality score</Body1>}
+                      description={<Caption1>{dqGate || 'No score has been measured for this product yet.'}</Caption1>} />
+                    <div className={s.cardActions}>
+                      <Button size="small" onClick={() => router.push('/governance/data-quality')}>Data quality rules</Button>
+                      <Button size="small" onClick={() => setTab('observability')}>Rerun DQ check</Button>
+                    </div>
+                    <Caption1 className={s.muted}>Authoring rules requires the tenant-admin role; rerunning the check does not.</Caption1>
                   </Card>
                 ) : dqScore < 80 ? (
                   <Card className={s.card}>
                     <CardHeader header={<Body1>Improve data-quality coverage</Body1>}
-                      description={<Caption1>Score is {dqScore}/100 — some rules are disabled.</Caption1>} />
-                    <Button size="small" onClick={() => router.push('/admin/data-quality-rules')}>Review rules</Button>
+                      description={<Caption1>Score is {dqScore}/100 — rules are FAILING their thresholds, not merely switched off.</Caption1>} />
+                    <Button size="small" onClick={() => router.push('/governance/data-quality')}>Review rules</Button>
                   </Card>
                 ) : (
                   <Caption1 className={s.muted}>No health actions needed.</Caption1>

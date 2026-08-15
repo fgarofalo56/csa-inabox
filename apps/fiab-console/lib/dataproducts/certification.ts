@@ -151,6 +151,42 @@ export function evaluateCertification(i: CertificationInputs): CertificationEval
   return { checks, score, validated, certifiable };
 }
 
+/** The item shape `gatherCertInputs` reads (a WorkspaceItem, structurally). */
+export interface CertifiableItem {
+  description?: string;
+  state?: Record<string, unknown>;
+}
+
+/**
+ * Gather the live certification inputs from an item's Cosmos state. Pure.
+ *
+ * Lives here, beside the engine that consumes it, because FOUR call sites now
+ * evaluate certification — the certification GET, certify, revoke and the DQ
+ * measurement that reconciles the discovery badge — and a copy that drifts is a
+ * product that certifies on one screen and not on another.
+ */
+export function gatherCertInputs(item: CertifiableItem, dqScore: number | null): CertificationInputs {
+  const st = (item.state || {}) as Record<string, unknown>;
+  const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const owners = arr(st.owners);
+  const contract = (st.contract && typeof st.contract === 'object' ? st.contract : {}) as Record<string, unknown>;
+  const schema = arr(contract.schema);
+  const slo = contract.slo && typeof contract.slo === 'object' ? contract.slo as Record<string, unknown> : {};
+  return {
+    ownerCount: owners.length > 0 ? owners.length : (typeof st.owner === 'string' && st.owner.trim() ? 1 : 0),
+    descriptionLength: (item.description || '').trim().length,
+    useCaseLength: (typeof st.useCase === 'string' ? st.useCase : '').trim().length,
+    glossaryCount: arr(st.glossaryLinks).length + arr(st.glossaryTerms).length,
+    cdeCount: arr(st.CDEs).length,
+    assetCount: arr(st.datasets).length + arr(st.dataAssets).length,
+    dqScore,
+    sloCount: Object.values(slo).filter((v) => v !== undefined && v !== null && v !== '').length,
+    hasContractSchema: schema.length > 0,
+    accessConfigured: !!st.accessPolicy || st.accessModel === 'self-serve',
+    hasSampleData: !!st.sampleData || !!st.sampleDataset,
+  };
+}
+
 /** Persisted certification metadata on `state.certification`. */
 export interface CertificationRecord {
   state: CertificationState;

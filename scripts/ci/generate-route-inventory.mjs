@@ -117,6 +117,14 @@ const BACKEND_IMPORT_RE = /from\s+['"]@\/lib\/azure\/([a-z0-9-]+)['"]/g;
 const BACKEND_LABEL = {
   'adf-client': 'ADF', 'synapse-sql-client': 'Synapse SQL', 'synapse-dev-client': 'Synapse',
   'synapse-pool-arm': 'Synapse pool', 'kusto-client': 'ADX', 'kusto-arm-client': 'ADX ARM',
+  // `data-quality-client` IS an ADX data-plane client — every rule it scores is
+  // a live `executeQuery` KQL aggregate (it re-exports `kustoConfigGate` as
+  // `adxConfigGate`). It was missing from this map, so a route reached ADX
+  // through it and the inventory said the route touched no backend at all. Found
+  // when #3499 moved a `defaultDatabase` import out of two data-product routes
+  // into a shared helper: their ADX tag vanished while the ADX calls did not.
+  // Six other routes were already mis-tagged the same way.
+  'data-quality-client': 'ADX',
   'adls-client': 'ADLS', 'search-index-client': 'AI Search', 'databricks-client': 'Databricks',
   'eventhubs-client': 'Event Hubs', 'stream-analytics-client': 'Stream Analytics',
   'cosmos-client': 'Cosmos', 'cosmos-account-client': 'Cosmos', 'aas-client': 'AAS',
