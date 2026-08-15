@@ -394,7 +394,7 @@ jobs:
         run: node scripts/ci/resolve-automation-oid.mjs
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
