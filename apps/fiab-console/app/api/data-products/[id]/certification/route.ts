@@ -1,15 +1,26 @@
 /**
  * GET /api/data-products/[id]/certification  (DP-5)
  *
- * The LIVE certification score for a data product: every automated check
- * evaluated against real Cosmos state + the tenant's DQ rules, plus the derived
- * certification state (draft → validated → certified) and any recorded sign-off.
- * Read-only + not ownership-gated (the trust signal is discoverable), so the
- * catalog card and marketplace listing can show the same badge the owner sees.
+ * The certification score for a data product: every automated check evaluated
+ * against real Cosmos state, plus the derived certification state (draft →
+ * validated → certified) and any recorded sign-off. Read-only + not
+ * ownership-gated (the trust signal is discoverable), so the catalog card and
+ * marketplace listing can show the same badge the owner sees.
  *
- * Azure-native: Cosmos for the item, live ADX for the DQ score. No Fabric /
+ * The DQ input is READ from the last persisted measurement
+ * (`state.dqMeasurement`), never re-executed here: executing the tenant's rules
+ * is one live ADX round-trip PER RULE, and this route is reachable by any
+ * authenticated user for any product id — measuring on read turned a Cosmos
+ * point-read into unbounded serial KQL fan-out (#3493). Measurement happens on
+ * the owner-gated writes (POST /certify, action `certify` / `revoke` /
+ * `measure-dq`, and the Observability rerun), which persist the result. The
+ * enforcement path re-measures live before any sign-off, so a certification is
+ * never granted on a stale number — only the DISPLAY is read-through, and it
+ * reports `measuredAt` + `stale` rather than implying "now".
+ *
+ * Azure-native: Cosmos for the item + the persisted measurement. No Fabric /
  * Power BI dependency (.claude/rules/no-fabric-dependency.md); real data, no
- * mocks (.claude/rules/no-vaporware.md) — an unmeasurable DQ score honest-gates
+ * mocks (.claude/rules/no-vaporware.md) — an unmeasured DQ score honest-gates
  * the `dq` check rather than fabricating a pass.
  */
 
@@ -21,7 +32,7 @@ import {
   evaluateCertification, deriveCertificationState, resolveEndorsement,
   type CertificationInputs, type CertificationRecord,
 } from '@/lib/dataproducts/certification';
-import { measureCertificationDq } from '@/lib/dataproducts/certification-dq';
+import { readCertificationDq } from '@/lib/dataproducts/certification-dq';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -73,7 +84,8 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     if (!item) return apiError('Data product not found', 404, { code: 'not_found' });
 
     const st = (item.state || {}) as Record<string, unknown>;
-    const { dqScore, dqGate, dqResult } = await measureCertificationDq(session.claims.oid, item);
+    // PURE read of the last persisted measurement — no rule execution on a GET.
+    const { dqScore, dqGate, dqGateId, dqMissing, dqResult, measuredAt, stale } = readCertificationDq(item);
     const evaluation = evaluateCertification(gatherCertInputs(item, dqScore));
     const existing = (st.certification && typeof st.certification === 'object'
       ? st.certification as CertificationRecord
@@ -98,15 +110,19 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
       validated: evaluation.validated,
       certifiable: evaluation.certifiable,
       // The MEASURED data-quality input behind the `dq` check: the passing-rule
-      // ratio, the per-rule breakdown, and — when nothing could be measured —
-      // the exact reason the check is gated rather than passed.
+      // ratio, the per-rule breakdown, WHEN it was measured — and, when nothing
+      // could be measured, the exact reason the check is gated rather than
+      // passed (plus the registry gate id so the UI renders a real Fix-it).
       dq: {
         score: dqScore,
         gate: dqGate,
+        gateId: dqGateId,
+        missing: dqMissing,
         ruleCount: dqResult?.ruleCount ?? 0,
         passingRules: dqResult?.passingRules ?? 0,
         breakdown: dqResult?.breakdown ?? [],
-        measuredAt: dqResult?.computedAt ?? null,
+        measuredAt,
+        stale,
       },
       // A reviewer must be DISTINCT from the creator (Power BI reviewer-pool
       // parity); the client disables the Certify action for the creator.

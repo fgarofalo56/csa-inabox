@@ -4,8 +4,15 @@
  * Mounts the owner details page with a mocked GET /api/data-products/[id]
  * response and asserts the real behaviors that matter per the task's VERIFY:
  *   - product name + status badge render from the (mocked) Cosmos doc
- *   - the DQ honest-gate shows when dqScore is null (no fabricated number)
+ *   - the DQ honest-gate shows the reason the ROUTE established when dqScore is
+ *     null (no fabricated number, and no reason the code did not establish)
  *   - the show-empty toggle hides null custom attributes and restores them
+ *
+ * The gate fixture is the one the route can actually return. It previously
+ * asserted `/No data-quality rules configured/i` against a string that had been
+ * DELETED from the codebase — the spec passed only because it fabricated the
+ * response it then asserted on, i.e. a fixture modelling code that no longer
+ * exists. The strings below come from `lib/dataproducts/certification-dq.ts`.
  *
  * Network is caught by installFetchMock; ItemEditorChrome + next/navigation
  * are stubbed by vitest.setup.ts.
@@ -13,6 +20,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, cleanup } from '@testing-library/react';
 import { DataProductDetailEditor } from '../data-product-detail';
+import { DQ_GATE, DQ_ADX_GATE_ID } from '@/lib/dataproducts/certification-dq';
 import { makeItem, installFetchMock } from './test-helpers';
 
 const PRODUCT = {
@@ -55,7 +63,12 @@ function mountWith(extra: Record<string, unknown> = {}) {
       isOwner: true,
       product: PRODUCT,
       dqScore: null,
-      dqGate: 'No data-quality rules configured for this tenant. Define rules in Admin › Data Quality Rules to compute a real score.',
+      // The reason a product with no measurement actually reports.
+      dqGate: DQ_GATE.notMeasured,
+      dqGateId: null,
+      dqMissing: [],
+      dqMeasuredAt: null,
+      dqStale: false,
       subscriberCount: 0,
       ...extra,
     }),
@@ -81,8 +94,33 @@ describe('DataProductDetailEditor', () => {
   it('shows the DQ honest-gate (no fabricated score) when dqScore is null', async () => {
     mountWith();
     await waitFor(() =>
-      expect(screen.getByText(/No data-quality rules configured/i)).toBeInTheDocument(),
+      expect(screen.getAllByText(/has not been measured for this data product yet/i).length).toBeGreaterThan(0),
     );
+    // The health-action card must not contradict the bar above it by claiming a
+    // cause it did not establish ("No rules are defined for this tenant").
+    expect(screen.queryByText(/No rules are defined for this tenant/i)).not.toBeInTheDocument();
+  });
+
+  it('an INFRA reason renders the registry gate with a Fix it, not a dead-end sentence', async () => {
+    mountWith({
+      dqGate: `${DQ_GATE.adx} (missing LOOM_KUSTO_CLUSTER_URI)`,
+      dqGateId: DQ_ADX_GATE_ID,
+      dqMissing: ['LOOM_KUSTO_CLUSTER_URI'],
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('a real score is described as rules that PASSED, never as rules that are enabled', async () => {
+    mountWith({ dqScore: 50, dqGate: null, dqMeasuredAt: '2026-08-10T12:00:00.000Z' });
+    await waitFor(() =>
+      expect(screen.getByText(/rules that passed when last measured/i)).toBeInTheDocument(),
+    );
+    // 50 now means half the rules FAILED — the old card called that "some rules
+    // are disabled", which is a different fact entirely.
+    expect(screen.getByText(/rules are FAILING their thresholds/i)).toBeInTheDocument();
+    expect(screen.queryByText(/some rules are disabled/i)).not.toBeInTheDocument();
   });
 
   it('show-empty toggle hides null custom attributes and restores them', async () => {

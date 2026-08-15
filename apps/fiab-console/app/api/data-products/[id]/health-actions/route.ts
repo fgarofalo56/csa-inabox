@@ -7,7 +7,10 @@
  *                       subgraph (`getLineageSubgraph`); effect = fresh
  *                       node/edge counts returned to the card.
  *   - rerun-dq-check  → recompute the DQ score from live ADX KQL
- *                       (`computeDqScore`); effect = updated gauge/score.
+ *                       (`measureCertificationDq`) AND persist it to
+ *                       `state.dqMeasurement`; effect = updated gauge/score on
+ *                       every read surface, not just this response (#3493 — the
+ *                       GET paths read that record instead of re-running rules).
  *   - trigger-scan    → kick a Purview scan run (`triggerScanRun`) for the
  *                       `source`/`scan` the card supplies; effect = a runId.
  *
@@ -18,7 +21,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { loadOwnedItem, updateOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   getLineageSubgraph,
   triggerScanRun,
@@ -27,8 +30,10 @@ import {
   PurviewError,
 } from '@/lib/azure/purview-client';
 import { prewarmPurviewShirForScan } from '@/lib/azure/shir-autoscale';
-import { adxConfigGate, computeDqScore } from '@/lib/azure/data-quality-client';
-import { defaultDatabase } from '@/lib/azure/kusto-client';
+import { adxConfigGate } from '@/lib/azure/data-quality-client';
+import {
+  measureCertificationDq, toDqMeasurement, DQ_MEASUREMENT_KEY,
+} from '@/lib/dataproducts/certification-dq';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -58,7 +63,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const datasets = (Array.isArray(state.datasets) ? state.datasets : []) as Dataset[];
   const purviewDataProductId = (state.purviewDataProductId as string) || '';
   const firstDatasetGuid = datasets[0]?.guid || purviewDataProductId || '';
-  const database = (state.databaseName as string) || defaultDatabase();
   const timestamp = new Date().toISOString();
 
   try {
@@ -83,12 +87,37 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (gate) {
         return NextResponse.json({ ok: false, error: 'ADX not provisioned', gate }, { status: 503 });
       }
-      const tableNames = datasets.map((d) => d.name).filter((n): n is string => !!n);
-      const score = await computeDqScore(session.claims.oid, database, tableNames);
-      const outcome = score.score == null
-        ? `No applicable data-quality rules — add rules in Governance → Data quality.`
-        : `DQ score recomputed: ${score.score} (${score.passingRules}/${score.ruleCount} rules passing).`;
-      return NextResponse.json({ ok: true, result: { action, outcome, dqScore: score, timestamp } });
+      // Same measurement the certification gate consumes (rules EXECUTED, scored
+      // on the ones that PASSED), and the same record it writes — so a rerun here
+      // moves the badge the marketplace card and the certification panel show,
+      // instead of producing a number that dies with this response.
+      const dq = await measureCertificationDq(session.claims.oid, item);
+      const measurement = toDqMeasurement(dq, session.claims.oid);
+      const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, {
+        state: { ...state, [DQ_MEASUREMENT_KEY]: measurement },
+      });
+      const score = dq.dqResult;
+      const measured = dq.dqGate
+        ? dq.dqGate
+        : `DQ score recomputed: ${dq.dqScore} (${score?.passingRules ?? 0}/${score?.ruleCount ?? 0} rules passing).`;
+      // The card renders `outcome` and nothing else, so a failed persist has to
+      // be IN it — otherwise the user reads "recomputed" for a number the read
+      // surfaces never received.
+      const persistNote = updated
+        ? ''
+        : ' The measurement ran but could NOT be written to the item — the product card and certification panel still show the previous reading.';
+      return NextResponse.json({
+        ok: true,
+        result: {
+          action,
+          outcome: `${measured}${persistNote}`,
+          dqScore: score,
+          certificationDqScore: dq.dqScore,
+          persisted: !!updated,
+          measuredAt: measurement.measuredAt,
+          timestamp,
+        },
+      });
     }
 
     // trigger-scan

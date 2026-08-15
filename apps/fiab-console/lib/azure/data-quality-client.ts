@@ -206,17 +206,33 @@ async function scoreRule(database: string, rule: DqRule): Promise<{ percentage: 
   }
 }
 
+export interface DqScoreOptions {
+  /**
+   * How many rules execute CONCURRENTLY. Default 1 = strictly sequential (the
+   * historical behaviour every existing caller keeps). Rules are still ISSUED in
+   * scope order and the breakdown is always index-ordered, so a caller that
+   * raises this gets the same result faster, never a different one.
+   */
+  concurrency?: number;
+}
+
 /**
  * Compute the composite DQ score for a data product. `tableNames` are the
  * product's dataset table names (ADX tables); only rules scoped to one of these
  * tables are evaluated. Returns score=null + ruleCount=0 when no matching,
  * enabled rule exists (the UI then shows an honest "no rules" note rather than a
  * fabricated number).
+ *
+ * Cost note: this is ONE live ADX round-trip per applicable rule, each on the
+ * Kusto client's 30 s budget — and with no `tableNames` it scores every enabled
+ * rule in the tenant. Callers on a request path must be owner-gated + bounded
+ * (`concurrency`), never a read any authenticated user can amplify (#3493).
  */
 export async function computeDqScore(
   tenantId: string,
   database: string,
   tableNames: string[],
+  opts: DqScoreOptions = {},
 ): Promise<DqScoreResult> {
   const computedAt = new Date().toISOString();
   const rules = await loadRules(tenantId);
@@ -233,17 +249,26 @@ export async function computeDqScore(
     return { score: null, ruleCount: 0, passingRules: 0, breakdown: [], computedAt };
   }
 
-  const breakdown: DqRuleResult[] = [];
-  for (const rule of applicable) {
-    try {
-      const { percentage, detail } = await scoreRule(database, rule);
-      const passed = percentage != null && percentage >= rule.threshold;
-      breakdown.push({ ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage, passed, detail });
-    } catch (e: any) {
-      const msg = e instanceof KustoError ? e.message : (e?.message || String(e));
-      breakdown.push({ ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage: null, passed: false, detail: `error: ${msg}` });
+  // Index-addressed so a raised `concurrency` cannot reorder the breakdown.
+  const breakdown: DqRuleResult[] = new Array(applicable.length);
+  const lanes = Math.max(1, Math.min(Math.floor(opts.concurrency ?? 1), applicable.length));
+  let next = 0;
+  async function lane(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= applicable.length) return;
+      const rule = applicable[i];
+      try {
+        const { percentage, detail } = await scoreRule(database, rule);
+        const passed = percentage != null && percentage >= rule.threshold;
+        breakdown[i] = { ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage, passed, detail };
+      } catch (e: any) {
+        const msg = e instanceof KustoError ? e.message : (e?.message || String(e));
+        breakdown[i] = { ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage: null, passed: false, detail: `error: ${msg}` };
+      }
     }
   }
+  await Promise.all(Array.from({ length: lanes }, () => lane()));
 
   const scored = breakdown.map((b) => b.percentage).filter((p): p is number => p != null);
   const score = scored.length ? Math.round((scored.reduce((a, b) => a + b, 0) / scored.length) * 10) / 10 : null;

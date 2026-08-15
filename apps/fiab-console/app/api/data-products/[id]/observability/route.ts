@@ -26,7 +26,7 @@ import {
   PurviewError,
 } from '@/lib/azure/purview-client';
 import { adxConfigGate, computeDqScore, runHealthCharts } from '@/lib/azure/data-quality-client';
-import { defaultDatabase } from '@/lib/azure/kusto-client';
+import { resolveDqTarget } from '@/lib/dataproducts/certification-dq';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -48,8 +48,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const datasets = (Array.isArray(state.datasets) ? state.datasets : []) as Dataset[];
   const purviewDataProductId = (state.purviewDataProductId as string) || '';
   const firstDatasetGuid = datasets[0]?.guid || purviewDataProductId || '';
-  const tableName = (state.databaseTable as string) || datasets[0]?.name || undefined;
-  const database = (state.databaseName as string) || defaultDatabase();
+  // ONE shared derivation of the ADX target (certification-dq.resolveDqTarget) —
+  // this route's own copy passed a whitespace-only databaseName straight into KQL
+  // instead of falling back to the default database.
+  const { database, tableNames } = resolveDqTarget(item);
+  const tableName = (state.databaseTable as string) || tableNames[0] || undefined;
 
   const gate: Record<string, { missing: string }> = {};
   // Per-section failure reasons (a slow/failing ADX read degrades only itself).
@@ -90,7 +93,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     // Health charts and the DQ score are INDEPENDENT ADX reads. Settle them
     // separately so one slow / failing KQL query degrades only its own section
     // (honest per-section error) instead of 502-ing the whole report.
-    const tableNames = datasets.map((d) => d.name).filter((n): n is string => !!n);
     const [healthR, dqR] = await Promise.allSettled([
       runHealthCharts(database, tableName),
       computeDqScore(session.claims.oid, database, tableNames),

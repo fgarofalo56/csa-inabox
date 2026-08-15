@@ -8,17 +8,23 @@
  *
  *   GET   /api/data-products/[id]
  *     → { ok, item, doc, ownerTenantId, isOwner,
- *         product, dqScore, dqGate, subscriberCount,
- *         displayName, workspaceId, preconditions, current }  (+ ETag header)
+ *         product, dqScore, dqGate, dqGateId, dqMissing, dqMeasuredAt, dqStale,
+ *         subscriberCount, displayName, workspaceId, preconditions, current }
+ *       (+ ETag header)
  *
  *     `item`/`doc`/`isOwner` drive the F15 consumer read view and the owner edit
  *     dialog. `product` is the owner details (F3) projection of the same record,
  *     plus two best-effort derived fields:
- *       - dqScore : MEASURED data-quality score — the tenant's DQ rules executed
- *                   against the product's bound ADX tables, scored on the rules
- *                   that PASSED their own threshold. null (with `dqGate` naming
- *                   the reason) when nothing could be measured; the UI shows the
- *                   honest gate instead of a fabricated number (no-vaporware.md).
+ *       - dqScore : the LAST MEASURED data-quality score — the tenant's DQ rules
+ *                   executed against the product's bound ADX tables, scored on
+ *                   the rules that PASSED their own threshold, read from
+ *                   `state.dqMeasurement` with `dqMeasuredAt`/`dqStale` saying
+ *                   when. null (with `dqGate` naming the reason and `dqGateId`
+ *                   naming the registry gate when one applies) when nothing has
+ *                   been measured; the UI shows the honest gate instead of a
+ *                   fabricated number (no-vaporware.md). The rules are NOT
+ *                   executed here — this GET serves non-owners for any product
+ *                   id, and per-rule ADX on that path is the #3493 amplifier.
  *       - subscriberCount : real count of approved access-requests.
  *
  *     `preconditions`/`current` (F13) are the four destructive-delete gates,
@@ -78,7 +84,7 @@ import {
 } from '@/lib/azure/loom-data-products-search';
 import { deleteOwnedItem, loadOwnedItem as loadOwnedItemByType } from '../../items/_lib/item-crud';
 import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
-import { measureCertificationDq } from '@/lib/dataproducts/certification-dq';
+import { readCertificationDq } from '@/lib/dataproducts/certification-dq';
 import type { DataContract } from '@/lib/dataproducts/contract';
 import {
   deleteDataProductBestEffort,
@@ -460,11 +466,16 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     // W18 — count a real consumer view (owner self-views excluded so the
     // publisher-analytics number reflects genuine demand). Fire-and-forget.
     if (!isOwner) void recordListingView(id);
-    const [{ dqScore, dqGate }, subscriberCount, gates] = await Promise.all([
-      measureCertificationDq(session.claims.oid, item),
+    const [subscriberCount, gates] = await Promise.all([
       countSubscribers(id),
       computePreconditions(item, id),
     ]);
+    // PURE read of the last persisted measurement. This GET is NOT ownership
+    // gated and takes any product id, so executing the tenant's DQ rules here
+    // (one live ADX query PER RULE, unbounded) let any authenticated user
+    // amplify a Cosmos point-read into serial KQL fan-out — #3493. Measurement
+    // happens on the owner-gated writes that persist it.
+    const { dqScore, dqGate, dqGateId, dqMissing, measuredAt, stale } = readCertificationDq(item);
     return NextResponse.json(
       {
         ok: true,
@@ -477,6 +488,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
         isOwner,
         dqScore,
         dqGate,
+        dqGateId,
+        dqMissing,
+        dqMeasuredAt: measuredAt,
+        dqStale: stale,
         subscriberCount,
         displayName: item.displayName,
         workspaceId: item.workspaceId,

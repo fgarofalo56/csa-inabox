@@ -98,10 +98,22 @@ export interface DataProductDetailResponse {
   item?: unknown;
   /** True when the caller's tenant owns this product (server-authoritative). */
   isOwner?: boolean;
-  /** Real computed DQ score 0–100, or null when no rules are configured. */
+  /**
+   * Last MEASURED data-quality score 0–100 (rules that PASSED their own
+   * threshold ÷ applicable rules), read from the persisted measurement. null
+   * when nothing has been measured — the rules are never executed on this GET.
+   */
   dqScore?: number | null;
   /** Honest-gate message shown in place of the gauge when dqScore is null. */
   dqGate?: string | null;
+  /** Gate-registry id when that reason is infrastructure (drives the Fix-it). */
+  dqGateId?: string | null;
+  /** The exact env var(s) the gate needs. */
+  dqMissing?: string[];
+  /** ISO-8601 of the measurement behind dqScore, or null when never measured. */
+  dqMeasuredAt?: string | null;
+  /** True when that measurement is older than the freshness window. */
+  dqStale?: boolean;
   /** Count of approved subscribers (real access-requests query). */
   subscriberCount?: number;
   error?: string;
