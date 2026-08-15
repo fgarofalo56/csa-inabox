@@ -347,19 +347,33 @@ test('discovery FINDS a newly added compiled template (so the coverage check can
 // fire on a developer's machine would be a gate with no population in CI.
 
 test('the REAL argument lists this guard builds are accepted', () => {
-  // Exactly what runAz is called with, including a Windows repo path with a
-  // space and parentheses (`C:\Program Files (x86)\…` is a legal checkout root).
   assertInterpreterSafeArgs(['az', 'bicep', 'version']);
   assertInterpreterSafeArgs(['az', 'bicep', 'install', '--version', 'v0.45.15']);
+  // A Windows checkout root with a space AND parentheses (`C:\Program Files
+  // (x86)\…` is legal), and a Windows temp path — kept as LITERALS so this
+  // coverage survives on the ubuntu-latest runner, where os.tmpdir() is /tmp
+  // and nothing would otherwise exercise a backslash path at all.
   assertInterpreterSafeArgs([
     'az', 'bicep', 'build',
     '-f', 'E:\\Repos\\GitHub\\csa-inabox\\platform\\fiab\\bicep\\main.bicep',
     '--outfile', 'C:\\Users\\dev\\AppData\\Local\\Temp\\loom-tmplsync-a1b2c3\\compiled.json',
   ]);
   assertInterpreterSafeArgs(['az', 'bicep', 'build', '-f', 'C:\\Program Files (x86)\\loom\\main.bicep']);
-  // …and the real ones, on this machine, right now.
-  assertInterpreterSafeArgs(['az', 'bicep', 'build', '-f', path.join(REPO_ROOT, ARTIFACTS[0].source)]);
-  assertInterpreterSafeArgs(['az', 'bicep', 'build', '--outfile', path.join(os.tmpdir(), 'loom-tmplsync-x', 'compiled.json')]);
+
+  // …and the REAL values, on this machine, right now. The outfile is built the
+  // way compile() builds it — `fs.mkdtempSync(path.join(os.tmpdir(), 'loom-tmplsync-'))`
+  // — not with a constant name. That is not a concession to
+  // check-temp-artifact-safety: a constant-named fixture MODELLED the code
+  // instead of exercising it (this repo's 2026-08-03 lesson), because the value
+  // that actually reaches `--outfile` carries mkdtemp's random suffix and this
+  // machine's real TMPDIR, neither of which a hand-written constant contains.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-tmplsync-'));
+  try {
+    assertInterpreterSafeArgs(['az', 'bicep', 'build', '-f', path.join(REPO_ROOT, ARTIFACTS[0].source),
+      '--outfile', path.join(dir, 'compiled.json')]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('MEASURED PRIMITIVE: every character that executed a second command is REJECTED', () => {
@@ -421,5 +435,20 @@ test('on THIS machine the resolved interpreter is a real cmd.exe', { skip: proce
   const p = resolveWindowsInterpreter();
   assert.equal(path.basename(p).toLowerCase(), 'cmd.exe');
   assert.ok(fs.existsSync(p), `${p} does not exist`);
+});
+
+test('the interpreter path is WINDOWS-shaped on EVERY host, not the host separator', () => {
+  // Caught by the ubuntu-latest `node:test suites (node 20)` lane, not by a
+  // Windows run: the resolver builds a Windows path, but with the bare
+  // `path.*` helpers it inherits the HOST's semantics. Under POSIX,
+  // `join('C:\\Windows','System32','cmd.exe')` is `C:\Windows/System32/cmd.exe`,
+  // `isAbsolute` on it is FALSE and `basename('C:\\x\\payload.exe')` is the whole
+  // string — so every candidate was rejected and the resolver threw. It now uses
+  // `path.win32` explicitly. This assertion is identical on both platforms; the
+  // Linux lane is what makes it bite, which is the point — that lane is the only
+  // place the win32 security decision can be exercised at all.
+  const p = resolveWindowsInterpreter({ SystemRoot: 'C:\\Windows' }, () => true);
+  assert.equal(p, 'C:\\Windows\\System32\\cmd.exe');
+  assert.ok(!p.includes('/'), `built with the host's separator instead of Windows': ${p}`);
 });
 

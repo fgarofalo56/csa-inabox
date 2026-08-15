@@ -453,14 +453,24 @@ export function assertInterpreterSafeArgs(args) {
  * @throws {Error} when neither candidate is a real cmd.exe.
  */
 export function resolveWindowsInterpreter(env = process.env, exists = (p) => fs.existsSync(p)) {
+  // `path.win32`, EXPLICITLY, not the platform-native `path`. This function
+  // builds and judges a WINDOWS path, and the bare helpers are whatever the
+  // host is: under POSIX semantics `path.join('C:\\Windows','System32','cmd.exe')`
+  // yields `C:\Windows/System32/cmd.exe`, `isAbsolute` on it is FALSE, and
+  // `basename('C:\\x\\payload.exe')` is the WHOLE string — so every candidate is
+  // rejected and the resolver throws. On Windows `path === path.win32`, so this
+  // changes nothing at runtime there; what it changes is that the interpreter
+  // choice becomes DETERMINISTIC and therefore testable off-Windows, which is
+  // the only way the Linux CI lane can cover this security decision at all.
+  const w = path.win32;
   const candidates = [
-    env.SystemRoot ? path.join(env.SystemRoot, 'System32', 'cmd.exe') : null,
-    env.windir ? path.join(env.windir, 'System32', 'cmd.exe') : null,
+    env.SystemRoot ? w.join(env.SystemRoot, 'System32', 'cmd.exe') : null,
+    env.windir ? w.join(env.windir, 'System32', 'cmd.exe') : null,
     env.ComSpec || null,
   ].filter(Boolean);
   for (const c of candidates) {
-    if (path.basename(c).toLowerCase() !== 'cmd.exe') continue;
-    if (!path.isAbsolute(c)) continue;
+    if (w.basename(c).toLowerCase() !== 'cmd.exe') continue;
+    if (!w.isAbsolute(c)) continue;
     if (!exists(c)) continue;
     return c;
   }
