@@ -103,6 +103,58 @@ async function ghJson<T>(pathname: string): Promise<{ data?: T; error?: string }
  */
 const RUNS_PER_PAGE = 30;
 
+/**
+ * A git object id: 7–40 hex, nothing else (CodeQL js/file-access-to-http #776).
+ *
+ * WHY THIS EXISTS. `build.sha` is FILE data — `readBuildMarker()` pulls it out
+ * of public/build-marker.txt with `/sha=([^\s]+)/`, which accepts every
+ * non-whitespace byte, and it was then interpolated straight into a request
+ * path. `..` segments are collapsed by the URL parser BEFORE the request goes
+ * out, so the marker chose which api.github.com endpoint this route called.
+ *
+ * Measured, not reasoned about — a marker of `sha=../../../../user/repos?x=`
+ * produces (node, WHATWG URL):
+ *
+ *     pathname  /user/repos
+ *     search    ?x=...main
+ *
+ * `GET /user/repos` is a real endpoint (401 unauthenticated, verified), so with
+ * LOOM_FEEDBACK_GITHUB_TOKEN configured the request lands there authenticated.
+ *
+ * WHAT IT IS, STATED EXACTLY. A BLIND, credential-attached GET to an
+ * attacker-chosen path on ONE host — SSRF confined to api.github.com. It is NOT
+ * information disclosure: `DeployStatusReport` carries only `estate` + `paths`,
+ * `EstateDrift` has no field holding the compare payload, and
+ * `classifyEstateDrift` reads only `status`, `ahead_by`, `behind_by` and
+ * `commits[].commit.*.date` — all `undefined` for a diverted endpoint, so
+ * `behindSince` lands null. Verified against the real response shape: NO BYTE
+ * of the diverted body reaches the client.
+ *
+ * TRUST BOUNDARY, so the severity is not overread: the only writer of
+ * build-marker.txt is apps/fiab-console/Dockerfile:152, the only writers of
+ * LOOM_BUILD_SHA are six CI build-args (no bicep sets it at runtime), and this
+ * route sits behind `withCapability('admin.env-config','Admin')`. Anyone who
+ * can set the marker already owns the image. This is defence in depth at the
+ * image-build boundary, not a runtime-reachable hole.
+ *
+ * The marker is written from the LOOM_BUILD_SHA build-arg, and all six
+ * producers pass either `github.sha` (40 hex) or `git rev-parse --short=8 HEAD`
+ * (8 hex) — build-fiab-images-acr-tasks, console-bluegreen-roll,
+ * full-app-deploy-commercial, gov-build-images, gov-console-roll,
+ * publish-ghcr-images — so this validates what the value already is and cannot
+ * reject a legitimate build. The unset case is the Dockerfile default
+ * `unknown`, which readBuildMarker already drops before it reaches here.
+ *
+ * It is ALSO the honest-error fix, and that is the stronger half
+ * (deploy-integrity R7). Without it a malformed marker produced either
+ * `GitHub API returned HTTP 404` — asserting a GitHub-side cause for a purely
+ * local defect — or, when the diverted endpoint answered 200, a verdict
+ * computed from a body that is not a comparison at all: measured,
+ * `state:'behind'` / `severity:'error'` / "This estate is **undefined** commits
+ * behind main". Loud and incoherent, naming no real cause.
+ */
+const GIT_OBJECT_ID = /^[0-9a-f]{7,40}$/i;
+
 async function computeDeployStatus(): Promise<DeployStatusReport> {
   const build = readBuildMarker();
   const cloud = detectLoomCloud();
@@ -113,9 +165,27 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
   //    what classifyEstateDrift tolerates a roll-in-flight against. There is no
   //    commit-count tolerance any more — being behind at all is the condition —
   //    so the only thing standing between "behind" and "error" is that date.
-  const compare = build.sha
-    ? await ghJson<CompareResult>(`/repos/${REPO}/compare/${build.sha}...${BRANCH}`)
-    : { error: 'this image carries no build sha' };
+  //
+  //    The sha is VALIDATED before it reaches the URL (see GIT_OBJECT_ID): it is
+  //    file data, and a request path is not a place to interpolate file data
+  //    unchecked. Each branch degrades to an honest reason, never a false green.
+  const sha = build.sha;
+  let compare: { data?: CompareResult; error?: string };
+  if (!sha) {
+    compare = { error: 'this image carries no build sha' };
+  } else if (!GIT_OBJECT_ID.test(sha)) {
+    // Deliberately does NOT echo the value: the fix is that this string never
+    // leaves the process carrying marker bytes. The remediation is the marker,
+    // and naming it is enough to act on.
+    compare = {
+      error:
+        "this image's build marker does not carry a git object id (expected 7–40 hex " +
+        'from the LOOM_BUILD_SHA build-arg), so it names no commit to compare — ' +
+        'check /build-marker.txt on the running revision',
+    };
+  } else {
+    compare = await ghJson<CompareResult>(`/repos/${REPO}/compare/${sha}...${BRANCH}`);
+  }
   const estate = classifyEstateDrift({
     buildSha: build.sha ?? null,
     buildStamp: build.stamp ?? null,

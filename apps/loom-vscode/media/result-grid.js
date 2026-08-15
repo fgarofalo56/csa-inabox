@@ -111,7 +111,63 @@
     content.appendChild(wrap);
   }
 
+  /**
+   * ORIGIN GUARD (CodeQL js/missing-origin-check #766 / CWE-940).
+   *
+   * `window.addEventListener('message', ...)` accepts a post from ANY window
+   * that holds a handle to this one. This view is driven entirely by the
+   * extension host, so anything else is forgery: a foreign post can repaint the
+   * status bar and the whole grid, and a fabricated "rows 0 / no matches" over a
+   * query the user actually ran is a lie the UI has no way to detect. Nothing
+   * here is injected as markup (every value goes in via textContent), so the
+   * damage is integrity, not execution — a believable WRONG answer.
+   *
+   * WHY SAME-ORIGIN IS SUFFICIENT, read off the pinned VS Code 1.102 webview
+   * host (src/vs/workbench/contrib/webview/browser/pre/index.html) rather than
+   * assumed. Every post into this document — both of them, lines 1126 and 1242,
+   * and there are no others — supplies a targetOrigin:
+   *
+   *     contentWindow.postMessage(message.message, window.origin, …)
+   *
+   * and the frame is created with
+   *
+   *     const sandboxRules = new Set(['allow-same-origin', 'allow-pointer-lock']);
+   *
+   * `allow-same-origin` is unconditional, so this document shares the host's
+   * origin. And because a targetOrigin is given (never `'*'` — zero wildcards
+   * in the file), the browser refuses to DELIVER unless the receiver's origin
+   * matches it. So on the legitimate path `event.origin === window.origin` is
+   * not merely usually true, it is guaranteed by the delivery rule itself.
+   *
+   * An earlier revision also accepted `event.source === window.parent ||
+   * window.top`. That is unconditional embedder trust, and per the above it
+   * covers no host case this does not — so it is gone rather than documented.
+   *
+   * A pinned origin LITERAL is still wrong: the value is host- and
+   * version-specific (`vscode-webview://<uuid>` desktop, `https://<uuid>.
+   * vscode-cdn.net` web) and hard-coding one would blank this panel the day
+   * either changes. Comparing to our own origin tracks it automatically.
+   *
+   * The `'null'` exclusion is not decorative. An opaque-origin document reports
+   * `window.origin === 'null'`, and so does every opaque-origin SENDER, so the
+   * comparison would degenerate into "accept anyone". Unreachable while
+   * `allow-same-origin` is unconditional above — this keeps the check honest if
+   * that ever changes, rather than leaving our safety contingent on an
+   * implementation detail of another product.
+   *
+   * REACHABILITY, stated honestly and in the right direction: not exploitable
+   * as this panel ships. CSP `default-src 'none'` (frame-src falls back to it)
+   * means this document EMBEDS nothing, and the only script here never calls
+   * `window.open` — so it hands no OUTBOUND handle to anyone. That says nothing
+   * about who may embed US; there is no `frame-ancestors` anywhere in the host
+   * page, and that constraint comes instead from the `vscode-webview://`
+   * scheme. The guard is what makes the inbound direction safe on its own.
+   */
   window.addEventListener('message', function (event) {
+    const sameRealOrigin =
+      event.origin === window.origin && event.origin !== 'null' && event.origin !== '';
+    if (!sameRealOrigin) return;
+
     const msg = event.data;
     if (!msg || typeof msg.type !== 'string') return;
     if (msg.type === 'loading') renderLoading(msg);
