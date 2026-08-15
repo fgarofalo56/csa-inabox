@@ -598,69 +598,13 @@ after(() => {
 });
 
 /**
- * How many bytes THIS environment will still deliver when a process writes and
- * then calls process.exit() — measured, never assumed.
+ * Payload sizes to try, smallest first. Escalation stops at the first size this
+ * environment actually loses a tail at, so the common case stays cheap.
  *
- * The first version of this control keyed on `process.platform`, asserting that
- * POSIX truncates and Windows does not. That model was WRONG and CI proved it:
- * on ubuntu-latest process.exit() delivered 486,374 of 486,374 bytes and the
- * control went red rather than let the behavioural test pass for the wrong
- * reason. Measured since, all with stdout on a spawnSync socketpair:
- *
- *     WSL2 Linux, node 22.22.2   146,176 of 486,436 survived
- *     WSL2 Linux, node 20.19.4   219,264 of 486,436 survived
- *     Windows,    node 24.18.0   everything survived
- *     ubuntu-latest (GHA CI)     everything survived, at this payload size
- *
- * So it is not the OS and not the node version. The surviving prefix is however
- * much the RECEIVING BUFFER accepted before the write had to queue, and that
- * capacity varies per environment — which means the only honest way to ask "can
- * this environment show the bug" is to try it here, at the size in question.
- *
- * @returns {{size:number, delivered:number, truncates:boolean}}
+ * Capped at 8MB: the runner reads its child through a 64MB maxBuffer, and a
+ * merge-blocking lane should not spend minutes proving this.
  */
-function probeExitFlush(root, size) {
-  const probe = path.join(root, 'exit-form-probe.mjs');
-  fs.writeFileSync(
-    probe,
-    [
-      'const size = Number(process.argv[2]);',
-      "process.stdout.write('x'.repeat(size));",
-      "process.stdout.write('\\nTAIL-MARKER\\n');",
-      'process.exit(7);',
-      '',
-    ].join('\n'),
-  );
-  const r = spawnSync(process.execPath, [probe, String(size)], {
-    encoding: 'utf8',
-    maxBuffer: 256 * 1024 * 1024,
-  });
-  const out = r.stdout ?? '';
-  assert.equal(r.status, 7, 'the flush probe did not exit through process.exit(7) — it is not measuring that path');
-  return { size, delivered: out.length, truncates: !out.includes('TAIL-MARKER') };
-}
-
-/**
- * The smallest payload at which this environment loses a process.exit() tail,
- * or null when it never does within the cap.
- *
- * Escalates rather than guessing: a fixed size that happens to fit the local
- * buffer produces a control with no teeth AND no warning, which is the exact
- * failure this whole change is about.
- *
- * Capped at 8MB deliberately. The fixture is sized to 1.5x whatever is found,
- * and the runner reads its child through a 64MB maxBuffer — so a higher cap
- * could push the fixture toward ENOBUFS and turn this control into a different
- * failure. An environment needing more than 8MB to truncate is reported as
- * non-discriminating instead, which is honest and cheap.
- */
-function findTruncationThreshold(root) {
-  for (const size of [512_000, 2_000_000, 8_000_000]) {
-    const r = probeExitFlush(root, size);
-    if (r.truncates) return r;
-  }
-  return null;
-}
+const TAIL_PAYLOAD_SIZES = [480_000, 2_000_000, 8_000_000];
 
 /**
  * Stand the REAL runner up in a throwaway repo whose only suite FAILS, run it
@@ -768,34 +712,55 @@ function runFailingLane(entry, tapBytes = 480_000) {
 }
 
 /**
- * Everything the tail tests need, measured once (~1-3s total).
+ * Everything the tail tests need, calibrated against the REAL runner.
  *
- * The payload is sized from THIS environment's measured truncation threshold,
- * so the behavioural test below has teeth wherever the defect can be expressed
- * at all — rather than wherever a hard-coded 480KB happened to be enough.
+ * WHY CALIBRATION, AND WHY NOT A PROBE. This control first keyed on
+ * `process.platform` — POSIX truncates, Windows does not. CI falsified that: on
+ * ubuntu-latest process.exit() delivered 486,374 of 486,374 bytes. The second
+ * attempt calibrated with a small stand-in script that wrote N bytes and exited,
+ * and CI falsified THAT too, more usefully: the stand-in lost its tail at 512,000
+ * bytes (219,264 delivered) while the runner, in the same job, delivered its
+ * whole 774,378. A proxy that "models" the code is not the code — the runner
+ * spawns a child, parses 700KB of TAP, and writes from a different point in its
+ * lifecycle, and all of that changes how much leaves synchronously.
+ *
+ * So the escalation runs the actual artifact. Measured, one failing suite,
+ * stdout on a spawnSync socketpair:
+ *
+ *     WSL2 Linux, node 22.22.2   146,176 of 486,436 delivered — truncates
+ *     WSL2 Linux, node 20.19.4   219,264 of 486,436 delivered — truncates
+ *     Windows,    node 24.18.0   everything delivered
+ *     ubuntu-latest (GHA)        everything delivered at 486KB and at 774KB
+ *
+ * Not the OS, not the node version: what survives is however much the receiving
+ * buffer took before the write had to queue, and that is per-environment. The
+ * only honest question is whether THIS environment can express the defect at a
+ * payload we are willing to run, and the only honest way to ask is to try it.
  */
 let tailRuns;
 function tailPair() {
   if (tailRuns) return tailRuns;
-  const calibrationRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'node-test-suites-tail-'));
-  tailFixtureRoots.push(calibrationRoot);
-  const threshold = findTruncationThreshold(calibrationRoot);
-  // Comfortably past the observed threshold: the fixture's TAP is interleaved
-  // with the runner's own preamble, so matching it exactly would be marginal.
-  const tapBytes = threshold ? Math.ceil(threshold.size * 1.5) : 480_000;
-  tailRuns = {
-    threshold,
-    tapBytes,
-    shipped: runFailingLane(null, tapBytes),
-    legacy: runFailingLane(ENTRY_EXIT, tapBytes),
-  };
+  let legacy = null;
+  let tapBytes = TAIL_PAYLOAD_SIZES[TAIL_PAYLOAD_SIZES.length - 1];
+  let truncates = false;
+  for (const size of TAIL_PAYLOAD_SIZES) {
+    legacy = runFailingLane(ENTRY_EXIT, size);
+    tapBytes = size;
+    if (!legacy.hasNotOk && !legacy.hasVerdict) {
+      truncates = true;
+      break;
+    }
+  }
+  // The shipped form is measured at the SAME payload, so the pair is comparable.
+  tailRuns = { legacy, shipped: runFailingLane(null, tapBytes), tapBytes, truncates };
   return tailRuns;
 }
 
 test('#3466 — a FAILING suite still emits BOTH its `not ok` and its FAIL verdict', () => {
-  // THE assertion. Runs the entry point exactly as it ships, so reverting the
-  // fix turns this red anywhere the environment can express the defect — which
-  // the CONTROL below establishes rather than assumes.
+  // THE assertion. Runs the entry point exactly as it ships, at whatever payload
+  // the calibration above found this environment can express the defect at — so
+  // reverting the fix turns this red wherever it CAN go red, and the CONTROL
+  // below says plainly when that is nowhere.
   const { shipped } = tailPair();
   assert.ok(
     shipped.hasNotOk,
@@ -822,27 +787,26 @@ test('#3466 — the fix does not soften the exit status the lane depends on', ()
 
 test('#3466 CONTROL: the harness can SEE the truncation (or says it cannot)', () => {
   // Without this, the behavioural test is unfalsifiable in some environments and
-  // nobody would know which. It keys on a MEASUREMENT, not on process.platform:
-  // the platform model was wrong, and this control is what caught that — see
-  // probeExitFlush() for the four environments measured.
-  const { threshold, legacy, shipped, tapBytes } = tailPair();
+  // nobody would know which. It has now caught two wrong models of its own
+  // subject (the platform split, then the stand-in probe), which is the entire
+  // reason it exists.
+  const { truncates, shipped, tapBytes, legacy } = tailPair();
 
-  if (threshold === null) {
-    // Honest, and NOT a silent pass: this environment delivered every byte up to
-    // the 8MB cap, so the behavioural test above cannot fail here and the shape
-    // assertion that follows is what holds the fix. Recorded, not hidden — this
-    // is the branch ubuntu-latest took at 486KB, which is how the platform model
-    // was caught being wrong.
+  if (!truncates) {
+    // Honest, and NOT a silent pass: this environment delivered every byte at
+    // every size tried, so the behavioural test above cannot fail here and the
+    // shape assertion is what holds the fix. Declared, never skipped.
     assert.ok(
       shipped.hasNotOk && shipped.hasVerdict,
-      'the shipped runner lost its tail in an environment that never truncates on the probe — the two measurements disagree, so one of them is wrong',
+      `the shipped runner lost its tail (${shipped.bytes} bytes) in an environment where the process.exit() form did not (${legacy.bytes} bytes) — the two measurements disagree, so one of them is wrong`,
     );
     return;
   }
 
+  // Truncation WAS reproduced, so the behavioural test has teeth at this size.
   assert.ok(
     !legacy.hasNotOk && !legacy.hasVerdict,
-    `this environment loses a process.exit() tail at ${threshold.size} bytes (delivered ${threshold.delivered}), but the runner's ${tapBytes}-byte payload came back whole (${legacy.bytes} bytes) — so the behavioural test above would pass against the defect too. The fixture is no longer clearing the buffer the probe cleared.`,
+    `calibration said this environment truncates at ${tapBytes} bytes but the process.exit() run came back whole (${legacy.bytes} bytes) — the calibration and the assertion disagree`,
   );
 });
 
