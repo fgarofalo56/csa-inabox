@@ -1,0 +1,9 @@
+{
+  "_owner": "CSA Loom platform / deploy-integrity",
+  "_why": "Tracked `requirements.txt` files that MATCH python-deps-resolve.yml's own trigger globs but are deliberately NOT in its resolve matrix. Every entry needs a measured reason. The list exists so the hole is LOUD — check-python-deps-resolve-coverage.mjs prints it on every passing run — rather than being the silent gap #3486 found, where 14 files triggered the workflow and none of them were checked.",
+  "_unblock": "Fix the pin set, add the file to the `resolve` matrix in .github/workflows/python-deps-resolve.yml, and delete the entry here. The rule FAILS on a stale entry (a path that no longer exists, or one that is also in the matrix), so this cannot rot in either direction.",
+  "_not_an_excuse_list": "An entry is strictly worse than a matrix row. It means the file is UNCHECKED at PR time, which is the condition that let apps/loom-transform-runner/requirements.txt ship unresolvable for months.",
+  "entries": {
+    "examples/ai-agents/requirements.txt": "DOES NOT RESOLVE on linux/py3.11 as of 2026-08-15 — `azure-ai-projects==1.0.0b3` and `semantic-kernel` have conflicting dependencies (pip: ResolutionImpossible). Reference/example code: examples/ai-agents/Dockerfile exists but NO workflow builds it and no deploy path consumes it, so this ships nothing. Excluded rather than added to the matrix because adding it would red `main` immediately; it is NOT excluded because the failure is acceptable. Tracked separately — the pin set needs a real fix, at which point this entry goes away."
+  }
+}
