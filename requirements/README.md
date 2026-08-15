@@ -36,17 +36,39 @@ required). The locks are the **source of truth** for:
 # Or a single extra
 ./scripts/update-locks.sh portal
 
-# Or invoke pip-compile manually (must be run from repo root)
-pip-compile \
-    --generate-hashes \
-    --resolver=backtracking \
-    --strip-extras \
-    --allow-unsafe \
-    --no-emit-index-url \
-    --extra portal \
-    --output-file requirements/portal.lock \
-    pyproject.toml
+# Raising a floor that needs a transitive dependency to move with it
+./scripts/update-locks.sh portal --upgrade-package cryptography --upgrade-package msal
+
+# Show the exact commands without running them
+./scripts/update-locks.sh --print-plan portal
 ```
+
+### Why the script and not a bare `pip-compile`
+
+The script compiles **inside a digest-pinned Linux container** (the same
+`python:3.12-slim` digest `portal/kubernetes/docker/backend/Dockerfile` ships)
+with a pinned pip-tools version. Docker is required; `--native` opts out and is
+refused outright on a non-Linux host.
+
+That is not ceremony. pip-tools has **no** universal/cross-platform resolve mode
+— `uv pip compile --universal` is a different tool — so the resolve is a
+property of the machine it runs on. The committed `portal.lock` had been
+compiled on Windows, and therefore pinned the win32-only `colorama` while
+omitting `uvloop`, which `uvicorn[standard]` uses on Linux. Every consumer of
+these locks (Docker builds, CI, SBOM, Trivy fs) is Linux, so the lock described
+an install none of them perform. Measured on 2026-08-15: compiling `[portal]`
+natively on Windows still adds `colorama==0.4.6` and drops `uvloop==0.22.1`
+versus the container. See #3491.
+
+### When `ResolutionImpossible` comes back
+
+`pip-compile` reuses the existing lock as constraints, so a floor whose fix
+needs a transitive dependency to move is reported as impossible when it is
+merely *forbidden*. The script now cross-references the versions named in the
+resolver error against the pins in the lock it just fed back, names the ones
+that match, and prints the exact `--upgrade-package` re-run. If none of them is
+a reused pin it says so rather than guessing — the conflict is then genuinely
+between the declared requirements.
 
 See [`docs/SUPPLY_CHAIN.md`](../docs/SUPPLY_CHAIN.md) for the full workflow,
 SBOM publication details, and CVE incident-response procedure.
