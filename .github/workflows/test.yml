@@ -108,6 +108,38 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
+      # WHY `./requirements/locks/*` IS EXCLUDED FROM THE PER-DOMAIN LOOP BELOW
+      # (#3485). This reasoning lives in a YAML comment rather than inside the
+      # `run:` body on purpose — see the note at the end.
+      #
+      # Those ten files are the compiled, hash-pinned locks: 495 exact pins
+      # across the whole extras surface, including a `starlette==` and a
+      # `fastapi==`. Installed into this single shared environment they would
+      # decide what tests/loom_duckdb measures, which is the #2615 defect
+      # verbatim. The guard written for #2615 could not see it either:
+      # scripts/ci/assert_installed_pins.py read ZERO pins from all ten,
+      # because every pin line in a --generate-hashes lock ends in a
+      # continuation and its `_PIN` regex is anchored with `$`. So the static
+      # model in tests/repo/test_python_ci_dependency_order.py read an EMPTY
+      # file while `pip install -r` applied all 495 at runtime — green over the
+      # exact hazard it exists for. Measured: this loop's population goes 20 ->
+      # 30 without the exclusion. Both halves are fixed; the parser can now see
+      # such a file, and that test asserts the exclusion is present AND that the
+      # locks it excludes really do pin fastapi/starlette.
+      #
+      # They also do not belong here on their own terms: the locks are compiled
+      # for Python 3.12 and this job is a 3.10/3.11/3.12 matrix, so two of the
+      # three legs would emit ten spurious "pip install FAILED" annotations. The
+      # extras this job needs are installed above, from pyproject.toml, as
+      # FLOORS.
+      #
+      # KEEP LONG PROSE OUT OF THE `run:` BODY. actionlint pipes each `run:`
+      # script through shellcheck, and adding this block INSIDE the script made
+      # `actionlint .github/workflows/test.yml` stop terminating — measured, 90s
+      # with no result versus ~2s without it, and no single line was the
+      # trigger (removing any one still hung; removing the block did not). A
+      # lint that HANGS is worse than one that fails: it burns the job timeout
+      # and reports nothing. YAML comments are never handed to shellcheck.
       - name: Install dependencies
         if: steps.relevant.outputs.run == 'true'
         run: |
@@ -124,7 +156,9 @@ jobs:
           # failure is now SURFACED as a CI annotation + a job-summary line
           # instead of vanishing into `|| true`.
           failed_reqs=""
-          for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*" -not -path "./apps/loom-duckdb/*"); do
+          # requirements/locks/* is excluded — see the YAML comment above this
+          # step for why (#3485). Do not re-add it.
+          for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*" -not -path "./apps/loom-duckdb/*" -not -path "./requirements/locks/*"); do
             if ! pip install -r "$req"; then
               echo "::warning file=${req#./}::pip install -r ${req#./} FAILED - its dependencies are absent from the test environment."
               failed_reqs="${failed_reqs} ${req#./}"
