@@ -25,6 +25,23 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.97.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.1...csa-inabox-v0.97.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **auth:** the circuit breaker's terminal page was unreachable — it redirected to the container's own listen address ([#3442](https://github.com/fgarofalo56/csa-inabox/issues/3442)) ([ae4bf89](https://github.com/fgarofalo56/csa-inabox/commit/ae4bf893e163d9e2780bcd3b08f2eb8758d7692f)), closes [#3334](https://github.com/fgarofalo56/csa-inabox/issues/3334)
+* **ci:** seven guards ran their whole scan on import — and the first scan for it found three ([#3441](https://github.com/fgarofalo56/csa-inabox/issues/3441)) ([e05351a](https://github.com/fgarofalo56/csa-inabox/commit/e05351a84586aac9b9d63cdca157830af07722f3)), closes [#3436](https://github.com/fgarofalo56/csa-inabox/issues/3436)
+* **ci:** suite discovery walked temp/, so every local run graded 976 stale copies from other branches ([#3494](https://github.com/fgarofalo56/csa-inabox/issues/3494)) ([3ec0606](https://github.com/fgarofalo56/csa-inabox/commit/3ec060618985bd44c2dd77e336d96e6062031570))
+* **deploy:** the Gov deploys now MEASURE their image tags instead of asking an operator to type them ([#3449](https://github.com/fgarofalo56/csa-inabox/issues/3449)) ([#3452](https://github.com/fgarofalo56/csa-inabox/issues/3452)) ([4f18ab0](https://github.com/fgarofalo56/csa-inabox/commit/4f18ab0d171b4899b7679450af35c349e8a1fec4))
+* **deploy:** the platform now CONVERGES a RoleAssignmentExists instead of telling the operator to ([#3454](https://github.com/fgarofalo56/csa-inabox/issues/3454)) ([48c5d34](https://github.com/fgarofalo56/csa-inabox/commit/48c5d348f00d2ee11bb68bcb59911d847edc7821))
+* **deploy:** the platform now performs what it was telling the operator to do ([#3374](https://github.com/fgarofalo56/csa-inabox/issues/3374), [#3376](https://github.com/fgarofalo56/csa-inabox/issues/3376)) ([#3445](https://github.com/fgarofalo56/csa-inabox/issues/3445)) ([33ebfa3](https://github.com/fgarofalo56/csa-inabox/commit/33ebfa3129798fa1280da2963e73834c0a1fb818))
+* **flightsql:** the ticket-mint URL handed clients the container's own address ([#3443](https://github.com/fgarofalo56/csa-inabox/issues/3443)) ([#3451](https://github.com/fgarofalo56/csa-inabox/issues/3451)) ([74c3118](https://github.com/fgarofalo56/csa-inabox/commit/74c31188b85a7f28a4c7423e40841655d47d8d26))
+* **release:** the dispatch probe counted HELD runs as evidence and deadlocked the release lane ([#3461](https://github.com/fgarofalo56/csa-inabox/issues/3461)) ([54e7acc](https://github.com/fgarofalo56/csa-inabox/commit/54e7acc15595cbb304ca6a32e14b8e65b1b92f9d))
+* **release:** the release lane graded nothing and reported green, and a release merge closed a P0 nobody claimed ([#3448](https://github.com/fgarofalo56/csa-inabox/issues/3448)) ([22f7fa1](https://github.com/fgarofalo56/csa-inabox/commit/22f7fa1b1771a7d6db514203a60c77e33dcf817c))
+* **security:** the &lt;49.0.0 ceiling excluded every patched cryptography, so three CVEs were unfixable by construction ([#3473](https://github.com/fgarofalo56/csa-inabox/issues/3473)) ([b6677c3](https://github.com/fgarofalo56/csa-inabox/commit/b6677c3af4d6b38c4d8047e2a120ef28892ae456))
+* **security:** the CHECK expression was the one fragment nothing guarded, so a constraint could execute arbitrary SQL ([#3489](https://github.com/fgarofalo56/csa-inabox/issues/3489)) ([0f50dad](https://github.com/fgarofalo56/csa-inabox/commit/0f50dad764fa748f33acc6112671c26c284faa89))
+
 ## [0.97.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.0...csa-inabox-v0.97.1) (2026-08-14)
 
 
