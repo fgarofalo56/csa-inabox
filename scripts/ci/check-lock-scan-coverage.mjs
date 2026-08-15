@@ -191,25 +191,63 @@ export function evaluateTrivy({ report, locks }) {
   return { problems, scanned, packages };
 }
 
-/** Pure: the whole --sbom verdict. */
-export function evaluateSbom({ doc, extra }) {
+/**
+ * Pure: the whole --sbom verdict.
+ *
+ * SYMMETRIC WITH THE TRIVY SIDE, and deliberately so. The first version of this
+ * floored at `components > 0`, which would have passed a Syft cataloger
+ * degrading 13 components to 1 — the same "reports green over a nearly-empty
+ * set" shape #3485 is about, just further along the scale.
+ *
+ * The expectation is DERIVED from the lock, not configured: a CycloneDX doc for
+ * a lock declaring N pins must carry exactly N components of `type: "library"`.
+ * Measured across three extras spanning an order of magnitude — bff 12/12,
+ * portal 58/58, copilot 160/160 — with zero declared-but-absent in each. The
+ * one non-library component is the scanned file itself (`type: "file"`), which
+ * is why the count is taken over libraries rather than over the whole array.
+ */
+export function evaluateSbom({ doc, extra, pins = null }) {
   const problems = [];
-  const components = Array.isArray(doc && doc.components) ? doc.components.length : null;
-  if (components === null) {
+  const all = Array.isArray(doc && doc.components) ? doc.components : null;
+  if (all === null) {
     problems.push(
       `the SBOM for '${extra}' has no \`components\` array at all. This guard cannot confirm the ` +
         `document describes anything, and will not vouch for what it could not read.`
     );
-    return { problems, components: 0 };
+    return { problems, components: 0, libraries: 0 };
   }
-  if (components === 0) {
+
+  const libraries = all.filter((c) => c && c.type === 'library').length;
+
+  if (all.length === 0) {
     problems.push(
       `the SBOM for '${extra}' has ZERO components. A published SBOM with no components asserts ` +
-        `that this software has no dependencies — which is false, and is how the portal SBOM read ` +
-        `for as long as the locks were named \`.lock\` (#3485).`
+        `that this software has no dependencies — which is false, and is how every published ` +
+        `Python SBOM read for as long as the locks were named \`.lock\` (#3485).`
+    );
+    return { problems, components: 0, libraries };
+  }
+
+  if (libraries === 0) {
+    problems.push(
+      `the SBOM for '${extra}' has ${all.length} component(s) but NONE of type "library" ` +
+        `(types seen: ${[...new Set(all.map((c) => (c && c.type) || '<none>'))].join(', ')}). ` +
+        `Either the cataloger produced no packages or the document shape changed; this guard will ` +
+        `not certify a count it could not classify.`
+    );
+    return { problems, components: all.length, libraries };
+  }
+
+  if (pins !== null && libraries !== pins) {
+    problems.push(
+      `the SBOM for '${extra}' describes ${libraries} library component(s), but its lock declares ` +
+        `${pins} pin(s). Syft reached the file and did not catalog all of it, so the published ` +
+        `document understates what this extra installs. (Measured baseline: the component count ` +
+        `equals the pin count exactly, plus one \`type: "file"\` entry for the file itself.)`
     );
   }
-  return { problems, components };
+
+  return { problems, components: all.length, libraries };
 }
 
 /* --------------------------- the embedded control -------------------------- */
@@ -259,11 +297,31 @@ export function runControl() {
   if (countPins('# comment\nfoo==1.0 \\\nbar==2.0\n') !== 2) {
     failures.push('the pin counter does not count pins.');
   }
-  if (evaluateSbom({ doc: { components: [] }, extra: 'control' }).problems.length === 0) {
+
+  // --- the SBOM half, floored the same way: derived from the lock, not a `> 0`.
+  const lib = (n) => Array.from({ length: n }, (_, i) => ({ name: `c${i}`, type: 'library' }));
+  const file = { name: 'requirements.txt', type: 'file' };
+  if (evaluateSbom({ doc: { components: [] }, extra: 'control', pins: 3 }).problems.length === 0) {
     failures.push('a 0-component SBOM came back clean.');
   }
-  if (evaluateSbom({ doc: { components: [{ name: 'x' }] }, extra: 'control' }).problems.length > 0) {
-    failures.push('a 1-component SBOM came back dirty — the SBOM verdict does not move.');
+  if (evaluateSbom({ doc: {}, extra: 'control', pins: 3 }).problems.length === 0) {
+    failures.push('an SBOM with no components array came back clean.');
+  }
+  // The degradation the `> 0` floor would have missed: 3 pins, 1 library.
+  if (evaluateSbom({ doc: { components: [...lib(1), file] }, extra: 'control', pins: 3 }).problems.length === 0) {
+    failures.push('an SBOM cataloguing FEWER libraries than the lock pins came back clean.');
+  }
+  // Components present but none classifiable as a library.
+  if (evaluateSbom({ doc: { components: [file] }, extra: 'control', pins: 3 }).problems.length === 0) {
+    failures.push('an SBOM with components but no libraries came back clean.');
+  }
+  // And the healthy shape — exactly `pins` libraries plus the file entry.
+  const healthySbom = evaluateSbom({ doc: { components: [...lib(3), file] }, extra: 'control', pins: 3 });
+  if (healthySbom.problems.length > 0) {
+    failures.push(`a correct SBOM came back dirty (${healthySbom.problems.join(' | ')}) — the SBOM verdict does not move.`);
+  }
+  if (healthySbom.libraries !== 3) {
+    failures.push(`a correct SBOM was miscounted (libraries=${healthySbom.libraries}).`);
   }
   return failures;
 }
@@ -288,8 +346,10 @@ function main(argv) {
   }
   if (argv.includes('--selftest')) {
     console.log(
-      '[lock-scan-coverage] control OK — an empty report, a zero-package target, a zero-lock ' +
-        'population and a 0-component SBOM all FAIL; healthy inputs pass. The verdict moves.'
+      '[lock-scan-coverage] control OK — an empty report, a zero-package target, an under-read ' +
+        'target, a zero-lock population, a 0-component SBOM, an SBOM with no libraries and an ' +
+        'SBOM cataloguing fewer libraries than the lock pins ALL fail; the correct shapes pass. ' +
+        'The verdict moves.'
     );
     return 0;
   }
@@ -314,10 +374,20 @@ function main(argv) {
       console.error(`\n[lock-scan-coverage] FAIL — ${problems.length} problem(s):\n`);
       for (const p of problems) console.error(`  - ${p}`);
       console.error(
-        '\n  Trivy and Syft both key on the FILENAME. The locks live at\n' +
-          '  requirements/<extra>/requirements.txt precisely so both tools recognise them with no\n' +
-          '  configuration; a rename back to anything else makes them invisible again and this\n' +
-          '  check is what stops that landing green.\n'
+        '\n  Trivy and Syft both key on the FILENAME, and Trivy also keys on the DIRECTORY.\n' +
+          '  The locks live at requirements/LOCKS/<extra>/requirements.txt. BOTH parts are\n' +
+          '  load-bearing:\n' +
+          '    - the basename must be literally `requirements.txt`. Measured on identical\n' +
+          '      contents: `<extra>.lock` -> Trivy blind, Syft 0 components;\n' +
+          '      `<extra>.requirements.txt` -> Trivy STILL blind, Syft 13. Only the exact\n' +
+          '      name is recognised by both, with no scanner configuration to regress.\n' +
+          '    - the `locks/` level keeps every extra off Trivy\'s ROOT-ANCHORED default\n' +
+          '      skip list, which includes `dev` (walker defaultSkipDirs: "**/.git", "proc",\n' +
+          '      "sys", "dev" — note `dev` carries no `**/` prefix). With the scan rooted at\n' +
+          '      requirements/, a requirements/dev/requirements.txt is SILENTLY DROPPED while\n' +
+          '      its siblings are scanned. Do not "fix" this failure by flattening to\n' +
+          '      requirements/<extra>/requirements.txt — that is the layout that loses `dev`.\n' +
+          '  Regenerate with scripts/update-locks.sh, which writes the correct path.\n'
       );
       return 1;
     }
@@ -330,7 +400,11 @@ function main(argv) {
 
   const sbomFile = arg('--sbom');
   if (sbomFile) {
-    const extra = arg('--extra') || '(unnamed)';
+    const extra = arg('--extra');
+    if (!extra) {
+      console.error('[lock-scan-coverage] FAIL — --sbom needs --extra <name> to find the lock it must match.');
+      return 2;
+    }
     let doc;
     try {
       doc = readJson(sbomFile);
@@ -338,13 +412,39 @@ function main(argv) {
       console.error(`[lock-scan-coverage] FAIL — ${err.message}`);
       return 1;
     }
-    const { problems, components } = evaluateSbom({ doc, extra });
+
+    // The expectation comes from the LOCK, so this cannot be satisfied by a
+    // configured threshold that quietly drifts down.
+    const lockPath = `requirements/locks/${extra}/requirements.txt`;
+    let pins;
+    try {
+      pins = countPins(readFileSync(path.join(REPO_ROOT, lockPath), 'utf8'));
+    } catch (err) {
+      console.error(
+        `[lock-scan-coverage] FAIL — could not read ${lockPath} to derive the expected component ` +
+          `count (${err.message}). "Could not check" is not "nothing to check".`
+      );
+      return 1;
+    }
+    if (pins === 0) {
+      console.error(
+        `[lock-scan-coverage] FAIL — ${lockPath} declares ZERO pins, so an SBOM for '${extra}' ` +
+          `cannot be floored against anything. An extra with an empty lock does not belong in the ` +
+          `SBOM matrix (see the note beside it in sbom.yml).`
+      );
+      return 1;
+    }
+
+    const { problems, components, libraries } = evaluateSbom({ doc, extra, pins });
     if (problems.length > 0) {
       console.error(`\n[lock-scan-coverage] FAIL — ${problems.length} problem(s):\n`);
       for (const p of problems) console.error(`  - ${p}`);
       return 1;
     }
-    console.log(`[lock-scan-coverage] OK — the '${extra}' SBOM describes ${components} component(s).`);
+    console.log(
+      `[lock-scan-coverage] OK — the '${extra}' SBOM describes ${libraries} library component(s), ` +
+        `matching all ${pins} pin(s) in ${lockPath} (${components} components including the file entry).`
+    );
     return 0;
   }
 

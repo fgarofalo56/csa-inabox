@@ -66,11 +66,29 @@
 #    that is the configuration that produced the defect above; on Linux it
 #    warns that the result is only as reproducible as the local interpreter.
 #
-# The resulting locks are the source of truth for:
-#   • Docker image builds (portal/kubernetes/docker/{backend,frontend}/Dockerfile)
-#   • CI dependency installs
-#   • SBOM generation (.github/workflows/sbom.yml)
+# WHAT THE LOCKS ACTUALLY FEED — stated precisely, because the previous version
+# of this list was not true. It claimed "Docker image builds
+# (portal/kubernetes/docker/{backend,frontend}/Dockerfile)". Measured over all
+# 37 tracked Dockerfiles: NOT ONE references requirements/locks. The portal
+# backend installs `portal/shared/requirements.txt` (a RANGE file) at
+# portal/kubernetes/docker/backend/Dockerfile:19, and the only other `.lock`
+# hits in any Dockerfile are Rust's Cargo.lock. Claiming an audience a file does
+# not have is how a control comes to be trusted for something it never covered.
+#
+#   • SBOM generation      (.github/workflows/sbom.yml)
 #   • Trivy filesystem CVE scans (.github/workflows/trivy.yml)
+#
+# NOT consumed by:
+#   • Any Dockerfile. The shipped portal image resolves
+#     portal/shared/requirements.txt, whose ranges are guarded separately by
+#     scripts/ci/check-python-cve-floors.mjs.
+#   • The Python test lane. `.github/workflows/test.yml` installs the EXTRAS
+#     from pyproject.toml as floors and explicitly EXCLUDES requirements/locks/
+#     from its per-domain loop (#3485) — 495 exact pins in one shared env would
+#     decide what the suite measures, which is the #2615 defect.
+#
+# Wiring a Dockerfile to a lock would be a real improvement; until someone does,
+# this comment says what is true.
 #
 # Usage:
 #   scripts/update-locks.sh                        # regenerate every lock

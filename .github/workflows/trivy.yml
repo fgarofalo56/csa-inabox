@@ -110,11 +110,6 @@ jobs:
       # the CRITICAL gate below is what decides the check.
       - name: Trivy filesystem scan — full report (coverage evidence)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
-        env:
-          # Populate Results[].Packages so the coverage guard can count what was
-          # actually parsed rather than inferring it from vulnerability counts —
-          # zero findings is a legitimate state, zero packages never is.
-          TRIVY_LIST_ALL_PKGS: 'true'
         with:
           scan-type: fs
           scan-ref: requirements/
@@ -124,6 +119,21 @@ jobs:
           format: json
           output: trivy-fs-coverage.json
           vuln-type: library
+          # Populates Results[].Packages so the coverage guard can count what
+          # was actually PARSED, rather than inferring it from vulnerability
+          # counts — zero findings is a legitimate state, zero packages never is.
+          #
+          # The action's own documented input, not a `TRIVY_LIST_ALL_PKGS` env.
+          # The env route works today, but only on two coincidences: the action
+          # declines to forward its own 'false' default (so it does not clobber
+          # an outer env), and trivy's --list-all-pkgs happens to default true
+          # for fs scans. If either flips on a version bump, Packages empties,
+          # the coverage guard fails closed, and the diagnosis points at the
+          # locks instead of at the action. This input is written into
+          # trivy_envs.txt, which entrypoint.sh sources AFTER the outer env, so
+          # it wins unconditionally. Confirmed present in the pinned action.yaml
+          # at 57a97c7e (input `list-all-pkgs`, default 'false').
+          list-all-pkgs: 'true'
 
       # THE POPULATION FLOOR. Every tracked lock must appear in that report with
       # a package count equal to the pins it declares. Without this, `num=0`

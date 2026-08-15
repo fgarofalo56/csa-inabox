@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,17 +134,86 @@ test('trivyPackageCounts and findTarget handle the report shapes Trivy emits', (
 });
 
 /* -------------------------------------------------------------------------- */
-/* SBOM component floor.                                                      */
+/* SBOM component floor — derived from the lock, symmetric with the Trivy side.*/
 /* -------------------------------------------------------------------------- */
 
-test('a 0-component SBOM FAILS and a populated one passes', () => {
-  assert.match(evaluateSbom({ doc: { components: [] }, extra: 'portal' }).problems[0], /ZERO components/);
-  assert.deepEqual(evaluateSbom({ doc: { components: [{ name: 'x' }] }, extra: 'portal' }).problems, []);
+const lib = (n) => Array.from({ length: n }, (_, i) => ({ name: `c${i}`, type: 'library' }));
+const fileComponent = { name: 'requirements.txt', type: 'file' };
+
+test('a 0-component SBOM FAILS and a correctly-catalogued one passes', () => {
+  assert.match(
+    evaluateSbom({ doc: { components: [] }, extra: 'portal', pins: 3 }).problems[0],
+    /ZERO components/
+  );
+  assert.deepEqual(
+    evaluateSbom({ doc: { components: [...lib(3), fileComponent] }, extra: 'portal', pins: 3 }).problems,
+    []
+  );
+});
+
+test('an SBOM cataloguing FEWER libraries than the lock pins FAILS', () => {
+  // The exact degradation a `components > 0` floor would have waved through:
+  // 3 pins, 1 library, non-zero component count.
+  const r = evaluateSbom({ doc: { components: [...lib(1), fileComponent] }, extra: 'portal', pins: 3 });
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0], /describes 1 library component\(s\), but its lock declares 3 pin\(s\)/);
+  assert.equal(r.libraries, 1);
+});
+
+test('the file component is not counted as a library', () => {
+  const r = evaluateSbom({ doc: { components: [fileComponent] }, extra: 'portal', pins: 3 });
+  assert.match(r.problems[0], /NONE of type "library"/);
+  // And the message says what it DID see rather than asserting a cause.
+  assert.match(r.problems[0], /types seen: file/);
 });
 
 test('an SBOM with no components key at all is a REFUSAL, not a pass', () => {
-  const r = evaluateSbom({ doc: { bomFormat: 'CycloneDX' }, extra: 'portal' });
+  const r = evaluateSbom({ doc: { bomFormat: 'CycloneDX' }, extra: 'portal', pins: 3 });
   assert.match(r.problems[0], /no `components` array at all/);
+});
+
+test('the REAL Syft baseline holds: libraries == pins, exactly', () => {
+  // Not a guess. Measured 2026-08-15 over three extras spanning an order of
+  // magnitude — bff 12/12, portal 58/58, copilot 160/160 — each with one extra
+  // `type: "file"` component and zero declared-but-absent packages. If Syft's
+  // shape changes this assumption, this test is where it surfaces.
+  for (const pins of [12, 58, 160]) {
+    const doc = { components: [...lib(pins), fileComponent] };
+    const r = evaluateSbom({ doc, extra: 'portal', pins });
+    assert.deepEqual(r.problems, []);
+    assert.equal(r.libraries, pins);
+    assert.equal(r.components, pins + 1);
+  }
+});
+
+/* -------------------------------------------------------------------------- */
+/* The two floors must cover the SAME population.                             */
+/* -------------------------------------------------------------------------- */
+
+test('sbom.yml\'s matrix covers exactly the locks with a non-empty pin set', () => {
+  // The Trivy floor DERIVES its population from `git ls-files`; the SBOM matrix
+  // is hand-listed. Left unchecked, a new extra gets a Trivy floor automatically
+  // and is silently absent from the SBOM side — a floor over a population that
+  // quietly stops matching is this repo's dominant defect class.
+  // `\r` stripped first: this repo checks out CRLF on Windows, and a matcher
+  // anchored on `\n` reads a perfectly good workflow as unparseable.
+  const yaml = readFileSync(path.join(REPO_ROOT, '.github/workflows/sbom.yml'), 'utf8').replace(/\r/g, '');
+  const block = /\n\s*extra:\n((?:\s*-\s*\S+\n)+)/.exec(yaml);
+  assert.ok(block, 'could not find the `extra:` matrix in sbom.yml — the parse, not the workflow, may be wrong');
+  const declared = [...block[1].matchAll(/-\s*(\S+)/g)].map((m) => m[1]).sort();
+  assert.ok(declared.length > 0, 'the matrix parsed to zero extras; this test would pass vacuously');
+
+  const locks = trackedLocks();
+  const nonEmpty = locks.filter((l) => l.pins > 0).map((l) => l.path.split('/')[2]).sort();
+  const empty = locks.filter((l) => l.pins === 0).map((l) => l.path.split('/')[2]);
+
+  assert.deepEqual(
+    declared,
+    nonEmpty,
+    'sbom.yml\'s matrix has drifted from the committed locks. Every lock with pins must get an ' +
+      'SBOM (its floor is derived from that pin count), and a lock with none must NOT be listed ' +
+      `(a 0-component SBOM for it would be TRUE). Empty by construction: ${empty.join(', ') || '(none)'}`
+  );
 });
 
 /* -------------------------------------------------------------------------- */
@@ -211,4 +280,42 @@ test('the CLI refuses to do nothing quietly', () => {
   const r = spawnSync('node', [GUARD], { cwd: REPO_ROOT, encoding: 'utf8' });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /nothing to check/);
+});
+
+test('--sbom without --extra is refused rather than floored against nothing', () => {
+  const r = spawnSync('node', [GUARD, '--sbom', 'whatever.json'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /needs --extra/);
+});
+
+test('the failure remediation does NOT name a layout this repo measured as BROKEN', () => {
+  // R7, applied to a guard's own remediation text. The first draft told the
+  // reader the locks live at `requirements/<extra>/requirements.txt` — the exact
+  // flat layout whose `dev` entry Trivy silently skips. A maintainer following
+  // that remediation would have reintroduced the defect the guard exists to
+  // catch. Drive the REAL failure path and read what it actually prints.
+  const dir = mkdtempSync(path.join(tmpdir(), 'lsc-r7-'));
+  try {
+    const zero = path.join(dir, 'zero.json');
+    writeFileSync(zero, JSON.stringify({ Results: [] }), 'utf8');
+    const r = spawnSync('node', [GUARD, '--trivy', zero], { cwd: REPO_ROOT, encoding: 'utf8' });
+    assert.notEqual(r.status, 0);
+
+    // The remediation must name the layout that WORKS...
+    assert.match(r.stderr, /requirements\/LOCKS\/<extra>\/requirements\.txt/);
+    // ...and must not recommend the flat one. Strip the sentence that warns
+    // AGAINST it before checking, or the warning itself would trip this.
+    const withoutTheWarning = r.stderr.replace(/Do not "fix" this failure by flattening[\s\S]*?loses `dev`\./, '');
+    assert.doesNotMatch(
+      withoutTheWarning,
+      /requirements\/<extra>\/requirements\.txt/,
+      'the remediation points at the flat layout, which loses requirements/dev to Trivy\'s ' +
+        'root-anchored skip list'
+    );
+    // And it must say WHY the extra level exists, or the next reader flattens it.
+    assert.match(r.stderr, /ROOT-ANCHORED/);
+    assert.match(r.stderr, /dev/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
