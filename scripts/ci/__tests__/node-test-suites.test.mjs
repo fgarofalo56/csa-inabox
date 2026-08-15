@@ -8,7 +8,7 @@
 //
 // Run: node --test scripts/ci/__tests__/node-test-suites.test.mjs
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -578,14 +578,24 @@ test('CONTROL: the pre-existing independent lanes are untouched', () => {
 // no `not ok` line anywhere, and no `[node-test-suites] FAIL:` verdict either —
 // so the failure was diagnosed as process death, then OOM, then maxBuffer, then
 // runner parallelism. All wrong. The cause was `process.exit()` at the entry
-// point: it does not wait for a PIPE-backed stdout to drain, and under GitHub
-// Actions stdout is a pipe carrying ~425KB of TAP.
+// point: a write larger than the kernel's 64 KiB pipe buffer is queued on the
+// stream and needs the event loop to drain it, and process.exit() runs first
+// and discards the queue. Under GitHub Actions stdout is a pipe carrying ~425KB
+// of TAP.
 //
 // These tests run the REAL runner, copied byte-for-byte, over a real pipe.
 
 /** The two entry-point forms. The second is the #3466 defect. */
 const ENTRY_EXITCODE = 'process.exitCode = main(process.argv.slice(2));';
 const ENTRY_EXIT = 'process.exit(main(process.argv.slice(2)));';
+
+/** Fixture trees to remove after this file's tests finish (~500KB each). */
+const tailFixtureRoots = [];
+after(() => {
+  for (const root of tailFixtureRoots) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 /**
  * Stand the REAL runner up in a throwaway repo whose only suite FAILS, run it
@@ -603,6 +613,7 @@ const ENTRY_EXIT = 'process.exit(main(process.argv.slice(2)));';
  */
 function runFailingLane(entry) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'node-test-suites-tail-'));
+  tailFixtureRoots.push(root);
   const ciDir = path.join(root, 'scripts', 'ci');
   fs.mkdirSync(ciDir, { recursive: true });
 
@@ -719,8 +730,9 @@ test('#3466 — the fix does not soften the exit status the lane depends on', ()
 
 test('#3466 CONTROL: the harness can SEE the truncation (or says it cannot)', () => {
   // Without this, the test above is unfalsifiable on half the platforms it runs
-  // on and nobody would know which half. Node's documented behaviour: writes to
-  // a pipe are asynchronous on POSIX and SYNCHRONOUS on Windows. `guardrails`
+  // on and nobody would know which half. Node's process docs put pipe writes as
+  // asynchronous on POSIX and synchronous on Windows, and MEASURED here that is
+  // exactly what happens: Linux drops the tail, Windows keeps it. `guardrails`
   // runs on ubuntu-latest, so the bug is real where it matters and invisible
   // where it is developed — which is exactly how it survived.
   const { shipped, legacy } = tailPair();
