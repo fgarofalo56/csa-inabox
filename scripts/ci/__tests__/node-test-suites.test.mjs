@@ -792,6 +792,18 @@ test('#3466 CONTROL: the harness can SEE the truncation (or says it cannot)', ()
   // reason it exists.
   const { truncates, shipped, tapBytes, legacy } = tailPair();
 
+  // Say what was measured, every run, in the log. Both branches below PASS, so
+  // without this the lane cannot tell you whether it proved anything — and this
+  // environment is genuinely marginal: ubuntu-latest delivered 774,378 bytes
+  // whole in one run and truncated at a SMALLER payload in the next, because
+  // what escapes synchronously depends on how much the reader had drained at
+  // that instant. A number in the log is the difference between a receipt and a
+  // guess about which branch ran.
+  console.log(
+    `[#3466] ${process.platform} ${process.version}: payload=${tapBytes} `
+    + `truncates=${truncates} exit-form-delivered=${legacy.bytes} shipped-delivered=${shipped.bytes}`,
+  );
+
   if (!truncates) {
     // Honest, and NOT a silent pass: this environment delivered every byte at
     // every size tried, so the behavioural test above cannot fail here and the
