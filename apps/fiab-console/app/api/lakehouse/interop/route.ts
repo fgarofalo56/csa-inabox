@@ -27,6 +27,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
+import { externalOrigin } from '@/lib/auth/auth-breaker';
 import { buildGateEnvelope } from '@/lib/api/gate-envelope';
 import {
   auditLogContainer,
@@ -98,8 +99,15 @@ function catalogBlock(origin: string) {
   };
 }
 
-function originOf(url: string): string {
-  try { return new URL(url).origin; } catch { return (process.env.LOOM_PUBLIC_BASE_URL || '').replace(/\/+$/, ''); }
+function originOf(req: Request): string {
+  // #3467: this took `req.url` and returned `new URL(url).origin`, which under
+  // `output: 'standalone'` with HOSTNAME=0.0.0.0 is the CONTAINER's own listen
+  // address. It feeds catalogBlock().uri, which the lakehouse Interop tab
+  // renders behind "Copy catalog URI" and pastes into the same
+  // buildConnectSnippets Spark/Trino config — so the address had to be one an
+  // external engine can reach. The LOOM_PUBLIC_BASE_URL fallback was dead code:
+  // it sat in a `catch`, and that URL is perfectly valid, so it never threw.
+  return externalOrigin(req.headers);
 }
 
 export const GET = withSession(async (req, { session }) => {
@@ -136,7 +144,7 @@ export const GET = withSession(async (req, { session }) => {
     account,
     ...(accountGate ? { accountGate } : {}),
     ...(storeError ? { storeError } : {}),
-    catalog: catalogBlock(originOf(req.url)),
+    catalog: catalogBlock(originOf(req)),
     defaultPool: defaultSparkPool(),
     tables: (doc?.tables || []).map((t) => ({
       ...t,
@@ -363,7 +371,7 @@ export const PUT = withSession(async (req, { session }) => {
     tableRootUri,
     metadataLocation,
     state,
-    catalog: catalogBlock(originOf(req.url)),
+    catalog: catalogBlock(originOf(req)),
     ...(catalogNote ? { catalogNote } : {}),
     ...(persistError ? { persistError } : {}),
     ...(jobError ? { error: `Could not start the Spark session on pool "${pool}": ${jobError}`, code: 'livy_submit_error' } : {}),

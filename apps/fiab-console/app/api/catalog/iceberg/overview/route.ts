@@ -20,6 +20,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { externalOrigin } from '@/lib/auth/auth-breaker';
 import { buildGateEnvelope } from '@/lib/api/gate-envelope';
 import { lakehouseInteropContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -184,10 +185,13 @@ export const GET = withTenantAdmin(async (req, { session }) => {
   }
   rows.sort((a, b) => (a.namespace + a.name).localeCompare(b.namespace + b.name));
 
-  const origin = (() => {
-    try { return new URL(req.url).origin; } catch { return (process.env.LOOM_PUBLIC_BASE_URL || '').replace(/\/+$/, ''); }
-  })();
-  const catalogUri = `${origin}/api/catalog/iceberg`;
+  // #3467: the connection string /admin/catalog renders into copy-snippet tabs.
+  // This read `new URL(req.url).origin`, which under `output: 'standalone'` with
+  // HOSTNAME=0.0.0.0 is the CONTAINER's own listen address, so the page handed
+  // out `http://0.0.0.0:3000/api/catalog/iceberg` for an external engine to
+  // paste. The LOOM_PUBLIC_BASE_URL fallback beside it was dead code — it sat in
+  // a `catch`, and that URL is perfectly valid, so it never threw.
+  const catalogUri = `${externalOrigin(req.headers)}/api/catalog/iceberg`;
 
   return NextResponse.json({
     ok: true,
