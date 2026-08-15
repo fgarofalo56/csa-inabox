@@ -23,6 +23,7 @@
  * repeatedly (it backs the "Provision backing store" button).
  */
 import { executeQuery, executeParameterized } from './azure-sql-client';
+import { tsql } from '@/lib/sql/trusted-sql';
 
 export interface PlanBackingGate {
   missing: string;
@@ -119,7 +120,7 @@ export async function writebackCells(
     await executeQuery(cfg.server, cfg.database, DDL);
     let written = 0;
     for (const c of cells) {
-      const sqlText = `
+      const sqlText = tsql`
 MERGE dbo.loom_plan_cells AS t
 USING (SELECT @p0 AS plan_id, @p1 AS sheet_id, @p2 AS line_item_id, @p3 AS period_id, @p4 AS scenario_id, @p5 AS value) AS s
 ON (t.plan_id = s.plan_id AND t.sheet_id = s.sheet_id AND t.line_item_id = s.line_item_id AND t.period_id = s.period_id AND t.scenario_id = s.scenario_id)
@@ -160,7 +161,7 @@ export interface ReadResult {
  */
 export async function readPlanCells(cfg: PlanBackingConfig, planId: string): Promise<ReadResult> {
   try {
-    const sqlText = `
+    const sqlText = tsql`
 IF OBJECT_ID('dbo.loom_plan_cells', 'U') IS NULL
   SELECT TOP 0 CAST(NULL AS NVARCHAR(128)) AS sheet_id, CAST(NULL AS NVARCHAR(128)) AS line_item_id,
          CAST(NULL AS NVARCHAR(128)) AS period_id, CAST(NULL AS NVARCHAR(128)) AS scenario_id,

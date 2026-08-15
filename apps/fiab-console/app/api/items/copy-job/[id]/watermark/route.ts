@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeParameterized } from '@/lib/azure/azure-sql-client';
+import { tsql } from '@/lib/sql/trusted-sql';
 import { jerr, loadOwnedItem } from '../../../_lib/item-crud';
 
 export const runtime = 'nodejs';
@@ -53,8 +54,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const rows = await executeParameterized<{ source: string; table_name: string; last_value: string | null; updated_utc: string | null }>(
       server,
       database,
-      'SELECT source, table_name, last_value, CONVERT(varchar(33), updated_utc, 126) AS updated_utc ' +
-      'FROM dbo.copy_watermark WHERE source = @p0 AND table_name = @p1',
+      tsql`SELECT source, table_name, last_value, CONVERT(varchar(33), updated_utc, 126) AS updated_utc FROM dbo.copy_watermark WHERE source = @p0 AND table_name = @p1`,
       [sourceName, sourceTable],
     );
     return NextResponse.json({ ok: true, configured: true, watermark: rows[0] || null });

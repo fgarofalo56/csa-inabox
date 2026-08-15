@@ -37,6 +37,7 @@ import {
 } from './adf-client';
 import { dfsSuffix } from './cloud-endpoints';
 import { escapeSqlLiteral, bracket as qbracket } from '@/lib/sql/quoting';
+import { tsql, quotedIdentifier, quotedName, integerLiteral, joinFragments, sqlFragment } from '@/lib/sql/trusted-sql';
 // N6 — ODCS data contracts ENFORCED at ingestion. Rows are enforced between the
 // source read and the Bronze upload, so a violating row never reaches the clean
 // landing zone. Default = warn-quarantine; hard-reject is a per-contract opt-in.
@@ -348,12 +349,10 @@ async function enableChangeTracking(server: string, database: string, schema: st
   // is queryable with VIEW DATABASE STATE (db_owner has it) and is the documented
   // way to test whether CT is on for the current database.
   await executeParameterizedWithAuth(server, database,
-    `IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID()) ` +
-    `BEGIN ALTER DATABASE ${bracket(database)} SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON) END`, [], auth);
+    tsql`IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID()) BEGIN ALTER DATABASE ${quotedIdentifier(database)} SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON) END`, [], auth);
   // Table-level: enable CT on the specific table if it isn't already tracked.
   await executeParameterizedWithAuth(server, database,
-    `IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(@p0)) ` +
-    `ALTER TABLE ${bracket(schema)}.${bracket(table)} ENABLE CHANGE_TRACKING`,
+    tsql`IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(@p0)) ALTER TABLE ${quotedName(schema, table)} ENABLE CHANGE_TRACKING`,
     [`${schema}.${table}`], auth);
 }
 
@@ -368,7 +367,7 @@ async function changeTrackingStatus(
   server: string, database: string, schema: string, table: string, auth?: SqlExplicitAuth,
 ): Promise<{ current: number; minValid: number | null } | null> {
   const rows = await executeParameterizedWithAuth<{ ctv: number | null; minV: number | null }>(server, database,
-    `SELECT CHANGE_TRACKING_CURRENT_VERSION() AS ctv, CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID(@p0)) AS minV`,
+    tsql`SELECT CHANGE_TRACKING_CURRENT_VERSION() AS ctv, CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID(@p0)) AS minV`,
     [`${schema}.${table}`], auth);
   const r = rows[0];
   if (!r || r.ctv == null) return null;
@@ -382,10 +381,7 @@ async function changeTrackingStatus(
  */
 async function getPrimaryKeyColumns(server: string, database: string, schema: string, table: string, auth?: SqlExplicitAuth): Promise<string[]> {
   const rows = await executeParameterizedWithAuth<{ name: string }>(server, database,
-    `SELECT c.name FROM sys.index_columns ic ` +
-    `JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id ` +
-    `JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id ` +
-    `WHERE i.is_primary_key = 1 AND ic.object_id = OBJECT_ID(@p0) ORDER BY ic.key_ordinal`,
+    tsql`SELECT c.name FROM sys.index_columns ic JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id WHERE i.is_primary_key = 1 AND ic.object_id = OBJECT_ID(@p0) ORDER BY ic.key_ordinal`,
     [`${schema}.${table}`], auth);
   return rows.map((r) => r.name).filter(Boolean);
 }
@@ -409,12 +405,11 @@ async function readChangedRows(
   server: string, database: string, schema: string, table: string, sinceVersion: number, pkCols: string[],
   auth?: SqlExplicitAuth,
 ): Promise<{ columns: string[]; rows: Record<string, unknown>[] }> {
-  const pkJoin = pkCols.map((c) => `T.${bracket(c)} = CT.${bracket(c)}`).join(' AND ');
-  const sql =
-    `SELECT T.* ` +
-    `FROM ${bracket(schema)}.${bracket(table)} AS T ` +
-    `JOIN CHANGETABLE(CHANGES ${bracket(schema)}.${bracket(table)}, ${BigInt(sinceVersion).toString()}) AS CT ` +
-    `ON ${pkJoin}`;
+  const pkJoin = joinFragments(
+    pkCols.map((c) => sqlFragment`T.${quotedIdentifier(c)} = CT.${quotedIdentifier(c)}`),
+    sqlFragment` AND `,
+  );
+  const sql = tsql`SELECT T.* FROM ${quotedName(schema, table)} AS T JOIN CHANGETABLE(CHANGES ${quotedName(schema, table)}, ${integerLiteral(BigInt(sinceVersion))}) AS CT ON ${pkJoin}`;
   const recordset = await executeParameterizedWithAuth<Record<string, unknown>>(server, database, sql, [], auth);
   const cols = recordset.length ? Object.keys(recordset[0]) : [];
   return { columns: cols, rows: recordset };
@@ -672,7 +667,7 @@ async function snapshotTable(
       }
     }
 
-    const sql = `SELECT TOP ${MAX_ROWS + 1} * FROM ${bracket(t.schema)}.${bracket(t.table)}`;
+    const sql = tsql`SELECT TOP ${integerLiteral(MAX_ROWS + 1)} * FROM ${quotedName(t.schema, t.table)}`;
     const recordset = await executeParameterizedWithAuth<Record<string, unknown>>(src.server, src.database, sql, [], src.auth);
     const truncated = recordset.length > MAX_ROWS;
     const rows = truncated ? recordset.slice(0, MAX_ROWS) : recordset;
