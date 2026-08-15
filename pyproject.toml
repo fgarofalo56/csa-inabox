@@ -87,6 +87,18 @@ functions = [
     # Event Processing function deps
     "azure-eventhub>=5.11.0,<6.0.0",
     "azure-cosmos>=4.5.0,<5.0.0",
+    # DECLARED even though cryptography only arrives here transitively (via
+    # azure-identity, azure-storage-blob, msal, pyjwt).  Without a constraint of
+    # our own the lock re-pins to whatever is newest at compile time with
+    # NOTHING holding it there, so the next unrelated regeneration is free to
+    # drift back down and the next advisory has no floor to stop it landing on a
+    # vulnerable version.  That is how this lock came to pin 46.0.7 carrying
+    # four open advisories (GHSA-537c-gmf6-5ccf 48.0.1, CVE-2026-69249 and
+    # CVE-2026-69248 49.0.0, CVE-2026-69247 50.0.0).  Floor = the highest of
+    # those fixed versions; the ceiling ADMITS it — see
+    # portal/shared/requirements.txt for the mistake of a ceiling below the fix,
+    # which shipped twice on one line.  Refs #3492.
+    "cryptography>=50.0.0,<51.0.0",
 ]
 platform = [
     "structlog>=24.1.0,<27.0.0",
@@ -121,6 +133,14 @@ platform = [
     # gated on the RAG_DOC_INTELLIGENCE_ENDPOINT env; falls back to
     # pypdf text extraction when unset or when the API call fails.
     "azure-ai-documentintelligence>=1.0.0,<2.0.0",
+    # DECLARED even though cryptography only arrives here transitively (via
+    # azure-identity, azure-storage-blob, azure-storage-file-share, google-auth,
+    # msal, pyjwt).  An undeclared transitive re-pins to "newest at compile
+    # time" with nothing holding it, so the next regeneration can drift back
+    # below the fix — which is how this lock came to pin 46.0.7 with four open
+    # advisories.  Floor = the highest fixed version of those four (50.0.0);
+    # the ceiling admits it.  Refs #3492.
+    "cryptography>=50.0.0,<51.0.0",
 ]
 portal = [
     # Web framework
@@ -168,6 +188,14 @@ bff = [
     # InMemorySessionStore exists for local dev. Pinning keeps the
     # supply chain deterministic in gov builds.
     "redis>=5.0.0,<9.0.0",
+    # DECLARED even though cryptography only arrives here transitively (via
+    # msal and pyjwt).  An undeclared transitive re-pins to "newest at compile
+    # time" with nothing holding it, so the next regeneration can drift back
+    # below the fix — which is how this lock came to pin 46.0.7 with four open
+    # advisories.  Floor = the highest fixed version of those four (50.0.0);
+    # the ceiling admits it.  msal <1.37.0 caps cryptography at <49, so a
+    # regeneration here needs `--upgrade-package msal` too (#3491).  Refs #3492.
+    "cryptography>=50.0.0,<51.0.0",
 ]
 postgres = [
     # CSA-0046 — Postgres backend for portal persistence (AQ-0016).
@@ -188,6 +216,13 @@ postgres = [
     # ``pip install -e .[postgres]`` alone is self-contained for the
     # managed-identity code path.
     "azure-identity>=1.17.0,<2.0.0",
+    # DECLARED even though cryptography only arrives here transitively (via
+    # azure-identity, msal, pyjwt).  An undeclared transitive re-pins to "newest
+    # at compile time" with nothing holding it, so the next regeneration can
+    # drift back below the fix — which is how this lock came to pin 46.0.7 with
+    # four open advisories.  Floor = the highest fixed version of those four
+    # (50.0.0); the ceiling admits it.  Refs #3492.
+    "cryptography>=50.0.0,<51.0.0",
 ]
 copilot-evals = [
     # CSA-0008 — Minimal install for the deterministic eval harness
@@ -263,6 +298,14 @@ copilot = [
     # inside apps.copilot.conversation.CosmosConversationStore so
     # memory/redis deployments never resolve this dep.
     "azure-cosmos>=4.5.0,<5.0.0",
+    # DECLARED even though cryptography only arrives here transitively (via
+    # authlib, azure-identity, google-auth, joserfc, msal, pyjwt).  An
+    # undeclared transitive re-pins to "newest at compile time" with nothing
+    # holding it, so the next regeneration can drift back below the fix — which
+    # is how this lock came to pin 46.0.7 with four open advisories.  Floor =
+    # the highest fixed version of those four (50.0.0); the ceiling admits it.
+    # Refs #3492.
+    "cryptography>=50.0.0,<51.0.0",
 ]
 streaming = [
     # CSA-0137 streaming spine — unified streaming contract (source,
@@ -303,6 +346,13 @@ streaming = [
     # Lazy-imported so contract validation alone does not pull them.
     "azure-eventgrid>=4.17.0,<5.0.0",
     "azure-cosmos>=4.5.0,<5.0.0",
+    # DECLARED even though cryptography only arrives here transitively (via
+    # azure-identity, azure-storage-blob, msal, pyjwt).  An undeclared
+    # transitive re-pins to "newest at compile time" with nothing holding it, so
+    # the next regeneration can drift back below the fix — which is how this
+    # lock came to pin 46.0.7 with four open advisories.  Floor = the highest
+    # fixed version of those four (50.0.0); the ceiling admits it.  Refs #3492.
+    "cryptography>=50.0.0,<51.0.0",
 ]
 serving = [
     # apps/loom-duckdb — the N2b DuckDB serving tier + the N3 Arrow Flight SQL

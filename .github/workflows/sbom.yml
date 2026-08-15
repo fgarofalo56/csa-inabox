@@ -4,11 +4,25 @@ name: SBOM
 #
 # Emits CycloneDX and SPDX SBOMs on every push to main and on every
 # tagged release for:
-#   1. The Python source tree (resolved from requirements/*.lock so the
-#      SBOM reflects the exact pinned, hash-verified dependency set that
+#   1. The Python source tree (resolved from requirements/locks/*/requirements.txt
+#      so the SBOM reflects the exact pinned, hash-verified dependency set that
 #      ships in CI and Docker images).
 #   2. The two portal container images (backend + frontend), built locally
 #      from the Dockerfiles in portal/kubernetes/docker/*/.
+#
+# #3485 — EVERY PYTHON SBOM THIS JOB EVER PUBLISHED HAD ZERO COMPONENTS. The
+# `sbom-python-portal-cyclonedx.json` from run 31789267009 is empty. Syft's
+# python cataloger keys on the FILENAME and `requirements/portal.lock` matched
+# nothing it looks for, so a document asserting "this software has no
+# dependencies" was published as a supply-chain artifact for auditors. The
+# comment that used to sit here — "Use `file:` instead so Syft scans the lock
+# file as `python-requirements`" — was an unverified claim that did not hold,
+# and it survived review precisely because it reads as a reasoned choice.
+#
+# Fixed by the filename, not by configuration: the locks now live at
+# requirements/locks/<extra>/requirements.txt, which Syft recognises by default
+# (measured: 0 components before, 13 after, on the same file contents). The
+# component floor below is what makes it stay fixed.
 #
 # SBOMs are:
 #   • Uploaded to the workflow run as artifacts (retention: 90 days).
@@ -21,9 +35,10 @@ on:
   push:
     branches: [main]
     paths:
-      - 'requirements/**.lock'
+      - 'requirements/**'
       - 'pyproject.toml'
       - 'portal/kubernetes/docker/**/Dockerfile'
+      - 'scripts/ci/check-lock-scan-coverage.mjs'
       - '.github/workflows/sbom.yml'
   release:
     types: [published]
@@ -50,8 +65,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `base` is deliberately absent: the bare package declares no runtime
+        # dependencies, so its lock has zero pins and a 0-component SBOM for it
+        # would be TRUE. Every extra listed here has a non-empty lock, which is
+        # what makes the component floor below a real assertion rather than one
+        # that has to carve out an exception.
         extra:
-          - base
           - dev
           - governance
           - functions
@@ -65,31 +84,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
+      - name: Set up Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
       - name: Verify lock file exists
         run: |
-          test -f "requirements/${{ matrix.extra }}.lock" || {
-            echo "::error::requirements/${{ matrix.extra }}.lock is missing. Run scripts/update-locks.sh."
+          test -f "requirements/locks/${{ matrix.extra }}/requirements.txt" || {
+            echo "::error::requirements/locks/${{ matrix.extra }}/requirements.txt is missing. Run scripts/update-locks.sh."
             exit 1
           }
 
-      # anchore/sbom-action wraps Syft. The `path:` input is interpreted as
-      # a directory; pointing it at a single file makes Syft try `dir:` and
-      # `oci-dir:` schemes which both fail. Use `file:` instead so Syft scans
-      # the lock file as `python-requirements`.
+      # The component floor's own control, before any SBOM is judged: a
+      # 0-component document must FAIL and a populated one must pass.
+      - name: sbom-coverage self-test (the component floor must be able to fail)
+        run: node scripts/ci/check-lock-scan-coverage.mjs --selftest
+
+      # Syft recognises `requirements.txt` by default; the `file:` scheme just
+      # points it at one. No cataloger configuration — see the header for why
+      # that is the whole design.
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          file: requirements/${{ matrix.extra }}.lock
+          file: requirements/locks/${{ matrix.extra }}/requirements.txt
           format: cyclonedx-json
           artifact-name: sbom-python-${{ matrix.extra }}-cyclonedx.json
           output-file: sbom-python-${{ matrix.extra }}-cyclonedx.json
           upload-artifact: true
           upload-artifact-retention: 90
 
+      # THE COMPONENT FLOOR. A published SBOM with zero components asserts that
+      # this software has no dependencies. That is what shipped for months, and
+      # this is the single assertion that would have caught it (#3485).
+      - name: sbom-coverage (the published SBOM must describe something — #3485)
+        run: node scripts/ci/check-lock-scan-coverage.mjs --sbom sbom-python-${{ matrix.extra }}-cyclonedx.json --extra ${{ matrix.extra }}
+
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          file: requirements/${{ matrix.extra }}.lock
+          file: requirements/locks/${{ matrix.extra }}/requirements.txt
           format: spdx-json
           artifact-name: sbom-python-${{ matrix.extra }}-spdx.json
           output-file: sbom-python-${{ matrix.extra }}-spdx.json

@@ -50,11 +50,25 @@ def parse_pins(text: str) -> dict[str, str]:
     Lines that are blank, comments, pip options (``-r``, ``--hash``), URLs or
     non-exact constraints are skipped: this function answers "what does this
     file pin EXACTLY", not "what does it allow".
+
+    A trailing ``\\`` is a pip LINE CONTINUATION, not part of the version, and
+    stripping it is not cosmetic (#3485). ``_PIN`` is anchored with ``$``, and
+    every pin line in a ``pip-compile --generate-hashes`` lock ends in ``` \\```
+    because its hashes follow on continuation lines. Measured on the ten
+    compiled locks: 495 pin lines, ``parse_pins`` returned **0**. So the static
+    model in ``tests/repo/test_python_ci_dependency_order.py`` read an empty
+    file while ``pip install -r`` applied all 495 at runtime — the guard passing
+    vacuously over the exact hazard it was written for. The workflow no longer
+    installs those locks, and this makes the parser able to SEE such a file, so
+    the next one cannot be silently invisible.
     """
     pins: dict[str, str] = {}
     for raw in text.splitlines():
-        # Strip inline comments, then environment markers, then whitespace.
+        # Strip inline comments, then environment markers, then a trailing
+        # line-continuation backslash, then whitespace.
         line = raw.split("#", 1)[0].split(";", 1)[0].strip()
+        if line.endswith("\\"):
+            line = line[:-1].strip()
         if not line or line.startswith("-"):
             continue
         match = _PIN.match(line)

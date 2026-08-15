@@ -541,6 +541,29 @@ jobs:
       - name: npm-cve-floors (npm overrides must govern something, reach the BUILD, and state their exposure honestly)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-npm-cve-floors.mjs
+      # #3474 — the PYTHON side of the same class, and there was no guard for it
+      # at all. `portal/shared/requirements.txt` shipped an unfixable-by-
+      # construction cryptography ceiling TWICE on one line: `<47.0.0` blocked
+      # the 48.0.1 fix for GHSA-537c-gmf6-5ccf, and the remediation for THAT
+      # (`>=48.0.1,<49.0.0`) then blocked the 49.0.0 and 50.0.0 fixes for three
+      # more. Each time the fix for one advisory created the blocker for the
+      # next, and each time it read in review as diligence — because a floor
+      # raised alongside a ceiling is the SHAPE of diligence. Only arithmetic
+      # against the advisory's own first-patched version shows the range is
+      # empty of patched releases.
+      #
+      # Selftest FIRST, as with every other analyser here: it runs the pre-#3473
+      # ceiling and the post-#3473 one through the analyser and fails unless the
+      # verdict MOVES between them. A guard that cannot detect the defect it was
+      # written for must not be the thing that says the repo is clean. The real
+      # incident is reproducible on demand with `--rev b6677c3a^`, and
+      # scripts/ci/__tests__/python-cve-floors.test.mjs drives exactly that
+      # against the real commits.
+      - name: python-cve-floors (no advisory's fixed version may fall above a declared Python ceiling — #3474)
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-python-cve-floors.mjs --selftest
+          node scripts/ci/check-python-cve-floors.mjs
       # The third member of that family, and the one that closes the gap both
       # others assume shut: they check WHAT is pinned, this checks that the
       # lockfile doing the pinning is in the build context at all. #2816 —
