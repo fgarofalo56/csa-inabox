@@ -313,7 +313,41 @@ function cellValue(row: unknown, colName: string): string {
 
 /** Escape markdown table-breaking characters. */
 export function escapeMd(v: string): string {
-  return String(v).replace(/\|/g, '\\|').replace(/\n/g, ' ').replace(/`/g, 'ˋ');
+  return (
+    String(v)
+      // BACKSLASH FIRST, and the order is the whole fix (CodeQL
+      // js/incomplete-sanitization #767). Escaping `|` as `\|` without first
+      // escaping `\` lets a cell value re-introduce the delimiter: `a\|b`
+      // became `a\\|b`, and marked -- the renderer VS Code Chat uses -- counts
+      // CONSECUTIVE backslashes before a pipe, so an EVEN count reads as
+      // unescaped and splits the row. The value then controls table structure
+      // rather than occupying one cell. Query results are the input here, and
+      // warehouse/lakehouse rows routinely carry text from upstream systems.
+      .replace(/\\/g, '\\\\')
+      .replace(/\|/g, '\\|')
+      // EVERY character marked treats as a line terminator, not just LF.
+      // Measured against real marked 14.0.0 (the copy VS Code 1.102 vendors) by
+      // poisoning row 2 of a 3-row result and counting the <tr>s it emits:
+      //
+      //   LF CR VT FF NUL TAB NEL  -> 3 rows rendered   (harmless)
+      //   U+2028  U+2029           -> 1 row rendered    (rows 2 AND 3 gone)
+      //
+      // Two distinct mechanisms, both fixed by flattening here:
+      //   - CR: `Lexer.lex` preprocesses `/\r\n|\r/` to `\n` before tokenizing,
+      //     so a lone CR is promoted to a real newline and ends the row.
+      //   - U+2028/U+2029: marked's row patterns are `.`-based, and JS `.`
+      //     does not match a line terminator, so the match STOPS there and the
+      //     poisoned row plus every row after it is silently dropped — under a
+      //     footer that still reads "3 rows". That is worse than truncation:
+      //     it is a believable wrong answer with a confident row count.
+      //
+      // Spelled with \u escapes on purpose. U+2028/U+2029 are invisible in
+      // every editor and diff; as literals one reformat neuters this silently.
+      .replace(/[\r\n\u2028\u2029]/g, ' ')
+      // U+02CB, not a backtick: a real backtick would close the code span the
+      // call sites wrap this in.
+      .replace(/`/g, 'ˋ')
+  );
 }
 
 /** Turn a backend error into an honest message (status + reason + hint) — never a fabricated answer. */
