@@ -570,3 +570,188 @@ test('CONTROL: the pre-existing independent lanes are untouched', () => {
     'the hand-listed scripts/ci self-test step was removed',
   );
 });
+
+// ── a FAILING lane must stay READABLE (#3466) ───────────────────────────────
+//
+// decide() being right is worth nothing if the reader never sees its verdict.
+// On PR #3461 this lane went red having emitted a TAP stream cut off mid-word,
+// no `not ok` line anywhere, and no `[node-test-suites] FAIL:` verdict either —
+// so the failure was diagnosed as process death, then OOM, then maxBuffer, then
+// runner parallelism. All wrong. The cause was `process.exit()` at the entry
+// point: it does not wait for a PIPE-backed stdout to drain, and under GitHub
+// Actions stdout is a pipe carrying ~425KB of TAP.
+//
+// These tests run the REAL runner, copied byte-for-byte, over a real pipe.
+
+/** The two entry-point forms. The second is the #3466 defect. */
+const ENTRY_EXITCODE = 'process.exitCode = main(process.argv.slice(2));';
+const ENTRY_EXIT = 'process.exit(main(process.argv.slice(2)));';
+
+/**
+ * Stand the REAL runner up in a throwaway repo whose only suite FAILS, run it
+ * with stdout on a PIPE, and report what a reader would actually have seen.
+ *
+ * The runner is COPIED, never re-implemented: a hand-written stand-in that
+ * "modelled" the write-then-exit sequence would prove only that the model has
+ * the bug. REPO_ROOT is derived from the runner's own location, so a copy at
+ * <fixture>/scripts/ci/ discovers the fixture tree instead of this repo. The
+ * merge-blocking workflow is copied too, so the fixture exercises the same
+ * branches production does rather than a degraded variant.
+ *
+ * @param entry one of the forms above, or null to run the file EXACTLY as it
+ *   ships — which is what makes the shipped-form test able to fail.
+ */
+function runFailingLane(entry) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'node-test-suites-tail-'));
+  const ciDir = path.join(root, 'scripts', 'ci');
+  fs.mkdirSync(ciDir, { recursive: true });
+
+  let src = fs.readFileSync(path.join(REPO_ROOT, RUNNER_PATH), 'utf8');
+  if (entry !== null) {
+    src = src.replace(ENTRY_EXITCODE, entry).replace(ENTRY_EXIT, entry);
+    assert.ok(
+      src.includes(entry),
+      `could not install the entry form "${entry}" — the runner's entry point was rewritten, so this control is measuring nothing`,
+    );
+  }
+  fs.writeFileSync(path.join(ciDir, 'check-node-test-suites.mjs'), src);
+  fs.copyFileSync(
+    path.join(REPO_ROOT, 'scripts/ci/_logical-lines.mjs'),
+    path.join(ciDir, '_logical-lines.mjs'),
+  );
+  const wf = MERGE_BLOCKING_LANES[0].workflow;
+  fs.mkdirSync(path.join(root, path.dirname(wf)), { recursive: true });
+  fs.copyFileSync(path.join(REPO_ROOT, wf), path.join(root, wf));
+
+  // One suite, ~480KB of TAP, failing LAST — the incident's shape. The bulk has
+  // to clear the pipe buffer plus whatever libuv flushes synchronously (146KB
+  // when measured), or the tail survives by accident and this stops measuring.
+  const suiteDir = path.join(root, 'apps', 'bulk', 'tests');
+  fs.mkdirSync(suiteDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(suiteDir, 'bulk.test.mjs'),
+    [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "const wide = (n) => `bulk case ${n} ` + 'y'.repeat(4000);",
+      'for (let i = 0; i < 60; i++) test(wide(i), () => assert.equal(1, 1));',
+      "test('the assertion that FAILS', () => assert.equal(1, 2));",
+      '',
+    ].join('\n'),
+  );
+
+  // stdio defaults to pipe — that IS the condition under test. CI is cleared so
+  // the run cannot divert into the CI-only sh branch, which is not what this
+  // measures; the failing-child path through decide() ignores `ci` anyway.
+  //
+  // NODE_TEST_* must go. This file runs under `node --test`, which exports
+  // NODE_TEST_CONTEXT=child-v8 to signal "report over the v8 serializer, not
+  // TAP" — and a plain spawn inherits it two levels down, so the fixture's
+  // `node --test --test-reporter=tap` grandchild emitted no TAP at all. Measured:
+  // 702 bytes of preamble and nothing else, from BOTH entry forms, which reads
+  // exactly like the truncation under investigation. Leaving it set would have
+  // made this control fail identically whether the bug was present or fixed.
+  const env = { ...process.env, CI: '' };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.NODE_TEST_WORKER_ID;
+
+  const r = spawnSync(process.execPath, [path.join(ciDir, 'check-node-test-suites.mjs')], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 128 * 1024 * 1024,
+    env,
+  });
+  assert.ok(!r.error, `could not run the fixture runner: ${r.error?.message}`);
+  const out = r.stdout ?? '';
+  // The fixture must actually have RUN something, and this has to be checked
+  // separately from the tail: a run that never produced TAP is short in exactly
+  // the way a truncated one is, so without this the control would report the
+  // defect's signature when the harness itself was broken (it did — 702 bytes,
+  // both forms, see NODE_TEST_* above).
+  assert.match(
+    out,
+    /discovered 1 node:test suite\(s\)/,
+    `the fixture runner did not discover its one suite — it is not measuring this repo's runner:\n${out.slice(0, 400)}`,
+  );
+  assert.ok(
+    out.length > 50_000,
+    `the fixture emitted only ${out.length} bytes, far below the ~146KB a truncated run still delivers — the suite never really produced TAP, so this control measured nothing. stderr tail: ${(r.stderr ?? '').trim().slice(-300)}`,
+  );
+  return {
+    status: r.status,
+    bytes: out.length,
+    hasNotOk: /^not ok \d+/m.test(out),
+    hasVerdict: out.includes('[node-test-suites] FAIL:'),
+  };
+}
+
+/** Two real runner invocations (~1s). Built once, asserted by three tests. */
+let tailRuns;
+const tailPair = () =>
+  (tailRuns ??= { shipped: runFailingLane(null), legacy: runFailingLane(ENTRY_EXIT) });
+
+test('#3466 — a FAILING suite still emits BOTH its `not ok` and its FAIL verdict', () => {
+  // THE assertion. Runs the entry point exactly as it ships, so reverting the
+  // fix turns this red (on POSIX — see the platform control below).
+  const { shipped } = tailPair();
+  assert.ok(
+    shipped.hasNotOk,
+    `the failing assertion's \`not ok\` line never reached the reader (${shipped.bytes} bytes survived) — a red lane with no visible cause is #3466 again`,
+  );
+  assert.ok(
+    shipped.hasVerdict,
+    `the [node-test-suites] FAIL: verdict never reached the reader (${shipped.bytes} bytes survived)`,
+  );
+});
+
+test('#3466 — the fix does not soften the exit status the lane depends on', () => {
+  // process.exitCode must produce the same non-zero exit process.exit() did.
+  // Truncation was never the risk here; silently returning 0 would be worse than
+  // the bug, so both forms are pinned to the SAME non-zero status.
+  const { shipped, legacy } = tailPair();
+  assert.notEqual(shipped.status, 0, 'a failing suite no longer fails this lane');
+  assert.equal(
+    shipped.status,
+    legacy.status,
+    'the entry form changed the exit status, not just the flushing',
+  );
+});
+
+test('#3466 CONTROL: the harness can SEE the truncation (or says it cannot)', () => {
+  // Without this, the test above is unfalsifiable on half the platforms it runs
+  // on and nobody would know which half. Node's documented behaviour: writes to
+  // a pipe are asynchronous on POSIX and SYNCHRONOUS on Windows. `guardrails`
+  // runs on ubuntu-latest, so the bug is real where it matters and invisible
+  // where it is developed — which is exactly how it survived.
+  const { shipped, legacy } = tailPair();
+  if (process.platform === 'win32') {
+    assert.ok(
+      legacy.hasNotOk && legacy.hasVerdict,
+      'process.exit() lost the tail on Windows, where pipe writes are documented as synchronous — the platform assumption below is wrong and the test above may be measuring something else',
+    );
+    // Declared, not hidden: on Windows the test above cannot fail, and the
+    // shape assertion that follows is the only thing holding the fix locally.
+    return;
+  }
+  assert.ok(
+    !legacy.hasNotOk && !legacy.hasVerdict,
+    `process.exit() delivered the whole tail (${legacy.bytes} of ${shipped.bytes} bytes), so the test above would pass against the defect too. Either the payload no longer clears the pipe buffer — grow it — or this platform flushes synchronously.`,
+  );
+});
+
+test('#3466 — the entry point does not hand main()\'s result to process.exit()', () => {
+  // A SHAPE assertion, which is normally the weak kind. It is here because the
+  // behavioural test above is structurally unable to fail on Windows, so on a
+  // Windows dev box this is the only thing between a reverted fix and a
+  // regression that reappears only in CI — the same blind spot that produced
+  // #3466. It is a companion to the behavioural test, never a substitute.
+  const src = fs.readFileSync(path.join(REPO_ROOT, RUNNER_PATH), 'utf8');
+  assert.ok(
+    src.includes(ENTRY_EXITCODE),
+    'the entry point no longer assigns process.exitCode',
+  );
+  assert.ok(
+    !/process\.exit\(main\(/.test(src),
+    'the entry point calls process.exit(main(…)) again — a pipe-backed stdout will lose the tail of a failing run (#3466)',
+  );
+});
