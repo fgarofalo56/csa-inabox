@@ -70,8 +70,28 @@ function req(url: string, init: { headers?: Record<string, string> } = {}) {
 const CONTAINER_URL = 'http://0.0.0.0:3000/api/catalog/iceberg/connect';
 /** What the client actually reached, as Front Door forwards it. */
 const FORWARDED = { host: '0.0.0.0:3000', 'x-forwarded-host': 'loom.contoso.com', 'x-forwarded-proto': 'https' };
-/** The only address any of these routes may hand an external engine. */
-const EXTERNAL_URI = 'https://loom.contoso.com/api/catalog/iceberg';
+/** The only origin any of these routes may hand an external engine. */
+const EXTERNAL_ORIGIN = 'https://loom.contoso.com';
+/** The address the defect emitted, and the one that must never appear. */
+const CONTAINER_ORIGIN = 'http://0.0.0.0:3000';
+/** The full URI those two combine into. */
+const EXTERNAL_URI = `${EXTERNAL_ORIGIN}/api/catalog/iceberg`;
+
+/**
+ * Every absolute http(s) origin appearing in a snippet body, parsed rather than
+ * pattern-matched, so `https://loom.contoso.com.evil.test` can never satisfy an
+ * assertion about `https://loom.contoso.com`.
+ */
+function originsIn(code: string): string[] {
+  const found = String(code).match(/https?:\/\/[^\s'"`,)\]]+/g) ?? [];
+  return found.flatMap((raw) => {
+    try {
+      return [new URL(raw).origin];
+    } catch {
+      return [];
+    }
+  });
+}
 
 beforeEach(() => {
   sessionValue = { claims: { oid: 'oid-1', upn: 'analyst@contoso.com', tid: 'tid-1' }, exp: Date.now() / 1000 + 3600 };
@@ -102,12 +122,19 @@ describe('GET /api/catalog/iceberg/connect', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
 
-    expect(body.catalog.uri).toBe('https://loom.contoso.com/api/catalog/iceberg');
+    expect(body.catalog.uri).toBe(EXTERNAL_URI);
     expect(body.catalog.uri).not.toContain('0.0.0.0');
   });
 
   // The snippet bodies are what a user actually pastes into Spark or Trino, so
   // the address has to be right THERE, not merely in the field beside them.
+  //
+  // Asserted on PARSED origins, never on substrings. `code.includes('https://
+  // loom.contoso.com/…')` reads as equivalent and is not: it is satisfied by a
+  // host that merely CONTAINS the expected one, which is why CodeQL flags the
+  // shape (js/incomplete-url-substring-sanitization). Parsing every URL out and
+  // comparing origins exactly is both rule-clean and the stronger check — it
+  // sees every address in the body, not just the one being looked for.
   it('#3467 — no snippet carries the container address', async () => {
     const { GET } = await import('../connect/route');
     const res = await GET(
@@ -117,12 +144,11 @@ describe('GET /api/catalog/iceberg/connect', () => {
     const body = await res.json();
 
     expect(body.snippets.length).toBeGreaterThan(3);
-    const offenders = body.snippets.filter((s: any) => s.code.includes('0.0.0.0'));
+    const offenders = body.snippets.filter((s: any) => originsIn(s.code).includes(CONTAINER_ORIGIN));
     expect(offenders.map((s: any) => s.id)).toEqual([]);
     // Present, not merely absent — a route emitting an empty origin would also
     // have zero offenders while being just as unusable.
-    const carrying = body.snippets.filter((s: any) =>
-      s.code.includes('https://loom.contoso.com/api/catalog/iceberg'));
+    const carrying = body.snippets.filter((s: any) => originsIn(s.code).includes(EXTERNAL_ORIGIN));
     expect(carrying.length).toBeGreaterThan(0);
   });
 
@@ -148,7 +174,7 @@ describe('GET /api/catalog/iceberg/connect', () => {
     expect(body.catalog.gate).toBeTruthy();
     // Still a real, reachable address even while gated — the gate must not cost
     // the user the value the route exists to give.
-    expect(body.catalog.uri).toBe('https://loom.contoso.com/api/catalog/iceberg');
+    expect(body.catalog.uri).toBe(EXTERNAL_URI);
     expect(body.snippets.length).toBeGreaterThan(3);
   });
 });
