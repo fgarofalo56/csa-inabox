@@ -129,12 +129,15 @@ describe('GET /api/catalog/iceberg/connect', () => {
   // The snippet bodies are what a user actually pastes into Spark or Trino, so
   // the address has to be right THERE, not merely in the field beside them.
   //
-  // Asserted on PARSED origins, never on substrings. `code.includes('https://
-  // loom.contoso.com/…')` reads as equivalent and is not: it is satisfied by a
-  // host that merely CONTAINS the expected one, which is why CodeQL flags the
-  // shape (js/incomplete-url-substring-sanitization). Parsing every URL out and
-  // comparing origins exactly is both rule-clean and the stronger check — it
-  // sees every address in the body, not just the one being looked for.
+  // Asserted on PARSED origins compared with ===, never on substrings and never
+  // via .includes(). `code.includes('https://loom.contoso.com/…')` reads as
+  // equivalent and is not: it is satisfied by a host that merely CONTAINS the
+  // expected one, which is why CodeQL flags it
+  // (js/incomplete-url-substring-sanitization). The rule matches on the CALL,
+  // not the receiver, so `parsedOrigins.includes(URL_LITERAL)` trips it too even
+  // though array membership is exact — hence `.some(o => o === …)`. Parsing every
+  // URL out and comparing origins is the stronger check regardless: it sees
+  // every address in the body, not just the one being looked for.
   it('#3467 — no snippet carries the container address', async () => {
     const { GET } = await import('../connect/route');
     const res = await GET(
@@ -144,11 +147,11 @@ describe('GET /api/catalog/iceberg/connect', () => {
     const body = await res.json();
 
     expect(body.snippets.length).toBeGreaterThan(3);
-    const offenders = body.snippets.filter((s: any) => originsIn(s.code).includes(CONTAINER_ORIGIN));
+    const offenders = body.snippets.filter((s: any) => originsIn(s.code).some((o) => o === CONTAINER_ORIGIN));
     expect(offenders.map((s: any) => s.id)).toEqual([]);
     // Present, not merely absent — a route emitting an empty origin would also
     // have zero offenders while being just as unusable.
-    const carrying = body.snippets.filter((s: any) => originsIn(s.code).includes(EXTERNAL_ORIGIN));
+    const carrying = body.snippets.filter((s: any) => originsIn(s.code).some((o) => o === EXTERNAL_ORIGIN));
     expect(carrying.length).toBeGreaterThan(0);
   });
 
