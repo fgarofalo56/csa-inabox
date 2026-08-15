@@ -23,13 +23,14 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { tenantSettingsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
+import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import {
   evaluateCertification, deriveCertificationState,
   type CertificationRecord,
 } from '@/lib/dataproducts/certification';
+import { measureCertificationDq } from '@/lib/dataproducts/certification-dq';
 import { gatherCertInputs } from '../certification/route';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -39,17 +40,6 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'data-product';
 const ACTIONS = ['certify', 'revoke', 'promote', 'unpromote'] as const;
 type Action = (typeof ACTIONS)[number];
-
-interface DqRule { enabled: boolean }
-async function computeDqScore(tenantId: string): Promise<number | null> {
-  try {
-    const ts = await tenantSettingsContainer();
-    const { resource } = await ts.item(`dq-rules:${tenantId}`, tenantId).read<{ items?: DqRule[] }>();
-    const rules = resource?.items ?? [];
-    if (rules.length > 0) return Math.round((rules.filter((r) => r.enabled).length / rules.length) * 100);
-  } catch { /* honest-gate */ }
-  return null;
-}
 
 /** Best-effort certification audit entry (partition = itemId, matching the
  *  data-product audit convention). Never blocks the write. */
@@ -100,7 +90,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     // ── Revoke — drop a prior sign-off back to the automated rung ───────────
     if (action === 'revoke') {
-      const dqScore = await computeDqScore(session.claims.oid);
+      const { dqScore } = await measureCertificationDq(session.claims.oid, item);
       const evaluation = evaluateCertification(gatherCertInputs(item, dqScore));
       const record: CertificationRecord = {
         state: evaluation.validated ? 'validated' : 'draft',
@@ -125,8 +115,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
     // Gate 2: EVERY automated check must pass — re-evaluated live, never trusting
-    // the client. A failing check returns 422 with the precise blockers.
-    const dqScore = await computeDqScore(session.claims.oid);
+    // the client. The DQ input is MEASURED (rules executed against ADX, scored on
+    // the rules that PASSED), so a product whose rules are all failing cannot
+    // clear this gate; an unmeasurable score gates rather than passes (#3493).
+    // A failing check returns 422 with the precise blockers.
+    const { dqScore, dqGate } = await measureCertificationDq(session.claims.oid, item);
     const evaluation = evaluateCertification(gatherCertInputs(item, dqScore));
     if (!evaluation.certifiable) {
       return NextResponse.json(
@@ -136,6 +129,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           code: 'checks_failed',
           blockers: evaluation.checks.filter((c) => !c.pass).map((c) => ({ id: c.id, label: c.label, detail: c.detail })),
           checks: evaluation.checks,
+          ...(dqGate ? { dqGate } : {}),
         },
         { status: 422 },
       );

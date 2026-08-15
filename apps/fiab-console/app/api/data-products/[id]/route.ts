@@ -14,10 +14,11 @@
  *     `item`/`doc`/`isOwner` drive the F15 consumer read view and the owner edit
  *     dialog. `product` is the owner details (F3) projection of the same record,
  *     plus two best-effort derived fields:
- *       - dqScore : real data-quality score from the tenant's DQ rules
- *                   (tenant-settings doc id `dq-rules:<tenantId>`); null when no
- *                   rules are configured — the UI shows an honest-gate instead
- *                   of a fabricated number (per no-vaporware.md).
+ *       - dqScore : MEASURED data-quality score — the tenant's DQ rules executed
+ *                   against the product's bound ADX tables, scored on the rules
+ *                   that PASSED their own threshold. null (with `dqGate` naming
+ *                   the reason) when nothing could be measured; the UI shows the
+ *                   honest gate instead of a fabricated number (no-vaporware.md).
  *       - subscriberCount : real count of approved access-requests.
  *
  *     `preconditions`/`current` (F13) are the four destructive-delete gates,
@@ -69,7 +70,6 @@ import { getSession } from '@/lib/auth/session';
 import {
   itemsContainer,
   workspacesContainer,
-  tenantSettingsContainer,
   accessRequestsContainer,
   auditLogContainer,
 } from '@/lib/azure/cosmos-client';
@@ -78,6 +78,7 @@ import {
 } from '@/lib/azure/loom-data-products-search';
 import { deleteOwnedItem, loadOwnedItem as loadOwnedItemByType } from '../../items/_lib/item-crud';
 import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
+import { measureCertificationDq } from '@/lib/dataproducts/certification-dq';
 import type { DataContract } from '@/lib/dataproducts/contract';
 import {
   deleteDataProductBestEffort,
@@ -365,29 +366,6 @@ async function loadOwnedItem(itemId: string, tenantId: string): Promise<WithEtag
   return item;
 }
 
-/** Minimal shape of the DQ-rules document (see /api/admin/data-quality-rules). */
-interface DqRule { id: string; name: string; enabled: boolean; check?: string; scope?: string }
-interface DqRulesDoc { id: string; tenantId: string; items?: DqRule[] }
-
-const DQ_GATE =
-  'No data-quality rules configured for this tenant. Define rules in Admin › Data Quality Rules to compute a real score.';
-
-/** Real DQ score from the caller's tenant rules; honest-gate when none exist. */
-async function computeDqScore(tenantId: string): Promise<{ dqScore: number | null; dqGate: string | null }> {
-  try {
-    const ts = await tenantSettingsContainer();
-    const { resource } = await ts.item(`dq-rules:${tenantId}`, tenantId).read<DqRulesDoc>();
-    const rules = resource?.items ?? [];
-    if (rules.length > 0) {
-      const enabled = rules.filter((r) => r.enabled).length;
-      return { dqScore: Math.round((enabled / rules.length) * 100), dqGate: null };
-    }
-  } catch {
-    // 404 = no rules doc yet → honest-gate, not an error.
-  }
-  return { dqScore: null, dqGate: DQ_GATE };
-}
-
 /** Real count of approved subscribers (access-requests). Best-effort → 0. */
 async function countSubscribers(dataProductId: string): Promise<number> {
   try {
@@ -483,7 +461,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     // publisher-analytics number reflects genuine demand). Fire-and-forget.
     if (!isOwner) void recordListingView(id);
     const [{ dqScore, dqGate }, subscriberCount, gates] = await Promise.all([
-      computeDqScore(session.claims.oid),
+      measureCertificationDq(session.claims.oid, item),
       countSubscribers(id),
       computePreconditions(item, id),
     ]);

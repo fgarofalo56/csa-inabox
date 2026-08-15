@@ -7,20 +7,21 @@
  * Read-only + not ownership-gated (the trust signal is discoverable), so the
  * catalog card and marketplace listing can show the same badge the owner sees.
  *
- * Azure-native: reads only Cosmos + the tenant DQ-rules doc. No Fabric / Power
- * BI dependency (.claude/rules/no-fabric-dependency.md); real data, no mocks
- * (.claude/rules/no-vaporware.md) — a missing DQ score honest-gates one check
- * rather than fabricating a pass.
+ * Azure-native: Cosmos for the item, live ADX for the DQ score. No Fabric /
+ * Power BI dependency (.claude/rules/no-fabric-dependency.md); real data, no
+ * mocks (.claude/rules/no-vaporware.md) — an unmeasurable DQ score honest-gates
+ * the `dq` check rather than fabricating a pass.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
   evaluateCertification, deriveCertificationState, resolveEndorsement,
   type CertificationInputs, type CertificationRecord,
 } from '@/lib/dataproducts/certification';
+import { measureCertificationDq } from '@/lib/dataproducts/certification-dq';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -37,20 +38,6 @@ async function findItem(itemId: string): Promise<WorkspaceItem | null> {
     })
     .fetchAll();
   return resources[0] ?? null;
-}
-
-interface DqRule { enabled: boolean }
-interface DqRulesDoc { items?: DqRule[] }
-
-/** Real DQ score from the caller's tenant rules (enabled ÷ total); null → honest-gate. */
-async function computeDqScore(tenantId: string): Promise<number | null> {
-  try {
-    const ts = await tenantSettingsContainer();
-    const { resource } = await ts.item(`dq-rules:${tenantId}`, tenantId).read<DqRulesDoc>();
-    const rules = resource?.items ?? [];
-    if (rules.length > 0) return Math.round((rules.filter((r) => r.enabled).length / rules.length) * 100);
-  } catch { /* 404 → no rules → honest-gate */ }
-  return null;
 }
 
 /** Gather the live certification inputs from an item's Cosmos state. Shared with
@@ -86,7 +73,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     if (!item) return apiError('Data product not found', 404, { code: 'not_found' });
 
     const st = (item.state || {}) as Record<string, unknown>;
-    const dqScore = await computeDqScore(session.claims.oid);
+    const { dqScore, dqGate, dqResult } = await measureCertificationDq(session.claims.oid, item);
     const evaluation = evaluateCertification(gatherCertInputs(item, dqScore));
     const existing = (st.certification && typeof st.certification === 'object'
       ? st.certification as CertificationRecord
@@ -110,6 +97,17 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
       checks: evaluation.checks,
       validated: evaluation.validated,
       certifiable: evaluation.certifiable,
+      // The MEASURED data-quality input behind the `dq` check: the passing-rule
+      // ratio, the per-rule breakdown, and — when nothing could be measured —
+      // the exact reason the check is gated rather than passed.
+      dq: {
+        score: dqScore,
+        gate: dqGate,
+        ruleCount: dqResult?.ruleCount ?? 0,
+        passingRules: dqResult?.passingRules ?? 0,
+        breakdown: dqResult?.breakdown ?? [],
+        measuredAt: dqResult?.computedAt ?? null,
+      },
       // A reviewer must be DISTINCT from the creator (Power BI reviewer-pool
       // parity); the client disables the Certify action for the creator.
       isCreator: item.createdBy === session.claims.oid,
