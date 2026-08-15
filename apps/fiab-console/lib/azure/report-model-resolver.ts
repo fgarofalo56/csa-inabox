@@ -78,6 +78,7 @@ import {
   executeWithCredential,
   executeParameterized,
 } from '@/lib/azure/azure-sql-client';
+import { sqlWithNoContainmentGuarantee } from '@/lib/sql/trusted-sql';
 import { executeStatement, databricksConfigGate, warehouseConfigGate } from '@/lib/azure/databricks-client';
 import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-flex-client';
 import { queryItems } from '@/lib/azure/cosmos-data-client';
@@ -1652,6 +1653,14 @@ function toPositionalParams(params: SynapseQueryParam[]): string[] {
  * (azure-sql | generic-sql). entra-mi binds `@p<n>` via executeParameterized;
  * credentialed auth runs through executeWithCredential (no param binding — the
  * caller passes `undefined` filters for those, the client re-applies them).
+ *
+ * `sql` reaches `executeParameterized` through
+ * `sqlWithNoContainmentGuarantee(…, 'report-visual-compiler')` rather than a
+ * containing constructor, and the name is the disclosure: a SqlRunner statement
+ * is compiled by `wells-to-sql.buildSqlFromVisual` (resolver-whitelisted
+ * identifiers, `@p<n>`-bound values) but MAY wrap the report data source's own
+ * custom `SELECT` (`ReportObjectRef.mode === 'query'`), which this surface
+ * executes on purpose. Nothing here proves containment and nothing pretends to.
  */
 async function azureSqlRunner(conn: LoomConnection): Promise<SqlRunner> {
   const host = conn.host || '';
@@ -1663,7 +1672,7 @@ async function azureSqlRunner(conn: LoomConnection): Promise<SqlRunner> {
         // bag by each marker's own index so the bound inputs always line up with
         // the @p<n> markers compiled into `sql` (see toPositionalParams).
         const recs = await executeParameterized<Record<string, unknown>>(
-          host, db, sql, toPositionalParams(params),
+          host, db, sqlWithNoContainmentGuarantee(sql, 'report-visual-compiler'), toPositionalParams(params),
         );
         return { columns: recs.length ? Object.keys(recs[0]) : [], rows: recs };
       }
