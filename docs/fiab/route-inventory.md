@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1675 |
 | Public (no session) | 104 |
-| Session-only | 561 |
-| Owner-scoped | 711 |
+| Session-only | 560 |
+| Owner-scoped | 712 |
 | Admin | 299 |
 | Gated (backend config) | 494 |
 | Areas | 121 |
@@ -605,10 +605,10 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `dab/[id]/publish/route.ts` | POST | session-only | ● | APIM |
 | `dab/[id]/validate/route.ts` | POST | session-only |  | — |
 | `dab/create/route.ts` | POST | owner-scoped |  | — |
-| `dab/deploy-source/route.ts` | GET POST | owner-scoped | ● | Databricks, Purview |
+| `dab/deploy-source/route.ts` | GET POST | owner-scoped | ● | Azure SQL, Databricks, Purview |
 | `dab/sources/[kind]/columns/route.ts` | GET | session-only | ● | — |
 | `dab/sources/[kind]/schema/route.ts` | GET | session-only | ● | — |
-| `dab/sources/route.ts` | GET | session-only | ● | — |
+| `dab/sources/route.ts` | GET | session-only | ● | Azure SQL |
 
 ## data-agent
 
@@ -1037,7 +1037,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/shortcuts/[name]/route.ts` | PATCH DELETE | owner-scoped |  | — |
 | `items/[type]/[id]/shortcuts/[name]/test/route.ts` | POST | owner-scoped |  | — |
 | `items/[type]/[id]/shortcuts/route.ts` | GET POST | owner-scoped |  | — |
-| `items/[type]/[id]/sql-security/route.ts` | GET POST | session-only | ● | Synapse SQL |
+| `items/[type]/[id]/sql-security/route.ts` | GET POST | session-only | ● | Azure SQL, Synapse SQL |
 | `items/[type]/[id]/statistics/route.ts` | GET POST | session-only | ● | Databricks, Synapse SQL |
 | `items/[type]/[id]/versions/[versionId]/restore/route.ts` | POST | owner-scoped | ● | Cosmos |
 | `items/[type]/[id]/versions/[versionId]/route.ts` | GET | owner-scoped | ● | — |
@@ -1132,29 +1132,29 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/automl/jobs/route.ts` | GET | session-only | ● | — |
 | `items/automl/options/route.ts` | GET | session-only | ● | AML |
 | `items/automl/submit/route.ts` | POST | session-only | ● | — |
-| `items/azure-sql-database/[id]/aad-admin/route.ts` | GET PUT | session-only |  | — |
+| `items/azure-sql-database/[id]/aad-admin/route.ts` | GET PUT | session-only |  | Azure SQL |
 | `items/azure-sql-database/[id]/connect/route.ts` | POST | owner-scoped |  | — |
-| `items/azure-sql-database/[id]/copilot/route.ts` | POST | owner-scoped | ● | — |
-| `items/azure-sql-database/[id]/create-db/route.ts` | POST | session-only |  | — |
-| `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | session-only |  | — |
+| `items/azure-sql-database/[id]/copilot/route.ts` | POST | owner-scoped | ● | Azure SQL |
+| `items/azure-sql-database/[id]/create-db/route.ts` | POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | session-only |  | Azure SQL |
 | `items/azure-sql-database/[id]/get-data/route.ts` | POST | session-only | ● | ADF |
-| `items/azure-sql-database/[id]/maintenance-configs/route.ts` | GET | session-only |  | — |
-| `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | Cosmos |
-| `items/azure-sql-database/[id]/performance/route.ts` | POST | session-only |  | — |
+| `items/azure-sql-database/[id]/maintenance-configs/route.ts` | GET | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos |
+| `items/azure-sql-database/[id]/performance/route.ts` | POST | session-only |  | Azure SQL |
 | `items/azure-sql-database/[id]/principal-search/route.ts` | GET | session-only |  | — |
 | `items/azure-sql-database/[id]/queries/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
-| `items/azure-sql-database/[id]/query/cancel/route.ts` | POST | session-only |  | — |
-| `items/azure-sql-database/[id]/query/route.ts` | POST | owner-scoped |  | — |
-| `items/azure-sql-database/[id]/replication/route.ts` | POST | session-only |  | — |
-| `items/azure-sql-database/[id]/restore/route.ts` | GET POST | session-only |  | — |
-| `items/azure-sql-database/[id]/scale/route.ts` | POST | session-only |  | — |
-| `items/azure-sql-database/[id]/search-management/route.ts` | GET POST | session-only |  | — |
-| `items/azure-sql-database/[id]/share/route.ts` | GET POST DELETE | session-only |  | — |
-| `items/azure-sql-database/[id]/sql2025-features/route.ts` | POST | session-only |  | — |
+| `items/azure-sql-database/[id]/query/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/query/route.ts` | POST | owner-scoped |  | Azure SQL |
+| `items/azure-sql-database/[id]/replication/route.ts` | POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/restore/route.ts` | GET POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/scale/route.ts` | POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/search-management/route.ts` | GET POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/share/route.ts` | GET POST DELETE | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/sql2025-features/route.ts` | POST | session-only |  | Azure SQL |
 | `items/azure-sql-database/route.ts` | GET POST | owner-scoped |  | — |
-| `items/azure-sql-managed-instance/route.ts` | GET POST | owner-scoped |  | — |
-| `items/azure-sql-server/[id]/databases/route.ts` | GET | session-only |  | — |
-| `items/azure-sql-server/route.ts` | GET POST | owner-scoped |  | — |
+| `items/azure-sql-managed-instance/route.ts` | GET POST | owner-scoped |  | Azure SQL |
+| `items/azure-sql-server/[id]/databases/route.ts` | GET | session-only |  | Azure SQL |
+| `items/azure-sql-server/route.ts` | GET POST | owner-scoped |  | Azure SQL |
 | `items/batch-pool/jobs/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
 | `items/batch-pool/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
 | `items/batch-pool/tasks/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
@@ -1186,9 +1186,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/copilot-template-library/[id]/route.ts` | GET POST DELETE | session-only |  | — |
 | `items/copilot-template-library/route.ts` | GET POST | session-only |  | — |
 | `items/copy-job/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Synapse |
-| `items/copy-job/[id]/run/route.ts` | POST | owner-scoped | ● | ADF |
-| `items/copy-job/[id]/runs/route.ts` | GET | session-only |  | ADF |
-| `items/copy-job/[id]/watermark/route.ts` | GET | owner-scoped |  | — |
+| `items/copy-job/[id]/run/route.ts` | POST | owner-scoped | ● | ADF, Azure SQL |
+| `items/copy-job/[id]/runs/route.ts` | GET | owner-scoped |  | ADF |
+| `items/copy-job/[id]/watermark/route.ts` | GET | owner-scoped |  | Azure SQL |
 | `items/copy-job/route.ts` | GET POST | owner-scoped |  | — |
 | `items/cosmos-db/[id]/gremlin/route.ts` | POST | session-only | ● | Cosmos |
 | `items/cosmos-db/[id]/keys/route.ts` | GET POST | admin |  | Cosmos |
@@ -1465,7 +1465,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/mirrored-database/[id]/sources/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/mirrored-database/[id]/sql-endpoint/route.ts` | GET | owner-scoped |  | Cosmos, Synapse SQL |
 | `items/mirrored-database/[id]/state/route.ts` | POST | owner-scoped |  | Cosmos |
-| `items/mirrored-database/[id]/tables/route.ts` | GET | owner-scoped |  | Cosmos |
+| `items/mirrored-database/[id]/tables/route.ts` | GET | owner-scoped |  | Azure SQL, Cosmos |
 | `items/mirrored-database/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/mirrored-database/source-tables/route.ts` | POST | session-only |  | Cosmos |
 | `items/mirrored-database/verify/route.ts` | POST | session-only | ● | — |
@@ -1533,7 +1533,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/operations-agent/[id]/run/route.ts` | POST | owner-scoped |  | ADX |
 | `items/paginated-report/[id]/definition/route.ts` | GET PUT | owner-scoped |  | ADX |
 | `items/paginated-report/[id]/export/route.ts` | POST | session-only |  | — |
-| `items/paginated-report/[id]/preview/route.ts` | POST | session-only |  | Synapse SQL |
+| `items/paginated-report/[id]/preview/route.ts` | POST | session-only |  | Azure SQL, Synapse SQL |
 | `items/paginated-report/[id]/rdl/route.ts` | GET PUT | owner-scoped |  | — |
 | `items/paginated-report/[id]/render/route.ts` | POST | owner-scoped |  | AAS, ADX |
 | `items/paginated-report/[id]/route.ts` | GET | session-only |  | — |
@@ -1612,7 +1612,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/scorecard/route.ts` | GET | owner-scoped |  | — |
 | `items/semantic-model/[id]/content/route.ts` | GET PUT | owner-scoped |  | — |
 | `items/semantic-model/[id]/copilot-structure/route.ts` | GET POST | owner-scoped |  | AAS |
-| `items/semantic-model/[id]/datasource/route.ts` | GET POST PUT | owner-scoped | ● | AAS, ADX, Cosmos, Synapse SQL |
+| `items/semantic-model/[id]/datasource/route.ts` | GET POST PUT | owner-scoped | ● | AAS, ADX, Azure SQL, Cosmos, Synapse SQL |
 | `items/semantic-model/[id]/dax-query/route.ts` | POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/describe-bulk/route.ts` | GET POST | owner-scoped |  | AAS |
 | `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | session-only | ● | AAS, Synapse SQL |
@@ -1659,7 +1659,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/sql-analytics-endpoint/[id]/schema/route.ts` | — | public |  | — |
 | `items/sql-database/[id]/route.ts` | GET DELETE | owner-scoped |  | Cosmos |
 | `items/sql-database/route.ts` | GET POST | owner-scoped |  | Cosmos |
-| `items/sql-databases/route.ts` | GET | session-only |  | — |
+| `items/sql-databases/route.ts` | GET | session-only |  | Azure SQL |
 | `items/sql-server-2025-vector-index/route.ts` | GET POST | owner-scoped |  | — |
 | `items/stream-analytics-job/[name]/assist/route.ts` | — | public |  | — |
 | `items/stream-analytics-job/[name]/inputs/route.ts` | PUT DELETE | session-only |  | Stream Analytics |
