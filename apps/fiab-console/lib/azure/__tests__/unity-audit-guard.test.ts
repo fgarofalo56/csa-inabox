@@ -38,6 +38,7 @@ import {
   OUTBOUND_BASELINE,
   CHOKEPOINT_FILES,
   KNOWN_UNAUDITED,
+  MUST_AUDIT,
   MASK_BUDGET_BYTES,
   maskedBytes,
   resetMaskedBytes,
@@ -644,6 +645,11 @@ describe('masking', () => {
  * deadline with every test still passing — PR #2785. Post-#2959 a scan is
  * ~0.18 s and this file's upper bound is 6.1 s, so the grouping now stands on
  * readability; `MASK_BUDGET_BYTES` is what holds the cost line.)
+ *
+ * The two POPULATION-FLOOR tests (#3497) are the exception, and deliberately so:
+ * proving a mutation flips ONE transport's verdict requires mutating exactly one
+ * transport per scan, so they cost 5 scans (~0.9 s) rather than 1. Grouping them
+ * would destroy the property they exist to establish.
  */
 describe('ROUND 5 — every audited transport must record from its finally', () => {
   /**
@@ -655,11 +661,47 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
    * the decoy keeps the file's recorder-symbol COUNT non-zero, so check 5
    * (MUST_AUDIT, "the symbol appears somewhere") still passes. That is the
    * point: only the brace-accurate finally check can catch this.
+   *
+   * `decoy: false` is the same mutation WITHOUT that cover — the recorder symbol
+   * disappears from the file entirely, so check 5 DOES fire wherever it applies.
+   * That is how {@link DISAMBIGUABLE} below proves the weaker check is genuinely
+   * capable of firing rather than merely silent (#3497).
    */
-  function gutFinally(src: string, symbol: string): string {
+  function gutFinally(src: string, symbol: string, { decoy = true } = {}): string {
     const neutered = src.split(`${symbol}(`).join(`__disabled_${symbol}(`);
+    if (!decoy) return neutered;
     return `${neutered}\nfunction __decoy_${symbol}() { void ${symbol}({} as never); }\n`;
   }
+
+  /**
+   * The population the `.not.toMatch` in the next test can actually SPEAK FOR
+   * (issue #3497), derived from the guard's own table rather than hand-listed.
+   *
+   * That assertion's job is SPECIFICITY: it proves the failure the scan produced
+   * came from the brace-accurate `finally` match and not from check 5, the much
+   * weaker "the recorder symbol appears somewhere in this file" test. "Check 5
+   * did not fire" is only a statement about something for a file check 5 could
+   * have fired for — i.e. one with a {@link MUST_AUDIT} entry.
+   *
+   * Measured on the shipped tree with the decoy removed: 3 of the 5 transports
+   * emit `<file>: allowlisted`, and they are EXACTLY the three in MUST_AUDIT.
+   * For `ucFetch` and `ucSecurable` the string cannot be emitted under any
+   * mutation of the file, so the negative assertion passed unconditionally —
+   * indistinguishable from passing for a reason, which is this repo's
+   * "assertion that cannot fail" class.
+   *
+   * Note the discriminating map is MUST_AUDIT, NOT CHOKEPOINT_FILES: #3497 named
+   * the latter, but `unity-catalog-client.ts` is in CHOKEPOINT_FILES and is still
+   * incapable, and adding `uc-securable.ts` to CHOKEPOINT_FILES alone leaves it
+   * incapable too (both measured). Widening either map to make a TEST's negative
+   * assertion non-vacuous would also be backwards: check 5 is strictly weaker
+   * than check 1, which already covers all five transports, and a CHOKEPOINT_FILES
+   * entry is an EXEMPTION from the no-bypass scan (check 4 `continue`s on it) —
+   * so it would cost real coverage to buy a test a stronger-looking assertion.
+   * The population is narrowed instead, and the exclusion is asserted below.
+   */
+  const DISAMBIGUABLE = (AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string }>)
+    .filter((t) => MUST_AUDIT.has(t.file));
 
   it('covers all five transports from ONE table', () => {
     expect(AUDITED_TRANSPORTS.map((t: { fn: string }) => t.fn).sort())
@@ -685,7 +727,85 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
         .toMatch(new RegExp(`${t.recorder}\\( is not called from inside a \`finally\` block of ${t.fn}`));
       // …and the weaker "symbol appears in the file" check did NOT fire, which
       // is what makes this a real regression test for the finally match.
-      expect(found).not.toMatch(new RegExp(`${escapeRegExp(t.file)}: allowlisted`));
+      //
+      // Only for a transport check 5 could have fired for (#3497). For the other
+      // two there is no weaker check to have fired, so this asserted nothing
+      // about them; see DISAMBIGUABLE above and the two floor tests below.
+      if (!MUST_AUDIT.has(t.file)) continue;
+      expect(
+        found,
+        `${t.fn}: check 5 (MUST_AUDIT) fired too, so this scan does not prove the finally match is what caught it`,
+      ).not.toMatch(new RegExp(`${escapeRegExp(t.file)}: allowlisted`));
+    }
+  });
+
+  /**
+   * POPULATION FLOOR (issue #3497). A negative assertion is only evidence if the
+   * thing it denies COULD have happened, so this proves capability per member —
+   * one mutation per transport, each flipping that transport's verdict alone.
+   *
+   * Costs 3 whole-tree scans (~0.18 s each). The budget prose at the top of this
+   * file applies: the cliff is 60 s of synchronous CPU and the file's upper bound
+   * was 6.1 s, so the five scans this round adds are inside the headroom, and
+   * `MASK_BUDGET_BYTES` — not this comment — is what holds the line.
+   */
+  it('every transport the specificity assertion covers CAN emit the string it denies', () => {
+    expect(
+      DISAMBIGUABLE.length,
+      'the .not.toMatch above now ranges over NOTHING — it cannot fail for any transport',
+    ).toBeGreaterThan(0);
+    expect(DISAMBIGUABLE.map((t) => t.fn).sort()).toEqual(['acctFetch', 'dbxFetch', 'ucSql']);
+
+    for (const t of DISAMBIGUABLE) {
+      const s = realSources();
+      const src = s.get(t.file);
+      expect(src, `${t.file} is not in the scanned tree`).toBeTruthy();
+      s.set(t.file, gutFinally(src!, t.recorder, { decoy: false }));
+      const found = analyzeUnityChokepoint(s).join('\n');
+      expect(
+        found,
+        `${t.fn}: check 5 cannot fire for ${t.file}, so the .not.toMatch is VACUOUS for this transport`,
+      ).toMatch(new RegExp(
+        `${escapeRegExp(t.file)}: allowlisted to call the catalog outside ucFetch but no longer calls `
+        + `${t.recorder}\\(`,
+      ));
+      // …and ONLY for the mutated transport. One mutation flipping exactly one
+      // member's verdict is what makes this per-transport rather than a single
+      // pass that any one of the three could be carrying.
+      for (const other of DISAMBIGUABLE) {
+        if (other.file === t.file) continue;
+        expect(found, `mutating ${t.file} also flipped ${other.file}`)
+          .not.toMatch(new RegExp(`${escapeRegExp(other.file)}: allowlisted`));
+      }
+    }
+  });
+
+  /**
+   * The other half of the floor: the transports the specificity assertion is
+   * deliberately silent about are NAMED, and excluding them is shown to cost no
+   * coverage — check 1 still fails the build for each.
+   *
+   * This is also the tripwire. If a future round gives either file a MUST_AUDIT
+   * entry, it leaves this list, joins DISAMBIGUABLE, and the capability floor
+   * above starts demanding a per-transport receipt for it automatically.
+   */
+  it('names the two transports it CANNOT disambiguate, and shows check 1 still covers them', () => {
+    const excluded = (AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string }>)
+      .filter((t) => !MUST_AUDIT.has(t.file));
+    expect(excluded.map((t) => t.fn).sort()).toEqual(['ucFetch', 'ucSecurable']);
+    expect(DISAMBIGUABLE.length + excluded.length).toBe(AUDITED_TRANSPORTS.length);
+
+    for (const t of excluded) {
+      // The structural cause, asserted rather than described: no MUST_AUDIT
+      // entry means check 5 has nothing to say about this file, under ANY
+      // mutation of it — which is why the assertion above skips it.
+      expect(MUST_AUDIT.has(t.file), `${t.file} now HAS a MUST_AUDIT entry`).toBe(false);
+      const s = realSources();
+      const src = s.get(t.file);
+      expect(src, `${t.file} is not in the scanned tree`).toBeTruthy();
+      s.set(t.file, gutFinally(src!, t.recorder, { decoy: false }));
+      expect(analyzeUnityChokepoint(s).join('\n'), `${t.fn} walked past the finally check`)
+        .toMatch(new RegExp(`${t.recorder}\\( is not called from inside a \`finally\` block of ${t.fn}`));
     }
   });
 });
