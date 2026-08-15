@@ -120,6 +120,65 @@ test('MATRIX: preflight UNKNOWN + suite green → job PASSES, with a warning', (
 });
 
 // ---------------------------------------------------------------------------
+// MATRIX for `unproven` (#3498). It sits between `unknown` and `broken` and is
+// neither: hits ARE in hand (unlike unknown, so it blocks) and their recency was
+// never established (unlike broken, so it must not say sign-in is down).
+// ---------------------------------------------------------------------------
+
+test('MATRIX #3498: preflight UNPROVEN + suite green → job FAILS', () => {
+  // An unreadable timestamp must NEVER silently pass. This is the row that
+  // proves the fix did not weaken the gate.
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'unproven',
+    UVG_RC: '1',
+    UVG_BLOCKING: 'verify=success,extra-projects=skipped',
+  });
+  assert.equal(r.code, 1, 'an unestablished recency must fail closed');
+  assert.match(r.out, /::error::LOGIN-HEALTH UNPROVEN/);
+  assert.equal(causeCount(r.out), 1);
+});
+
+test('MATRIX #3498: UNPROVEN does not assert that sign-in is down (deploy-integrity R7)', () => {
+  // Folded into `broken`, this run\'s summary read "the preflight found evidence
+  // that sign-in is down" when what happened was that a query returned no
+  // timestamp — and that sent two investigations at a freshly rotated credential.
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'unproven',
+    UVG_RC: '1',
+    UVG_BLOCKING: 'verify=success',
+  });
+  assert.doesNotMatch(r.out, /found evidence that sign-in is down/);
+  assert.match(r.out, /NOT a finding that sign-in is down/);
+  assert.match(r.out, /could NOT establish whether any of them postdates/);
+});
+
+test('MATRIX #3498: UNPROVEN recorded against rc=0 is a contradiction, and fails twice over', () => {
+  // The two signals are recorded independently precisely so drift between them
+  // is loud. `unproven` with a zero exit means something stopped failing closed.
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'unproven',
+    UVG_RC: '0',
+    UVG_BLOCKING: 'verify=success',
+  });
+  assert.equal(r.code, 1);
+  assert.equal(causeCount(r.out), 2, 'the verdict AND the disagreement must both be reported');
+  assert.match(r.out, /the two recorded signals disagree|signals disagree/i);
+});
+
+test('MATRIX #3498: UNPROVEN is distinguishable from UNKNOWN in the outcome, not just the prose', () => {
+  // The mutation receipt for this gate: change ONLY the token and the exit
+  // status must move. A gate that returns 0 for both is the defect restated.
+  const base = { UVG_PREFLIGHT_OUTCOME: 'success', UVG_RC: '0', UVG_BLOCKING: 'verify=success' };
+  const unknown = run({ ...base, UVG_VERDICT: 'unknown' });
+  const unproven = run({ ...base, UVG_VERDICT: 'unproven', UVG_RC: '1' });
+  assert.equal(unknown.code, 0);
+  assert.equal(unproven.code, 1);
+});
+
+// ---------------------------------------------------------------------------
 // MATRIX for the two labels added by #2875. Before that change the gate was fed
 // `verify` and `extra-projects` only, and the comment above it blessed
 // publish-version and the receipt as "deliberate continue-on-error tolerance" —
@@ -417,6 +476,58 @@ test('WIRING: login-health-verdict.sh records the verdict it now promises', () =
   // it would fail on EVERY run — pin the contract at its source instead.
   const src = readFileSync(resolve(HERE, '..', 'login-health-verdict.sh'), 'utf8');
   assert.match(src, /verdict=\$\{VERDICT\}" >> "\$GITHUB_OUTPUT/);
+});
+
+// ── #3498 WIRING: the recency read must survive as ONE query ────────────────
+// The verdict script has been able to order the hits against the credential
+// since #3160. It was never given the timestamp to do it with: the preflight ran
+// TWO `az monitor log-analytics query` calls, the count returned 4 and the
+// timestamp returned EMPTY, and the gate failed closed on `last-hit=<unread>`
+// from 2026-08-10 until this fix — blocking every G1 browser receipt in the repo.
+// These pin the shape that makes that state unreachable from a working query.
+
+test('WIRING #3498: the preflight reads the count and the timestamp from ONE query', () => {
+  const step = stepConfigById('login_health');
+  const queries = [...step.matchAll(/--analytics-query/g)].length;
+  assert.equal(
+    queries,
+    1,
+    'two reads of the same population can disagree about whether they ran; one row from one query cannot',
+  );
+  assert.match(
+    step,
+    /summarize hits\s*=\s*count\(\),\s*newest\s*=\s*max\(TimeGenerated\)/,
+    'the count alone cannot order the errors against the credential rotation (#3160)',
+  );
+  assert.match(step, /LH_HITS_ROW="\$HITS_ROW"/, 'the row must reach the verdict script');
+});
+
+test('WIRING #3498: the hits query keeps its container scope', () => {
+  // check-containerlog-query-scope.mjs exists because this exact query once
+  // counted the Actions runner echoing its own annotation back into the table.
+  const step = stepConfigById('login_health');
+  assert.match(step, /where ContainerAppName_s == 'loom-console'/);
+});
+
+test('WIRING #3498: the hits query still has NO `|| echo 0` fallback', () => {
+  // An empty result means the query did not run. Mapping it to a clean zero is
+  // the second half of #2837 and would make this gate pass by failing to read.
+  const step = stepConfigById('login_health');
+  assert.doesNotMatch(step, /\|\|\s*echo\s+0/);
+});
+
+test('WIRING #3498: the reads that feed the verdict no longer discard stderr', () => {
+  // `2>/dev/null` is why #3498 was undiagnosable: the query failed, the reason
+  // went to the void, and `<unread>` with no cause attached pointed two
+  // investigations at a credential that had just been rotated correctly.
+  const step = stepConfigById('login_health');
+  const lines = step.split('\n').filter((l) => /az (monitor log-analytics query|ad app credential list)/.test(l));
+  assert.ok(lines.length >= 3, `expected the hits + credential reads, saw ${lines.length}`);
+  for (const l of lines) {
+    assert.doesNotMatch(l, /2>\/dev\/null/, `this read still discards its own diagnosis: ${l.trim()}`);
+  }
+  assert.match(step, /LH_HITS_ERR="\$HITS_ERR"/);
+  assert.match(step, /LH_CRED_ERR="\$CRED_ERR"/);
 });
 
 
