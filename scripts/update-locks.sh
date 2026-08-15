@@ -2,11 +2,12 @@
 # =============================================================================
 # CSA-0032 — Regenerate the dependency lock files.
 #
-# Reads pyproject.toml directly and emits fully-resolved, hash-pinned
-# `*.lock` files via `pip-compile --extra=<name>` (pip-tools >=7 treats
-# pyproject.toml as a first-class input, so no intermediate `.in` files
-# are needed — the [project.optional-dependencies] tables are the single
-# source of truth).
+# Reads pyproject.toml directly and emits fully-resolved, hash-pinned locks at
+# `requirements/locks/<extra>/requirements.txt` via `pip-compile --extra=<name>`
+# (pip-tools >=7 treats pyproject.toml as a first-class input, so no
+# intermediate `.in` files are needed — the [project.optional-dependencies]
+# tables are the single source of truth). The path is load-bearing; see the
+# comment above the compile loop and #3485.
 #
 # THE TWO DEFECTS THIS SCRIPT CARRIES A FIX FOR  (refs #3491)
 # ----------------------------------------------------------
@@ -232,7 +233,7 @@ if [[ "${MODE}" == "native" ]]; then
         cat >&2 <<EOF
 ERROR: --native is refused on ${HOST_OS}.
 
-  Every consumer of requirements/*.lock is Linux: the portal Docker images, CI,
+  Every consumer of these locks is Linux: the portal Docker images, CI,
   the SBOM and the Trivy filesystem scan. A lock compiled on ${HOST_OS} resolves
   a different dependency set — the committed portal.lock was compiled on Windows
   and therefore pinned the win32-only \`colorama\` while omitting \`uvloop\`,
@@ -460,6 +461,28 @@ EOF
 # that pip-compile embeds in each lock is identical across machines (otherwise
 # Windows absolute paths like E:/... would leak in and churn diffs for every
 # contributor).
+#
+# THE LAYOUT IS `requirements/locks/<extra>/requirements.txt`, NOT `<extra>.lock`,
+# AND EVERY PART OF THAT PATH IS LOAD-BEARING (#3485). Trivy's pip analyzer and
+# Syft's python cataloger both key on the FILENAME. Measured 2026-08-15 against
+# one directory holding all three spellings of the same file:
+#
+#     requirements/bff.lock               Trivy num=0   Syft 0 components
+#     requirements/bff.requirements.txt   Trivy num=0   Syft 13 components
+#     requirements/bff/requirements.txt   Trivy SEES it Syft 13 components
+#
+# So `.lock` was invisible to BOTH, the obvious rename fixes only Syft, and only
+# a file literally named `requirements.txt` is recognised by both with no
+# scanner configuration at all — which is the point: a `--file-patterns` config
+# can silently regress when a tool changes its defaults, and a filename cannot.
+#
+# The extra `locks/` level is not decoration either. Trivy's default skip list
+# is ROOT-ANCHORED, and `dev` is on it: with the scan rooted at `requirements/`,
+# a `requirements/dev/requirements.txt` is silently dropped while every sibling
+# is scanned. Measured on a probe directory — `dev/` and `proc/` skipped,
+# `nested/dev/`, `devx/`, `tmp/` and `portal/` all scanned. One level of nesting
+# moves every extra off the anchor. `scripts/ci/check-lock-scan-coverage.mjs` is
+# what caught this, and is what will catch the next one.
 # ---------------------------------------------------------------------------
 LOG_DIR="$(mktemp -d)"
 trap 'rm -rf "${LOG_DIR}"' EXIT
@@ -467,7 +490,8 @@ trap 'rm -rf "${LOG_DIR}"' EXIT
 FAILED=()
 
 for extra in "${EXTRAS[@]}"; do
-    LOCK_FILE_REL="requirements/${extra}.lock"
+    LOCK_FILE_REL="requirements/locks/${extra}/requirements.txt"
+    mkdir -p "requirements/locks/${extra}"
 
     COMPILE_ARGS=("${PIP_COMPILE_FLAGS[@]}")
     [[ ${UPGRADE_ALL} -eq 1 ]] && COMPILE_ARGS+=(--upgrade)

@@ -152,15 +152,28 @@ test('--native is REFUSED on a non-Linux host and accepted on Linux (uname decid
 /*                                                                            */
 /* The stub stands in for docker, so the resolver text is fixed and the only  */
 /* thing under test is the script's reading of it. The pins it is checked     */
-/* against are the REAL requirements/bff.lock, so this cannot pass against a  */
-/* script that merely echoes the package name back.                           */
+/* against are the REAL requirements/locks/bff/requirements.txt, so this      */
+/* cannot pass against a script that merely echoes the package name back.     */
+/*                                                                            */
+/* The blocker's VERSION is read out of that lock rather than hard-coded. The */
+/* shape is what is under test, and a literal `1.36.0` would quietly stop     */
+/* being a real pin the moment msal moves — leaving a test that still passes  */
+/* while asserting nothing about the lock. (It did: #3492 moved msal to       */
+/* 1.37.0 within the hour.)                                                   */
 /* -------------------------------------------------------------------------- */
 
+const BFF_LOCK = 'requirements/locks/bff/requirements.txt';
+const PINNED_MSAL = /^msal==(\S+?)\s*\\?$/m.exec(readFileSync(path.join(REPO_ROOT, BFF_LOCK), 'utf8'))?.[1];
+
+test('the fixtures below are built from a REAL pin, not a remembered one', () => {
+  assert.ok(PINNED_MSAL, `${BFF_LOCK} does not pin msal; the fixtures below would assert nothing`);
+});
+
 const RESOLUTION_IMPOSSIBLE = [
-  'ERROR: Cannot install msal==1.36.0 and cryptography>=50.0.0 because these package versions have conflicting dependencies.',
+  `ERROR: Cannot install msal==${PINNED_MSAL} and cryptography>=50.0.0 because these package versions have conflicting dependencies.`,
   'The conflict is caused by:',
   '    The user requested cryptography>=50.0.0',
-  '    msal 1.36.0 depends on cryptography<49,>=2.5',
+  `    msal ${PINNED_MSAL} depends on cryptography<49,>=2.5`,
   'ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/en/latest/topics/dependency-resolution/',
 ].join('\n');
 
@@ -169,8 +182,7 @@ test('a ResolutionImpossible naming a version PINNED in the lock is attributed t
   try {
     const r = run(['bff'], { env: { DOCKER: docker.file } });
     assert.notEqual(r.status, 0, r.all);
-    // msal==1.36.0 really is the pin in requirements/bff.lock.
-    assert.match(r.stderr, /ALREADY PINNED in\s+requirements\/bff\.lock: .*msal/s);
+    assert.match(r.stderr, /ALREADY PINNED in\s+requirements\/locks\/bff\/requirements\.txt: .*msal/s);
     // And the remediation is the exact command, not a description of one.
     assert.match(r.stderr, /scripts\/update-locks\.sh bff --upgrade-package msal/);
     assert.doesNotMatch(r.stderr, /cannot attribute the conflict/);
@@ -180,25 +192,32 @@ test('a ResolutionImpossible naming a version PINNED in the lock is attributed t
 });
 
 test('the blocker is found when the resolver names it ONLY as a wheel URL (the real #3492 failure)', () => {
-  // VERBATIM from the real `update-locks.sh bff` failure on 2026-08-15, after
-  // the cryptography floor was declared. pip-tools raised the conflict from
-  // inside resolvelib, so `msal 1.36.0` NEVER appears with a space — the
-  // version exists only inside a wheel filename. The first draft of the
-  // extractor read one shape, found nothing here, and printed "NONE of the
-  // versions the resolver named is a pin" over a lock that pins msal==1.36.0.
-  // A diagnosis keyed to a shape the defect does not take.
+  // The shape is VERBATIM from the real `update-locks.sh bff` failure on
+  // 2026-08-15, after the cryptography floor was declared. pip-tools raised the
+  // conflict from inside resolvelib, so `msal <version>` NEVER appears with a
+  // space — the version exists only inside a wheel filename. The first draft of
+  // the extractor read one shape, found nothing here, and printed "NONE of the
+  // versions the resolver named is a pin" over a lock that pins msal. A
+  // diagnosis keyed to a shape the defect does not take.
   const wheelOnly = [
     'ERROR: Cannot install cryptography<51.0.0 and >=50.0.0 and csa-inabox (pyproject.toml) because these package versions have conflicting dependencies.',
-    'pip._vendor.resolvelib.resolvers.ResolutionImpossible: [RequirementInformation(requirement=SpecifierRequirement(\'cryptography<51.0.0,>=50.0.0\'), parent=None), RequirementInformation(requirement=SpecifierRequirement(\'cryptography<49,>=2.5\'), parent=LinkCandidate(\'https://files.pythonhosted.org/packages/2a/d3/414d1f0a5f6f4fe5313c2b002c54e78a3332970feb3f5fed14237aa17064/msal-1.36.0-py3-none-any.whl (from https://pypi.org/simple/msal/) (requires-python:>=3.8)\'))]',
+    "pip._vendor.resolvelib.resolvers.ResolutionImpossible: [RequirementInformation(requirement=SpecifierRequirement('cryptography<51.0.0,>=50.0.0'), parent=None), " +
+      "RequirementInformation(requirement=SpecifierRequirement('cryptography<49,>=2.5'), parent=LinkCandidate(" +
+      `'https://files.pythonhosted.org/packages/2a/d3/414d1f0a5f6f4fe5313c2b002c54e78a3332970feb3f5fed14237aa17064/msal-${PINNED_MSAL}-py3-none-any.whl ` +
+      "(from https://pypi.org/simple/msal/) (requires-python:>=3.8)'))]",
     'pip._internal.exceptions.DistributionNotFound: ResolutionImpossible: for help visit https://pip.pypa.io/',
   ].join('\n');
-  assert.doesNotMatch(wheelOnly, /msal 1\.36\.0/, 'fixture must not contain the space-separated shape');
+  assert.doesNotMatch(
+    wheelOnly,
+    new RegExp(`msal ${PINNED_MSAL.replace(/\./g, '\\.')}`),
+    'fixture must not contain the space-separated shape'
+  );
 
   const docker = shim('docker', `printf '%s\\n' ${JSON.stringify(wheelOnly)}\nexit 1`);
   try {
     const r = run(['bff'], { env: { DOCKER: docker.file } });
     assert.notEqual(r.status, 0, r.all);
-    assert.match(r.stderr, /ALREADY PINNED in\s+requirements\/bff\.lock: .*msal/s);
+    assert.match(r.stderr, /ALREADY PINNED in\s+requirements\/locks\/bff\/requirements\.txt: .*msal/s);
     assert.match(r.stderr, /scripts\/update-locks\.sh bff --upgrade-package msal/);
   } finally {
     rmSync(docker.dir, { recursive: true, force: true });
@@ -244,13 +263,13 @@ test('a failure that is NOT a resolution conflict is not dressed up as one', () 
 test('a compile that exits 0 without writing the lock is a FAILURE, not a success', () => {
   // The "exits 0 having produced nothing" shape. Without this, a broken
   // container path would print "Done." over an untouched tree.
-  const target = path.join(REPO_ROOT, 'requirements', 'base.lock');
+  const target = path.join(REPO_ROOT, 'requirements', 'locks', 'base', 'requirements.txt');
   const before = readFileSync(target, 'utf8');
   const docker = shim('docker', `: > "${target.split(path.sep).join('/')}"\nexit 0`);
   try {
     const r = run(['base'], { env: { DOCKER: docker.file } });
     assert.notEqual(r.status, 0, r.all);
-    assert.match(r.stderr, /exited 0 but requirements\/base\.lock is missing or empty/);
+    assert.match(r.stderr, /exited 0 but requirements\/locks\/base\/requirements\.txt is missing or empty/);
   } finally {
     writeFileSync(target, before, 'utf8');
     rmSync(docker.dir, { recursive: true, force: true });

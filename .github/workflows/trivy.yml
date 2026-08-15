@@ -3,13 +3,31 @@ name: Trivy
 # CSA-0032 — Trivy vulnerability scanning.
 #
 # Three surfaces covered:
-#   1. Filesystem scan of requirements/*.lock (Python CVEs).  This is the
-#      cheapest surface and runs on every PR touching a lock file.
+#   1. Filesystem scan of requirements/locks/*/requirements.txt (Python CVEs).
+#      This is the cheapest surface and runs on every PR touching a lock file.
 #   2. Docker image scans for the two portal images built from
 #      portal/kubernetes/docker/{backend,frontend}/Dockerfile.
 #   3. IaC/config scan of the repo (Dockerfiles, compose, k8s manifests)
 #      — separately gated so a misconfiguration does not block an
 #      otherwise-clean dependency PR.
+#
+# #3485 — THE LOCK-FILE SCAN EXAMINED NOTHING, FOR AS LONG AS IT HAD EXISTED.
+# Run 31834443174 logged `Number of language-specific files  num=0` and the
+# report table was empty: the CRITICAL-gated check named "Trivy Filesystem (lock
+# files)" had never looked at a single package. Trivy's pip analyzer keys on the
+# FILENAME, and `requirements/portal.lock` matched nothing it looks for. The
+# locks now live at `requirements/locks/<extra>/requirements.txt` — a filename
+# both Trivy and Syft recognise with no configuration, so there is no pattern
+# config here to silently regress. The `locks/` level is also load-bearing:
+# Trivy's default skip list is ROOT-ANCHORED and includes `dev`, so with the
+# scan rooted at `requirements/` a `requirements/dev/requirements.txt` was
+# dropped while its nine siblings were scanned (measured).
+#
+# The rename alone would not have been enough, because nothing would have
+# noticed it regressing. The `lock-scan-coverage` step below is the assertion
+# that was missing on day one: every tracked lock must appear in the report with
+# a package count matching the pins it declares. It is what caught the `dev`
+# skip.
 #
 # PR gating rules (enforced via the `severity` / `exit-code` knobs):
 #   • CRITICAL findings fail the PR.
@@ -23,9 +41,10 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'requirements/**.lock'
+      - 'requirements/**'
       - 'pyproject.toml'
       - 'portal/kubernetes/docker/**'
+      - 'scripts/ci/check-lock-scan-coverage.mjs'
       - '.github/workflows/trivy.yml'
   push:
     branches: [main]
@@ -73,6 +92,45 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      # The coverage guard's own control, run BEFORE any real report exists. It
+      # feeds the analyser an empty report, an under-read target and an empty
+      # population and requires each to FAIL. A gate that cannot fail must not be
+      # the thing that certifies the scan (#3485).
+      - name: lock-scan-coverage self-test (the coverage assertion must be able to fail)
+        run: node scripts/ci/check-lock-scan-coverage.mjs --selftest
+
+      # A full-severity JSON report used ONLY to prove the scan parsed the locks.
+      # exit-code 0 deliberately: this step's job is coverage, not the verdict —
+      # the CRITICAL gate below is what decides the check.
+      - name: Trivy filesystem scan — full report (coverage evidence)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        env:
+          # Populate Results[].Packages so the coverage guard can count what was
+          # actually parsed rather than inferring it from vulnerability counts —
+          # zero findings is a legitimate state, zero packages never is.
+          TRIVY_LIST_ALL_PKGS: 'true'
+        with:
+          scan-type: fs
+          scan-ref: requirements/
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+          ignore-unfixed: false
+          format: json
+          output: trivy-fs-coverage.json
+          vuln-type: library
+
+      # THE POPULATION FLOOR. Every tracked lock must appear in that report with
+      # a package count equal to the pins it declares. Without this, `num=0`
+      # reads exactly like `no vulnerabilities` — which is how this job passed
+      # for its entire existence.
+      - name: lock-scan-coverage (the scan must have PARSED every lock — #3485)
+        run: node scripts/ci/check-lock-scan-coverage.mjs --trivy trivy-fs-coverage.json
 
       # Fail the job on CRITICAL.
       - name: Trivy filesystem scan — fail on CRITICAL
