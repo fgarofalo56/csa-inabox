@@ -262,6 +262,20 @@ Trivy, CodeQL, a Dependabot security alert, or an external report):
    will never clear no matter how often the locks are regenerated. Example:
    a fix in 50.0.0 needs `cryptography>=50.0.0,<51.0.0`, **not**
    `cryptography>=50.0.0,<49.0.0` or a stale `<49.0.0` left in place.
+   `scripts/ci/check-python-cve-floors.mjs` is the guard for exactly this
+   mistake — it runs in `loom-guardrails` and fails naming the package, the
+   constraint, the advisory and the version that would satisfy it. Run it
+   locally before pushing:
+
+    ```bash
+    node scripts/ci/check-python-cve-floors.mjs
+    # reproduce either historical incident on demand:
+    node scripts/ci/check-python-cve-floors.mjs --rev b6677c3a^
+    ```
+
+   When a new advisory lands, add it to that file's `ADVISORIES` table with the
+   advisory database's own first-patched version. That is what makes the next
+   occurrence a red check instead of a review that reads fine.
 2. If the package is resolved **transitively** by an extra that declares no
    constraint on it, declare one there too. A lock regenerated with no
    declared floor re-pins by "newest at compile time" with nothing holding it,
