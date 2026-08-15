@@ -81,6 +81,32 @@
  * The direction was chosen deliberately: this guard's failure mode has always
  * been under-detection.
  *
+ * ── THE azure-host LABEL BOUNDARY, AND WHY CodeQL WAS RIGHT FOR THE WRONG
+ *    REASON (#3560) ───────────────────────────────────────────────────────
+ * CodeQL raised 10 × js/incomplete-url-substring-sanitization ("Missing regular
+ * expression anchor") on the azure-host suffix list. Its stated reasoning does
+ * NOT apply here: that rule assumes the regex is a URL SANITIZER deciding
+ * whether to trust a host, and this is a DETECTOR reading source text to decide
+ * whether a form field asks a human to type an Azure address. There is no URL,
+ * no trust decision and no security boundary; matching mid-string is the
+ * requirement, because the evidence is prose like
+ * `e.g. https://saloom.dfs.core.windows.net`.
+ *
+ * The finding was still worth acting on, because the patterns were loose FOR
+ * THEIR OWN PURPOSE. Measured before the fix, all eight matched:
+ *
+ *     x.azconfig.iowa                y.azure-api.network
+ *     z.cloudapp.azure.community     q.kusto.windows.network
+ *     r.azurehdinsight.networking    s.azuredatalakestore.networks
+ *     loom.kusto.windows.net.evil.test
+ *     account.blob.core.windows.net.attacker.example
+ *
+ * None is an Azure host, and the pattern's own `why` claims "an Azure service
+ * FQDN" — so a hint mentioning any of them would have been graded on evidence
+ * that says the opposite. The DNS-label boundary makes the pattern mean what it
+ * always claimed. Coverage on the real corpus is unchanged: 250 sites across
+ * 110 files before and after, and the 12-case coverage probe still passes.
+ *
  * ── WHAT CHANGED ───────────────────────────────────────────────────────────
  * PART 1 (unchanged, still a HARD ZERO) — the raw-JSON-config detector.
  * PART 2 (new, RATCHETED) — every FREE-TEXT INPUT in `apps/fiab-console` that
@@ -432,28 +458,51 @@ export const SHAPE_PATTERNS = [
   {
     id: 'azure-host',
     re: new RegExp(
-      [
-        '\\.(?:dfs|blob|table|queue|file|web)\\.core\\.(?:windows\\.net|usgovcloudapi\\.net|chinacloudapi\\.cn)',
-        '\\.vault\\.(?:azure\\.net|usgovcloudapi\\.net|azure\\.cn)',
-        '\\.database\\.(?:windows\\.net|usgovcloudapi\\.net)',
-        '\\.kusto\\.(?:windows\\.net|usgovcloudapi\\.net)',
-        '\\.servicebus\\.(?:windows\\.net|usgovcloudapi\\.net)',
-        '\\.documents\\.azure\\.(?:com|us)',
-        '\\.search\\.(?:windows\\.net|azure\\.us)',
-        '\\.openai\\.azure\\.(?:com|us)',
-        '\\.cognitiveservices\\.azure\\.(?:com|us)',
-        '\\.azurecr\\.(?:io|us)',
-        '\\.(?:azuredatabricks\\.net|databricks\\.azure\\.us)',
-        '\\.(?:dev\\.|sql\\.)?azuresynapse\\.(?:net|usgovcloudapi\\.net)',
-        '\\.azurewebsites\\.(?:net|us)',
-        '\\.azconfig\\.io',
-        '\\.azurehdinsight\\.net',
-        '\\.(?:dfs\\.)?fabric\\.microsoft\\.com',
-        '\\.azure-api\\.net',
-        '\\.eventgrid\\.azure\\.net',
-        '\\.azuredatalakestore\\.net',
-        '\\.cloudapp\\.azure\\.com',
-      ].join('|'),
+      // The suffix list, wrapped so the DNS-LABEL BOUNDARY below applies to
+      // every alternative and not just the last one — the mixed-anchor trap
+      // check-regex-anchor.mjs exists for (#2772), one level down.
+      '(?:' +
+        [
+          '\\.(?:dfs|blob|table|queue|file|web)\\.core\\.(?:windows\\.net|usgovcloudapi\\.net|chinacloudapi\\.cn)',
+          '\\.vault\\.(?:azure\\.net|usgovcloudapi\\.net|azure\\.cn)',
+          '\\.database\\.(?:windows\\.net|usgovcloudapi\\.net)',
+          '\\.kusto\\.(?:windows\\.net|usgovcloudapi\\.net)',
+          '\\.servicebus\\.(?:windows\\.net|usgovcloudapi\\.net)',
+          '\\.documents\\.azure\\.(?:com|us)',
+          '\\.search\\.(?:windows\\.net|azure\\.us)',
+          '\\.openai\\.azure\\.(?:com|us)',
+          '\\.cognitiveservices\\.azure\\.(?:com|us)',
+          '\\.azurecr\\.(?:io|us)',
+          '\\.(?:azuredatabricks\\.net|databricks\\.azure\\.us)',
+          '\\.(?:dev\\.|sql\\.)?azuresynapse\\.(?:net|usgovcloudapi\\.net)',
+          '\\.azurewebsites\\.(?:net|us)',
+          '\\.azconfig\\.io',
+          '\\.azurehdinsight\\.net',
+          '\\.(?:dfs\\.)?fabric\\.microsoft\\.com',
+          '\\.azure-api\\.net',
+          '\\.eventgrid\\.azure\\.net',
+          '\\.azuredatalakestore\\.net',
+          '\\.cloudapp\\.azure\\.com',
+        ].join('|') +
+        ')' +
+        // DNS-LABEL BOUNDARY. Without it every entry above is a SUBSTRING test,
+        // which is not what the pattern claims: `why` says "an Azure service
+        // FQDN", and MEASURED before this was added, all eight of these matched —
+        //   x.azconfig.iowa · y.azure-api.network · z.cloudapp.azure.community
+        //   q.kusto.windows.network · r.azurehdinsight.networking
+        //   s.azuredatalakestore.networks
+        //   loom.kusto.windows.net.evil.test · acct.blob.core.windows.net.attacker.example
+        // none of which is an Azure host. That is a real classifier defect: a
+        // hint mentioning any of them would have been graded "asks for an Azure
+        // FQDN" on evidence that says the opposite.
+        //
+        // `\\.?` before the class is what keeps SENTENCE-FINAL PROSE working. Hint
+        // text in this tree ends sentences on a host ("…is a.dfs.core.windows.net.
+        // Then click save."), so a bare `(?![A-Za-z0-9.-])` would have dropped it —
+        // an anchor tightened past its own corpus is a false negative, which is
+        // this guard's historic failure direction. The lookahead therefore rejects
+        // only a FURTHER LABEL: `net.` + space passes, `net.evil` does not.
+        '(?!\\.?[A-Za-z0-9-])',
       'i',
     ),
     why: 'an Azure service FQDN the user must know and type',
@@ -1213,6 +1262,23 @@ export const CONTROLS = [
     name: "good: a git URL whose HINT mentions an access token — the LABEL is the promise, an adjacent hint is contamination",
     src: '<Field label="Git repository URL" hint="https repo on github.com. Private repos: store an access token below."><Input value={g} onChange={f} /></Field>',
     expect: false,
+  },
+
+  // ── the azure-host DNS-LABEL BOUNDARY, both directions (#3560 CodeQL) ───
+  {
+    name: 'good: a host that merely CONTAINS an Azure suffix is not one — `.azconfig.iowa` is not `.azconfig.io`',
+    src: '<Input placeholder="x.azconfig.iowa" value={v} onChange={f} />',
+    expect: false,
+  },
+  {
+    name: 'good: suffix confusion — `kusto.windows.net.evil.test` is not an Azure host',
+    src: '<Input placeholder="https://loom.kusto.windows.net.evil.test/steal" value={v} onChange={f} />',
+    expect: false,
+  },
+  {
+    name: 'bad: the boundary must not cost SENTENCE-FINAL prose — a host ending a hint still counts',
+    src: '<Field label="Cluster" hint="the host is a.dfs.core.windows.net. Then click save."><Input value={v} onChange={f} /></Field>',
+    expect: true,
   },
 ];
 

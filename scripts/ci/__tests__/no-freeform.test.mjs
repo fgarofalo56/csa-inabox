@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CONTROLS,
+  SHAPE_PATTERNS,
   analyze,
   collect,
   extractSites,
@@ -139,7 +140,46 @@ test('a closed sibling <Field> cannot lend its label to the next input', () => {
   assert.equal(v[0].line, 1);
 });
 
-// ── 4. the ratchet, both directions ────────────────────────────────────────
+// ── 4. the azure-host DNS-label boundary (#3560) ───────────────────────────
+
+test('azure-host matches a real Azure FQDN in every position it appears in the corpus', () => {
+  const re = SHAPE_PATTERNS.find((p) => p.id === 'azure-host').re;
+  for (const s of [
+    'https://<cluster>.<region>.kusto.windows.net',
+    'e.g. adb-1234567890.19.azuredatabricks.net',
+    'abfss://container@account.dfs.core.windows.net/path',
+    'myserver.database.windows.net',
+    'ws-ondemand.sql.azuresynapse.net (Synapse)',
+    'myacr.azurecr.io/img:tag',
+    'https://c.eastus.kusto.usgovcloudapi.net',
+    'Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=x',
+    // sentence-final prose: the boundary must allow a trailing period
+    'the host is a.dfs.core.windows.net. Then click save.',
+  ]) {
+    assert.ok(re.test(s), `azure-host no longer matches ${s} — detection coverage lost`);
+  }
+});
+
+test('azure-host does NOT match a host that merely CONTAINS an Azure suffix', () => {
+  // Every one of these matched before the DNS-label boundary was added, and the
+  // pattern's own `why` says "an Azure service FQDN" — so this was a real
+  // classifier defect, not only a CodeQL complaint.
+  const re = SHAPE_PATTERNS.find((p) => p.id === 'azure-host').re;
+  for (const s of [
+    'x.azconfig.iowa',
+    'y.azure-api.network',
+    'z.cloudapp.azure.community',
+    'q.kusto.windows.network',
+    'r.azurehdinsight.networking',
+    's.azuredatalakestore.networks',
+    'https://loom.kusto.windows.net.evil.test/steal',
+    'account.blob.core.windows.net.attacker.example',
+  ]) {
+    assert.equal(re.test(s), false, `azure-host still matches ${s} — the label boundary regressed`);
+  }
+});
+
+// ── 5. the ratchet, both directions ────────────────────────────────────────
 
 test('a NEW violation in a baselined file FAILS', () => {
   const file = tmpBaseline({ 'a.tsx': 1 });
@@ -180,7 +220,7 @@ test('an unavailable base-ref diff SKIPS the boy-scout rule rather than failing 
   assert.equal(judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, touchedFiles: null }), 0);
 });
 
-// ── 5. the floors ──────────────────────────────────────────────────────────
+// ── 6. the floors ──────────────────────────────────────────────────────────
 
 test('FLOOR: a collapsed file enumeration FAILS instead of reporting a clean sweep', () => {
   const file = tmpBaseline({});
@@ -221,7 +261,7 @@ test('the floors are ordered so extraction breakage is reported BEFORE a classif
   assert.match(errs.join('\n'), /site extraction found only 0/);
 });
 
-// ── 6. end to end, as CI runs it ───────────────────────────────────────────
+// ── 7. end to end, as CI runs it ───────────────────────────────────────────
 
 test('the guard passes on the current tree at its baseline', () => {
   const r = execFileSync(process.execPath, [GUARD], { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' });
