@@ -32,6 +32,11 @@
 import { AzureSqlError, executeParameterized, executeWithCredential, executeQuery, type SqlExplicitAuth, type QueryResult } from './azure-sql-client';
 import { bracket as qbracket } from '@/lib/sql/quoting';
 import { validCheckExpression } from '@/lib/sql/check-expression';
+import {
+  tsql, sqlFragment, quotedIdentifier, quotedName, integerLiteral,
+  containedCheckExpression, commaSeparated,
+  type TrustedSql, type SqlFragment,
+} from '@/lib/sql/trusted-sql';
 
 export type SqlObjectGroup = 'table' | 'view' | 'procedure' | 'function' | 'table-type';
 
@@ -110,9 +115,7 @@ export function sqlConfigGate(server: string | undefined | null): { missing: str
 
 const USER_SCHEMA_FILTER =
   // Exclude the system schemas SSMS hides under "System" by default.
-  "s.name NOT IN ('sys','INFORMATION_SCHEMA','guest','db_owner','db_accessadmin'," +
-  "'db_securityadmin','db_ddladmin','db_backupoperator','db_datareader'," +
-  "'db_datawriter','db_denydatareader','db_denydatawriter')";
+  sqlFragment`s.name NOT IN ('sys','INFORMATION_SCHEMA','guest','db_owner','db_accessadmin','db_securityadmin','db_ddladmin','db_backupoperator','db_datareader','db_datawriter','db_denydatareader','db_denydatawriter')`;
 
 // Read-only user-table catalog query (no user input — server/database are
 // resolved per item, never interpolated). Shared by listTables (UAMI) and
@@ -128,7 +131,7 @@ const USER_SCHEMA_FILTER =
 // counts; MPP connections get the no-subquery variant (count omitted — the
 // picker just shows the table name, which is all it needs).
 const LIST_TABLES_SQL =
-  `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
+  tsql`SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
           t.type AS [type], o.type_desc AS typeDesc,
           t.create_date AS createDate, t.modify_date AS modifyDate,
           ISNULL((
@@ -145,7 +148,7 @@ const LIST_TABLES_SQL =
 // MPP-engine (Synapse dedicated SQL pool / Fabric Warehouse) table-list — no
 // scalar subquery in the SELECT list (the construct the MPP parser rejects).
 const LIST_TABLES_SQL_MPP =
-  `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
+  tsql`SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
           t.type AS [type], o.type_desc AS typeDesc,
           t.create_date AS createDate, t.modify_date AS modifyDate
    FROM sys.tables t
@@ -155,7 +158,7 @@ const LIST_TABLES_SQL_MPP =
    ORDER BY s.name, t.name;`;
 
 /** Pick the table-list dialect for the connection's TDS backend. */
-function listTablesSqlFor(server: string): string {
+function listTablesSqlFor(server: string): TrustedSql {
   return detectSqlBackendKind(server) === 'sqldb' ? LIST_TABLES_SQL : LIST_TABLES_SQL_MPP;
 }
 
@@ -163,7 +166,7 @@ export async function listSchemas(server: string, database: string): Promise<Sql
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT s.schema_id AS schemaId, s.name AS name
+    tsql`SELECT s.schema_id AS schemaId, s.name AS name
      FROM sys.schemas s
      WHERE ${USER_SCHEMA_FILTER}
      ORDER BY s.name;`,
@@ -204,7 +207,7 @@ export async function listViews(server: string, database: string): Promise<SqlOb
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT v.object_id AS objectId, s.name AS [schema], v.name AS name,
+    tsql`SELECT v.object_id AS objectId, s.name AS [schema], v.name AS name,
             v.type AS [type], o.type_desc AS typeDesc,
             v.create_date AS createDate, v.modify_date AS modifyDate
      FROM sys.views v
@@ -220,7 +223,7 @@ export async function listProcedures(server: string, database: string): Promise<
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT p.object_id AS objectId, s.name AS [schema], p.name AS name,
+    tsql`SELECT p.object_id AS objectId, s.name AS [schema], p.name AS name,
             p.type AS [type], o.type_desc AS typeDesc,
             p.create_date AS createDate, p.modify_date AS modifyDate
      FROM sys.procedures p
@@ -237,7 +240,7 @@ export async function listFunctions(server: string, database: string): Promise<S
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT o.object_id AS objectId, s.name AS [schema], o.name AS name,
+    tsql`SELECT o.object_id AS objectId, s.name AS [schema], o.name AS name,
             o.type AS [type], o.type_desc AS typeDesc,
             o.create_date AS createDate, o.modify_date AS modifyDate
      FROM sys.objects o
@@ -252,7 +255,7 @@ export async function listTableTypes(server: string, database: string): Promise<
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT tt.type_table_object_id AS objectId, s.name AS [schema], tt.name AS name,
+    tsql`SELECT tt.type_table_object_id AS objectId, s.name AS [schema], tt.name AS name,
             'TT' AS [type], 'USER_TABLE_TYPE' AS typeDesc,
             NULL AS createDate, NULL AS modifyDate
      FROM sys.table_types tt
@@ -273,7 +276,7 @@ export async function listColumns(
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT c.column_id AS columnId, c.name AS name, ty.name AS dataType,
+    tsql`SELECT c.column_id AS columnId, c.name AS name, ty.name AS dataType,
             c.max_length AS maxLength, c.precision AS [precision], c.scale AS scale,
             c.is_nullable AS isNullable, c.is_identity AS isIdentity, c.is_computed AS isComputed,
             CAST(CASE WHEN EXISTS (
@@ -310,12 +313,12 @@ function bracket(ident: string): string {
   return qbracket(ident);
 }
 
-const DROP_KEYWORD: Record<SqlObjectGroup, string> = {
-  'table': 'TABLE',
-  'view': 'VIEW',
-  'procedure': 'PROCEDURE',
-  'function': 'FUNCTION',
-  'table-type': 'TYPE',
+const DROP_KEYWORD: Record<SqlObjectGroup, SqlFragment> = {
+  'table': sqlFragment`TABLE`,
+  'view': sqlFragment`VIEW`,
+  'procedure': sqlFragment`PROCEDURE`,
+  'function': sqlFragment`FUNCTION`,
+  'table-type': sqlFragment`TYPE`,
 };
 
 /**
@@ -336,20 +339,20 @@ export async function dropObject(
     if (group === 'table-type') {
       resolved = await executeParameterized<any>(
         server, database,
-        `SELECT s.name AS [schema], tt.name AS name
+        tsql`SELECT s.name AS [schema], tt.name AS name
          FROM sys.table_types tt JOIN sys.schemas s ON s.schema_id = tt.schema_id
          WHERE tt.type_table_object_id = @p0 AND tt.is_user_defined = 1;`,
         [objectId],
       );
     } else {
       const wantTypes =
-        group === 'table' ? "('U')"
-        : group === 'view' ? "('V')"
-        : group === 'procedure' ? "('P','PC')"
-        : "('FN','IF','TF','FS','FT','AF')"; // function
+        group === 'table' ? sqlFragment`('U')`
+        : group === 'view' ? sqlFragment`('V')`
+        : group === 'procedure' ? sqlFragment`('P','PC')`
+        : sqlFragment`('FN','IF','TF','FS','FT','AF')`; // function
       resolved = await executeParameterized<any>(
         server, database,
-        `SELECT s.name AS [schema], o.name AS name
+        tsql`SELECT s.name AS [schema], o.name AS name
          FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id
          WHERE o.object_id = @p0 AND o.is_ms_shipped = 0 AND o.type IN ${wantTypes};`,
         [objectId],
@@ -357,8 +360,8 @@ export async function dropObject(
     }
     const hit = resolved[0];
     if (!hit) return { ok: false, error: `${group} not found for object_id ${objectId}`, status: 404 };
-    const fq = `${bracket(hit.schema)}.${bracket(hit.name)}`;
-    await executeParameterized(server, database, `DROP ${DROP_KEYWORD[group]} ${fq};`);
+    const fq = quotedName(hit.schema, hit.name);
+    await executeParameterized(server, database, tsql`DROP ${DROP_KEYWORD[group]} ${fq};`);
     return { ok: true, dropped: `${hit.schema}.${hit.name}` };
   } catch (e: any) {
     const status = e instanceof AzureSqlError ? e.status : 502;
@@ -380,11 +383,11 @@ export async function dropObject(
 /** Metric the top-queries list is ranked by (column aliases, never raw input). */
 export type PerfMetric = 'cpu' | 'duration' | 'logical-reads' | 'executions';
 
-const PERF_ORDER_COL: Record<PerfMetric, string> = {
-  cpu: 'totalCpuMs',
-  duration: 'totalDurationMs',
-  'logical-reads': 'totalLogicalReads',
-  executions: 'totalExecutions',
+const PERF_ORDER_COL: Record<PerfMetric, SqlFragment> = {
+  cpu: sqlFragment`totalCpuMs`,
+  duration: sqlFragment`totalDurationMs`,
+  'logical-reads': sqlFragment`totalLogicalReads`,
+  executions: sqlFragment`totalExecutions`,
 };
 
 export interface QueryStoreStatus {
@@ -437,7 +440,7 @@ export async function queryStoreStatus(
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT actual_state_desc        AS actualState,
+    tsql`SELECT actual_state_desc        AS actualState,
             readonly_reason          AS readonlyReason,
             current_storage_size_mb  AS currentStorageSizeMb,
             max_storage_size_mb      AS maxStorageSizeMb,
@@ -469,7 +472,7 @@ export async function enableQueryStore(
   await executeParameterized(
     server,
     database,
-    `ALTER DATABASE CURRENT SET QUERY_STORE = ON (OPERATION_MODE = READ_WRITE);`,
+    tsql`ALTER DATABASE CURRENT SET QUERY_STORE = ON (OPERATION_MODE = READ_WRITE);`,
   );
   return queryStoreStatus(server, database);
 }
@@ -492,7 +495,7 @@ export async function topQueriesByMetric(
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT TOP (${n})
+    tsql`SELECT TOP (${integerLiteral(n)})
         q.query_id AS queryId,
         LEFT(qt.query_sql_text, 4000) AS queryText,
         SUM(rs.avg_cpu_time          * rs.count_executions) / 1000.0 AS totalCpuMs,
@@ -507,7 +510,7 @@ export async function topQueriesByMetric(
           ON rs.plan_id = p.plan_id
      JOIN sys.query_store_runtime_stats_interval rsi
           ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
-     WHERE rsi.start_time >= DATEADD(HOUR, -${wh}, GETUTCDATE())
+     WHERE rsi.start_time >= DATEADD(HOUR, -${integerLiteral(wh)}, GETUTCDATE())
        AND rs.execution_type = 0
      GROUP BY q.query_id, qt.query_sql_text
      ORDER BY ${orderCol} DESC;`,
@@ -535,7 +538,7 @@ export async function queryTimeSeries(
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT rsi.start_time AS intervalStart, rsi.end_time AS intervalEnd,
+    tsql`SELECT rsi.start_time AS intervalStart, rsi.end_time AS intervalEnd,
             SUM(rs.count_executions)            AS executions,
             AVG(rs.avg_cpu_time)    / 1000.0    AS avgCpuMs,
             AVG(rs.avg_duration)    / 1000.0    AS avgDurationMs,
@@ -545,7 +548,7 @@ export async function queryTimeSeries(
           ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
      JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
      WHERE p.query_id = @p0
-       AND rsi.start_time >= DATEADD(HOUR, -${wh}, GETUTCDATE())
+       AND rsi.start_time >= DATEADD(HOUR, -${integerLiteral(wh)}, GETUTCDATE())
        AND rs.execution_type = 0
      GROUP BY rsi.start_time, rsi.end_time
      ORDER BY rsi.start_time;`,
@@ -571,7 +574,7 @@ export async function queryStorePlan(
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT TOP 1 p.plan_id AS planId,
+    tsql`SELECT TOP 1 p.plan_id AS planId,
             TRY_CAST(p.query_plan AS nvarchar(MAX)) AS queryPlanXml,
             p.last_compile_start_time AS lastCompileTime
      FROM sys.query_store_plan p
@@ -628,7 +631,7 @@ export async function listIndexes(
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT
+    tsql`SELECT
        i.index_id AS indexId,
        i.name AS name,
        i.type AS [type],
@@ -680,7 +683,7 @@ async function resolveIndex(
 ): Promise<{ schema: string; table: string; index: string } | null> {
   const rows = await executeParameterized<any>(
     server, database,
-    `SELECT s.name AS [schema], t.name AS tname, i.name AS iname
+    tsql`SELECT s.name AS [schema], t.name AS tname, i.name AS iname
      FROM sys.indexes i
      JOIN sys.tables t ON t.object_id = i.object_id
      JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -710,7 +713,7 @@ export async function dropIndex(
     if (!hit) return { ok: false, error: `index not found for object_id ${tableObjectId}, index_id ${indexId}`, status: 404 };
     await executeParameterized(
       server, database,
-      `DROP INDEX ${bracket(hit.index)} ON ${bracket(hit.schema)}.${bracket(hit.table)};`,
+      tsql`DROP INDEX ${quotedIdentifier(hit.index)} ON ${quotedName(hit.schema, hit.table)};`,
     );
     return { ok: true, dropped: `${hit.schema}.${hit.table}.${hit.index}` };
   } catch (e: any) {
@@ -724,12 +727,12 @@ export async function dropIndex(
 // ============================================================
 
 /** sys.objects type codes per navigable group (for resolution + DROP keyword). */
-const GROUP_TYPES: Record<SqlObjectGroup, string> = {
-  'table': "('U')",
-  'view': "('V')",
-  'procedure': "('P','PC')",
-  'function': "('FN','IF','TF','FS','FT','AF')",
-  'table-type': '', // resolved via sys.table_types, not sys.objects
+const GROUP_TYPES: Record<SqlObjectGroup, SqlFragment> = {
+  'table': sqlFragment`('U')`,
+  'view': sqlFragment`('V')`,
+  'procedure': sqlFragment`('P','PC')`,
+  'function': sqlFragment`('FN','IF','TF','FS','FT','AF')`,
+  'table-type': sqlFragment``, // resolved via sys.table_types, not sys.objects
 };
 
 /** Resolve `{ schema, name }` for an object_id within a group. */
@@ -743,7 +746,7 @@ async function resolveObject(
   if (group === 'table-type') {
     rows = await executeParameterized<any>(
       server, database,
-      `SELECT s.name AS [schema], tt.name AS name
+      tsql`SELECT s.name AS [schema], tt.name AS name
        FROM sys.table_types tt JOIN sys.schemas s ON s.schema_id = tt.schema_id
        WHERE tt.type_table_object_id = @p0 AND tt.is_user_defined = 1;`,
       [objectId],
@@ -751,7 +754,7 @@ async function resolveObject(
   } else {
     rows = await executeParameterized<any>(
       server, database,
-      `SELECT s.name AS [schema], o.name AS name
+      tsql`SELECT s.name AS [schema], o.name AS name
        FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id
        WHERE o.object_id = @p0 AND o.is_ms_shipped = 0 AND o.type IN ${GROUP_TYPES[group]};`,
       [objectId],
@@ -795,7 +798,7 @@ export async function renameObject(
     // @p0 = bracket-quoted catalog name, @p1 = user-supplied bare new name.
     await executeParameterized(
       server, database,
-      "EXEC sys.sp_rename @objname = @p0, @newname = @p1, @objtype = 'OBJECT';",
+      tsql`EXEC sys.sp_rename @objname = @p0, @newname = @p1, @objtype = 'OBJECT';`,
       [objname, bare],
     );
     const warningDefinitionStale = group === 'view' || group === 'procedure' || group === 'function';
@@ -834,7 +837,7 @@ export async function previewObject(
   try {
     const rows = await executeParameterized<any>(
       server, database,
-      `SELECT s.name AS [schema], o.name AS name
+      tsql`SELECT s.name AS [schema], o.name AS name
        FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id
        WHERE o.object_id = @p0 AND o.is_ms_shipped = 0 AND o.type IN ('U','V');`,
       [objectId],
@@ -874,7 +877,7 @@ function formatSqlType(typeName: string, maxLength: number, precision: number, s
 async function scriptTableCreate(server: string, database: string, objectId: number, schema: string, name: string): Promise<string> {
   const cols = await executeParameterized<any>(
     server, database,
-    `SELECT c.column_id AS columnId, c.name AS name, ty.name AS typeName,
+    tsql`SELECT c.column_id AS columnId, c.name AS name, ty.name AS typeName,
             c.max_length AS maxLength, c.precision AS prec, c.scale AS scale,
             c.is_nullable AS isNullable, c.is_identity AS isIdentity,
             c.is_computed AS isComputed, c.collation_name AS collationName,
@@ -892,7 +895,7 @@ async function scriptTableCreate(server: string, database: string, objectId: num
   );
   const pk = await executeParameterized<any>(
     server, database,
-    `SELECT kc.name AS pkName, i.type_desc AS typeDesc,
+    tsql`SELECT kc.name AS pkName, i.type_desc AS typeDesc,
             (SELECT STRING_AGG('[' + REPLACE(col.name, ']', ']]') + '] '
                     + CASE WHEN icx.is_descending_key = 1 THEN 'DESC' ELSE 'ASC' END, ', ')
                     WITHIN GROUP (ORDER BY icx.key_ordinal)
@@ -1035,11 +1038,11 @@ export type ConstraintSpec =
   | { type: 'CK'; name: string; expression: string; noCheck: boolean };
 
 /** Map an Azure SQL referential action enum → its T-SQL clause text. */
-const REF_ACTION_SQL: Record<SqlReferentialAction, string> = {
-  NO_ACTION: 'NO ACTION',
-  CASCADE: 'CASCADE',
-  SET_NULL: 'SET NULL',
-  SET_DEFAULT: 'SET DEFAULT',
+const REF_ACTION_SQL: Record<SqlReferentialAction, SqlFragment> = {
+  NO_ACTION: sqlFragment`NO ACTION`,
+  CASCADE: sqlFragment`CASCADE`,
+  SET_NULL: sqlFragment`SET NULL`,
+  SET_DEFAULT: sqlFragment`SET DEFAULT`,
 };
 
 /**
@@ -1071,7 +1074,7 @@ export async function listConstraints(
   const rows = await executeParameterized<any>(
     server,
     database,
-    `-- PRIMARY KEY + UNIQUE (sys.key_constraints, columns via the backing index)
+    tsql`-- PRIMARY KEY + UNIQUE (sys.key_constraints, columns via the backing index)
      SELECT kc.type AS constraintType, kc.object_id AS constraintId, kc.name AS name,
             kc.is_system_named AS isSystemNamed, CAST(0 AS bit) AS isDisabled,
             CAST(1 AS bit) AS isTrusted,
@@ -1160,7 +1163,7 @@ async function resolveTable(
 ): Promise<{ schema: string; name: string } | null> {
   const rows = await executeParameterized<any>(
     server, database,
-    `SELECT s.name AS [schema], t.name AS name
+    tsql`SELECT s.name AS [schema], t.name AS name
      FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id
      WHERE t.object_id = @p0 AND t.is_ms_shipped = 0;`,
     [tableObjectId],
@@ -1180,22 +1183,22 @@ async function resolveColumns(
   database: string,
   tableObjectId: number,
   columnIds: number[],
-): Promise<string[] | null> {
+): Promise<SqlFragment[] | null> {
   if (columnIds.length === 0) return null;
   if (!columnIds.every((c) => Number.isInteger(c))) return null;
   const rows = await executeParameterized<any>(
     server, database,
-    `SELECT c.column_id AS columnId, c.name AS name
+    tsql`SELECT c.column_id AS columnId, c.name AS name
      FROM sys.columns c WHERE c.object_id = @p0;`,
     [tableObjectId],
   );
   const byId = new Map<number, string>();
   for (const r of rows) byId.set(Number(r.columnId), String(r.name));
-  const out: string[] = [];
+  const out: SqlFragment[] = [];
   for (const id of columnIds) {
     const nm = byId.get(id);
     if (!nm) return null; // unknown column for this table → reject
-    out.push(bracket(nm));
+    out.push(quotedIdentifier(nm));
   }
   return out;
 }
@@ -1250,9 +1253,9 @@ export async function addConstraint(
   try {
     const tbl = await resolveTable(server, database, tableObjectId);
     if (!tbl) return { ok: false, error: `table not found for object_id ${tableObjectId}`, status: 404 };
-    const fq = `${bracket(tbl.schema)}.${bracket(tbl.name)}`;
-    const cn = bracket(spec.name.trim());
-    let ddl: string;
+    const fq = quotedName(tbl.schema, tbl.name);
+    const cn = quotedIdentifier(spec.name.trim());
+    let ddl: TrustedSql;
 
     if (spec.type === 'PK' || spec.type === 'UQ') {
       if (!Array.isArray(spec.columns) || spec.columns.length === 0) {
@@ -1261,15 +1264,16 @@ export async function addConstraint(
       const ids = spec.columns.map((c) => c.columnId);
       const names = await resolveColumns(server, database, tableObjectId, ids);
       if (!names) return { ok: false, error: 'one or more key columns do not belong to this table', status: 400 };
-      const cols = spec.columns.map((c, i) => `${names[i]} ${c.descending ? 'DESC' : 'ASC'}`).join(', ');
-      const kw = spec.type === 'PK' ? 'PRIMARY KEY' : 'UNIQUE';
+      const cols = commaSeparated(spec.columns.map((c, i) =>
+        sqlFragment`${names[i]} ${c.descending ? sqlFragment`DESC` : sqlFragment`ASC`}`));
+      const kw = spec.type === 'PK' ? sqlFragment`PRIMARY KEY` : sqlFragment`UNIQUE`;
       if (metadataOnly) {
         // Fabric Warehouse / Synapse dedicated pool: PK/UNIQUE are accepted only
         // as NONCLUSTERED NOT ENFORCED metadata constraints.
-        ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} NONCLUSTERED (${cols}) NOT ENFORCED;`;
+        ddl = tsql`ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} NONCLUSTERED (${cols}) NOT ENFORCED;`;
       } else {
-        const clustered = spec.clustered ? 'CLUSTERED' : 'NONCLUSTERED';
-        ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} ${clustered} (${cols});`;
+        const clustered = spec.clustered ? sqlFragment`CLUSTERED` : sqlFragment`NONCLUSTERED`;
+        ddl = tsql`ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} ${clustered} (${cols});`;
       }
     } else if (spec.type === 'FK') {
       // (synapse-dedicated FK already rejected up front.)
@@ -1286,27 +1290,28 @@ export async function addConstraint(
       const refNames = await resolveColumns(server, database, spec.refTableObjectId, spec.refColumns);
       if (!localNames) return { ok: false, error: 'one or more FK columns do not belong to this table', status: 400 };
       if (!refNames) return { ok: false, error: 'one or more referenced columns do not belong to the referenced table', status: 400 };
-      const refFq = `${bracket(refTbl.schema)}.${bracket(refTbl.name)}`;
-      const onDelete = REF_ACTION_SQL[spec.onDelete] ?? 'NO ACTION';
-      const onUpdate = REF_ACTION_SQL[spec.onUpdate] ?? 'NO ACTION';
+      const refFq = quotedName(refTbl.schema, refTbl.name);
+      const onDelete = REF_ACTION_SQL[spec.onDelete] ?? REF_ACTION_SQL.NO_ACTION;
+      const onUpdate = REF_ACTION_SQL[spec.onUpdate] ?? REF_ACTION_SQL.NO_ACTION;
       if (metadataOnly) {
         // Fabric Warehouse: FK accepted only as NOT ENFORCED (no WITH (NO)CHECK,
         // no ON DELETE/UPDATE actions — the engine ignores them).
-        ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} `
-          + `FOREIGN KEY (${localNames.join(', ')}) REFERENCES ${refFq} (${refNames.join(', ')}) NOT ENFORCED;`;
+        ddl = tsql`ALTER TABLE ${fq} ADD CONSTRAINT ${cn} FOREIGN KEY (${commaSeparated(localNames)}) REFERENCES ${refFq} (${commaSeparated(refNames)}) NOT ENFORCED;`;
       } else {
-        const withCheck = spec.noCheck ? 'WITH NOCHECK ' : 'WITH CHECK ';
-        ddl = `ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} `
-          + `FOREIGN KEY (${localNames.join(', ')}) REFERENCES ${refFq} (${refNames.join(', ')}) `
-          + `ON DELETE ${onDelete} ON UPDATE ${onUpdate};`;
+        const withCheck = spec.noCheck ? sqlFragment`WITH NOCHECK ` : sqlFragment`WITH CHECK `;
+        ddl = tsql`ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} FOREIGN KEY (${commaSeparated(localNames)}) REFERENCES ${refFq} (${commaSeparated(refNames)}) ON DELETE ${onDelete} ON UPDATE ${onUpdate};`;
       }
     } else if (spec.type === 'CK') {
       // (metadata-only CHECK already rejected up front.)
       const expr = (spec.expression || '').trim();
       if (!expr) return { ok: false, error: 'a CHECK expression is required', status: 400 };
       if (expr.length > 4000) return { ok: false, error: 'CHECK expression must be ≤4000 characters', status: 400 };
-      const withCheck = spec.noCheck ? 'WITH NOCHECK ' : 'WITH CHECK ';
-      ddl = `ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} CHECK (${expr});`;
+      const withCheck = spec.noCheck ? sqlFragment`WITH NOCHECK ` : sqlFragment`WITH CHECK `;
+      // containedCheckExpression re-runs validCheckExpression and THROWS. The
+      // up-front check above already returned 400 for the identical string, so
+      // this cannot fire — it is the backstop that survives someone deleting
+      // that early return, which is the exact defect #789 was.
+      ddl = tsql`ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} CHECK (${containedCheckExpression(expr)});`;
     } else {
       return { ok: false, error: 'unsupported constraint type', status: 400 };
     }
@@ -1328,7 +1333,7 @@ async function resolveConstraint(
 ): Promise<{ schema: string; table: string; name: string; type: SqlConstraintType } | null> {
   const rows = await executeParameterized<any>(
     server, database,
-    `SELECT s.name AS [schema], t.name AS tname, o.name AS cname, o.type AS ctype
+    tsql`SELECT s.name AS [schema], t.name AS tname, o.name AS cname, o.type AS ctype
      FROM sys.objects o
      JOIN sys.tables t ON t.object_id = o.parent_object_id
      JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -1362,7 +1367,7 @@ export async function dropConstraint(
     if (!hit) return { ok: false, error: `constraint not found for object_id ${constraintId} on table ${tableObjectId}`, status: 404 };
     await executeParameterized(
       server, database,
-      `ALTER TABLE ${bracket(hit.schema)}.${bracket(hit.table)} DROP CONSTRAINT ${bracket(hit.name)};`,
+      tsql`ALTER TABLE ${quotedName(hit.schema, hit.table)} DROP CONSTRAINT ${quotedIdentifier(hit.name)};`,
     );
     return { ok: true, dropped: `${hit.schema}.${hit.table}.${hit.name}` };
   } catch (e: any) {
@@ -1393,12 +1398,12 @@ export async function toggleConstraint(
     if (hit.type === 'PK' || hit.type === 'UQ') {
       return { ok: false, error: 'PRIMARY KEY / UNIQUE constraints cannot be disabled — drop and recreate to change them', status: 400 };
     }
-    const fq = `${bracket(hit.schema)}.${bracket(hit.table)}`;
-    const cn = bracket(hit.name);
+    const fq = quotedName(hit.schema, hit.table);
+    const cn = quotedIdentifier(hit.name);
     // WITH CHECK CHECK re-validates + trusts; NOCHECK disables enforcement.
     const stmt = enable
-      ? `ALTER TABLE ${fq} WITH CHECK CHECK CONSTRAINT ${cn};`
-      : `ALTER TABLE ${fq} NOCHECK CONSTRAINT ${cn};`;
+      ? tsql`ALTER TABLE ${fq} WITH CHECK CHECK CONSTRAINT ${cn};`
+      : tsql`ALTER TABLE ${fq} NOCHECK CONSTRAINT ${cn};`;
     await executeParameterized(server, database, stmt);
     return { ok: true, state: enable ? 'enabled' : 'disabled', constraint: `${hit.schema}.${hit.table}.${hit.name}` };
   } catch (e: any) {
@@ -1421,7 +1426,7 @@ function scriptCreateIndex(ix: SqlIndexRow, schema: string, table: string): stri
 async function scriptTableTypeCreate(server: string, database: string, objectId: number, schema: string, name: string): Promise<string> {
   const cols = await executeParameterized<any>(
     server, database,
-    `SELECT c.name AS name, ty.name AS typeName, c.max_length AS maxLength,
+    tsql`SELECT c.name AS name, ty.name AS typeName, c.max_length AS maxLength,
             c.precision AS prec, c.scale AS scale, c.is_nullable AS isNullable,
             c.collation_name AS collationName
      FROM sys.columns c
@@ -1487,7 +1492,7 @@ export async function scriptObject(
       }
       const mod = await executeParameterized<any>(
         server, database,
-        `SELECT m.definition AS definition
+        tsql`SELECT m.definition AS definition
          FROM sys.sql_modules m JOIN sys.objects o ON o.object_id = m.object_id
          WHERE m.object_id = @p0 AND o.is_ms_shipped = 0;`,
         [objectId],

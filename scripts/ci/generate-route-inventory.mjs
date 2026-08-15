@@ -125,6 +125,14 @@ const BACKEND_LABEL = {
   // into a shared helper: their ADX tag vanished while the ADX calls did not.
   // Six other routes were already mis-tagged the same way.
   'data-quality-client': 'ADX',
+  // Same defect, same shape, found the same way (#3529). `azure-sql-client` is
+  // the Azure SQL data-plane client — real TDS + AAD (`executeQuery`,
+  // `executeParameterized`, `executeWithCredential`) plus the ARM control plane
+  // — and it was missing here, so every route reaching Azure SQL through it
+  // published "touches no backend" in a table whose stated job is to classify
+  // backend dependency. Noticed because copy-job/[id]/watermark runs a live
+  // `SELECT` against the dbo.copy_watermark control table and its row read `—`.
+  'azure-sql-client': 'Azure SQL',
   'adls-client': 'ADLS', 'search-index-client': 'AI Search', 'databricks-client': 'Databricks',
   'eventhubs-client': 'Event Hubs', 'stream-analytics-client': 'Stream Analytics',
   'cosmos-client': 'Cosmos', 'cosmos-account-client': 'Cosmos', 'aas-client': 'AAS',

@@ -11,6 +11,7 @@ import {
   parseItemRef,
   runChatTurn,
   renderGrid,
+  escapeMd,
   type ChatApi,
   type ChatStream,
 } from '../src/chat/chat-core';
@@ -170,6 +171,119 @@ describe('runChatTurn — grounded on the real backend', () => {
     const out = s.md.join('\n');
     expect(out).toContain('503');
     expect(out).toContain('set LOOM_AI_SEARCH_SERVICE');
+  });
+});
+
+/**
+ * marked's table-row splitter, re-implemented here rather than asserted against
+ * a string shape. This is the rule that decides whether a `|` inside a cell ends
+ * the cell: walk backwards over CONSECUTIVE backslashes and toggle. An ODD run
+ * means the pipe is escaped and stays content; an EVEN run (including zero)
+ * means it is a delimiter. VS Code Chat renders with marked, so this — not
+ * cmark-gfm's "is the previous character a backslash" — is the rule that
+ * governs, and the two disagree on exactly the `\\|` case #767 was about.
+ */
+function markedCellCount(row: string): number {
+  let cells = 1;
+  for (let i = 0; i < row.length; i += 1) {
+    if (row[i] !== '|') continue;
+    let back = i;
+    let escaped = false;
+    while (--back >= 0 && row[back] === '\\') escaped = !escaped;
+    if (!escaped) cells += 1;
+  }
+  return cells;
+}
+
+describe('escapeMd — table-cell containment (CodeQL js/incomplete-sanitization #767)', () => {
+  it('CONTROL — markedCellCount splits on a bare pipe and on an EVEN backslash run', () => {
+    // Without this the assertions below could all be passing on a counter that
+    // never splits anything.
+    expect(markedCellCount('a|b')).toBe(2);
+    expect(markedCellCount('a\\\\|b')).toBe(2); // two backslashes → pipe is a delimiter
+    expect(markedCellCount('a\\|b')).toBe(1); // one backslash → escaped
+  });
+
+  it('keeps a backslash-pipe payload inside ONE cell', () => {
+    // The pre-fix output for this input was `a\\|b`: an EVEN backslash run, so
+    // marked read the pipe as a delimiter and the value took over the row.
+    expect(markedCellCount(escapeMd('a\\|b'))).toBe(1);
+  });
+
+  it('leaves every escaped pipe with an ODD backslash run, for any run length', () => {
+    for (const backslashes of ['', '\\', '\\\\', '\\\\\\', '\\\\\\\\']) {
+      const out = escapeMd(`x${backslashes}|y`);
+      expect(markedCellCount(out)).toBe(1);
+    }
+  });
+
+  it('round-trips through marked back to the original text', () => {
+    // Escaping is only correct if the rendered result is the value the user
+    // stored. marked's inline pass turns `\\` into `\` and `\|` into `|`.
+    const unescape = (s: string) => s.replace(/\\([\\|])/g, '$1');
+    for (const v of ['a\\|b', 'C:\\temp\\x', 'a|b', 'plain', '\\\\']) {
+      expect(unescape(escapeMd(v))).toBe(v);
+    }
+  });
+
+  it('still neutralizes newlines and backticks', () => {
+    expect(escapeMd('a\nb')).toBe('a b');
+    expect(escapeMd('`code`')).not.toContain('`');
+  });
+
+  it('neutralizes EVERY character marked treats as a line terminator', () => {
+    // Not hypothetical, and not just CR. Measured against real marked 14.0.0
+    // (the copy VS Code 1.102 vendors) by poisoning row 2 of a 3-row result and
+    // counting the <tr>s marked emitted:
+    //   LF CR VT FF NUL TAB NEL -> 3 rows      (harmless)
+    //   U+2028 / U+2029         -> 1 row       (rows 2 AND 3 dropped)
+    // Two mechanisms: `Lexer.lex` rewrites /\r\n|\r/ to \n before tokenizing,
+    // and marked's row patterns are `.`-based while JS `.` does not match a
+    // line terminator — so the match STOPS at U+2028 and everything after the
+    // poisoned row disappears under a footer still claiming 3 rows.
+    //
+    // Built with String.fromCharCode, never literals: a raw separator is as
+    // invisible in a fixture as it is in the source it is testing.
+    const CR = String.fromCharCode(13);
+    const LS = String.fromCharCode(8232); // U+2028 LINE SEPARATOR
+    const PS = String.fromCharCode(8233); // U+2029 PARAGRAPH SEPARATOR
+    const TERMINATORS = { CR, LS, PS, LF: '\n' };
+
+    // CONTROL — JS `.` really does stop at each of these, which is the
+    // mechanism the fix exists for. Without this the loop below could be
+    // passing on inert payloads.
+    for (const [name, ch] of Object.entries(TERMINATORS)) {
+      expect(/^a.b$/.test(`a${ch}b`), `${name} should not be matched by .`).toBe(false);
+    }
+    expect(/^a.b$/.test('a b')).toBe(true); // ... and NUL is matched, so `.` is not simply always-false
+
+    for (const [name, ch] of Object.entries(TERMINATORS)) {
+      const out = escapeMd(`poison${ch}tail`);
+      expect(out, name).not.toContain(ch);
+      // The whole payload survives as readable text in ONE cell.
+      expect(markedCellCount(out), name).toBe(1);
+      expect(out, name).toContain('poison');
+      expect(out, name).toContain('tail');
+    }
+  });
+
+  it('a query result cell cannot add a column to the rendered grid', () => {
+    const res: QueryResult = {
+      ok: true,
+      columns: [{ name: 'c1' }, { name: 'c2' }],
+      rows: [{ c1: 'a\\|INJECTED', c2: 'b' }],
+      rowCount: 1,
+    };
+    const rows = renderGrid(res, 1, 10)
+      .split('\n')
+      .filter((l) => l.startsWith('|') && !l.includes('---'));
+    // The invariant, not an arithmetic constant: every data row splits into the
+    // same number of segments as the HEADER. Pre-fix the injected cell produced
+    // one extra, which is a column the query never returned.
+    const expected = markedCellCount(rows[0]);
+    for (const line of rows.slice(1)) expect(markedCellCount(line)).toBe(expected);
+    // ... and the payload is still readable, in one cell.
+    expect(rows[1]).toContain('INJECTED');
   });
 });
 

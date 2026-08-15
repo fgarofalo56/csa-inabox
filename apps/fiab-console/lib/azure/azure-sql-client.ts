@@ -22,6 +22,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import sql from 'mssql';
+import { tsql, type TrustedSql } from '@/lib/sql/trusted-sql';
 import { armBase, getSqlSuffix } from './cloud-endpoints';
 import type { RestorableWindow, RestoreStatus } from './sql-restore-model';
 import { normalizeRestoreStatus } from './sql-restore-model';
@@ -527,34 +528,33 @@ export async function executeQueryBatch(
  * Parameterized query — returns the raw recordset (array of row objects) so
  * callers can read named catalog columns.
  *
- * SECURITY CONTRACT — read this before adding a call site.
+ * SECURITY CONTRACT — enforced by the compiler, not by this comment.
  *
  *   `params` are bound as `@p0`, `@p1`, … and are safe: a bound value can never
  *   be re-parsed as SQL. **That guarantee covers the VALUES ONLY.**
  *
- *   `sqlText` is TRUSTED-CALLER INPUT and is executed verbatim. Binding does
- *   nothing for text spliced into the statement itself, so a caller that builds
- *   `sqlText` by concatenation owns that injection risk entirely. Callers MUST
- *   assemble `sqlText` from static SQL plus — for the fragments that cannot be
- *   bound — either the audited helpers in `@/lib/sql/quoting`
- *   (`bracket`/`quoteIdent` for identifiers, `quoteLiteral`/`escapeSqlLiteral`
- *   for literals) or a closed-grammar validator that throws rather than emit
- *   something unproven (the shape `lib/azure/copy-job-sql.ts` and
- *   `validCheckExpression` in `lib/sql/check-expression.ts` use).
+ *   `sqlText` is executed verbatim, so binding does nothing for text spliced
+ *   into the statement itself. It is therefore typed {@link TrustedSql}: a
+ *   branded type only the constructors in `@/lib/sql/trusted-sql` can produce
+ *   (`tsql` for a module-literal statement, `quotedIdentifier`/`quotedName` for
+ *   catalog and config identifiers, `integerLiteral` for numeric spans,
+ *   `containedCheckExpression` for the one free-text fragment). Handing this
+ *   function a raw `string` is a COMPILE ERROR.
  *
  *   An earlier revision of this comment asserted that "no string-injection path
  *   exists" and that this was "used only by the sql-objects navigator". Both
  *   were wrong: the first was true of `params` and false of `sqlText`, and the
  *   second was false of six call sites. Read as a whole-function guarantee, it
  *   is exactly how a caller-supplied CHECK expression reached `.query()` here
- *   verbatim (CodeQL js/sql-injection #789, fixed in `addConstraint`). The claim
- *   is corrected rather than restated — this function cannot make `sqlText` safe
- *   and no longer pretends to.
+ *   verbatim (CodeQL js/sql-injection #789, fixed in `addConstraint`). Fixing
+ *   that ONE caller left the shape intact — a seventh could have been added with
+ *   nothing structurally stopping it — so the guarantee now lives in the type
+ *   rather than in a paragraph asking call sites to be careful.
  */
 export async function executeParameterized<T = Record<string, unknown>>(
   server: string,
   database: string,
-  sqlText: string,
+  sqlText: TrustedSql,
   params: Array<string | number | boolean> = [],
 ): Promise<T[]> {
   const pool = await getPool(server, database);
@@ -580,11 +580,15 @@ export async function executeParameterized<T = Record<string, unknown>>(
  * path opens a short-lived pool per call (mirroring `executeWithCredential`)
  * because pooling per-credential would mean caching secret material in memory
  * keyed by connection, which this codebase deliberately does not do.
+ *
+ * `sqlText` carries the same {@link TrustedSql} contract as
+ * {@link executeParameterized} — it reaches the identical `request.query()`
+ * sink, so a raw `string` is a compile error here too.
  */
 export async function executeParameterizedWithAuth<T = Record<string, unknown>>(
   server: string,
   database: string,
-  sqlText: string,
+  sqlText: TrustedSql,
   params: Array<string | number | boolean> = [],
   auth?: SqlExplicitAuth,
 ): Promise<T[]> {
@@ -626,6 +630,17 @@ export async function executeParameterizedWithAuth<T = Record<string, unknown>>(
 // the source with it here — so a source that only accepts SQL auth (no Entra
 // admin for the UAMI) still enumerates its real tables. A transient pool is used
 // (no caching of password-backed pools) and always closed.
+//
+// WHY `sqlText` IS `string` HERE AND `TrustedSql` ON executeParameterized:
+//   `executeQuery`, `executeQueryBatch` and `executeWithCredential` are the
+//   DELIBERATE arbitrary-SQL doors — they back the T-SQL query editor and the
+//   report designer's custom `SELECT`, whose product contract IS "run what the
+//   author wrote". Branding them would only be honest via a cast that proves
+//   nothing, i.e. the universal escape hatch `@/lib/sql/trusted-sql` refuses to
+//   ship. `executeParameterized` is different in kind: every one of its callers
+//   assembles a statement in code, so the type can be made to hold. Naming this
+//   split rather than implying uniform coverage is the point — an unstated
+//   assumption here is what CodeQL js/sql-injection #789 grew out of.
 // ============================================================
 
 /** SQL login + password (resolved from a Key Vault secretRef). */
@@ -719,7 +734,7 @@ export async function enableMirroring(
     // parameter for procedure sp_change_feed_enable_db"). The documented enable
     // is the bare call (destination_type defaults to 0 = Synapse-Link/landing-
     // zone CDC, the Azure-native path — no Fabric).
-    await executeParameterizedWithAuth(server, database, 'EXEC sys.sp_change_feed_enable_db;', [], auth);
+    await executeParameterizedWithAuth(server, database, tsql`EXEC sys.sp_change_feed_enable_db;`, [], auth);
     return { enabled: true, backend: 'azure-native-cdc', state: 'Initializing', note };
   } catch (e: any) {
     const msg = (e?.message || String(e));

@@ -30,6 +30,21 @@
 # ticket instead of a surprise on the next deploy.
 #
 # ADDING AN APP: add its requirements.txt to the `resolve` matrix below.
+#
+# THE MATRIX AND THE TRIGGER MUST AGREE (#3486)
+# ---------------------------------------------
+# This workflow triggers on `**/requirements.txt` but resolved a hand-listed
+# subset, and the two drifted: 21 tracked files matched the trigger, 7 were in
+# the matrix. The other 14 — including `portal/shared/requirements.txt`, which
+# the SHIPPED portal-backend image installs — got a PASSING resolve check that
+# had resolved something else entirely. Same class as the defect above: the
+# verdict was real, it just was not about the file that produced it.
+#
+# `scripts/ci/check-python-deps-resolve-coverage.mjs` (run from loom-guardrails)
+# now enforces the inverse: every tracked `requirements.txt` this workflow's own
+# trigger globs match must be in the matrix below OR declared, with a reason, in
+# `scripts/ci/python-deps-resolve-exclusions.json`. Adding a requirements.txt
+# anywhere in the tree therefore fails the build until it is one or the other.
 
 name: Python Deps Resolve
 
@@ -82,6 +97,43 @@ jobs:
             req: apps/loom-transform-runner/requirements.txt
           - app: script-runner
             req: platform/runners/script-runner/requirements.txt
+          # The SHIPPED portal-backend image installs this one
+          # (portal/kubernetes/docker/backend/Dockerfile:19). It matched the
+          # `**/requirements.txt` trigger from the day this workflow landed and
+          # was in the matrix from none of them, so a PR whose only change was
+          # this file got a green "resolve" that had resolved seven OTHER files
+          # — a verdict indistinguishable from a real pass (#3486).
+          - app: portal-backend
+            req: portal/shared/requirements.txt
+          # The inverse check that found the rest: the trigger matched 21 files
+          # and the matrix listed 7, so 14 could report green un-resolved. All
+          # 13 that resolve on linux/py3.11 are now checked; the 14th is
+          # declared in scripts/ci/python-deps-resolve-exclusions.json, and
+          # check-python-deps-resolve-coverage.mjs fails on any future drift.
+          - app: fn-copilot-chat
+            req: azure-functions/copilot-chat/requirements.txt
+          - app: fn-mcp-server
+            req: azure-functions/mcp-server/requirements.txt
+          - app: fn-paginated-report-renderer
+            req: azure-functions/paginated-report-renderer/requirements.txt
+          - app: fn-posture-refresh
+            req: azure-functions/posture-refresh/requirements.txt
+          - app: csa-ai-integration
+            req: csa_platform/ai_integration/requirements.txt
+          - app: csa-fn-ai-enrichment
+            req: csa_platform/functions/aiEnrichment/functions/requirements.txt
+          - app: csa-fn-event-processing
+            req: csa_platform/functions/eventProcessing/functions/requirements.txt
+          - app: csa-fn-secret-rotation
+            req: csa_platform/functions/secretRotation/functions/requirements.txt
+          - app: csa-fn-validation
+            req: csa_platform/functions/validation/requirements.txt
+          - app: csa-multi-synapse
+            req: csa_platform/multi_synapse/requirements.txt
+          - app: csa-semantic-model
+            req: csa_platform/semantic_model/requirements.txt
+          - app: csa-unity-catalog-pattern
+            req: csa_platform/unity_catalog_pattern/requirements.txt
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 

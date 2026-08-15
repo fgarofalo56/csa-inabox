@@ -31,24 +31,32 @@ import { randomUUID } from 'node:crypto';
 const LOG_PREFIX = '[mcp-bridge]';
 
 /**
- * C0 control characters (CR, LF, TAB, NUL ...) plus DEL.
- *
- * Written as a regex LITERAL with backslash-u escapes, never with literal
- * original writes this class with LITERAL control characters in the source,
- * which are invisible in every editor and diff — one careless copy/paste and
- * the class silently becomes something else while the code still compiles and
- * the sanitizer still returns a string. This form cannot be mangled unseen.
- */
-/**
  * The log-forging vector, spelled out: a CR or LF inside a request-derived
  * value starts what looks like a new, attacker-authored record.
  *
- * Kept as its own literal rather than folded into the C0 range below. The
- * range DOES cover CR and LF, but CodeQL js/log-injection could not see that:
- * it does not resolve backslash-u escapes inside a character RANGE, so the
- * alert survived a sanitizer that demonstrably strips (mutation-proved: neuter
- * it and four tests go red). Naming the vector explicitly is both the clearer
- * source and the form the analyser reads.
+ * Kept as its own literal rather than folded into the C0 range below, because
+ * naming the vector is clearer than burying it in a range.
+ *
+ * IT IS NOT WHAT CLOSES THE ALERT, and the note that used to sit here said it
+ * was. That note claimed CodeQL "does not resolve backslash-u escapes inside a
+ * character RANGE" — true of OTHER_CONTROLS, irrelevant here (`[\r\n]` carries
+ * no \u escape and no range) — and it is why js/log-injection #762 was raised
+ * against this file on 2026-08-04, two days AFTER #2849 believed it had fixed
+ * it. The real rule, read off LogInjectionQuery.qll rather than inferred:
+ *
+ *     class StringReplaceSanitizer extends Sanitizer {
+ *       StringReplaceSanitizer() {
+ *         exists(string s | this.(StringReplaceCall).replaces(s, "") and
+ *                           s.regexpMatch("\\n"))
+ *       }
+ *     }
+ *
+ * The replaced string must be exactly "\n" AND the replacement must be the
+ * EMPTY string. This line replaces with a SPACE, so it satisfies neither half
+ * and the whole helper stays invisible to the scanner. See the `.replaceAll` in
+ * logSafe() below for the construct that IS modelled — the same one
+ * apps/fiab-console/lib/util/log-safe.ts carries, and which this file copied the
+ * SEMANTICS of without copying the SHAPE.
  */
 const LINE_BREAKS = /[\r\n]+/g;
 
@@ -82,7 +90,21 @@ const MAX_LOG_DETAIL = 2000;
 export function logSafe(value, max = MAX_LOG_DETAIL) {
   if (value === null || value === undefined) return '';
   const raw = typeof value === 'string' ? value : String(value);
-  const flat = raw.replace(LINE_BREAKS, ' ').replace(OTHER_CONTROLS, ' ').trim();
+  const flat = raw
+    // 1) READABILITY. Collapse each run of framing/control characters to ONE
+    //    space, so "a\n\n\nb" reads "a b" and two tokens never silently fuse.
+    .replace(LINE_BREAKS, ' ')
+    .replace(OTHER_CONTROLS, ' ')
+    // 2) FRAMING, belt-and-braces — and the ONLY construct CodeQL models
+    //    (StringReplaceSanitizer: replaced string exactly "\n", replacement the
+    //    EMPTY string). After (1) there is no LF left, so at runtime this is a
+    //    no-op — and that is precisely the point: it still holds if (1) is ever
+    //    edited, reformatted, or narrowed. Do NOT delete it as dead code:
+    //    without it the scanner sees NO sanitizer and every console.* call site
+    //    in this package is re-flagged, which is exactly what #762 was.
+    //    apps/fiab-mcp-bridge/tests/safe-error.test.mjs fails if it goes away.
+    .replaceAll('\n', '')
+    .trim();
   return flat.length > max ? `${flat.slice(0, max)}...` : flat;
 }
 

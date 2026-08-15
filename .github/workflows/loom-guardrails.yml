@@ -831,19 +831,24 @@ jobs:
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-guard-import-side-effects.mjs
       # Under `output: 'standalone'` with HOSTNAME=0.0.0.0, `req.url` and
-      # `req.nextUrl.origin` carry the CONTAINER's authority — so any URL built
-      # on them and handed to a client points at 0.0.0.0:3000. It has bitten
-      # twice: #3442 (the auth breaker fired correctly and redirected the
-      # browser somewhere unreachable, so the diagnosis page never rendered) and
+      # `req.nextUrl` carry the CONTAINER's authority — so any URL built on them
+      # and handed to a client points at 0.0.0.0:3000. It has bitten three
+      # times: #3442 (the auth breaker fired correctly and redirected the
+      # browser somewhere unreachable, so the diagnosis page never rendered),
       # #3443 (a copy-paste connection snippet, in a file whose own docstring
-      # declares "No internal hosts"). Both were one line, under a comment
-      # stating the correct rule, and invisible to every fixture — the harnesses
-      # set `host` and `x-forwarded-host` to the same value as the request URL,
-      # making the broken and correct constructions byte-identical.
+      # declares "No internal hosts") and #3467 (Spark and Trino handed
+      # http://0.0.0.0:3000/api/catalog/iceberg to paste into their configs).
       #
-      # The guard strips comments first: 6 of the 7 hits in the sweep that found
-      # #3443 were prose EXPLAINING the pattern, plus one deliberate control.
-      - name: 'external-origin-urls (a client-facing URL must use the FORWARDED origin — #3442, #3443)'
+      # #3468: the FIRST version of this guard matched only the two-argument
+      # `new URL(x, req.url)` form and reported "0 violation(s), 5 embedded
+      # control(s) passed", EXIT=0, on a tree carrying the live #3467 defect —
+      # all five controls modelled the shape it could see. It now FOLLOWS THE
+      # VALUE (local variables, function parameters at their call sites, return
+      # values) over a string/comment/regex-aware mask, because the interop half
+      # of #3500 laundered `req.url` through `originOf(url: string)` and no
+      # widened regex can see that. Ratcheting: the 35 pre-existing sites are
+      # frozen per file with the boy-scout rule; #3468 tracks the triage.
+      - name: 'external-origin-urls (a client-facing URL must use the FORWARDED origin — #3442, #3443, #3467, #3468)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-external-origin-urls.mjs
       # The sibling half of the same problem. That guard proves each required
@@ -911,6 +916,20 @@ jobs:
       - name: 'build-trigger-covers-matrix (every app a push builds is an app a push can trigger)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-build-trigger-covers-matrix.mjs
+      # The INVERSE of the rule above, and the other way a matrix/trigger split
+      # goes wrong. python-deps-resolve.yml triggers on `**/requirements.txt` and
+      # resolved a hand-listed 7 of the 21 tracked files, so a PR touching any of
+      # the other 14 got a PASSING resolve check that had resolved something
+      # else — including portal/shared/requirements.txt, which the SHIPPED
+      # portal-backend image installs. The first rule catches work that never
+      # runs; this one catches a verdict about nothing (#3486). Self-test first:
+      # the rule must prove it can still fail before its clean scan means
+      # anything.
+      - name: 'python-deps-resolve-coverage (every requirements.txt that triggers the gate is a file the gate resolves)'
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-python-deps-resolve-coverage.mjs --self-test
+          node scripts/ci/check-python-deps-resolve-coverage.mjs
       # `az acr login` authenticates through an ARM-mediated token exchange, so it
       # returns 0 while the registry still refuses this runner's IP. Roll
       # 31454217160: this oracle said "reachable after 1 attempt" in the SAME

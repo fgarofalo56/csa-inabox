@@ -21,6 +21,7 @@
  */
 import type { SchemaMap, EngineSourceConfig } from './connector-plane';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY } from '@/lib/azure/mirror-engine';
+import { tsql } from '@/lib/sql/trusted-sql';
 
 /** Cap the captured surface so a pathological source can't bloat the fingerprint. */
 const MAX_TABLES = Number(process.env.LOOM_MIRROR_MAX_TABLES || 50);
@@ -60,7 +61,7 @@ async function captureSql(source: EngineSourceConfig): Promise<SchemaMap> {
   const { executeParameterized } = await import('@/lib/azure/azure-sql-client');
   const recordset = await executeParameterized<{ s: string; t: string; c: string }>(
     source.server, source.database,
-    `SELECT sch.name AS s, tbl.name AS t, col.name AS c
+    tsql`SELECT sch.name AS s, tbl.name AS t, col.name AS c
        FROM sys.columns col
        JOIN sys.tables tbl ON tbl.object_id = col.object_id
        JOIN sys.schemas sch ON sch.schema_id = tbl.schema_id
