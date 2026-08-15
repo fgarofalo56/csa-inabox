@@ -525,5 +525,29 @@ function main(argv) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  process.exit(main(process.argv.slice(2)));
+  // NOT process.exit() (#3466). This runner writes the ENTIRE TAP stream to
+  // stdout — ~425KB in the incident — and under GitHub Actions stdout is a PIPE.
+  //
+  // MECHANISM: a write larger than the kernel's 64 KiB pipe buffer cannot
+  // complete in one syscall, so the remainder is QUEUED on the stream and needs
+  // the event loop to drain it. process.exit() tears the process down first and
+  // the queue is discarded — which is why the surviving prefix ends on a
+  // pipe-buffer boundary rather than anywhere meaningful. Node's process docs
+  // name this exact failure mode: output "not written at all if process.exit()
+  // is called before an asynchronous write completes", and document pipe writes
+  // as asynchronous on POSIX / synchronous on Windows — which is why this never
+  // reproduced on a dev box while failing every time on ubuntu-latest, where
+  // `guardrails` runs.
+  //
+  // Measured against this exact file on Linux, one failing suite, 487,731 bytes
+  // of output: process.exit() delivered 146,419 of them and took BOTH the
+  // `not ok` line and the `[node-test-suites] FAIL:` verdict with the remainder.
+  // decide() had classified the failure correctly the whole time; nobody could
+  // read it. The lane went red with no reason in the log, and the diagnosis went
+  // to process death, OOM, maxBuffer and runner parallelism in turn — all wrong.
+  //
+  // Assigning exitCode lets Node exit naturally once stdout has drained. The
+  // status is unchanged: main() still returns the child's exact code, so a
+  // failing suite still fails this lane with the same number.
+  process.exitCode = main(process.argv.slice(2));
 }

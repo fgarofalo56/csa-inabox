@@ -17,6 +17,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
+import { externalOrigin } from '@/lib/auth/auth-breaker';
 import { buildGateEnvelope } from '@/lib/api/gate-envelope';
 import {
   ICEBERG_CATALOG_GATE_ID,
@@ -29,20 +30,27 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * The IRC endpoint EXTERNAL engines use — the Loom proxy on this deployment's
- * public origin, not the internal-ingress container. Derived from the request
- * origin (so it is correct behind Front Door / a vanity domain) with
- * LOOM_PUBLIC_BASE_URL as the fallback.
+ * The IRC endpoint EXTERNAL engines use — the Loom proxy on the origin the
+ * CALLER actually reached us on, never the internal-ingress container.
+ *
+ * #3467: this read `new URL(req.url).origin`. Under `output: 'standalone'` with
+ * HOSTNAME=0.0.0.0, Next builds the handler's request URL from its own listen
+ * address, so that expression is the CONTAINER's address — and this route hands
+ * it to Spark / Trino / DuckDB / Snowflake in a copy-paste config, directly
+ * beneath a comment reading "never the internal container". The engine gets
+ * `http://0.0.0.0:3000/api/catalog/iceberg`, which cannot resolve for it.
+ *
+ * The `LOOM_PUBLIC_BASE_URL` fallback that was supposed to cover this was dead
+ * code: it sat in a `catch`, and `new URL('http://0.0.0.0:3000/…')` is a
+ * perfectly valid URL that never throws, so it could only fire on a malformed
+ * one — not the failure mode it was written for. Removed rather than left
+ * reading as protection it never provided.
+ *
+ * `externalOrigin` reads the forwarded host this app already trusts for the
+ * OAuth redirect_uri. Same defect and same fix as #3443 in flightsql/connect.
  */
 function proxyCatalogUri(req: Request): string {
-  let origin = '';
-  try {
-    origin = new URL(req.url).origin;
-  } catch {
-    origin = '';
-  }
-  if (!origin) origin = (process.env.LOOM_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
-  return `${origin}/api/catalog/iceberg`;
+  return `${externalOrigin(req.headers)}/api/catalog/iceberg`;
 }
 
 export const GET = withSession(async (req) => {
