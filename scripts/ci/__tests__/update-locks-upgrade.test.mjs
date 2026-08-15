@@ -207,9 +207,17 @@ test('the blocker is found when the resolver names it ONLY as a wheel URL (the r
       "(from https://pypi.org/simple/msal/) (requires-python:>=3.8)'))]",
     'pip._internal.exceptions.DistributionNotFound: ResolutionImpossible: for help visit https://pip.pypa.io/',
   ].join('\n');
-  assert.doesNotMatch(
-    wheelOnly,
-    new RegExp(`msal ${PINNED_MSAL.replace(/\./g, '\\.')}`),
+  // A LITERAL containment check, not a constructed regex. The first version
+  // built one with `PINNED_MSAL.replace(/\./g, '\\.')`, which CodeQL flagged
+  // (js/incomplete-sanitization, HIGH): escaping `.` and nothing else is an
+  // incomplete escape, and a version string carrying any other metacharacter
+  // would have produced a regex that quietly matched something else. Not
+  // exploitable here — the value is read out of a committed lock — but a
+  // weak assertion inside a supply-chain test is worth removing rather than
+  // dismissing, and the honest fix is that this never needed a regex: the
+  // claim is "these exact bytes do not appear".
+  assert.ok(
+    !wheelOnly.includes(`msal ${PINNED_MSAL}`),
     'fixture must not contain the space-separated shape'
   );
 
