@@ -8,5 +8,5 @@ pydantic==2.13.4
 duckdb==1.5.5
 # pyarrow provides both the Arrow IPC serialization for the HTTP tier and the
 # Flight SQL server for the ADBC/JDBC serving wire (N3).
-pyarrow==25.0.0
+pyarrow==25.0.1
 azure-identity==1.25.3
