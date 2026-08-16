@@ -31,24 +31,42 @@
  * own credentials.
  */
 
-/** Every reason Loom server code reads a secret out of the Loom Key Vault. */
-export type KvSecretPurpose =
+/**
+ * Every reason Loom server code reads a secret out of the Loom Key Vault.
+ *
+ * Declared as a VALUE, not just a type union, so tests can derive the full
+ * population instead of keeping a hand-written list that drifts (the purpose
+ * matrix in kv-secret-purpose.test.ts had already fallen two purposes behind).
+ */
+export const KV_SECRET_PURPOSES = [
   /** A Loom Connection's stored credential (`secretRef`, minted `loom-conn-<uuid>`). */
-  | 'connection-secret'
+  'connection-secret',
+  /**
+   * An external-source credential for a lakehouse SHORTCUT (S3 access key, GCS
+   * service-account JSON, the Dataverse export path). Loom mints BOTH shortcut
+   * credential names — `loom-shortcut-<itemId>` and `loom-sc-<uuid>` — so this
+   * purpose OWNS that name-space rather than accepting an arbitrary name: the
+   * only caller resolves a name supplied in a request, and no UI path sends an
+   * operator-typed name to it.
+   */
+  'shortcut-credential',
   /** A git PAT / SPN secret for Git integration or a Loom App's private repo. */
-  | 'git-credential'
+  'git-credential',
   /** An Azure Functions host key for the UDF / functions-on-objects runtime. */
-  | 'udf-function-key'
+  'udf-function-key',
   /** A Variable Library `secret-ref` variable — the user names the secret. */
-  | 'variable-library'
+  'variable-library',
   /** A DirectQuery source credential for a semantic model — the operator names it. */
-  | 'directquery-source'
+  'directquery-source',
   /** A KV secret name bound into a hosted Loom App's container env (ACA resolves the value). */
-  | 'app-env-binding'
+  'app-env-binding',
   /** A pipeline/trigger parameter bound to Key Vault — the author names the secret. */
-  | 'pipeline-parameter'
+  'pipeline-parameter',
   /** The credential an MCP server entry presents to its remote endpoint. */
-  | 'mcp-server-credential';
+  'mcp-server-credential',
+] as const;
+
+export type KvSecretPurpose = (typeof KV_SECRET_PURPOSES)[number];
 
 /**
  * Name-spaces Loom MINTS. A purpose that owns one may read nothing else; a
@@ -61,10 +79,13 @@ export type KvSecretPurpose =
  *   git-binding-store.ts        `loom-git-<workspaceId>-<authMethod>`
  *   git-integration-client.ts   `loom-git-pat-<workspaceId>` (LOOM_GIT_PAT_KV_PREFIX)
  *   loom-app-runtime git-credential  `loom-app-git-<id8>`
+ *   items/lakehouse-shortcut    `loom-shortcut-<itemId>`
+ *   lakehouse/shortcuts/creds   `loom-sc-<uuid>`
  */
 const MINTED_NAMESPACES: Record<string, readonly string[]> = {
   'connection-secret': ['loom-conn-'],
   'git-credential': ['loom-git-', 'loom-app-git-'],
+  'shortcut-credential': ['loom-sc-', 'loom-shortcut-'],
 };
 
 /** Purposes whose secret NAME is chosen by an operator/user rather than minted by Loom. */
@@ -83,6 +104,13 @@ const OPERATOR_NAMED: readonly KvSecretPurpose[] = [
  * created by `platform/fiab/bicep/modules/admin-plane/main.bicep` (or the
  * keyvault module) and wired to a Container App via a `secretRef`, never by a
  * user. Reading one from a request-driven path is always an exfiltration.
+ *
+ * NAME-SPACE DISCIPLINE: these are KEY VAULT secret names. A Container Apps
+ * `secretRef` ALIAS is a different name-space and listing one here guards a
+ * string that does not exist in the vault. `loom-azure-maps-key` was exactly
+ * that mistake — it is the alias at main.bicep:4977, while the vault name is
+ * `loom-azure-maps-primary-key` (main.bicep:2000). Both are listed now: the
+ * alias is harmless to keep, the vault name is the one that matters.
  */
 const RESERVED_EXACT: readonly string[] = [
   'loom-msal-client-secret',
@@ -99,6 +127,15 @@ const RESERVED_EXACT: readonly string[] = [
   'loom-alert-webhook-url',
   'loom-console-cosmos',
   'loom-dataverse-client-secret',
+  // Added after review: each is a real vault secret created by platform bicep
+  // that no purpose-based check refused, because none matches a reserved
+  // pattern and none carries a `loom-<feature>-` minted prefix.
+  'session-secret',              // the Console SESSION-SIGNING key (main.bicep:5909)
+  'loom-session-secret',         // the same key under its alternate name
+  'synthetic-login-secret',      // synthetic-monitor automation password
+  'loom-risingwave-root-password', // Postgres-wire root password (main.bicep:1355)
+  'loom-azure-maps-primary-key', // the VAULT name behind the alias above
+  'loom-ducklake-catalog-url',   // full postgresql:// DSN, credentials inline
 ];
 
 /** Shapes of platform credential names, so a bicep rename cannot open a hole. */
@@ -116,6 +153,17 @@ const RESERVED_PATTERNS: readonly RegExp[] = [
  * was set by bicep so a Container App could resolve it — so it joins the
  * reserved set automatically. Read live (not cached) so tests and a rolled
  * revision both see the current environment.
+ *
+ * HONEST LIMIT (measured, not assumed): on the Console this currently harvests
+ * NOTHING. The suffix set matches only `LOOM_SECRET_EXPIRY_KV_SECRET`, which is
+ * set on the secret-expiry job and not on the Console, so in a shipped
+ * deployment this function returns an empty list. It is therefore NOT the
+ * safety net that keeps a bicep rename from opening a hole — RESERVED_EXACT and
+ * RESERVED_PATTERNS are, and a new platform secret must be added to them by
+ * hand. The suffix set is deliberately narrow rather than widened to `_SECRET$`:
+ * several env vars with that ending carry a secret VALUE rather than a NAME, and
+ * harvesting a value into a name list would put credential material into
+ * comparisons and refusal messages.
  */
 function envConfiguredSecretNames(): string[] {
   const out: string[] = [];

@@ -102,8 +102,21 @@ export async function deleteShortcutSecret(name: string): Promise<void> {
   }).catch(() => { /* best-effort */ });
 }
 
-/** GET the current value of a secret from the SHORTCUT vault. */
-export async function getShortcutSecretValue(name: string): Promise<string> {
+/**
+ * GET the current value of a secret from the SHORTCUT vault.
+ *
+ * `purpose` is REQUIRED for the same reason it is on {@link getKeyVaultSecretValue}:
+ * the ONLY caller (`/api/lakehouse/shortcuts/browse`) takes `name` straight from a
+ * `?kvSecret=` query parameter, so any authenticated user chooses which secret the
+ * Console reads with its managed identity. And the vault it reads is the MAIN Loom
+ * vault in every shipped deployment — `admin-plane/main.bicep` sets
+ * LOOM_SHORTCUT_KEYVAULT to the admin-plane vault unless an operator overrides it,
+ * and no params file does — so that name-space includes the platform's own
+ * credentials. The policy check runs BEFORE the vault URL is resolved and before a
+ * token is minted, so a refused name never reaches Key Vault at all.
+ */
+export async function getShortcutSecretValue(name: string, purpose: KvSecretPurpose): Promise<string> {
+  assertSecretReadAllowed(name, purpose);
   const base = shortcutVaultUrl();
   if (!base) throw new KeyVaultError('Shortcut Key Vault not configured (LOOM_SHORTCUT_KEYVAULT)', 503);
   const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {

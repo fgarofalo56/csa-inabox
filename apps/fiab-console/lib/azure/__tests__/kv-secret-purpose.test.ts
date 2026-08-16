@@ -14,17 +14,19 @@ import {
   assertSecretReadAllowed,
   isReservedPlatformSecret,
   KeyVaultSecretPolicyError,
+  KV_SECRET_PURPOSES,
   type KvSecretPurpose,
 } from '../kv-secret-purpose';
 
-const ALL_PURPOSES: KvSecretPurpose[] = [
-  'connection-secret',
-  'git-credential',
-  'udf-function-key',
-  'variable-library',
-  'directquery-source',
-  'app-env-binding',
-];
+/**
+ * DERIVED, never hand-written. This was a literal list and it had already
+ * drifted two purposes behind the module (`pipeline-parameter`,
+ * `mcp-server-credential`), so the "unreachable from EVERY purpose" matrix below
+ * was quietly covering a subset — including, when it was added,
+ * `shortcut-credential`, the purpose introduced to fix an exfiltration. A matrix
+ * that silently shrinks is the same failure this suite exists to catch.
+ */
+const ALL_PURPOSES: readonly KvSecretPurpose[] = KV_SECRET_PURPOSES;
 
 describe('platform credentials are unreachable from EVERY purpose', () => {
   // The exact names platform bicep writes into the Loom vault.

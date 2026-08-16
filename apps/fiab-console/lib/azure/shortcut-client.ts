@@ -347,6 +347,26 @@ export interface S3BrowseArgs {
 }
 
 /**
+ * AWS region labels are lowercase alphanumerics and hyphens. The value is
+ * interpolated into the S3 request AUTHORITY (`s3.<region>.amazonaws.com`), so a
+ * region carrying '/', '@', ':' or '?' relocates the request to a host of the
+ * caller's choosing while the string still ends in '.amazonaws.com' — and the
+ * Authorization header on that request carries `Credential=<accessKeyId>`, which
+ * on the shortcut-browse path is derived from a Key Vault secret value. Callers
+ * validate the region BEFORE resolving any credential.
+ */
+export function assertValidAwsRegion(region: string): void {
+  if (!/^[a-z0-9-]{1,32}$/.test(String(region || ''))) {
+    throw new ShortcutSourceError(
+      `'${String(region || '').slice(0, 40)}' is not a valid AWS region name ` +
+        '(lowercase letters, digits and hyphens, e.g. us-east-1).',
+      's3_bad_region',
+      400,
+    );
+  }
+}
+
+/**
  * List one level of an S3 bucket (delimiter '/') signed with SigV4 and parsed
  * from the XML response. Path-style addressing keeps dotted bucket names valid.
  */
@@ -359,6 +379,11 @@ export async function listS3Objects(args: S3BrowseArgs): Promise<BrowseResult> {
   }
   const prefix = (args.prefix || '').replace(/^\/+/, '');
   const maxKeys = Math.min(Math.max(args.maxKeys ?? 100, 1), 1000);
+  // Belt-and-braces: the browse route rejects a bad region BEFORE it reads the
+  // Key Vault secret, but this is the function that puts a credential-derived
+  // `Credential=` header on the wire, so it refuses an authority-steering region
+  // even if a future caller forgets to check. See assertValidAwsRegion.
+  assertValidAwsRegion(region);
   const host = (args.endpointHost || `s3.${region}.amazonaws.com`).replace(/^https?:\/\//, '').replace(/\/$/, '');
   const canonicalUri = '/' + awsUriEncode(bucket, false);
 
@@ -662,7 +687,13 @@ export interface DataverseBrowseArgs {
 /** Parse account/container/path out of an abfss:// URI (Dataverse export target). */
 export function parseAbfss(uri: string): { account: string; container: string; path: string } {
   const m = (uri || '').match(/^abfss:\/\/([^@]+)@([^/]+)\/?(.*)$/i);
-  if (!m) throw new ShortcutSourceError(`Not a valid abfss:// URI: ${uri}`, 'dataverse_bad_target', 400);
+  // The rejected value is NOT interpolated. Four callers pass a user-typed URI,
+  // where echoing it would be helpful — but one passes a Key Vault secret VALUE
+  // (listDataverseEntities), and a primitive that is safe only depending on who
+  // calls it is the "correct helper exists, next consumer doesn't adopt it"
+  // shape this module has already been bitten by. Callers that hold a
+  // non-secret URI can name it in their own message.
+  if (!m) throw new ShortcutSourceError('Not a valid abfss:// URI.', 'dataverse_bad_target', 400);
   const container = m[1];
   const host = m[2];
   const account = host.split('.')[0];
@@ -670,7 +701,24 @@ export function parseAbfss(uri: string): { account: string; container: string; p
 }
 
 export async function listDataverseEntities(args: DataverseBrowseArgs): Promise<BrowseResult> {
-  const { account, container, path } = parseAbfss(args.exportAbfssUri);
+  // `exportAbfssUri` is a KEY VAULT SECRET VALUE (the browse route resolves it
+  // from `?kvSecret=`). parseAbfss interpolates its input into its error message,
+  // which the route returns to the caller — so a malformed value would hand the
+  // secret material straight back in a response body. Establish the shape here
+  // and report only THAT (deploy-integrity.md R7: say what was established, never
+  // echo what could not be parsed).
+  let parts: { account: string; container: string; path: string };
+  try {
+    parts = parseAbfss(args.exportAbfssUri);
+  } catch {
+    throw new ShortcutSourceError(
+      'The stored Dataverse credential is not an abfss:// export path. Re-save the Dataverse Synapse-Link ' +
+        'export location on the shortcut (its value is not shown here).',
+      'dataverse_bad_target',
+      400,
+    );
+  }
+  const { account, container, path } = parts;
   const base = trimTrailingSlashes(path);
   const prefix = args.prefix ? trimTrailingSlashes(`${base}/${trimLeadingSlashes(args.prefix)}`) : base;
   const result = await browseAdls({ account, container, prefix, maxResults: args.maxResults });
