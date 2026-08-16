@@ -6,21 +6,64 @@
  *
  * ?table=<schema.table> → { ok, columns } (INFORMATION_SCHEMA.COLUMNS) for
  * editor IntelliSense. Otherwise returns { schemas, databases }.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. `GET(req)` took no `ctx` and ran
+ * `getSession()` alone, then enumerated every schema, table and row count in
+ * the shared dedicated pool, every view/procedure/function in it, and every
+ * database on the Synapse SQL server.
+ *
+ * Layer 1 now authorizes the caller against the warehouse item
+ * (`allowReadRoles: true` — this handler issues no write).
+ *
+ * Layer 2 is applied to the `databases` list ONLY, and that is deliberate: the
+ * picker it feeds drives `[id]/query`'s `body.database`, and #3614's own round-2
+ * finding was that narrowing a CONSUMER while leaving its PICKER wide produces a
+ * control that 403s on its own documented use. Picker and consumer now admit the
+ * same set by construction — both call `workspaceSynapseScope`.
+ *
+ * HOW MUCH THAT NARROWS, stated at full strength because an earlier revision of
+ * the ledger understated it as "out-of-band databases disappear". For the COMMON
+ * item — `state: {}`, no provisioning record — `workspaceSynapseScope` is a
+ * SINGLE entry: the env-pinned shared pool. Nothing in the platform writes a
+ * second Synapse database onto an item today, so in practice **this dropdown
+ * collapses to one option in every workspace**, which removes the cross-database
+ * picker's documented purpose rather than merely trimming it.
+ *
+ * It does NOT become an error state — `workspaceSynapseScope` always contains at
+ * least the item's own database, so the list is never empty and the editor's
+ * `disabled={… || databases.length === 0}` never trips. That is read from
+ * `lib/editors/synapse-sql-editors.tsx`, NOT observed in a browser: per
+ * `ux-baseline.md` G1 a one-option dropdown still needs a live pass, and this PR
+ * does not have one. Recorded as unverified.
+ *
+ * The schema/table enumeration inside the one shared pool database is NOT
+ * narrowed, because nothing in the estate records which schema belongs to which
+ * item. See `_lib/synapse-item-scope.ts` and the PR ledger — stated, not implied
+ * fixed.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { enumerateSqlObjects } from '@/lib/azure/sql-object-scripting';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { guardSynapseItemRequest, workspaceSynapseScope } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+const WAREHOUSE_NOT_FOUND = 'warehouse not found';
+
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'warehouse',
+    notFound: WAREHOUSE_NOT_FOUND,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
+  const { item } = guard.ctx;
 
   // Distinguish a genuine non-Online pool (Paused/Resuming → 409, honest gate)
   // from a probe failure (ARM unreachable / scope wrong → 502, surfaced as an
@@ -97,8 +140,10 @@ export async function GET(req: NextRequest) {
 
     let databases: string[] = [];
     try {
+      const scope = await workspaceSynapseScope(item);
       const dbs = await executeQuery(dedicatedTarget(), `SELECT name FROM sys.databases WHERE state = 0 ORDER BY name`);
-      databases = dbs.rows.map((r) => String(r[0]));
+      // LAYER 2 — the picker offers exactly what `[id]/query` will admit.
+      databases = dbs.rows.map((r) => String(r[0])).filter((n) => scope.has(n));
     } catch { databases = []; }
 
     return NextResponse.json({

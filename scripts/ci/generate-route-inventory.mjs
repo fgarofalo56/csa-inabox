@@ -64,7 +64,7 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * too; the note is left here because this file caught it first and the checker
  * did not, which is the whole argument for keeping the two in lockstep.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest)\s*(?:<[^(]*>)?\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -101,6 +101,18 @@ const OWNER_RE = new RegExp([
   // session moved into the wrapper. That is the exact under-reporting this
   // file's header warns about, reproduced by the very change that fixed them.
   'guardAdxItemRequest\\s*\\(',
+  // ...and MEASURED AGAIN, on the third pass, which is why the note above is
+  // worth keeping. Adopting `guardSynapseItemRequest` on the shared-Synapse /
+  // Databricks-UC / AAS routes flipped FOUR of them from `session-only` to
+  // **public** in the generated inventory —
+  //   items/[type]/[id]/optimize, items/[type]/[id]/statistics,
+  //   items/databricks-sql-warehouse/[id]/ctas,
+  //   items/semantic-model/[id]/refresh-policy
+  // — i.e. the published doc would have described a newly OWNER-SCOPED route as
+  // unauthenticated, because the session moved inside a wrapper this file did
+  // not know. Exactly the same failure the ADX pass hit. Both regexes are
+  // updated together; do not add a guard wrapper to one without the other.
+  'guardSynapseItemRequest\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',

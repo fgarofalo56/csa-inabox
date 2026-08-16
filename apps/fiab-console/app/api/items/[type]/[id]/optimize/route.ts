@@ -21,10 +21,23 @@
  *
  * No raw SQL crosses the wire: the OPTIMIZE / ANALYZE statements are built
  * server-side from validated identifiers (statistics-client.ts).
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. `getSession()` was the only check and `[id]`
+ * was never read (only `[type]`, to pick an engine). OPTIMIZE physically
+ * REWRITES a Delta table's files — compaction + optional ZORDER — against a
+ * caller-named `catalog.schema.table` on the shared Databricks workspace and
+ * Unity Catalog, as the Console identity. On a large foreign table that is also
+ * an unattributable compute-cost attack.
+ *
+ * Layer 1 (`guardSynapseItemRequest`) now authorizes the caller against the
+ * route item, write-scoped. The guard is backend-agnostic; only its `database`
+ * field is Synapse-specific and this handler does not use it.
+ *
+ * NOT closed: Unity Catalog has no item→`catalog.schema.table` binding in this
+ * tree, so the coordinate is still caller-named. FLOOR, not BOUND — ledger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { databricksConfigGate, executeStatement, getWarehouse } from '@/lib/azure/databricks-client';
 import { countParquetFiles, getAccountName } from '@/lib/azure/adls-client';
 import {
@@ -32,6 +45,7 @@ import {
   buildDatabricksAnalyzeSQL,
   type Built,
 } from '@/lib/azure/statistics-client';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,10 +63,16 @@ function unwrap(b: Built): string {
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const { type, id } = await ctx.params;
+  // OPTIMIZE rewrites data files — a write. No allowReadRoles.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: type,
+    notFound: 'item not found',
+  });
+  if (guard.res) return guard.res;
+  const { session } = guard.ctx;
 
-  const { type } = await ctx.params;
   const body = await req.json().catch(() => ({}));
 
   // Synapse Dedicated SQL pool — OPTIMIZE does not apply (columnstore, not Delta).

@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 104 |
-| Session-only | 525 |
-| Owner-scoped | 750 |
+| Session-only | 513 |
+| Owner-scoped | 762 |
 | Admin | 301 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -1023,7 +1023,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/onelake-security/[role]/cls/route.ts` | GET POST | owner-scoped |  | — |
 | `items/[type]/[id]/onelake-security/[role]/rls/route.ts` | GET POST | owner-scoped |  | — |
 | `items/[type]/[id]/onelake-security/schema/route.ts` | GET | owner-scoped |  | ADLS |
-| `items/[type]/[id]/optimize/route.ts` | POST | session-only | ● | ADLS, Databricks |
+| `items/[type]/[id]/optimize/route.ts` | POST | owner-scoped | ● | ADLS, Databricks |
 | `items/[type]/[id]/pbi-source/route.ts` | GET | owner-scoped |  | Cosmos, Synapse SQL |
 | `items/[type]/[id]/pbids/route.ts` | GET | owner-scoped |  | ADX, Cosmos, Synapse SQL |
 | `items/[type]/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
@@ -1038,7 +1038,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/shortcuts/[name]/test/route.ts` | POST | owner-scoped |  | — |
 | `items/[type]/[id]/shortcuts/route.ts` | GET POST | owner-scoped |  | — |
 | `items/[type]/[id]/sql-security/route.ts` | GET POST | session-only | ● | Azure SQL, Synapse SQL |
-| `items/[type]/[id]/statistics/route.ts` | GET POST | session-only | ● | Databricks, Synapse SQL |
+| `items/[type]/[id]/statistics/route.ts` | GET POST | owner-scoped | ● | Databricks, Synapse SQL |
 | `items/[type]/[id]/versions/[versionId]/restore/route.ts` | POST | owner-scoped | ● | Cosmos |
 | `items/[type]/[id]/versions/[versionId]/route.ts` | GET | owner-scoped | ● | — |
 | `items/[type]/[id]/versions/route.ts` | GET | owner-scoped | ● | — |
@@ -1281,7 +1281,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-sql-warehouse/[id]/clone/route.ts` | POST | session-only | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/connection/route.ts` | GET | session-only |  | — |
 | `items/databricks-sql-warehouse/[id]/create/route.ts` | POST | session-only | ● | Databricks, Synapse |
-| `items/databricks-sql-warehouse/[id]/ctas/route.ts` | POST | session-only | ● | Databricks |
+| `items/databricks-sql-warehouse/[id]/ctas/route.ts` | POST | owner-scoped | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/delete/route.ts` | POST | session-only | ● | Databricks, Synapse |
 | `items/databricks-sql-warehouse/[id]/edit/route.ts` | POST | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |
@@ -1344,7 +1344,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/eventhouse/[id]/overview/route.ts` | GET | session-only |  | ADX, ADX ARM, Azure Monitor |
 | `items/eventhouse/[id]/policies/route.ts` | POST PATCH | owner-scoped |  | ADX, ADX ARM |
 | `items/eventhouse/[id]/purge/route.ts` | GET POST | owner-scoped |  | ADX |
-| `items/eventhouse/[id]/route.ts` | GET | session-only |  | ADX, ADX ARM |
+| `items/eventhouse/[id]/route.ts` | GET | owner-scoped |  | ADX, ADX ARM |
 | `items/eventstream/[id]/activator/route.ts` | GET POST | owner-scoped | ● | Azure Monitor, Cosmos |
 | `items/eventstream/[id]/asa-sync/route.ts` | POST | owner-scoped |  | ADX, Stream Analytics |
 | `items/eventstream/[id]/assist/route.ts` | — | public |  | — |
@@ -1622,7 +1622,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/semantic-model/[id]/model-health/route.ts` | GET POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/model/route.ts` | GET POST PUT PATCH DELETE | owner-scoped |  | — |
 | `items/semantic-model/[id]/prep-for-ai/route.ts` | GET POST | owner-scoped |  | — |
-| `items/semantic-model/[id]/refresh-policy/route.ts` | GET PUT | session-only | ● | — |
+| `items/semantic-model/[id]/refresh-policy/route.ts` | GET PUT | owner-scoped | ● | — |
 | `items/semantic-model/[id]/refresh-schedule/route.ts` | GET PATCH | owner-scoped | ● | — |
 | `items/semantic-model/[id]/refresh/route.ts` | GET POST | owner-scoped | ● | — |
 | `items/semantic-model/[id]/refreshes/route.ts` | GET POST | owner-scoped | ● | — |
@@ -1671,14 +1671,14 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/stream-analytics-job/[name]/test/route.ts` | POST | session-only |  | Stream Analytics |
 | `items/stream-analytics-job/route.ts` | GET | session-only |  | Stream Analytics |
 | `items/synapse-dedicated-sql-pool/[id]/cancel/route.ts` | POST | session-only |  | Synapse SQL |
-| `items/synapse-dedicated-sql-pool/[id]/clone/route.ts` | POST | session-only |  | Synapse SQL, Synapse pool |
+| `items/synapse-dedicated-sql-pool/[id]/clone/route.ts` | POST | owner-scoped |  | Synapse SQL, Synapse pool |
 | `items/synapse-dedicated-sql-pool/[id]/connection/route.ts` | GET | session-only |  | — |
 | `items/synapse-dedicated-sql-pool/[id]/model/route.ts` | — | public |  | — |
 | `items/synapse-dedicated-sql-pool/[id]/query-history/route.ts` | GET | session-only |  | Synapse SQL, Synapse pool |
 | `items/synapse-dedicated-sql-pool/[id]/query/route.ts` | POST | owner-scoped |  | Synapse SQL, Synapse pool |
 | `items/synapse-dedicated-sql-pool/[id]/resume/route.ts` | POST | session-only |  | Synapse pool |
-| `items/synapse-dedicated-sql-pool/[id]/schema/route.ts` | GET | session-only |  | Synapse SQL, Synapse pool |
-| `items/synapse-dedicated-sql-pool/[id]/script-out/route.ts` | GET | session-only |  | Synapse SQL, Synapse pool |
+| `items/synapse-dedicated-sql-pool/[id]/schema/route.ts` | GET | owner-scoped |  | Synapse SQL, Synapse pool |
+| `items/synapse-dedicated-sql-pool/[id]/script-out/route.ts` | GET | owner-scoped |  | Synapse SQL, Synapse pool |
 | `items/synapse-dedicated-sql-pool/[id]/state/route.ts` | GET POST | session-only |  | Synapse pool |
 | `items/synapse-notebook/[id]/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/synapse-pipeline/[id]/bind/route.ts` | GET POST | owner-scoped |  | Synapse |
@@ -1726,15 +1726,15 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/vector-store/[id]/sync/route.ts` | GET POST | session-only |  | — |
 | `items/vector-store/route.ts` | GET POST | owner-scoped |  | — |
 | `items/warehouse/[id]/cancel/route.ts` | POST | session-only |  | Synapse SQL |
-| `items/warehouse/[id]/clone/route.ts` | POST | session-only | ● | ADLS, Databricks, Synapse SQL, Synapse pool |
-| `items/warehouse/[id]/copy-into/route.ts` | GET POST | session-only |  | ADLS, Synapse SQL, Synapse pool |
+| `items/warehouse/[id]/clone/route.ts` | POST | owner-scoped | ● | ADLS, Databricks, Synapse SQL, Synapse pool |
+| `items/warehouse/[id]/copy-into/route.ts` | GET POST | owner-scoped |  | ADLS, Synapse SQL, Synapse pool |
 | `items/warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |
 | `items/warehouse/[id]/model/route.ts` | — | public |  | — |
 | `items/warehouse/[id]/query-acceleration/route.ts` | GET POST | session-only | ● | Synapse SQL, Synapse pool |
 | `items/warehouse/[id]/query/route.ts` | POST | owner-scoped |  | Synapse SQL, Synapse pool |
 | `items/warehouse/[id]/restore-points/route.ts` | GET POST | session-only | ● | Synapse pool |
-| `items/warehouse/[id]/schema/route.ts` | GET | session-only |  | Synapse SQL, Synapse pool |
-| `items/warehouse/[id]/script-out/route.ts` | GET | session-only |  | Synapse SQL, Synapse pool |
+| `items/warehouse/[id]/schema/route.ts` | GET | owner-scoped |  | Synapse SQL, Synapse pool |
+| `items/warehouse/[id]/script-out/route.ts` | GET | owner-scoped |  | Synapse SQL, Synapse pool |
 | `items/warehouse/[id]/snapshots/route.ts` | GET POST | session-only | ● | ADLS, Databricks |
 | `items/warehouse/[id]/time-travel/route.ts` | GET POST | session-only | ● | ADLS, Databricks |
 | `items/warehouse/migrate/import/route.ts` | POST | owner-scoped | ● | Synapse SQL, Synapse pool |

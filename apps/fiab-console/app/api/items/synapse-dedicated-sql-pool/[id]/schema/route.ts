@@ -8,21 +8,45 @@
  *                            (drives editor IntelliSense column completions)
  * Otherwise returns { schemas, databases } (databases = sys.databases for the
  * cross-database picker).
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. Sibling of `warehouse/[id]/schema` over the
+ * SAME shared pool: `GET(req)` took no `ctx`, `getSession()` was the only check,
+ * and the response enumerated the whole pool plus every database on the Synapse
+ * SQL server. Layer 1 authorizes against the pool item (read-scoped); the
+ * `databases` picker is narrowed to `workspaceSynapseScope` so it admits exactly
+ * what `[id]/query` will accept. The in-database schema/table enumeration is NOT
+ * narrowed — no item→schema ownership exists to narrow it with. See the ledger.
+ *
+ * The narrowing is LARGE, not marginal: for an item with no recorded second
+ * database — which is every item the platform provisions today — the scope is a
+ * single entry and this dropdown collapses to one option. It does not become an
+ * error state (the list is never empty, so the editor's `disabled` never trips),
+ * but that is read from `lib/editors/synapse-sql-editors.tsx` and NOT verified in
+ * a browser. See the sibling `warehouse/[id]/schema` header and the PR ledger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { enumerateSqlObjects } from '@/lib/azure/sql-object-scripting';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { guardSynapseItemRequest, workspaceSynapseScope } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+const POOL_NOT_FOUND = 'dedicated SQL pool not found';
+
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'synapse-dedicated-sql-pool',
+    notFound: POOL_NOT_FOUND,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
+  const { item } = guard.ctx;
 
   const state = await getPoolState().catch(() => null);
   if (!state || state.state !== 'Online') {
@@ -79,8 +103,10 @@ export async function GET(req: NextRequest) {
     // Database list for the cross-database picker (sys.databases, online only).
     let databases: string[] = [];
     try {
+      const scope = await workspaceSynapseScope(item);
       const dbs = await executeQuery(dedicatedTarget(), `SELECT name FROM sys.databases WHERE state = 0 ORDER BY name`);
-      databases = dbs.rows.map((r) => String(r[0]));
+      // LAYER 2 — the picker offers exactly what `[id]/query` will admit.
+      databases = dbs.rows.map((r) => String(r[0])).filter((n) => scope.has(n));
     } catch { databases = []; }
 
     return NextResponse.json({

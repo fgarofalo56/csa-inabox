@@ -104,6 +104,7 @@ export const RETURNED_VALUE_GATES = [
   'authorizeDatabricksJobItem',
   'authorizeDatabricksPipelineItem',
   'guardAdxItemRequest',
+  'guardSynapseItemRequest',
 ];
 
 /**
@@ -136,6 +137,7 @@ const DENIAL_BINDINGS = {
   authorizeDatabricksJobItem: ['denied'],
   authorizeDatabricksPipelineItem: ['denied'],
   guardAdxItemRequest: ['res'],
+  guardSynapseItemRequest: ['res'],
 };
 
 /**

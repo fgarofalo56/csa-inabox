@@ -17,11 +17,25 @@
  * Grounded in:
  *   https://learn.microsoft.com/fabric/data-warehouse/clone-table
  *   https://learn.microsoft.com/azure/databricks/delta/clone
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. This handler was `POST(req)`: it did not
+ * accept `ctx`, so `[id]` was never read, and behind `getSession()` alone it ran
+ * `CREATE TABLE <caller target> AS SELECT * FROM <caller source>` on the ONE
+ * shared Synapse dedicated pool as the Console UAMI. Paired with
+ * `[id]/query` — which reads the result back — that is a complete cross-tenant
+ * read primitive on the shared pool, the same materialize-then-read shape the
+ * advisory rates as its worst ADX finding.
+ *
+ * Layer 1 (`guardSynapseItemRequest`) now authorizes the caller against the
+ * warehouse item. READ `_lib/synapse-item-scope.ts`'s "WHAT THIS MODULE
+ * DELIBERATELY DOES NOT DO" section before treating this as closed: there is no
+ * item→schema.table ownership anywhere in the estate, so on this route Layer 1
+ * is a FLOOR, not a BOUND — a caller who owns any warehouse item can still name
+ * any table in the shared pool. That residual is in the PR ledger.
  */
 
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiServerError, apiUnauthorized } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { databricksConfigGate, listWarehouses, executeStatement } from '@/lib/azure/databricks-client';
@@ -29,9 +43,12 @@ import { getAccountName } from '@/lib/azure/adls-client';
 import { toAbfss } from '@/lib/azure/delta-source-uri';
 import { cleanTablePath, isKnownContainer } from '@/lib/azure/delta-history';
 import { bracket } from '@/lib/sql/quoting';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const WAREHOUSE_NOT_FOUND = 'warehouse not found';
 
 // T-SQL identifiers are restricted to name chars; reject anything else early so
 // a bad payload never reaches the (already bracket-quoted) statement builder.
@@ -43,9 +60,17 @@ function safeIdent(v: unknown): string | null {
 
 const DISTRIBUTIONS = new Set(['ROUND_ROBIN', 'HEAP']);
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // Cloning a table is a WRITE (CTAS / SHALLOW CLONE both create an object), so
+  // this must NOT pass `allowReadRoles` — a Viewer never mutates through it.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'warehouse',
+    notFound: WAREHOUSE_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
+  const { session } = guard.ctx;
 
   const body = await req.json().catch(() => ({}));
   const mode = body?.mode === 'delta-shallow' ? 'delta-shallow' : 'ctas';

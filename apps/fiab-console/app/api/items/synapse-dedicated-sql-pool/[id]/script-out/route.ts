@@ -10,22 +10,36 @@
  * The schema/name come from the Explorer's catalog enumeration; they are
  * single-quote-escaped before the WHERE clause and bracket-sanitized in the
  * emitted DDL. Returns 409 when the pool is Paused (no compute to read from).
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. Sibling of `warehouse/[id]/script-out` over
+ * the same shared pool; `GET(req)` took no `ctx` and returned any object's
+ * verbatim definition behind `getSession()` alone. Layer 1 authorizes against
+ * the pool item (read-scoped); no item→object binding exists, so this is a
+ * FLOOR — see the ledger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import {
   scriptOutSqlObject, asScriptObjectType, asScriptMode,
 } from '@/lib/azure/sql-object-scripting';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+const POOL_NOT_FOUND = 'dedicated SQL pool not found';
+
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'synapse-dedicated-sql-pool',
+    notFound: POOL_NOT_FOUND,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
 
   const schema = req.nextUrl.searchParams.get('schema');
   const name = req.nextUrl.searchParams.get('name');

@@ -14,14 +14,28 @@
  *
  * Executed over TDS (synapse-sql-client.executeQuery) against the env-bound
  * Dedicated pool. recordsAffected reports the rows materialized.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. `POST(req)` took no `ctx`, so `[id]` was never
+ * read; behind `getSession()` alone this issued `SELECT * INTO <caller target>
+ * FROM <caller source>` on the ONE shared dedicated pool as the Console UAMI.
+ * Sibling of `warehouse/[id]/clone` over the SAME backend — fixing one and not
+ * the other only relocates which URL carries the primitive, which is the
+ * advisory's own recorded lesson about the graph-model / gql-graph pair.
+ *
+ * Layer 1 (`guardSynapseItemRequest`) authorizes the caller against the pool
+ * item. Per `_lib/synapse-item-scope.ts`, that is a FLOOR and not a BOUND here:
+ * the shared pool has no item→schema.table ownership to bind the source and
+ * target against. Recorded in the PR ledger, not implied fixed.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const POOL_NOT_FOUND = 'dedicated SQL pool not found';
 
 const ZERO_COPY_NOTE =
   'Synapse Dedicated SQL pool has no zero-copy clone equivalent. ' +
@@ -29,9 +43,16 @@ const ZERO_COPY_NOTE =
   'and a Clustered Columnstore Index (non-configurable). ' +
   'To control distribution or index type, use Save as table (CTAS) instead.';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // SELECT INTO creates a table — a WRITE. No `allowReadRoles`.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'synapse-dedicated-sql-pool',
+    notFound: POOL_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
+  const { session } = guard.ctx;
 
   const body = await req.json().catch(() => ({}));
   const sourceSchema = (body?.sourceSchema || 'dbo').toString().trim();

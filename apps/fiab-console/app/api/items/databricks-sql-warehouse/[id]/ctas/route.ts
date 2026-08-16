@@ -17,18 +17,49 @@
  *   GRANT CREATE TABLE ON SCHEMA  <cat>.<schema>   TO `<mi-app-id>`;
  * Missing grants surface as a Databricks PERMISSION_DENIED 502 (runtime IAM,
  * not bicep — see deployment runbook).
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. `POST(req)` took no `ctx`, so `[id]` was never
+ * read; behind `getSession()` alone it ran `CREATE TABLE <caller catalog>.<caller
+ * schema>.<caller table> AS <caller SELECT>` on the shared Databricks workspace
+ * as the Console identity. The `^select` check bounds the STATEMENT SHAPE and
+ * nothing else — the SELECT body is unrestricted, so the pair "SELECT from any
+ * UC table → land it in a schema you can read" is the advisory's headline
+ * materialize-then-read primitive on Unity Catalog.
+ *
+ * Layer 1 (`guardSynapseItemRequest`) authorizes the caller against the SQL
+ * warehouse item, write-scoped. The guard is backend-agnostic; its
+ * Synapse-specific `database` field is unused here.
+ *
+ * NOT closed, and worth naming precisely because it is the strongest residual in
+ * this PR: `warehouseId`, `catalog`, `schema` and the SELECT body all remain
+ * caller-supplied. Binding `warehouseId` needs a server-attested owner marker on
+ * the warehouse (the `loom_item_id` pattern `_lib/databricks-resource-binding.ts`
+ * applies to Jobs and DLT pipelines) — SQL warehouses are never stamped today,
+ * and `resolveLegacyClaim`'s exclusivity fallback would 409 every estate that
+ * shares one warehouse across items, i.e. all of them. Binding `catalog.schema`
+ * needs a UC three-level scoping helper that does not exist. Both are design
+ * work with a brownfield migration, not a mechanical adoption. FLOOR, not BOUND.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { executeStatement, getWarehouse, databricksConfigGate } from '@/lib/azure/databricks-client';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+const WAREHOUSE_NOT_FOUND = 'databricks sql warehouse not found';
+
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // CTAS creates a table — a write. No allowReadRoles.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'databricks-sql-warehouse',
+    notFound: WAREHOUSE_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
+  const { session } = guard.ctx;
 
   const gate = databricksConfigGate();
   if (gate) {

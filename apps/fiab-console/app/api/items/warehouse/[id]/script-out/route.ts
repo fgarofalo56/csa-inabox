@@ -5,22 +5,38 @@
  * Mirrors the Dedicated SQL pool script-out — the Fabric Warehouse is backed
  * by the same Synapse Dedicated compute. create/alter return the real
  * OBJECT_DEFINITION body; drop returns a runnable DROP … IF EXISTS.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. `GET(req)` took no `ctx` and ran
+ * `getSession()` alone, then returned the full `OBJECT_DEFINITION` of any
+ * view / procedure / function in the shared dedicated pool — i.e. another
+ * tenant's business logic, verbatim. Layer 1 now authorizes the caller against
+ * the warehouse item (read-scoped). Per `_lib/synapse-item-scope.ts` there is no
+ * item→object ownership in the shared pool to bind `schema`/`name` against, so
+ * this is a FLOOR and not a BOUND; recorded in the PR ledger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import {
   scriptOutSqlObject, asScriptObjectType, asScriptMode,
 } from '@/lib/azure/sql-object-scripting';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+const WAREHOUSE_NOT_FOUND = 'warehouse not found';
+
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'warehouse',
+    notFound: WAREHOUSE_NOT_FOUND,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
 
   const schema = req.nextUrl.searchParams.get('schema');
   const name = req.nextUrl.searchParams.get('name');

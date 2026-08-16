@@ -20,10 +20,29 @@
  * The client NEVER sends raw SQL — it sends a structured action + identifiers,
  * and the SQL is built server-side by lib/azure/statistics-client.ts
  * (IDENT_RE-validated + bracket/backtick-quoted), so there is no injection path.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. "No injection path" is not "authorized", and
+ * that distinction is the whole advisory. Both handlers ran `getSession()` alone
+ * and read `[id]` only to pick an ENGINE — never to authorize. POST then issued
+ * `CREATE`/`UPDATE`/`DROP STATISTICS` against a caller-named `schema.table` in
+ * the shared Synapse dedicated pool, or `ANALYZE TABLE` against a caller-named
+ * `catalog.schema.table` on the shared Databricks workspace + Unity Catalog, as
+ * the Console identity. DROP STATISTICS on another tenant's fact table is a
+ * silent query-plan regression they cannot attribute.
+ *
+ * Layer 1 (`guardSynapseItemRequest`) now authorizes the caller against the
+ * route item — write-scoped on POST, read-scoped on GET. The guard is
+ * backend-agnostic (session → `authorizeItemWorkspace` ladder → fail-closed item
+ * load); only its `database` field is Synapse-specific and these handlers do not
+ * use it, so it serves the Databricks branch identically.
+ *
+ * NOT closed: neither shared backend records which `schema.table` (Synapse) or
+ * `catalog.schema.table` (Unity Catalog) belongs to which Loom item, so the
+ * coordinate stays caller-named. Layer 1 is a FLOOR here, not a BOUND — see
+ * `_lib/synapse-item-scope.ts` and the PR ledger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery as synapseExecute } from '@/lib/azure/synapse-sql-client';
 import { databricksConfigGate, executeStatement, getWarehouse } from '@/lib/azure/databricks-client';
 import {
@@ -36,6 +55,7 @@ import {
   type ScanMode,
   type Built,
 } from '@/lib/azure/statistics-client';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -73,10 +93,15 @@ function unwrap(b: Built): string {
 // ============================================================
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const { type, id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: type,
+    notFound: 'item not found',
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
 
-  const { type } = await ctx.params;
   const schema = (req.nextUrl.searchParams.get('schema') || 'dbo').trim();
   const table = (req.nextUrl.searchParams.get('table') || '').trim();
   if (!table) return NextResponse.json({ ok: false, error: 'table query parameter is required' }, { status: 400 });
@@ -143,10 +168,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ type: strin
 // ============================================================
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const { type, id } = await ctx.params;
+  // create / update / drop STATISTICS and ANALYZE all MUTATE. No allowReadRoles.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: type,
+    notFound: 'item not found',
+  });
+  if (guard.res) return guard.res;
+  const { session } = guard.ctx;
 
-  const { type } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || '').trim();
   const schema = String(body?.schema || 'dbo').trim();
