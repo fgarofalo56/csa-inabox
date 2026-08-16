@@ -35,6 +35,14 @@
 export type KvSecretPurpose =
   /** A Loom Connection's stored credential (`secretRef`, minted `loom-conn-<uuid>`). */
   | 'connection-secret'
+  /**
+   * An external-source credential for a lakehouse SHORTCUT (S3 access key, GCS
+   * service-account JSON, the Dataverse export path). The shortcut wizard mints
+   * `loom-shortcut-<id>` but an operator may also point a shortcut at a
+   * credential they named themselves, so this is operator-named rather than
+   * name-space-owning.
+   */
+  | 'shortcut-credential'
   /** A git PAT / SPN secret for Git integration or a Loom App's private repo. */
   | 'git-credential'
   /** An Azure Functions host key for the UDF / functions-on-objects runtime. */
@@ -69,6 +77,7 @@ const MINTED_NAMESPACES: Record<string, readonly string[]> = {
 
 /** Purposes whose secret NAME is chosen by an operator/user rather than minted by Loom. */
 const OPERATOR_NAMED: readonly KvSecretPurpose[] = [
+  'shortcut-credential',
   'udf-function-key',
   'variable-library',
   'directquery-source',

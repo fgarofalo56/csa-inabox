@@ -20,17 +20,31 @@
  * { ok, data: { entries, prefix, truncated } }. Honest-gate (503) when the KV
  * isn't configured for the credentialed sources — names LOOM_SHORTCUT_KEYVAULT.
  *
+ * SECURITY — `kvSecret` is a caller-supplied NAME and the Console resolves it
+ * with its own managed identity, so WHICH secret may be read is a policy
+ * decision, not the caller's. The read goes through the `shortcut-credential`
+ * purpose (lib/azure/kv-secret-purpose.ts), which refuses every platform
+ * credential and every other feature's minted name-space BEFORE a vault token is
+ * minted. That check is load-bearing rather than defensive: `shortcutVaultUrl()`
+ * falls back to the main Loom vault whenever LOOM_SHORTCUT_KEYVAULT is unset,
+ * which is the default deployment. Two matching rules follow from the same
+ * principle and live with their sources: a resolved value is never interpolated
+ * into an error (listDataverseEntities), and `region` cannot move the S3 request
+ * to another authority (listS3Objects).
+ *
  * Auth: session-required. Runtime: nodejs, force-dynamic.
  * Per .claude/rules/no-vaporware.md — real S3/GCS/ADLS REST, no mock arrays.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getShortcutSecretValue, shortcutKeyVaultConfigGate } from '@/lib/azure/kv-secrets-client';
+import { KeyVaultSecretPolicyError } from '@/lib/azure/kv-secret-purpose';
 import {
   listS3Objects,
   listGcsObjects,
   browseAdls,
   listDataverseEntities,
+  assertValidAwsRegion,
   ShortcutSourceError,
   type BrowseResult,
   type GcsServiceAccount,
@@ -83,7 +97,14 @@ export const GET = withSession(async (req: NextRequest) => {
       if (!kvSecret) {
         return NextResponse.json({ ok: false, error: 'kvSecret (Key Vault secret name) is required' }, { status: 400 });
       }
-      const secretValue = (await getShortcutSecretValue(kvSecret)).trim();
+      // Validate every caller-supplied coordinate that shapes a DESTINATION
+      // before the credential is resolved. `region` is interpolated into the S3
+      // request authority, so it is checked here rather than after the read —
+      // a refused request must not have caused a secret to be read at all.
+      const s3Region = sourceType === 's3' ? ((sp.get('region') || 'us-east-1').trim()) : '';
+      if (sourceType === 's3') assertValidAwsRegion(s3Region);
+
+      const secretValue = (await getShortcutSecretValue(kvSecret, 'shortcut-credential')).trim();
       if (!secretValue) {
         return NextResponse.json(
           { ok: false, code: 'kv_secret_empty', error: `Key Vault secret '${kvSecret}' is empty — re-save the credential.` },
@@ -93,7 +114,7 @@ export const GET = withSession(async (req: NextRequest) => {
 
       if (sourceType === 's3') {
         const bucket = (sp.get('bucket') || '').trim();
-        const region = (sp.get('region') || 'us-east-1').trim();
+        const region = s3Region;
         if (!bucket) return NextResponse.json({ ok: false, error: 'bucket is required for S3 browse' }, { status: 400 });
         if (/^arn:aws/i.test(secretValue)) {
           return NextResponse.json(
@@ -130,6 +151,12 @@ export const GET = withSession(async (req: NextRequest) => {
 
     return NextResponse.json({ ok: true, data: result });
   } catch (e: any) {
+    if (e instanceof KeyVaultSecretPolicyError) {
+      // The caller named a secret this surface may not read. Report the NAME it
+      // asked for and the reason — never anything read from the vault, because
+      // nothing was: the policy runs before the vault token is minted.
+      return NextResponse.json({ ok: false, code: 'kv_secret_not_permitted', error: e.message, hint: e.message }, { status: 403 });
+    }
     if (e instanceof ShortcutSourceError) {
       return NextResponse.json({ ok: false, code: e.code, error: sanitize(e), hint: sanitize(e) }, { status: e.status });
     }
