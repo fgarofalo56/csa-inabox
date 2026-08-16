@@ -4,12 +4,37 @@
  * Imports the route handlers directly, stubs getSession + AAS XMLA fetch, and
  * asserts: backend honest-gate (503), input validation (400), and the happy PUT
  * path (Alter + Refresh + TMSCHEMA_PARTITIONS Discover → partition receipt).
+ *
+ * UPDATED for GHSA-v2g8-gp3r-rg4r round 3. The route now runs
+ * `guardSynapseItemRequest` BEFORE the backend gate, which reaches
+ * `authorizeItemWorkspace` and Cosmos — dependencies this file never had. Both
+ * are stubbed to the ADMITTED path so what is contract-tested here is unchanged.
+ *
+ * The DENIED path is not re-tested here; it has its own suite
+ * (`app/api/items/[type]/[id]/__tests__/ghsa-shared-backend-dispatchers.test.ts`),
+ * which also asserts the ORDERING that broke this file — the guard must run
+ * before the config gate, so an unauthorized caller is never handed a 503 naming
+ * `LOOM_*` env vars.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 })),
+}));
+
+vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeItemWorkspace: vi.fn(async () => null) }));
+
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => ({
+    items: {
+      query: () => ({
+        fetchAll: async () => ({
+          resources: [{ id: 'ds-1', itemType: 'semantic-model', workspaceId: 'ws-1', state: {} }],
+        }),
+      }),
+    },
+  }),
 }));
 
 vi.mock('@azure/identity', () => {
