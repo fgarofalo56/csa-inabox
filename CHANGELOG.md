@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.0...csa-inabox-v0.98.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* **security:** a second Key Vault secret reader never adopted the purpose allow-list (GHSA-rv4m-34x8-5p42) ([#3603](https://github.com/fgarofalo56/csa-inabox/issues/3603)) ([4a8c1c6](https://github.com/fgarofalo56/csa-inabox/commit/4a8c1c65151203572e67e48dd0ba5b05e4076199))
+* **security:** a setup route let request text decide where a command ended (GHSA-fj7j-qq8g-hqj8) ([#3602](https://github.com/fgarofalo56/csa-inabox/issues/3602)) ([c46e497](https://github.com/fgarofalo56/csa-inabox/commit/c46e49749af66a9dbd46082a44c76d165d13cd50))
+
 ## [0.98.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.4...csa-inabox-v0.98.0) (2026-08-16)
 
 
