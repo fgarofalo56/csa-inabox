@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.4...csa-inabox-v0.98.0) (2026-08-16)
+
+
+### Features
+
+* **loom:** the picker every wave must adopt dropped stored values, dead-ended on discovery failure, and had no Fix-it ([#3572](https://github.com/fgarofalo56/csa-inabox/issues/3572)) ([f8af76f](https://github.com/fgarofalo56/csa-inabox/commit/f8af76fbafe44c3d771cf463b82688dab0d8395a))
+
+
+### Bug Fixes
+
+* **ci:** 41 of the 250 no-freeform sites were never defects, and the baseline could not say which ([#3579](https://github.com/fgarofalo56/csa-inabox/issues/3579)) ([1436e0e](https://github.com/fgarofalo56/csa-inabox/commit/1436e0e1334ebc36c0bbecc22f737f8c320f9a07))
+* **console:** 22 surfaces demanded an ARM id or an Azure FQDN the platform could have listed, and three took a value only the deploy knows ([#3587](https://github.com/fgarofalo56/csa-inabox/issues/3587)) ([bf23c18](https://github.com/fgarofalo56/csa-inabox/commit/bf23c184ad2d5e59dd8d13f881461b90e8230fd3))
+* **deploy:** the Gov DMLZ path asked ARM for a NEW Purview every time, so it failed in any tenant already holding five ([#3577](https://github.com/fgarofalo56/csa-inabox/issues/3577)) ([#3590](https://github.com/fgarofalo56/csa-inabox/issues/3590)) ([407d190](https://github.com/fgarofalo56/csa-inabox/commit/407d1904a00246d4bdc6a5af4c751df63aca0840))
+* **loom:** picking an upstream product REWROTE a legacy abfss:// ref into dp-2://c/p, and a padded stored id rendered blank with no warning ([#3581](https://github.com/fgarofalo56/csa-inabox/issues/3581)) ([5bb19a7](https://github.com/fgarofalo56/csa-inabox/commit/5bb19a7beff8eb3a4109a959d179b79b38b4c442))
+* **security:** a caller-named database reached ADX DDL and a cross-database copy as the Console's identity (GHSA-v2g8-gp3r-rg4r) ([#3600](https://github.com/fgarofalo56/csa-inabox/issues/3600)) ([1a9aa90](https://github.com/fgarofalo56/csa-inabox/commit/1a9aa90b36ced83ed7fa3131f02f26f1a45b408a))
+* **security:** id-addressed routes reached another tenant's backing resource — and the allowlist that excused them never re-tested its own premise ([#3591](https://github.com/fgarofalo56/csa-inabox/issues/3591)) ([29b0dad](https://github.com/fgarofalo56/csa-inabox/commit/29b0dad96dc6900ce72047daf6e750810f470090))
+* **ui:** 11 surfaces asked for an Entra principal by hand while the picker sat 7 imports away ([#3595](https://github.com/fgarofalo56/csa-inabox/issues/3595)) ([14ad101](https://github.com/fgarofalo56/csa-inabox/commit/14ad101284bc8570418493c909b8687c00df4358))
+
 ## [0.97.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.3...csa-inabox-v0.97.4) (2026-08-16)
 
 
