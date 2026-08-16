@@ -107,6 +107,37 @@
  * always claimed. Coverage on the real corpus is unchanged: 250 sites across
  * 110 files before and after, and the 12-case coverage probe still passes.
  *
+ * THE ALERT DID NOT CLEAR, AND IS DISMISSED — alerts #961-970, rule
+ * `js/regex/missing-regexp-anchor` (NOT `js/incomplete-url-substring-
+ * sanitization`; the two share a message string and are easy to confuse). The
+ * query inspects each host-shaped STRING LITERAL in isolation, so a boundary
+ * applied to the wrapping group is invisible to it — which is also why the ten
+ * entries that end in an alternation group (`…(?:com|us)`) were never flagged
+ * and the ten that end in a bare TLD were. The split is syntactic, not semantic:
+ * `\.azconfig\.io` and `\.documents\.azure\.(?:com|us)` are equally unanchored,
+ * and only one is reported.
+ *
+ * Dismissed rather than restructured because every restructure available is
+ * worse:
+ *   - ending each entry in a dummy alternation group would silence the
+ *     recognizer without changing behaviour — obfuscation, and it would hide a
+ *     genuine finding here later;
+ *   - swapping the regex for `indexOf`/`endsWith` over a suffix list trades this
+ *     HIGH for `js/incomplete-url-substring-sanitization` in the same family;
+ *   - tokenising host-shaped substrings first breaks on the templated
+ *     placeholders that motivated the guard (`https://<cluster>.<region>.kusto.
+ *     windows.net`), i.e. it costs detection coverage on fixture #1.
+ *
+ * The rule's premise does not hold here in any case: it assumes a regex used as
+ * a FORMAT CHECK that an attacker-controlled value must pass. This regex reads
+ * SOURCE TEXT from files in this repo to decide whether a form field asks a
+ * human to type an Azure address. There is no URL, no trust decision, no
+ * adversary and no bypass — and matching mid-string is the REQUIREMENT, because
+ * the evidence is prose. That is the same judgement `check-regex-anchor.mjs`
+ * already encodes one directory over: it deliberately fires only on SECRET
+ * vocabulary because, run unrestricted, six of the eight sites it finds are
+ * correct code.
+ *
  * ── WHAT CHANGED ───────────────────────────────────────────────────────────
  * PART 1 (unchanged, still a HARD ZERO) — the raw-JSON-config detector.
  * PART 2 (new, RATCHETED) — every FREE-TEXT INPUT in `apps/fiab-console` that
