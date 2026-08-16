@@ -64,7 +64,18 @@ const SELF = 'apps/fiab-console/lib/auth/workspace-guard.ts';
  * Touched-file escape hatch: repo-relative path → one-line reason a PR may
  * modify a baselined file without migrating it. Keep SHORT.
  */
-const TOUCH_EXEMPT = new Map([]);
+const TOUCH_EXEMPT = new Map([
+  // GHSA-v2g8-gp3r-rg4r touched this file for +10 LOC that are UNRELATED to the
+  // baselined line: `createDatabase` now reports whether ARM returned 201
+  // (created) or 200 (updated), so a caller cannot bind a database that already
+  // existed. The baselined occurrence is `loadKustoItem`'s owner-only point
+  // read, which 13 `/api/adx/*` routes depend on; migrating it to
+  // `authorizeItemWorkspace` WIDENS access (it would newly admit tenant admins
+  // and shared-ACL members) and so needs its own review and its own tests, not
+  // a drive-by inside a security fix.
+  ['apps/fiab-console/lib/azure/kusto-client.ts',
+   'GHSA-v2g8-gp3r-rg4r: +10 LOC on createDatabase only; migrating loadKustoItem WIDENS access for 13 /api/adx routes — separate PR'],
+]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */
 const POINT_READ_RE =

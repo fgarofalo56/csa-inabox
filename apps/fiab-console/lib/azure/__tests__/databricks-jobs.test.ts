@@ -21,7 +21,7 @@ vi.mock('@azure/identity', () => {
 
 import {
   listJobs, getJob, createJob, updateJob, deleteJob,
-  runJob, listJobRuns, getJobRun, getRunOutput,
+  runJob, listJobRuns, listJobRunsPage, JOB_RUNS_PAGE_MAX, getJobRun, getRunOutput,
 } from '../databricks-client';
 
 const realFetch = global.fetch;
@@ -143,7 +143,53 @@ describe('listJobRuns', () => {
     expect(url).toContain('/api/2.1/jobs/runs/list?');
     expect(url).toContain('job_id=42');
     expect(url).toContain('limit=25');
+    expect(url).toContain('expand_tasks=false');
     expect(runs[0].run_id).toBe(5);
+  });
+
+  /**
+   * GHSA-v2g8-gp3r-rg4r. `items/databricks-notebook/[id]/runs` scopes the shared
+   * workspace's run history down to THIS notebook's runs, and the only
+   * coordinate that attributes a run to a notebook is
+   * `tasks[].notebook_task.notebook_path` — which Databricks omits unless
+   * `expand_tasks=true`. If this parameter stops being sent, every run becomes
+   * unattributable and the route (which fails closed) returns an EMPTY history
+   * for a legitimate owner. Asserted on the real URL, not on a mock of this
+   * function, because the route-level suite mocks this module wholesale and so
+   * cannot see the wire contract.
+   */
+  it('requests expand_tasks=true when asked — the notebook run scope depends on it', async () => {
+    let url = '';
+    mockFetch((u) => { url = u; return { runs: [] }; });
+    await listJobRunsPage({ expandTasks: true, limit: JOB_RUNS_PAGE_MAX });
+    expect(url).toContain('expand_tasks=true');
+    expect(url).toContain(`limit=${JOB_RUNS_PAGE_MAX}`);
+    expect(url).not.toContain('job_id=');
+  });
+
+  /**
+   * Jobs 2.1 documents `runs/list` limit as "greater than 0 and less than 25".
+   * The first version of the notebook run-scope fix asked for `limit=200`,
+   * which the workspace either 400s (route dead for everyone) or clamps to 25 —
+   * and on a busy shared workspace those 25 can all be foreign runs, which the
+   * route then filters away, handing the owner an EMPTY history. The cap is
+   * enforced HERE so no caller can reintroduce it.
+   */
+  it('clamps limit to the documented per-request maximum', async () => {
+    let url = '';
+    mockFetch((u) => { url = u; return { runs: [] }; });
+    await listJobRunsPage({ limit: 200 });
+    expect(url).toContain(`limit=${JOB_RUNS_PAGE_MAX}`);
+    expect(url).not.toContain('limit=200');
+  });
+
+  it('threads page_token and returns next_page_token so a caller can page', async () => {
+    let url = '';
+    mockFetch((u) => { url = u; return { runs: [{ run_id: 1 }], next_page_token: 'tok2' }; });
+    const page = await listJobRunsPage({ pageToken: 'tok1' });
+    expect(url).toContain('page_token=tok1');
+    expect(page.nextPageToken).toBe('tok2');
+    expect(page.runs[0].run_id).toBe(1);
   });
 });
 

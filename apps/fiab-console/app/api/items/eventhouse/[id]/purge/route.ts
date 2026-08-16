@@ -27,10 +27,28 @@
  * Azure-native by default — no Fabric/OneLake dependency. Per
  * .claude/rules/no-vaporware.md, every path calls the real ADX backend or
  * returns a structured error; no mock data.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. This route ran `getSession()` and nothing
+ * else: it never read `[id]`, and took `database` + `table` straight from the
+ * request. `.purge` is PERMANENT ROW DELETION and it executed as the Console's
+ * UAMI, which holds AllDatabasesAdmin on the shared cluster — so any signed-in
+ * user, in any tenant, could erase rows from any database on it by naming one.
+ *
+ * Both coordinates are now bound (`_lib/adx-item-scope.ts`, the item-route form
+ * of the `app/api/adx/_shared.ts::guardAdxRequest` convention):
+ *   LAYER 1 — the caller is authorized against the eventhouse ITEM, WRITE-scoped
+ *     on POST (a purge is a mutation; a read-only Viewer must not reach it) and
+ *     read-scoped on the GET picker.
+ *   LAYER 2 — `database` must be inside the eventhouse item's own workspace ADX
+ *     scope: its bound database, the databases it recorded when they were
+ *     created through `[id]/database`, and its kql-database siblings. A database
+ *     outside that scope is REFUSED (403), never silently substituted —
+ *     purging a different database than the operator selected would be worse
+ *     than refusing. `table` is then validated against that database's OWN
+ *     `.show tables` output rather than passed through.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   listTables, getTableSchema, executeQuery,
   buildPurgeWhere, executePurgeVerify, executePurgeCommit,
@@ -38,24 +56,61 @@ import {
   KustoError,
   type PurgePredicatePart,
 } from '@/lib/azure/kusto-client';
+import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const EVENTHOUSE_NOT_FOUND = 'eventhouse not found';
 
 function validIdent(s: string): boolean {
   return /^[A-Za-z0-9_][A-Za-z0-9_\-]{0,127}$/.test(s);
 }
 
-export async function GET(req: NextRequest, _ctx: { params: { id: string } }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+/**
+ * Resolve `table` against the database's OWN object list.
+ *
+ * A syntactic `validIdent` check only proves the string is well formed — it says
+ * nothing about whether the database exposes that object, which is the check the
+ * advisory calls for. Fails closed: an unlistable database yields a refusal, not
+ * a pass-through.
+ */
+async function scopeTable(
+  database: string,
+  table: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  let names: string[];
+  try {
+    names = (await listTables(database)).map((t) => t.name);
+  } catch (e: any) {
+    const status = e instanceof KustoError ? e.status : 502;
+    return { ok: false, status, error: `could not verify tables in "${database}": ${e?.message || String(e)}` };
+  }
+  if (!names.includes(table)) {
+    return { ok: false, status: 404, error: `table "${table}" does not exist in database "${database}".` };
+  }
+  return { ok: true };
+}
 
-  const database = req.nextUrl.searchParams.get('database') || '';
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'eventhouse',
+    notFound: EVENTHOUSE_NOT_FOUND,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
+
+  const requested = req.nextUrl.searchParams.get('database') || '';
   const table = req.nextUrl.searchParams.get('table') || '';
 
-  if (!database || !validIdent(database)) {
+  if (!requested || !validIdent(requested)) {
     return NextResponse.json({ ok: false, error: 'database query param required and must be a valid identifier' }, { status: 400 });
   }
+  const scoped = await scopeAdxDatabase(guard.ctx.item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database = scoped.database;
 
   try {
     if (!table) {
@@ -79,18 +134,25 @@ export async function GET(req: NextRequest, _ctx: { params: { id: string } }) {
   }
 }
 
-export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // WRITE-scoped deliberately: `allowReadRoles` is NOT passed. A purge deletes
+  // rows permanently, so a shared read-only role must never reach it.
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'eventhouse',
+    notFound: EVENTHOUSE_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
 
   const body = await req.json().catch(() => ({}));
-  const database = String(body?.database || '').trim();
+  const requested = String(body?.database || '').trim();
   const table = String(body?.table || '').trim();
   const step = String(body?.step || '').toLowerCase();
   const rawPredicates: any[] = Array.isArray(body?.predicates) ? body.predicates : [];
   const verificationToken = String(body?.verificationToken || '').trim();
 
-  if (!database || !validIdent(database)) {
+  if (!requested || !validIdent(requested)) {
     return NextResponse.json({ ok: false, error: 'database is required and must be a valid identifier' }, { status: 400 });
   }
   if (!table || !validIdent(table)) {
@@ -104,6 +166,15 @@ export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
   }
   if (!rawPredicates.length) {
     return NextResponse.json({ ok: false, error: 'predicates array is required and must be non-empty' }, { status: 400 });
+  }
+
+  // LAYER 2 — bind BOTH coordinates before anything reaches the DM endpoint.
+  const scoped = await scopeAdxDatabase(guard.ctx.item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database = scoped.database;
+  const scopedTable = await scopeTable(database, table);
+  if (!scopedTable.ok) {
+    return NextResponse.json({ ok: false, error: scopedTable.error }, { status: scopedTable.status });
   }
 
   const predicates: PurgePredicatePart[] = [];

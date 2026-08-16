@@ -871,16 +871,34 @@ export interface JobRun {
   cleanup_duration?: number;
   trigger?: string;
   creator_user_name?: string;
+  /** Tasks — on `runs/get`, and on `runs/list` only with `expand_tasks`. Its
+   *  `notebook_task.notebook_path` is the ONLY run-to-notebook attribution. */
+  tasks?: Array<{ notebook_task?: { notebook_path?: string }; [k: string]: unknown }>;
 }
 
-export async function listJobRuns(jobId?: number, limit = 25): Promise<JobRun[]> {
+/** Jobs 2.1 documents `runs/list` limit as "greater than 0 and less than 25".
+ *  Asking for more is a contract violation the workspace may 400 on. */
+export const JOB_RUNS_PAGE_MAX = 25;
+
+/** One page of `runs/list`, with the cursor to the next.
+ *  `expandTasks` (GHSA-v2g8-gp3r-rg4r) adds `tasks[].notebook_task.notebook_path`,
+ *  the only run-to-notebook attribution; `items/databricks-notebook/[id]/runs`
+ *  needs it to scope the shared workspace's history to its own notebook. */
+export async function listJobRunsPage(
+  opts?: { jobId?: number; limit?: number; expandTasks?: boolean; pageToken?: string },
+): Promise<{ runs: JobRun[]; nextPageToken?: string }> {
   const params = new URLSearchParams();
-  if (jobId) params.set('job_id', String(jobId));
-  params.set('limit', String(limit));
-  params.set('expand_tasks', 'false');
+  if (opts?.jobId) params.set('job_id', String(opts.jobId));
+  params.set('limit', String(Math.min(opts?.limit ?? JOB_RUNS_PAGE_MAX, JOB_RUNS_PAGE_MAX)));
+  params.set('expand_tasks', opts?.expandTasks ? 'true' : 'false');
+  if (opts?.pageToken) params.set('page_token', opts.pageToken);
   const res = await dbxFetch(`/api/2.1/jobs/runs/list?${params.toString()}`);
-  const body = await asJsonOrThrow<{ runs?: JobRun[] }>(res, 'listJobRuns');
-  return body.runs || [];
+  const body = await asJsonOrThrow<{ runs?: JobRun[]; next_page_token?: string }>(res, 'listJobRuns');
+  return { runs: body.runs || [], nextPageToken: body.next_page_token };
+}
+
+export async function listJobRuns(jobId?: number, limit = 25, opts?: { expandTasks?: boolean }): Promise<JobRun[]> {
+  return (await listJobRunsPage({ jobId, limit, expandTasks: opts?.expandTasks })).runs;
 }
 
 export async function getJobRun(runId: number): Promise<JobRun> {

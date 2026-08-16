@@ -24,6 +24,23 @@
  * Per .claude/rules/no-vaporware.md — no mock arrays. All three modes either
  * succeed with real data or return a structured error explaining what's
  * missing.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. This is the WRITE half of the same class the
+ * advisory names, on the same item family, and the first pass at it missed this
+ * route. `withSession` proved a caller was signed in; then `handleFile(_id, req)`
+ * DISCARDED the item id and took `database` from the form behind nothing but a
+ * `validKustoIdent` syntax check, so `ingestInline(database, …)` wrote rows into
+ * any ADX database on the shared cluster. The two JSON kinds were worse: the
+ * onelake kind put a CALLER-CONTROLLED URL into
+ * `.ingest into table [...] (h'<url>')`, fetched by the CLUSTER's identity, and
+ * the eventhub kind PUT an ARM `dataConnections` resource onto any database —
+ * a persistent ingestion pipe into someone else's data.
+ *
+ * All three handlers now receive an AUTHORIZED item (not a bare id) and resolve
+ * `database` through `scopeAdxDatabase` against that item's own workspace scope,
+ * the same binding the sibling `[id]/purge` route uses. Passing the item rather
+ * than the id is deliberate: there is no id-shaped parameter left for a handler
+ * to ignore, which is exactly how this route stayed broken.
  */
 
 import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
@@ -33,7 +50,8 @@ import {
 } from '@/lib/azure/kusto-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
-import { withSession } from '@/lib/api/route-toolkit';
+import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -108,14 +126,18 @@ function parseJsonLines(text: string): unknown[][] {
   return [header, ...data];
 }
 
-async function handleFile(_id: string, req: NextRequest): Promise<NextResponse> {
+async function handleFile(item: WorkspaceItem, req: NextRequest): Promise<NextResponse> {
   const form = await req.formData();
-  const database = sanitizeId(form.get('database') as string);
+  const requested = sanitizeId(form.get('database') as string);
   const table = sanitizeId(form.get('table') as string);
   const file = form.get('file') as File | null;
-  if (!database || !table) return NextResponse.json({ ok: false, error: 'database + table required' }, { status: 400 });
-  if (!validKustoIdent(database)) return NextResponse.json({ ok: false, error: 'invalid database name' }, { status: 400 });
+  if (!requested || !table) return NextResponse.json({ ok: false, error: 'database + table required' }, { status: 400 });
+  if (!validKustoIdent(requested)) return NextResponse.json({ ok: false, error: 'invalid database name' }, { status: 400 });
   if (!validKustoIdent(table)) return NextResponse.json({ ok: false, error: 'invalid table name' }, { status: 400 });
+  // LAYER 2 — the write target must belong to this eventhouse item's workspace.
+  const scoped = await scopeAdxDatabase(item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database = scoped.database;
   if (!file) return NextResponse.json({ ok: false, error: 'file is required' }, { status: 400 });
   if (file.size > MAX_FILE_BYTES) {
     return NextResponse.json({
@@ -167,17 +189,22 @@ async function handleFile(_id: string, req: NextRequest): Promise<NextResponse> 
   }
 }
 
-async function handleEventHub(_id: string, body: any): Promise<NextResponse> {
-  const database = sanitizeId(body?.database);
+async function handleEventHub(item: WorkspaceItem, body: any): Promise<NextResponse> {
+  const requested = sanitizeId(body?.database);
   const table = sanitizeId(body?.table);
   const eventHubName = sanitizeId(body?.eventHubName);
   const consumerGroup = sanitizeId(body?.consumerGroup) || '$Default';
-  if (!database || !table || !eventHubName) {
+  if (!requested || !table || !eventHubName) {
     return NextResponse.json({ ok: false, error: 'database, table, eventHubName required' }, { status: 400 });
   }
-  if (!validKustoIdent(database) || !validKustoIdent(table)) {
+  if (!validKustoIdent(requested) || !validKustoIdent(table)) {
     return NextResponse.json({ ok: false, error: 'invalid database or table name' }, { status: 400 });
   }
+  // LAYER 2 — an ARM dataConnections PUT is a PERSISTENT ingestion pipe into the
+  // named database. Bind it before the ARM request is built, not after.
+  const scoped = await scopeAdxDatabase(item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database = scoped.database;
 
   // The Event Hub resource ID needs to be supplied or resolved. We require
   // the operator to set LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID (full ARM id) and
@@ -238,19 +265,26 @@ async function handleEventHub(_id: string, body: any): Promise<NextResponse> {
   });
 }
 
-async function handleOneLake(_id: string, body: any): Promise<NextResponse> {
-  const database = sanitizeId(body?.database);
+async function handleOneLake(item: WorkspaceItem, body: any): Promise<NextResponse> {
+  const requested = sanitizeId(body?.database);
   const table = sanitizeId(body?.table);
   const path = String(body?.oneLakePath || '').trim();
-  if (!database || !table || !path) {
+  if (!requested || !table || !path) {
     return NextResponse.json({ ok: false, error: 'database, table, oneLakePath required' }, { status: 400 });
   }
-  if (!validKustoIdent(database) || !validKustoIdent(table)) {
+  if (!validKustoIdent(requested) || !validKustoIdent(table)) {
     return NextResponse.json({ ok: false, error: 'invalid database or table name' }, { status: 400 });
   }
   if (!/^(abfss|https):\/\//i.test(path)) {
     return NextResponse.json({ ok: false, error: 'oneLakePath must be abfss:// or https:// URL' }, { status: 400 });
   }
+  // LAYER 2 — the ingest target. (The `h'<url>'` source is fetched by the
+  // CLUSTER's managed identity and is still caller-supplied; that is a separate,
+  // pre-existing SSRF-shaped surface which this change does NOT close — it is
+  // recorded in the PR rather than implied fixed.)
+  const scoped = await scopeAdxDatabase(item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database = scoped.database;
   // Optional explicit format from the wizard's Format dropdown. 'auto' (or
   // unset) lets ADX infer from the URL extension; a recognized format is
   // emitted as a `with (format=...)` clause.
@@ -275,15 +309,24 @@ async function handleOneLake(_id: string, body: any): Promise<NextResponse> {
   }
 }
 
-export const POST = withSession<{ id: string }>(async (req: NextRequest, { params }) => {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // LAYER 1 — WRITE-scoped: every mode below writes to ADX or provisions ARM.
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'eventhouse',
+    notFound: 'eventhouse not found',
+  });
+  if (guard.res) return guard.res;
+  const { item } = guard.ctx;
 
   const ct = (req.headers.get('content-type') || '').toLowerCase();
   if (ct.includes('multipart/form-data')) {
-    return handleFile(params.id, req);
+    return handleFile(item, req);
   }
   const body = await req.json().catch(() => ({}));
   const kind = String(body?.kind || '').toLowerCase();
-  if (kind === 'eventhub') return handleEventHub(params.id, body);
-  if (kind === 'onelake') return handleOneLake(params.id, body);
+  if (kind === 'eventhub') return handleEventHub(item, body);
+  if (kind === 'onelake') return handleOneLake(item, body);
   return NextResponse.json({ ok: false, error: 'unknown ingest kind; expected file / eventhub / onelake' }, { status: 400 });
-});
+}

@@ -1945,7 +1945,7 @@ export async function createOrAlterContinuousExport(
 export async function createDatabase(
   name: string,
   opts?: { hotCacheDays?: number; softDeleteDays?: number; location?: string },
-): Promise<{ provisioningState: string; id: string }> {
+): Promise<{ provisioningState: string; id: string; created: boolean }> {
   const sub = required('LOOM_SUBSCRIPTION_ID');
   const rg = process.env.LOOM_KUSTO_RG || 'rg-csa-loom-admin-eastus2';
   const cluster = process.env.LOOM_KUSTO_CLUSTER_NAME || 'adx-csa-loom-shared';
@@ -1981,7 +1981,17 @@ export async function createDatabase(
     const msg = (json?.error?.message || text || 'createDatabase failed').toString();
     throw new KustoError(msg, res.status, json || text);
   }
-  return { provisioningState: json?.properties?.provisioningState || 'Accepted', id: json?.id || '' };
+  // `created` distinguishes ARM's 201 (Created) from its 200 (Updated). This is
+  // a PUT — Create *Or Update* — so naming an existing database SUCCEEDS and
+  // rewrites its softDeletePeriod/hotCachePeriod rather than conflicting.
+  // GHSA-v2g8-gp3r-rg4r: callers that BIND the returned name to a Loom item must
+  // bind only on a real create, or "create" becomes a way to claim a database
+  // someone else owns. Callers that ignore it are unchanged.
+  return {
+    provisioningState: json?.properties?.provisioningState || 'Accepted',
+    id: json?.id || '',
+    created: res.status === 201,
+  };
 }
 
 function required(key: string): string {

@@ -13,7 +13,7 @@
  *   it (closes the empty-tables gap). A final batched count query returns
  *   per-table row counts + a `make-graph` relationship count receipt.
  *
- *   Body: { database?, nodes:[{ name, properties:[{name,type,sourceColumn?}],
+ *   Body: { nodes:[{ name, properties:[{name,type,sourceColumn?}],
  *           sourceDatabase?, sourceTable?, keyColumns?:string[] }],
  *           edges:[{ name, properties:[…], sourceDatabase?, sourceTable?,
  *           originKeyColumns?:string[], targetKeyColumns?:string[] }] }
@@ -22,11 +22,37 @@
  *             loaded:[{kind,name,table,rows,command,ok,error?}],
  *             counts:{ [table]: rows }, graph:{ relationships } | null,
  *             gate?:{ remediation } }
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. This was the worst route in that advisory and
+ * both of its halves are fixed here.
+ *
+ *   1. NO AUTHORIZATION AT ALL. The handler was
+ *      `withSession<{ id: string }>(async (req: NextRequest) => …)` — it did not
+ *      bind `session`, did not accept `params`, and never read `[id]`. Any
+ *      signed-in user, owning nothing, in any tenant, reached it.
+ *
+ *   2. THE TARGET AND SOURCE DATABASES CAME FROM THE BODY.
+ *      `const db = String(body?.database || defaultDatabase())` fed
+ *      `.create-merge table` DDL, and `sourceRef(sourceDatabase, sourceTable)`
+ *      fed `.set-or-append <t> <| database('<any db>').['<any table>']` — a
+ *      CROSS-DATABASE COPY executed as the Console's UAMI, which reaches every
+ *      database on the shared cluster. Paired with `[id]/query` (which also took
+ *      `body.database`) that is a complete read primitive: copy any table into a
+ *      table you own, then read it back. The DDL alone was the lesser half.
+ *
+ * The fix adopts the convention `app/api/adx/_shared.ts::guardAdxRequest`
+ * already carries on thirteen `/api/adx/*` routes, via the item-route form in
+ * `_lib/adx-item-scope.ts`: the caller is authorized against the graph-model
+ * item, the TARGET database is resolved FROM THAT ITEM (`state.database` — the
+ * editor's own "Target ADX database" field, saved before every build), and each
+ * SOURCE database is validated against the databases bound to items in that
+ * item's workspace. `body.database` is no longer read at all.
  */
 import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
-import { executeMgmtCommand, executeQuery, defaultDatabase, kustoConfigGate, KustoError } from '@/lib/azure/kusto-client';
-import { withSession } from '@/lib/api/route-toolkit';
+import { executeMgmtCommand, executeQuery, listTables, kustoConfigGate, KustoError } from '@/lib/azure/kusto-client';
+import { guardAdxItemRequest, scopeAdxDatabase, workspaceAdxScope } from '../../../_lib/adx-item-scope';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -88,7 +114,57 @@ function sourceRef(db: string | undefined, table: string): string {
   return db ? `database('${kqlEscapeSingle(db)}').${bq(table)}` : bq(table);
 }
 
-export const POST = withSession<{ id: string }>(async (req: NextRequest) => {
+/**
+ * Resolve one type's SOURCE coordinates against the item's workspace scope.
+ *
+ * Both halves are required. The DATABASE is validated against
+ * `workspaceAdxScope` — the databases bound to items in this graph model's own
+ * workspace — so `.set-or-append <| database('X')` can no longer name a
+ * database the caller does not own. The TABLE is then validated against that
+ * resolved database's OWN object list (`.show tables`) rather than passed
+ * through, so a table name cannot address something the database does not
+ * expose. Fails closed: if the table list cannot be read, the binding is
+ * refused rather than attempted.
+ */
+async function resolveSource(
+  item: WorkspaceItem,
+  decl: Decl,
+  targetDb: string,
+  scope: Set<string>,
+  tableCache: Map<string, Set<string>>,
+): Promise<{ ok: true; db: string | undefined; table: string } | { ok: false; error: string }> {
+  const scoped = await scopeAdxDatabase(item, decl.sourceDatabase, scope);
+  if (!scoped.ok) return { ok: false, error: scoped.error };
+  const db = scoped.database;
+  let known = tableCache.get(db);
+  if (!known) {
+    try {
+      known = new Set((await listTables(db)).map((t) => t.name));
+    } catch (e: any) {
+      return { ok: false, error: `could not verify source tables in "${db}": ${e?.message || String(e)}` };
+    }
+    tableCache.set(db, known);
+  }
+  const table = String(decl.sourceTable);
+  if (!known.has(table)) {
+    return { ok: false, error: `source table "${table}" does not exist in database "${db}".` };
+  }
+  // A source in the target database itself needs no `database()` qualifier.
+  return { ok: true, db: db === targetDb ? undefined : db, table };
+}
+
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // LAYER 1 + LAYER 2 — authorize the caller against the graph-model item, and
+  // take the TARGET database from that item. WRITE-scoped (no allowReadRoles):
+  // this issues DDL and ingests rows.
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'graph-model',
+    notFound: 'graph model not found',
+  });
+  if (guard.res) return guard.res;
+  const { item, database: db } = guard.ctx;
 
   const gate = kustoConfigGate();
   if (gate) {
@@ -100,12 +176,15 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest) => {
   }
 
   const body = await req.json().catch(() => ({}));
-  const db = String(body?.database || defaultDatabase());
   const nodes: Decl[] = Array.isArray(body?.nodes) ? body.nodes : [];
   const edges: Decl[] = Array.isArray(body?.edges) ? body.edges : [];
   if (nodes.length === 0 && edges.length === 0) {
     return NextResponse.json({ ok: false, error: 'No node or edge definitions provided' }, { status: 400 });
   }
+
+  // The databases this workspace may address, resolved once from Cosmos.
+  const scope = await workspaceAdxScope(item);
+  const tableCache = new Map<string, Set<string>>();
 
   const created: Array<{ kind: 'node' | 'edge'; name: string; command: string; ok: boolean; error?: string }> = [];
   const loaded: Array<{ kind: 'node' | 'edge'; name: string; table: string; rows: number | null; command: string; ok: boolean; error?: string }> = [];
@@ -138,13 +217,18 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest) => {
   for (const n of nodes) {
     if (!n?.name || !n.sourceTable || !(n.keyColumns && n.keyColumns.length)) continue;
     const table = `Node_${safeIdent(n.name)}`;
+    const src = await resolveSource(item, n, db, scope, tableCache);
+    if (!src.ok) {
+      loaded.push({ kind: 'node', name: n.name, table, rows: null, command: '', ok: false, error: src.error });
+      continue;
+    }
     const projParts = [`id = ${keyExpr(n.keyColumns)}`];
     for (const p of (n.properties || [])) {
       if (!p?.name) continue;
       const col = p.sourceColumn || p.name;
       projParts.push(`${safeIdent(p.name)} = ${castFn(p.type || 'string')}(${bq(col)})`);
     }
-    const cmd = `.set-or-append ${table} <| ${sourceRef(n.sourceDatabase, n.sourceTable)}\n| project ${projParts.join(', ')}`;
+    const cmd = `.set-or-append ${table} <| ${sourceRef(src.db, src.table)}\n| project ${projParts.join(', ')}`;
     try {
       const r = await executeMgmtCommand(db, cmd);
       // The ingest extent table reports rows in a RecordCount-ish column.
@@ -158,13 +242,18 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest) => {
   for (const e of edges) {
     if (!e?.name || !e.sourceTable || !(e.originKeyColumns && e.originKeyColumns.length) || !(e.targetKeyColumns && e.targetKeyColumns.length)) continue;
     const table = `Edge_${safeIdent(e.name)}`;
+    const src = await resolveSource(item, e, db, scope, tableCache);
+    if (!src.ok) {
+      loaded.push({ kind: 'edge', name: e.name, table, rows: null, command: '', ok: false, error: src.error });
+      continue;
+    }
     const projParts = [`src = ${keyExpr(e.originKeyColumns)}`, `dst = ${keyExpr(e.targetKeyColumns)}`];
     for (const p of (e.properties || [])) {
       if (!p?.name || p.name === 'srcType' || p.name === 'dstType') continue;
       const col = p.sourceColumn || p.name;
       projParts.push(`${safeIdent(p.name)} = ${castFn(p.type || 'string')}(${bq(col)})`);
     }
-    const cmd = `.set-or-append ${table} <| ${sourceRef(e.sourceDatabase, e.sourceTable)}\n| project ${projParts.join(', ')}`;
+    const cmd = `.set-or-append ${table} <| ${sourceRef(src.db, src.table)}\n| project ${projParts.join(', ')}`;
     try {
       const r = await executeMgmtCommand(db, cmd);
       const rc = r.columns.findIndex((c) => /record|rowcount|count/i.test(c));
@@ -205,4 +294,4 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest) => {
   }
 
   return NextResponse.json({ ok: true, database: db, created, loaded, counts, graph });
-});
+}

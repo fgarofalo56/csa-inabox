@@ -123,6 +123,36 @@
  *     `getSession()` in ANOTHER module) and 80 carry none. Making the remit fail
  *     closed — in scope unless explicitly excused — is the right shape and is
  *     NOT done here; it needs those 80 triaged first.
+ *     **2026-08-14 (GHSA-v2g8-gp3r-rg4r): the remit is now fail-closed for the
+ *     NOW_GUARDED set only.** Measured while graduating that advisory's routes:
+ *     replacing `guardAdxItemRequest(` with a non-guard call in
+ *     `items/graph-model/[id]/materialize/route.ts` left `violations: 0`,
+ *     because a route whose session lives in a HELPER matches the remit only
+ *     through the helper's NAME — so deleting the call removed the route from
+ *     the remit as well as from the guard, and NOW_GUARDED (whose stated purpose
+ *     is "if a future edit drops the guard, the checker re-flags them") was
+ *     inert for it. Graduated routes are therefore in remit unconditionally now.
+ *     The broader 80-route triage is still NOT done.
+ *   - **A wrapper `mustCall` used to be matched against the WHOLE MODULE.**
+ *     Measured 2026-08-14: replacing `resolveItemDatabase(item)` with
+ *     `defaultDatabase()` inside `guardAdxItemRequest` — i.e. handing every
+ *     caller a database NOT resolved from the item, which is the entirety of
+ *     GHSA-v2g8-gp3r-rg4r — left this checker GREEN, because a SIBLING function
+ *     in the same file still called `resolveItemDatabase`. `mustCall` is now
+ *     evaluated against the wrapper's OWN body (namedExportBody), and an
+ *     unlocatable body fails closed.
+ *   - **This checker still cannot see the GHSA-v2g8-gp3r-rg4r class in
+ *     general.** That class is "a handler reaches a data-plane client with a
+ *     RESOURCE COORDINATE taken from the request body rather than from a
+ *     resolved item" — `body.database` into `.purge`, `body.sourceDatabase`
+ *     into a cross-database `.set-or-append`. Nothing here follows a VALUE; the
+ *     two checks are a name search and a consumption check. Detecting it needs
+ *     intra-file taint plus a registry of which PARAMETER POSITIONS of which
+ *     data-plane clients are coordinates rather than payloads (`kql` and `sql`
+ *     are legitimately caller-authored; `database` and `table` are not). That
+ *     registry does not exist and is a piece of work in its own right, so it is
+ *     named here as a known gap rather than approximated with a grep that would
+ *     read green for the same reason this one did.
  * ------------------------------------------------------------------------
  *
  * SCOPE (the directories where this hole class lives):
@@ -230,6 +260,17 @@ const GUARD_SIGNAL_RE = new RegExp(
     // a comment cannot satisfy it — the way `assertOwner` lied. Kept in lockstep
     // with OWNER_RE in generate-route-inventory.mjs.
     'authorizeStorageAccount(?:<[^()]*>)?\\s*\\(',
+    // GHSA-v2g8-gp3r-rg4r — `guardAdxItemRequest(` is the item-route form of
+    // `app/api/adx/_shared.ts::guardAdxRequest` (already a signal below), for the
+    // `items/<type>/[id]/**` handlers whose item id arrives as a route param
+    // rather than `?id=`. It runs getSession + the canonical
+    // `authorizeItemWorkspace` ladder and resolves the ADX database FROM THE
+    // ITEM. Matched AS A CALL, never as a bare word, so a `{@link …}` in a
+    // comment cannot satisfy it — the specific way `assertOwner` lied above —
+    // and its substance is verified by `assertGuardWrappersAreReal()` below, so
+    // hollowing it out fails this checker instead of silently disarming every
+    // consumer.
+    'guardAdxItemRequest(?:<[^()]*>)?\\s*\\(',
     // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
     // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
     // route that threads one of them is owner-scoped even without a literal
@@ -851,6 +892,41 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/semantic-model/[id]/refresh-schedule/route.ts',
   'apps/fiab-console/app/api/items/semantic-model/[id]/refreshes/route.ts',
   'apps/fiab-console/app/api/items/semantic-model/[id]/take-over/route.ts',
+  // ── GHSA-v2g8-gp3r-rg4r ──────────────────────────────────────────────────
+  // The ADX / shared-backend routes that took their TARGET from the request
+  // body instead of from the item. They sat under SHARED_BACKEND_ITEM_ROUTES on
+  // the recorded class reason "no per-tenant Cosmos ownership to scope", which
+  // was true of them ONLY because the handler never looked:
+  // `graph-model/[id]/materialize` did not even bind `session`,
+  // `lakehouse/[id]/query` took `_ctx` and ignored it, and
+  // `databricks-notebook/[id]/runs` did not accept `ctx` at all.
+  //
+  // NOTE FOR falsifiedSharedBackendPremise (the CHECK 3 immediately above this
+  // list's sibling entries): these are OUTSIDE that control's population BY
+  // CONSTRUCTION, because it requires the handler to consume `[id]` and these
+  // did not. The strictly worse shape was the invisible one — which is why they
+  // were found by review rather than by the sweep that produced the 20 above.
+  //
+  // Every one now runs a real item guard (`guardAdxItemRequest` /
+  // `authorizeNotebookItem`) and resolves its database — or its run scope —
+  // from the item, so they are listed here rather than allowlisted: dropping
+  // the guard must re-flag, not stay masked by the old class reason.
+  'apps/fiab-console/app/api/items/graph-model/[id]/materialize/route.ts',
+  'apps/fiab-console/app/api/items/graph-model/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/eventhouse/[id]/purge/route.ts',
+  'apps/fiab-console/app/api/items/eventhouse/[id]/database/route.ts',
+  'apps/fiab-console/app/api/items/lakehouse/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/databricks-notebook/[id]/runs/route.ts',
+  // Second pass on the same advisory, after review found the fix had RELOCATED
+  // the primitive rather than removed it. `gql-graph/[id]/query` is the sibling
+  // of `graph-model/[id]/query` and carried the identical shape — `_ctx` taken
+  // and ignored, `body.database` into `executeQuery`, caller KQL concatenated
+  // raw. `eventhouse/[id]/ingest` is the WRITE half: `handleFile(_id, req)`
+  // discarded the item id and took `database` from the form, and the JSON kinds
+  // reached `.ingest into table (h'<caller url>')` and an ARM dataConnections
+  // PUT on any database. Both now run the same item guard.
+  'apps/fiab-console/app/api/items/gql-graph/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/eventhouse/[id]/ingest/route.ts',
   // non-items routes fixed in the same sweep
   'apps/fiab-console/app/api/aml/environments/route.ts',
   'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',
@@ -1543,6 +1619,31 @@ const GUARD_WRAPPERS = [
     ),
     mustCall: ['getSession\\s*\\(', 'authorizeItemWorkspace\\s*\\('],
   },
+  {
+    // GHSA-v2g8-gp3r-rg4r — the ADX item-route guard. Same hazard, same bar: a
+    // route delegating to it is authorized only while it still resolves a
+    // session AND runs the canonical ladder AND resolves the database from the
+    // item.
+    //
+    // THE LAST REGEX IS NOT A CALL CHECK, AND THAT IS THE POINT. `mustCall` is
+    // a PRESENCE test, so `resolveItemDatabase\s*\(` alone is satisfied by this,
+    // which reintroduces the whole advisory:
+    //     const bound = resolveItemDatabase(item);
+    //     const requested = typeof (opts as any).database === 'string' ? … : '';
+    //     return { ctx: { session, item, database: requested || bound } };
+    // Every caller then gets a caller-supplied database while the checker stays
+    // green. Pinning the RETURN EXPRESSION — `database: resolveItemDatabase(item)`
+    // and nothing else — is what makes the assertion about behaviour rather than
+    // vocabulary. A future refactor that legitimately renames the binding must
+    // update this line, which is the intended cost.
+    name: 'guardAdxItemRequest',
+    file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'adx-item-scope.ts'),
+    mustCall: [
+      'getSession\\s*\\(',
+      'authorizeItemWorkspace\\s*\\(',
+      'database:\\s*resolveItemDatabase\\s*\\(\\s*item\\s*\\)',
+    ],
+  },
   // C22 (#3088) — the route-toolkit wrappers are guard signals too, and they
   // are the SAME hazard one level up: a route adopting `withTenantAdmin` is
   // authorized only while that wrapper still runs its gate. Hollow any of them
@@ -1586,6 +1687,40 @@ const GUARD_WRAPPERS = [
   },
 ];
 
+/**
+ * The SOURCE OF THE NAMED EXPORTED FUNCTION ONLY — brace-matched from its
+ * keyword — or null when it cannot be located.
+ *
+ * WHY THIS EXISTS. `mustCall` used to be matched against the WHOLE MODULE, which
+ * is the "presence, not enforcement" blind spot this repo has been bitten by
+ * before. MEASURED on 2026-08-14: replacing `resolveItemDatabase(item)` with
+ * `defaultDatabase()` inside `guardAdxItemRequest` — i.e. handing every caller a
+ * database NOT resolved from the item, which is the whole of
+ * GHSA-v2g8-gp3r-rg4r — left this checker GREEN, because `workspaceAdxScope` in
+ * the SAME FILE still called `resolveItemDatabase`. A sibling function satisfied
+ * an assertion about the wrapper, exactly as a comment once satisfied an
+ * assertion about `assertOwner`.
+ *
+ * Input is already comment/string-stripped, so a brace inside a string or a
+ * comment cannot unbalance the scan.
+ */
+function namedExportBody(src, name) {
+  // ALL declarations, not the first: `withWorkspaceOwner` is declared as two
+  // TypeScript OVERLOAD SIGNATURES followed by the implementation, and an
+  // overload has no body (functionBody returns '' on the `;`). Taking the first
+  // match failed closed on a wrapper that is perfectly intact.
+  const re = new RegExp(`export\\s+(?:async\\s+)?function\\s+${name}\\b`, 'g');
+  for (let decl = re.exec(src); decl; decl = re.exec(src)) {
+    const paren = src.indexOf('(', decl.index);
+    if (paren < 0) continue;
+    // Delegate to the existing brace scanner: it already skips a `{…}` sitting
+    // in TYPESCRIPT RETURN-TYPE position and returns '' for an overload.
+    const body = functionBody(src, paren);
+    if (body) return body;
+  }
+  return null;
+}
+
 function assertGuardWrappersAreReal() {
   const bad = [];
   for (const w of GUARD_WRAPPERS) {
@@ -1603,8 +1738,19 @@ function assertGuardWrappersAreReal() {
       bad.push(`${w.name}: not exported from ${rel(w.file)}`);
       continue;
     }
+    // Scoped to the wrapper's OWN body — see functionBody() for the measurement
+    // that made this necessary. An unlocatable body fails closed rather than
+    // silently falling back to the whole module.
+    const body = namedExportBody(src, w.name);
+    if (body === null) {
+      bad.push(
+        `${w.name}: its body could not be located in ${rel(w.file)} — ` +
+        'the mustCall assertions below cannot be evaluated, so this fails closed.',
+      );
+      continue;
+    }
     for (const must of w.mustCall) {
-      if (!new RegExp(must).test(src)) {
+      if (!new RegExp(must).test(body)) {
         bad.push(`${w.name}: no longer calls /${must}/ — the wrapper no longer authorizes`);
       }
     }
@@ -1897,7 +2043,26 @@ function main() {
     const hasMutating = MUTATING_EXPORT_RE.test(src);
     const hasGet = GET_EXPORT_RE.test(src);
     if (!hasMutating && !hasGet) continue; // no data surface to guard
-    if (!GETSESSION_RE.test(src)) continue; // not session-based; out of this check's remit
+    // REMIT. A route with no session-shaped token is normally skipped (see the
+    // header: 119 such files, 80 of them untriaged). That skip has a hole this
+    // checker's own NOW_GUARDED set depends on NOT having: a route whose session
+    // lives entirely inside a HELPER matches the remit only through the helper's
+    // NAME, so deleting the helper call removes the route from the remit as well
+    // as from the guard — and the checker stays green on a route it was
+    // explicitly told had been fixed.
+    //
+    // MEASURED on 2026-08-14 while graduating the GHSA-v2g8-gp3r-rg4r routes:
+    // replacing `guardAdxItemRequest(` with a non-guard call in
+    // `items/graph-model/[id]/materialize/route.ts` — the route with NO literal
+    // `getSession` — left `violations: 0`. NOW_GUARDED was inert for it.
+    //
+    // So NOW_GUARDED is now FAIL-CLOSED: a route this checker has recorded as
+    // fixed is in remit unconditionally. That is deliberately scoped to the
+    // graduated set rather than to all 119 — the broader remit change still
+    // needs those 80 triaged first — but it makes the promise NOW_GUARDED
+    // already claims ("if a future edit drops the guard, the checker re-flags
+    // them") actually true.
+    if (!GETSESSION_RE.test(src) && !NOW_GUARDED.has(r)) continue; // out of this check's remit
     scanned++;
     // Per HANDLER, not per file: a guard in a sibling handler does not authorize
     // this one (measured on app/api/workspaces/route.ts — see unguardedHandlers).

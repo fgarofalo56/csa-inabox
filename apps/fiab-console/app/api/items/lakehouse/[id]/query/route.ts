@@ -13,8 +13,32 @@
  * This route is the lakehouse's own SQL analytics endpoint, calling the real
  * Synapse Serverless TDS client (no mock data).
  *
- * Body: { sql: string, database?: string }
- * Auth: session-required.
+ * Body: { sql: string }
+ * Auth: authorized against the lakehouse ITEM (see below).
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. The handler signature was
+ * `POST(req, _ctx: { params: Promise<{ id: string }> })` — it took the route
+ * context and ignored it, so `[id]` was never read and `getSession()` was the
+ * only check: any signed-in user, in any tenant, could execute T-SQL on the
+ * shared Synapse Serverless endpoint as the Console's identity. The `database`
+ * also came from the body.
+ *
+ * The caller is now authorized against the lakehouse item via
+ * `_lib/adx-item-scope.ts::guardAdxItemRequest` (the canonical
+ * `authorizeItemWorkspace` ladder — owner → tenant-admin → shared-ACL — with the
+ * workspace resolved FROM THE ITEM, and a fail-closed 404 for an id naming no
+ * lakehouse), and the target database is resolved from that item.
+ * `allowReadRoles` IS passed: the Serverless SQL analytics endpoint is
+ * read-only, so a shared Viewer running a preview is a legitimate caller and
+ * refusing them would break the editor's Preview and the entity-diagram column
+ * enrichment.
+ *
+ * KNOWN RESIDUAL, stated rather than implied fixed: the SQL TEXT itself is still
+ * unbounded — `OPENROWSET` can address any path the Console's identity can read
+ * on the shared lake. That is the same shape as every other T-SQL surface in the
+ * console (warehouse/[id]/query, synapse-serverless-sql-pool/[id]/query) and is
+ * NOT closed here; this change closes the missing caller authorization, which is
+ * what the advisory names.
  *
  * Background:
  *  - Fabric lakehouse SQL analytics endpoint: a read-only T-SQL endpoint over
@@ -24,22 +48,44 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { serverlessTarget, executeQuery, getSynapseSqlSuffix } from '@/lib/azure/synapse-sql-client';
+import { guardAdxItemRequest } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+/**
+ * The Serverless database this lakehouse item is bound to. Serverless exposes
+ * `master` plus any explicitly-created serverless databases; the item declares
+ * one in `state.sqlDatabase` when it has its own, otherwise `master` — which is
+ * what every caller in the console already sends.
+ */
+function lakehouseSqlDatabase(state: Record<string, unknown> | undefined): string {
+  for (const key of ['sqlDatabase', 'sqlEndpointDatabase'] as const) {
+    const v = state?.[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return 'master';
+}
+
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'lakehouse',
+    notFound: 'lakehouse not found',
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
+  const { session, item } = guard.ctx;
+
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 
   const body = await req.json().catch(() => ({}));
   const sqlText = (body?.sql || '').toString().trim();
-  const database = (body?.database || 'master').toString();
+  const database = lakehouseSqlDatabase(item.state);
   if (!sqlText) return NextResponse.json({ ok: false, error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ ok: false, error: 'sql too large (>64KB)' }, { status: 413 });
 
