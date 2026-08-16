@@ -7,14 +7,36 @@
  * container outside the four DLZ ones. A user picking a location outside the
  * DLZ therefore had to type an `abfss://` URI.
  *
- * What is pinned here: the inputs that reach the storage data plane are bounded
- * (both segments are URL path components and the prefix is appended to them),
- * and a DENIAL is reported as a denial with the exact role to grant — never as
- * an empty container list, which reads to the user as "this account is empty".
+ * What is pinned here: the caller is AUTHORIZED and not merely authenticated
+ * (both routes shipped as `withSession` only, which made them a confused deputy
+ * for the Console UAMI's DLZ-wide storage read), the inputs that reach the
+ * storage data plane are bounded (both segments are URL path components and the
+ * prefix is appended to them), and a DENIAL is reported as a denial with the
+ * exact role to grant — never as an empty container list, which reads to the
+ * user as "this account is empty".
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+vi.mock('@/lib/auth/session', () => ({
+  getSession: vi.fn(),
+  // authorize.ts scopes the tenant with this; the real one is
+  // `claims.tid || claims.oid`, which is what the fixture below models.
+  tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
+}));
+const canAccessDlzPanes = vi.fn();
+const loadTenantDomains = vi.fn();
+vi.mock('@/lib/auth/domain-role', () => ({ canAccessDlzPanes: (...a: any[]) => canAccessDlzPanes(...a) }));
+vi.mock('@/lib/auth/load-domains', () => ({ loadTenantDomains: (...a: any[]) => loadTenantDomains(...a) }));
+
+const itemQuery = vi.fn();
+const authorizeWorkspace = vi.fn();
+vi.mock('@/lib/auth/workspace-guard', () => ({
+  authorizeWorkspace: (...a: any[]) => authorizeWorkspace(...a),
+}));
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => ({ items: { query: () => ({ fetchAll: () => itemQuery() }) } }),
+}));
+
 const listFileSystems = vi.fn();
 const listPaths = vi.fn();
 vi.mock('@/lib/azure/adls-client', () => ({
@@ -25,9 +47,14 @@ vi.mock('@/lib/azure/adls-client', () => ({
 import { GET as CONTAINERS } from '../[account]/containers/route';
 import { GET as PATHS } from '../[account]/containers/[container]/paths/route';
 import { isValidStorageAccount, isValidContainerName, isSafePrefix } from '../_lib/validate';
+import { deploymentLakeAccounts } from '../_lib/authorize';
 import { getSession } from '@/lib/auth/session';
 
-const SESSION = { claims: { upn: 'u@contoso.com', oid: 'oid-1' }, exp: 9_999_999_999 };
+const SESSION = { claims: { upn: 'u@contoso.com', oid: 'oid-1', tid: 'tid-1' }, exp: 9_999_999_999 };
+/** This deployment's own lake, per LOOM_BRONZE_URL below. */
+const LAKE_ACCOUNT = 'loomlake01';
+/** An account that is NOT the deployment lake — the confused-deputy target. */
+const OTHER_ACCOUNT = 'victimacct99';
 
 function req(qs = '') {
   return { nextUrl: new URL(`http://x/api/storage/acct/containers?${qs}`) } as any;
@@ -43,11 +70,23 @@ function httpErr(status: number) {
   e.statusCode = status;
   return e;
 }
+/** The population this PR is built for: signed in, no DLZ standing at all. */
+function asWorkspaceUser() {
+  (getSession as any).mockReturnValue(SESSION);
+  canAccessDlzPanes.mockResolvedValue(false);
+  loadTenantDomains.mockResolvedValue([]);
+  itemQuery.mockResolvedValue({ resources: [] });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('LOOM_BRONZE_URL', `https://${LAKE_ACCOUNT}.dfs.core.windows.net/bronze`);
   (getSession as any).mockReturnValue(SESSION);
+  canAccessDlzPanes.mockResolvedValue(true);
+  loadTenantDomains.mockResolvedValue([]);
+  itemQuery.mockResolvedValue({ resources: [] });
 });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('input validation', () => {
   it('bounds the account name', () => {
@@ -70,6 +109,120 @@ describe('input validation', () => {
     expect(isSafePrefix('../../etc')).toBe(false);
     expect(isSafePrefix('https://evil/x')).toBe(false);
     expect(isSafePrefix('a?comp=list')).toBe(false);
+  });
+});
+
+/**
+ * AUTHORIZATION — the blocker these routes shipped with.
+ *
+ * `withSession` is AUTHENTICATION. Both routes had nothing else, while `account`
+ * came off the URL and the listing ran as the Console UAMI (Storage Blob Data
+ * Reader/Contributor across the DLZ). Any signed-in workspace-scoped user could
+ * therefore enumerate every container on every reachable account.
+ *
+ * `check-route-guards` reported violations: 0 on that code, because it counts
+ * `withSession` as a guard SIGNAL — presence, not enforcement. So every test
+ * below exercises a caller who should be DENIED, and asserts the data plane was
+ * never touched, rather than asserting that a wrapper is present.
+ */
+describe('authorization (not just authentication)', () => {
+  it('DENIES a signed-in workspace user an account outside the deployment lake — and never touches storage', async () => {
+    asWorkspaceUser();
+    const res = await CONTAINERS(req(), ctx({ account: OTHER_ACCOUNT }));
+    const j = await res.json();
+    expect(res.status).toBe(403);
+    expect(j.ok).toBe(false);
+    expect(j.error).toMatch(/not authorized/i);
+    // The whole point: the UAMI was never driven at an account this caller
+    // has no standing on.
+    expect(listFileSystems).not.toHaveBeenCalled();
+  });
+
+  it('DENIES the same caller the paths route too — the sibling is not a way around it', async () => {
+    asWorkspaceUser();
+    const res = await PATHS(req('prefix=Tables'), ctx({ account: OTHER_ACCOUNT, container: 'raw' }));
+    expect(res.status).toBe(403);
+    expect(await res.json().then((j: any) => j.error)).toMatch(/not authorized/i);
+    expect(listPaths).not.toHaveBeenCalled();
+  });
+
+  it('the denial does not vary with whether the account EXISTS (no existence oracle)', async () => {
+    // dfsUrl(account) is public DNS, so a 403/404/502 split evaluated BEFORE
+    // authorization would let any signed-in user probe storage-account names
+    // globally. Authorization runs first, so Loom never asks — and therefore
+    // cannot tell the caller. Same account both times; only what storage WOULD
+    // have said differs.
+    asWorkspaceUser();
+    listFileSystems.mockReturnValue(gen([{ name: 'secrets' }]));
+    const exists = await CONTAINERS(req(), ctx({ account: OTHER_ACCOUNT }));
+    listFileSystems.mockImplementation(() => { throw httpErr(404); });
+    const absent = await CONTAINERS(req(), ctx({ account: OTHER_ACCOUNT }));
+
+    expect(exists.status).toBe(403);
+    expect(absent.status).toBe(exists.status);
+    expect((await absent.json()).error).toBe((await exists.json()).error);
+    expect(listFileSystems).not.toHaveBeenCalled();
+  });
+
+  it("ALLOWS any signed-in session this deployment's own lake account (parity with /api/lakehouse/paths)", async () => {
+    asWorkspaceUser();
+    listFileSystems.mockReturnValue(gen([{ name: 'bronze' }]));
+    const res = await CONTAINERS(req(), ctx({ account: LAKE_ACCOUNT }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).containers[0].name).toBe('bronze');
+    // T1 is env-only: no tenant/domain lookup on the path every adopting editor takes.
+    expect(loadTenantDomains).not.toHaveBeenCalled();
+  });
+
+  it('ALLOWS a DLZ-authoritative caller (tenant admin / domain admin) an arbitrary account', async () => {
+    canAccessDlzPanes.mockResolvedValue(true);
+    listFileSystems.mockReturnValue(gen([{ name: 'raw' }]));
+    const res = await CONTAINERS(req(), ctx({ account: OTHER_ACCOUNT }));
+    expect(res.status).toBe(200);
+    expect(listFileSystems).toHaveBeenCalled();
+  });
+
+  it("ALLOWS an account a lakehouse the caller can ACCESS is bound to", async () => {
+    asWorkspaceUser();
+    itemQuery.mockResolvedValue({ resources: [{ id: 'lh-1', workspaceId: 'ws-1' }] });
+    authorizeWorkspace.mockResolvedValue(null); // null == authorized
+    listFileSystems.mockReturnValue(gen([{ name: 'raw' }]));
+    const res = await CONTAINERS(req(), ctx({ account: OTHER_ACCOUNT }));
+    expect(res.status).toBe(200);
+    // The CANONICAL ladder (owner → tenant admin → shared ACL), read-scoped —
+    // NOT a `workspaces.item(id, tenantId)` point read, which can only answer
+    // "did this caller CREATE it?" and refuses every non-creator member.
+    expect(authorizeWorkspace).toHaveBeenCalledWith(SESSION, 'ws-1', { allowReadRoles: true });
+  });
+
+  it('DENIES when the caller cannot access the workspace that binds it', async () => {
+    asWorkspaceUser();
+    itemQuery.mockResolvedValue({ resources: [{ id: 'lh-1', workspaceId: 'ws-other' }] });
+    authorizeWorkspace.mockResolvedValue({ status: 404 }); // a denial response
+    const res = await CONTAINERS(req(), ctx({ account: OTHER_ACCOUNT }));
+    expect(res.status).toBe(403);
+    expect(listFileSystems).not.toHaveBeenCalled();
+  });
+
+  it('FAILS CLOSED when the authorization evidence itself is unreadable', async () => {
+    // An authorization check that cannot reach its evidence has verified
+    // nothing. "I could not tell" must never be read as "allowed", and the
+    // message must not claim a cause it did not establish (deploy-integrity R7).
+    asWorkspaceUser();
+    loadTenantDomains.mockRejectedValue(new Error('Cosmos unreachable'));
+    const res = await CONTAINERS(req(), ctx({ account: OTHER_ACCOUNT }));
+    const j = await res.json();
+    expect(res.status).toBe(403);
+    expect(j.error).toMatch(/could not establish/i);
+    expect(j.error).not.toMatch(/not authorized/i);
+    expect(listFileSystems).not.toHaveBeenCalled();
+  });
+
+  it('parses the deployment lake accounts out of the configured LOOM_*_URL set', () => {
+    expect(deploymentLakeAccounts().has(LAKE_ACCOUNT)).toBe(true);
+    expect(deploymentLakeAccounts().has(OTHER_ACCOUNT)).toBe(false);
+    vi.stubEnv('LOOM_BRONZE_URL', '');
+    expect(deploymentLakeAccounts().size).toBe(0);
   });
 });
 

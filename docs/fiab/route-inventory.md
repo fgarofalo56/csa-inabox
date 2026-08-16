@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1675 |
+| Total routes | 1678 |
 | Public (no session) | 104 |
 | Session-only | 560 |
-| Owner-scoped | 712 |
-| Admin | 299 |
+| Owner-scoped | 714 |
+| Admin | 300 |
 | Gated (backend config) | 494 |
-| Areas | 121 |
+| Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -172,9 +172,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/load-sample-data/route.ts` | POST | admin |  | ADX |
 | `admin/mcp-servers/bridge/route.ts` | GET | admin |  | — |
 | `admin/mcp-servers/builtin/route.ts` | GET | admin |  | — |
-| `admin/mcp-servers/deploy/route.ts` | GET POST | admin | ● | Cosmos |
+| `admin/mcp-servers/deploy/route.ts` | GET POST | admin | ● | Cosmos, Key Vault |
 | `admin/mcp-servers/deployed/status/route.ts` | GET | admin |  | — |
-| `admin/mcp-servers/deployed/teardown/route.ts` | DELETE | admin |  | Cosmos |
+| `admin/mcp-servers/deployed/teardown/route.ts` | DELETE | admin |  | Cosmos, Key Vault |
 | `admin/mcp-servers/ms-remote/config/route.ts` | GET PUT | admin |  | Cosmos |
 | `admin/mcp-servers/ms-remote/route.ts` | GET POST | admin |  | Cosmos |
 | `admin/mcp-servers/powerbi/route.ts` | GET POST | admin | ● | Cosmos |
@@ -540,10 +540,10 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `connections/[id]/objects/route.ts` | POST | owner-scoped |  | — |
 | `connections/[id]/preview/route.ts` | POST | owner-scoped |  | — |
 | `connections/[id]/purview/route.ts` | POST | owner-scoped | ● | — |
-| `connections/[id]/route.ts` | GET PATCH DELETE | owner-scoped | ● | Cosmos |
-| `connections/[id]/test/route.ts` | POST | owner-scoped |  | — |
+| `connections/[id]/route.ts` | GET PATCH DELETE | owner-scoped | ● | Cosmos, Key Vault |
+| `connections/[id]/test/route.ts` | POST | owner-scoped |  | Key Vault |
 | `connections/route.ts` | GET POST DELETE | session-only |  | — |
-| `connections/test/route.ts` | POST | owner-scoped |  | — |
+| `connections/test/route.ts` | POST | owner-scoped |  | Key Vault |
 
 ## copilot
 
@@ -1414,7 +1414,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/lakebase-postgres/[id]/replicas/route.ts` | GET POST | public |  | — |
 | `items/lakebase-postgres/[id]/route.ts` | GET PATCH | public |  | — |
 | `items/lakebase-postgres/[id]/snapshot/route.ts` | GET POST | owner-scoped |  | — |
-| `items/lakehouse-shortcut/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, Cosmos, Synapse SQL |
+| `items/lakehouse-shortcut/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, Cosmos, Key Vault, Synapse SQL |
 | `items/lakehouse/[id]/abfss/route.ts` | GET | session-only |  | — |
 | `items/lakehouse/[id]/assist/route.ts` | — | public |  | — |
 | `items/lakehouse/[id]/query/route.ts` | POST | session-only | ● | Synapse SQL |
@@ -1428,7 +1428,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/loom-app-runtime/[id]/context/route.ts` | GET | owner-scoped |  | — |
 | `items/loom-app-runtime/[id]/deploy/route.ts` | POST | owner-scoped |  | — |
 | `items/loom-app-runtime/[id]/export/route.ts` | GET | owner-scoped |  | — |
-| `items/loom-app-runtime/[id]/git-credential/route.ts` | GET POST DELETE | owner-scoped | ● | — |
+| `items/loom-app-runtime/[id]/git-credential/route.ts` | GET POST DELETE | owner-scoped | ● | Key Vault |
 | `items/loom-app-runtime/[id]/lifecycle/route.ts` | POST | owner-scoped |  | — |
 | `items/loom-app-runtime/[id]/logs/route.ts` | GET | owner-scoped |  | — |
 | `items/loom-app-runtime/[id]/mcp/route.ts` | POST | owner-scoped |  | — |
@@ -1612,7 +1612,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/scorecard/route.ts` | GET | owner-scoped |  | — |
 | `items/semantic-model/[id]/content/route.ts` | GET PUT | owner-scoped |  | — |
 | `items/semantic-model/[id]/copilot-structure/route.ts` | GET POST | owner-scoped |  | AAS |
-| `items/semantic-model/[id]/datasource/route.ts` | GET POST PUT | owner-scoped | ● | AAS, ADX, Azure SQL, Cosmos, Synapse SQL |
+| `items/semantic-model/[id]/datasource/route.ts` | GET POST PUT | owner-scoped | ● | AAS, ADX, Azure SQL, Cosmos, Key Vault, Synapse SQL |
 | `items/semantic-model/[id]/dax-query/route.ts` | POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/describe-bulk/route.ts` | GET POST | owner-scoped |  | AAS |
 | `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | session-only | ● | AAS, Synapse SQL |
@@ -1716,9 +1716,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/tracing/route.ts` | GET | session-only |  | — |
 | `items/transformation-project/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
 | `items/transformation-project/route.ts` | GET POST | owner-scoped |  | — |
-| `items/user-data-function/[id]/invoke/route.ts` | POST | owner-scoped |  | — |
+| `items/user-data-function/[id]/invoke/route.ts` | POST | owner-scoped |  | Key Vault |
 | `items/user-data-function/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
-| `items/variable-library/[id]/resolve/route.ts` | POST | owner-scoped |  | — |
+| `items/variable-library/[id]/resolve/route.ts` | POST | owner-scoped |  | Key Vault |
 | `items/variable-library/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/vector-store/[id]/index/route.ts` | GET POST PUT | session-only |  | — |
 | `items/vector-store/[id]/search/route.ts` | POST | session-only | ● | — |
@@ -1745,6 +1745,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/workshop-app/[id]/run-action/route.ts` | POST | owner-scoped | ● | Synapse SQL |
 | `items/workshop-app/route.ts` | — | public |  | — |
 
+## keyvault
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `keyvault/secret-names/route.ts` | GET | admin |  | Key Vault |
+
 ## lakehouse
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -1765,8 +1771,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, Cosmos |
 | `lakehouse/schemas/route.ts` | GET POST PATCH DELETE | session-only | ● | Synapse |
 | `lakehouse/settings/route.ts` | GET PUT | owner-scoped | ● | ADLS, Cosmos, Databricks |
-| `lakehouse/shortcuts/browse/route.ts` | GET | session-only | ● | — |
-| `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | — |
+| `lakehouse/shortcuts/browse/route.ts` | GET | session-only | ● | Key Vault |
+| `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Key Vault |
 | `lakehouse/shortcuts/route.ts` | GET POST DELETE | session-only |  | ADLS |
 | `lakehouse/shortcuts/sharepoint/route.ts` | GET | owner-scoped | ● | — |
 | `lakehouse/shortcuts/test/route.ts` | POST | session-only | ● | ADLS |
@@ -2025,11 +2031,11 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `realtime-hub/connect-source/route.ts` | POST | owner-scoped |  | — |
+| `realtime-hub/connect-source/route.ts` | POST | owner-scoped |  | Key Vault |
 | `realtime-hub/databases/route.ts` | GET | session-only | ● | ADX |
 | `realtime-hub/endpoints/route.ts` | GET | owner-scoped |  | — |
 | `realtime-hub/http-source/route.ts` | POST | session-only |  | — |
-| `realtime-hub/keyvault-certificates/route.ts` | GET | session-only | ● | — |
+| `realtime-hub/keyvault-certificates/route.ts` | GET | session-only | ● | Key Vault |
 | `realtime-hub/options/route.ts` | GET | session-only | ● | Event Hubs |
 | `realtime-hub/preview/route.ts` | POST | session-only |  | ADX |
 | `realtime-hub/provision/route.ts` | POST | session-only |  | Event Hubs |
@@ -2160,6 +2166,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `storage/[account]/containers/[container]/paths/route.ts` | GET | owner-scoped |  | ADLS |
+| `storage/[account]/containers/route.ts` | GET | owner-scoped |  | ADLS |
 | `storage/accounts/route.ts` | GET | session-only |  | — |
 
 ## streaming-sql
@@ -2297,7 +2305,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `workspaces/[id]/role-assignments/[principalId]/route.ts` | DELETE | admin |  | — |
 | `workspaces/[id]/role-assignments/route.ts` | GET POST | admin |  | — |
 | `workspaces/[id]/route.ts` | GET PATCH DELETE | admin |  | Cosmos |
-| `workspaces/[id]/scm/route.ts` | GET POST DELETE | owner-scoped | ● | Cosmos |
+| `workspaces/[id]/scm/route.ts` | GET POST DELETE | owner-scoped | ● | Cosmos, Key Vault |
 | `workspaces/[id]/task-flows/[flowId]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos |
 | `workspaces/[id]/task-flows/[flowId]/run/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `workspaces/[id]/task-flows/route.ts` | GET POST | owner-scoped |  | Cosmos |

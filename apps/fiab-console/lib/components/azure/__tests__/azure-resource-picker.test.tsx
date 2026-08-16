@@ -81,6 +81,61 @@ describe('DEFECT 1 — a stored value discovery cannot resolve is preserved', ()
     await waitFor(() => expect(screen.getByText(/saved value — not visible to you/i)).toBeInTheDocument());
   });
 
+  /**
+   * RENDERING the stored value was only half the fix. INTERACTING with it fed
+   * the same option straight back into `resources.find(...)`, which by the
+   * definition of `unresolved` can never match — so every one of these paths
+   * called `onChange(null)` and the caller's next Save wrote the blank back.
+   * That is the ORIGINAL defect, reachable through the control built to fix it.
+   *
+   * Verified against the pinned @fluentui/react-combobox@9.17.1, not assumed:
+   *   - lib/utils/useSelection.js — single-select ALWAYS fires onOptionSelect
+   *     with a non-empty `optionValue`; there is no deselect-on-reclick path.
+   *   - lib/utils/useComboboxBaseState.js — on open, single-select focuses the
+   *     currently-selected option, which with `selectedOptions={[value]}` IS
+   *     the stored-value option. So "open, press Enter" hits it too.
+   */
+  it('selecting the preserved stored-value option re-affirms it — it does NOT clear the binding', async () => {
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(jsonRes({ ok: true, resources: [CLUSTER], via: 'user' }));
+    wrap(<AzureResourcePicker type="Microsoft.Kusto/clusters" value={STORED_ID} onChange={onChange} />);
+
+    await waitFor(() => expect(screen.getByText(/saved value — not visible to you/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: /saved value, not in the discovered list/i }));
+
+    expect(onChange).not.toHaveBeenCalledWith(null);
+  });
+
+  it('keyboard-selecting the stored option (open → Enter, the focused row) does NOT clear it either', async () => {
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(jsonRes({ ok: true, resources: [CLUSTER], via: 'user' }));
+    wrap(<AzureResourcePicker type="Microsoft.Kusto/clusters" value={STORED_ID} onChange={onChange} />);
+
+    await waitFor(() => expect(screen.getByText(/saved value — not visible to you/i)).toBeInTheDocument());
+    const box = screen.getByRole('combobox');
+    fireEvent.click(box);
+    await screen.findByRole('option', { name: /saved value, not in the discovered list/i });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    expect(onChange).not.toHaveBeenCalledWith(null);
+  });
+
+  it('picking a REAL resource from a picker holding an unresolved stored value still switches to it', async () => {
+    // The guard must not become "never clear": choosing a different, discovered
+    // resource has to replace the stored value, or the fix would freeze the field.
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(jsonRes({ ok: true, resources: [CLUSTER], via: 'user' }));
+    wrap(<AzureResourcePicker type="Microsoft.Kusto/clusters" value={STORED_ID} onChange={onChange} />);
+
+    await waitFor(() => expect(screen.getByText(/saved value — not visible to you/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: /adx-1/ }));
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ id: CLUSTER.id }));
+    expect(onChange).not.toHaveBeenCalledWith(null);
+  });
+
   it('resolves a stored DERIVED value (an endpoint, not an id) against the projection', async () => {
     fetchMock.mockResolvedValue(jsonRes({ ok: true, resources: [CLUSTER], via: 'user', select: 'properties.uri' }));
     wrap(

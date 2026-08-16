@@ -83,6 +83,28 @@ describe('query construction', () => {
     expect(buildQuery('Microsoft.DataFactory/factories', undefined)).not.toContain('value=');
   });
 
+  it('narrows to a deterministically-named resource when the source asks for one', () => {
+    // WHY THIS EXISTS: the `catalog-endpoint` field's Gov source is
+    // `Microsoft.App/containerApps`, and UNFILTERED that is every container app
+    // in the tenant — the console, the runner, the DuckDB app — offered under
+    // the label "Loom Unity". The Gov path produced *a* list but not a USABLE
+    // one. `loom-unity` is pinned by
+    // platform/fiab/bicep/modules/compute/loom-unity-app.bicep.
+    const q = buildQuery(
+      'Microsoft.App/containerApps', undefined, 'properties.configuration.ingress.fqdn', 'loom-unity',
+    );
+    expect(q).toContain("| where name =~ 'loom-unity'");
+    // …and it stays absent when no name is asked for, so no other field narrows.
+    expect(buildQuery('Microsoft.App/containerApps', undefined)).not.toContain('where name =~');
+  });
+
+  it('the name filter is a bounded ARG literal, so it cannot break out of the query', () => {
+    // Same guarantee `kind` has: rejected outright rather than escaped.
+    expect(isSafeSelectPath('properties.uri')).toBe(true); // control: helper reachable
+    const res = buildQuery('Microsoft.App/containerApps', undefined, undefined, 'loom-unity');
+    expect(res).toContain("where name =~ 'loom-unity'");
+  });
+
   it('resource groups come from `resourcecontainers`, not `resources`', () => {
     // The live defect: the route hard-coded `resources`, so the ADF
     // "Target resource group" picker asked for a type that table does not carry

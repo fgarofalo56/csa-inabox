@@ -80,6 +80,14 @@ export interface AzureResourceSource {
   kind?: string;
   /** Resource Graph property path projected into `value` (the derived endpoint). */
   select?: string;
+  /**
+   * Narrow to a single, DETERMINISTICALLY-NAMED resource. Some ARM types are
+   * far too broad to offer whole — `Microsoft.App/containerApps` returns every
+   * app in the tenant, so an unfiltered "catalog endpoint" list offers the
+   * console and the runner alongside the catalog. Loom's own resources carry
+   * fixed names from bicep, so the source names the one it means.
+   */
+  name?: string;
   /** Group heading when more than one source is merged (cloud-parity pairs). */
   label?: string;
 }
@@ -179,6 +187,27 @@ const MANUAL_LABEL: Record<MatchBy, string> = {
 };
 
 /**
+ * The SHAPE of the value the escape hatch wants, spelled out.
+ *
+ * Two jobs, both deliberate. For the user it turns "type something" into "type
+ * this shape" — the thing that makes a hand-entered ARM id right the first
+ * time. For CI it makes the site CLASSIFIABLE: a free-text ask whose
+ * placeholder literally reads `/subscriptions/<sub>/resourceGroups/<rg>/…`
+ * classifies as `arm-id`, which is what it is, so `check-no-freeform`'s
+ * classifier counts it as a ratcheted violation instead of an unlabelled
+ * `sites` entry. That matters precisely because ~40 editors are about to adopt
+ * this component: their own classified asks drop to zero, and if this one
+ * stayed invisible the free-text ask would have RELOCATED here rather than
+ * gone. An escape hatch we intend to keep should be baselined out loud.
+ */
+const MANUAL_PLACEHOLDER: Record<MatchBy, string> = {
+  id: '/subscriptions/<sub>/resourceGroups/<rg>/providers/<provider>/<type>/<name>',
+  derived: 'https://<host>.<domain> — the resource endpoint',
+  name: '<resource-name>',
+  subscriptionId: '00000000-0000-0000-0000-000000000000',
+};
+
+/**
  * A readable label for a stored value we could NOT resolve — an ARM id shows
  * its leaf name plus its resource group, anything else shows itself. Never
  * empty: the whole point is that the user sees what is stored.
@@ -264,6 +293,7 @@ export function AzureResourcePicker({
         const qs = new URLSearchParams({ type: src.type });
         if (src.kind) qs.set('kind', src.kind);
         if (src.select) qs.set('select', src.select);
+        if (src.name) qs.set('name', src.name);
         const res = await clientFetch(`/api/azure/resources?${qs.toString()}`);
         const j: ApiResponse = await res.json();
         return { src, j, status: res.status };
@@ -343,13 +373,28 @@ export function AzureResourcePicker({
   const onSelect = useCallback((optionValue: string | undefined) => {
     if (!optionValue) { onChange(null); return; }
     const r = resources.find((x) => valueOf(x) === optionValue);
-    if (!r) { onChange(null); return; }
+    if (!r) {
+      // THE STORED-VALUE OPTION. `unresolved` MEANS "no row in `resources`
+      // matches `value`", so the synthetic option rendered for it can never
+      // match here — feeding it to the generic miss branch would call
+      // onChange(null) and clear the very binding the option exists to keep.
+      //
+      // This is not theoretical: @fluentui/react-combobox@9.17.1 focuses the
+      // currently-selected option on open (useComboboxBaseState), which with
+      // `selectedOptions={[value]}` is THIS option — so plain "open the box,
+      // press Enter" (or click the already-highlighted row) hit it, and the
+      // caller's next Save wrote the blank back. Re-affirming a value the user
+      // just re-picked is a no-op, which is exactly the right outcome.
+      if (optionValue === value) return;
+      onChange(null);
+      return;
+    }
     onChange({
       id: r.id, name: r.name, subscriptionId: r.subscriptionId,
       resourceGroup: r.resourceGroup, location: r.location,
       value: r.value, type: r.type,
     });
-  }, [resources, onChange, valueOf]);
+  }, [resources, onChange, valueOf, value]);
 
   const commitManual = useCallback(() => {
     const err = validateManualValue(manualDraft, matchBy);
@@ -362,7 +407,11 @@ export function AzureResourcePicker({
     // become a wrong ARM call two layers down.
     onChange({
       id: matchBy === 'id' ? v : '',
-      name: matchBy === 'name' ? v : describeUnresolvedValue(v),
+      // EMPTY, not a fabricated label. `describeUnresolvedValue(v)` here put a
+      // human-readable DESCRIPTION into a field callers treat as the resource's
+      // real name — the comment above says every other field stays empty rather
+      // than being guessed, and this line was the one exception to it.
+      name: matchBy === 'name' ? v : '',
       subscriptionId: matchBy === 'subscriptionId' ? v : '',
       resourceGroup: '', location: '',
       value: matchBy === 'derived' ? v : undefined,
@@ -459,6 +508,7 @@ export function AzureResourcePicker({
             <Input
               className={s.combo}
               value={manualDraft}
+              placeholder={MANUAL_PLACEHOLDER[matchBy]}
               onChange={(_, d) => { setManualDraft(d.value); setManualError(null); }}
               aria-label={manualFieldLabel}
             />

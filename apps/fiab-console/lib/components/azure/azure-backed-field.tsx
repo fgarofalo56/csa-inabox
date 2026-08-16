@@ -62,6 +62,11 @@ export interface AzureBackedFieldDef {
   valueFrom: ValueFrom;
   /** What a hand-typed fallback would be, for the escape hatch's label. */
   manualLabel: string;
+  /**
+   * Optional post-processing of the stored value. Used where the ARG projection
+   * is not quite the shape the platform itself binds — see `catalog-endpoint`.
+   */
+  normalize?: (v: string) => string;
 }
 
 /** `properties.<path>` values are projected by the route; the rest come from the row. */
@@ -191,11 +196,25 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
         // Loom Unity — the OSS Unity Catalog server Loom deploys as a container
         // app. This is THE catalog in Azure Government, where Databricks Unity
         // Catalog does not exist (`cloud-parity.md`).
+        //
+        // NAME-FILTERED, because `Microsoft.App/containerApps` unfiltered is
+        // every container app in the tenant: the console, the runner, the
+        // DuckDB app, the catalog. That produced *a* list in Gov but not a
+        // USABLE one. `loom-unity` is the deterministic name pinned by
+        // `platform/fiab/bicep/modules/compute/loom-unity-app.bicep`
+        // (`param name string = 'loom-unity'`).
         type: 'Microsoft.App/containerApps',
+        name: 'loom-unity',
         select: 'properties.configuration.ingress.fqdn',
         label: 'Loom Unity (OSS Unity Catalog — Gov + Commercial)',
       },
     ],
+    // `ingress.fqdn` is a BARE host with no scheme; every consumer of a catalog
+    // endpoint wants a URL, and the value the deploy itself wires
+    // (`LOOM_UNITY_URL`) is `https://loom-unity.internal.<caeDomain>`. Without
+    // this the picker would store a value shaped differently from the one the
+    // platform binds — the two would silently disagree.
+    normalize: (v) => (v && !/^https?:\/\//i.test(v) ? `https://${v}` : v),
     manualLabel: 'Catalog endpoint',
   },
 };
@@ -219,10 +238,10 @@ export const AZURE_BACKED_FIELDS: Record<string, AzureBackedFieldDef> = {
 export type AzureBackedKind = keyof typeof AZURE_BACKED_FIELDS & string;
 
 /** Loader keys deliberately NOT served here, with the reason. */
-export const UNSERVED_LOADERS: Record<string, string> = {
+export const UNSERVED_LOADERS: Record<string, string> = Object.assign(Object.create(null), {
   aoaiDeployment:
     'A model deployment is a child of a Cognitive Services account (accounts → per-account deployments) and is not a Resource Graph row. Use the gate Fix-it dialog, which walks both steps.',
-};
+});
 
 export interface AzureBackedFieldProps {
   /** Which value this field needs — a registry loader key or an extra kind. */
@@ -243,12 +262,16 @@ export interface AzureBackedFieldProps {
 export function AzureBackedField({
   kind, value, onChange, label, placeholder, surface, allowManualEntry,
 }: AzureBackedFieldProps) {
-  const def = AZURE_BACKED_FIELDS[kind];
+  // `Object.hasOwn`, not a bare index: `AZURE_BACKED_FIELDS` is a plain object,
+  // so `AZURE_BACKED_FIELDS['toString']` returns a FUNCTION — truthy, and then
+  // `def.sources` is undefined and the picker mounts with no query at all.
+  const def = Object.hasOwn(AZURE_BACKED_FIELDS, kind) ? AZURE_BACKED_FIELDS[kind] : undefined;
 
   const handle = useCallback(
     (r: AzureResourceSelection | null) => {
       if (!r || !def) { onChange(null, null); return; }
-      const v = valueOfSelection(def.valueFrom, r);
+      const raw = valueOfSelection(def.valueFrom, r);
+      const v = def.normalize ? def.normalize(raw) : raw;
       onChange(v || null, r);
     },
     [def, onChange],

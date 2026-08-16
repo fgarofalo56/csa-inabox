@@ -38,7 +38,7 @@
  * (`no-fabric-dependency.md`), and every URL is built from the account's own
  * data-plane host, so sovereign suffixes are preserved (`cloud-parity.md`).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button, Caption1, Field, Input, Spinner, Breadcrumb, BreadcrumbItem, BreadcrumbButton,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
@@ -52,6 +52,7 @@ import {
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { EmptyState } from '@/lib/components/empty-state';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 
 const useStyles = makeStyles({
@@ -122,6 +123,18 @@ export function AdlsBrowseDialog({
   const [entries, setEntries] = useState<PathRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
+  /** True when the path listing failed because ACCESS was refused, not because
+   *  something broke — that distinction decides gate-vs-error-bar below. */
+  const [pathDenied, setPathDenied] = useState(false);
+
+  /**
+   * REQUEST-SEQUENCE GUARD. Both loaders are fired from click handlers, so a
+   * user switching account/container/folder faster than the BFF answers had a
+   * STALE response overwrite a newer one — the list then disagreed with the
+   * breadcrumb, and `pick()` could emit a URI for a folder that is not the one
+   * on screen. Each load takes a ticket and only the newest one may write.
+   */
+  const seq = useRef(0);
 
   /**
    * Containers for the chosen account. Account-scope listing first; on a denial
@@ -130,10 +143,13 @@ export function AdlsBrowseDialog({
    */
   const loadContainers = useCallback(async (acct: string) => {
     if (!acct) { setContainers(null); return; }
+    const ticket = ++seq.current;
+    const fresh = () => ticket === seq.current;
     setContainers(null); setContainersError(null); setContainersFallback(false);
     try {
       const r = await clientFetch(`/api/storage/${encodeURIComponent(acct)}/containers`);
       const j = await r.json();
+      if (!fresh()) return;
       if (j?.ok && Array.isArray(j.containers)) {
         setContainers(j.containers);
         if (j.host) setHost(j.host);
@@ -142,6 +158,7 @@ export function AdlsBrowseDialog({
       // Denied / failed — try the DLZ containers before giving up.
       const dlz = await clientFetch('/api/lakehouse/containers');
       const dj = await dlz.json();
+      if (!fresh()) return;
       const rows: ContainerRow[] = (dj?.containers || []).filter(
         (c: ContainerRow) => (c.url || '').toLowerCase().includes(`//${acct.toLowerCase()}.`),
       );
@@ -156,26 +173,39 @@ export function AdlsBrowseDialog({
       setContainers([]);
       setContainersError(j?.error || `Could not list containers on '${acct}'.`);
     } catch (e: any) {
+      if (!fresh()) return;
       setContainers([]);
       setContainersError(e?.message || String(e));
     }
   }, []);
 
   const loadPaths = useCallback(async (acct: string, cont: string, p: string) => {
-    setLoading(true); setPathError(null);
+    const ticket = ++seq.current;
+    const fresh = () => ticket === seq.current;
+    setLoading(true); setPathError(null); setPathDenied(false);
     try {
       const qs = new URLSearchParams({ prefix: p });
       const r = await clientFetch(
         `/api/storage/${encodeURIComponent(acct)}/containers/${encodeURIComponent(cont)}/paths?${qs.toString()}`,
       );
       const j = await r.json();
-      if (j?.ok) setEntries(j.paths || []);
-      else { setEntries([]); setPathError(j?.error || `Listing failed (HTTP ${r.status}).`); }
+      if (!fresh()) return;
+      if (j?.ok) {
+        setEntries(j.paths || []);
+        // The route ships the authoritative, sovereign-correct data-plane host.
+        // Taking it here is what lets `pick()` refuse to guess one.
+        if (j.host) setHost(j.host);
+      } else {
+        setEntries([]);
+        setPathDenied(r.status === 403);
+        setPathError(j?.error || `Listing failed (HTTP ${r.status}).`);
+      }
     } catch (e: any) {
+      if (!fresh()) return;
       setEntries([]);
       setPathError(e?.message || String(e));
     } finally {
-      setLoading(false);
+      if (fresh()) setLoading(false);
     }
   }, []);
 
@@ -196,9 +226,38 @@ export function AdlsBrowseDialog({
     }
   }, [open, initialUri, loadContainers, loadPaths]);
 
-  const effectiveHost = host || (account ? `${account}.dfs.core.windows.net` : '');
+  /**
+   * THE HOST IS NEVER FABRICATED.
+   *
+   * This was `host || (account ? `${account}.dfs.core.windows.net` : '')`, which
+   * carried two defects on one line, both on the Gov escape-hatch path:
+   *
+   *   (a) `host` was NOT reset when the account changed, so switching from
+   *       account A to B — where B's enumeration is denied and the container is
+   *       typed — emitted `abfss://<container>@A.dfs.core.windows.net/…` while
+   *       `AdlsLocation.account` said B. The stored URI named the WRONG account.
+   *   (b) the fallback hard-coded the COMMERCIAL suffix, on precisely the
+   *       denied-enumeration path this file's header calls out as common in
+   *       Azure Government — writing `.dfs.core.windows.net` into a sovereign
+   *       item and making the header's cloud-parity claim false at that line.
+   *
+   * (a) is fixed by resetting `host` with the account. (b) is fixed by refusing
+   * to invent one: the host is now shipped by BOTH BFF routes (built from
+   * `dfsUrl()`, so sovereign-correct), and every path that can reach `pick()`
+   * has already made one of those calls. If we somehow still do not know it, we
+   * say so rather than writing a URI that is wrong in a way nothing downstream
+   * can detect (deploy-integrity R7).
+   */
   const pick = (path: string, kind: 'folder' | 'file') => {
-    onPick({ uri: toAbfss(container, effectiveHost, path), account, container, path, kind });
+    if (!host) {
+      setPathError(
+        'Loom does not know this account\'s data-lake host yet, so it will not compose a location URI for it — '
+        + 'a guessed host writes a commercial-cloud suffix into a sovereign estate. Re-open the container to let '
+        + 'the listing report the host.',
+      );
+      return;
+    }
+    onPick({ uri: toAbfss(container, host, path), account, container, path, kind });
   };
   const goUp = () => {
     const next = prefix.split('/').filter(Boolean).slice(0, -1).join('/');
@@ -219,9 +278,13 @@ export function AdlsBrowseDialog({
               value={account}
               onChange={(v) => {
                 setAccount(v || '');
+                // `host` MUST reset with the account, or the previous account's
+                // host survives and `pick()` emits a URI naming the wrong one.
+                setHost('');
                 setContainer('');
                 setPrefix('');
                 setEntries([]);
+                setPathError(null);
                 if (v) void loadContainers(v);
               }}
             />
@@ -331,19 +394,54 @@ export function AdlsBrowseDialog({
                   </Button>
                 </div>
                 {pathError && (
-                  <MessageBar intent="error" layout="multiline">
-                    <MessageBarBody><MessageBarTitle>Could not list this path</MessageBarTitle>{pathError}</MessageBarBody>
-                  </MessageBar>
+                  /* A REFUSAL gets the shared gate with its Fix-it + registry
+                     link (G2); a genuine failure stays an error bar. Both were
+                     one bare MessageBar before, so the remediable case had no
+                     way to be remediated — and `check-honest-gate-coverage.mjs`
+                     could not see it, because the text arrives from the route at
+                     runtime and the JSX held no env-var literal. */
+                  pathDenied ? (
+                    <HonestGate
+                      gateId="svc-adls"
+                      surface={`ADLS browser (${account}/${container})`}
+                      detail={pathError}
+                      onResolved={() => { void loadPaths(account, container, prefix); }}
+                    />
+                  ) : (
+                    <MessageBar intent="error" layout="multiline">
+                      <MessageBarBody><MessageBarTitle>Could not list this path</MessageBarTitle>{pathError}</MessageBarBody>
+                    </MessageBar>
+                  )
                 )}
                 {loading ? (
                   <div className={s.row}><Spinner size="tiny" label="Listing…" /></div>
+                ) : !pathError && entries.length === 0 ? (
+                  // The shared primitive, not a bare TableCell (`web3-ui.md`) —
+                  // and rendered INSTEAD of the table, because a role="status"
+                  // div inside a <tbody> is invalid markup.
+                  //
+                  // GATED ON `!pathError`, which is the evidence the read
+                  // SUCCEEDED. `!loading` is not: the `finally` clears it on a
+                  // 500, a 403 and a timeout alike, so without this the dialog
+                  // would assert "this folder is empty" — a claim about the
+                  // lake's CONTENTS — on a read that never returned
+                  // (deploy-integrity.md R7). check-empty-claim-read-evidence
+                  // caught exactly that here.
+                  <EmptyState
+                    icon={<FolderOpen20Regular />}
+                    title="This folder is empty"
+                    body={
+                      prefix
+                        ? `Nothing under ${prefix} in ${container}. You can still select this folder as the location.`
+                        : `${container} has no items yet. You can still select its root as the location.`
+                    }
+                    primaryAction={{ label: 'Use this folder', onClick: () => pick(prefix, 'folder') }}
+                    {...(prefix ? { secondaryAction: { label: 'Up one level', onClick: goUp } } : {})}
+                  />
                 ) : (
                   <div className={s.tableWrap}>
                     <Table size="small">
                       <TableBody>
-                        {entries.length === 0 && (
-                          <TableRow><TableCell className={s.cell}>This folder is empty.</TableCell></TableRow>
-                        )}
                         {entries.map((e) => {
                           const leaf = e.name.split('/').pop() || e.name;
                           const selectable = e.isDirectory || mode !== 'folder';

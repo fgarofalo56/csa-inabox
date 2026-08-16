@@ -68,9 +68,19 @@ import { apiOk, apiError } from '@/lib/api/respond';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+/**
+ * The three other routes this PR adds all declare 30. This one — the route
+ * EVERY adopting picker calls, and the only one that walks up to ten sequential
+ * ARG pages — did not, so it inherited the platform default and had no ceiling
+ * of its own. Combined with a bare global `fetch` (no timeout), one slow ARG
+ * page could hold a picker open indefinitely.
+ */
+export const maxDuration = 30;
 
 const ARM_SCOPE = armScope();
 const ARG_URL = `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01`;
@@ -203,7 +213,7 @@ export function unsupportedReason(type: string): string | null {
  *   - subnets               mv-expand over the VNet's properties.subnets, with
  *     the select path re-based onto the expanded element.
  */
-export function buildQuery(type: string, kind: string | undefined, select?: string): string {
+export function buildQuery(type: string, kind: string | undefined, select?: string, name?: string): string {
   const isSubnet = type.toLowerCase() === SUBNET_TYPE;
   if (isSubnet) {
     // The select path is read RELATIVE TO THE SUBNET, e.g.
@@ -226,6 +236,15 @@ export function buildQuery(type: string, kind: string | undefined, select?: stri
   const valueExpr = select ? `, value=tostring(${select})` : '';
   let q = `${table} | where type =~ '${type}'`;
   if (kind) q += ` | where kind =~ '${kind}'`;
+  // NAME NARROWING. Some ARM types are far too broad to offer whole: every Loom
+  // deployment's Container Apps environment holds the console, the runner, the
+  // DuckDB app and the catalog, so an unfiltered `Microsoft.App/containerApps`
+  // query renders a "Catalog endpoint" list containing every app in the tenant.
+  // The resources Loom itself deploys carry DETERMINISTIC names (the Loom Unity
+  // bicep module pins `param name string = 'loom-unity'`), so a source can name
+  // the one it means. Same `=~` case-insensitive comparison as `kind`, same
+  // literal validation.
+  if (name) q += ` | where name =~ '${name}'`;
   if (table === 'resourcecontainers') {
     q +=
       ' | project id,name,type,' +
@@ -249,6 +268,13 @@ export function buildQuery(type: string, kind: string | undefined, select?: stri
  * ONE request per PAGE — never per resource. That is the whole reason the
  * `properties.<path>` projection lives on this route rather than on the
  * gate-options route, which does a per-resource GET and therefore caps at 15.
+ *
+ * PAGED UNDER A WALL-CLOCK BUDGET, like the Key Vault sibling in this same PR.
+ * This previously used the raw global `fetch` with NO timeout and no ceiling
+ * beyond a page count, so ten slow ARG pages could each hang for as long as the
+ * platform allowed. `PagingBudget` bounds the whole walk and `fetchWithTimeout`
+ * bounds each page; a breach keeps the rows already read (a partial picker
+ * still works) and reports the answer as partial rather than as complete.
  */
 async function runArg(
   token: string,
@@ -256,26 +282,37 @@ async function runArg(
 ): Promise<{ ok: true; rows: AzureResourceRow[]; truncated: boolean } | { ok: false; status: number; error: string }> {
   const rows: AzureResourceRow[] = [];
   let skipToken: string | undefined;
-  let pages = 0;
+  const budget = new PagingBudget(`azure resource graph ${query.slice(0, 60)}`, { maxPages: ARG_MAX_PAGES });
 
-  do {
-    let res: Response;
+  while (budget.claimPage()) {
+    let res: Response | typeof PAGE_DEADLINE;
+    const body = JSON.stringify({
+      query,
+      options: {
+        resultFormat: 'objectArray',
+        $top: ARG_PAGE_SIZE,
+        ...(skipToken ? { $skipToken: skipToken } : {}),
+      },
+    });
     try {
-      res = await fetch(ARG_URL, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          query,
-          options: {
-            resultFormat: 'objectArray',
-            $top: ARG_PAGE_SIZE,
-            ...(skipToken ? { $skipToken: skipToken } : {}),
+      res = await budget.runPage(async (timeoutMs) =>
+        fetchWithTimeout(
+          ARG_URL,
+          {
+            method: 'POST',
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+            body,
+            cache: 'no-store',
           },
-        }),
-      });
+          timeoutMs,
+        ));
     } catch (e: any) {
       return { ok: false, status: 502, error: sanitize(e?.message || String(e)) };
     }
+    // Deadline reached mid-walk: keep what we have and report it partial. A
+    // hard failure here would blank a picker that already has usable rows.
+    if (res === PAGE_DEADLINE) break;
+
     const text = await res.text();
     if (!res.ok) {
       let msg = text;
@@ -287,18 +324,19 @@ async function runArg(
       }
       return { ok: false, status: res.status, error: sanitize(msg) };
     }
-    let body: any = {};
+    let parsed: any = {};
     try {
-      body = text ? JSON.parse(text) : {};
+      parsed = text ? JSON.parse(text) : {};
     } catch {
       return { ok: false, status: 502, error: 'Resource Graph returned a non-JSON body' };
     }
-    if (Array.isArray(body?.data)) rows.push(...(body.data as AzureResourceRow[]));
-    skipToken = typeof body?.$skipToken === 'string' && body.$skipToken ? body.$skipToken : undefined;
-    pages += 1;
-  } while (skipToken && pages < ARG_MAX_PAGES);
+    if (Array.isArray(parsed?.data)) rows.push(...(parsed.data as AzureResourceRow[]));
+    skipToken = typeof parsed?.$skipToken === 'string' && parsed.$skipToken ? parsed.$skipToken : undefined;
+    if (!skipToken) break;
+  }
+  budget.warnIfTruncated(rows.length);
 
-  return { ok: true, rows, truncated: !!skipToken };
+  return { ok: true, rows, truncated: !!skipToken || !!budget.truncatedBy };
 }
 
 const GATE_MESSAGE =
@@ -320,6 +358,7 @@ function countUnresolved(rows: AzureResourceRow[]): number {
 export const GET = withSession(async (req: NextRequest, { session }) => {
   const type = (req.nextUrl.searchParams.get('type') || '').trim();
   const kind = (req.nextUrl.searchParams.get('kind') || '').trim() || undefined;
+  const name = (req.nextUrl.searchParams.get('name') || '').trim() || undefined;
   const select = (req.nextUrl.searchParams.get('select') || '').trim() || undefined;
   if (!type) {
     return apiError(
@@ -328,8 +367,8 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       { code: 'bad_request' },
     );
   }
-  if (!isSafeArgLiteral(type) || (kind && !isSafeArgLiteral(kind))) {
-    return apiError('Invalid characters in `type` or `kind`.', 400, { code: 'bad_request' });
+  if (!isSafeArgLiteral(type) || (kind && !isSafeArgLiteral(kind)) || (name && !isSafeArgLiteral(name))) {
+    return apiError('Invalid characters in `type`, `kind` or `name`.', 400, { code: 'bad_request' });
   }
   if (select && !isSafeSelectPath(select)) {
     return apiError(
@@ -345,7 +384,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     return apiError(unsupported, 400, { code: 'unsupported_type', type });
   }
 
-  const query = buildQuery(type, kind, select);
+  const query = buildQuery(type, kind, select, name);
 
   // ---- (a) User ARM token (per-user RBAC) -------------------------------
   let userArgError: { status: number; error: string } | null = null;

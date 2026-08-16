@@ -38,12 +38,21 @@ beforeEach(() => {
 
 describe('the loader table is CONSUMED, not re-listed', () => {
   it('every registry loader is reachable as a field kind (or declared unserved with a reason)', () => {
+    // `Object.hasOwn`, not `k in X`: `in` walks Object.prototype, so a loader
+    // named `toString` or `constructor` would report as SERVED by a method it
+    // inherited — the control would pass while the field was missing.
     const missing = Object.keys(L).filter(
-      (k) => !(k in AZURE_BACKED_FIELDS) && !(k in UNSERVED_LOADERS),
+      (k) => !Object.hasOwn(AZURE_BACKED_FIELDS, k) && !Object.hasOwn(UNSERVED_LOADERS, k),
     );
     expect(missing).toEqual([]);
     // And the count is not accidentally zero — the control has a population.
     expect(Object.keys(L).length).toBeGreaterThanOrEqual(28);
+  });
+
+  it('an inherited Object.prototype key is NOT mistaken for a served field kind', () => {
+    // The control for the control: prove the lookup does not walk the prototype.
+    expect(Object.hasOwn(AZURE_BACKED_FIELDS, 'toString')).toBe(false);
+    expect(Object.hasOwn(UNSERVED_LOADERS, 'toString')).toBe(false);
   });
 
   it('a loader that Resource Graph cannot express is DECLARED, not silently dropped', () => {

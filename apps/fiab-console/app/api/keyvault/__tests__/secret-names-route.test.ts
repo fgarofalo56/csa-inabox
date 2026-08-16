@@ -113,6 +113,25 @@ describe('GET', () => {
     expect(j.names.map((n: any) => n.name)).toEqual(['a', 'b']);
   });
 
+  it('REFUSES to follow a nextLink to another origin — the vault token never leaves it', async () => {
+    // `?vault=` is origin-bounded on the way in, but `nextLink` is a
+    // SERVER-SUPPLIED url that this loop attaches an Azure Key Vault access
+    // token to. Following one off-origin would hand a live vault token to
+    // whatever host the response named — the same SSRF the `?vault=` check
+    // exists to prevent, arriving one hop later.
+    // ONE queued page only. A second `mockResolvedValueOnce` here would never be
+    // consumed (that is the point of the test) and would LEAK into the next
+    // test — `vi.clearAllMocks()` clears calls, not the `Once` queue.
+    fetchWithTimeout
+      .mockResolvedValueOnce(kvPage([secretRow('a')], 'https://evil.example.com/secrets?$skiptoken=x'));
+    const res = await GET(req(), {} as any);
+    const j = await res.json();
+    expect(res.status).toBe(502);
+    expect(j.error).toMatch(/outside the vault being listed/i);
+    // Exactly ONE fetch: the off-origin page was never requested.
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
+  });
+
   it('403 names the READER role, not the Officer role writing would need', async () => {
     fetchWithTimeout.mockResolvedValue({ ok: false, status: 403, text: async () => 'Forbidden' } as any);
     const res = await GET(req(), {} as any);

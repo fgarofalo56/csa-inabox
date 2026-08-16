@@ -16,10 +16,13 @@
  *
  * Sibling: GET /api/storage/[account]/containers/[container]/paths.
  *
- * Auth: the caller must be signed in (withSession). The listing itself runs as
- * the Console identity — the same identity `listPaths` has always used for
- * external accounts — so a 403 from storage is surfaced VERBATIM with the exact
- * role to grant, never swallowed into an empty list (no-vaporware.md).
+ * Auth: the caller must be signed in AND authorized for the account
+ * (`_lib/authorize.ts`). The listing itself runs as the Console identity — the
+ * same identity `listPaths` has always used for external accounts — which is
+ * exactly why authentication alone was not enough: the account comes off the
+ * URL, so `withSession` on its own made this route a confused deputy for the
+ * UAMI's DLZ-wide storage read. A storage 403 is surfaced VERBATIM with the
+ * exact role to grant, never swallowed into an empty list (no-vaporware.md).
  */
 import { NextRequest } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -27,6 +30,7 @@ import { apiOk, apiError } from '@/lib/api/respond';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import { dfsUrl } from '@/lib/azure/cloud-endpoints';
 import { isValidStorageAccount } from '../../_lib/validate';
+import { authorizeStorageAccount } from '../../_lib/authorize';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +46,7 @@ export interface StorageContainerRow {
 /** Containers listed before the answer is reported partial. */
 const MAX_CONTAINERS = 500;
 
-export const GET = withSession<{ account: string }>(async (_req: NextRequest, { params }) => {
+export const GET = withSession<{ account: string }>(async (_req: NextRequest, { session, params }) => {
   const account = (params.account || '').trim().toLowerCase();
   if (!isValidStorageAccount(account)) {
     return apiError(
@@ -50,6 +54,16 @@ export const GET = withSession<{ account: string }>(async (_req: NextRequest, { 
       400,
       { code: 'bad_request' },
     );
+  }
+
+  // AUTHORIZATION, before anything reaches the data plane. Running it first is
+  // also what collapses the 403/404/502 existence oracle: an unauthorized
+  // caller gets the same 403 whether or not the account exists, because Loom
+  // never asked. The distinguishable statuses below are only ever produced for
+  // a caller already entitled to know (deploy-integrity R6/R7).
+  const authz = await authorizeStorageAccount(session, account);
+  if (!authz.allowed) {
+    return apiError(authz.reason, 403, { code: 'forbidden' });
   }
 
   const base = dfsUrl(account).replace(/\/$/, '');

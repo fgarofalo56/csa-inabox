@@ -23,12 +23,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Combobox, Option, Field, Button, Badge, Caption1, Spinner,
-  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync16Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
@@ -150,12 +150,18 @@ export function KeyVaultSecretPicker({
       </div>
 
       {error && (
-        <MessageBar intent="warning" layout="multiline">
-          <MessageBarBody>
-            <MessageBarTitle>Could not list this vault&apos;s secret names</MessageBarTitle>
-            {error}
-          </MessageBarBody>
-        </MessageBar>
+        /* G2: the shared gate with its Fix-it wizard + /admin/gates link, not a
+           bare `intent="warning"` MessageBar. `check-honest-gate-coverage.mjs`
+           passed on the bare bar only because the text arrives from the route at
+           runtime, so the JSX carried no env-var literal for the guard to see —
+           the guard's population EXCLUDED it. Its Recheck re-lists in place, so
+           an operator who grants the role never has to reload the surface. */
+        <HonestGate
+          gateId="svc-keyvault"
+          surface={`Key Vault secret picker${resolvedVault ? ` (${resolvedVault})` : ''}`}
+          detail={error}
+          onResolved={load}
+        />
       )}
     </div>
   );

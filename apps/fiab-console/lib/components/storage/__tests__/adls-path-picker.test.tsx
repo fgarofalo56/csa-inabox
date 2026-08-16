@@ -170,3 +170,110 @@ describe('AdlsBrowseDialog', () => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/containers/raw/paths'))).toBe(true));
   });
 });
+
+/**
+ * THE HOST IS THE ACCOUNT'S OWN, ALWAYS.
+ *
+ * `effectiveHost` used to fall back to `${account}.dfs.core.windows.net`, which
+ * (a) let a previous account's host survive an account switch, so the emitted
+ * URI named a DIFFERENT account than `AdlsLocation.account`, and (b) hard-coded
+ * the Commercial suffix on exactly the denied-enumeration path this component
+ * advertises as common in Azure Government. Both corrupt a STORED value, in a
+ * way nothing downstream can detect.
+ */
+describe('the emitted URI never names the wrong account or a guessed suffix', () => {
+  /** Two accounts: A enumerates fine, B is denied and must be typed. */
+  function twoAccounts(hostForA = 'accta.dfs.core.usgovcloudapi.net') {
+    fetchMock.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/api/azure/resources')) {
+        return Promise.resolve(jsonRes({
+          ok: true,
+          via: 'user',
+          resources: [
+            { ...ACCOUNT_ROW, id: `${ACCOUNT_ROW.id}-a`, name: 'accta' },
+            { ...ACCOUNT_ROW, id: `${ACCOUNT_ROW.id}-b`, name: 'acctb' },
+          ],
+        }));
+      }
+      if (u.includes('/api/storage/accta/containers/')) {
+        return Promise.resolve(jsonRes({
+          ok: true, account: 'accta', host: hostForA,
+          paths: [{ name: 'Tables', isDirectory: true, size: 0 }],
+        }));
+      }
+      if (u.includes('/api/storage/accta/containers')) {
+        return Promise.resolve(jsonRes({
+          ok: true, account: 'accta', host: hostForA,
+          containers: [{ name: 'bronze', url: `https://${hostForA}/bronze` }],
+        }));
+      }
+      // Account B: everything denied — the Gov escape-hatch path.
+      if (u.includes('/api/storage/acctb')) return Promise.resolve(jsonRes({ ok: false, error: 'denied' }, 403));
+      if (u.includes('/api/lakehouse/containers')) return Promise.resolve(jsonRes({ containers: [] }));
+      return Promise.resolve(jsonRes({ ok: true, resources: [], via: 'user' }));
+    });
+  }
+
+  async function chooseAccount(name: string) {
+    const combo = await screen.findByRole('combobox');
+    fireEvent.click(combo);
+    fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
+  }
+
+  it('does NOT carry account A\'s host over to account B after a switch', async () => {
+    twoAccounts();
+    const onPick = vi.fn();
+    wrap(<AdlsBrowseDialog open onClose={() => {}} onPick={onPick} />);
+
+    // A: enumerate, open a container — this is what puts A's host in state.
+    await chooseAccount('accta');
+    fireEvent.click(await screen.findByText('bronze'));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/accta/containers/bronze/paths'))).toBe(true));
+
+    // B: denied, so the container is typed. B's host is unknown.
+    await chooseAccount('acctb');
+    fireEvent.change(await screen.findByLabelText('Container to open'), { target: { value: 'raw' } });
+    fireEvent.click(screen.getByRole('button', { name: /open container/i }));
+
+    fireEvent.click(await screen.findByRole('button', { name: /use this folder/i }));
+
+    // The old build emitted `abfss://raw@accta.dfs.core.usgovcloudapi.net/`
+    // with account: 'acctb'. Anything naming A here is the corruption.
+    for (const call of onPick.mock.calls) {
+      expect(String(call[0].uri)).not.toContain('accta');
+    }
+  });
+
+  it('REFUSES to compose a URI when the account\'s host is unknown, rather than guessing a Commercial suffix', async () => {
+    twoAccounts();
+    const onPick = vi.fn();
+    wrap(<AdlsBrowseDialog open onClose={() => {}} onPick={onPick} />);
+
+    await chooseAccount('acctb');
+    fireEvent.change(await screen.findByLabelText('Container to open'), { target: { value: 'raw' } });
+    fireEvent.click(screen.getByRole('button', { name: /open container/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /use this folder/i }));
+
+    expect(onPick).not.toHaveBeenCalled();
+    expect(await screen.findByText(/does not know this account/i)).toBeInTheDocument();
+  });
+
+  it('preserves a SOVEREIGN suffix reported by the route (cloud-parity.md)', async () => {
+    twoAccounts('accta.dfs.core.usgovcloudapi.net');
+    const onPick = vi.fn();
+    wrap(<AdlsBrowseDialog open onClose={() => {}} onPick={onPick} />);
+
+    await chooseAccount('accta');
+    fireEvent.click(await screen.findByText('bronze'));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/accta/containers/bronze/paths'))).toBe(true));
+    fireEvent.click(await screen.findByRole('button', { name: /use this folder/i }));
+
+    expect(onPick).toHaveBeenCalledWith(expect.objectContaining({
+      uri: 'abfss://bronze@accta.dfs.core.usgovcloudapi.net/',
+      account: 'accta',
+    }));
+  });
+});

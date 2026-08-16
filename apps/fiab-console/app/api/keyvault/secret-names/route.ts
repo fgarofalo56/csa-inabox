@@ -200,6 +200,31 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       });
     }
     if (typeof j?.nextLink !== 'string' || !j.nextLink) break;
+    // RE-VALIDATE THE TARGET before following it with a bearer token. `nextLink`
+    // is a SERVER-SUPPLIED url and this loop attaches an Azure Key Vault access
+    // token to it; if a compromised or misbehaving response ever returned a
+    // nextLink on another host, the token would go there — the same SSRF the
+    // `?vault=` suffix check prevents on the way in, arriving one hop later.
+    //
+    // A PREFIX test against the already-validated `base`, deliberately, rather
+    // than `new URL(nextLink).origin !== new URL(base).origin`: it is stricter
+    // (it pins the path root too, not just the authority), it needs no URL
+    // parsing of attacker-influenced input, and it does not read `.origin` off a
+    // URL — the construction `check-external-origin-urls` polices. That guard's
+    // taint analysis reaches `base` because `base` derives from `?vault=`; the
+    // value is vault DATA bounded to the active cloud's KV suffix by
+    // `resolveVaultBase`, never a request AUTHORITY, so the 0.0.0.0:3000 defect
+    // it guards cannot arise here — but the cheap fix is to not write the shape
+    // at all rather than to baseline an exception.
+    const prefix = `${base}/`;
+    if (!j.nextLink.toLowerCase().startsWith(prefix.toLowerCase())) {
+      return apiError(
+        `Key Vault returned a paging link outside the vault being listed; refusing to send the vault token to it. `
+          + `Expected a link under ${base}/.`,
+        502,
+        { code: 'bad_next_link', vault: base },
+      );
+    }
     next = j.nextLink;
   }
   budget.warnIfTruncated(out.length);
