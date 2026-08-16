@@ -1091,7 +1091,7 @@ const ALLOWLIST_PREFIXES = [
   ['apps/fiab-console/app/api/dab/', 'A: Data API Builder — create threads createOwnedItem; [id] routes publish to the shared DAB runtime + APIM by id (no per-tenant Cosmos read)'],
   ['apps/fiab-console/app/api/data-agent/', 'A: data-agent chat over the deployment AOAI + ADX'],
   ['apps/fiab-console/app/api/org-reports/', 'A: org-wide report renderer over deployment-scoped aggregates'],
-  ['apps/fiab-console/app/api/loom/', 'A: Loom compute-target/capacity/SHIR navigators resolve a shared Azure resource by ARM name via Console UAMI'],
+  ['apps/fiab-console/app/api/loom/', 'A: Loom compute-target/capacity/SHIR/model-serving navigators resolve a SHARED Azure resource by ARM/env name via Console UAMI — no id from the URL, no per-tenant Cosmos read. NOTE model-serving/endpoints lists the deployment-wide serving-endpoint NAMES with no item-ownership precondition (the sibling app/api/items/model-serving-endpoint/[id] gates on resolveServingItem first); that widening is deliberate for a picker discovery call and is stated rather than inherited'],
   ['apps/fiab-console/app/api/notebook/', 'A: notebook Livy/LSP/session navigator over the shared Synapse/Databricks compute (per-tenant [id]/assist is in NOW_GUARDED)'],
   // (B) session-scoped Cosmos stores
   ['apps/fiab-console/app/api/connections/', 'B: connections-store partitions every read/write by session.claims.oid'],

@@ -25,11 +25,11 @@ const HOST = 'dp-host';
 
 /** Ports as stored on the product: one input port pinned to an upstream the
  *  caller can no longer resolve (deleted, or in a workspace they lost access to). */
-function storedPorts(ref = 'dp-GONE') {
+function storedPorts(ref = 'dp-GONE', kind = 'data-product') {
   return {
     ok: true,
     ports: {
-      input: [{ id: 'in-1', name: 'upstream', direction: 'input', kind: 'data-product', ref }],
+      input: [{ id: 'in-1', name: 'upstream', direction: 'input', kind, ref }],
       output: [],
       management: [],
     },
@@ -37,15 +37,28 @@ function storedPorts(ref = 'dp-GONE') {
   };
 }
 
-/** The route only ever returns products the caller may see. `dp-Z` is NOT here
- *  — it is the out-of-scope control. */
-const VISIBLE_PRODUCTS = {
-  ok: true,
-  items: [
-    { id: 'dp-1', itemType: 'data-product', displayName: 'Curated sales', description: 'gold' },
-    { id: 'dp-2', itemType: 'data-product', displayName: 'Customer 360' },
-  ],
-};
+/** An input port whose ref is a data-plane ASSET, not a Loom item — the branch
+ *  that still ships a free-text `<Input>` (declared gap in the file header). */
+function assetPorts(ref = 'sales/bronze') {
+  return {
+    ok: true,
+    ports: {
+      input: [{ id: 'in-1', name: 'raw', direction: 'input', kind: 'adls-path', ref }],
+      output: [],
+      management: [],
+    },
+    summary: { input: 1, output: 0, management: 0, total: 1 },
+  };
+}
+
+const IN_SCOPE = [
+  { id: 'dp-1', itemType: 'data-product', displayName: 'Curated sales', description: 'gold' },
+  { id: 'dp-2', itemType: 'data-product', displayName: 'Customer 360' },
+];
+/** The product the ROUTE withholds because the caller cannot see its workspace. */
+const OUT_OF_SCOPE = { id: 'dp-Z', itemType: 'data-product', displayName: 'Out-of-scope product' };
+
+const VISIBLE_PRODUCTS = { ok: true, items: IN_SCOPE };
 
 function mount() {
   return render(
@@ -55,17 +68,38 @@ function mount() {
   );
 }
 
-describe('refProductId / withProductId — the output-port `<productId>:<portId>` split', () => {
+describe('refProductId / withProductId — kind-aware ref splitting', () => {
   it('reads the product half of an output-port ref', () => {
-    expect(refProductId('dp-1:out-3')).toBe('dp-1');
-    expect(refProductId('dp-1')).toBe('dp-1');
-    expect(refProductId(undefined)).toBe('');
+    expect(refProductId('dp-1:out-3', 'output-port')).toBe('dp-1');
+    expect(refProductId('dp-1', 'output-port')).toBe('dp-1');
+    expect(refProductId(undefined, 'output-port')).toBe('');
   });
 
   it('replacing the product PRESERVES the port suffix the user already chose', () => {
-    expect(withProductId('dp-1:out-3', 'dp-2')).toBe('dp-2:out-3');
-    expect(withProductId('dp-1', 'dp-2')).toBe('dp-2');
-    expect(withProductId('dp-1:out-3', '')).toBe('');
+    expect(withProductId('dp-1:out-3', 'dp-2', 'output-port')).toBe('dp-2:out-3');
+    expect(withProductId('dp-1', 'dp-2', 'output-port')).toBe('dp-2');
+    expect(withProductId('dp-1:out-3', '', 'output-port')).toBe('');
+  });
+
+  it('a data-product ref is the id WHOLE — the split must not touch it', () => {
+    // The free-text placeholder this panel used to ship (`dp-123 or abfss://…`)
+    // invited exactly this value. Splitting on ':' read the product as `abfss`
+    // and re-joining wrote `dp-2://c/p` — a corrupted ref pointing at nothing.
+    expect(refProductId('abfss://c/p', 'data-product')).toBe('abfss://c/p');
+    expect(withProductId('abfss://c/p', 'dp-2', 'data-product')).toBe('dp-2');
+  });
+
+  it('a URI under an OUTPUT-PORT kind is still not a `<product>:<port>` split', () => {
+    expect(refProductId('abfss://c/p', 'output-port')).toBe('abfss://c/p');
+    expect(withProductId('abfss://c/p', 'dp-2', 'output-port')).toBe('dp-2');
+  });
+
+  it('never emits a ref containing `://` after a pick', () => {
+    for (const kind of ['data-product', 'output-port'] as const) {
+      for (const legacy of ['abfss://c/p', 'https://x/y', 's3://b/k', 'dp-1:out-3', 'dp-1', '']) {
+        expect(withProductId(legacy, 'dp-2', kind)).not.toContain('://');
+      }
+    }
   });
 });
 
@@ -90,17 +124,53 @@ describe('PortsPanel — upstream data product is picked, not typed', () => {
     expect(listCall!.url).toContain('types=data-product');
   });
 
-  it('a product OUTSIDE the caller’s scope never appears as an option', async () => {
+  it('renders only what the route returned — a product it withheld never appears', async () => {
+    // POSITIVE CONTROL FIRST: when the route DOES return dp-Z the option is
+    // there. Without this the negative below is vacuous — nothing in the client
+    // could have produced dp-Z, so asserting its absence proves nothing.
     installFetchMock({
       [`/api/data-products/${HOST}/ports`]: () => storedPorts(''),
-      '/api/items/by-type': () => VISIBLE_PRODUCTS, // dp-Z deliberately withheld
+      '/api/items/by-type': () => ({ ok: true, items: [...IN_SCOPE, OUT_OF_SCOPE] }),
     });
     mount();
-    const dd = await screen.findByRole('combobox', { name: 'Upstream data product' });
-    fireEvent.click(dd);
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Upstream data product' }));
+    await waitFor(() => expect(screen.getByText('Out-of-scope product')).toBeInTheDocument());
+    cleanup();
+
+    // NEGATIVE: the route withholds it (the caller cannot see its workspace) and
+    // the client neither caches nor synthesizes it.
+    vi.restoreAllMocks();
+    installFetchMock({
+      [`/api/data-products/${HOST}/ports`]: () => storedPorts(''),
+      '/api/items/by-type': () => VISIBLE_PRODUCTS,
+    });
+    mount();
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Upstream data product' }));
     await waitFor(() => expect(screen.getByText('Curated sales')).toBeInTheDocument());
     expect(screen.queryByText('Out-of-scope product')).toBeNull();
-    expect(screen.queryByText('dp-Z')).toBeNull();
+  });
+
+  it('fetches the product list ONCE for the whole panel, not once per row', async () => {
+    const { calls } = installFetchMock({
+      [`/api/data-products/${HOST}/ports`]: () => ({
+        ok: true,
+        ports: {
+          input: [
+            { id: 'in-1', name: 'a', direction: 'input', kind: 'data-product', ref: '' },
+            { id: 'in-2', name: 'b', direction: 'input', kind: 'data-product', ref: '' },
+            { id: 'in-3', name: 'c', direction: 'input', kind: 'output-port', ref: '' },
+          ],
+          output: [], management: [],
+        },
+        summary: { input: 3, output: 0, management: 0, total: 3 },
+      }),
+      '/api/items/by-type': () => VISIBLE_PRODUCTS,
+    });
+    mount();
+    await waitFor(() => expect(screen.getAllByRole('combobox', { name: 'Upstream data product' })).toHaveLength(3));
+    // `/api/items/by-type` is a cross-partition Cosmos scan; three rows must not
+    // mean three scans.
+    expect(calls.filter((c) => c.url.includes('/api/items/by-type'))).toHaveLength(1);
   });
 
   it('the free-text upstream-ref box is gone', async () => {
@@ -113,6 +183,18 @@ describe('PortsPanel — upstream data product is picked, not typed', () => {
     expect(screen.queryByText('Upstream ref (product id / asset)')).toBeNull();
     // …and nothing teaches the user to compose a storage URI here any more.
     expect(document.querySelector('input[placeholder*="abfss"]')).toBeNull();
+  });
+
+  it('DECLARED GAP: an asset-kind port still ships a free-text ref box', async () => {
+    // Not an endorsement — a lock on the honest statement in the file header, so
+    // "the guard counts 0" can never be read as "no free-text ask remains".
+    installFetchMock({
+      [`/api/data-products/${HOST}/ports`]: () => assetPorts('sales/bronze'),
+      '/api/items/by-type': () => VISIBLE_PRODUCTS,
+    });
+    mount();
+    await waitFor(() => expect(screen.getByDisplayValue('sales/bronze')).toBeInTheDocument());
+    expect(screen.queryByRole('combobox', { name: 'Upstream data product' })).toBeNull();
   });
 
   it('an UNRESOLVABLE stored upstream survives render → save → reload', async () => {
@@ -147,6 +229,21 @@ describe('PortsPanel — upstream data product is picked, not typed', () => {
     await waitFor(() =>
       expect((screen.getByRole('combobox', { name: 'Upstream data product' }) as HTMLInputElement).value)
         .toBe('dp-GONE'));
+  });
+
+  it('a stored ref with surrounding whitespace still renders and still selects', async () => {
+    // These fields were free text people pasted into, so ' dp-1 ' is realistic.
+    // A merge that trims while the lookup does not leaves a BLANK required field
+    // with no warning — the exact symptom the picker exists to prevent.
+    installFetchMock({
+      [`/api/data-products/${HOST}/ports`]: () => storedPorts(' dp-1 '),
+      '/api/items/by-type': () => VISIBLE_PRODUCTS,
+    });
+    mount();
+    const dd = await screen.findByRole('combobox', { name: 'Upstream data product' });
+    await waitFor(() => expect((dd as HTMLInputElement).value).toBe('Curated sales'));
+    // It resolved, so it must NOT be flagged unresolved.
+    expect(screen.queryByText(/not in the products you can see right now/i)).toBeNull();
   });
 
   it('stays usable when there are no other data products', async () => {
@@ -185,6 +282,25 @@ describe('PortsPanel — upstream data product is picked, not typed', () => {
     });
     mount();
     const dd = await screen.findByRole('combobox', { name: 'Upstream data product' });
+    fireEvent.click(dd);
+    fireEvent.click(await screen.findByText('Customer 360'));
+    fireEvent.click(screen.getByRole('button', { name: /save ports/i }));
+    await waitFor(() => {
+      const patch = calls.find((c) => c.init?.method === 'PATCH');
+      expect(patch).toBeTruthy();
+      expect(JSON.parse(String(patch!.init!.body)).ports.input[0].ref).toBe('dp-2');
+    });
+  });
+
+  it('picking a product on a LEGACY URI ref replaces it whole — never `dp-2://…`', async () => {
+    const { calls } = installFetchMock({
+      [`/api/data-products/${HOST}/ports`]: () => storedPorts('abfss://c@a.dfs.core.windows.net/p'),
+      [`/api/data-products/${HOST}`]: () => ({ ok: true }),
+      '/api/items/by-type': () => VISIBLE_PRODUCTS,
+    });
+    mount();
+    const dd = await screen.findByRole('combobox', { name: 'Upstream data product' });
+    await waitFor(() => expect((dd as HTMLInputElement).value).toBe('abfss://c@a.dfs.core.windows.net/p'));
     fireEvent.click(dd);
     fireEvent.click(await screen.findByText('Customer 360'));
     fireEvent.click(screen.getByRole('button', { name: /save ports/i }));

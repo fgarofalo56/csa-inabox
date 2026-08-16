@@ -29,9 +29,18 @@
  *
  * The other input kinds (`synapse-table` / `adx-table` / `adls-path`) reference
  * a data-plane ASSET, not a Loom item, and stay free text for now — a browsable
- * asset/path picker is separate work. The `abfss://…` example is gone from the
- * placeholder either way: teaching a user to compose a storage URI is the same
- * defect in a different class.
+ * asset/path picker is separate work.
+ *
+ * DECLARED GAP — READ THIS BEFORE TRUSTING THE GUARD'S COUNT. This file no
+ * longer registers a `no-freeform` violation, and that is NOT the same as "no
+ * free-text infrastructure ask remains". The asset-ref `<Input>` below still
+ * ships for those three kinds, and the `abfss://` example that used to sit in
+ * its JSX placeholder now lives in `assetPlaceholder()` — a function the
+ * guard's static reader cannot follow. The site did not go away; it went
+ * INVISIBLE to the measurement. That is evidence relocation and it is called
+ * out here so the count cannot be read as a clean sweep. The honest fix is a
+ * PATH-class picker (an ADLS browser / a Synapse+ADX table browser), which is
+ * a later wave's work, not this one's.
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -42,7 +51,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add20Regular, Dismiss16Regular, Save20Regular, ArrowImport20Regular, ArrowExport20Regular, Wrench20Regular } from '@fluentui/react-icons';
-import { LoomObjectPicker, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
+import { LoomObjectPicker, useLoomObjects, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
 import {
   PORT_DIRECTIONS, PORT_KINDS_BY_DIRECTION, emptyPorts,
   type PortsModel, type Port, type PortDirection, type PortKind,
@@ -74,18 +83,45 @@ type ResolvedPort = Port & { resolved?: { productName: string; contractVersion?:
 const PRODUCT_REF_KINDS: readonly PortKind[] = ['data-product', 'output-port'];
 
 /**
- * An `output-port` ref is `<productId>:<portId>`; a `data-product` ref is just
- * `<productId>`. The picker owns the product id half and preserves whatever
- * suffix was already stored, so switching the upstream never silently drops the
- * port selector the user had.
+ * Split an `output-port` ref into its `<productId>:<portId>` halves, or null
+ * when it is not that shape.
+ *
+ * A URI IS NOT THAT SHAPE, and that distinction is load-bearing. `abfss://c/p`
+ * contains a colon, so a naive `split(':')` reads the product as `abfss` and
+ * re-joining after a pick writes `dp-2://c/p` — a corrupted ref that resolves to
+ * nothing and silently destroys the stored address. That input is not
+ * hypothetical: the free-text placeholder this panel used to ship
+ * (`'dp-123 or abfss://…'`) actively invited it, on EVERY input kind, so a
+ * pre-existing product row can legitimately hold a storage URI today.
  */
-export function refProductId(ref: string | undefined): string {
-  return (ref || '').split(':')[0] || '';
+function splitOutputPortRef(ref: string): { productId: string; portId: string } | null {
+  const i = ref.indexOf(':');
+  if (i <= 0) return null;
+  if (ref.startsWith('//', i + 1)) return null; // `scheme://…` — a URI, not a split ref
+  return { productId: ref.slice(0, i), portId: ref.slice(i + 1) };
 }
-export function withProductId(ref: string | undefined, productId: string): string {
-  const rest = (ref || '').split(':').slice(1).join(':');
+
+/**
+ * The product half of a port ref, per KIND.
+ *
+ * Only `output-port` carries a `<productId>:<portId>` suffix; a `data-product`
+ * ref is the item id WHOLE. Applying the split to both kinds was the defect
+ * above — it is gated on the kind here, and additionally on the ref not being a
+ * URI, because a legacy URI can appear under either kind.
+ */
+export function refProductId(ref: string | undefined, kind: PortKind): string {
+  const r = (ref || '').trim();
+  if (!r) return '';
+  if (kind !== 'output-port') return r;
+  return splitOutputPortRef(r)?.productId ?? r;
+}
+
+/** Write `productId` into a port ref, preserving an `output-port` suffix. */
+export function withProductId(ref: string | undefined, productId: string, kind: PortKind): string {
   if (!productId) return '';
-  return rest ? `${productId}:${rest}` : productId;
+  if (kind !== 'output-port') return productId;
+  const portId = splitOutputPortRef((ref || '').trim())?.portId;
+  return portId ? `${productId}:${portId}` : productId;
 }
 
 /**
@@ -93,6 +129,10 @@ export function withProductId(ref: string | undefined, productId: string): strin
  * caller-scoped lister (see the file header); an unreachable route is reported
  * as an ERROR, never as an empty list — "there are none" and "I could not ask"
  * are different answers and the picker renders them differently.
+ *
+ * Loaded ONCE per panel via `useLoomObjects` and shared across every port row —
+ * a per-row loader made this an N+1 cross-partition scan that re-fired on every
+ * added port.
  */
 async function loadDataProducts(): Promise<LoomObjectLoad> {
   const r = await clientFetch('/api/items/by-type?types=data-product');
@@ -124,6 +164,11 @@ export function PortsPanel({ id, isNew }: { id: string; isNew?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+
+  // ONE product list for the whole panel. Every product-ref row renders its own
+  // picker but they all read this source, so adding a tenth input port does not
+  // fire a tenth cross-partition scan.
+  const products = useLoomObjects(loadDataProducts, 'data-product');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -193,10 +238,9 @@ export function PortsPanel({ id, isNew }: { id: string; isNew?: boolean }) {
                     hint={p.kind === 'output-port'
                       ? 'The product that publishes the output port this one consumes.'
                       : 'The product this one consumes.'}
-                    value={refProductId(p.ref)}
-                    onChange={(pid) => updatePort(dir, i, { ref: withProductId(p.ref, pid) })}
-                    load={loadDataProducts}
-                    loadKey="data-product"
+                    value={refProductId(p.ref, p.kind)}
+                    onChange={(pid) => updatePort(dir, i, { ref: withProductId(p.ref, pid, p.kind) })}
+                    source={products}
                     placeholder="Select a data product…"
                     emptyTitle="No other data products yet"
                     emptyBody="This is the only data product you can see, so there is nothing upstream to depend on. Create another one, then refresh."

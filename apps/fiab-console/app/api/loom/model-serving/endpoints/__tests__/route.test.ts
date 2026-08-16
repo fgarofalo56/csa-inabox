@@ -78,7 +78,13 @@ describe('GET /api/loom/model-serving/endpoints', () => {
     expect(j.ok).toBe(false);
     expect(j.code).toBe('svc-model-serving');
     expect(j.missing).toContain('LOOM_AML_WORKSPACE');
-    // The Fix-it payload the UI needs (ux-baseline G2) survives the envelope.
+    // The two fields the CLIENT actually reads to mount the shared HonestGate.
+    // Asserting only `fixEnvVar` here is what let a fully-wired route feed a
+    // bare MessageBar for a while: the payload was right and nothing consumed
+    // it. The consumer side is asserted in
+    // lib/editors/__tests__/feature-table-serving-picker.test.tsx.
+    expect(j.gate.gateId).toBe('svc-model-serving');
+    expect(j.gate.missing).toContain('LOOM_AML_WORKSPACE');
     expect(j.gate.fixEnvVar).toBe('LOOM_AML_WORKSPACE');
     // And the model plane was never called.
     expect((listServingEndpoints as any).mock.calls.length).toBe(0);

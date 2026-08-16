@@ -26,6 +26,14 @@ import { clientFetch } from '@/lib/client-fetch';
  * Purview endpoint through `purviewBaseSync`, which is cloud-aware
  * (`.purview.azure.us` in Azure Government), so this control behaves the same in
  * a sovereign boundary (`cloud-parity.md`).
+ *
+ * DECLARED GAP — the guard now counts ZERO violations in this file, and that is
+ * not the same as "no free-text infrastructure ask remains". The "Promote ADLS
+ * path to OneLake shortcut" section below still asks for an **ADLS Gen2
+ * location** and an **ADLS subpath** as free text. They do not register because
+ * neither label nor placeholder trips a SHAPE or NAME pattern — not because the
+ * ask is gone. They are PATH-class and want an ADLS browser, which is a later
+ * wave's work.
  */
 import { useState } from 'react';
 import {

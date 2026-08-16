@@ -42,23 +42,28 @@
  *      inline Fix-it per `ux-baseline.md` G2) ABOVE a still-usable Dropdown, so
  *      an existing value can always be inspected and cleared.
  *
- * SCOPING IS THE CALLER'S CONTRACT. This control renders whatever `load()`
+ * SCOPING IS THE CALLER'S CONTRACT. This control renders whatever the loader
  * returns; it is the caller's job to pick a route that scopes to what the
  * signed-in user may actually see. An item picker that lists across workspaces
  * the caller has no access to leaks item names, so the backing route must do
  * the authorization (e.g. `/api/items/by-type`, which authorizes the workspace
  * and otherwise filters to the caller's visible workspaces).
  *
+ * WHERE THIS LIVES. `lib/components/pickers/` is the declared home for
+ * discovery-backed pickers that are NOT specific to one consumer. The ~15
+ * existing pickers sit beside their consumers because each serves exactly one
+ * surface; this one is shared by three (and counting), so it goes in the shared
+ * directory rather than in whichever editor happened to adopt it first.
+ *
  * Fluent v9 + Loom tokens only; no hard-coded px / hex (`web3-ui.md`).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  Button, Caption1, Dropdown, Field, MessageBar, MessageBarBody, MessageBarTitle,
-  Option, Spinner, Text, makeStyles, tokens,
+  Button, Caption1, Dropdown, Field, MessageBar, MessageBarActions, MessageBarBody,
+  MessageBarTitle, Option, Spinner, Text, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync16Regular, Search20Regular, Warning16Regular } from '@fluentui/react-icons';
-import { EmptyState } from '@/lib/components/empty-state';
+import { ArrowSync16Regular, Warning16Regular } from '@fluentui/react-icons';
 
 /** One pickable object. `id` is what gets persisted; `name` is what is shown. */
 export interface LoomObjectOption {
@@ -79,15 +84,98 @@ export interface LoomObjectLoad {
   error?: string;
   /** Remediation detail shown under the error (env var, role, scope…). */
   hint?: string;
+  /**
+   * A STRUCTURED honest gate from the route, when the reason the list is
+   * unavailable is a config gate rather than a failure. Carrying this through
+   * (rather than flattening it to `error`) is what lets the host render the
+   * shared `HonestGate` with its real Fix-it wizard — `ux-baseline.md` G2 makes
+   * a bare remediation MessageBar non-compliant, and a route that returns
+   * `fixEnvVar` into a UI that reads only `error` is a gate that LOOKS wired.
+   */
+  gate?: { gateId: string; missing?: string };
+}
+
+/**
+ * The resolved list plus its liveness, as a value a HOST can own.
+ *
+ * This exists so a surface that renders N pickers over the SAME population
+ * fetches once. `ports-panel.tsx` renders one picker per input port row; with a
+ * per-instance fetch that was an N+1 against a cross-partition Cosmos scan,
+ * re-firing on every added port.
+ */
+export interface LoomObjectSource {
+  /** null = the first load has not resolved yet (distinct from "empty"). */
+  options: LoomObjectOption[] | null;
+  error: string | null;
+  hint: string | null;
+  /** The route's structured config gate, when it returned one. */
+  gate: { gateId: string; missing?: string } | null;
+  loading: boolean;
+  reload: () => void;
+}
+
+/**
+ * Run a discovery call and keep its result. Call it ONCE in a host that renders
+ * several pickers over the same population and pass the result to each as
+ * `source`; a single-picker surface can just pass `load` and let the picker own
+ * this internally.
+ *
+ * STALENESS: every run carries a sequence number and a late response from a
+ * superseded run is DROPPED. Without it two overlapping loads resolve
+ * last-to-arrive rather than last-requested, so a fast refresh landing after a
+ * slow initial load would show the older list.
+ */
+export function useLoomObjects(load: () => Promise<LoomObjectLoad>, loadKey = ''): LoomObjectSource {
+  const [options, setOptions] = useState<LoomObjectOption[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [gate, setGate] = useState<LoomObjectSource['gate']>(null);
+  const [loading, setLoading] = useState(false);
+  const seq = useRef(0);
+  // `load` is re-created by most callers on every render; `loadKey` is the
+  // caller's DECLARED dependency, so keying on it avoids a fetch loop while
+  // still refetching when the scope genuinely changes.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
+  const run = useCallback(async () => {
+    const mine = ++seq.current;
+    setLoading(true);
+    setError(null);
+    setHint(null);
+    setGate(null);
+    try {
+      const r = await loadRef.current();
+      if (mine !== seq.current) return; // superseded — a later run owns the state
+      setOptions(Array.isArray(r.options) ? r.options : []);
+      setError(r.error ?? null);
+      setHint(r.hint ?? null);
+      setGate(r.gate ?? null);
+    } catch (e: any) {
+      if (mine !== seq.current) return;
+      // An unreachable discovery call is NOT an empty list.
+      setOptions([]);
+      setError(e?.message || String(e));
+    } finally {
+      if (mine === seq.current) setLoading(false);
+    }
+  }, [loadKey]);
+
+  useEffect(() => { void run(); }, [run]);
+
+  return { options, error, hint, gate, loading, reload: run };
 }
 
 export interface LoomObjectPickerProps {
   label: string;
-  /** The persisted value. Rendered even when `load()` cannot resolve it. */
+  /** The persisted value. Rendered even when the loader cannot resolve it. */
   value: string;
   onChange: (id: string) => void;
-  /** The real discovery call. */
-  load: () => Promise<LoomObjectLoad>;
+  /** The real discovery call. Ignored when `source` is supplied. */
+  load?: () => Promise<LoomObjectLoad>;
+  /** A host-owned list (see {@link useLoomObjects}) — use when several pickers
+   *  share one population, so the fetch happens once. */
+  source?: LoomObjectSource;
   /** Re-runs `load()` when it changes. Keep it a primitive. */
   loadKey?: string;
   hint?: string;
@@ -96,8 +184,18 @@ export interface LoomObjectPickerProps {
   /** Guided empty state (never a bare "no results"). */
   emptyTitle?: string;
   emptyBody?: string;
-  /** Inline Fix-it for the empty / gated state (`ux-baseline.md` G2). */
+  /**
+   * Inline Fix-it for the empty AND gated/error states (`ux-baseline.md` G2:
+   * a bare remediation MessageBar with no Fix-it is not compliant).
+   */
   fixIt?: { label: string; onClick: () => void };
+  /**
+   * Rendered INSTEAD of the plain error MessageBar when the loader reported a
+   * structured config gate. Hosts pass the shared `<HonestGate>` here so the
+   * gated state gets the real registry-driven Fix-it wizard rather than a
+   * second, weaker copy of it inside this control.
+   */
+  gateSlot?: ReactNode;
   /**
    * Caption on a stored value the loader did not return. Names WHY it may be
    * missing so the user is not told a value they can see is invalid.
@@ -122,60 +220,70 @@ const useStyles = makeStyles({
  * Exported so the round-trip property can be asserted directly, not only
  * through the rendered DOM: a stored id that the loader did not return MUST
  * still appear, still be selected, and still carry its own id as the value.
+ *
+ * The id is TRIMMED, and callers must select on the same trimmed value — see
+ * `normalizeStoredValue`. A stored `' dp-1 '` is realistic precisely because
+ * these fields used to be free text people pasted into.
  */
 export function mergeStoredValue(
   options: LoomObjectOption[],
   value: string,
 ): { options: LoomObjectOption[]; unresolved: boolean } {
-  const v = (value || '').trim();
+  const v = normalizeStoredValue(value);
   if (!v) return { options, unresolved: false };
   if (options.some((o) => o.id === v)) return { options, unresolved: false };
   // The stored id leads, so it is visible without scrolling a long list.
   return { options: [{ id: v, name: v }, ...options], unresolved: true };
 }
 
+/**
+ * The single normalization applied to a stored value — used by BOTH the merge
+ * and the selection lookup.
+ *
+ * It exists because they once disagreed: `mergeStoredValue` inserted the
+ * TRIMMED id while the component looked up the RAW `value`. For a stored
+ * `' dp-1 '` the merge found a match (so `unresolved` was false and no warning
+ * rendered) while the lookup found nothing (so the Dropdown rendered blank and
+ * `selectedOptions` matched no option) — a blank required field over a stored
+ * value, with no disclosure. That is the exact symptom this primitive exists to
+ * prevent, reintroduced by a one-character asymmetry.
+ */
+export function normalizeStoredValue(value: string | undefined): string {
+  return (value || '').trim();
+}
+
+/** Sentinel loader for the host-owned (`source`) mode — never invoked for data. */
+const EMPTY_LOAD = async (): Promise<LoomObjectLoad> => ({ options: [] });
+const SOURCE_OWNED_KEY = '__source-owned__';
+
 export function LoomObjectPicker({
-  label, value, onChange, load, loadKey = '', hint, required, placeholder,
-  emptyTitle, emptyBody, fixIt, unresolvedCaption, ...rest
+  label, value, onChange, load, source, loadKey = '', hint, required, placeholder,
+  emptyTitle, emptyBody, fixIt, gateSlot, unresolvedCaption, ...rest
 }: LoomObjectPickerProps) {
   const s = useStyles();
-  const [raw, setRaw] = useState<LoomObjectOption[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loadHint, setLoadHint] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  if (!load && !source) {
+    throw new Error('LoomObjectPicker: pass either `load` (self-loading) or `source` (host-owned).');
+  }
+  // Hook order is stable: the fallback loader is always constructed, and simply
+  // resolves to an empty list when the host owns the source.
+  const own = useLoomObjects(
+    load ?? EMPTY_LOAD,
+    source ? SOURCE_OWNED_KEY : loadKey,
+  );
+  const list = source ?? own;
+  const { options: raw, error, hint: loadHint, loading, reload } = list;
 
-  const run = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setLoadHint(null);
-    try {
-      const r = await load();
-      setRaw(Array.isArray(r.options) ? r.options : []);
-      setError(r.error ?? null);
-      setLoadHint(r.hint ?? null);
-    } catch (e: any) {
-      // An unreachable discovery call is NOT an empty list.
-      setRaw([]);
-      setError(e?.message || String(e));
-    } finally {
-      setLoading(false);
-    }
-    // `load` is re-created by most callers on every render; `loadKey` is the
-    // caller's declared dependency, so keying on it avoids a fetch loop while
-    // still refetching when the scope genuinely changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadKey]);
-
-  useEffect(() => { void run(); }, [run]);
+  const stored = normalizeStoredValue(value);
 
   const { options, unresolved } = useMemo(
-    () => mergeStoredValue(raw ?? [], value),
-    [raw, value],
+    () => mergeStoredValue(raw ?? [], stored),
+    [raw, stored],
   );
 
-  const selected = useMemo(() => options.find((o) => o.id === value) || null, [options, value]);
-  // NOTE: `selected` can only be null when `value` is empty — mergeStoredValue
-  // guarantees a non-empty value is always present in `options`.
+  // `selected` can only be null when `stored` is empty — mergeStoredValue
+  // guarantees a non-empty stored value is present in `options`, and both sides
+  // read the SAME normalized value.
+  const selected = useMemo(() => options.find((o) => o.id === stored) || null, [options, stored]);
 
   const discovered = raw?.length ?? 0;
   const showEmpty = raw !== null && discovered === 0 && !loading;
@@ -192,7 +300,7 @@ export function LoomObjectPicker({
             // and it also hides a stored value the user needs to see.
             placeholder={loading ? 'Loading…' : (placeholder || 'Select…')}
             value={selected ? selected.name : ''}
-            selectedOptions={value ? [value] : []}
+            selectedOptions={stored ? [stored] : []}
             onOptionSelect={(_, d) => onChange(String(d.optionValue ?? ''))}
           >
             {options.map((o) => (
@@ -206,7 +314,7 @@ export function LoomObjectPicker({
           </Dropdown>
           <Button
             size="small" appearance="subtle" icon={<ArrowSync16Regular />}
-            onClick={() => void run()} disabled={loading}
+            onClick={reload} disabled={loading}
             aria-label={`Refresh ${label}`} title={`Refresh ${label}`}
           />
           {loading && <Spinner size="tiny" />}
@@ -221,24 +329,42 @@ export function LoomObjectPicker({
         </Caption1>
       )}
 
-      {error && (
+      {/* A structured config gate gets the SHARED HonestGate (registry-driven
+          Fix-it wizard). Otherwise a plain error bar, which still carries a
+          Fix-it when the host supplied one — `ux-baseline.md` G2 makes a bare
+          remediation MessageBar non-compliant, and the gated case is exactly
+          when the user most needs the one-click way out. */}
+      {error && gateSlot ? gateSlot : null}
+      {error && !gateSlot && (
         <MessageBar intent="warning">
           <MessageBarBody>
             <MessageBarTitle>Could not list {label.toLowerCase()}</MessageBarTitle>
             {error}
             {loadHint ? <><br /><Caption1>{loadHint}</Caption1></> : null}
           </MessageBarBody>
+          <MessageBarActions>
+            {fixIt && <Button size="small" appearance="primary" onClick={fixIt.onClick}>{fixIt.label}</Button>}
+            <Button size="small" appearance="secondary" onClick={reload} disabled={loading}>Refresh</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
+      {/* NOT `EmptyState`: that primitive is a full-pane card (minHeight 320px,
+          XXXL padding, dashed border) and this control renders INLINE — in
+          ports-panel it sits inside a port ROW, where every row would grow its
+          own 320px card. An inline MessageBar with the same guidance + actions
+          is the field-scale equivalent. */}
       {showEmpty && !error && (
-        <EmptyState
-          icon={<Search20Regular />}
-          title={emptyTitle || `No ${label.toLowerCase()} found`}
-          body={emptyBody || `Nothing to pick yet. Create one, then refresh — an existing value stays selected either way.`}
-          {...(fixIt ? { primaryAction: { label: fixIt.label, onClick: fixIt.onClick } } : {})}
-          secondaryAction={{ label: 'Refresh', onClick: () => void run(), appearance: 'secondary' }}
-        />
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>{emptyTitle || `No ${label.toLowerCase()} found`}</MessageBarTitle>
+            {emptyBody || 'Nothing to pick yet. Create one, then refresh — an existing value stays selected either way.'}
+          </MessageBarBody>
+          <MessageBarActions>
+            {fixIt && <Button size="small" appearance="primary" onClick={fixIt.onClick}>{fixIt.label}</Button>}
+            <Button size="small" appearance="secondary" onClick={reload} disabled={loading}>Refresh</Button>
+          </MessageBarActions>
+        </MessageBar>
       )}
     </div>
   );

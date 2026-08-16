@@ -135,18 +135,38 @@ describe('FeatureTableEditor — the serving endpoint is picked, not typed', () 
       .toBeInTheDocument();
   });
 
-  it('an honest 503 gate is surfaced verbatim, not flattened into "there are none"', async () => {
+  it('an honest 503 gate renders the SHARED HonestGate with a real Fix-it, not a bare bar', async () => {
+    // The half that used to pass while the shipped surface was non-compliant:
+    // the route returned `gate.fixEnvVar` and the editor read only `error`, so
+    // G2's inline Fix-it never rendered. Assert the BUTTON, not the payload.
     installFetch({
       endpoints: () => ({
         ok: false, code: 'svc-model-serving',
         error: 'Set LOOM_AML_WORKSPACE (+ LOOM_AML_RESOURCE_GROUP) so model-serving endpoints have an Azure Machine Learning workspace.',
         missing: 'LOOM_AML_WORKSPACE (or LOOM_FOUNDRY_NAME)',
+        gate: {
+          gateId: 'svc-model-serving', backend: 'aml',
+          missing: 'LOOM_AML_WORKSPACE (or LOOM_FOUNDRY_NAME)',
+          fixEnvVar: 'LOOM_AML_WORKSPACE',
+          hint: 'Set LOOM_AML_WORKSPACE so model-serving endpoints have an Azure ML workspace.',
+        },
       }),
     });
     const dd = await openServing();
-    await waitFor(() => expect(screen.getByText(/Set LOOM_AML_WORKSPACE/)).toBeInTheDocument());
-    expect(screen.getByText(/Missing: LOOM_AML_WORKSPACE/)).toBeInTheDocument();
+    // The registry-driven gate surface, with its inline Fix-it button (G2).
+    await waitFor(() => expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument());
+    // The gate names the exact env var (the registry entry also repeats it in
+    // the bicep-module line, hence getAllByText).
+    expect(screen.getAllByText(/LOOM_AML_WORKSPACE/).length).toBeGreaterThan(0);
+    // "There are none" is a different claim and must not be made.
     expect(screen.queryByText('No serving endpoints yet')).toBeNull();
     expect(dd).not.toBeDisabled();
+  });
+
+  it('fetches the endpoint list ONCE for the tab, not once per render of the row', async () => {
+    const calls = installFetch();
+    await openServing();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Serving endpoint' })).toBeInTheDocument());
+    expect(calls.filter((c) => c.url.includes('/api/loom/model-serving/endpoints'))).toHaveLength(1);
   });
 });

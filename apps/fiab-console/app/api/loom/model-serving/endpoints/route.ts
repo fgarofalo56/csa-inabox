@@ -20,6 +20,20 @@
  * env var and the Fix-it target, `ux-baseline.md` G2) rather than an empty list:
  * "there are none" and "I could not ask" must stay distinguishable
  * (`deploy-integrity.md` R7).
+ *
+ * AUTHORIZATION — A DELIBERATE WIDENING, STATED NOT INHERITED. The sibling
+ * `app/api/items/model-serving-endpoint/[id]/route.ts` returns the same
+ * `listServingEndpoints()` result, but only after
+ * `resolveServingItem(id, session.claims.oid)` — i.e. behind an item-ownership
+ * precondition. This route drops that precondition on purpose: it is a
+ * discovery call for a picker, and a user with no serving-endpoint item yet is
+ * exactly the user who needs the list. The consequence is real and is the point
+ * of writing it down: ANY signed-in user, owning nothing, can enumerate every
+ * serving-endpoint NAME in the deployment. That is the same exposure the other
+ * class-A shared-backend navigators already carry (`/api/databricks/*`,
+ * `/api/aml/*`), it returns names and states only — no scoring URI, no key, no
+ * ARM id — and it is recorded in the class-A entry in
+ * `scripts/ci/check-route-guards.mjs` so the written premise matches the code.
  */
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';

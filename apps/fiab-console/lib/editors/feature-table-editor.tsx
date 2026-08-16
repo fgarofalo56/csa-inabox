@@ -50,7 +50,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
-import { LoomObjectPicker, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
+import { LoomObjectPicker, useLoomObjects, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
 import { useSharedEditorStyles } from './shared-styles';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -62,12 +62,23 @@ const FEATURE_TYPES = ['DOUBLE', 'FLOAT', 'BIGINT', 'INT', 'STRING', 'BOOLEAN', 
  * (see the file header). A 503 honest gate or any non-ok envelope is reported as
  * an ERROR — never flattened to an empty list, because "this deployment has no
  * endpoints" and "I could not reach the model plane" are different answers.
+ *
+ * The route's STRUCTURED gate is carried through as `gate`, not just as text:
+ * the picker renders the shared `HonestGate` from it, which is the registry-
+ * driven Fix-it wizard (`ux-baseline.md` G2). Reading only `error` here — which
+ * an earlier revision did — turned a fully-wired gate into a bare MessageBar
+ * while the route-level test still passed on the half that worked.
  */
 async function loadServingEndpoints(): Promise<LoomObjectLoad> {
   const r = await clientFetch('/api/loom/model-serving/endpoints');
   const j = await r.json().catch(() => ({}));
   if (!j?.ok) {
-    return { options: [], error: j?.error || `Could not list serving endpoints (HTTP ${r.status}).`, hint: j?.missing ? `Missing: ${j.missing}` : undefined };
+    return {
+      options: [],
+      error: j?.error || `Could not list serving endpoints (HTTP ${r.status}).`,
+      hint: j?.missing ? `Missing: ${j.missing}` : undefined,
+      ...(j?.gate?.gateId ? { gate: { gateId: String(j.gate.gateId), missing: j.gate.missing } } : {}),
+    };
   }
   return {
     options: (j.endpoints || []).map((e: any) => ({
@@ -150,6 +161,9 @@ function FeatureBody({ item, id }: { item: FabricItemType; id: string }) {
   const [publishBusy, setPublishBusy] = useState(false);
   const [publishMsg, setPublishMsg] = useState<{ intent: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [svEndpoint, setSvEndpoint] = useState('');
+  // Host-owned so the route's structured gate is readable here and can drive the
+  // shared HonestGate (G2) rather than a bare MessageBar inside the picker.
+  const servingEndpoints = useLoomObjects(loadServingEndpoints, 'model-serving');
   const [svKeys, setSvKeys] = useState<Record<string, string>>({});
   const [svPayload, setSvPayload] = useState('{\n  "dataframe_records": [\n    {}\n  ]\n}');
   const [svBusy, setSvBusy] = useState(false);
@@ -453,12 +467,20 @@ function FeatureBody({ item, id }: { item: FabricItemType; id: string }) {
                           required
                           value={svEndpoint}
                           onChange={setSvEndpoint}
-                          load={loadServingEndpoints}
-                          loadKey="model-serving"
+                          source={servingEndpoints}
                           placeholder="Select a serving endpoint…"
                           emptyTitle="No serving endpoints yet"
                           emptyBody="Deploy a model to a serving endpoint (Model serving item), then refresh. Feature lookup still runs — it is the invoke step that needs an endpoint."
                           unresolvedCaption="Saved endpoint — not in the endpoints this deployment can list right now (deleted, or the model plane could not be read). Kept as-is until you change it."
+                          gateSlot={servingEndpoints.gate ? (
+                            <HonestGate
+                              gateId={servingEndpoints.gate.gateId}
+                              surface="Serving endpoint"
+                              missing={servingEndpoints.gate.missing || ''}
+                              detail={servingEndpoints.error || undefined}
+                              onResolved={servingEndpoints.reload}
+                            />
+                          ) : undefined}
                         />
                       </div>
                       {spec.primaryKeys.map((k) => (
