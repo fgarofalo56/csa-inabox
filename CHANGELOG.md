@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.2...csa-inabox-v0.98.3) (2026-08-16)
+
+
+### Bug Fixes
+
+* **security:** four more SQL/PostgreSQL routes took their server from the request, and one was never on the list (GHSA-v8r7-c2p5-mjf2) ([#3642](https://github.com/fgarofalo56/csa-inabox/issues/3642)) ([b5f990f](https://github.com/fgarofalo56/csa-inabox/commit/b5f990f1d3305feadc0ebccf5b70e2acb7c94626))
+
 ## [0.98.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.1...csa-inabox-v0.98.2) (2026-08-16)
 
 
