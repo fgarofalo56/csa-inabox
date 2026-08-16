@@ -7,14 +7,14 @@
  * via `executeQuery` (azure-sql-client). NO Microsoft Fabric and NO mock data
  * on any path — the Azure-native engine is the only backend.
  *
- * GET  /api/items/azure-sql-database/[id]/search-management?server=&database=&kind=inventory|columns&objectName=
+ * GET  /api/items/azure-sql-database/[id]/search-management?kind=inventory|columns&objectName=
  *   - kind=inventory (default): catalogs + fts indexes + vector indexes + a
  *     pick-list of base tables with their eligible FTS columns, vector columns,
  *     and single-column unique non-null indexes (for the KEY INDEX dropdown).
  *   - kind=columns&objectName=schema.table: columns of one table.
  *
  * POST /api/items/azure-sql-database/[id]/search-management
- *   body { server, database, action, ... } where action is one of:
+ *   body { action, ... } where action is one of:
  *     - 'create-catalog'  { name, accentSensitivity?, asDefault? }
  *     - 'drop-catalog'    { name }
  *     - 'create-fts'      { schema, table, columns:[{name,language?}], keyIndex, catalog, changeTracking, stoplist? }
@@ -26,13 +26,30 @@
  * Identifiers are validated against a strict whitelist and bracket-quoted before
  * interpolation, so the dialog inputs can never inject arbitrary T-SQL. All DDL
  * is returned in the response (`ddl`) so the UI can show exactly what ran.
+ *
+ * AUTHORITY (GHSA-v8r7-c2p5-mjf2). BOTH verbs took `server` + `database` from
+ * the request under a bare `getSession()` and handed them straight to
+ * `executeQuery`, which opens a real TDS connection as the Console UAMI.
+ *
+ * The GET half was the quieter and broader of the two: seven catalog queries
+ * over `sys.tables` / `sys.columns` / `sys.indexes` / `sys.fulltext_*` returned
+ * the FULL SCHEMA of any database the UAMI could reach — table names, column
+ * names and types — to any signed-in caller. The POST half then ran real DDL
+ * (CREATE/DROP FULLTEXT CATALOG and INDEX, CREATE/DROP VECTOR INDEX, population
+ * control) on that same caller-named database. The T-SQL quoting was already
+ * sound; the missing control was never injection, it was WHOSE database.
+ *
+ * NOW both verbs derive server + database from the `[id]` item's bound
+ * connection via `withBoundSqlServer`, admitted against the governed
+ * subscription set. The GET is `allowReadRoles` (a workspace reader may inspect
+ * the search inventory); the POST is NOT, because it mutates the schema.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
 import { executeQuery, AzureSqlError } from '@/lib/azure/azure-sql-client';
 import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
 import { apiError } from '@/lib/api/respond';
+import { withBoundSqlServer } from '@/app/api/items/_lib/sql-server-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,24 +77,19 @@ function jerr(error: string, status = 400) {
   return apiError(error, status);
 }
 
-function readState(req: NextRequest) {
-  const server = String(req.nextUrl.searchParams.get('server') || '').trim();
-  const database = String(req.nextUrl.searchParams.get('database') || '').trim();
-  return { server, database };
-}
-
 // ── GET: inventory + dialog pick-lists ───────────────────────────────────────
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const { server, database } = readState(req);
-  if (!server) return jerr('server is required');
-  if (!database) return jerr('database is required');
-  const kind = (req.nextUrl.searchParams.get('kind') || 'inventory').toLowerCase();
+// Read-only over the bound database's catalog views, so a workspace READER may
+// run it. The target is the item's binding; `?server=`/`?database=` may now only
+// trigger a mismatch refusal inside the wrapper, never choose the database whose
+// schema is returned.
+export const GET = withBoundSqlServer(
+  { provider: 'sql', requireDatabase: true, allowReadRoles: true },
+  async (req, { server, database }) => {
+  const kind = (new URL(req.url).searchParams.get('kind') || 'inventory').toLowerCase();
 
   try {
     if (kind === 'columns') {
-      const objectName = String(req.nextUrl.searchParams.get('objectName') || '').trim();
+      const objectName = String(new URL(req.url).searchParams.get('objectName') || '').trim();
       if (!objectName) return jerr('objectName is required for kind=columns');
       const columns = await runRows(server, database, `
         SELECT c.name AS column_name, t.name AS data_type, c.max_length AS max_length
@@ -167,18 +179,15 @@ export async function GET(req: NextRequest) {
     const status = e instanceof AzureSqlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), code: e?.code }, { status });
   }
-}
+  },
+);
 
 // ── POST: create / drop / populate ───────────────────────────────────────────
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const body = await req.json().catch(() => ({}));
-  const server = String(body?.server || '').trim();
-  const database = String(body?.database || '').trim();
-  const action = String(body?.action || '').trim();
-  if (!server) return jerr('server is required');
-  if (!database) return jerr('database is required');
+// Real DDL on the bound database — write-scoped (no allowReadRoles).
+export const POST = withBoundSqlServer(
+  { provider: 'sql', requireDatabase: true },
+  async (_req, { server, database, body }) => {
+  const action = String((body as any)?.action || '').trim();
   if (!action) return jerr('action is required');
 
   let ddl = '';
@@ -207,7 +216,8 @@ export async function POST(req: NextRequest) {
       error: e?.message || String(e), code: e?.code, sqlNumber: e?.number,
     }, { status });
   }
-}
+  },
+);
 
 // ── DDL builders (server-side, escaped) ──────────────────────────────────────
 function objRef(schema: string, table: string): string {

@@ -6,8 +6,7 @@
  * surfaces with THIS database pre-wired as the copy SINK — no toasts, real
  * navigation.
  *
- *   body { action: 'copy-data' | 'new-pipeline' | 'new-dataflow',
- *          family, server, serverFqdn?, database }
+ *   body { action: 'copy-data' | 'new-pipeline' | 'new-dataflow', family }
  *   → { ok, url, factoryName, privateNetworkGate?, factoryMiPrincipalHint?,
  *       pipelineName?, dataflowName?, linkedServiceName?, datasetName? }
  *
@@ -30,15 +29,31 @@
  * the exact missing var so the UI shows an honest infra-gate MessageBar.
  * The ADF factory MI must be a SQL Entra user with db_datareader/db_datawriter
  * on the target DB for the copy to write — surfaced as a hint, never a mock.
+ *
+ * AUTHORITY (GHSA-v8r7-c2p5-mjf2). This route took `server`, `database` AND
+ * `serverFqdn` from the body under a bare `getSession()`, and `serverFqdn` was
+ * the sharper of the three: `resolveFqdn` returned it VERBATIM whenever it
+ * contained a dot, and it landed inside the linked service's connection string
+ * as `Data Source=tcp:<fqdn>,1433`. The factory itself is env-pinned, so the
+ * artifacts always landed in Loom's OWN Data Factory — which is the point: any
+ * signed-in caller could plant a persistent, MI-authenticated linked service
+ * and Copy pipeline in the deployment's shared factory, pointed at a host of
+ * their choosing, for the factory's managed identity to authenticate to.
+ *
+ * NOW the item's bound connection supplies both coordinates and the FQDN is
+ * DERIVED from the admitted server rather than accepted — `admitGovernedServer`
+ * has already reduced any FQDN to its first DNS label, so `resolveFqdn` can only
+ * ever compose a host inside this cloud's SQL suffix. `action` and `family` stay
+ * caller-chosen; they select the artifact shape, not the target.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
 import {
   adfConfigGate, factoryResourceId, defaultFactoryName, getDefaultFactory,
   upsertLinkedService, upsertDataset, upsertPipeline, upsertDataFlow,
 } from '@/lib/azure/adf-client';
 import { adfStudioBase, getSqlSuffix } from '@/lib/azure/cloud-endpoints';
+import { withBoundSqlServer } from '@/app/api/items/_lib/sql-server-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,10 +67,17 @@ function safeName(s: string): string {
   return s.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 120);
 }
 
-/** Resolve the SQL server FQDN (use the provided one or build it per cloud). */
-function resolveFqdn(server: string, serverFqdn?: string): string {
-  if (serverFqdn && serverFqdn.includes('.')) return serverFqdn;
-  return server.includes('.') ? server : `${server}.${getSqlSuffix()}`;
+/**
+ * Resolve the SQL server FQDN from the ADMITTED bound server.
+ *
+ * The `serverFqdn` body field is GONE, deliberately. It was returned verbatim
+ * whenever it contained a dot, so it could name any host; the admitted server is
+ * either a bare label or an ARM id, and both compose to a host inside this
+ * cloud's SQL suffix.
+ */
+function resolveFqdn(server: string): string {
+  const name = server.startsWith('/') ? (server.split('/').pop() || '') : server;
+  return name.includes('.') ? name : `${name}.${getSqlSuffix()}`;
 }
 
 /** Encoded `factory=` deep-link query param for ADF Studio. */
@@ -63,10 +85,9 @@ function factoryParam(): string {
   return `factory=${encodeURIComponent(factoryResourceId())}`;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const POST = withBoundSqlServer(
+  { provider: 'sql', requireDatabase: true },
+  async (_req, { server, database, body }) => {
   // Honest config gate — names the exact missing env var.
   const g = adfConfigGate();
   if (g) {
@@ -81,18 +102,16 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const body = await req.json().catch(() => ({}));
-  const action = String(body?.action || '') as Action;
-  const family = String(body?.family || 'azure-sql') as Family;
-  const server = String(body?.server || '').trim();
-  const serverFqdn = String(body?.serverFqdn || '').trim();
-  const database = String(body?.database || '').trim();
+  const action = String((body as any)?.action || '') as Action;
+  const family = String((body as any)?.family || 'azure-sql') as Family;
+  // `server` / `database` are the item's ADMITTED binding — the body's own
+  // copies are only ever compared (in the wrapper) and never read here. The
+  // server name is what ARM artifact names are derived from, so take the label.
+  const serverName = server.startsWith('/') ? (server.split('/').pop() || '') : server;
 
   if (!ACTIONS.has(action)) {
     return NextResponse.json({ ok: false, error: 'action must be copy-data | new-pipeline | new-dataflow' }, { status: 400 });
   }
-  if (!server) return NextResponse.json({ ok: false, error: 'server is required' }, { status: 400 });
-  if (!database) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
 
   const factoryName = defaultFactoryName();
 
@@ -135,9 +154,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const fqdn = resolveFqdn(server, serverFqdn);
-    const lsName = safeName(`loom_sqldb_${server}_${database}`);
-    const dsName = safeName(`loom_ds_${server}_${database}`);
+    const fqdn = resolveFqdn(server);
+    const lsName = safeName(`loom_sqldb_${serverName}_${database}`);
+    const dsName = safeName(`loom_ds_${serverName}_${database}`);
 
     // 1) AzureSqlDatabase linked service — SystemAssignedManagedIdentity auth
     //    (no secret on disk; the factory MI authenticates to the DB).
@@ -242,4 +261,5 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+  },
+);

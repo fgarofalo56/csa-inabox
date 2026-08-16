@@ -1,11 +1,10 @@
 /**
  * POST /api/items/azure-sql-database/[id]/performance
- *   body { server, database, action, ...opts }
+ *   body { action, ...opts }
  *
  *   Azure-native Query Performance Insight over the real Query Store
  *   (`sys.query_store_*`) — no Microsoft Fabric / Power BI dependency.
- *   The [id] path segment scopes the originating item for UX continuity;
- *   connection target comes from the body { server, database }.
+ *   The connection target is THIS item's bound connection.
  *
  *   Actions:
  *     'status'      — read sys.database_query_store_options
@@ -14,9 +13,21 @@
  *     'query-plan'  — latest showplan XML for one query_id
  *     'enable'      — ALTER DATABASE CURRENT SET QUERY_STORE = ON
  *                     (requires confirm:true in the body — explicit consent)
+ *
+ * AUTHORITY (GHSA-v8r7-c2p5-mjf2). `server` + `database` arrived in the body
+ * under a bare `getSession()` and went straight to the Query Store readers,
+ * which reach TDS as the Console UAMI. This is a READ finding first: Query Store
+ * returns the executed QUERY TEXT and the SHOWPLAN XML, which routinely carry
+ * literal predicate values — so `top-queries` and `query-plan` against a
+ * caller-named database leaked the content of other tenants' workloads, not just
+ * their schema. `enable` is the write half (ALTER DATABASE).
+ *
+ * NOW the target is the `[id]` item's bound connection, admitted against the
+ * governed subscription set. Kept WRITE-scoped (no `allowReadRoles`) because
+ * `enable` runs DDL on the same handler; splitting the verb is a UX change, not
+ * a security one, and is not attempted inside a security fix.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
 import {
   queryStoreStatus,
   enableQueryStore,
@@ -26,6 +37,7 @@ import {
   type PerfMetric,
 } from '@/lib/azure/sql-objects-client';
 import { AzureSqlError } from '@/lib/azure/azure-sql-client';
+import { withBoundSqlServer } from '@/app/api/items/_lib/sql-server-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,17 +45,12 @@ export const dynamic = 'force-dynamic';
 const VALID_METRICS = new Set<PerfMetric>(['cpu', 'duration', 'logical-reads', 'executions']);
 const VALID_ACTIONS = new Set(['status', 'top-queries', 'time-series', 'query-plan', 'enable']);
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withBoundSqlServer(
+  { provider: 'sql', requireDatabase: true },
+  async (_req, { server, database, body }) => {
+  const b = body as any;
+  const action = String(b?.action || '').trim();
 
-  const body = await req.json().catch(() => ({}));
-  const server = String(body?.server || '').trim();
-  const database = String(body?.database || '').trim();
-  const action = String(body?.action || '').trim();
-
-  if (!server) return NextResponse.json({ ok: false, error: 'server is required' }, { status: 400 });
-  if (!database) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
   if (!VALID_ACTIONS.has(action)) {
     return NextResponse.json(
       { ok: false, error: `action must be one of: ${[...VALID_ACTIONS].join(' | ')}` },
@@ -58,7 +65,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'enable') {
-      if (!body?.confirm) {
+      if (!b?.confirm) {
         return NextResponse.json(
           {
             ok: false,
@@ -76,16 +83,16 @@ export async function POST(req: NextRequest) {
     }
 
     // Shared validation for the metric/window-based actions.
-    const metric: PerfMetric = VALID_METRICS.has(body?.metric) ? (body.metric as PerfMetric) : 'cpu';
-    const windowHours = Math.min(720, Math.max(1, Math.trunc(Number(body?.windowHours) || 24)));
-    const topN = Math.min(50, Math.max(1, Math.trunc(Number(body?.topN) || 10)));
+    const metric: PerfMetric = VALID_METRICS.has(b?.metric) ? (b.metric as PerfMetric) : 'cpu';
+    const windowHours = Math.min(720, Math.max(1, Math.trunc(Number(b?.windowHours) || 24)));
+    const topN = Math.min(50, Math.max(1, Math.trunc(Number(b?.topN) || 10)));
 
     if (action === 'top-queries') {
       const rows = await topQueriesByMetric(server, database, metric, windowHours, topN);
       return NextResponse.json({ ok: true, rows, metric, windowHours, topN });
     }
 
-    const queryId = Math.trunc(Number(body?.queryId) || 0);
+    const queryId = Math.trunc(Number(b?.queryId) || 0);
     if (!queryId || queryId < 1) {
       return NextResponse.json(
         { ok: false, error: 'queryId (positive integer) required for time-series and query-plan' },
@@ -108,4 +115,6 @@ export async function POST(req: NextRequest) {
     const status = e instanceof AzureSqlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
   }
-}
+  },
+);
+
