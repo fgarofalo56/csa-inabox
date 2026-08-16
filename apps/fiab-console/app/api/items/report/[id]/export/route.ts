@@ -40,9 +40,23 @@
  *
  * No mocks. Power BI errors (job Failed, 401/403, capacity required) and renderer
  * errors surface verbatim so the editor can show them in a MessageBar.
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — this handler EXPORTED A REPORT'S RENDERED
+ * CONTENT for a caller-named report id with no item-level check, on both branches:
+ * the Power BI ExportTo path returned the report's real PDF/PPTX/XLSX bytes, and
+ * the loom-native path applied `applySensitivityStamp(session, reportId, …)` —
+ * i.e. resolved another item's sensitivity label — for an unauthorized caller.
+ * It was excused by check-route-guards' SHARED_BACKEND_ITEM_ROUTES on "no
+ * per-tenant Cosmos ownership to scope"; nineteen sibling routes under
+ * `report/[id]/**` resolve the SAME `[id]` as an owned Loom item.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
+ * RAW Power BI report GUID on the opt-in ExportTo path and `loadOwnedItem`
+ * renders "no item" as 404. `allowReadRoles` because exporting is a read.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { fetchWithTimeout, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
 import {
@@ -55,6 +69,7 @@ import {
   type PaginatedExportFormat,
 } from '@/lib/azure/powerbi-client';
 import { applySensitivityStamp } from '@/lib/azure/report-export-label';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -243,13 +258,19 @@ async function exportLoomNative(
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const limited = await enforceRateLimit(session, 'export');
   if (limited) return limited;
 
-  const { id: reportId } = await ctx.params;
+  const { id: reportId } = params;
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: reportId,
+    itemType: 'report',
+    allowReadRoles: true,
+    notFound: 'report not found',
+  });
+  if (denied) return denied;
   const body = await req.json().catch(() => ({}));
   const workspaceId = (body?.workspaceId || '').toString().trim();
   const mode = String(body?.mode || '').toLowerCase();
@@ -330,4 +351,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

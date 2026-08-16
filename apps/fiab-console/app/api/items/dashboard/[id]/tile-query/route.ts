@@ -23,6 +23,31 @@
  *
  * Every unconfigured backend surfaces an HONEST gate (`code` + `hint` + exact
  * env var) instead of erroring — the editor renders a Fluent MessageBar.
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — this handler consumed `[id]` and ran no
+ * item-level check. It is the one route in this family that check-route-guards
+ * never even ASKED about: the file matched GUARD_SIGNAL_RE on
+ * `session.claims.oid` / `tenantScopeId(session)` inside `recordQueryRun` — the
+ * FinOps ATTRIBUTION fields, never a check — so the handler read as guarded and
+ * its allowlist entry was never consulted. That is the presence-vs-enforcement
+ * weakness the checker's own header documents, hit again on a live route.
+ *
+ * What it cost: `[id]` is the cost-attribution key (`itemId` / `dashboardId` on
+ * every recorded run), so any signed-in caller could bill their own ad-hoc ADX /
+ * DAX query against another tenant's dashboard in the per-dashboard rollup.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
+ * RAW Power BI dashboard GUID on the opt-in path (no Loom item behind it), and
+ * `loadOwnedItem` renders "no item" as 404. `allowReadRoles` because running a
+ * tile's query is what VIEWING the dashboard does.
+ *
+ * NOT FIXED HERE, AND NOT CLAIMED TO BE: the ADX `database` and the Power BI
+ * `workspaceId`/`datasetId` still come from the request body, so this route can
+ * still run a caller-authored query against any database the Console UAMI
+ * reaches. That is the free-form-shared-backend class (`guardAdxRequest` /
+ * `resolveOwnedItemDatabase`), not the broken-object-level-authorization class
+ * this change closes, and binding the tile query to the item's own database is a
+ * behaviour change beyond this advisory. Reported, not silently folded in.
  */
 
 export const runtime = 'nodejs';
@@ -31,6 +56,7 @@ export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { tenantScopeId } from '@/lib/auth/session';
 import { withSession } from '@/lib/api/route-toolkit';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { recordQueryRun } from '@/lib/finops/query-run';
 import {
@@ -83,6 +109,15 @@ export const POST = withSession(async (req: NextRequest, { session, params }) =>
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
   const dashboardId = params.id;
+
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: dashboardId,
+    itemType: 'dashboard',
+    allowReadRoles: true,
+    notFound: 'dashboard not found',
+  });
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   const kind = body?.kind as TileKind | undefined;

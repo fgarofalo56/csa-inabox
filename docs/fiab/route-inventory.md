@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1678 |
 | Public (no session) | 104 |
-| Session-only | 560 |
-| Owner-scoped | 714 |
+| Session-only | 540 |
+| Owner-scoped | 734 |
 | Admin | 300 |
 | Gated (backend config) | 494 |
 | Areas | 122 |
@@ -634,7 +634,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `data-products/[id]/observability/route.ts` | GET | owner-scoped | ● | ADX, Purview |
 | `data-products/[id]/okrs/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
 | `data-products/[id]/policies/route.ts` | GET | session-only |  | Cosmos |
-| `data-products/[id]/ports/route.ts` | GET | session-only |  | Cosmos |
+| `data-products/[id]/ports/route.ts` | GET | owner-scoped |  | Cosmos |
 | `data-products/[id]/preview/route.ts` | POST | session-only | ● | ADX, Cosmos |
 | `data-products/[id]/principal-search/route.ts` | GET | owner-scoped |  | — |
 | `data-products/[id]/route.ts` | GET PATCH DELETE | owner-scoped | ● | Cosmos, Purview |
@@ -1197,10 +1197,10 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/cosmos-gremlin-graph/route.ts` | GET POST | owner-scoped |  | — |
 | `items/cypher-graph/[id]/assist/route.ts` | — | public |  | — |
 | `items/cypher-graph/route.ts` | GET POST | owner-scoped |  | — |
-| `items/dashboard/[id]/embed-token/route.ts` | POST | session-only |  | — |
-| `items/dashboard/[id]/pin/route.ts` | POST | session-only | ● | — |
+| `items/dashboard/[id]/embed-token/route.ts` | POST | owner-scoped |  | — |
+| `items/dashboard/[id]/pin/route.ts` | POST | owner-scoped | ● | — |
 | `items/dashboard/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos |
-| `items/dashboard/[id]/tile-embed-token/route.ts` | POST | session-only |  | — |
+| `items/dashboard/[id]/tile-embed-token/route.ts` | POST | owner-scoped |  | — |
 | `items/dashboard/[id]/tile-query/route.ts` | POST | owner-scoped | ● | AAS, ADX |
 | `items/dashboard/route.ts` | GET | session-only |  | — |
 | `items/data-agent/[id]/a2a/route.ts` | GET POST | owner-scoped |  | — |
@@ -1294,7 +1294,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-sql-warehouse/[id]/start/route.ts` | POST | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/state/route.ts` | GET POST | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/warehouses/route.ts` | GET | session-only |  | Databricks, Synapse |
-| `items/dataflow/[id]/refresh/route.ts` | POST | session-only |  | — |
+| `items/dataflow/[id]/refresh/route.ts` | POST | owner-scoped |  | — |
 | `items/dataflow/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos |
 | `items/dataflow/config/route.ts` | GET | session-only | ● | ADF |
 | `items/dataflow/copilot/route.ts` | POST | owner-scoped | ● | — |
@@ -1380,8 +1380,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/graph-model/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/graph-model/[id]/source-schema/route.ts` | GET | session-only | ● | ADX |
 | `items/graph-model/route.ts` | GET POST | owner-scoped |  | — |
-| `items/graphql-api/[id]/publish/route.ts` | POST | session-only |  | APIM |
-| `items/graphql-api/[id]/query/route.ts` | POST | session-only |  | APIM |
+| `items/graphql-api/[id]/publish/route.ts` | POST | owner-scoped |  | APIM |
+| `items/graphql-api/[id]/query/route.ts` | POST | owner-scoped |  | APIM |
 | `items/graphql-api/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/health-check/[id]/action-group/route.ts` | GET POST PUT | owner-scoped | ● | Azure Monitor |
 | `items/health-check/[id]/history/route.ts` | GET | owner-scoped | ● | Azure Monitor |
@@ -1532,11 +1532,11 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/operations-agent/[id]/rules/route.ts` | GET POST DELETE | owner-scoped | ● | ADX, Azure Monitor, Cosmos |
 | `items/operations-agent/[id]/run/route.ts` | POST | owner-scoped |  | ADX |
 | `items/paginated-report/[id]/definition/route.ts` | GET PUT | owner-scoped |  | ADX |
-| `items/paginated-report/[id]/export/route.ts` | POST | session-only |  | — |
+| `items/paginated-report/[id]/export/route.ts` | POST | owner-scoped |  | — |
 | `items/paginated-report/[id]/preview/route.ts` | POST | session-only |  | Azure SQL, Synapse SQL |
 | `items/paginated-report/[id]/rdl/route.ts` | GET PUT | owner-scoped |  | — |
 | `items/paginated-report/[id]/render/route.ts` | POST | owner-scoped |  | AAS, ADX |
-| `items/paginated-report/[id]/route.ts` | GET | session-only |  | — |
+| `items/paginated-report/[id]/route.ts` | GET | owner-scoped |  | — |
 | `items/paginated-report/capabilities/route.ts` | GET | session-only |  | — |
 | `items/paginated-report/route.ts` | GET | session-only |  | — |
 | `items/plan/[id]/approval-callback/route.ts` | POST | public | ● | AAS, Cosmos |
@@ -1562,7 +1562,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/power-page/[id]/route.ts` | GET | session-only |  | — |
 | `items/power-page/route.ts` | GET | session-only |  | — |
 | `items/prompt-flow/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
-| `items/prompt-flow/[id]/run/route.ts` | POST | session-only |  | — |
+| `items/prompt-flow/[id]/run/route.ts` | POST | owner-scoped |  | — |
 | `items/prompt-flow/route.ts` | GET POST | session-only |  | — |
 | `items/rayfin-app/[id]/render/route.ts` | POST | owner-scoped | ● | AAS |
 | `items/rayfin-app/[id]/route.ts` | GET PUT PATCH DELETE | owner-scoped |  | — |
@@ -1581,14 +1581,14 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/report/[id]/connector-preview/route.ts` | POST | owner-scoped |  | — |
 | `items/report/[id]/data-source/route.ts` | GET PUT | owner-scoped |  | — |
 | `items/report/[id]/definition/route.ts` | PUT | owner-scoped |  | — |
-| `items/report/[id]/embed-token/route.ts` | POST | session-only |  | — |
+| `items/report/[id]/embed-token/route.ts` | POST | owner-scoped |  | — |
 | `items/report/[id]/endorsement/route.ts` | GET PUT PATCH | owner-scoped |  | — |
-| `items/report/[id]/export/route.ts` | POST | session-only |  | — |
+| `items/report/[id]/export/route.ts` | POST | owner-scoped |  | — |
 | `items/report/[id]/fields/route.ts` | GET | owner-scoped |  | AAS, Synapse SQL |
 | `items/report/[id]/map-token/route.ts` | GET | owner-scoped |  | Azure Maps |
 | `items/report/[id]/native-query/route.ts` | GET | owner-scoped |  | AAS |
 | `items/report/[id]/pages/route.ts` | GET | owner-scoped |  | — |
-| `items/report/[id]/paginated-embed-token/route.ts` | POST | session-only | ● | — |
+| `items/report/[id]/paginated-embed-token/route.ts` | POST | owner-scoped | ● | — |
 | `items/report/[id]/powerbi-copilot/route.ts` | POST | owner-scoped |  | — |
 | `items/report/[id]/profile/route.ts` | GET POST | owner-scoped |  | AAS, Synapse SQL |
 | `items/report/[id]/publish/route.ts` | POST DELETE | owner-scoped |  | — |
@@ -1615,22 +1615,22 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/semantic-model/[id]/datasource/route.ts` | GET POST PUT | owner-scoped | ● | AAS, ADX, Azure SQL, Cosmos, Key Vault, Synapse SQL |
 | `items/semantic-model/[id]/dax-query/route.ts` | POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/describe-bulk/route.ts` | GET POST | owner-scoped |  | AAS |
-| `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | session-only | ● | AAS, Synapse SQL |
-| `items/semantic-model/[id]/embed-token/route.ts` | POST | session-only |  | — |
+| `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | owner-scoped | ● | AAS, Synapse SQL |
+| `items/semantic-model/[id]/embed-token/route.ts` | POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/ingest/route.ts` | POST | owner-scoped | ● | AAS, ADF, ADLS, Cosmos |
-| `items/semantic-model/[id]/measures/route.ts` | POST | session-only |  | — |
+| `items/semantic-model/[id]/measures/route.ts` | POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/model-health/route.ts` | GET POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/model/route.ts` | GET POST PUT PATCH DELETE | owner-scoped |  | — |
 | `items/semantic-model/[id]/prep-for-ai/route.ts` | GET POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/refresh-policy/route.ts` | GET PUT | session-only | ● | — |
-| `items/semantic-model/[id]/refresh-schedule/route.ts` | GET PATCH | session-only | ● | — |
-| `items/semantic-model/[id]/refresh/route.ts` | GET POST | session-only | ● | — |
-| `items/semantic-model/[id]/refreshes/route.ts` | GET POST | session-only | ● | — |
+| `items/semantic-model/[id]/refresh-schedule/route.ts` | GET PATCH | owner-scoped | ● | — |
+| `items/semantic-model/[id]/refresh/route.ts` | GET POST | owner-scoped | ● | — |
+| `items/semantic-model/[id]/refreshes/route.ts` | GET POST | owner-scoped | ● | — |
 | `items/semantic-model/[id]/roles/route.ts` | GET POST PUT | owner-scoped | ● | Databricks, Synapse SQL |
 | `items/semantic-model/[id]/route.ts` | GET | owner-scoped |  | — |
 | `items/semantic-model/[id]/semantic-link/route.ts` | GET POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/synonyms/route.ts` | GET PUT | owner-scoped |  | — |
-| `items/semantic-model/[id]/take-over/route.ts` | POST | session-only |  | — |
+| `items/semantic-model/[id]/take-over/route.ts` | POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/verified-queries/route.ts` | GET POST | owner-scoped |  | — |
 | `items/semantic-model/aas-databases/route.ts` | GET | session-only | ● | — |
 | `items/semantic-model/build/route.ts` | POST | session-only |  | — |

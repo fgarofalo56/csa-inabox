@@ -18,9 +18,30 @@
  *
  * Docs: https://learn.microsoft.com/rest/api/power-bi/datasets/update-refresh-schedule-in-group
  *       https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — neither handler authorized the caller
+ * against the model, so on the Power BI backend any signed-in caller could read
+ * AND REWRITE a caller-named dataset's scheduled refresh. It was excused by
+ * check-route-guards' SHARED_BACKEND_ITEM_ROUTES on "no per-tenant Cosmos
+ * ownership to scope"; eight sibling routes under `semantic-model/[id]/**`
+ * resolve the SAME `[id]` as an owned Loom item.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
+ * RAW Power BI dataset GUID on the opt-in path and `loadOwnedItem` renders
+ * "no item" as 404. The `?workspaceId=` is a Power BI group id, so the scope is
+ * resolved FROM THE ITEM. GET admits read roles; PATCH does not.
+ *
+ * WHAT THIS DOES **NOT** FIX, stated rather than implied: on the AAS backend the
+ * schedule is a JSON ARM tag on the DEPLOYMENT'S SINGLE AAS SERVER —
+ * `aasGetRefreshSchedule()` / `aasSetRefreshSchedule(write)` take no model id at
+ * all, so that branch is deployment-wide, not per-model, and the guard below can
+ * only require that the caller holds a role on SOME model they named. Making the
+ * AAS schedule per-model is a storage-shape change, not an authorization one, and
+ * is reported rather than silently folded in here.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { type SessionPayload } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import {
   getRefreshSchedule as pbiGetRefreshSchedule,
   patchRefreshSchedule,
@@ -35,6 +56,7 @@ import {
   type AasScheduleWrite,
 } from '@/lib/azure/aas-server-client';
 import { usingAasAsync } from '../../_lib/bi-backend';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,10 +67,24 @@ const VALID_DAYS = new Set([
 const PBI_TIME_RE = /^([01]\d|2[0-3]):(00|30)$/; // HH:MM on 30-minute boundaries (Power BI)
 const AAS_TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/; // HH:MM any minute (AAS — Loom-managed)
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+/** Canonical owner → tenant-admin → shared-ACL ladder for this model, with the
+ *  workspace resolved FROM THE ITEM so authorization cannot be skipped (or
+ *  misdirected) by the caller's Power BI `?workspaceId=`. */
+async function denyUnlessAuthorized(session: SessionPayload, id: string, opts?: { allowReadRoles?: boolean }) {
+  return authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: id,
+    itemType: 'semantic-model',
+    notFound: 'semantic model not found',
+    ...(opts?.allowReadRoles ? { allowReadRoles: true } : {}),
+  });
+}
+
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
+  // READ surface → any workspace role may view the schedule.
+  const denied = await denyUnlessAuthorized(session, id, { allowReadRoles: true });
+  if (denied) return denied;
 
   if (await usingAasAsync()) {
     const gate = aasServerConfigGate();
@@ -74,12 +110,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
+  // WRITE surface → no `allowReadRoles`.
+  const denied = await denyUnlessAuthorized(session, id);
+  if (denied) return denied;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
   // ── AAS path ──────────────────────────────────────────────────────────
@@ -149,4 +186,4 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
   }
-}
+});

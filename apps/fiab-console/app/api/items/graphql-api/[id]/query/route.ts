@@ -7,21 +7,44 @@
  *
  *   Returns { ok, status, body } where body is the GraphQL JSON response text.
  *   If the item has not been published to APIM yet, returns 409 with guidance.
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — `withWorkspaceOwner('graphql-api',
+ *   { allowReadRoles: true })`. This handler executed a caller-authored GraphQL
+ *   document against another tenant's published API with no item-level check,
+ *   using the SERVER-HELD APIM all-access subscription key — so the caller never
+ *   needed a credential of their own, and the query reached whatever backend that
+ *   API's resolvers front.
+ *
+ *   It was excused by check-route-guards' SHARED_BACKEND_ITEM_ROUTES on "no
+ *   per-tenant Cosmos ownership to scope"; its own sibling `graphql-api/[id]`
+ *   resolves the SAME `[id]` through `loadOwnedItem`, so that premise was
+ *   provably false. The path graduates into NOW_GUARDED.
+ *
+ *   `withWorkspaceOwner` (not `authorizeItemWorkspace`) because a `graphql-api`
+ *   `[id]` is ALWAYS a Loom Cosmos item — the APIM apiId is minted FROM it by
+ *   `[id]/publish` — so the stricter 404-on-no-item wrapper costs no reachable
+ *   caller. `allowReadRoles` because running a query is what USING the API is;
+ *   the mutation (publish) is write-scoped in its own route.
+ *
+ * THE APIM api id STILL USES THE RAW ROUTE ID, matching `[id]/publish`:
+ *   `loadOwnedItem` resolves the `loom:` synthetic-id prefix for the OWNERSHIP
+ *   lookup only, so resolving `getApi()` from `item.id` instead would look up a
+ *   different apiId than publish wrote for every bundle-installed API.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { getApi, testApiCall, ApimError } from '@/lib/azure/apim-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+const ITEM_TYPE = 'graphql-api';
+
+export const POST = withWorkspaceOwner(ITEM_TYPE, { allowReadRoles: true }, async (req, { session, params }) => {
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
-  const id = (await ctx.params).id;
+  const id = params.id;
   const b = await req.json().catch(() => ({}));
   const query = String(b?.query || '').trim();
   if (!query) return NextResponse.json({ ok: false, error: 'query is required' }, { status: 400 });
@@ -63,4 +86,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof ApimError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
   }
-}
+});

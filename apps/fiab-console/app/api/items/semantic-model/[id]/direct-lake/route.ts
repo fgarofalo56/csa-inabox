@@ -68,10 +68,33 @@
  * Honest gates: shim-disabled (LOOM_DIRECT_LAKE_SHIM_ENABLED unset) and
  * Event-Grid-queue-missing (LOOM_DIRECT_LAKE_SHIM_QUEUE_ID unset) are surfaced
  * structurally, never faked.
+ *
+ * ── AUTHORIZATION (GHSA-hf73-rp4q-66pf) ─────────────────────────────────────
+ * No handler authorized the caller against the model. GET returned another
+ * tenant's shim config — `deltaSourcePath` is an `abfss://` address and the
+ * config also carries the bound `workspaceId` / `datasetId` / `xmlaEndpoint`;
+ * POST ran a caller-supplied DAX or SQL query attributed to the model; PUT
+ * UPSERT'd the shim config and provisioned an Event Grid subscription against
+ * the named storage account. It was excused by check-route-guards'
+ * SHARED_BACKEND_ITEM_ROUTES on "no per-tenant Cosmos ownership to scope"; eight
+ * sibling routes under `semantic-model/[id]/**` resolve the SAME `[id]` as an
+ * owned Loom item, so that premise was provably false for this item type.
+ *
+ * PUT is included even though it was not flagged: it matched GUARD_SIGNAL_RE on
+ * `session.claims?.oid` passed to `upsertShimConfig` as the SAVED-BY
+ * ATTRIBUTION, never as a check. That is the presence-vs-enforcement weakness
+ * the checker's own header documents; fixing GET/POST and leaving the WRITE half
+ * passing on an audit field would have been the worse outcome.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
+ * RAW Power BI dataset GUID on the opt-in warm-cache path and `loadOwnedItem`
+ * renders "no item" as 404. GET/POST admit read roles (status read; DirectQuery
+ * read); PUT does not — it writes config and provisions infrastructure.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import {
   executeQuery,
   serverlessTarget,
@@ -145,16 +168,33 @@ function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
 }
 
+/** Canonical owner → tenant-admin → shared-ACL ladder for this model, with the
+ *  workspace resolved FROM THE ITEM so authorization cannot be skipped (or
+ *  misdirected) by the caller's Power BI `workspaceId`. */
+async function denyUnlessAuthorized(session: SessionPayload, id: string, opts?: { allowReadRoles?: boolean }) {
+  return authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: id,
+    itemType: 'semantic-model',
+    notFound: 'semantic model not found',
+    ...(opts?.allowReadRoles ? { allowReadRoles: true } : {}),
+  });
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  const id = (await ctx.params).id;
+  // READ surface (DirectQuery) → any workspace role admits the caller.
+  const denied = await denyUnlessAuthorized(session, id, { allowReadRoles: true });
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   const workspaceId = (body?.workspaceId || '').toString().trim();
   const table = (body?.table || '').toString().trim();
   const rawSql = (body?.sql || '').toString().trim();
   const maxRows = Math.min(Math.max(1, parseInt(body?.maxRows ?? '1000', 10) || 1000), 5_000);
-  const id = (await ctx.params).id;
 
   if (!table && !rawSql) {
     return NextResponse.json({ ok: false, error: 'table or sql required' }, { status: 400 });
@@ -323,6 +363,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
+  // READ surface → any workspace role may view the shim wiring status.
+  const denied = await denyUnlessAuthorized(session, id, { allowReadRoles: true });
+  if (denied) return denied;
 
   if (!shimEnabled()) {
     return NextResponse.json({ ok: true, shimEnabled: false, hint: SHIM_DISABLED_HINT, runs: [], config: null });
@@ -378,6 +421,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
+  // WRITE surface (config upsert + Event Grid provisioning) → no read roles.
+  const denied = await denyUnlessAuthorized(session, id);
+  if (denied) return denied;
 
   if (!shimEnabled()) {
     return NextResponse.json({ ok: false, shimEnabled: false, error: SHIM_DISABLED_HINT }, { status: 409 });

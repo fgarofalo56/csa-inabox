@@ -6,13 +6,36 @@
  * NOT proxy the /render route, which returns the on-screen JSON page-model and
  * produced a JSON blob renamed `.pdf`/`.xlsx`/`.docx`. The honest-gate must key
  * on `LOOM_PAGINATED_RENDER_URL` (export's real dependency).
+ *
+ * GHSA-hf73-rp4q-66pf added `authorizeItemWorkspace` to this handler, so the
+ * guard's data layer is stubbed here to the AUTHORIZED answer — these cases are
+ * about the renderer contract, not the boundary. The boundary itself is covered
+ * in `paginated-report/[id]/__tests__/ghsa-item-authz.test.ts`, which stubs the
+ * same layer to a DENIED answer and asserts the 404.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const getSessionMock = vi.fn(
   () => ({ claims: { oid: 'o' }, exp: Date.now() / 1000 + 3600 }) as any,
 );
-vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+vi.mock('@/lib/auth/session', async () => {
+  const actual = await vi.importActual<any>('@/lib/auth/session');
+  return { ...actual, getSession: () => getSessionMock() };
+});
+
+// The guard runs for real; only what it reads is stubbed.
+const cosmosQueryStub = () => ({
+  items: { query: () => ({ fetchAll: async () => ({ resources: [{ workspaceId: 'ws1' }] }) }) },
+});
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => cosmosQueryStub(),
+  workspacesContainer: async () => cosmosQueryStub(),
+}));
+vi.mock('@/lib/auth/workspace-access', () => ({
+  resolveWorkspaceAccessByOid: async () => ({
+    workspace: { id: 'ws1' }, role: 'Owner', via: 'owner', canWrite: true,
+  }),
+}));
 
 const paginatedRenderGateMock = vi.fn();
 const renderReportMock = vi.fn();

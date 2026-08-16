@@ -145,6 +145,32 @@ const TOUCH_EXEMPT = new Map([
   // …)` (lib/api/route-toolkit.ts), which composes withSession + the same
   // enforceCapability call into a form with no returned value to drop.
   ['apps/fiab-console/app/api/admin/env-config/route.ts', "#3051: opt-in status payload; codemod skips both handlers — prologue is enforceCapability(Admin) (401/403, fails closed), STRICTER than the withSession shape; 403 now PINNED by check-route-guards' gate-consumption check (#3088, re-measured) — route-level 401 contract test still a follow-up"],
+  // GHSA-hf73-rp4q-66pf touched this route ONLY to make its stated posture true.
+  // It claimed to return "the ports of A DISCOVERABLE data product" and resolved
+  // "only upstream contract summaries", while running two unscoped
+  // cross-partition lookups: it established no discoverability, no tenant, and no
+  // workspace, and a port `ref` is an infrastructure ADDRESS (abfss:// path /
+  // Synapse schema.table / ADX database). It now enforces the sentence it was
+  // excused on. The auth prologue is UNTOUCHED — getSession() → 401, unchanged.
+  //
+  // THE CODEMOD DECLINES IT — `--file=app/api/data-products/[id]/ports/route.ts`
+  // reports "SKIPPED (GET: getSession() without the exact 401 guard)", because the
+  // 401 goes through `apiError('Unauthorized', 401, { code: 'unauthorized' })`
+  // rather than the literal shape withSession replaces. Hand-migrating would
+  // REWRITE that envelope to withSession's `apiUnauthorized()`
+  // ({ok:false,error:'unauthenticated'}, no `code`) — a behaviour change to an
+  // error contract, inside a security fix, for no security gain. The 15 sibling
+  // routes in this same change that the codemod DID accept were all migrated.
+  //
+  // COMPENSATING CONTROL (verified, not assumed): the 401 is pinned by
+  // `app/api/data-products/[id]/ports/__tests__/route.test.ts` — "401s with no
+  // session, before any Cosmos read" — which also asserts the ACL resolver is
+  // never reached, so a dropped prologue fails a merge-blocking test. The
+  // AUTHORIZATION half is pinned separately in that file (draft/foreign-tenant
+  // 404s, the non-distinguishing upstream echo). NOTE check-route-guards does not
+  // pin the 401 here: its remit is authorization, and this route passes it on the
+  // `authorizeWorkspace` call the fix added, not on the session check.
+  ['apps/fiab-console/app/api/data-products/[id]/ports/route.ts', 'GHSA-hf73-rp4q-66pf: enforce the discoverability the route already claimed; auth prologue untouched; codemod skips it — 401 goes through apiError(...,{code}), not the literal guard shape, and migrating would rewrite that envelope for no security gain; 401 + authorization pinned by ports/__tests__/route.test.ts'],
   // #2622 touched this route ONLY to swap ten raw `executeStatement(...)` calls
   // for the AUDITED `ucSql(...)` wrapper, so the UC ABAC column-mask + row-filter
   // DDL it issues finally produces a Loom Unity audit row. Same arguments, same
