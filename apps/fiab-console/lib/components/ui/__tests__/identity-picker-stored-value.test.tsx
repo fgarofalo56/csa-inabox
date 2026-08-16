@@ -14,6 +14,7 @@
  * not, and cannot be allowed to regress into, that shape.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import React from 'react';
 import { render, screen, cleanup, waitFor, configure } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
@@ -116,25 +117,37 @@ describe('IdentityPicker stored-value mode — an unresolvable value survives', 
     expect(save()).toBe(STORED_OID);
   });
 
-  it('keeps the stored value even while a SEARCH returns an entirely different set', async () => {
-    // This is the azure-resource-picker defect, reproduced as a control: a
-    // picker that derived "selected" from the fetched list would drop the chip
-    // the moment a search returned rows that do not include it.
+  it('keeps the stored value while a live SEARCH returns an entirely different set', async () => {
+    // The azure-resource-picker defect, reproduced as a control: a picker that
+    // derived "selected" from the fetched list would drop the chip the moment a
+    // search returned rows that do not include it.
+    //
+    // An earlier revision of this spec never RAN a search — `onChange` was a
+    // `vi.fn()`, so `value` never changed, the box never rendered and the `q=`
+    // route was never hit. It still caught the defect via the remount, but its
+    // name overstated it. The state is driven for real here.
     routes = [
       [/resolve=/, { body: { ok: true, results: [] } }],
       [/[?&]q=/, { body: { ok: true, results: [LIVE_USER, LIVE_GROUP] } }],
     ];
-    const onChange = vi.fn();
     const user = userEvent.setup();
-    wrap(<IdentityPicker kind="all" value={STORED_OID} onChange={onChange} />);
+    function Host() {
+      const [v, setV] = React.useState(STORED_OID);
+      return <IdentityPicker kind="all" value={v} onChange={(id) => setV(id)} />;
+    }
+    wrap(<Host />);
     await screen.findByText(STORED_OID);
 
-    // Clear, search (the results contain neither the stored id nor anything
-    // like it), then re-render with the ORIGINAL stored value still persisted:
-    // the caller never committed a new pick, so nothing may have changed.
+    // Clear -> the search surface returns; run a REAL search whose results
+    // contain neither the stored id nor anything like it.
     await user.click(screen.getByRole('button', { name: /Clear selected principal/i }));
-    expect(onChange).toHaveBeenCalledWith('');
+    await user.type(await screen.findByRole('textbox'), 'part');
+    expect(await screen.findByText('Ada Lovelace', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(calls.some((u) => u.includes('q=part'))).toBe(true);
+    expect(screen.getByText('Finance Analysts')).toBeInTheDocument();
 
+    // Re-mount with the ORIGINAL stored value: nothing the search returned may
+    // have displaced it.
     cleanup();
     wrap(<IdentityPicker kind="all" value={STORED_OID} onChange={() => {}} />);
     expect(await screen.findByText(STORED_OID)).toBeInTheDocument();
@@ -176,13 +189,13 @@ describe('IdentityPicker — the surface stays usable when search yields nothing
     expect((box as HTMLInputElement).value).toBe('nobodyx');
   });
 
-  it('surfaces the honest gate with the exact AppRoles, and still leaves the box enabled', async () => {
+  it('surfaces the honest gate through HonestGate — Fix-it + registry link, box still enabled', async () => {
     routes = [[/[?&]q=/, {
       status: 503,
       body: {
         ok: false, error: 'not_configured',
         remediation: 'Console UAMI lacks the Microsoft Graph application permissions.',
-        hint: { rolesRequired: [{ name: 'User.Read.All', appRoleId: 'df021288-bdef-4463-88db-98f22de89214' }] },
+        hint: { missingEnvVar: 'LOOM_IDENTITY_PICKER_ENABLED', rolesRequired: [{ name: 'User.Read.All', appRoleId: 'df021288-bdef-4463-88db-98f22de89214' }] },
       },
     }]];
     const user = userEvent.setup();
@@ -190,8 +203,10 @@ describe('IdentityPicker — the surface stays usable when search yields nothing
     const box = screen.getByRole('textbox');
     await user.type(box, 'ada');
 
-    expect(await screen.findByText(/not_configured/i, {}, { timeout: 3000 })).toBeInTheDocument();
-    expect(screen.getByText(/df021288-bdef-4463-88db-98f22de89214/)).toBeInTheDocument();
+    // G2 shape, not a bare MessageBar: an inline Fix-it plus the registry link.
+    expect(await screen.findByRole('button', { name: /Fix it/i }, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Gate registry/i })).toHaveAttribute('href', '/admin/gates');
+    expect(screen.getByText(/LOOM_IDENTITY_PICKER_ENABLED/)).toBeInTheDocument();
     expect(box).not.toBeDisabled();
   });
 
@@ -220,12 +235,24 @@ describe('IdentityPicker — manual-entry escape hatch', () => {
     body: { ok: false, error: 'not_configured', remediation: 'Grant the Console UAMI User.Read.All.' },
   };
 
-  it('is absent entirely unless the caller opts in — hand-typing is not the default', async () => {
+  it('is ON by default — the gate must never be a dead end on any adopting surface', async () => {
+    // Shipped opt-in for one review cycle, which left ten adopted surfaces with
+    // no way to enter a principal at all in a default deployment (the flag is
+    // false on every deploy path). Default-on is the fix; opt-OUT is available
+    // where hand-entry is genuinely wrong.
     routes = [[/[?&]q=/, GATE]];
     const user = userEvent.setup();
     wrap(<IdentityPicker kind="user" />);
     await user.type(screen.getByRole('textbox'), 'ada');
-    await screen.findByText(/not_configured/i, {}, { timeout: 3000 });
+    expect(await screen.findByPlaceholderText(/Entra object id/i, {}, { timeout: 3000 })).toBeInTheDocument();
+  });
+
+  it('honours an explicit opt-OUT', async () => {
+    routes = [[/[?&]q=/, GATE]];
+    const user = userEvent.setup();
+    wrap(<IdentityPicker kind="user" allowManualEntry={false} />);
+    await user.type(screen.getByRole('textbox'), 'ada');
+    await screen.findByRole('button', { name: /Fix it/i }, { timeout: 3000 });
     expect(screen.queryByPlaceholderText(/Entra object id/i)).toBeNull();
   });
 
@@ -287,16 +314,22 @@ describe('IdentityPicker — manual-entry escape hatch', () => {
     expect(await screen.findByText(/not an Entra object id/i)).toBeInTheDocument();
   });
 
-  it('falls back to onChange when no explicit manual sink is given (stored-value callers)', async () => {
+  it('falls back to onChange WITH a synthesized hit when no explicit manual sink is given', async () => {
+    // The hit is not decoration: `onChange(id, hit?)` omits the hit on exactly
+    // one other path — clearing — so a caller reading `if (!hit)` as "cleared"
+    // would discard a manually entered principal. powerbi-governance did.
     routes = [[/[?&]q=/, GATE]];
     const onChange = vi.fn();
     const user = userEvent.setup();
-    wrap(<IdentityPicker kind="user" allowManualEntry onChange={onChange} />);
+    wrap(<IdentityPicker kind="group" allowManualEntry onChange={onChange} />);
     await user.type(screen.getByRole('textbox'), 'ada');
     const box = await screen.findByPlaceholderText(/Entra object id/i, {}, { timeout: 3000 });
     await user.type(box, STORED_OID);
     await user.click(screen.getByRole('button', { name: /^Add$/ }));
-    expect(onChange).toHaveBeenCalledWith(STORED_OID);
+    expect(onChange).toHaveBeenCalledWith(
+      STORED_OID,
+      expect.objectContaining({ id: STORED_OID, type: 'group' }),
+    );
   });
 
   it('vanishes when the caller DISABLES the picker after a failure — not an inert box', async () => {
@@ -355,16 +388,69 @@ describe('IdentityPicker — kind subsets and commit', () => {
     expect(calls.filter((u) => u.includes('resolve='))).toHaveLength(0);
   });
 
-  it('resolves a stored value exactly once, not on every re-render', async () => {
+  it('resolves a stored value exactly once across re-renders that CHANGE other props', async () => {
+    // The earlier version of this spec rerendered with byte-identical props, so
+    // React never re-ran the effect regardless of the `resolvedFor` guard —
+    // deleting the guard left it passing. Vary an unrelated prop so the
+    // component genuinely re-renders and the effect's identity is exercised.
     routes = [[/resolve=/, { body: { ok: true, results: [] } }]];
-    const view = wrap(<IdentityPicker kind="user" value={STORED_OID} onChange={() => {}} />);
+    const view = wrap(<IdentityPicker kind="user" value={STORED_OID} onChange={() => {}} label="A" />);
     await screen.findByText(/Not resolvable/i);
+    for (const label of ['B', 'C', 'D']) {
+      view.rerender(
+        <FluentProvider theme={webLightTheme}>
+          <IdentityPicker kind="user" value={STORED_OID} onChange={() => {}} label={label} />
+        </FluentProvider>,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    expect(calls.filter((u) => u.includes('resolve='))).toHaveLength(1);
+  });
+
+  it('does not spin forever when the effect re-runs mid-flight (StrictMode remount)', async () => {
+    // The resolve effect's cleanup released only its `live` flag, not
+    // `resolvedFor`. A re-run then hit the "already resolved this value" early
+    // return and never cleared `resolving`, so the chip span "Resolving in the
+    // directory…" permanently. next.config.mjs enables StrictMode, which
+    // double-invokes every effect, so this fired on every developer's first
+    // paint. Driven here by changing `apiBase` mid-flight.
+    routes = [[/resolve=/, { body: { ok: true, results: [] } }]];
+    const view = wrap(<IdentityPicker kind="user" value={STORED_OID} onChange={() => {}} apiBase="/api/a" />);
     view.rerender(
       <FluentProvider theme={webLightTheme}>
-        <IdentityPicker kind="user" value={STORED_OID} onChange={() => {}} />
+        <IdentityPicker kind="user" value={STORED_OID} onChange={() => {}} apiBase="/api/b" />
       </FluentProvider>,
     );
-    await new Promise((r) => setTimeout(r, 50));
-    expect(calls.filter((u) => u.includes('resolve='))).toHaveLength(1);
+    // Resolution completes and the transient state clears.
+    expect(await screen.findByText(/Not resolvable/i, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText(/Resolving in the directory/i)).toBeNull();
+    expect(screen.getByText(STORED_OID)).toBeInTheDocument();
+  });
+
+  it('a PICKED principal is not re-resolved — the pick seeds the chip', async () => {
+    // Without seeding, committing a pick re-rendered the parent with the new
+    // `value`, the chip painted the raw GUID, and a SECOND Graph call went out
+    // for a principal the search had just returned — which, if it came back
+    // empty, left the chip reading "Not resolvable" about something chosen from
+    // that directory seconds earlier.
+    routes = [
+      [/resolve=/, { body: { ok: true, results: [] } }],
+      [/[?&]q=/, { body: { ok: true, results: [LIVE_USER] } }],
+    ];
+    const user = userEvent.setup();
+    function Host() {
+      const [v, setV] = React.useState('');
+      return <IdentityPicker kind="user" value={v} onChange={(id) => setV(id)} />;
+    }
+    wrap(<Host />);
+    await user.type(screen.getByRole('textbox'), 'ada');
+    await user.click(await screen.findByText('Ada Lovelace', {}, { timeout: 3000 }));
+
+    // The chip shows the resolved persona immediately…
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 80));
+    // …and no resolve lookup was issued at all.
+    expect(calls.filter((u) => u.includes('resolve='))).toHaveLength(0);
+    expect(screen.queryByText(/Not resolvable/i)).toBeNull();
   });
 });

@@ -54,6 +54,9 @@ const useStyles = makeStyles({
 type AppMode = 'existing' | 'new' | 'disable';
 type AdminMode = 'self' | 'group';
 
+/** Sentinel option value — "search every app registration, not just the scanned ones". */
+const OTHER_APP = '__other__';
+
 interface IdentityState {
   msal: { configured: boolean; configuredClientId?: string; tenantId?: string; recommendation: AppMode };
   appRegistrations: { reachable: boolean; items: { appId: string; displayName: string; redirectUris: string[] }[] };
@@ -67,6 +70,7 @@ export function SetupIdentityCard() {
   const [error, setError] = useState<string | null>(null);
   const [appMode, setAppMode] = useState<AppMode>('new');
   const [existingClientId, setExistingClientId] = useState('');
+  const [searchAllApps, setSearchAllApps] = useState(false);
   const [adminMode, setAdminMode] = useState<AdminMode>('self');
   const [groupId, setGroupId] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
@@ -171,29 +175,53 @@ export function SetupIdentityCard() {
                 the id is CHOSEN, not typed. A stored id the scan no longer
                 returns (deleted, renamed, or the scan itself unreachable) is
                 kept as its own option so re-opening the wizard cannot silently
-                blank a recorded choice. */}
-            {appRegOptions.length > 0 ? (
+                blank a recorded choice.
+
+                "Other / search all app registrations" is ALWAYS offered, not
+                only when the scan came back empty. `discoverApps()` filters
+                `startswith(displayName,'CSA Loom Console')`, so an operator
+                with one matching app plus the differently-named one they
+                actually want would otherwise have no way to reach the latter —
+                they used to type its client id. Keying the fallback on an
+                EMPTY list was the bug; keying it on the operator's choice is
+                the fix. */}
+            {!searchAllApps && appRegOptions.length > 0 ? (
               <Dropdown
                 placeholder="Select an app registration"
                 value={appRegLabel}
                 selectedOptions={existingClientId ? [existingClientId] : []}
-                onOptionSelect={(_, d) => setExistingClientId(String(d.optionValue || ''))}
+                onOptionSelect={(_, d) => {
+                  const v = String(d.optionValue || '');
+                  if (v === OTHER_APP) { setSearchAllApps(true); setExistingClientId(''); return; }
+                  setExistingClientId(v);
+                }}
               >
                 {appRegOptions.map((a) => (
                   <Option key={a.appId} value={a.appId} text={a.label}>{a.label}</Option>
                 ))}
+                <Option value={OTHER_APP} text="Other / search all app registrations…">
+                  Other / search all app registrations…
+                </Option>
               </Dropdown>
             ) : (
-              // No Loom-named app registration was discovered — never a dead
-              // end: fall through to a live service-principal search so any
-              // existing app in the tenant can still be chosen.
-              <IdentityPicker
-                kind="spn"
-                label="Search the tenant's app registrations"
-                placeholder="App registration display name"
-                value={existingClientId}
-                onChange={(id, hit) => setExistingClientId(hit?.appId || id)}
-              />
+              <>
+                <IdentityPicker
+                  kind="spn"
+                  label="Search the tenant's app registrations"
+                  placeholder="App registration display name"
+                  value={existingClientId}
+                  onChange={(id, hit) => setExistingClientId(hit?.appId || id)}
+                />
+                {appRegOptions.length > 0 && (
+                  <Button
+                    appearance="transparent"
+                    size="small"
+                    onClick={() => { setSearchAllApps(false); setExistingClientId(''); }}
+                  >
+                    Back to the {appRegOptions.length} discovered registration(s)
+                  </Button>
+                )}
+              </>
             )}
           </Field>
         )}

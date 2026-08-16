@@ -42,6 +42,7 @@ describe('graph-identity-client — stored-principal resolution', () => {
     process.env.LOOM_UAMI_CLIENT_ID = 'test-uami';
     process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
     delete process.env.LOOM_GRAPH_BASE;
+    delete process.env.LOOM_CLOUD_BOUNDARY;
     delete process.env.AZURE_CLOUD;
     fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
@@ -113,14 +114,36 @@ describe('graph-identity-client — stored-principal resolution', () => {
     expect(decodeURIComponent(String(fetchMock.mock.calls[0][0]))).toContain("O''Brien Analysts");
   });
 
-  it('resolves against the SOVEREIGN Graph host in Gov, not the commercial one (cloud-parity)', async () => {
+  it('resolves against each SOVEREIGN Graph host — the real three-way split (cloud-parity)', async () => {
+    // The earlier version set LOOM_GRAPH_BASE, which is the ONE branch that
+    // short-circuits graphBoundary() — so the split it claimed to cover was
+    // never exercised. Drive the boundary itself.
+    const cases: Array<[string, string]> = [
+      ['GCC-High', 'https://graph.microsoft.us'],
+      ['IL5', 'https://dod-graph.microsoft.us'],
+    ];
+    for (const [boundary, host] of cases) {
+      delete process.env.LOOM_GRAPH_BASE;
+      process.env.LOOM_CLOUD_BOUNDARY = boundary;
+      fetchMock.mockClear();
+      fetchMock.mockImplementation(async () => ok({ value: [] }));
+      vi.resetModules();
+      const mod = await import('../graph-identity-client');
+      await mod.resolvePrincipalRef(OID);
+      const url = String(fetchMock.mock.calls[0][0]);
+      expect(url, `${boundary} must resolve against ${host}`).toContain(`${host}/v1.0/directoryObjects/getByIds`);
+      expect(url).not.toContain('graph.microsoft.com');
+    }
+  });
+
+  it('honours an explicit LOOM_GRAPH_BASE override ahead of the boundary map', async () => {
     process.env.LOOM_GRAPH_BASE = 'https://graph.microsoft.us';
+    process.env.LOOM_CLOUD_BOUNDARY = 'Commercial';
     fetchMock.mockImplementation(async () => ok({ value: [] }));
     vi.resetModules();
     const mod = await import('../graph-identity-client');
     await mod.resolvePrincipalRef(OID);
     expect(String(fetchMock.mock.calls[0][0])).toContain('https://graph.microsoft.us/v1.0/directoryObjects/getByIds');
-    expect(String(fetchMock.mock.calls[0][0])).not.toContain('graph.microsoft.com');
   });
 
   it('is gated on LOOM_IDENTITY_PICKER_ENABLED like every other read on this client', async () => {
@@ -129,10 +152,19 @@ describe('graph-identity-client — stored-principal resolution', () => {
     await expect(mod.resolvePrincipalRef(OID)).rejects.toBeInstanceOf(mod.GraphIdentityNotConfiguredError);
   });
 
-  it('getPrincipalsByIds de-dupes, drops blanks and caps the batch', async () => {
+  it('getPrincipalsByIds de-dupes, drops blanks, and CAPS the batch at 100', async () => {
     fetchMock.mockImplementation(async () => ok({ value: [] }));
     const mod = await import('../graph-identity-client');
     await mod.getPrincipalsByIds(['a', 'a', '', '  ', 'b']);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).ids).toEqual(['a', 'b']);
+
+    // The cap was in the name of this spec and asserted by nothing.
+    // getByIds rejects more than 1000 per call; this client caps at 100.
+    fetchMock.mockClear();
+    await mod.getPrincipalsByIds(Array.from({ length: 250 }, (_, i) => `id-${i}`));
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body).ids;
+    expect(sent).toHaveLength(100);
+    expect(sent[0]).toBe('id-0');
+    expect(sent[99]).toBe('id-99');
   });
 });

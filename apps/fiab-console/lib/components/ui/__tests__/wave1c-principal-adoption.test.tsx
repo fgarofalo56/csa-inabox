@@ -154,7 +154,7 @@ describe('access reviews — campaign scope + leaver revoke-all', () => {
     expect(screen.getByRole('button', { name: /Revoke all access/i })).toBeDisabled();
   });
 
-  it('the campaign wizard scope is a picker with no free-text oid escape hatch', async () => {
+  it('the campaign wizard scope is a picker, with the free-text oid demoted behind the gate', async () => {
     const { AccessReviewsPanel } = await import('@/lib/components/admin/access-reviews-panel');
     const user = userEvent.setup();
     clientFetchMock.mockResolvedValue(json({ ok: true, reviews: [], packages: [] }));
@@ -281,7 +281,10 @@ describe('lakehouse Share dialog — RBAC recipient', () => {
 
     expect(await screen.findByText(GHOST)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/11111111-2222-3333-4444-555555555555/)).toBeNull();
-    // A stored value the directory cannot resolve must still be grantable.
+    // A stored value the directory cannot resolve must still be grantable. The
+    // load-bearing assertion is the findByText above — `not.toBeDisabled()`
+    // would hold even if the picker had rendered nothing at all, so it is a
+    // corroborating check, not the proof.
     expect(screen.getByRole('button', { name: /Grant access/i })).not.toBeDisabled();
   });
 });
@@ -313,6 +316,7 @@ describe('lakehouse Permissions dialog — container RBAC grant', () => {
 
     expect(await screen.findByText(GHOST)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/11111111-2222-3333-4444-555555555555/)).toBeNull();
+    // As above: findByText is the proof, this is corroboration.
     expect(screen.getByRole('button', { name: /Grant role/i })).not.toBeDisabled();
   });
 });
@@ -399,8 +403,11 @@ describe('OneLake security tab — role members', () => {
     await user.click(screen.getByRole('button', { name: /^Next$/ }));
     await user.click(screen.getByRole('button', { name: /^Next$/ }));
 
-    // Before any search: the picker is the ONLY way in. Hand-typing is no
-    // longer a peer of the picker sitting beside it.
+    // Before any search the picker is the PRIMARY way in — hand-typing is no
+    // longer a peer control sitting beside it. It is demoted, not removed: an
+    // earlier revision of this spec asserted "the picker is the ONLY way in",
+    // which read as a virtue and was in fact the G2 dead end, since
+    // LOOM_IDENTITY_PICKER_ENABLED is false on every deploy path.
     expect(await screen.findByPlaceholderText(/Display name or UPN/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/Entra object id/i)).toBeNull();
     expect(screen.queryByPlaceholderText(/00000000-0000-0000-0000-000000000000/)).toBeNull();

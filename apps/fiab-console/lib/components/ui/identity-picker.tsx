@@ -52,6 +52,7 @@ import {
   Search16Regular, Person16Regular, People16Regular, Apps16Regular,
   ChevronDown16Regular, ChevronRight16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 
 // Mirrors IdentityHit from lib/azure/graph-identity-client.ts. Duplicated here
 // so the client component never imports server-only Graph code.
@@ -124,6 +125,24 @@ const useStyles = makeStyles({
     display: 'block',
     marginTop: tokens.spacingVerticalXXS,
   },
+  /**
+   * The chip's inner column. Lives here rather than as an inline style override
+   * because web3-ui.md forbids hard-coded spacing and this file already keeps
+   * every other layout rule in makeStyles. No `gap` declared at all: the CSS
+   * property initialises to `normal`, which computes to zero for a flex
+   * container, so the rendering is identical to the literal it replaces.
+   *
+   * (The first attempt at this comment spelled the offending inline attribute
+   * out longhand and check-no-raw-px flagged the COMMENT — its region matcher
+   * does not strip comments. Left as a note so the next person does not spend a
+   * cycle on it.)
+   */
+  chipStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    minWidth: 0,
+  },
   storedId: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
@@ -137,6 +156,30 @@ const ALL_KINDS: IdentityKind[] = ['user', 'group', 'spn'];
 
 /** An Entra object id. Used only to validate the escape hatch's input. */
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A NOT-CONFIGURED gate (the deployment has not wired
+ * `LOOM_IDENTITY_PICKER_ENABLED`) vs any other failure. Only the former belongs
+ * in `HonestGate`, because only the former has a Fix-it the registry can apply.
+ */
+function isGateError(e: PickerError): boolean {
+  return e.message === 'not_configured' || e.hint?.missingEnvVar === 'LOOM_IDENTITY_PICKER_ENABLED';
+}
+
+/**
+ * A sentence, never a raw code. `admin.permissions::Reader` denials arrive as
+ * `{ok:false,error:'forbidden'}` with no hint, and rendering `error.message`
+ * verbatim put the literal word "forbidden" in the title where a user expects
+ * an explanation.
+ */
+function humanErrorTitle(e: PickerError): string {
+  const m = String(e.message || '');
+  if (m === 'forbidden') return 'You do not have permission to search the directory';
+  if (m === 'unauthenticated') return 'Your session expired — sign in again to search the directory';
+  if (/^graph_40[13]$/.test(m)) return 'The Console identity is not consented to search the directory';
+  if (/^graph_\d+$/.test(m)) return `Microsoft Graph returned ${m.slice(6)} — directory search is unavailable`;
+  return m || 'Directory search is unavailable';
+}
 
 function kindLabel(t: IdentityKind): string {
   if (t === 'group') return 'group';
@@ -191,28 +234,28 @@ export interface IdentityPickerProps {
   /** Allow expanding a group to its transitive members. Default true. */
   allowGroupExpand?: boolean;
   /**
-   * ESCAPE HATCH (opt-in, default off). Reveals a manual object-id entry
-   * BEHIND THE GATE — only once a directory search has actually failed.
+   * ESCAPE HATCH — manual object-id entry, revealed BEHIND THE GATE (only once
+   * a directory search has actually failed). **Defaults to ON.**
    *
-   * The wave that built stored-value mode initially DELETED the manual box on
-   * `onelake-security-tab.tsx`, and that was wrong: with Graph unreachable the
-   * role wizard could not add a member at all, which is the "no results +
-   * nothing you can do" dead end `auto-bind-by-default.md` forbids outright. A
-   * gate naming the exact AppRoles does not fix that — the operator cannot act
-   * past it ON THAT SURFACE.
+   * It shipped opt-in for one review cycle and that was a G2 defect, because
+   * `LOOM_IDENTITY_PICKER_ENABLED` is FALSE on every deploy path today —
+   * `main.bicep:134`, `admin-plane/main.bicep:2082`, `commercial.bicepparam`
+   * hard-false, `commercial-full` / `tenant-dmlz` via
+   * `readEnvironmentVariable(…, 'false')`, and unset (therefore false) in
+   * `gcc` / `gcc-high` / `il5`. So `assertEnabled()` throws, the BFF 503s
+   * `not_configured`, and an opt-in hatch left TEN adopted surfaces with no way
+   * to enter a principal at all — each of which shipped a working `<Input>`
+   * before this wave. Flipping the bicep flag is complementary, NOT a
+   * substitute: a Graph 403 before admin consent produces the identical state,
+   * which this component's own `notConfiguredHint.followUp` says outright.
    *
-   * The rule's target is that hand-typing stops being the DEFAULT, not that it
-   * becomes impossible when discovery is down. So the hatch is: off unless the
-   * caller opts in, invisible until the search errors, validated, and — because
-   * its placeholder names what it takes in words — visible to
-   * `check-no-freeform.mjs` as a counted free-text SITE. An escape hatch no
-   * guard can count is how these went unmeasured in the first place.
+   * `EntraGroupPicker` already behaves this way (`entra-group-picker.tsx:73-75`
+   * lets a pasted GUID stand, commented "the honest-gate fallback"), and the
+   * argument this lane used to DECLINE migrating that component — "it would add
+   * a day-one gate to a surface that works today" — condemns an opt-in hatch
+   * here for exactly the same reason.
    *
-   * KNOWN LIMIT, stated because an unstated one reads as coverage: the guard
-   * scans a wrapper's DEFINITION file, not its call sites (its own header says
-   * so), so this hatch is counted ONCE here however many surfaces enable it.
-   * That is the deliberate trade against forking a bypass per surface — which
-   * is the exact adoption-gap shape this component exists to end.
+   * Pass `allowManualEntry={false}` only where hand-entry is genuinely wrong.
    */
   allowManualEntry?: boolean;
   /**
@@ -240,7 +283,7 @@ export function IdentityPicker({
   placeholder,
   disabled = false,
   allowGroupExpand = true,
-  allowManualEntry = false,
+  allowManualEntry = true,
   onManualEntry,
   apiBase = '/api/governance/identities/search',
   label = 'Search Entra',
@@ -303,8 +346,7 @@ export function IdentityPicker({
     if (resolvedFor.current === storedValue) return;
     resolvedFor.current = storedValue;
     let live = true;
-    setResolving(true); setResolvedHit(null); setResolveNote(null);
-    (async () => {
+    setResolving(true); setResolvedHit(null); setResolveNote(null);    (async () => {
       try {
         const res = await fetch(`${apiBase}?resolve=${encodeURIComponent(storedValue)}`, { cache: 'no-store' });
         const json = await res.json().catch(() => null);
@@ -325,7 +367,14 @@ export function IdentityPicker({
         if (live) setResolving(false);
       }
     })();
-    return () => { live = false; };
+    // The cleanup MUST release `resolvedFor`, not just the `live` flag. When a
+    // dep OTHER than the value changes mid-flight (`apiBase`, `resolveValue`, or
+    // any remount — which StrictMode does to every effect on every load, and
+    // next.config.mjs enables it) the effect re-runs, hits the
+    // `resolvedFor.current === storedValue` early return, and never reaches the
+    // `setResolving(false)`. The chip then spins forever. Releasing the guard
+    // here lets the re-run own the lookup again.
+    return () => { live = false; resolvedFor.current = null; };
   }, [storedValue, hasStored, apiBase, resolveValue]);
 
   // Debounced search (300ms) — identical cadence to the RBAC grant dialog.
@@ -396,6 +445,19 @@ export function IdentityPicker({
       // where the list is a multi-add surface (share recipients, reviewers).
       onChange(h.id, h);
       setQ(''); setHits([]); setExpanded({});
+      // SEED the resolution from the pick. Without this the parent re-renders
+      // with the new `value`, the chip paints the raw GUID, and the resolve
+      // effect issues a SECOND Graph call for a principal the search just
+      // returned — and if that call comes back empty the chip permanently reads
+      // "Not resolvable in this directory" about something chosen from that
+      // directory two seconds earlier. Seeding also means the happy path never
+      // depends on `POST /directoryObjects/getByIds`, an endpoint this tree had
+      // not previously called and whose behaviour under the granted consent set
+      // is unproven.
+      setResolvedHit(h);
+      setResolveNote(null);
+      setResolving(false);
+      resolvedFor.current = h.id;
     }
   }, [onSelect, onChange]);
 
@@ -419,9 +481,23 @@ export function IdentityPicker({
     }
     setManualErr(null);
     setManual('');
+    // Sink chain, so the hatch is never a button that does nothing. A
+    // SYNTHESIZED hit always accompanies the id — everything the directory would
+    // have told us except the display name, which the surface renders from the
+    // id until a later resolve can improve it.
+    //
+    // The hit is not optional politeness: `onChange(id, hit?)` is emitted with
+    // NO hit on exactly one other path — clearing, where the id is `''` — and a
+    // caller reading `if (!hit) …` as "cleared" would silently discard a
+    // manually entered principal. powerbi-governance did precisely that, and
+    // this test suite caught it. Passing a hit whenever an id is SET makes the
+    // contract "no hit ⇒ cleared" true by construction for every caller,
+    // including the seven this lane does not own.
+    const hit: IdentityHit = { id: v, type: effectiveKind, displayName: v };
     if (onManualEntry) onManualEntry(v, effectiveKind);
-    else onChange?.(v);
-  }, [manual, onManualEntry, onChange, effectiveKind]);
+    else if (onChange) onChange(v, hit);
+    else onSelect?.(hit);
+  }, [manual, onManualEntry, onChange, onSelect, effectiveKind]);
 
   const placeholderText = useMemo(() => {
     if (placeholder) return placeholder;
@@ -436,7 +512,7 @@ export function IdentityPicker({
     <div className={styles.selectedChip}>
       <div className={styles.rowMain}>
         {kindIcon(resolvedHit?.type ?? (kinds.length === 1 ? kinds[0] : 'user'))}
-        <div className={styles.rowMain} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 0 }}>
+        <div className={styles.chipStack}>
           {resolvedHit ? (
             <Persona
               name={resolvedHit.displayName}
@@ -446,7 +522,13 @@ export function IdentityPicker({
           ) : (
             <>
               <span className={styles.storedId}>{valueLabel || storedValue}</span>
-              {valueLabel && <Caption1 className={styles.storedNote}>{storedValue}</Caption1>}
+              {/* Only when the label ADDS something. A caller that stores the id
+                  as its own display name (which is what a manually entered
+                  principal looks like until the directory can resolve it) would
+                  otherwise render the same GUID twice. */}
+              {valueLabel && valueLabel !== storedValue && (
+                <Caption1 className={styles.storedNote}>{storedValue}</Caption1>
+              )}
             </>
           )}
           {resolving && <Caption1 className={styles.storedNote}>Resolving in the directory…</Caption1>}
@@ -514,10 +596,33 @@ export function IdentityPicker({
             </div>
           )}
 
-          {error && (
+          {/* G2 — the gate goes through the ONE shared renderer, which carries
+              the inline Fix-it wizard and the /admin/gates link. This was a bare
+              `MessageBar intent="warning"` for one review cycle, which is the
+              exact shape #3572 (`f8af76fb`) had just removed from
+              AzureResourcePicker one commit before this branch's base, calling
+              it "a G2 violation that adoption would have multiplied by 40".
+              Adopting the picker eleven more times with the old shape would have
+              multiplied it again. */}
+          {error && isGateError(error) && (
+            <HonestGate
+              gateId="identity-picker"
+              surface="Directory search"
+              missing={error.hint?.missingEnvVar}
+              detail={error.remediation || error.hint?.followUp}
+            />
+          )}
+
+          {/* Everything that is NOT a not-configured gate: a Graph 5xx, a
+              network failure, or an AUTHORIZATION denial. The last one has no
+              `hint.rolesRequired` in its body, so the raw code — literally the
+              string `forbidden` — used to render as the title. It is mapped to
+              a sentence instead, and the escape hatch below still gives the
+              caller a way through. */}
+          {error && !isGateError(error) && (
             <MessageBar intent="warning">
               <MessageBarBody>
-                <MessageBarTitle>{error.message}</MessageBarTitle>
+                <MessageBarTitle>{humanErrorTitle(error)}</MessageBarTitle>
                 {error.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{error.remediation}</div>}
                 {error.hint?.rolesRequired && error.hint.rolesRequired.length > 0 && (
                   <div style={{ marginTop: tokens.spacingVerticalSNudge }}>

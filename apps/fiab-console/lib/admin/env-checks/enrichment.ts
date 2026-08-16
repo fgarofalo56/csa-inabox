@@ -26,6 +26,14 @@ export const ENRICHMENT_ENV_CHECKS: EnvSpec[] = [
     role: 'Microsoft Graph Group.Read.All + GroupMember.Read.All (application) granted to the Console UAMI',
   },
   {
+    id: 'identity-picker', category: 'enrichment', title: 'Entra principal picker (directory search)', severity: 'recommended',
+    required: ['LOOM_IDENTITY_PICKER_ENABLED'], warnOnMiss: true, optionalDefault: true,
+    remediation: 'Set LOOM_IDENTITY_PICKER_ENABLED=true and grant the Console UAMI Microsoft Graph User.Read.All + Group.Read.All + Application.Read.All (application, admin-consented) via scripts/csa-loom/grant-identity-graph-approles.sh so every RBAC grant, policy statement, role-member and access-review surface can SEARCH the directory instead of asking for an object id. Until then those surfaces still work — the shared <IdentityPicker> falls back to a validated manual object-id entry behind this gate — but the operator has to know the id.',
+    docs: 'https://learn.microsoft.com/graph/permissions-reference#userreadall',
+    provisionedBy: 'platform/fiab/bicep/modules/admin-plane/identity-graph-rbac.bicep (loomIdentityPickerEnabled) → apps[] env + post-deploy Graph grant',
+    role: 'Microsoft Graph User.Read.All + Group.Read.All + Application.Read.All (application) granted to the Console UAMI',
+  },
+  {
     id: 'svc-m365-link', category: 'enrichment', title: 'Workspace ↔ Microsoft 365 group link', severity: 'recommended',
     required: ['LOOM_WORKSPACE_M365_LINK'], warnOnMiss: true,
     remediation: 'Set LOOM_WORKSPACE_M365_LINK=true and grant the Console UAMI Graph Group.ReadWrite.All so workspaces can bind to an M365 group for membership sync. Loom-native workspace roles work without it.',

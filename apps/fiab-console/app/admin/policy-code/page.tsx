@@ -468,7 +468,15 @@ export function StatementDialog({
                   hint="Written to the statement as its Entra object id; the display name is kept alongside it."
                   value={pId}
                   valueLabel={pName || undefined}
-                  onChange={(id, hit) => { setPId(id); setPName(hit?.displayName || (id ? pName : '')); }}
+                  onChange={(id, hit) => {
+                    setPId(id);
+                    // A hit whose displayName IS the id is the manual-entry
+                    // synthesis, not a directory answer — it carries no name to
+                    // record, so leave the statement's `name` empty rather than
+                    // writing the GUID into it twice.
+                    if (!id) { setPName(''); return; }
+                    if (hit && hit.displayName && hit.displayName !== id) setPName(hit.displayName);
+                  }}
                 />
               </div>
             </div>

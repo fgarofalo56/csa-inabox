@@ -176,9 +176,13 @@ export function ManageAccessPanel({ enabled, workspaceId }: { enabled: boolean; 
             hint="Users are added by UPN; groups and apps by object id — Power BI's own rule."
             value={identifier}
             onChange={(id, hit) => {
-              if (!hit) { setIdentifier(''); return; }
-              setIdentifier(hit.type === 'user' ? (hit.upn || hit.mail || id) : id);
-              setPrincipalType(hit.type === 'user' ? 'User' : hit.type === 'group' ? 'Group' : 'App');
+              // Key the clear on the ID, not on the hit. `onChange` emits no hit
+              // only when clearing — but reading it the other way round meant a
+              // manually entered object id (the escape hatch when directory
+              // search is gated) was silently thrown away.
+              if (!id) { setIdentifier(''); return; }
+              setIdentifier(hit && hit.type === 'user' ? (hit.upn || hit.mail || id) : id);
+              if (hit) setPrincipalType(hit.type === 'user' ? 'User' : hit.type === 'group' ? 'Group' : 'App');
             }}
           />
         </div>

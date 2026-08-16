@@ -317,7 +317,15 @@ describe('admin/env-config registry', () => {
     // in the catalog (N1) and stays at one entry - what changed there is that it
     // is no longer optionalDefault, which moves it OUT of the set pinned below
     // but does not change this total.
-    expect(EDITABLE_ENV.length).toBe(197);
+    // Bumped to 198 by the no-freeform principal-picker adoption (#3595): the
+    // new identity-picker spec registers LOOM_IDENTITY_PICKER_ENABLED, +1:
+    // 197 -> 198. It had NO gate entry at all despite being false on every
+    // deploy path — so eleven surfaces that search the directory degraded with
+    // nothing on /admin/gates to say why or to fix it. `optionalDefault: true`:
+    // unset, every adopting surface still works through the picker's validated
+    // manual object-id entry, so a push-button deploy needs ZERO operator input
+    // and the gate scores neutral rather than "unconfigured forever".
+    expect(EDITABLE_ENV.length).toBe(198);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -436,6 +444,12 @@ describe('admin/env-config registry', () => {
       // (GraphRAG grounding still runs, just at the default hop budget).
       'LOOM_GRAPHRAG_MAX_HOPS',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
+      // #3595 identity-picker — unset, every surface that searches the directory
+      // still works through the shared picker's validated manual object-id
+      // entry, which appears automatically once a search fails. Wiring the gate
+      // upgrades typing an id to searching for a name; it does not unblock a
+      // dead surface, so the gate is genuinely fallback-functional.
+      'LOOM_IDENTITY_PICKER_ENABLED',
       // N1 svc-iceberg-catalog is DELIBERATELY ABSENT from this set now.
       // LOOM_ICEBERG_CATALOG_URL used to be optionalDefault on the argument that
       // the lakehouse Interop tab still emits Delta↔Iceberg dual metadata when it
