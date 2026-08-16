@@ -48,11 +48,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # --- base OS deps + toolchain repos ---------------------------------------
+# libatomic1: @pnpm/exe's native binary (installed below via corepack) dlopens
+# libatomic.so.1 at startup. Ubuntu 22.04 does not pull it in as a dependency
+# of anything else here, so every pnpm invocation fails closed with "error
+# while loading shared libraries" until it's installed explicitly (observed
+# live 2026-08-15: every job on this image that shells to pnpm, including the
+# base loom-ui-verify smoke suite, failed within seconds of Setup pnpm).
 RUN set -euo pipefail; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl jq git unzip gnupg lsb-release apt-transport-https \
-        sudo libicu70 liblttng-ust1 libssl3 zlib1g acl \
+        sudo libicu70 liblttng-ust1 libssl3 zlib1g libatomic1 acl \
         software-properties-common; \
     rm -rf /var/lib/apt/lists/*
 
