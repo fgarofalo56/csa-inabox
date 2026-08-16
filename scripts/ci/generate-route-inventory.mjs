@@ -138,6 +138,25 @@ const BACKEND_LABEL = {
   // backend dependency. Noticed because copy-job/[id]/watermark runs a live
   // `SELECT` against the dbo.copy_watermark control table and its row read `—`.
   'azure-sql-client': 'Azure SQL',
+  // FOURTH instance of the same defect (found landing #3581 — a new route read
+  // `—` in the regenerated diff). `model-serving-client` is the model data
+  // plane: `listServingEndpoints` / `invokeServingEndpoint` / `setServingTraffic`
+  // are real Azure ML online-endpoint ARM + scoring calls, or real Databricks
+  // Mosaic serving REST. SIX routes reach it — including
+  // `items/model-serving-endpoint/[id]/invoke` (a live inference) and
+  // `.../traffic` (a live traffic-split mutation) — and ALL SIX published
+  // "touches no backend" before this entry existed; five of them had shipped
+  // that way.
+  //
+  // THE LABEL NAMES BOTH BACKENDS ON PURPOSE. This client DISPATCHES on
+  // `resolveServingBackend()` — Azure ML by default, Databricks Mosaic when
+  // `LOOM_MODEL_SERVING_BACKEND=databricks` — so which backend a row's route
+  // actually reaches is deployment configuration, not a property of the code.
+  // A single-backend label would be right in one boundary and wrong in the
+  // other, which is the same class of false row this map keeps producing, just
+  // smaller. ` / ` (not `, `) because the renderer joins multiple labels with
+  // `, `.
+  'model-serving-client': 'AML / Databricks Mosaic',
   'adls-client': 'ADLS', 'search-index-client': 'AI Search', 'databricks-client': 'Databricks',
   'eventhubs-client': 'Event Hubs', 'stream-analytics-client': 'Stream Analytics',
   'cosmos-client': 'Cosmos', 'cosmos-account-client': 'Cosmos', 'aas-client': 'AAS',
