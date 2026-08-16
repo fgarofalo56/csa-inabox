@@ -186,6 +186,42 @@
  * The 209 that remain are the actual work: a picker fed by a real discovery
  * call, per `auto-bind-by-default.md` §5.
  *
+ * ── AND THEN THE EXTRACTOR TURNED OUT TO BE BLIND: 243 -> 246 (212 RATCHETED) ─
+ * The wave-1C lane, adopting a picker, hit a live defect in the SITE EXTRACTOR
+ * while this PR was in review. The skip test for a disabled control read the
+ * identifier INSIDE its own braces (see `attrSkeleton` for the mechanism), so
+ * `disabled={disabled}` — and, via the same hole in `hasTruthyProp`,
+ * `readOnly={readOnly}` — marked a CONDITIONALLY off control as permanently
+ * off and dropped it before classification.
+ *
+ * Measured through the real code path, one prop at a time, rather than
+ * estimated:
+ *
+ *   both holes open (as shipped)    2,298 sites   243 classified   106 files
+ *   `disabled` hole closed          2,325 sites   245 classified   108 files
+ *   both closed (this PR)           2,350 sites   246 classified   109 files
+ *
+ * So +52 free-text sites and +3 classified violations, split 27/2 to `disabled`
+ * and 25/1 to `readOnly`. All three new violations are GENUINE asks that were
+ * structurally invisible — a Cosmos conflict-resolution sproc resource id, a
+ * `type="password"` pipeline parameter default, and a Key Vault secret name —
+ * and none falls in an ACCEPTED file, so the baseline absorbs them.
+ *
+ * THE COUNT WENT UP AND THAT IS THE FIX WORKING. A ratchet baseline that grows
+ * because the detector stopped being blind is the opposite of a regression;
+ * this file's entire history is the other failure. The honest statement of the
+ * population is 246, not 243 and not the 250 this guard shipped with — 250 was
+ * what the extractor could SEE, and reporting it as the population would be the
+ * same class of error the wave exists to correct.
+ *
+ * ONE CORRECTION TO THE REPORT, recorded because an unchecked premise is how
+ * this guard went wrong the first time. The defect was filed as also covering
+ * `disabled={loading}` and `disabled={busy}` — "the ordinary React idiom", 31
+ * sites. It does not: the regex needs the LITERAL word `disabled` after the
+ * brace, so only the self-named form could ever trip it. `disabled={busy}` was
+ * always visible. The real number is 27, and the difference matters because the
+ * two framings imply different fixes.
+ *
  * ── WHAT CHANGED ───────────────────────────────────────────────────────────
  * PART 1 (unchanged, still a HARD ZERO) — the raw-JSON-config detector.
  * PART 2 (new, RATCHETED) — every FREE-TEXT INPUT in `apps/fiab-console` that
@@ -332,11 +368,18 @@ const BASELINE_FILE = path.join(REPO_ROOT, 'scripts', 'ci', 'no-freeform-inputs-
  *  broke, not that the front end was deleted. */
 const MIN_TRACKED_FILES = 1000;
 /**
- * Free-text SITES the extractor must still find. MEASURED 2,298 today, from
- * 2,742 raw tag matches; the 444-site gap is accounted for and is not silent
- * loss — ~408 carry a non-text `type=` (number/checkbox/date/file/…), ~64 are
- * `readOnly`, ~33 are unconditionally `disabled`, and 20 are prose inside a
- * comment or a string that the mask correctly removed.
+ * Free-text SITES the extractor must still find. MEASURED 2,350 today, from
+ * 2,742 raw tag matches; the ~392-site gap is accounted for and is not silent
+ * loss — ~408 carry a non-text `type=` (number/checkbox/date/file/…), 36 are
+ * bare `readOnly`, 6 are bare or explicitly-`{true}` `disabled`, and 20 are
+ * prose inside a comment or a string that the mask correctly removed.
+ *
+ * It was 2,298 until the `disabled`/`readOnly` brace hole was closed (see
+ * `attrSkeleton`): 52 sites were being dropped because a CONDITIONALLY off
+ * control read as a permanently off one. The `readOnly`/`disabled` line of this
+ * accounting used to read "~64 readOnly, ~33 disabled" — those were the counts
+ * of elements SKIPPED, not of elements legitimately skippable, and the gap
+ * between the two is exactly the defect.
  *
  * This is the control on SITE EXTRACTION, and it is the floor that matters
  * most: the classifier reports a subset of these, so if the tag matcher, the
@@ -346,9 +389,10 @@ const MIN_TRACKED_FILES = 1000;
  */
 const MIN_FREETEXT_SITES = 1800;
 /** Classified violations the guard must still find; 250 when this ratchet was
- *  bootstrapped, 243 today — the 7-site drop is the two WAVE-1B classifier
- *  narrowings (`domKeyless` and the descriptor display-row rule), each measured
- *  before it was written and each pinned by a control.
+ *  bootstrapped, 246 today. Two movements, in opposite directions: -7 from the
+ *  two WAVE-1B classifier narrowings (`domKeyless`, the descriptor display-row
+ *  rule), then +3 from closing the `disabled`/`readOnly` brace hole in the site
+ *  extractor, which had made 52 free-text sites structurally invisible.
  *
  *  This floor reads the MEASURED population, BEFORE ACCEPTED is applied. An
  *  acceptance is a judgement about a site the detector correctly found, so
@@ -944,6 +988,66 @@ function hasTruthyProp(tagCode, name) {
 }
 
 /**
+ * Blank every BRACE EXPRESSION in an open tag, innermost-out, preserving length
+ * so nothing downstream shifts. `disabled={disabled}` becomes `disabled=` plus
+ * spaces; `onChange={(e) => f({a: 1})}` becomes `onChange=` plus spaces.
+ *
+ * ── THE DEFECT THIS EXISTS FOR (#3579, found by the wave-1C lane) ──────────
+ * The skip test for a disabled control was
+ *
+ *     /(?:^|[\s{])disabled\b(?!\s*=)/
+ *
+ * and the `{` in that character class is the whole bug. On
+ * `<Input disabled={disabled} …>` it matches the IDENTIFIER INSIDE THE BRACES:
+ * `{` satisfies `[\s{]`, `disabled` satisfies the name, and the `(?!\s*=)`
+ * lookahead passes because the next character is `}`. So a control that is
+ * *conditionally* disabled — one the user CAN type into — was read as
+ * permanently disabled and dropped before classification.
+ *
+ * MEASURED on this corpus rather than taken from the report: **26** free-text
+ * sites were invisible this way, across 13 files (Cosmos policy editors, the
+ * pipeline expression fields, the identity/group pickers, the Copilot tool
+ * catalogue, uc-governance-pane, domain-settings-pane). The report described it
+ * as also covering `disabled={loading}` and `disabled={busy}`; it does NOT —
+ * the regex needs the LITERAL word `disabled` after the brace, so only the
+ * self-named idiom could ever trip it. Stating that precisely matters, because
+ * "31 sites lost to any expression-valued disabled" and "26 lost to
+ * `disabled={disabled}` specifically" imply different fixes.
+ *
+ * `readOnly` had the IDENTICAL hole via `hasTruthyProp` and measured ZERO
+ * occurrences today — a latent sibling, fixed in the same pass rather than left
+ * for whoever writes the first `readOnly={readOnly}`. Enumerating the siblings
+ * of a defect mechanically is the lesson of #3529 / the seventh-consumer class.
+ */
+export function attrSkeleton(tagCode) {
+  let flat = String(tagCode);
+  for (let i = 0; i < 12; i++) {
+    const next = flat.replace(/\{[^{}]*\}/g, (m) => ' '.repeat(m.length));
+    if (next === flat) break;
+    flat = next;
+  }
+  return flat;
+}
+
+/**
+ * True when `name` marks the control as PERMANENTLY off — a display rather than
+ * an ask. Two accepted shapes, and only two:
+ *
+ *   bare          `<Input readOnly />`      — the attribute with no value
+ *   explicit true `<Input disabled={true}>` — or `disabled="true"`
+ *
+ * Anything expression-valued (`{busy}`, `{!canEdit}`, `{disabled}`) is
+ * CONDITIONAL, therefore typable in at least one state, therefore a site. The
+ * bare test runs over the SKELETON so an identifier inside braces cannot pose
+ * as an attribute name; the explicit-true test runs over the raw tag because
+ * that is where `{true}` still exists.
+ */
+export function isPermanentlyOff(skeleton, tagCode, name) {
+  if (new RegExp(`(?:^|\\s)${name}\\b(?!\\s*=)`, 'i').test(skeleton)) return true;
+  return new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:\\{\\s*true\\s*\\}|["']true["'])`, 'i').test(tagCode);
+}
+
+/**
  * The nearest ENCLOSING `<Field …>` open tag for a site, or null.
  * Walks backwards over `<Field`/`</Field>` in a bounded window so a sibling
  * Field that has already CLOSED cannot lend its label to the next input — the
@@ -1024,8 +1128,13 @@ export function extractSites(src) {
     const type = (attrValue(code, src, start, end, 'type') || '').trim().toLowerCase();
     if (NON_TEXT_TYPES.has(type)) continue;
     // A read-only / permanently disabled box is a display, not an ask.
-    if (hasTruthyProp(tagCode, 'readOnly') || hasTruthyProp(tagCode, 'readonly')) continue;
-    if (/(?:^|[\s{])disabled\b(?!\s*=)/i.test(tagCode) || /(?:^|[\s{])disabled\s*=\s*\{?\s*true/i.test(tagCode)) continue;
+    // BOTH tests read the ATTRIBUTE SKELETON, never the raw tag — see
+    // `attrSkeleton`. `<Input disabled={disabled}>` is a CONDITIONALLY disabled
+    // control, i.e. one the user can type into, and reading its own identifier
+    // as the attribute name made 26 real sites structurally invisible.
+    const skel = attrSkeleton(tagCode);
+    if (isPermanentlyOff(skel, tagCode, 'readOnly') || isPermanentlyOff(skel, tagCode, 'readonly')) continue;
+    if (isPermanentlyOff(skel, tagCode, 'disabled')) continue;
 
     const field = enclosingField(code, start);
     const label = field ? attrValue(code, src, field.start, field.end, 'label') : null;
@@ -1071,25 +1180,33 @@ function decamel(s) {
 }
 
 /**
- * Drop an `id`/`name` attribute that is a TEMPLATE INTERPOLATION, because such
- * a value is a DOM uniqueness key rather than a statement about what the field
- * wants. `<Input id={`user-${row.armResourceId}`}>` names the ROW; the field
- * under it is a SQL login.
+ * Strip TEMPLATE INTERPOLATIONS out of an `id`/`name` attribute, because an
+ * interpolated segment is a DOM uniqueness key rather than a statement about
+ * what the field wants. ``<Input id={`user-${row.armResourceId}`}>`` names the
+ * ROW; the field under it is a SQL login.
  *
- * MEASURED before it was written (temp probe over all 1,286 tracked .tsx): the
- * tree has exactly five templated `id`/`name` attributes on a free-text site.
- * Three (`${baseId}-name`, `${baseId}-title`, `${baseId}-name` in the report
- * panes) produce no NAME hit at all, so they are unaffected in both directions.
+ * STRIPS rather than NULLS (review #3579). Dropping the whole attribute would
+ * also discard the LITERAL half, so a future ``id={`endpoint-${i}`}`` would
+ * lose "endpoint" as evidence — a false negative introduced by a narrowing
+ * aimed at a false positive. Keeping the literal text costs nothing: measured
+ * at 243 either way.
+ *
+ * MEASURED before it was written (probe over all 1,286 tracked .tsx): the tree
+ * has exactly five templated `id`/`name` attributes on a free-text site. Three
+ * (`${baseId}-name`, `${baseId}-title`, `${baseId}-name` in the report panes)
+ * produce no NAME hit either way, so they are unaffected in both directions.
  * The other two are `add-existing-wizard.tsx`'s Username and Password rows,
  * which matched `resource-id` on the interpolated ARM id and on nothing else —
  * i.e. this narrowing changes exactly the two classifications it was written
- * for, and a control pins that it cannot widen.
+ * for, and controls pin that it cannot widen.
  *
- * A LITERAL id is still evidence and is untouched: `id="cmk-uri"` on the AI
- * Search CMK form is the only label that site carries.
+ * A LITERAL id is untouched: `id="cmk-uri"` on the AI Search CMK form is the
+ * only label that site carries.
  */
 function domKeyless(v) {
-  return v && v.includes('${') ? null : v;
+  if (!v || !v.includes('${')) return v;
+  const stripped = v.replace(/\$\{[^{}]*\}/g, ' ').trim();
+  return stripped || null;
 }
 
 /**
@@ -1161,26 +1278,48 @@ export function extractDescriptors(src) {
     // A DISPLAY ROW, not an ask. `{ key: 'fqdn', label: 'Server FQDN', value:
     // cfg.server.fqdn }` is the descriptor form of the shape this guard's own
     // control already calls compliant — "a READ-ONLY display of a resolved
-    // endpoint is a receipt, not an ask". It carries a `value:` that is a BOUND
-    // EXPRESSION (the resolved value, read off the live resource) and neither a
-    // `placeholder:` nor a `secret:`, which is what every real input descriptor
-    // in this tree carries.
+    // endpoint is a receipt, not an ask". The canonical instance is
+    // `UriRow` in `lib/components/shared/details-panel.tsx`
+    // (`{ key, label, value, href?, mono? }`), which `UriRowView` renders as a
+    // caption plus a Copy button — no input of any kind.
     //
     // MEASURED before it was written: 26 descriptor hits, of which 5 have this
     // exact shape — the Event Hubs / Service Bus namespace endpoints, the
     // Lakebase server FQDN, the ML model artifact URI and the model-serving
-    // scoring URI, all rendered into a read-only "Endpoints" list. The
-    // narrowing is keyed to `value:` and NOT to "has no placeholder", so
-    // manage-panel.tsx's `{ key: 'accessKeyId', label: 'Access key ID',
-    // required: true }` — a real ask with no placeholder — is untouched, as is
-    // every `secret: true` row and the OP_DESCRIPTOR_CONNSTRING control.
+    // scoring URI, all rendered into a read-only "Endpoints" list.
+    //
+    // FOUR DISQUALIFIERS, not one. Review (#3579) found that keying on `value:`
+    // ALONE would also exempt a CONTROLLED INPUT bound to form state —
+    // `{ key: 'conn', label: 'Connection string', value: form.conn, onChange:
+    // setConn }` — because a bound expression looks identical either way. No
+    // such descriptor exists in the tree today, so nothing was concealed, but a
+    // permanent exemption on a shape that exists elsewhere in this codebase is
+    // a hole waiting for its first occupant. The editable sibling of `UriRow`
+    // proves the discriminator is structural rather than incidental: `PolicyRow`
+    // in the same file is inline-editable and carries `onSave:`. So an
+    // EDITABILITY MARKER of any kind disqualifies:
+    //
+    //   placeholder:  example data implies a box to type it into
+    //   secret:       already the strongest descriptor signal there is
+    //   on[A-Z]       any handler — onChange / onSave / onCommit / onBlur
+    //   required:     only a field the user must FILL can be required
+    //
+    // Adding the last two costs ZERO sites (243 before and after) and closes
+    // all four of the review's probes. `manage-panel.tsx`'s `{ key:
+    // 'accessKeyId', label: 'Access key ID', required: true }` — a real ask
+    // with no placeholder — was already untouched and stays so.
     //
     // `struct` is MASKED, so a quoted default (`value: 'prod'`) reads as `''`
     // and is correctly NOT treated as a resolved display.
     const valueProp = struct.match(/\bvalue\s*:\s*([^,}]*)/);
     const rendersResolvedValue =
       !!valueProp && valueProp[1].trim() !== '' && !/^['"`]/.test(valueProp[1].trim());
-    if (rendersResolvedValue && !/\bplaceholder\s*:/.test(struct) && !/\bsecret\s*:/.test(struct)) continue;
+    const isEditableDescriptor =
+      /\bplaceholder\s*:/.test(struct) ||
+      /\bsecret\s*:/.test(struct) ||
+      /\bon[A-Z]/.test(struct) ||
+      /\brequired\s*:/.test(struct);
+    if (rendersResolvedValue && !isEditableDescriptor) continue;
 
     const nameEvidence = [label, hint, decamel(key)].filter(Boolean).join(' │ ');
     const shapeEvidence = [placeholder, label, hint].filter(Boolean).join(' │ ');
@@ -1433,6 +1572,13 @@ export const CONTROLS = [
     expect: true,
   },
   {
+    // STRIPPING, not nulling: the literal half of a templated id is still
+    // evidence. Nulling the attribute would turn this into a false negative.
+    name: 'bad: the LITERAL half of a templated id survives — `endpoint-${i}` still reads as "endpoint"',
+    src: '<Input id={`endpoint-${i}`} value={rows[i].v} onChange={f} />',
+    expect: true,
+  },
+  {
     name: 'good: a descriptor rendering a RESOLVED value is a receipt, not an ask',
     src: "const rows = [{ key: 'fqdn', label: 'Server FQDN', value: cfg.server.fqdn }];",
     expect: false,
@@ -1451,6 +1597,110 @@ export const CONTROLS = [
     name: 'bad: a descriptor whose `value` is a quoted DEFAULT is an ask with a default, not a display',
     src: "const F = [{ key: 'clusterUri', label: 'Cluster URI', value: 'https://c.kusto.windows.net' }];",
     expect: true,
+  },
+
+  // ── the descriptor EDITABILITY disqualifiers (#3579 review) ─────────────
+  // A bound `value:` looks identical on a read-only display row and on a
+  // CONTROLLED INPUT. Without these four probes the display-row rule would be a
+  // permanent exemption on a shape that exists elsewhere in this codebase —
+  // `PolicyRow` in details-panel.tsx is exactly it, marked by `onSave:`.
+  {
+    name: 'bad: a controlled-input descriptor (value + onChange) is an ASK, not a display',
+    src: "const F = [{ key: 'conn', label: 'Connection string', value: form.conn, onChange: setConn }];",
+    expect: true,
+  },
+  {
+    name: 'bad: a controlled-input descriptor for a storage account key',
+    src: "const F = [{ key: 'accountKey', label: 'Storage account key', value: form.accountKey, onChange: setK }];",
+    expect: true,
+  },
+  {
+    name: 'bad: a controlled-input descriptor for an ARM workspace id',
+    src: "const F = [{ key: 'wsId', label: 'Workspace resource ID', value: form.wsId, onChange: setW }];",
+    expect: true,
+  },
+  {
+    name: 'bad: `required:` alone disqualifies a display row — only a field you FILL can be required',
+    src: "const F = [{ key: 'clusterUri', label: 'Cluster URI', value: form.clusterUri, required: true }];",
+    expect: true,
+  },
+  {
+    name: 'bad: the inline-editable sibling shape — PolicyRow carries onSave, not onChange',
+    src: "const P = [{ key: 'endpoint', label: 'Namespace endpoint', value: ns.endpoint, onSave: patch }];",
+    expect: true,
+  },
+  {
+    name: 'good: a DetailsPanel UriRow — value + href + mono, no editability marker anywhere',
+    src: "const U = [{ key: 'fqdn', label: 'Server FQDN', value: cfg.server.fqdn, href: link, mono: true }];",
+    expect: false,
+  },
+
+  // ── the disabled/readOnly BRACE HOLE, both directions (#3579, wave 1C) ───
+  // `(?:^|[\s{])disabled\b(?!\s*=)` matched the IDENTIFIER INSIDE the braces of
+  // `disabled={disabled}`, so a conditionally-disabled control read as a
+  // permanently-disabled one and was dropped before classification. 27 sites.
+  // The same hole existed on `readOnly` via hasTruthyProp — 25 more.
+  {
+    name: 'bad: `disabled={disabled}` is CONDITIONALLY disabled — the user can type in it',
+    src: '<Field label="Cluster URI"><Input disabled={disabled} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  // The three shapes below are what make `attrSkeleton` LOAD-BEARING rather
+  // than belt-and-braces. Re-anchoring the regex from `[\s{]` to `\s` alone
+  // fixes the TIGHT `disabled={disabled}` and nothing else: put a space inside
+  // the braces, use the spread shorthand, or write any compound expression
+  // ending in the identifier, and the whitespace anchor matches again. Measured
+  // by disabling the skeleton and watching the verdict NOT move — which is how
+  // a "fix" that only covered one spelling nearly shipped here.
+  {
+    name: 'bad: `disabled={ disabled }` — a space inside the braces defeats a whitespace anchor',
+    src: '<Field label="Cluster URI"><Input disabled={ disabled } value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: 'bad: `disabled={a && disabled}` — a compound expression, the common React shape',
+    src: '<Field label="Cluster URI"><Input disabled={busy && disabled} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: 'bad: `readOnly={ readOnly }` — the same, on the sibling prop',
+    src: '<Field label="Cluster URI"><Input readOnly={ readOnly } value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: 'bad: `readOnly={readOnly}` is CONDITIONALLY read-only — same hole, sibling prop',
+    src: '<Field label="Cluster URI"><Input readOnly={readOnly} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: 'bad: an expression-valued disabled is a site — `{busy}` never tripped the old regex either',
+    src: '<Field label="Storage account key"><Input disabled={busy} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: 'good: a BARE `disabled` still skips — the fix must not cost the 6 real ones',
+    src: '<Field label="Cluster URI"><Input disabled value={v} onChange={f} /></Field>',
+    expect: false,
+  },
+  {
+    name: 'good: a BARE `readOnly` still skips — 36 real ones in the tree depend on it',
+    src: '<Field label="Cluster URI"><Input readOnly value={v} onChange={f} /></Field>',
+    expect: false,
+  },
+  {
+    name: 'good: an EXPLICIT `disabled={true}` is permanently off, not an ask',
+    src: '<Field label="Cluster URI"><Input disabled={true} value={v} onChange={f} /></Field>',
+    expect: false,
+  },
+  {
+    name: 'bad: `disabled={false}` is enabled — it must NOT read as permanently off',
+    src: '<Field label="Cluster URI"><Input disabled={false} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: 'good: an onChange arrow body containing the word `disabled` must not disable the element',
+    src: '<Field label="Display name"><Input value={v} onChange={(e) => setDisabled(e.disabled)} /></Field>',
+    expect: false,
   },
 ];
 
@@ -1600,15 +1850,23 @@ export const ACCEPTED = [
     file: 'apps/fiab-console/app/admin/migrate/page.tsx',
     sites: 3,
     kind: 'byo',
-    ref: 'auto-bind-by-default.md §Allowed',
+    ref: '#3586',
     why:
-      'The three fields describe a source estate in another VENDOR or another TENANT: a Snowflake account ' +
-      'URL / Databricks workspace URL, the workspace-or-group id inside that system, and a token minted ' +
-      'there. Loom holds no credential for the source until these are supplied — the assessment reader is ' +
-      'the first thing that ever talks to it — so there is no discovery call that could enumerate any of ' +
-      'them. The token field is already the compliant secret shape: it accepts an ' +
-      '`@Microsoft.KeyVault(SecretUri=…)` reference, and its hint records that the value is resolved ' +
-      'server-side and never rendered back.',
+      'A source estate in another VENDOR or another TENANT: :176 is the workspace-or-group id INSIDE that ' +
+      'system and :185 is a token minted THERE — Loom holds no credential for the source until they are ' +
+      'supplied, so nothing could enumerate either. The token is already the compliant secret shape: it ' +
+      'accepts an `@Microsoft.KeyVault(SecretUri=…)` reference and its hint records that the value is ' +
+      'resolved server-side and never rendered back. ' +
+      'PARTIAL, AND TRACKED IN #3586 — this is a deferred fix, not a permanent exception, which is why the ' +
+      'ref is an issue rather than a rule clause. :170 is one Input whose label switches on sourceType, and ' +
+      'the SNOWFLAKE branch is genuinely un-enumerable, but the DATABRICKS branch is not: ' +
+      '`lib/azure/databricks-discovery.ts` exports listDatabricksWorkspaces(), which returns ' +
+      '`properties.workspaceUrl` for every Microsoft.Databricks/workspaces the deployment identity can ' +
+      'read, and two live BFF routes already consume it. An earlier revision of this entry claimed "no ' +
+      'discovery call could enumerate any of them"; review (#3579) established that is false for that ' +
+      'branch, and the same reasoning is why setup-identity-step.tsx was DECLINED rather than accepted. ' +
+      'The fix is the hybrid this repo already ships twice (api-marketplace, workspace-egress-pane): a ' +
+      'picker plus "Other / not in this estate".',
   },
   {
     file: 'apps/fiab-console/lib/components/access/request-access-button.tsx',
@@ -1631,7 +1889,11 @@ export const ACCEPTED = [
     why:
       'The origin an API Management API forwards to. Fronting an arbitrary HTTP backend — including one ' +
       'outside the Azure estate entirely — is what APIM IS; no discovery call enumerates "every service ' +
-      'the customer might proxy". The field is optional: a façade-only API leaves it blank.',
+      'the customer might proxy". The field is optional: a façade-only API leaves it blank. Rated the ' +
+      'weakest of the BYO set on review (#3579) and improvable rather than wrong: ' +
+      '`app/api/apim/backends/route.ts` does enumerate the Backend entities that exist, so the hybrid ' +
+      'shape (picker + "Other / external origin") would cover the enumerable half — tracked in #3589 for ' +
+      'this field and its four siblings.',
   },
   {
     file: 'apps/fiab-console/lib/components/admin/apim-backends-pane.tsx',
@@ -1755,7 +2017,10 @@ export const ACCEPTED = [
       'this pane\'s own MessageBar records that Azure DevOps runs on commercial endpoints in EVERY Loom ' +
       'boundary, so for a GCC-High / IL5 deployment the ADO organization\'s directory is definitionally ' +
       'not the deployment\'s tenant (cloud-parity.md). The PAT / client secret is already Key Vault-backed: ' +
-      'saveBinding() calls putKeyVaultSecret and Cosmos holds only the secretRef.',
+      'saveBinding() calls putKeyVaultSecret and Cosmos holds only the secretRef. SEPARATELY, and tracked ' +
+      'in #3588: that the SPN ids are read by nothing which mints a token raises whether the ' +
+      'service-principal option works at all. That is a no-vaporware question, not a no-freeform one, and ' +
+      'is why the fields were investigated rather than quietly deleted.',
   },
   {
     file: 'apps/fiab-console/lib/power-platform/flow-builder.tsx',
@@ -1818,13 +2083,44 @@ export const ACCEPTED = [
 ];
 
 /**
+ * Where a rule-clause `ref` may name a file. A clause ref is only worth
+ * anything if the thing it cites exists — `made-up.md §Nonexistent` passed a
+ * shape-only check (#3579 review), which is a reference in form and not in
+ * substance.
+ */
+const REF_SEARCH_DIRS = ['.claude/rules', 'scripts/ci', 'docs/fiab', 'docs'];
+
+/**
+ * Resolve a rule-clause ref (`<file> §<clause>`) against the tree. Returns null
+ * when it resolves, or the reason it does not.
+ *
+ * Checks BOTH halves: the file must exist somewhere sensible, and the `§` text
+ * must actually appear in it. A citation to a real file and an imaginary
+ * section is the same failure as a citation to an imaginary file.
+ */
+function resolveClauseRef(ref) {
+  const m = /^(\S+\.(?:md|mjs))\s+§\s*(.+?)\s*$/.exec(ref);
+  if (!m) return `\`${ref}\` is not a resolvable clause reference (expected "<file>.md §<clause>")`;
+  const [, fileName, clause] = m;
+  for (const dir of REF_SEARCH_DIRS) {
+    const p = path.join(REPO_ROOT, dir, fileName);
+    if (!fs.existsSync(p)) continue;
+    const text = fs.readFileSync(p, 'utf8');
+    if (text.includes(clause)) return null;
+    return `\`${fileName}\` exists but contains no "${clause}" — the section named by the ref is not there`;
+  }
+  return `\`${fileName}\` was not found under ${REF_SEARCH_DIRS.join(', ')} — the ref names no real document`;
+}
+
+/**
  * An acceptance must be complete and must carry a reference. Returns the
  * problems so the driver can fail on them.
  *
  * Enforced here rather than left to review, on #3533's reasoning: a convention
  * that depends on a reviewer noticing is the one that rots. `ref` is either a
  * tracking issue (a deferred fix somebody owns closing) or the rule clause that
- * permits the exception (a permanent one) — see the deviation note above.
+ * permits the exception (a permanent one) — see the deviation note above. A
+ * clause ref is RESOLVED against the tree, not merely shape-checked.
  */
 export function validateAccepted(accepted = ACCEPTED) {
   const problems = [];
@@ -1844,13 +2140,16 @@ export function validateAccepted(accepted = ACCEPTED) {
           'Without it the entry is a blanket amnesty and a new violation in the file would be invisible.',
       );
     }
-    if (!a.ref || !(/#\d+/.test(a.ref) || /\.(?:md|mjs)\s+§\S/.test(a.ref))) {
+    if (!a.ref) {
       problems.push(
         `ACCEPTED entry for ${label} carries no reference. Every accepted exception needs a \`ref\`: a ` +
-          "tracking issue that closes it (e.g. '#3542') for a deferred fix, or the clause that permits it " +
+          "tracking issue that closes it (e.g. '#3586') for a deferred fix, or the clause that permits it " +
           "(e.g. 'auto-bind-by-default.md §Allowed', 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES') " +
           'for a permanent one — otherwise it is an exception nobody owns and nobody revisits.',
       );
+    } else if (!/#\d+/.test(a.ref)) {
+      const bad = resolveClauseRef(a.ref);
+      if (bad) problems.push(`ACCEPTED entry for ${label} has an unresolvable ref: ${bad}.`);
     }
     if (seen.has(a.file)) problems.push(`ACCEPTED lists ${label} twice; one entry per file.`);
     seen.add(a.file);
@@ -1864,6 +2163,7 @@ export function validateAccepted(accepted = ACCEPTED) {
  */
 export function applyAccepted(current, accepted = ACCEPTED) {
   const problems = [];
+  const drifted = [];
   const remaining = { ...current };
   for (const a of accepted) {
     const live = current[a.file];
@@ -1876,18 +2176,21 @@ export function applyAccepted(current, accepted = ACCEPTED) {
       continue;
     }
     if (live !== a.sites) {
+      drifted.push(a.file);
       problems.push(
         `ACCEPTED entry for ${a.file} declares ${a.sites} site(s); the classifier now finds ${live}. ` +
           (live > a.sites
             ? 'A NEW hand-typed infrastructure value was added to an accepted file — judge it before ' +
-              'raising the number, because the acceptance does not cover it.'
-            : 'A site was cleared — lower the number in the same PR so the acceptance keeps its teeth.'),
+              'raising the number, because the acceptance does not cover it. Every site in the file is ' +
+              'annotated below, so the new one can be READ rather than hunted for.'
+            : 'A site was cleared — lower the number in the same PR so the acceptance keeps its teeth. ' +
+              'Every remaining site in the file is annotated below.'),
       );
       continue;
     }
     delete remaining[a.file];
   }
-  return { remaining, problems };
+  return { remaining, problems, drifted };
 }
 
 export function collect() {
@@ -1957,8 +2260,13 @@ export function judge(
 
   // ── accepted exceptions: validated, applied, and PRINTED every run ───────
   const acceptProblems = validateAccepted(accepted);
-  const { remaining: current, problems: driftProblems } = applyAccepted(measured, accepted);
+  const { remaining: current, problems: driftProblems, drifted } = applyAccepted(measured, accepted);
   const acceptedSites = accepted.reduce((n, a) => n + (Number.isInteger(a.sites) ? a.sites : 0), 0);
+  const verbose = argv.includes('--report');
+  const acceptedFiles = new Set(accepted.map((a) => a.file));
+
+  /** `file:line [kind:ids] evidence` — the per-site line, one place. */
+  const siteLine = (b) => `${b.f}:${b.line} [${b.kind}:${b.ids.join(',')}] ${b.evidence}`;
 
   console.log(
     `no-freeform: ${files.length} tracked .tsx, ${sites} free-text input site(s) extracted, ` +
@@ -1973,9 +2281,27 @@ export function judge(
   );
   for (const a of accepted) {
     console.log(`  ACCEPTED [${a.kind}] (${a.ref}) ${a.file} — ${a.sites} site(s): ${a.why}`);
+    // Under --report, list the SITES each acceptance covers. Without this the
+    // 34 accepted sites have no `file:line` anywhere in the output and an
+    // auditor has to instrument `collect()` to find out what was excused
+    // (#3579 review). It is a `console.log`, never an annotation — the
+    // judgement has been made, so it is a listing and not a finding.
+    if (verbose) {
+      for (const b of detail) if (b.f === a.file) console.log(`    [accepted] ${siteLine(b)}`);
+    }
   }
   if (acceptProblems.length || driftProblems.length) {
     for (const p of [...acceptProblems, ...driftProblems]) console.error(`::error::no-freeform: ${p}`);
+    // A count-only failure at the moment a reviewer most needs a pointer is the
+    // worst time to withhold one. Annotate every site in each DRIFTED file so
+    // the new (or removed) one is read off the log rather than hunted for.
+    for (const b of detail) {
+      if (!drifted.includes(b.f)) continue;
+      console.error(
+        `::error file=${b.f},line=${b.line}::no-freeform [accepted-file drift]: this site is in an ` +
+          `ACCEPTED file whose declared count no longer matches. ${b.why}. Evidence: ${b.evidence}\n  ${b.text}`,
+      );
+    }
     console.error(
       '::error::no-freeform: the ACCEPTED table does not describe this tree. An exception that no longer ' +
         'matches what it excuses is not an exception, it is cover — same reasoning as #3531.',
@@ -2004,12 +2330,11 @@ export function judge(
   // nothing is wrong trains reviewers to ignore it. `regen` suppresses them
   // outright: on a BOOTSTRAP regen the baseline is empty, so every site reads
   // as over-baseline and the run would emit the entire population as errors.
-  const verbose = argv.includes('--report');
-  const acceptedFiles = new Set(accepted.map((a) => a.file));
   for (const b of detail) {
-    // An accepted file's sites are reported above, with their reason. Listing
-    // them again here — or annotating them — would re-file a judgement that has
-    // already been made.
+    // An accepted file's sites are LISTED above under their acceptance (with a
+    // `[accepted]` tag, when --report is on) and must never be ANNOTATED: the
+    // judgement has been made, and re-filing it as a finding is what trains a
+    // reviewer to stop reading annotations.
     if (acceptedFiles.has(b.f)) continue;
     const overBaseline = !regen && (current[b.f] ?? 0) > (baseline[b.f] ?? 0);
     const body =
@@ -2018,10 +2343,13 @@ export function judge(
       'and binds the backing resource (auto-bind-by-default.md §5) rather than asking for its address. ' +
       `Evidence: ${b.evidence}`;
     if (overBaseline) console.error(`::error file=${b.f},line=${b.line}::${body}\n  ${b.text}`);
-    else if (verbose) console.log(`  ${b.f}:${b.line} [${b.kind}:${b.ids.join(',')}] ${b.evidence}`);
+    else if (verbose) console.log(`  ${siteLine(b)}`);
   }
   if (!verbose) {
-    console.log('no-freeform: re-run with --report to list the full baselined population.');
+    console.log(
+      'no-freeform: re-run with --report to list the full baselined population and the sites each ' +
+        'ACCEPTED entry covers.',
+    );
   }
 
   return runRatchet({

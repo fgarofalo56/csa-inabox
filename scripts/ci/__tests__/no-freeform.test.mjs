@@ -28,8 +28,10 @@ import {
   SHAPE_PATTERNS,
   analyze,
   applyAccepted,
+  attrSkeleton,
   collect,
   extractSites,
+  isPermanentlyOff,
   judge,
   maskJsx,
   selfTest,
@@ -301,6 +303,36 @@ test('a RISE inside an accepted file FAILS — a new hand-typed value is not cov
   assert.match(problems[0], /NEW hand-typed/);
 });
 
+test('drift ANNOTATES every site in the drifted file — a count-only error is useless at that moment', () => {
+  const file = tmpBaseline({ 'a.tsx': 1 });
+  const errs = [];
+  const orig = console.error;
+  console.error = (...x) => errs.push(x.join(' '));
+  let code;
+  try {
+    code = judge(
+      {
+        files: new Array(1286).fill('x.tsx'),
+        current: { 'a.tsx': 2, 'zz-floor-filler.tsx': 400 },
+        detail: [
+          { f: 'a.tsx', line: 10, tag: 'Input', kind: 'shape', ids: ['arm-id'], why: 'an ARM resource id', evidence: 'old site', text: '<Input/>' },
+          { f: 'a.tsx', line: 99, tag: 'Input', kind: 'shape', ids: ['arm-id'], why: 'an ARM resource id', evidence: 'THE NEW ONE', text: '<Input/>' },
+        ],
+        sites: 2350,
+      },
+      { argv: [], baselineFile: file, touchedFiles: null, accepted: [{ file: 'a.tsx', sites: 1, kind: 'byo', ref: '#1', why: 'w' }] },
+    );
+  } finally {
+    console.error = orig;
+  }
+  const joined = errs.join('\n');
+  assert.equal(code, 1);
+  assert.match(joined, /declares 1 site\(s\); the classifier now finds 2/);
+  // The pointer the reviewer had to go find by hand:
+  assert.match(joined, /::error file=a\.tsx,line=99::.*THE NEW ONE/);
+  assert.match(joined, /::error file=a\.tsx,line=10::/);
+});
+
 test('a DRAIN inside an accepted file FAILS until the count is corrected by a human', () => {
   const { problems } = applyAccepted({ 'a.tsx': 3 }, [{ file: 'a.tsx', sites: 4, kind: 'byo', ref: '#1', why: 'w' }]);
   assert.equal(problems.length, 1);
@@ -337,6 +369,40 @@ test('every ACCEPTED file still classifies exactly the number of sites it claims
   const { current } = collect();
   for (const a of ACCEPTED) {
     assert.equal(current[a.file], a.sites, `${a.file}: ACCEPTED says ${a.sites}, classifier finds ${current[a.file]}`);
+  }
+});
+
+test('validateAccepted RESOLVES a rule-clause ref — a made-up document must not pass', () => {
+  const base = { file: 'a.tsx', sites: 1, kind: 'byo', why: 'because' };
+  assert.equal(validateAccepted([{ ...base, ref: 'made-up.md §Nonexistent' }]).length, 1);
+  // A real file with an imaginary section is the same failure.
+  assert.equal(validateAccepted([{ ...base, ref: 'auto-bind-by-default.md §NoSuchSection' }]).length, 1);
+  // Both refs the real table uses resolve.
+  assert.deepEqual(validateAccepted([{ ...base, ref: 'auto-bind-by-default.md §Allowed' }]), []);
+  assert.deepEqual(
+    validateAccepted([{ ...base, ref: 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES' }]),
+    [],
+  );
+});
+
+test('--report prints file:line for every ACCEPTED site — an auditor must not have to instrument collect()', () => {
+  const r = execFileSync(process.execPath, [GUARD, '--report'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' });
+  const tagged = r.split('\n').filter((l) => /^\s+\[accepted\] apps\/fiab-console\/\S+:\d+ \[/.test(l));
+  const claimed = ACCEPTED.reduce((n, a) => n + a.sites, 0);
+  assert.equal(tagged.length, claimed, `--report listed ${tagged.length} accepted sites, ACCEPTED claims ${claimed}`);
+  // Every accepted FILE is represented, not just the total.
+  for (const a of ACCEPTED) {
+    assert.ok(tagged.some((l) => l.includes(a.file)), `${a.file} has no [accepted] site line`);
+  }
+});
+
+test('an accepted site is LISTED but never ANNOTATED — the judgement has been made', () => {
+  const r = execFileSync(process.execPath, [GUARD, '--report'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' });
+  for (const a of ACCEPTED) {
+    assert.ok(
+      !new RegExp(`::error file=${a.file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(r),
+      `${a.file} was annotated as a finding despite being accepted`,
+    );
   }
 });
 
@@ -439,7 +505,62 @@ test('RECEIPT: the accepted egress allow-list already has a picker for the enume
   assert.match(pane, /serviceTags\.map/);
 });
 
-// ── 9. end to end, as CI runs it ───────────────────────────────────────────
+// ── 9. the disabled/readOnly BRACE HOLE (#3579, found by wave 1C) ──────────
+//
+// The skip test read the identifier INSIDE `disabled={disabled}` as the
+// attribute name, so a conditionally-off control read as permanently off and
+// was dropped before classification. 52 free-text sites were invisible. These
+// pin both directions AND the mechanism, because a fix that over-corrected
+// would cost the 6 bare `disabled` and 36 bare `readOnly` that are real.
+
+test('attrSkeleton blanks brace expressions so an identifier cannot pose as an attribute name', () => {
+  const skel = attrSkeleton('<Input disabled={disabled} readOnly={readOnly} onChange={(e) => f({a: 1})} />');
+  assert.equal(skel.length, '<Input disabled={disabled} readOnly={readOnly} onChange={(e) => f({a: 1})} />'.length);
+  assert.ok(!/\{disabled\}/.test(skel), 'the disabled expression survived the skeleton');
+  assert.ok(!/\{readOnly\}/.test(skel), 'the readOnly expression survived the skeleton');
+  assert.match(skel, /disabled=/, 'the attribute NAME must survive — only its value is blanked');
+});
+
+test('THE DEFECT: the old regex matched the identifier inside the braces', () => {
+  // Pinned as a property so nobody reintroduces `[\s{]` as "harmless".
+  const old = /(?:^|[\s{])disabled\b(?!\s*=)/i;
+  assert.equal(old.test('<Input disabled={disabled} />'), true, 'the old regex did not have the hole this fixes');
+  // …and the corrected logic does not.
+  const tag = '<Input disabled={disabled} />';
+  assert.equal(isPermanentlyOff(attrSkeleton(tag), tag, 'disabled'), false);
+});
+
+test('a CONDITIONALLY disabled/readOnly control is a site in both spellings', () => {
+  for (const src of [
+    '<Field label="Cluster URI"><Input disabled={disabled} value={v} onChange={f} /></Field>',
+    '<Field label="Cluster URI"><Input readOnly={readOnly} value={v} onChange={f} /></Field>',
+    '<Field label="Cluster URI"><Input disabled={busy} value={v} onChange={f} /></Field>',
+    '<Field label="Cluster URI"><Input disabled={false} value={v} onChange={f} /></Field>',
+  ]) {
+    assert.equal(analyze(src).violations.length, 1, `not classified: ${src}`);
+  }
+});
+
+test('a PERMANENTLY off control still skips — the fix must not cost the real ones', () => {
+  for (const src of [
+    '<Field label="Cluster URI"><Input disabled value={v} onChange={f} /></Field>',
+    '<Field label="Cluster URI"><Input readOnly value={v} onChange={f} /></Field>',
+    '<Field label="Cluster URI"><Input disabled={true} value={v} onChange={f} /></Field>',
+    '<Field label="Cluster URI"><Input readOnly={true} value={v} onChange={f} /></Field>',
+  ]) {
+    assert.equal(analyze(src).violations.length, 0, `wrongly classified: ${src}`);
+  }
+});
+
+test('the corrected extractor finds MORE sites than the floor, not fewer', () => {
+  // The population went UP because the detector stopped being blind. If a
+  // future change silently reintroduces the hole, this is the canary that the
+  // ratchet (which only fails on a RISE) cannot be.
+  const { sites } = collect();
+  assert.ok(sites > 2300, `site extraction fell to ${sites} — the brace hole may be back`);
+});
+
+// ── 10. end to end, as CI runs it ──────────────────────────────────────────
 
 test('the guard passes on the current tree at its baseline', () => {
   const r = execFileSync(process.execPath, [GUARD], { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' });
