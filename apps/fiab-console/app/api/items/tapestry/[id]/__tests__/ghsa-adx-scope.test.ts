@@ -125,6 +125,7 @@ vi.mock('@/lib/azure/tapestry-graph', () => tapestry);
 import { POST as linkPOST } from '../link/route';
 import { POST as geoPOST } from '../geo/route';
 import { POST as timelinePOST } from '../timeline/route';
+import { GET as databasesGET } from '../databases/route';
 
 const ctx = { params: Promise.resolve({ id: 'tap-1' }) } as any;
 
@@ -247,5 +248,78 @@ describe('the panes still do their job for a legitimate owner', () => {
     );
     expect(res.status).toBe(400);
     expect(kusto.executeQuery).not.toHaveBeenCalled();
+  });
+});
+
+// ── The PICKER must offer exactly what the panes accept ─────────────────────
+
+/**
+ * Binding the panes created, in the tapestry editor, the exact defect
+ * `graph-model/[id]/source-schema` had just lost: its database control was a
+ * free-text `<Input>` hinted "Defaults to LOOM_KUSTO_DEFAULT_DB", so any typed
+ * value outside the workspace scope now 403s — the field failing on its own
+ * documented use. `[id]/databases` is the picker that fixes it, and these tests
+ * pin the property that matters: THE PICKER'S LIST AND THE PANES' ADMISSION SET
+ * ARE THE SAME SET. A picker that offers a choice its consumer refuses is the
+ * bug; asserting the list contents alone would not catch that.
+ *
+ * MUTATION PROOF (applied, whole file run, reverted):
+ *   20. `databases/route.ts` — return `listDatabases()` instead of
+ *       `workspaceAdxScope(item)`
+ *         → "offers ONLY databases the panes accept" fails: victimdb is offered
+ *           and the pane refuses it.
+ *   21. `databases/route.ts` — drop `if (guard.res) return guard.res;`
+ *         → "a denied caller gets no database list" fails.
+ */
+describe('[id]/databases — the picker and the panes agree by construction', () => {
+  it('a denied caller gets no database list', async () => {
+    const { NextResponse } = await import('next/server');
+    guard.authorizeItemWorkspace.mockResolvedValue(
+      NextResponse.json({ ok: false, error: 'tapestry not found' }, { status: 404 }) as any,
+    );
+    const res = await databasesGET(req({}), ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it('admits shared read roles — it feeds read-only panes', async () => {
+    await databasesGET(req({}), ctx);
+    expect(guard.authorizeItemWorkspace).toHaveBeenCalledWith(SESSION, EXPECTED_READ_GUARD);
+  });
+
+  it('lists the workspace scope, never the cluster', async () => {
+    const res = await databasesGET(req({}), ctx);
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    const names = j.databases.map((d: any) => d.name);
+    expect(names).toEqual([DEFAULT_DB, SIBLING_DB].sort());
+    expect(names).not.toContain(VICTIM_DB);
+    expect(j.defaultDatabase).toBe(DEFAULT_DB);
+  });
+
+  it('offers ONLY databases the panes accept — every option round-trips', async () => {
+    const offered = (await (await databasesGET(req({}), ctx)).json())
+      .databases.map((d: any) => d.name);
+    expect(offered.length).toBeGreaterThan(0);
+    for (const db of offered) {
+      for (const [, handler] of PANES) {
+        const res = await handler(req({ analysis: 'pattern', database: db }), ctx);
+        expect(res.status).toBe(200);
+      }
+    }
+  });
+
+  it('and does NOT offer one they refuse', async () => {
+    const offered = (await (await databasesGET(req({}), ctx)).json())
+      .databases.map((d: any) => d.name);
+    expect(offered).not.toContain(VICTIM_DB);
+    const res = await linkPOST(req({ analysis: 'pattern', database: VICTIM_DB }), ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it('surfaces the ADX config gate rather than an empty picker', async () => {
+    kusto.kustoConfigGate.mockReturnValue({ missing: 'LOOM_KUSTO_CLUSTER_URI' } as any);
+    const res = await databasesGET(req({}), ctx);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/LOOM_KUSTO_CLUSTER_URI/);
   });
 });

@@ -21,7 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { executeQuery, kustoConfigGate, KustoError } from '@/lib/azure/kusto-client';
 import { discoverGraphTables, buildTimelineKql, TIMELINE_WINDOWS, type TimelineWindow } from '@/lib/azure/tapestry-graph';
-import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
+import { guardAdxItemRequest, scopeAdxDatabase, type AdxScopedDatabase } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // LAYER 2 — bound before any ADX call, including the table discovery probe.
   const scoped = await scopeAdxDatabase(guard.ctx.item, body?.database);
   if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
-  const db = scoped.database;
+  const db: AdxScopedDatabase = scoped.database;
   try {
     const { nodeTables, edgeTables } = await discoverGraphTables(db);
     if (edgeTables.length === 0) {

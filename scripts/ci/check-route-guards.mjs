@@ -963,6 +963,13 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/tapestry/[id]/link/route.ts',
   'apps/fiab-console/app/api/items/tapestry/[id]/geo/route.ts',
   'apps/fiab-console/app/api/items/tapestry/[id]/timeline/route.ts',
+  // Added in the same pass, not pre-existing: binding the three panes above left
+  // the tapestry editor with a FREE-TEXT database field that would 403 on its own
+  // documented use — the picker/consumer mismatch the graph-model source-schema
+  // fix had just removed. `[id]/databases` returns exactly `workspaceAdxScope`,
+  // the same set those panes admit, so it is graduated with them rather than
+  // shipped as a new unguarded surface.
+  'apps/fiab-console/app/api/items/tapestry/[id]/databases/route.ts',
   // non-items routes fixed in the same sweep
   'apps/fiab-console/app/api/aml/environments/route.ts',
   'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',

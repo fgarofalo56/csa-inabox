@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1679 |
+| Total routes | 1680 |
 | Public (no session) | 104 |
 | Session-only | 525 |
-| Owner-scoped | 749 |
+| Owner-scoped | 750 |
 | Admin | 301 |
-| Gated (backend config) | 495 |
+| Gated (backend config) | 496 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1709,6 +1709,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/synthetic-data/[id]/preview/route.ts` | POST | owner-scoped |  | — |
 | `items/synthetic-data/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/synthetic-data/[id]/sources/route.ts` | GET | owner-scoped |  | — |
+| `items/tapestry/[id]/databases/route.ts` | GET | owner-scoped | ● | ADX |
 | `items/tapestry/[id]/geo/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/tapestry/[id]/link/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/tapestry/[id]/timeline/route.ts` | POST | owner-scoped | ● | ADX |

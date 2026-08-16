@@ -25,7 +25,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * (loom-no-freeform-config).
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Caption1, Subtitle2, Badge, Button, Input, Label, Spinner, Field, InfoLabel,
   Tab, TabList, Dropdown, Option, Divider,
@@ -117,6 +117,33 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
   // to the geo/timeline runs that follow.
   const [seedId, setSeedId] = useState<string>('');
   const [database, setDatabase] = useState<string>('');
+
+  // ADX database picker (GHSA-v2g8-gp3r-rg4r). This WAS a free-text `<Input>`
+  // hinted "Defaults to LOOM_KUSTO_DEFAULT_DB". Once the three panes bind the
+  // database to the item's workspace scope, any typed value outside that scope
+  // is refused — so a text box would 403 on its own documented use, which is the
+  // exact picker/consumer mismatch the graph-model source-schema fix removed.
+  // The options come from `[id]/databases`, which returns the SAME
+  // `workspaceAdxScope(item)` the panes admit. Blank = the item's own default.
+  const [dbOptions, setDbOptions] = useState<string[]>([]);
+  const [dbDefault, setDbDefault] = useState<string>('');
+
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch(`/api/items/tapestry/${id}/databases`);
+        const j = await r.json();
+        if (cancelled || !j?.ok) return;
+        setDbOptions((j.databases || []).map((d: { name: string }) => d.name));
+        setDbDefault(String(j.defaultDatabase || ''));
+      } catch {
+        /* the panes still run on the item's own default with `database` blank */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
 
   // Link pane state.
   const [analysis, setAnalysis] = useState<LinkAnalysis>('pattern');
@@ -272,8 +299,22 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
             Azure-native — no Microsoft Fabric required.
           </Caption1>
           <Divider />
-          <Field label={<InfoLabel info="Optional ADX (Azure Data Explorer) database to query instead of the default. Leave blank to use LOOM_KUSTO_DEFAULT_DB.">ADX database (optional)</InfoLabel>} hint="Defaults to LOOM_KUSTO_DEFAULT_DB.">
-            <Input value={database} onChange={(_: unknown, d: any) => setDatabase(d.value)} placeholder="loomdb-default" />
+          <Field
+            label={<InfoLabel info="Which ADX (Azure Data Explorer) database to query. The list is the databases bound to items in THIS workspace — the same set the Link/Geo/Timeline panes accept, so every option here works. Leave on the default to use this item's own database.">ADX database</InfoLabel>}
+            hint={dbDefault ? `Default: ${dbDefault}` : 'Workspace-bound databases only.'}
+          >
+            <Dropdown
+              value={database || `${dbDefault || 'default'} (default)`}
+              selectedOptions={[database]}
+              onOptionSelect={(_, d) => setDatabase(d.optionValue === '' ? '' : String(d.optionValue ?? ''))}
+            >
+              <Option value="" text={`${dbDefault || 'default'} (default)`}>
+                {`${dbDefault || 'default'} (default)`}
+              </Option>
+              {dbOptions.filter((n) => n !== dbDefault).map((n) => (
+                <Option key={n} value={n} text={n}>{n}</Option>
+              ))}
+            </Dropdown>
           </Field>
           <Field label={<InfoLabel info="Starting node for neighbor expansion and the source for shortest-path. Set it by clicking a node in the graph, or type a node id here. It is carried across the Geo and Timeline panes.">Seed / focus node id (shared)</InfoLabel>} hint="Set by clicking a node, or type one. Used by shortest-path / neighbors and carried across panes.">
             <Input value={seedId} onChange={(_: unknown, d: any) => setSeedId(d.value)} placeholder="p-alice" />

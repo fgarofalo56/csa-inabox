@@ -65,7 +65,7 @@ import {
   KustoArmError,
   KustoNotConfiguredError,
 } from '@/lib/azure/kusto-arm-client';
-import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
+import { guardAdxItemRequest, scopeAdxDatabase, type AdxScopedDatabase } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // LAYER 2 — bind the policy target BEFORE any `.alter database` is built.
   const scoped = await scopeAdxDatabase(guard.ctx.item, requested);
   if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
-  const database = scoped.database;
+  const database: AdxScopedDatabase = scoped.database;
 
   const hot = Number(body?.hotCacheDays);
   const soft = Number(body?.softDeleteDays);

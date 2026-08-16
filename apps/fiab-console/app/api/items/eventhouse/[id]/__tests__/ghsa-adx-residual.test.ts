@@ -35,11 +35,19 @@
  * was run, and the mutation was reverted. Each turns this file RED. Run whole
  * files: `-t` with a regex metacharacter silently matches nothing and exits 0.
  *
- *   1. policies POST — keep the scope call but use the body value
- *      (`const database = scoped.ok ? scoped.database : requested`)
+ *   1. policies POST — DELETE the `scopeAdxDatabase` call, so `requested` (the
+ *      body value) is the policy target
  *        → "refuses a policy change on a database outside the workspace scope"
- *          and "…retention specifically" FAIL. tsc-clean (exit 0) — the type
- *          does not see this, which is the whole reason the checker matters.
+ *          and the retention leg FAIL. tsc-clean (exit 0).
+ *
+ *          WORDED THIS WAY DELIBERATELY. An earlier phrasing — "keep the scope
+ *          call but use `scoped.ok ? scoped.database : requested`" — is INERT
+ *          ON THIS ROUTE, and a reviewer reproducing it saw green and
+ *          reasonably doubted the receipt. It is inert because `policies` 400s
+ *          on an empty `database`, so whenever the scope check ADMITS a value
+ *          `requested` already equals `scoped.database` and the substitution
+ *          changes nothing. A mutation that cannot change behaviour proves
+ *          nothing about the test; deleting the call is the one that does.
  *   2. policies POST — drop `if (guard.res) return guard.res;`
  *        → "a denied caller never reaches ADX" FAILS.
  *   3. policies POST — pass `allowReadRoles: true`
@@ -61,6 +69,26 @@
  *          FAILS.
  *  10. journal — use the raw `?database` instead of the scoped one
  *        → "refuses another tenant's journal" FAILS.
+ *  22. `_lib/adx-item-scope.ts` — remove the fail-safe try/catch around
+ *      `guardAdxItemRequest`'s body
+ *        → the "structured 500" legs FAIL: a Cosmos throw escapes the handler
+ *          and the editor's `await r.json()` would get HTML.
+ *  23. journal — remove the OUTER `catch (e) { return apiServerError(e); }`
+ *        → "a throw OUTSIDE the guard (ctx.params) is still an envelope" FAILS.
+ *
+ *          RECORDED BECAUSE IT WAS GREEN FIRST. M22's fail-safe covers a Cosmos
+ *          throw, which made the outer envelope look redundant and left it
+ *          UNWATCHED — M23 passed until a test exercised something the guard
+ *          does NOT run (`await ctx.params`). Two overlapping controls can hide
+ *          each other's absence, and only a mutation finds that.
+ *
+ * TSC IS NOT THE CONTROL HERE, measured both ways. All eight
+ * coordinate-rebinding mutations across this advisory's routes compile CLEAN
+ * under `tsc -p tsconfig.build.json`. The `AdxScopedDatabase` brand added in
+ * this pass catches the shape that KEEPS the annotation
+ * (`const db: AdxScopedDatabase = requested` → tsc exit 2) and does NOT catch
+ * the shape that drops it (`const db = requested` → exit 0). Both are the same
+ * defect, so these tests remain the control that actually holds.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -427,5 +455,105 @@ describe('[id]/journal — the schema-change log is scoped to the item', () => {
   it('the journal picker admits shared read roles', async () => {
     await journalGET(req({}, {}), ctx);
     expect(guard.authorizeItemWorkspace).toHaveBeenCalledWith(SESSION, EXPECTED_READ_GUARD);
+  });
+});
+
+// ── The ERROR CONTRACT the withSession removal would otherwise have dropped ──
+
+/**
+ * `journal` and `continuous-export` ran under `withSession`, whose try/catch
+ * funnelled ANY unexpected throw to `apiServerError`: a structured 500
+ * `{ok:false,error,code}` plus one bounded server log. Adopting the item guard
+ * removed that wrapper, and the guard reaches COSMOS — a dependency these
+ * handlers never had — so without a replacement a Cosmos failure would surface
+ * as Next's generic HTML 500 and the editors' `await r.json()` would throw on
+ * the HTML.
+ *
+ * That is a real regression introduced BY the security fix, so it is pinned
+ * here rather than left to review. Note this asserts the SHAPE, not merely a
+ * status: an HTML 500 also "has status 500".
+ *
+ * MUTATION PROOF (applied, whole file run, reverted):
+ *   22. `_lib/adx-item-scope.ts` — remove the try/catch around
+ *       `guardAdxItemRequest`'s body
+ *         → every test below fails with the raw Cosmos error thrown out of the
+ *           handler instead of a JSON envelope.
+ *   23. `journal/route.ts` / `continuous-export/route.ts` — remove the outer
+ *       `try { … } catch (e) { return apiServerError(e); }`
+ *         → the `req.json()` leg fails (the guard's own catch does not cover
+ *           the body parse).
+ */
+describe('an unexpected failure still returns the JSON envelope, not HTML', () => {
+  it('journal: a Cosmos failure inside the guard is a structured 500', async () => {
+    guard.authorizeItemWorkspace.mockRejectedValue(new Error('cosmos: request timed out'));
+    const res = await journalGET(req({}, {}), ctx);
+    expect(res.status).toBe(500);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(typeof j.error).toBe('string');
+    // The raw driver text must not reach the caller.
+    expect(j.error).not.toMatch(/cosmos: request timed out/);
+    expect(kusto.executeMgmtCommand).not.toHaveBeenCalled();
+  });
+
+  it('continuous-export POST: same envelope', async () => {
+    guard.authorizeItemWorkspace.mockRejectedValue(new Error('cosmos: request timed out'));
+    const res = await exportPOST(req({ ...EXPORT_BODY, database: OWN_DB }), ctx);
+    expect(res.status).toBe(500);
+    expect((await res.json()).ok).toBe(false);
+    expect(kusto.createOrAlterContinuousExport).not.toHaveBeenCalled();
+  });
+
+  it('continuous-export GET: same envelope', async () => {
+    guard.authorizeItemWorkspace.mockRejectedValue(new Error('cosmos: request timed out'));
+    const res = await exportGET(req({}, { database: OWN_DB }), ctx);
+    expect(res.status).toBe(500);
+    expect((await res.json()).ok).toBe(false);
+  });
+
+  it('policies: the guard failing is a refusal, never a pass-through to ADX', async () => {
+    // The guard's catch returns the `{ res }` half by construction, so a Cosmos
+    // failure can only ever DENY — it cannot yield a ctx and let the handler run.
+    guard.authorizeItemWorkspace.mockRejectedValue(new Error('cosmos: request timed out'));
+    const res = await policiesPOST(req({ database: OWN_DB, softDeleteDays: 1 }), ctx);
+    expect(res.status).toBe(500);
+    expect((await res.json()).ok).toBe(false);
+    expect(kusto.executeMgmtCommand).not.toHaveBeenCalled();
+  });
+
+  it('continuous-export POST: a malformed body is still an envelope, not a throw', async () => {
+    const bad = { url: 'http://x/', nextUrl: new URL('http://x/'), json: async () => { throw new Error('bad json'); } } as any;
+    const res = await exportPOST(bad, ctx);
+    // `req.json().catch(() => ({}))` swallows it, so this lands on the normal
+    // 400 path — the point is that it is JSON either way.
+    expect([400, 500]).toContain(res.status);
+    expect((await res.json()).ok).toBe(false);
+  });
+
+  /**
+   * The guard's own fail-safe (M22) covers a Cosmos throw, so it alone left the
+   * handlers' OUTER envelope unwatched — measured: removing it kept this file
+   * green until this test existed. The outer catch is load-bearing for
+   * everything the guard does not run: `await ctx.params`, `new URL(req.url)`,
+   * and the response shaping. `withSession` covered those via `resolveParams`
+   * inside its try, which is exactly what adopting the guard removed.
+   */
+  it('journal: a throw OUTSIDE the guard (ctx.params) is still an envelope', async () => {
+    const badCtx = { params: Promise.reject(new Error('params resolution failed')) } as any;
+    // Keep the rejection from tripping an unhandled-rejection warning before use.
+    badCtx.params.catch(() => {});
+    const res = await journalGET(req({}, {}), badCtx);
+    expect(res.status).toBe(500);
+    expect((await res.json()).ok).toBe(false);
+    expect(kusto.executeMgmtCommand).not.toHaveBeenCalled();
+  });
+
+  it('continuous-export POST: a throw OUTSIDE the guard is still an envelope', async () => {
+    const badCtx = { params: Promise.reject(new Error('params resolution failed')) } as any;
+    badCtx.params.catch(() => {});
+    const res = await exportPOST(req({ ...EXPORT_BODY, database: OWN_DB }), badCtx);
+    expect(res.status).toBe(500);
+    expect((await res.json()).ok).toBe(false);
+    expect(kusto.createOrAlterContinuousExport).not.toHaveBeenCalled();
   });
 });

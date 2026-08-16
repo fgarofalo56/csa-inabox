@@ -48,7 +48,7 @@ import {
   discoverGraphTables, buildGraphPrelude, buildLinkKql, isSafeId,
   type LinkAnalysis, type LinkParams,
 } from '@/lib/azure/tapestry-graph';
-import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
+import { guardAdxItemRequest, scopeAdxDatabase, type AdxScopedDatabase } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // name cannot even be probed through `discoverGraphTables`.
   const scoped = await scopeAdxDatabase(guard.ctx.item, body?.database);
   if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
-  const db = scoped.database;
+  const db: AdxScopedDatabase = scoped.database;
   try {
     const { nodeTables, edgeTables } = await discoverGraphTables(db);
     if (nodeTables.length === 0 || edgeTables.length === 0) {

@@ -71,10 +71,59 @@
 import { NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import { apiServerError } from '@/lib/api/respond';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { cosmosIdFromLoomId } from '@/app/api/items/_lib/loom-content-id';
 import { defaultDatabase } from '@/lib/azure/kusto-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+
+/**
+ * A database name that has been RESOLVED FROM AN ITEM or admitted by
+ * {@link scopeAdxDatabase} — never a raw request value.
+ *
+ * WHY A BRAND. Measured on this advisory's second remediation pass: all EIGHT
+ * coordinate-rebinding mutations (replace the scoped database with the body
+ * value) compile CLEAN under `tsc -p tsconfig.build.json`, because
+ * `scoped.database` and `body.database` were both plain `string`. The type
+ * system had no opinion, so the route tests were the only control on the
+ * defect this whole advisory is about.
+ *
+ * Branding the resolved value fixes that AT THE CALL SITE: a handler that
+ * annotates its target `: AdxScopedDatabase` can no longer be re-pointed at a
+ * raw string without a cast, and the cast is a visible, greppable, reviewable
+ * act rather than a silent one-token edit.
+ *
+ * EXACTLY WHAT IT CATCHES — MEASURED, on four routes, both directions:
+ *
+ *   A. `const db: AdxScopedDatabase = requested;`  (re-point, annotation KEPT)
+ *        → `tsc` exit 2. CAUGHT. This is the likely accidental regression: some-
+ *          one "simplifying" the two-line scope check to one line.
+ *   B. `const db = requested;`                     (rewrite, annotation DROPPED)
+ *        → `tsc` exit 0. NOT CAUGHT. The inferred type is plain `string`, so
+ *          there is nothing for the brand to disagree with.
+ *
+ * Both mutations are semantically identical — the raw request value reaches the
+ * data plane — so THE BRAND DOES NOT CLOSE THE CLASS. It raises the cost of the
+ * cheapest edit; the route tests remain the control that actually holds, and
+ * this is written down so nobody reads the brand as licence to stop writing
+ * them.
+ *
+ * WHAT WOULD CLOSE IT, and why it is not done here. Branding the `database`
+ * PARAMETER of the kusto client itself, so no unscoped string can reach ADX at
+ * all, is the real fix — shape B would then fail at the call to `executeQuery`
+ * rather than at the assignment. 102 files import `@/lib/azure/kusto-client`,
+ * and the ~37 item routes still carrying this defect would each need an
+ * `as AdxScopedDatabase` escape hatch to keep compiling, which is a brand that
+ * certifies nothing. That change belongs AFTER those routes are scoped, as its
+ * own PR. Until then this brand protects exactly the handlers that opt into it,
+ * and only against shape A.
+ */
+export type AdxScopedDatabase = string & { readonly __adxScoped: unique symbol };
+
+/** The single trusted construction point for {@link AdxScopedDatabase}. */
+function scoped(name: string): AdxScopedDatabase {
+  return name as AdxScopedDatabase;
+}
 
 /**
  * Item types whose Cosmos `state` names an ADX database this workspace owns.
@@ -102,18 +151,18 @@ const ADX_BACKED_ITEM_TYPES = [
  * Falls back to the env-pinned default DB, which is what every ADX route in the
  * console already does when an item declares nothing.
  */
-export function resolveItemDatabase(item: Pick<WorkspaceItem, 'state'> | null | undefined): string {
+export function resolveItemDatabase(item: Pick<WorkspaceItem, 'state'> | null | undefined): AdxScopedDatabase {
   const state = (item?.state || {}) as Record<string, unknown>;
   for (const key of ['database', 'databaseName'] as const) {
     const v = state[key];
-    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'string' && v.trim()) return scoped(v.trim());
   }
   const prov = state.provisioning as Record<string, any> | undefined;
   if (prov && (prov.status === 'created' || prov.status === 'exists')) {
     const provDb = prov.secondaryIds?.database || prov.resourceId;
-    if (typeof provDb === 'string' && provDb.trim()) return provDb.trim();
+    if (typeof provDb === 'string' && provDb.trim()) return scoped(provDb.trim());
   }
-  return defaultDatabase();
+  return scoped(defaultDatabase());
 }
 
 /** Additional database names an item explicitly records (eventhouse `state.databases`). */
@@ -183,7 +232,7 @@ export interface AdxItemContext {
   /** The authorized route item. */
   item: WorkspaceItem;
   /** The database resolved FROM THE ITEM. Never a request-body value. */
-  database: string;
+  database: AdxScopedDatabase;
 }
 
 /**
@@ -238,23 +287,38 @@ export async function guardAdxItemRequest(opts: AdxItemGuardOpts): Promise<AdxIt
   if (!session) {
     return { res: NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 }) };
   }
-  const denied = await authorizeItemWorkspace(session, {
-    workspaceId: opts.workspaceId ?? null,
-    itemId: opts.itemId,
-    itemType: opts.itemType,
-    ...(opts.allowReadRoles ? { allowReadRoles: true } : {}),
-    notFound: opts.notFound,
-  });
-  if (denied) return { res: denied };
+  // FAIL-SAFE ENVELOPE. Both calls below reach COSMOS, and most consumers of
+  // this guard are handlers that previously touched only ADX — so adopting it
+  // introduced a new failure mode they had no catch for. Under `withSession`
+  // that throw used to land on `apiServerError` (a structured 500
+  // `{ok:false,error,code}` plus one bounded server log); a handler that calls
+  // this guard directly would instead have surfaced Next's generic HTML 500,
+  // which the editors' `await r.json()` cannot parse.
+  //
+  // This can only ever produce a DENIAL — the catch returns the `{ res }` half,
+  // never a `{ ctx }` — so it is fail-closed by construction and cannot convert
+  // an authorization error into an authorization pass.
+  try {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId: opts.workspaceId ?? null,
+      itemId: opts.itemId,
+      itemType: opts.itemType,
+      ...(opts.allowReadRoles ? { allowReadRoles: true } : {}),
+      notFound: opts.notFound,
+    });
+    if (denied) return { res: denied };
 
-  const item = await loadAdxItemRaw(opts.itemId, opts.itemType);
-  if (!item) {
-    // FAIL CLOSED. `authorizeItemWorkspace` returns null (= allow) for an id
-    // naming no item of this type; with no item there is no scope to bind a
-    // database to, so proceeding would run unbound on the shared cluster.
-    return { res: NextResponse.json({ ok: false, error: opts.notFound }, { status: 404 }) };
+    const item = await loadAdxItemRaw(opts.itemId, opts.itemType);
+    if (!item) {
+      // FAIL CLOSED. `authorizeItemWorkspace` returns null (= allow) for an id
+      // naming no item of this type; with no item there is no scope to bind a
+      // database to, so proceeding would run unbound on the shared cluster.
+      return { res: NextResponse.json({ ok: false, error: opts.notFound }, { status: 404 }) };
+    }
+    return { ctx: { session, item, database: resolveItemDatabase(item) } };
+  } catch (e) {
+    return { res: apiServerError(e) };
   }
-  return { ctx: { session, item, database: resolveItemDatabase(item) } };
 }
 
 /**
@@ -267,7 +331,7 @@ export async function guardAdxItemRequest(opts: AdxItemGuardOpts): Promise<AdxIt
  * is not read at all.
  */
 export type ScopedDatabase =
-  | { ok: true; database: string }
+  | { ok: true; database: AdxScopedDatabase }
   | { ok: false; status: number; error: string };
 
 const DB_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_\-. ]{0,126}$/;
@@ -275,14 +339,14 @@ const DB_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_\-. ]{0,126}$/;
 export async function scopeAdxDatabase(
   item: WorkspaceItem,
   requested: unknown,
-  scope?: Set<string>,
+  scopeSet?: Set<string>,
 ): Promise<ScopedDatabase> {
   const asked = typeof requested === 'string' ? requested.trim() : '';
   if (!asked) return { ok: true, database: resolveItemDatabase(item) };
   if (!DB_NAME_RE.test(asked)) {
     return { ok: false, status: 400, error: 'database is not a valid Azure Data Explorer database name.' };
   }
-  const allowed = scope ?? (await workspaceAdxScope(item));
+  const allowed = scopeSet ?? (await workspaceAdxScope(item));
   if (!allowed.has(asked)) {
     return {
       ok: false,
@@ -293,7 +357,9 @@ export async function scopeAdxDatabase(
         'Create the KQL database through this item (or bind it as a kql-database item) first.',
     };
   }
-  return { ok: true, database: asked };
+  // Admitted against the workspace's own bound set — this is the ONLY place a
+  // caller-supplied string becomes an AdxScopedDatabase.
+  return { ok: true, database: scoped(asked) };
 }
 
 /**

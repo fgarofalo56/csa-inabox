@@ -49,7 +49,8 @@
 import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
 import { executeMgmtCommand, KustoError } from '@/lib/azure/kusto-client';
-import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
+import { apiServerError } from '@/lib/api/respond';
+import { guardAdxItemRequest, scopeAdxDatabase, type AdxScopedDatabase } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,28 +61,50 @@ function qName(name: string): string {
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const { id } = await ctx.params;
-  // LAYER 1 — read-only surface, so shared read roles are admitted.
-  const guard = await guardAdxItemRequest({
-    itemId: id,
-    itemType: 'eventhouse',
-    notFound: 'eventhouse not found',
-    allowReadRoles: true,
-  });
-  if (guard.res) return guard.res;
+  // ERROR CONTRACT. This route used to run under `withSession`, whose try/catch
+  // funnelled ANY unexpected throw to `apiServerError` — a structured 500
+  // `{ok:false,error,code}` plus one bounded server log. Dropping the wrapper
+  // for the item guard would have left the guard, the scope resolution and
+  // `ctx.params` outside every catch, so a Cosmos failure would surface as
+  // Next's generic HTML 500 and the editor's `await r.json()` would throw on it.
+  // That regression matters MORE after this change, not less: the guard reaches
+  // Cosmos, which these handlers never did before.
+  try {
+    const { id } = await ctx.params;
+    // LAYER 1 — read-only surface, so shared read roles are admitted.
+    const guard = await guardAdxItemRequest({
+      itemId: id,
+      itemType: 'eventhouse',
+      notFound: 'eventhouse not found',
+      allowReadRoles: true,
+    });
+    if (guard.res) return guard.res;
 
-  const url = new URL(req.url);
-  const limitRaw = parseInt(url.searchParams.get('limit') || '100', 10);
-  const limit = Math.min(1000, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 100));
+    const url = new URL(req.url);
+    const limitRaw = parseInt(url.searchParams.get('limit') || '100', 10);
+    const limit = Math.min(1000, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 100));
 
-  // LAYER 2 — an empty `?database` resolves to the item's OWN database (that is
-  // `scopeAdxDatabase`'s contract), so there is no un-scoped branch left.
-  const scoped = await scopeAdxDatabase(guard.ctx.item, url.searchParams.get('database'));
-  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
-  const database = scoped.database;
+    // LAYER 2 — an empty `?database` resolves to the item's OWN database (that is
+    // `scopeAdxDatabase`'s contract), so there is no un-scoped branch left.
+    const scoped = await scopeAdxDatabase(guard.ctx.item, url.searchParams.get('database'));
+    if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+    const database: AdxScopedDatabase = scoped.database;
 
-  const command = `.show database ${qName(database)} journal | take ${limit}`;
+    const command = `.show database ${qName(database)} journal | take ${limit}`;
 
+    return await runJournal(database, command);
+  } catch (e) {
+    return apiServerError(e);
+  }
+}
+
+/**
+ * Run the journal command and shape the rows. Kept as its own function so the
+ * KustoError → 502 mapping stays exactly as it shipped, while the caller's outer
+ * try/catch restores the `apiServerError` envelope for anything that is NOT a
+ * Kusto error (a Cosmos failure inside the guard, most obviously).
+ */
+async function runJournal(database: string, command: string) {
   try {
     // Executed AGAINST the bound database, not the shared NetDefaultDB: the
     // connection database and the queried database are now the same thing, so

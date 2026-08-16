@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1679 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1680 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -1593,6 +1593,7 @@ export type DynamicApiRoute =
   | `/api/items/synthetic-data/${string}/generate`
   | `/api/items/synthetic-data/${string}/preview`
   | `/api/items/synthetic-data/${string}/sources`
+  | `/api/items/tapestry/${string}/databases`
   | `/api/items/tapestry/${string}/geo`
   | `/api/items/tapestry/${string}/link`
   | `/api/items/tapestry/${string}/timeline`
