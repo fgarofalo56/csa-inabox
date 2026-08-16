@@ -205,13 +205,35 @@ function candidateItemTypes(type: string, kind: Backend): string[] {
  * refused before it reaches `serverlessTarget()` and the connection-pool cache
  * key.
  *
- * UNICODE-AWARE ON PURPOSE. SQL Server identifiers may be Unicode, so an
- * ASCII-only class would 400 a legitimately-named database — refusing a real
- * user to bound a coordinate that is already confined to this deployment's own
- * endpoint, which is a bad trade. `\p{L}\p{N}` keeps every letter and digit and
- * still excludes every separator and quoting character.
+ * DEFINED BY EXCLUSION, and that is a deliberate correction. The first version
+ * of this was an ALLOWLIST — `[\p{L}\p{N}_ .-]` — whose own doc-comment argued
+ * for Unicode-awareness "so the class does not 400 a legitimately-named
+ * database", and which then omitted `@`, `$` and `#`. SQL Server permits those
+ * in an identifier, so `sales#2024` and `db$archive` were refused: the exact
+ * defect the comment claimed to be avoiding, one line below the claim.
+ *
+ * Writing a correct allowlist means encoding SQL Server's identifier grammar,
+ * and I could not reach Microsoft Learn from this execution context to ground
+ * it. Transcribing it from memory is what produced the bug in the first place,
+ * so this does not try: it **excludes** the characters that make a value
+ * implausible as a database name or hazardous in a connection context, and
+ * nothing else. Whatever the grammar's exact edges are, this cannot refuse a
+ * legal name that avoids separators, quotes, brackets and control characters.
+ *
+ * Excluded: `\p{C}` (control / format / surrogate / unassigned), `\p{Zl}`+`\p{Zp}`
+ * (line + paragraph separators), `/` `\` (path separators), `;` (statement /
+ * connection-string separator), `'` `"` and `[` `]` (SQL quoting). Length is
+ * capped at 128, SQL Server's `sysname` limit.
+ *
+ * NO LEADING-CHARACTER RESTRICTION, declined on purpose. Review suggested
+ * keeping `@`/`#` out of the leading class to stay clear of `@variable` /
+ * `#temp` shapes. Those are T-SQL STATEMENT constructs; this value is passed as
+ * the discrete `database` field of an `mssql.ConnectionPool` config
+ * (`synapse-sql-client.ts:152`), never concatenated into a statement or a
+ * connection string, so a leading `@` or `#` carries no special meaning on this
+ * path. Adding the restriction would re-import grammar folklore for no gain.
  */
-const SERVERLESS_DATABASE_RE = /^[\p{L}\p{N}_][\p{L}\p{N}_ .-]{0,126}[\p{L}\p{N}_.-]$|^[\p{L}\p{N}_]$/u;
+const SERVERLESS_DATABASE_RE = /^[^\p{C}\p{Zl}\p{Zp}/\\;'"[\]]{1,128}$/u;
 
 function synapseReader(backend: Backend, target: SynapseTarget, serverless = false): Reader {
   return {
@@ -291,6 +313,41 @@ function gateOrError(refusal: { status: number; code: string; error: string }): 
 }
 
 /**
+ * The route id an UNSAVED editor carries. `/items/<type>/new` is the create
+ * route, so `[id]` is the literal string `new` until the item is first saved.
+ *
+ * It can NEVER collide with a real item: `createOwnedItem` mints ids with
+ * `crypto.randomUUID()` (`_lib/item-crud.ts:467`, and :275 records the same
+ * invariant), so special-casing it downgrades nothing.
+ */
+const UNSAVED_ITEM_ID = 'new';
+
+/**
+ * The 404 body for an item the caller cannot reach — deliberately naming BOTH
+ * causes and asserting NEITHER.
+ *
+ * `loadOwnedItem` returns `null` for two different situations (`_lib/item-crud.ts`
+ * :286 `if (!item) return null` and :289 `if (!opts.allowReadRoles &&
+ * !access.canWrite) return null`), and this route CANNOT tell them apart without
+ * a second read — which is precisely the cross-tenant existence probe the
+ * 404-not-403 convention exists to prevent. So the status stays 404 and the
+ * message states the disjunction rather than picking a side, per
+ * `deploy-integrity.md` R7: an error must not assert a cause it did not
+ * establish.
+ *
+ * The read-role half is a REAL consequence of this PR's write-scoping, raised in
+ * review: a Viewer/Contributor of a shared workspace can open the item and its
+ * Security tab, and previously reached the route (that was the vulnerability).
+ * Keeping them out is correct — the wizards execute DDL/DCL and the GET reaches
+ * the same TDS executor — but a bare "not found" gave them nothing to act on.
+ */
+const ITEM_UNREACHABLE =
+  'This item is not available to you. Either it does not exist, or your role in ' +
+  'its workspace is read-only — the SQL security wizards read and execute T-SQL ' +
+  'against the database, so they require write access. Ask a workspace owner for ' +
+  'a Contributor-or-higher role if you need them.';
+
+/**
  * LAYER 1 → LAYER 2/3 → a Reader. The single authorization path for both verbs.
  *
  * `submitted` is the request's own `server`/`database` (query string on GET,
@@ -305,10 +362,54 @@ async function authorizeAndResolve(
 ): Promise<Resolved> {
   const kind = backendKindFor(type);
 
+  // ── UNSAVED ITEM — the honest gate, NOT a 404. ───────────────────────────
+  //
+  // FOUND IN REVIEW OF THIS FIX, and it is the case the ownership check would
+  // otherwise get wrong. An unsaved item has no Cosmos row to own, so
+  // `loadOwnedSqlItem` returns null and the route 404s — and the panel renders a
+  // 404 as a RED "Could not load security state — not found" banner
+  // (`lib/panes/sql-security-panel.tsx:109`, the `!j.gated && !j.ok` branch).
+  //
+  // That is reachable in four clicks from a create page, because THREE of the
+  // four editors that mount `SqlSecurityPanel` do not condition their trigger on
+  // the item being saved:
+  //
+  //   unified-sql-database-editor.tsx:1449  — enabled on
+  //     `server && database && family === 'azure-sql'`, no `id !== 'new'`; and
+  //     :1992-1995 mounts the panel on the same predicate. The bind-on-selection
+  //     effect this route's Layer 2 relies on returns early for an unsaved item
+  //     (`:792  if (!server || !id || id === 'new') return;`), so the item is not
+  //     merely unowned — it is unbindable.
+  //   synapse-sql-editors.tsx:392           — the SERVERLESS trigger is
+  //     UNCONDITIONAL (`onClick: () => setSecOpen(true)`).
+  //   synapse-sql-editors.tsx:932           — the DEDICATED trigger gates on
+  //     `isOnline`, which comes from `synapse-dedicated-sql-pool/[id]/state`
+  //     (`export async function GET()` — no `ctx` at all, session-only and
+  //     env-derived), so it reports Online for `id === 'new'` too.
+  //
+  //   phase3/warehouse-editor.tsx:459 is the one that is SAFE: `canRun` derives
+  //   from `ready`, whose query carries `enabled: !isNew` (:142).
+  //
+  // A red error banner on a freshly created item is exactly what
+  // `ux-baseline.md` forbids ("new-item first-open is clean"), and a dead end
+  // with no route forward is what `auto-bind-by-default.md` forbids. So this
+  // returns the route's EXISTING gate shape with the one action that actually
+  // resolves it. Deliberately BEFORE the ownership call and branch-agnostic, so
+  // all three reachable editors get it.
+  if (id === UNSAVED_ITEM_ID) {
+    return {
+      ok: false,
+      res: gate(
+        'Save this item first — the SQL security wizards run against the saved ' +
+          "item's bound database, and an unsaved item has nothing to bind to yet.",
+      ),
+    };
+  }
+
   // ── LAYER 1 — the caller must own the route item. ────────────────────────
   // Write-scoped (no allowReadRoles) on BOTH verbs; see the header.
   const item: WorkspaceItem | null = await loadOwnedSqlItem(id, session, candidateItemTypes(type, kind));
-  if (!item) return { ok: false, res: apiNotFound() };
+  if (!item) return { ok: false, res: apiNotFound(ITEM_UNREACHABLE) };
 
   if (kind === 'synapse-dedicated') {
     if (!process.env.LOOM_SYNAPSE_WORKSPACE || !process.env.LOOM_SYNAPSE_DEDICATED_POOL) {

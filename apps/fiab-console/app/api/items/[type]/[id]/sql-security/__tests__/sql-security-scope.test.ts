@@ -393,6 +393,108 @@ describe('sql-security — LAYER 2/3: the Azure SQL target comes from the item',
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// UNSAVED ITEM — the gate, not a 404. Found in review of the first version of
+// this fix, which 404'd `id='new'` and so put a RED "Could not load security
+// state — not found" banner four clicks from a create page.
+//
+// THREE of the four editors that mount SqlSecurityPanel reach this: the unified
+// SQL editor (:1449 / :1992-1995, no `id !== 'new'`), the Synapse SERVERLESS
+// editor (:392, trigger is unconditional) and the Synapse DEDICATED editor
+// (:932, gated on `isOnline`, which comes from a `GET()` with no ctx and is
+// therefore id-blind). Only phase3/warehouse-editor.tsx:459 is safe
+// (`canRun` <- `ready`, whose query carries `enabled: !isNew`).
+//
+// So the specs cover EVERY branch — a fix applied only to the azure-sql path
+// would leave two live dead ends.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('sql-security — an UNSAVED item gates, it does not dead-end', () => {
+  //   MUTATION: delete the `id === UNSAVED_ITEM_ID` short-circuit. → the
+  //   ownership check 404s and the panel paints a red error banner.
+  it.each([
+    ['azure-sql-database', '?server=srv&database=db'],
+    ['synapse-serverless-sql-pool', ''],
+    ['synapse-dedicated-sql-pool', ''],
+    ['warehouse', ''],
+  ])('GET on a new %s returns the GATE shape, never a 404', async (type, qs) => {
+    const { GET } = await import('../route');
+    const r = await GET(getReq(type, qs, 'new'), params(type, 'new'));
+    expect(r.status).not.toBe(404);
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.gated).toBe(true);
+    expect(j.ok).toBe(false);
+    // Actionable: it names the one action that resolves the state.
+    expect(String(j.error)).toMatch(/save this item first/i);
+    noSqlRan();
+  });
+
+  it('POST on a new item gates too, executing NO DDL', async () => {
+    const { POST } = await import('../route');
+    const r = await POST(postReq('azure-sql-database', GRANT_BODY, 'new'), params('azure-sql-database', 'new'));
+    expect(r.status).toBe(200);
+    expect((await r.json()).gated).toBe(true);
+    noSqlRan();
+  });
+
+  // The gate must be a SHORT-CIRCUIT, not a 404 that happens to be relabelled:
+  // an unsaved item has no Cosmos row, so Cosmos must not be consulted at all.
+  it('does not even attempt a Cosmos read for an unsaved item', async () => {
+    const { GET } = await import('../route');
+    await GET(getReq('azure-sql-database', '', 'new'), params('azure-sql-database', 'new'));
+    expect(loadOwnedItemMock).not.toHaveBeenCalled();
+  });
+
+  // `'new'` is special-cased ONLY as an exact match. A real Cosmos id is a
+  // `crypto.randomUUID()` (item-crud.ts:467), so nothing that merely contains or
+  // resembles the word may skip the ownership check.
+  //   MUTATION: change the comparison to `id.includes('new')` or a regex.
+  it.each(['newton', 'new-item', 'NEW', 'anew'])(
+    'does NOT skip ownership for an id that merely resembles new — %s',
+    async (id) => {
+      loadOwnedItemMock.mockResolvedValue(null as any);
+      const { GET } = await import('../route');
+      const r = await GET(getReq('azure-sql-database', '', id), params('azure-sql-database', id));
+      expect(r.status).toBe(404);
+      expect(loadOwnedItemMock).toHaveBeenCalled();
+      noSqlRan();
+    },
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The 404 body — names both causes, asserts neither (deploy-integrity.md R7).
+// ═══════════════════════════════════════════════════════════════════════════
+describe('sql-security — the unreachable-item message is actionable and honest', () => {
+  //   MUTATION: revert to a bare `apiNotFound()`. → the body is "not found",
+  //   which tells a read-role member of a shared workspace nothing.
+  it('explains BOTH causes without asserting either', async () => {
+    loadOwnedItemMock.mockResolvedValue(null as any);
+    const { GET } = await import('../route');
+    const r = await GET(getReq('azure-sql-database', ''), params('azure-sql-database'));
+    expect(r.status).toBe(404);
+    const err = String((await r.json()).error);
+    expect(err).toMatch(/does not exist/i);
+    expect(err).toMatch(/read-only/i);
+    expect(err).toMatch(/write access/i);
+    // It must NOT claim to know which one it is — that would be a fact the route
+    // did not establish (loadOwnedItem returns null for both).
+    expect(err).toMatch(/either/i);
+  });
+
+  // 404-not-403 is retained deliberately: distinguishing the two causes needs a
+  // second read, which IS the cross-tenant existence probe the convention exists
+  // to prevent.
+  //   MUTATION: return 403 when the item exists but the caller lacks write. →
+  //   this goes red, and an id becomes probeable across tenants.
+  it('stays 404, never 403 — an id must not be probeable', async () => {
+    loadOwnedItemMock.mockResolvedValue(null as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq('azure-sql-database', GRANT_BODY), params('azure-sql-database'));
+    expect(r.status).toBe(404);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SYNAPSE — env-derived targets, and the one caller coordinate that remains.
 // ═══════════════════════════════════════════════════════════════════════════
 describe('sql-security — Synapse branches', () => {
@@ -422,8 +524,10 @@ describe('sql-security — Synapse branches', () => {
   //   200s and the raw string reaches serverlessTarget().
   it.each([
     ['a path separator', 'db/../other'],
+    ['a backslash', 'db\\other'],
     ['a semicolon', 'db;Encrypt=false'],
     ['a quote', "db'"],
+    ['a double quote', 'db"x'],
     ['a bracket', 'db]-[other'],
     ['whitespace padding beyond trim', 'db\tname'],
     ['an over-long name', 'd'.repeat(200)],
@@ -446,18 +550,28 @@ describe('sql-security — Synapse branches', () => {
     expect(serverlessTargetMock).toHaveBeenCalledWith('lake_db');
   });
 
-  // The shape bound must not refuse a REAL database. SQL Server identifiers may
-  // be Unicode, so an ASCII-only class would 400 a legitimate user to bound a
-  // coordinate already confined to this deployment's own endpoint.
-  //   MUTATION: narrow SERVERLESS_DATABASE_RE back to [A-Za-z0-9_].
-  it('CONTROL: SERVERLESS accepts a Unicode database name', async () => {
+  // THE SHAPE BOUND MUST NOT REFUSE A REAL DATABASE. The first version of
+  // SERVERLESS_DATABASE_RE was an allowlist that argued for Unicode-awareness and
+  // then omitted `@`, `$` and `#` — which SQL Server permits in an identifier —
+  // so `sales#2024` and `db$archive` 400'd. Raised in review; these are the
+  // regression specs for it.
+  //   MUTATION: narrow SERVERLESS_DATABASE_RE back to an allowlist such as
+  //   [\p{L}\p{N}_ .-]. → every case below 400s.
+  it.each([
+    ['Unicode letters', 'ventas_año'],
+    ['a hash', 'sales#2024'],
+    ['a dollar sign', 'db$archive'],
+    ['an at sign', 'db@corp'],
+    ['a leading hash (no leading-char restriction, by design)', '#staging'],
+    ['a space and a dot', 'sales db.v2'],
+  ])('CONTROL: SERVERLESS accepts a legal database name — %s', async (_label, database) => {
     const { GET } = await import('../route');
     const r = await GET(
-      getReq('synapse-serverless-sql-pool', `?database=${encodeURIComponent('ventas_año')}`),
+      getReq('synapse-serverless-sql-pool', `?database=${encodeURIComponent(database)}`),
       params('synapse-serverless-sql-pool'),
     );
     expect(r.status).toBe(200);
-    expect(serverlessTargetMock).toHaveBeenCalledWith('ventas_año');
+    expect(serverlessTargetMock).toHaveBeenCalledWith(database);
   });
 
   // The env gates are honest infra gates, NOT authorization — so they must come
