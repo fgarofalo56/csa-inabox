@@ -41,7 +41,10 @@ on:
         type: boolean
 
 permissions:
-  id-token: write
+  # No id-token: write — this workflow authenticates with a service-principal
+  # secret (see the login steps). It carried id-token: write while taking an
+  # OIDC path that could never succeed, which made the over-permission look
+  # load-bearing.
   contents: read
 
 env:
@@ -83,12 +86,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
+      # Service-principal secret, NOT OIDC. The Gov app registration
+      # (csa-loom-gov-deploy) has no federated identity credentials configured,
+      # so the OIDC path this step used to take failed 100% of the time with
+      # AADSTS70025 — which is why this workflow has never once succeeded. Every
+      # Gov lane that DOES produce receipts (gov-verify-facts, gov-console-roll,
+      # gov-build-images, gov-workspace-identity, gov-selfaudit) authenticates
+      # this way. Migrating the whole Gov fleet to OIDC is tracked separately and
+      # requires the FICs to exist first.
       - name: Azure Gov Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
         with:
-          client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
           environment: ${{ env.AZURE_GOV_ENVIRONMENT }}
 
       - name: Determine parameters file
@@ -125,12 +145,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
+      # Service-principal secret, NOT OIDC. The Gov app registration
+      # (csa-loom-gov-deploy) has no federated identity credentials configured,
+      # so the OIDC path this step used to take failed 100% of the time with
+      # AADSTS70025 — which is why this workflow has never once succeeded. Every
+      # Gov lane that DOES produce receipts (gov-verify-facts, gov-console-roll,
+      # gov-build-images, gov-workspace-identity, gov-selfaudit) authenticates
+      # this way. Migrating the whole Gov fleet to OIDC is tracked separately and
+      # requires the FICs to exist first.
       - name: Azure Gov Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
         with:
-          client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
           environment: ${{ env.AZURE_GOV_ENVIRONMENT }}
 
       - name: Determine parameters file
