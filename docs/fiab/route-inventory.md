@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 680 |
-| Owner-scoped | 641 |
+| Session-only | 676 |
+| Owner-scoped | 645 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -1172,8 +1172,8 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/azure-sql-database/[id]/aad-admin/route.ts` | GET PUT | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/[id]/connect/route.ts` | POST | owner-scoped |  | — |
 | `items/azure-sql-database/[id]/copilot/route.ts` | POST | owner-scoped | ● | Azure SQL |
-| `items/azure-sql-database/[id]/create-db/route.ts` | POST | session-only |  | Azure SQL |
-| `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/create-db/route.ts` | POST | owner-scoped |  | Azure SQL |
+| `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/[id]/get-data/route.ts` | POST | owner-scoped | ● | ADF |
 | `items/azure-sql-database/[id]/maintenance-configs/route.ts` | GET | session-only |  | Azure SQL |
 | `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos |
@@ -1190,7 +1190,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/azure-sql-database/[id]/sql2025-features/route.ts` | POST | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/route.ts` | GET POST | owner-scoped |  | — |
 | `items/azure-sql-managed-instance/route.ts` | GET POST | owner-scoped |  | Azure SQL |
-| `items/azure-sql-server/[id]/databases/route.ts` | GET | session-only |  | Azure SQL |
+| `items/azure-sql-server/[id]/databases/route.ts` | GET | owner-scoped |  | Azure SQL |
 | `items/azure-sql-server/route.ts` | GET POST | owner-scoped |  | Azure SQL |
 | `items/batch-pool/jobs/route.ts` | GET POST DELETE | session-only | ● | Batch |
 | `items/batch-pool/route.ts` | GET POST DELETE | session-only | ● | Batch |
@@ -1583,7 +1583,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/plan/[id]/model/route.ts` | GET POST | owner-scoped |  | — |
 | `items/plan/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/plan/[id]/writeback/route.ts` | GET POST | owner-scoped | ● | — |
-| `items/postgres-flexible-server/[id]/databases/route.ts` | GET | session-only |  | — |
+| `items/postgres-flexible-server/[id]/databases/route.ts` | GET | owner-scoped |  | — |
 | `items/postgres-flexible-server/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | — |
 | `items/postgres-flexible-server/[id]/query/route.ts` | POST | owner-scoped |  | — |
 | `items/postgres-flexible-server/route.ts` | GET POST | session-only |  | — |
@@ -2355,7 +2355,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 
 ## Authorization resolvers (derived)
 
-170 function(s) across 78 module(s) reach an owner / workspace-ACL
+171 function(s) across 78 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2376,7 +2376,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/_lib/palantir-crud.ts` | `GET`, `PATCH`, `POST`, `listOntologies`, `loadOntologySurface`, `makeCollectionRoute`, `makeItemRoute` |
 | `apps/fiab-console/app/api/items/_lib/pbi-content-fallback.ts` | `listContentBackedItems`, `loadContentBackedItem` |
 | `apps/fiab-console/app/api/items/_lib/semantic-model-checkpoints.ts` | `captureCheckpoint`, `listCheckpoints`, `restoreCheckpoint` |
-| `apps/fiab-console/app/api/items/_lib/sql-server-scope.ts` | `loadOwnedSqlItem`, `withBoundSqlServer` |
+| `apps/fiab-console/app/api/items/_lib/sql-server-scope.ts` | `loadOwnedSqlItem`, `withBoundSqlServer`, `withOwnedSqlItem` |
 | `apps/fiab-console/app/api/items/_lib/synapse-item-scope.ts` | `guardSynapseItemRequest` |
 | `apps/fiab-console/app/api/items/_lib/synapse-model.ts` | `DELETE`, `GET`, `POST`, `makeSynapseModelHandlers` |
 | `apps/fiab-console/app/api/items/aip-logic/[id]/_block-graph.ts` | `loadEntityBindings`, `resolveUseLlmTools`, `runBlockGraph`, `runSiblingFunction` |

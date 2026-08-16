@@ -118,23 +118,49 @@ describe('GET /api/items/sql-databases (tenant inventory)', () => {
 });
 
 // ---------------------------------------------------------------
+// GHSA-v8r7-c2p5-mjf2 (fourth pass) — create-db now runs `withOwnedSqlItem`, so
+// every case must supply a route ctx and an owned item to reach the handler at
+// all. The server stays a caller PICK (the database does not exist yet, so there
+// is no binding to resolve) and is admitted against the authorized subscription
+// set instead; that authorization is covered in depth by
+// `azure-sql-database/[id]/create-db/__tests__/create-db-scope.test.ts`. These
+// specs stay pointed at what they were always about — validation and delegation
+// with the right args — plus the ownership requirement that is new.
+//
+// The bare server names below ('s', 'srv') are deliberately unchanged and still
+// pass: `admitGovernedServer` consults the authorized-subscription set only for
+// a FULL ARM ID, and a bare name is pinned tighter anyway by the client's own
+// `LOOM_SUBSCRIPTION_ID`-scoped lookup. So this file needs no env setup.
 describe('POST /azure-sql-database/[id]/create-db', () => {
+  /** The owner-scoped item `withOwnedSqlItem` resolves for id=i1. */
+  const ownedItem = { id: 'i1', itemType: 'azure-sql-database', workspaceId: 'ws1', state: {} } as any;
+
   it('401 without session', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await createDbPOST(bodyReq('http://x/', { server: 's', name: 'd' }));
+    const res = await createDbPOST(bodyReq('http://x/', { server: 's', name: 'd' }), ctx('i1'));
     expect(res.status).toBe(401);
+  });
+
+  it('404s a caller who does not own the [id] item, provisioning NOTHING', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd' }), ctx('i1'));
+    expect(res.status).toBe(404);
+    expect(createDatabase).not.toHaveBeenCalled();
   });
 
   it('400 when name missing', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await createDbPOST(bodyReq('http://x/', { server: 's' }));
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
+    const res = await createDbPOST(bodyReq('http://x/', { server: 's' }), ctx('i1'));
     expect(res.status).toBe(400);
   });
 
   it('delegates to createDatabase and returns 201', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
     (createDatabase as any).mockResolvedValue({ ok: true, id: '/subs/.../databases/d', status: 'Creating' });
-    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', skuName: 'S0', tier: 'Standard' }));
+    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', skuName: 'S0', tier: 'Standard' }), ctx('i1'));
     const j = await res.json();
     expect(res.status).toBe(201);
     expect(j.ok).toBe(true);
@@ -143,20 +169,22 @@ describe('POST /azure-sql-database/[id]/create-db', () => {
 
   it('propagates the client error status (e.g. 403 missing role)', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
     (createDatabase as any).mockResolvedValue({ ok: false, error: 'Authorization failed', status: 403 });
-    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd' }));
+    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd' }), ctx('i1'));
     expect(res.status).toBe(403);
   });
 
   it('passes collation + backup-redundancy + maintenance-config-id through to createDatabase', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
     (createDatabase as any).mockResolvedValue({ ok: true, id: '/subs/.../databases/d', status: 'Creating' });
     const res = await createDbPOST(bodyReq('http://x/', {
       server: 'srv', name: 'd',
       collation: 'Latin1_General_100_CI_AS_SC_UTF8',
       requestedBackupStorageRedundancy: 'Zone',
       maintenanceConfigurationId: '/subscriptions/x/providers/Microsoft.Maintenance/publicMaintenanceConfigurations/SQL_EastUS2_DB_1',
-    }));
+    }), ctx('i1'));
     expect(res.status).toBe(201);
     expect(createDatabase).toHaveBeenCalledWith(expect.objectContaining({
       collation: 'Latin1_General_100_CI_AS_SC_UTF8',
@@ -167,7 +195,8 @@ describe('POST /azure-sql-database/[id]/create-db', () => {
 
   it('400 for an invalid collation string (route-level regex blocks before ARM)', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', collation: "'; DROP TABLE--" }));
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
+    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', collation: "'; DROP TABLE--" }), ctx('i1'));
     expect(res.status).toBe(400);
     const j = await res.json();
     expect(j.error).toMatch(/collation/i);
@@ -176,8 +205,9 @@ describe('POST /azure-sql-database/[id]/create-db', () => {
 
   it('drops unknown requestedBackupStorageRedundancy values (allow-list: Geo|GeoZone|Local|Zone)', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
     (createDatabase as any).mockResolvedValue({ ok: true, id: '/subs/.../databases/d', status: 'Creating' });
-    await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', requestedBackupStorageRedundancy: 'Unknown' }));
+    await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', requestedBackupStorageRedundancy: 'Unknown' }), ctx('i1'));
     expect(createDatabase).toHaveBeenCalledWith(expect.objectContaining({ requestedBackupStorageRedundancy: undefined }));
   });
 });
@@ -273,16 +303,34 @@ describe('PostgreSQL flexible server routes', () => {
     expect(createPgServer).toHaveBeenCalledWith(expect.objectContaining({ name: 'pg', resourceGroup: 'rg', tier: 'Burstable' }));
   });
 
+  // GHSA-v8r7-c2p5-mjf2 (fourth pass) — the databases DISCOVERY GET now runs
+  // `withOwnedSqlItem`, so it needs a route ctx and an owned item. The server
+  // stays a caller PICK: this call is what populates the picker, so requiring a
+  // binding first would invert the flow (and race the editor's own
+  // bind-on-selection effect). Authorization depth lives in
+  // `postgres-flexible-server/[id]/databases/__tests__/databases-scope.test.ts`.
+  const pgOwnedItem = { id: 'i1', itemType: 'postgres-flexible-server', workspaceId: 'ws1', state: {} } as any;
+
+  it('GET databases — 404s a caller who does not own the [id] item, enumerating NOTHING', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await pgDbGET(getReq('http://x/api/items/postgres-flexible-server/i1/databases?server=pg'), ctx('i1'));
+    expect(res.status).toBe(404);
+    expect(listPgDatabases).not.toHaveBeenCalled();
+  });
+
   it('GET databases — 400 without server param', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await pgDbGET(getReq('http://x/api/items/postgres-flexible-server/i1/databases'));
+    (loadOwnedItem as any).mockResolvedValue(pgOwnedItem);
+    const res = await pgDbGET(getReq('http://x/api/items/postgres-flexible-server/i1/databases'), ctx('i1'));
     expect(res.status).toBe(400);
   });
 
   it('GET databases — returns the database list', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(pgOwnedItem);
     (listPgDatabases as any).mockResolvedValue([{ name: 'app' }, { name: 'postgres' }]);
-    const res = await pgDbGET(getReq('http://x/api/items/postgres-flexible-server/i1/databases?server=pg'));
+    const res = await pgDbGET(getReq('http://x/api/items/postgres-flexible-server/i1/databases?server=pg'), ctx('i1'));
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.databases).toHaveLength(2);

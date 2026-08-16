@@ -96,7 +96,7 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * too; the note is left here because this file caught it first and the checker
  * did not, which is the whole argument for keeping the two in lockstep.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer|OwnedSqlItem)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
 
 /**
  * OWNER_RE IS GONE (#3625) — READ THIS BEFORE ADDING A NAME LIST BACK.
@@ -138,7 +138,6 @@ const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|Te
  * lists is present in the set this one derives, so the two cannot drift APART
  * without failing.
  */
-
 const ADMIN_RE = new RegExp([
   'requireTenantAdmin', 'isTenantAdmin', 'isTenantAdminTier', 'requireDomainRole',
   'enforceCapability', 'canAccessDlzPanes', 'isAtLeastDomainAdmin',
