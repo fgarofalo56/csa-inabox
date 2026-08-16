@@ -14,6 +14,18 @@ import { clientFetch } from '@/lib/client-fetch';
  *
  * Every action posts to a real BFF route (no client-side mock). Errors are
  * surfaced inline via MessageBar.
+ *
+ * GOVERNANCE DOMAIN — WHY IT IS A PICKER (`loom_no_freeform_config`).
+ * The domain this registration lands in is a Purview Unified Catalog business
+ * domain, and the field used to ask for its raw GUID (placeholder
+ * `11111111-2222-…`). A user cannot know that GUID, and they should not have to:
+ * `/api/governance-domains` already lists the published business domains, and
+ * falls back to the Loom-local domain list when Purview UC is not configured —
+ * so the picker works with no Purview at all (`no-fabric-dependency.md` shape:
+ * the Azure-native path is the default, not a gate). That route resolves the
+ * Purview endpoint through `purviewBaseSync`, which is cloud-aware
+ * (`.purview.azure.us` in Azure Government), so this control behaves the same in
+ * a sovereign boundary (`cloud-parity.md`).
  */
 import { useState } from 'react';
 import {
@@ -22,6 +34,28 @@ import {
 } from '@fluentui/react-components';
 import { Open16Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { LoomObjectPicker, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
+
+/**
+ * Live governance-domain list. A non-ok envelope is an ERROR, not an empty
+ * list — the picker must not tell the user "there are no domains" when what
+ * actually happened is that the call failed (`deploy-integrity.md` R7).
+ */
+async function loadGovernanceDomains(): Promise<LoomObjectLoad> {
+  const r = await clientFetch('/api/governance-domains');
+  const j = await r.json().catch(() => ({}));
+  if (!j?.ok) {
+    return { options: [], error: j?.error || `Could not list governance domains (HTTP ${r.status}).` };
+  }
+  return {
+    options: (j.domains || []).map((d: any) => ({
+      id: String(d.id),
+      name: String(d.name || d.id),
+      caption: d.description ? String(d.description).slice(0, 80) : undefined,
+    })),
+    hint: j.purviewHint,
+  };
+}
 
 interface Props {
   source: 'purview' | 'unity-catalog' | 'onelake';
@@ -187,9 +221,20 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
               Creates / merges an Atlas entity in Purview Unified Catalog using a deterministic qualifiedName.
               Subsequent registrations are idempotent (Atlas dedupes by qualifiedName).
             </Body1>
-            <Field label="Business domain GUID (optional)">
-              <Input className={s.control} value={domain} onChange={(_, d) => setDomain(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
-            </Field>
+            <div className={s.control} data-testid="domain-picker">
+              <LoomObjectPicker
+                label="Governance domain"
+                hint="Optional. The Purview Unified Catalog business domain this registration is filed under."
+                value={domain}
+                onChange={setDomain}
+                load={loadGovernanceDomains}
+                loadKey="governance-domains"
+                placeholder="No domain (register at the account root)"
+                emptyTitle="No governance domains yet"
+                emptyBody="Registration still works without one — the asset is filed at the account root. Create a published business domain in Purview Unified Catalog (or a Loom domain in Admin → Domains), then refresh."
+                unresolvedCaption="Saved domain — not in the domains you can see right now (unpublished, removed, or the list could not be read). Kept as-is until you change it."
+              />
+            </div>
             <div className={s.buttonRow}>
               <Button appearance="primary" onClick={registerInPurview} disabled={busy} data-testid="action-register">
                 {busy ? <Spinner size="tiny" /> : 'Register in Purview'}

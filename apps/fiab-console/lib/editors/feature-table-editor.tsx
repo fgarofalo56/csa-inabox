@@ -19,6 +19,22 @@
  * the surface still renders and shows the shared HonestGate with an inline "Fix
  * it" wizard (gate svc-feature-store) — no dead buttons, no red banner on a
  * freshly created item (ux-baseline G1/G2).
+ *
+ * SERVING ENDPOINT — WHY IT IS A PICKER (`loom_no_freeform_config`).
+ * "Look up + invoke" posts a serving-endpoint NAME to POST .../serve, which
+ * hands it to `invokeServingEndpoint` — so the only names that can possibly work
+ * are the ones that backend already has. The field used to ask the user to type
+ * one from memory (placeholder `fraud-scorer`), and a typo produced a 404 from
+ * the model plane instead of a picker that never offered the wrong name.
+ *
+ * The list comes from `/api/loom/model-serving/endpoints`, which is deliberately NOT
+ * the Databricks-only lister: `invokeServingEndpoint` dispatches on
+ * `resolveServingBackend()` (Azure ML by DEFAULT, Databricks Mosaic only when
+ * `LOOM_MODEL_SERVING_BACKEND=databricks`). Listing Databricks endpoints while
+ * the invoke path calls Azure ML would offer names the action cannot use, and
+ * Databricks model serving is not GA in Azure Government at all — so the
+ * backend-agnostic route is what keeps this control identical in every boundary
+ * (`cloud-parity.md`).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -29,15 +45,38 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete20Regular, Play20Regular, ArrowClockwise20Regular, CloudArrowUp20Regular } from '@fluentui/react-icons';
+import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
+import { LoomObjectPicker, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
 import { useSharedEditorStyles } from './shared-styles';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const FEATURE_TYPES = ['DOUBLE', 'FLOAT', 'BIGINT', 'INT', 'STRING', 'BOOLEAN', 'TIMESTAMP', 'DATE'] as const;
+
+/**
+ * Live serving-endpoint list for the picker, from the backend-agnostic route
+ * (see the file header). A 503 honest gate or any non-ok envelope is reported as
+ * an ERROR — never flattened to an empty list, because "this deployment has no
+ * endpoints" and "I could not reach the model plane" are different answers.
+ */
+async function loadServingEndpoints(): Promise<LoomObjectLoad> {
+  const r = await clientFetch('/api/loom/model-serving/endpoints');
+  const j = await r.json().catch(() => ({}));
+  if (!j?.ok) {
+    return { options: [], error: j?.error || `Could not list serving endpoints (HTTP ${r.status}).`, hint: j?.missing ? `Missing: ${j.missing}` : undefined };
+  }
+  return {
+    options: (j.endpoints || []).map((e: any) => ({
+      id: String(e.name),
+      name: String(e.name),
+      caption: [e.backend === 'databricks' ? 'Mosaic' : 'Azure ML', e.state].filter(Boolean).join(' · ') || undefined,
+    })),
+  };
+}
 
 const useLocalStyles = makeStyles({
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
@@ -408,7 +447,20 @@ function FeatureBody({ item, id }: { item: FabricItemType; id: string }) {
                       Looks up the entity&apos;s online features, merges them into the scoring payload, and invokes a model-serving endpoint (WS-1.2). Provide the entity key value(s) and a scoring endpoint name.
                     </Body1>
                     <div className={s.form}>
-                      <Field label="Serving endpoint" required><Input value={svEndpoint} onChange={(_, d) => setSvEndpoint(d.value)} placeholder="fraud-scorer" /></Field>
+                      <div data-testid="serving-endpoint-picker">
+                        <LoomObjectPicker
+                          label="Serving endpoint"
+                          required
+                          value={svEndpoint}
+                          onChange={setSvEndpoint}
+                          load={loadServingEndpoints}
+                          loadKey="model-serving"
+                          placeholder="Select a serving endpoint…"
+                          emptyTitle="No serving endpoints yet"
+                          emptyBody="Deploy a model to a serving endpoint (Model serving item), then refresh. Feature lookup still runs — it is the invoke step that needs an endpoint."
+                          unresolvedCaption="Saved endpoint — not in the endpoints this deployment can list right now (deleted, or the model plane could not be read). Kept as-is until you change it."
+                        />
+                      </div>
                       {spec.primaryKeys.map((k) => (
                         <Field key={k} label={`Entity key: ${k}`} required><Input value={svKeys[k] || ''} onChange={(_, d) => setSvKeys((m) => ({ ...m, [k]: d.value }))} placeholder="value" /></Field>
                       ))}

@@ -9,6 +9,29 @@
  * asset / endpoint). Input ports that point at another data product resolve to
  * that upstream's contract summary. Backed by GET /ports (resolve) + PATCH the
  * product's `ports` model. Azure-native Cosmos; no Fabric dependency.
+ *
+ * UPSTREAM REF — WHY IT IS A PICKER (`loom_no_freeform_config`).
+ * An input port of kind `data-product` / `output-port` points at ANOTHER LOOM
+ * ITEM, by its Loom item id. This row used to ask for that id as free text,
+ * placeholder `dp-123 or abfss://…` — i.e. the surface taught the user to type
+ * an opaque Cosmos id (or, worse, an ADLS URI in a field the resolver only ever
+ * reads as an item id). Every id it accepts is one Loom already has, so it is
+ * now picked from the live list.
+ *
+ * The list comes from `/api/items/by-type?types=data-product`, which is the
+ * SCOPED lister: with no `workspaceId` it filters to the workspaces the caller
+ * can actually see (owned + shared + admin, inside the tid boundary). That
+ * matters — an unscoped product list would leak the display names of products
+ * in workspaces the user has no access to. PortsPanel is mounted from the
+ * data-product editor with only the product id, so there is no workspace in
+ * scope to narrow it further; the route's caller-visibility filter is the
+ * authorization boundary here.
+ *
+ * The other input kinds (`synapse-table` / `adx-table` / `adls-path`) reference
+ * a data-plane ASSET, not a Loom item, and stay free text for now — a browsable
+ * asset/path picker is separate work. The `abfss://…` example is gone from the
+ * placeholder either way: teaching a user to compose a storage URI is the same
+ * defect in a different class.
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -19,6 +42,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add20Regular, Dismiss16Regular, Save20Regular, ArrowImport20Regular, ArrowExport20Regular, Wrench20Regular } from '@fluentui/react-icons';
+import { LoomObjectPicker, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
 import {
   PORT_DIRECTIONS, PORT_KINDS_BY_DIRECTION, emptyPorts,
   type PortsModel, type Port, type PortDirection, type PortKind,
@@ -45,6 +69,53 @@ const DIR_META: Record<PortDirection, { label: string; hint: string; icon: React
 };
 
 type ResolvedPort = Port & { resolved?: { productName: string; contractVersion?: string; columnCount: number } | { error: string } };
+
+/** Input kinds whose `ref` is a LOOM ITEM id (and so must be picked, not typed). */
+const PRODUCT_REF_KINDS: readonly PortKind[] = ['data-product', 'output-port'];
+
+/**
+ * An `output-port` ref is `<productId>:<portId>`; a `data-product` ref is just
+ * `<productId>`. The picker owns the product id half and preserves whatever
+ * suffix was already stored, so switching the upstream never silently drops the
+ * port selector the user had.
+ */
+export function refProductId(ref: string | undefined): string {
+  return (ref || '').split(':')[0] || '';
+}
+export function withProductId(ref: string | undefined, productId: string): string {
+  const rest = (ref || '').split(':').slice(1).join(':');
+  if (!productId) return '';
+  return rest ? `${productId}:${rest}` : productId;
+}
+
+/**
+ * Live data-product list for the upstream picker. `/api/items/by-type` is the
+ * caller-scoped lister (see the file header); an unreachable route is reported
+ * as an ERROR, never as an empty list — "there are none" and "I could not ask"
+ * are different answers and the picker renders them differently.
+ */
+async function loadDataProducts(): Promise<LoomObjectLoad> {
+  const r = await clientFetch('/api/items/by-type?types=data-product');
+  const j = await r.json().catch(() => ({}));
+  if (!j?.ok) {
+    return { options: [], error: j?.error || `Could not list data products (HTTP ${r.status}).` };
+  }
+  const options = (j.items || []).map((it: any) => ({
+    id: String(it.id),
+    name: String(it.displayName || it.id),
+    caption: it.description ? String(it.description).slice(0, 80) : undefined,
+  }));
+  return { options };
+}
+
+/** Placeholder for the asset-reference kinds. Deliberately NOT an `abfss://`
+ *  example — a placeholder that spells out a storage URI is the surface
+ *  teaching the user to compose one. */
+function assetPlaceholder(kind: PortKind): string {
+  if (kind === 'synapse-table' || kind === 'adx-table') return 'schema.table';
+  if (kind === 'adls-path') return 'container/folder';
+  return 'endpoint / path';
+}
 
 export function PortsPanel({ id, isNew }: { id: string; isNew?: boolean }) {
   const s = useStyles();
@@ -115,9 +186,28 @@ export function PortsPanel({ id, isNew }: { id: string; isNew?: boolean }) {
                   {PORT_KINDS_BY_DIRECTION[dir].map((k) => (<Option key={k} value={k}>{k}</Option>))}
                 </Dropdown>
               </Field>
-              <Field label={dir === 'input' ? 'Upstream ref (product id / asset)' : 'Reference'} className={s.grow}>
-                <Input value={p.ref || ''} onChange={(_, d) => updatePort(dir, i, { ref: d.value })} placeholder={dir === 'input' ? 'dp-123 or abfss://…' : 'endpoint / path'} />
-              </Field>
+              {PRODUCT_REF_KINDS.includes(p.kind) ? (
+                <div className={s.grow} data-testid={`port-ref-picker-${p.id}`}>
+                  <LoomObjectPicker
+                    label="Upstream data product"
+                    hint={p.kind === 'output-port'
+                      ? 'The product that publishes the output port this one consumes.'
+                      : 'The product this one consumes.'}
+                    value={refProductId(p.ref)}
+                    onChange={(pid) => updatePort(dir, i, { ref: withProductId(p.ref, pid) })}
+                    load={loadDataProducts}
+                    loadKey="data-product"
+                    placeholder="Select a data product…"
+                    emptyTitle="No other data products yet"
+                    emptyBody="This is the only data product you can see, so there is nothing upstream to depend on. Create another one, then refresh."
+                    unresolvedCaption="Saved upstream — not in the products you can see right now (deleted, in a workspace you cannot access, or the list could not be read). Kept as-is until you change it."
+                  />
+                </div>
+              ) : (
+                <Field label={dir === 'input' ? 'Asset reference' : 'Reference'} className={s.grow}>
+                  <Input value={p.ref || ''} onChange={(_, d) => updatePort(dir, i, { ref: d.value })} placeholder={assetPlaceholder(p.kind)} />
+                </Field>
+              )}
               <Button icon={<Dismiss16Regular />} appearance="subtle" aria-label="Remove port" onClick={() => removePort(dir, i)} />
               {dir === 'input' && resolved[p.id] && (
                 <Caption1 className={s.resolved} style={{ flexBasis: '100%' }}>
