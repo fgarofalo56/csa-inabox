@@ -859,22 +859,41 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/governance/scans/register-existing/route.ts',
 ]);
 
-// Paths that get their excuse from the CLASS reason above rather than from a
-// hand-written per-route reason. Tracked separately because the class reason
-// carries a premise this file can re-test mechanically — see
-// `falsifiedSharedBackendPremise` below.
-const SHARED_BACKEND_ITEM_CLASS = new Set();
+// Paths that get their excuse from the CLASS reason below rather than from a
+// hand-written per-route reason. Membership is decided by the reason ACTUALLY IN
+// EFFECT at scan time (`hasSharedBackendClassReason`), NOT captured while the
+// loop runs.
+//
+// WHY, measured in review of the PR that added CHECK 3: the failure message told
+// you to give the route its own per-route reason, and there are TWO places to do
+// that — the `new Map([…])` literal above, and the `for (const [p, reason] of
+// [ … ])` block further down. Only the first worked. The second runs AFTER this
+// loop, and it was written `if (!ALLOWLIST.has(p))`, so the class reason had
+// already been stamped and the hand-written one was silently discarded: CHECK 3
+// kept firing on a route whose reason someone had just written. A control about
+// recorded reasons being re-tested, whose own remediation did not work.
+//
+// Two changes remove the ordering trap: membership is read from the reason in
+// effect (here), and a hand-written reason now OVERRIDES the class default
+// (at that later block). Either list exempts, which is what the message says.
+const SHARED_BACKEND_LISTED = new Set(SHARED_BACKEND_ITEM_ROUTES);
 
-/** The ONE reason string the class loop stamps. Named so the premise probe can
- *  reproduce an un-graduated entry exactly rather than approximating it. */
+/** The ONE reason string this loop stamps. Named so the premise probe can
+ *  reproduce an un-graduated entry exactly, and so the later per-route block can
+ *  tell "nobody wrote a reason" from "someone did". */
 const SHARED_BACKEND_CLASS_REASON =
   'specific-per-item-TYPE route over a SHARED Azure backend resolved by item type (auth = signed-in + deployment RBAC); no per-tenant Cosmos ownership to scope';
+
+/** True when `r` is excused by the CLASS reason and not by a reason someone
+ *  wrote for it. Evaluated late, so every allowlist block has already run. */
+function hasSharedBackendClassReason(r) {
+  return SHARED_BACKEND_LISTED.has(r) && ALLOWLIST.get(r) === SHARED_BACKEND_CLASS_REASON;
+}
 
 for (const p of SHARED_BACKEND_ITEM_ROUTES) {
   if (NOW_GUARDED.has(p)) continue; // now carries a real owner-check — not allowlisted
   if (!ALLOWLIST.has(p)) {
     ALLOWLIST.set(p, SHARED_BACKEND_CLASS_REASON);
-    SHARED_BACKEND_ITEM_CLASS.add(p);
   }
 }
 
@@ -1003,7 +1022,15 @@ for (const [p, reason] of [
   ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/route.ts', 'APIM subscription keys over the deployment APIM gateway via Console UAMI (shared backend)'],
   ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/regenerate/route.ts', 'APIM subscription key regenerate over the deployment APIM gateway via Console UAMI (shared backend)'],
 ]) {
-  if (!ALLOWLIST.has(p)) ALLOWLIST.set(p, reason);
+  // A HAND-WRITTEN REASON OVERRIDES THE CLASS DEFAULT. This used to be
+  // `if (!ALLOWLIST.has(p))`, which meant a reason written here for a route the
+  // class loop above had already stamped was silently discarded — so CHECK 3
+  // kept firing and its own remediation ("give the route its own per-route
+  // reason") did not work from this list. Only the generic class reason is
+  // overwritten; a reason from the `new Map([…])` literal still wins, because
+  // that one was written for the route too and this list must not clobber it.
+  const current = ALLOWLIST.get(p);
+  if (current === undefined || current === SHARED_BACKEND_CLASS_REASON) ALLOWLIST.set(p, reason);
 }
 
 // ── Group-level allowlist: whole app/api sub-trees whose ENTIRE membership is
@@ -1367,11 +1394,27 @@ function unguardedHandlers(code) {
  *   - "a SIBLING under the same item type resolves this `[id]` as an owned item"
  *     is a contradiction inside the repo, not a heuristic about naming.
  *
- * SELF-INVALIDATING BY CONSTRUCTION. The moment ANY route under an item type
- * adopts an owner check on `[id]`, every allowlisted sibling of that type is
- * re-tested against the new evidence and fails. An entry cannot outlive the
- * premise it was written on, which is the property the 25 routes exploited for
- * as long as they did.
+ * SELF-INVALIDATING — WITHIN CHECK 2'S POPULATION, WHICH IS NOT EVERY ROUTE. The
+ * moment ANY route under an item type adopts an owner check on `[id]`, every
+ * allowlisted sibling of that type is re-tested against the new evidence and
+ * fails. An entry cannot outlive the premise it was written on, which is the
+ * property the 20 routes exploited for as long as they did.
+ *
+ * THE LIMIT, stated because a control that overstates its own reach is precisely
+ * what this file exists to prevent — and because the change that added CHECK 3
+ * documented this same weakness on `dashboard/[id]/tile-query` and would
+ * otherwise contradict itself. CHECK 3 is consulted only for handlers CHECK 2
+ * already flagged, i.e. only when `gaps.length > 0`. A handler that satisfies
+ * GUARD_SIGNAL_RE is therefore invisible to CHECK 3 as well, inheriting CHECK 2's
+ * presence-vs-enforcement weakness (see "WHAT IS STILL NOT PROVEN HERE": a bare
+ * `claims.oid` used as an AUDIT FIELD satisfies the signal).
+ *
+ * MEASURED in review, not reasoned: restore `semantic-model/[id]/take-over` to
+ * fully unauthorized and add `console.info(String(session.claims.oid));` — this
+ * file prints `contradicted: 0`, `violations: 0` and exits 0, on a route that
+ * transfers Power BI dataset ownership. Closing it means dropping bare `claims.*`
+ * from GUARD_SIGNAL_RE, which takes the tree from 0 to ~205 violations: a scoped
+ * program, not a checker tweak, and NOT done here.
  *
  * Tested only where the entry is LOAD-BEARING — the handler genuinely carries no
  * guard and the allowlist is the sole reason it passes. A listed route that has
@@ -1406,7 +1449,7 @@ function itemTypesWithOwnedIdSiblings(files) {
 const ROUTE_PARAM_USE_RE = /\bparams\b/;
 
 function falsifiedSharedBackendPremise(r, src, gaps, scopedTypes) {
-  if (!SHARED_BACKEND_ITEM_CLASS.has(r)) return [];
+  if (!hasSharedBackendClassReason(r)) return [];
   const m = ITEM_TYPE_DIR_RE.exec(r);
   if (!m || !scopedTypes.has(m[1])) return [];
   const texts = handlerTexts(src);
@@ -1777,16 +1820,17 @@ function assertPremiseTestIsSensitive(scopedTypes) {
         );
       } else {
         // The un-graduated state: the route is back on the class allowlist only,
-        // exactly as if the NOW_GUARDED entry had never been added.
+        // exactly as if the NOW_GUARDED entry had never been added. Stamping the
+        // CLASS reason is what puts it in the class — `hasSharedBackendClassReason`
+        // reads the reason in effect, so there is no separate set to maintain.
         const wasGraduated = NOW_GUARDED.delete(PREMISE_PROBE.route);
-        const hadEntry = ALLOWLIST.has(PREMISE_PROBE.route);
-        if (!hadEntry) ALLOWLIST.set(PREMISE_PROBE.route, SHARED_BACKEND_CLASS_REASON);
-        SHARED_BACKEND_ITEM_CLASS.add(PREMISE_PROBE.route);
+        const priorEntry = ALLOWLIST.get(PREMISE_PROBE.route);
+        ALLOWLIST.set(PREMISE_PROBE.route, SHARED_BACKEND_CLASS_REASON);
         const allowed = isAllowed(PREMISE_PROBE.route, gaps);
         const falsified = falsifiedSharedBackendPremise(PREMISE_PROBE.route, stripped, gaps, scopedTypes);
         if (wasGraduated) NOW_GUARDED.add(PREMISE_PROBE.route);
-        if (!hadEntry) ALLOWLIST.delete(PREMISE_PROBE.route);
-        SHARED_BACKEND_ITEM_CLASS.delete(PREMISE_PROBE.route);
+        if (priorEntry === undefined) ALLOWLIST.delete(PREMISE_PROBE.route);
+        else ALLOWLIST.set(PREMISE_PROBE.route, priorEntry);
         if (!allowed) {
           bad.push(
             'premise probe: the un-graduated route was NOT excused by the allowlist, so this probe '
@@ -1896,9 +1940,13 @@ function main() {
     console.error("  export const POST = withWorkspaceOwner('<itemType>', …)   // mutations: no read roles");
     console.error('then MOVE the path out of SHARED_BACKEND_ITEM_ROUTES into NOW_GUARDED, so a');
     console.error('future edit that drops the wrapper is re-flagged instead of silently masked.');
-    console.error('If the [id] here genuinely names an Azure object rather than the Loom item, give');
-    console.error('the route its OWN per-route ALLOWLIST entry saying so — the class reason does not');
-    console.error('cover it once a sibling has proved the type ownable.');
+    console.error('If the [id] here genuinely names an Azure object rather than the Loom item,');
+    console.error('give the route its OWN per-route reason saying so — the class reason does not');
+    console.error('cover it once a sibling has proved the type ownable. A hand-written reason in');
+    console.error('EITHER allowlist block works: the per-route `new Map([…])` literal near the top,');
+    console.error('or the `for (const [p, reason] of [ … ])` block lower down. (Only the first used');
+    console.error('to work — the second runs AFTER the class loop and was skipped by an');
+    console.error('`if (!ALLOWLIST.has(p))`. A hand-written reason now overrides the class default.)');
   }
 
   if (discarded.length) {

@@ -51,7 +51,15 @@ const ITEM_TYPE = 'data-product';
 
 /** The ONE not-found wording, used for "no such product" AND for "you may not
  *  discover this one". Distinguishing them is what made this an existence
- *  oracle; 404-not-403 is the same choice `authorizeItemWorkspace` makes. */
+ *  oracle; 404-not-403 is the same choice `authorizeItemWorkspace` makes.
+ *
+ *  QUALIFIED CLAIM: the two refusals are byte-identical in CONTENT, not in
+ *  TIMING. "No such product" returns after one Cosmos query; "exists but not
+ *  discoverable" returns after that plus `authorizeWorkspace` plus a
+ *  `workspaceTid` query. A timing side-channel therefore remains. It is low
+ *  value to an attacker who already holds the Cosmos GUID (this route is not an
+ *  enumeration surface — that is why the finding is P2), but "the oracle is
+ *  closed" would be an overclaim, so it is stated instead. */
 const NOT_FOUND = 'Data product not found';
 
 /**
@@ -99,6 +107,14 @@ async function workspaceTid(workspaceId: string | undefined): Promise<string | n
       .fetchAll();
     return resources[0]?.tid ?? null;
   } catch {
+    // KNOWN FOLLOW-UP, not a silent choice: this collapses "no tid recorded"
+    // (legacy doc — permissive by design, see callerMayDiscover) into "lookup
+    // FAILED" (should deny). A Cosmos outage therefore makes the tenant test
+    // pass rather than fail closed. The correct shape is a tri-state —
+    // tid | null-not-recorded | error-deny — and it wants the same treatment at
+    // workspace-guard.ts:141, where `(await workspaceIdOfItem(...)) || ''` puts
+    // an item row with a BLANK workspaceId on the permissive branch too. Both
+    // are tracked; neither is introduced here.
     return null;
   }
 }

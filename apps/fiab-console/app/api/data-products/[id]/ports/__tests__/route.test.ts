@@ -119,6 +119,10 @@ describe('the posture is now IMPLEMENTED, not merely asserted', () => {
   });
 
   it('the refusal is byte-identical to "no such product", so it is not an existence oracle', async () => {
+    // CONTENT-identical. Deliberately NOT a timing claim: "no such product"
+    // returns after one Cosmos query and "not discoverable" after three, so a
+    // timing side-channel remains and is disclosed in the route rather than
+    // implied away.
     const missing = await GET(req, ctx('dp-does-not-exist'));
     const refused = await GET(req, ctx('dp-draft'));
     expect(missing.status).toBe(refused.status);

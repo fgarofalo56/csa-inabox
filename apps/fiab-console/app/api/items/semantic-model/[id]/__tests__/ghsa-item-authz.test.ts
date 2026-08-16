@@ -50,6 +50,14 @@ vi.mock('@/lib/auth/workspace-access', () => ({
   resolveWorkspaceAccessByOid: (...a: any[]) => resolveWorkspaceAccessByOid(...a),
 }));
 
+/** `direct-lake`'s raw-SQL branch requires the item to RESOLVE and be
+ *  write-scoped, which it gets from `loadOwnedItem` rather than from the
+ *  fail-open ladder. Stubbed here so both answers can be exercised. */
+const loadOwnedItem = vi.fn();
+vi.mock('@/app/api/items/_lib/item-crud', () => ({
+  loadOwnedItem: (...a: any[]) => loadOwnedItem(...a),
+}));
+
 // ── Backends. Every one is asserted NEVER-CALLED on the non-owner path. ───────
 const generateDatasetEmbedToken = vi.fn(async () => ({ token: 'REAL-TOKEN', tokenId: 't', expiration: 'e' }));
 const getDataset = vi.fn(async () => ({ id: 'ds-1' }));
@@ -162,6 +170,7 @@ beforeEach(() => {
   itemRows = [{ workspaceId: 'ws-1' }];
   getSession.mockReturnValue(SESSION);
   resolveWorkspaceAccessByOid.mockResolvedValue(OWNER);
+  loadOwnedItem.mockResolvedValue({ id: ID, workspaceId: 'ws-1', itemType: 'semantic-model', state: {} });
   generateDatasetEmbedToken.mockResolvedValue({ token: 'REAL-TOKEN', tokenId: 't', expiration: 'e' });
   getDataset.mockResolvedValue({ id: 'ds-1' });
   executeDatasetQueries.mockResolvedValue({ results: [{ tables: [{ rows: [] }] }] });
@@ -273,8 +282,63 @@ describe('GHSA-hf73-rp4q-66pf — the guard is unskippable and runs before the b
   });
 });
 
-describe('GHSA-hf73-rp4q-66pf — when authorization CANNOT be established, it fails CLOSED', () => {
-  // deploy-integrity R7: a route that cannot establish authorization must not
+describe('GHSA-hf73-rp4q-66pf — direct-lake RAW T-SQL is gated harder than the preview read', () => {
+  // Found in independent review of this PR, and it was a REAL escalation the
+  // first cut introduced: `body.sql` reaches
+  // `executeQuery(serverlessTarget('master'), rawSql)` verbatim (only a 64KB
+  // cap), and Synapse serverless accepts CREATE VIEW / CREATE EXTERNAL TABLE /
+  // CREATE DATABASE SCOPED CREDENTIAL on that connection. Two concessions that
+  // are correct for the TABLE preview were wrong for this branch:
+  //   - `allowReadRoles` made it a Viewer -> Contributor escalation;
+  //   - `authorizeItemWorkspace`'s deliberate fail-open on an unknown id meant
+  //     ANY authenticated caller could invent an id and submit T-SQL.
+  const sqlReq = () => req('', { sql: 'CREATE VIEW pwn AS SELECT 1' });
+
+  it('an INVENTED id can no longer submit T-SQL, even though the ladder fails open on it', async () => {
+    // The ladder still says "allow" here — itemRows empty is exactly the raw-PBI
+    // -GUID case it is designed to let through. `loadOwnedItem` is what refuses.
+    itemRows = [];
+    resolveWorkspaceAccessByOid.mockResolvedValue(null);
+    loadOwnedItem.mockResolvedValue(null);
+    const res = await dlPost(sqlReq(), ctx());
+    expect(res.status).toBe(404);
+    expect(synapseExecuteQuery).not.toHaveBeenCalled();
+  });
+
+  it('a read-only VIEWER cannot submit T-SQL (no DDL via the preview surface)', async () => {
+    resolveWorkspaceAccessByOid.mockResolvedValue(VIEWER);
+    loadOwnedItem.mockResolvedValue(null); // write-scoped lookup refuses a Viewer
+    const res = await dlPost(sqlReq(), ctx());
+    expect(res.status).toBe(404);
+    expect(synapseExecuteQuery).not.toHaveBeenCalled();
+  });
+
+  it('the raw-SQL lookup is WRITE-scoped — it does NOT pass allowReadRoles', async () => {
+    await dlPost(sqlReq(), ctx());
+    expect(loadOwnedItem).toHaveBeenCalledWith(
+      ID, 'semantic-model', 'oid-1',
+      expect.not.objectContaining({ allowReadRoles: true }),
+    );
+  });
+
+  it('an OWNER still runs raw SQL', async () => {
+    const res = await dlPost(sqlReq(), ctx());
+    expect(res.status).toBe(200);
+    expect(synapseExecuteQuery).toHaveBeenCalled();
+  });
+
+  it('the TABLE preview branch is unaffected — a Viewer still previews, with no item lookup', async () => {
+    // The concession stays where it belongs: previewing a table is a read, and
+    // the `_`-id path (no dataset bound) must keep working.
+    resolveWorkspaceAccessByOid.mockResolvedValue(VIEWER);
+    loadOwnedItem.mockResolvedValue(null);
+    const res = await dlPost(req('', { table: 'T' }), ctx());
+    expect(res.status).toBe(200);
+    expect(loadOwnedItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('GHSA-hf73-rp4q-66pf — when authorization CANNOT be established, it fails CLOSED', () => {  // deploy-integrity R7: a route that cannot establish authorization must not
   // assert something it did not establish. If the ownership lookup THROWS
   // (Cosmos unreachable), the honest answer is a 500 — "something went wrong" —
   // and NOT a 404, which would claim the item is not there. What matters either

@@ -24,6 +24,26 @@
  *
  * NO `allowReadRoles`: submitting a run executes the flow and bills the
  * deployment's AOAI capacity, so a read-only Viewer must not pass.
+ *
+ * ── WHAT THIS GUARD DOES *NOT* CLOSE, for the population the editor serves ──
+ * State it plainly: for a flow that exists ONLY in the Foundry project — which is
+ * most of them — this guard changes nothing, and the route is still reachable by
+ * any authenticated caller.
+ *
+ * The chain: `GET /api/items/prompt-flow` (route.ts:26) enumerates the Foundry
+ * project's flows for ANY authenticated caller, scoped to no tenant. Those ids
+ * have no Loom Cosmos item, so `authorizeItemWorkspace` takes its deliberate
+ * fail-open branch (workspace-guard.ts:139-143 returns null = allow) and the run
+ * proceeds. So the attack is list → pick any id → run, and nothing here stops it.
+ * There is no user-identity backstop either: `foundry-client.ts:36-42` calls the
+ * data plane as the Console UAMI, never on behalf of the caller.
+ *
+ * The guard is still correct and still worth having — it binds the ids that ARE
+ * Loom items, and it is the half that must exist before the other half can bite.
+ * THE REAL FIX IS TO SCOPE THE LIST ROUTE FIRST; once `GET /api/items/prompt-flow`
+ * returns only flows the caller may see, this check has something to enforce
+ * against. Tracked separately — do not read the advisory close-out as meaning
+ * this surface is fully scoped.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';

@@ -90,11 +90,22 @@
  * RAW Power BI dataset GUID on the opt-in warm-cache path and `loadOwnedItem`
  * renders "no item" as 404. GET/POST admit read roles (status read; DirectQuery
  * read); PUT does not — it writes config and provisions infrastructure.
+ *
+ * THE `body.sql` BRANCH IS GATED SEPARATELY AND MORE STRICTLY, and the first cut
+ * of this fix got it wrong. `allowReadRoles` + the guard's deliberate fail-open
+ * on an unknown id together meant any authenticated caller could invent a
+ * semantic-model id and submit verbatim T-SQL to Synapse serverless — which
+ * accepts DDL, so it was also a Viewer→Contributor escalation. That branch now
+ * requires `loadOwnedItem` (item must RESOLVE, write-scoped); see the comment at
+ * the call site. The header used to claim this change closed the route's
+ * authorization gap, which was an overclaim for that branch (deploy-integrity
+ * R7) — recorded here rather than quietly corrected.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   executeQuery,
   serverlessTarget,
@@ -198,6 +209,33 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   if (!table && !rawSql) {
     return NextResponse.json({ ok: false, error: 'table or sql required' }, { status: 400 });
+  }
+
+  // ── RAW T-SQL IS NOT A PREVIEW READ, AND IS GATED SEPARATELY ────────────────
+  // `body.sql` reaches `executeQuery(serverlessTarget('master'), rawSql)` VERBATIM
+  // — the only limit is a 64KB cap, and Synapse serverless accepts `CREATE VIEW`,
+  // `CREATE EXTERNAL TABLE` and `CREATE DATABASE SCOPED CREDENTIAL` on that
+  // connection. So the two concessions the TABLE branch legitimately makes are
+  // both wrong for this one:
+  //
+  //   1. `allowReadRoles` would be a Viewer→Contributor escalation. Dropped here:
+  //      the raw-SQL branch is write-scoped (Owner/Admin/Member).
+  //   2. `authorizeItemWorkspace` FAILS OPEN by design when `[id]` names no
+  //      `semantic-model` item anywhere (workspace-guard.ts:139-143 returns null
+  //      = allow, so a raw Power BI dataset GUID on the opt-in path still works —
+  //      that permissiveness is deliberate and load-bearing for embed/refresh).
+  //      Here it meant ANY authenticated caller could invent an id and submit
+  //      T-SQL with no authorization at all. `loadOwnedItem` closes it because it
+  //      returns null for BOTH "no such item" and "not yours".
+  //
+  // The raw-GUID justification that carries the rest of this family does not
+  // reach this branch: it never uses `id` for the query, and a Power BI dataset
+  // GUID has no business submitting T-SQL to Synapse.
+  if (rawSql) {
+    const owned = await loadOwnedItem(id, 'semantic-model', session.claims.oid, { session });
+    if (!owned) {
+      return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
+    }
   }
 
   // Synapse Serverless is required for the fallback path (and for raw sql).
