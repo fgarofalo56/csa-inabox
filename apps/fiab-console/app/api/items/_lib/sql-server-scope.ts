@@ -274,6 +274,26 @@ function refuse(status: number, code: string, error: string): ScopeRefusal {
  *      SQL SUFFIX for this cloud — which is why the routes in this module are
  *      immune to that path even though the shared TDS client is not.
  *
+ *      MANAGED INSTANCE IS THE KNOWN CASUALTY of that reduction, recorded here
+ *      because this is the function that causes it and the function that would
+ *      have to change. An Azure SQL Managed Instance host is ZONE-QUALIFIED —
+ *      `<instance>.<dnsZone>.database.windows.net` — so reducing it to the first
+ *      label yields `<instance>`, and `getPool` then composes
+ *      `<instance>.database.windows.net`: a DIFFERENT host from the one the
+ *      operator selected, and usually one that does not exist.
+ *
+ *      So `SqlManagedInstanceEditor` is deliberately NOT auto-bound (see the
+ *      comment on its `run`): binding it would turn a dead button into one that
+ *      silently addresses the wrong server, which is strictly worse than the
+ *      honest 409 `no_bound_connection` it returns today. Anyone "fixing" that
+ *      editor by adding a binding must fix THIS function first.
+ *
+ *      The real fix is to carry the zone label through admission — either an
+ *      MI-aware branch here that keeps the first TWO labels when the remainder
+ *      matches the cloud's SQL suffix, or a distinct
+ *      `Microsoft.Sql/managedInstances` {@link SqlProviderKind}. Both change a
+ *      security-critical admission rule and neither is attempted here.
+ *
  * FAILS CLOSED when the authorized set is empty: with no set there is nothing to
  * admit against, so an ARM id is refused rather than allowed. A bare name in
  * that state still fails downstream in the client with its existing

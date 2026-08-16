@@ -25,6 +25,14 @@ import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/re
 import { AzureSqlServerEditor } from '../azure-sql-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
+const PRINCIPALS = {
+  ok: true,
+  results: [
+    { id: 'aaaaaaaa-1111-2222-3333-444444444444', type: 'user', displayName: 'Ada Lovelace', upn: 'ada@contoso.com' },
+    { id: 'bbbbbbbb-5555-6666-7777-888888888888', type: 'user', displayName: 'Adam Smith', upn: 'adam@contoso.com' },
+  ],
+};
+
 const SERVERS = {
   ok: true,
   servers: [
@@ -45,6 +53,7 @@ describe('AzureSqlServerEditor — binds its picked server to the item (#3623)',
         ok: true, admin: { login: 'admins@contoso.com', sid: '1111-2222' },
       }),
       '/api/items/azure-sql-database/srv-item/firewall': () => ({ ok: true, rules: [] }),
+      '/api/items/azure-sql-database/srv-item/principal-search': () => PRINCIPALS,
     });
     calls = m.calls;
   });
@@ -131,5 +140,117 @@ describe('AzureSqlServerEditor — binds its picked server to the item (#3623)',
 
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/items/azure-sql-server'))).toBe(true));
     expect(connectCalls().length).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE ENTRA ADMIN IS PICKED, NOT TYPED (check-no-freeform boy-scout).
+//
+// The dialog used to carry three free-text boxes — login, "Object id (sid)" and
+// "Tenant id (optional)". The sid is a GUID with no meaning to a human, so the
+// operator had to leave Loom, find the principal in the portal, copy its object
+// id back, and hope it belonged to the same principal they typed the login for.
+// ARM does not reject a mismatch: it sets a SERVER ADMIN — sysadmin-equivalent
+// on every database — whose login text and actual identity disagree.
+//
+// Both coordinates now come from ONE Microsoft Graph object.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('AzureSqlServerEditor — Entra admin comes from a live Graph pick', () => {
+  // `hidden: true` on the dialog-internal queries: jsdom does not implement
+  // HTMLDialogElement.showModal(), so Fluent's portalled DialogSurface never
+  // enters the accessibility tree here even though React has rendered its
+  // children. Same reason and same convention as
+  // spark-job-definition-lineage.test.tsx. It means these specs prove the WIRING,
+  // not the visibility — the browser receipt (ux-baseline.md G1) is still owed.
+  let calls: Array<{ url: string; init?: RequestInit }>;
+
+  beforeEach(() => {
+    const m = installFetchMock({
+      '/api/items/azure-sql-server': () => SERVERS,
+      '/api/items/azure-sql-database/srv-item/connect': () => ({ ok: true, item: { id: 'srv-item' } }),
+      '/api/items/azure-sql-database/srv-item/aad-admin': () => ({ ok: true, admin: null }),
+      '/api/items/azure-sql-database/srv-item/principal-search': () => PRINCIPALS,
+    });
+    calls = m.calls;
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  async function openDialogAndSearch(term = 'Ada') {
+    render(<AzureSqlServerEditor item={makeItem('azure-sql-server', 'Azure SQL server')} id="srv-item" />);
+    await waitFor(() => expect(screen.getAllByText('loom-sql-01').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByText('loom-sql-01')[0]);
+    fireEvent.click(screen.getByRole('button', { name: /AAD admin/i }));
+    const box = await screen.findByPlaceholderText(/Start typing a name or UPN/i);
+    fireEvent.change(box, { target: { value: term } });
+    return box;
+  }
+
+  //   MUTATION: reinstate the free-text sid Input. → no Graph call is made.
+  it('searches Microsoft Graph as the operator types — no GUID is asked for', async () => {
+    await openDialogAndSearch();
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.includes('/principal-search?q=Ada'))).toBe(true);
+    });
+    // The results are offered as options, not as a box to paste an id into.
+    expect(await screen.findByRole('button', { name: /Ada Lovelace/, hidden: true })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/1111-2222-3333/)).toBeNull();
+  });
+
+  // THE MISMATCH CATCHER. login and sid must come from the SAME Graph object.
+  //   MUTATION: send `login` from one principal and `sid` from another (or from
+  //   a separate free-text field). → this assertion goes red.
+  it('PUTs the login and sid of the SAME picked principal', async () => {
+    await openDialogAndSearch();
+    fireEvent.click(await screen.findByRole('button', { name: /Ada Lovelace/, hidden: true }));
+    fireEvent.click(screen.getByRole('button', { name: /Set Microsoft Entra admin/i, hidden: true }));
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.endsWith('/aad-admin') && c.init?.method === 'PUT')).toBe(true);
+    });
+    const put = calls.find((c) => c.url.endsWith('/aad-admin') && c.init?.method === 'PUT')!;
+    const body = JSON.parse(String(put.init!.body));
+    expect(body.login).toBe('ada@contoso.com');
+    expect(body.sid).toBe('aaaaaaaa-1111-2222-3333-444444444444');
+    // Both are Ada's — not Adam's, who is the other search hit.
+    expect(body.sid).not.toBe('bbbbbbbb-5555-6666-7777-888888888888');
+  });
+
+  // The tenant field is GONE, not hidden: ARM defaults it to the server's own
+  // tenant, which is the tenant this Graph search resolves against.
+  //   MUTATION: reinstate a tenantId field and send it. → this goes red.
+  it('sends NO tenantId — ARM defaults it to the server’s tenant', async () => {
+    await openDialogAndSearch();
+    fireEvent.click(await screen.findByRole('button', { name: /Ada Lovelace/, hidden: true }));
+    fireEvent.click(screen.getByRole('button', { name: /Set Microsoft Entra admin/i, hidden: true }));
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.endsWith('/aad-admin') && c.init?.method === 'PUT')).toBe(true);
+    });
+    const put = calls.find((c) => c.url.endsWith('/aad-admin') && c.init?.method === 'PUT')!;
+    expect(JSON.parse(String(put.init!.body))).not.toHaveProperty('tenantId');
+  });
+
+  // Save must be impossible until a real principal is selected — the old form
+  // enabled it on any two non-empty strings.
+  it('cannot save before a principal is picked', async () => {
+    await openDialogAndSearch();
+    expect(screen.getByRole('button', { name: /Set Microsoft Entra admin/i, hidden: true })).toBeDisabled();
+  });
+
+  // Graph permission gaps surface honestly rather than as an empty list
+  // (no-vaporware.md) — the route's structured remediation is rendered.
+  it('surfaces a Graph permission gap with its remediation', async () => {
+    cleanup();
+    const m = installFetchMock({
+      '/api/items/azure-sql-server': () => SERVERS,
+      '/api/items/azure-sql-database/srv-item/connect': () => ({ ok: true, item: { id: 'srv-item' } }),
+      '/api/items/azure-sql-database/srv-item/aad-admin': () => ({ ok: true, admin: null }),
+      '/api/items/azure-sql-database/srv-item/principal-search': () => ({
+        ok: false, error: 'graph_forbidden', remediation: 'Grant the Console UAMI Directory.Read.All.',
+      }),
+    });
+    calls = m.calls;
+    await openDialogAndSearch();
+    expect(await screen.findByText(/Grant the Console UAMI Directory.Read.All/)).toBeInTheDocument();
   });
 });

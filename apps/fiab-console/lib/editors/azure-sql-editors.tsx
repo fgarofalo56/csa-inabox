@@ -15,7 +15,7 @@ import { clientFetch } from '@/lib/client-fetch';
  *   - SQL Server 2025 feature probe
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Skeleton, SkeletonItem, Input, Label,
   Tree, TreeItem, TreeItemLayout,
@@ -45,7 +45,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { DetailsPanel } from '@/lib/components/shared/details-panel';
 import { DatabasePlugConnected20Regular } from '@fluentui/react-icons';
 import { useSharedEditorStyles } from './shared-styles';
-import { bindItemConnection } from './sql-bind-connection';
+import { useSqlItemBinding, EntraAdminDialog } from './components/sql-server-admin';
 
 // ── Azure SQL real option sets (parity with the portal create/scale blades) ──
 const AZURE_REGIONS = [
@@ -95,17 +95,6 @@ function resultsToCsv(columns: string[], rows: unknown[][]): string {
 }
 function resultsToJson(columns: string[], rows: unknown[][]): string {
   return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
-}
-
-/**
- * `postJson` adapter for {@link bindItemConnection} — the same contract the
- * unified SQL editor passes, expressed over this module's `clientFetch`. Returns
- * the parsed envelope; a non-JSON / failed response becomes `{ ok:false }` so the
- * caller reports a refusal rather than throwing mid-dialog.
- */
-async function postSqlJson(url: string, init: RequestInit): Promise<any> {
-  const r = await clientFetch(url, init);
-  return r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
 }
 
 const useLocalStyles = makeStyles({
@@ -320,7 +309,6 @@ interface ServerInfo {
 }
 
 interface FirewallRule { name: string; startIpAddress: string; endIpAddress: string }
-interface AadAdminState { login: string; sid: string; tenantId?: string; azureADOnlyAuthentication?: boolean }
 
 export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -350,53 +338,24 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   const [newRuleEnd, setNewRuleEnd] = useState('');
   const [confirmDeleteRule, setConfirmDeleteRule] = useState<string | null>(null);
 
-  // AAD admin dialog
+  // Entra-admin dialog. The dialog owns its own load/save and its principal
+  // picker (components/sql-server-admin.tsx) — this editor keeps only the flag.
   const [aadOpen, setAadOpen] = useState(false);
-  const [aadCurrent, setAadCurrent] = useState<AadAdminState | null>(null);
-  const [aadLogin, setAadLogin] = useState('');
-  const [aadSid, setAadSid] = useState('');
-  const [aadTenantId, setAadTenantId] = useState('');
-  const [aadError, setAadError] = useState<string | null>(null);
-  const [aadBusy, setAadBusy] = useState(false);
 
   /**
    * AUTO-BIND THE PICKED SERVER TO THIS ITEM (auto-bind-by-default.md §1/§4).
-   *
-   * The Entra-admin route (and the firewall route, once it is converted) resolves
-   * its target from THIS item's `state.connection` and refuses a body that names
-   * anything else — GHSA-v8r7-c2p5-mjf2 Layer 2. But this surface picks its server
-   * from LIVE ARM DISCOVERY (`GET /api/items/azure-sql-server`) and used to persist
-   * nothing, so after #3623 there was no binding to resolve: the dialogs would have
-   * 409'd `no_bound_connection` with a remediation ("open the Connect tab") that
-   * names a tab this editor does not have — a dead end, which is a defect under
-   * auto-bind-by-default.md, not a fix.
-   *
-   * So the PICK IS THE BINDING. Selecting a server and opening a dialog that needs
-   * it writes that server to the item, exactly as `UnifiedSqlDatabaseEditor` does
-   * through the same helper. `bindItemConnection` short-circuits on `boundKeyRef`,
-   * so this costs at most one POST per distinct selection, not one per click.
-   *
-   * Server scope only — no database is bound, and neither route requires one
-   * (`requireDatabase` is deliberately unset on the Entra-admin handlers, since
-   * the Entra admin sits at the SERVER scope).
-   *
-   * Returns null on success, or the message to show in the dialog's error slot.
+   * This surface picks from live ARM discovery and used to persist nothing, so
+   * after #3623 the Entra-admin route had no `state.connection` to resolve and
+   * would have 409'd with a remediation naming a Connect tab this editor does
+   * not have. The pick IS the binding — see `useSqlItemBinding`. Server scope
+   * only: the Entra admin sits at the server scope, so no database is bound.
    */
-  const boundKeyRef = useRef('');
-  const ensureBound = useCallback(async (): Promise<string | null> => {
-    if (!selected) return 'Pick a server on the left first.';
-    const bound = await bindItemConnection({
-      id,
-      family: 'azure-sql',
-      server: selected.name,
-      database: '',
-      cachedKey: boundKeyRef.current,
-      postJson: postSqlJson,
-    });
-    if (!bound.ok) return bound.error;
-    boundKeyRef.current = bound.key;
-    return null;
-  }, [id, selected]);
+  const ensureBound = useSqlItemBinding({
+    id,
+    family: 'azure-sql',
+    server: selected?.name || '',
+    unselectedMessage: 'Pick a server on the left first.',
+  });
 
   const loadFirewall = useCallback(async () => {
     if (!selected) return;
@@ -449,46 +408,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     loadFirewall();
   }, [loadFirewall]);
 
-  const loadAad = useCallback(async () => {
-    if (!selected) return;
-    setAadBusy(true); setAadError(null);
-    try {
-      const bindErr = await ensureBound();
-      if (bindErr) { setAadError(bindErr); return; }
-      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin?server=${encodeURIComponent(selected.name)}`);
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setAadCurrent(j.admin || null);
-      if (j.admin) {
-        setAadLogin(j.admin.login || '');
-        setAadSid(j.admin.sid || '');
-        setAadTenantId(j.admin.tenantId || '');
-      }
-    } catch (e: any) { setAadError(e?.message || String(e)); }
-    finally { setAadBusy(false); }
-  }, [id, selected, ensureBound]);
-
-  const openAad = useCallback(() => {
-    setAadOpen(true);
-    loadAad();
-  }, [loadAad]);
-
-  const saveAad = useCallback(async () => {
-    if (!selected || !aadLogin.trim() || !aadSid.trim()) return;
-    setAadBusy(true); setAadError(null);
-    try {
-      const bindErr = await ensureBound();
-      if (bindErr) { setAadError(bindErr); return; }
-      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ server: selected.name, login: aadLogin.trim(), sid: aadSid.trim(), tenantId: aadTenantId.trim() || undefined }),
-      });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setAadCurrent(j.admin || null);
-    } catch (e: any) { setAadError(e?.message || String(e)); }
-    finally { setAadBusy(false); }
-  }, [id, selected, aadLogin, aadSid, aadTenantId, ensureBound]);
+  const openAad = useCallback(() => setAadOpen(true), []);
 
   const refresh = useCallback(() => {
     setLoading(true); setError(null);
@@ -884,40 +804,13 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
             </DialogSurface>
           </Dialog>
 
-          <Dialog open={aadOpen} onOpenChange={(_, d) => setAadOpen(d.open)}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>AAD admin — {selected?.name}</DialogTitle>
-                <DialogContent>
-                  {aadBusy && <Spinner size="tiny" label="Calling ARM…" labelPosition="after" />}
-                  {aadCurrent && (
-                    <Caption1>
-                      Current: <strong>{aadCurrent.login}</strong> (<code>{aadCurrent.sid?.slice(0, 8)}…</code>)
-                      {aadCurrent.azureADOnlyAuthentication ? ' · AAD-only auth enabled' : ''}
-                    </Caption1>
-                  )}
-                  <Field label="Login (UPN or group name)" required>
-                    <Input value={aadLogin} onChange={(_, d) => setAadLogin(d.value)} placeholder="user@contoso.com" />
-                  </Field>
-                  <Field label="Object id (sid)" required>
-                    <Input value={aadSid} onChange={(_, d) => setAadSid(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
-                  </Field>
-                  <Field label="Tenant id (optional)">
-                    <Input value={aadTenantId} onChange={(_, d) => setAadTenantId(d.value)} placeholder="leave blank to use the server's tenant" />
-                  </Field>
-                  {aadError && (
-                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>AAD admin update failed</MessageBarTitle>{aadError}</MessageBarBody></MessageBar>
-                  )}
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setAadOpen(false)} disabled={aadBusy}>Close</Button>
-                  <Button appearance="primary" onClick={saveAad} disabled={aadBusy || !aadLogin.trim() || !aadSid.trim()}>
-                    {aadBusy ? 'Saving…' : 'Set AAD admin'}
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <EntraAdminDialog
+            open={aadOpen}
+            onOpenChange={setAadOpen}
+            itemId={id}
+            serverName={selected?.name || ''}
+            ensureBound={ensureBound}
+          />
         </div>
       }
     />
@@ -1524,26 +1417,14 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
   // Run T-SQL over the selected instance's FQDN, reusing the Azure SQL DB
   // /query route (executeQueryBatch).
   //
-  // DELIBERATELY NOT AUTO-BOUND, unlike this module's other two editors — and
-  // this surface is therefore still broken. Measured, not assumed:
-  //
-  //   `/query` now resolves `[id]` across SQL_EDITOR_ITEM_TYPES, so an
-  //   `azure-sql-managed-instance` item reaches the handler instead of 404ing.
-  //   But the target then comes from `state.connection` via `admitGovernedServer`,
-  //   which reduces an FQDN TO ITS FIRST DNS LABEL by design (it is what stops a
-  //   bound `attacker.example.com` from receiving a live SQL token). An MI's host
-  //   is zone-qualified — `<instance>.<dnsZone>.database.windows.net` — so binding
-  //   it would reduce to `<instance>`, and `azure-sql-client.getPool` would then
-  //   compose `<instance>.database.windows.net`: a DIFFERENT host from the one the
-  //   operator selected. Binding here would convert a dead button into one that
-  //   silently addresses the wrong server, which is worse.
-  //
-  //   Fixing MI properly needs the zone label carried through admission (an
-  //   MI-aware `admitGovernedServer` branch, or an `Microsoft.Sql/managedInstances`
-  //   provider kind); that is a real change to the security-critical admission
-  //   rule and is out of scope for the item-type regression this file's change
-  //   fixes. Left dead-and-honest (409 `no_bound_connection`) rather than
-  //   wrong-and-silent.
+  // DELIBERATELY NOT AUTO-BOUND, unlike this module's other two editors, so this
+  // surface is still dead (409 `no_bound_connection`) and that is the intended
+  // state — NOT an oversight to "fix" by adding a useSqlItemBinding call here.
+  // An MI host is zone-qualified and `admitGovernedServer` reduces a bound FQDN
+  // to its first DNS label, so binding would silently address a DIFFERENT server
+  // than the operator picked. Full reasoning and the shape of the real fix are
+  // recorded at that function — `app/api/items/_lib/sql-server-scope.ts`,
+  // §"MANAGED INSTANCE".
   const run = useCallback(() => {
     if (!selectedFqdn) { setResult({ ok: false, error: 'select a managed instance first' }); return; }
     if (!navDb.trim()) { setResult({ ok: false, error: 'database is required' }); return; }
@@ -1813,24 +1694,13 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
 
   const ddl = `-- SQL Server 2025 native vector index DDL.\n-- Requires SQL 2025 (major ≥17). Use Probe engine in the Database editor first.\nCREATE VECTOR INDEX idx_${table}_${column}\nON dbo.${table}(${column})\nWITH (METRIC = '${metric.toUpperCase()}', DIMENSIONS = ${dim});`;
 
-  /**
-   * AUTO-BIND (auto-bind-by-default.md §1). `/query` derives its execution target
-   * from THIS item's `state.connection` and treats the body's server/database as
-   * something to AGREE with, never to choose (#2723 + GHSA-v8r7-c2p5-mjf2). This
-   * editor picks both from live discovery, so the selection has to be persisted
-   * before either action runs or the route refuses with 409 `no_bound_connection`.
-   * Cached on `boundKeyRef`, so at most one POST per distinct selection.
-   */
-  const boundKeyRef = useRef('');
-  const ensureBound = useCallback(async (): Promise<string | null> => {
-    const bound = await bindItemConnection({
-      id, family: 'azure-sql', server, database,
-      cachedKey: boundKeyRef.current, postJson: postSqlJson,
-    });
-    if (!bound.ok) return bound.error;
-    boundKeyRef.current = bound.key;
-    return null;
-  }, [id, server, database]);
+  // AUTO-BIND: `/query` derives its target from this item's `state.connection`
+  // and the body may only agree with it (#2723 + GHSA-v8r7-c2p5-mjf2), so the
+  // live-discovery pick must be persisted before either action runs.
+  const ensureBound = useSqlItemBinding({
+    id, family: 'azure-sql', server, database,
+    unselectedMessage: 'server + database required',
+  });
 
   const runDdl = useCallback(async () => {
     if (!server || !database) { setResult({ ok: false, error: 'server + database required' }); return; }
