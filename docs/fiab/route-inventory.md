@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1678 |
+| Total routes | 1679 |
 | Public (no session) | 104 |
-| Session-only | 540 |
+| Session-only | 541 |
 | Owner-scoped | 734 |
 | Admin | 300 |
-| Gated (backend config) | 494 |
+| Gated (backend config) | 495 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1362,7 +1362,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/feature-table/[id]/online/route.ts` | GET POST | owner-scoped |  | — |
 | `items/feature-table/[id]/pit-join/route.ts` | POST | owner-scoped |  | — |
 | `items/feature-table/[id]/route.ts` | GET POST DELETE | owner-scoped | ● | — |
-| `items/feature-table/[id]/serve/route.ts` | POST | owner-scoped |  | — |
+| `items/feature-table/[id]/serve/route.ts` | POST | owner-scoped |  | AML / Databricks Mosaic |
 | `items/fine-tuning-job/[id]/deploy/route.ts` | POST | owner-scoped | ● | — |
 | `items/fine-tuning-job/[id]/events/route.ts` | GET | owner-scoped |  | — |
 | `items/fine-tuning-job/[id]/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | — |
@@ -1490,10 +1490,10 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/ml-model/[id]/route.ts` | GET | owner-scoped |  | — |
 | `items/ml-model/[id]/stage/route.ts` | GET POST | owner-scoped |  | — |
 | `items/ml-model/route.ts` | GET | session-only |  | — |
-| `items/model-serving-endpoint/[id]/invoke/route.ts` | POST | owner-scoped |  | — |
-| `items/model-serving-endpoint/[id]/metrics/route.ts` | GET | owner-scoped |  | — |
-| `items/model-serving-endpoint/[id]/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | — |
-| `items/model-serving-endpoint/[id]/traffic/route.ts` | POST | owner-scoped |  | — |
+| `items/model-serving-endpoint/[id]/invoke/route.ts` | POST | owner-scoped |  | AML / Databricks Mosaic |
+| `items/model-serving-endpoint/[id]/metrics/route.ts` | GET | owner-scoped |  | AML / Databricks Mosaic |
+| `items/model-serving-endpoint/[id]/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | AML / Databricks Mosaic |
+| `items/model-serving-endpoint/[id]/traffic/route.ts` | POST | owner-scoped |  | AML / Databricks Mosaic |
 | `items/mounted-adf/[id]/route.ts` | GET DELETE | owner-scoped |  | ADF, Cosmos |
 | `items/mounted-adf/[id]/run/route.ts` | POST | owner-scoped |  | ADF, Cosmos |
 | `items/mounted-adf/route.ts` | GET POST | owner-scoped |  | Cosmos |
@@ -1813,6 +1813,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `loom/compute-targets/[id]/[verb]/route.ts` | POST | session-only |  | — |
 | `loom/compute-targets/databricks-options/route.ts` | GET | session-only |  | Databricks |
 | `loom/compute-targets/route.ts` | GET POST | owner-scoped |  | Databricks, Synapse |
+| `loom/model-serving/endpoints/route.ts` | GET | session-only | ● | AML / Databricks Mosaic |
 | `loom/shir/route.ts` | GET POST | session-only | ● | — |
 | `loom/storage-paths/route.ts` | GET | session-only |  | — |
 | `loom/workspaces/route.ts` | GET | owner-scoped |  | Cosmos |

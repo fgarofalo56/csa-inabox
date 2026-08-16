@@ -9,6 +9,54 @@
  * asset / endpoint). Input ports that point at another data product resolve to
  * that upstream's contract summary. Backed by GET /ports (resolve) + PATCH the
  * product's `ports` model. Azure-native Cosmos; no Fabric dependency.
+ *
+ * UPSTREAM REF — WHY IT IS A PICKER (`loom_no_freeform_config`).
+ * An input port of kind `data-product` / `output-port` points at ANOTHER LOOM
+ * ITEM, by its Loom item id. This row used to ask for that id as free text,
+ * placeholder `dp-123 or abfss://…` — i.e. the surface taught the user to type
+ * an opaque Cosmos id (or, worse, an ADLS URI in a field the resolver only ever
+ * reads as an item id). Every id it accepts is one Loom already has, so it is
+ * now picked from the live list.
+ *
+ * The list comes from `/api/items/by-type?types=data-product`, which is the
+ * SCOPED lister: with no `workspaceId` it filters to the workspaces the caller
+ * can actually see (owned + shared + admin, inside the tid boundary). That
+ * matters — an unscoped product list would leak the display names of products
+ * in workspaces the user has no access to. PortsPanel is mounted from the
+ * data-product editor with only the product id, so there is no workspace in
+ * scope to narrow it further; the route's caller-visibility filter is the
+ * authorization boundary here.
+ *
+ * The other input kinds (`synapse-table` / `adx-table` / `adls-path`) reference
+ * a data-plane ASSET, not a Loom item, and stay free text for now — a browsable
+ * asset/path picker is separate work.
+ *
+ * DECLARED GAP — READ THIS BEFORE TRUSTING THE GUARD'S COUNT. This file no
+ * longer registers a `no-freeform` violation, and that is NOT the same as "no
+ * free-text infrastructure ask remains". The asset-ref `<Input>` below still
+ * ships for those three kinds: for `adls-path` the user still types a storage
+ * path by hand.
+ *
+ * WHY IT IS NO LONGER COUNTED — and it is not what an earlier revision of this
+ * comment claimed. That revision said the `abfss://` example had "moved into
+ * `assetPlaceholder()` where the guard cannot follow it". That is false:
+ * `assetPlaceholder()` returns `schema.table` / `container/folder` /
+ * `endpoint / path`, and the only `abfss://` left in this file is in prose like
+ * this sentence. The literal was DELETED, not relocated.
+ *
+ * The real mechanism is less comfortable. The classifier's only evidence for
+ * this input was the misleading placeholder — `'dp-123 or abfss://…'` — and
+ * removing that example was the correct fix for the teaching defect. But it was
+ * also the entire SHAPE signal, so the ask that remains is now invisible to the
+ * measurement. Fixing the defect deleted the evidence for the leftover.
+ *
+ * That leftover cannot be recorded as an ACCEPTED exception either: `ACCEPTED`
+ * is keyed to the CLASSIFIED population, and `applyAccepted()` rejects an entry
+ * whose file has zero classified sites ("no longer matches ANY classified
+ * site"). So it lives here, in prose, which is weaker than a counted
+ * acceptance — stated plainly rather than implied clean. The honest fix is a
+ * PATH-class picker (an ADLS browser / a Synapse+ADX table browser), which is a
+ * later wave's work. The sibling blind spot is filed as #3594.
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -19,6 +67,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add20Regular, Dismiss16Regular, Save20Regular, ArrowImport20Regular, ArrowExport20Regular, Wrench20Regular } from '@fluentui/react-icons';
+import { LoomObjectPicker, useLoomObjects, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
 import {
   PORT_DIRECTIONS, PORT_KINDS_BY_DIRECTION, emptyPorts,
   type PortsModel, type Port, type PortDirection, type PortKind,
@@ -46,6 +95,84 @@ const DIR_META: Record<PortDirection, { label: string; hint: string; icon: React
 
 type ResolvedPort = Port & { resolved?: { productName: string; contractVersion?: string; columnCount: number } | { error: string } };
 
+/** Input kinds whose `ref` is a LOOM ITEM id (and so must be picked, not typed). */
+const PRODUCT_REF_KINDS: readonly PortKind[] = ['data-product', 'output-port'];
+
+/**
+ * Split an `output-port` ref into its `<productId>:<portId>` halves, or null
+ * when it is not that shape.
+ *
+ * A URI IS NOT THAT SHAPE, and that distinction is load-bearing. `abfss://c/p`
+ * contains a colon, so a naive `split(':')` reads the product as `abfss` and
+ * re-joining after a pick writes `dp-2://c/p` — a corrupted ref that resolves to
+ * nothing and silently destroys the stored address. That input is not
+ * hypothetical: the free-text placeholder this panel used to ship
+ * (`'dp-123 or abfss://…'`) actively invited it, on EVERY input kind, so a
+ * pre-existing product row can legitimately hold a storage URI today.
+ */
+function splitOutputPortRef(ref: string): { productId: string; portId: string } | null {
+  const i = ref.indexOf(':');
+  if (i <= 0) return null;
+  if (ref.startsWith('//', i + 1)) return null; // `scheme://…` — a URI, not a split ref
+  return { productId: ref.slice(0, i), portId: ref.slice(i + 1) };
+}
+
+/**
+ * The product half of a port ref, per KIND.
+ *
+ * Only `output-port` carries a `<productId>:<portId>` suffix; a `data-product`
+ * ref is the item id WHOLE. Applying the split to both kinds was the defect
+ * above — it is gated on the kind here, and additionally on the ref not being a
+ * URI, because a legacy URI can appear under either kind.
+ */
+export function refProductId(ref: string | undefined, kind: PortKind): string {
+  const r = (ref || '').trim();
+  if (!r) return '';
+  if (kind !== 'output-port') return r;
+  return splitOutputPortRef(r)?.productId ?? r;
+}
+
+/** Write `productId` into a port ref, preserving an `output-port` suffix. */
+export function withProductId(ref: string | undefined, productId: string, kind: PortKind): string {
+  if (!productId) return '';
+  if (kind !== 'output-port') return productId;
+  const portId = splitOutputPortRef((ref || '').trim())?.portId;
+  return portId ? `${productId}:${portId}` : productId;
+}
+
+/**
+ * Live data-product list for the upstream picker. `/api/items/by-type` is the
+ * caller-scoped lister (see the file header); an unreachable route is reported
+ * as an ERROR, never as an empty list — "there are none" and "I could not ask"
+ * are different answers and the picker renders them differently.
+ *
+ * Loaded ONCE per panel via `useLoomObjects` and shared across every port row —
+ * a per-row loader made this an N+1 cross-partition scan that re-fired on every
+ * added port.
+ */
+async function loadDataProducts(): Promise<LoomObjectLoad> {
+  const r = await clientFetch('/api/items/by-type?types=data-product');
+  const j = await r.json().catch(() => ({}));
+  if (!j?.ok) {
+    return { options: [], error: j?.error || `Could not list data products (HTTP ${r.status}).` };
+  }
+  const options = (j.items || []).map((it: any) => ({
+    id: String(it.id),
+    name: String(it.displayName || it.id),
+    caption: it.description ? String(it.description).slice(0, 80) : undefined,
+  }));
+  return { options };
+}
+
+/** Placeholder for the asset-reference kinds. Deliberately NOT an `abfss://`
+ *  example — a placeholder that spells out a storage URI is the surface
+ *  teaching the user to compose one. */
+function assetPlaceholder(kind: PortKind): string {
+  if (kind === 'synapse-table' || kind === 'adx-table') return 'schema.table';
+  if (kind === 'adls-path') return 'container/folder';
+  return 'endpoint / path';
+}
+
 export function PortsPanel({ id, isNew }: { id: string; isNew?: boolean }) {
   const s = useStyles();
   const [model, setModel] = useState<PortsModel>(emptyPorts());
@@ -53,6 +180,11 @@ export function PortsPanel({ id, isNew }: { id: string; isNew?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+
+  // ONE product list for the whole panel. Every product-ref row renders its own
+  // picker but they all read this source, so adding a tenth input port does not
+  // fire a tenth cross-partition scan.
+  const products = useLoomObjects(loadDataProducts, 'data-product');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,9 +247,27 @@ export function PortsPanel({ id, isNew }: { id: string; isNew?: boolean }) {
                   {PORT_KINDS_BY_DIRECTION[dir].map((k) => (<Option key={k} value={k}>{k}</Option>))}
                 </Dropdown>
               </Field>
-              <Field label={dir === 'input' ? 'Upstream ref (product id / asset)' : 'Reference'} className={s.grow}>
-                <Input value={p.ref || ''} onChange={(_, d) => updatePort(dir, i, { ref: d.value })} placeholder={dir === 'input' ? 'dp-123 or abfss://…' : 'endpoint / path'} />
-              </Field>
+              {PRODUCT_REF_KINDS.includes(p.kind) ? (
+                <div className={s.grow} data-testid={`port-ref-picker-${p.id}`}>
+                  <LoomObjectPicker
+                    label="Upstream data product"
+                    hint={p.kind === 'output-port'
+                      ? 'The product that publishes the output port this one consumes.'
+                      : 'The product this one consumes.'}
+                    value={refProductId(p.ref, p.kind)}
+                    onChange={(pid) => updatePort(dir, i, { ref: withProductId(p.ref, pid, p.kind) })}
+                    source={products}
+                    placeholder="Select a data product…"
+                    emptyTitle="No other data products yet"
+                    emptyBody="This is the only data product you can see, so there is nothing upstream to depend on. Create another one, then refresh."
+                    unresolvedCaption="Saved upstream — not in the products you can see right now (deleted, in a workspace you cannot access, or the list could not be read). Kept as-is until you change it."
+                  />
+                </div>
+              ) : (
+                <Field label={dir === 'input' ? 'Asset reference' : 'Reference'} className={s.grow}>
+                  <Input value={p.ref || ''} onChange={(_, d) => updatePort(dir, i, { ref: d.value })} placeholder={assetPlaceholder(p.kind)} />
+                </Field>
+              )}
               <Button icon={<Dismiss16Regular />} appearance="subtle" aria-label="Remove port" onClick={() => removePort(dir, i)} />
               {dir === 'input' && resolved[p.id] && (
                 <Caption1 className={s.resolved} style={{ flexBasis: '100%' }}>
