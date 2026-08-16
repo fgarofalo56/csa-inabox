@@ -17,6 +17,7 @@
  * Server-only helper (imports only types) — safe to import from a route handler.
  */
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { admitBoundSqlTarget } from '@/app/api/items/_lib/sql-server-scope';
 
 /**
  * The Azure SQL server + database bound to an azure-sql-database item via the
@@ -57,40 +58,31 @@ export type SqlTargetResult =
  * database are ALWAYS the item's bound values — the body is used only to REJECT
  * a mismatch, never to choose the target (#2723). Refusals:
  *   - item has no bound connection            → 409 `no_bound_connection`
+ *   - binding is outside the authorized subs  → 403 `server_not_governed`
  *   - body names a different server           → 403 `server_mismatch`
  *   - body names a different database         → 403 `database_mismatch`
+ *
+ * GHSA-v8r7-c2p5-mjf2, second pass. This USED TO return the RAW bound string.
+ * That was Layer 1 + Layer 2 only, and Layer 2 is not a boundary: `PATCH
+ * /api/items/[type]/[id]` replaces `state` WHOLESALE with body JSON, so the
+ * caller writes the very value this function read. Downstream that is worse
+ * than the ARM routes — `azure-sql-client.getPool` composes
+ * `server.includes('.') ? server : `${server}.${sqlHostSuffix()}`` and presents
+ * an Entra ACCESS TOKEN for the SQL scope to the resulting host, so a bound
+ * `attacker.example.com` was arbitrary SQL *plus credential egress*.
+ *
+ * It now delegates to `_lib/sql-server-scope.admitBoundSqlTarget`, which adds
+ * Layer 3: an ARM-id binding must be in `sqlAuthorizedSubscriptions()`, and an
+ * FQDN binding is reduced to its first DNS label so no bound value can name a
+ * host outside this cloud's SQL suffix.
  */
 export function resolveOwnedSqlTarget(
   item: WorkspaceItem,
   submitted?: { server?: unknown; database?: unknown },
 ): SqlTargetResult {
-  const { server, database } = boundSqlConnection(item);
-  if (!server || !database) {
-    return {
-      ok: false,
-      status: 409,
-      code: 'no_bound_connection',
-      error:
-        'This SQL item has no bound connection. Open the Connect tab and bind a server and database before running queries.',
-    };
+  const admitted = admitBoundSqlTarget(item, submitted, 'sql', { requireDatabase: true });
+  if (!admitted.ok) {
+    return { ok: false, status: admitted.status, code: admitted.code, error: admitted.error };
   }
-  const subServer = typeof submitted?.server === 'string' ? submitted.server.trim() : '';
-  const subDatabase = typeof submitted?.database === 'string' ? submitted.database.trim() : '';
-  if (subServer && !sqlHostsMatch(subServer, server)) {
-    return {
-      ok: false,
-      status: 403,
-      code: 'server_mismatch',
-      error: 'The requested server does not match this item’s bound connection.',
-    };
-  }
-  if (subDatabase && subDatabase.toLowerCase() !== database.toLowerCase()) {
-    return {
-      ok: false,
-      status: 403,
-      code: 'database_mismatch',
-      error: 'The requested database does not match this item’s bound connection.',
-    };
-  }
-  return { ok: true, server, database };
+  return { ok: true, server: admitted.server, database: admitted.database };
 }

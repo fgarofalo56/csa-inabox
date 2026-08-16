@@ -147,6 +147,42 @@ describe('UnifiedSqlDatabaseEditor (registered azure-sql-database editor)', () =
     await waitFor(() => expect(screen.getAllByText(/loom-sql-01/).length).toBeGreaterThan(0));
   });
 
+  // ── GHSA-v8r7-c2p5-mjf2 — the editor half of the fix ──────────────────────
+  // The scale / restore / replication / share / Entra-admin panels now DERIVE
+  // their ARM target from the item's bound connection, so the editor must
+  // persist the selection AS SOON AS IT CHANGES — not only when a query runs.
+  // Without this every one of those panels refuses a legitimate user with 409
+  // `no_bound_connection`, and a fix that refuses real users is not a fix.
+  //
+  // This effect had ZERO coverage in the first pass, which is how the
+  // item-type regression (a `postgres-flexible-server` item could never bind)
+  // reached review.
+  //   MUTATION: delete the bind-on-selection useEffect, or restore its
+  //   `family !== 'postgres'` guard. → no /connect call is made.
+  it('PERSISTS the connection as soon as a server is picked — before any query runs', async () => {
+    renderEditor();
+    await pickServer();
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.endsWith('/connect') && c.init?.method === 'POST')).toBe(true);
+    });
+    const bind = calls.find((c) => c.url.endsWith('/connect'));
+    expect(bind!.url).toBe('/api/items/azure-sql-database/sqldb-fixture/connect');
+    expect(JSON.parse(String(bind!.init!.body))).toMatchObject({
+      family: 'azure-sql', server: 'loom-sql-01',
+    });
+    // No query was ever run — the binding is what the ARM panels read.
+    expect(calls.some((c) => c.url.endsWith('/query'))).toBe(false);
+  });
+
+  it('does NOT bind an unsaved item (id=new) — there is no item to bind to', async () => {
+    render(<UnifiedSqlDatabaseEditor item={makeItem('azure-sql-database', 'Azure SQL database')} id="new" />);
+    await pickServer();
+    // Give the effect a chance to run before asserting the negative.
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/api/items/sql-databases'))).toBe(true));
+    expect(calls.some((c) => c.url.endsWith('/connect'))).toBe(false);
+  });
+
   it('mounts the sys.* object navigator (SqlDbTree) in the Schema tab wired to the selected Azure SQL connection', async () => {
     renderEditor();
     await pickServer();

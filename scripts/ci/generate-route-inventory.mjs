@@ -64,7 +64,7 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * too; the note is left here because this file caught it first and the checker
  * did not, which is the whole argument for keeping the two in lockstep.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -113,6 +113,16 @@ const OWNER_RE = new RegExp([
   // not know. Exactly the same failure the ADX pass hit. Both regexes are
   // updated together; do not add a guard wrapper to one without the other.
   'guardSynapseItemRequest\\s*\\(',
+  // GHSA-v8r7-c2p5-mjf2 — the Azure SQL / PostgreSQL item-route guard
+  // (`app/api/items/_lib/sql-server-scope.ts`). Matched AS A CALL for the same
+  // reason its siblings are. Added to BOTH regexes here and to GETSESSION_RE /
+  // GUARD_SIGNAL_RE in check-route-guards.mjs in ONE change, deliberately:
+  // measured on the six routes this advisory hardened, listing the name nowhere
+  // dropped them out of the guard checker's remit entirely (1526 → 1520 scanned
+  // routes) — the same under-reporting the ADX entry above records, reproduced
+  // by the very change that fixed them. THIRD independent reproduction of the
+  // lockstep rule in this one file; it is not theoretical.
+  'withBoundSqlServer\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',
