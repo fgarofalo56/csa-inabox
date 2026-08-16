@@ -1796,7 +1796,24 @@ const META = {
  * Touched-file (boy-scout) escape hatch: repo-relative path -> one-line reason a
  * PR may modify a baselined file WITHOUT fixing its sites.
  */
-export const TOUCH_EXEMPT = new Map();
+export const TOUCH_EXEMPT = new Map([
+  // GHSA-v8r7-c2p5-mjf2 — the SQL panels (scale / restore / replication / share
+  // / Entra-admin) now derive their ARM target from the item's bound connection,
+  // so the editor must persist the server+database selection ON CHANGE rather
+  // than only when a query runs; without that the security fix 409s legitimate
+  // users, which is not a fix. The boy-scout rule requires a touched file to be
+  // FULLY cleared, and its four sites cannot be: the Entra `sid` picker is real
+  // work (a `principal-search`-fed picker), the PostgreSQL admin PASSWORD is a
+  // credential no discovery call can supply (it needs the platform to mint and
+  // Key Vault it, per auto-bind-by-default.md §5), and the ADF run-id receipt
+  // needs a run-history picker. Tracked with acceptance criteria — including
+  // DELETING this entry — in #3626, so this is a dated exception rather than a
+  // permanent amnesty.
+  [
+    'apps/fiab-console/lib/editors/unified-sql-database-editor.tsx',
+    'GHSA-v8r7-c2p5-mjf2 required binding the server selection here; the 4 sites need UI work tracked in #3626',
+  ],
+]);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 4a. ACCEPTED — sites that are a REVIEWED decision, not a backlog item
