@@ -106,6 +106,26 @@ describe('resolveItemSynapseDatabase — resolution order', () => {
     expect(resolveItemSynapseDatabase({ state: {} } as any)).toBe('');
     process.env.LOOM_SYNAPSE_DEDICATED_POOL = POOL;
   });
+
+  it('returns NULL for an item type this module does not model', () => {
+    /**
+     * `guardSynapseItemRequest` is deliberately reused as the backend-agnostic
+     * Layer-1 guard by the Databricks/UC and AAS dispatchers. Resolving a
+     * `databricks-sql-warehouse` item to the env-pinned SYNAPSE pool would hand
+     * a future maintainer reading `ctx.database` a Databricks item pointed at a
+     * Synapse database with no error. Null makes that unrepresentable.
+     */
+    expect(
+      resolveItemSynapseDatabase({ itemType: 'databricks-sql-warehouse', state: { database: 'x' } } as any),
+    ).toBeNull();
+    expect(resolveItemSynapseDatabase({ itemType: 'kql-database', state: {} } as any)).toBeNull();
+  });
+
+  it('still resolves for every type it DOES model', () => {
+    for (const t of ['warehouse', 'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'lakehouse', 'semantic-model']) {
+      expect(resolveItemSynapseDatabase({ itemType: t, state: {} } as any)).toBe(POOL);
+    }
+  });
 });
 
 describe('workspaceSynapseScope — fails CLOSED', () => {
@@ -167,6 +187,15 @@ describe('scopeSynapseDatabase', () => {
   it('admits a database the workspace really is bound to', async () => {
     cosmos.byWorkspace = [ITEM, { itemType: 'warehouse', workspaceId: 'ws-1', state: { database: 'sib_db' } }];
     expect(await scopeSynapseDatabase(ITEM, 'sib_db')).toEqual({ ok: true, database: 'sib_db' });
+  });
+
+  it('FAILS CLOSED on a blank request from an item type it does not model', async () => {
+    // Unreachable from any shipped route, asserted so it stays that way: a
+    // non-Synapse item must not silently receive the shared pool.
+    const foreign: any = { id: 'x', itemType: 'databricks-sql-warehouse', workspaceId: 'ws-1', state: {} };
+    const r = await scopeSynapseDatabase(foreign, '');
+    expect(r).toMatchObject({ ok: false, status: 400 });
+    if (!r.ok) expect(r.error).toMatch(/not backed by a Synapse SQL database/i);
   });
 });
 

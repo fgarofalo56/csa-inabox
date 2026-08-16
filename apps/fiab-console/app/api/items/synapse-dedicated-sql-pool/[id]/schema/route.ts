@@ -16,6 +16,13 @@
  * `databases` picker is narrowed to `workspaceSynapseScope` so it admits exactly
  * what `[id]/query` will accept. The in-database schema/table enumeration is NOT
  * narrowed — no item→schema ownership exists to narrow it with. See the ledger.
+ *
+ * The narrowing is LARGE, not marginal: for an item with no recorded second
+ * database — which is every item the platform provisions today — the scope is a
+ * single entry and this dropdown collapses to one option. It does not become an
+ * error state (the list is never empty, so the editor's `disabled` never trips),
+ * but that is read from `lib/editors/synapse-sql-editors.tsx` and NOT verified in
+ * a browser. See the sibling `warehouse/[id]/schema` header and the PR ledger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

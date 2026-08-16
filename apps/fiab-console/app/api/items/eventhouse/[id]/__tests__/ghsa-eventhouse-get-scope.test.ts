@@ -57,16 +57,21 @@ const SIBLING: any = {
   state: { databaseName: SIBLING_DB },
 };
 
-const cosmos = vi.hoisted(() => ({ byId: [] as any[], byWorkspace: [] as any[] }));
+const cosmos = vi.hoisted(() => ({
+  byId: [] as any[],
+  byWorkspace: [] as any[],
+  /** Make the SIBLING (workspace-scoped) query throw — the fail-closed probe. */
+  throwOnWorkspaceQuery: false,
+}));
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: async () => ({
     items: {
       query: (spec: any) => ({
-        fetchAll: async () => ({
-          resources: String(spec?.query || '').includes('c.workspaceId')
-            ? cosmos.byWorkspace
-            : cosmos.byId,
-        }),
+        fetchAll: async () => {
+          const isWorkspaceQuery = String(spec?.query || '').includes('c.workspaceId');
+          if (isWorkspaceQuery && cosmos.throwOnWorkspaceQuery) throw new Error('cosmos down');
+          return { resources: isWorkspaceQuery ? cosmos.byWorkspace : cosmos.byId };
+        },
       }),
     },
   }),
@@ -131,6 +136,7 @@ beforeEach(() => {
   } as any);
   cosmos.byId = [ITEM];
   cosmos.byWorkspace = [ITEM, SIBLING];
+  cosmos.throwOnWorkspaceQuery = false;
 });
 
 // ── LAYER 1 — the caller is authorized against the item ──────────────────────
@@ -184,15 +190,37 @@ describe('layer 2 — the database list is workspace-scoped', () => {
     );
   });
 
-  it('fails CLOSED to the item’s own database when the sibling query throws', async () => {
-    // `workspaceAdxScope` degrades to the item's own bound set rather than
-    // widening — an unverifiable database is not an authorized one.
-    const boom = { itemsContainer: async () => { throw new Error('cosmos down'); } };
-    vi.doMock('@/lib/azure/cosmos-client', () => boom);
+  it('fails CLOSED to the item’s own scope when the SIBLING query throws', async () => {
+    /**
+     * REWRITTEN after review. The first version called
+     * `vi.doMock('@/lib/azure/cosmos-client', …)` AFTER the top-level
+     * `import { GET } from '../route'`. `vi.doMock` is not hoisted and does not
+     * re-evaluate an already-resolved module graph, so the intended throw never
+     * fired and the assertion — "victim-db is absent" — was already true from
+     * `beforeEach`. It passed identically whether `workspaceAdxScope` failed
+     * closed or wide open, i.e. it was decoration.
+     *
+     * The flag pattern below makes the throw real, and the assertion is now the
+     * NARROWING itself: the sibling's database drops out (it could not be read),
+     * the item's own two remain, and the victim is still absent. If the catch
+     * ever widened instead of narrowing, this fails.
+     */
+    cosmos.throwOnWorkspaceQuery = true;
     const res = await GET(req, ctx);
-    const j = await res.json();
-    expect(j.databases.map((d: any) => d.name)).not.toContain(VICTIM_DB);
-    vi.doUnmock('@/lib/azure/cosmos-client');
+    expect(res.status).toBe(200);
+    const names = (await res.json()).databases.map((d: any) => d.name);
+    expect(names.sort()).toEqual([OWN_DB, CREATED_DB].sort());
+    expect(names).not.toContain(SIBLING_DB);
+    expect(names).not.toContain(VICTIM_DB);
+  });
+
+  it('the fail-closed probe is REAL — the same call without it sees the sibling', async () => {
+    // The control for the test above: with the flag off, SIBLING_DB IS present.
+    // Without this pair, "sibling absent" could mean the throw fired or could
+    // mean the sibling was never in scope to begin with.
+    cosmos.throwOnWorkspaceQuery = false;
+    const names = (await (await GET(req, ctx)).json()).databases.map((d: any) => d.name);
+    expect(names).toContain(SIBLING_DB);
   });
 });
 

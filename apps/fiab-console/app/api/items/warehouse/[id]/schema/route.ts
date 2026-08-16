@@ -21,6 +21,21 @@
  * control that 403s on its own documented use. Picker and consumer now admit the
  * same set by construction — both call `workspaceSynapseScope`.
  *
+ * HOW MUCH THAT NARROWS, stated at full strength because an earlier revision of
+ * the ledger understated it as "out-of-band databases disappear". For the COMMON
+ * item — `state: {}`, no provisioning record — `workspaceSynapseScope` is a
+ * SINGLE entry: the env-pinned shared pool. Nothing in the platform writes a
+ * second Synapse database onto an item today, so in practice **this dropdown
+ * collapses to one option in every workspace**, which removes the cross-database
+ * picker's documented purpose rather than merely trimming it.
+ *
+ * It does NOT become an error state — `workspaceSynapseScope` always contains at
+ * least the item's own database, so the list is never empty and the editor's
+ * `disabled={… || databases.length === 0}` never trips. That is read from
+ * `lib/editors/synapse-sql-editors.tsx`, NOT observed in a browser: per
+ * `ux-baseline.md` G1 a one-option dropdown still needs a live pass, and this PR
+ * does not have one. Recorded as unverified.
+ *
  * The schema/table enumeration inside the one shared pool database is NOT
  * narrowed, because nothing in the estate records which schema belongs to which
  * item. See `_lib/synapse-item-scope.ts` and the PR ledger — stated, not implied

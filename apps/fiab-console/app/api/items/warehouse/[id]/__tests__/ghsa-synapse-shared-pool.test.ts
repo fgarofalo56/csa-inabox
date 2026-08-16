@@ -142,7 +142,8 @@ vi.mock('@/lib/azure/databricks-client', () => ({
   getWarehouse: vi.fn(async () => ({ id: 'w', state: 'RUNNING' })),
 }));
 
-vi.mock('@/lib/azure/rate-limiter', () => ({ enforceRateLimit: vi.fn(async () => null) }));
+const rateLimit = vi.hoisted(() => ({ enforceRateLimit: vi.fn(async () => null as any) }));
+vi.mock('@/lib/azure/rate-limiter', () => rateLimit);
 vi.mock('@/lib/finops/query-run', () => ({ recordQueryRun: vi.fn(async () => undefined) }));
 vi.mock('@/lib/azure/sql-access-mode', () => ({ resolveAccessMode: vi.fn(async () => 'service') }));
 vi.mock('@/lib/azure/sql-user-token-store', () => ({ getUserSqlToken: vi.fn(async () => null) }));
@@ -183,6 +184,7 @@ async function denyAll() {
 beforeEach(() => {
   vi.clearAllMocks();
   guard.authorizeItemWorkspace.mockResolvedValue(null as any);
+  rateLimit.enforceRateLimit.mockResolvedValue(null as any);
   poolArm.getPoolState.mockResolvedValue({ state: 'Online', sku: 'DW100c' } as any);
   synapse.dedicatedTarget.mockReturnValue({
     server: 'syn-loom.sql.azuresynapse.net', database: POOL_DB, cacheKey: `dedicated:syn-loom:${POOL_DB}`,
@@ -359,6 +361,60 @@ describe('a legitimate owner still succeeds', () => {
   });
 });
 
+// ── THE OUTER ERROR ENVELOPE — a regression this PR introduced and closed ───
+
+describe('the outer envelope survives a throw the INNER catch never sees', () => {
+  /**
+   * Dropping `withSession` from `warehouse/[id]/query` also dropped
+   * `route-toolkit`'s `try { … } catch (e) { return apiServerError(e) }`,
+   * leaving `enforceRateLimit` and `dedicatedTarget()` outside any try.
+   * `dedicatedTarget()` throws on an unset `LOOM_SYNAPSE_DEDICATED_POOL` — the
+   * exact state `envPoolDatabase()` exists to tolerate — so the route returned
+   * Next's generic HTML 500 and the editor's `await r.json()` could not parse it.
+   *
+   * The inner catch wraps `executeQuery` ONLY, so it cannot see this. That is
+   * the M22/M23 lesson restated: two overlapping controls hide each other's
+   * absence, and only a test exercising what the inner one does not run will
+   * notice. These are those tests.
+   */
+  it('warehouse/query returns STRUCTURED json when dedicatedTarget() throws', async () => {
+    synapse.dedicatedTarget.mockImplementation(() => {
+      throw new Error('Missing env var: LOOM_SYNAPSE_DEDICATED_POOL');
+    });
+    const res = await whQueryPOST(req({ sql: 'SELECT 1' }), whCtx);
+    expect(res.status).toBe(500);
+    // Parseable — this is the whole point; an HTML body throws here.
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(typeof j.error).toBe('string');
+  });
+
+  it('warehouse/query returns STRUCTURED json when the rate limiter throws', async () => {
+    rateLimit.enforceRateLimit.mockRejectedValue(new Error('redis unreachable'));
+    const res = await whQueryPOST(req({ sql: 'SELECT 1' }), whCtx);
+    expect(res.status).toBe(500);
+    expect((await res.json()).ok).toBe(false);
+  });
+
+  it('dedicated-pool/query too (pre-existing gap, same failure mode)', async () => {
+    synapse.dedicatedTarget.mockImplementation(() => {
+      throw new Error('Missing env var: LOOM_SYNAPSE_DEDICATED_POOL');
+    });
+    const res = await dpQueryPOST(req({ sql: 'SELECT 1' }), dpCtx);
+    expect(res.status).toBe(500);
+    expect((await res.json()).ok).toBe(false);
+  });
+
+  it('the INNER catch is still the one that classifies a cancelled query', async () => {
+    // Proves the outer envelope did not swallow the inner behaviour — the
+    // failure mode of "just wrap everything in one try".
+    synapse.executeQuery.mockRejectedValue(Object.assign(new Error('Query canceled'), { code: 'ECANCEL' }));
+    const res = await whQueryPOST(req({ sql: 'SELECT 1' }), whCtx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).canceled).toBe(true);
+  });
+});
+
 // ── THE RESIDUAL, ASSERTED — not left for a reader to infer ─────────────────
 
 describe('RESIDUAL: schema.table is NOT bound on the shared pool', () => {
@@ -381,10 +437,31 @@ describe('RESIDUAL: schema.table is NOT bound on the shared pool', () => {
   });
 
   it('and the in-database schema enumeration is still pool-wide', async () => {
+    /**
+     * REWRITTEN after review. The first version asserted
+     * `expect(await res.json()).toHaveProperty('schemas')`, which **cannot
+     * fail**: a future change narrowing `schemas` to the item's own set still
+     * returns a `schemas` property. It proved response shape, not that the gap
+     * is open — and a RESIDUAL assertion that does not fail when the residual
+     * closes is worse than none, because it makes the block look load-bearing.
+     *
+     * This asserts the actual leak: a schema belonging to ANOTHER tenant, with
+     * its table and row count, comes back to a caller authorized only for THIS
+     * warehouse item. When the ownership model lands, this fails — which is the
+     * point.
+     */
+    synapse.executeQuery.mockResolvedValue({
+      columns: ['qualified', 'table_name', 'schema_name', 'row_count'],
+      rows: [
+        ['gold.fact_sales', 'fact_sales', 'gold', 42],
+        ['tenantB_gold.payroll', 'payroll', 'tenantB_gold', 9_000_000],
+      ],
+      rowCount: 2, executionMs: 5, truncated: false, messages: [], recordsAffected: 0,
+    } as any);
     const res = await whSchemaGET(req(), whCtx);
     expect(res.status).toBe(200);
-    // `schemas` comes from sys.tables over the whole shared pool; only the
-    // `databases` picker is narrowed. Recorded, not implied fixed.
-    expect((await res.json())).toHaveProperty('schemas');
+    const j = await res.json();
+    expect(Object.keys(j.schemas)).toContain('tenantB_gold');
+    expect(j.schemas.tenantB_gold).toEqual([{ table: 'payroll', rows: 9_000_000 }]);
   });
 });

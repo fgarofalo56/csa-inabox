@@ -25,15 +25,36 @@
  * shared dedicated pool has no item→schema.table ownership, so a caller can
  * still address any table in the one shared pool. See
  * `_lib/synapse-item-scope.ts` and the PR ledger.
+ *
+ * THE OUTER ENVELOPE IS LOAD-BEARING — and its absence was a REGRESSION this
+ * change introduced, caught in review. Dropping `withSession` also dropped
+ * `route-toolkit`'s `try { … } catch (e) { return apiServerError(e) }`, which
+ * left `enforceRateLimit(session, 'query')` and `dedicatedTarget()` outside any
+ * try. `dedicatedTarget()` calls `required('LOOM_SYNAPSE_DEDICATED_POOL')` and
+ * THROWS when it is unset — a state `_lib/synapse-item-scope.ts::envPoolDatabase`
+ * exists precisely to accommodate — so an unconfigured pool returned Next's
+ * generic HTML 500 that the editor's `await r.json()` cannot parse.
+ *
+ * That is the M22/M23 failure the guard's own fail-safe envelope was added for,
+ * reintroduced one line below the guard. It is restored here as an explicit
+ * outer try, and it is WATCHED: a test unsets the pool env var and asserts a
+ * structured `{ok:false}` 500, which is a path the INNER catch (around
+ * `executeQuery`) never runs. Two overlapping controls can hide each other's
+ * absence; only a test that exercises what the inner one does not can tell.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { tenantScopeId } from '@/lib/auth/session';
+import { apiServerError } from '@/lib/api/respond';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { dedicatedTarget, executeQuery, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { recordQueryRun } from '@/lib/finops/query-run';
-import { guardSynapseItemRequest, scopeSynapseDatabase } from '../../../_lib/synapse-item-scope';
+import {
+  guardSynapseItemRequest,
+  scopeSynapseDatabase,
+  type SynapseScopedDatabase,
+} from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,76 +71,87 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (guard.res) return guard.res;
   const { session, item } = guard.ctx;
 
-  const limited = await enforceRateLimit(session, 'query');
-  if (limited) return limited;
-
-  const body = await req.json().catch(() => ({}));
-  const sqlText = (body?.sql || '').toString().trim();
-  const queryId = (body?.queryId || '').toString().trim() || undefined;
-  if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
-  if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
-
-  // LAYER 2 — the database is bound to the item's workspace BEFORE any TDS work.
-  const scopedDb = await scopeSynapseDatabase(item, body?.database);
-  if (!scopedDb.ok) {
-    return NextResponse.json({ ok: false, error: scopedDb.error }, { status: scopedDb.status });
-  }
-
-  // Named parameters (`@name`) — bound via req.input(), NOT concatenated.
-  const parameters: SynapseQueryParam[] = (Array.isArray(body?.parameters) ? body.parameters : [])
-    .filter((p: any) => p && typeof p.name === 'string')
-    .map((p: any) => ({ name: String(p.name), value: p.value == null ? null : String(p.value) }));
-
-  const state = await getPoolState().catch(() => null);
-  if (state && state.state !== 'Online') {
-    return NextResponse.json(
-      { ok: false, error: `Warehouse compute is ${state.state}. Resume via the Dedicated SQL pool editor.`, state: state.state, sku: state.sku },
-      { status: 409 },
-    );
-  }
-
-  const baseTarget = dedicatedTarget();
-  const database: string = scopedDb.database;
-  const target = database && database !== baseTarget.database
-    ? { ...baseTarget, database, cacheKey: `dedicated:${process.env.LOOM_SYNAPSE_WORKSPACE}:${database}` }
-    : baseTarget;
-
+  // OUTER ENVELOPE — everything the guard does not run. `enforceRateLimit` and
+  // `dedicatedTarget()` both throw on a misconfigured deployment.
   try {
-    const started = Date.now();
-    const result = await executeQuery(target, sqlText, 60_000, parameters, queryId);
-    // B-N19e — FOCUS cost attribution: tag this run with WHO ran it and WHICH
-    // warehouse item + workspace it belongs to (best-effort, never blocks).
-    void recordQueryRun({
-      tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
-      engine: 'synapse-sql', statement: sqlText, durationMs: Date.now() - started,
-      rowCount: (result as { rowCount?: number }).rowCount,
-      queryId,
-      itemId: id, itemType: 'warehouse',
-      resourceId: target.database,
-    });
-    return NextResponse.json({
-      ok: true,
-      ...result,
-      warehouse: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
-      database: target.database,
-      sku: state?.sku || 'unknown',
-      // Receipt: the parameterized statement + bound params (values out-of-band).
-      statement: sqlText,
-      parameters,
-      parametersCount: parameters.length,
-      executedBy: session.claims.upn,
-    });
-  } catch (e: any) {
-    const canceled = /cancel/i.test(e?.message || '') || e?.code === 'ECANCEL';
-    return NextResponse.json(
-      {
-        ok: false,
-        canceled,
-        error: canceled ? 'Query canceled by user.' : (e?.message || String(e)),
-        code: e?.code,
-        sqlNumber: e?.number,
-      },
-      { status: canceled ? 200 : 502 },
-    );
+    const limited = await enforceRateLimit(session, 'query');
+    if (limited) return limited;
+
+    const body = await req.json().catch(() => ({}));
+    const sqlText = (body?.sql || '').toString().trim();
+    const queryId = (body?.queryId || '').toString().trim() || undefined;
+    if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
+    if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
+
+    // LAYER 2 — the database is bound to the item's workspace BEFORE any TDS work.
+    const scopedDb = await scopeSynapseDatabase(item, body?.database);
+    if (!scopedDb.ok) {
+      return NextResponse.json({ ok: false, error: scopedDb.error }, { status: scopedDb.status });
+    }
+
+    // Named parameters (`@name`) — bound via req.input(), NOT concatenated.
+    const parameters: SynapseQueryParam[] = (Array.isArray(body?.parameters) ? body.parameters : [])
+      .filter((p: any) => p && typeof p.name === 'string')
+      .map((p: any) => ({ name: String(p.name), value: p.value == null ? null : String(p.value) }));
+
+    const state = await getPoolState().catch(() => null);
+    if (state && state.state !== 'Online') {
+      return NextResponse.json(
+        { ok: false, error: `Warehouse compute is ${state.state}. Resume via the Dedicated SQL pool editor.`, state: state.state, sku: state.sku },
+        { status: 409 },
+      );
+    }
+
+    const baseTarget = dedicatedTarget();
+    // ANNOTATED WITH THE BRAND, not `string`. Annotating `string` here would
+    // discard `SynapseScopedDatabase` at exactly the assignment the brand exists
+    // to protect, so even the annotated re-point mutation would stop being a
+    // compile error. `SynapseScopedDatabase` is assignable to `string`, so the
+    // target below builds identically.
+    const database: SynapseScopedDatabase = scopedDb.database;
+    const target = database && database !== baseTarget.database
+      ? { ...baseTarget, database, cacheKey: `dedicated:${process.env.LOOM_SYNAPSE_WORKSPACE}:${database}` }
+      : baseTarget;
+
+    try {
+      const started = Date.now();
+      const result = await executeQuery(target, sqlText, 60_000, parameters, queryId);
+      // B-N19e — FOCUS cost attribution: tag this run with WHO ran it and WHICH
+      // warehouse item + workspace it belongs to (best-effort, never blocks).
+      void recordQueryRun({
+        tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+        engine: 'synapse-sql', statement: sqlText, durationMs: Date.now() - started,
+        rowCount: (result as { rowCount?: number }).rowCount,
+        queryId,
+        itemId: id, itemType: 'warehouse',
+        resourceId: target.database,
+      });
+      return NextResponse.json({
+        ok: true,
+        ...result,
+        warehouse: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
+        database: target.database,
+        sku: state?.sku || 'unknown',
+        // Receipt: the parameterized statement + bound params (values out-of-band).
+        statement: sqlText,
+        parameters,
+        parametersCount: parameters.length,
+        executedBy: session.claims.upn,
+      });
+    } catch (e: any) {
+      const canceled = /cancel/i.test(e?.message || '') || e?.code === 'ECANCEL';
+      return NextResponse.json(
+        {
+          ok: false,
+          canceled,
+          error: canceled ? 'Query canceled by user.' : (e?.message || String(e)),
+          code: e?.code,
+          sqlNumber: e?.number,
+        },
+        { status: canceled ? 200 : 502 },
+      );
+    }
+  } catch (e) {
+    return apiServerError(e);
   }
 }

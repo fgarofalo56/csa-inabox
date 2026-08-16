@@ -35,6 +35,23 @@
  * `[id]` as an owned item, so the strictly worse shape is outside its population
  * by construction.
  *
+ * A SIBLING THAT WAS ALREADY GUARDED, recorded because "no route in this family
+ * had an item guard" was my first claim and it was WRONG. `_lib/synapse-model.ts`
+ * — behind `warehouse/[id]/model` and `synapse-dedicated-sql-pool/[id]/model` —
+ * already ran `readModelState(id, itemType, session.claims.oid)` →
+ * `loadOwnedItem` → 404. That is a real owner check under a local name, which is
+ * the missed-sibling shape this program keeps getting burned by.
+ *
+ * IT IS A DIFFERENT LADDER, and that is now a known inconsistency rather than an
+ * accident: `loadOwnedItem` is OWNER-ONLY (a partition point-read on the
+ * caller's own oid), while this module runs the canonical
+ * `authorizeItemWorkspace` ladder (owner → tenant-admin → shared-ACL). So two
+ * ladders govern the same shared pool — a tenant admin or ACL-shared member can
+ * query a warehouse they do not own but cannot open its Model view. Converging
+ * them is a behaviour change with its own blast radius (per #2941 the owner-only
+ * form is what broke the semantic-model editor for admins), so it is recorded
+ * here for the next pass rather than folded into a security fix.
+ *
  * TWO LAYERS, the same contract `_lib/adx-item-scope.ts` established:
  *
  *   LAYER 1 — AUTHORIZE THE CALLER against the route item.
@@ -78,6 +95,38 @@
  * Layer 2 IS a real bound for the `database` coordinate specifically: the
  * cross-database re-point on `[id]/query` reaches OTHER databases on the same
  * Synapse SQL server, which are not the shared pool and are not this workspace's.
+ *
+ * ══ WHY THERE IS NO `crossDatabaseReference` ANALOGUE HERE ══
+ *
+ * `_lib/adx-item-scope.ts` ships one, and says out loud that pinning the
+ * `database` argument "is NOT sufficient on its own" — because KQL's
+ * `database('X')` / `cluster('Y').database('X')` qualifiers let a QUERY BODY
+ * address any database the connection identity can reach, regardless of which
+ * database the connection was opened against. Both `[id]/query` routes here run
+ * arbitrary caller-authored T-SQL, so the absence of an equivalent is a fair
+ * question and is answered rather than left to inference.
+ *
+ * T-SQL ON A DEDICATED SQL POOL DOES NOT HAVE THAT ESCAPE HATCH. Synapse
+ * dedicated SQL pool does not support cross-database queries: three-part names
+ * (`otherdb.schema.table`) do not resolve, and there is no `USE <db>` either —
+ * which is exactly WHY the editor's picker RE-POINTS THE TDS CONNECTION instead
+ * of qualifying the name, and why `body.database` exists at all. The connection's
+ * database is therefore the real boundary for the query body, not merely for the
+ * default schema, so pinning it IS sufficient here in a way it is not for KQL.
+ *   https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-overview-manage-security
+ *
+ * WHAT THAT DOES NOT COVER, stated so the difference from ADX is not read as a
+ * stronger claim than it is: a query body can still address any SCHEMA and
+ * TABLE **inside** the admitted database, and on the shared pool that is every
+ * tenant's data. That is the same residual the section above records — it is a
+ * missing OWNERSHIP model, not a missing query-text filter, and a
+ * `crossDatabaseReference`-shaped regex would not touch it.
+ *
+ * If a future change introduces a backend where T-SQL CAN reach out of its
+ * connection database — Synapse SERVERLESS (which resolves cross-database
+ * references and `OPENROWSET` over arbitrary storage), or Azure SQL with
+ * elastic query — this reasoning does NOT carry over and that route needs a
+ * query-text refusal of its own.
  */
 import { NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
@@ -120,6 +169,8 @@ const SYNAPSE_BACKED_ITEM_TYPES = [
   'semantic-model',
 ] as const;
 
+type SynapseBackedItemType = (typeof SYNAPSE_BACKED_ITEM_TYPES)[number];
+
 /**
  * The env-pinned dedicated pool database, read WITHOUT throwing.
  *
@@ -138,7 +189,18 @@ function envPoolDatabase(): string {
  * Resolve the Synapse database an item is bound to — the item's OWN
  * declaration, never a request body.
  *
- * Resolution order mirrors what the PLATFORM itself writes and reads:
+ * Returns **null** for an item whose `itemType` this module does not model.
+ * That case is real and was found in review: `guardSynapseItemRequest` is
+ * deliberately reused as the backend-agnostic Layer-1 guard by
+ * `[type]/[id]/{optimize,statistics}`, `databricks-sql-warehouse/[id]/ctas` and
+ * `semantic-model/[id]/refresh-policy`. Those items are NOT Synapse-backed, so
+ * resolving them to the env-pinned Synapse pool would hand a future maintainer
+ * reading `guard.ctx.database` a **Databricks item pointed at a Synapse
+ * database, with no error**. Null makes that unrepresentable instead of silent;
+ * no shipped handler reads the field today, and the ones that need a database
+ * (`warehouse|synapse-dedicated-sql-pool/[id]/query`) are inside the set.
+ *
+ * Resolution order otherwise mirrors what the PLATFORM itself writes and reads:
  *   `state.provisioning.secondaryIds.database` — what `warehouseProvisioner`
  *       records on a successful install (`{ backend, database: target.database }`).
  *   `state.database` / `state.databaseName` — what the editors persist.
@@ -146,8 +208,12 @@ function envPoolDatabase(): string {
  *       when an item declares nothing.
  */
 export function resolveItemSynapseDatabase(
-  item: Pick<WorkspaceItem, 'state'> | null | undefined,
-): SynapseScopedDatabase {
+  item: Pick<WorkspaceItem, 'state'> & { itemType?: string } | null | undefined,
+): SynapseScopedDatabase | null {
+  const itemType = item?.itemType;
+  if (typeof itemType === 'string' && !SYNAPSE_BACKED_ITEM_TYPES.includes(itemType as SynapseBackedItemType)) {
+    return null;
+  }
   const state = (item?.state || {}) as Record<string, unknown>;
   const prov = state.provisioning as Record<string, any> | undefined;
   if (prov && (prov.status === 'created' || prov.status === 'exists')) {
@@ -207,8 +273,18 @@ export interface SynapseItemContext {
   session: SessionPayload;
   /** The authorized route item. */
   item: WorkspaceItem;
-  /** The database resolved FROM THE ITEM. Never a request-body value. */
-  database: SynapseScopedDatabase;
+  /**
+   * The database resolved FROM THE ITEM. Never a request-body value, and
+   * **null** for an item type this module does not model — see
+   * {@link resolveItemSynapseDatabase}. Read it only on a Synapse-backed route.
+   *
+   * `semantic-model` IS in the modelled set (the Loom-native tabular layer sits
+   * over the warehouse/lakehouse per `no-fabric-dependency.md`), so this field
+   * is a SYNAPSE database for that type — it is NOT the Azure Analysis Services
+   * database `semantic-model/[id]/refresh-policy` talks to. That route does not
+   * read it.
+   */
+  database: SynapseScopedDatabase | null;
 }
 
 /**
@@ -312,7 +388,20 @@ export async function scopeSynapseDatabase(
   scopeSet?: Set<string>,
 ): Promise<ScopedSynapseDatabase> {
   const asked = typeof requested === 'string' ? requested.trim() : '';
-  if (!asked) return { ok: true, database: resolveItemSynapseDatabase(item) };
+  if (!asked) {
+    const own = resolveItemSynapseDatabase(item);
+    if (own === null) {
+      // FAIL CLOSED. Unreachable from any shipped route (only Synapse-backed
+      // handlers call this), but a non-Synapse item asking for a Synapse
+      // database has no correct answer and must not silently get the shared pool.
+      return {
+        ok: false,
+        status: 400,
+        error: `item type "${item.itemType}" is not backed by a Synapse SQL database.`,
+      };
+    }
+    return { ok: true, database: own };
+  }
   if (!DB_NAME_RE.test(asked)) {
     return { ok: false, status: 400, error: 'database is not a valid Synapse SQL database name.' };
   }
