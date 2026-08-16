@@ -38,9 +38,12 @@
  *      and `azure-resource-picker.tsx` disables on `!resources.length && …`.
  *      "No results" plus a dead control is the exact shape
  *      `auto-bind-by-default.md` forbids. This control is NEVER disabled: an
- *      empty or failed load renders a guided `EmptyState` (with an optional
- *      inline Fix-it per `ux-baseline.md` G2) ABOVE a still-usable Dropdown, so
- *      an existing value can always be inspected and cleared.
+ *      empty or failed load renders a guided inline MessageBar (with an
+ *      optional Fix-it per `ux-baseline.md` G2) ABOVE a still-usable Dropdown,
+ *      so an existing value can always be inspected and cleared. It is
+ *      deliberately NOT the `EmptyState` primitive — that is a full-pane card
+ *      (minHeight 320px, XXXL padding, dashed border) and this control renders
+ *      inline, inside a form row.
  *
  * SCOPING IS THE CALLER'S CONTRACT. This control renders whatever the loader
  * returns; it is the caller's job to pick a route that scopes to what the
