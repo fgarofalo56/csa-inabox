@@ -289,22 +289,49 @@ describe('PostgreSQL flexible server routes', () => {
     expect(listPgDatabases).toHaveBeenCalledWith('pg');
   });
 
+  // GHSA-v8r7-c2p5-mjf2 (third pass) — firewall now resolves its server from the
+  // OWNED `[id]` item's bound connection instead of from the request, so these
+  // cases must supply a route ctx and an owned, bound item to reach the handler
+  // at all. Firewall rules are a NETWORK EXPOSURE primitive: POST is an
+  // idempotent PUT, so the old body-addressed shape let any signed-in caller
+  // open any reachable PostgreSQL server to the internet. The authorization is
+  // covered in depth by
+  // `postgres-flexible-server/[id]/firewall/__tests__/firewall-scope.test.ts`;
+  // this spec stays pointed at what it was always about — validation and
+  // delegation with the right args — plus the ownership requirement that is new.
+  const pgFwBoundItem = {
+    id: 'i1', itemType: 'postgres-flexible-server', workspaceId: 'ws1',
+    state: { connection: { family: 'postgres', server: 'pg' } },
+  } as any;
+
+  it('firewall — 404s a caller who does not own the [id] item, touching NO rule', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await pgFwPOST(
+      bodyReq('http://x/', { server: 'pg', name: 'r', startIpAddress: '0.0.0.0', endIpAddress: '255.255.255.255' }),
+      ctx('i1'),
+    );
+    expect(res.status).toBe(404);
+    expect(upsertPgFw).not.toHaveBeenCalled();
+  });
+
   it('firewall GET/POST/DELETE — validate + delegate', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(pgFwBoundItem);
     (listPgFw as any).mockResolvedValue([{ name: 'r', startIpAddress: '1.1.1.1', endIpAddress: '1.1.1.1' }]);
-    const g = await pgFwGET(getReq('http://x/?server=pg'));
+    const g = await pgFwGET(getReq('http://x/?server=pg'), ctx('i1'));
     expect((await g.json()).ok).toBe(true);
 
-    const bad = await pgFwPOST(bodyReq('http://x/', { server: 'pg', name: 'r' }));
+    const bad = await pgFwPOST(bodyReq('http://x/', { server: 'pg', name: 'r' }), ctx('i1'));
     expect(bad.status).toBe(400);
 
     (upsertPgFw as any).mockResolvedValue({ name: 'r', startIpAddress: '1.1.1.1', endIpAddress: '1.1.1.2' });
-    const ok = await pgFwPOST(bodyReq('http://x/', { server: 'pg', name: 'r', startIpAddress: '1.1.1.1', endIpAddress: '1.1.1.2' }));
+    const ok = await pgFwPOST(bodyReq('http://x/', { server: 'pg', name: 'r', startIpAddress: '1.1.1.1', endIpAddress: '1.1.1.2' }), ctx('i1'));
     expect((await ok.json()).ok).toBe(true);
     expect(upsertPgFw).toHaveBeenCalledWith('pg', { name: 'r', startIpAddress: '1.1.1.1', endIpAddress: '1.1.1.2' });
 
     (deletePgFw as any).mockResolvedValue(undefined);
-    const del = await pgFwDELETE(getReq('http://x/?server=pg&rule=r'));
+    const del = await pgFwDELETE(getReq('http://x/?server=pg&rule=r'), ctx('i1'));
     expect((await del.json()).ok).toBe(true);
     expect(deletePgFw).toHaveBeenCalledWith('pg', 'r');
   });
