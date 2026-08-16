@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "5427739587297793021"
+      "templateHash": "8307192504647281126"
     }
   },
   "definitions": {
@@ -2554,7 +2554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11942575417242732808"
+              "templateHash": "1048808415173044714"
             }
           },
           "definitions": {
@@ -4133,7 +4133,7 @@
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope."
+                "description": "RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope. REPORTING ONLY: per GHSA-v8r7-c2p5-mjf2 this deliberately does NOT authorize Azure SQL / PostgreSQL actions — that boundary is LOOM_SQL_AUTHORIZED_SUBSCRIPTIONS, which defaults to the admin + DLZ subscriptions this deploy already emits."
               }
             },
             "loomIotHubResourceId": {
