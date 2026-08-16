@@ -15,9 +15,9 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1679 |
 | Public (no session) | 104 |
-| Session-only | 533 |
+| Session-only | 532 |
 | Owner-scoped | 742 |
-| Admin | 300 |
+| Admin | 301 |
 | Gated (backend config) | 495 |
 | Areas | 122 |
 
@@ -2122,7 +2122,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `setup/subscriptions/route.ts` | GET | owner-scoped |  | — |
 | `setup/tenant-topology/route.ts` | GET | session-only |  | — |
 | `setup/validate-adoption/route.ts` | POST | admin | ● | — |
-| `setup/wire-existing/route.ts` | POST | session-only |  | — |
+| `setup/wire-existing/route.ts` | POST | admin |  | — |
 | `setup/workflow-run-status/route.ts` | GET | session-only | ● | — |
 
 ## spark

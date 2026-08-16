@@ -113,8 +113,12 @@ export const BASELINE = new Set([
   'apps/fiab-console/app/api/marketplace/sharing/_lib.ts::grant-databricks-delta-sharing.sh',
   'apps/fiab-console/app/api/setup/deploy/route.ts::post-deploy-bootstrap.sh',
   'apps/fiab-console/app/api/setup/identity/route.ts::bootstrap-msal-app-reg.sh',
-  'apps/fiab-console/app/api/setup/wire-existing/route.ts::grant-navigator-rbac.sh',
-  'apps/fiab-console/app/api/setup/wire-existing/route.ts::patch-navigator-env.sh',
+  // wire-existing/route.ts::grant-navigator-rbac.sh and ::patch-navigator-env.sh
+  // were here. REMOVED (GHSA-fj7j-qq8g-hqj8): the route no longer names either
+  // script. The invocation moved behind lib/setup/wire-existing.ts, which holds
+  // them as an allow-list of basenames rather than as text telling an operator
+  // to run something, and the failure message now states the limitation instead
+  // of handing over a command. Ratchet tightened rather than re-baselined.
   'apps/fiab-console/app/apps/page.tsx::seed-catalogs.sh',
   'apps/fiab-console/lib/admin/env-checks/azure-services.ts::grant-powerplatform-sp.sh',
   'apps/fiab-console/lib/admin/health-probes.ts::grant-powerplatform-sp.sh',
