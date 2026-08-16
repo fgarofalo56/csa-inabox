@@ -355,6 +355,13 @@ const ALLOWLIST = new Set([
   'LOOM_COPILOT_FUNCTION_URL',      // derived copilot function endpoint
   'LOOM_COSMOS_VCORE_DATABASE',     // opt-in cosmos vCore (pgvector alt)
   'LOOM_COST_SUBSCRIPTIONS',        // opt-in cost-scope subscription list
+  // GHSA-v8r7-c2p5-mjf2 — opt-in NARROWING/widening of the Azure SQL /
+  // PostgreSQL authorization boundary. Not an auto-bind violation: the DEFAULT
+  // is derived from LOOM_SUBSCRIPTION_ID + LOOM_DLZ_SUBSCRIPTION_ID, both of
+  // which the deploy already emits, so the feature works with zero operator
+  // configuration. Deliberately NOT delivered as an always-empty env entry —
+  // that would be the inert shape this file's own always-empty check rejects.
+  'LOOM_SQL_AUTHORIZED_SUBSCRIPTIONS',
   'LOOM_DATABRICKS_CATALOG',        // UC catalog default (code default)
   'LOOM_DATABRICKS_CLUSTER_ID',     // derived / opt-in default cluster
   // Surfaced by the comment-blindness fix in collectEmitted() (2026-08-04): it
