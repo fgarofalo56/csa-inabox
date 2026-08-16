@@ -24,8 +24,9 @@ export const dynamic = 'force-dynamic';
  * (already deployed in other subscriptions) and wants to wire them into the
  * admin plane WITHOUT re-deploying. This endpoint:
  *
- *   1. Resolves each selected DLZ against Azure Resource Graph (proves it exists
- *      AND that the caller is entitled to see it)
+ *   1. Resolves each selected DLZ against Azure Resource Graph (proves the
+ *      resource group actually exists; see the L2 note below on what this does
+ *      and does NOT establish about the caller)
  *   2. Grants the Console UAMI navigator roles on each DLZ (via grant-navigator-rbac.sh)
  *   3. Discovers and patches navigator env vars (via patch-navigator-env.sh)
  *
@@ -54,6 +55,14 @@ export const dynamic = 'force-dynamic';
  */
 
 interface WireExistingConfig {
+  /**
+   * Sovereign boundary the wizard is operating in. ACCEPTED BUT NOT USED, and
+   * deliberately NOT required: nothing on this path branches on it. Cloud
+   * selection comes from the deployment's own configuration via `armBase()`,
+   * not from the request — which is the correct source, since a request cannot
+   * be allowed to redirect the console at a different ARM endpoint. Requiring a
+   * field the handler ignores only manufactures a way for a valid call to fail.
+   */
   boundary?: string;
   subscriptionId?: string;  // Admin plane sub
   subscriptionName?: string;
@@ -89,7 +98,6 @@ export async function POST(req: NextRequest) {
   // ─────────────────────────────────────────────────────────────────────────
   const missing: string[] = [];
   if (!body.subscriptionId) missing.push('subscriptionId (admin plane)');
-  if (!body.boundary) missing.push('boundary');
   if (!body.location) missing.push('location');
   if (!body.selectedExistingDlzs || body.selectedExistingDlzs.length === 0) {
     missing.push('selectedExistingDlzs (select at least one existing DLZ)');
@@ -153,10 +161,15 @@ export async function POST(req: NextRequest) {
   // ─────────────────────────────────────────────────────────────────────────
   // L2 — resolve each selection against real estate state
   //
-  // Resource Graph honours RBAC, so this both proves the DLZ exists and confines
-  // the caller to landing zones they are entitled to see. The resource-group
-  // name used downstream is the one AZURE returned — the request never supplies
-  // a resource coordinate of its own construction.
+  // The resource-group name used downstream is the one AZURE returned; the
+  // request never supplies a resource coordinate of its own construction. That
+  // is an EXISTENCE proof and it is the property this control rests on.
+  //
+  // It is NOT a per-caller entitlement check, and must not be read as one:
+  // `getArmTokenPreferUser` prefers the signed-in user's OBO token but FALLS
+  // BACK to the Console UAMI, so the scan honours whichever identity the token
+  // belongs to. Authorization for this route is the `admin.deploy-dlz` gate
+  // above, not the reach of this scan.
   // ─────────────────────────────────────────────────────────────────────────
   let token: string;
   try {

@@ -28,7 +28,9 @@
  *        selection against the DLZ resource groups Azure Resource Graph actually
  *        returns, and every downstream consumer uses the AZURE-RETURNED `rg`
  *        string. A resource group that does not exist cannot be named, so the
- *        request cannot introduce a coordinate of its own invention.
+ *        request cannot introduce a coordinate of its own invention. This is an
+ *        EXISTENCE proof, NOT a per-caller entitlement check — see
+ *        {@link scanDeployedDlzs} for which identity the scan actually runs as.
  *   L3 — STRICT ALLOW-LISTS. {@link isSubscriptionId}, {@link isAzureLocation},
  *        {@link isDlzDomainName} and {@link isSafeResourceGroupName} accept only
  *        the character sets Azure itself permits. Anything else is refused with
@@ -139,10 +141,15 @@ export function parseDlzRg(rg: string): { domainName: string; region: string } |
  * Resource Graph, paging through `$skipToken` so a tenant with more than one
  * page lists fully rather than silently truncating.
  *
- * Resource Graph honours RBAC: only resource groups in scopes where the
- * principal holds at least Reader come back. That is what makes this a
- * trustworthy source for L2 — the returned names are Azure's, and they are
- * already filtered to what this caller is entitled to see.
+ * Resource Graph honours the RBAC of whichever identity `token` belongs to — the
+ * signed-in user when OBO is available, otherwise the Console UAMI (see
+ * `getArmTokenPreferUser` in `lib/auth/obo.ts`, which falls back). So this is
+ * NOT a per-caller entitlement check, and must not be documented as one.
+ *
+ * What it DOES guarantee, which is the property L2 rests on, is that every name
+ * returned is one AZURE REPORTED for a resource group that actually exists. The
+ * request cannot introduce a coordinate of its own construction. That holds
+ * regardless of which of the two identities the scan ran as.
  *
  * NOTE: this mirrors the scan in `app/api/setup/existing-dlzs/route.ts`, which
  * is what populates the wizard's picker. The two are intentionally kept in step;
@@ -219,7 +226,9 @@ export function resolveSelectedDlzs(
         requested: req,
         reason:
           'No Data Landing Zone with that domain exists in that subscription, or the ' +
-          'Console identity cannot see it. Grant it Reader on the subscription and retry.',
+          'identity the discovery scan ran as could not see it. That is the signed-in ' +
+          'user when their ARM consent is available, otherwise the Console UAMI — grant ' +
+          'Reader on the subscription to whichever applies and retry.',
       };
     }
     // Belt and braces: the name came from Azure, but it is about to cross a
