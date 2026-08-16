@@ -65,9 +65,33 @@
  *    authorizeItemWorkspace lib/auth/workspace-guard.ts  → Promise<NextResponse|null>
  *    authorizeWorkspace     lib/auth/workspace-guard.ts  → Promise<NextResponse|null>
  *    requireWorkspace       lib/auth/workspace-guard.ts  → {session}|{resp}
+ *    authorizeNotebookItem  app/api/items/databricks-notebook/_lib/notebook-exec-scope.ts
+ *                                                       → {item}|{denied}
+ *    authorizeDatabricksJobItem      .../databricks-job/_lib/job-scope.ts       → {item}|{denied}
+ *    authorizeDatabricksPipelineItem .../databricks-pipeline/_lib/pipeline-scope.ts → {item}|{denied}
+ *    guardAdxItemRequest    app/api/items/_lib/adx-item-scope.ts → {ctx}|{res}
  *
  *  `requireWorkspace` is the destructuring shape (`const { session, resp } =
- *  await requireWorkspace(id)`), handled below. */
+ *  await requireWorkspace(id)`), handled below. The five item-guard wrappers are
+ *  the SAME shape one level up.
+ *
+ *  THE FOUR WRAPPERS WERE MISSING UNTIL 2026-08-16, and that was measured, not
+ *  theorised. They were listed in `check-route-guards.mjs`'s GUARD_SIGNAL_RE and
+ *  GUARD_WRAPPERS — so a route calling one was classified authorized — but NOT
+ *  here, so the "answer is DISCARDED" check never looked at them. Deleting
+ *  `if (guard.res) return guard.res;` from
+ *  `items/eventhouse/[id]/database/route.ts` (whose DELETE drops a KQL database
+ *  on the shared cluster) left every control green:
+ *      [route-guards] gates whose answer is DISCARDED: 0
+ *      [route-guards] violations: 0            CHECKER_EXIT=0
+ *  That is the exact C22 defect this module exists for, reproduced on the
+ *  newest wrappers. A wrapper is only a safe signal if BOTH files know it.
+ *
+ *  TYPE-SAFETY IS NOT A SUBSTITUTE, and the earlier claim that it was has been
+ *  corrected. Dropping the check while STILL destructuring `guard.ctx` is a
+ *  compile error (TS2339/TS18048) — but calling the guard and discarding the
+ *  result entirely, then reading `body.database`, COMPILES CLEAN. The type only
+ *  protects handlers that go on to consume the context. */
 export const RETURNED_VALUE_GATES = [
   'enforceCapability',
   'requireTenantAdmin',
@@ -76,7 +100,43 @@ export const RETURNED_VALUE_GATES = [
   'authorizeItemWorkspace',
   'authorizeWorkspace',
   'requireWorkspace',
+  'authorizeNotebookItem',
+  'authorizeDatabricksJobItem',
+  'authorizeDatabricksPipelineItem',
+  'guardAdxItemRequest',
 ];
+
+/**
+ * For the TWO-SHAPE gates — the ones that return `{success} | {denial}` rather
+ * than `NextResponse | null` — the name of the DENIAL half.
+ *
+ * WHY THIS IS SEPARATE FROM THE GENERIC CHECK, and how it was found. The generic
+ * rule is "at least one binding short-circuits", which is right for
+ * `NextResponse | null` but WRONG here, because the SUCCESS half is also a
+ * binding and referencing it satisfies the heuristic without refusing anybody.
+ * Measured 2026-08-16 on `items/eventhouse/[id]/database/route.ts` DELETE (which
+ * drops a KQL database on the shared cluster): replacing
+ *     if (guard.res) return guard.res;
+ *     const { item } = guard.ctx;
+ * with
+ *     const { item } = guard.ctx ?? { item: {} as never };
+ * left `DISCARDED: 0` and `violations: 0`, because `guard.ctx ??` matches the
+ * "tested in a logical position" shape in {@link bindingIsConsumed} — a fallback
+ * READ of the success half looks identical to a decision. The route was fully
+ * unauthorized and every control was green.
+ *
+ * So for these gates the DENIAL binding specifically must be returned/thrown:
+ * `guard.res`, `{ denied }`, `{ resp }`. Adding this flagged nothing that was
+ * already correct — every existing consumer already writes
+ * `if (denied) return denied;` — so it is a tightening with no migration.
+ */
+const DENIAL_BINDINGS = {
+  requireWorkspace: ['resp'],
+  authorizeNotebookItem: ['denied'],
+  authorizeDatabricksJobItem: ['denied'],
+  authorizeDatabricksPipelineItem: ['denied'],
+  guardAdxItemRequest: ['res'],
+};
 
 /**
  * Blank out comments, string/template literals AND REGEX LITERALS, PRESERVING
@@ -400,6 +460,19 @@ export function findDiscardedGateResults(src, gates = RETURNED_VALUE_GATES) {
         /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:[^;{}]*?\?\s*)?(?:await\s+)?$/,
       );
       if (simple) {
+        const denials = DENIAL_BINDINGS[gate];
+        if (denials) {
+          // TWO-SHAPE GATE: the DENIAL half specifically must short-circuit.
+          if (denials.some((d) => bindingIsConsumed(code, `${simple[1]}.${d}`, callStart))) continue;
+          found.push({
+            gate,
+            line,
+            reason:
+              `result bound to \`${simple[1]}\` but \`${simple[1]}.${denials[0]}\` is never returned/thrown — ` +
+              'the denial half of the gate\'s answer is discarded',
+          });
+          continue;
+        }
         if (bindingIsConsumed(code, simple[1], callStart)) continue;
         found.push({
           gate,
@@ -416,6 +489,21 @@ export function findDiscardedGateResults(src, gates = RETURNED_VALUE_GATES) {
           .filter(Boolean);
         // At least ONE destructured binding must short-circuit (the `resp` half
         // of `requireWorkspace`'s `{ session, resp }`).
+        const denials = DENIAL_BINDINGS[gate];
+        if (denials) {
+          // TWO-SHAPE GATE: the SUCCESS half is not a substitute. `const { item }
+          // = await authorizeNotebookItem(…)` binds only the success half, so
+          // there is nothing left that can short-circuit — the denial is dropped.
+          if (denials.some((d) => names.includes(d) && bindingIsConsumed(code, d, callStart))) continue;
+          found.push({
+            gate,
+            line,
+            reason:
+              `destructured to {${names.join(', ')}} but the denial binding ` +
+              `\`${denials[0]}\` is not bound-and-returned — the gate's refusal is discarded`,
+          });
+          continue;
+        }
         if (names.some((nm) => bindingIsConsumed(code, nm, callStart))) continue;
         found.push({
           gate,

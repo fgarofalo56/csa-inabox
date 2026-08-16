@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1679 |
 | Public (no session) | 104 |
-| Session-only | 535 |
-| Owner-scoped | 740 |
+| Session-only | 533 |
+| Owner-scoped | 742 |
 | Admin | 300 |
 | Gated (backend config) | 495 |
 | Areas | 122 |
@@ -1339,7 +1339,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/eventhouse/[id]/continuous-export/route.ts` | GET POST | session-only |  | ADLS, ADX |
 | `items/eventhouse/[id]/database/route.ts` | POST DELETE | owner-scoped |  | ADX, ADX ARM |
 | `items/eventhouse/[id]/ingest/preview/route.ts` | POST | session-only |  | — |
-| `items/eventhouse/[id]/ingest/route.ts` | POST | session-only |  | ADX |
+| `items/eventhouse/[id]/ingest/route.ts` | POST | owner-scoped |  | ADX |
 | `items/eventhouse/[id]/journal/route.ts` | GET | session-only |  | ADX |
 | `items/eventhouse/[id]/overview/route.ts` | GET | session-only |  | ADX, ADX ARM, Azure Monitor |
 | `items/eventhouse/[id]/policies/route.ts` | POST PATCH | session-only |  | ADX, ADX ARM |
@@ -1373,7 +1373,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/geo-pipeline/route.ts` | GET POST | owner-scoped |  | — |
 | `items/geo-query/route.ts` | GET POST | owner-scoped |  | — |
 | `items/gql-graph/[id]/assist/route.ts` | — | public |  | — |
-| `items/gql-graph/[id]/query/route.ts` | POST | session-only | ● | ADX |
+| `items/gql-graph/[id]/query/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/gql-graph/route.ts` | GET POST | owner-scoped |  | — |
 | `items/graph-model/[id]/materialize/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/graph-model/[id]/query/route.ts` | POST | owner-scoped | ● | ADX |

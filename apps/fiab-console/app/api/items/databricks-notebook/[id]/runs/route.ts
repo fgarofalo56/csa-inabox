@@ -29,9 +29,22 @@
  * FAIL CLOSED. A run whose notebook path cannot be determined is OUT of scope —
  * an unverifiable run is not an authorized one — and a run touching ANY path
  * outside the item's scope is refused even if it also touches an in-scope one.
+ *
+ * SCOPE NARROWING, disclosed rather than implied: `authorizeNotebookItem` is
+ * WRITE-scoped and makes `allowReadRoles` inexpressible on purpose (see
+ * `_lib/notebook-exec-scope.ts` — every other consumer EXECUTES). This GET is
+ * read-only, so that is stricter than it needs to be, and a shared read-only
+ * Viewer who could previously see run history now gets a 404. It is kept
+ * deliberately: `[id]/schedule`'s read-only GET in this same family is held to
+ * the same bar for the same reason, and widening the wrapper to admit read roles
+ * would put an `allowReadRoles` parameter back within reach of the four handlers
+ * that execute code. Loosening it belongs in a change that only touches this
+ * surface, not in an advisory fix.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { listJobRuns, getJobRun, getRunOutput, type JobRun } from '@/lib/azure/databricks-client';
+import {
+  listJobRunsPage, getJobRun, getRunOutput, JOB_RUNS_PAGE_MAX, type JobRun,
+} from '@/lib/azure/databricks-client';
 import { scopeDbxNotebookPath } from '../../_lib/notebook-path-scope';
 import { authorizeNotebookItem } from '../../_lib/notebook-exec-scope';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -39,8 +52,19 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** How many runs to pull from the shared workspace before scoping down. */
-const WORKSPACE_RUN_WINDOW = 200;
+/**
+ * How many PAGES of the shared workspace's history to walk before giving up.
+ *
+ * Jobs 2.1 documents `runs/list` limit as "greater than 0 and less than 25", so
+ * a single `limit=200` call is a contract violation: the workspace either 400s
+ * (the route dies for everyone) or clamps to 25 — and on a busy shared
+ * workspace those 25 can all be other tenants' runs, which this route then
+ * filters away, handing the owner an EMPTY history. Paging keeps every request
+ * inside the documented cap while still reaching back far enough to find this
+ * notebook's runs. Bounded so a workspace with a very long foreign history
+ * cannot turn one editor open into an unbounded fan-out.
+ */
+const MAX_PAGES = 8;
 /** How many in-scope runs to return (the shape the editor already renders). */
 const RETURNED_RUNS = 25;
 
@@ -91,10 +115,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       return NextResponse.json({ ok: true, run, output });
     }
     // LAYER 2 — the listing is filtered to this item's own scope, so it can no
-    // longer enumerate the shared workspace's run history.
-    const all = await listJobRuns(undefined, WORKSPACE_RUN_WINDOW, { expandTasks: true });
-    const runs = all.filter((r) => runInScope(r, item, id)).slice(0, RETURNED_RUNS);
-    return NextResponse.json({ ok: true, runs });
+    // longer enumerate the shared workspace's run history. Paged within the
+    // documented per-request cap; see MAX_PAGES.
+    const runs: JobRun[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < MAX_PAGES && runs.length < RETURNED_RUNS; page++) {
+      const { runs: batch, nextPageToken } = await listJobRunsPage({
+        limit: JOB_RUNS_PAGE_MAX,
+        expandTasks: true,
+        pageToken,
+      });
+      for (const r of batch) {
+        if (runInScope(r, item, id)) runs.push(r);
+      }
+      if (!nextPageToken || batch.length === 0) break;
+      pageToken = nextPageToken;
+    }
+    return NextResponse.json({ ok: true, runs: runs.slice(0, RETURNED_RUNS) });
   } catch (e: any) {
     const status = e?.status === 403 ? 403 : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });

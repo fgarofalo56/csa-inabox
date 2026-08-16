@@ -18,11 +18,32 @@
  * Fabric Graph REST remains available ONLY as an explicit opt-in
  * (backend:'fabric' + LOOM_GQL_GRAPH_BACKEND=fabric + a bound workspace) per
  * .claude/rules/no-fabric-dependency.md — it is never the default path.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. This route is the SIBLING of
+ * `graph-model/[id]/query` and carried the identical defect, which the first
+ * pass at that advisory missed: `_ctx` accepted and ignored (so `[id]` was
+ * never read), `getSession()` as the only check, `const db =
+ * String(body?.database || defaultDatabase())` straight into `executeQuery`,
+ * and the caller's `query` CONCATENATED RAW after the generated prelude.
+ *
+ * No bypass was needed. Point `database` at a graph database you own so the
+ * `Node_*`/`Edge_*` discovery below is satisfied, then send
+ * `database('victim').['Secrets'] | take 100` as `query` — it lands verbatim in
+ * the executed text and runs as the Console's UAMI, which reaches every
+ * database on the shared ADX cluster. Fixing `graph-model/[id]/query` alone
+ * would have RELOCATED the read primitive to this URL rather than removing it.
+ *
+ * Both bindings are applied here, exactly as on the sibling: the caller is
+ * authorized against the gql-graph item and the database is resolved FROM THAT
+ * ITEM (`_lib/adx-item-scope.ts`), and the assembled KQL is refused if it
+ * carries a `database(…)` / `cluster(…)` qualifier.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
-import { executeQuery, listTables, kustoConfigGate, defaultDatabase, KustoError } from '@/lib/azure/kusto-client';
+import { executeQuery, listTables, kustoConfigGate, KustoError } from '@/lib/azure/kusto-client';
+import {
+  guardAdxItemRequest, crossDatabaseReference, crossDatabaseRefused,
+} from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,9 +67,20 @@ function buildGraphPrelude(nodeTables: string[], edgeTables: string[]): string {
   ].join('\n');
 }
 
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // LAYER 1 + LAYER 2 — authorize the caller against the gql-graph item and take
+  // the database FROM THAT ITEM. Read-only surface, so shared read roles are
+  // admitted, matching the sibling graph-model query pane.
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'gql-graph',
+    notFound: 'graph not found',
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
+  const { session: s, database: db } = guard.ctx;
+
   const limited = await enforceRateLimit(s, 'query');
   if (limited) return limited;
 
@@ -85,7 +117,6 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
     }, { status: 503 });
   }
 
-  const db = String(body?.database || defaultDatabase());
   try {
     const tables = await listTables(db);
     const nodeTables = tables.map((t) => t.name).filter((n) => n.startsWith('Node_'));
@@ -105,6 +136,14 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
       ? '#crp query_language=opencypher\n#crp query_graph_reference=G\n'
       : '';
     const full = `${directives}${prelude}\n${query}`;
+
+    // The database is pinned above; this stops the caller's `query` — which is
+    // concatenated RAW after the prelude — from stepping out of it. Checked on
+    // the ASSEMBLED text, so a qualifier cannot be smuggled in through either
+    // half. `buildGraphPrelude` only ever names local `Node_*`/`Edge_*` tables,
+    // so a legitimate graph query never trips this.
+    const qualifier = crossDatabaseReference(full);
+    if (qualifier) return crossDatabaseRefused(qualifier, db);
 
     const result = await executeQuery(db, full);
     return NextResponse.json({

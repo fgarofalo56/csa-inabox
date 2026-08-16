@@ -32,16 +32,34 @@
  *        → "purge guards WRITE-scoped" fails on the extra key. tsc-clean.
  *   4. `[id]/purge/route.ts` GET — drop `if (guard.res) return guard.res;`
  *        → "a denied caller never reaches ADX" fails — AND `tsc` fails with
- *          TS18048 `'guard.ctx' is possibly 'undefined'`. The guard's
- *          two-shape return type (`{ ctx } | { res }`) makes discarding the
- *          answer a COMPILE error, not merely an untested one; that is the
- *          shape `route-toolkit.ts` argues for over a droppable `if (gate)`.
+ *          TS18048 `'guard.ctx' is possibly 'undefined'`.
+ *
+ *          READ THAT NARROWLY. The type only bites because the handler goes on
+ *          to DESTRUCTURE `guard.ctx`. Calling the guard and discarding the
+ *          result ENTIRELY, then using `body.database`, COMPILES CLEAN (exit 0)
+ *          — measured. So the two-shape return is not a substitute for the
+ *          consumption check; `guardAdxItemRequest` is in
+ *          `scripts/ci/_gate-consumption.mjs::RETURNED_VALUE_GATES` for exactly
+ *          the case the type cannot see.
  *   5. `[id]/database/route.ts` — drop the `rebind` on create
  *        → "a database created through this item becomes purgeable" fails.
  *          tsc-clean (exit 0).
  *   6. `_lib/adx-item-scope.ts` `guardAdxItemRequest` — return a ctx instead of
  *      the 404 when the item is missing
  *        → "an id naming no eventhouse is refused" fails.
+ *   7. `[id]/database/route.ts` DELETE — drop the `scopeAdxDatabase` binding
+ *        → "refuses DROPPING a database outside the workspace scope" fails.
+ *          tsc-clean (exit 0). This is the most destructive verb in the whole
+ *          advisory surface and Layer 1 alone did not bind it.
+ *   8. `[id]/database/route.ts` POST — bind unconditionally instead of on
+ *      `result.created`
+ *        → "an ARM 200 (already existed) is NOT bound" fails.
+ *   9. `[id]/database/route.ts` POST — drop the pre-flight `listDatabases`
+ *      existence refusal
+ *        → "refuses creating over an existing foreign database" fails.
+ *  10. `[id]/ingest/route.ts` — drop the `scopeAdxDatabase` in any of the three
+ *      handlers → the corresponding "ingest refuses a foreign database" test
+ *          fails and the ADX/ARM call is reached.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -99,15 +117,18 @@ const kusto = vi.hoisted(() => {
     tablesByDb,
     savedState: [] as any[],
     listTables: vi.fn(async (db: string) => (tablesByDb[db] || []).map((name) => ({ name }))),
+    listDatabases: vi.fn(async () => Object.keys(tablesByDb).map((name) => ({ name }))),
     getTableSchema: vi.fn(async () => ({ OrderedColumns: [{ Name: 'id', CslType: 'string' }] })),
     executeQuery: vi.fn(async () => ({ columns: ['Count'], rows: [[0]] })),
+    executeMgmtCommand: vi.fn(async (_db: string, _cmd: string) => ({ columns: ['x'], rows: [[1]], rowCount: 1, executionMs: 3 })),
+    ingestInline: vi.fn(async (_db: string, _table: string, _rows: unknown[][]) => ({ executionMs: 7 })),
     buildPurgeWhere: vi.fn(() => "where id == 'x'"),
     executePurgeVerify: vi.fn(async () => ({
       numRecordsToPurge: 4, estimatedPurgeExecutionTime: '00:01:00', verificationToken: 'vt',
     })),
     executePurgeCommit: vi.fn(async () => ({ operationId: 'op-1', state: 'Scheduled', scheduledTime: 'now' })),
     PURGE_ALLOWED_OPS: ['==', '!=', 'contains'] as const,
-    createDatabase: vi.fn(async () => ({ provisioningState: 'Succeeded' })),
+    createDatabase: vi.fn(async (_name: string) => ({ provisioningState: 'Succeeded', id: '/x', created: true })),
     saveItemState: vi.fn(async (item: any, patch: any) => {
       kusto.savedState.push(patch);
       return { ...item, state: { ...item.state, ...patch } };
@@ -126,13 +147,36 @@ vi.mock('@/lib/azure/kusto-arm-client', () => arm);
 
 import { GET as purgeGET, POST as purgePOST } from '../purge/route';
 import { POST as dbPOST, DELETE as dbDELETE } from '../database/route';
+import { POST as ingestPOST } from '../ingest/route';
 
 const ctx = { params: Promise.resolve({ id: 'eh-1' }) } as any;
 
 function req(body: any = {}, query: Record<string, string> = {}) {
   const url = new URL('http://x/');
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-  return { url: url.toString(), nextUrl: url, json: async () => body } as any;
+  return {
+    url: url.toString(),
+    nextUrl: url,
+    json: async () => body,
+    headers: { get: () => 'application/json' },
+  } as any;
+}
+
+/** A multipart ingest request carrying a caller-chosen database + table. */
+function formReq(fields: Record<string, string>, file: { name: string; size: number; text: string }) {
+  const map = new Map<string, unknown>(Object.entries(fields));
+  map.set('file', {
+    name: file.name,
+    size: file.size,
+    arrayBuffer: async () => new TextEncoder().encode(file.text).buffer,
+  });
+  const url = new URL('http://x/');
+  return {
+    url: url.toString(),
+    nextUrl: url,
+    headers: { get: () => 'multipart/form-data; boundary=x' },
+    formData: async () => ({ get: (k: string) => map.get(k) ?? null }),
+  } as any;
 }
 
 const PREDICATES = [{ column: 'id', op: '==', value: 'x' }];
@@ -152,6 +196,10 @@ beforeEach(() => {
   kusto.listTables.mockImplementation(
     async (db: string) => (kusto.tablesByDb[db] || []).map((name) => ({ name })),
   );
+  kusto.listDatabases.mockImplementation(
+    async () => Object.keys(kusto.tablesByDb).map((name) => ({ name })),
+  );
+  kusto.createDatabase.mockResolvedValue({ provisioningState: 'Succeeded', id: '/x', created: true } as any);
   cosmos.byId = [ITEM];
   cosmos.byWorkspace = [ITEM];
 });
@@ -340,5 +388,138 @@ describe('auto-bind on create/delete', () => {
     const res = await dbPOST(req({ name: 'freshdb' }), ctx);
     expect(res.status).toBe(429);
     expect(kusto.savedState.length).toBe(0);
+  });
+});
+
+// ── The auto-bind must not become a SCOPE-INJECTION primitive ────────────────
+
+describe('create cannot claim a database this workspace does not own', () => {
+  /**
+   * `createDatabase` is an ARM PUT — Create *Or Update* — so naming an existing
+   * database SUCCEEDS and rewrites its retention rather than conflicting. If the
+   * created name were bound unconditionally, a caller could POST the victim's
+   * database name, land it in their own item's `state.databases`, and thereby
+   * widen `workspaceAdxScope` for that item AND every ADX-backed sibling —
+   * re-admitting the `.purge` and cross-database `.set-or-append` this advisory
+   * closes. The whole chain is asserted here, end to end.
+   */
+  it('refuses creating over an existing foreign database — and never calls ARM', async () => {
+    const res = await dbPOST(req({ name: VICTIM_DB }), ctx);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/already exists .* not bound to this workspace/i);
+    // The retention/hot-cache overwrite must not have happened either.
+    expect(kusto.createDatabase).not.toHaveBeenCalled();
+    expect(kusto.savedState.length).toBe(0);
+  });
+
+  it('an ARM 200 (already existed) is NOT bound — the race backstop', async () => {
+    // The pre-flight list does not yet know about it, but ARM reports UPDATE.
+    kusto.listDatabases.mockResolvedValue([{ name: OWN_DB }] as any);
+    kusto.createDatabase.mockResolvedValue(
+      { provisioningState: 'Succeeded', id: '/x', created: false } as any,
+    );
+    const res = await dbPOST(req({ name: VICTIM_DB }), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).created).toBe(false);
+    expect(kusto.savedState.length).toBe(0);
+  });
+
+  it('the full injection chain is dead: create-then-purge a foreign database', async () => {
+    await dbPOST(req({ name: VICTIM_DB }), ctx); // refused above
+    // The item's state is unchanged, so purge still refuses the same name.
+    const res = await purgePOST(
+      req({ database: VICTIM_DB, table: 'Customers', step: 'verify', predicates: PREDICATES }),
+      ctx,
+    );
+    expect(res.status).toBe(403);
+    expect(kusto.executePurgeVerify).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED when the cluster database list cannot be read', async () => {
+    kusto.listDatabases.mockRejectedValue(new kusto.KustoError('Forbidden', 403));
+    const res = await dbPOST(req({ name: 'freshdb' }), ctx);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/could not verify/i);
+    expect(kusto.createDatabase).not.toHaveBeenCalled();
+  });
+
+  it('re-creating a database this item ALREADY owns is still allowed', async () => {
+    const res = await dbPOST(req({ name: CREATED_DB }), ctx);
+    expect(res.status).toBe(200);
+    // In scope, so no existence pre-flight was needed at all.
+    expect(kusto.listDatabases).not.toHaveBeenCalled();
+    expect(kusto.createDatabase).toHaveBeenCalled();
+  });
+});
+
+// ── DELETE is the most destructive verb in this surface ─────────────────────
+
+describe('DELETE binds the database, not just the caller', () => {
+  it('refuses DROPPING a database outside the workspace scope', async () => {
+    const res = await dbDELETE(req({}, { name: VICTIM_DB }), ctx);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/not bound to any item in this workspace/i);
+    expect(arm.deleteKustoDatabase).not.toHaveBeenCalled();
+  });
+
+  it('still drops a database this workspace owns', async () => {
+    const res = await dbDELETE(req({}, { name: OWN_DB }), ctx);
+    expect(res.status).toBe(200);
+    expect(arm.deleteKustoDatabase).toHaveBeenCalledWith(OWN_DB);
+  });
+});
+
+// ── The WRITE half: ingest ──────────────────────────────────────────────────
+
+describe('ingest binds its write target', () => {
+  const CSV = { name: 'rows.csv', size: 40, text: 'id,name\n1,a\n2,b' };
+
+  it('a denied caller never reaches ADX', async () => {
+    const { NextResponse } = await import('next/server');
+    guard.authorizeItemWorkspace.mockResolvedValue(
+      NextResponse.json({ ok: false, error: 'eventhouse not found' }, { status: 404 }) as any,
+    );
+    expect((await ingestPOST(formReq({ database: OWN_DB, table: 'Events' }, CSV), ctx)).status).toBe(404);
+    expect(kusto.ingestInline).not.toHaveBeenCalled();
+  });
+
+  it('ingest guards WRITE-scoped', async () => {
+    await ingestPOST(formReq({ database: OWN_DB, table: 'Events' }, CSV), ctx);
+    expect(guard.authorizeItemWorkspace).toHaveBeenCalledWith(SESSION, EXPECTED_WRITE_GUARD);
+  });
+
+  it('refuses a FILE ingest into a foreign database', async () => {
+    const res = await ingestPOST(formReq({ database: VICTIM_DB, table: 'Customers' }, CSV), ctx);
+    expect(res.status).toBe(403);
+    expect(kusto.ingestInline).not.toHaveBeenCalled();
+  });
+
+  it('refuses a ONELAKE ingest into a foreign database — no .ingest is issued', async () => {
+    const res = await ingestPOST(
+      req({ kind: 'onelake', database: VICTIM_DB, table: 'Customers', oneLakePath: 'https://evil.example/x.csv' }),
+      ctx,
+    );
+    expect(res.status).toBe(403);
+    expect(kusto.executeMgmtCommand).not.toHaveBeenCalled();
+  });
+
+  it('refuses an EVENTHUB data connection on a foreign database — no ARM PUT', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const res = await ingestPOST(
+      req({ kind: 'eventhub', database: VICTIM_DB, table: 'Customers', eventHubName: 'eh' }),
+      ctx,
+    );
+    expect(res.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('an authorized owner can still ingest into their own database', async () => {
+    const res = await ingestPOST(formReq({ database: OWN_DB, table: 'Events' }, CSV), ctx);
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.rows).toBe(2);
+    expect(kusto.ingestInline).toHaveBeenCalledWith(OWN_DB, 'Events', [['1', 'a'], ['2', 'b']]);
   });
 });

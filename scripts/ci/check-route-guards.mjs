@@ -917,6 +917,16 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/eventhouse/[id]/database/route.ts',
   'apps/fiab-console/app/api/items/lakehouse/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/databricks-notebook/[id]/runs/route.ts',
+  // Second pass on the same advisory, after review found the fix had RELOCATED
+  // the primitive rather than removed it. `gql-graph/[id]/query` is the sibling
+  // of `graph-model/[id]/query` and carried the identical shape — `_ctx` taken
+  // and ignored, `body.database` into `executeQuery`, caller KQL concatenated
+  // raw. `eventhouse/[id]/ingest` is the WRITE half: `handleFile(_id, req)`
+  // discarded the item id and took `database` from the form, and the JSON kinds
+  // reached `.ingest into table (h'<caller url>')` and an ARM dataConnections
+  // PUT on any database. Both now run the same item guard.
+  'apps/fiab-console/app/api/items/gql-graph/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/eventhouse/[id]/ingest/route.ts',
   // non-items routes fixed in the same sweep
   'apps/fiab-console/app/api/aml/environments/route.ts',
   'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',
@@ -1613,16 +1623,25 @@ const GUARD_WRAPPERS = [
     // GHSA-v2g8-gp3r-rg4r — the ADX item-route guard. Same hazard, same bar: a
     // route delegating to it is authorized only while it still resolves a
     // session AND runs the canonical ladder AND resolves the database from the
-    // item. `resolveItemDatabase` is asserted too, because a version of this
-    // wrapper that authorized the caller but handed back a caller-supplied
-    // database would still satisfy the first two and would re-open the exact
-    // hole the advisory names.
+    // item.
+    //
+    // THE LAST REGEX IS NOT A CALL CHECK, AND THAT IS THE POINT. `mustCall` is
+    // a PRESENCE test, so `resolveItemDatabase\s*\(` alone is satisfied by this,
+    // which reintroduces the whole advisory:
+    //     const bound = resolveItemDatabase(item);
+    //     const requested = typeof (opts as any).database === 'string' ? … : '';
+    //     return { ctx: { session, item, database: requested || bound } };
+    // Every caller then gets a caller-supplied database while the checker stays
+    // green. Pinning the RETURN EXPRESSION — `database: resolveItemDatabase(item)`
+    // and nothing else — is what makes the assertion about behaviour rather than
+    // vocabulary. A future refactor that legitimately renames the binding must
+    // update this line, which is the intended cost.
     name: 'guardAdxItemRequest',
     file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'adx-item-scope.ts'),
     mustCall: [
       'getSession\\s*\\(',
       'authorizeItemWorkspace\\s*\\(',
-      'resolveItemDatabase\\s*\\(',
+      'database:\\s*resolveItemDatabase\\s*\\(\\s*item\\s*\\)',
     ],
   },
   // C22 (#3088) — the route-toolkit wrappers are guard signals too, and they

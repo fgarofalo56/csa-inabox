@@ -53,13 +53,20 @@
  * `_lib/notebook-path-scope.ts` and `_lib/notebook-exec-scope.ts` state for the
  * Databricks family.
  *
- * KNOWN RESIDUAL, recorded rather than implied fixed: `resolveItemDatabase`
+ * KNOWN RESIDUAL, recorded rather than implied fixed. `resolveItemDatabase`
  * falls back to `defaultDatabase()` (LOOM_KUSTO_DEFAULT_DB) for an item that
- * declares no database, so the shared default database is inside every
- * workspace's scope. That is the pre-existing default-path behaviour of every
- * ADX route in the console (including `guardAdxRequest` itself) and is NOT
- * changed here; separating per-tenant data out of the shared default database
- * is a different piece of work.
+ * declares no database of its own. On the RESOLUTION path that fallback is the
+ * unchanged default-path behaviour of every ADX route in the console, including
+ * `guardAdxRequest` itself — it is unreachable whenever the item declares
+ * anything.
+ *
+ * On the ADMISSION path ({@link scopeAdxDatabase}) it is stronger than that and
+ * should be read as such: a workspace whose eventhouse declares no database has
+ * the shared default database inside its scope, so it can name
+ * LOOM_KUSTO_DEFAULT_DB and purge rows from it. That is a NARROWING of the
+ * shipped behaviour (which admitted every database on the cluster), not a
+ * regression — but it is not zero, and separating per-tenant data out of the
+ * shared default database is a different piece of work.
  */
 import { NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
@@ -290,6 +297,33 @@ export async function scopeAdxDatabase(
 }
 
 /**
+ * Blank out KQL `//` line comments that are NOT inside a string literal,
+ * preserving length and newlines.
+ *
+ * WHY. The engine strips comments before it parses, so `database // c\n('x').T`
+ * is a live cross-database reference that a naive `database\s*\(` never sees —
+ * `\s*` does not span a comment. Measured against the first version of
+ * {@link crossDatabaseReference}: that input was ALLOWED.
+ */
+function blankKqlLineComments(kql: string): string {
+  const out = kql.split('');
+  let quote: string | null = null;
+  for (let i = 0; i < kql.length; i++) {
+    const c = kql[i];
+    if (quote) {
+      if (c === '\\') { i++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '/' && kql[i + 1] === '/') {
+      while (i < kql.length && kql[i] !== '\n') { out[i] = ' '; i++; }
+    }
+  }
+  return out.join('');
+}
+
+/**
  * Refuse KQL that reaches OUT of the database it is executed against.
  *
  * Pinning the `database` argument of `executeQuery` is NOT sufficient on its
@@ -298,12 +332,26 @@ export async function scopeAdxDatabase(
  * for the Console UAMI on the shared cluster, is all of them. Any route that
  * runs caller-authored KQL must call this.
  *
+ * SCANNED TWICE, and the union is refused. The comment-stripped copy catches
+ * `database // x\n('victim')`; the RAW copy catches the opposite failure — if
+ * the stripper ever mis-detects a string and blanks real code, the raw scan
+ * still sees the qualifier. Both directions fail closed, so a bug in the
+ * stripper can only produce a false REFUSAL, never a false pass.
+ *
  * Deliberately a REFUSAL, not a rewrite: silently stripping a qualifier would
  * change what the user asked for and hand back results for a different table.
+ *
+ * DEFENCE IN DEPTH, not the primary control. The primary control is that the
+ * database is resolved from the item; this closes the raw-KQL escape hatch on
+ * top of it.
  */
 export function crossDatabaseReference(kql: string): string | null {
-  const m = /\b(?:database|cluster)\s*\(/i.exec(kql);
-  return m ? m[0].replace(/\s*\($/, '') : null;
+  const re = /\b(?:database|cluster)\s*\(/i;
+  for (const text of [kql, blankKqlLineComments(kql)]) {
+    const m = re.exec(text);
+    if (m) return m[0].replace(/\s*\($/, '').replace(/\s+/g, '');
+  }
+  return null;
 }
 
 /** The 403 a route returns when caller-authored KQL reaches another database. */

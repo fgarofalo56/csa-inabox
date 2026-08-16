@@ -27,10 +27,16 @@
  *   1. `[id]/runs/route.ts` — drop `if (denied) return denied;`
  *        → "a denied caller never reaches Databricks" and "an id naming no
  *          notebook is refused" fail — AND `tsc` fails with TS2345
- *          (`WorkspaceItem | undefined` is not assignable), because
- *          `authorizeNotebookItem`'s two-shape return makes discarding the
- *          answer a COMPILE error rather than merely an untested one.
- *   2. `[id]/runs/route.ts` — return `all` unfiltered from the list branch
+ *          (`WorkspaceItem | undefined` is not assignable), because the handler
+ *          goes on to pass `item` to `runInScope`.
+ *
+ *          READ THAT NARROWLY. The type bites only because the CONTEXT is
+ *          consumed afterwards. A handler that called the guard and discarded
+ *          the result entirely would compile clean, which is why
+ *          `authorizeNotebookItem` is now in
+ *          `scripts/ci/_gate-consumption.mjs::RETURNED_VALUE_GATES` rather than
+ *          being left to the type system.
+ *   2. `[id]/runs/route.ts` — push every run instead of only in-scope ones
  *        → "lists only this notebook's runs" and "a run with no notebook path
  *          is OUT of scope" fail. tsc-clean (exit 0).
  *   3. `[id]/runs/route.ts` — discard the `runInScope` check on the runId branch
@@ -96,9 +102,10 @@ function nbRun(run_id: number, ...paths: string[]) {
 }
 
 const dbx = vi.hoisted(() => ({
-  listJobRuns: vi.fn(async () => [] as any[]),
+  listJobRunsPage: vi.fn(async (_opts?: any) => ({ runs: [] as any[], nextPageToken: undefined as string | undefined })),
   getJobRun: vi.fn(async () => ({ run_id: 1, tasks: [] } as any)),
   getRunOutput: vi.fn(async () => ({ notebook_output: { result: 'secret rows' } })),
+  JOB_RUNS_PAGE_MAX: 25,
 }));
 vi.mock('@/lib/azure/databricks-client', () => dbx);
 
@@ -122,12 +129,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   guard.authorizeItemWorkspace.mockResolvedValue(null as any);
   cosmos.fetchAll.mockResolvedValue({ resources: [ITEM as any] });
-  dbx.listJobRuns.mockResolvedValue([
-    nbRun(1, OWN_PATH),
-    nbRun(2, FOREIGN_PATH),
-    nbRun(3, SIBLING_PATH),
-    { run_id: 4, start_time: 4 }, // a run declaring no notebook at all
-  ] as any);
+  dbx.listJobRunsPage.mockResolvedValue({
+    runs: [
+      nbRun(1, OWN_PATH),
+      nbRun(2, FOREIGN_PATH),
+      nbRun(3, SIBLING_PATH),
+      { run_id: 4, start_time: 4 }, // a run declaring no notebook at all
+    ],
+    nextPageToken: undefined,
+  } as any);
 });
 
 // ── LAYER 1 — the caller is authorized against the item ──────────────────────
@@ -140,7 +150,7 @@ describe('layer 1 — caller authorization', () => {
     );
     expect((await GET(req(), ctx)).status).toBe(404);
     expect((await GET(req({ runId: '2' }), ctx)).status).toBe(404);
-    expect(dbx.listJobRuns).not.toHaveBeenCalled();
+    expect(dbx.listJobRunsPage).not.toHaveBeenCalled();
     expect(dbx.getJobRun).not.toHaveBeenCalled();
     expect(dbx.getRunOutput).not.toHaveBeenCalled();
   });
@@ -153,7 +163,7 @@ describe('layer 1 — caller authorization', () => {
   it('an id naming no notebook is refused, not fallen through to Databricks', async () => {
     cosmos.fetchAll.mockResolvedValue({ resources: [] });
     expect((await GET(req(), ctx)).status).toBe(404);
-    expect(dbx.listJobRuns).not.toHaveBeenCalled();
+    expect(dbx.listJobRunsPage).not.toHaveBeenCalled();
   });
 });
 
@@ -169,11 +179,42 @@ describe('layer 2 — run scoping', () => {
 
   it('asks Databricks to expand tasks — without them nothing is attributable', async () => {
     await GET(req(), ctx);
-    expect(dbx.listJobRuns).toHaveBeenCalledWith(undefined, 200, { expandTasks: true });
+    expect(dbx.listJobRunsPage).toHaveBeenCalledWith(
+      expect.objectContaining({ expandTasks: true, limit: 25 }),
+    );
+  });
+
+  it('stays inside the documented per-request cap and PAGES instead', async () => {
+    // A busy shared workspace: page 1 is entirely foreign, this notebook's runs
+    // are on page 2. Asking for limit=200 in one call (the first version of this
+    // fix) would have been a contract violation; clamped to 25 without paging it
+    // would have handed the owner an EMPTY history.
+    dbx.listJobRunsPage
+      .mockResolvedValueOnce({ runs: [nbRun(9, FOREIGN_PATH)], nextPageToken: 'p2' } as any)
+      .mockResolvedValueOnce({ runs: [nbRun(1, OWN_PATH)], nextPageToken: undefined } as any);
+    const j = await (await GET(req(), ctx)).json();
+    expect(j.runs.map((r: any) => r.run_id)).toEqual([1]);
+    for (const call of dbx.listJobRunsPage.mock.calls) {
+      expect((call[0] as any).limit).toBeLessThanOrEqual(25);
+    }
+    expect((dbx.listJobRunsPage.mock.calls[1][0] as any).pageToken).toBe('p2');
+  });
+
+  it('stops paging when the cursor runs out — no unbounded fan-out', async () => {
+    dbx.listJobRunsPage.mockResolvedValue({ runs: [nbRun(9, FOREIGN_PATH)], nextPageToken: undefined } as any);
+    const j = await (await GET(req(), ctx)).json();
+    expect(j.runs).toEqual([]);
+    expect(dbx.listJobRunsPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds the page walk even when the cursor never ends', async () => {
+    dbx.listJobRunsPage.mockResolvedValue({ runs: [nbRun(9, FOREIGN_PATH)], nextPageToken: 'more' } as any);
+    await GET(req(), ctx);
+    expect(dbx.listJobRunsPage.mock.calls.length).toBeLessThanOrEqual(8);
   });
 
   it('a run with no notebook path is OUT of scope (fail closed)', async () => {
-    dbx.listJobRuns.mockResolvedValue([{ run_id: 9, start_time: 9 }] as any);
+    dbx.listJobRunsPage.mockResolvedValue({ runs: [{ run_id: 9, start_time: 9 }], nextPageToken: undefined } as any);
     const j = await (await GET(req(), ctx)).json();
     expect(j.runs).toEqual([]);
   });
