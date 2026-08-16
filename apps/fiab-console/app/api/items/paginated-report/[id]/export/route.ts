@@ -24,10 +24,25 @@
  * MessageBar (env var + bicep module) instead of downloading a broken file.
  *
  * Azure-native; no Microsoft Fabric / Power BI workspace required.
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — this handler rendered a caller-named
+ * paginated report to a real document with no item-level check. When the body
+ * omitted `definition` it went further and LOADED the saved RDL from
+ * `getRdlDefinition(workspaceId, id)` for an unauthorized caller, so the report's
+ * full definition (its datasets, connection strings and queries) rendered into a
+ * downloadable file. It was excused by check-route-guards'
+ * SHARED_BACKEND_ITEM_ROUTES on "no per-tenant Cosmos ownership to scope", which
+ * its own sibling `paginated-report/[id]/rdl` disproves — that route resolves the
+ * SAME `[id]` through `loadOwnedItem`.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` may be a raw Power
+ * BI report GUID on the opt-in path and `loadOwnedItem` renders "no item" as 404.
+ * `allowReadRoles` because exporting is a read of the report the caller can
+ * already open.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import {
   paginatedRenderGate,
@@ -36,6 +51,7 @@ import {
   type RdlExportFormat,
   type RdlReportDefinition,
 } from '@/lib/azure/paginated-report-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,13 +59,19 @@ export const maxDuration = 60;
 
 const FORMATS: RdlExportFormat[] = ['pdf', 'xlsx', 'docx'];
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const limited = await enforceRateLimit(session, 'export');
   if (limited) return limited;
 
-  const { id } = await ctx.params;
+  const { id } = params;
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: id,
+    itemType: 'paginated-report',
+    allowReadRoles: true,
+    notFound: 'paginated report not found',
+  });
+  if (denied) return denied;
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
 
   const format = String((body as any)?.format || '') as RdlExportFormat;
@@ -109,4 +131,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = typeof e?.status === 'number' ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

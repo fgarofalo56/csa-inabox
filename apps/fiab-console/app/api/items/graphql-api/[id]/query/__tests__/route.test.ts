@@ -3,12 +3,28 @@
  * console proxy. Covers the honest 409 gate for an API with no resolvers/
  * backend service URL (raw "Resolvers are not defined…" previously passed
  * through as ok:true).
+ *
+ * GHSA-hf73-rp4q-66pf moved this handler onto `withWorkspaceOwner`, so
+ * `loadOwnedItem` is stubbed here to the AUTHORIZED answer — these cases are
+ * about the APIM proxy contract, not the boundary. The boundary itself is
+ * covered in `graphql-api/[id]/__tests__/ghsa-item-authz.test.ts`, which stubs
+ * the same call to null and asserts the 404.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-1' } } as any));
-vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+vi.mock('@/lib/auth/session', async () => {
+  const actual = await vi.importActual<any>('@/lib/auth/session');
+  return { ...actual, getSession: () => getSessionMock() };
+});
+
+// The wrapper runs for real; only the owner lookup beneath it is stubbed.
+const loadOwnedItemMock = vi.fn(async (..._a: any[]) =>
+  ({ id: 'gql-1', workspaceId: 'ws-1', itemType: 'graphql-api', state: {} } as any));
+vi.mock('@/app/api/items/_lib/item-crud', () => ({
+  loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...a),
+}));
 
 vi.mock('@/lib/azure/rate-limiter', () => ({ enforceRateLimit: vi.fn(async () => null) }));
 
@@ -38,6 +54,8 @@ function post(body: unknown): NextRequest {
 }
 beforeEach(() => {
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-1' } } as any);
+  loadOwnedItemMock.mockClear();
+  loadOwnedItemMock.mockResolvedValue({ id: 'gql-1', workspaceId: 'ws-1', itemType: 'graphql-api', state: {} } as any);
   getApiMock.mockClear();
   testApiCallMock.mockClear();
 });

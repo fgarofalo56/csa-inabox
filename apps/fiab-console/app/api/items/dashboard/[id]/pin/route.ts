@@ -12,19 +12,45 @@
  * "pin arbitrary visual" verb); the editor surfaces that honestly and offers
  * this Clone path to copy an already-pinned tile. The Azure-native default
  * dashboard surface (Loom-native ADX/AAS tiles) needs none of this.
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — this handler CLONED A TILE ONTO the
+ * `[id]` dashboard with no item-level check, so any signed-in caller could write
+ * a tile onto a dashboard they do not own. It was excused by check-route-guards'
+ * SHARED_BACKEND_ITEM_ROUTES on the premise "no per-tenant Cosmos ownership to
+ * scope", which its own sibling `dashboard/[id]` disproves by authorizing the
+ * SAME `[id]` through the canonical ladder.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
+ * RAW Power BI dashboard GUID on the opt-in path (no Loom item behind it), and
+ * `loadOwnedItem` renders "no item" as 404 — which would have broken that path.
+ * The body `workspaceId` is a Power BI group id, not a Loom Cosmos workspace, so
+ * the scope is resolved from the item instead.
+ *
+ * NO `allowReadRoles`: this MUTATES the target dashboard, so a read-only Viewer
+ * must not pass (item-crud.ts:289 — the resolver is write-scoped by default and
+ * read roles are an explicit opt-in reserved for read-only surfaces).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { cloneDashboardTile, PowerBiError, powerbiConfigGate } from '@/lib/azure/powerbi-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const targetDashboardId = (await ctx.params).id;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const targetDashboardId = params.id;
+
+  // Authorization runs BEFORE the honest config gate so an unreachable id gets
+  // 404 rather than learning which env var this deployment is missing.
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: targetDashboardId,
+    itemType: 'dashboard',
+    notFound: 'dashboard not found',
+  });
+  if (denied) return denied;
 
   const gate = powerbiConfigGate();
   if (gate) {
@@ -51,4 +77,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

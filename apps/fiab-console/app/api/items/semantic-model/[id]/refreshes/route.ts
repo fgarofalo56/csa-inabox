@@ -12,10 +12,25 @@
  *
  * Backend selection: see _lib/bi-backend.ts. Per no-fabric-dependency.md the
  * Azure-native AAS path is the default; Power BI is opt-in.
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — neither handler authorized the caller
+ * against the model. GET returned a caller-named model's refresh history (Power
+ * BI, or the AAS database `dbName`, which defaults to `[id]`); POST queued a
+ * Power BI ENHANCED refresh, including partition-level `objects` and
+ * `applyRefreshPolicy`. It was excused by check-route-guards'
+ * SHARED_BACKEND_ITEM_ROUTES on "no per-tenant Cosmos ownership to scope"; eight
+ * sibling routes under `semantic-model/[id]/**` resolve the SAME `[id]` as an
+ * owned Loom item.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
+ * RAW Power BI dataset GUID on the opt-in path and `loadOwnedItem` renders
+ * "no item" as 404. The `?workspaceId=` is a Power BI group id, so the scope is
+ * resolved FROM THE ITEM. GET admits read roles; POST does not.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { type SessionPayload } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import {
   listRefreshHistory,
   enhancedRefreshDataset,
@@ -24,14 +39,29 @@ import {
 } from '@/lib/azure/powerbi-client';
 import { getRefreshes as aasGetRefreshes, aasServerConfigGate, AasError } from '@/lib/azure/aas-server-client';
 import { usingAasAsync } from '../../_lib/bi-backend';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+/** Canonical owner → tenant-admin → shared-ACL ladder for this model, with the
+ *  workspace resolved FROM THE ITEM so authorization cannot be skipped (or
+ *  misdirected) by the caller's Power BI `?workspaceId=`. */
+async function denyUnlessAuthorized(session: SessionPayload, id: string, opts?: { allowReadRoles?: boolean }) {
+  return authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: id,
+    itemType: 'semantic-model',
+    notFound: 'semantic model not found',
+    ...(opts?.allowReadRoles ? { allowReadRoles: true } : {}),
+  });
+}
+
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
+  // READ surface → any workspace role may view refresh history.
+  const denied = await denyUnlessAuthorized(session, id, { allowReadRoles: true });
+  if (denied) return denied;
 
   if (!(await usingAasAsync())) {
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
@@ -59,11 +89,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = e instanceof AasError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
+  // WRITE surface → no `allowReadRoles`.
+  const denied = await denyUnlessAuthorized(session, id);
+  if (denied) return denied;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   const body = (await req.json().catch(() => ({}))) as EnhancedRefreshBody;
@@ -75,10 +107,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     );
   }
   try {
-    const { requestId } = await enhancedRefreshDataset(workspaceId, (await ctx.params).id, body);
+    const { requestId } = await enhancedRefreshDataset(workspaceId, id, body);
     return NextResponse.json({ ok: true, requestId, queuedAt: new Date().toISOString() }, { status: 202 });
   } catch (e: any) {
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

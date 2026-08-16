@@ -84,6 +84,80 @@ const WRITE_SCOPE_EXEMPT = new Map<string, { readCalls: number; reason: string }
       reason: 'read of the SOURCE item; the tile write is separately write-scoped',
     },
   ],
+
+  // ── GHSA-hf73-rp4q-66pf: POST-shaped READS on the Power BI family ──────────
+  // These nine routes were previously UNAUTHORIZED — id-addressed, consuming the
+  // id, with no item-level check at all — and the advisory fix gave them the
+  // canonical ladder. They are POSTs by HTTP verb only: none writes Loom item
+  // state, and each is something a read-only Viewer must be able to do or the
+  // item cannot be VIEWED. Denying read roles here would 404 legitimate viewers,
+  // which is the failure the copy-job/[id]/watermark fix already had to undo.
+  //
+  // THE LINE, applied case by case rather than as a blanket: a POST is exempt
+  // when it is REQUIRED TO VIEW the item and runs no caller-authored code as an
+  // authoring affordance. `semantic-model/[id]/measures` was in the first cut of
+  // this list and was REMOVED — its only caller is the Validate button on the
+  // measure-authoring form, so it is now write-scoped in the route. That is the
+  // direction this exemption list is allowed to move.
+  [
+    'app/api/items/dashboard/[id]/embed-token/route.ts:POST',
+    { readCalls: 1, reason: "mints a Power BI 'View'-scope embed token; a Viewer sees nothing without it" },
+  ],
+  [
+    'app/api/items/dashboard/[id]/tile-embed-token/route.ts:POST',
+    { readCalls: 1, reason: "mints a per-tile 'View'-scope embed token; same viewing requirement" },
+  ],
+  [
+    'app/api/items/dashboard/[id]/tile-query/route.ts:POST',
+    {
+      readCalls: 1,
+      // A dashboard's tiles cannot render without running their queries, so this
+      // IS viewing. Disclosed: the ADX database / PBI dataset still come from the
+      // request body, so this scopes the ITEM, not the query target — recorded in
+      // the route and in the advisory as an unfixed, separate class.
+      reason: 'runs a tile query — a dashboard cannot render without it; the query TARGET is a separate unfixed scope',
+    },
+  ],
+  [
+    'app/api/items/report/[id]/embed-token/route.ts:POST',
+    {
+      readCalls: 1,
+      // The flag is CONDITIONAL in the source — `accessLevel === 'Edit' ? {} :
+      // { allowReadRoles: true }` — so an Edit-scope token stays write-scoped and
+      // a Viewer cannot obtain an editing credential. This scan is static and
+      // sees the token either way, hence the exemption; the conditional itself is
+      // pinned by report/[id]/__tests__/ghsa-item-authz.test.ts.
+      reason: "'View' token admits read roles; the 'Edit' branch is write-scoped (conditional, pinned by test)",
+    },
+  ],
+  [
+    'app/api/items/report/[id]/paginated-embed-token/route.ts:POST',
+    { readCalls: 1, reason: 'mints a paginated embed token with allowEdit:false — read-only by construction' },
+  ],
+  [
+    'app/api/items/report/[id]/export/route.ts:POST',
+    { readCalls: 1, reason: 'renders content the caller can already read; Power BI grants export to its Viewer role too' },
+  ],
+  [
+    'app/api/items/paginated-report/[id]/export/route.ts:POST',
+    { readCalls: 1, reason: 'renders the RDL to a document; a read of content the caller can already open' },
+  ],
+  [
+    'app/api/items/semantic-model/[id]/embed-token/route.ts:POST',
+    { readCalls: 1, reason: "mints a Power BI 'View'-scope dataset token for the Q&A pane" },
+  ],
+  [
+    'app/api/items/semantic-model/[id]/direct-lake/route.ts:POST',
+    {
+      readCalls: 1,
+      // Surfaced only once this spec learned to follow module-local guard helpers
+      // (see callsIn) — it was invisible before. It is the Direct Lake data-preview
+      // tab (`executeDlQuery`), and it is called with `[id] === '_'` when no
+      // dataset is bound, which is also why the route threads
+      // `authorizeItemWorkspace` rather than `withWorkspaceOwner`.
+      reason: 'Direct Lake data preview (DirectQuery read); PUT on the same route writes the shim config and IS write-scoped',
+    },
+  ],
 ]);
 
 interface Call {
@@ -100,6 +174,27 @@ interface Call {
  * A call's argument text is taken from the call site up to its balanced closing
  * paren, so a multi-line options object is read correctly and a sibling call
  * later in the same handler can't bleed its flag into this one.
+ *
+ * MODULE-LOCAL GUARD HELPERS ARE FOLLOWED (GHSA-hf73-rp4q-66pf). Until this, the
+ * scan only saw a LITERAL `authorize*Workspace(` inside a handler region — so the
+ * widespread idiom
+ *
+ *   async function denyUnlessAuthorized(session, id, opts?) {
+ *     return authorizeItemWorkspace(session, { …, ...(opts?.allowReadRoles ? … ) });
+ *   }
+ *   export const PUT = withSession(async (req, { session, params }) => {
+ *     const denied = await denyUnlessAuthorized(session, params.id);   // ← invisible
+ *
+ * was INVISIBLE to it: the real call sits at module scope, above the first
+ * handler, so it was attributed to no handler at all. `dashboard/[id]`,
+ * `databricks-notebook/[id]/versions` and four semantic-model routes all use that
+ * shape, so the population this spec watches excluded them — the same
+ * guard-can't-see-what-it-should class this file exists to prevent, one level up.
+ *
+ * `allowReadRoles` is read from the HELPER CALL SITE, not the helper body. The
+ * body necessarily mentions the flag (it forwards it conditionally), so reading
+ * it there would mark every caller read-scoped — including the mutations, which
+ * is precisely backwards. The call site is where the decision is actually made.
  */
 function callsIn(abs: string): Call[] {
   const rel = path.relative(path.resolve(API_ROOT, '..', '..'), abs).replace(/\\/g, '/');
@@ -110,16 +205,35 @@ function callsIn(abs: string): Call[] {
     const m = l.match(HANDLER_RE);
     if (m) bounds.push({ i, verb: (m[1] || m[2])! });
   });
+
+  // Module-scope helpers (declared at column 0) that reach an authorize call.
+  // Their NAME becomes a scannable proxy for the call they perform.
+  const helperNames: Array<{ name: string; fn: Call['fn'] }> = [];
+  const helperDecl = /^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm;
+  let hm: RegExpExecArray | null;
+  const preHandlers = bounds.length ? lines.slice(0, bounds[0].i).join('\n') : src;
+  while ((hm = helperDecl.exec(preHandlers))) {
+    const from = hm.index;
+    // The helper's text runs to the next column-0 declaration or the end.
+    const nextDecl = preHandlers.slice(from + hm[0].length).search(/^(?:export\s+)?(?:async\s+)?(?:function|const)\s/m);
+    const body = nextDecl === -1
+      ? preHandlers.slice(from)
+      : preHandlers.slice(from, from + hm[0].length + nextDecl);
+    for (const fn of ['authorizeItemWorkspace', 'authorizeWorkspace'] as const) {
+      if (body.includes(`${fn}(`)) helperNames.push({ name: hm[1], fn });
+    }
+  }
+
   const out: Call[] = [];
   bounds.forEach((b, k) => {
     const end = k + 1 < bounds.length ? bounds[k + 1].i : lines.length;
     const region = lines.slice(b.i, end).join('\n');
-    for (const fn of ['authorizeItemWorkspace', 'authorizeWorkspace'] as const) {
-      let at = region.indexOf(`${fn}(`);
+    const scan = (token: string, fn: Call['fn']) => {
+      let at = region.indexOf(`${token}(`);
       while (at !== -1) {
         // balanced-paren scan from the call's open paren
         let depth = 0;
-        let j = at + fn.length;
+        let j = at + token.length;
         for (; j < region.length; j++) {
           if (region[j] === '(') depth++;
           else if (region[j] === ')') {
@@ -129,9 +243,11 @@ function callsIn(abs: string): Call[] {
         }
         const args = region.slice(at, j + 1);
         out.push({ file: rel, verb: b.verb, fn, allowReadRoles: /allowReadRoles/.test(args) });
-        at = region.indexOf(`${fn}(`, j);
+        at = region.indexOf(`${token}(`, j);
       }
-    }
+    };
+    for (const fn of ['authorizeItemWorkspace', 'authorizeWorkspace'] as const) scan(fn, fn);
+    for (const h of helperNames) scan(h.name, h.fn);
   });
   return out;
 }

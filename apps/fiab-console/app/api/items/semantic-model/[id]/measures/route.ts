@@ -17,11 +17,37 @@
  *
  * 200 OK → { ok: true, validated: true, probe?: { columns, rows } }
  * 4xx/5xx → { ok: false, error, status }
+ *
+ * AUTHORIZATION (GHSA-hf73-rp4q-66pf) — this handler ran a caller-authored DAX
+ * query against a caller-named dataset with no item-level check. The probe is
+ * `DEFINE MEASURE … EVALUATE ROW("value", …)`, so the expression can read any
+ * table in the model: this was arbitrary DAX read access to another tenant's
+ * semantic model, not merely a syntax check. It was excused by
+ * check-route-guards' SHARED_BACKEND_ITEM_ROUTES on "no per-tenant Cosmos
+ * ownership to scope"; eight sibling routes under `semantic-model/[id]/**`
+ * resolve the SAME `[id]` as an owned Loom item.
+ *
+ * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
+ * RAW Power BI dataset GUID on the opt-in path and `loadOwnedItem` renders
+ * "no item" as 404. The `?workspaceId=` is a Power BI group id, so the scope is
+ * resolved from the item.
+ *
+ * WRITE-SCOPED — no `allowReadRoles`, and that is a deliberate reversal. This
+ * route persists nothing, so "it is really a read" is arguable, and the first cut
+ * of the fix did admit read roles on that reasoning. The CLIENT settles it: the
+ * only caller is `validateDax` in the semantic-model editor (phase3/
+ * semantic-model-editor.tsx:903), the Validate button on the measure-AUTHORING
+ * form — it is bound to `measureName` / `measureTable` / `daxExpr`, all authoring
+ * state. A read-only Viewer never reaches it, and the probe evaluates
+ * caller-authored DAX (`DEFINE MEASURE … EVALUATE ROW`) against the model, which
+ * is a wider capability than reading the report's own queries. Admitting Viewers
+ * would have widened who can run arbitrary DAX for no viewing benefit.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { executeDatasetQueries, PowerBiError } from '@/lib/azure/powerbi-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,9 +64,15 @@ function safeBracket(s: string): string {
   return `[${(s || '').replace(/]/g, '')}]`;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const modelId = params.id;
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: null,
+    itemId: modelId,
+    itemType: 'semantic-model',
+    notFound: 'semantic model not found',
+  });
+  if (denied) return denied;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
 
@@ -63,7 +95,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const query = `DEFINE MEASURE ${tableBracket}${measureBracket} = ${daxExpression}\nEVALUATE ROW("value", ${probe})`;
 
   try {
-    const j = await executeDatasetQueries(workspaceId, (await ctx.params).id, query);
+    const j = await executeDatasetQueries(workspaceId, modelId, query);
     const rows = j?.results?.[0]?.tables?.[0]?.rows || [];
     return NextResponse.json({
       ok: true,
@@ -76,4 +108,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
   }
-}
+});

@@ -16,7 +16,7 @@
  * (#3088 / FINISHLINE C22. The previous header OVERCLAIMED; that overclaim
  * was itself the bug, so this section is normative.)
  *
- * TWO INDEPENDENT CHECKS RUN HERE:
+ * THREE INDEPENDENT CHECKS RUN HERE:
  *
  *   CHECK 1 — GATE CONSUMPTION (scripts/ci/_gate-consumption.mjs).
  *     Every call to a returned-value guard must have its answer CONSUMED in a
@@ -64,6 +64,31 @@
  *
  *     Both are now pinned by SENSITIVITY_PROBES, which re-breaks these routes in
  *     memory on every run and fails if the verdict does not change.
+ *
+ *   CHECK 3 — ALLOWLIST PREMISE (GHSA-hf73-rp4q-66pf, `falsifiedSharedBackend-
+ *     Premise`). CHECK 2 honours the allowlist. It never asked whether the REASON
+ *     an entry was written for is still — or was ever — true, so an entry added on
+ *     a premise that did not apply stayed green indefinitely.
+ *
+ *     Measured: 20 routes across 8 item types sat in SHARED_BACKEND_ITEM_ROUTES,
+ *     excused as "specific-per-item-TYPE route over a SHARED Azure backend … no
+ *     per-tenant Cosmos ownership to scope", while consuming the route `[id]` and
+ *     performing no item-level authorization. Severity ran from reading a
+ *     product's run history to MINTING A POWER BI EMBED TOKEN for a dashboard the
+ *     caller did not own.
+ *
+ *     The second clause of that reason is falsifiable INSIDE THIS TREE: if a
+ *     SIBLING route under `items/<same type>/[id]/**` resolves the same `[id]`
+ *     through an item-ownership resolver, then `[id]` names an ownable Loom item
+ *     and ownership demonstrably IS scopeable. Two routes under one item type
+ *     cannot both be right about what `[id]` means. So the premise is tested, not
+ *     trusted — and the test RE-KEYS ITSELF: the moment any route under a type
+ *     adopts an owner check, every allowlisted sibling of that type is re-judged.
+ *
+ *     Pinned by `assertPremiseTestIsSensitive`, which every run un-graduates a
+ *     real fixed route back into the allowlist, strips its guard IN MEMORY, and
+ *     fails unless CHECK 3 catches it — CHECK 2 stays green on that state, which
+ *     is exactly why the class survived as long as it did.
  *
  * WHAT IS STILL NOT PROVEN HERE (stated so no one reads more into a green run
  * than it earns):
@@ -145,7 +170,12 @@
  *   endpoint. Add the repo-relative path to ALLOWLIST with a one-line reason.
  *   Prefer FIXING the route (thread `loadOwnedItem` / an admin gate) over
  *   allowlisting — allowlisting an ownable resource re-opens the hole.
- *   NOTE an allowlist entry does NOT exempt a route from CHECK 1.
+ *   NOTE an allowlist entry does NOT exempt a route from CHECK 1, and the
+ *   SHARED_BACKEND_ITEM_ROUTES class reason does not exempt it from CHECK 3:
+ *   THE REASON YOU WRITE IS A CLAIM ABOUT THE CODE AND IT WILL BE RE-TESTED.
+ *   If a sibling under the same item type already scopes that `[id]` by item,
+ *   the class reason does not cover your route — fix it, or give it its own
+ *   entry saying what the code actually does.
  */
 
 import fs from 'node:fs';
@@ -783,6 +813,44 @@ const NOW_GUARDED = new Set([
   // it by loading the item. It now runs withWorkspaceOwner, so it is listed here
   // rather than allowlisted — dropping the wrapper must re-flag, not stay masked.
   'apps/fiab-console/app/api/items/copy-job/[id]/runs/route.ts',
+  // ── GHSA-hf73-rp4q-66pf ──────────────────────────────────────────────────
+  // 20 routes across 8 item types, graduated for the SAME reason copy-job/[id]/
+  // runs was: each is addressed by item ID, consumes that id, and had no
+  // item-level authorization, while a SIBLING under the same item type resolves
+  // that very id as an owned Loom item. The class reason ("no per-tenant Cosmos
+  // ownership to scope") was therefore false for every one of them, and it is now
+  // re-tested mechanically each run — see falsifiedSharedBackendPremise, which is
+  // what produced this list rather than a hand sweep.
+  //
+  // MOST OF THESE THREAD `authorizeItemWorkspace`, NOT `withWorkspaceOwner`, and
+  // that is deliberate: on the Power BI / Foundry families the `[id]` is
+  // legitimately a RAW backend object id on the opt-in path (a Power BI dashboard
+  // / report / dataset GUID, an AI Foundry flow id) with no Loom item behind it,
+  // and `loadOwnedItem` renders "no item" as 404. Wrapping those would have
+  // 404'd every caller on the opt-in path — a fix that breaks real users is not a
+  // fix. `dashboard/[id]` had already made and documented exactly this call.
+  // graphql-api is the exception and uses the stricter wrapper, because its
+  // `[id]` is always a Cosmos item (the APIM apiId is minted FROM it).
+  'apps/fiab-console/app/api/items/dashboard/[id]/embed-token/route.ts',
+  'apps/fiab-console/app/api/items/dashboard/[id]/pin/route.ts',
+  'apps/fiab-console/app/api/items/dashboard/[id]/tile-embed-token/route.ts',
+  'apps/fiab-console/app/api/items/dashboard/[id]/tile-query/route.ts',
+  'apps/fiab-console/app/api/items/dataflow/[id]/refresh/route.ts',
+  'apps/fiab-console/app/api/items/graphql-api/[id]/publish/route.ts',
+  'apps/fiab-console/app/api/items/graphql-api/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/paginated-report/[id]/route.ts',
+  'apps/fiab-console/app/api/items/paginated-report/[id]/export/route.ts',
+  'apps/fiab-console/app/api/items/prompt-flow/[id]/run/route.ts',
+  'apps/fiab-console/app/api/items/report/[id]/embed-token/route.ts',
+  'apps/fiab-console/app/api/items/report/[id]/export/route.ts',
+  'apps/fiab-console/app/api/items/report/[id]/paginated-embed-token/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/embed-token/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/measures/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/refresh/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/refresh-schedule/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/refreshes/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/take-over/route.ts',
   // non-items routes fixed in the same sweep
   'apps/fiab-console/app/api/aml/environments/route.ts',
   'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',
@@ -791,13 +859,41 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/governance/scans/register-existing/route.ts',
 ]);
 
+// Paths that get their excuse from the CLASS reason below rather than from a
+// hand-written per-route reason. Membership is decided by the reason ACTUALLY IN
+// EFFECT at scan time (`hasSharedBackendClassReason`), NOT captured while the
+// loop runs.
+//
+// WHY, measured in review of the PR that added CHECK 3: the failure message told
+// you to give the route its own per-route reason, and there are TWO places to do
+// that — the `new Map([…])` literal above, and the `for (const [p, reason] of
+// [ … ])` block further down. Only the first worked. The second runs AFTER this
+// loop, and it was written `if (!ALLOWLIST.has(p))`, so the class reason had
+// already been stamped and the hand-written one was silently discarded: CHECK 3
+// kept firing on a route whose reason someone had just written. A control about
+// recorded reasons being re-tested, whose own remediation did not work.
+//
+// Two changes remove the ordering trap: membership is read from the reason in
+// effect (here), and a hand-written reason now OVERRIDES the class default
+// (at that later block). Either list exempts, which is what the message says.
+const SHARED_BACKEND_LISTED = new Set(SHARED_BACKEND_ITEM_ROUTES);
+
+/** The ONE reason string this loop stamps. Named so the premise probe can
+ *  reproduce an un-graduated entry exactly, and so the later per-route block can
+ *  tell "nobody wrote a reason" from "someone did". */
+const SHARED_BACKEND_CLASS_REASON =
+  'specific-per-item-TYPE route over a SHARED Azure backend resolved by item type (auth = signed-in + deployment RBAC); no per-tenant Cosmos ownership to scope';
+
+/** True when `r` is excused by the CLASS reason and not by a reason someone
+ *  wrote for it. Evaluated late, so every allowlist block has already run. */
+function hasSharedBackendClassReason(r) {
+  return SHARED_BACKEND_LISTED.has(r) && ALLOWLIST.get(r) === SHARED_BACKEND_CLASS_REASON;
+}
+
 for (const p of SHARED_BACKEND_ITEM_ROUTES) {
   if (NOW_GUARDED.has(p)) continue; // now carries a real owner-check — not allowlisted
   if (!ALLOWLIST.has(p)) {
-    ALLOWLIST.set(
-      p,
-      'specific-per-item-TYPE route over a SHARED Azure backend resolved by item type (auth = signed-in + deployment RBAC); no per-tenant Cosmos ownership to scope',
-    );
+    ALLOWLIST.set(p, SHARED_BACKEND_CLASS_REASON);
   }
 }
 
@@ -903,7 +999,18 @@ for (const [p, reason] of [
   ['apps/fiab-console/app/api/data-products/import/template/route.ts', 'imports a data product from a shared template definition; no per-tenant Cosmos read'],
   ['apps/fiab-console/app/api/data-products/[id]/policies/route.ts', 'consumer-discovery: returns the owner\'s Access-policy purposes for the Request-access dialog (documented cross-tenant read, read-only, non-sensitive)'],
   ['apps/fiab-console/app/api/data-products/[id]/preview/route.ts', 'consumer-discovery: read-only 25-row preview of a discoverable data product (documented, mirrors GET /api/data-products/[id])'],
-  ['apps/fiab-console/app/api/data-products/[id]/ports/route.ts', 'consumer-discovery: read-only input/output/management ports of a discoverable data product (DP-8; mirrors GET /api/data-products/[id], resolves only upstream contract summaries)'],
+  // GHSA-hf73-rp4q-66pf addendum. The previous reason for this entry —
+  // "read-only input/output/management ports of A DISCOVERABLE data product …
+  // resolves ONLY upstream contract summaries" — was not true of the code: the
+  // route established nothing about discoverability (no lifecycle filter, no
+  // tid, no workspace scope), and a port `ref` is an infrastructure ADDRESS
+  // (abfss:// path / Synapse schema.table / ADX database), not a contract
+  // summary. It now enforces the sentence it was excused on, so it passes on its
+  // own `authorizeWorkspace` call and this entry is no longer load-bearing —
+  // kept, with the corrected wording, so the next reader does not inherit the
+  // old premise. The residual (a legacy workspace doc with no recorded `tid`
+  // cannot be tenant-tested) is documented in the route, not hidden here.
+  ['apps/fiab-console/app/api/data-products/[id]/ports/route.ts', 'consumer-discovery: ports are returned only to a caller authorized on the owning workspace, or for a published/deprecated product in the caller\'s own Entra tenant; the upstream `ref` resolution runs the same test and is non-distinguishing on failure'],
   ['apps/fiab-console/app/api/governance/classifications/system/route.ts', 'read-only deployment-wide system classification catalog (static)'],
   ['apps/fiab-console/app/api/governance/dlp/schemas/route.ts', 'read-only DLP schema listing over the shared warehouse'],
   ['apps/fiab-console/app/api/governance/purview/status/route.ts', 'read-only deployment-wide Purview status'],
@@ -915,7 +1022,15 @@ for (const [p, reason] of [
   ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/route.ts', 'APIM subscription keys over the deployment APIM gateway via Console UAMI (shared backend)'],
   ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/regenerate/route.ts', 'APIM subscription key regenerate over the deployment APIM gateway via Console UAMI (shared backend)'],
 ]) {
-  if (!ALLOWLIST.has(p)) ALLOWLIST.set(p, reason);
+  // A HAND-WRITTEN REASON OVERRIDES THE CLASS DEFAULT. This used to be
+  // `if (!ALLOWLIST.has(p))`, which meant a reason written here for a route the
+  // class loop above had already stamped was silently discarded — so CHECK 3
+  // kept firing and its own remediation ("give the route its own per-route
+  // reason") did not work from this list. Only the generic class reason is
+  // overwritten; a reason from the `new Map([…])` literal still wins, because
+  // that one was written for the route too and this list must not clobber it.
+  const current = ALLOWLIST.get(p);
+  if (current === undefined || current === SHARED_BACKEND_CLASS_REASON) ALLOWLIST.set(p, reason);
 }
 
 // ── Group-level allowlist: whole app/api sub-trees whose ENTIRE membership is
@@ -1186,8 +1301,12 @@ function initializerExpression(code, from) {
 }
 
 /**
- * Which exported handlers in this file carry NO authorization signal of their
- * own? Returns [] when the file is authorized handler-by-handler.
+ * Effective text of each EXPORTED handler in the file, keyed by verb — the
+ * handler's own body PLUS every module-local binding it references. Split out of
+ * `unguardedHandlers` so the allowlist premise re-test below can ask a SECOND
+ * question of the SAME text ("does this handler consume the route id?") rather
+ * than re-deriving the handler boundaries with a looser regex and disagreeing
+ * with the guard verdict about what a handler even is.
  *
  * WHY PER HANDLER — MEASURED 2026-08-08 on `app/api/workspaces/route.ts`, a
  * COLLECTION route. Two separate mutations, each a real cross-tenant hole:
@@ -1205,22 +1324,139 @@ function initializerExpression(code, from) {
  * one. `withSession` is deliberately NOT a guard signal, so a `withSession`
  * handler is still judged on what its body does.
  */
-function unguardedHandlers(code) {
+function handlerTexts(code) {
   const localBodies = localFunctionBodies(code);
-  const gaps = [];
+  const out = new Map();
   for (const h of HANDLER_NAMES) {
     const wrapped = new RegExp(`export\\s+const\\s+${h}\\s*(?::[^=\\n]*)?=`).exec(code);
     if (wrapped) {
       const expr = initializerExpression(code, wrapped.index + wrapped[0].length);
-      if (!GUARD_SIGNAL_RE.test(effectiveHandlerText(expr, localBodies))) gaps.push(h);
+      out.set(h, effectiveHandlerText(expr, localBodies));
       continue;
     }
     const classic = new RegExp(`export\\s+async\\s+function\\s+${h}\\s*(?:<[^>]*>)?\\s*\\(`).exec(code);
     if (!classic) continue;
     const body = functionBody(code, classic.index + classic[0].length - 1);
-    if (!GUARD_SIGNAL_RE.test(effectiveHandlerText(body, localBodies))) gaps.push(h);
+    out.set(h, effectiveHandlerText(body, localBodies));
+  }
+  return out;
+}
+
+/**
+ * Which exported handlers in this file carry NO authorization signal of their
+ * own? Returns [] when the file is authorized handler-by-handler.
+ */
+function unguardedHandlers(code) {
+  const gaps = [];
+  for (const [h, text] of handlerTexts(code)) {
+    if (!GUARD_SIGNAL_RE.test(text)) gaps.push(h);
   }
   return gaps;
+}
+
+/**
+ * ── THE ALLOWLIST'S OWN PREMISE, RE-TESTED EVERY RUN (GHSA-hf73-rp4q-66pf) ──
+ *
+ * This checker verifies THAT an id-addressed route is authorized. Until now it
+ * honoured `SHARED_BACKEND_ITEM_ROUTES` **without ever re-testing the reason the
+ * entry was written for**, so an entry added on a premise that never applied —
+ * or that stopped applying after a refactor — stayed green indefinitely. That is
+ * this repo's most-repeated failure class: a guard whose POPULATION excludes the
+ * thing it should be watching.
+ *
+ * The recorded class reason is:
+ *
+ *   "specific-per-item-TYPE route over a SHARED Azure backend … no per-tenant
+ *    Cosmos ownership to scope"
+ *
+ * Its second clause — **there is no per-tenant Cosmos ownership to scope** — is
+ * falsifiable WITHIN THIS TREE, with no judgement call: if a SIBLING route under
+ * `items/<same type>/[id]/**` resolves that same `[id]` through an item-ownership
+ * resolver, then `[id]` names an ownable Loom item and ownership demonstrably IS
+ * scopeable. Two routes under one item type cannot both be right about what
+ * `[id]` means. So the premise is TESTED, not trusted.
+ *
+ * That is the exact signature the advisory was derived from, and it is why the
+ * test is keyed to the sibling rather than to the id:
+ *
+ *   - "the path contains `[id]`" was the FIRST sweep's signature and reported 44.
+ *     Wrong by 19: the 14-route `azure-sql-database` family exports `POST(req)`
+ *     and never reads `ctx.params`.
+ *   - "the handler CONSUMES the route id" is closer and reports 87 — but it still
+ *     over-reaches, because for `apim-api/[id]`, `adf-trigger/[id]`,
+ *     `compute/[id]`, `dataverse-table/[id]` and their kin the `[id]` IS the
+ *     Azure object's own name on the deployment-shared backend (an APIM API id,
+ *     an ADF trigger name, an ARM VM name). Those are id-addressed AND genuinely
+ *     have no Cosmos item behind them, so the class reason still holds; flagging
+ *     them would assert something the code does not establish (deploy-integrity
+ *     R7) and would train the next reader to widen the allowlist to make a noisy
+ *     control shut up — which is how this class re-opens.
+ *   - "a SIBLING under the same item type resolves this `[id]` as an owned item"
+ *     is a contradiction inside the repo, not a heuristic about naming.
+ *
+ * SELF-INVALIDATING — WITHIN CHECK 2'S POPULATION, WHICH IS NOT EVERY ROUTE. The
+ * moment ANY route under an item type adopts an owner check on `[id]`, every
+ * allowlisted sibling of that type is re-tested against the new evidence and
+ * fails. An entry cannot outlive the premise it was written on, which is the
+ * property the 20 routes exploited for as long as they did.
+ *
+ * THE LIMIT, stated because a control that overstates its own reach is precisely
+ * what this file exists to prevent — and because the change that added CHECK 3
+ * documented this same weakness on `dashboard/[id]/tile-query` and would
+ * otherwise contradict itself. CHECK 3 is consulted only for handlers CHECK 2
+ * already flagged, i.e. only when `gaps.length > 0`. A handler that satisfies
+ * GUARD_SIGNAL_RE is therefore invisible to CHECK 3 as well, inheriting CHECK 2's
+ * presence-vs-enforcement weakness (see "WHAT IS STILL NOT PROVEN HERE": a bare
+ * `claims.oid` used as an AUDIT FIELD satisfies the signal).
+ *
+ * MEASURED in review, not reasoned: restore `semantic-model/[id]/take-over` to
+ * fully unauthorized and add `console.info(String(session.claims.oid));` — this
+ * file prints `contradicted: 0`, `violations: 0` and exits 0, on a route that
+ * transfers Power BI dataset ownership. Closing it means dropping bare `claims.*`
+ * from GUARD_SIGNAL_RE, which takes the tree from 0 to ~205 violations: a scoped
+ * program, not a checker tweak, and NOT done here.
+ *
+ * Tested only where the entry is LOAD-BEARING — the handler genuinely carries no
+ * guard and the allowlist is the sole reason it passes. A listed route that has
+ * since adopted a real guard never consults its entry.
+ */
+const ITEM_OWNERSHIP_RESOLVER_RE = new RegExp(
+  [
+    'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'softDeleteOwnedItem',
+    'loadContentBackedItem', 'withWorkspaceOwner', 'authorizeItemWorkspace',
+    'resolveItemAccessByOid',
+    'authorizeNotebookItem', 'authorizeDatabricksJobItem', 'authorizeDatabricksPipelineItem',
+  ].map((n) => `${n}(?:<[^()]*>)?\\s*\\(`).join('|'),
+);
+
+const ITEM_TYPE_DIR_RE = /^apps\/fiab-console\/app\/api\/items\/([^/]+)\/\[id\]\//;
+
+/** Item types with at least one `[id]` route that resolves `[id]` as an OWNED
+ *  Loom item — i.e. types for which "no per-tenant Cosmos ownership to scope" is
+ *  provably false. Built once from the tree, never hand-maintained. */
+function itemTypesWithOwnedIdSiblings(files) {
+  const scoped = new Set();
+  for (const f of files) {
+    const m = ITEM_TYPE_DIR_RE.exec(rel(f));
+    if (!m) continue;
+    if (scoped.has(m[1])) continue;
+    const src = stripImportStatements(stripCommentsAndStrings(fs.readFileSync(f, 'utf8')));
+    if (ITEM_OWNERSHIP_RESOLVER_RE.test(src)) scoped.add(m[1]);
+  }
+  return scoped;
+}
+
+const ROUTE_PARAM_USE_RE = /\bparams\b/;
+
+function falsifiedSharedBackendPremise(r, src, gaps, scopedTypes) {
+  if (!hasSharedBackendClassReason(r)) return [];
+  const m = ITEM_TYPE_DIR_RE.exec(r);
+  if (!m || !scopedTypes.has(m[1])) return [];
+  const texts = handlerTexts(src);
+  // The handler must actually CONSUME the id for the contradiction to bite: a
+  // sibling proving the type is ownable says nothing about a handler that never
+  // touches `[id]` (e.g. `release-environment/[id]/swap`, which ignores it).
+  return gaps.filter((h) => ROUTE_PARAM_USE_RE.test(texts.get(h) || ''));
 }
 
 
@@ -1526,6 +1762,100 @@ function assertCheckerIsSensitive() {
   console.log(`[route-guards] sensitivity probes passed: ${SENSITIVITY_PROBES.length} (each breaks a real route in memory and must be caught)`);
 }
 
+/**
+ * SENSITIVITY PROBE FOR CHECK 3 — the premise re-test must itself be shown to
+ * bite, every run, for the same reason every other control here is.
+ *
+ * The probe reproduces the EXACT regression the advisory describes, in memory:
+ * take a route that has been fixed and graduated, put it back into
+ * `SHARED_BACKEND_ITEM_ROUTES` (i.e. undo the graduation), and strip its guard.
+ * That is the shape 20 routes were in. CHECK 2 goes GREEN on it — the allowlist
+ * entry excuses the handler, which is precisely why this class survived — so if
+ * CHECK 3 does not fire, nothing in this file does.
+ *
+ * A probe whose anchors no longer match is a FAILURE, never a skip: without it
+ * the premise re-test could be weakened to a no-op while the run stayed green,
+ * which is the failure mode the whole advisory is about.
+ */
+const PREMISE_PROBE = {
+  route: 'apps/fiab-console/app/api/items/dashboard/[id]/tile-embed-token/route.ts',
+  handler: 'POST',
+  /** Cut from the guard CALL to the end of the short-circuit that consumes it —
+   *  removing both leaves a syntactically valid, session-only, id-addressed
+   *  handler. Stripping only one would leave a parse error, and a probe that
+   *  fails on a syntax error proves nothing (the lesson from PR #3529). */
+  from: '  const denied = await authorizeItemWorkspace(session, {',
+  to: '  if (denied) return denied;',
+};
+
+function assertPremiseTestIsSensitive(scopedTypes) {
+  const bad = [];
+  const full = path.join(REPO_ROOT, PREMISE_PROBE.route);
+  if (!fs.existsSync(full)) {
+    bad.push(`premise probe: target ${PREMISE_PROBE.route} no longer exists`);
+  } else if (!SHARED_BACKEND_ITEM_ROUTES.includes(PREMISE_PROBE.route)) {
+    bad.push(
+      `premise probe: ${PREMISE_PROBE.route} is no longer listed in SHARED_BACKEND_ITEM_ROUTES, `
+      + 'so the probe can no longer simulate an un-graduated entry. Re-point it at another '
+      + 'graduated route; do NOT delete it.',
+    );
+  } else {
+    let src = fs.readFileSync(full, 'utf8');
+    const at = src.indexOf(PREMISE_PROBE.from);
+    const stop = at < 0 ? -1 : src.indexOf(PREMISE_PROBE.to, at);
+    if (at < 0 || stop < 0) {
+      bad.push(
+        'premise probe: the guard this probe strips has changed — anchor not found: '
+        + `\`${(at < 0 ? PREMISE_PROBE.from : PREMISE_PROBE.to).trim()}\`. `
+        + 'Re-point the probe; without it CHECK 3 has no evidence its verdict still changes.',
+      );
+    } else {
+      src = src.slice(0, at) + src.slice(stop + PREMISE_PROBE.to.length);
+      const stripped = stripImportStatements(stripCommentsAndStrings(src));
+      const gaps = unguardedHandlers(stripped);
+      if (!gaps.includes(PREMISE_PROBE.handler)) {
+        bad.push(
+          `premise probe: ${PREMISE_PROBE.handler} was stripped of its guard and CHECK 2 did not `
+          + 'even see the gap, so CHECK 3 cannot be exercised. The probe is not measuring anything.',
+        );
+      } else {
+        // The un-graduated state: the route is back on the class allowlist only,
+        // exactly as if the NOW_GUARDED entry had never been added. Stamping the
+        // CLASS reason is what puts it in the class — `hasSharedBackendClassReason`
+        // reads the reason in effect, so there is no separate set to maintain.
+        const wasGraduated = NOW_GUARDED.delete(PREMISE_PROBE.route);
+        const priorEntry = ALLOWLIST.get(PREMISE_PROBE.route);
+        ALLOWLIST.set(PREMISE_PROBE.route, SHARED_BACKEND_CLASS_REASON);
+        const allowed = isAllowed(PREMISE_PROBE.route, gaps);
+        const falsified = falsifiedSharedBackendPremise(PREMISE_PROBE.route, stripped, gaps, scopedTypes);
+        if (wasGraduated) NOW_GUARDED.add(PREMISE_PROBE.route);
+        if (priorEntry === undefined) ALLOWLIST.delete(PREMISE_PROBE.route);
+        else ALLOWLIST.set(PREMISE_PROBE.route, priorEntry);
+        if (!allowed) {
+          bad.push(
+            'premise probe: the un-graduated route was NOT excused by the allowlist, so this probe '
+            + 'no longer reproduces the advisory shape (CHECK 2 would have caught it anyway).',
+          );
+        } else if (!falsified.includes(PREMISE_PROBE.handler)) {
+          bad.push(
+            `premise probe: ${PREMISE_PROBE.route} was un-graduated AND stripped of its guard, the `
+            + 'allowlist excused it, and CHECK 3 STILL PASSED it. That is the exact state 20 routes '
+            + 'shipped in.',
+          );
+        }
+      }
+    }
+  }
+  if (bad.length) {
+    console.error('\n[route-guards] FAIL — the allowlist PREMISE re-test cannot demonstrate it bites:');
+    for (const b of bad) console.error(`  - ${b}`);
+    console.error('\nAn allowlist that is never re-tested is how GHSA-hf73-rp4q-66pf survived. A');
+    console.error('premise test that cannot show its own sensitivity is the same thing again.');
+    process.exit(1);
+  }
+  console.log('[route-guards] allowlist-premise probe passed: an un-graduated, unguarded route is caught by CHECK 3 (CHECK 2 stays green on it)');
+}
+
 function main() {
   assertGuardWrappersAreReal();
   assertCheckerIsSensitive();
@@ -1539,6 +1869,13 @@ function main() {
   // including allowlisted ones: "no per-resource authorization is needed here"
   // never licenses "call a gate and ignore what it said".
   const discarded = [];
+  // CHECK 3 — an allowlist entry whose PREMISE is false (GHSA-hf73-rp4q-66pf).
+  const falsePremises = [];
+  // Item types whose `[id]` is PROVABLY an ownable Loom item, because some route
+  // under that type already resolves it as one. Derived from the tree so the
+  // premise test re-keys itself the moment a sibling adopts an owner check.
+  const scopedTypes = itemTypesWithOwnedIdSiblings(uniqueFiles);
+  assertPremiseTestIsSensitive(scopedTypes);
   let scanned = 0;
   let allowlistedHits = 0;
   let gateCalls = 0;
@@ -1566,7 +1903,14 @@ function main() {
     // this one (measured on app/api/workspaces/route.ts — see unguardedHandlers).
     const gaps = unguardedHandlers(src);
     if (gaps.length === 0) continue; // every handler carries its own authorization
-    if (isAllowed(r, gaps)) { allowlistedHits++; continue; } // intentional shared/session/self route
+    if (isAllowed(r, gaps)) {
+      allowlistedHits++;
+      // CHECK 3 — the entry is load-bearing HERE (nothing else makes this
+      // handler pass), so its premise is re-tested rather than trusted.
+      const falsified = falsifiedSharedBackendPremise(r, src, gaps, scopedTypes);
+      if (falsified.length) falsePremises.push(`${r}  [${falsified.join(', ')}]`);
+      continue; // intentional shared/session/self route
+    }
     violations.push(`${r}  [${gaps.join(', ')}]`);
   }
 
@@ -1574,9 +1918,36 @@ function main() {
   console.log(`[route-guards] allowlisted intentional routes hit: ${allowlistedHits} (${ALLOWLIST.size} per-route + ${ALLOWLIST_PREFIXES.length} class prefixes)`);
   console.log(`[route-guards] returned-value gate calls checked for consumption: ${gateCalls} (${RETURNED_VALUE_GATES.join(', ')})`);
   console.log(`[route-guards] gates whose answer is DISCARDED: ${discarded.length}`);
+  console.log(`[route-guards] shared-backend allowlist entries whose OWNERSHIP premise is CONTRADICTED by a sibling: ${falsePremises.length}`);
   console.log(`[route-guards] violations: ${violations.length}`);
 
   let failed = false;
+
+  if (falsePremises.length) {
+    failed = true;
+    console.error('\n[route-guards] FAIL — these routes are excused by SHARED_BACKEND_ITEM_ROUTES,');
+    console.error('whose recorded reason ends "…no per-tenant Cosmos ownership to scope". A SIBLING');
+    console.error('route under the SAME item type resolves the SAME [id] through an item-ownership');
+    console.error('resolver, so that premise is false: ownership IS scopeable here, and these');
+    console.error('handlers consume the id without scoping it.');
+    for (const p of falsePremises) console.error(`  - ${p}`);
+    console.error('\nAn allowlist entry is a claim about the code. This one is tested rather than');
+    console.error('trusted (GHSA-hf73-rp4q-66pf), and the test re-keys itself: the moment any route');
+    console.error('under an item type scopes [id] by item, every allowlisted sibling of that type is');
+    console.error('re-judged against it.');
+    console.error('\nFix: thread the owner check and GRADUATE the path —');
+    console.error("  export const GET = withWorkspaceOwner('<itemType>', { allowReadRoles: true }, …)");
+    console.error("  export const POST = withWorkspaceOwner('<itemType>', …)   // mutations: no read roles");
+    console.error('then MOVE the path out of SHARED_BACKEND_ITEM_ROUTES into NOW_GUARDED, so a');
+    console.error('future edit that drops the wrapper is re-flagged instead of silently masked.');
+    console.error('If the [id] here genuinely names an Azure object rather than the Loom item,');
+    console.error('give the route its OWN per-route reason saying so — the class reason does not');
+    console.error('cover it once a sibling has proved the type ownable. A hand-written reason in');
+    console.error('EITHER allowlist block works: the per-route `new Map([…])` literal near the top,');
+    console.error('or the `for (const [p, reason] of [ … ])` block lower down. (Only the first used');
+    console.error('to work — the second runs AFTER the class loop and was skipped by an');
+    console.error('`if (!ALLOWLIST.has(p))`. A hand-written reason now overrides the class default.)');
+  }
 
   if (discarded.length) {
     failed = true;
