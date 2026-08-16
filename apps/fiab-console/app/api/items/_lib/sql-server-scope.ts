@@ -577,6 +577,67 @@ export function withBoundSqlServer<P extends { id: string } = { id: string }>(
   });
 }
 
+/** Context for a route whose server is a PICK, not the item's binding. */
+export interface OwnedSqlContext<P> {
+  session: SessionPayload;
+  /** The authorized route item. */
+  item: WorkspaceItem;
+  /** Awaited route params. */
+  params: P;
+  /** The parsed JSON body (`{}` for a GET, or an unparseable/absent body). */
+  body: Record<string, unknown>;
+}
+
+export type OwnedSqlHandler<P> = (
+  req: NextRequest,
+  ctx: OwnedSqlContext<P>,
+) => Promise<Response> | Response;
+
+/**
+ * LAYER 1 ONLY: authorize the caller against the route `[id]` item, and hand the
+ * handler the item and the parsed body — no resolved server.
+ *
+ * For the routes {@link admitPickedServer} documents, where the server is the
+ * PARAMETER of the operation rather than the item's identity. Those routes call
+ * `admitPickedServer` themselves (Layer 3) on the coordinate they take; this
+ * wrapper supplies the ownership half so both halves are present and neither is
+ * a bare `getSession()`.
+ *
+ * IT IS A GUARD SIGNAL, so it is registered in `check-route-guards.mjs`
+ * (GUARD_SIGNAL_RE + GETSESSION_RE) and `generate-route-inventory.mjs`
+ * (SESSION_RE + OWNER_RE) in the SAME change that introduces it, and its
+ * substance is pinned structurally by `assertGuardWrappersAreReal()`. That
+ * lockstep is not ceremony: this file's own history records four separate
+ * measurements where moving a session into a wrapper the scripts did not know
+ * dropped the route out of the checker's REMIT — `scanned session-based routes`
+ * FELL — so the routes read as fixed while nothing was watching them.
+ *
+ * Unskippable in the same way `withBoundSqlServer` is: the handler is an
+ * ARGUMENT, so there is no `if (denied) return denied;` line a later edit can
+ * drop while leaving the guard's name in the file.
+ *
+ * The body is read ONCE here; a handler must not call `req.json()` again.
+ */
+export function withOwnedSqlItem<P extends { id: string } = { id: string }>(
+  opts: { itemTypes?: readonly string[]; allowReadRoles?: boolean },
+  handler: OwnedSqlHandler<P>,
+): RouteHandler<P> {
+  const itemTypes = opts.itemTypes ?? SQL_EDITOR_ITEM_TYPES;
+  const ownerOpts = opts.allowReadRoles ? { allowReadRoles: true } : {};
+  return withSession<P>(async (req, sctx) => {
+    const id = (sctx.params as { id?: string })?.id;
+    if (!id) return apiNotFound();
+    const item = await loadOwnedSqlItem(id, sctx.session, itemTypes, ownerOpts);
+    // 404-not-403, so an id cannot be probed for existence across tenants.
+    if (!item) return apiNotFound();
+    const body =
+      req.method === 'GET' || req.method === 'HEAD'
+        ? {}
+        : ((await req.json().catch(() => ({}))) as Record<string, unknown>);
+    return handler(req, { session: sctx.session, item, params: sctx.params, body });
+  });
+}
+
 /**
  * The admitted server + database for a route that has ALREADY loaded its owned
  * item itself, rather than through {@link withBoundSqlServer}.
@@ -638,8 +699,64 @@ export function admitBoundSqlTarget(
 }
 
 /**
- * Admit a SECOND, caller-chosen server coordinate — currently only
- * `replication`'s `replicaServer`, the destination of a geo-secondary.
+ * Admit a caller-CHOSEN server coordinate — one that legitimately cannot be
+ * resolved from the item, because choosing it IS the action.
+ *
+ * WHEN THIS IS THE RIGHT LAYER AND {@link withBoundSqlServer} IS NOT. Layer 2
+ * (resolve the target from `state.connection`, refuse a body that names anything
+ * else) is correct when the route ACTS ON the item's own database — scale it,
+ * restore it, grant on it. It is WRONG when the server is the parameter of the
+ * operation rather than the item's identity:
+ *
+ *   - `replication`'s `replicaServer` — you pick where the geo-secondary lands,
+ *     and it is by definition NOT the primary the item is bound to.
+ *   - `create-db`'s `server` — the database does not exist yet, so there is
+ *     nothing for the item to be bound to; the pick is the whole input.
+ *   - the two `[id]/databases` discovery GETs — they enumerate a server so the
+ *     user can CHOOSE what to bind. Requiring a binding first inverts the order
+ *     of the flow: `unified-sql-database-editor.pickServer` calls them in the
+ *     same tick it sets the selection, racing its own bind-on-selection effect,
+ *     and the SQL server editor's list-databases call precedes any bind at all.
+ *
+ * Forcing Layer 2 onto those would not be a stricter fix, it would be a broken
+ * one — and per `auto-bind-by-default.md` a 409 whose remediation is "go bind
+ * something first" on a surface whose PURPOSE is to help you choose what to bind
+ * is a dead end, not a boundary.
+ *
+ * So these routes carry LAYER 1 + LAYER 3 and no Layer 2: the caller must own
+ * the route item ({@link withOwnedSqlItem}), and the picked server must be in
+ * {@link sqlAuthorizedSubscriptions}. Layer 3 is the load-bearing one anyway —
+ * see this module's header — so what is lost is the weaker of the two, and what
+ * remains is precisely the control that closes the cross-subscription class.
+ *
+ * KNOWN RESIDUAL, stated rather than implied away: a caller may still name any
+ * server INSIDE the governed subscription(s) on these four routes. `create-db`
+ * can therefore provision a database onto a governed server the caller does not
+ * otherwise use (a cost/inventory concern, not a data-disclosure one), and the
+ * discovery GETs can list database NAMES on a governed server. That is the same
+ * residual the module header records for the bound routes, reached one hop
+ * earlier. Closing it needs the per-workspace registry of adopted servers noted
+ * there, and is deliberately not attempted here.
+ *
+ * `missing` carries the 400 this route wants when the coordinate is absent —
+ * `admitGovernedServer`'s own empty-value refusal is phrased for a BINDING
+ * ("This item has no bound server"), which would be a false statement here.
+ */
+export function admitPickedServer(
+  ref: unknown,
+  provider: SqlProviderKind,
+  missing: { code: string; error: string },
+): AdmittedServer {
+  const admitted = admitGovernedServer(ref, provider);
+  if (!admitted.ok && admitted.code === 'no_bound_connection') {
+    return refuse(400, missing.code, missing.error);
+  }
+  return admitted;
+}
+
+/**
+ * Admit a SECOND, caller-chosen server coordinate — `replication`'s
+ * `replicaServer`, the destination of a geo-secondary.
  *
  * Pinning the PRIMARY alone is not enough there: `enableReplication` resolves
  * `replicaServer` through the identical `startsWith('/')` branch, so a full ARM
@@ -647,13 +764,16 @@ export function admitBoundSqlTarget(
  * primary this one is a legitimate user PICK (you choose where the replica
  * lands), so it cannot be resolved from the item — it is admitted against the
  * authorized subscription set instead, which is the same Layer 3 control.
+ *
+ * A thin alias over {@link admitPickedServer} so the two stay one implementation;
+ * its refusal code and message are preserved verbatim because
+ * `replication-scope.test.ts` pins them.
  */
 export function admitReplicaServer(ref: unknown, provider: SqlProviderKind): AdmittedServer {
-  const admitted = admitGovernedServer(ref, provider);
-  if (!admitted.ok && admitted.code === 'no_bound_connection') {
-    return refuse(400, 'replica_server_required', 'replicaServer is required');
-  }
-  return admitted;
+  return admitPickedServer(ref, provider, {
+    code: 'replica_server_required',
+    error: 'replicaServer is required',
+  });
 }
 
 /** `/subscriptions/<sub>/resourceGroups/<rg>/providers/<ns>/<type>/<server>/<childType>/<child>` */

@@ -64,7 +64,7 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * too; the note is left here because this file caught it first and the checker
  * did not, which is the whole argument for keeping the two in lockstep.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer|OwnedSqlItem)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -147,6 +147,27 @@ const OWNER_RE = new RegExp([
   // the trap, not the reassurance. This token is what makes the classification
   // rest on the code again. (Related: #3625, presence vs enforcement.)
   'loadOwnedSqlItem\\s*\\(',
+  // The LAYER-1-ONLY wrapper from the same module, for the three routes whose
+  // server is a caller PICK rather than the item's binding — `[id]/create-db`
+  // and the two `[id]/databases` discovery GETs (see `sql-server-scope.ts`
+  // §admitPickedServer). Those routes call NEITHER `withBoundSqlServer` NOR
+  // `loadOwnedSqlItem` in their own source, so this file cannot see their
+  // ownership check without this token.
+  //
+  // FIFTH reproduction of the lockstep rule, MEASURED rather than assumed.
+  // Regenerating with the token removed publishes all three as **public**:
+  //
+  //     Public (no session)  104 → 107
+  //     items/azure-sql-database/[id]/create-db          session-only → public
+  //     items/azure-sql-server/[id]/databases            session-only → public
+  //     items/postgres-flexible-server/[id]/databases    session-only → public
+  //
+  // i.e. the doc would describe three routes that had just gained an OWNER
+  // check as unauthenticated — strictly worse than the `session-only` they were
+  // published as while they genuinely were unowned. `[id]/firewall` is absent
+  // from that list because it adopted `withBoundSqlServer`, already registered
+  // above; the gap is exactly the names this file does not know.
+  'withOwnedSqlItem\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',

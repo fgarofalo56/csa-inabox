@@ -38,8 +38,13 @@ describe('AzureSqlDatabaseEditor', () => {
     const m = installFetchMock({
       // useSqlServers() inventory.
       '/api/items/azure-sql-server': () => ({ ok: true, servers: [{ name: 'loom-sql-01', location: 'eastus2', fqdn: 'loom-sql-01.database.windows.net' }] }),
-      // useSqlDatabases() — route reads ?server= only.
-      '/api/items/azure-sql-server/current/databases': () => ({ ok: true, databases: [{ name: 'appdb' }] }),
+      // useSqlDatabases() — GHSA-v8r7-c2p5-mjf2 (fourth pass): the route now
+      // AUTHORIZES the caller against `[id]`, so the hook sends this editor's
+      // real item id. It used to send the literal `current`, on the strength of
+      // the route reading `?server=` only — which was true, and was the defect.
+      // Keying this fixture on the real id is what makes the fetch mock prove
+      // the caller was fixed, not just the route.
+      '/api/items/azure-sql-server/sqldb-fixture/databases': () => ({ ok: true, databases: [{ name: 'appdb' }] }),
       // sys.* navigator routes (real backend; mocked transport here).
       '/api/sqldb/tables': () => ({ ok: true, database: 'appdb', tables: [{ objectId: 1, schema: 'dbo', name: 'Orders', fullName: 'dbo.Orders', type: 'U', rowCount: 7 }] }),
       '/api/sqldb/views': () => ({ ok: true, views: [] }),

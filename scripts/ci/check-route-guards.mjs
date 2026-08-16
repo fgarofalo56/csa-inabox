@@ -267,6 +267,39 @@ const GUARD_SIGNAL_RE = new RegExp(
     // left the checker's REMIT, which is the same under-reporting the ADX pass
     // recorded and the `guard-adoption gap` this repo has been bitten by before.
     'withBoundSqlServer(?:<[^()]*>)?\\s*\\(',
+    // ...and its LAYER-1-ONLY sibling, for the four routes in the same family
+    // whose server is a caller PICK rather than the item's binding —
+    // `[id]/create-db` (the database does not exist yet) and the two
+    // `[id]/databases` discovery GETs plus `azure-sql-server`'s (they run so the
+    // user can CHOOSE what to bind, and the unified editor calls one of them in
+    // the same tick it sets the selection, racing its own bind effect). Those
+    // routes carry Layer 1 here + Layer 3 via `admitPickedServer` at the call
+    // site; forcing Layer 2 on them would 409 the legitimate flow, which is a
+    // dead end and not a boundary (`auto-bind-by-default.md`).
+    //
+    // Matched AS A CALL, and its substance is pinned by
+    // `assertGuardWrappersAreReal()` below, so hollowing it out fails this run
+    // instead of silently disarming all four.
+    //
+    // ADDED TO GETSESSION_RE AND generate-route-inventory's SESSION_RE/OWNER_RE
+    // IN THE SAME CHANGE — the FIFTH recorded reproduction of that lockstep
+    // rule, and the numbers here are MEASURED, not reasoned. Simulating
+    // "hardened but registered nowhere" (this token removed AND the four
+    // NOW_GUARDED entries below removed) takes `scanned session-based routes`
+    // from 1526 to 1523, with `violations: 0` throughout — three routes leaving
+    // the checker's REMIT entirely, silently, on the change that fixed them.
+    //
+    // THREE, NOT FOUR, and the difference is the useful part: `[id]/firewall`
+    // stays in remit because it adopted `withBoundSqlServer`, which was already
+    // registered. Only the three `withOwnedSqlItem` routes vanish. A guard is
+    // invisible to this file for exactly as long as its NAME is, which is why
+    // the number is written down rather than described.
+    //
+    // NOTE the count does NOT move with this token alone removed: NOW_GUARDED is
+    // fail-closed and holds a graduated route in remit regardless. That is the
+    // protection working — and it is also why the honest measurement had to
+    // remove both, rather than one and assume.
+    'withOwnedSqlItem(?:<[^()]*>)?\\s*\\(',
     // ...and its OWNER-RESOLUTION half, used directly by the routes in that
     // family that cannot adopt the wrapper — `[id]/connect` (it WRITES the
     // binding the wrapper reads, so there is nothing to resolve yet), `[id]/query`
@@ -397,7 +430,7 @@ const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // did not. That is #2977 again, verbatim: a control passing on prose. Now that
 // matching runs on comment-stripped source the prose is gone, so the pattern
 // has to match the real call.
-const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer)(?:<[^()]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)(?:<[^()]*>)?\s*\(/;
+const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer|OwnedSqlItem)(?:<[^()]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)(?:<[^()]*>)?\s*\(/;
 
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
@@ -473,6 +506,39 @@ const ALLOWLIST = new Map([
   ['apps/fiab-console/app/api/items/[type]/[id]/security/route.ts', 'security-scan over a shared Azure backend resolved by item-type gate'],
   ['apps/fiab-console/app/api/items/[type]/[id]/sql-security/route.ts', 'SQL security over a shared Azure backend resolved by item-type gate'],
   ['apps/fiab-console/app/api/items/[type]/[id]/statistics/route.ts', 'read-only statistics over a shared Azure backend resolved by item type'],
+
+  // ── GHSA-v8r7-c2p5-mjf2 — the three tabled routes that are OUT OF CLASS ──
+  //
+  // Recorded per-route rather than left under the class default, because the
+  // advisory's own lesson is that an inherited reason is not evidence. Each was
+  // re-derived from the handler and its client, not from the previous triage:
+  // the question is not "does it authorize" (none of the three does more than
+  // `getSession()`) but "does it carry a SERVER / DATABASE / ARM-id coordinate
+  // that reaches the Console UAMI", which is the class this advisory records.
+  // If any of them ever grows one, it re-enters the class and this reason is
+  // wrong — which is exactly why the coordinate each one DOES take is named.
+  //
+  // maintenance-configs — takes `location` ONLY, and it reaches
+  // `GET /providers/Microsoft.Maintenance/publicMaintenanceConfigurations`, a
+  // TENANT-level read of MICROSOFT-PUBLISHED configurations. No subscription, no
+  // resource group, no customer resource. `location` is URL-encoded into an
+  // OData `$filter` VALUE and never into a path segment, so it cannot redirect
+  // the request either.
+  ['apps/fiab-console/app/api/items/azure-sql-database/[id]/maintenance-configs/route.ts', 'GHSA-v8r7-c2p5-mjf2 OUT OF CLASS: takes `location` only; reads tenant-level Microsoft-published publicMaintenanceConfigurations, location goes into an encoded $filter value not a path segment — no server/database/ARM-id coordinate'],
+  // principal-search — a Microsoft Graph directory search (`q`, `kind`). No ARM,
+  // no server, no database, no resource id; it cannot reach a database backend
+  // at all. Out of THIS class. It does let any authenticated session run a
+  // directory lookup as the app identity, which is a separate and much smaller
+  // question (and adding an owner check would break the picker on an unsaved
+  // `id === 'new'` item) — tracked in the advisory, not fixed here.
+  ['apps/fiab-console/app/api/items/azure-sql-database/[id]/principal-search/route.ts', 'GHSA-v8r7-c2p5-mjf2 OUT OF CLASS: Microsoft Graph principal search over `q`/`kind`; no ARM call, no server/database/resource-id coordinate'],
+  // query/cancel — takes `requestId` and looks it up in `liveRequests`, an
+  // IN-PROCESS Map of live mssql `Request` objects on one replica. It sends a TDS
+  // ATTENTION packet on an ALREADY-OPEN connection that `[id]/query` (itself
+  // fully guarded) established; it opens nothing, names no server or database,
+  // and returns no data. The id is a client-generated UUIDv4 that no route ever
+  // discloses, so there is no cross-user reach to bound.
+  ['apps/fiab-console/app/api/items/azure-sql-database/[id]/query/cancel/route.ts', 'GHSA-v8r7-c2p5-mjf2 OUT OF CLASS: takes `requestId` into an in-process live-request Map and sends TDS ATTENTION on a connection [id]/query already opened; no server/database/ARM-id coordinate, opens nothing, returns no data'],
 
   // Admin routes gated by getSession + org-scoped Cosmos queries (every read
   // binds the caller tenant) or reading deployment-wide config only.
@@ -614,12 +680,9 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/apim-product/[id]/apis/route.ts',
   'apps/fiab-console/app/api/items/apim-product/[id]/route.ts',
   'apps/fiab-console/app/api/items/apim-product/[id]/subscriptions/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/create-db/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/firewall/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/maintenance-configs/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/principal-search/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/cancel/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-server/[id]/databases/route.ts',
   'apps/fiab-console/app/api/items/compute/[id]/route.ts',
   'apps/fiab-console/app/api/items/compute/[id]/start/route.ts',
   'apps/fiab-console/app/api/items/compute/[id]/stop/route.ts',
@@ -758,7 +821,6 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/paginated-report/[id]/export/route.ts',
   'apps/fiab-console/app/api/items/paginated-report/[id]/preview/route.ts',
   'apps/fiab-console/app/api/items/paginated-report/[id]/route.ts',
-  'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/databases/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/definition/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/run/route.ts',
@@ -1144,6 +1206,49 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/performance/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/sql2025-features/route.ts',
   'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/firewall/route.ts',
+  // ── GHSA-v8r7-c2p5-mjf2, FOURTH PASS ─────────────────────────────────────
+  // Four of the seven the third pass tabled. Two adoptions, not one:
+  //
+  //  `[id]/firewall` (Azure SQL) takes the FULL wrapper — Layer 1 + 2 + 3, the
+  //  exact shape its PostgreSQL twin took in #3623. Its tabling reason was real
+  //  and is now VOID rather than waived: it was tabled because
+  //  `AzureSqlServerEditor` drives it with an `azure-sql-server` item id and
+  //  that editor persisted NO binding, so Layer 2 would have 409'd every
+  //  legitimate click at a Connect tab it does not have. #3639 gave that editor
+  //  `useSqlItemBinding` and it now awaits `ensureBound()` before all three
+  //  calls. The blocker was removed by fixing the EDITOR, not by weakening the
+  //  route.
+  //
+  //  The other three take `withOwnedSqlItem` + `admitPickedServer` — Layer 1 +
+  //  Layer 3, no Layer 2 — because their server is the PARAMETER of the
+  //  operation rather than the item's identity: `create-db` provisions a
+  //  database that does not exist yet (so there is nothing bound to resolve),
+  //  and the two `[id]/databases` GETs are the DISCOVERY calls that populate the
+  //  picker, i.e. they run so the user can choose what to bind.
+  //  `unified-sql-database-editor.pickServer` calls one in the same tick it sets
+  //  the selection, racing its own bind-on-selection effect, so Layer 2 there
+  //  would have failed intermittently on a legitimate flow. Layer 3 is the
+  //  load-bearing layer for this whole family (see the module header), so what
+  //  is skipped is the weaker of the two.
+  //
+  //  `azure-sql-server/[id]/databases` was NOT in the advisory's 19. It sat in
+  //  SHARED_BACKEND_ITEM_ROUTES beside `create-db` and `firewall` and is the
+  //  exact twin of the PostgreSQL one; it was found by enumerating this block
+  //  mechanically rather than working the handed-over list. Its editor caller
+  //  used to send the literal id `current`, with a comment noting the route
+  //  reads only `?server=` — which was true, and was the defect.
+  //
+  //  THE REMAINING THREE — `maintenance-configs`, `principal-search` and
+  //  `query/cancel` — stay allowlisted because they are OUT OF CLASS, verified
+  //  independently rather than inherited. Each now carries a per-route reason
+  //  in ALLOWLIST recording what coordinate it actually takes, so the next
+  //  reader does not have to re-derive it. Their stale class-reason entries were
+  //  left in place deliberately; the four above were DELETED from that list in
+  //  this same change rather than left to lose a race with NOW_GUARDED.
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/firewall/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/create-db/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-server/[id]/databases/route.ts',
+  'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/databases/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
@@ -1719,6 +1824,10 @@ const ITEM_OWNERSHIP_RESOLVER_RE = new RegExp(
     // falsify the "no per-tenant Cosmos ownership to scope" premise for any
     // SIBLING in those families that is still body-addressed.
     'withBoundSqlServer',
+    // ...and its Layer-1-only sibling. Same purpose here: a type whose `[id]` is
+    // resolved as an OWNED item by ANY of its routes cannot also claim "no
+    // per-tenant Cosmos ownership to scope" for a body-addressed sibling.
+    'withOwnedSqlItem',
   ].map((n) => `${n}(?:<[^()]*>)?\\s*\\(`).join('|'),
 );
 
@@ -1918,6 +2027,31 @@ const GUARD_WRAPPERS = [
     file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'sql-server-scope.ts'),
     exportKind: 'async-function',
     mustCall: ['loadOwnedItem\\s*\\(\\s*id\\s*,\\s*itemType\\s*,\\s*session\\.claims\\.oid\\s*,'],
+  },
+  {
+    // GHSA-v8r7-c2p5-mjf2, FOURTH PASS — the LAYER-1-ONLY wrapper for the four
+    // routes whose server is a caller PICK. Four routes delegate their ENTIRE
+    // ownership check to it, so hollowing it out must fail HERE rather than
+    // silently disarming all four while they keep matching GUARD_SIGNAL_RE.
+    //
+    // PINNED TO AN EXPRESSION, NOT A NAME, for the reason its sibling records:
+    // `mustCall` is a PRESENCE test, so `loadOwnedSqlItem\s*\(` alone is
+    // satisfied by a wrapper that resolves the item, ignores the answer and
+    // calls the handler anyway:
+    //     const item = await loadOwnedSqlItem(id, sctx.session, itemTypes, …);
+    //     return handler(req, { …, item: item ?? ({} as WorkspaceItem) });
+    // — which reinstates the whole class with this checker green. Pinning
+    // `if (!item) return apiNotFound()` asserts the answer is ACTED ON, which is
+    // the same "gates whose answer is DISCARDED" failure this file counts
+    // elsewhere. `withSession` pins that a session is required at all.
+    name: 'withOwnedSqlItem',
+    file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'sql-server-scope.ts'),
+    exportKind: 'function',
+    mustCall: [
+      'withSession\\s*(?:<[^()]*>)?\\s*\\(',
+      'loadOwnedSqlItem\\s*\\(',
+      'if\\s*\\(\\s*!item\\s*\\)\\s*return\\s+apiNotFound\\s*\\(',
+    ],
   },
   // C22 (#3088) — the route-toolkit wrappers are guard signals too, and they
   // are the SAME hazard one level up: a route adopting `withTenantAdmin` is

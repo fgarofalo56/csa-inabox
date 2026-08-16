@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 104 |
-| Session-only | 502 |
-| Owner-scoped | 773 |
+| Session-only | 498 |
+| Owner-scoped | 777 |
 | Admin | 301 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -1135,8 +1135,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/azure-sql-database/[id]/aad-admin/route.ts` | GET PUT | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/[id]/connect/route.ts` | POST | owner-scoped |  | — |
 | `items/azure-sql-database/[id]/copilot/route.ts` | POST | owner-scoped | ● | Azure SQL |
-| `items/azure-sql-database/[id]/create-db/route.ts` | POST | session-only |  | Azure SQL |
-| `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/create-db/route.ts` | POST | owner-scoped |  | Azure SQL |
+| `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/[id]/get-data/route.ts` | POST | owner-scoped | ● | ADF |
 | `items/azure-sql-database/[id]/maintenance-configs/route.ts` | GET | session-only |  | Azure SQL |
 | `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos |
@@ -1153,7 +1153,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/azure-sql-database/[id]/sql2025-features/route.ts` | POST | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/route.ts` | GET POST | owner-scoped |  | — |
 | `items/azure-sql-managed-instance/route.ts` | GET POST | owner-scoped |  | Azure SQL |
-| `items/azure-sql-server/[id]/databases/route.ts` | GET | session-only |  | Azure SQL |
+| `items/azure-sql-server/[id]/databases/route.ts` | GET | owner-scoped |  | Azure SQL |
 | `items/azure-sql-server/route.ts` | GET POST | owner-scoped |  | Azure SQL |
 | `items/batch-pool/jobs/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
 | `items/batch-pool/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
@@ -1546,7 +1546,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/plan/[id]/model/route.ts` | GET POST | owner-scoped |  | — |
 | `items/plan/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/plan/[id]/writeback/route.ts` | GET POST | owner-scoped | ● | — |
-| `items/postgres-flexible-server/[id]/databases/route.ts` | GET | session-only |  | — |
+| `items/postgres-flexible-server/[id]/databases/route.ts` | GET | owner-scoped |  | — |
 | `items/postgres-flexible-server/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | — |
 | `items/postgres-flexible-server/[id]/query/route.ts` | POST | owner-scoped |  | — |
 | `items/postgres-flexible-server/route.ts` | GET POST | session-only |  | — |

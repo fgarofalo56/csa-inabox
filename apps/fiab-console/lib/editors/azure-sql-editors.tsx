@@ -850,20 +850,31 @@ function useSqlServers() {
   return { servers, error, hint, loading };
 }
 
-function useSqlDatabases(server: string) {
+function useSqlDatabases(id: string, server: string) {
   const [databases, setDatabases] = useState<DatabaseLite[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     if (!server) { setDatabases(null); setError(null); return; }
+    // An UNSAVED item owns nothing, so the now-owner-scoped route below would
+    // 404 and paint a red "Databases not reachable" bar on a freshly created
+    // item — which `ux-baseline.md` §6 forbids. Guide instead of erroring; the
+    // list populates as soon as the item is saved.
+    if (!id || id === 'new') {
+      setDatabases([]);
+      setError(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       setLoading(true); setError(null);
       try {
-        // The /api/items/azure-sql-server/[id]/databases route only reads
-        // the ?server= query param, not the [id] path segment — use a
-        // stable "current" placeholder so the route is satisfied.
-        const r = await clientFetch(`/api/items/azure-sql-server/current/databases?server=${encodeURIComponent(server)}`);
+        // GHSA-v8r7-c2p5-mjf2 — the REAL item id, not a placeholder. This used
+        // to send the literal `current` with a comment noting the route reads
+        // only `?server=` and not `[id]`. That was true, and it was the defect:
+        // the route now authorizes the caller against `[id]` and admits the
+        // picked server against the governed subscription set.
+        const r = await clientFetch(`/api/items/azure-sql-server/${encodeURIComponent(id)}/databases?server=${encodeURIComponent(server)}`);
         if (cancelled) return;
         const j = await r.json();
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setDatabases([]); }
@@ -873,7 +884,7 @@ function useSqlDatabases(server: string) {
       } finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [server]);
+  }, [id, server]);
   return { databases, error, loading };
 }
 
@@ -882,7 +893,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   const srv = useSqlServers();
   const [server, setServer] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_SERVER || '');
   const [database, setDatabase] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_DB || '');
-  const dbs = useSqlDatabases(server);
+  const dbs = useSqlDatabases(id, server);
   const [tab, setTab] = useState<'query' | 'fts' | 'vector' | 'mirroring' | 'replication' | 'sql2025'>('query');
   const [sqlText, setSqlText] = useState<string>(
     `-- Azure SQL database — TDS over AAD MI from the Loom Console BFF.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, @@VERSION AS version;`,
@@ -1684,7 +1695,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
   const srv = useSqlServers();
   const [server, setServer] = useState<string>('');
   const [database, setDatabase] = useState<string>('');
-  const dbs = useSqlDatabases(server);
+  const dbs = useSqlDatabases(id, server);
   const [table, setTable] = useState<string>('docs');
   const [column, setColumn] = useState<string>('embedding');
   const [dim, setDim] = useState<number>(1536);
