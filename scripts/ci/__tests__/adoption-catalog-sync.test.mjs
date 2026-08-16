@@ -243,6 +243,23 @@ test('MUTATION: binding through a cross-scope MODULE goes RED (the #3333 RBAC tr
   );
 });
 
+test('MUTATION: a WRAPPED creator declaration is still judged (not physical-line blind)', () => {
+  // A bicep module declaration may legally wrap across lines. The first version
+  // of these checks filtered physical lines and required the path AND the
+  // condition on the same one, so this shape would have been invisible and the
+  // guard would have reported clean — the exact blindness #3417 recorded for
+  // shell continuations.
+  const { problems } = withMutation(
+    'govBicep',
+    "module purview 'modules/purview.bicep' = if (provisionPurview) {",
+    "module purview 'modules/purview.bicep' =\n  if (deployDMLZ) {",
+  );
+  assert.ok(
+    problems.some((p) => p.includes('gov/main.bicep') && p.includes('provisionPurview')),
+    `a wrapped declaration must still be caught, got:\n${problems.join('\n')}`,
+  );
+});
+
 test('the checks are keyed to a REAL catalog entry, not a private list', () => {
   // If someone removes `purview` from the catalog, these checks must not go
   // quietly green by finding nothing to check.

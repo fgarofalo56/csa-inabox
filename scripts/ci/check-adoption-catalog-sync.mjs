@@ -33,6 +33,15 @@
  * come out, this exits non-zero.
  *
  * Mutation-proven by scripts/ci/__tests__/adoption-catalog-sync.test.mjs.
+ *
+ * PHYSICAL-LINES-OK: the `.split('\n')` calls here judge BICEP only — the A2/A3/A4
+ * checks against platform/fiab/bicep/main.bicep. Bicep has no backslash line
+ * continuation, so a physical line is a logical line there (the same reasoning
+ * check-guard-logical-lines.mjs encodes in its own out-of-scope control). This
+ * file entered that guard's scope only when it began READING .github/workflows
+ * to derive its population — and that parsing never splits: submittedTemplates()
+ * matches `--template-file` across the whole body, and the per-template checks
+ * below match whole-source regexes that tolerate a wrapped module declaration.
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -439,7 +448,6 @@ export function runChecks(files) {
   for (const tpl of ADOPT_HONOURING_TEMPLATES) {
     const src = files[tpl.file];
     const label = PATHS[tpl.file];
-    const lines = src.split('\n');
 
     // G1 — the transport exists. Without the bag there is nothing to carry a
     // decision, and every service silently reverts to create-always.
@@ -475,21 +483,31 @@ export function runChecks(files) {
 
       // G3 — the module that CREATES the service is gated on that var, not on
       // the landing-zone toggle alone. This is the exact revert that reopens
-      // #3577. Matched on the module PATH ending in <key>.bicep, case-insensitive,
-      // because the trees disagree on casing and depth
-      // ('modules/purview.bicep' vs '../Purview/purview.bicep').
-      const creatorLines = lines.filter(
-        (l) => /=\s*if\s*\(/.test(l) && new RegExp(`[/']${key}\\.bicep'`, 'i').test(l),
+      // #3577.
+      //
+      // Matched against the WHOLE SOURCE, not line by line. A bicep module
+      // declaration may legally wrap:
+      //     module purview 'modules/purview.bicep' =
+      //       if (deployDMLZ) {
+      // and a physical-line test would see neither the path nor the condition
+      // together, then report clean — the same blindness #3417 recorded for
+      // shell continuations. The condition is captured and inspected instead.
+      // Matched case-insensitively because the trees disagree on casing and
+      // depth ('modules/purview.bicep' vs '../Purview/purview.bicep').
+      const creatorRe = new RegExp(
+        `module\\s+\\w+\\s+'[^']*${key}\\.bicep'\\s*=\\s*if\\s*\\(([\\s\\S]*?)\\)\\s*\\{`,
+        'gi',
       );
-      if (creatorLines.length === 0) {
+      const conditions = [...src.matchAll(creatorRe)].map((m) => m[1].trim());
+      if (conditions.length === 0) {
         problems.push(
           `${label}: no module invocation matching '<path>/${key}.bicep' is gated \`= if (…)\`. Either the ` +
             `creator moved (update this guard) or its condition was removed.`,
         );
-      } else if (!creatorLines.some((l) => l.includes(def.provisionVar))) {
+      } else if (!conditions.some((c) => c.includes(def.provisionVar))) {
         problems.push(
           `${label}: the module that creates ${def.label} is gated on ` +
-            `${creatorLines.map((l) => l.trim()).join(', ')} — it must carry '${def.provisionVar}', or it ` +
+            `${conditions.map((c) => `if (${c})`).join(', ')} — it must carry '${def.provisionVar}', or it ` +
             `deploys a new one even when the plan says adopt (#3577).`,
         );
       }
@@ -504,16 +522,14 @@ export function runChecks(files) {
       // `Microsoft.Resources/deployments/write`, which Reader does not carry —
       // the AuthorizationFailed P0 that failed two Commercial deploys on
       // 2026-08-13 (#3333). An `existing` resource needs only read.
-      const bindsExisting = new RegExp(`resource \\w+ '${def.armType}@[^']+' existing`, 'i').test(src);
+      const bindsExisting = new RegExp(`resource\\s+\\w+\\s+'${def.armType}@[^']+'\\s+existing`, 'i').test(src);
       if (!bindsExisting) {
         problems.push(
           `${label}: declares no \`resource … '${def.armType}@…' existing\`, so an 'adopt' decision would ` +
             `suppress the new ${def.label} and bind nothing — a silent skip wearing adoption's name.`,
         );
       }
-      const bindsViaModule = lines.some(
-        (l) => /^\s*module\s/.test(l) && new RegExp(`${key}-existing\\.bicep`, 'i').test(l),
-      );
+      const bindsViaModule = new RegExp(`module\\s+\\w+\\s+'[^']*${key}-existing\\.bicep'`, 'i').test(src);
       if (bindsViaModule) {
         problems.push(
           `${label}: binds the adopted ${def.label} through a MODULE. A module scoped to the adopted ` +
