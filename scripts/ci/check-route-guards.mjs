@@ -271,6 +271,16 @@ const GUARD_SIGNAL_RE = new RegExp(
     // hollowing it out fails this checker instead of silently disarming every
     // consumer.
     'guardAdxItemRequest(?:<[^()]*>)?\\s*\\(',
+    // GHSA-v2g8-gp3r-rg4r (round 3) — `guardSynapseItemRequest(` is the same
+    // contract for the SHARED Synapse SQL estate (`warehouse`,
+    // `synapse-*-sql-pool`) and for the `[type]/[id]/**` dispatchers that also
+    // reach Databricks/Unity Catalog. Same substance bar: it runs getSession +
+    // the canonical `authorizeItemWorkspace` ladder and resolves the database
+    // FROM THE ITEM, and `assertGuardWrappersAreReal()` below pins that return
+    // expression so hollowing it out fails this checker rather than silently
+    // disarming every consumer. Matched AS A CALL, so a `{@link …}` cannot
+    // satisfy it.
+    'guardSynapseItemRequest(?:<[^()]*>)?\\s*\\(',
     // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
     // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
     // route that threads one of them is owner-scoped even without a literal
@@ -970,6 +980,61 @@ const NOW_GUARDED = new Set([
   // the same set those panes admit, so it is graduated with them rather than
   // shipped as a new unguarded surface.
   'apps/fiab-console/app/api/items/tapestry/[id]/databases/route.ts',
+  // ── GHSA-v2g8-gp3r-rg4r, THIRD pass — the tabled set ────────────────────────
+  //
+  // The advisory stayed open after #3600/#3614 on the routes those passes tabled
+  // with per-route reasons. These fourteen are that set, and they sat under
+  // SHARED_BACKEND_ITEM_ROUTES / ALLOWLIST on the SAME false premise: "a shared
+  // Azure backend with no per-tenant Cosmos ownership to scope", which was true
+  // of these handlers only because they never looked at `[id]`. Several did not
+  // even accept `ctx`.
+  //
+  //   eventhouse/[id]                   `export async function GET()` — no ctx —
+  //     running `.show databases details` CLUSTER-WIDE and returning every
+  //     tenant's database name + size + retention + hot-cache + table count. The
+  //     reconnaissance half of the retention-rewrite `[id]/policies` closes.
+  //   warehouse/[id]/{clone,copy-into}  CTAS / COPY INTO writing a caller-named
+  //     table in the ONE env-pinned Synapse dedicated pool.
+  //   warehouse/[id]/query
+  //   synapse-dedicated-sql-pool/[id]/{clone,query}
+  //                                     arbitrary T-SQL plus a `body.database`
+  //     that re-pointed the TDS connection at any database on the shared server.
+  //   warehouse/[id]/{schema,script-out}
+  //   synapse-dedicated-sql-pool/[id]/{schema,script-out}
+  //                                     pool-wide enumeration and verbatim
+  //     OBJECT_DEFINITION of any view/procedure/function on it.
+  //   databricks-sql-warehouse/[id]/ctas
+  //   [type]/[id]/{optimize,statistics} CREATE TABLE AS SELECT / OPTIMIZE /
+  //     CREATE-UPDATE-DROP STATISTICS at a caller-named Unity Catalog or Synapse
+  //     coordinate, as the Console identity.
+  //   semantic-model/[id]/refresh-policy
+  //                                     TMSL Alter + a Refresh that REBUILDS the
+  //     partitions of a caller-named table in the ONE shared AAS database.
+  //
+  // Each now runs `guardSynapseItemRequest` (or `guardAdxItemRequest` for the
+  // eventhouse GET) against the route item. Graduating them here rather than
+  // leaving them allowlisted is the same commitment #3600/#3614 made: dropping
+  // the guard must RE-FLAG, not fall back to a class reason nobody re-tested.
+  //
+  // READ THE LEDGER BEFORE READING THIS AS CLOSURE. On the shared Synapse pool,
+  // Unity Catalog and AAS surfaces the DATA coordinate (`schema.table`,
+  // `catalog.schema.table`, `tableName`) is still caller-named, because no
+  // item→object ownership exists in the estate to bind it to. Graduation records
+  // that Layer 1 is now enforced and watched — not that the class is closed.
+  'apps/fiab-console/app/api/items/eventhouse/[id]/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/clone/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/copy-into/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/schema/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/script-out/route.ts',
+  'apps/fiab-console/app/api/items/synapse-dedicated-sql-pool/[id]/clone/route.ts',
+  'apps/fiab-console/app/api/items/synapse-dedicated-sql-pool/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/synapse-dedicated-sql-pool/[id]/schema/route.ts',
+  'apps/fiab-console/app/api/items/synapse-dedicated-sql-pool/[id]/script-out/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/ctas/route.ts',
+  'apps/fiab-console/app/api/items/[type]/[id]/optimize/route.ts',
+  'apps/fiab-console/app/api/items/[type]/[id]/statistics/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/refresh-policy/route.ts',
   // non-items routes fixed in the same sweep
   'apps/fiab-console/app/api/aml/environments/route.ts',
   'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',
@@ -1685,6 +1750,22 @@ const GUARD_WRAPPERS = [
       'getSession\\s*\\(',
       'authorizeItemWorkspace\\s*\\(',
       'database:\\s*resolveItemDatabase\\s*\\(\\s*item\\s*\\)',
+    ],
+  },
+  {
+    // GHSA-v2g8-gp3r-rg4r round 3 — the Synapse sibling. Held to the IDENTICAL
+    // bar, including the pinned RETURN EXPRESSION, for the reason spelled out
+    // above: `mustCall` is a presence test, so asserting only that
+    // `resolveItemSynapseDatabase` appears somewhere in the wrapper would be
+    // satisfied by a body that computes it and then prefers a caller-supplied
+    // value. Pinning `database: resolveItemSynapseDatabase(item)` makes the
+    // assertion about behaviour rather than vocabulary.
+    name: 'guardSynapseItemRequest',
+    file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'synapse-item-scope.ts'),
+    mustCall: [
+      'getSession\\s*\\(',
+      'authorizeItemWorkspace\\s*\\(',
+      'database:\\s*resolveItemSynapseDatabase\\s*\\(\\s*item\\s*\\)',
     ],
   },
   // C22 (#3088) — the route-toolkit wrappers are guard signals too, and they

@@ -7,35 +7,58 @@
  * Data-access mode (F10): when the item's state.accessMode is 'user', the
  * query runs under the signed-in user's own Azure identity via their cached
  * delegated SQL token; otherwise it runs as the Loom service identity (default).
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r (the "weak signal only" band). `getSession()`
+ * was the only check; `[id]` was read solely to resolve `accessMode`, which
+ * selects an identity and authorizes nobody. `body.database` re-pointed the TDS
+ * connection at any other database on the shared Synapse SQL server.
+ *
+ * NOTE that the DEFAULT `accessMode` is the SERVICE identity, so the common path
+ * runs as the Console UAMI with AAD-admin rights and no caller RBAC consulted.
+ * The 'user' mode is a genuine OBO and is unaffected by this change — the guard
+ * runs before either branch, so the identity choice is now made only for a
+ * caller authorized against the item.
+ *
+ * Both layers, same contract as `warehouse/[id]/query` (its sibling over the
+ * SAME pool — fixing one alone would only move the URL).
  */
-
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { dedicatedTarget, executeQuery, executeQueryAsUser, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
+import { guardSynapseItemRequest, scopeSynapseDatabase } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const POOL_NOT_FOUND = 'dedicated SQL pool not found';
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  const { id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'synapse-dedicated-sql-pool',
+    notFound: POOL_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
+  const { session, item } = guard.ctx;
+
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 
-  const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   const sqlText = (body?.sql || '').toString().trim();
   const queryId = (body?.queryId || '').toString().trim() || undefined;
-  // Cross-database picker: when the editor's database dropdown selects a
-  // database other than the env-bound pool, open the TDS connection against
-  // that database so 3-part names (other_db.schema.table) resolve natively.
-  const database = (body?.database || '').toString().trim();
   if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
+
+  // LAYER 2 — the cross-database picker is bound to this item's workspace.
+  const scopedDb = await scopeSynapseDatabase(item, body?.database);
+  if (!scopedDb.ok) {
+    return NextResponse.json({ ok: false, error: scopedDb.error }, { status: scopedDb.status });
+  }
 
   // Named parameters (`@name`) — bound via req.input(), NOT concatenated.
   const parameters: SynapseQueryParam[] = (Array.isArray(body?.parameters) ? body.parameters : [])
@@ -56,6 +79,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // sibling database for cross-DB queries (keyed separately so its own pool
   // is cached).
   const baseTarget = dedicatedTarget();
+  const database: string = scopedDb.database;
   const target = database && database !== baseTarget.database
     ? { ...baseTarget, database, cacheKey: `dedicated:${process.env.LOOM_SYNAPSE_WORKSPACE}:${database}` }
     : baseTarget;

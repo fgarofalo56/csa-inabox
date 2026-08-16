@@ -13,6 +13,19 @@
  * Fabric parity: the Azure-native equivalent of the Fabric Warehouse
  * `COPY INTO` data-ingestion statement.
  *   https://learn.microsoft.com/sql/t-sql/statements/copy-into-transact-sql?view=azure-sqldw-latest
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. Both handlers ran under `withSession`, which
+ * resolves a session and authorizes nobody against `[id]` — the id was not read
+ * at all. POST then wrote rows into a CALLER-NAMED `targetSchema.targetTable` in
+ * the ONE shared Synapse dedicated pool, as the Console UAMI.
+ *
+ * Layer 1 now authorizes the caller against the warehouse item: WRITE-scoped on
+ * POST (it loads data), read-scoped on the GET source picker. Per
+ * `_lib/synapse-item-scope.ts` the shared pool has no item→table ownership, so
+ * the target table is still caller-named — a FLOOR, not a BOUND. The SOURCE side
+ * was already bounded to the deployment lake by `isKnownContainer`, but the PATH
+ * within it stays caller-chosen; that residual is in the ledger alongside the
+ * eventhouse continuous-export one it matches.
  */
 
 import { trimSlashes } from '@/lib/util/trim';
@@ -24,10 +37,12 @@ import { KNOWN_CONTAINERS, listPaths, getAccountName } from '@/lib/azure/adls-cl
 import { toHttps } from '@/lib/azure/delta-source-uri';
 import { cleanTablePath, isKnownContainer } from '@/lib/azure/delta-history';
 import { bracket, escapeSqlLiteral } from '@/lib/sql/quoting';
-import { withSession } from '@/lib/api/route-toolkit';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const WAREHOUSE_NOT_FOUND = 'warehouse not found';
 
 const FILE_TYPES = new Set(['CSV', 'PARQUET', 'ORC']);
 const ENCODINGS = new Set(['UTF8', 'UTF16']);
@@ -46,7 +61,15 @@ function terminator(v: unknown, fallback: string): string {
   return escapeSqlLiteral(s);
 }
 
-export const GET = withSession(async (req: NextRequest, { session }) => {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'warehouse',
+    notFound: WAREHOUSE_NOT_FOUND,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
 
   const container = req.nextUrl.searchParams.get('container') || '';
   if (!container) {
@@ -65,9 +88,18 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   } catch (e) {
     return apiServerError(e, 'Failed to list storage paths', 'list_failed');
   }
-});
+}
 
-export const POST = withSession(async (req: NextRequest, { session }) => {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // COPY INTO LOADS DATA — a write. No `allowReadRoles`.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'warehouse',
+    notFound: WAREHOUSE_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
+  const { session } = guard.ctx;
 
   const body = await req.json().catch(() => ({}));
   const tgtSchema = safeIdent(body?.targetSchema ?? 'dbo');
@@ -121,4 +153,4 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   } catch (e) {
     return apiServerError(e, 'COPY INTO failed', 'copy_failed');
   }
-});
+}

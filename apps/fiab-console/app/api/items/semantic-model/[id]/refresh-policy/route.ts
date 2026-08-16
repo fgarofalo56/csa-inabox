@@ -25,6 +25,29 @@
  *   3. returns listPartitions(tableName) as the receipt.
  *
  * Docs: https://learn.microsoft.com/power-bi/connect-data/incremental-refresh-xmla
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. `withSession` resolved a session and
+ * authorized nobody against `[id]` — which the header above even says out loud
+ * ("`[id]` is the model") while nothing read it. The AAS server AND database are
+ * env-pinned (`LOOM_AAS_XMLA_ENDPOINT` / `LOOM_AAS_DATABASE`), so EVERY
+ * semantic-model item in every workspace shares ONE tabular database, and
+ * `tableName` came straight from the body into a TMSL **Alter** followed by a
+ * TMSL **Refresh** with `applyRefreshPolicy`. That is not a read: applying a
+ * refresh policy REBUILDS the table's partition structure, and a rolling window
+ * shorter than the data's history DROPS the partitions outside it. Any signed-in
+ * user could rewrite another tenant's incremental-refresh policy and destroy
+ * their historical partitions in one PUT.
+ *
+ * Layer 1 (`guardSynapseItemRequest`) now authorizes the caller against the
+ * semantic-model item — write-scoped on PUT, read-scoped on the GET partition
+ * list. The guard is backend-agnostic (session → `authorizeItemWorkspace` →
+ * fail-closed item load); its Synapse-specific `database` field is unused here.
+ *
+ * NOT closed: `tableName` remains caller-supplied inside the one shared AAS
+ * database, because no item→table binding exists for the tabular layer. A
+ * caller authorized for their own model can still name another model's table.
+ * FLOOR, not BOUND — see the PR ledger. The correct fix is to resolve the
+ * table set from the item's own model definition, which is its own change.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import {
@@ -35,10 +58,12 @@ import {
   AasError,
   type AasRefreshPolicy,
 } from '@/lib/azure/aas-incremental-refresh';
-import { withSession } from '@/lib/api/route-toolkit';
+import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const MODEL_NOT_FOUND = 'semantic model not found';
 
 const VALID_GRANULARITIES = new Set(['day', 'month', 'quarter', 'year']);
 
@@ -70,7 +95,16 @@ function backendGate(): NextResponse | null {
   return null;
 }
 
-export const GET = withSession<{ id: string }>(async (req: NextRequest, { session }) => {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'semantic-model',
+    notFound: MODEL_NOT_FOUND,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
+
   const gate = backendGate();
   if (gate) return gate;
   const tableName = req.nextUrl.searchParams.get('tableName') || undefined;
@@ -81,9 +115,18 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     const status = e instanceof AasError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-});
+}
 
-export const PUT = withSession<{ id: string }>(async (req: NextRequest) => {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // TMSL Alter + Refresh REBUILD partitions — a write. No allowReadRoles.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: 'semantic-model',
+    notFound: MODEL_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
+
   const gate = backendGate();
   if (gate) return gate;
 
@@ -129,4 +172,4 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest) => {
     const status = e instanceof AasError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-});
+}
