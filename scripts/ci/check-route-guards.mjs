@@ -593,13 +593,9 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/apim-product/[id]/subscriptions/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/create-db/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/firewall/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/get-data/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/maintenance-configs/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/performance/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/principal-search/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/cancel/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/search-management/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/sql2025-features/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-server/[id]/databases/route.ts',
   'apps/fiab-console/app/api/items/compute/[id]/route.ts',
   'apps/fiab-console/app/api/items/compute/[id]/start/route.ts',
@@ -740,7 +736,6 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/paginated-report/[id]/preview/route.ts',
   'apps/fiab-console/app/api/items/paginated-report/[id]/route.ts',
   'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/databases/route.ts',
-  'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/firewall/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/definition/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/run/route.ts',
@@ -1096,6 +1091,36 @@ const NOW_GUARDED = new Set([
   // plus credential egress. Both now resolve through `admitBoundSqlTarget`.
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/copilot/route.ts',
+  // ── GHSA-v8r7-c2p5-mjf2, THIRD PASS ──────────────────────────────────────
+  // Six of the thirteen routes the first pass tabled. Same adoption: the target
+  // comes from the `[id]` item's bound connection and that binding is admitted
+  // against `sqlAuthorizedSubscriptions()`.
+  //
+  // `mirroring` is the one worth recording, because it was NEVER allowlisted and
+  // still passed this checker for its whole life. It called `loadOwnedItem` — a
+  // bare-word GUARD_SIGNAL_RE token — so CHECK 2 was satisfied. But that call sat
+  // AFTER `enableMirroring(body.server, body.database)` had already run real DDL,
+  // it only ran inside the `LOOM_BRONZE_URL` branch, and FAILING it returned
+  // `ok: true` with a note. A guard signal that is present, runs late, runs
+  // conditionally, and answers 200 on denial is indistinguishable from a real one
+  // at the token level — which is the same lesson as `assertOwner`-in-prose, one
+  // layer up: the token was real code, it just was not a boundary.
+  //
+  // The other five were allowlisted under the shared-backend class reason and
+  // their stale entries are DELETED here rather than left to lose a race with
+  // NOW_GUARDED, per the 2x2 probe's finding.
+  //
+  // The REMAINING SEVEN of the thirteen are still allowlisted and are triaged
+  // per-route in the PR body — including `[id]/firewall`, which cannot adopt this
+  // wrapper until `azure-sql-server` items carry a persisted binding (its editor
+  // calls this route with an `azure-sql-server` id and never binds). A partial
+  // fix with an honest ledger.
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/mirroring/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/search-management/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/get-data/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/performance/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/sql2025-features/route.ts',
+  'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/firewall/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
