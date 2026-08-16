@@ -34,13 +34,29 @@
  * DECLARED GAP — READ THIS BEFORE TRUSTING THE GUARD'S COUNT. This file no
  * longer registers a `no-freeform` violation, and that is NOT the same as "no
  * free-text infrastructure ask remains". The asset-ref `<Input>` below still
- * ships for those three kinds, and the `abfss://` example that used to sit in
- * its JSX placeholder now lives in `assetPlaceholder()` — a function the
- * guard's static reader cannot follow. The site did not go away; it went
- * INVISIBLE to the measurement. That is evidence relocation and it is called
- * out here so the count cannot be read as a clean sweep. The honest fix is a
- * PATH-class picker (an ADLS browser / a Synapse+ADX table browser), which is
- * a later wave's work, not this one's.
+ * ships for those three kinds: for `adls-path` the user still types a storage
+ * path by hand.
+ *
+ * WHY IT IS NO LONGER COUNTED — and it is not what an earlier revision of this
+ * comment claimed. That revision said the `abfss://` example had "moved into
+ * `assetPlaceholder()` where the guard cannot follow it". That is false:
+ * `assetPlaceholder()` returns `schema.table` / `container/folder` /
+ * `endpoint / path`, and the only `abfss://` left in this file is in prose like
+ * this sentence. The literal was DELETED, not relocated.
+ *
+ * The real mechanism is less comfortable. The classifier's only evidence for
+ * this input was the misleading placeholder — `'dp-123 or abfss://…'` — and
+ * removing that example was the correct fix for the teaching defect. But it was
+ * also the entire SHAPE signal, so the ask that remains is now invisible to the
+ * measurement. Fixing the defect deleted the evidence for the leftover.
+ *
+ * That leftover cannot be recorded as an ACCEPTED exception either: `ACCEPTED`
+ * is keyed to the CLASSIFIED population, and `applyAccepted()` rejects an entry
+ * whose file has zero classified sites ("no longer matches ANY classified
+ * site"). So it lives here, in prose, which is weaker than a counted
+ * acceptance — stated plainly rather than implied clean. The honest fix is a
+ * PATH-class picker (an ADLS browser / a Synapse+ADX table browser), which is a
+ * later wave's work. The sibling blind spot is filed as #3594.
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';

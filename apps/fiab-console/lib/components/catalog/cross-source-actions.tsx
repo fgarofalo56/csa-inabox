@@ -27,13 +27,24 @@ import { clientFetch } from '@/lib/client-fetch';
  * (`.purview.azure.us` in Azure Government), so this control behaves the same in
  * a sovereign boundary (`cloud-parity.md`).
  *
- * DECLARED GAP — the guard now counts ZERO violations in this file, and that is
+ * DECLARED GAP — the guard counts ZERO violations in this file, and that is
  * not the same as "no free-text infrastructure ask remains". The "Promote ADLS
  * path to OneLake shortcut" section below still asks for an **ADLS Gen2
- * location** and an **ADLS subpath** as free text. They do not register because
- * neither label nor placeholder trips a SHAPE or NAME pattern — not because the
- * ask is gone. They are PATH-class and want an ADLS browser, which is a later
- * wave's work.
+ * location** and an **ADLS subpath** as free text.
+ *
+ * Those two were never counted — not before this change and not after. The
+ * reason is a classifier blind spot, measured rather than guessed: the
+ * `storage-loc` NAME pattern requires the literal token "storage", so
+ * `<Field label="Storage location">` FLAGS while `<Field label="ADLS Gen2
+ * location">` does not. A label that names the SERVICE instead of the generic
+ * noun slips past it. Filed as #3594; when that pattern is extended these two
+ * sites become visible and must then be fixed or explicitly accepted.
+ *
+ * They cannot be recorded as an ACCEPTED exception today: `ACCEPTED` is keyed
+ * to the CLASSIFIED population and `applyAccepted()` rejects an entry whose
+ * file has zero classified sites. Hence prose — which is weaker than a counted
+ * acceptance, and is said here rather than left to be inferred from a clean
+ * count. They are PATH-class and want an ADLS browser, a later wave's work.
  */
 import { useState } from 'react';
 import {
