@@ -10,10 +10,31 @@
  *   - gate behavior  — whether the route honest-gates on a backend config,
  *   - backends       — the Azure/data-plane client modules it depends on.
  *
- * The detection heuristics deliberately MIRROR scripts/ci/check-route-guards.mjs
- * (same session / owner-guard / admin signals, same classic + WS-D1 toolkit
+ * The session / admin / gate / backend heuristics deliberately MIRROR
+ * scripts/ci/check-route-guards.mjs (same signals, same classic + WS-D1 toolkit
  * `export const GET = withWorkspaceOwner(…)` export styles) so the two agree on
  * what a route is.
+ *
+ * ── THE OWNER COLUMN IS NO LONGER A NAME LIST (#3625) ──────────────────────
+ * `OWNER_RE` used to decide `owner-scoped` from a regex over the file, and one
+ * of its alternatives was the bare token `claims\.oid`. Measured on `main` at
+ * 9cc1a397: **271 of the 773 published `owner-scoped` rows rested on a
+ * `claims.*` token and NOTHING else** — a caller oid used as a log field, a
+ * FinOps attribution field, or a Cosmos partition key, none of which is an
+ * authorization decision. Four were confirmed by hand, including
+ * `items/azure-sql-database/[id]/mirroring`, which published `owner-scoped`
+ * while it was an ACTIVE P0 data-exfiltration primitive: the column an operator
+ * would scan reported the hole as fixed.
+ *
+ * That verdict now comes from `_route-auth-scope.mjs`, which DERIVES the
+ * authorization-resolver set from the tree (import closure from a seeded root
+ * primitive, plus the inline owner-comparison form) and asks whether the route
+ * REACHES one, rather than whether a name appears. The derived set is published
+ * in this document, so adding a resolver shows up in the diff naming its module.
+ *
+ * A route whose scope cannot be ESTABLISHED is reported as `unknown` and this
+ * generator EXITS 1 (deploy-integrity.md R7) — it does not fall back to the
+ * reassuring answer, which is exactly what the old default did.
  *
  * USAGE:
  *   node scripts/ci/generate-route-inventory.mjs            # (re)write the doc
@@ -23,6 +44,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stripCommentsAndStrings } from './_gate-consumption.mjs';
+import {
+  buildGraph,
+  deriveResolvers,
+  deriveSessionFns,
+  assertSeedsExist,
+  classifyRouteOwnership,
+  ROOT_AUTHORIZERS,
+  SESSION_ROOTS,
+  AUTH_SHAPED_EXEMPT,
+  selfTest,
+} from './_route-auth-scope.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -66,93 +98,46 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  */
 const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest|guardSynapseItemRequest)\s*(?:<[^(]*>)?\s*\(/;
 
-const OWNER_RE = new RegExp([
-  'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
-  'softDeleteOwnedItem', 'restoreOwnedItem', 'purgeRecycledItem', 'loadRecycledItem',
-  // #2977 — `assertOwner` was here and is deliberately gone: PR #2973 deleted the
-  // function, so every remaining occurrence is PROSE in a migration comment and
-  // this list was classifying 34 routes `owner-scoped` on a comment rather than
-  // on code. `authorizeItemWorkspace` is the real successor signal (canonical
-  // owner → tenant-admin → shared-ACL ladder). Kept in lockstep with
-  // GUARD_SIGNAL_RE in check-route-guards.mjs — the two must not drift.
-  'authorizeItemWorkspace',
-  // #2988 — the databricks-notebook execution family's guard wrapper, matched AS
-  // A CALL so a `{@link authorizeNotebookItem}` in prose cannot classify a route
-  // owner-scoped. Before this, moving `getSession()` into that wrapper made four
-  // genuinely-authorized routes report as `public` — the exact under-reporting
-  // this file's header warns trains readers to ignore the `public` column.
-  // Its substance is asserted by check-route-guards.assertGuardWrappersAreReal().
-  'authorizeNotebookItem\\s*\\(',
-  // #2996/#2997 - sibling guard wrappers for the databricks-job and
-  // databricks-pipeline families. Matched AS CALLS, never as prose.
-  'authorizeDatabricksJobItem\\s*\\(',
-  'authorizeDatabricksPipelineItem\\s*\\(',
-  // #3572 — bounds WHICH storage account a caller may drive the Console UAMI
-  // at (deployment lake / DLZ authority / an account this tenant's lakehouse is
-  // bound to). Matched AS A CALL. Lockstep with GUARD_SIGNAL_RE in
-  // check-route-guards.mjs — the two must not drift.
-  'authorizeStorageAccount\\s*\\(',
-  // GHSA-v2g8-gp3r-rg4r — the ADX item-route guard (`app/api/items/_lib/
-  // adx-item-scope.ts`), the item-route form of `guardAdxRequest` below. Matched
-  // AS A CALL for the same reason its siblings are. Adding it to BOTH regexes at
-  // once is deliberate: on first run without it, four routes that had just been
-  // HARDENED — graph-model materialize + query, eventhouse purge + database,
-  // lakehouse query — flipped from `session-only` to `public`, because their
-  // session moved into the wrapper. That is the exact under-reporting this
-  // file's header warns about, reproduced by the very change that fixed them.
-  'guardAdxItemRequest\\s*\\(',
-  // ...and MEASURED AGAIN, on the third pass, which is why the note above is
-  // worth keeping. Adopting `guardSynapseItemRequest` on the shared-Synapse /
-  // Databricks-UC / AAS routes flipped FOUR of them from `session-only` to
-  // **public** in the generated inventory —
-  //   items/[type]/[id]/optimize, items/[type]/[id]/statistics,
-  //   items/databricks-sql-warehouse/[id]/ctas,
-  //   items/semantic-model/[id]/refresh-policy
-  // — i.e. the published doc would have described a newly OWNER-SCOPED route as
-  // unauthenticated, because the session moved inside a wrapper this file did
-  // not know. Exactly the same failure the ADX pass hit. Both regexes are
-  // updated together; do not add a guard wrapper to one without the other.
-  'guardSynapseItemRequest\\s*\\(',
-  // GHSA-v8r7-c2p5-mjf2 — the Azure SQL / PostgreSQL item-route guard
-  // (`app/api/items/_lib/sql-server-scope.ts`). Matched AS A CALL for the same
-  // reason its siblings are. Added to BOTH regexes here and to GETSESSION_RE /
-  // GUARD_SIGNAL_RE in check-route-guards.mjs in ONE change, deliberately:
-  // measured on the six routes this advisory hardened, listing the name nowhere
-  // dropped them out of the guard checker's remit entirely (1526 → 1520 scanned
-  // routes) — the same under-reporting the ADX entry above records, reproduced
-  // by the very change that fixed them. THIRD independent reproduction of the
-  // lockstep rule in this one file; it is not theoretical.
-  'withBoundSqlServer\\s*\\(',
-  // The wrapper's OWNER-RESOLUTION half, for the routes in that family that
-  // resolve the item themselves rather than through the wrapper's ctx —
-  // `[id]/connect` (it WRITES the binding the wrapper reads), `[id]/query` and
-  // `[id]/copilot`. Matched AS A CALL; its substance is asserted by
-  // check-route-guards.assertGuardWrappersAreReal(), which pins it to
-  // `loadOwnedItem(id, itemType, session.claims.oid, …)`.
-  //
-  // FOURTH reproduction of the lockstep rule, and this one is only visible if
-  // you MEASURE rather than eyeball the generated diff. Moving `[id]/query` off
-  // `withWorkspaceOwner` and onto `withSession` + `loadOwnedSqlItem` took every
-  // OWNER_RE token out of that route's CODE. The generated inventory did not
-  // change — because `loadOwnedItem` still appears TWICE in the file, both times
-  // inside a COMMENT. Measured on the post-change file:
-  //
-  //     whole file  WITHOUT this token = true   (matches the prose)
-  //     code only   WITHOUT this token = FALSE  (no code signal at all)
-  //     code only   WITH    this token = true
-  //
-  // So a byte-identical inventory would have been resting entirely on a comment
-  // — the same shape as the deleted-`assertOwner` incident recorded above, which
-  // classified 34 routes on a word in a migration note. The identical diff was
-  // the trap, not the reassurance. This token is what makes the classification
-  // rest on the code again. (Related: #3625, presence vs enforcement.)
-  'loadOwnedSqlItem\\s*\\(',
-  'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
-  'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
-  'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',
-  'resolveWorkspaceAccessByOid', 'denyIfNoDlzAccess', 'pdpCheck',
-  'claims\\.oid', 'claims\\.tid', 'claims\\.tenantId',
-].join('|'));
+/**
+ * OWNER_RE IS GONE (#3625) — READ THIS BEFORE ADDING A NAME LIST BACK.
+ *
+ * It was a 30-name regex, and three of the names were the bare tokens
+ * `claims.oid` / `claims.tid` / `claims.tenantId`. Measured on `main` at
+ * 9cc1a397, over comment-stripped code, with ADMIN precedence already applied:
+ *
+ *     owner-scoped rows                              773
+ *     …resting ONLY on a claims.* token              271
+ *
+ * i.e. 35% of this document's owner column was reporting a LOG FIELD, a FinOps
+ * attribution field or a Cosmos partition key as an authorization check. The
+ * four hand-confirmed cases are recorded in _route-auth-scope.mjs's header; the
+ * worst was `items/azure-sql-database/[id]/mirroring`, which read `owner-scoped`
+ * while it was an active P0 exfiltration primitive.
+ *
+ * The list ALSO under-reported, and that half is why the replacement DERIVES
+ * rather than lists: a dozen `_lib/*` and `_shared` modules wrap the canonical
+ * guards under local names, and every one had to be hand-added here AFTER a
+ * route using it published the wrong scope. This file's own history carries four
+ * such notes in a row — `guardAdxItemRequest`, `guardSynapseItemRequest`,
+ * `withBoundSqlServer`, `loadOwnedSqlItem` — each recording the same lesson and
+ * each learned only once the damage was visible.
+ *
+ * The replacement is `_route-auth-scope.mjs`: it derives the resolver set from
+ * the import graph, asks whether the route REACHES one, and FAILS on a route it
+ * cannot establish instead of defaulting to the reassuring answer. The derived
+ * set is published in this document (§Authorization resolvers), so a new wrapper
+ * appears in the diff naming its module rather than silently moving 27 rows.
+ *
+ * Do not reintroduce a name list here. If a resolver is missing it is missing
+ * from the DERIVATION — seed it, or make it consume a seeded root.
+ *
+ * LOCKSTEP with check-route-guards.mjs still holds for SESSION_RE / ADMIN_RE
+ * below, which are unchanged. `GUARD_SIGNAL_RE` over there answers a different
+ * question ("is this route guarded at all"); a control in
+ * __tests__/route-auth-scope.test.mjs asserts every ownership name that file
+ * lists is present in the set this one derives, so the two cannot drift APART
+ * without failing.
+ */
 
 const ADMIN_RE = new RegExp([
   'requireTenantAdmin', 'isTenantAdmin', 'isTenantAdminTier', 'requireDomainRole',
@@ -253,10 +238,10 @@ function relApi(f) {
   return path.relative(API_ROOT, f).split(path.sep).join('/');
 }
 
-function classify(raw, relPath) {
+function classify(raw, relPath, ownership) {
   // C22 (#3088): classify the AUTH signals from CODE, not from prose. Every one
   // is a NAME, and a name survives in a comment long after the code is gone —
-  // that is #2977, which this file's own OWNER_RE note records for
+  // that is #2977, which this file's own OWNER_RE tombstone records for
   // `assertOwner`. Removing `assertOwner` fixed one symbol; stripping comments
   // and string literals closes the mechanism for all of them at once.
   const src = stripCommentsAndStrings(raw);
@@ -269,35 +254,81 @@ function classify(raw, relPath) {
   const dataSrc = stripCommentsAndStrings(raw, { keepStrings: true });
   const methods = METHOD_ORDER.filter((m) => METHOD_RES[m].test(src));
   const isAdminPath = relPath.startsWith('admin/');
-  const hasSession = SESSION_RE.test(src);
-  const hasOwner = OWNER_RE.test(src);
+  // SESSION_RE is the lockstep signal shared with check-route-guards.mjs;
+  // `ownership.session` is the DERIVED one, which only ever adds. Removing the
+  // bogus `claims.oid` owner token dropped 13 `app/api/adx/*` routes to
+  // **public** because their session lives inside `guardAdxRequest`, a wrapper
+  // SESSION_RE does not know — a false claim in the most safety-critical column,
+  // created by the fix. See SESSION_ROOTS in _route-auth-scope.mjs.
+  const hasSession = SESSION_RE.test(src) || ownership.session;
   const hasAdmin = ADMIN_RE.test(src) || isAdminPath;
   const gated = GATE_RE.test(dataSrc);
 
   let scope;
   if (hasAdmin) scope = 'admin';
-  else if (hasOwner) scope = 'owner-scoped';
+  else if (ownership.owner) scope = 'owner-scoped';
+  else if (ownership.unknowns.length) scope = 'unknown';
   else if (hasSession) scope = 'session-only';
   else scope = 'public';
+
+  // An unknown that lands on a route the ADMIN column already covers cannot
+  // change what a reader concludes, so it is not raised. `admin/workspaces/
+  // [id]/networking/*` is the live instance: `authorizeNetworking` resolves
+  // through `resolveAdminWorkspace`, and those 14 routes publish `admin` either
+  // way. Reporting them would be an annotation that fires when nothing is wrong.
+  const unknowns = scope === 'unknown' ? ownership.unknowns : [];
 
   const backends = [...new Set(
     [...dataSrc.matchAll(BACKEND_IMPORT_RE)].map((m) => BACKEND_LABEL[m[1]]).filter(Boolean),
   )].sort();
 
   const area = relPath.split('/')[0] || '(root)';
-  return { relPath, area, methods, scope, gated, backends };
+  return { relPath, area, methods, scope, gated, backends, unknowns, why: ownership.why };
 }
 
+/**
+ * Build the module graph ONCE, derive the resolver set, then classify.
+ *
+ * The graph covers every tracked `.ts`/`.tsx` under `apps/fiab-console`, not
+ * just the routes, because the whole point is that a route's authorization
+ * usually lives one or more modules away.
+ */
 function buildRows() {
+  const graph = buildGraph({ repoRoot: REPO_ROOT });
+
+  // The seeds are asserted BEFORE anything is derived from them. #2977 is what
+  // happens when a signal name outlives the function it names: the derivation
+  // would quietly produce a tiny resolver set and every route would drop a tier.
+  const badSeeds = assertSeedsExist(graph);
+  if (badSeeds.length) {
+    for (const b of badSeeds) console.error(`::error::[route-inventory] SEED MISSING — ${b}`);
+    console.error(
+      '::error::[route-inventory] the owner column is derived FROM these primitives. With one missing the ' +
+        'derivation cannot be trusted, so this generator refuses to publish rather than emit a document ' +
+        'in which every route looks less protected than it is (#2977, #3625).',
+    );
+    process.exit(1);
+  }
+
+  const resolvers = deriveResolvers(graph);
+  const sessionFns = deriveSessionFns(graph);
   const files = walk(API_ROOT).sort();
-  return files.map((f) => classify(fs.readFileSync(f, 'utf8'), relApi(f)));
+  const rows = files.map((f) => {
+    const rel = path.relative(REPO_ROOT, f).split(path.sep).join('/');
+    return classify(
+      fs.readFileSync(f, 'utf8'),
+      relApi(f),
+      classifyRouteOwnership(graph, resolvers, rel, sessionFns),
+    );
+  });
+  return { rows, resolvers, sessionFns, routeCount: files.length, graphSize: graph.files.length };
 }
 
 function esc(s) { return String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|'); }
 
-function render(rows) {
+function render(rows, resolvers) {
   const byArea = new Map();
-  const scopeCounts = { public: 0, 'session-only': 0, 'owner-scoped': 0, admin: 0 };
+  const scopeCounts = { public: 0, 'session-only': 0, 'owner-scoped': 0, admin: 0, unknown: 0 };
   let gatedCount = 0;
   for (const r of rows) {
     if (!byArea.has(r.area)) byArea.set(r.area, []);
@@ -314,9 +345,9 @@ function render(rows) {
   lines.push('> CI drift gate: `node scripts/ci/generate-route-inventory.mjs --check`.');
   lines.push('');
   lines.push('Taxonomy of every `apps/fiab-console/app/api/**/route.ts` — classified by');
-  lines.push('auth scope, gate behavior, and backend dependency. Detection mirrors');
-  lines.push('`scripts/ci/check-route-guards.mjs` (same session / owner-guard / admin signals,');
-  lines.push('same classic + WS-D1 toolkit export styles).');
+  lines.push('auth scope, gate behavior, and backend dependency. Session / admin / gate /');
+  lines.push('backend detection mirrors `scripts/ci/check-route-guards.mjs`. The **owner**');
+  lines.push('verdict is DERIVED, not name-matched — see "How the owner column is decided".');
   lines.push('');
   lines.push('## Summary');
   lines.push('');
@@ -327,13 +358,50 @@ function render(rows) {
   lines.push(`| Session-only | ${scopeCounts['session-only']} |`);
   lines.push(`| Owner-scoped | ${scopeCounts['owner-scoped']} |`);
   lines.push(`| Admin | ${scopeCounts.admin} |`);
+  lines.push(`| Unknown (generator fails) | ${scopeCounts.unknown} |`);
   lines.push(`| Gated (backend config) | ${gatedCount} |`);
   lines.push(`| Areas | ${byArea.size} |`);
   lines.push('');
   lines.push('**Auth scope** — `public`: no session check; `session-only`: signed-in but');
-  lines.push('no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the');
-  lines.push('target item; `admin`: tenant/domain-admin gate. **Gated** = the route honest-');
-  lines.push('gates on a backend being configured (see `docs/fiab/gate-registry.md`).');
+  lines.push('no per-resource authz; `owner-scoped`: the route reaches an owner/workspace-ACL');
+  lines.push('decision about the caller; `admin`: tenant/domain-admin gate; `unknown`: the');
+  lines.push('generator could not establish the scope and FAILED rather than guess.');
+  lines.push('**Gated** = the route honest-gates on a backend being configured (see');
+  lines.push('`docs/fiab/gate-registry.md`).');
+  lines.push('');
+  lines.push('## How the owner column is decided');
+  lines.push('');
+  lines.push('Until #3625 this column came from a regex of ~30 names, three of which were');
+  lines.push('the bare tokens `claims.oid` / `claims.tid` / `claims.tenantId`. Measured on');
+  lines.push('`main` at 9cc1a397: **271 of 773 `owner-scoped` rows rested on a `claims.*`');
+  lines.push('token and nothing else** — a log field, a FinOps attribution field or a Cosmos');
+  lines.push('partition key reported as an authorization check. One of them,');
+  lines.push('`items/azure-sql-database/[id]/mirroring`, read `owner-scoped` while it was an');
+  lines.push('active P0 exfiltration primitive.');
+  lines.push('');
+  lines.push('A route is now `owner-scoped` when it **reaches** an authorization decision:');
+  lines.push('');
+  lines.push('1. it calls a symbol that resolves — module-qualified, through the import');
+  lines.push('   graph — to a member of the derived resolver set below, from a span');
+  lines.push('   reachable from an exported HTTP verb, and the answer is not discarded');
+  lines.push('   (`scripts/ci/_gate-consumption.mjs`); **or**');
+  lines.push('2. it compares the caller identity against a stored owner field and refuses.');
+  lines.push('');
+  lines.push('The resolver set is DERIVED, not listed: a function qualifies when its body');
+  lines.push('reaches a seeded root primitive and consumes the answer, or makes the same');
+  lines.push('comparison itself. Seeds:');
+  lines.push('');
+  for (const r of ROOT_AUTHORIZERS) lines.push(`- owner: \`${esc(r.module)}::${esc(r.symbol)}\``);
+  for (const r of SESSION_ROOTS) lines.push(`- session: \`${esc(r.module)}::${esc(r.symbol)}\``);
+  lines.push('');
+  lines.push('The **session** signal is derived the same way, in addition to the shared');
+  lines.push('`SESSION_RE` list. It only ever adds: removing the bogus owner token dropped 13');
+  lines.push('`adx/*` routes to `public` because their session lives inside `guardAdxRequest`,');
+  lines.push('a wrapper that list does not name.');
+  lines.push('');
+  lines.push('What this does NOT claim: that the decision is the RIGHT one (correct item,');
+  lines.push('correct role) — that needs a per-route read. Scope is per FILE, not per method.');
+  lines.push('Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.');
   lines.push('');
 
   for (const area of [...byArea.keys()].sort()) {
@@ -349,27 +417,119 @@ function render(rows) {
     }
     lines.push('');
   }
+
+  // The derived resolver set, PUBLISHED. This is what makes "someone added an
+  // authorization helper" visible: the set changes, the drift gate fails, and
+  // the diff names the module. A set that lived only in memory would move rows
+  // with no reviewable artifact — which is how 27 ADX rows carried
+  // `guardAdxRequest`'s name for months without anyone reading its body.
+  const byModule = new Map();
+  for (const key of resolvers) {
+    const i = key.lastIndexOf('::');
+    const [mod, sym] = [key.slice(0, i), key.slice(i + 2)];
+    if (!byModule.has(mod)) byModule.set(mod, []);
+    byModule.get(mod).push(sym);
+  }
+  lines.push('## Authorization resolvers (derived)');
+  lines.push('');
+  lines.push(`${resolvers.size} function(s) across ${byModule.size} module(s) reach an owner / workspace-ACL`);
+  lines.push('decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —');
+  lines.push('nothing here is hand-maintained. A change to this list in a diff means the');
+  lines.push('authorization surface moved.');
+  lines.push('');
+  lines.push('| Module | Resolvers |');
+  lines.push('| --- | --- |');
+  for (const mod of [...byModule.keys()].sort()) {
+    lines.push(`| \`${esc(mod)}\` | ${byModule.get(mod).sort().map((s) => `\`${esc(s)}\``).join(', ')} |`);
+  }
+  lines.push('');
+  lines.push('### Authorization-shaped names that are NOT owner checks');
+  lines.push('');
+  lines.push('Each was read at its definition. A call to an authorization-shaped name that is');
+  lines.push('neither derived nor listed here fails the generator (#3625) rather than');
+  lines.push('silently downgrading the route.');
+  lines.push('');
+  lines.push('| Symbol | Why it is not an owner check |');
+  lines.push('| --- | --- |');
+  for (const name of [...AUTH_SHAPED_EXEMPT.keys()].sort()) {
+    lines.push(`| \`${esc(name)}\` | ${esc(AUTH_SHAPED_EXEMPT.get(name))} |`);
+  }
+  lines.push('');
   return lines.join('\n');
 }
 
+/**
+ * Compare IGNORING `\r`. The generator always writes LF; on a Windows checkout
+ * with `core.autocrlf=true` the working-tree file is CRLF, so a byte compare
+ * failed on EVERY Windows tree regardless of content — a phantom the operator
+ * chased more than once (#3550 item 2). Normalising cannot mask real drift:
+ * both sides are compared after the same transform, and the writer never emits
+ * CR, so a CR difference is a checkout artifact and nothing else.
+ */
+const eol = (s) => s.replace(/\r\n/g, '\n');
+
 function main() {
   const check = process.argv.includes('--check');
-  const rows = buildRows();
-  const content = render(rows);
+
+  // CONTROLS FIRST. A taxonomy from a classifier that has stopped classifying is
+  // not a taxonomy — and the controls that matter here are the NEGATIVE ones (an
+  // oid used as a log field, a partition key, a name in a comment), because a
+  // control set without them passes on the exact tree that produced #3625.
+  const controlFailures = selfTest();
+  if (controlFailures.length) {
+    for (const f of controlFailures) console.error(`::error::[route-inventory] EMBEDDED CONTROL FAILED — ${f}`);
+    console.error(
+      '::error::[route-inventory] the auth classifier has drifted; a document produced by it would mean ' +
+        'nothing. Refusing to publish (scripts/ci/_route-auth-scope.mjs CONTROLS).',
+    );
+    process.exit(1);
+  }
+
+  const { rows, resolvers, graphSize } = buildRows();
+
+  // UNKNOWNS FAIL. deploy-integrity.md R7: a generator that cannot establish a
+  // route's auth scope says so. The old default picked `session-only`, i.e. the
+  // reassuring answer, and the whole of #3625 is what a reassuring default costs.
+  const unknownRows = rows.filter((r) => r.scope === 'unknown');
+  if (unknownRows.length) {
+    for (const r of unknownRows) {
+      for (const u of r.unknowns) {
+        console.error(
+          `::error file=apps/fiab-console/app/api/${r.relPath},line=${u.line}::[route-inventory] ` +
+            `UNKNOWN auth scope — ${u.note} (module: ${u.module})`,
+        );
+      }
+    }
+    console.error(
+      `::error::[route-inventory] ${unknownRows.length} route(s) have an auth scope this generator cannot ` +
+        'establish. Resolve each one — seed a ROOT_AUTHORIZER, make the helper consume one, or record it in ' +
+        'AUTH_SHAPED_EXEMPT with the reason you read at its definition — in scripts/ci/_route-auth-scope.mjs. ' +
+        'Publishing a guess here is the defect #3625 exists to end.',
+    );
+    process.exit(1);
+  }
+
+  const content = render(rows, resolvers);
   if (check) {
     let current = '';
     try { current = fs.readFileSync(DOC_PATH, 'utf8'); } catch { /* missing → stale */ }
-    if (current !== content) {
+    if (eol(current) !== eol(content)) {
       console.error('[route-inventory] FAIL — docs/fiab/route-inventory.md is out of date.');
       console.error('Run: node scripts/ci/generate-route-inventory.mjs');
       process.exit(1);
     }
-    console.log(`[route-inventory] OK — inventory up to date (${rows.length} routes).`);
+    console.log(
+      `[route-inventory] OK — inventory up to date (${rows.length} routes, ` +
+        `${resolvers.size} derived resolvers, ${graphSize} console sources analysed).`,
+    );
     process.exit(0);
   }
   fs.mkdirSync(path.dirname(DOC_PATH), { recursive: true });
   fs.writeFileSync(DOC_PATH, content, 'utf8');
-  console.log(`[route-inventory] wrote ${path.relative(REPO_ROOT, DOC_PATH)} (${rows.length} routes).`);
+  console.log(
+    `[route-inventory] wrote ${path.relative(REPO_ROOT, DOC_PATH)} (${rows.length} routes, ` +
+      `${resolvers.size} derived resolvers, ${graphSize} console sources analysed).`,
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
