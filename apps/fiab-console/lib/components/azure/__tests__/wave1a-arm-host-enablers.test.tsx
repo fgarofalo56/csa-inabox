@@ -21,7 +21,8 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 const fetchMock = vi.fn();
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: any[]) => fetchMock(...a) }));
 
-import { AZURE_BACKED_FIELDS, AzureBackedField } from '../azure-backed-field';
+import { L } from '@/lib/gates/registry/types';
+import { AZURE_BACKED_FIELDS, AzureBackedField, UNSERVED_LOADERS } from '../azure-backed-field';
 import {
   PrivateLinkTargetField, PRIVATE_LINK_TARGET_TYPES, typeFromArmId, groupIdsForType,
   initialGroupIdsFor,
@@ -130,6 +131,39 @@ describe('the ARM-id field kinds Wave 1A added', () => {
     const all = JSON.stringify(AZURE_BACKED_FIELDS).toLowerCase();
     expect(all).not.toContain('fabric');
     expect(all).not.toContain('powerbi');
+  });
+
+  /**
+   * THE DRIFT THIS WAVE INTRODUCED, and the assertion that closes it.
+   *
+   * Wave 0's control runs one way: every loader in `L` must be a field kind or
+   * be named in UNSERVED_LOADERS. It says nothing about a kind that is NOT a
+   * loader — which is what the eight kinds added here are. So the reverse
+   * drift is open: if the registry later grows a `privateDnsZone` or
+   * `eventgridTopic` loader, there would be TWO definitions of the same ARM
+   * query and no test would object, which is how the 250 accumulated.
+   *
+   * The rule is a KEY rule, not a type rule: an id-shaped kind deliberately
+   * shares an ARM type with a name/endpoint loader (that is the whole point of
+   * `eventhubs-namespace-id` next to `eventhubs`). What must never collide is
+   * the KEY, and a non-loader kind must not silently become the second answer
+   * to a loader key.
+   */
+  it('no added kind shadows a registry loader key, in either direction', () => {
+    const loaderKeys = new Set(Object.keys(L));
+    const added = [
+      'logic-app', 'private-dns-zone', 'storage-account-id',
+      'eventhubs-namespace-id', 'adx-cluster-id',
+      'eventgrid-topic-endpoint', 'storage-dfs-endpoint', 'sql-host',
+    ];
+    // The control has a population, and it is the one the commit describes.
+    expect(added.every((k) => k in AZURE_BACKED_FIELDS)).toBe(true);
+    for (const k of added) {
+      expect(loaderKeys.has(k), `${k} now collides with a registry loader key`).toBe(false);
+      expect(UNSERVED_LOADERS[k], `${k} is a served kind and must not also be declared unserved`).toBeUndefined();
+    }
+    // And Wave 0's forward control still holds on the extended table.
+    expect(Object.keys(L).filter((k) => !(k in AZURE_BACKED_FIELDS) && !(k in UNSERVED_LOADERS))).toEqual([]);
   });
 });
 
