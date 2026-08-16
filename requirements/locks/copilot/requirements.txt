@@ -1756,9 +1756,9 @@ pydantic-ai==1.84.1 \
     --hash=sha256:a9b579ddc5eb1ec83e828330687d28eb3115fb38f1392e8ddb0917b78eec53f6 \
     --hash=sha256:cf29955253e1a299db9781d220f7b74a8c33e29df91edd492287f8024baa6eb6
     # via csa-inabox (pyproject.toml)
-pydantic-ai-slim==1.84.1 \
-    --hash=sha256:d608ec966f85ec449097237449c2564c5ad76ae577f0178e159f136149678ee7 \
-    --hash=sha256:e8ebafbe1c7a6546436f1d8d1f46a1e5d24c498e6f3e921699372447a0fb535d
+pydantic-ai-slim==1.106.0 \
+    --hash=sha256:0dd7a99ea3fa89b490098406c2240ba7d75c327eea094c3fd057dd7aa9f3d163 \
+    --hash=sha256:e265598c8ee0e903ebb02d0494bb232be4cc8aa463ba1a55aa743cf34135dacf
     # via
     #   pydantic-ai
     #   pydantic-evals
