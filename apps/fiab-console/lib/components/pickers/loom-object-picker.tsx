@@ -58,6 +58,33 @@
  * surface; this one is shared by three (and counting), so it goes in the shared
  * directory rather than in whichever editor happened to adopt it first.
  *
+ * ── WHICH PICKER DO I USE? (settled against Wave 0's #3572, on the combined
+ *    tree, not by reading either PR description) ───────────────────────────────
+ *
+ *   `components/azure/AzureBackedField` / `AzureResourcePicker`
+ *       → the value is an ARM RESOURCE. Those are built on the gate registry's
+ *         28 ARM options-loaders (`lib/gates/registry/types.ts` `L`) and query
+ *         Azure Resource Graph via `GET /api/azure/resources`; every kind names
+ *         an `armType`. Use them for anything with an ARM id: a Databricks
+ *         workspace URL, a Key Vault URI, an ADX cluster endpoint, a SQL server
+ *         FQDN. THAT IS THE DEFAULT — prefer it whenever it can answer.
+ *
+ *   THIS control
+ *       → the value is an object Loom knows about that is NOT in Resource
+ *         Graph, so no ARM query can produce it. The three current adopters are
+ *         each of that kind: a data-product LOOM ITEM (Cosmos), a Purview
+ *         Unified Catalog business DOMAIN (Purview data plane), and a
+ *         model-serving ENDPOINT NAME (AML/Databricks data plane). The loader
+ *         is injected rather than derived from an `armType`, precisely because
+ *         there is no `armType` to derive it from.
+ *
+ * The two share the preservation PROPERTY (an unresolvable stored value is kept
+ * and disclosed) and implement it separately — Wave 0 inside its own component,
+ * this file in the exported pure `mergeStoredValue`. That duplication is worth
+ * collapsing into one shared helper, but not from this branch: #3572 landed
+ * days ago and the refactor belongs to whoever owns both, with both test suites
+ * green on the combined tree.
+ *
  * Fluent v9 + Loom tokens only; no hard-coded px / hex (`web3-ui.md`).
  */
 
