@@ -135,7 +135,18 @@ test('MUTATION — breaking the classifier fails a control (the controls have te
  */
 test('FALSIFICATION — four breaks of the analyzer, each must turn a control red', async () => {
   const analyzerPath = path.join(REPO_ROOT, 'scripts/ci/_route-auth-scope.mjs');
-  const original = fs.readFileSync(analyzerPath, 'utf8');
+  // NORMALISED TO LF BEFORE PATCHING. Three of the four mutants below match a
+  // single-line needle and are indifferent; the structural-wrapper one spans two
+  // lines, and a `\n` needle cannot match a file checked out CRLF. On Windows
+  // that mutation silently failed to apply, so this control was RED for every
+  // Windows contributor and green on Linux CI — a control whose verdict depended
+  // on `core.autocrlf` rather than on the analyzer.
+  //
+  // It failed LOUDLY (`did not apply — it proves nothing`) rather than passing
+  // vacuously, which is the assert-on-apply design working exactly as intended:
+  // the harness refused to claim a mutation it had not actually made. Same fix
+  // `reconcile-policy.test.mjs` already uses via its `readNorm()` reader.
+  const original = fs.readFileSync(analyzerPath, 'utf8').replace(/\r\n/g, '\n');
 
   const MUTANTS = [
     {
