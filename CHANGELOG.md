@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.97.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.3...csa-inabox-v0.97.4) (2026-08-16)
+
+
+### Bug Fixes
+
+* **ci:** gh-aca-runner image is missing libatomic1, breaking every pnpm invocation ([#3559](https://github.com/fgarofalo56/csa-inabox/issues/3559)) ([f037d8c](https://github.com/fgarofalo56/csa-inabox/commit/f037d8c1665d56da33e7403b69da330a4a00bc37))
+* **ci:** login-health could not READ the recency it gates on, so it failed closed forever and froze every G1 receipt ([#3498](https://github.com/fgarofalo56/csa-inabox/issues/3498)) ([#3563](https://github.com/fgarofalo56/csa-inabox/issues/3563)) ([8519afe](https://github.com/fgarofalo56/csa-inabox/commit/8519afef0f8bdd489262d29e2cf7922cb7c69295))
+* **ci:** the no-freeform guard could not see &lt;Input&gt;, so 250 hand-typed-infrastructure asks shipped unmeasured ([#3560](https://github.com/fgarofalo56/csa-inabox/issues/3560)) ([42a944b](https://github.com/fgarofalo56/csa-inabox/commit/42a944b42305cf5833887e94355ca2cb0fe6e48c))
+* **deploy:** the Gov deploy lane authenticated by OIDC against an app registration with ZERO federated credentials, so it has NEVER succeeded ([#3576](https://github.com/fgarofalo56/csa-inabox/issues/3576)) ([e1c513e](https://github.com/fgarofalo56/csa-inabox/commit/e1c513e8770478999d2c36a1f24c1ade76be4b7f))
+* **security:** six locks pinned a cryptography with four open advisories, and nothing parsed the files to notice ([#3533](https://github.com/fgarofalo56/csa-inabox/issues/3533)) ([3bca6b2](https://github.com/fgarofalo56/csa-inabox/commit/3bca6b256c832bdcb00104a4febc06a71373d980))
+* **security:** the SQL sink accepted any string, so a seventh caller could reintroduce the injection ([#3529](https://github.com/fgarofalo56/csa-inabox/issues/3529)) ([3f5006a](https://github.com/fgarofalo56/csa-inabox/commit/3f5006ac24cb6c209349cb5ebd294e0e650ba535))
+
 ## [0.97.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.2...csa-inabox-v0.97.3) (2026-08-15)
 
 
