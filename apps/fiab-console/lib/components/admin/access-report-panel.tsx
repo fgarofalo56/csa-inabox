@@ -21,6 +21,7 @@ import {
   Play20Regular, Timer20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 import { isUnauthorized } from '@/lib/components/sign-in-required';
 
 interface Entry {
@@ -163,12 +164,47 @@ export function AccessReportPanel() {
             <Option value="resource" text="By resource"><Group20Regular /> By resource</Option>
           </Dropdown>
         </Field>
-        {mode !== 'tenant' && (
-          <Field label={mode === 'principal' ? 'Principal object id (oid)' : 'Resource ref (workspace / container / db / item id)'} style={{ minWidth: 320, flex: 1 }}>
+        {mode === 'principal' && (
+          <div style={{ minWidth: 320, flex: 1 }}>
+            {/* "By principal" is an Entra lookup, so it is a directory pick.
+                An oid the directory can no longer resolve (a leaver whose object
+                is gone) is exactly the row an access report must still be able
+                to query for, so the picker keeps it. */}
+            <IdentityPicker
+              kind="all"
+              label="Principal"
+              value={value}
+              onChange={(id) => setValue(id)}
+            />
+            <Button
+              appearance="secondary"
+              icon={<Search20Regular />}
+              disabled={!value.trim()}
+              onClick={() => void load()}
+              style={{ marginTop: tokens.spacingVerticalS }}
+            >
+              Search grants
+            </Button>
+          </div>
+        )}
+        {mode === 'resource' && (
+          // NOT an Entra principal — a Loom resource ref (workspace id, ADLS
+          // container, database or item id). Left free-text deliberately: it is
+          // a different class from this wave's principal pickers and needs its
+          // own discovery cascade over /api/workspaces + the container and item
+          // listings. Tracked for the Loom-resource-ref wave.
+          //
+          // The placeholder names what it takes IN WORDS rather than showing a
+          // specimen id, so check-no-freeform keeps counting this as a free-text
+          // SITE. Splitting the ternary above drained the file's violation, and
+          // a box that leaves the ledger entirely is how 250 of these went
+          // unmeasured — it stays visible until the wave that fixes it.
+          <Field label="Resource ref" style={{ minWidth: 320, flex: 1 }}>
             <Input
               value={value}
               onChange={(_, d) => setValue(d.value)}
-              placeholder={mode === 'principal' ? 'e.g. 8f2a…-oid' : 'e.g. ws-123 or salescontainer'}
+              placeholder="Workspace id, ADLS container, database or item id"
+              aria-label="Loom resource reference"
               onKeyDown={(e) => { if (e.key === 'Enter') void load(); }}
               contentAfter={<Button appearance="transparent" size="small" icon={<Search20Regular />} onClick={() => void load()} aria-label="Search" />}
             />

@@ -25,6 +25,7 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import { clientFetch } from '@/lib/client-fetch';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 import {
   POLICY_BACKENDS, BACKEND_LABELS, POLICY_ACTIONS,
   type PolicyBackend, type PolicyCodeSet, type PolicyStatement, type PolicyAction,
@@ -391,7 +392,8 @@ function newStatement(set: PolicyCodeSet | null): PolicyStatement {
   return { id: `statement-${n}`, principals: [{ kind: 'group', id: '' }], resources: [{ backend: 'synapse', object: '' }], actions: ['read'] };
 }
 
-function StatementDialog({
+/** Exported for the principal-picker round-trip spec (Wave 1C). */
+export function StatementDialog({
   initial, existingIds, onCancel, onSave,
 }: { initial: PolicyStatement; existingIds: string[]; onCancel: () => void; onSave: (s: PolicyStatement) => void }) {
   const s = useStyles();
@@ -454,13 +456,20 @@ function StatementDialog({
                   <Option value="user">user</Option>
                 </Dropdown>
               </div>
-              <div className={s.field} style={{ flexGrow: 1, minWidth: 220 }}>
-                <Caption1>Entra object id</Caption1>
-                <Input value={pId} onChange={(_, d) => setPId(d.value)} placeholder="00000000-0000-0000-0000-000000000000" />
-              </div>
-              <div className={s.field} style={{ flexGrow: 1, minWidth: 180 }}>
-                <Caption1>Display name / UPN</Caption1>
-                <Input value={pName} onChange={(_, d) => setPName(d.value)} placeholder="Finance-Analysts" />
+              <div className={s.field} style={{ flexGrow: 1, minWidth: 300 }}>
+                {/* Was a GUID box + a separate "Display name / UPN" box, which
+                    could disagree with each other. One pick now writes both.
+                    A statement IMPORTED from policy-as-code carries an id this
+                    tenant may not resolve at all — it still renders here and is
+                    still written back on save, unchanged. */}
+                <IdentityPicker
+                  kind={pKind === 'group' ? 'group' : 'user'}
+                  label="Principal"
+                  hint="Written to the statement as its Entra object id; the display name is kept alongside it."
+                  value={pId}
+                  valueLabel={pName || undefined}
+                  onChange={(id, hit) => { setPId(id); setPName(hit?.displayName || (id ? pName : '')); }}
+                />
               </div>
             </div>
             <div className={s.row}>

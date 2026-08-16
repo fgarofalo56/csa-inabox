@@ -34,6 +34,7 @@ import {
 
 import { RowSecurityDialog } from '@/lib/panes/onelake-security/row-security-dialog';
 import { ColumnSecurityDialog } from '@/lib/panes/onelake-security/column-security-dialog';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
@@ -195,42 +196,28 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
     setSelectedPaths((prev) => (checked ? Array.from(new Set([...prev, p])) : prev.filter((x) => x !== p)));
   }, []);
 
-  // ---- Step 3: identity picker ----------------------------------------
-  const [pq, setPq] = useState('');
-  const [pkind, setPkind] = useState<'user' | 'group'>('user');
-  const [pres, setPres] = useState<PrincipalHit[]>([]);
-  const [pbusy, setPbusy] = useState(false);
-  const [pGate, setPGate] = useState<string | null>(null);
-  const [rawOid, setRawOid] = useState('');
-
-  useEffect(() => {
-    if (!wizardOpen || step !== 3) return;
-    const q = pq.trim();
-    if (q.length < 2) { setPres([]); return; }
-    const h = setTimeout(async () => {
-      setPbusy(true); setPGate(null);
-      try {
-        const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${pkind}`);
-        const j = await r.json();
-        if (!j.ok && j.remediation) { setPGate(j.remediation); setPres([]); return; }
-        setPres((j.results || []).map((p: any) => ({ id: p.id, type: p.type, displayName: p.displayName, upn: p.upn })));
-      } catch { setPres([]); }
-      finally { setPbusy(false); }
-    }, 300);
-    return () => clearTimeout(h);
-  }, [pq, pkind, wizardOpen, step]);
-
+  // ---- Step 3: members ------------------------------------------------
+  //
+  // This step used to be a hand-rolled Graph search (its own debounce, its own
+  // result list, its own gate string) PLUS a "…or add a raw Entra object id"
+  // GUID box beside it — a compliant control shipped next to its own bypass.
+  // Both are replaced by the shared <IdentityPicker>: one debounce, one route,
+  // one honest gate that names the exact AppRoles to grant. Members already on
+  // the role keep rendering from their stored objectId whether or not the
+  // directory can resolve them, so an ACL for a departed user is never dropped
+  // by the editor that is meant to manage it.
+  //
+  // The manual box is NOT deleted, it is DEMOTED. Removing it outright left the
+  // wizard unable to add anybody at all when Graph was unreachable — a dead end
+  // `auto-bind-by-default.md` forbids, and one a gate naming the AppRoles does
+  // not cure, because the operator cannot act past it here. `allowManualEntry`
+  // brings it back behind the gate: invisible until a search actually fails.
   const addMember = useCallback((m: SecurityRoleMember) => {
     setMembers((prev) => (prev.some((x) => x.objectId === m.objectId) ? prev : [...prev, m]));
-    setPq(''); setPres([]);
   }, []);
   const removeMember = useCallback((oid: string) => {
     setMembers((prev) => prev.filter((m) => m.objectId !== oid));
   }, []);
-  const addRawOid = useCallback(() => {
-    const oid = rawOid.trim();
-    if (/^[0-9a-fA-F-]{36}$/.test(oid)) { addMember({ objectId: oid, objectType: pkind === 'group' ? 'Group' : 'User' }); setRawOid(''); }
-  }, [rawOid, pkind, addMember]);
 
   const submitRole = useCallback(async () => {
     setBusy(true); setSubmitErr(null);
@@ -720,39 +707,22 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
               {step === 3 && (
                 <div className={s.step}>
                   <div><span className={s.stepNum}>3</span><Subtitle2 style={{ display: 'inline' }}>Members</Subtitle2></div>
-                  <RadioGroup value={pkind} layout="horizontal" onChange={(_, d) => { setPkind(d.value as any); setPres([]); }}>
-                    <Radio value="user" label="Users" />
-                    <Radio value="group" label="Groups" />
-                  </RadioGroup>
-                  <Field label="Search by name or UPN">
-                    <Input value={pq} onChange={(_, d) => setPq(d.value)} placeholder="Search Entra…" contentAfter={pbusy ? <Spinner size="extra-tiny" /> : undefined} />
-                  </Field>
-                  {pGate && (
-                    <MessageBar intent="warning">
-                      <MessageBarBody>
-                        <MessageBarTitle>Identity search unavailable</MessageBarTitle>
-                        {pGate} You can still paste an Entra object id below.
-                      </MessageBarBody>
-                    </MessageBar>
-                  )}
-                  {pres.length > 0 && (
-                    <div className={s.pickList}>
-                      {pres.map((p) => (
-                        <div key={p.id} role="button" tabIndex={0} className={s.resultRow}
-                          onClick={() => addMember({ objectId: p.id, objectType: p.type === 'group' ? 'Group' : 'User', upn: p.upn, displayName: p.displayName })}
-                          onKeyDown={(e) => { if (e.key === 'Enter') addMember({ objectId: p.id, objectType: p.type === 'group' ? 'Group' : 'User', upn: p.upn, displayName: p.displayName }); }}>
-                          <Body1>{p.displayName}</Body1>
-                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{p.upn || p.id}</Caption1>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <Field label="…or add a raw Entra object id">
-                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-                      <Input value={rawOid} onChange={(_, d) => setRawOid(d.value)} placeholder="00000000-0000-0000-0000-000000000000" />
-                      <Button onClick={addRawOid} icon={<Add20Regular />}>Add</Button>
-                    </div>
-                  </Field>
+                  <IdentityPicker
+                    kind={['user', 'group', 'spn']}
+                    label="Add a member"
+                    hint="Users, Entra security groups and service principals can all hold a data-access role."
+                    allowManualEntry
+                    onManualEntry={(oid, kind) => addMember({
+                      objectId: oid,
+                      objectType: kind === 'group' ? 'Group' : kind === 'spn' ? 'ServicePrincipal' : 'User',
+                    })}
+                    onSelect={(p) => p && addMember({
+                      objectId: p.id,
+                      objectType: p.type === 'group' ? 'Group' : p.type === 'spn' ? 'ServicePrincipal' : 'User',
+                      upn: p.upn,
+                      displayName: p.displayName,
+                    })}
+                  />
                   <Field label={`Selected members (${members.length})`}>
                     <div className={s.chips}>
                       {members.length === 0 && <Caption1>None yet.</Caption1>}

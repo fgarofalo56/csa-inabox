@@ -14,6 +14,7 @@ import {
   ArrowSync20Regular, Eye20Regular, Column20Regular, KeyMultiple20Regular,
 } from '@fluentui/react-icons';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 import type { TableLite } from './types';
 import { useSmVisualStyles } from './styles';
 
@@ -82,6 +83,9 @@ export function SemanticModelSecurityTab(props: SecurityTabProps) {
   const sm = useSmVisualStyles();
 
   const role = (roles || []).find((r) => r.name === selectedRole) || null;
+  // Stored member strings, verbatim. Never derived from a directory lookup —
+  // a member the tenant can no longer resolve must survive a round-trip.
+  const members = (role?.members || []).map((m) => m.memberName).filter(Boolean);
   const tablePerm = (table: string): SmSecTablePerm | undefined =>
     role?.tablePermissions.find((tp) => tp.name === table);
   const olsTableObj = tables.find((t) => t.name === olsTable);
@@ -156,13 +160,44 @@ export function SemanticModelSecurityTab(props: SecurityTabProps) {
             <Input value={role.name} onChange={(_, d) => onRenameRole(role.name, d.value)} style={{ maxWidth: 240 }} aria-label="Role name" />
           </div>
 
-          <Field label="Members (Entra UPN or group object id, comma-separated)">
-            <Input
-              value={(role.members || []).map((m) => m.memberName).join(', ')}
-              onChange={(_, d) => onSetMembers(role.name, d.value.split(',').map((x) => x.trim()).filter(Boolean))}
-              placeholder="alice@contoso.com, group-object-id"
-            />
+          {/* Was one comma-separated free-text box holding UPNs and group
+              object ids. Members are now picked from the directory and held as
+              chips; an existing member string the directory cannot resolve
+              (a deleted user, a group from a federated tenant, a member added
+              in SSMS) still renders and is still written back on save. Service
+              principals are excluded because Power BI / AAS reject them as role
+              members — the picker enforces what the caption used to only say. */}
+          <Field label="Members" hint="Entra users and security groups. Service principals cannot hold an AAS role.">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, minWidth: 0 }}>
+              {members.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No members — the role applies to nobody until one is added.</Caption1>}
+              {members.map((m) => (
+                <Button
+                  key={m}
+                  size="small"
+                  appearance="outline"
+                  icon={<Delete20Regular />}
+                  iconPosition="after"
+                  aria-label={`Remove member ${m}`}
+                  onClick={() => onSetMembers(role.name, members.filter((x) => x !== m))}
+                >
+                  {m}
+                </Button>
+              ))}
+            </div>
           </Field>
+          <IdentityPicker
+            kind={['user', 'group']}
+            label="Add a member"
+            onSelect={(h) => {
+              if (!h) return;
+              // AAS/Power BI keys role members by NAME (UPN for a user, display
+              // name for a group), not by object id — same convention
+              // getPrincipalDirectGroups() reads back.
+              const memberName = h.type === 'user' ? (h.upn || h.mail || h.displayName) : h.displayName;
+              if (!memberName || members.includes(memberName)) return;
+              onSetMembers(role.name, [...members, memberName]);
+            }}
+          />
           <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: -8 }}>
             Service principals cannot be added as role members (Power BI/AAS restriction) — use real users or Entra security groups.
           </Caption1>

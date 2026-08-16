@@ -7,6 +7,7 @@ import {
   Tab, TabList, Field, Input, Dropdown, Option,
 } from '@fluentui/react-components';
 import { OnelakeRlsPredicateEditor } from '@/lib/panes/onelake-security-tab';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 import { useStyles } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 import type { PermsTab } from '../types';
@@ -129,9 +130,21 @@ export function PermissionsDialog() {
                 </div>
                 <Subtitle2>Grant access</Subtitle2>
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr) minmax(0,2fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
-                  <Field label="Principal object id" required>
-                    <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
-                  </Field>
+                  {/* Was a GUID box. Picking the principal also sets the
+                      principal TYPE, which the ARM role assignment needs and
+                      which an operator typing an oid had to get right by hand.
+                      A stored oid the directory cannot resolve still renders
+                      and still grants. */}
+                  <IdentityPicker
+                    kind={['user', 'group', 'spn']}
+                    required
+                    label="Principal"
+                    value={newPrincipalId}
+                    onChange={(id, hit) => {
+                      setNewPrincipalId(id);
+                      if (hit) setNewPrincipalType(hit.type === 'group' ? 'Group' : hit.type === 'spn' ? 'ServicePrincipal' : 'User');
+                    }}
+                  />
                   <Field label="Principal type">
                     <Dropdown
                       selectedOptions={[newPrincipalType]}

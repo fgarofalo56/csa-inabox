@@ -531,6 +531,100 @@ export async function getGroupsByIds(ids: string[]): Promise<IdentityHit[]> {
   return out;
 }
 
+/**
+ * Bulk-resolve ANY directory principal (user / group / service principal) by
+ * object id. Backs the identity picker's stored-value mode: a surface that
+ * persists a bare object id can show WHO it is without the caller having to
+ * keep a display name in its own document.
+ *
+ * Backing call: POST /v1.0/directoryObjects/getByIds — the same API
+ * {@link getGroupsByIds} uses, with the `types` filter widened past `group`.
+ * Available in all national clouds.
+ *
+ * Returns only what the directory actually returned. An id that is missing from
+ * the response is NOT an error and NOT an assertion that it does not exist —
+ * getByIds silently omits objects the caller cannot read, and the caller must
+ * report that as "could not resolve", never as "does not exist"
+ * (deploy-integrity R7). A Graph failure still THROWS, so the route can tell
+ * "unreachable" apart from "no match".
+ */
+export async function getPrincipalsByIds(ids: string[]): Promise<IdentityHit[]> {
+  assertEnabled();
+  const unique = [...new Set((ids || []).map((s) => String(s || '').trim()).filter(Boolean))].slice(0, 100);
+  if (unique.length === 0) return [];
+  const endpoint = '/directoryObjects/getByIds';
+  const res = await graphFetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ids: unique, types: ['user', 'group', 'servicePrincipal'] }),
+  });
+  const j = await readJson<{ value?: any[] }>(res, endpoint);
+  const out: IdentityHit[] = [];
+  const seen = new Set<string>();
+  for (const p of j?.value || []) {
+    if (!p?.id || seen.has(p.id)) continue;
+    seen.add(p.id);
+    const kind = odataTypeToKind(p['@odata.type']);
+    out.push({
+      id: p.id,
+      type: kind,
+      displayName: p.displayName || p.userPrincipalName || p.appId || p.id,
+      upn: p.userPrincipalName,
+      mail: p.mail,
+      appId: p.appId,
+      spnType: p.servicePrincipalType,
+      description: p.description,
+    });
+  }
+  return out;
+}
+
+/**
+ * Resolve a single stored principal REFERENCE, which in this tree is not always
+ * an object id: policy statements and Analysis Services role members persist a
+ * UPN, and Power BI workspace ACLs persist an email. `getByIds` only accepts
+ * ids, so a non-GUID reference falls through to a UPN/mail lookup.
+ *
+ * Returns null when the directory answered and matched nothing. THROWS when the
+ * directory could not be asked — the two outcomes are different sentences and
+ * the caller renders them differently.
+ */
+export async function resolvePrincipalRef(ref: string): Promise<IdentityHit | null> {
+  assertEnabled();
+  const value = String(ref || '').trim();
+  if (!value) return null;
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    const byId = await getPrincipalsByIds([value]);
+    if (byId.length) return byId[0];
+    // A GUID that is not a directory OBJECT id may still be an application
+    // (client) id — which is what an MSAL app-registration field stores.
+    const byAppId = `/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${escapeSqlLiteral(value)}'`)}` +
+      `&$select=id,displayName,appId,servicePrincipalType&$top=1`;
+    const sp = await readJson<{ value?: any[] }>(await graphFetch(byAppId), byAppId);
+    const first = (sp?.value || [])[0];
+    return first
+      ? { id: first.id, type: 'spn', displayName: first.displayName || value, appId: first.appId, spnType: first.servicePrincipalType }
+      : null;
+  }
+
+  const filter = value.includes('@')
+    ? `userPrincipalName eq '${escapeSqlLiteral(value)}' or mail eq '${escapeSqlLiteral(value)}'`
+    : `displayName eq '${escapeSqlLiteral(value)}'`;
+  const usersPath = `/users?$filter=${encodeURIComponent(filter)}&$select=id,displayName,userPrincipalName,mail&$top=1`;
+  const users = await readJson<{ value?: any[] }>(await graphFetch(usersPath), usersPath);
+  const u = (users?.value || [])[0];
+  if (u) return { id: u.id, type: 'user', displayName: u.displayName || value, upn: u.userPrincipalName, mail: u.mail };
+
+  const groupsPath = `/groups?$filter=${encodeURIComponent(`displayName eq '${escapeSqlLiteral(value)}' or mail eq '${escapeSqlLiteral(value)}'`)}` +
+    `&$select=id,displayName,description,mail&$top=1`;
+  const groups = await readJson<{ value?: any[] }>(await graphFetch(groupsPath), groupsPath);
+  const g = (groups?.value || [])[0];
+  if (g) return { id: g.id, type: 'group', displayName: g.displayName || value, mail: g.mail, description: g.description };
+
+  return null;
+}
+
 // ----------------------------------------------------------------------------
 // Users + licenses (F17 — Users & licenses admin surface)
 // ----------------------------------------------------------------------------
