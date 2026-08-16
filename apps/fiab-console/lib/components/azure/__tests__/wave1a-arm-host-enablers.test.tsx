@@ -111,12 +111,51 @@ describe('the ARM-id field kinds Wave 1A added', () => {
     });
   });
 
-  it('sql-host queries Azure SQL AND Synapse, so a Synapse-only estate is not empty', () => {
-    const types = AZURE_BACKED_FIELDS['sql-host'].sources.map((s) => s.type);
-    expect(types).toEqual(['Microsoft.Sql/servers', 'Microsoft.Synapse/workspaces']);
-    // One source per ARM TYPE: the picker keys options on the resource id, so a
-    // second Synapse source (the dedicated endpoint) would emit a duplicate key.
-    expect(new Set(types).size).toBe(types.length);
+  it('sql-host queries Azure SQL AND both Synapse endpoints, so no estate is empty and no pool is mis-targeted', () => {
+    const srcs = AZURE_BACKED_FIELDS['sql-host'].sources;
+    expect(srcs.map((s) => s.type)).toEqual([
+      'Microsoft.Sql/servers', 'Microsoft.Synapse/workspaces', 'Microsoft.Synapse/workspaces',
+    ]);
+    // The dedicated endpoint was DROPPED in the first cut, so picking a Synapse
+    // workspace and typing a dedicated pool name produced `ws-ondemand…` +
+    // `pool01` and failed at TDS. Both endpoints are now offered, distinctly.
+    expect(srcs.map((s) => s.select)).toEqual([
+      'properties.fullyQualifiedDomainName',
+      'properties.connectivityEndpoints.sqlOnDemand',
+      'properties.connectivityEndpoints.sql',
+    ]);
+    // Distinctly LABELLED, or the two Synapse rows are indistinguishable.
+    expect(new Set(srcs.map((s) => s.label)).size).toBe(3);
+  });
+
+  it('renders both Synapse endpoints as separate options rather than collapsing them', async () => {
+    // Same workspace, two sources — the case that produced duplicate React keys
+    // and filed both rows under the first source's label.
+    const ws = {
+      id: '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Synapse/workspaces/ws',
+      name: 'ws', type: 'microsoft.synapse/workspaces',
+      location: 'eastus2', resourceGroup: 'rg', subscriptionId: 's1',
+    };
+    fetchMock.mockImplementation((url: any) => {
+      const u = String(url);
+      if (u.includes('Microsoft.Sql%2Fservers')) return Promise.resolve(jsonRes({ ok: true, via: 'user', resources: [] }));
+      if (u.includes('sqlOnDemand')) return Promise.resolve(jsonRes({ ok: true, via: 'user', resources: [{ ...ws, value: 'ws-ondemand.sql.azuresynapse.net' }] }));
+      return Promise.resolve(jsonRes({ ok: true, via: 'user', resources: [{ ...ws, value: 'ws.sql.azuresynapse.net' }] }));
+    });
+
+    const onChange = vi.fn();
+    wrap(<AzureBackedField kind="sql-host" onChange={onChange} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.getByText(/2 resources across 2 sources/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('combobox'));
+    // Both endpoints are selectable, and the DEDICATED one yields its own value.
+    expect(await screen.findByRole('group', { name: /Synapse serverless SQL endpoint/i })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: /Synapse dedicated SQL pool endpoint/i })).toBeInTheDocument();
+
+    const opts = screen.getAllByRole('option');
+    const dedicated = opts.find((o) => o.textContent?.includes('ws')) && opts.length >= 2;
+    expect(dedicated).toBe(true);
   });
 
   it('issues ONE request per source — never one per resource', async () => {
@@ -127,6 +166,43 @@ describe('the ARM-id field kinds Wave 1A added', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * The LIST case, which the "one request per source" test above does not
+   * cover: `cosmos-account-editor` renders one subnet picker per VNet rule, so
+   * ten rules mounted ten concurrent multi-page ARG walks for an identical
+   * query. Concurrent identical requests are now coalesced in flight.
+   */
+  it('collapses N concurrently-mounted pickers of the same query into ONE request', async () => {
+    let resolveIt: (v: unknown) => void = () => {};
+    const pending = new Promise((r) => { resolveIt = r; });
+    fetchMock.mockReturnValue(pending);
+
+    wrap(
+      <>
+        {Array.from({ length: 10 }, (_, i) => (
+          <AzureBackedField key={i} kind="subnet" onChange={() => {}} />
+        ))}
+      </>,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveIt(jsonRes({ ok: true, via: 'user', resources: [] }));
+    await waitFor(() => expect(screen.getAllByText(/0 resources/i).length).toBe(10));
+  });
+
+  it('coalescing is IN-FLIGHT only — a later mount still issues a real request', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ ok: true, via: 'user', resources: [] }));
+    const first = wrap(<AzureBackedField kind="subnet" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    // Settled, so the entry is evicted — this is not a cache and cannot serve
+    // a stale answer.
+    wrap(<AzureBackedField kind="subnet" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
   it('adds no Fabric or Power BI source', () => {
     const all = JSON.stringify(AZURE_BACKED_FIELDS).toLowerCase();
     expect(all).not.toContain('fabric');
@@ -134,36 +210,75 @@ describe('the ARM-id field kinds Wave 1A added', () => {
   });
 
   /**
-   * THE DRIFT THIS WAVE INTRODUCED, and the assertion that closes it.
+   * THE DRIFT THIS WAVE INTRODUCED, and the assertion that actually closes it.
    *
    * Wave 0's control runs one way: every loader in `L` must be a field kind or
    * be named in UNSERVED_LOADERS. It says nothing about a kind that is NOT a
-   * loader — which is what the eight kinds added here are. So the reverse
-   * drift is open: if the registry later grows a `privateDnsZone` or
-   * `eventgridTopic` loader, there would be TWO definitions of the same ARM
-   * query and no test would object, which is how the 250 accumulated.
+   * loader — which is what the eight kinds added here are. The hazard is a
+   * SECOND DEFINITION OF THE SAME ARM QUERY appearing under a different key.
    *
-   * The rule is a KEY rule, not a type rule: an id-shaped kind deliberately
-   * shares an ARM type with a name/endpoint loader (that is the whole point of
-   * `eventhubs-namespace-id` next to `eventhubs`). What must never collide is
-   * the KEY, and a non-loader kind must not silently become the second answer
-   * to a loader key.
+   * ── WHY THE FIRST VERSION OF THIS TEST WAS THEATRE (review, 2026-08-16) ──
+   * It asserted that no added KEY equals a loader KEY. That cannot fail for the
+   * drift it names: registry keys are camelCase and these kinds are kebab-case,
+   * so `privateDnsZone` vs `private-dns-zone` sails through in both directions.
+   * It fired only on an exact string collision — the single shape its own
+   * mutation receipt tested. And the duplicate it claimed to prevent was
+   * ALREADY PRESENT: `sql-host.sources[0]` is the same (type, kind, select,
+   * valueFrom) tuple `fromLoader` builds for `L.sqlServer`.
+   *
+   * So the control is now over the QUERY TUPLE, with a closed allow-list for
+   * the overlaps that are deliberate. Exact equality, not a subset check: a new
+   * duplicate fails, and so does REMOVING one without updating the list, which
+   * keeps the list from rotting into a rubber stamp.
    */
-  it('no added kind shadows a registry loader key, in either direction', () => {
-    const loaderKeys = new Set(Object.keys(L));
-    const added = [
-      'logic-app', 'private-dns-zone', 'storage-account-id',
-      'eventhubs-namespace-id', 'adx-cluster-id',
-      'eventgrid-topic-endpoint', 'storage-dfs-endpoint', 'sql-host',
-    ];
-    // The control has a population, and it is the one the commit describes.
-    expect(added.every((k) => k in AZURE_BACKED_FIELDS)).toBe(true);
-    for (const k of added) {
-      expect(loaderKeys.has(k), `${k} now collides with a registry loader key`).toBe(false);
-      expect(UNSERVED_LOADERS[k], `${k} is a served kind and must not also be declared unserved`).toBeUndefined();
+  it('no two field kinds define the same ARM query, except the declared composites', () => {
+    const NORMALIZE = (k: string) => k.toLowerCase().replace(/[-_]/g, '');
+
+    // 1. KEY drift, case- and separator-insensitive — the shape the previous
+    //    version could not see.
+    const byNorm = new Map<string, string[]>();
+    for (const k of [...Object.keys(L), ...Object.keys(AZURE_BACKED_FIELDS)]) {
+      const n = NORMALIZE(k);
+      if (!byNorm.has(n)) byNorm.set(n, []);
+      if (!byNorm.get(n)!.includes(k)) byNorm.get(n)!.push(k);
     }
-    // And Wave 0's forward control still holds on the extended table.
+    const keyClashes = [...byNorm.values()].filter((ks) => ks.length > 1);
+    expect(keyClashes, 'two keys differ only by case/separator — one is shadowing the other').toEqual([]);
+
+    // 2. QUERY drift — the same (type|kind|select|valueFrom) under two kinds.
+    const tuples = new Map<string, string[]>();
+    for (const [kind, def] of Object.entries(AZURE_BACKED_FIELDS)) {
+      for (const src of def.sources) {
+        const t = `${src.type}|${src.kind ?? ''}|${src.select ?? ''}|${def.valueFrom}`;
+        if (!tuples.has(t)) tuples.set(t, []);
+        tuples.get(t)!.push(kind);
+      }
+    }
+    const dupes = [...tuples.entries()]
+      .filter(([, kinds]) => kinds.length > 1)
+      .map(([t, kinds]) => `${kinds.sort().join(' + ')} :: ${t}`)
+      .sort();
+
+    // The overlaps that are intentional, each with the reason it exists.
+    const DECLARED = [
+      // A cloud-parity composite: the Databricks workspace URL is both its own
+      // kind and the Commercial half of `catalog-endpoint`.
+      'catalog-endpoint + databricks :: Microsoft.Databricks/workspaces||properties.workspaceUrl|properties.workspaceUrl',
+      // `sql-host` is the multi-backend composite; its Azure SQL leg is by
+      // construction the same query as the `sqlServer` loader.
+      'sql-host + sqlServer :: Microsoft.Sql/servers||properties.fullyQualifiedDomainName|properties.fullyQualifiedDomainName',
+    ].sort();
+    expect(dupes).toEqual(DECLARED);
+
+    // 3. The control has a population — the assertions above are not vacuous.
+    expect(tuples.size).toBeGreaterThan(25);
+    expect(byNorm.size).toBeGreaterThan(30);
+
+    // 4. Wave 0's forward control still holds on the extended table.
     expect(Object.keys(L).filter((k) => !(k in AZURE_BACKED_FIELDS) && !(k in UNSERVED_LOADERS))).toEqual([]);
+    for (const k of Object.keys(AZURE_BACKED_FIELDS)) {
+      expect(UNSERVED_LOADERS[k], `${k} is served and must not also be declared unserved`).toBeUndefined();
+    }
   });
 });
 
@@ -204,6 +319,45 @@ describe('PrivateLinkTargetField — type, then resource, then sub-resource', ()
     const manual = await screen.findByLabelText('Target resource ID');
     expect((manual as HTMLInputElement).disabled).toBe(false);
     expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument();
+  });
+
+  /**
+   * BLOCKER 1 (review, 2026-08-16). The manual-entry path derived its groupIds
+   * from the type DROPDOWN rather than from the id the user typed, because
+   * `commitManual` builds a selection with no `type` key. The result was a pair
+   * ARM rejects, and — since the caller's sub-resource dropdown offers only
+   * these groupIds — one the user could no longer correct. Strictly worse than
+   * the free-text box this wave removed.
+   */
+  it('derives groupIds from a HAND-TYPED id, not from the type dropdown', async () => {
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(jsonRes({ ok: false, code: 'no_access', error: 'no access' }));
+    // Dropdown is on its default (Storage account); discovery is denied.
+    wrap(<PrivateLinkTargetField onChange={onChange} />);
+
+    const manual = await screen.findByLabelText('Target resource ID');
+    fireEvent.change(manual, { target: { value: HIDDEN_ID } });   // a Key Vault id
+    fireEvent.click(screen.getByRole('button', { name: /use this value/i }));
+
+    // ['vault'], not the storage set. Before the fix this was
+    // ['dfs','blob','file','queue','table','web'] and the POST carried 'blob'.
+    expect(onChange).toHaveBeenLastCalledWith(HIDDEN_ID, ['vault'], expect.objectContaining({ id: HIDDEN_ID }));
+    expect(onChange.mock.calls.at(-1)![1]).not.toContain('blob');
+  });
+
+  it('moves the type dropdown to match a hand-typed id, so the widget stops asserting a type the value contradicts', async () => {
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(jsonRes({ ok: false, code: 'no_access', error: 'no access' }));
+    wrap(<PrivateLinkTargetField onChange={onChange} />);
+
+    const manual = await screen.findByLabelText('Target resource ID');
+    fireEvent.change(manual, { target: { value: HIDDEN_ID } });
+    fireEvent.click(screen.getByRole('button', { name: /use this value/i }));
+
+    await waitFor(() => {
+      const typeBox = screen.getAllByRole('combobox')[0] as HTMLInputElement;
+      expect(typeBox.value).toBe('Key Vault');
+    });
   });
 
   it('hands back the ARM id AND the sub-resources Azure accepts for its type', async () => {
@@ -272,6 +426,59 @@ describe('private-link helpers', () => {
       expect(t.groupIds.length, t.type).toBeGreaterThan(0);
       expect(t.type, t.type).toMatch(/^Microsoft\.[A-Za-z]+\/[A-Za-z]+$/);
     }
+    // Arity is not validity — see the two assertions below, which are about
+    // whether a listed PAIR is one ARM actually accepts.
+  });
+
+  /**
+   * BLOCKER 2 (review, 2026-08-16). `Microsoft.OperationalInsights/workspaces`
+   * + `azuremonitor` was listed and is a guaranteed ARM rejection: a Log
+   * Analytics workspace is not a private-endpoint target. Azure Monitor
+   * private link terminates on an Azure Monitor Private Link Scope. Because
+   * AMPLS was ALSO missing, the correct target was unreachable — so this pins
+   * both halves of the correction, not just the removal.
+   */
+  it('does not offer a Log Analytics workspace as a private-endpoint target', () => {
+    const types = PRIVATE_LINK_TARGET_TYPES.map((t) => t.type.toLowerCase());
+    expect(types).not.toContain('microsoft.operationalinsights/workspaces');
+    // And the real Azure Monitor target IS reachable.
+    expect(groupIdsForType('Microsoft.Insights/privateLinkScopes')).toEqual(['azuremonitor']);
+  });
+
+  /**
+   * Grounding, not memory: every pair Loom's own bicep has had ARM accept.
+   * Grepping `groupIds` with context across the bicep tree is the source. A row
+   * that drifts from what we deploy is a row a customer will fail on.
+   */
+  it('matches the (type, groupId) pairs this repo\'s bicep actually deploys', () => {
+    const DEPLOYED: Array<[string, string]> = [
+      ['Microsoft.KeyVault/vaults', 'vault'],
+      ['Microsoft.Storage/storageAccounts', 'blob'],
+      ['Microsoft.Storage/storageAccounts', 'dfs'],
+      ['Microsoft.Storage/storageAccounts', 'file'],
+      ['Microsoft.ContainerRegistry/registries', 'registry'],
+      ['Microsoft.Search/searchServices', 'searchService'],
+      ['Microsoft.Purview/accounts', 'account'],
+      ['Microsoft.Purview/accounts', 'portal'],
+      ['Microsoft.CognitiveServices/accounts', 'account'],
+      ['Microsoft.MachineLearningServices/workspaces', 'amlworkspace'],
+      ['Microsoft.DataFactory/factories', 'dataFactory'],
+      ['Microsoft.EventHub/namespaces', 'namespace'],
+      ['Microsoft.ServiceBus/namespaces', 'namespace'],
+      ['Microsoft.EventGrid/topics', 'topic'],
+      ['Microsoft.DocumentDB/databaseAccounts', 'Sql'],
+      ['Microsoft.DocumentDB/databaseAccounts', 'Gremlin'],
+      ['Microsoft.Synapse/workspaces', 'Sql'],
+      ['Microsoft.Synapse/workspaces', 'SqlOnDemand'],
+      ['Microsoft.Synapse/workspaces', 'Dev'],
+      ['Microsoft.DBforPostgreSQL/flexibleServers', 'postgresqlServer'],
+      ['Microsoft.Databricks/workspaces', 'databricks_ui_api'],
+      ['Microsoft.Cache/Redis', 'redisCache'],
+    ];
+    const missing = DEPLOYED.filter(([t, g]) => !groupIdsForType(t).includes(g))
+      .map(([t, g]) => `${t} :: ${g}`);
+    expect(missing).toEqual([]);
+    expect(DEPLOYED.length).toBeGreaterThan(20);
   });
 
   it('seeds a caller\'s sub-resource dropdown for the type the field OPENS on, never with []', () => {

@@ -70,6 +70,12 @@ export interface AzureResource {
   subscriptionId: string;
   /** The projected `select=properties.<path>` value, when one was requested. */
   value?: string;
+  /**
+   * Index of the `sources[]` entry this row came from. Set by the picker, not
+   * by the route. Two sources can share an ARM type and differ only in
+   * `select`, so the row's own fields are not enough to tell them apart.
+   */
+  srcIdx?: number;
 }
 
 /** One ARM query the picker merges into its option list. */
@@ -155,10 +161,15 @@ interface ApiResponse {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '320px' },
+  // `minWidth: 0`, not a 320px floor. Wave 1A drops this picker into
+  // `minmax(0, 1fr)` grid tracks (the catalog + governance lineage forms), and
+  // a hard px floor there overflows the track at narrow widths instead of
+  // shrinking — `web3-ui.md` §5. The comfortable width is expressed as a
+  // flex-basis on the combobox, which is a preference rather than a floor.
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
   row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
   meta: { color: tokens.colorNeutralForeground3, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' },
-  combo: { minWidth: '320px', flex: 1 },
+  combo: { minWidth: 0, flexBasis: '260px', flexGrow: 1, flexShrink: 1 },
 });
 
 /** Group by an arbitrary key, preserving the route's name-sorted order. */
@@ -257,6 +268,39 @@ export function validateManualValue(raw: string, matchBy: MatchBy): string | nul
   return null;
 }
 
+/**
+ * IN-FLIGHT COALESCING for identical concurrent queries.
+ *
+ * A LIST of pickers is a real call shape, not a hypothetical: the Cosmos
+ * account editor renders one subnet picker PER virtual-network rule, so ten
+ * rules mounted ten independent multi-page Resource Graph walks for the same
+ * `type=Microsoft.Network/virtualNetworks/subnets` query, simultaneously. The
+ * per-page "one request, no row cap" property that motivated this route is a
+ * per-PICKER property; nothing was collapsing the pickers.
+ *
+ * This is deliberately NOT a cache. The entry is evicted the moment the promise
+ * settles, so it only ever merges requests that overlap in time:
+ *   - the list case collapses to one request;
+ *   - a later mount, a Refresh, or the next test still issues a real fetch;
+ *   - no stale answer can be served, and no cross-test state accumulates.
+ */
+const inFlight = new Map<string, Promise<{ j: ApiResponse; status: number }>>();
+
+function fetchSource(url: string): Promise<{ j: ApiResponse; status: number }> {
+  const existing = inFlight.get(url);
+  if (existing) return existing;
+  const p = (async () => {
+    const res = await clientFetch(url);
+    const j: ApiResponse = await res.json();
+    return { j, status: res.status };
+  })();
+  inFlight.set(url, p);
+  // Evict on settle, success or failure — a rejected promise must not be
+  // handed to the next caller as if it were a fresh attempt.
+  void p.finally(() => { inFlight.delete(url); }).catch(() => {});
+  return p;
+}
+
 export function AzureResourcePicker({
   type, kind, select, sources, value, matchBy = 'id', onChange, label, placeholder,
   surface, manualLabel, allowManualEntry = true,
@@ -289,14 +333,13 @@ export function AzureResourcePicker({
     }
     setLoading(true); setGate(null); setError(null); setTruncated(false);
     try {
-      const results = await Promise.all(list.map(async (src) => {
+      const results = await Promise.all(list.map(async (src, srcIdx) => {
         const qs = new URLSearchParams({ type: src.type });
         if (src.kind) qs.set('kind', src.kind);
         if (src.select) qs.set('select', src.select);
         if (src.name) qs.set('name', src.name);
-        const res = await clientFetch(`/api/azure/resources?${qs.toString()}`);
-        const j: ApiResponse = await res.json();
-        return { src, j, status: res.status };
+        const { j, status } = await fetchSource(`/api/azure/resources?${qs.toString()}`);
+        return { src, srcIdx, j, status };
       }));
 
       const rows: AzureResource[] = [];
@@ -304,9 +347,15 @@ export function AzureResourcePicker({
       const errors: string[] = [];
       let anyVia: 'user' | 'uami' | null = null;
       let anyTruncated = false;
-      for (const { src, j, status } of results) {
+      for (const { src, srcIdx, j, status } of results) {
         if (j.ok && Array.isArray(j.resources)) {
-          for (const r of j.resources) rows.push({ ...r, type: r.type || src.type });
+          // `srcIdx` tags the row with the SOURCE that produced it. Two sources
+          // may share an ARM type and differ only in `select` — a Synapse
+          // workspace exposes a serverless AND a dedicated SQL endpoint — and
+          // without the tag both rows resolve to the same option key and the
+          // same group label, so React sees duplicate keys and the second
+          // endpoint is presented as the first.
+          for (const r of j.resources) rows.push({ ...r, type: r.type || src.type, srcIdx });
           anyVia = j.via ?? anyVia;
           anyTruncated = anyTruncated || !!j.truncated;
         } else if (j.code === 'no_access') {
@@ -335,7 +384,13 @@ export function AzureResourcePicker({
   const multiSource = sourceList.length > 1;
   const grouped = useMemo(
     () => (multiSource
-      ? groupBy(resources, (r) => sourceList.find((x) => x.type.toLowerCase() === (r.type || '').toLowerCase())?.label || r.type || 'resources')
+      // Group by the SOURCE that produced the row, not by matching its ARM type
+      // back against the source list — that match returns the FIRST source with
+      // that type, so a second source of the same type (Synapse serverless vs
+      // dedicated) had its rows filed and labelled under the first.
+      ? groupBy(resources, (r) => (r.srcIdx != null && sourceList[r.srcIdx]?.label)
+        || sourceList.find((x) => x.type.toLowerCase() === (r.type || '').toLowerCase())?.label
+        || r.type || 'resources')
       : groupBy(resources, (r) => r.subscriptionId)),
     [resources, multiSource, sourceList],
   );
@@ -468,7 +523,11 @@ export function AzureResourcePicker({
                   {g.items.map((r) => {
                     const ov = valueOf(r);
                     return (
-                      <Option key={r.id} value={ov} text={r.name} disabled={!ov}>
+                      // Keyed on (source, resource), not on the resource id
+                      // alone: one workspace can appear once per source with a
+                      // different projected endpoint, and a bare `r.id` makes
+                      // those React-identical.
+                      <Option key={`${r.srcIdx ?? 0}:${r.id}`} value={ov} text={r.name} disabled={!ov}>
                         {ov
                           ? `${r.name}${r.kind ? ` (${r.kind})` : ''} · ${r.resourceGroup || '—'} · ${r.location || '—'}`
                           : `${r.name} — Resource Graph returned no ${select || 'endpoint'} for this resource`}

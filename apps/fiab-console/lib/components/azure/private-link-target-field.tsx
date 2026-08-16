@@ -37,9 +37,29 @@ import { AzureResourcePicker, type AzureResourceSelection } from './azure-resour
 
 /**
  * Private-link-capable ARM types Loom binds, with the `groupIds` Azure accepts
- * for each. Sourced from the per-service "What is a private endpoint" pages on
- * Microsoft Learn (privatelink sub-resource tables); every entry here is a type
- * some Loom surface already provisions or attaches.
+ * for each.
+ *
+ * ── HOW THIS TABLE IS GROUNDED ──────────────────────────────────────────────
+ * Every row that Loom itself deploys a private endpoint for is taken from THIS
+ * REPO'S OWN BICEP — `platform/fiab/bicep/modules/**` `privateLinkServiceConnections`
+ * — not from memory. That is the strongest available evidence: it is the pair
+ * ARM has actually accepted in our subscriptions. Verified rows:
+ *   vault, blob/dfs/file, registry, searchService, account+portal (Purview),
+ *   account (Cognitive Services), amlworkspace, dataFactory, namespace
+ *   (Event Hubs + Service Bus), topic (Event Grid), Sql/Gremlin (Cosmos),
+ *   Sql/SqlOnDemand/Dev (Synapse), postgresqlServer, databricks_ui_api,
+ *   redisCache, redisEnterprise.
+ *
+ * ── THE ROW THAT WAS WRONG (review, 2026-08-16) ─────────────────────────────
+ * `Microsoft.OperationalInsights/workspaces` + `azuremonitor` was here and is a
+ * GUARANTEED ARM rejection: a Log Analytics workspace is not itself a
+ * private-endpoint target. Azure Monitor private link terminates on an Azure
+ * Monitor Private Link Scope (`Microsoft.Insights/privateLinkScopes`), and
+ * `azuremonitor` is THAT resource's sub-resource. Corroborated here by absence:
+ * grepping `privateLinkServiceId` across the bicep tree creates no endpoint
+ * against a Log Analytics workspace anywhere in this repo. Worse than a dud
+ * option — with AMPLS missing from the table the CORRECT target was unreachable
+ * too, so the row is replaced rather than deleted.
  */
 export interface PrivateLinkTargetType {
   /** ARM resource type. */
@@ -57,17 +77,20 @@ export const PRIVATE_LINK_TARGET_TYPES: PrivateLinkTargetType[] = [
   { type: 'Microsoft.Synapse/workspaces', label: 'Synapse workspace', groupIds: ['Sql', 'SqlOnDemand', 'Dev'] },
   { type: 'Microsoft.Kusto/clusters', label: 'Azure Data Explorer cluster', groupIds: ['cluster'] },
   { type: 'Microsoft.DocumentDB/databaseAccounts', label: 'Cosmos DB account', groupIds: ['Sql', 'MongoDB', 'Cassandra', 'Gremlin', 'Table'] },
+  { type: 'Microsoft.Databricks/workspaces', label: 'Databricks workspace', groupIds: ['databricks_ui_api', 'browser_authentication'] },
   { type: 'Microsoft.EventHub/namespaces', label: 'Event Hubs namespace', groupIds: ['namespace'] },
   { type: 'Microsoft.ServiceBus/namespaces', label: 'Service Bus namespace', groupIds: ['namespace'] },
   { type: 'Microsoft.EventGrid/topics', label: 'Event Grid topic', groupIds: ['topic'] },
   { type: 'Microsoft.ContainerRegistry/registries', label: 'Container registry', groupIds: ['registry'] },
   { type: 'Microsoft.Search/searchServices', label: 'AI Search service', groupIds: ['searchService'] },
   { type: 'Microsoft.CognitiveServices/accounts', label: 'Azure OpenAI / AI Services account', groupIds: ['account'] },
-  { type: 'Microsoft.MachineLearningServices/workspaces', label: 'Azure ML workspace', groupIds: ['amlworkspace'] },
+  { type: 'Microsoft.MachineLearningServices/workspaces', label: 'Azure ML / Foundry workspace', groupIds: ['amlworkspace'] },
   { type: 'Microsoft.Purview/accounts', label: 'Purview account', groupIds: ['account', 'portal'] },
   { type: 'Microsoft.DataFactory/factories', label: 'Data Factory', groupIds: ['dataFactory'] },
-  { type: 'Microsoft.OperationalInsights/workspaces', label: 'Log Analytics workspace', groupIds: ['azuremonitor'] },
+  // Azure Monitor terminates on the SCOPE, never on the workspace. See header.
+  { type: 'Microsoft.Insights/privateLinkScopes', label: 'Azure Monitor Private Link Scope (AMPLS)', groupIds: ['azuremonitor'] },
   { type: 'Microsoft.DBforPostgreSQL/flexibleServers', label: 'PostgreSQL flexible server', groupIds: ['postgresqlServer'] },
+  { type: 'Microsoft.Cache/Redis', label: 'Azure Cache for Redis', groupIds: ['redisCache'] },
   { type: 'Microsoft.AppConfiguration/configurationStores', label: 'App Configuration store', groupIds: ['configurationStores'] },
   { type: 'Microsoft.Web/sites', label: 'App Service / Function App', groupIds: ['sites'] },
   { type: 'Microsoft.App/managedEnvironments', label: 'Container Apps environment', groupIds: ['managedEnvironments'] },
@@ -75,7 +98,9 @@ export const PRIVATE_LINK_TARGET_TYPES: PrivateLinkTargetType[] = [
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
-  dropdown: { minWidth: '320px' },
+  // Same reasoning as the picker's `combo`: a preference, not a px floor, so
+  // the control shrinks inside a `minmax(0, 1fr)` track (`web3-ui.md` §5).
+  dropdown: { minWidth: 0, width: '100%' },
 });
 
 /** The ARM type embedded in an ARM id, or null when it has none. */
@@ -150,7 +175,32 @@ export function PrivateLinkTargetField({
 
   const handleResource = useCallback((r: AzureResourceSelection | null) => {
     if (!r) { onChange(null, groupIdsForType(type), null); return; }
-    onChange(r.id || null, groupIdsForType(r.type || type), r);
+    /**
+     * DERIVE THE TYPE FROM THE VALUE, NOT FROM THE WIDGET.
+     *
+     * `AzureResourcePicker.commitManual` builds its selection WITHOUT a `type`
+     * key — deliberately, per Wave 0's "a hand-entered value fills only the
+     * field it IS; every other field stays empty rather than being guessed".
+     * So on the manual-entry path `r.type` is undefined, and reading the type
+     * dropdown instead produced a pair ARM rejects:
+     *
+     *   Gov, discovery denied, fresh Inbound tab. Dropdown reads "Storage
+     *   account" (the default). User pastes a Key Vault ARM id. groupIds come
+     *   back ['dfs','blob',…], the caller keeps 'blob', and the POST is
+     *   {privateLinkServiceId: <vault id>, groupIds: ['blob']} — rejected.
+     *
+     * And it was UNCORRECTABLE: the caller's sub-resource dropdown offers only
+     * these groupIds, so 'vault' could not be selected, and the free-text box
+     * that used to accept it is the one this wave removed. Strictly worse than
+     * what shipped before.
+     *
+     * The id carries its own `/providers/<ns>/<type>/` segment, so it is read
+     * from there, and `setType` moves the dropdown to match — otherwise the
+     * widget keeps asserting a type the stored value contradicts.
+     */
+    const t = r.type || typeFromArmId(r.id) || type;
+    if (t.toLowerCase() !== type.toLowerCase()) setType(t);
+    onChange(r.id || null, groupIdsForType(t), r);
   }, [onChange, type]);
 
   return (

@@ -282,16 +282,22 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     manualLabel: 'DFS endpoint',
   },
   /**
-   * A T-SQL host. TWO sources on purpose: the surfaces that ask for one accept
-   * either an Azure SQL server or a Synapse serverless endpoint, and a picker
-   * that knew only `Microsoft.Sql/servers` would be EMPTY on the Synapse-only
+   * A T-SQL host. THREE sources on purpose: the surfaces that ask for one
+   * accept an Azure SQL server or either Synapse endpoint, and a picker that
+   * knew only `Microsoft.Sql/servers` would be EMPTY on the Synapse-only
    * estates Loom deploys by default (`cloud-parity.md` reasoning, applied to a
    * backend choice rather than a boundary).
    *
-   * ONE source per ARM TYPE, deliberately: the picker keys its options on the
-   * resource id, so listing a Synapse workspace twice (serverless AND dedicated
-   * endpoints) would emit two options with the same key. The dedicated pool
-   * endpoint reaches the same server name and is named in the manual label.
+   * ── WHY THE DEDICATED ENDPOINT IS BACK (review, 2026-08-16) ──────────────
+   * This listed serverless ONLY, with a comment claiming one source per ARM
+   * type was required because the picker keyed options on `r.id`. That traded
+   * a rendering detail for a wrong ANSWER: `paginated-report-editor` maps
+   * Synapse to this kind next to a "Database / pool" field, so picking a
+   * workspace and typing a dedicated pool produced `ws-ondemand….sql…` +
+   * `pool01` and failed at TDS — the "fails at the backend, not in the UI"
+   * class this whole wave exists to remove. The picker now keys on
+   * (source, resource) and groups by source, so both endpoints coexist,
+   * labelled distinctly.
    */
   'sql-host': {
     label: 'SQL server / endpoint',
@@ -307,8 +313,13 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
         select: 'properties.connectivityEndpoints.sqlOnDemand',
         label: 'Synapse serverless SQL endpoint',
       },
+      {
+        type: 'Microsoft.Synapse/workspaces',
+        select: 'properties.connectivityEndpoints.sql',
+        label: 'Synapse dedicated SQL pool endpoint',
+      },
     ],
-    manualLabel: 'Server FQDN (Azure SQL, or a Synapse serverless / dedicated endpoint)',
+    manualLabel: 'Server FQDN',
   },
 };
 

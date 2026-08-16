@@ -139,13 +139,51 @@ describe('Catalog lineage — the Databricks workspace host was typed', () => {
     expect(box).toBeDefined();
   });
 
-  it('keeps a hostname it cannot resolve rather than blanking the field', async () => {
+  /**
+   * S2 (review, 2026-08-16). This test was titled "keeps a hostname it cannot
+   * resolve rather than blanking the field" and asserted only that a combobox
+   * existed, on a page whose `host` starts `''`. It would have passed with the
+   * preservation logic DELETED — a green run over an empty population, which is
+   * the exact family this PR's own body is about.
+   *
+   * `CatalogLineagePage` owns `host` internally and takes no prop, so a stored
+   * value cannot be injected. It CAN be driven: pick a workspace, then re-run
+   * discovery against a list that no longer contains it. That is the real
+   * defect shape — a saved binding whose resource the caller can no longer see
+   * — and it fails if `selected` is ever re-derived from the fetched list.
+   */
+  it('keeps a resolved hostname when a later discovery no longer returns it', async () => {
+    routeFetch([[/\/api\/azure\/resources/, { ok: true, via: 'user', resources: [WORKSPACE], select: 'properties.workspaceUrl' }]]);
+    wrap(<CatalogLineagePage />);
+
+    await waitFor(() => expect(screen.getByText(/1 resource/i)).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('combobox').find((c) => (c as HTMLInputElement).placeholder?.includes('Select a resource'))!);
+    fireEvent.click(await screen.findByRole('option', { name: /adb-1/ }));
+    await waitFor(() => {
+      expect(screen.getAllByRole('combobox').some((c) => (c as HTMLInputElement).value.includes('adb-1'))).toBe(true);
+    });
+
+    // The workspace vanishes from discovery — RBAC revoked, or a Gov boundary
+    // where the UAMI can no longer enumerate it. Re-run via the Refresh button.
+    routeFetch([[/\/api\/azure\/resources/, { ok: true, via: 'user', resources: [], select: 'properties.workspaceUrl' }]]);
+    fireEvent.click(screen.getByRole('button', { name: /refresh resource list/i }));
+
+    await waitFor(() => expect(screen.getByText(/0 resources/i)).toBeInTheDocument());
+    // The stored value survives, badged as unverified rather than blanked.
+    const kept = screen.getAllByRole('combobox').find((c) => (c as HTMLInputElement).value.includes('adb-123456'));
+    expect(kept, 'the resolved hostname was blanked when discovery stopped returning it').toBeDefined();
+    expect(screen.getByText(/saved value — not visible to you/i)).toBeInTheDocument();
+  });
+
+  it('is not a dead end when discovery returns nothing on first open', async () => {
     routeFetch([[/\/api\/azure\/resources/, { ok: true, via: 'user', resources: [], select: 'properties.workspaceUrl' }]]);
     wrap(<CatalogLineagePage />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    // Nothing discovered, so the escape hatch is the control the user gets —
-    // never "No resources found" over a disabled box.
-    expect(screen.getByRole('combobox', { name: /workspace/i })).toBeInTheDocument();
+    // The escape hatch is REACHABLE — `auto-bind-by-default` forbids "no
+    // results" over a control the user cannot use.
+    fireEvent.click(await screen.findByRole('button', { name: /enter manually/i }));
+    const manual = await screen.findByLabelText('Workspace URL');
+    expect((manual as HTMLInputElement).disabled).toBe(false);
   });
 });
 
