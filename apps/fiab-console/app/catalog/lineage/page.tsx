@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import { LineageGraph } from '@/lib/components/catalog/lineage-graph';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import {
   Dropdown, Option, Input, Field, Button, Body1, makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -54,9 +55,13 @@ export default function CatalogLineagePage() {
           <Input value={id} onChange={(_, d) => setId(d.value)} placeholder="main.bronze.customers / 0e1a-…-9f / 1234-…-abc" />
         </Field>
         {source === 'unity-catalog' && (
-          <Field label="Workspace hostname">
-            <Input value={host} onChange={(_, d) => setHost(d.value)} placeholder="adb-…azuredatabricks.net" />
-          </Field>
+          <AzureBackedField
+            kind="databricks"
+            value={host}
+            label="Workspace"
+            surface="Catalog lineage"
+            onChange={(v) => setHost(v || '')}
+          />
         )}
         <Button appearance="primary" disabled={!id} onClick={() => setCommitted({ source, id, host })}>
           Resolve

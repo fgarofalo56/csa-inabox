@@ -163,6 +163,17 @@ function fromLoader(key: string, loader: GateOptionsLoader): AzureBackedFieldDef
  * Kinds Resource Graph serves that the loader table does not name — the
  * container tables and the mv-expanded subnet — plus the cloud-parity
  * composites. `catalog-endpoint` is the load-bearing one: see the header.
+ *
+ * ── WHY THE `*-id` KINDS EXIST (Wave 1A) ────────────────────────────────────
+ * The loader table stores what a GATE needs, which is usually a name or an
+ * endpoint. Roughly a third of the hand-typed ARM sites want the resource's
+ * full ARM ID instead — a private-endpoint target, a Geo-DR partner namespace,
+ * an Event Hubs capture destination, a Logic App an alert invokes. Same ARM
+ * type, different `valueFrom`, so it cannot be expressed by reusing the loader
+ * key: `L.eventhubs` is `name`, and handing a namespace NAME to an API that
+ * wants `/subscriptions/…/namespaces/<n>` fails at the ARM call, not here.
+ * Rather than let each call site name its own ARM type again (the adoption gap
+ * this component exists to close), the id-shaped kinds live in the ONE table.
  */
 const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
   'resource-group': {
@@ -216,6 +227,88 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     // platform binds — the two would silently disagree.
     normalize: (v) => (v && !/^https?:\/\//i.test(v) ? `https://${v}` : v),
     manualLabel: 'Catalog endpoint',
+  },
+
+  // ── ARM-ID kinds. Same ARM types as the loaders above, `valueFrom: 'id'`. ──
+  'logic-app': {
+    label: 'Logic App',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.Logic/workflows' }],
+    manualLabel: 'Logic App resource ID',
+  },
+  'private-dns-zone': {
+    label: 'Private DNS zone',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.Network/privateDnsZones' }],
+    manualLabel: 'Private DNS zone resource ID',
+  },
+  'storage-account-id': {
+    label: 'Storage account',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.Storage/storageAccounts' }],
+    manualLabel: 'Storage account resource ID',
+  },
+  'eventhubs-namespace-id': {
+    label: 'Event Hubs namespace',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.EventHub/namespaces' }],
+    manualLabel: 'Event Hubs namespace resource ID',
+  },
+  /**
+   * The cluster's ARM id, WITH its URI projected alongside. `valueFrom: 'id'`
+   * decides what is stored; the `select` costs nothing extra (it is a column in
+   * the same ARG query) and reaches the caller as `resource.value`, so a
+   * surface that needs both — the ADX follower wizard needs the leader's ARM id
+   * AND its URI — fills both from ONE pick instead of two typed boxes.
+   */
+  'adx-cluster-id': {
+    label: 'Azure Data Explorer cluster',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.Kusto/clusters', select: 'properties.uri' }],
+    manualLabel: 'Cluster resource ID',
+  },
+
+  // ── DERIVED-ENDPOINT kinds with no loader, because no gate asks for them. ──
+  'eventgrid-topic-endpoint': {
+    label: 'Event Grid topic endpoint',
+    valueFrom: 'properties.endpoint',
+    sources: [{ type: 'Microsoft.EventGrid/topics', select: 'properties.endpoint' }],
+    manualLabel: 'Topic endpoint',
+  },
+  'storage-dfs-endpoint': {
+    label: 'ADLS Gen2 (DFS) endpoint',
+    valueFrom: 'properties.primaryEndpoints.dfs',
+    sources: [{ type: 'Microsoft.Storage/storageAccounts', select: 'properties.primaryEndpoints.dfs' }],
+    manualLabel: 'DFS endpoint',
+  },
+  /**
+   * A T-SQL host. TWO sources on purpose: the surfaces that ask for one accept
+   * either an Azure SQL server or a Synapse serverless endpoint, and a picker
+   * that knew only `Microsoft.Sql/servers` would be EMPTY on the Synapse-only
+   * estates Loom deploys by default (`cloud-parity.md` reasoning, applied to a
+   * backend choice rather than a boundary).
+   *
+   * ONE source per ARM TYPE, deliberately: the picker keys its options on the
+   * resource id, so listing a Synapse workspace twice (serverless AND dedicated
+   * endpoints) would emit two options with the same key. The dedicated pool
+   * endpoint reaches the same server name and is named in the manual label.
+   */
+  'sql-host': {
+    label: 'SQL server / endpoint',
+    valueFrom: 'properties.fullyQualifiedDomainName',
+    sources: [
+      {
+        type: 'Microsoft.Sql/servers',
+        select: 'properties.fullyQualifiedDomainName',
+        label: 'Azure SQL server',
+      },
+      {
+        type: 'Microsoft.Synapse/workspaces',
+        select: 'properties.connectivityEndpoints.sqlOnDemand',
+        label: 'Synapse serverless SQL endpoint',
+      },
+    ],
+    manualLabel: 'Server FQDN (Azure SQL, or a Synapse serverless / dedicated endpoint)',
   },
 };
 

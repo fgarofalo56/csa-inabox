@@ -47,6 +47,7 @@ import {
 } from '@fluentui/react-icons';
 import { appendFactoryCoords, type SelectedFactoryCoords } from './factory-coords';
 import { clientFetch } from '@/lib/client-fetch';
+import { PrivateLinkTargetField, initialGroupIdsFor } from '@/lib/components/azure/private-link-target-field';
 import {
   rowActionsFor, groupActionsFor, canConfirmDelete,
   KIND_ROUTE, RESOURCE_JSON_TYPE, ALL_GROUP_VALUES,
@@ -248,6 +249,9 @@ export function FactoryResourcesTree({
   const [mpeName, setMpeName] = useState('');
   const [mpeResourceId, setMpeResourceId] = useState('');
   const [mpeGroupId, setMpeGroupId] = useState('dfs');
+  /** Sub-resources the chosen target accepts, seeded from the picker's own
+   *  opening type so the dropdown is never momentarily empty. */
+  const [mpeGroupIdChoices, setMpeGroupIdChoices] = useState<string[]>(() => initialGroupIdsFor());
   const [mpeError, setMpeError] = useState<string | null>(null);
   const [mpeNote, setMpeNote] = useState<string | null>(null);
 
@@ -1166,12 +1170,22 @@ export function FactoryResourcesTree({
               <Field label="Name" required>
                 <Input value={mpeName} onChange={(_, d) => setMpeName(d.value)} placeholder="mpe-lake-dfs" disabled={!!mpeNote} />
               </Field>
-              <Field label="Target resource ID" required style={{ marginTop: tokens.spacingVerticalS }}>
-                <Input value={mpeResourceId} onChange={(_, d) => setMpeResourceId(d.value)} placeholder="/subscriptions/…/providers/Microsoft.Storage/storageAccounts/…" disabled={!!mpeNote} />
-              </Field>
+              <div style={{ marginTop: tokens.spacingVerticalS }}>
+                <PrivateLinkTargetField
+                  value={mpeResourceId}
+                  required
+                  label="Target resource"
+                  surface="Managed private endpoint"
+                  onChange={(id, gids) => {
+                    setMpeResourceId(id || '');
+                    setMpeGroupIdChoices(gids);
+                    if (gids.length && !gids.includes(mpeGroupId)) setMpeGroupId(gids[0]);
+                  }}
+                />
+              </div>
               <Field label="Sub-resource (groupId)" required style={{ marginTop: tokens.spacingVerticalS }}>
                 <Dropdown value={mpeGroupId} selectedOptions={[mpeGroupId]} onOptionSelect={(_, d) => setMpeGroupId(d.optionValue || 'dfs')} disabled={!!mpeNote}>
-                  {['dfs', 'blob', 'sqlServer', 'vault', 'table', 'queue', 'file', 'namespace', 'sites'].map((gid) => <Option key={gid} value={gid} text={gid}>{gid}</Option>)}
+                  {mpeGroupIdChoices.map((gid) => <Option key={gid} value={gid} text={gid}>{gid}</Option>)}
                 </Dropdown>
               </Field>
               <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>

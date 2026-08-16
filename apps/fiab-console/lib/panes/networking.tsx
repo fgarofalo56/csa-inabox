@@ -34,6 +34,8 @@ import {
 import {
   Add16Regular, Delete16Regular, ShieldLock24Regular, ArrowClockwise16Regular,
 } from '@fluentui/react-icons';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { PrivateLinkTargetField, initialGroupIdsFor } from '@/lib/components/azure/private-link-target-field';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM },
@@ -124,7 +126,10 @@ function InboundTab({ workspaceId }: { workspaceId: string }) {
   const [busy, setBusy] = useState(false);
   // create form
   const [plsId, setPlsId] = useState('');
-  const [groupIds, setGroupIds] = useState('blob');
+  // The sub-resources Azure accepts for the CHOSEN target type, seeded from the
+  // type the picker itself opens on so the dropdown is never momentarily empty.
+  const [groupIdChoices, setGroupIdChoices] = useState<string[]>(() => initialGroupIdsFor(plsId));
+  const [groupIds, setGroupIds] = useState<string[]>(['blob']);
   const [location, setLocation] = useState('');
   const [dnsZoneId, setDnsZoneId] = useState('');
 
@@ -144,7 +149,7 @@ function InboundTab({ workspaceId }: { workspaceId: string }) {
     setBusy(true); setGate(undefined); setErr(undefined);
     try {
       const body = next
-        ? { enable: true, privateLinkServiceId: plsId.trim(), groupIds: groupIds.split(',').map((s) => s.trim()).filter(Boolean), location: location.trim() || undefined, dnsZoneId: dnsZoneId.trim() || undefined }
+        ? { enable: true, privateLinkServiceId: plsId.trim(), groupIds, location: location.trim() || undefined, dnsZoneId: dnsZoneId.trim() || undefined }
         : { enable: false };
       const r = await fetch(`${base(workspaceId)}/inbound`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       const j = await r.json();
@@ -189,18 +194,44 @@ function InboundTab({ workspaceId }: { workspaceId: string }) {
       </Caption1>
       {!enabled && (
         <div className={styles.formGrid}>
-          <Field label="Target resource ARM id (privateLinkServiceId)" required>
-            <Input value={plsId} onChange={(_e, d) => setPlsId(d.value)} placeholder="/subscriptions/…/providers/Microsoft.Storage/storageAccounts/myacct" />
-          </Field>
-          <Field label="Sub-resource group ids (comma-separated)" hint="e.g. blob, sqlServer, vault">
-            <Input value={groupIds} onChange={(_e, d) => setGroupIds(d.value)} placeholder="blob" />
+          <PrivateLinkTargetField
+            value={plsId}
+            required
+            label="Target resource (privateLinkServiceId)"
+            surface="Inbound protection"
+            onChange={(id, gids) => {
+              setPlsId(id || '');
+              setGroupIdChoices(gids);
+              // Keep only sub-resources the new type actually accepts, and
+              // default to the first when nothing survives — the pair is
+              // submitted together and a stale groupId fails at ARM.
+              setGroupIds((prev) => {
+                const kept = prev.filter((g) => gids.includes(g));
+                return kept.length ? kept : gids.slice(0, 1);
+              });
+            }}
+          />
+          <Field label="Target sub-resource(s)" hint="Which private-link sub-resource the endpoint connects to. Filled in from the resource type.">
+            <Dropdown
+              multiselect
+              value={groupIds.join(', ')}
+              selectedOptions={groupIds}
+              placeholder={groupIdChoices.length ? 'Select a sub-resource' : 'Pick a target resource first'}
+              onOptionSelect={(_e, d) => setGroupIds(d.selectedOptions)}
+            >
+              {groupIdChoices.map((g) => <Option key={g} value={g} text={g}>{g}</Option>)}
+            </Dropdown>
           </Field>
           <Field label="Location" hint="defaults to LOOM_LOCATION when blank">
             <Input value={location} onChange={(_e, d) => setLocation(d.value)} placeholder="eastus" />
           </Field>
-          <Field label="Private DNS zone ARM id (optional — registers the FQDN)">
-            <Input value={dnsZoneId} onChange={(_e, d) => setDnsZoneId(d.value)} placeholder="/subscriptions/…/privateDnsZones/privatelink.blob.core.windows.net" />
-          </Field>
+          <AzureBackedField
+            kind="private-dns-zone"
+            value={dnsZoneId}
+            label="Private DNS zone (optional — registers the FQDN)"
+            surface="Inbound protection"
+            onChange={(v) => setDnsZoneId(v || '')}
+          />
         </div>
       )}
       {pe?.privateLinkServiceId && (
@@ -354,7 +385,8 @@ function OutboundTab({ workspaceId }: { workspaceId: string }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState('');
-  const [groupIds, setGroupIds] = useState('blob');
+  const [groupIdChoices, setGroupIdChoices] = useState<string[]>(() => initialGroupIdsFor());
+  const [groupIds, setGroupIds] = useState<string[]>(['blob']);
   const [location, setLocation] = useState('');
 
   const load = useCallback(async () => {
@@ -374,7 +406,7 @@ function OutboundTab({ workspaceId }: { workspaceId: string }) {
     try {
       const r = await fetch(`${base(workspaceId)}/outbound`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ targetResourceId: target.trim(), groupIds: groupIds.split(',').map((s) => s.trim()).filter(Boolean), location: location.trim() || undefined }),
+        body: JSON.stringify({ targetResourceId: target.trim(), groupIds, location: location.trim() || undefined }),
       });
       const j = await r.json();
       if (j.ok) { setOpen(false); setTarget(''); await load(); }
@@ -411,11 +443,30 @@ function OutboundTab({ workspaceId }: { workspaceId: string }) {
               <DialogTitle>New outbound private endpoint</DialogTitle>
               <DialogContent>
                 <div className={styles.formGrid}>
-                  <Field label="Target resource ARM id" required>
-                    <Input value={target} onChange={(_e, d) => setTarget(d.value)} placeholder="/subscriptions/…/providers/Microsoft.Storage/storageAccounts/myacct" />
-                  </Field>
-                  <Field label="Sub-resource group ids (comma-separated)" hint="e.g. blob, sqlServer, vault">
-                    <Input value={groupIds} onChange={(_e, d) => setGroupIds(d.value)} placeholder="blob" />
+                  <PrivateLinkTargetField
+                    value={target}
+                    required
+                    label="Target resource"
+                    surface="Outbound private endpoint"
+                    onChange={(id, gids) => {
+                      setTarget(id || '');
+                      setGroupIdChoices(gids);
+                      setGroupIds((prev) => {
+                        const kept = prev.filter((g) => gids.includes(g));
+                        return kept.length ? kept : gids.slice(0, 1);
+                      });
+                    }}
+                  />
+                  <Field label="Target sub-resource(s)" hint="Which private-link sub-resource the endpoint connects to. Filled in from the resource type.">
+                    <Dropdown
+                      multiselect
+                      value={groupIds.join(', ')}
+                      selectedOptions={groupIds}
+                      placeholder={groupIdChoices.length ? 'Select a sub-resource' : 'Pick a target resource first'}
+                      onOptionSelect={(_e, d) => setGroupIds(d.selectedOptions)}
+                    >
+                      {groupIdChoices.map((g) => <Option key={g} value={g} text={g}>{g}</Option>)}
+                    </Dropdown>
                   </Field>
                   <Field label="Location" hint="defaults to LOOM_LOCATION when blank">
                     <Input value={location} onChange={(_e, d) => setLocation(d.value)} placeholder="eastus" />

@@ -40,6 +40,7 @@ import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { EventHubsNamespaceTree } from '@/lib/components/eventhubs/eventhubs-tree';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import { NewItemCreateGate } from '../new-item-gate';
 import { openCopilotWithPersona } from '@/lib/components/copilot-pane';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -880,9 +881,16 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                                     {adxTables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
                                   </Select>
                                 </Field>
-                                <Field label="Cluster (optional override)" style={{ flex: 1, minWidth: 240 }} hint={adxDefaultCluster ? `Default: ${adxDefaultCluster}` : 'Resolved from LOOM_KUSTO_CLUSTER_URI'}>
-                                  <Input placeholder="https://<cluster>.<region>.kusto.windows.net" value={adxCluster} onChange={(_: unknown, d: any) => setAdxCluster(d.value)} />
-                                </Field>
+                                <div style={{ flex: 1, minWidth: 240 }}>
+                                  <AzureBackedField
+                                    kind="adxUri"
+                                    value={adxCluster}
+                                    label="Cluster (optional override)"
+                                    placeholder={adxDefaultCluster ? `Default: ${adxDefaultCluster}` : 'Resolved from LOOM_KUSTO_CLUSTER_URI'}
+                                    surface="Activator condition source"
+                                    onChange={(v) => setAdxCluster(v || '')}
+                                  />
+                                </div>
                               </div>
                               {adxGate && (
                                 <MessageBar intent="warning">
@@ -1082,9 +1090,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           )}
                           {actKind === 'LogicApp' && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
-                              <Field label="Logic App resource id" hint="Microsoft.Logic/workflows resource id (Consumption workflow with an HTTP trigger).">
-                                <Input placeholder="/subscriptions/.../providers/Microsoft.Logic/workflows/wf-alert" value={actLogicAppResourceId} onChange={(_: unknown, d: any) => setActLogicAppResourceId(d.value)} />
-                              </Field>
+                              <AzureBackedField
+                                kind="logic-app"
+                                value={actLogicAppResourceId}
+                                label="Logic App"
+                                surface="Activator action"
+                                onChange={(v) => setActLogicAppResourceId(v || '')}
+                              />
                               <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                                 <Field label="Trigger name" style={{ width: 160 }}>
                                   <Input value={actLogicAppTrigger} onChange={(_: unknown, d: any) => setActLogicAppTrigger(d.value)} />

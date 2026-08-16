@@ -39,6 +39,7 @@ import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import {
@@ -324,17 +325,36 @@ function DestinationPicker({ spec, onChange }: { spec: ActivationSyncSpec; onCha
         </Field>
       )}
       {kind === 'event-grid' && (
-        <Field label="Event Grid topic endpoint (https)">
-          <Input value={dest?.kind === 'event-grid' ? dest.topicEndpoint : ''} placeholder="https://<topic>.<region>.eventgrid.azure.net/api/events"
-            onChange={(_, d) => setDest({ kind: 'event-grid', topicEndpoint: d.value, eventType: dest?.kind === 'event-grid' ? dest.eventType : undefined })} />
-        </Field>
+        <AzureBackedField
+          kind="eventgrid-topic-endpoint"
+          value={dest?.kind === 'event-grid' ? dest.topicEndpoint : ''}
+          label="Event Grid topic"
+          surface="Activation destination"
+          onChange={(v) => setDest({
+            kind: 'event-grid',
+            topicEndpoint: v || '',
+            eventType: dest?.kind === 'event-grid' ? dest.eventType : undefined,
+          })}
+        />
       )}
       {kind === 'service-bus' && (
         <div className={styles.row}>
-          <Field label="Namespace" className={styles.grow}>
-            <Input value={dest?.kind === 'service-bus' ? dest.namespace : ''} placeholder="<ns>.servicebus.windows.net"
-              onChange={(_, d) => setDest({ kind: 'service-bus', namespace: d.value, entity: dest?.kind === 'service-bus' ? dest.entity : '' })} />
-          </Field>
+          <div className={styles.grow}>
+            {/* The namespace NAME, not an FQDN: `serviceBusFqdn()` appends the
+                per-boundary suffix, so storing the name is what keeps this
+                destination working in Gov (`cloud-parity.md`). */}
+            <AzureBackedField
+              kind="servicebus"
+              value={dest?.kind === 'service-bus' ? dest.namespace : ''}
+              label="Namespace"
+              surface="Activation destination"
+              onChange={(v) => setDest({
+                kind: 'service-bus',
+                namespace: v || '',
+                entity: dest?.kind === 'service-bus' ? dest.entity : '',
+              })}
+            />
+          </div>
           <Field label="Queue / topic" className={styles.grow}>
             <Input value={dest?.kind === 'service-bus' ? dest.entity : ''} placeholder="activation-queue"
               onChange={(_, d) => setDest({ kind: 'service-bus', namespace: dest?.kind === 'service-bus' ? dest.namespace : '', entity: d.value })} />

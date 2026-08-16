@@ -53,6 +53,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { CosmosTree, type CosmosSelection, type CosmosAction } from '@/lib/components/cosmos/cosmos-tree';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import { CosmosDataExplorer } from '@/lib/components/cosmos/cosmos-data-explorer';
 import { CosmosHome } from '@/lib/components/cosmos/cosmos-home';
 import { CosmosConnectPanel } from '@/lib/components/cosmos/cosmos-connect-panel';
@@ -1174,10 +1175,12 @@ function NetworkingPanel() {
               {vnetRules.map((v, i) => (
                 <div key={i} className={s.row}>
                   <div className={s.grow}>
-                    <Input
+                    <AzureBackedField
+                      kind="subnet"
                       value={v.id}
-                      placeholder="/subscriptions/…/virtualNetworks/<vnet>/subnets/<subnet>"
-                      onChange={(_, d) => setVnetRules((prev) => prev.map((x, j) => (j === i ? { ...x, id: d.value } : x)))}
+                      label={`Subnet ${i + 1}`}
+                      surface="Cosmos DB virtual network rules"
+                      onChange={(val) => setVnetRules((prev) => prev.map((x, j) => (j === i ? { ...x, id: val || '' } : x)))}
                     />
                   </div>
                   <Tooltip content="Remove VNet rule" relationship="label">
