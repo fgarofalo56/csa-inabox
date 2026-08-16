@@ -49,7 +49,7 @@ import { cogScope, getOpenAiSuffix } from '@/lib/azure/cloud-endpoints';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
 import { iterateAoaiDeltas } from '@/lib/api/aoai-sse';
 import { randomId } from '@/lib/util/random-id';
-import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { SQL_EDITOR_ITEM_TYPES, loadOwnedSqlItem } from '@/app/api/items/_lib/sql-server-scope';
 import { resolveOwnedSqlTarget } from '@/app/api/items/azure-sql-database/_bound-connection';
 
 // ---------- Command allowlist ----------
@@ -218,7 +218,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // Authority (#2723): the caller must OWN the [id] item, and the schema this
   // Copilot reads over the live TDS path is bound to THAT item's connection —
   // never a body-chosen server/database. Owner-scoped load → 404 otherwise.
-  const item = await loadOwnedItem(id, 'azure-sql-database', session.claims.oid, { session });
+  //
+  // ACROSS THE FAMILY, not one hard-coded type. `UnifiedSqlDatabaseEditor` posts
+  // here from all three of its slugs, so `'azure-sql-database'` alone 404'd
+  // Copilot for every `postgres-flexible-server` and `sql-database` item — the
+  // same defect `SQL_EDITOR_ITEM_TYPES` exists to end, left behind in this
+  // sibling. Each candidate runs the identical owner check, so trying several
+  // cannot widen access.
+  const item = await loadOwnedSqlItem(id, session, SQL_EDITOR_ITEM_TYPES);
   if (!item) {
     return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
   }

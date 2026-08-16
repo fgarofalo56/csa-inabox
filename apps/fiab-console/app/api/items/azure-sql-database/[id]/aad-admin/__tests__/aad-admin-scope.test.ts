@@ -11,6 +11,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
+// The wrapper resolves `[id]` across this whole family; the specs assert against
+// it rather than re-listing the slugs (re-listing is the defect that made #3623
+// wrong twice).
+import { SQL_EDITOR_ITEM_TYPES } from '@/app/api/items/_lib/sql-server-scope';
+
 const OID = 'oid-owner';
 const GOVERNED = '11111111-1111-1111-1111-111111111111';
 const FOREIGN = '99999999-9999-9999-9999-999999999999';
@@ -162,6 +167,64 @@ describe('PUT /aad-admin — the privilege grant', () => {
     const { PUT } = await import('../route');
     const r = await PUT(putReq({ login: 'x' }), PARAMS);
     expect(r.status).toBe(400);
+    expect(setAadAdminMock).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE #3623 REGRESSION. `AzureSqlServerEditor` — registered for the
+// `azure-sql-server` slug — calls THIS route with an `azure-sql-server` item id
+// (its AAD admin dialog). #3623 shipped SQL_EDITOR_ITEM_TYPES as
+// `['azure-sql-database']`, review widened it to three, and `azure-sql-server`
+// was in neither: `loadOwnedSqlItem` matched no candidate, returned null, and a
+// working button started 404ing.
+//
+// Nothing else caught it. `tsc` is clean either way, and
+// `scripts/ci/check-route-guards.mjs` sees the route still consuming
+// `session.claims.oid` through the wrapper. Only a spec that names the slug can.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('resolves the [id] across the WHOLE editor family, not one slug', () => {
+  /** The caller owns an item of EXACTLY `itemType` and nothing else. */
+  const ownsOnly = (itemType: string) =>
+    loadOwnedItemMock.mockImplementation(((_id: string, t: string) =>
+      Promise.resolve(t === itemType ? { ...OWNED_ITEM, itemType } : null)) as any);
+
+  //   MUTATION: drop 'azure-sql-server' from SQL_EDITOR_ITEM_TYPES.
+  it('authorizes an owned azure-sql-server item — the slug #3623 dropped', async () => {
+    ownsOnly('azure-sql-server');
+    const { GET } = await import('../route');
+    const r = await GET(getReq('?server=srv'), PARAMS);
+    expect(r.status).toBe(200);
+    expect(getAadAdminMock).toHaveBeenCalledWith('srv');
+  });
+
+  it('authorizes a PUT for an owned azure-sql-server item', async () => {
+    ownsOnly('azure-sql-server');
+    const { PUT } = await import('../route');
+    const r = await PUT(putReq(ADMIN), PARAMS);
+    expect(r.status).toBe(200);
+    expect(setAadAdminMock).toHaveBeenCalledWith('srv', expect.objectContaining({ login: ADMIN.login }));
+  });
+
+  // The not-owned specs above only mean something if EVERY candidate was tried
+  // and refused. Assert that directly — a resolution that quietly stopped after
+  // one type would still 404 here and hide behind the same green.
+  it('owner-checks every slug in the family before refusing', async () => {
+    loadOwnedItemMock.mockResolvedValue(null as any);
+    const { PUT } = await import('../route');
+    const r = await PUT(putReq(ADMIN), PARAMS);
+    expect(r.status).toBe(404);
+    const typesTried = loadOwnedItemMock.mock.calls.map((c: any[]) => c[1]);
+    expect(new Set(typesTried)).toEqual(new Set(SQL_EDITOR_ITEM_TYPES));
+  });
+
+  // Widening the population must NOT widen access: a caller who owns nothing is
+  // still refused for all six, and the privilege grant never runs.
+  it('a caller who owns NONE of the six is still refused, granting NOTHING', async () => {
+    loadOwnedItemMock.mockResolvedValue(null as any);
+    const { PUT } = await import('../route');
+    const r = await PUT(putReq({ server: sqlArm(GOVERNED, 'srv'), ...ADMIN }), PARAMS);
+    expect(r.status).toBe(404);
     expect(setAadAdminMock).not.toHaveBeenCalled();
   });
 });
