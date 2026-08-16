@@ -118,23 +118,65 @@ export function sqlAuthorizedSubscriptions(): string[] {
 }
 
 /**
- * The item types that share `UnifiedSqlDatabaseEditor` (lib/editors/registry.ts)
- * and therefore share these routes.
+ * Every item-type slug whose editor calls a route under
+ * `/api/items/azure-sql-database/[id]/**` or
+ * `/api/items/postgres-flexible-server/[id]/**`. Resolution tries each in turn,
+ * so an item of ANY of them reaches its handler instead of 404ing.
  *
- * WHY THIS EXISTS, found in review of the first pass. `postgres-flexible-server`
- * is a REAL creatable slug — `searchOnly: true` hides it from browse but the
- * search branch of `new-item-dialog.tsx` deliberately does NOT filter searchOnly,
- * and `createItem` persists the picked slug verbatim. `sql-database` is
- * `hiddenFromGallery` but pre-existing items still resolve. Defaulting the owner
- * check to `azure-sql-database` alone therefore 404'd every route for those
- * items — a REGRESSION, because pre-fix they were session-only and worked.
+ * ── THIS LIST HAS BEEN WRONG THREE TIMES, EACH TIME BY BEING HAND-WRITTEN ──
  *
- * Resolution tries each type, so an item of any of the three reaches its handler.
+ * #3623 shipped it as `['azure-sql-database']`. Review widened it to three
+ * (`postgres-flexible-server` and `sql-database` also mount
+ * `UnifiedSqlDatabaseEditor`). Both were transcriptions of what someone had
+ * recently read in `lib/editors/registry.ts`, and both were short: the registry
+ * maps SIX slugs onto the two SQL editor modules, and `azure-sql-server`,
+ * `azure-sql-managed-instance` and `sql-server-2025-vector-index` all issue
+ * requests to these routes with their OWN slug's item id. A fourth hand-edit
+ * would have been wrong a fourth time.
+ *
+ * So the list is now DERIVED, and the derivation is enforced by a build-time
+ * control: `_lib/__tests__/sql-editor-item-types.control.test.ts` parses
+ * `lib/editors/registry.ts`, walks each registered editor module's relative
+ * import closure inside `lib/editors/`, and asserts that the set of slugs whose
+ * closure fetches one of these route families is EXACTLY this array. Add a slug
+ * to the registry, or teach an existing editor to call one of these routes, and
+ * that test goes red naming the missing slug.
+ *
+ * A RUNTIME import of the registry was considered and rejected: `registry.ts` is
+ * `'use client'` and pulls `next/dynamic` + React + the loading skeleton, so
+ * importing it from a route helper inverts the app/lib layering and drags a
+ * client module into every one of these server bundles. The build-time control
+ * gets the same guarantee without that.
+ *
+ * ── WHY A SUPERSET IS SAFE, and an omission is not ──
+ *
+ * The item TYPE is not an authorization boundary here, and it is worth stating
+ * plainly so nobody reads this list as one. Authorization is (1) `loadOwnedItem`'s
+ * owner / workspace-ACL check, run independently per candidate — a foreign item
+ * resolves for NONE of them, so trying six types cannot widen access any more
+ * than trying one; and (2) {@link admitGovernedServer}'s subscription pin, which
+ * is what actually bounds what a binding may name. A caller who owns an item can
+ * already write any `state.connection` they like onto it via `PATCH
+ * /api/items/[type]/[id]` (see this module's header), whatever its type — so
+ * listing one more type grants nothing that listing `azure-sql-database` did not.
+ *
+ * The asymmetry is therefore total: a slug listed in error is inert, a slug
+ * MISSING 404s a working button. When in doubt, list it.
+ *
+ * Ordered hottest-first — resolution stops at the first hit, and each miss is a
+ * Cosmos round-trip.
  */
 export const SQL_EDITOR_ITEM_TYPES = [
+  // UnifiedSqlDatabaseEditor — the common path.
   'azure-sql-database',
   'postgres-flexible-server',
   'sql-database',
+  // azure-sql-editors.tsx — AzureSqlServerEditor (firewall / Entra admin on the
+  // server scope), SqlManagedInstanceEditor and SqlServer2025VectorIndexEditor
+  // (both reuse the azure-sql-database /query path).
+  'azure-sql-server',
+  'azure-sql-managed-instance',
+  'sql-server-2025-vector-index',
 ] as const;
 
 
@@ -231,6 +273,29 @@ function refuse(status: number, code: string, error: string): ScopeRefusal {
  *      the first label means a bound value can only ever name a HOST IN THE
  *      SQL SUFFIX for this cloud — which is why the routes in this module are
  *      immune to that path even though the shared TDS client is not.
+ *
+ *      MANAGED INSTANCE IS THE KNOWN CASUALTY of that reduction, recorded here
+ *      because this is the function that causes it and the function that would
+ *      have to change. An Azure SQL Managed Instance host is ZONE-QUALIFIED —
+ *      `<instance>.<dnsZone>.<sqlHostSuffix()>`, one label deeper than a logical
+ *      server — so reducing it to the first label yields `<instance>`, and
+ *      `getPool` then composes `<instance>.<sqlHostSuffix()>`: a DIFFERENT host
+ *      from the one the operator selected, and usually one that does not exist.
+ *      (Stated against `sqlHostSuffix()` rather than a literal on purpose — the
+ *      suffix differs per boundary, so this defect is identical in Gov and the
+ *      prose must not teach the Commercial one. See `cloud-parity.md`.)
+ *
+ *      So `SqlManagedInstanceEditor` is deliberately NOT auto-bound (see the
+ *      comment on its `run`): binding it would turn a dead button into one that
+ *      silently addresses the wrong server, which is strictly worse than the
+ *      honest 409 `no_bound_connection` it returns today. Anyone "fixing" that
+ *      editor by adding a binding must fix THIS function first.
+ *
+ *      The real fix is to carry the zone label through admission — either an
+ *      MI-aware branch here that keeps the first TWO labels when the remainder
+ *      matches the cloud's SQL suffix, or a distinct
+ *      `Microsoft.Sql/managedInstances` {@link SqlProviderKind}. Both change a
+ *      security-critical admission rule and neither is attempted here.
  *
  * FAILS CLOSED when the authorized set is empty: with no set there is nothing to
  * admit against, so an ARM id is refused rather than allowed. A bare name in
@@ -356,10 +421,10 @@ export type BoundSqlHandler<P> = (
 export interface BoundSqlOpts {
   /**
    * Cosmos itemTypes the route's `[id]` may name. Defaults to
-   * {@link SQL_EDITOR_ITEM_TYPES} — every slug that shares this editor — because
-   * defaulting to `azure-sql-database` alone 404s a `postgres-flexible-server`
-   * or `sql-database` item, which is a REGRESSION against the session-only
-   * behaviour these routes used to have.
+   * {@link SQL_EDITOR_ITEM_TYPES} — every slug whose editor calls these routes —
+   * because defaulting to `azure-sql-database` alone 404s an item of any of the
+   * other five, which is a REGRESSION against the session-only behaviour these
+   * routes used to have. Do not narrow this per route by hand; see the constant.
    */
   itemTypes?: readonly string[];
   /** The ARM provider this route's backend speaks. */

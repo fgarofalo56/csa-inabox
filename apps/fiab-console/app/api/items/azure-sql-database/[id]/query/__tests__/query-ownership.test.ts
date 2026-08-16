@@ -13,9 +13,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
+// The route resolves `[id]` across this whole family; the specs assert against
+// it rather than re-listing the slugs (which is the defect that produced #3623).
+import { SQL_EDITOR_ITEM_TYPES } from '@/app/api/items/_lib/sql-server-scope';
+
 const OID = 'oid-owner';
 
-// withWorkspaceOwner runs getSession() then loadOwnedItem(); mock both.
+// The route runs getSession() then loadOwnedItem() per candidate type; mock both.
 const getSessionMock = vi.fn(() => ({ claims: { oid: OID, upn: 'owner@loom.test', tid: 'tid-1' }, exp: Date.now() / 1000 + 3600 }) as any);
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
@@ -80,15 +84,45 @@ describe('POST /api/items/azure-sql-database/[id]/query — authority binding (#
   });
 
   // (a) A caller who does NOT own the item → 404, NO SQL executed.
-  //   MUTATION: change `withWorkspaceOwner('azure-sql-database', …)` back to a
-  //   session-only `getSession()` prologue (or `loadItemRaw`). → this 404 becomes
-  //   a 200 and executeQueryBatch runs against the body-chosen DB.
+  //   MUTATION: change the `loadOwnedSqlItem` prologue back to a session-only
+  //   `getSession()` prologue (or `loadItemRaw`). → this 404 becomes a 200 and
+  //   executeQueryBatch runs against the body-chosen DB.
+  //
+  //   `mockResolvedValue`, NOT `...Once`. Resolution walks every slug in
+  //   SQL_EDITOR_ITEM_TYPES, so a single-shot null is satisfied by the SECOND
+  //   candidate and this spec would go green while testing nothing.
   it('(a) 404s a caller who does NOT own the item, executing NO SQL', async () => {
-    loadOwnedItemMock.mockResolvedValueOnce(null);
+    loadOwnedItemMock.mockResolvedValue(null as any);
     const { POST } = await import('../route');
     const r = await POST(postReq({ server: 'victim-srv', database: 'victim-db', sql: 'SELECT * FROM secrets' }), PARAMS);
     expect(r.status).toBe(404);
     expect(executeQueryBatchMock).not.toHaveBeenCalled();
+  });
+
+  // The not-owned spec above only means something if EVERY candidate was tried
+  // and refused. Assert that directly, so a resolution that quietly stopped
+  // after one type (or resolved a type nobody owns) cannot hide behind the 404.
+  it('(a) refuses across the WHOLE family — every slug is owner-checked', async () => {
+    loadOwnedItemMock.mockResolvedValue(null as any);
+    const { POST } = await import('../route');
+    await POST(postReq({ sql: 'SELECT 1' }), PARAMS);
+    const typesTried = loadOwnedItemMock.mock.calls.map((c: any[]) => c[1]);
+    expect(new Set(typesTried)).toEqual(new Set(SQL_EDITOR_ITEM_TYPES));
+  });
+
+  // THE #3623 REGRESSION CLASS, on this route's own hard-coded type. The vector
+  // index editor posts to THIS url with a `sql-server-2025-vector-index` id;
+  // `withWorkspaceOwner('azure-sql-database', …)` matched nothing and 404'd it.
+  //   MUTATION: narrow the resolution back to a single item type.
+  it('(a) runs for an owned item of a NON-azure-sql-database slug', async () => {
+    loadOwnedItemMock.mockImplementation(((_id: string, itemType: string) =>
+      Promise.resolve(itemType === 'sql-server-2025-vector-index'
+        ? { ...OWNED_ITEM, itemType: 'sql-server-2025-vector-index' }
+        : null)) as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ sql: 'SELECT 1 AS n' }), PARAMS);
+    expect(r.status).toBe(200);
+    expect(executeQueryBatchMock).toHaveBeenCalledWith('srv', 'db', 'SELECT 1 AS n', undefined);
   });
 
   it('(a) loads the item OWNER-scoped: id + itemType + caller oid + session', async () => {
@@ -106,7 +140,7 @@ describe('POST /api/items/azure-sql-database/[id]/query — authority binding (#
   // tsc-valid weakening that would let a read-only VIEWER of a shared workspace
   // execute arbitrary T-SQL (DROP/UPDATE included) as the Console UAMI. Assert
   // the write scope directly so that mutation goes red.
-  //   MUTATION: withWorkspaceOwner('azure-sql-database', { allowReadRoles: true }, …)
+  //   MUTATION: pass `{ allowReadRoles: true }` into loadOwnedSqlItem.
   it('(a) stays WRITE-scoped — a read-only viewer can never execute T-SQL', async () => {
     const { POST } = await import('../route');
     await POST(postReq({ sql: 'SELECT 1' }), PARAMS);

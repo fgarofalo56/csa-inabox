@@ -267,6 +267,29 @@ const GUARD_SIGNAL_RE = new RegExp(
     // left the checker's REMIT, which is the same under-reporting the ADX pass
     // recorded and the `guard-adoption gap` this repo has been bitten by before.
     'withBoundSqlServer(?:<[^()]*>)?\\s*\\(',
+    // ...and its OWNER-RESOLUTION half, used directly by the routes in that
+    // family that cannot adopt the wrapper — `[id]/connect` (it WRITES the
+    // binding the wrapper reads, so there is nothing to resolve yet), `[id]/query`
+    // and `[id]/copilot` (they resolve their target through
+    // `resolveOwnedSqlTarget` rather than the wrapper's ctx).
+    //
+    // LEGITIMATE AS A SIGNAL because its substance is asserted structurally a few
+    // hundred lines below, in this same file: the `loadOwnedSqlItem` entry of
+    // `assertGuardWrappersAreReal()` requires it to call
+    // `loadOwnedItem(id, itemType, session.claims.oid, …)`. So this is not a name
+    // standing in for a check — the check is pinned separately and the run fails
+    // if it ever stops being the canonical owner/workspace-ACL read. Same basis
+    // as `loadKustoItem` / `guardAdxRequest` below.
+    //
+    // ADDED IN LOCKSTEP with generate-route-inventory's OWNER_RE, per the rule
+    // that file records THREE separate reproductions of. MEASURED here on the
+    // fourth: replacing `withWorkspaceOwner('azure-sql-database', …)` on
+    // `[id]/query` with `withSession` + `loadOwnedSqlItem` (so an item of any of
+    // the six slugs that drive that URL stops 404ing) made this checker report
+    // that route as `violations: 1` — "gated only by getSession()" — while the
+    // route was being HARDENED, not weakened. That is the same under-reporting
+    // the siblings above describe, reproduced by the fix itself.
+    'loadOwnedSqlItem\\s*\\(',
     // #3572 — `authorizeStorageAccount(` bounds which storage account a caller
     // may drive the Console UAMI at: the deployment's own lake (any session),
     // DLZ authority (tenant/domain admin), or an account a lakehouse in the

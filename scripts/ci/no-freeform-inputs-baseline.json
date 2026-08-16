@@ -33,7 +33,6 @@
     "apps/fiab-console/lib/editors/apim-editors/data-product-editor.tsx": 2,
     "apps/fiab-console/lib/editors/apim-editors/data-product/publish-as-api-dialog.tsx": 1,
     "apps/fiab-console/lib/editors/azure-services-editors.tsx": 2,
-    "apps/fiab-console/lib/editors/azure-sql-editors.tsx": 2,
     "apps/fiab-console/lib/editors/components/mirror-source-wizard.tsx": 2,
     "apps/fiab-console/lib/editors/components/predict-wizard.tsx": 2,
     "apps/fiab-console/lib/editors/copilot-studio-editors.tsx": 1,

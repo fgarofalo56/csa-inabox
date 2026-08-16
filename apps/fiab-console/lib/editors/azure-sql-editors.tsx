@@ -45,6 +45,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { DetailsPanel } from '@/lib/components/shared/details-panel';
 import { DatabasePlugConnected20Regular } from '@fluentui/react-icons';
 import { useSharedEditorStyles } from './shared-styles';
+import { useSqlItemBinding, EntraAdminDialog } from './components/sql-server-admin';
 
 // ── Azure SQL real option sets (parity with the portal create/scale blades) ──
 const AZURE_REGIONS = [
@@ -308,7 +309,6 @@ interface ServerInfo {
 }
 
 interface FirewallRule { name: string; startIpAddress: string; endIpAddress: string }
-interface AadAdminState { login: string; sid: string; tenantId?: string; azureADOnlyAuthentication?: boolean }
 
 export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -338,31 +338,45 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   const [newRuleEnd, setNewRuleEnd] = useState('');
   const [confirmDeleteRule, setConfirmDeleteRule] = useState<string | null>(null);
 
-  // AAD admin dialog
+  // Entra-admin dialog. The dialog owns its own load/save and its principal
+  // picker (components/sql-server-admin.tsx) — this editor keeps only the flag.
   const [aadOpen, setAadOpen] = useState(false);
-  const [aadCurrent, setAadCurrent] = useState<AadAdminState | null>(null);
-  const [aadLogin, setAadLogin] = useState('');
-  const [aadSid, setAadSid] = useState('');
-  const [aadTenantId, setAadTenantId] = useState('');
-  const [aadError, setAadError] = useState<string | null>(null);
-  const [aadBusy, setAadBusy] = useState(false);
+
+  /**
+   * AUTO-BIND THE PICKED SERVER TO THIS ITEM (auto-bind-by-default.md §1/§4).
+   * This surface picks from live ARM discovery and used to persist nothing, so
+   * after #3623 the Entra-admin route had no `state.connection` to resolve and
+   * would have 409'd with a remediation naming a Connect tab this editor does
+   * not have. The pick IS the binding — see `useSqlItemBinding`. Server scope
+   * only: the Entra admin sits at the server scope, so no database is bound.
+   */
+  const ensureBound = useSqlItemBinding({
+    id,
+    family: 'azure-sql',
+    server: selected?.name || '',
+    unselectedMessage: 'Pick a server on the left first.',
+  });
 
   const loadFirewall = useCallback(async () => {
     if (!selected) return;
     setFwBusy(true); setFwError(null);
     try {
+      const bindErr = await ensureBound();
+      if (bindErr) { setFwError(bindErr); return; }
       const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setFwRules(j.rules || []);
     } catch (e: any) { setFwError(e?.message || String(e)); }
     finally { setFwBusy(false); }
-  }, [id, selected]);
+  }, [id, selected, ensureBound]);
 
   const addRule = useCallback(async () => {
     if (!selected || !newRuleName.trim() || !newRuleStart.trim() || !newRuleEnd.trim()) return;
     setFwBusy(true); setFwError(null);
     try {
+      const bindErr = await ensureBound();
+      if (bindErr) { setFwError(bindErr); return; }
       const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ server: selected.name, name: newRuleName.trim(), startIpAddress: newRuleStart.trim(), endIpAddress: newRuleEnd.trim() }),
@@ -373,61 +387,28 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
       await loadFirewall();
     } catch (e: any) { setFwError(e?.message || String(e)); }
     finally { setFwBusy(false); }
-  }, [id, selected, newRuleName, newRuleStart, newRuleEnd, loadFirewall]);
+  }, [id, selected, newRuleName, newRuleStart, newRuleEnd, loadFirewall, ensureBound]);
 
   const deleteRule = useCallback(async (ruleName: string) => {
     if (!selected) return;
     setFwBusy(true); setFwError(null);
     try {
+      const bindErr = await ensureBound();
+      if (bindErr) { setFwError(bindErr); return; }
       const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}&rule=${encodeURIComponent(ruleName)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadFirewall();
     } catch (e: any) { setFwError(e?.message || String(e)); }
     finally { setFwBusy(false); }
-  }, [id, selected, loadFirewall]);
+  }, [id, selected, loadFirewall, ensureBound]);
 
   const openFw = useCallback(() => {
     setFwOpen(true);
     loadFirewall();
   }, [loadFirewall]);
 
-  const loadAad = useCallback(async () => {
-    if (!selected) return;
-    setAadBusy(true); setAadError(null);
-    try {
-      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin?server=${encodeURIComponent(selected.name)}`);
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setAadCurrent(j.admin || null);
-      if (j.admin) {
-        setAadLogin(j.admin.login || '');
-        setAadSid(j.admin.sid || '');
-        setAadTenantId(j.admin.tenantId || '');
-      }
-    } catch (e: any) { setAadError(e?.message || String(e)); }
-    finally { setAadBusy(false); }
-  }, [id, selected]);
-
-  const openAad = useCallback(() => {
-    setAadOpen(true);
-    loadAad();
-  }, [loadAad]);
-
-  const saveAad = useCallback(async () => {
-    if (!selected || !aadLogin.trim() || !aadSid.trim()) return;
-    setAadBusy(true); setAadError(null);
-    try {
-      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ server: selected.name, login: aadLogin.trim(), sid: aadSid.trim(), tenantId: aadTenantId.trim() || undefined }),
-      });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setAadCurrent(j.admin || null);
-    } catch (e: any) { setAadError(e?.message || String(e)); }
-    finally { setAadBusy(false); }
-  }, [id, selected, aadLogin, aadSid, aadTenantId]);
+  const openAad = useCallback(() => setAadOpen(true), []);
 
   const refresh = useCallback(() => {
     setLoading(true); setError(null);
@@ -823,40 +804,13 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
             </DialogSurface>
           </Dialog>
 
-          <Dialog open={aadOpen} onOpenChange={(_, d) => setAadOpen(d.open)}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>AAD admin — {selected?.name}</DialogTitle>
-                <DialogContent>
-                  {aadBusy && <Spinner size="tiny" label="Calling ARM…" labelPosition="after" />}
-                  {aadCurrent && (
-                    <Caption1>
-                      Current: <strong>{aadCurrent.login}</strong> (<code>{aadCurrent.sid?.slice(0, 8)}…</code>)
-                      {aadCurrent.azureADOnlyAuthentication ? ' · AAD-only auth enabled' : ''}
-                    </Caption1>
-                  )}
-                  <Field label="Login (UPN or group name)" required>
-                    <Input value={aadLogin} onChange={(_, d) => setAadLogin(d.value)} placeholder="user@contoso.com" />
-                  </Field>
-                  <Field label="Object id (sid)" required>
-                    <Input value={aadSid} onChange={(_, d) => setAadSid(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
-                  </Field>
-                  <Field label="Tenant id (optional)">
-                    <Input value={aadTenantId} onChange={(_, d) => setAadTenantId(d.value)} placeholder="leave blank to use the server's tenant" />
-                  </Field>
-                  {aadError && (
-                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>AAD admin update failed</MessageBarTitle>{aadError}</MessageBarBody></MessageBar>
-                  )}
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setAadOpen(false)} disabled={aadBusy}>Close</Button>
-                  <Button appearance="primary" onClick={saveAad} disabled={aadBusy || !aadLogin.trim() || !aadSid.trim()}>
-                    {aadBusy ? 'Saving…' : 'Set AAD admin'}
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <EntraAdminDialog
+            open={aadOpen}
+            onOpenChange={setAadOpen}
+            itemId={id}
+            serverName={selected?.name || ''}
+            ensureBound={ensureBound}
+          />
         </div>
       }
     />
@@ -1461,9 +1415,16 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
   }, []);
 
   // Run T-SQL over the selected instance's FQDN, reusing the Azure SQL DB
-  // /query route (executeQueryBatch). The route resolves the connection purely
-  // from the body server/database, so pointing `server` at the MI FQDN reuses
-  // the identical TDS backend — no MI-specific backend needed.
+  // /query route (executeQueryBatch).
+  //
+  // DELIBERATELY NOT AUTO-BOUND, unlike this module's other two editors, so this
+  // surface is still dead (409 `no_bound_connection`) and that is the intended
+  // state — NOT an oversight to "fix" by adding a useSqlItemBinding call here.
+  // An MI host is zone-qualified and `admitGovernedServer` reduces a bound FQDN
+  // to its first DNS label, so binding would silently address a DIFFERENT server
+  // than the operator picked. Full reasoning and the shape of the real fix are
+  // recorded at that function — `app/api/items/_lib/sql-server-scope.ts`,
+  // §"MANAGED INSTANCE".
   const run = useCallback(() => {
     if (!selectedFqdn) { setResult({ ok: false, error: 'select a managed instance first' }); return; }
     if (!navDb.trim()) { setResult({ ok: false, error: 'database is required' }); return; }
@@ -1733,22 +1694,34 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
 
   const ddl = `-- SQL Server 2025 native vector index DDL.\n-- Requires SQL 2025 (major ≥17). Use Probe engine in the Database editor first.\nCREATE VECTOR INDEX idx_${table}_${column}\nON dbo.${table}(${column})\nWITH (METRIC = '${metric.toUpperCase()}', DIMENSIONS = ${dim});`;
 
+  // AUTO-BIND: `/query` derives its target from this item's `state.connection`
+  // and the body may only agree with it (#2723 + GHSA-v8r7-c2p5-mjf2), so the
+  // live-discovery pick must be persisted before either action runs.
+  const ensureBound = useSqlItemBinding({
+    id, family: 'azure-sql', server, database,
+    unselectedMessage: 'server + database required',
+  });
+
   const runDdl = useCallback(async () => {
     if (!server || !database) { setResult({ ok: false, error: 'server + database required' }); return; }
     setLoading(true); setResult(null);
+    const bindErr = await ensureBound();
+    if (bindErr) { setResult({ ok: false, error: bindErr }); setLoading(false); return; }
     const r = await clientFetch(`/api/items/azure-sql-database/${id}/query`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ server, database, sql: ddl }),
     });
     setResult(await r.json());
     setLoading(false);
-  }, [id, server, database, ddl]);
+  }, [id, server, database, ddl, ensureBound]);
 
   // Real similarity probe — VECTOR_DISTANCE ANN search executed via the same
   // wired azure-sql /query TDS path (SQL Server 2025 native vector search).
   const testSimilarity = useCallback(async () => {
     if (!server || !database) { setResult({ ok: false, error: 'server + database required' }); return; }
     setLoading(true); setResult(null);
+    const bindErr = await ensureBound();
+    if (bindErr) { setResult({ ok: false, error: bindErr }); setLoading(false); return; }
     const probe = `-- Approximate nearest-neighbour search over the vector index (SQL 2025).\n`
       + `DECLARE @q VECTOR(${dim}) = CAST('[' + REPLICATE('0.0,', ${dim} - 1) + '0.0]' AS VECTOR(${dim}));\n`
       + `SELECT TOP 10 id,\n`
@@ -1761,7 +1734,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
     });
     setResult(await r.json());
     setLoading(false);
-  }, [id, server, database, dim, metric, column, table]);
+  }, [id, server, database, dim, metric, column, table, ensureBound]);
 
   const canCreate = !!server && !!database && !loading;
   const ribbon: RibbonTab[] = useMemo(() => [

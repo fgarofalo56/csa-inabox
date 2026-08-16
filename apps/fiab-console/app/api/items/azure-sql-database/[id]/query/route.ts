@@ -17,18 +17,43 @@
  * per-statement `rowsAffected[]`. The first result set is also promoted to the
  * legacy top-level `columns/rows/rowCount/truncated` fields so the schema browser
  * + INFORMATION_SCHEMA grid keep working.
+ * ITEM TYPE IS RESOLVED, NOT ASSUMED. This route was `withWorkspaceOwner(
+ * 'azure-sql-database', …)` from #2920 until the SQL_EDITOR_ITEM_TYPES audit —
+ * but THREE registry slugs drive this exact URL with their own item's id:
+ * `azure-sql-database` (UnifiedSqlDatabaseEditor), `sql-server-2025-vector-index`
+ * (the CREATE VECTOR INDEX / VECTOR_DISTANCE probe) and
+ * `azure-sql-managed-instance`. For the latter two the single hard-coded type
+ * meant `loadOwnedItem` matched nothing and the Run button 404'd. Resolution now
+ * runs across `SQL_EDITOR_ITEM_TYPES`, which is derived from the editor registry
+ * and held there by a build-time control.
+ *
+ * Trying several types cannot widen access: each candidate runs the SAME
+ * write-scoped `loadOwnedItem` owner / workspace-ACL check, so a foreign item
+ * resolves for none of them.
  */
 
 import { NextResponse } from 'next/server';
-import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
+import { withSession } from '@/lib/api/route-toolkit';
+import { apiNotFound } from '@/lib/api/respond';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { executeQueryBatch, AzureSqlError } from '@/lib/azure/azure-sql-client';
 import { resolveOwnedSqlTarget } from '@/app/api/items/azure-sql-database/_bound-connection';
+import { SQL_EDITOR_ITEM_TYPES, loadOwnedSqlItem } from '@/app/api/items/_lib/sql-server-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const POST = withWorkspaceOwner('azure-sql-database', async (req, { session, item }) => {
+export const POST = withSession<{ id: string }>(async (req, { session, params }) => {
+  const id = (params as { id?: string })?.id;
+  if (!id) return apiNotFound();
+  // Owner-scoped across every slug that drives this route. Write-scoped (no
+  // allowReadRoles): running T-SQL is a write, and a read-only viewer of a
+  // shared workspace must never reach the executor.
+  const item = await loadOwnedSqlItem(id, session, SQL_EDITOR_ITEM_TYPES);
+  // 404-not-403, matching withWorkspaceOwner, so an id cannot be probed for
+  // existence across tenants.
+  if (!item) return apiNotFound();
+
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 

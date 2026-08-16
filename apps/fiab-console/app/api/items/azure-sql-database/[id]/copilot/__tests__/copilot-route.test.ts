@@ -200,16 +200,34 @@ describe('POST /api/items/azure-sql-database/[id]/copilot', () => {
 // DENIAL or a NON-CALL and names the mutation that turns it red.
 // ---------------------------------------------------------------------------
 describe('POST /api/items/azure-sql-database/[id]/copilot — authority binding (#2723)', () => {
-  // MUTATION: delete the `const item = await loadOwnedItem(...); if (!item) 404`
+  // MUTATION: delete the `const item = await loadOwnedSqlItem(...); if (!item) 404`
   // block. → the route reads the schema of a body-chosen DB for a caller who
   // does not own the item.
+  //
+  // `mockResolvedValue`, NOT `...Once`. The route resolves across every slug in
+  // SQL_EDITOR_ITEM_TYPES, so a single-shot null is satisfied by the SECOND
+  // candidate and this spec would go green while testing nothing.
   it('404s when the caller does not own the item, and reads NO schema', async () => {
-    loadOwnedItemMock.mockResolvedValueOnce(null);
+    loadOwnedItemMock.mockResolvedValue(null);
     stubAoaiStream(['SELECT 1']);
     const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
     const r = await POST(postReq({ command: 'explain', server: 'victim-srv', database: 'victim-db', sql: 'SELECT 1' }), PARAMS);
     expect(r.status).toBe(404);
     expect(executeQueryMock).not.toHaveBeenCalled();
+  });
+
+  // `UnifiedSqlDatabaseEditor` posts here from all three of its slugs. The
+  // hard-coded `'azure-sql-database'` 404'd Copilot for the other two.
+  //   MUTATION: narrow the resolution back to a single item type.
+  it('runs for an owned item of a sibling slug (postgres-flexible-server)', async () => {
+    loadOwnedItemMock.mockImplementation(((_id: string, itemType: string) =>
+      Promise.resolve(itemType === 'postgres-flexible-server'
+        ? { ...OWNED_ITEM, itemType: 'postgres-flexible-server' }
+        : null)) as any);
+    stubAoaiStream(['SELECT 1']);
+    const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
+    const r = await POST(postReq({ command: 'explain', sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(200);
   });
 
   // This Copilot reads INFORMATION_SCHEMA over the LIVE TDS path, so it must stay

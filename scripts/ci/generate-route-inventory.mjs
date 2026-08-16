@@ -123,6 +123,30 @@ const OWNER_RE = new RegExp([
   // by the very change that fixed them. THIRD independent reproduction of the
   // lockstep rule in this one file; it is not theoretical.
   'withBoundSqlServer\\s*\\(',
+  // The wrapper's OWNER-RESOLUTION half, for the routes in that family that
+  // resolve the item themselves rather than through the wrapper's ctx —
+  // `[id]/connect` (it WRITES the binding the wrapper reads), `[id]/query` and
+  // `[id]/copilot`. Matched AS A CALL; its substance is asserted by
+  // check-route-guards.assertGuardWrappersAreReal(), which pins it to
+  // `loadOwnedItem(id, itemType, session.claims.oid, …)`.
+  //
+  // FOURTH reproduction of the lockstep rule, and this one is only visible if
+  // you MEASURE rather than eyeball the generated diff. Moving `[id]/query` off
+  // `withWorkspaceOwner` and onto `withSession` + `loadOwnedSqlItem` took every
+  // OWNER_RE token out of that route's CODE. The generated inventory did not
+  // change — because `loadOwnedItem` still appears TWICE in the file, both times
+  // inside a COMMENT. Measured on the post-change file:
+  //
+  //     whole file  WITHOUT this token = true   (matches the prose)
+  //     code only   WITHOUT this token = FALSE  (no code signal at all)
+  //     code only   WITH    this token = true
+  //
+  // So a byte-identical inventory would have been resting entirely on a comment
+  // — the same shape as the deleted-`assertOwner` incident recorded above, which
+  // classified 34 routes on a word in a migration note. The identical diff was
+  // the trap, not the reassurance. This token is what makes the classification
+  // rest on the code again. (Related: #3625, presence vs enforcement.)
+  'loadOwnedSqlItem\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',
