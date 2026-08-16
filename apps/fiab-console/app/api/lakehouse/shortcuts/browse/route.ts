@@ -23,14 +23,30 @@
  * SECURITY — `kvSecret` is a caller-supplied NAME and the Console resolves it
  * with its own managed identity, so WHICH secret may be read is a policy
  * decision, not the caller's. The read goes through the `shortcut-credential`
- * purpose (lib/azure/kv-secret-purpose.ts), which refuses every platform
- * credential and every other feature's minted name-space BEFORE a vault token is
- * minted. That check is load-bearing rather than defensive: `shortcutVaultUrl()`
- * falls back to the main Loom vault whenever LOOM_SHORTCUT_KEYVAULT is unset,
- * which is the default deployment. Two matching rules follow from the same
- * principle and live with their sources: a resolved value is never interpolated
- * into an error (listDataverseEntities), and `region` cannot move the S3 request
- * to another authority (listS3Objects).
+ * purpose (lib/azure/kv-secret-purpose.ts), which OWNS the `loom-sc-` /
+ * `loom-shortcut-` name-space: anything outside it — every platform credential,
+ * every other feature's minted secret — is refused BEFORE a vault token is
+ * minted.
+ *
+ * That check is load-bearing rather than defensive, and not because of a code
+ * fallback: `admin-plane/main.bicep` SETS `LOOM_SHORTCUT_KEYVAULT` on the
+ * Console to the admin-plane vault whenever `loomShortcutKeyVaultUri` is empty,
+ * and no params file in any boundary supplies that override. So the shortcut
+ * vault IS the main Loom vault in every shipped deployment, by explicit
+ * deploy-time wiring.
+ *
+ * Two matching rules follow from the same principle and live with their
+ * sources: a resolved value is never interpolated into an error (parseAbfss),
+ * and `region` cannot move the S3 request to another authority (listS3Objects).
+ *
+ * KNOWN RESIDUAL — `kvSecret` is name-scoped, not OWNER-scoped. The name-space
+ * policy stops a caller reaching a platform or cross-feature secret, but it does
+ * not prove the named shortcut credential belongs to the caller's own item, so
+ * this is still a confused deputy between two users' shortcut credentials. The
+ * minted names embed UUIDs, which makes enumeration impractical rather than
+ * impossible. Closing it properly needs the item id at this endpoint so
+ * ownership can be checked the way /api/connections/test checks it — a request
+ * contract change, deliberately not bundled into a security fix.
  *
  * Auth: session-required. Runtime: nodejs, force-dynamic.
  * Per .claude/rules/no-vaporware.md — real S3/GCS/ADLS REST, no mock arrays.
@@ -154,8 +170,12 @@ export const GET = withSession(async (req: NextRequest) => {
     if (e instanceof KeyVaultSecretPolicyError) {
       // The caller named a secret this surface may not read. Report the NAME it
       // asked for and the reason — never anything read from the vault, because
-      // nothing was: the policy runs before the vault token is minted.
-      return NextResponse.json({ ok: false, code: 'kv_secret_not_permitted', error: e.message, hint: e.message }, { status: 403 });
+      // nothing was: the policy runs before the vault token is minted. Routed
+      // through the same sanitize() as every other branch, since the message
+      // embeds the caller-supplied name and would otherwise be the one reply
+      // returned unstripped and unbounded.
+      const msg = sanitize(e);
+      return NextResponse.json({ ok: false, code: 'kv_secret_not_permitted', error: msg, hint: msg }, { status: 403 });
     }
     if (e instanceof ShortcutSourceError) {
       return NextResponse.json({ ok: false, code: e.code, error: sanitize(e), hint: sanitize(e) }, { status: e.status });

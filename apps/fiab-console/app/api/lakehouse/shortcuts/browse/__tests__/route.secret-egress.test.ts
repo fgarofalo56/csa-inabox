@@ -63,13 +63,29 @@ import { GET } from '../route';
 const req = (qs: string) =>
   ({ nextUrl: new URL(`https://console.local/api/lakehouse/shortcuts/browse?${qs}`) }) as any;
 
-/** Every platform credential the browse surface must never resolve. */
+/**
+ * Every platform credential the browse surface must never resolve.
+ *
+ * Deliberately NOT limited to names already in RESERVED_EXACT. The first five
+ * were, which made the assertion prove only that the policy is WIRED, not that
+ * the reserved list is COMPLETE — and completeness was the actual gap:
+ * `session-secret` (the Console session-signing key) and the four below it are
+ * real vault secrets created by platform bicep that no check refused until this
+ * change. The `loom-sc-`/`loom-shortcut-` name-space policy now refuses them
+ * structurally, whether or not anyone remembers to list them.
+ */
 const PLATFORM_SECRETS = [
   'loom-msal-client-secret',
   'loom-internal-token',
   'loom-ci-token',
   'loom-dataverse-client-secret',
   'loom-github-mcp-pat',
+  // Not covered by any reserved name or pattern before this change:
+  'session-secret',
+  'synthetic-login-secret',
+  'loom-risingwave-root-password',
+  'loom-azure-maps-primary-key',
+  'loom-ducklake-catalog-url',
 ];
 
 beforeEach(() => {
@@ -85,7 +101,13 @@ beforeEach(() => {
   });
   listPathsMock.mockImplementation(async () => [{ name: 'account', isDirectory: true }] as any);
   process.env.LOOM_KEY_VAULT_URI = 'https://loomkv.vault.azure.net';
-  delete process.env.LOOM_SHORTCUT_KEYVAULT; // the default: shortcuts share the Loom vault
+  // THE REAL SHIPPED DEFAULT: admin-plane/main.bicep sets LOOM_SHORTCUT_KEYVAULT
+  // to the admin-plane vault whenever loomShortcutKeyVaultUri is empty, and no
+  // params file in any boundary supplies that override — so the shortcut vault
+  // IS the main Loom vault, explicitly, in every deployment. An earlier revision
+  // deleted the variable to model a "fallback", which is a state that does not
+  // occur on a deployed Console.
+  process.env.LOOM_SHORTCUT_KEYVAULT = 'https://loomkv.vault.azure.net';
 });
 afterEach(() => {
   delete process.env.LOOM_KEY_VAULT_URI;
@@ -127,14 +149,22 @@ describe('ATTACK: a caller-named platform secret', () => {
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
-  it('is refused even when an operator splits shortcuts onto their own vault', async () => {
-    // The fallback is what makes the default dangerous, but the policy is not
-    // conditional on it — a dedicated shortcut vault gets the same answer.
+  it('is refused when an operator DOES split shortcuts onto their own vault', async () => {
+    // The shipped default points both names at one vault; an operator override
+    // is the other configuration, and the policy is not conditional on either.
     process.env.LOOM_SHORTCUT_KEYVAULT = 'https://shortcutkv.vault.azure.net';
     const res = await GET(req('sourceType=dataverse&kvSecret=loom-msal-client-secret'));
     expect(res.status).toBe(403);
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
-    delete process.env.LOOM_SHORTCUT_KEYVAULT;
+  });
+
+  it('refuses an operator-typed name outside the minted name-space', async () => {
+    // shortcut-credential OWNS loom-sc-/loom-shortcut-. A free-typed name is not
+    // in it, and no UI path sends one to this route.
+    const res = await GET(req('sourceType=dataverse&kvSecret=contoso-dataverse-export-path'));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/name-space/i);
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 });
 
@@ -194,13 +224,14 @@ describe('the legitimate browse flow still works', () => {
     expect(listPathsMock).toHaveBeenCalledWith('dataverse', 'exports/tables', 200, 'contoso');
   });
 
-  it('accepts an operator-named shortcut credential outside the minted prefix', async () => {
-    const res = await GET(req('sourceType=dataverse&kvSecret=contoso-dataverse-export-path'));
-    // Not a 403: an operator may name their own shortcut credential. It reached
-    // the vault (and then failed the abfss shape, which is the sentinel value).
-    expect(res.status).toBe(400);
-    expect((await res.json()).code).toBe('dataverse_bad_target');
-    expect(fetchWithTimeoutMock).toHaveBeenCalled();
+  it('accepts the OTHER minted shortcut prefix (loom-sc-) as well', async () => {
+    // Two mint sites exist: `loom-shortcut-<itemId>` (the item route) and
+    // `loom-sc-<uuid>` (the credentials route). Both must resolve, or the
+    // name-space policy would break one of the two real creation paths.
+    const res = await GET(req('sourceType=dataverse&kvSecret=loom-sc-4f2a9c1e'));
+    expect(res.status).not.toBe(403);
+    expect(String(fetchWithTimeoutMock.mock.calls[0][0]))
+      .toBe('https://loomkv.vault.azure.net/secrets/loom-sc-4f2a9c1e?api-version=7.4');
   });
 
   it('a valid AWS region is accepted and signs against the AWS host', async () => {

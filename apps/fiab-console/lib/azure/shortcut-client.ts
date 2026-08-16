@@ -687,7 +687,13 @@ export interface DataverseBrowseArgs {
 /** Parse account/container/path out of an abfss:// URI (Dataverse export target). */
 export function parseAbfss(uri: string): { account: string; container: string; path: string } {
   const m = (uri || '').match(/^abfss:\/\/([^@]+)@([^/]+)\/?(.*)$/i);
-  if (!m) throw new ShortcutSourceError(`Not a valid abfss:// URI: ${uri}`, 'dataverse_bad_target', 400);
+  // The rejected value is NOT interpolated. Four callers pass a user-typed URI,
+  // where echoing it would be helpful — but one passes a Key Vault secret VALUE
+  // (listDataverseEntities), and a primitive that is safe only depending on who
+  // calls it is the "correct helper exists, next consumer doesn't adopt it"
+  // shape this module has already been bitten by. Callers that hold a
+  // non-secret URI can name it in their own message.
+  if (!m) throw new ShortcutSourceError('Not a valid abfss:// URI.', 'dataverse_bad_target', 400);
   const container = m[1];
   const host = m[2];
   const account = host.split('.')[0];
