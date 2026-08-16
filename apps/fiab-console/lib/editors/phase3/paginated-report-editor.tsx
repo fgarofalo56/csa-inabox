@@ -31,6 +31,7 @@ import {
 import { getItem } from '@/lib/api/workspaces';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import type {
   RdlReportDefinition, RdlDataSource, RdlDataset, RdlTablix, RdlParameter,
   RdlField, RdlDataSourceType, RdlExportFormat,
@@ -70,6 +71,19 @@ export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: 
 // ============================================================
 
 const RDL_DS_TYPES: RdlDataSourceType[] = ['AzureSQL', 'Synapse', 'Cosmos', 'ADLS'];
+
+/**
+ * Which discovery each RDL source type needs. All four are ARM resources, so
+ * none of them was ever a value the user had to know — `AzureSQL`/`Synapse`
+ * share the `sql-host` kind because the field accepts either server and a
+ * picker that showed only one would be empty on the other kind of estate.
+ */
+const RDL_DS_FIELD_KIND: Record<RdlDataSourceType, string> = {
+  AzureSQL: 'sql-host',
+  Synapse: 'sql-host',
+  Cosmos: 'cosmos',
+  ADLS: 'storage-dfs-endpoint',
+};
 const RDL_FIELD_TYPES: RdlField['type'][] = ['String', 'Int', 'Decimal', 'DateTime', 'Boolean'];
 const RDL_PARAM_TYPES: RdlParameter['type'][] = ['String', 'Int', 'Boolean', 'DateTime'];
 const RDL_AGGS = ['', 'Sum', 'Count', 'Avg', 'Max', 'Min'] as const;
@@ -759,9 +773,13 @@ function DataSourceDialog({ open, editing, workspaceId, onClose, onSave, onDelet
                   {RDL_DS_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
                 </Dropdown>
               </Field>
-              <Field label="Server / host" hint="e.g. myserver.database.windows.net (AzureSQL) or ws-ondemand.sql.azuresynapse.net (Synapse)">
-                <Input value={server} onChange={(_, d) => setServer(d.value)} />
-              </Field>
+              <AzureBackedField
+                kind={RDL_DS_FIELD_KIND[type]}
+                value={server}
+                label="Server / host"
+                surface="Paginated report data source"
+                onChange={(v) => setServer(v || '')}
+              />
               <Field label="Database / pool"><Input value={database} onChange={(_, d) => setDatabase(d.value)} /></Field>
             </div>
           </DialogContent>

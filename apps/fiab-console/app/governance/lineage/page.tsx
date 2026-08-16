@@ -34,6 +34,7 @@ import {
 import { ArrowSync24Regular, Flowchart24Regular } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import { Toolbar } from '@/lib/components/ui/section';
 import {
   LineageCanvas, type CanvasLineageNode, type CanvasLineageEdge,
@@ -313,9 +314,13 @@ function FederatedScope() {
           <Input value={id} onChange={(_, d) => setId(d.value)} placeholder="main.bronze.customers / 0e1a-…-9f / 1234-…-abc" />
         </Field>
         {source === 'unity-catalog' && (
-          <Field label="Workspace hostname">
-            <Input value={host} onChange={(_, d) => setHost(d.value)} placeholder="adb-…azuredatabricks.net" />
-          </Field>
+          <AzureBackedField
+            kind="databricks"
+            value={host}
+            label="Workspace"
+            surface="Governance lineage"
+            onChange={(v) => setHost(v || '')}
+          />
         )}
         <Button appearance="primary" disabled={!id} onClick={() => setCommitted({ source, id, host })}>Resolve</Button>
       </div>

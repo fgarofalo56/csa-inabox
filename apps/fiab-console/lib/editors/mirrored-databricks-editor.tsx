@@ -35,6 +35,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import { EmptyState } from '@/lib/components/empty-state';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
@@ -390,9 +391,14 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                           <Input value={cCatalog} onChange={(_, d) => setCCatalog(d.value)} placeholder="main" />
                         )}
                       </Field>
-                      <Field label="Databricks hostname (optional override)" hint="Defaults to LOOM_DATABRICKS_HOSTNAME">
-                        <Input value={cHostname} onChange={(_, d) => setCHostname(d.value)} placeholder="adb-xxxx.azuredatabricks.net" />
-                      </Field>
+                      <AzureBackedField
+                        kind="databricks"
+                        value={cHostname}
+                        label="Databricks workspace (optional override)"
+                        placeholder="Defaults to LOOM_DATABRICKS_HOSTNAME"
+                        surface="Mirrored Databricks catalog"
+                        onChange={(v) => setCHostname(v || '')}
+                      />
                       <Field label="Description"><Textarea value={cDesc} onChange={(_, d) => setCDesc(d.value)} /></Field>
                       {cErr && <MessageBar intent="error"><MessageBarBody>{cErr}</MessageBarBody></MessageBar>}
                       {cPairing && (
@@ -647,7 +653,14 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                 {active && (
                   <>
                     <Field label="Unity Catalog name"><Input value={editCatalog} onChange={(_, d) => setEditCatalog(d.value)} /></Field>
-                    <Field label="Databricks hostname override"><Input value={editHostname} onChange={(_, d) => setEditHostname(d.value)} placeholder={process.env.NEXT_PUBLIC_LOOM_DATABRICKS_HOSTNAME || 'adb-xxxx.azuredatabricks.net'} /></Field>
+                    <AzureBackedField
+                      kind="databricks"
+                      value={editHostname}
+                      label="Databricks workspace override"
+                      placeholder={process.env.NEXT_PUBLIC_LOOM_DATABRICKS_HOSTNAME || 'Defaults to LOOM_DATABRICKS_HOSTNAME'}
+                      surface="Mirrored Databricks settings"
+                      onChange={(v) => setEditHostname(v || '')}
+                    />
                     {settingsErr && <MessageBar intent="error"><MessageBarBody>{settingsErr}</MessageBarBody></MessageBar>}
                     {settingsMsg && <MessageBar intent="success"><MessageBarBody>{settingsMsg}</MessageBarBody></MessageBar>}
                     <div className={s.toolbar}>

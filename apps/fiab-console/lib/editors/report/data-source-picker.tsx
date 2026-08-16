@@ -59,6 +59,7 @@ import {
   CubeTree20Regular, ChevronRight20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import { readOnlySelect } from '@/lib/thread/sql-guard';
 // ── WAVE 4 — Power Query "Transform Data" host ────────────────────────────────
 // The report Transform surface is the SAME PowerQueryHost the Dataflow Gen2 editor
@@ -804,13 +805,13 @@ export function DataSourcePicker({ open, reportId, workspaceId, value, onChange,
                 Bind an existing XMLA tabular model. Visuals render with DAX (no Power BI workspace).
                 The Console UAMI must be a server admin on the AAS instance.
               </Caption1>
-              <Field label="XMLA server URI" required hint="e.g. asazure://eastus2.asazure.windows.net/my-server">
-                <Input
-                  value={aasServer}
-                  placeholder="asazure://<region>.asazure.windows.net/<server>"
-                  onChange={(_e, d) => setAasServer(d.value)}
-                />
-              </Field>
+              <AzureBackedField
+                kind="aas"
+                value={aasServer}
+                label="XMLA server"
+                surface="Report data source"
+                onChange={(v) => setAasServer(v || '')}
+              />
               <Field label="Database (model name)" required>
                 <Input value={aasDatabase} placeholder="my-tabular-model" onChange={(_e, d) => setAasDatabase(d.value)} />
               </Field>

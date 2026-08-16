@@ -1,5 +1,14 @@
-#!/usr/bin/env node
 /**
+ * NO SHEBANG — DO NOT RE-ADD ONE. Every invocation of this guard is
+ * `node scripts/ci/check-no-freeform.mjs` (the guardrails workflow, its own
+ * `node --test` suite, the console's Wave-1A spec), so a `#!` buys nothing —
+ * and it costs coverage: vite-node evaluates an out-of-root `.mjs` through
+ * `vm.Script`, which does NOT strip `#!`, so any vitest spec that references
+ * this file dies at COLLECTION with `SyntaxError: Invalid or unexpected token`
+ * and reads as "Failed Suites 1 / no tests". Same class, and same fix, as the
+ * header of `_ratchet-count.mjs`; `__tests__/spec-imported-scripts-have-no-shebang.test.ts`
+ * is the class guard that keeps it closed.
+ *
  * GUARDRAIL: no-freeform-config  (merge-blocker; PART 2 RATCHETS)
  * ===========================================================================
  * RULE (`loom_no_freeform_config`, BLOCKING GLOBAL; `.claude/rules/`): item and

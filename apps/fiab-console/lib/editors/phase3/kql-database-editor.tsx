@@ -38,6 +38,7 @@ import {
   Sparkle16Regular, Info16Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
 import { AdxClusterEditor } from '@/lib/components/adx/adx-cluster-editor';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -2004,19 +2005,22 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     )}
                     {wizardKind === 'follower' && (
                       <>
-                        <Caption1>Leader cluster ARM resource ID</Caption1>
-                        <Input
+                        {/* ONE pick fills both leader fields: the ARM id is the
+                            stored value, and the cluster URI rides along on the
+                            same Resource Graph row. */}
+                        <AzureBackedField
+                          kind="adx-cluster-id"
                           value={wizLeaderResourceId}
-                          onChange={(_: unknown, d: any) => setWizLeaderResourceId(d.value)}
-                          placeholder="/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Kusto/clusters/{name}"
-                          style={{ fontFamily: 'Consolas, monospace' }}
+                          label="Leader cluster"
+                          surface="Follower database wizard"
+                          onChange={(v, r) => {
+                            setWizLeaderResourceId(v || '');
+                            if (r?.value) setWizLeaderUri(r.value);
+                            else if (!v) setWizLeaderUri('');
+                          }}
                         />
-                        <Caption1>Leader cluster URI (optional, display only)</Caption1>
-                        <Input
-                          value={wizLeaderUri}
-                          onChange={(_: unknown, d: any) => setWizLeaderUri(d.value)}
-                          placeholder="https://mycluster.eastus2.kusto.windows.net"
-                        />
+                        <Caption1>Leader cluster URI — filled in from the cluster above; display only.</Caption1>
+                        <Input value={wizLeaderUri} readOnly aria-label="Leader cluster URI" />
                         <Caption1>Database to follow (leave blank or * to follow all leader databases)</Caption1>
                         <Input
                           value={wizFollowerDbName}

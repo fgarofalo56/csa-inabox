@@ -94,10 +94,22 @@ test('the six operator-filed surfaces are flagged in the LIVE tree, not only as 
   // A control set can pass on a synthetic copy of a defect while the real file
   // has drifted out of reach — the fixture-models-the-code failure. These
   // assertions read the actual files.
+  //
+  // ── WHY A REMEDIATED FILE LEAVES THIS LIST ──────────────────────────────
+  // This assertion says "the guard can still SEE the incident in the tree". It
+  // is not a claim that the incident must remain unfixed — a lane that drains
+  // one of these surfaces would otherwise be forced to choose between shipping
+  // the fix and keeping the control green, and the obvious way out (weakening
+  // the guard) is the failure this whole file exists to prevent.
+  //
+  // The shape coverage does NOT move when a file leaves: the `CONTROLS` loop
+  // above asserts the same defect against a byte-for-byte copy of the ORIGINAL
+  // source, frozen in the guard, and that copy is what proves the detector
+  // still detects. A file listed here as REMEDIATED is additionally asserted to
+  // be clean, so "fixed" cannot quietly become "the guard stopped looking".
   const { detail } = collect();
   const at = (needle) => detail.filter((d) => d.f.includes(needle));
   const cases = [
-    ['lib/editors/phase3/activator-editor.tsx', 'ADX cluster URI + Logic App ARM id'],
     ['lib/editors/palantir/health-check-editor.tsx', 'Logic App ARM id'],
     ['lib/editors/databricks/uc-dialogs.tsx', 'Databricks UC credential dialog'],
     ['app/catalog/unity/page.tsx', 'UC storage credential ARM id'],
@@ -108,6 +120,17 @@ test('the six operator-filed surfaces are flagged in the LIVE tree, not only as 
   for (const [file, what] of cases) {
     assert.ok(at(file).length > 0, `${file} (${what}) is not flagged — the guard is blind to the incident again`);
   }
+
+  // Remediated, with the wave that drained it. Asserted CLEAN, so a partial fix
+  // that leaves a site behind fails here as loudly as a blind guard would.
+  const remediated = [
+    ['lib/editors/phase3/activator-editor.tsx', 'Wave 1A — ADX cluster URI + Logic App ARM id are now AzureBackedField pickers'],
+  ];
+  for (const [file, why] of remediated) {
+    assert.equal(at(file).length, 0, `${file} still has a hand-typed infrastructure site (${why})`);
+  }
+  // Every operator-filed surface is accounted for in exactly one of the lists.
+  assert.equal(cases.length + remediated.length, 7);
 });
 
 // ── 3. the JSX lexer ───────────────────────────────────────────────────────

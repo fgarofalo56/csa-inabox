@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { PrivateLinkTargetField, initialGroupIdsFor } from '@/lib/components/azure/private-link-target-field';
 /**
  * ScaleManagePanel — Admin → Capacity & compute "Scale & manage".
  *
@@ -300,6 +301,13 @@ function PurviewManagedVnetSection() {
   const [msg, setMsg] = useState<{ text: string; ok: boolean; portalUrl?: string; azCli?: string } | null>(null);
   const [resourceId, setResourceId] = useState('');
   const [groupId, setGroupId] = useState('dfs');
+  /**
+   * The sub-resources the CHOSEN target actually accepts, seeded from the type
+   * the picker opens on. PE_GROUP_OPTIONS' friendly labels are still used for
+   * the ones it names; anything else shows its raw groupId rather than being
+   * dropped, which would silently hide a valid choice.
+   */
+  const [groupIdChoices, setGroupIdChoices] = useState<string[]>(() => initialGroupIdsFor());
   const [peName, setPeName] = useState('');
 
   const load = useCallback(async () => {
@@ -409,13 +417,35 @@ function PurviewManagedVnetSection() {
 
           <div className={s.form}>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a managed private endpoint to a source</Caption1>
+            {/* RENDERED ONLY WHEN THE FORM CAN ACTUALLY BE USED. The target
+                picker issues real Resource Graph queries on mount, and this
+                section is inert without a managed-VNet IR — so leaving it
+                mounted spent a cross-subscription ARG walk on a form whose
+                submit is disabled. `PrivateLinkTargetField` deliberately has no
+                `disabled` prop (its own doc says a caller needing it inert
+                should not render it); this caller was rendering it anyway.
+                Keyed on `irPresent`, NOT on `gated` — `gated` also covers the
+                transient `busy`, and unmounting on every operation would
+                re-issue the query each time. */}
+            {data.irPresent && (
             <div className={s.formRow}>
-              <Field label="Source resource id (e.g. the DLZ lake storage account)" style={{ flex: 2, minWidth: 280 }}>
-                <Input value={resourceId} onChange={(_, d) => setResourceId(d.value)} placeholder="/subscriptions/…/resourceGroups/…/providers/Microsoft.Storage/storageAccounts/…" disabled={gated} />
-              </Field>
+              <div style={{ flex: 2, minWidth: 280 }}>
+                <PrivateLinkTargetField
+                  value={resourceId}
+                  label="Source resource (e.g. the DLZ lake storage account)"
+                  surface="Managed private endpoints"
+                  onChange={(id, gids) => {
+                    setResourceId(id || '');
+                    setGroupIdChoices(gids);
+                    if (gids.length && !gids.includes(groupId)) setGroupId(gids[0]);
+                  }}
+                />
+              </div>
               <Field label="Group id" style={{ minWidth: 220 }}>
                 <Select value={groupId} onChange={(_, d) => setGroupId(d.value)} disabled={gated}>
-                  {PE_GROUP_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  {groupIdChoices
+                    .map((g) => ({ value: g, label: PE_GROUP_OPTIONS.find((o) => o.value === g)?.label ?? g }))
+                    .map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </Select>
               </Field>
               <Field label="Name (optional)" style={{ minWidth: 160 }}>
@@ -427,6 +457,7 @@ function PurviewManagedVnetSection() {
                 {busy === 'pe' ? 'Creating…' : 'Add private endpoint'}
               </Button>
             </div>
+            )}
             {!data.irPresent && (
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Create the managed-VNet IR above before adding private endpoints.</Caption1>
             )}

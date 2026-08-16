@@ -35,6 +35,7 @@ import {
   Eye20Regular, ArrowSync16Regular, Delete16Regular, Add20Regular,
   Checkmark16Regular, Dismiss16Regular, Copy16Regular, Shield20Regular,
 } from '@fluentui/react-icons';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 
 const useStyles = makeStyles({
   panel: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '0', marginTop: '12px' },
@@ -239,9 +240,14 @@ function CaptureTab({ hub, onSaved }: { hub: string; onSaved?: () => void }) {
           </Field>
           {enabled && (
             <>
-              <Field label="Storage account resource ID" required hint="ARM id of a Blob Storage or ADLS Gen2 account, e.g. /subscriptions/…/storageAccounts/myacct.">
-                <Input value={storageId} onChange={(_, v) => setStorageId(v.value)} placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Storage/storageAccounts/myacct" />
-              </Field>
+              <AzureBackedField
+                kind="storage-account-id"
+                value={storageId}
+                label="Capture destination storage account"
+                surface="Event Hubs capture"
+                onChange={(v) => setStorageId(v || '')}
+              />
+              <Caption1 className={s.hint}>Blob Storage or ADLS Gen2. Capture writes Avro blobs into the container below.</Caption1>
               <div className={s.row}>
                 <Field label="Blob container" required className={s.grow}>
                   <Input value={container} onChange={(_, v) => setContainer(v.value)} placeholder="captures" />
@@ -367,9 +373,14 @@ function GeoDrTab({ onSaved }: { onSaved?: () => void }) {
           <Field label="Alias name" required>
             <Input value={alias} onChange={(_, v) => setAlias(v.value)} placeholder="loom-geodr-alias" />
           </Field>
-          <Field label="Secondary namespace ARM resource ID" required hint="An existing Event Hubs namespace in another region (Standard tier or higher).">
-            <Input value={partnerId} onChange={(_, v) => setPartnerId(v.value)} placeholder="/subscriptions/.../providers/Microsoft.EventHub/namespaces/secondary-ns" />
-          </Field>
+          <AzureBackedField
+            kind="eventhubs-namespace-id"
+            value={partnerId}
+            label="Secondary namespace"
+            surface="Event Hubs Geo-DR"
+            onChange={(v) => setPartnerId(v || '')}
+          />
+          <Caption1 className={s.hint}>Pick an Event Hubs namespace in another region (Standard tier or higher).</Caption1>
           <div className={s.row}>
             <Button appearance="primary" onClick={create} disabled={busy || !alias.trim() || !partnerId.trim()}>{busy ? 'Creating…' : 'Create pairing'}</Button>
             <Button appearance="secondary" onClick={() => setShowCreate(false)} disabled={busy}>Cancel</Button>
@@ -851,11 +862,18 @@ function NetworkingTab({ onSaved }: { onSaved?: () => void }) {
 
           <div className={s.sectionTitle}>Virtual network rules</div>
           <div className={s.row}>
-            <Field label="Add subnet ARM resource ID" className={s.grow} hint="The subnet must have the Microsoft.EventHub service endpoint enabled.">
-              <Input value={newSubnet} onChange={(_, v) => setNewSubnet(v.value)} placeholder="/subscriptions/.../virtualNetworks/vnet/subnets/subnet1" onKeyDown={(e) => { if (e.key === 'Enter') addSubnet(); }} />
-            </Field>
+            <div className={s.grow}>
+              <AzureBackedField
+                kind="subnet"
+                value={newSubnet}
+                label="Add subnet"
+                surface="Event Hubs virtual network rules"
+                onChange={(v) => setNewSubnet(v || '')}
+              />
+            </div>
             <Button appearance="secondary" icon={<Add20Regular />} onClick={addSubnet}>Add VNet rule</Button>
           </div>
+          <Caption1 className={s.hint}>The subnet must have the Microsoft.EventHub service endpoint enabled.</Caption1>
           {vnetRules.length === 0 ? <Caption1 className={s.hint}>No VNet rules.</Caption1> : (
             <div className={s.gridWrap}>
               <Table size="small" aria-label="Virtual network rules">

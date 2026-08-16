@@ -22,6 +22,7 @@ import {
 } from '@fluentui/react-components';
 import { Flash20Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import {
   MONITOR_ACTION_KINDS, monitorActionSummary,
   type MonitorActionKind, type MonitorActionState,
@@ -148,10 +149,13 @@ export function MonitorActionBuilder({
 
           {value.kind === 'LogicApp' && (
             <div className={s.root}>
-              <Field label="Logic App resource id" hint="Microsoft.Logic/workflows resource id (Consumption workflow with an HTTP trigger).">
-                <Input value={value.logicAppResourceId} onChange={(_, d) => set({ logicAppResourceId: d.value })}
-                  placeholder="/subscriptions/…/providers/Microsoft.Logic/workflows/wf-alert" />
-              </Field>
+              <AzureBackedField
+                kind="logic-app"
+                value={value.logicAppResourceId}
+                label="Logic App"
+                surface="Monitor action group"
+                onChange={(v) => set({ logicAppResourceId: v || '' })}
+              />
               <div className={s.row}>
                 <Field label="Trigger name" style={{ width: '160px' }}>
                   <Input value={value.logicAppTrigger} onChange={(_, d) => set({ logicAppTrigger: d.value })} />
