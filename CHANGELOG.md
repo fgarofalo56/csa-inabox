@@ -25,6 +25,17 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.1...csa-inabox-v0.98.2) (2026-08-16)
+
+
+### Bug Fixes
+
+* **ci:** the route inventory called a LOG FIELD an authorization check — 271 of 773 owner-scoped rows ([#3625](https://github.com/fgarofalo56/csa-inabox/issues/3625)) ([#3643](https://github.com/fgarofalo56/csa-inabox/issues/3643)) ([72fb01a](https://github.com/fgarofalo56/csa-inabox/commit/72fb01afdeb6c771beae0c0c034a92b8885502b0))
+* **console:** SQL_EDITOR_ITEM_TYPES listed 3 of 6 slugs, so [#3623](https://github.com/fgarofalo56/csa-inabox/issues/3623) 404'd two working buttons ([#3639](https://github.com/fgarofalo56/csa-inabox/issues/3639)) ([b0cbe21](https://github.com/fgarofalo56/csa-inabox/commit/b0cbe2105bc2a89c8bb5085ddd3644bfbc07128a))
+* **security:** 6 SQL/PostgreSQL routes drove the Console UAMI at any subscription's server (GHSA-v8r7-c2p5-mjf2) ([#3623](https://github.com/fgarofalo56/csa-inabox/issues/3623)) ([424b123](https://github.com/fgarofalo56/csa-inabox/commit/424b1239548534374fe5aa89bdc1883e35425800))
+* **security:** fourteen more routes acted on a shared Synapse pool, Unity Catalog and AAS with no item authorization, and the eventhouse GET still mapped every tenant's database (GHSA-v2g8-gp3r-rg4r) ([#3624](https://github.com/fgarofalo56/csa-inabox/issues/3624)) ([3997055](https://github.com/fgarofalo56/csa-inabox/commit/39970552c60c2859a18efe70f195e94cac2a17c6))
+* **security:** the mirroring route read a caller-named database into the caller's own Bronze folder (GHSA-v8r7-c2p5-mjf2) ([#3638](https://github.com/fgarofalo56/csa-inabox/issues/3638)) ([fa97fe7](https://github.com/fgarofalo56/csa-inabox/commit/fa97fe7c7b9ad6c9f4cd1eb62293c0374ca40724))
+
 ## [0.98.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.0...csa-inabox-v0.98.1) (2026-08-16)
 
 
