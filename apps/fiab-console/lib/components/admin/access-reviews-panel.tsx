@@ -266,10 +266,18 @@ function CampaignWizard({ onClose, onCreated }: { onClose: () => void; onCreated
                 </>
               )}
               {(scopeKind === 'principal' || scopeKind === 'group') && (
-                <Field label={scopeKind === 'group' ? 'Entra group' : 'Principal'} required hint="Search Entra, or paste the object id.">
-                  <IdentityPicker kind={scopeKind === 'group' ? 'group' : 'user'} onSelect={(h) => setScopeRef(h?.id || '')} />
-                  <Input value={scopeRef} onChange={(_, d) => setScopeRef(d.value)} placeholder="object id (oid)" />
-                </Field>
+                /* The picker was already here; the free-text "object id (oid)"
+                   box beside it was the adoption gap — a compliant control and
+                   its own bypass, shipped together. The picker now carries the
+                   stored value itself, so an id it cannot resolve still shows
+                   and still saves. */
+                <IdentityPicker
+                  kind={scopeKind === 'group' ? 'group' : 'user'}
+                  required
+                  label={scopeKind === 'group' ? 'Entra group' : 'Principal'}
+                  value={scopeRef}
+                  onChange={(id) => setScopeRef(id)}
+                />
               )}
               <Field label="Reviewers" hint="Named reviewers who may attest/revoke. Empty = admin-only.">
                 <IdentityPicker kind="all" onSelect={addReviewer} />
@@ -520,10 +528,28 @@ function LifecycleActions({ onDone, onError }: { onDone: (msg: string) => void; 
       )}
       <div className={s.lifecycle}>
         <Button appearance="secondary" icon={<PeopleTeam20Regular />} disabled={busy} onClick={() => void groupSync()}>Reconcile Entra group targets</Button>
-        <Field label="Leaver revoke-all (principal object id)" style={{ minWidth: 320 }}>
-          <Input value={principal} onChange={(_, d) => setPrincipal(d.value)} placeholder="8f2a…-oid"
-            contentAfter={<Button appearance="transparent" size="small" icon={<PersonDelete20Regular />} disabled={busy || !principal.trim()} onClick={() => void revokeAll()} aria-label="Revoke all access for this principal" />} />
-        </Field>
+        <div style={{ minWidth: 320, flex: 1 }}>
+          {/* Revoke-all is irreversible, so the departing principal is CHOSEN
+              from the directory rather than typed as an oid. A leaver who has
+              already been deleted from Entra still resolves to nothing — the
+              picker keeps the stored id so the tear-down can still run. */}
+          <IdentityPicker
+            kind="all"
+            label="Leaver revoke-all"
+            hint="Tears down every active/eligible grant for a departing principal."
+            value={principal}
+            onChange={(id) => setPrincipal(id)}
+          />
+          <Button
+            appearance="secondary"
+            icon={<PersonDelete20Regular />}
+            disabled={busy || !principal.trim()}
+            onClick={() => void revokeAll()}
+            style={{ marginTop: tokens.spacingVerticalS }}
+          >
+            Revoke all access
+          </Button>
+        </div>
       </div>
       <Caption1 className={s.via}><ClipboardTaskListLtr24Regular style={{ fontSize: '14px', verticalAlign: 'middle' }} /> Revoke-all tears down every active/eligible grant for a departing principal through the real backend + entitlement ledger.</Caption1>
     </div>

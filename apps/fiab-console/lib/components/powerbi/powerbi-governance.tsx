@@ -30,6 +30,7 @@ import {
   Add20Regular, Delete20Regular, ArrowSync20Regular,
   Ribbon20Regular, Link20Regular,
 } from '@fluentui/react-icons';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -162,10 +163,30 @@ export function ManageAccessPanel({ enabled, workspaceId }: { enabled: boolean; 
       </Caption1>
 
       <div className={s.row}>
-        <Field label="User email / object id" style={{ minWidth: 280 }}>
-          <Input value={identifier} onChange={(_, d) => setIdentifier(d.value)} placeholder="user@contoso.com or app object id" />
-        </Field>
-        <Field label="Principal" style={{ minWidth: 130 }}>
+        {/* Power BI's GroupUser.identifier is a UPN for a user and an object id
+            for a group / service principal, which is exactly the mapping an
+            operator got wrong when this was one free-text box. Picking the
+            principal now sets BOTH the identifier and the principal type, so
+            they cannot disagree. A stored identifier the directory can no
+            longer resolve still renders and still submits. */}
+        <div style={{ minWidth: 280, flex: 1 }}>
+          <IdentityPicker
+            kind={['user', 'group', 'spn']}
+            label="Principal"
+            hint="Users are added by UPN; groups and apps by object id — Power BI's own rule."
+            value={identifier}
+            onChange={(id, hit) => {
+              // Key the clear on the ID, not on the hit. `onChange` emits no hit
+              // only when clearing — but reading it the other way round meant a
+              // manually entered object id (the escape hatch when directory
+              // search is gated) was silently thrown away.
+              if (!id) { setIdentifier(''); return; }
+              setIdentifier(hit && hit.type === 'user' ? (hit.upn || hit.mail || id) : id);
+              if (hit) setPrincipalType(hit.type === 'user' ? 'User' : hit.type === 'group' ? 'Group' : 'App');
+            }}
+          />
+        </div>
+        <Field label="Principal type" style={{ minWidth: 130 }}>
           <Select value={principalType} onChange={(_, d) => setPrincipalType(d.value)}>
             {PRINCIPALS.map((p) => <option key={p} value={p}>{p}</option>)}
           </Select>

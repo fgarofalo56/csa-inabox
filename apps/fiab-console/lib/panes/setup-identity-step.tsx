@@ -11,6 +11,13 @@ import { clientFetch } from '@/lib/client-fetch';
  * app registration and self / group for the bootstrap admin (structured
  * pickers, no freeform per loom-no-freeform-config), and POSTs the choice.
  *
+ * Both principal fields were free-text until Wave 1C: the app (client) id was a
+ * GUID box even though `/api/setup/identity` had ALREADY discovered the tenant's
+ * app registrations, and the admin group was a "group OID" box. Both are now
+ * pickers over real discovery, and both keep a stored value the directory can no
+ * longer resolve (an app registration deleted out-of-band, a group in another
+ * tenant) rather than dropping it on load.
+ *
  * Honest: the POST records the choice + returns the exact apply path (bootstrap
  * script + deploy params) — it does NOT fake an "applied" success, because
  * provisioning the app registration is a privileged Graph + Container-App action
@@ -28,7 +35,6 @@ import {
   Field,
   Dropdown,
   Option,
-  Input,
   Button,
   Spinner,
   Badge,
@@ -37,6 +43,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 
 const useStyles = makeStyles({
   card: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL },
@@ -46,6 +53,9 @@ const useStyles = makeStyles({
 
 type AppMode = 'existing' | 'new' | 'disable';
 type AdminMode = 'self' | 'group';
+
+/** Sentinel option value — "search every app registration, not just the scanned ones". */
+const OTHER_APP = '__other__';
 
 interface IdentityState {
   msal: { configured: boolean; configuredClientId?: string; tenantId?: string; recommendation: AppMode };
@@ -60,6 +70,7 @@ export function SetupIdentityCard() {
   const [error, setError] = useState<string | null>(null);
   const [appMode, setAppMode] = useState<AppMode>('new');
   const [existingClientId, setExistingClientId] = useState('');
+  const [searchAllApps, setSearchAllApps] = useState(false);
   const [adminMode, setAdminMode] = useState<AdminMode>('self');
   const [groupId, setGroupId] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
@@ -117,6 +128,17 @@ export function SetupIdentityCard() {
   }
   if (!data) return null;
 
+  // Discovered app registrations, plus the recorded choice when the scan no
+  // longer returns it — the value must survive a scan that came back empty.
+  const discovered = data.appRegistrations.items || [];
+  const appRegOptions = [
+    ...discovered.map((a) => ({ appId: a.appId, label: `${a.displayName} — ${a.appId}` })),
+    ...(existingClientId && !discovered.some((a) => a.appId === existingClientId)
+      ? [{ appId: existingClientId, label: `${existingClientId} (recorded; not returned by the current scan)` }]
+      : []),
+  ];
+  const appRegLabel = appRegOptions.find((a) => a.appId === existingClientId)?.label ?? '';
+
   return (
     <Card className={styles.card}>
       <div>
@@ -148,8 +170,59 @@ export function SetupIdentityCard() {
           </Dropdown>
         </Field>
         {appMode === 'existing' && (
-          <Field className={styles.field} label="Existing app (client) id">
-            <Input value={existingClientId} onChange={(_, d) => setExistingClientId(d.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+          <Field className={styles.field} label="Existing app registration">
+            {/* The scan already knows the tenant's Loom app registrations, so
+                the id is CHOSEN, not typed. A stored id the scan no longer
+                returns (deleted, renamed, or the scan itself unreachable) is
+                kept as its own option so re-opening the wizard cannot silently
+                blank a recorded choice.
+
+                "Other / search all app registrations" is ALWAYS offered, not
+                only when the scan came back empty. `discoverApps()` filters
+                `startswith(displayName,'CSA Loom Console')`, so an operator
+                with one matching app plus the differently-named one they
+                actually want would otherwise have no way to reach the latter —
+                they used to type its client id. Keying the fallback on an
+                EMPTY list was the bug; keying it on the operator's choice is
+                the fix. */}
+            {!searchAllApps && appRegOptions.length > 0 ? (
+              <Dropdown
+                placeholder="Select an app registration"
+                value={appRegLabel}
+                selectedOptions={existingClientId ? [existingClientId] : []}
+                onOptionSelect={(_, d) => {
+                  const v = String(d.optionValue || '');
+                  if (v === OTHER_APP) { setSearchAllApps(true); setExistingClientId(''); return; }
+                  setExistingClientId(v);
+                }}
+              >
+                {appRegOptions.map((a) => (
+                  <Option key={a.appId} value={a.appId} text={a.label}>{a.label}</Option>
+                ))}
+                <Option value={OTHER_APP} text="Other / search all app registrations…">
+                  Other / search all app registrations…
+                </Option>
+              </Dropdown>
+            ) : (
+              <>
+                <IdentityPicker
+                  kind="spn"
+                  label="Search the tenant's app registrations"
+                  placeholder="App registration display name"
+                  value={existingClientId}
+                  onChange={(id, hit) => setExistingClientId(hit?.appId || id)}
+                />
+                {appRegOptions.length > 0 && (
+                  <Button
+                    appearance="transparent"
+                    size="small"
+                    onClick={() => { setSearchAllApps(false); setExistingClientId(''); }}
+                  >
+                    Back to the {appRegOptions.length} discovered registration(s)
+                  </Button>
+                )}
+              </>
+            )}
           </Field>
         )}
       </div>
@@ -166,9 +239,15 @@ export function SetupIdentityCard() {
           </Dropdown>
         </Field>
         {adminMode === 'group' && (
-          <Field className={styles.field} label="Admin group object id">
-            <Input value={groupId} onChange={(_, d) => setGroupId(d.value)} placeholder="group OID" />
-          </Field>
+          <div className={styles.field}>
+            <IdentityPicker
+              kind="group"
+              label="Admin group"
+              hint="Members of this Entra security group can open /admin/*."
+              value={groupId}
+              onChange={(id) => setGroupId(id)}
+            />
+          </div>
         )}
       </div>
 

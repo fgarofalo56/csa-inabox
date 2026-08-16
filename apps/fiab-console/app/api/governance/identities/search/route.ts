@@ -17,6 +17,14 @@
  *   ?q=<text>                search query (min 2 chars; shorter → empty list)
  *   ?kind=user|group|spn|all default 'all'
  *   ?expand=<groupId>        expand a group's transitive members (q ignored)
+ *   ?resolve=<ref>           resolve ONE stored principal reference (object id,
+ *                            application id, UPN or mail) back to a display
+ *                            name. Backs <IdentityPicker>'s stored-value mode.
+ *                            `{ok:true, results:[]}` means the directory
+ *                            ANSWERED and matched nothing; a 502/503 means it
+ *                            could not be asked. The picker renders those two
+ *                            differently and never conflates them
+ *                            (deploy-integrity R7).
  *   ?top=<n>                 max results (default 20, max 50)
  *
  * Responses:
@@ -26,14 +34,14 @@
  *   { ok: false, error: 'graph_<N>', body }                              502
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { withCapability } from '@/lib/api/route-toolkit';
 import {
   searchAll,
   searchUsers,
   searchGroups,
   searchServicePrincipals,
   getGroupTransitiveMembers,
+  resolvePrincipalRef,
   GraphIdentityNotConfiguredError,
   GraphIdentityError,
   type IdentityHit,
@@ -85,13 +93,22 @@ function graphErrorResponse(e: GraphIdentityError) {
   );
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  const gate = await enforceCapability(s, 'admin.permissions', 'Reader');
-  if (gate) return gate;
-
+// Route-toolkit: withCapability (C22 / #3088) — migrated by the boy-scout touch
+// ratchet when Wave 1C added `?resolve=`. BEHAVIOUR-PRESERVING, checked rather
+// than assumed, exactly as the sibling /api/admin/permissions/principals
+// migration records:
+//   - no session -> withSession returns apiUnauthorized(), the same 401
+//     `{ok:false,error:'unauthenticated'}` body enforceCapability(null, …)
+//     produced from the hand-rolled prologue below.
+//   - session, no capability -> enforceCapability's 403 envelope, unchanged.
+//   - allowed -> the handler below, unchanged (same admin.permissions::Reader).
+// The one DIFFERENCE is an improvement: withSession wraps the handler in
+// try/catch -> apiServerError, so an unexpected throw outside this function's
+// own try block is a logged 500 rather than an unhandled Next error.
+export const GET = withCapability('admin.permissions', 'Reader', async (req: NextRequest) => {
   const sp = req.nextUrl.searchParams;
   const expand = (sp.get('expand') || '').trim();
+  const resolve = (sp.get('resolve') || '').trim();
   const q = (sp.get('q') || '').trim();
   const kind = (sp.get('kind') || 'all').toLowerCase();
   const topRaw = parseInt(sp.get('top') || '20', 10);
@@ -99,7 +116,12 @@ export async function GET(req: NextRequest) {
 
   try {
     let results: IdentityHit[];
-    if (expand) {
+    if (resolve) {
+      // Stored-value resolution. An empty list here means "asked, no match" —
+      // the picker keeps and still saves the stored value either way.
+      const hit = await resolvePrincipalRef(resolve);
+      results = hit ? [hit] : [];
+    } else if (expand) {
       // Group transitive-member expansion — flatten nested groups.
       results = await getGroupTransitiveMembers(expand, Math.min(Math.max(top, 50), 200));
     } else {
@@ -119,4 +141,4 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
-}
+});

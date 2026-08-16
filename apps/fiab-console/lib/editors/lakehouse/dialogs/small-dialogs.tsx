@@ -15,6 +15,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useStyles, leafName, formatBytes } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 
 // ── Context Menu ──────────────────────────────────────────────────────────────
 export function ContextMenu() {
@@ -259,9 +260,9 @@ export function ShareDialog() {
           <DialogContent>
             <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
               Grant a user, group, or service principal access to this lakehouse
-              container via Azure RBAC. Provide the Entra ID object id of the
-              recipient. Sharing is applied directly on the storage scope — no
-              Fabric or Power BI workspace is involved.
+              container via Azure RBAC. Pick the recipient from the directory —
+              Loom resolves the object id. Sharing is applied directly on the
+              storage scope — no Fabric or Power BI workspace is involved.
             </Caption1>
             {shareError && (
               <MessageBar intent="error">
@@ -273,13 +274,19 @@ export function ShareDialog() {
                 <MessageBarBody>{shareSuccess}</MessageBarBody>
               </MessageBar>
             )}
-            <Field label="Principal object id" required hint="Entra ID user, group, or service principal object id (GUID)">
-              <Input
-                value={sharePrincipal}
-                onChange={(_, d) => setSharePrincipal(d.value)}
-                placeholder="11111111-2222-3333-4444-555555555555"
-              />
-            </Field>
+            {/* Was "Principal object id" + a GUID placeholder. The pick also
+                sets the principal TYPE below, and a stored id the directory
+                cannot resolve still renders and still grants. */}
+            <IdentityPicker
+              kind={['user', 'group', 'spn']}
+              required
+              label="Recipient"
+              value={sharePrincipal}
+              onChange={(id, hit) => {
+                setSharePrincipal(id);
+                if (hit) setSharePrincipalType((hit.type === 'group' ? 'Group' : hit.type === 'spn' ? 'ServicePrincipal' : 'User') as any);
+              }}
+            />
             <Field label="Principal type" style={{ marginTop: tokens.spacingVerticalS }}>
               <Dropdown
                 selectedOptions={[sharePrincipalType]}
