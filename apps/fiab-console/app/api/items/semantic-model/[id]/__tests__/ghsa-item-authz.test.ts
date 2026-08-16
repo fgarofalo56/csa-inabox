@@ -178,7 +178,11 @@ const ROUTES: Array<{ name: string; read: boolean; call: () => Promise<any> }> =
   { name: 'embed-token POST', read: true, call: () => embedToken(req('', { workspaceId: 'pbi-ws' }), ctx()) },
   {
     name: 'measures POST',
-    read: true,
+    // WRITE-scoped, deliberately. See the route header: its only caller is the
+    // Validate button on the measure-AUTHORING form, and the probe evaluates
+    // caller-authored DAX against the model. The first cut of this fix admitted
+    // read roles on "it persists nothing"; the client settled it the other way.
+    read: false,
     call: () => measures(req('?workspaceId=pbi-ws', { measureName: 'm', tableName: 't', daxExpression: '1' }), ctx()),
   },
   { name: 'take-over POST', read: false, call: () => takeOver(req('?workspaceId=pbi-ws'), ctx()) },
@@ -266,5 +270,32 @@ describe('GHSA-hf73-rp4q-66pf — the guard is unskippable and runs before the b
     const res = await embedToken(req('', { workspaceId: 'pbi-ws' }), ctx());
     expect(res.status).toBe(200);
     expect(generateDatasetEmbedToken).toHaveBeenCalled();
+  });
+});
+
+describe('GHSA-hf73-rp4q-66pf — when authorization CANNOT be established, it fails CLOSED', () => {
+  // deploy-integrity R7: a route that cannot establish authorization must not
+  // assert something it did not establish. If the ownership lookup THROWS
+  // (Cosmos unreachable), the honest answer is a 500 — "something went wrong" —
+  // and NOT a 404, which would claim the item is not there. What matters either
+  // way is that it fails CLOSED: no backend call, no token minted.
+  //
+  // This is not hypothetical. It is exactly what the pre-existing
+  // powerbi-parity-routes / prompt-flow-routes fixtures hit when they had not
+  // stubbed the guard's data layer: every branch returned 500 and no Power BI
+  // call was made.
+  it('a Cosmos failure in the ownership lookup 500s and mints NO embed token', async () => {
+    resolveWorkspaceAccessByOid.mockRejectedValue(new Error('Cosmos DB is not configured'));
+    const res = await embedToken(req('', { workspaceId: 'pbi-ws' }), ctx());
+    expect(res.status).toBe(500);
+    expect(generateDatasetEmbedToken).not.toHaveBeenCalled();
+  });
+
+  it('the 500 body leaks neither the failure detail nor a false not-found claim', async () => {
+    resolveWorkspaceAccessByOid.mockRejectedValue(new Error('Cosmos DB is not configured: LOOM_COSMOS_ENDPOINT'));
+    const res = await embedToken(req('', { workspaceId: 'pbi-ws' }), ctx());
+    const body = JSON.stringify(await res.json());
+    expect(body).not.toContain('LOOM_COSMOS_ENDPOINT');
+    expect(body).not.toContain('not found');
   });
 });

@@ -30,8 +30,18 @@
  * `authorizeItemWorkspace`, not `withWorkspaceOwner`: `[id]` is legitimately a
  * RAW Power BI dataset GUID on the opt-in path and `loadOwnedItem` renders
  * "no item" as 404. The `?workspaceId=` is a Power BI group id, so the scope is
- * resolved from the item. `allowReadRoles` — the route validates only and
- * persists nothing (persistence needs XMLA, see above), so it is a read.
+ * resolved from the item.
+ *
+ * WRITE-SCOPED — no `allowReadRoles`, and that is a deliberate reversal. This
+ * route persists nothing, so "it is really a read" is arguable, and the first cut
+ * of the fix did admit read roles on that reasoning. The CLIENT settles it: the
+ * only caller is `validateDax` in the semantic-model editor (phase3/
+ * semantic-model-editor.tsx:903), the Validate button on the measure-AUTHORING
+ * form — it is bound to `measureName` / `measureTable` / `daxExpr`, all authoring
+ * state. A read-only Viewer never reaches it, and the probe evaluates
+ * caller-authored DAX (`DEFINE MEASURE … EVALUATE ROW`) against the model, which
+ * is a wider capability than reading the report's own queries. Admitting Viewers
+ * would have widened who can run arbitrary DAX for no viewing benefit.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -60,7 +70,6 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     workspaceId: null,
     itemId: modelId,
     itemType: 'semantic-model',
-    allowReadRoles: true,
     notFound: 'semantic model not found',
   });
   if (denied) return denied;
