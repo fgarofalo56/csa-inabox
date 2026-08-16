@@ -48,7 +48,30 @@ export const PATHS = {
   attachKinds: 'apps/fiab-console/lib/azure/attached-service-kinds.ts',
   commercialParams: 'platform/fiab/bicep/params/commercial-full.bicepparam',
   discoveryModel: 'apps/fiab-console/lib/deploy/discovery-model.ts',
+  govBicep: 'deploy/bicep/gov/main.bicep',
 };
+
+/**
+ * Orchestrators that create adoptable services and must therefore honour an
+ * adopt decision. `rootBicep` is Commercial; `govBicep` is the sovereign
+ * (Azure Government) orchestrator that deploy-gov.yml submits.
+ *
+ * WHY THE GOV FILE IS LISTED HERE AT ALL (#3577)
+ * ---------------------------------------------
+ * Until this entry existed, every check below read `platform/fiab/bicep/main.bicep`
+ * and nothing else — so this guard's population was ONE file while the repo had
+ * TWO orchestrators creating the same services. `deploy/bicep/gov/main.bicep`
+ * created a Purview account on `= if (deployDMLZ)` with no adopt path at all,
+ * and the guard whose entire purpose is "an adopt decision must suppress the
+ * new resource" reported OK throughout, because Gov was never in the set it
+ * examined.
+ *
+ * That defect shipped: Purview accounts are capped at 5 per tenant per region,
+ * and deploy-gov.yml run 31917112453 was refused at preflight in usgovvirginia.
+ * A guard that cannot see a consumer cannot protect it
+ * (csa_loom_seventh_consumer_broke_the_deploy).
+ */
+const GOV_SERVICE_KEYS = ['purview'];
 
 /**
  * The catalog must never silently shrink. This floor is the count of
@@ -334,6 +357,81 @@ export function runChecks(files) {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // G1..G3 — THE SOVEREIGN ORCHESTRATOR HONOURS THE SAME DECISIONS.
+  //
+  // cloud-parity.md: a capability that works in Commercial and not in Gov is
+  // incomplete, not "Commercial-first". Adoption is exactly such a capability —
+  // and the boundary where it matters MOST, because the Purview cap is per
+  // tenant per region and a sovereign tenant that already runs Purview is the
+  // normal case, not the exception.
+  //
+  // These checks are deliberately keyed on the SHAPE of the gate rather than
+  // byte-comparing the Commercial line: the Gov orchestrator's enable flag is
+  // `deployDMLZ` (its landing-zone toggle), not `purviewEnabled`, so requiring
+  // an identical line would force a redundant second flag whose only purpose is
+  // to satisfy a guard.
+  // ---------------------------------------------------------------------------
+  const govLines = files.govBicep.split('\n');
+
+  // G1 — the transport exists. Without the bag there is nothing to carry a
+  // decision, and every service silently reverts to create-always.
+  if (!/^param adopt object = \{\}$/m.test(files.govBicep)) {
+    problems.push(
+      `${PATHS.govBicep} does not declare \`param adopt object = {}\`. Without it the sovereign ` +
+        `orchestrator cannot receive an adopt decision at all, and every service it deploys is ` +
+        `create-always — which is how the Gov Purview deploy hit the per-tenant cap (#3577).`,
+    );
+  }
+
+  for (const key of GOV_SERVICE_KEYS) {
+    const def = catalog.find((d) => d.key === key);
+    if (!def) {
+      problems.push(
+        `${PATHS.govBicep} is expected to honour the '${key}' adopt decision, but '${key}' is not ` +
+          `in the adoption catalog. Remove it from GOV_SERVICE_KEYS deliberately, or restore the entry.`,
+      );
+      continue;
+    }
+
+    // G2 — the suppression var exists and is derived from the SAME plan key the
+    // catalog and the console use. A Gov-only key would mean a plan the wizard
+    // emits is silently ignored here.
+    const gateRe = new RegExp(`^var ${def.provisionVar} = .*adoptMode\\(adopt, '${key}'\\) == 'create'`, 'm');
+    if (!gateRe.test(files.govBicep)) {
+      problems.push(
+        `${PATHS.govBicep} must declare \`var ${def.provisionVar} = <enable flag> && adoptMode(adopt, '${key}') == 'create'\` ` +
+          `and does not. Without it, choosing "adopt" still deploys a new ${def.label} in the sovereign boundary.`,
+      );
+      continue;
+    }
+
+    // G3 — the module that CREATES the service is gated on that var, not on the
+    // landing-zone toggle alone. This is the exact revert that would reopen
+    // #3577: restoring `= if (deployDMLZ)` on the purview module.
+    const creatorGated = govLines.some(
+      (l) => /=\s*if\s*\(/.test(l) && l.includes(`modules/${key}.bicep`) && l.includes(def.provisionVar),
+    );
+    if (!creatorGated) {
+      problems.push(
+        `${PATHS.govBicep}: the module that creates ${def.label} (modules/${key}.bicep) is not gated ` +
+          `\`= if (… ${def.provisionVar} …)\`. It would deploy a new one even when the plan says adopt — ` +
+          `the defect that made the Gov deploy fail against a tenant already at its ${def.label} cap (#3577).`,
+      );
+    }
+
+    // G4 — an adopt decision must actually BIND something. A suppression that
+    // creates nothing and binds nothing is not adoption, it is a silent skip,
+    // and the catalog reserves that meaning for mode 'skip'.
+    const binds = govLines.some((l) => /=\s*if\s*\(/.test(l) && l.includes(`modules/${key}-existing.bicep`));
+    if (!binds) {
+      problems.push(
+        `${PATHS.govBicep}: nothing references modules/${key}-existing.bicep, so an 'adopt' decision would ` +
+          `suppress the new ${def.label} and bind nothing — a silent skip wearing adoption's name.`,
+      );
+    }
+  }
+
   return { problems, catalog, adoptable };
 }
 
@@ -345,6 +443,7 @@ export function loadFiles() {
     attachKinds: read(PATHS.attachKinds),
     commercialParams: read(PATHS.commercialParams),
     discoveryModel: read(PATHS.discoveryModel),
+    govBicep: read(PATHS.govBicep),
   };
 }
 

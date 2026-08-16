@@ -62,6 +62,40 @@ param enableHIPAA bool = false
 @description('Tags applied to all resources.')
 param tags object = {}
 
+// ─── Adopt-or-create: the operator's per-service decision ────────────────────
+//
+// SAME CONVENTION AS COMMERCIAL, DELIBERATELY. `platform/fiab/bicep/main.bicep`
+// has carried this exact bag — one object keyed by the service key in
+// `apps/fiab-console/lib/deploy/adoption-catalog.ts`, transported as
+// LOOM_ADOPT_JSON — since the adoption work landed. This orchestrator spoke
+// none of it, which is why brownfield support that already existed for
+// Commercial could not be reached from Gov at all. A second, Gov-only
+// convention (`existingPurviewAccountId`, say) would have made the wizard,
+// scripts/csa-loom/*, and this file disagree about the same question a fourth
+// time; adopting the established shape means a plan the console already emits
+// is understood here with no translation.
+//
+// SHAPE — per service key; every field optional; an ABSENT key means create-new:
+//   { '<serviceKey>': { mode: 'adopt'|'create'|'skip',
+//                       target: { name: '<name>', rg: '<rg>', sub: '<subId>' } } }
+@description('Adopt-or-create plan keyed by adoption-catalog service key. Per key: { mode: "adopt"|"create"|"skip", target: { name, rg, sub } }. An absent key means create new, so a greenfield deploy is unaffected by this parameter existing. Emitted by scripts/csa-loom/discover-purview-adopt-plan.sh and by lib/deploy/plan-to-arm.ts (LOOM_ADOPT_JSON).')
+param adopt object = {}
+
+// Safe accessors. An absent key, an absent target, or an absent field all
+// degrade to the create-new default rather than erroring — a partial plan is
+// always a valid plan.
+func adoptMode(a object, k string) string => a[?k].?mode ?? 'create'
+
+// The coordinate accessors are GATED ON MODE, exactly as in the Commercial
+// orchestrator. `union()` deep-merges, so a plan that says {purview:{mode:
+// 'create'}} layered over an older document can keep a stale `target`; handing
+// that name back would bind Loom to the customer's account WHILE ALSO creating
+// a new one. A coordinate is only ever surfaced for a decision that is actually
+// 'adopt'.
+func adoptName(a object, k string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?target.?name ?? '') : ''
+func adoptRg(a object, k string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?target.?rg ?? '') : ''
+func adoptSub(a object, k string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?target.?sub ?? '') : ''
+
 // ─── Variables ────────────────────────────────────────────────────────────────
 
 var baseName = toLower('${prefix}-${environment}')
@@ -236,8 +270,43 @@ module dataFactory 'modules/dataFactory.bicep' = if (deployDLZ) {
 }
 
 // ─── Data Management Landing Zone ────────────────────────────────────────────
+//
+// PURVIEW IS ADOPT-OR-CREATE, NOT CREATE (deploy-integrity.md R5, #3577).
+//
+// This module used to read `= if (deployDMLZ)`, i.e. "whenever the DMLZ is
+// requested, make a new Purview account". Purview account quota is per-TENANT
+// per-REGION and is 5, so on a tenant that already runs Purview — the normal
+// case in a sovereign boundary — that is not a preference, it is a wall:
+// deploy-gov.yml run 31917112453 was refused at preflight with
+// "The Tenant *** with 5 resources has surpassed its resource quota 5 for
+// resource type Account in usgovvirginia location."
+//
+// Both halves of R5's prohibition were live in that one line: had quota
+// allowed, it would have deployed a SIXTH account beside the customer's five;
+// because quota did not allow, it failed because one exists.
+//
+// `provisionPurview` is the suppression half of adopt-or-create and is byte-
+// identical in shape to the Commercial orchestrator's, so a reader who knows
+// one knows the other. `adoptPurview` is the binding half.
+var existingPurviewAccount = adoptName(adopt, 'purview')
+var existingPurviewRg = adoptRg(adopt, 'purview')
+var existingPurviewSub = adoptSub(adopt, 'purview')
 
-module purview 'modules/purview.bicep' = if (deployDMLZ) {
+var provisionPurview = deployDMLZ && adoptMode(adopt, 'purview') == 'create'
+
+// An adopt decision needs BOTH coordinates to be actionable: `resourceGroup(sub,
+// '')` is a deployment that cannot be submitted, so an adopt plan carrying a
+// name but no resource group must not reach ARM as a malformed scope. The
+// preflight (scripts/csa-loom/discover-purview-adopt-plan.sh) refuses to emit
+// such a plan; this condition is the template-side backstop, and its failure
+// mode is the pre-existing create path, never a broken deployment.
+var adoptPurview = deployDMLZ && adoptMode(adopt, 'purview') == 'adopt' && !empty(existingPurviewAccount) && !empty(existingPurviewRg)
+
+// The plan's `sub` is optional — an adopted account in THIS subscription is the
+// common case and omitting the field is how the plan says so.
+var existingPurviewSubEff = empty(existingPurviewSub) ? subscription().subscriptionId : existingPurviewSub
+
+module purview 'modules/purview.bicep' = if (provisionPurview) {
   name: '${baseName}-prv'
   scope: rgManagement
   params: {
@@ -247,6 +316,17 @@ module purview 'modules/purview.bicep' = if (deployDMLZ) {
     publicNetworkAccess: 'Disabled'
     managedResourceGroupName: 'rg-${baseName}-prv-managed'
     logAnalyticsId: logAnalytics.outputs.workspaceId
+  }
+}
+
+// BIND to the account the tenant already owns. Read-only: see the module header
+// for why it deliberately writes nothing to a resource Loom does not own.
+module purviewAdopted 'modules/purview-existing.bicep' = if (adoptPurview) {
+  name: '${baseName}-prv-adopt'
+  scope: resourceGroup(existingPurviewSubEff, existingPurviewRg)
+  params: {
+    name: existingPurviewAccount
+    expectedLocation: location
   }
 }
 
@@ -407,4 +487,24 @@ output databricksWorkspaceUrl string = (deployDLZ && databricks != null) ? datab
 output synapseWorkspaceUrl string = (deployDLZ && synapse != null) ? synapse!.outputs.workspaceUrl : ''
 output eventHubNamespace string = (deployStreaming && eventHub != null) ? eventHub!.outputs.namespaceName : ''
 output adxClusterUri string = (deployStreaming && adx != null) ? adx!.outputs.clusterUri : ''
-output purviewAccountName string = (deployDMLZ && purview != null) ? purview!.outputs.accountName : ''
+
+// ─── Purview binding — WHICH account, and HOW it got there ───────────────────
+// The MODE is emitted next to the name deliberately. An operator reading these
+// outputs can then tell an account Loom created from one it adopted, instead of
+// inferring it from a name that looks conventional — the mapping is recorded
+// and inspectable rather than guessed (auto-bind-by-default.md §2).
+output purviewAccountName string = (provisionPurview && purview != null)
+  ? purview!.outputs.accountName
+  : ((adoptPurview && purviewAdopted != null) ? purviewAdopted!.outputs.accountName : '')
+
+output purviewAccountId string = (provisionPurview && purview != null)
+  ? purview!.outputs.accountId
+  : ((adoptPurview && purviewAdopted != null) ? purviewAdopted!.outputs.accountId : '')
+
+@description('created | adopted | none. `none` means the DMLZ was requested but no account was created OR bound — read the deploy log, do not assume Purview is wired.')
+output purviewBindingMode string = provisionPurview ? 'created' : (adoptPurview ? 'adopted' : 'none')
+
+@description('The adopted account\'s ACTUAL region, read from ARM — not the region that was asked for. Empty when nothing was bound. A value different from the deployment location is a cross-region binding: workable (the Data Map is reached by account host) and disclosed rather than silently normalised.')
+output purviewAccountLocation string = (provisionPurview && purview != null)
+  ? location
+  : ((adoptPurview && purviewAdopted != null) ? purviewAdopted!.outputs.accountLocation : '')

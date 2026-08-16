@@ -153,3 +153,75 @@ test('a catalog the guard cannot parse THROWS rather than reporting ok', () => {
     /no catalog entries parsed/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// G1..G4 — the SOVEREIGN orchestrator.
+//
+// Every mutation below reproduces the state `deploy/bicep/gov/main.bicep` was
+// actually in before #3577, and each must go RED. Before these checks existed
+// the guard read one file and reported OK while the Gov orchestrator created a
+// Purview account unconditionally — a guard whose population excluded the
+// consumer that broke.
+// ---------------------------------------------------------------------------
+
+test('MUTATION: reverting the Gov purview module to `if (deployDMLZ)` goes RED', () => {
+  // Byte-for-byte the pre-#3577 line. This is the revert that reopens the
+  // per-tenant cap failure, and it is the single most important thing here.
+  const { problems } = withMutation(
+    'govBicep',
+    "module purview 'modules/purview.bicep' = if (provisionPurview) {",
+    "module purview 'modules/purview.bicep' = if (deployDMLZ) {",
+  );
+  assert.ok(
+    problems.some((p) => p.includes('modules/purview.bicep') && p.includes('provisionPurview')),
+    `expected the Gov creator-gate check to fail, got:\n${problems.join('\n')}`,
+  );
+});
+
+test('MUTATION: dropping the Gov adopt bag goes RED', () => {
+  const { problems } = withMutation('govBicep', 'param adopt object = {}', 'param adoptGone object = {}');
+  assert.ok(
+    problems.some((p) => p.includes('deploy/bicep/gov/main.bicep') && p.includes('param adopt object')),
+    `expected the Gov transport check to fail, got:\n${problems.join('\n')}`,
+  );
+});
+
+test('MUTATION: dropping the Gov suppression var goes RED', () => {
+  const { problems } = withMutation(
+    'govBicep',
+    "var provisionPurview = deployDMLZ && adoptMode(adopt, 'purview') == 'create'",
+    'var provisionPurview = deployDMLZ',
+  );
+  assert.ok(
+    problems.some((p) => p.includes('provisionPurview') && p.includes('adoptMode')),
+    `expected the Gov gate-expression check to fail, got:\n${problems.join('\n')}`,
+  );
+});
+
+test('MUTATION: suppressing the new account but binding NOTHING goes RED', () => {
+  // The subtle half. Gating the creator is only half of adopt-or-create: if the
+  // adopted account is never referenced, "adopt" silently means "no catalog at
+  // all" while every gate still reads green.
+  const { problems } = withMutation(
+    'govBicep',
+    "module purviewAdopted 'modules/purview-existing.bicep' = if (adoptPurview) {",
+    "module purviewAdopted 'modules/purview-disabled.bicep' = if (adoptPurview) {",
+  );
+  assert.ok(
+    problems.some((p) => p.includes('purview-existing.bicep') && p.includes('bind nothing')),
+    `expected the Gov binding check to fail, got:\n${problems.join('\n')}`,
+  );
+});
+
+test('the Gov checks are keyed to a REAL catalog entry, not a private list', () => {
+  // If someone removes `purview` from the catalog, the Gov checks must not go
+  // quietly green by finding nothing to check.
+  const { problems } = runChecks({
+    ...BASE,
+    catalog: BASE.catalog.replace("    key: 'purview',", "    key: 'purview-renamed',"),
+  });
+  assert.ok(
+    problems.some((p) => p.includes('GOV_SERVICE_KEYS') || p.includes("'purview' is not")),
+    `expected a loud failure when the catalog entry disappears, got:\n${problems.join('\n')}`,
+  );
+});

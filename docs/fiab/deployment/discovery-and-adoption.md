@@ -216,10 +216,22 @@ If that is not acceptable for a given production workspace, choose *create*.
 Deliberately decisive rather than heuristic:
 
 - **`adopt-required`** — the service is a tenant singleton and one exists.
-  Purview is the case: Azure permits one Enterprise Purview account per tenant
-  and deploying a second fails at ARM with `EnterpriseTenantAlreadyExists`. So
-  "create new" is not offered and then failed twenty minutes into a deploy — it
-  is disabled with the reason.
+  Purview is the case, and it is capped **two** independent ways:
+
+  | Cap | Scope | What ARM says when you hit it |
+  | --- | --- | --- |
+  | One **Enterprise-tier** account | per tenant | `EnterpriseTenantAlreadyExists` |
+  | **5 accounts** | per tenant, **per region** | `2005 - The Tenant … with 5 resources has surpassed its resource quota 5 for resource type Account in <region> location` |
+
+  Either way "create new" is not offered and then failed twenty minutes into a
+  deploy — it is disabled with the reason.
+
+  The second cap is the one that matters most in a sovereign boundary, and it
+  was measured the hard way: `deploy-gov.yml` run 31917112453 was refused at
+  preflight in `usgovvirginia` because the tenant already had five. A Gov tenant
+  that already runs Purview is the normal case, so on that path "create a new
+  one" was closer to always-broken than occasionally-broken. See
+  [Azure Government](#azure-government) below.
 - **`adopt`** — exactly one candidate, in the hub region.
 - **`create`** — everything else. One candidate in the *wrong* region says so
   and names both regions. Several candidates says so and does not guess: picking
@@ -456,6 +468,76 @@ subscription-agnostic and has no `LOOM_PURVIEW_SUB` wire.
 > which service, or Loom deployed a second one alongside yours. Every adoptable
 > service now has a `provision<Service>` variable that is `false` whenever the
 > plan says `adopt`.
+
+### Azure Government
+
+Everything above describes `platform/fiab/bicep/main.bicep`, the **Commercial**
+orchestrator. Azure Government has a second one — `deploy/bicep/gov/main.bicep`,
+which `deploy-gov.yml` submits — and it speaks the **same `adopt` bag**, keyed by
+the same service keys, so a plan produced for one is understood by the other with
+no translation.
+
+It did not always. Until #3577 the Gov orchestrator created a Purview account on
+`= if (deployDMLZ)` with no adopt path at all, so both halves of R5's prohibition
+were live in one line: had quota allowed it would have deployed a sixth account
+beside the customer's five, and because quota did not allow, it failed because
+five exist. `scripts/ci/check-adoption-catalog-sync.mjs` now reads **both**
+orchestrators — its population was one file while the repo had two.
+
+Coverage today is **Purview only** on the Gov path. The other services that
+orchestrator deploys (Synapse, Databricks, ADF, Event Hubs, ADX, storage) still
+create unconditionally there. That is a real R5 gap and it is tracked, not
+implied fixed — it is simply not deploy-blocking, because none of them carries a
+per-tenant cap the way Purview does.
+
+#### Greenfield (empty Gov subscription)
+
+Nothing to do. Discovery finds no Purview account, emits an **empty plan**, and
+`adoptMode()` defaults the key to `create` exactly as before. The greenfield path
+is byte-identical to its pre-#3577 behaviour.
+
+#### Brownfield (a tenant that already runs Purview)
+
+Also nothing to do — this is the point. Dispatch `deploy-gov.yml` and leave
+`purview_account` blank:
+
+1. **Discover** — `scripts/csa-loom/discover-purview-adopt-plan.sh` enumerates
+   `Microsoft.Purview/accounts` across every subscription the deployment identity
+   can read, using core `az resource list` (no CLI extension, no Resource Graph).
+2. **Present** — every candidate is printed with its region and subscription,
+   followed by what Loom would *change* about an adopted account. That list is
+   kept in step with the catalog's `mutations` array, so the operator reads it
+   **before** the deploy.
+3. **Choose** — an in-region account is preferred; failing that a cross-region
+   one, with the crossing disclosed (Purview's Data Map is reached by account
+   host, so cross-region works). The choice is **name-sorted**, not ARM list
+   order, so two runs over the same estate bind the same account.
+4. **Validate** — existence and real region are read from ARM. The template then
+   binds through `modules/purview-existing.bicep`, a read-only `existing`
+   reference that writes nothing to a resource Loom does not own.
+5. **Record** — the deployment outputs carry `purviewBindingMode`
+   (`created` / `adopted` / `none`), `purviewAccountName`, `purviewAccountId` and
+   `purviewAccountLocation`, so the binding is inspectable rather than inferred.
+
+| Want | Set |
+| --- | --- |
+| Discover and adopt automatically | `purview_account` blank *(default)* |
+| Bind a specific account | `purview_account = <name>` (+ `purview_account_rg` if it is outside the readable subscriptions) |
+| Force a brand-new account | `purview_account = NEW` |
+
+#### When it cannot succeed
+
+Asking for a new account in a region already holding five fails **before** ARM is
+called, with the region, the count, the limit, and the two real options — adopt
+one of the accounts it just listed, or raise the cap / pick another region.
+
+If the quota is consumed by accounts the deployment identity cannot *read*, the
+script says exactly that: its count is labelled a **lower bound**, not a tenant
+total, and it proceeds rather than asserting room it did not measure. ARM then
+refuses, and that refusal now classifies as `quota` — signal
+`quota.tenant-resource-quota` — carrying the same remediation. Before #3577 it
+classified as `defect` / not-remediable and told the operator to rebuild a
+template that was perfectly valid.
 
 ---
 
