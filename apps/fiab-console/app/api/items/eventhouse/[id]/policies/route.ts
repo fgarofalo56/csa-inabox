@@ -21,10 +21,43 @@
  * inline` low-latency path is live for that database. Both run here.
  *
  * Real backend, no mocks. Per .claude/rules/no-vaporware.md.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r (residual population). This route carried the
+ * advisory's exact shape and was not in the eight audited by #3600: `_ctx` was
+ * accepted and never read, `getSession()` was the only check, and
+ * `String(body?.database)` went straight into
+ * `.alter database ["<db>"] policy caching|retention|streamingingestion` as the
+ * Console's UAMI, which holds AllDatabasesAdmin on the shared ADX cluster.
+ *
+ * It is the most DESTRUCTIVE remaining instance, and worse than the DDL half of
+ * the original finding, because the retention policy is a DATA-LIFETIME control:
+ * `POST { database: '<victim>', softDeleteDays: 1 }` rewrites another tenant's
+ * `SoftDeletePeriod` to one day, and ADX then deletes everything older than that
+ * on its own schedule. No `.purge`, no `.drop`, no verification token — one
+ * request, and the data ages out. `hotCacheDays: 0` is the cheaper version:
+ * evict the whole hot cache and every query on that database falls to cold
+ * storage latency.
+ *
+ * Both layers of `_lib/adx-item-scope.ts` are applied, exactly as on the sibling
+ * `[id]/purge`: the caller is authorized against the eventhouse ITEM
+ * (WRITE-scoped — a policy change is a mutation, so `allowReadRoles` is NOT
+ * passed), and `database` must be inside that item's own workspace ADX scope or
+ * it is REFUSED (403), never silently substituted.
+ *
+ * KNOWN RESIDUAL, recorded rather than implied fixed. Two operations reachable
+ * from this file are CLUSTER-level ARM, not per-database, so item scope cannot
+ * bound their effect: `updateKustoStreamingIngest` (POST, when
+ * `enableStreamingIngest` is present) and `updateKustoClusterAutoscale` (PATCH).
+ * Both now require authorization against a real eventhouse item — strictly more
+ * than the `getSession()` they had — but any caller authorized for ANY
+ * eventhouse can still flip a cluster-wide flag. Raising those to
+ * `requireTenantAdmin` is the correct control and is deliberately NOT done here:
+ * it would remove the editor's Scale/Streaming dialogs from non-admin owners,
+ * which is a product decision needing its own receipt, and it is outside this
+ * advisory's class (neither takes a coordinate from the request).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { executeMgmtCommand, KustoError } from '@/lib/azure/kusto-client';
 import {
   updateKustoClusterAutoscale,
@@ -32,22 +65,36 @@ import {
   KustoArmError,
   KustoNotConfiguredError,
 } from '@/lib/azure/kusto-arm-client';
+import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const EVENTHOUSE_NOT_FOUND = 'eventhouse not found';
 
 function validIdent(s: string): boolean {
   return /^[A-Za-z0-9_][A-Za-z0-9_\-]{0,127}$/.test(s);
 }
 
-export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // LAYER 1 — WRITE-scoped: every branch below alters a policy or a cluster flag.
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'eventhouse',
+    notFound: EVENTHOUSE_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
 
   const body = await req.json().catch(() => ({}));
-  const database = String(body?.database || '').trim();
-  if (!database) return NextResponse.json({ ok: false, error: 'database required' }, { status: 400 });
-  if (!validIdent(database)) return NextResponse.json({ ok: false, error: 'invalid database name' }, { status: 400 });
+  const requested = String(body?.database || '').trim();
+  if (!requested) return NextResponse.json({ ok: false, error: 'database required' }, { status: 400 });
+  if (!validIdent(requested)) return NextResponse.json({ ok: false, error: 'invalid database name' }, { status: 400 });
+
+  // LAYER 2 — bind the policy target BEFORE any `.alter database` is built.
+  const scoped = await scopeAdxDatabase(guard.ctx.item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database = scoped.database;
 
   const hot = Number(body?.hotCacheDays);
   const soft = Number(body?.softDeleteDays);
@@ -164,10 +211,20 @@ export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
  * ARM rejects optimizedAutoscale on Dev(No SLA)/Basic-tier SKUs with HTTP 400;
  * that is surfaced as an honest 422 SKU gate per .claude/rules/no-vaporware.md.
  * Azure-native path — no Fabric workspace required.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r. Authorized against the eventhouse item rather
+ * than `getSession()` alone. See the file header: this verb is CLUSTER-scoped,
+ * so item authorization is a floor, not a bound — that residual is recorded
+ * there, not implied fixed.
  */
-export async function PATCH(req: NextRequest, _ctx: { params: { id: string } }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'eventhouse',
+    notFound: EVENTHOUSE_NOT_FOUND,
+  });
+  if (guard.res) return guard.res;
 
   const body = await req.json().catch(() => ({}));
   const as = body?.optimizedAutoscale;

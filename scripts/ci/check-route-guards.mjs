@@ -927,6 +927,42 @@ const NOW_GUARDED = new Set([
   // PUT on any database. Both now run the same item guard.
   'apps/fiab-console/app/api/items/gql-graph/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/eventhouse/[id]/ingest/route.ts',
+  // THIRD pass on the same advisory. #3600 fixed eight routes; the advisory
+  // stayed open because the MEASURED population is far larger, and these seven
+  // were in the unaudited remainder. All were sitting in
+  // SHARED_BACKEND_ITEM_ROUTES under the same false premise, and every one took
+  // its coordinate from the request as the Console UAMI:
+  //   eventhouse/[id]/policies          `.alter database policy retention` on any
+  //     database in the body — a DATA-LIFETIME rewrite, so `softDeleteDays: 1`
+  //     ages another tenant's data out with no `.purge` ever issued. The most
+  //     destructive instance left in the advisory.
+  //   eventhouse/[id]/continuous-export a STANDING export job: `database` +
+  //     `sourceTable` named the source and `body.adlsAccount` WON over the
+  //     configured account, so the destination was caller-chosen too. Plus
+  //     `.create-or-alter external table` / `function` DDL in bind mode.
+  //   eventhouse/[id]/journal           bound `params` and discarded it on
+  //     purpose; with no `?database` it ran cluster-wide `.show journal`, whose
+  //     `ChangeCommand` + `Principal` columns are a schema-and-identity map of
+  //     every tenant on the cluster.
+  //   graph-model/[id]/source-schema    the RECONNAISSANCE half of the primitive
+  //     #3600 fixed the consumer of: `.show databases` enumerated every database
+  //     on the cluster, then tables, then column schemas — exactly the
+  //     sourceDatabase/sourceTable/sourceColumn inputs `[id]/materialize` takes.
+  //   tapestry/[id]/{link,geo,timeline} the THIRD editor family over the same
+  //     materialized Node_*/Edge_* tables as graph-model and gql-graph, with the
+  //     identical `_ctx`-ignored / `body.database || defaultDatabase()` shape.
+  //
+  // Same reason as the two passes above for listing them here rather than
+  // leaving them allowlisted: they now run `guardAdxItemRequest` and resolve the
+  // database from the item, and dropping that must RE-FLAG rather than fall back
+  // to a class reason that was only ever true because nobody looked.
+  'apps/fiab-console/app/api/items/eventhouse/[id]/policies/route.ts',
+  'apps/fiab-console/app/api/items/eventhouse/[id]/continuous-export/route.ts',
+  'apps/fiab-console/app/api/items/eventhouse/[id]/journal/route.ts',
+  'apps/fiab-console/app/api/items/graph-model/[id]/source-schema/route.ts',
+  'apps/fiab-console/app/api/items/tapestry/[id]/link/route.ts',
+  'apps/fiab-console/app/api/items/tapestry/[id]/geo/route.ts',
+  'apps/fiab-console/app/api/items/tapestry/[id]/timeline/route.ts',
   // non-items routes fixed in the same sweep
   'apps/fiab-console/app/api/aml/environments/route.ts',
   'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',
