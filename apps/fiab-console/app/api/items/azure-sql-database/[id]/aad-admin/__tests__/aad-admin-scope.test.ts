@@ -76,7 +76,10 @@ describe('PUT /aad-admin — the privilege grant', () => {
 
   //   MUTATION: replace withBoundSqlServer with a bare `getSession()` prologue.
   it('404s a caller who does NOT own the item, setting NOTHING', async () => {
-    loadOwnedItemMock.mockResolvedValueOnce(null as any);
+    // mockResolvedValue, NOT ...Once: the wrapper tries EVERY type in
+    // SQL_EDITOR_ITEM_TYPES, so a single null is satisfied by the next candidate
+    // and this spec would silently stop testing not-owned.
+    loadOwnedItemMock.mockResolvedValue(null as any);
     const { PUT } = await import('../route');
     const r = await PUT(putReq({ server: sqlArm(FOREIGN, 'victim-srv'), ...ADMIN }), PARAMS);
     expect(r.status).toBe(404);

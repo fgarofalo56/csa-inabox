@@ -17,10 +17,12 @@
  * subscription — arguably the worst route in that advisory.
  *
  * NOW: {@link withBoundSqlServer} authorizes the caller against the `[id]` item
- * (the unified SQL editor addresses BOTH families through one
- * `azure-sql-database` item — see `unified-sql-database-editor.tsx`), resolves
- * the server from that item's bound connection, and admits it against the
- * governed subscription scope. A body server that names a different server is
+ * (the unified SQL editor addresses BOTH families through one item — see
+ * `unified-sql-database-editor.tsx` — and the `[id]` may be ANY of the three
+ * slugs registered to that editor, which is why the wrapper's default
+ * `SQL_EDITOR_ITEM_TYPES` is used rather than a single type), resolves the
+ * server from that item's bound connection, and admits it against the
+ * authorized subscription set. A body server that names a different server is
  * refused; the body can never CHOOSE the target.
  *
  * DATABASE, stated plainly: when the item's binding names a database the body

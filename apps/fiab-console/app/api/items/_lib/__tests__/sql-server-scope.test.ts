@@ -17,6 +17,8 @@ import {
   admitReplicaServer,
   admitBoundRoleAssignmentId,
   admitBoundServerChild,
+  admitBoundSqlTarget,
+  sqlAuthorizedSubscriptions,
   boundConnection,
   serverRefsMatch,
 } from '../sql-server-scope';
@@ -34,6 +36,7 @@ const ENV_KEYS = [
   'LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_SUBSCRIPTION_ID', 'LOOM_DLZ_SUB',
   'LOOM_ASA_SUB', 'LOOM_EVENTHUB_SUB', 'LOOM_AI_SEARCH_SUB', 'LOOM_FOUNDRY_SUB',
   'LOOM_KUSTO_SUB', 'LOOM_EXTRA_SUBSCRIPTIONS', 'LOOM_COST_SUBSCRIPTIONS',
+  'LOOM_SQL_AUTHORIZED_SUBSCRIPTIONS',
 ] as const;
 const saved: Record<string, string | undefined> = {};
 
@@ -278,8 +281,152 @@ describe('admitBoundServerChild — the restorable-dropped-database id', () => {
   });
 });
 
-describe('boundConnection / serverRefsMatch', () => {
-  it('reads the shape POST /connect persists, trimming', () => {
+describe('sqlAuthorizedSubscriptions — the authorization set is NOT the reporting set', () => {
+  // THE POINT, raised in review. `loomSubscriptionScope()` unions
+  // LOOM_EXTRA_SUBSCRIPTIONS / LOOM_COST_SUBSCRIPTIONS and five per-service
+  // *_SUB overrides, and admin-plane/main.bicep documents loomExtraSubscriptions
+  // as "extra subscription IDs to include in cross-subscription stream
+  // discovery". An operator adding a subscription so it appears in COST
+  // AGGREGATION must not thereby widen who can be scaled, restored or
+  // role-granted. Since this set is the one load-bearing layer of the module, it
+  // gets its own purpose-named input.
+  //   MUTATION: `const governed = loomSubscriptionScope();` in admitGovernedServer.
+  it.each([
+    ['LOOM_EXTRA_SUBSCRIPTIONS', 'LOOM_EXTRA_SUBSCRIPTIONS'],
+    ['LOOM_COST_SUBSCRIPTIONS', 'LOOM_COST_SUBSCRIPTIONS'],
+    ['LOOM_KUSTO_SUB', 'LOOM_KUSTO_SUB'],
+    ['LOOM_AI_SEARCH_SUB', 'LOOM_AI_SEARCH_SUB'],
+    ['LOOM_EVENTHUB_SUB', 'LOOM_EVENTHUB_SUB'],
+  ])('a reporting-only env var (%s) does NOT authorize a server', (_label, key) => {
+    process.env[key] = FOREIGN;
+    expect(sqlAuthorizedSubscriptions()).not.toContain(FOREIGN);
+    const r = admitGovernedServer(sqlId(FOREIGN), 'sql');
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.code).toBe('server_not_governed');
+  });
+
+  it('defaults to the admin + DLZ subscriptions only', () => {
+    expect(sqlAuthorizedSubscriptions().sort()).toEqual([GOVERNED, DLZ].sort());
+  });
+
+  // Widening must be an explicit, named act.
+  it('LOOM_SQL_AUTHORIZED_SUBSCRIPTIONS REPLACES the default when set', () => {
+    process.env.LOOM_SQL_AUTHORIZED_SUBSCRIPTIONS = FOREIGN;
+    expect(sqlAuthorizedSubscriptions()).toEqual([FOREIGN]);
+    expect(admitGovernedServer(sqlId(FOREIGN), 'sql').ok).toBe(true);
+    // …and the previous default is no longer authorized, so it is a REPLACEMENT,
+    // not a union — an operator narrowing the set actually narrows it.
+    expect(admitGovernedServer(sqlId(GOVERNED), 'sql').ok).toBe(false);
+  });
+});
+
+describe('admitBoundSqlTarget — Layer 3 for the query/copilot path (blocker 2)', () => {
+  const bound = (server: string, database = 'db') =>
+    ({ state: { connection: { family: 'azure-sql', server, database } } }) as any;
+
+  // THE CREDENTIAL-EGRESS PATH. `azure-sql-client.getPool` composes
+  // `server.includes('.') ? server : `${server}.${suffix}`` and then presents an
+  // Entra ACCESS TOKEN for the SQL scope to that host. Before this, the bound
+  // string was returned RAW, and `PATCH /api/items/[type]/[id]` writes state
+  // wholesale — so a caller could point /query at a host they control.
+  //   MUTATION: return the raw `boundConnection(item).server`.
+  it('REFUSES a binding that names an arbitrary external host — no token egress', () => {
+    const r = admitBoundSqlTarget(bound('attacker.example.com'), undefined, 'sql', { requireDatabase: true });
+    // Reduced to its first DNS label, which is not a routable external host —
+    // the TDS client can then only ever reach `<label>.<sql-suffix>`.
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.server).toBe('attacker');
+    expect(String(r.server)).not.toContain('.');
+  });
+
+  it('REFUSES an ARM-id binding in an unauthorized subscription', () => {
+    const r = admitBoundSqlTarget(bound(sqlId(FOREIGN)), undefined, 'sql', { requireDatabase: true });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.code).toBe('server_not_governed');
+  });
+
+  it('REFUSES a submitted ARM id in an unauthorized subscription, before comparing names', () => {
+    const r = admitBoundSqlTarget(bound('srv'), { server: sqlId(FOREIGN, 'srv') }, 'sql', { requireDatabase: true });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.code).toBe('server_not_governed');
+  });
+
+  it('keeps the #2723 refusals: unbound 409, server mismatch 403, database mismatch 403', () => {
+    const unbound = admitBoundSqlTarget({ state: {} } as any, undefined, 'sql', { requireDatabase: true });
+    expect(unbound.ok).toBe(false);
+    if (!unbound.ok) expect(unbound.code).toBe('no_bound_connection');
+
+    const srvMismatch = admitBoundSqlTarget(bound('srv'), { server: 'other' }, 'sql', { requireDatabase: true });
+    expect(srvMismatch.ok).toBe(false);
+    if (!srvMismatch.ok) expect(srvMismatch.code).toBe('server_mismatch');
+
+    const dbMismatch = admitBoundSqlTarget(bound('srv'), { database: 'other' }, 'sql', { requireDatabase: true });
+    expect(dbMismatch.ok).toBe(false);
+    if (!dbMismatch.ok) expect(dbMismatch.code).toBe('database_mismatch');
+  });
+
+  it('CONTROL: the owner still gets their bound pair', () => {
+    const r = admitBoundSqlTarget(bound('srv'), { server: 'srv', database: 'db' }, 'sql', { requireDatabase: true });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect([String(r.server), r.database]).toEqual(['srv', 'db']);
+  });
+});
+
+describe('exact-scope matching when the binding is a full ARM id', () => {
+  // Review: comparing by NAME is "as precise as the binding" only when the
+  // binding is a BARE NAME. With a full ARM id the subscription AND resource
+  // group are in hand, so a same-named server in a DIFFERENT resource group of
+  // an authorized subscription must not match.
+  //   MUTATION: use `serverRefsMatch(name, boundServer)` in parentScopeMatchesBinding.
+  const otherRg = `/subscriptions/${GOVERNED}/resourceGroups/rg-OTHER/providers/Microsoft.Sql/servers/srv`;
+
+  it('REFUSES a dropped-database id on a same-named server in another resource group', () => {
+    const r = admitBoundServerChild(
+      `${otherRg}/restorableDroppedDatabases/victim,1700000000000`,
+      sqlId(GOVERNED, 'srv'),
+      'sql',
+      'restorableDroppedDatabases',
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.code).toBe('child_out_of_scope');
+  });
+
+  it('REFUSES a role assignment on a same-named server in another resource group', () => {
+    const r = admitBoundRoleAssignmentId(
+      `${otherRg}/databases/db/providers/Microsoft.Authorization/roleAssignments/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`,
+      sqlId(GOVERNED, 'srv'),
+      'db',
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.code).toBe('assignment_out_of_scope');
+  });
+
+  it('CONTROL: the item’s OWN resource group still matches exactly', () => {
+    expect(admitBoundServerChild(
+      `${sqlId(GOVERNED, 'srv')}/restorableDroppedDatabases/x,1`,
+      sqlId(GOVERNED, 'srv'), 'sql', 'restorableDroppedDatabases',
+    ).ok).toBe(true);
+    expect(admitBoundRoleAssignmentId(
+      `${sqlId(GOVERNED, 'srv')}/databases/db/providers/Microsoft.Authorization/roleAssignments/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`,
+      sqlId(GOVERNED, 'srv'), 'db',
+    ).ok).toBe(true);
+  });
+
+  it('a BARE-NAME binding still matches by name — as precise as the binding is', () => {
+    expect(admitBoundServerChild(
+      `${otherRg}/restorableDroppedDatabases/x,1`, 'srv', 'sql', 'restorableDroppedDatabases',
+    ).ok).toBe(true);
+  });
+});
+
+describe('boundConnection / serverRefsMatch', () => {  it('reads the shape POST /connect persists, trimming', () => {
     expect(boundConnection({ state: { connection: { family: 'azure-sql', server: ' srv ', database: ' db ' } } } as any))
       .toEqual({ server: 'srv', database: 'db', family: 'azure-sql' });
   });

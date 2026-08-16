@@ -79,7 +79,10 @@ describe('POST /api/items/azure-sql-database/[id]/scale — server authorization
   // LAYER 1 — the caller must own the [id] item.
   //   MUTATION: replace withBoundSqlServer with a bare `getSession()` prologue.
   it('404s a caller who does NOT own the item, scaling NOTHING', async () => {
-    loadOwnedItemMock.mockResolvedValueOnce(null as any);
+    // mockResolvedValue, NOT ...Once: the wrapper tries EVERY type in
+    // SQL_EDITOR_ITEM_TYPES, so a single null is satisfied by the next candidate
+    // and this spec would silently stop testing not-owned.
+    loadOwnedItemMock.mockResolvedValue(null as any);
     const { POST } = await import('../route');
     const r = await POST(postReq({ server: foreignId, database: 'victim-db', ...SKU }), PARAMS);
     expect(r.status).toBe(404);

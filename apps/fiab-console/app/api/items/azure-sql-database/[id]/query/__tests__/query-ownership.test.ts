@@ -10,7 +10,7 @@
  * turns it red, plus a passing CONTROL. Session, item ownership, the rate
  * limiter, and the TDS executor are mocked — no cookies / Cosmos / TDS.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const OID = 'oid-owner';
@@ -166,5 +166,85 @@ describe('POST /api/items/azure-sql-database/[id]/query — authority binding (#
     const r = await POST(postReq({ server: 'bound-srv.database.windows.net', database: 'bound-db', sql: 'SELECT 2', requestId: 'r1' }), PARAMS);
     expect(r.status).toBe(200);
     expect(executeQueryBatchMock).toHaveBeenCalledWith('bound-srv', 'bound-db', 'SELECT 2', { requestId: 'r1' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GHSA-v8r7-c2p5-mjf2, second pass — LAYER 3 on the query/copilot path.
+//
+// #2723 gave this route Layer 1 (it owns its item) and Layer 2 (the target is
+// resolved from `state.connection`). Review established that Layer 2 is NOT a
+// boundary: `PATCH /api/items/[type]/[id]` replaces `state` wholesale with body
+// JSON, so the caller writes the value Layer 2 reads. This route was therefore
+// cited as the precedent for the whole fix while being unfixed itself.
+//
+// Downstream it is WORSE than the ARM routes. `azure-sql-client.getPool`
+// composes `server.includes('.') ? server : `${server}.${sqlHostSuffix()}`` and
+// presents an Entra ACCESS TOKEN for the SQL scope to that host — so a bound
+// external FQDN was arbitrary SQL *plus credential egress*.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('POST /query — subscription + host admission (GHSA-v8r7-c2p5-mjf2)', () => {
+  const GOVERNED = '11111111-1111-1111-1111-111111111111';
+  const FOREIGN = '99999999-9999-9999-9999-999999999999';
+  const sqlArm = (sub: string, name = 'srv') =>
+    `/subscriptions/${sub}/resourceGroups/rg-loom/providers/Microsoft.Sql/servers/${name}`;
+
+  let savedSub: string | undefined;
+  beforeEach(() => {
+    savedSub = process.env.LOOM_SUBSCRIPTION_ID;
+    process.env.LOOM_SUBSCRIPTION_ID = GOVERNED;
+  });
+  afterEach(() => {
+    if (savedSub === undefined) delete process.env.LOOM_SUBSCRIPTION_ID;
+    else process.env.LOOM_SUBSCRIPTION_ID = savedSub;
+  });
+
+  // THE CREDENTIAL-EGRESS RECEIPT. A caller PATCHes their own item's
+  // state.connection.server to a host they control, then runs a query.
+  //   MUTATION: return the raw bound string from resolveOwnedSqlTarget. → the
+  //   attacker host reaches executeQueryBatch, and from there getPool presents a
+  //   live SQL-scope token to it.
+  it('never lets a bound EXTERNAL host reach the TDS client — no token egress', async () => {
+    loadOwnedItemMock.mockResolvedValue({
+      ...OWNED_ITEM, state: { connection: { server: 'attacker.example.com', database: 'db' } },
+    } as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(200);
+    const target = executeQueryBatchMock.mock.calls.at(-1)?.[0] as string;
+    // Reduced to the first DNS label, so getPool can only ever compose
+    // `<label>.<sql-suffix>` — the attacker's host is unreachable from here.
+    expect(target).toBe('attacker');
+    expect(target).not.toContain('.');
+  });
+
+  //   MUTATION: as above.
+  it('403s a binding whose ARM id is in an unauthorized subscription, running NO SQL', async () => {
+    loadOwnedItemMock.mockResolvedValue({
+      ...OWNED_ITEM, state: { connection: { server: sqlArm(FOREIGN), database: 'db' } },
+    } as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('server_not_governed');
+    expect(executeQueryBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('403s a body ARM id for a SAME-NAMED server in an unauthorized subscription', async () => {
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ server: sqlArm(FOREIGN, 'srv'), database: 'db', sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('server_not_governed');
+    expect(executeQueryBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('CONTROL: an authorized ARM-id binding still executes, verbatim', async () => {
+    loadOwnedItemMock.mockResolvedValue({
+      ...OWNED_ITEM, state: { connection: { server: sqlArm(GOVERNED, 'srv'), database: 'db' } },
+    } as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(200);
+    expect(executeQueryBatchMock).toHaveBeenCalledWith(sqlArm(GOVERNED, 'srv'), 'db', 'SELECT 1', undefined);
   });
 });

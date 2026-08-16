@@ -80,9 +80,63 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
 import type { WorkspaceItem } from '@/lib/types/workspace';
-import { withWorkspaceOwner, type RouteHandler } from '@/lib/api/route-toolkit';
-import { apiError } from '@/lib/api/respond';
-import { loomSubscriptionScope } from '@/lib/azure/loom-subscriptions';
+import { withSession, type RouteHandler } from '@/lib/api/route-toolkit';
+import { apiError, apiNotFound } from '@/lib/api/respond';
+import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { adminSubscriptionId, dlzSubscriptionId } from '@/lib/azure/loom-subscriptions';
+
+/**
+ * The subscriptions a SQL / PostgreSQL binding may name — the AUTHORIZATION
+ * boundary, deliberately NOT `loomSubscriptionScope()`.
+ *
+ * WHY ITS OWN SET, changed in review. `loomSubscriptionScope()` is a REPORTING
+ * set: it unions `LOOM_EXTRA_SUBSCRIPTIONS`, `LOOM_COST_SUBSCRIPTIONS` and five
+ * per-service `*_SUB` overrides, and `admin-plane/main.bicep` documents
+ * `loomExtraSubscriptions` as "extra subscription IDs to include in
+ * cross-subscription stream discovery". An operator adding a subscription so it
+ * shows up in cost aggregation has no reason to expect they have just widened
+ * who can be scaled, restored, or role-granted. Since this set is the ONE
+ * load-bearing layer of this whole module, it must be governed by its own
+ * purpose-named input rather than inherit a reporting one.
+ *
+ * Default: the admin subscription plus the DLZ subscription — the two places a
+ * Loom-managed database actually lives. `LOOM_SQL_AUTHORIZED_SUBSCRIPTIONS`
+ * (comma-separated) REPLACES that default for estates whose databases live
+ * elsewhere, so widening is an explicit, named act.
+ */
+export function sqlAuthorizedSubscriptions(): string[] {
+  const explicit = (process.env.LOOM_SQL_AUTHORIZED_SUBSCRIPTIONS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (explicit.length) return Array.from(new Set(explicit));
+  const subs = new Set<string>();
+  for (const v of [adminSubscriptionId(), dlzSubscriptionId()]) {
+    if (v && v.trim()) subs.add(v.trim());
+  }
+  return Array.from(subs);
+}
+
+/**
+ * The item types that share `UnifiedSqlDatabaseEditor` (lib/editors/registry.ts)
+ * and therefore share these routes.
+ *
+ * WHY THIS EXISTS, found in review of the first pass. `postgres-flexible-server`
+ * is a REAL creatable slug — `searchOnly: true` hides it from browse but the
+ * search branch of `new-item-dialog.tsx` deliberately does NOT filter searchOnly,
+ * and `createItem` persists the picked slug verbatim. `sql-database` is
+ * `hiddenFromGallery` but pre-existing items still resolve. Defaulting the owner
+ * check to `azure-sql-database` alone therefore 404'd every route for those
+ * items — a REGRESSION, because pre-fix they were session-only and worked.
+ *
+ * Resolution tries each type, so an item of any of the three reaches its handler.
+ */
+export const SQL_EDITOR_ITEM_TYPES = [
+  'azure-sql-database',
+  'postgres-flexible-server',
+  'sql-database',
+] as const;
+
 
 /**
  * A server reference that has been RESOLVED FROM AN ITEM and ADMITTED by
@@ -149,28 +203,39 @@ function refuse(status: number, code: string, error: string): ScopeRefusal {
 }
 
 /**
- * Admit a server reference against the GOVERNED SUBSCRIPTION SCOPE.
+ * Admit a server reference against the AUTHORIZED SUBSCRIPTION SET.
  *
  * Accepts two forms, and only two:
  *
  *   1. A FULL ARM ID. Must be well-formed, must name `provider`'s exact
  *      namespace/type, and its subscription must appear in
- *      `loomSubscriptionScope()`. This is the form the advisory turns on: the
- *      clients all branch `ref.startsWith('/') ? ref : <compose from
+ *      {@link sqlAuthorizedSubscriptions}. This is the form the advisory turns
+ *      on: the clients all branch `ref.startsWith('/') ? ref : <compose from
  *      LOOM_SUBSCRIPTION_ID>`, so an ARM id skipped the subscription pin
  *      entirely and reached any subscription the UAMI held a role in.
  *
- *   2. A BARE SERVER NAME (or an FQDN, whose first DNS label is taken — the
- *      same first-label semantics `_bound-connection.ts::sqlHostsMatch` already
- *      uses, and the form the clients' `listServers()` lookup expects). A bare
- *      name carries NO subscription, so the clients resolve it by listing
- *      servers in `LOOM_SUBSCRIPTION_ID` — it is pinned by construction and
- *      cannot address another subscription.
+ *   2. A BARE SERVER NAME, or an FQDN whose first DNS label is taken.
  *
- * FAILS CLOSED when the governed set is empty (`LOOM_SUBSCRIPTION_ID` unset):
- * with no governed set there is nothing to admit against, so an ARM id is
- * refused rather than allowed. A bare name in that state still fails downstream
- * in the client with its existing `LOOM_SUBSCRIPTION_ID not set` error.
+ *      The bare-name case is pinned TIGHTER than this function's own set, and
+ *      that is worth stating because it is a real part of the guarantee:
+ *      `azure-sql-client.defaultServerScope` and
+ *      `postgres-flex-client.resolveScope` resolve a bare name by listing
+ *      servers in `LOOM_SUBSCRIPTION_ID` ONLY — not the DLZ subscription, not
+ *      any extra. So a bare binding cannot address a second subscription at all.
+ *
+ *      REDUCING AN FQDN TO ITS FIRST LABEL IS LOAD-BEARING, not cosmetic. The
+ *      TDS path composes `server.includes('.') ? server : <name>.<suffix>`
+ *      (`azure-sql-client.ts` getPool / :600 / :662) and then presents an Entra
+ *      ACCESS TOKEN for the SQL scope to whatever host that yields. A binding of
+ *      `attacker.example.com` would therefore egress a live credential. Taking
+ *      the first label means a bound value can only ever name a HOST IN THE
+ *      SQL SUFFIX for this cloud — which is why the routes in this module are
+ *      immune to that path even though the shared TDS client is not.
+ *
+ * FAILS CLOSED when the authorized set is empty: with no set there is nothing to
+ * admit against, so an ARM id is refused rather than allowed. A bare name in
+ * that state still fails downstream in the client with its existing
+ * `LOOM_SUBSCRIPTION_ID not set` error.
  */
 export function admitGovernedServer(ref: unknown, provider: SqlProviderKind): AdmittedServer {
   const raw = typeof ref === 'string' ? ref.trim() : '';
@@ -198,7 +263,7 @@ export function admitGovernedServer(ref: unknown, provider: SqlProviderKind): Ad
     if (!SERVER_NAME_RE.test(name)) {
       return refuse(400, 'malformed_server_id', 'The bound server name is not a valid Azure server name.');
     }
-    const governed = loomSubscriptionScope();
+    const governed = sqlAuthorizedSubscriptions();
     if (!governed.length) {
       return refuse(
         403,
@@ -289,8 +354,14 @@ export type BoundSqlHandler<P> = (
 ) => Promise<Response> | Response;
 
 export interface BoundSqlOpts {
-  /** Cosmos itemType of the route's `[id]`. Defaults to `azure-sql-database`. */
-  itemType?: string;
+  /**
+   * Cosmos itemTypes the route's `[id]` may name. Defaults to
+   * {@link SQL_EDITOR_ITEM_TYPES} — every slug that shares this editor — because
+   * defaulting to `azure-sql-database` alone 404s a `postgres-flexible-server`
+   * or `sql-database` item, which is a REGRESSION against the session-only
+   * behaviour these routes used to have.
+   */
+  itemTypes?: readonly string[];
   /** The ARM provider this route's backend speaks. */
   provider: SqlProviderKind;
   /** Read-only handlers opt in. Anything that mutates Azure must NOT pass it. */
@@ -303,7 +374,29 @@ export interface BoundSqlOpts {
   requireDatabase?: boolean;
 }
 
-const DEFAULT_ITEM_TYPE = 'azure-sql-database';
+/**
+ * Resolve the route `[id]` as an item the CALLER OWNS, across the item types
+ * that share this editor. Returns the first type that resolves, or null.
+ *
+ * Runs the exact `loadOwnedItem(id, type, oid, { session })` owner /
+ * workspace-ACL check per candidate — the same check `withWorkspaceOwner` runs,
+ * threaded with the session so the cross-tenant `tid` boundary evaluates from
+ * claims (#2703) rather than the ambient cookie. A type that does not match
+ * simply returns null, so trying several cannot widen access: every candidate is
+ * owner-scoped independently.
+ */
+export async function loadOwnedSqlItem(
+  id: string,
+  session: SessionPayload,
+  itemTypes: readonly string[],
+  opts: { allowReadRoles?: boolean } = {},
+): Promise<WorkspaceItem | null> {
+  for (const itemType of itemTypes) {
+    const item = await loadOwnedItem(id, itemType, session.claims.oid, { ...opts, session });
+    if (item) return item;
+  }
+  return null;
+}
 
 /**
  * Session → item ownership → the item's bound server → admission against the
@@ -326,9 +419,16 @@ export function withBoundSqlServer<P extends { id: string } = { id: string }>(
   opts: BoundSqlOpts,
   handler: BoundSqlHandler<P>,
 ): RouteHandler<P> {
-  const itemType = opts.itemType ?? DEFAULT_ITEM_TYPE;
+  const itemTypes = opts.itemTypes ?? SQL_EDITOR_ITEM_TYPES;
   const ownerOpts = opts.allowReadRoles ? { allowReadRoles: true } : {};
-  return withWorkspaceOwner<P>(itemType, ownerOpts, async (req, ctx) => {
+  return withSession<P>(async (req, sctx) => {
+    const id = (sctx.params as { id?: string })?.id;
+    if (!id) return apiNotFound();
+    const item = await loadOwnedSqlItem(id, sctx.session, itemTypes, ownerOpts);
+    // 404-not-403, the same behaviour `withWorkspaceOwner` uses, so an id cannot
+    // be probed for existence across tenants.
+    if (!item) return apiNotFound();
+    const ctx = { session: sctx.session, params: sctx.params, item };
     const body =
       req.method === 'GET' || req.method === 'HEAD'
         ? {}
@@ -388,7 +488,8 @@ export function withBoundSqlServer<P extends { id: string } = { id: string }>(
         403,
         { code: 'server_mismatch' },
       );
-    }    if (
+    }
+    if (
       bound.database &&
       submittedDatabase.trim() &&
       submittedDatabase.trim().toLowerCase() !== bound.database.toLowerCase()
@@ -412,6 +513,66 @@ export function withBoundSqlServer<P extends { id: string } = { id: string }>(
 }
 
 /**
+ * The admitted server + database for a route that has ALREADY loaded its owned
+ * item itself, rather than through {@link withBoundSqlServer}.
+ *
+ * WHY THIS EXISTS — the gap review found. `azure-sql-database/[id]/query` and
+ * `[id]/copilot` were fixed by #2723 and were cited as the precedent for this
+ * whole module, so they were assumed done and were NOT in the advisory's 19.
+ * They carry Layer 1 (they own their item) and Layer 2 (`resolveOwnedSqlTarget`
+ * resolves from `state.connection`) — but they had NO Layer 3, and by this
+ * module's own thesis Layer 2 is not a boundary: `PATCH /api/items/[type]/[id]`
+ * replaces `state` wholesale, so the caller writes the value Layer 2 reads.
+ *
+ * Downstream they are WORSE than the ARM routes. `azure-sql-client.getPool`
+ * composes `server.includes('.') ? server : `${server}.${sqlHostSuffix()}`` and
+ * then presents an Entra ACCESS TOKEN for the SQL scope to that host, so a bound
+ * `attacker.example.com` is arbitrary SQL *plus credential egress*. Running the
+ * binding through {@link admitGovernedServer} closes it: an FQDN is reduced to
+ * its first label, so no bound value can name a host outside the cloud's SQL
+ * suffix, and an ARM id must be in {@link sqlAuthorizedSubscriptions}.
+ */
+export type AdmittedSqlTarget =
+  | { ok: true; server: ScopedSqlServer; database: string }
+  | ScopeRefusal;
+
+export function admitBoundSqlTarget(
+  item: Pick<WorkspaceItem, 'state'> | null | undefined,
+  submitted: { server?: unknown; database?: unknown } | undefined,
+  provider: SqlProviderKind,
+  opts: { requireDatabase?: boolean } = {},
+): AdmittedSqlTarget {
+  const bound = boundConnection(item);
+  if (!bound.server || (opts.requireDatabase && !bound.database)) {
+    return refuse(
+      409,
+      'no_bound_connection',
+      'This SQL item has no bound connection. Open the Connect tab and bind a server and database before running queries.',
+    );
+  }
+
+  const admitted = admitGovernedServer(bound.server, provider);
+  if (!admitted.ok) return admitted;
+
+  const subServer = typeof submitted?.server === 'string' ? submitted.server.trim() : '';
+  const subDatabase = typeof submitted?.database === 'string' ? submitted.database.trim() : '';
+
+  // Admit the SUBMITTED value before comparing it — a name-only comparison
+  // admits a same-named server in an unauthorized subscription.
+  if (subServer) {
+    const admittedSubmitted = admitGovernedServer(subServer, provider);
+    if (!admittedSubmitted.ok) return admittedSubmitted;
+  }
+  if (subServer && !serverRefsMatch(subServer, bound.server)) {
+    return refuse(403, 'server_mismatch', 'The requested server does not match this item’s bound connection.');
+  }
+  if (subDatabase && bound.database && subDatabase.toLowerCase() !== bound.database.toLowerCase()) {
+    return refuse(403, 'database_mismatch', 'The requested database does not match this item’s bound connection.');
+  }
+  return { ok: true, server: admitted.server, database: bound.database };
+}
+
+/**
  * Admit a SECOND, caller-chosen server coordinate — currently only
  * `replication`'s `replicaServer`, the destination of a geo-secondary.
  *
@@ -420,7 +581,7 @@ export function withBoundSqlServer<P extends { id: string } = { id: string }>(
  * id sent as the replica pointed an ARM PUT at any subscription. Unlike the
  * primary this one is a legitimate user PICK (you choose where the replica
  * lands), so it cannot be resolved from the item — it is admitted against the
- * governed subscription scope instead, which is the same Layer 3 control.
+ * authorized subscription set instead, which is the same Layer 3 control.
  */
 export function admitReplicaServer(ref: unknown, provider: SqlProviderKind): AdmittedServer {
   const admitted = admitGovernedServer(ref, provider);
@@ -435,6 +596,28 @@ const SERVER_CHILD_ID_RE =
   /^\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/([^/]+\/[^/]+)\/([^/]+)\/([^/]+)\/([^/]+)$/i;
 
 export type AdmittedChild = { ok: true; id: string } | ScopeRefusal;
+
+/**
+ * Does `parentScope` (a full `…/servers/<name>` ARM scope) name the SAME server
+ * as the item's binding?
+ *
+ * TIGHTER WHEN THE BINDING IS AN ARM ID, per review. Comparing by NAME is only
+ * "as precise as the bare name itself" when the binding IS a bare name — a bare
+ * name genuinely carries no subscription or resource group, so name equality
+ * plus the authorized-subscription pin is all the information there is. When the
+ * binding is a FULL ARM ID the exact subscription AND resource group are in
+ * hand, and throwing them away would admit a same-named server in a *different
+ * resource group of an authorized subscription*. So an ARM-id binding is
+ * compared exactly, and only a bare-name binding falls back to name equality.
+ */
+function parentScopeMatchesBinding(parentScope: string, boundServer: string): boolean {
+  const bound = boundServer.trim();
+  if (bound.startsWith('/')) {
+    return parentScope.trim().toLowerCase() === bound.toLowerCase();
+  }
+  const name = parentScope.trim().split('/').pop() || '';
+  return serverRefsMatch(name, bound);
+}
 
 /**
  * Admit a CHILD-resource ARM id against the item's bound server.
@@ -471,13 +654,12 @@ export function admitBoundServerChild(
   if (!SERVER_NAME_RE.test(serverName) || !childName) {
     return refuse(400, 'malformed_child_id', `${childType} id is not a well-formed Azure resource id.`);
   }
-  if (!serverRefsMatch(serverName, boundServer)) {
+  const parent = raw.replace(new RegExp(`/${child}/[^/]+$`, 'i'), '');
+  if (!parentScopeMatchesBinding(parent, boundServer)) {
     return refuse(403, 'child_out_of_scope', `That ${childType} is not on this item’s bound server.`);
   }
-  // The server segment matched by NAME; re-run the governed-subscription pin on
-  // the parent scope so a same-named server in an ungoverned subscription is
-  // still refused.
-  const parent = raw.replace(new RegExp(`/${child}/[^/]+$`, 'i'), '');
+  // A bare-name binding matched by NAME only, so re-run the subscription pin on
+  // the parent scope; an ARM-id binding was already compared exactly.
   const admitted = admitGovernedServer(parent, provider);
   if (!admitted.ok) return admitted;
   return { ok: true, id: raw };
@@ -499,10 +681,10 @@ export type AdmittedAssignment = { ok: true; assignmentId: string } | ScopeRefus
  * DELETE handler is scoped here rather than left on session-only.
  *
  * Checked as a STRING against the bound coordinates (no ARM round-trip): the
- * assignment's scope must be the bound server's database scope. Accepts the
- * bound server in either form — when the binding is a bare name the server
- * segment is compared by name, which is exactly as precise as the bare name
- * itself is (it resolves within `LOOM_SUBSCRIPTION_ID`).
+ * assignment's scope must be the bound server's database scope. When the binding
+ * is a FULL ARM ID the server scope is compared EXACTLY (subscription + resource
+ * group + name), because all of that is in hand; only a bare-name binding falls
+ * back to name equality, where it is genuinely as precise as the binding itself.
  */
 export function admitBoundRoleAssignmentId(
   assignmentId: unknown,
@@ -516,16 +698,16 @@ export function admitBoundRoleAssignmentId(
     return refuse(400, 'malformed_assignment_id', 'assignmentId is not a well-formed role-assignment resource id.');
   }
   const scope = m[1];
-  const dbScope = /\/providers\/Microsoft\.Sql\/servers\/([^/]+)\/databases\/([^/]+)$/i.exec(scope);
-  if (!dbScope) {
+  const dbScope = /^(.*)\/databases\/([^/]+)$/i.exec(scope);
+  if (!dbScope || !/\/providers\/Microsoft\.Sql\/servers\/[^/]+$/i.test(dbScope[1])) {
     return refuse(
       403,
       'assignment_out_of_scope',
       'This surface revokes role assignments on its own database scope only.',
     );
   }
-  const [, server, database] = dbScope;
-  const sameServer = serverRefsMatch(server, boundServer);
+  const [, serverScope, database] = dbScope;
+  const sameServer = parentScopeMatchesBinding(serverScope, boundServer);
   const sameDatabase = decodeURIComponent(database).toLowerCase() === boundDatabase.trim().toLowerCase();
   if (!sameServer || !sameDatabase) {
     return refuse(
@@ -534,7 +716,7 @@ export function admitBoundRoleAssignmentId(
       'That role assignment is not on this item’s bound database.',
     );
   }
-  // Belt and braces: the assignment's own subscription must also be governed.
+  // Belt and braces: the assignment's own subscription must also be authorized.
   const admitted = admitGovernedServer(
     scope.replace(/\/databases\/[^/]+$/i, ''),
     'sql',

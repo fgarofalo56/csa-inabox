@@ -88,7 +88,10 @@ describe('POST /api/items/postgres-flexible-server/[id]/query — server authori
 
   //   MUTATION: replace withBoundSqlServer with a bare `getSession()` prologue.
   it('404s a caller who does NOT own the item, running NO SQL', async () => {
-    loadOwnedItemMock.mockResolvedValueOnce(null as any);
+    // mockResolvedValue, NOT ...Once: the wrapper tries EVERY type in
+    // SQL_EDITOR_ITEM_TYPES, so a single null is satisfied by the next candidate
+    // and this spec would silently stop testing not-owned.
+    loadOwnedItemMock.mockResolvedValue(null as any);
     const { POST } = await import('../route');
     const r = await POST(postReq({ server: pgArm(FOREIGN), database: 'victim', sql: 'SELECT * FROM secrets' }), PARAMS);
     expect(r.status).toBe(404);
@@ -218,6 +221,53 @@ describe('POST /api/items/postgres-flexible-server/[id]/query — server authori
     const { POST } = await import('../route');
     const r = await POST(postReq({}), PARAMS);
     expect(r.status).toBe(400);
+    expect(executePostgresQueryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/items/postgres-flexible-server/[id]/query — item TYPE resolution', () => {
+  // REGRESSION FOUND IN REVIEW. `postgres-flexible-server` is a REAL creatable
+  // slug: `searchOnly:true` hides it from browse, but the search branch of
+  // `new-item-dialog.tsx` deliberately does NOT filter searchOnly, and
+  // `createItem` persists the picked slug verbatim. `sql-database` items also
+  // exist (hiddenFromGallery, but pre-existing ones still resolve). All three
+  // are registered to `UnifiedSqlDatabaseEditor`.
+  //
+  // Defaulting the owner check to `azure-sql-database` alone 404'd every one of
+  // them — and PRE-FIX this route was session-only and WORKED for them, so that
+  // is a regression this PR would have introduced. No test covered it, and there
+  // was no browser receipt, which is exactly how it survived the first pass.
+  //   MUTATION: `{ provider: 'postgres', itemTypes: ['azure-sql-database'] }`.
+  it.each([
+    ['postgres-flexible-server'],
+    ['sql-database'],
+  ])('a %s item reaches the handler and queries its bound server', async (itemType) => {
+    // loadOwnedItem resolves ONLY for this item's real type — the azure-sql
+    // attempt returns null, exactly as it would in Cosmos.
+    loadOwnedItemMock.mockImplementation(async (...a: any[]) =>
+      (a[1] === itemType
+        ? { ...OWNED_ITEM, itemType }
+        : null) as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(200);
+    expect(getServerMock).toHaveBeenCalledWith('pgsrv');
+    expect(executePostgresQueryMock).toHaveBeenCalledWith(
+      'pgsrv.postgres.database.azure.com', 'appdb', 'SELECT 1',
+    );
+  });
+
+  it('every candidate type is resolved OWNER-scoped — trying several cannot widen access', async () => {
+    loadOwnedItemMock.mockResolvedValue(null as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(404);
+    // Each attempt passed the caller's own oid + the session (the #2703 tid
+    // boundary), so a foreign item resolves for NONE of them.
+    for (const call of loadOwnedItemMock.mock.calls) {
+      expect(call[2]).toBe(OID);
+      expect((call[3] as any)?.session?.claims?.oid).toBe(OID);
+    }
     expect(executePostgresQueryMock).not.toHaveBeenCalled();
   });
 });

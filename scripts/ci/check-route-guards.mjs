@@ -591,7 +591,6 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/apim-product/[id]/apis/route.ts',
   'apps/fiab-console/app/api/items/apim-product/[id]/route.ts',
   'apps/fiab-console/app/api/items/apim-product/[id]/subscriptions/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/aad-admin/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/create-db/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/firewall/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/get-data/route.ts',
@@ -599,12 +598,7 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/performance/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/principal-search/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/cancel/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/replication/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/restore/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/scale/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/search-management/route.ts',
-  'apps/fiab-console/app/api/items/azure-sql-database/[id]/share/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/sql2025-features/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-server/[id]/databases/route.ts',
   'apps/fiab-console/app/api/items/compute/[id]/route.ts',
@@ -747,7 +741,6 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/paginated-report/[id]/route.ts',
   'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/databases/route.ts',
   'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/firewall/route.ts',
-  'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/definition/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/route.ts',
   'apps/fiab-console/app/api/items/power-automate-flow/[id]/run/route.ts',
@@ -1079,12 +1072,30 @@ const NOW_GUARDED = new Set([
   //
   // The REST of both families is untouched and still allowlisted — see the
   // advisory's triage table. This is a partial fix with an honest ledger.
+  //
+  // Their stale `SHARED_BACKEND_ITEM_ROUTES` entries were DELETED in the same
+  // change rather than left to lose a race. NOW_GUARDED wins over the allowlist
+  // today, so the entries were inert — but the stale entry IS the mask the 2x2
+  // probe demonstrates (guard stripped + entry deleted → violations: 0), and it
+  // re-arms silently if that block is ever edited. Two records of the same fact,
+  // one of which is wrong, is the shape this checker exists to catch.
   'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/share/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/aad-admin/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/restore/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/replication/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/scale/route.ts',
+  // Second pass on the same advisory. `[id]/query` and `[id]/copilot` were fixed
+  // by #2723 and were cited as the PRECEDENT for the whole module, so they were
+  // assumed done and were not in the advisory's 19. Review established they
+  // carried Layer 1 + Layer 2 only: `resolveOwnedSqlTarget` returned the RAW
+  // bound string, and `PATCH /api/items/[type]/[id]` writes that string
+  // wholesale. Downstream they are worse than the ARM routes — `getPool`
+  // composes `server.includes('.') ? server : <name>.<suffix>` and presents an
+  // Entra ACCESS TOKEN to the result, so a bound external FQDN was arbitrary SQL
+  // plus credential egress. Both now resolve through `admitBoundSqlTarget`.
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/copilot/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
@@ -1832,17 +1843,33 @@ const GUARD_WRAPPERS = [
     //     return handler(req, { …, server: bound.server as ScopedSqlServer });
     // — which reinstates the whole advisory with the checker green. Pinning
     // `server: admitted.server` asserts that what reaches the handler is the
-    // ADMITTED value, and pinning the `withWorkspaceOwner` composition asserts
-    // Layer 1 is still there. A refactor that legitimately renames either binding
-    // must update this line; that cost is the point.
+    // ADMITTED value; pinning `loadOwnedSqlItem` asserts Layer 1 is still there.
+    //
+    // THIS BLOCK EARNED ITS KEEP: the second-pass refactor (multi-item-type
+    // resolution, so a `postgres-flexible-server` item stops 404ing) replaced
+    // `withWorkspaceOwner` with `withSession` + `loadOwnedSqlItem`, and this
+    // check FAILED the run rather than letting the pin rot into a name that no
+    // longer describes the code.
     name: 'withBoundSqlServer',
     file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'sql-server-scope.ts'),
     exportKind: 'function',
     mustCall: [
-      'withWorkspaceOwner\\s*(?:<[^()]*>)?\\s*\\(',
+      'withSession\\s*(?:<[^()]*>)?\\s*\\(',
+      'loadOwnedSqlItem\\s*\\(',
       'admitGovernedServer\\s*\\(\\s*bound\\.server\\s*,',
       'server:\\s*admitted\\.server',
     ],
+  },
+  {
+    // The owner-resolution half of the wrapper above, asserted separately
+    // because `withBoundSqlServer` now delegates Layer 1 to it: if this stops
+    // running the canonical `loadOwnedItem` check — or stops threading the
+    // caller's own oid — every route in the family is unauthorized while the
+    // wrapper still looks intact.
+    name: 'loadOwnedSqlItem',
+    file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'sql-server-scope.ts'),
+    exportKind: 'async-function',
+    mustCall: ['loadOwnedItem\\s*\\(\\s*id\\s*,\\s*itemType\\s*,\\s*session\\.claims\\.oid\\s*,'],
   },
   // C22 (#3088) — the route-toolkit wrappers are guard signals too, and they
   // are the SAME hazard one level up: a route adopting `withTenantAdmin` is

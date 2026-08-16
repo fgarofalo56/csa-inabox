@@ -40,6 +40,14 @@
  *
  * `targetDatabase` stays caller-chosen: it is the NEW database's name, created
  * on the pinned server, which is the feature.
+ *
+ * A FOURTH coordinate exists and is NOT pinned here, stated rather than left to
+ * be discovered: GET `?mode=status&op=<asyncOperationUrl>` forwards that URL to
+ * `getRestoreOperationStatus`, which polls it directly. It is bounded by that
+ * function's own SSRF guard — the URL's origin must equal the configured
+ * sovereign ARM host — so it cannot leave ARM, and it returns only an LRO status
+ * document. It is a genuine residual (an LRO id for an operation on another
+ * subscription could be polled), not a claim of completeness.
  */
 import { apiOk, apiError, apiHonestError, apiServerError } from '@/lib/api/respond';
 import {

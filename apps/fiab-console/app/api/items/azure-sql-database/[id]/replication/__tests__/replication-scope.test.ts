@@ -71,7 +71,10 @@ describe('POST /replication — the PRIMARY coordinate', () => {
 
   //   MUTATION: replace withBoundSqlServer with a bare `getSession()` prologue.
   it('404s a caller who does NOT own the item, replicating NOTHING', async () => {
-    loadOwnedItemMock.mockResolvedValueOnce(null as any);
+    // mockResolvedValue, NOT ...Once: the wrapper tries EVERY type in
+    // SQL_EDITOR_ITEM_TYPES, so a single null is satisfied by the next candidate
+    // and this spec would silently stop testing not-owned.
+    loadOwnedItemMock.mockResolvedValue(null as any);
     const { POST } = await import('../route');
     const r = await POST(postReq({ server: sqlArm(FOREIGN), database: 'victim-db', ...GEO }), PARAMS);
     expect(r.status).toBe(404);
@@ -99,6 +102,41 @@ describe('POST /replication — the PRIMARY coordinate', () => {
     const r = await POST(postReq({ database: 'victim-db', ...GEO }), PARAMS);
     expect(r.status).toBe(403);
     expect((await r.json()).code).toBe('database_mismatch');
+    expect(enableReplicationMock).not.toHaveBeenCalled();
+  });
+
+  // COVERAGE GAP FOUND IN REVIEW. Deleting the wrapper's submitted-value
+  // admission turned 12 specs red across aad-admin / restore / scale / share /
+  // query — and ZERO here, because this file's ungoverned specs all target
+  // `replicaServer` and its mismatch spec uses a GOVERNED, differently-named
+  // server. The wrapper did enforce it; the receipt just claimed coverage this
+  // file did not have. This is that spec.
+  //   MUTATION: delete the `admitGovernedServer(submittedServer, …)` block in
+  //   withBoundSqlServer. → this 403 becomes a 200.
+  it('403s a body PRIMARY ARM id for a SAME-NAMED server in an ungoverned subscription', async () => {
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ server: sqlArm(FOREIGN, 'srv'), database: 'db', ...GEO }), PARAMS);
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('server_not_governed');
+    expect(enableReplicationMock).not.toHaveBeenCalled();
+  });
+
+  it('403s a body PRIMARY ARM id in an ungoverned subscription', async () => {
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ server: sqlArm(FOREIGN, 'other'), database: 'db', ...GEO }), PARAMS);
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('server_not_governed');
+    expect(enableReplicationMock).not.toHaveBeenCalled();
+  });
+
+  it('403s an item BOUND to an ungoverned server even when the body agrees', async () => {
+    loadOwnedItemMock.mockResolvedValue({
+      ...OWNED_ITEM, state: { connection: { server: sqlArm(FOREIGN), database: 'db' } },
+    } as any);
+    const { POST } = await import('../route');
+    const r = await POST(postReq({ server: sqlArm(FOREIGN), database: 'db', ...GEO }), PARAMS);
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('server_not_governed');
     expect(enableReplicationMock).not.toHaveBeenCalled();
   });
 
