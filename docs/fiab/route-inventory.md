@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1679 |
 | Public (no session) | 104 |
-| Session-only | 541 |
-| Owner-scoped | 734 |
+| Session-only | 535 |
+| Owner-scoped | 740 |
 | Admin | 300 |
 | Gated (backend config) | 495 |
 | Areas | 122 |
@@ -1267,7 +1267,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-notebook/[id]/ensure-cluster/route.ts` | POST | owner-scoped | ● | Databricks |
 | `items/databricks-notebook/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/run/route.ts` | POST | owner-scoped |  | Databricks |
-| `items/databricks-notebook/[id]/runs/route.ts` | GET | session-only |  | Databricks |
+| `items/databricks-notebook/[id]/runs/route.ts` | GET | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/schedule/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | Databricks |
 | `items/databricks-notebook/[id]/versions/route.ts` | GET POST | owner-scoped | ● | Cosmos |
 | `items/databricks-notebook/list/route.ts` | GET | session-only |  | Databricks |
@@ -1337,13 +1337,13 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/event-schema-set/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/eventhouse/[id]/capacity/route.ts` | GET POST | session-only | ● | ADX, Azure Monitor |
 | `items/eventhouse/[id]/continuous-export/route.ts` | GET POST | session-only |  | ADLS, ADX |
-| `items/eventhouse/[id]/database/route.ts` | POST DELETE | session-only |  | ADX, ADX ARM |
+| `items/eventhouse/[id]/database/route.ts` | POST DELETE | owner-scoped |  | ADX, ADX ARM |
 | `items/eventhouse/[id]/ingest/preview/route.ts` | POST | session-only |  | — |
 | `items/eventhouse/[id]/ingest/route.ts` | POST | session-only |  | ADX |
 | `items/eventhouse/[id]/journal/route.ts` | GET | session-only |  | ADX |
 | `items/eventhouse/[id]/overview/route.ts` | GET | session-only |  | ADX, ADX ARM, Azure Monitor |
 | `items/eventhouse/[id]/policies/route.ts` | POST PATCH | session-only |  | ADX, ADX ARM |
-| `items/eventhouse/[id]/purge/route.ts` | GET POST | session-only |  | ADX |
+| `items/eventhouse/[id]/purge/route.ts` | GET POST | owner-scoped |  | ADX |
 | `items/eventhouse/[id]/route.ts` | GET | session-only |  | ADX, ADX ARM |
 | `items/eventstream/[id]/activator/route.ts` | GET POST | owner-scoped | ● | Azure Monitor, Cosmos |
 | `items/eventstream/[id]/asa-sync/route.ts` | POST | owner-scoped |  | ADX, Stream Analytics |
@@ -1375,8 +1375,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/gql-graph/[id]/assist/route.ts` | — | public |  | — |
 | `items/gql-graph/[id]/query/route.ts` | POST | session-only | ● | ADX |
 | `items/gql-graph/route.ts` | GET POST | owner-scoped |  | — |
-| `items/graph-model/[id]/materialize/route.ts` | POST | session-only | ● | ADX |
-| `items/graph-model/[id]/query/route.ts` | POST | session-only | ● | ADX |
+| `items/graph-model/[id]/materialize/route.ts` | POST | owner-scoped | ● | ADX |
+| `items/graph-model/[id]/query/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/graph-model/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/graph-model/[id]/source-schema/route.ts` | GET | session-only | ● | ADX |
 | `items/graph-model/route.ts` | GET POST | owner-scoped |  | — |
@@ -1417,7 +1417,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/lakehouse-shortcut/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, Cosmos, Key Vault, Synapse SQL |
 | `items/lakehouse/[id]/abfss/route.ts` | GET | session-only |  | — |
 | `items/lakehouse/[id]/assist/route.ts` | — | public |  | — |
-| `items/lakehouse/[id]/query/route.ts` | POST | session-only | ● | Synapse SQL |
+| `items/lakehouse/[id]/query/route.ts` | POST | owner-scoped | ● | Synapse SQL |
 | `items/lakehouse/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/linked-service/route.ts` | — | public |  | — |
 | `items/logic-app/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |

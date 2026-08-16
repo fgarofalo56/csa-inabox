@@ -871,13 +871,19 @@ export interface JobRun {
   cleanup_duration?: number;
   trigger?: string;
   creator_user_name?: string;
+  /** Tasks — on `runs/get`, and on `runs/list` only with `expand_tasks`. Its
+   *  `notebook_task.notebook_path` is the ONLY run-to-notebook attribution. */
+  tasks?: Array<{ notebook_task?: { notebook_path?: string }; [k: string]: unknown }>;
 }
 
-export async function listJobRuns(jobId?: number, limit = 25): Promise<JobRun[]> {
+/** `expandTasks` (GHSA-v2g8-gp3r-rg4r) is OFF by default — existing callers are
+ *  byte-identical. `items/databricks-notebook/[id]/runs` turns it on to scope the
+ *  shared workspace's run history to its own notebook; see that route. */
+export async function listJobRuns(jobId?: number, limit = 25, opts?: { expandTasks?: boolean }): Promise<JobRun[]> {
   const params = new URLSearchParams();
   if (jobId) params.set('job_id', String(jobId));
   params.set('limit', String(limit));
-  params.set('expand_tasks', 'false');
+  params.set('expand_tasks', opts?.expandTasks ? 'true' : 'false');
   const res = await dbxFetch(`/api/2.1/jobs/runs/list?${params.toString()}`);
   const body = await asJsonOrThrow<{ runs?: JobRun[] }>(res, 'listJobRuns');
   return body.runs || [];

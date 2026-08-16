@@ -64,7 +64,7 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * too; the note is left here because this file caught it first and the checker
  * did not, which is the whole argument for keeping the two in lockstep.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)\s*(?:<[^(]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)\s*(?:<[^(]*>)?\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)\s*(?:<[^(]*>)?\s*\(|(?:authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)|guardAdxItemRequest)\s*(?:<[^(]*>)?\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -92,6 +92,15 @@ const OWNER_RE = new RegExp([
   // bound to). Matched AS A CALL. Lockstep with GUARD_SIGNAL_RE in
   // check-route-guards.mjs — the two must not drift.
   'authorizeStorageAccount\\s*\\(',
+  // GHSA-v2g8-gp3r-rg4r — the ADX item-route guard (`app/api/items/_lib/
+  // adx-item-scope.ts`), the item-route form of `guardAdxRequest` below. Matched
+  // AS A CALL for the same reason its siblings are. Adding it to BOTH regexes at
+  // once is deliberate: on first run without it, four routes that had just been
+  // HARDENED — graph-model materialize + query, eventhouse purge + database,
+  // lakehouse query — flipped from `session-only` to `public`, because their
+  // session moved into the wrapper. That is the exact under-reporting this
+  // file's header warns about, reproduced by the very change that fixed them.
+  'guardAdxItemRequest\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',

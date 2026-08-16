@@ -8,10 +8,32 @@
  *   4. honest infra-gate (LOOM_SYNAPSE_WORKSPACE unset) → 503 + named env var
  *   5. happy-path runs executeQuery against the serverless target
  *   6. backend failure → 502 with structured error
+ *
+ * GHSA-v2g8-gp3r-rg4r added caller authorization against the lakehouse ITEM
+ * ahead of every one of these paths (the route previously took `_ctx` and
+ * ignored `[id]`), so the workspace guard and the item lookup are mocked here.
+ * The AUTHORIZATION property itself is covered by `ghsa-item-authz.test.ts`;
+ * this file keeps its original scope — the backend contract behind the guard.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeItemWorkspace: vi.fn(async () => null) }));
+vi.mock('@/lib/azure/kusto-client', () => ({
+  defaultDatabase: () => 'loomdb-default',
+  KustoError: class extends Error { status = 502; },
+}));
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => ({
+    items: {
+      query: () => ({
+        fetchAll: async () => ({
+          resources: [{ id: 'lh-1', itemType: 'lakehouse', workspaceId: 'ws-1', displayName: 'Lake', state: {} }],
+        }),
+      }),
+    },
+  }),
+}));
 vi.mock('@/lib/azure/synapse-sql-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/synapse-sql-client');
   return { ...actual, executeQuery: vi.fn(), serverlessTarget: vi.fn(() => ({ server: 's', database: 'master', cacheKey: 'k' })) };
@@ -22,7 +44,8 @@ import { getSession } from '@/lib/auth/session';
 import { executeQuery } from '@/lib/azure/synapse-sql-client';
 
 function req(body: any) {
-  return { json: async () => body } as any;
+  const url = new URL('http://x/');
+  return { url: url.toString(), nextUrl: url, json: async () => body } as any;
 }
 const ctx = { params: Promise.resolve({ id: 'lh-1' }) };
 

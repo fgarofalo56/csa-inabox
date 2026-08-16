@@ -143,7 +143,28 @@ describe('listJobRuns', () => {
     expect(url).toContain('/api/2.1/jobs/runs/list?');
     expect(url).toContain('job_id=42');
     expect(url).toContain('limit=25');
+    expect(url).toContain('expand_tasks=false');
     expect(runs[0].run_id).toBe(5);
+  });
+
+  /**
+   * GHSA-v2g8-gp3r-rg4r. `items/databricks-notebook/[id]/runs` scopes the shared
+   * workspace's run history down to THIS notebook's runs, and the only
+   * coordinate that attributes a run to a notebook is
+   * `tasks[].notebook_task.notebook_path` — which Databricks omits unless
+   * `expand_tasks=true`. If this parameter stops being sent, every run becomes
+   * unattributable and the route (which fails closed) returns an EMPTY history
+   * for a legitimate owner. Asserted on the real URL, not on a mock of this
+   * function, because the route-level suite mocks this module wholesale and so
+   * cannot see the wire contract.
+   */
+  it('requests expand_tasks=true when asked — the notebook run scope depends on it', async () => {
+    let url = '';
+    mockFetch((u) => { url = u; return { runs: [] }; });
+    await listJobRuns(undefined, 200, { expandTasks: true });
+    expect(url).toContain('expand_tasks=true');
+    expect(url).toContain('limit=200');
+    expect(url).not.toContain('job_id=');
   });
 });
 
