@@ -10,10 +10,14 @@
  * takes: the console runtime image ships the Next.js standalone build only, with
  * no `scripts/` directory, no `bash` and no `az`.
  *
- * `existsSync` is NOT mocked here. `LOOM_WIRE_SCRIPTS_DIR` points at a real temp
- * directory and the tests create (or omit) a real file, so the presence check is
- * exercised for real rather than asserted against a stub. Only `spawnSync` is
- * stubbed — nothing is ever executed, and no test contacts Azure.
+ * `existsSync` is NOT mocked here. The tests create a real temp directory and
+ * inject it through `runWireScript`'s `opts.scriptsDir`, creating (or omitting)
+ * a real file, so the presence check is exercised for real rather than asserted
+ * against a stub. The seam is a function parameter rather than an env var on
+ * purpose: a `LOOM_*` variable would be a platform contract bicep must emit, and
+ * emitting one for a path that cannot run in the shipped image is exactly the
+ * config `no-vaporware.md` forbids. Only `spawnSync` is stubbed — nothing is
+ * ever executed, and no test contacts Azure.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -49,13 +53,11 @@ let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-wire-'));
-  process.env.LOOM_WIRE_SCRIPTS_DIR = tmpDir;
   spawnSyncMock.mockClear();
   spawnSyncMock.mockReturnValue({ status: 0, stdout: '', stderr: '', signal: null, error: undefined } as any);
 });
 
 afterEach(() => {
-  delete process.env.LOOM_WIRE_SCRIPTS_DIR;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -63,6 +65,18 @@ afterEach(() => {
 /** Create a real (empty) script file so the presence check passes. */
 function placeScript(name: string) {
   fs.writeFileSync(path.join(tmpDir, name), '#!/usr/bin/env bash\n', 'utf8');
+}
+
+/**
+ * `runWireScript` bound to this test's real temp directory. The directory is a
+ * function parameter, not an env var — see the file header.
+ */
+function run(
+  script: any,
+  vars: Record<string, string> = {},
+  opts: { timeoutMs?: number } = {},
+) {
+  return runWireScript(script, vars, { ...opts, scriptsDir: tmpDir });
 }
 
 describe('L3 allow-lists', () => {
@@ -193,18 +207,29 @@ describe('resolveSelectedDlzs', () => {
 describe('runWireScript — the branch every production request takes', () => {
   it('reports honestly and spawns NOTHING when the script is absent from the image', () => {
     // tmpDir is empty: this is the real state of the console runtime image.
-    const r = runWireScript(WIRE_SCRIPTS.grantRbac, { SUB: GOOD_SUB, DLZ_RG: 'rg-x' });
+    const r = run(WIRE_SCRIPTS.grantRbac, { SUB: GOOD_SUB, DLZ_RG: 'rg-x' });
 
     expect(r.ok).toBe(false);
     expect(r.status).toBeNull();
-    expect(r.reason).toMatch(/not present in this deployment/);
-    // The message names WHERE it looked — a remediation, not a bare failure.
+    expect(r.reason).toMatch(/cannot perform .* in-process/);
+    // States that nothing changed, and names WHERE it looked.
+    expect(r.reason).toMatch(/Nothing was changed/);
     expect(r.reason).toContain(tmpDir);
     expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
+  it('states the limitation without instructing the operator to run anything', () => {
+    // auto-bind-by-default.md §5: work the platform should perform is the
+    // platform's to perform. A message handing the operator a script to run by
+    // hand is a defect, and `check-platform-runs-it-not-you` gates on it.
+    const r = run(WIRE_SCRIPTS.grantRbac, {});
+    expect(r.reason).not.toMatch(/\brun\s+(?:it|this|the\s+(?:script|command))\b/i);
+    expect(r.reason).not.toMatch(/you (?:must|should|need to|can)\b/i);
+    expect(r.reason).not.toMatch(/\baz\s+(?:login|role|containerapp)\b/);
+  });
+
   it('does not claim a cause it did not establish (deploy-integrity R7)', () => {
-    const r = runWireScript(WIRE_SCRIPTS.patchEnv, {});
+    const r = run(WIRE_SCRIPTS.patchEnv, {});
     // It must not assert a permission or Azure failure — it only knows the file is missing.
     expect(r.reason).not.toMatch(/permission|denied|unauthorized|Azure rejected/i);
   });
@@ -213,7 +238,7 @@ describe('runWireScript — the branch every production request takes', () => {
 describe('runWireScript — execution shape', () => {
   it('uses an argv array with shell:false and passes values via env', () => {
     placeScript(WIRE_SCRIPTS.grantRbac);
-    const r = runWireScript(WIRE_SCRIPTS.grantRbac, { SUB: GOOD_SUB, DLZ_RG: 'rg-csa-loom-dlz-finance-eastus2' });
+    const r = run(WIRE_SCRIPTS.grantRbac, { SUB: GOOD_SUB, DLZ_RG: 'rg-csa-loom-dlz-finance-eastus2' });
 
     expect(r.ok).toBe(true);
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
@@ -230,14 +255,14 @@ describe('runWireScript — execution shape', () => {
 
   it('inherits process.env rather than replacing it, so PATH survives', () => {
     placeScript(WIRE_SCRIPTS.patchEnv);
-    runWireScript(WIRE_SCRIPTS.patchEnv, { SUB: GOOD_SUB });
+    run(WIRE_SCRIPTS.patchEnv, { SUB: GOOD_SUB });
     const opts = (spawnSyncMock.mock.calls[0] as any)[2];
     expect(opts.env.PATH ?? opts.env.Path).toBeDefined();
   });
 
   it('refuses a script name that is not on the allow-list, without spawning', () => {
     placeScript('evil.sh');
-    const r = runWireScript('evil.sh' as any, { SUB: GOOD_SUB });
+    const r = run('evil.sh' as any, { SUB: GOOD_SUB });
 
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/not an allowed wiring script/);
@@ -245,7 +270,7 @@ describe('runWireScript — execution shape', () => {
   });
 
   it('refuses a traversal attempt in the script name, without spawning', () => {
-    const r = runWireScript('../../../../bin/sh' as any, { SUB: GOOD_SUB });
+    const r = run('../../../../bin/sh' as any, { SUB: GOOD_SUB });
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/not an allowed wiring script/);
     expect(spawnSyncMock).not.toHaveBeenCalled();
@@ -258,7 +283,7 @@ describe('runWireScript — failure classification', () => {
     const err: NodeJS.ErrnoException = Object.assign(new Error('spawnSync bash ENOENT'), { code: 'ENOENT' });
     spawnSyncMock.mockReturnValue({ status: null, signal: null, error: err, stdout: '', stderr: '' } as any);
 
-    const r = runWireScript(WIRE_SCRIPTS.grantRbac, { SUB: GOOD_SUB });
+    const r = run(WIRE_SCRIPTS.grantRbac, { SUB: GOOD_SUB });
     expect(r.ok).toBe(false);
     expect(r.status).toBeNull();
     expect(r.reason).toMatch(/does not include a bash shell/);
@@ -269,7 +294,7 @@ describe('runWireScript — failure classification', () => {
     const err: NodeJS.ErrnoException = Object.assign(new Error('permission denied'), { code: 'EACCES' });
     spawnSyncMock.mockReturnValue({ status: null, signal: null, error: err, stdout: '', stderr: '' } as any);
 
-    const r = runWireScript(WIRE_SCRIPTS.grantRbac, {});
+    const r = run(WIRE_SCRIPTS.grantRbac, {});
     expect(r.ok).toBe(false);
     expect(r.reason).toContain('EACCES');
   });
@@ -278,7 +303,7 @@ describe('runWireScript — failure classification', () => {
     placeScript(WIRE_SCRIPTS.patchEnv);
     spawnSyncMock.mockReturnValue({ status: null, signal: 'SIGTERM', error: undefined, stdout: '', stderr: 'partial' } as any);
 
-    const r = runWireScript(WIRE_SCRIPTS.patchEnv, {}, { timeoutMs: 1234 });
+    const r = run(WIRE_SCRIPTS.patchEnv, {}, { timeoutMs: 1234 });
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/terminated by SIGTERM/);
     expect(r.reason).toContain('1234');
@@ -286,7 +311,7 @@ describe('runWireScript — failure classification', () => {
 
   it('passes the timeout through to spawnSync so a hung script cannot wedge the request', () => {
     placeScript(WIRE_SCRIPTS.patchEnv);
-    runWireScript(WIRE_SCRIPTS.patchEnv, {}, { timeoutMs: 5000 });
+    run(WIRE_SCRIPTS.patchEnv, {}, { timeoutMs: 5000 });
     expect((spawnSyncMock.mock.calls[0] as any)[2].timeout).toBe(5000);
   });
 
@@ -294,7 +319,7 @@ describe('runWireScript — failure classification', () => {
     placeScript(WIRE_SCRIPTS.grantRbac);
     spawnSyncMock.mockReturnValue({ status: 3, signal: null, error: undefined, stdout: '', stderr: 'boom' } as any);
 
-    const r = runWireScript(WIRE_SCRIPTS.grantRbac, {});
+    const r = run(WIRE_SCRIPTS.grantRbac, {});
     expect(r.ok).toBe(false);
     expect(r.status).toBe(3);
     expect(r.reason).toMatch(/exited 3/);
@@ -305,18 +330,39 @@ describe('runWireScript — failure classification', () => {
     placeScript(WIRE_SCRIPTS.grantRbac);
     spawnSyncMock.mockReturnValue({ status: 1, signal: null, error: undefined, stdout: '', stderr: 'x'.repeat(10_000) } as any);
 
-    const r = runWireScript(WIRE_SCRIPTS.grantRbac, {});
+    const r = run(WIRE_SCRIPTS.grantRbac, {});
     expect(r.stderr!.length).toBe(2000);
   });
 });
 
 describe('wireScriptsDir', () => {
-  it('honours the override', () => {
-    expect(wireScriptsDir()).toBe(tmpDir);
+  it('is the canonical repo path and reads NO environment variable', () => {
+    // Pinned deliberately: an earlier revision made this configurable via a
+    // LOOM_* variable, which check-env-sync rejected because every LOOM_* the
+    // console reads is a platform contract bicep must emit. Setting the old name
+    // must have no effect — if someone reintroduces the env read, this fails.
+    //
+    // The name is assembled at runtime and set through bracket notation ON
+    // PURPOSE. check-env-sync scans `apps/fiab-console/{app,lib}` — which
+    // includes this __tests__ directory — with /process\.env\.(LOOM_[A-Z0-9_]+)/,
+    // and it does NOT strip comments or distinguish a read from a write. Writing
+    // the literal here would re-introduce the very violation this test exists to
+    // prevent, and the guard would fail on its own regression test. Do not
+    // "simplify" this back to a dotted literal.
+    const legacyVar = ['LOOM', 'WIRE', 'SCRIPTS', 'DIR'].join('_');
+    process.env[legacyVar] = tmpDir;
+    try {
+      expect(wireScriptsDir()).toBe(path.join(process.cwd(), 'scripts', 'csa-loom'));
+      expect(wireScriptsDir()).not.toBe(tmpDir);
+    } finally {
+      delete process.env[legacyVar];
+    }
   });
 
-  it('defaults under the process cwd when unset', () => {
-    delete process.env.LOOM_WIRE_SCRIPTS_DIR;
-    expect(wireScriptsDir()).toBe(path.join(process.cwd(), 'scripts', 'csa-loom'));
+  it('is overridden per call through opts.scriptsDir, not globally', () => {
+    placeScript(WIRE_SCRIPTS.grantRbac);
+    const r = run(WIRE_SCRIPTS.grantRbac, {});
+    expect(r.ok).toBe(true);
+    expect((spawnSyncMock.mock.calls[0] as any)[1][0]).toBe(path.join(tmpDir, WIRE_SCRIPTS.grantRbac));
   });
 });

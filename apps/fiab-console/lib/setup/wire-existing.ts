@@ -261,8 +261,13 @@ export const WIRE_SCRIPTS = {
 
 export type WireScript = (typeof WIRE_SCRIPTS)[keyof typeof WIRE_SCRIPTS];
 
-/** Wall-clock ceiling for a single wiring script. */
-export const WIRE_SCRIPT_TIMEOUT_MS = Number(process.env.LOOM_WIRE_SCRIPT_TIMEOUT_MS) || 300_000;
+/**
+ * Wall-clock ceiling for a single wiring script.
+ *
+ * A plain constant, NOT an env var. See {@link wireScriptsDir} for why nothing
+ * on this path is a platform variable.
+ */
+export const WIRE_SCRIPT_TIMEOUT_MS = 300_000;
 
 export interface WireScriptResult {
   ok: boolean;
@@ -273,9 +278,25 @@ export interface WireScriptResult {
   stderr?: string;
 }
 
-/** Directory holding the wiring scripts; overridable for tests + alternate layouts. */
+/**
+ * Canonical directory holding the wiring scripts, relative to the process cwd.
+ *
+ * Deliberately NOT configurable through the environment. An earlier revision
+ * read `LOOM_WIRE_SCRIPTS_DIR` so tests could point at a temp directory, and
+ * `check-env-sync` correctly rejected it: the console reads every `LOOM_*` var
+ * from a platform contract that bicep must emit, and emitting one here would
+ * declare deployment config for a code path that CANNOT run in the shipped
+ * image — the runtime stage copies only the Next.js standalone output, so there
+ * is no `scripts/` directory, no `bash` and no `az` for it to point at. A
+ * platform variable whose only real consumer is a test harness is exactly the
+ * kind of config `no-vaporware.md` forbids.
+ *
+ * Tests inject the directory through `runWireScript`'s `opts.scriptsDir`
+ * instead, which keeps the seam where it belongs — in the function signature,
+ * not in the deployment contract.
+ */
 export function wireScriptsDir(): string {
-  return process.env.LOOM_WIRE_SCRIPTS_DIR || path.join(process.cwd(), 'scripts', 'csa-loom');
+  return path.join(process.cwd(), 'scripts', 'csa-loom');
 }
 
 /**
@@ -297,7 +318,7 @@ export function wireScriptsDir(): string {
 export function runWireScript(
   script: WireScript,
   vars: Record<string, string>,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; scriptsDir?: string } = {},
 ): WireScriptResult {
   // Reject anything not on the allow-list, even though the type already pins it
   // — this is the last line before a process is created.
@@ -306,16 +327,21 @@ export function runWireScript(
     return { ok: false, status: null, reason: `Refused: '${script}' is not an allowed wiring script.` };
   }
 
-  const scriptPath = path.join(wireScriptsDir(), script);
+  const dir = opts.scriptsDir ?? wireScriptsDir();
+  const scriptPath = path.join(dir, script);
   if (!fs.existsSync(scriptPath)) {
+    // State the limitation; do NOT hand the operator a script to go run. Per
+    // auto-bind-by-default.md §5 and deploy-integrity.md R6, work the platform
+    // should perform is the platform's to perform — a message instructing the
+    // operator to run it by hand is a defect, not a remediation.
     return {
       ok: false,
       status: null,
       reason:
-        `The wiring script '${script}' is not present in this deployment ` +
-        `(looked in ${wireScriptsDir()}). The console runtime image ships the Next.js ` +
-        `standalone build only, so RBAC/env wiring must be run from CI or a workstation ` +
-        `with the repo and the az CLI available.`,
+        `This deployment cannot perform the '${script}' wiring step in-process: the console ` +
+        `runtime image ships the Next.js standalone build only, so that step is not present ` +
+        `in it (looked in ${dir}). Nothing was changed. Landing-zone RBAC and navigator env ` +
+        `are applied by the platform's deploy and post-deploy bootstrap.`,
     };
   }
 

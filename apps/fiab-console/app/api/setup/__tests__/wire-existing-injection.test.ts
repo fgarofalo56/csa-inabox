@@ -105,7 +105,6 @@ function validBody(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   featureGrants = [];
   process.env.LOOM_TENANT_ADMIN_OID = 'oid-test';
-  process.env.LOOM_WIRE_SCRIPTS_DIR = '/tmp/loom-test-scripts';
   spawnSyncMock.mockClear();
   execSyncMock.mockClear();
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-test', upn: 'admin@t.com' }, exp: Date.now() / 1000 + 3600 } as any);
@@ -114,7 +113,6 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.LOOM_TENANT_ADMIN_OID;
-  delete process.env.LOOM_WIRE_SCRIPTS_DIR;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.resetModules();
