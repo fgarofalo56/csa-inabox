@@ -87,6 +87,11 @@ const OWNER_RE = new RegExp([
   // databricks-pipeline families. Matched AS CALLS, never as prose.
   'authorizeDatabricksJobItem\\s*\\(',
   'authorizeDatabricksPipelineItem\\s*\\(',
+  // #3572 — bounds WHICH storage account a caller may drive the Console UAMI
+  // at (deployment lake / DLZ authority / an account this tenant's lakehouse is
+  // bound to). Matched AS A CALL. Lockstep with GUARD_SIGNAL_RE in
+  // check-route-guards.mjs — the two must not drift.
+  'authorizeStorageAccount\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',
@@ -139,6 +144,19 @@ const BACKEND_LABEL = {
   'aml-client': 'AML', 'apim-client': 'APIM', 'monitor-client': 'Azure Monitor',
   'purview-client': 'Purview', 'servicebus-client': 'Service Bus', 'batch-client': 'Batch',
   'maps-client': 'Azure Maps', 'keyvault-client': 'Key Vault',
+  // #3572 — the THIRD instance of the same defect, found the same way the two
+  // above were. `kv-secrets-client` IS the Key Vault data-plane client (it is
+  // what `vaultUrl` / `shortcutVaultUrl` / `certVaultUrl` come from, and the
+  // routes using it issue real `GET {vault}/secrets?api-version=` calls). It was
+  // absent, so 19 routes reaching Key Vault through it published `—` ("touches
+  // no backend") in a table whose entire stated job is to classify backend
+  // dependency. Noticed because this PR's new `keyvault/secret-names` route —
+  // which does nothing BUT list Key Vault secret names — generated as `—`.
+  //
+  // Note the shape of the trap: `keyvault-client` sits in this map and is
+  // imported by ZERO routes, so the map LOOKED like it covered Key Vault while
+  // covering none of it. A label with no population verifies nothing.
+  'kv-secrets-client': 'Key Vault',
 };
 
 function walk(dir, out = []) {

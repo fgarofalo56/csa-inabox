@@ -193,6 +193,13 @@ const GUARD_SIGNAL_RE = new RegExp(
     // one out fails this checker instead of silently disarming it.
     'authorizeDatabricksJobItem(?:<[^()]*>)?\\s*\\(',
     'authorizeDatabricksPipelineItem(?:<[^()]*>)?\\s*\\(',
+    // #3572 — `authorizeStorageAccount(` bounds which storage account a caller
+    // may drive the Console UAMI at: the deployment's own lake (any session),
+    // DLZ authority (tenant/domain admin), or an account a lakehouse in the
+    // caller's OWN tenant is bound to. Matched AS A CALL, so a `{@link ...}` in
+    // a comment cannot satisfy it — the way `assertOwner` lied. Kept in lockstep
+    // with OWNER_RE in generate-route-inventory.mjs.
+    'authorizeStorageAccount(?:<[^()]*>)?\\s*\\(',
     // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
     // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
     // route that threads one of them is owner-scoped even without a literal
@@ -950,7 +957,20 @@ const ALLOWLIST_PREFIXES = [
   ['apps/fiab-console/app/api/powerplatform/', 'A: Power Platform navigator over the deployment environments via the PP management app'],
   ['apps/fiab-console/app/api/realtime-hub/', 'A: Real-Time hub navigator over the deployment Event Hubs/ADX'],
   ['apps/fiab-console/app/api/setup/', 'A: first-run setup/scan over ARM (subscription/topology discovery) via Console UAMI'],
-  ['apps/fiab-console/app/api/storage/', 'A: storage-accounts navigator over the deployment subscription (ARM by name)'],
+  // NARROWED from `app/api/storage/` (#3572). The class reason below — "storage
+  // ACCOUNTS navigator over the deployment subscription (ARM by name)" —
+  // describes `storage/accounts/route.ts` and nothing else. When
+  // `storage/[account]/containers/**` were added they inherited this exemption
+  // and were never in remit, yet they are not an ARM-by-name navigator over the
+  // deployment: they are a DATA-PLANE walk of an ARBITRARY account, taken off
+  // the URL, executed as the Console UAMI. They shipped with authentication and
+  // no authorization and this checker said `violations: 0` — not because it
+  // judged them safe, but because it never looked. A class exemption whose
+  // stated reason has stopped being true of its members is the same defect as a
+  // guard keyed to the wrong pattern: the verdict does not change when the code
+  // does. The `[account]` routes are now in remit and pass on their own signal
+  // (`authorizeStorageAccount`, in GUARD_SIGNAL_RE).
+  ['apps/fiab-console/app/api/storage/accounts/', 'A: storage-accounts navigator over the deployment subscription (ARM by name)'],
   ['apps/fiab-console/app/api/synapse/', 'A: Synapse artifacts navigator over the deployment workspace (data-plane by name)'],
   ['apps/fiab-console/app/api/warehouse/', 'A: Synapse SQL warehouse query navigator over the deployment pool'],
   ['apps/fiab-console/app/api/dab/', 'A: Data API Builder — create threads createOwnedItem; [id] routes publish to the shared DAB runtime + APIM by id (no per-tenant Cosmos read)'],

@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1675 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1678 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -615,6 +615,7 @@ export type StaticApiRoute =
   | '/api/items/warehouse/migrate/import'
   | '/api/items/warehouse/migrate/scan'
   | '/api/items/workshop-app'
+  | '/api/keyvault/secret-names'
   | '/api/lakehouse/ai-clean-suggest'
   | '/api/lakehouse/containers'
   | '/api/lakehouse/download'
@@ -1658,6 +1659,8 @@ export type DynamicApiRoute =
   | `/api/spark-environment/${string}/libraries`
   | `/api/spark-environment/${string}/publish`
   | `/api/spark-environment/${string}/validate`
+  | `/api/storage/${string}/containers`
+  | `/api/storage/${string}/containers/${string}/paths`
   | `/api/synapse/datasets/${string}`
   | `/api/synapse/kqlscripts/${string}`
   | `/api/synapse/kqlscripts/${string}/run`
