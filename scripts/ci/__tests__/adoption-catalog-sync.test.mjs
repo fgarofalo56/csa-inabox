@@ -11,7 +11,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runChecks, loadFiles, parseCatalog } from '../check-adoption-catalog-sync.mjs';
+import { runChecks, loadFiles, parseCatalog, submittedTemplates } from '../check-adoption-catalog-sync.mjs';
 
 const BASE = loadFiles();
 
@@ -155,13 +155,12 @@ test('a catalog the guard cannot parse THROWS rather than reporting ok', () => {
 });
 
 // ---------------------------------------------------------------------------
-// G1..G4 — the SOVEREIGN orchestrator.
+// G0..G4 — the NON-COMMERCIAL templates.
 //
-// Every mutation below reproduces the state `deploy/bicep/gov/main.bicep` was
-// actually in before #3577, and each must go RED. Before these checks existed
-// the guard read one file and reported OK while the Gov orchestrator created a
-// Purview account unconditionally — a guard whose population excluded the
-// consumer that broke.
+// Every mutation below reproduces a state one of these files was actually in
+// before #3577, and each must go RED. Before these checks existed the guard read
+// ONE file while THREE templates created Purview accounts — its population
+// excluded both consumers that were broken.
 // ---------------------------------------------------------------------------
 
 test('MUTATION: reverting the Gov purview module to `if (deployDMLZ)` goes RED', () => {
@@ -173,20 +172,35 @@ test('MUTATION: reverting the Gov purview module to `if (deployDMLZ)` goes RED',
     "module purview 'modules/purview.bicep' = if (deployDMLZ) {",
   );
   assert.ok(
-    problems.some((p) => p.includes('modules/purview.bicep') && p.includes('provisionPurview')),
+    problems.some((p) => p.includes('gov/main.bicep') && p.includes('provisionPurview')),
     `expected the Gov creator-gate check to fail, got:\n${problems.join('\n')}`,
   );
 });
 
-test('MUTATION: dropping the Gov adopt bag goes RED', () => {
-  const { problems } = withMutation('govBicep', 'param adopt object = {}', 'param adoptGone object = {}');
+test('MUTATION: reverting the DMLZ purview module to `if (bool(deployModules.governance))` goes RED', () => {
+  // The second creator, live on the same Gov tenant via params.USGov.dev.json.
+  const { problems } = withMutation(
+    'dmlzGovernance',
+    "module deployPurview '../Purview/purview.bicep' = if (provisionPurview) {",
+    "module deployPurview '../Purview/purview.bicep' = if (bool(deployModules.governance)) {",
+  );
   assert.ok(
-    problems.some((p) => p.includes('deploy/bicep/gov/main.bicep') && p.includes('param adopt object')),
-    `expected the Gov transport check to fail, got:\n${problems.join('\n')}`,
+    problems.some((p) => p.includes('DMLZ') && p.includes('provisionPurview')),
+    `expected the DMLZ creator-gate check to fail, got:\n${problems.join('\n')}`,
   );
 });
 
-test('MUTATION: dropping the Gov suppression var goes RED', () => {
+test('MUTATION: dropping the adopt bag from either template goes RED', () => {
+  for (const file of ['govBicep', 'dmlzGovernance']) {
+    const { problems } = withMutation(file, 'param adopt object = {}', 'param adoptGone object = {}');
+    assert.ok(
+      problems.some((p) => p.includes('param adopt object')),
+      `expected the transport check to fail for ${file}, got:\n${problems.join('\n')}`,
+    );
+  }
+});
+
+test('MUTATION: dropping a suppression var goes RED', () => {
   const { problems } = withMutation(
     'govBicep',
     "var provisionPurview = deployDMLZ && adoptMode(adopt, 'purview') == 'create'",
@@ -194,34 +208,114 @@ test('MUTATION: dropping the Gov suppression var goes RED', () => {
   );
   assert.ok(
     problems.some((p) => p.includes('provisionPurview') && p.includes('adoptMode')),
-    `expected the Gov gate-expression check to fail, got:\n${problems.join('\n')}`,
+    `expected the gate-expression check to fail, got:\n${problems.join('\n')}`,
   );
 });
 
 test('MUTATION: suppressing the new account but binding NOTHING goes RED', () => {
   // The subtle half. Gating the creator is only half of adopt-or-create: if the
   // adopted account is never referenced, "adopt" silently means "no catalog at
-  // all" while every gate still reads green.
+  // all" while every other gate still reads green.
   const { problems } = withMutation(
     'govBicep',
-    "module purviewAdopted 'modules/purview-existing.bicep' = if (adoptPurview) {",
-    "module purviewAdopted 'modules/purview-disabled.bicep' = if (adoptPurview) {",
+    "resource purviewAdopted 'Microsoft.Purview/accounts@2021-12-01' existing = {",
+    "resource purviewAdopted 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {",
   );
   assert.ok(
-    problems.some((p) => p.includes('purview-existing.bicep') && p.includes('bind nothing')),
-    `expected the Gov binding check to fail, got:\n${problems.join('\n')}`,
+    problems.some((p) => p.includes('existing') && p.includes('bind nothing')),
+    `expected the binding check to fail, got:\n${problems.join('\n')}`,
   );
 });
 
-test('the Gov checks are keyed to a REAL catalog entry, not a private list', () => {
-  // If someone removes `purview` from the catalog, the Gov checks must not go
+test('MUTATION: binding through a cross-scope MODULE goes RED (the #3333 RBAC trap)', () => {
+  // A module scoped to the adopted resource group compiles to a nested
+  // deployment THERE and needs Microsoft.Resources/deployments/write. Reader is
+  // not enough, and the whole deployment fails with AuthorizationFailed. This
+  // is the shape the first revision of this PR shipped.
+  const { problems } = withMutation(
+    'govBicep',
+    "resource purviewAdopted 'Microsoft.Purview/accounts@2021-12-01' existing = {",
+    "module purviewAdopted 'modules/purview-existing.bicep' = if (adoptPurview) {\n  x: 1\n}\nresource purviewAdoptedReal 'Microsoft.Purview/accounts@2021-12-01' existing = {",
+  );
+  assert.ok(
+    problems.some((p) => p.includes('nested deployment') && p.includes('deployments/write')),
+    `expected the nested-deployment check to fail, got:\n${problems.join('\n')}`,
+  );
+});
+
+test('the checks are keyed to a REAL catalog entry, not a private list', () => {
+  // If someone removes `purview` from the catalog, these checks must not go
   // quietly green by finding nothing to check.
   const { problems } = runChecks({
     ...BASE,
     catalog: BASE.catalog.replace("    key: 'purview',", "    key: 'purview-renamed',"),
   });
   assert.ok(
-    problems.some((p) => p.includes('GOV_SERVICE_KEYS') || p.includes("'purview' is not")),
+    problems.some((p) => p.includes('ADOPT_HONOURING_TEMPLATES') || p.includes("'purview' is not")),
     `expected a loud failure when the catalog entry disappears, got:\n${problems.join('\n')}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// G0 — the POPULATION itself. These are the checks that make this guard
+// different from the one it replaces: they fail when the guard is not LOOKING at
+// something, rather than only when what it looks at is wrong.
+// ---------------------------------------------------------------------------
+
+test('the population is DERIVED from the workflows, not hard-coded', () => {
+  const found = submittedTemplates(BASE.workflows);
+  assert.ok(found.size >= 4, `expected several submitted templates, parsed ${found.size}`);
+  // The three that matter, all discovered rather than listed.
+  for (const tpl of [
+    'platform/fiab/bicep/main.bicep',
+    'deploy/bicep/gov/main.bicep',
+    'deploy/bicep/DMLZ/main.bicep',
+  ]) {
+    assert.ok(found.has(tpl), `${tpl} should be discovered from the workflows; got ${[...found.keys()].join(', ')}`);
+  }
+  // $GITHUB_WORKSPACE-rooted spellings must normalise to the same key, or the
+  // Commercial orchestrator reads as an unknown template and the guard cries
+  // wolf on every run.
+  assert.ok(
+    found.get('platform/fiab/bicep/main.bicep').some((w) => /gcch|gcc|il5/.test(w)),
+    'the workspace-rooted sovereign spellings should collapse onto the repo-relative path',
+  );
+});
+
+test('MUTATION: a NEW submitted template that creates Purview goes RED', () => {
+  // The class this guard exists to close: someone adds a template that creates
+  // a Purview account and never registers it here. Before the derived
+  // population existed, that was silently green — which is exactly how
+  // deploy/bicep/DMLZ went unnoticed.
+  const { problems } = runChecks({
+    ...BASE,
+    workflows: {
+      ...BASE.workflows,
+      'brand-new-lane.yml': 'run: az deployment sub create --template-file deploy/bicep/unregistered/main.bicep\n',
+    },
+    templateBodies: {
+      ...BASE.templateBodies,
+      'deploy/bicep/unregistered/main.bicep': "resource p 'Microsoft.Purview/accounts@2021-12-01' = {\n  name: 'x'\n}\n",
+    },
+  });
+  assert.ok(
+    problems.some((p) => p.includes('unregistered/main.bicep') && p.includes('not in PATHS')),
+    `expected the population check to fail, got:\n${problems.join('\n')}`,
+  );
+});
+
+test('a submitted template that cannot be READ is UNKNOWN, never a pass', () => {
+  const { problems } = runChecks({
+    ...BASE,
+    workflows: {
+      ...BASE.workflows,
+      'ghost-lane.yml': 'run: az deployment sub create --template-file deploy/bicep/ghost/main.bicep\n',
+    },
+    // Present as a key with value undefined — "I looked and could not read it".
+    templateBodies: { ...BASE.templateBodies, 'deploy/bicep/ghost/main.bicep': undefined },
+  });
+  assert.ok(
+    problems.some((p) => p.includes('ghost/main.bicep') && p.includes('UNKNOWN')),
+    `expected an unreadable submitted template to fail, got:\n${problems.join('\n')}`,
   );
 });

@@ -157,14 +157,24 @@ pin a specific one, or to `NEW` to force a fresh account.
 
 The deployment outputs record which way it went — `purviewBindingMode` is
 `created`, `adopted` or `none`, alongside `purviewAccountName`,
-`purviewAccountId` and the account's real `purviewAccountLocation`.
+`purviewAccountId`, the account's real `purviewAccountLocation` and
+`purviewRegionMatches`.
+
+The adopted account is bound with `resource … existing`, **not** a module scoped
+to its resource group: a cross-scope module compiles to a nested deployment in
+the customer's resource group and requires `Microsoft.Resources/deployments/write`
+there, which Reader does not carry (#3333). An `existing` reference needs only
+read.
 
 > [!NOTE]
 > Purview is the only service on this path with an adopt route today. Synapse,
 > Databricks, ADF, Event Hubs, ADX and storage still create unconditionally here.
-> None of them carries a per-tenant cap, so none is deploy-blocking, but this is
-> a known [R5](../../../.claude/rules/deploy-integrity.md) gap rather than a
-> finished story.
+> None carries a per-tenant *cap*, so none blocks the deploy the way Purview did
+> — but several take **globally unique** names (`csadevstor`, `csa-dev-syn`,
+> `csa-dev-adf`, the Event Hubs namespace, the ADX cluster), and a name already
+> taken anywhere in the cloud fails for the other R5 reason: because one exists.
+> That is a known [R5](../../../.claude/rules/deploy-integrity.md) gap, untested
+> here, not an all-clear.
 
 Full walkthrough: [Discovery and adoption →
 Azure Government](../../../docs/fiab/deployment/discovery-and-adoption.md#azure-government).

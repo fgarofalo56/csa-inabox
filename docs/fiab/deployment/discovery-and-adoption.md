@@ -472,23 +472,52 @@ subscription-agnostic and has no `LOOM_PURVIEW_SUB` wire.
 ### Azure Government
 
 Everything above describes `platform/fiab/bicep/main.bicep`, the **Commercial**
-orchestrator. Azure Government has a second one — `deploy/bicep/gov/main.bicep`,
-which `deploy-gov.yml` submits — and it speaks the **same `adopt` bag**, keyed by
-the same service keys, so a plan produced for one is understood by the other with
-no translation.
+orchestrator. Two more templates create the same services and now speak the
+**same `adopt` bag**, keyed by the same service keys, so a plan produced for one
+is understood by the others with no translation:
 
-It did not always. Until #3577 the Gov orchestrator created a Purview account on
-`= if (deployDMLZ)` with no adopt path at all, so both halves of R5's prohibition
-were live in one line: had quota allowed it would have deployed a sixth account
-beside the customer's five, and because quota did not allow, it failed because
-five exist. `scripts/ci/check-adoption-catalog-sync.mjs` now reads **both**
-orchestrators — its population was one file while the repo had two.
+| Template | Submitted by | Purview creation gated on |
+| --- | --- | --- |
+| `deploy/bicep/gov/main.bicep` | `deploy-gov.yml` | `provisionPurview` |
+| `deploy/bicep/DMLZ/modules/governance/governance.bicep` | `deploy.yml`, `rollback.yml` | `provisionPurview` |
 
-Coverage today is **Purview only** on the Gov path. The other services that
-orchestrator deploys (Synapse, Databricks, ADF, Event Hubs, ADX, storage) still
-create unconditionally there. That is a real R5 gap and it is tracked, not
-implied fixed — it is simply not deploy-blocking, because none of them carries a
-per-tenant cap the way Purview does.
+Neither did before #3577. The Gov one created an account on `= if (deployDMLZ)`;
+the DMLZ one on `= if (bool(deployModules.governance))`, with
+`params.USGov.dev.json` shipping `governance: true` against the **same** Gov
+tenant. So both halves of R5's prohibition were live in each: had quota allowed
+they would have deployed a sixth account beside the customer's five, and because
+quota did not allow, they failed because five exist.
+
+`scripts/ci/check-adoption-catalog-sync.mjs` now **derives** its population from
+the workflows — it reads every path any workflow hands to `--template-file` and
+fails when a submitted template declares `Microsoft.Purview/accounts` without
+being registered. Previously it read one file while three created Purview
+accounts, and reported OK on all of them.
+
+> **The adopted account is bound with `resource … existing`, never a module.**
+> A module scoped to the adopted resource group compiles to a
+> `Microsoft.Resources/deployments` resource **in the customer's resource
+> group** and needs `Microsoft.Resources/deployments/write` there — Reader is
+> not enough, and an identity without it fails the *entire* deployment with
+> `AuthorizationFailed` (the P0 that broke two Commercial deploys on
+> 2026-08-13, #3333). An `existing` resource compiles to `reference()` and needs
+> only read, which is the same right discovery already proved by listing the
+> account.
+
+Coverage today is **Purview only** on the sovereign paths. The other services
+those orchestrators deploy (Synapse, Databricks, ADF, Event Hubs, ADX, storage)
+still create unconditionally. That is a real R5 gap and it is tracked, not
+implied fixed.
+
+It is *not* deploy-blocking for the same reason Purview was — none of them
+carries a per-tenant resource cap — but that is not the same as safe. Several
+are **globally unique** names: the Gov storage account resolves to
+`csadevstor` (`replace('${baseName}stor','-','')`), and `csa-dev-syn`,
+`csa-dev-adf`, the Event Hubs namespace and the ADX cluster are all in
+globally-unique namespaces too. A name already taken anywhere in that cloud is
+exactly *"failing because one exists"* — the other half of the R5 sentence this
+work quotes. Pre-existing, and not measured here; recorded so the note is not
+read as an all-clear it did not earn.
 
 #### Greenfield (empty Gov subscription)
 

@@ -67,6 +67,15 @@ param privateDNSZones object
 @sys.description('Array to hold all vaules for Governance module.')
 param parGovernance object
 
+// ADOPT-OR-CREATE (deploy-integrity.md R5, #3577). Same bag, same service keys
+// and same accessor shape as deploy/bicep/gov/main.bicep and
+// platform/fiab/bicep/main.bicep — one convention across all three
+// orchestrators, so a plan produced for any of them is understood by the others.
+// Threaded to modules/governance/governance.bicep, which gates Purview creation
+// on it. An absent key means create-new, so a greenfield tenant is unaffected.
+@sys.description('Adopt-or-create plan keyed by adoption-catalog service key. Per key: { mode: "adopt"|"create"|"skip", target: { name, rg, sub } }. Emitted by scripts/csa-loom/discover-purview-adopt-plan.sh and lib/deploy/plan-to-arm.ts (LOOM_ADOPT_JSON).')
+param adopt object = {}
+
 // Databricks governance workspace parameters
 @description('Parameters for governance Databricks workspace (Unity Catalog)')
 param parDatabricks object = {}
@@ -123,6 +132,7 @@ module governanceResources 'modules/governance/governance.bicep' = if (bool(depl
     parGovernance: parGovernance
     deployModules: deployModules
     defaultTags: tagsDefault
+    adopt: adopt
   }
   dependsOn: [
     governanceResourceGroup

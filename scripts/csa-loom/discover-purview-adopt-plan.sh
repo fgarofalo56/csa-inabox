@@ -85,6 +85,35 @@ fi
 
 log() { echo "[purview-adopt] $*" >&2; }
 
+# Temp files are tracked and removed on ANY exit, including the error paths that
+# `exit 1` out of the middle of the script.
+TMPFILES=""
+newtmp() { local t; t="$(mktemp)"; TMPFILES="${TMPFILES:+$TMPFILES }$t"; printf '%s' "$t"; }
+# An `if` rather than `[ -n … ] && …`: as the LAST command of an EXIT trap, a
+# false test returns non-zero and would overwrite the script's real exit status.
+# shellcheck disable=SC2086
+cleanup() { if [ -n "$TMPFILES" ]; then rm -f $TMPFILES; fi; }
+trap cleanup EXIT
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "::error::[purview-adopt] jq is not installed. It builds the adopt plan; without it this script would have to splice values into JSON by hand, which is how an account name containing a quote becomes a document that parses but does not mean what it says. Refusing to continue." >&2
+  exit 1
+fi
+
+# Build the adopt plan with jq, NEVER with printf.
+#
+# `printf '{"name":"%s"}' "$x"` splices the value straight into a JSON document,
+# so an account name containing a quote or a brace produces a document that is
+# still parseable but no longer says what this script meant — a crafted
+# `--account` value could inject additional keys and sail through the
+# `json.load` check below, because the result IS valid JSON. `jq -n --arg`
+# escapes every value as a JSON string, which is the only way the document can
+# be trusted to mean what it looks like.
+plan_json() { # plan_json <name> <rg> <sub>
+  jq -cn --arg name "$1" --arg rg "$2" --arg sub "$3" \
+    '{purview: {mode: "adopt", target: {name: $name, rg: $rg, sub: $sub}}}'
+}
+
 # Emit the envelope and exit 0. Every success path goes through here so a
 # malformed document cannot escape: the JSON is parsed before it is written, and
 # a parse failure is a hard failure rather than a plan the deploy chokes on.
@@ -131,7 +160,7 @@ EOF
 # ---------------------------------------------------------------------------
 # Enumerate the subscriptions this identity can actually read.
 # ---------------------------------------------------------------------------
-SUBS_ERR="$(mktemp)"
+SUBS_ERR="$(newtmp)"
 if ! SUBS_RAW="$(az account list --all --query "[?state=='Enabled'].id" -o tsv 2>"$SUBS_ERR")"; then
   echo "::error::[purview-adopt] could NOT list subscriptions, so what this tenant already owns is UNKNOWN — not 'nothing'. Adoption cannot be decided from here. az said:" >&2
   sed 's/^/  /' "$SUBS_ERR" >&2 || true
@@ -151,11 +180,11 @@ log "reading $SUB_COUNT subscription(s) this identity can see"
 # ---------------------------------------------------------------------------
 # DISCOVER. One row per account: name<TAB>rg<TAB>location<TAB>subscription
 # ---------------------------------------------------------------------------
-FOUND="$(mktemp)"
+FOUND="$(newtmp)"
 UNREADABLE=0
 UNREADABLE_SUBS=""
 for sub in $SUBS; do
-  ERR="$(mktemp)"
+  ERR="$(newtmp)"
   # A multiselect LIST `[name,resourceGroup,location]`, not a hash. `az -o tsv`
   # emits a multiselect HASH's columns in alphabetical key order rather than the
   # order they were written, so `{name:name,rg:resourceGroup,loc:location}`
@@ -215,8 +244,7 @@ if [ -n "$ACCOUNT" ]; then
       # enumerate. Bind it and let the template's `existing` read be the
       # authority, but say plainly that this was not verified here.
       log "'$ACCOUNT' was not visible to discovery, but --account-rg was supplied, so it will be bound on the operator's word. It was NOT validated by this script: if it does not exist, the deployment fails at the template's existing-resource read."
-      emit "$(printf '{"purview":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}}}' \
-              "$ACCOUNT" "$ACCOUNT_RG" "${ACCOUNT_SUB:-}")"
+      emit "$(plan_json "$ACCOUNT" "$ACCOUNT_RG" "${ACCOUNT_SUB:-}")"
     fi
     echo "::error::[purview-adopt] the supplied Purview account '$ACCOUNT' was not found in any subscription this identity can read, and no --account-rg was given to bind it blind." >&2
     echo "::error::  Remediation: re-run with --account-rg <resource-group> (and --account-sub <id> if it lives in another subscription), or omit --account and let discovery choose. Accounts seen: ${TOTAL}." >&2
@@ -239,7 +267,7 @@ if [ -n "$ACCOUNT" ]; then
   fi
 
   log "VALIDATED: binding '$A_NAME' (rg=$A_RG, region=$A_LOC, sub=$A_SUB)"
-  emit "$(printf '{"purview":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}}}' "$A_NAME" "$A_RG" "$A_SUB")"
+  emit "$(plan_json "$A_NAME" "$A_RG" "$A_SUB")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -268,7 +296,7 @@ else
     log "ADOPTING '$A_NAME' (rg=$A_RG, region=$A_LOC, sub=$A_SUB) — chosen because it is $CHOSEN_WHY."
     log "  To bind a different one:  --account <name> [--account-rg <rg>] [--account-sub <id>]"
     log "  To deploy a new one:      --create-new"
-    emit "$(printf '{"purview":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}}}' "$A_NAME" "$A_RG" "$A_SUB")"
+    emit "$(plan_json "$A_NAME" "$A_RG" "$A_SUB")"
   fi
 fi
 

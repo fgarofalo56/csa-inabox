@@ -294,12 +294,20 @@ var existingPurviewSub = adoptSub(adopt, 'purview')
 
 var provisionPurview = deployDMLZ && adoptMode(adopt, 'purview') == 'create'
 
-// An adopt decision needs BOTH coordinates to be actionable: `resourceGroup(sub,
-// '')` is a deployment that cannot be submitted, so an adopt plan carrying a
-// name but no resource group must not reach ARM as a malformed scope. The
-// preflight (scripts/csa-loom/discover-purview-adopt-plan.sh) refuses to emit
-// such a plan; this condition is the template-side backstop, and its failure
-// mode is the pre-existing create path, never a broken deployment.
+// An adopt decision needs BOTH coordinates to be actionable: a resource id
+// cannot be built from an empty resource group. The preflight
+// (scripts/csa-loom/discover-purview-adopt-plan.sh) refuses to emit such a plan,
+// and this condition is the template-side backstop.
+//
+// BE PRECISE ABOUT WHAT THE BACKSTOP DOES: it does NOT fall back to creating an
+// account. `mode:'adopt'` with an empty `rg` leaves BOTH `provisionPurview` and
+// `adoptPurview` false, so nothing is created and nothing is bound — the DMLZ
+// deploys with no catalog, and `purviewBindingMode` reports `none`. That is the
+// honest outcome rather than the safe-sounding one: silently creating an account
+// because a plan was malformed is precisely the duplicate this work removes, and
+// on a tenant at its cap it would fail the whole deployment. The state is
+// reachable — `plan-to-arm.ts` emits `rg: d.target?.rg ?? ''` — so it is
+// described here as what it is, not as a graceful degradation.
 var adoptPurview = deployDMLZ && adoptMode(adopt, 'purview') == 'adopt' && !empty(existingPurviewAccount) && !empty(existingPurviewRg)
 
 // The plan's `sub` is optional — an adopted account in THIS subscription is the
@@ -319,15 +327,44 @@ module purview 'modules/purview.bicep' = if (provisionPurview) {
   }
 }
 
-// BIND to the account the tenant already owns. Read-only: see the module header
-// for why it deliberately writes nothing to a resource Loom does not own.
-module purviewAdopted 'modules/purview-existing.bicep' = if (adoptPurview) {
-  name: '${baseName}-prv-adopt'
-  scope: resourceGroup(existingPurviewSubEff, existingPurviewRg)
-  params: {
-    name: existingPurviewAccount
-    expectedLocation: location
-  }
+// BIND to the account the tenant already owns.
+//
+// THIS IS AN `existing` RESOURCE, NOT A MODULE, AND THE DIFFERENCE IS RBAC.
+// A module scoped to another resource group compiles to a
+// `Microsoft.Resources/deployments` resource IN THAT RESOURCE GROUP, which
+// requires `Microsoft.Resources/deployments/write` there. Reader is not enough.
+// The Commercial orchestrator records what that costs
+// (platform/fiab/bicep/main.bicep, cross-sub lake grants): an identity holding
+// neither role "does not get a skipped grant — it gets AuthorizationFailed and
+// the WHOLE deployment fails", the P0 that failed two Commercial deploys on
+// 2026-08-13 (#3333). Commercial's answer was to default that path OFF behind a
+// measured probe.
+//
+// Adoption cannot be default-OFF — it is the whole point of #3577 — so it must
+// instead need nothing a reader lacks. An `existing` resource compiles to
+// `reference()` / `resourceId()`, emits NO resource into the template, and
+// therefore submits no nested deployment: reading the account is all it needs,
+// which is the same right discovery already proved by listing it.
+//
+// It carries no `= if (...)`: bicep does not allow a condition on an `existing`
+// resource. Every read of it below is instead guarded by `adoptPurview` inside
+// an `if()`, whose branches ARM evaluates lazily — the same shape
+// `acrForScriptRunner` uses in the Commercial admin-plane (an unconditional
+// `existing` whose only consumer is conditional).
+//
+// The coordinates fall back to Loom's OWN DMLZ resource group and an inert name
+// when not adopting. `existingPurviewAccount`/`Rg` are empty strings then, and
+// an empty name or resource group compiles to a MALFORMED resource id. Nothing
+// reads that id — both consumers sit behind `adoptPurview` — but a well-formed
+// id costs one expression and removes the failure mode entirely rather than
+// leaving it resting on evaluation order. The placeholder is never created and
+// never read; it exists only so the id is syntactically valid.
+var adoptedPurviewName = adoptPurview ? existingPurviewAccount : 'loom-no-adopted-purview'
+var adoptedPurviewRg = adoptPurview ? existingPurviewRg : 'rg-${baseName}-dmlz-${location}'
+
+resource purviewAdopted 'Microsoft.Purview/accounts@2021-12-01' existing = {
+  name: adoptedPurviewName
+  scope: resourceGroup(existingPurviewSubEff, adoptedPurviewRg)
 }
 
 // ─── Streaming Infrastructure ────────────────────────────────────────────────
@@ -493,18 +530,30 @@ output adxClusterUri string = (deployStreaming && adx != null) ? adx!.outputs.cl
 // outputs can then tell an account Loom created from one it adopted, instead of
 // inferring it from a name that looks conventional — the mapping is recorded
 // and inspectable rather than guessed (auto-bind-by-default.md §2).
-output purviewAccountName string = (provisionPurview && purview != null)
-  ? purview!.outputs.accountName
-  : ((adoptPurview && purviewAdopted != null) ? purviewAdopted!.outputs.accountName : '')
+//
+// ONLY `location` is read from the adopted account. An earlier revision also
+// surfaced `identity.principalId`, `properties.endpoints.catalog` and
+// `.scan` — none of which anything consumed. That was not merely dead weight:
+// they lived in a nested-deployment module, and a nested deployment evaluates
+// ALL of its outputs at apply time whether or not the parent reads them, so an
+// adopted account with `identity.type: 'None'` (or UserAssigned-only) would
+// have failed the deployment on a property that does not exist. What-if does
+// not evaluate nested outputs, so no what-if receipt could have caught it. The
+// binding needs none of those values, so they are gone rather than guarded.
+output purviewAccountName string = provisionPurview ? '${baseName}-prv' : (adoptPurview ? existingPurviewAccount : '')
 
+// Built from `resourceId()`, not `reference()` — an id needs no runtime read.
 output purviewAccountId string = (provisionPurview && purview != null)
   ? purview!.outputs.accountId
-  : ((adoptPurview && purviewAdopted != null) ? purviewAdopted!.outputs.accountId : '')
+  : (adoptPurview ? purviewAdopted.id : '')
 
 @description('created | adopted | none. `none` means the DMLZ was requested but no account was created OR bound — read the deploy log, do not assume Purview is wired.')
 output purviewBindingMode string = provisionPurview ? 'created' : (adoptPurview ? 'adopted' : 'none')
 
 @description('The adopted account\'s ACTUAL region, read from ARM — not the region that was asked for. Empty when nothing was bound. A value different from the deployment location is a cross-region binding: workable (the Data Map is reached by account host) and disclosed rather than silently normalised.')
-output purviewAccountLocation string = (provisionPurview && purview != null)
-  ? location
-  : ((adoptPurview && purviewAdopted != null) ? purviewAdopted!.outputs.accountLocation : '')
+output purviewAccountLocation string = provisionPurview ? location : (adoptPurview ? purviewAdopted.location : '')
+
+@description('True when the bound account sits in the deployment region. False is a DISCLOSURE, not a failure — cross-region adoption works because the Data Map is reached by account host. Always true for a created account; false with an empty binding is meaningless, so read it with purviewBindingMode.')
+output purviewRegionMatches bool = provisionPurview
+  ? true
+  : (adoptPurview ? toLower(purviewAdopted.location) == toLower(location) : false)

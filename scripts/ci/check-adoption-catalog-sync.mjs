@@ -34,7 +34,7 @@
  *
  * Mutation-proven by scripts/ci/__tests__/adoption-catalog-sync.test.mjs.
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,29 +49,94 @@ export const PATHS = {
   commercialParams: 'platform/fiab/bicep/params/commercial-full.bicepparam',
   discoveryModel: 'apps/fiab-console/lib/deploy/discovery-model.ts',
   govBicep: 'deploy/bicep/gov/main.bicep',
+  dmlzGovernance: 'deploy/bicep/DMLZ/modules/governance/governance.bicep',
 };
 
 /**
- * Orchestrators that create adoptable services and must therefore honour an
- * adopt decision. `rootBicep` is Commercial; `govBicep` is the sovereign
- * (Azure Government) orchestrator that deploy-gov.yml submits.
+ * Templates that CREATE adoptable services and must therefore honour an adopt
+ * decision, keyed to the file the check reads.
  *
- * WHY THE GOV FILE IS LISTED HERE AT ALL (#3577)
- * ---------------------------------------------
- * Until this entry existed, every check below read `platform/fiab/bicep/main.bicep`
- * and nothing else — so this guard's population was ONE file while the repo had
- * TWO orchestrators creating the same services. `deploy/bicep/gov/main.bicep`
- * created a Purview account on `= if (deployDMLZ)` with no adopt path at all,
- * and the guard whose entire purpose is "an adopt decision must suppress the
- * new resource" reported OK throughout, because Gov was never in the set it
- * examined.
+ * WHY THIS IS NOT THE WHOLE STORY — see assertPopulationIsComplete() below.
+ * Listing orchestrators by hand is how this guard was wrong in the first place:
+ * it read `platform/fiab/bicep/main.bicep` and nothing else while the repo had
+ * THREE templates creating Purview accounts. `deploy/bicep/gov/main.bicep`
+ * created one on `= if (deployDMLZ)` (#3577) and
+ * `deploy/bicep/DMLZ/modules/governance/governance.bicep` created one on
+ * `= if (deployModules.governance)` — with `params.USGov.dev.json` shipping
+ * `governance: true` against the same Azure Government tenant, whose Purview cap
+ * is 5 per region. Neither was in the guard's population, so it reported OK on
+ * both.
  *
- * That defect shipped: Purview accounts are capped at 5 per tenant per region,
- * and deploy-gov.yml run 31917112453 was refused at preflight in usgovvirginia.
- * A guard that cannot see a consumer cannot protect it
- * (csa_loom_seventh_consumer_broke_the_deploy).
+ * So the list below is the DEPTH of the check, and the derivation below is its
+ * BREADTH: a template submitted by a workflow that this file does not know about
+ * fails the guard rather than passing silently.
  */
-const GOV_SERVICE_KEYS = ['purview'];
+const ADOPT_HONOURING_TEMPLATES = [
+  { file: 'govBicep', enableFlag: 'deployDMLZ', keys: ['purview'] },
+  { file: 'dmlzGovernance', enableFlag: 'bool(deployModules.governance)', keys: ['purview'] },
+];
+
+/** ARM types whose creation must be gated on an adopt decision. */
+const ADOPTABLE_ARM_TYPES = ['Microsoft.Purview/accounts'];
+
+/**
+ * Every template path any workflow hands to `az deployment ... --template-file`.
+ * DERIVED, never listed — this is the check that closes the class instead of the
+ * instance.
+ */
+export function submittedTemplates(workflowFiles) {
+  const found = new Map();
+  for (const [name, body] of Object.entries(workflowFiles)) {
+    // `--template-file "path"` / `--template-file path`, possibly after a
+    // backslash continuation. Quotes optional, as both styles are in the tree.
+    for (const m of body.matchAll(/--template-file\s+"?([^\s"\\]+\.bicep)"?/g)) {
+      // Workspace-rooted forms are the SAME template as their repo-relative
+      // spelling — deploy-fiab-gcc/gcch/il5 all submit
+      // `$GITHUB_WORKSPACE/platform/fiab/bicep/main.bicep`. Without this the
+      // guard reports the Commercial orchestrator as an unreadable unknown,
+      // which is a false alarm that would train people to ignore it.
+      const tpl = m[1]
+        .replace(/^\$\{?GITHUB_WORKSPACE\}?\//, '')
+        .replace(/^\$\{\{\s*github\.workspace\s*\}\}\//, '')
+        .replace(/^\.\//, '');
+      if (!found.has(tpl)) found.set(tpl, []);
+      if (!found.get(tpl).includes(name)) found.get(tpl).push(name);
+    }
+  }
+  return found;
+}
+
+/**
+ * A submitted template that creates an adoptable ARM type must be under this
+ * guard. Anything submitted but unreadable is UNKNOWN, which is not a pass.
+ */
+export function assertPopulationIsComplete(workflowFiles, templateBodies) {
+  const problems = [];
+  const known = new Set(Object.values(PATHS));
+
+  for (const [tpl, workflows] of submittedTemplates(workflowFiles)) {
+    if (known.has(tpl)) continue;
+    const body = templateBodies[tpl];
+    if (body === undefined) {
+      problems.push(
+        `${tpl} is submitted by ${workflows.join(', ')} but could not be read, so whether it creates an ` +
+          `adoptable service is UNKNOWN. A guard that cannot see a template must not report OK on it.`,
+      );
+      continue;
+    }
+    for (const armType of ADOPTABLE_ARM_TYPES) {
+      if (new RegExp(`'${armType}@`, 'i').test(body)) {
+        problems.push(
+          `${tpl} (submitted by ${workflows.join(', ')}) declares '${armType}' but is not in PATHS, so this ` +
+            `guard does not check that it honours an adopt decision. Add it to PATHS + ` +
+            `ADOPT_HONOURING_TEMPLATES, or stop submitting it. This is exactly how the Gov and DMLZ ` +
+            `Purview creators went unnoticed (#3577).`,
+        );
+      }
+    }
+  }
+  return problems;
+}
 
 /**
  * The catalog must never silently shrink. This floor is the count of
@@ -358,7 +423,7 @@ export function runChecks(files) {
   }
 
   // ---------------------------------------------------------------------------
-  // G1..G3 — THE SOVEREIGN ORCHESTRATOR HONOURS THE SAME DECISIONS.
+  // G1..G4 — every NON-COMMERCIAL template that creates an adoptable service.
   //
   // cloud-parity.md: a capability that works in Commercial and not in Gov is
   // incomplete, not "Commercial-first". Adoption is exactly such a capability —
@@ -366,71 +431,103 @@ export function runChecks(files) {
   // tenant per region and a sovereign tenant that already runs Purview is the
   // normal case, not the exception.
   //
-  // These checks are deliberately keyed on the SHAPE of the gate rather than
-  // byte-comparing the Commercial line: the Gov orchestrator's enable flag is
-  // `deployDMLZ` (its landing-zone toggle), not `purviewEnabled`, so requiring
-  // an identical line would force a redundant second flag whose only purpose is
-  // to satisfy a guard.
+  // These checks are keyed on the SHAPE of the gate rather than byte-comparing
+  // the Commercial line, because each orchestrator's enable flag differs
+  // (`deployDMLZ`, `bool(deployModules.governance)`). Requiring an identical
+  // line would force a redundant flag whose only purpose is to satisfy a guard.
   // ---------------------------------------------------------------------------
-  const govLines = files.govBicep.split('\n');
+  for (const tpl of ADOPT_HONOURING_TEMPLATES) {
+    const src = files[tpl.file];
+    const label = PATHS[tpl.file];
+    const lines = src.split('\n');
 
-  // G1 — the transport exists. Without the bag there is nothing to carry a
-  // decision, and every service silently reverts to create-always.
-  if (!/^param adopt object = \{\}$/m.test(files.govBicep)) {
-    problems.push(
-      `${PATHS.govBicep} does not declare \`param adopt object = {}\`. Without it the sovereign ` +
-        `orchestrator cannot receive an adopt decision at all, and every service it deploys is ` +
-        `create-always — which is how the Gov Purview deploy hit the per-tenant cap (#3577).`,
-    );
+    // G1 — the transport exists. Without the bag there is nothing to carry a
+    // decision, and every service silently reverts to create-always.
+    if (!/^\s*param adopt object = \{\}$/m.test(src)) {
+      problems.push(
+        `${label} does not declare \`param adopt object = {}\`. Without it this template cannot receive ` +
+          `an adopt decision at all, and every service it deploys is create-always — which is how the Gov ` +
+          `Purview deploy hit the per-tenant cap (#3577).`,
+      );
+    }
+
+    for (const key of tpl.keys) {
+      const def = catalog.find((d) => d.key === key);
+      if (!def) {
+        problems.push(
+          `${label} is expected to honour the '${key}' adopt decision, but '${key}' is not in the adoption ` +
+            `catalog. Remove it from ADOPT_HONOURING_TEMPLATES deliberately, or restore the entry.`,
+        );
+        continue;
+      }
+
+      // G2 — the suppression var exists and is derived from the SAME plan key
+      // the catalog and the console use. A template-local key would mean a plan
+      // the wizard emits is silently ignored here.
+      const gateRe = new RegExp(`^var ${def.provisionVar} = .*adoptMode\\(adopt, '${key}'\\) == 'create'`, 'm');
+      if (!gateRe.test(src)) {
+        problems.push(
+          `${label} must declare \`var ${def.provisionVar} = <enable flag> && adoptMode(adopt, '${key}') == 'create'\` ` +
+            `and does not. Without it, choosing "adopt" still deploys a new ${def.label}.`,
+        );
+        continue;
+      }
+
+      // G3 — the module that CREATES the service is gated on that var, not on
+      // the landing-zone toggle alone. This is the exact revert that reopens
+      // #3577. Matched on the module PATH ending in <key>.bicep, case-insensitive,
+      // because the trees disagree on casing and depth
+      // ('modules/purview.bicep' vs '../Purview/purview.bicep').
+      const creatorLines = lines.filter(
+        (l) => /=\s*if\s*\(/.test(l) && new RegExp(`[/']${key}\\.bicep'`, 'i').test(l),
+      );
+      if (creatorLines.length === 0) {
+        problems.push(
+          `${label}: no module invocation matching '<path>/${key}.bicep' is gated \`= if (…)\`. Either the ` +
+            `creator moved (update this guard) or its condition was removed.`,
+        );
+      } else if (!creatorLines.some((l) => l.includes(def.provisionVar))) {
+        problems.push(
+          `${label}: the module that creates ${def.label} is gated on ` +
+            `${creatorLines.map((l) => l.trim()).join(', ')} — it must carry '${def.provisionVar}', or it ` +
+            `deploys a new one even when the plan says adopt (#3577).`,
+        );
+      }
+
+      // G4 — an adopt decision must actually BIND something. A suppression that
+      // creates nothing and binds nothing is not adoption, it is a silent skip,
+      // and the catalog reserves that meaning for mode 'skip'.
+      //
+      // The binding must be an `existing` RESOURCE, never a module scoped to the
+      // adopted resource group: a cross-scope module compiles to a
+      // Microsoft.Resources/deployments resource THERE and needs
+      // `Microsoft.Resources/deployments/write`, which Reader does not carry —
+      // the AuthorizationFailed P0 that failed two Commercial deploys on
+      // 2026-08-13 (#3333). An `existing` resource needs only read.
+      const bindsExisting = new RegExp(`resource \\w+ '${def.armType}@[^']+' existing`, 'i').test(src);
+      if (!bindsExisting) {
+        problems.push(
+          `${label}: declares no \`resource … '${def.armType}@…' existing\`, so an 'adopt' decision would ` +
+            `suppress the new ${def.label} and bind nothing — a silent skip wearing adoption's name.`,
+        );
+      }
+      const bindsViaModule = lines.some(
+        (l) => /^\s*module\s/.test(l) && new RegExp(`${key}-existing\\.bicep`, 'i').test(l),
+      );
+      if (bindsViaModule) {
+        problems.push(
+          `${label}: binds the adopted ${def.label} through a MODULE. A module scoped to the adopted ` +
+            `resource group compiles to a nested deployment there and requires ` +
+            `Microsoft.Resources/deployments/write — Reader is not enough, and the whole deployment fails ` +
+            `with AuthorizationFailed (#3333). Use \`resource … existing\`, which needs only read.`,
+        );
+      }
+    }
   }
 
-  for (const key of GOV_SERVICE_KEYS) {
-    const def = catalog.find((d) => d.key === key);
-    if (!def) {
-      problems.push(
-        `${PATHS.govBicep} is expected to honour the '${key}' adopt decision, but '${key}' is not ` +
-          `in the adoption catalog. Remove it from GOV_SERVICE_KEYS deliberately, or restore the entry.`,
-      );
-      continue;
-    }
-
-    // G2 — the suppression var exists and is derived from the SAME plan key the
-    // catalog and the console use. A Gov-only key would mean a plan the wizard
-    // emits is silently ignored here.
-    const gateRe = new RegExp(`^var ${def.provisionVar} = .*adoptMode\\(adopt, '${key}'\\) == 'create'`, 'm');
-    if (!gateRe.test(files.govBicep)) {
-      problems.push(
-        `${PATHS.govBicep} must declare \`var ${def.provisionVar} = <enable flag> && adoptMode(adopt, '${key}') == 'create'\` ` +
-          `and does not. Without it, choosing "adopt" still deploys a new ${def.label} in the sovereign boundary.`,
-      );
-      continue;
-    }
-
-    // G3 — the module that CREATES the service is gated on that var, not on the
-    // landing-zone toggle alone. This is the exact revert that would reopen
-    // #3577: restoring `= if (deployDMLZ)` on the purview module.
-    const creatorGated = govLines.some(
-      (l) => /=\s*if\s*\(/.test(l) && l.includes(`modules/${key}.bicep`) && l.includes(def.provisionVar),
-    );
-    if (!creatorGated) {
-      problems.push(
-        `${PATHS.govBicep}: the module that creates ${def.label} (modules/${key}.bicep) is not gated ` +
-          `\`= if (… ${def.provisionVar} …)\`. It would deploy a new one even when the plan says adopt — ` +
-          `the defect that made the Gov deploy fail against a tenant already at its ${def.label} cap (#3577).`,
-      );
-    }
-
-    // G4 — an adopt decision must actually BIND something. A suppression that
-    // creates nothing and binds nothing is not adoption, it is a silent skip,
-    // and the catalog reserves that meaning for mode 'skip'.
-    const binds = govLines.some((l) => /=\s*if\s*\(/.test(l) && l.includes(`modules/${key}-existing.bicep`));
-    if (!binds) {
-      problems.push(
-        `${PATHS.govBicep}: nothing references modules/${key}-existing.bicep, so an 'adopt' decision would ` +
-          `suppress the new ${def.label} and bind nothing — a silent skip wearing adoption's name.`,
-      );
-    }
-  }
+  // G0 — is this guard even LOOKING at everything it should? Derived from the
+  // workflows, so a template added tomorrow is covered the day it lands.
+  problems.push(...assertPopulationIsComplete(files.workflows ?? {}, files.templateBodies ?? {}));
 
   return { problems, catalog, adoptable };
 }
@@ -444,7 +541,38 @@ export function loadFiles() {
     commercialParams: read(PATHS.commercialParams),
     discoveryModel: read(PATHS.discoveryModel),
     govBicep: read(PATHS.govBicep),
+    dmlzGovernance: read(PATHS.dmlzGovernance),
+    // The DERIVED half. Read from disk, not listed: the whole point is that a
+    // template nobody remembered to register still gets noticed.
+    workflows: readWorkflows(),
+    templateBodies: readSubmittedTemplateBodies(),
   };
+}
+
+/** Every workflow body, keyed by file name. */
+function readWorkflows() {
+  const dir = resolve(REPO, '.github', 'workflows');
+  const out = {};
+  for (const f of readdirSync(dir)) {
+    if (!/\.ya?ml$/.test(f)) continue;
+    out[f] = readFileSync(resolve(dir, f), 'utf8').replace(/\r\n/g, '\n');
+  }
+  return out;
+}
+
+/**
+ * Body of every template a workflow submits, so the population check can ask
+ * what each one actually declares. A path that does not exist is recorded as
+ * `undefined` — deliberately distinct from an empty body, so "I could not read
+ * it" cannot be mistaken for "it declares nothing".
+ */
+function readSubmittedTemplateBodies() {
+  const out = {};
+  for (const tpl of submittedTemplates(readWorkflows()).keys()) {
+    const p = resolve(REPO, tpl);
+    out[tpl] = existsSync(p) ? readFileSync(p, 'utf8').replace(/\r\n/g, '\n') : undefined;
+  }
+  return out;
 }
 
 function main() {
