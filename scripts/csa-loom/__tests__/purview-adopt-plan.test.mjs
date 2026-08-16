@@ -1,0 +1,319 @@
+/**
+ * Behaviour proof for scripts/csa-loom/discover-purview-adopt-plan.sh.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * The script decides whether the Gov deploy ADOPTS an existing Purview account
+ * or asks ARM for a new one, and Purview account quota is per-tenant per-region
+ * and is 5 (#3577). Every branch below is therefore a deploy outcome, not a
+ * cosmetic one:
+ *
+ *   adopt chosen wrongly  -> Loom binds the customer's wrong catalog
+ *   adopt missed          -> the deploy is refused at preflight, as it was on
+ *                            deploy-gov.yml run 31917112453
+ *   quota misreported     -> the operator is sent to fix something that is fine
+ *
+ * The script's OWN logic runs unmodified; only `az` is stubbed
+ * (__tests__/fixtures/az-stub.sh), so this proves the shipped code path rather
+ * than a model of it. Per csa_loom_fixtures_that_model_the_code, a fixture that
+ * re-implements the subject proves nothing.
+ *
+ * Run: node --test scripts/csa-loom/__tests__/purview-adopt-plan.test.mjs
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, copyFileSync, chmodSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = resolve(HERE, '..', '..', '..');
+const SCRIPT = join(REPO, 'scripts', 'csa-loom', 'discover-purview-adopt-plan.sh');
+const STUB_SRC = join(HERE, 'fixtures', 'az-stub.sh');
+
+/**
+ * Run the script with the stub `az` first on PATH.
+ *
+ * The stub is prepended to PATH *inside* bash, never from Node. On Windows
+ * (Git Bash) `process.env.PATH` is a Windows-form list separated by `;` whose
+ * entries carry drive letters, so building `${binDir}:${process.env.PATH}` in
+ * Node yields a PATH bash reads as the entries `C` and `\Users\...`. The stub is
+ * then NOT found, the REAL `az` runs — against a different tenant, per
+ * csa_loom_workstation_az_is_a_different_tenant — and the suite hangs on a live
+ * Azure call instead of testing anything. That is exactly what happened the
+ * first time this file was written. MSYS converts PATH to POSIX form when bash
+ * starts, so the prepend is only correct once we are inside it.
+ *
+ * Returns { code, stdout, stderr, plan }; `plan` is the parsed `adopt` value
+ * when the run wrote an envelope, else null.
+ */
+function run(scenario, args = []) {
+  const dir = mkdtempSync(join(tmpdir(), 'purview-adopt-'));
+  const binDir = join(dir, 'bin');
+  mkdirSync(binDir);
+  const stub = join(binDir, 'az');
+  copyFileSync(STUB_SRC, stub);
+  chmodSync(stub, 0o755);
+
+  const out = join(dir, 'adopt.json');
+  const errFile = join(dir, 'stderr.txt');
+
+  // Every path arrives as env, so none is interpolated into the command string:
+  // a repo path containing a space would otherwise split into two words and the
+  // failure would read as a bug in the script rather than in this harness.
+  const script = [
+    'set -u',
+    'PATH="$(cygpath -u "$STUB_BIN" 2>/dev/null || printf %s "$STUB_BIN"):$PATH"',
+    'export PATH',
+    'S="$(cygpath -u "$SCRIPT_PATH" 2>/dev/null || printf %s "$SCRIPT_PATH")"',
+    'O="$(cygpath -u "$OUT_PATH" 2>/dev/null || printf %s "$OUT_PATH")"',
+    'E="$(cygpath -u "$ERR_PATH" 2>/dev/null || printf %s "$ERR_PATH")"',
+    'bash "$S" --location usgovvirginia --out "$O" "$@" 2>"$E"',
+  ].join('\n');
+
+  let code = 0;
+  let stdout = '';
+  try {
+    stdout = execFileSync('bash', ['-c', script, '--', ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        AZ_SCENARIO: scenario,
+        STUB_BIN: binDir,
+        SCRIPT_PATH: SCRIPT,
+        OUT_PATH: out,
+        ERR_PATH: errFile,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    code = err.status ?? 1;
+    stdout = err.stdout ?? '';
+  }
+
+  const stderr = existsSync(errFile) ? readFileSync(errFile, 'utf8') : '';
+
+  let plan = null;
+  if (existsSync(out)) {
+    const doc = JSON.parse(readFileSync(out, 'utf8'));
+    plan = doc.parameters.adopt.value;
+  }
+  return { code, stdout, stderr, plan };
+}
+
+/**
+ * Memoised view of `run`. Each invocation spawns three nested processes and
+ * costs 3-13s on Windows, so re-running an identical scenario would push the
+ * suite past its timeout for no added signal. The script is deterministic by
+ * design — `the choice is DETERMINISTIC` asserts exactly that, and does so with
+ * uncached calls so the cache can never be what makes it pass.
+ */
+const CACHE = new Map();
+function runCached(scenario, args = []) {
+  // JSON, not a delimiter-joined string. The first version of this line used
+  // literal NUL bytes as the separator instead of an escape sequence, which
+  // made the whole file BINARY to git: the PR UI rendered it as
+  // "Bin 0 -> 13339 bytes" and the proof of the discovery behaviour could not
+  // be read in review at all.
+  const key = JSON.stringify([scenario, args]);
+  if (!CACHE.has(key)) CACHE.set(key, run(scenario, args));
+  return CACHE.get(key);
+}
+
+/**
+ * Proof that the stub really is the `az` the script calls. Without it, a PATH
+ * mistake would make every scenario below exercise the real CLI (or none) and
+ * the suite could pass while measuring nothing.
+ */
+test('harness: the STUB az is the one on PATH, not the real CLI', () => {
+  const { stderr } = runCached('greenfield');
+  assert.match(
+    stderr,
+    /reading 2 subscription\(s\)/,
+    'the stub reports exactly two subscriptions; the real CLI would not',
+  );
+});
+
+test('at quota: adopts an existing account instead of asking for a sixth', () => {
+  const { code, plan } = runCached('atquota');
+  assert.equal(code, 0, 'a tenant at quota that OWNS an adoptable account must not fail');
+  assert.equal(plan.purview.mode, 'adopt');
+  assert.equal(plan.purview.target.rg, 'rg-gov-a');
+  assert.equal(plan.purview.target.sub, 'sub-aaa');
+});
+
+test('the choice is DETERMINISTIC, not ARM list order', () => {
+  // The stub emits echo, alpha, delta, charlie, bravo in that order, so an
+  // implementation that followed ARM's ordering would answer 'pv-echo'. Both
+  // calls are UNCACHED: a memoised second call would prove only that a Map
+  // returns what was put in it.
+  const a = run('atquota').plan.purview.target.name;
+  const b = run('atquota').plan.purview.target.name;
+  assert.equal(a, 'pv-alpha');
+  assert.equal(b, 'pv-alpha');
+});
+
+test('every discovered account reaches the candidate list — including the last one', () => {
+  // Regression: the discovery loop fed `read` a final line with no terminator,
+  // so the LAST account of every subscription was dropped. A five-account
+  // subscription silently became four and a one-account subscription discovered
+  // nothing at all. Asserting on the count is what catches an off-by-one here;
+  // asserting only that "an account was adopted" passed throughout the bug.
+  const { stderr } = runCached('atquota');
+  assert.match(stderr, /discovered 5 Purview account\(s\)/);
+  assert.match(stderr, /5 of them in usgovvirginia/);
+  for (const n of ['pv-alpha', 'pv-bravo', 'pv-charlie', 'pv-delta', 'pv-echo']) {
+    assert.match(stderr, new RegExp(n), `${n} is missing from the presented candidates`);
+  }
+});
+
+test('greenfield: emits an EMPTY plan so the template still creates one', () => {
+  const { code, plan, stderr } = runCached('greenfield');
+  assert.equal(code, 0);
+  assert.deepEqual(plan, {}, 'an empty plan is what makes adoptMode() default to create');
+  assert.match(stderr, /there is room/i);
+});
+
+test('greenfield says it MEASURED the room, and does not claim it when it did not', () => {
+  const readable = runCached('greenfield').stderr;
+  assert.match(readable, /no Purview account exists in usgovvirginia across the 2 subscription\(s\) read/);
+  assert.match(readable, /there is room\. Proceeding to CREATE \(greenfield\)/);
+
+  // The SAME zero, but with one subscription unenumerable. The zero now means
+  // something strictly weaker, and the script must say so rather than repeat
+  // the greenfield conclusion. Note the assertion targets the CONCLUSION
+  // sentence, not the words "there is room" — the honest message legitimately
+  // contains "Whether there is room is UNKNOWN", and a looser regex would fail
+  // the correct behaviour.
+  const partial = runCached('atquota-unreadable').stderr;
+  assert.match(partial, /LOWER BOUND/);
+  assert.match(partial, /could NOT enumerate/i);
+  assert.match(partial, /Whether there is room is UNKNOWN/);
+  assert.doesNotMatch(partial, /there is room\. Proceeding to CREATE \(greenfield\)/);
+});
+
+test('cross-region candidate is adopted AND the crossing is disclosed', () => {
+  const { code, plan, stderr } = runCached('crossregion');
+  assert.equal(code, 0);
+  assert.equal(plan.purview.target.name, 'pv-arizona');
+  assert.match(stderr, /no account exists in usgovvirginia/i);
+});
+
+test('an account in another subscription is adopted with its own sub id', () => {
+  const { plan } = runCached('othersub');
+  assert.equal(plan.purview.target.name, 'pv-remote');
+  assert.equal(
+    plan.purview.target.sub,
+    'sub-bbb',
+    'a cross-sub binding needs the sub, or the template scope resolves to the wrong subscription',
+  );
+});
+
+test('--account: a supplied account is validated and bound', () => {
+  const { code, plan } = runCached('atquota', ['--account', 'pv-charlie']);
+  assert.equal(code, 0);
+  assert.equal(plan.purview.target.name, 'pv-charlie');
+  assert.equal(plan.purview.target.rg, 'rg-gov-c');
+});
+
+test('--account: an unknown name FAILS CLOSED with a remediation, it does not fall back to create', () => {
+  const { code, plan, stderr } = runCached('atquota', ['--account', 'pv-does-not-exist']);
+  assert.notEqual(code, 0, 'silently creating instead would ask for a sixth account');
+  assert.equal(plan, null);
+  assert.match(stderr, /--account-rg/);
+});
+
+test('--account with --account-rg binds blind, and SAYS it was not validated', () => {
+  const { code, plan, stderr } = runCached('greenfield', [
+    '--account', 'pv-invisible', '--account-rg', 'rg-elsewhere', '--account-sub', 'sub-zzz',
+  ]);
+  assert.equal(code, 0);
+  assert.equal(plan.purview.target.name, 'pv-invisible');
+  assert.equal(plan.purview.target.sub, 'sub-zzz');
+  assert.match(stderr, /NOT validated/i);
+});
+
+test('creating into a FULL region fails closed with the R6 remediation', () => {
+  // This is the branch that actually has a population: --create-new leaves the
+  // five in-region accounts un-adopted, so the script can see the region is
+  // full. An earlier draft placed this check where TOTAL was necessarily 0,
+  // which made the condition unreachable — a guard with no population.
+  const { code, plan, stderr } = runCached('atquota', ['--create-new']);
+  assert.notEqual(code, 0, 'a create that cannot succeed must be refused before ARM, not after');
+  assert.equal(plan, null, 'no plan may be emitted for a deploy that is known to fail');
+
+  assert.match(stderr, /QUOTA\/CAPACITY/, 'the class must be named');
+  assert.match(stderr, /usgovvirginia/, 'the region must be named');
+  assert.match(stderr, /limit is per-TENANT per-REGION and is 5/, 'the limit must be named');
+  assert.match(stderr, /Retrying will not help/, 'retryability must be stated');
+  assert.match(stderr, /ADOPT one of the accounts listed above/, 'option 1');
+  assert.match(stderr, /RAISE the quota/, 'option 2');
+  assert.match(stderr, /pv-alpha/, 'the operator must see what they chose against');
+});
+
+test('--create-new is honoured where the region is NOT known to be full', () => {
+  // The same flag, with the quota-consuming accounts invisible to this
+  // identity. The script does not know the region is full, so it must not claim
+  // it is — it proceeds and says the count is a lower bound.
+  const { code, plan, stderr } = runCached('atquota-unreadable', ['--create-new']);
+  assert.equal(code, 0);
+  assert.deepEqual(plan, {});
+  assert.match(stderr, /--create-new was given/);
+  assert.match(stderr, /LOWER BOUND/);
+});
+
+test('the operator is shown what Loom would CHANGE before the deploy, not after', () => {
+  const { stderr } = runCached('atquota');
+  assert.match(stderr, /creates a Loom collection under the root collection/);
+  assert.match(stderr, /does NOT change the account's own control-plane configuration/);
+});
+
+test('a failure to LIST subscriptions is unknown, not an empty tenant', () => {
+  const { code, plan, stderr } = runCached('subsfail');
+  assert.notEqual(code, 0, 'proceeding here would create an account on an unverified premise');
+  assert.equal(plan, null);
+  assert.match(stderr, /UNKNOWN/);
+});
+
+test('zero readable subscriptions is reported as a PERMISSION problem, not an empty tenant', () => {
+  const { code, stderr } = runCached('nosubs');
+  assert.notEqual(code, 0);
+  assert.match(stderr, /permission problem/i);
+});
+
+test('a crafted account name cannot INJECT keys into the plan', () => {
+  // The plan used to be built with printf, splicing values straight into a JSON
+  // document. A name carrying a quote and a brace then produced a document that
+  // was still valid JSON — so the `json.load` syntax check passed — while
+  // saying something the script never meant. jq --arg escapes it as one string.
+  const evil = 'pv-x","rg":"attacker-rg","sub":"00000000-0000-0000-0000-000000000000';
+  const { code, plan } = run('greenfield', ['--account', evil, '--account-rg', 'rg-real']);
+  assert.equal(code, 0);
+  assert.equal(plan.purview.target.name, evil, 'the name must survive verbatim as ONE string');
+  assert.equal(plan.purview.target.rg, 'rg-real', 'the injected rg must NOT have taken effect');
+  assert.equal(Object.keys(plan.purview.target).sort().join(','), 'name,rg,sub');
+});
+
+test('--location is required, because the quota it reasons about is per-region', () => {
+  let code = 0;
+  let stderr = '';
+  try {
+    execFileSync('bash', [SCRIPT], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    code = err.status;
+    stderr = err.stderr;
+  }
+  assert.notEqual(code, 0);
+  assert.match(stderr, /--location is required/);
+});
+
+test('every emitted envelope is a valid ARM parameters document', () => {
+  for (const scenario of ['atquota', 'greenfield', 'crossregion', 'othersub']) {
+    const { plan } = runCached(scenario);
+    assert.ok(plan !== null, `${scenario} produced no envelope`);
+    assert.equal(typeof plan, 'object');
+  }
+});

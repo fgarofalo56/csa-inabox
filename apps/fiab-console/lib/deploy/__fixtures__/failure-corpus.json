@@ -310,6 +310,36 @@
       }
     },
     {
+      "name": "quota — per-TENANT per-region resource cap wrapped in InvalidTemplateDeployment, verbatim",
+      "source": "deploy-gov.yml run 31917112453 (gov-dev, usgovvirginia, what_if=true), 2026-08-16 — the first run of that workflow ever to authenticate (#3576). Classified `defect` / not-remediable before this case existed, which told the operator to rebuild a template that was valid while the real cause was a full tenant (#3577).",
+      "input": "ERROR: InvalidTemplateDeployment - The template deployment 'main' is not valid according to the validation procedure. The following resource provider(s) - 'Microsoft.Purview/accounts (2021-12-01)' reported preflight validation errors. Tracking id is 'e7b3e9c3-4cbb-45e6-aa5f-297eae201805'. See inner errors for details.\n2005 - The Tenant 00000000-0000-0000-0000-000000000000 with 5 resources has surpassed its resource quota 5 for resource type Account in usgovvirginia location. Please try creating in other available locations if applicable or contact support.",
+      "expect": {
+        "class": "quota",
+        "signalId": "quota.tenant-resource-quota",
+        "retryable": false
+      }
+    },
+    {
+      "name": "quota — the tenant-cap inner error ALONE, as the per-ARM-leaf path sees it",
+      "source": "the same run's inner error line, verbatim. The leaf's ARM error CODE is deliberately not reproduced here: the run log carried only this text, and the taxonomy's rule is that a guessed signal is worse than no signal.",
+      "input": "2005 - The Tenant 00000000-0000-0000-0000-000000000000 with 5 resources has surpassed its resource quota 5 for resource type Account in usgovvirginia location. Please try creating in other available locations if applicable or contact support.",
+      "expect": {
+        "class": "quota",
+        "signalId": "quota.tenant-resource-quota",
+        "retryable": false
+      }
+    },
+    {
+      "name": "defect — an InvalidTemplateDeployment with NO quota wording is still a defect (proves the new exclusion did not blind the signal)",
+      "source": "synthesised; the control for the `not` clause added for the tenant-cap case",
+      "input": "ERROR: InvalidTemplateDeployment - The template deployment 'main' is not valid according to the validation procedure. Unable to process template language expressions.",
+      "expect": {
+        "class": "defect",
+        "signalId": "defect.invalid-template",
+        "retryable": false
+      }
+    },
+    {
       "name": "defect — FirewallPolicyUpdateFailed, verbatim ARM leaf (classified UNKNOWN before #3038, which is what correctly refused the retry)",
       "source": "deploy-fiab-commercial run 31196922481, nested 'network' deployment, 2026-08-07; captured from az deployment operation group list -g rg-csa-loom-admin-centralus --name network",
       "input": "FirewallPolicyUpdateFailed: Put on Firewall Policy fwpol-csa-loom-centralus Failed with 1 faulted referenced firewalls",

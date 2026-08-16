@@ -39,6 +39,21 @@ on:
         required: false
         default: true
         type: boolean
+      # Purview is a per-TENANT per-REGION singleton (cap 5), so "just deploy a
+      # new one" is not a safe default in a sovereign tenant — it is what made
+      # run 31917112453 fail (#3577). Left blank, the run DISCOVERS the accounts
+      # the tenant already owns and binds one; the operator does not have to
+      # know this input exists (auto-bind-by-default.md §5).
+      purview_account:
+        description: 'Purview: existing account to adopt. Blank = discover and adopt automatically. Use "NEW" to force a brand-new account.'
+        required: false
+        default: ''
+        type: string
+      purview_account_rg:
+        description: 'Purview: resource group of the account named above. Only needed when it lives outside the subscriptions this identity can enumerate.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   # No id-token: write — this workflow authenticates with a service-principal
@@ -123,12 +138,27 @@ jobs:
             gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
           esac
 
+      # DISCOVER-AND-BIND before ARM is asked for anything (deploy-integrity R5,
+      # #3577). Purview accounts are capped per TENANT per REGION at 5, so on a
+      # sovereign tenant "create a new one" is usually refused at preflight —
+      # which is exactly how run 31917112453 failed. This step enumerates what
+      # the tenant already owns, prints each candidate with what Loom would
+      # change about it, and emits the `adopt` plan main.bicep binds to. It
+      # writes an EMPTY plan on a greenfield tenant, so that path is unchanged.
+      - name: Discover Purview — adopt or create
+        env:
+          PARAMS_FILE: ${{ steps.params.outputs.file }}
+          PURVIEW_ACCOUNT: ${{ github.event.inputs.purview_account }}
+          PURVIEW_ACCOUNT_RG: ${{ github.event.inputs.purview_account_rg }}
+        run: bash .github/scripts/gov-purview-adopt.sh
+
       - name: What-If
         run: |
           az deployment sub what-if \
             --location usgovvirginia \
             --template-file deploy/bicep/gov/main.bicep \
             --parameters deploy/bicep/gov/${{ steps.params.outputs.file }} \
+            --parameters "$RUNNER_TEMP/adopt.json" \
             --parameters \
               deployDLZ=${{ github.event.inputs.deploy_dlz }} \
               deployStreaming=${{ github.event.inputs.deploy_streaming }} \
@@ -182,6 +212,17 @@ jobs:
             gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
           esac
 
+      # Re-run in this job rather than carried over from what-if: the two jobs
+      # are separate runners with separate workspaces, and re-discovering is
+      # also the correct behaviour — an account created or deleted between the
+      # what-if and the deploy must change the plan, not be assumed away.
+      - name: Discover Purview — adopt or create
+        env:
+          PARAMS_FILE: ${{ steps.params.outputs.file }}
+          PURVIEW_ACCOUNT: ${{ github.event.inputs.purview_account }}
+          PURVIEW_ACCOUNT_RG: ${{ github.event.inputs.purview_account_rg }}
+        run: bash .github/scripts/gov-purview-adopt.sh
+
       - name: Deploy
         run: |
           # RETRY WITH CLASSIFICATION (#3017, deploy-integrity R6): the Gov
@@ -201,6 +242,7 @@ jobs:
             --location usgovvirginia \
             --template-file deploy/bicep/gov/main.bicep \
             --parameters deploy/bicep/gov/${{ steps.params.outputs.file }} \
+            --parameters "$RUNNER_TEMP/adopt.json" \
             --parameters \
               deployDLZ=${{ github.event.inputs.deploy_dlz }} \
               deployStreaming=${{ github.event.inputs.deploy_streaming }} \

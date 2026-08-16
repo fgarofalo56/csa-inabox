@@ -138,9 +138,10 @@
       ],
       "not": [
         "skunotavailable",
-        "quotaexceeded"
+        "quotaexceeded",
+        "has surpassed its resource quota"
       ],
-      "observed": "ARM rejects main.bicep's compiled template. Excluded when the nested reason is a SKU/quota problem, which InvalidTemplateDeployment also wraps.",
+      "observed": "ARM rejects main.bicep's compiled template. Excluded when the nested reason is a SKU/quota problem, which InvalidTemplateDeployment also wraps. The third exclusion was added after deploy-gov.yml run 31917112453 (2026-08-16): the per-tenant Purview quota refusal is wrapped in InvalidTemplateDeployment but its text never contains the token 'quotaexceeded', so the first two exclusions did not catch it and a genuine quota condition classified as `defect` / not-remediable — sending the operator to re-run `az bicep build` for a template that was perfectly valid.",
       "remediationKind": "not-remediable",
       "remediation": "The compiled ARM template is invalid — this is a CSA Loom defect, not an estate problem. Re-run `az bicep build` on an LF checkout, and if apps/fiab-console/deploy-templates/main.json changed, regenerate it (scripts/ci/check-deploy-template-sync.mjs enforces the byte-compare). File the run against the deploy-integrity label."
     },
@@ -201,6 +202,17 @@
       "observed": "Docker/OCI registry denial from `az acr build` / `cosign` against ACR.",
       "remediationKind": "operator-action",
       "remediation": "The registry refused this identity. Grant AcrPush (build) or AcrPull (roll) on the registry, and confirm the ACR firewall lease is held — CSA Loom keeps publicNetworkAccess=Disabled between builds (scripts/csa-loom/acr-firewall-lease.sh)."
+    },
+    {
+      "id": "quota.tenant-resource-quota",
+      "class": "quota",
+      "anyOf": [
+        "has surpassed its resource quota"
+      ],
+      "observed": "Verified verbatim from deploy-gov.yml run 31917112453 (gov-dev, usgovvirginia, what_if=true, 2026-08-16): '2005 - The Tenant *** with 5 resources has surpassed its resource quota 5 for resource type Account in usgovvirginia location. Please try creating in other available locations if applicable or contact support.' Distinct from quota.exceeded: that one is a SUBSCRIPTION quota and its text carries the token 'QuotaExceeded'; this is a per-TENANT per-REGION resource-count cap whose text carries neither, so it fell through to defect.invalid-template — the InvalidTemplateDeployment wrapper ARM puts around every preflight refusal — and a valid template was blamed for a full tenant. Ordered BEFORE quota.exceeded deliberately: within one class the earlier signal wins, so the specific cap message keeps its specific remediation even if a future ARM leaf carries both wordings.",
+      "remediationKind": "operator-action",
+      "remediation": "The TENANT is at its per-region cap for this resource type — read the count and the region out of the message itself. This is not a subscription quota and not a template defect, and retrying cannot help. For Microsoft.Purview/accounts the cap is 5 per tenant per region and the fix is to ADOPT an account the tenant already owns rather than create another: run scripts/csa-loom/discover-purview-adopt-plan.sh --location <region>, which discovers the existing accounts and emits the `adopt` plan that deploy/bicep/gov/main.bicep binds to. If every existing account is genuinely unsuitable, request a cap increase for the resource type and region named above, or deploy into a different region.",
+      "portalPath": "Help + support > New support request > Service and subscription limits (quotas)"
     },
     {
       "id": "quota.exceeded",

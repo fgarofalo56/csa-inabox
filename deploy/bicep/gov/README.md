@@ -20,6 +20,7 @@ Government-compatible version here.
 - [Service Availability Matrix](#-service-availability-matrix)
 - [Government-Specific Configuration](#%EF%B8%8F-government-specific-configuration)
 - [Usage](#-usage)
+- [Brownfield: adopting a Purview account the tenant already owns](#-brownfield-adopting-a-purview-account-the-tenant-already-owns)
 - [Open-Source Alternatives](#-open-source-alternatives)
 - [Related Documentation](#-related-documentation)
 
@@ -117,6 +118,66 @@ bash scripts/deploy/deploy-platform.sh \
   --environment gov-dev \
   --location usgovvirginia
 ```
+
+---
+
+## 🔁 Brownfield: adopting a Purview account the tenant already owns
+
+Purview accounts are capped **per tenant, per region, at 5** — a separate limit
+from the one-Enterprise-account-per-tenant rule. A sovereign tenant that already
+runs Purview is therefore the *normal* case, and "deploy a new one" is usually
+refused at preflight:
+
+```
+2005 - The Tenant *** with 5 resources has surpassed its resource quota 5
+       for resource type Account in usgovvirginia location.
+```
+
+That is exactly how `deploy-gov.yml` run 31917112453 failed (#3577). `main.bicep`
+now takes an **adopt-or-create** decision for Purview through the same `adopt`
+parameter bag the Commercial orchestrator uses:
+
+```bicep
+param adopt = {
+  purview: { mode: 'adopt', target: { name: 'corp-purview', rg: 'rg-gov', sub: '<sub-id>' } }
+}
+```
+
+- `mode: 'adopt'` binds the named account (read-only) and **suppresses** the new
+  one — `provisionPurview` is false.
+- `mode: 'create'`, or an **absent key**, creates one exactly as before, so a
+  greenfield deploy is unaffected.
+
+You normally never write that document by hand. `deploy-gov.yml` runs
+`scripts/csa-loom/discover-purview-adopt-plan.sh` before both What-If and Deploy;
+it enumerates the accounts the tenant already owns, prints each with what Loom
+would change about it, binds one, and emits the plan. Leave the workflow's
+`purview_account` input blank to get that behaviour, set it to an account name to
+pin a specific one, or to `NEW` to force a fresh account.
+
+The deployment outputs record which way it went — `purviewBindingMode` is
+`created`, `adopted` or `none`, alongside `purviewAccountName`,
+`purviewAccountId`, the account's real `purviewAccountLocation` and
+`purviewRegionMatches`.
+
+The adopted account is bound with `resource … existing`, **not** a module scoped
+to its resource group: a cross-scope module compiles to a nested deployment in
+the customer's resource group and requires `Microsoft.Resources/deployments/write`
+there, which Reader does not carry (#3333). An `existing` reference needs only
+read.
+
+> [!NOTE]
+> Purview is the only service on this path with an adopt route today. Synapse,
+> Databricks, ADF, Event Hubs, ADX and storage still create unconditionally here.
+> None carries a per-tenant *cap*, so none blocks the deploy the way Purview did
+> — but several take **globally unique** names (`csadevstor`, `csa-dev-syn`,
+> `csa-dev-adf`, the Event Hubs namespace, the ADX cluster), and a name already
+> taken anywhere in the cloud fails for the other R5 reason: because one exists.
+> That is a known [R5](../../../.claude/rules/deploy-integrity.md) gap, untested
+> here, not an all-clear.
+
+Full walkthrough: [Discovery and adoption →
+Azure Government](../../../docs/fiab/deployment/discovery-and-adoption.md#azure-government).
 
 ---
 
