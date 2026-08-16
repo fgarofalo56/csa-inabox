@@ -14,11 +14,17 @@
  *
  * Grounded in Microsoft Learn (KQL geospatial + graph semantics):
  *   https://learn.microsoft.com/azure/data-explorer/kusto/query/geospatial-grid-systems
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r (residual population). See the sibling
+ * `[id]/link` header for the full finding: `_ctx` ignored, `getSession()` only,
+ * `body.database` into `discoverGraphTables` + `executeQuery` as the Console's
+ * UAMI. All three tapestry panes are bound together because fixing one of a set
+ * of siblings only relocates the primitive.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { executeQuery, kustoConfigGate, defaultDatabase, KustoError } from '@/lib/azure/kusto-client';
+import { executeQuery, kustoConfigGate, KustoError } from '@/lib/azure/kusto-client';
 import { discoverGraphTables, buildGeoKql } from '@/lib/azure/tapestry-graph';
+import { guardAdxItemRequest, scopeAdxDatabase, type AdxScopedDatabase } from '../../../_lib/adx-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,9 +35,16 @@ interface GeoFeature {
   properties: { id: string; name: string; label: string };
 }
 
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // LAYER 1 — read-only projection pane, so shared read roles are admitted.
+  const guard = await guardAdxItemRequest({
+    itemId: id,
+    itemType: 'tapestry',
+    notFound: 'tapestry not found',
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
 
   const body = await req.json().catch(() => ({}));
 
@@ -44,7 +57,10 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
     }, { status: 503 });
   }
 
-  const db = String(body?.database || defaultDatabase());
+  // LAYER 2 — bound before any ADX call, including the table discovery probe.
+  const scoped = await scopeAdxDatabase(guard.ctx.item, body?.database);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const db: AdxScopedDatabase = scoped.database;
   try {
     const { nodeTables, edgeTables } = await discoverGraphTables(db);
     if (nodeTables.length === 0) {

@@ -41,6 +41,69 @@
  * Azure-native: ADX external tables + continuous-export → ADLS Gen2 Delta. No
  * Fabric workspace, no OneLake catalog API, no LOOM_KUSTO_FABRIC_MANAGED
  * dependency. Per .claude/rules/no-vaporware.md + no-fabric-dependency.md.
+ *
+ * SECURITY — GHSA-v2g8-gp3r-rg4r (residual population). Every entry point in
+ * this file took its coordinates from the request behind `withSession` alone;
+ * `{ id }` was declared as the generic parameter and never read. Three distinct
+ * primitives, all as the Console's UAMI (AllDatabasesAdmin on the shared ADX
+ * cluster):
+ *
+ *   1. EXPORT mode was a STANDING EXFILTRATION PIPE and is the worst of the
+ *      three. `database` + `sourceTable` named any table on the cluster and
+ *      `adlsAccount` + `container` named the destination — and `adlsAccount`
+ *      took the BODY value in preference to the configured one
+ *      (`body.adlsAccount || process.env.LOOM_RTI_EXPORT_ADLS`). So a caller
+ *      could point another tenant's fact table at storage they nominated, on a
+ *      5-minute schedule, and ADX would keep re-exporting it. Unlike a query,
+ *      it survives the request.
+ *   2. BIND mode issued `.create-or-alter external table` and — via
+ *      `createKqlView` — `.create-or-alter function <table>_view` against any
+ *      named database. `create-or-ALTER` on a function is an overwrite of
+ *      whatever body is already there.
+ *   3. GET listed the continuous-export jobs and Delta external tables of any
+ *      `?database`, including their `abfss://` targets.
+ *
+ * All three now bind through `_lib/adx-item-scope.ts`, the same contract the
+ * sibling `[id]/purge` and `[id]/ingest` use:
+ *   LAYER 1 — the caller is authorized against the eventhouse ITEM, WRITE-scoped
+ *     on POST (both modes issue DDL) and read-scoped on the GET picker.
+ *   LAYER 2 — `database` must be inside the item's own workspace ADX scope, and
+ *     `sourceTable` is validated against that resolved database's OWN
+ *     `.show tables` rather than passed through on a syntax check.
+ *   DESTINATION — `adlsAccount` is pinned to LOOM_RTI_EXPORT_ADLS. A body value
+ *     naming a DIFFERENT account is refused rather than silently replaced: the
+ *     caller asked to write somewhere, and writing somewhere else instead would
+ *     be a worse answer than saying no. The editor sends this field empty (its
+ *     placeholder is the deployment default), so the shipped flow is unchanged.
+ *
+ * KNOWN RESIDUAL — A CROSS-TENANT LAKE READ THAT IS NOT CLOSED HERE. An earlier
+ * revision of this comment named only BIND mode's `abfssUri` and rated it a
+ * note. That understated it, and in a change whose value is an honest ledger
+ * the understatement is the part that matters, so it is written out in full:
+ *
+ * BOTH modes end in `.create-or-alter external table … kind=delta` over a
+ * CALLER-CHOSEN abfss:// location, and the route hands back
+ * `sampleQuery: external_table("…") | take 5`. The table is READABLE, and it is
+ * read by the cluster's managed identity — which holds Storage Blob Data Reader
+ * on the deployment lake, as this file's own 403 hint states. So:
+ *
+ *   - EXPORT mode: the ACCOUNT is now pinned to LOOM_RTI_EXPORT_ADLS, but
+ *     `container` and `path` remain caller-supplied behind a syntax check only
+ *     (`validContainer` / `trimSlashes`). Any container and prefix in the
+ *     deployment's own export account is therefore addressable.
+ *   - BIND mode: `abfssUri` is not account-bounded at all.
+ *
+ * Net effect: a caller authorized for ANY eventhouse can mount a lake path they
+ * do not own as an external table in a database they DO own, and query it. The
+ * database binding above stops them choosing someone else's database; it does
+ * not stop them choosing someone else's data.
+ *
+ * This is strictly BETTER than the shipped behaviour (which additionally let
+ * them pick the database, and let EXPORT mode nominate the destination account),
+ * so it is a narrowing, not a regression — but it is NOT closed. Closing it
+ * needs an allowlist of the container/prefix roots a workspace owns, which does
+ * not exist and is the same missing primitive `[id]/ingest`'s onelake handler
+ * already records. Named in the PR ledger as unfixed.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -53,15 +116,20 @@ import {
   listContinuousExports,
   createOrAlterExternalTableDelta,
   createOrAlterContinuousExport,
+  listTables,
   KustoError,
 } from '@/lib/azure/kusto-client';
 import { listContainers } from '@/lib/azure/adls-client';
 import { getDfsSuffix } from '@/lib/azure/cloud-endpoints';
 import { trimSlashes } from '@/lib/util/trim';
-import { withSession } from '@/lib/api/route-toolkit';
+import { apiServerError } from '@/lib/api/respond';
+import { guardAdxItemRequest, scopeAdxDatabase, type AdxScopedDatabase } from '../../../_lib/adx-item-scope';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const EVENTHOUSE_NOT_FOUND = 'eventhouse not found';
 
 /** KQL identifier: starts with a letter, alphanumeric + underscore, 1-127 chars. */
 function validIdent(s: string): boolean {
@@ -80,6 +148,31 @@ function validContainer(s: string): boolean {
 
 type Step = { step: string; ok: boolean; detail?: string };
 
+/**
+ * Resolve an export SOURCE table against the resolved database's OWN object
+ * list, the same check `[id]/purge::scopeTable` runs before a `.purge`.
+ *
+ * `validKustoIdent` only proves the string is well formed. Fails closed: if the
+ * table list cannot be read the export is refused, because "I could not verify"
+ * must never render as "it is fine" (deploy-integrity.md R7).
+ */
+async function scopeSourceTable(
+  database: string,
+  table: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  let names: string[];
+  try {
+    names = (await listTables(database)).map((t) => t.name);
+  } catch (e: any) {
+    const status = e instanceof KustoError ? e.status : 502;
+    return { ok: false, status, error: `could not verify tables in "${database}": ${e?.message || String(e)}` };
+  }
+  if (!names.includes(table)) {
+    return { ok: false, status: 404, error: `sourceTable "${table}" does not exist in database "${database}".` };
+  }
+  return { ok: true };
+}
+
 /** Best-effort: real visible ADLS containers for the picker. Never throws. */
 async function pickerContainers(): Promise<string[]> {
   try {
@@ -95,33 +188,55 @@ async function pickerContainers(): Promise<string[]> {
  * POST — dispatched on body shape:
  *   { tableName, abfssUri }            → BIND mode (Delta source → KQL external table)
  *   { sourceTable, exportName, container } → EXPORT mode (continuous-export → ADLS Delta)
+ *
+ * Both mode handlers receive an AUTHORIZED ITEM, not an id. That signature is
+ * the fix, not decoration around one: with no id-shaped parameter in scope there
+ * is nothing left for a handler to accept and ignore, which is exactly how
+ * `handleFile(_id, req)` on the sibling ingest route stayed broken.
  */
-export const POST = withSession<{ id: string }>(async (req: NextRequest, { session }) => {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  // ERROR CONTRACT — this route used to run under `withSession`, whose try/catch
+  // funnelled any unexpected throw to `apiServerError` (structured 500 + one
+  // bounded server log). The item guard reaches Cosmos, which this handler never
+  // did before, so the envelope matters more here than it did, not less.
+  try {
+    const { id } = await ctx.params;
+    // LAYER 1 — WRITE-scoped: both modes issue `.create-or-alter` DDL.
+    const guard = await guardAdxItemRequest({
+      itemId: id,
+      itemType: 'eventhouse',
+      notFound: EVENTHOUSE_NOT_FOUND,
+    });
+    if (guard.res) return guard.res;
+    const { item } = guard.ctx;
 
-  const body = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => ({}));
 
-  // BIND mode: an ADLS Delta source bound directly as a KQL external table.
-  if (body?.tableName || body?.abfssUri) {
-    return bindDelta(body);
+    // BIND mode: an ADLS Delta source bound directly as a KQL external table.
+    if (body?.tableName || body?.abfssUri) {
+      return await bindDelta(item, body);
+    }
+
+    // EXPORT mode (default): a continuous-export job writing Delta to ADLS.
+    return await continuousExport(item, body);
+  } catch (e) {
+    return apiServerError(e);
   }
-
-  // EXPORT mode (default): a continuous-export job writing Delta to ADLS.
-  return continuousExport(body);
-});
+}
 
 /** BIND mode — ADLS Delta source → ADX external table + query acceleration. */
-async function bindDelta(body: any) {
-  const database = String(body?.database || '').trim();
+async function bindDelta(item: WorkspaceItem, body: any) {
+  const requested = String(body?.database || '').trim();
   const tableName = String(body?.tableName || '').trim();
   const abfssUri = String(body?.abfssUri || '').trim();
   const hotDays = Math.max(1, Math.floor(Number(body?.hotDays) || 7));
   const miObjectId = body?.miObjectId ? String(body.miObjectId).trim() : undefined;
   const createKqlView = !!body?.createKqlView;
 
-  if (!database) return NextResponse.json({ ok: false, error: 'database required' }, { status: 400 });
+  if (!requested) return NextResponse.json({ ok: false, error: 'database required' }, { status: 400 });
   if (!tableName) return NextResponse.json({ ok: false, error: 'tableName required' }, { status: 400 });
   if (!abfssUri) return NextResponse.json({ ok: false, error: 'abfssUri required' }, { status: 400 });
-  if (!validIdent(database)) {
+  if (!validIdent(requested)) {
     return NextResponse.json({ ok: false, error: 'invalid database name' }, { status: 400 });
   }
   if (!validIdent(tableName)) {
@@ -136,6 +251,13 @@ async function bindDelta(body: any) {
       error: 'abfssUri must be an abfss:// URI (e.g. abfss://bronze@account.dfs.core.windows.net/path/to/delta)',
     }, { status: 400 });
   }
+
+  // LAYER 2 — bind the database the external table + view are created in, before
+  // any DDL is built. `.create-or-alter function` overwrites an existing body,
+  // so this is a write even when it looks like a bind.
+  const scoped = await scopeAdxDatabase(item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database: AdxScopedDatabase = scoped.database;
 
   const steps: Step[] = [];
 
@@ -208,9 +330,10 @@ async function bindDelta(body: any) {
 }
 
 /** EXPORT mode — create or replace a continuous Delta-export job (KQL → ADLS). */
-async function continuousExport(body: any) {
+async function continuousExport(item: WorkspaceItem, body: any) {
   // Honest gate — ADLS export is opt-in; must be wired in Bicep.
-  if (!process.env.LOOM_RTI_EXPORT_ADLS) {
+  const configuredAccount = (process.env.LOOM_RTI_EXPORT_ADLS || '').trim();
+  if (!configuredAccount) {
     return NextResponse.json({
       ok: false,
       code: 'no_adls_config',
@@ -223,16 +346,29 @@ async function continuousExport(body: any) {
     });
   }
 
-  const database    = String(body?.database    || '').trim();
+  const requested   = String(body?.database    || '').trim();
   const sourceTable = String(body?.sourceTable || '').trim();
   const exportName  = String(body?.exportName  || '').trim();
   const container   = String(body?.container   || '').trim();
   const path        = trimSlashes(String(body?.path        || '').trim());
   const interval    = String(body?.interval    || '1h').trim();
-  // adlsAccount: body wins; fall back to the configured env var
-  const adlsAccount = (String(body?.adlsAccount || '').trim()) || (process.env.LOOM_RTI_EXPORT_ADLS || '');
+  // DESTINATION BINDING. The body value used to WIN over the configured account,
+  // which made the export destination caller-chosen. It is now pinned to the
+  // deployment's own account; a body value naming a different one is refused,
+  // not quietly rewritten. Empty is the editor's normal case.
+  const askedAccount = String(body?.adlsAccount || '').trim();
+  if (askedAccount && askedAccount !== configuredAccount) {
+    return NextResponse.json({
+      ok: false,
+      error:
+        `adlsAccount "${askedAccount}" is not this deployment's export account. ` +
+        `Continuous export writes to "${configuredAccount}" (LOOM_RTI_EXPORT_ADLS) only. ` +
+        'Leave adlsAccount empty to use it.',
+    }, { status: 403 });
+  }
+  const adlsAccount = configuredAccount;
 
-  if (!database || !validKustoIdent(database)) {
+  if (!requested || !validKustoIdent(requested)) {
     return NextResponse.json({ ok: false, error: 'database required (valid KQL identifier)' }, { status: 400 });
   }
   if (!sourceTable || !validKustoIdent(sourceTable)) {
@@ -244,7 +380,7 @@ async function continuousExport(body: any) {
   if (!container || !validContainer(container)) {
     return NextResponse.json({ ok: false, error: 'container required (valid ADLS filesystem name)' }, { status: 400 });
   }
-  if (!adlsAccount || !/^[a-z0-9]{3,24}$/.test(adlsAccount)) {
+  if (!/^[a-z0-9]{3,24}$/.test(adlsAccount)) {
     return NextResponse.json({ ok: false, error: 'adlsAccount required (valid storage account name)' }, { status: 400 });
   }
   if (!ALLOWED_INTERVALS.has(interval)) {
@@ -252,6 +388,19 @@ async function continuousExport(body: any) {
       { ok: false, error: `interval must be one of: ${[...ALLOWED_INTERVALS].join(', ')}` },
       { status: 400 },
     );
+  }
+
+  // LAYER 2 — the database the export READS FROM. A continuous export is a
+  // standing job, so this binding is what stops the pipe being created at all
+  // rather than merely returning fewer rows once.
+  const scoped = await scopeAdxDatabase(item, requested);
+  if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+  const database: AdxScopedDatabase = scoped.database;
+  // …and the TABLE it reads, against that database's own object list. Fails
+  // closed: an unlistable database refuses rather than falling through.
+  const scopedTable = await scopeSourceTable(database, sourceTable);
+  if (!scopedTable.ok) {
+    return NextResponse.json({ ok: false, error: scopedTable.error }, { status: scopedTable.status });
   }
 
   // Build the sovereign-cloud-correct abfss:// URI.
@@ -292,46 +441,65 @@ async function continuousExport(body: any) {
  * the Delta external tables (for the bind dialog). Both are best-effort: a
  * failure in one does not blank the other.
  */
-export const GET = withSession<{ id: string }>(async (req: NextRequest) => {
-
-  const { searchParams } = new URL(req.url);
-  const database = (searchParams.get('database') || '').trim();
-  if (!database || !validKustoIdent(database)) {
-    return NextResponse.json(
-      { ok: false, error: 'database query param required and must be a valid KQL identifier' },
-      { status: 400 },
-    );
-  }
-
-  const adlsAccount = (process.env.LOOM_RTI_EXPORT_ADLS || '').trim();
-  const containers = await pickerContainers();
-
-  let exports: Awaited<ReturnType<typeof listContinuousExports>> = [];
-  let exportsError: string | undefined;
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  // ERROR CONTRACT — see POST above.
   try {
-    exports = await listContinuousExports(database);
-  } catch (e: any) {
-    exportsError = e?.message || String(e);
-  }
+    const { id } = await ctx.params;
+    // LAYER 1 — read-only picker, so shared read roles are admitted.
+    const guard = await guardAdxItemRequest({
+      itemId: id,
+      itemType: 'eventhouse',
+      notFound: EVENTHOUSE_NOT_FOUND,
+      allowReadRoles: true,
+    });
+    if (guard.res) return guard.res;
 
-  // Delta external tables (the lakehouse-binding kind). Tables with an
-  // unknown/empty TableType are included so nothing is silently hidden.
-  let externalTables: Array<{ name: string; tableType: string; folder?: string }> = [];
-  try {
-    const all = await listExternalTables(database);
-    externalTables = all
-      .filter((t) => !t.tableType || t.tableType.toLowerCase() === 'delta')
-      .map((t) => ({ name: t.name, tableType: t.tableType || 'Delta', folder: t.folder }));
-  } catch {
-    /* best-effort — the export view does not need external tables */
-  }
+    const { searchParams } = new URL(req.url);
+    const requested = (searchParams.get('database') || '').trim();
+    if (!requested || !validKustoIdent(requested)) {
+      return NextResponse.json(
+        { ok: false, error: 'database query param required and must be a valid KQL identifier' },
+        { status: 400 },
+      );
+    }
+    // LAYER 2 — no export job or external-table target is disclosed for a
+    // database outside this item's workspace scope.
+    const scoped = await scopeAdxDatabase(guard.ctx.item, requested);
+    if (!scoped.ok) return NextResponse.json({ ok: false, error: scoped.error }, { status: scoped.status });
+    const database: AdxScopedDatabase = scoped.database;
 
-  return NextResponse.json({
-    ok: true,
-    database,
-    exports,
-    externalTables,
-    config: { adlsAccount, containers, configured: !!adlsAccount },
-    ...(exportsError ? { exportsError } : {}),
-  });
-});
+    const adlsAccount = (process.env.LOOM_RTI_EXPORT_ADLS || '').trim();
+    const containers = await pickerContainers();
+
+    let exports: Awaited<ReturnType<typeof listContinuousExports>> = [];
+    let exportsError: string | undefined;
+    try {
+      exports = await listContinuousExports(database);
+    } catch (e: any) {
+      exportsError = e?.message || String(e);
+    }
+
+    // Delta external tables (the lakehouse-binding kind). Tables with an
+    // unknown/empty TableType are included so nothing is silently hidden.
+    let externalTables: Array<{ name: string; tableType: string; folder?: string }> = [];
+    try {
+      const all = await listExternalTables(database);
+      externalTables = all
+        .filter((t) => !t.tableType || t.tableType.toLowerCase() === 'delta')
+        .map((t) => ({ name: t.name, tableType: t.tableType || 'Delta', folder: t.folder }));
+    } catch {
+      /* best-effort — the export view does not need external tables */
+    }
+
+    return NextResponse.json({
+      ok: true,
+      database,
+      exports,
+      externalTables,
+      config: { adlsAccount, containers, configured: !!adlsAccount },
+      ...(exportsError ? { exportsError } : {}),
+    });
+  } catch (e) {
+    return apiServerError(e);
+  }
+}

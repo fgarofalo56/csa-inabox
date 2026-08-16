@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1679 |
+| Total routes | 1680 |
 | Public (no session) | 104 |
-| Session-only | 532 |
-| Owner-scoped | 742 |
+| Session-only | 525 |
+| Owner-scoped | 750 |
 | Admin | 301 |
-| Gated (backend config) | 495 |
+| Gated (backend config) | 496 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1336,13 +1336,13 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/event-schema-set/[id]/versions/route.ts` | POST | owner-scoped | ● | Cosmos, Event Hubs |
 | `items/event-schema-set/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/eventhouse/[id]/capacity/route.ts` | GET POST | session-only | ● | ADX, Azure Monitor |
-| `items/eventhouse/[id]/continuous-export/route.ts` | GET POST | session-only |  | ADLS, ADX |
+| `items/eventhouse/[id]/continuous-export/route.ts` | GET POST | owner-scoped |  | ADLS, ADX |
 | `items/eventhouse/[id]/database/route.ts` | POST DELETE | owner-scoped |  | ADX, ADX ARM |
 | `items/eventhouse/[id]/ingest/preview/route.ts` | POST | session-only |  | — |
 | `items/eventhouse/[id]/ingest/route.ts` | POST | owner-scoped |  | ADX |
-| `items/eventhouse/[id]/journal/route.ts` | GET | session-only |  | ADX |
+| `items/eventhouse/[id]/journal/route.ts` | GET | owner-scoped |  | ADX |
 | `items/eventhouse/[id]/overview/route.ts` | GET | session-only |  | ADX, ADX ARM, Azure Monitor |
-| `items/eventhouse/[id]/policies/route.ts` | POST PATCH | session-only |  | ADX, ADX ARM |
+| `items/eventhouse/[id]/policies/route.ts` | POST PATCH | owner-scoped |  | ADX, ADX ARM |
 | `items/eventhouse/[id]/purge/route.ts` | GET POST | owner-scoped |  | ADX |
 | `items/eventhouse/[id]/route.ts` | GET | session-only |  | ADX, ADX ARM |
 | `items/eventstream/[id]/activator/route.ts` | GET POST | owner-scoped | ● | Azure Monitor, Cosmos |
@@ -1378,7 +1378,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/graph-model/[id]/materialize/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/graph-model/[id]/query/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/graph-model/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
-| `items/graph-model/[id]/source-schema/route.ts` | GET | session-only | ● | ADX |
+| `items/graph-model/[id]/source-schema/route.ts` | GET | owner-scoped | ● | ADX |
 | `items/graph-model/route.ts` | GET POST | owner-scoped |  | — |
 | `items/graphql-api/[id]/publish/route.ts` | POST | owner-scoped |  | APIM |
 | `items/graphql-api/[id]/query/route.ts` | POST | owner-scoped |  | APIM |
@@ -1709,9 +1709,10 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/synthetic-data/[id]/preview/route.ts` | POST | owner-scoped |  | — |
 | `items/synthetic-data/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/synthetic-data/[id]/sources/route.ts` | GET | owner-scoped |  | — |
-| `items/tapestry/[id]/geo/route.ts` | POST | session-only | ● | ADX |
-| `items/tapestry/[id]/link/route.ts` | POST | session-only | ● | ADX |
-| `items/tapestry/[id]/timeline/route.ts` | POST | session-only | ● | ADX |
+| `items/tapestry/[id]/databases/route.ts` | GET | owner-scoped | ● | ADX |
+| `items/tapestry/[id]/geo/route.ts` | POST | owner-scoped | ● | ADX |
+| `items/tapestry/[id]/link/route.ts` | POST | owner-scoped | ● | ADX |
+| `items/tapestry/[id]/timeline/route.ts` | POST | owner-scoped | ● | ADX |
 | `items/tracing/[traceId]/route.ts` | GET | session-only |  | — |
 | `items/tracing/route.ts` | GET | session-only |  | — |
 | `items/transformation-project/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
