@@ -138,6 +138,54 @@
  * vocabulary because, run unrestricted, six of the eight sites it finds are
  * correct code.
  *
+ * ── WAVE 1B (2026-08-15) — THE POLICY PASS: 250 -> 209 ─────────────────────
+ * The 250 was a measurement, not a backlog: it counted every surface that ASKS
+ * for an infrastructure value, which is the only thing a classifier can do, and
+ * deliberately left "could the platform have supplied it?" to per-surface
+ * judgement. That judgement has now been made for 41 of them, in two different
+ * ways, and the distinction between the two is the point:
+ *
+ *   7 were CLASSIFIER DEFECTS and were fixed HERE, not excused. Two narrowings,
+ *     each measured across all 1,286 tracked .tsx before it was written and each
+ *     pinned by a control in both directions:
+ *       `domKeyless`  — an `id`/`name` that is a template interpolation is a DOM
+ *                       uniqueness key, not a field name. Exactly 5 sites carry
+ *                       one; 3 produced no NAME hit either way, and the 2 that
+ *                       did were a SQL login and a password wearing their row's
+ *                       ARM id (add-existing-wizard.tsx). 2 sites.
+ *       display rows  — a DESCRIPTOR carrying a bound `value:` and neither a
+ *                       `placeholder:` nor a `secret:` renders a RESOLVED value.
+ *                       That is the descriptor form of the shape a control here
+ *                       already calls compliant ("a READ-ONLY display of a
+ *                       resolved endpoint is a receipt, not an ask"). 5 sites,
+ *                       all in read-only "Endpoints" lists. 26 descriptors were
+ *                       examined; manage-panel's `accessKeyId` (no value:) and
+ *                       every `secret: true` row are untouched.
+ *     An exemption is a permanent cost and a classifier fix is not, so anything
+ *     cheaply keyable was keyed.
+ *
+ *  34 were JUDGED and are declared in ACCEPTED below with a reason specific
+ *     enough to argue with — 30 bring-your-own across 15 files (a customer's
+ *     Snowflake account, their webhook receiver, an APIM origin, a git PAT,
+ *     an external Delta Sharing provider's activation token) and 4 residual
+ *     false positives across 4 files that no cheap classifier rule reaches.
+ *     They leave the ratchet entirely and are watched by `applyAccepted`
+ *     instead: the count must match EXACTLY, so a new hand-typed endpoint in a
+ *     BYO file still fails the run.
+ *
+ * ZERO fields were deleted. The scoping proposed 13 deletions on the premise
+ * that the value is derivable from session / item state / the deploy; three
+ * were measured and the premise did not hold (`spnTenantId` is persisted and
+ * read by nothing that mints a token; the Request-access dialog is PRE-AUTH so
+ * there is no session; the report Parameters panel's tenant id is an explicit
+ * override whose default the platform already supplies). The rest sit in files
+ * that also carry later-wave sites, which the all-or-nothing ratchet forbids
+ * touching. Those measurements are pinned as RECEIPT tests in
+ * `__tests__/no-freeform.test.mjs` §7 rather than argued in prose.
+ *
+ * The 209 that remain are the actual work: a picker fed by a real discovery
+ * call, per `auto-bind-by-default.md` §5.
+ *
  * ── WHAT CHANGED ───────────────────────────────────────────────────────────
  * PART 1 (unchanged, still a HARD ZERO) — the raw-JSON-config detector.
  * PART 2 (new, RATCHETED) — every FREE-TEXT INPUT in `apps/fiab-console` that
@@ -263,6 +311,8 @@
  * Run:    node scripts/ci/check-no-freeform.mjs
  * Report: node scripts/ci/check-no-freeform.mjs --report
  * Regen:  node scripts/ci/check-no-freeform.mjs --update-baseline
+ *         (regenerates the RATCHET baseline only — the ACCEPTED table below is
+ *          hand-maintained on purpose, because an acceptance needs a human)
  * Tests:  node --test scripts/ci/__tests__/no-freeform.test.mjs
  */
 
@@ -295,7 +345,17 @@ const MIN_TRACKED_FILES = 1000;
  * the version this replaces.
  */
 const MIN_FREETEXT_SITES = 1800;
-/** Classified violations the guard must still find; measured 250 today.
+/** Classified violations the guard must still find; 250 when this ratchet was
+ *  bootstrapped, 243 today — the 7-site drop is the two WAVE-1B classifier
+ *  narrowings (`domKeyless` and the descriptor display-row rule), each measured
+ *  before it was written and each pinned by a control.
+ *
+ *  This floor reads the MEASURED population, BEFORE ACCEPTED is applied. An
+ *  acceptance is a judgement about a site the detector correctly found, so
+ *  netting it off here would let the ACCEPTED table walk the floor down without
+ *  anything having been fixed — the floor would then be measuring the table
+ *  rather than the detector.
+ *
  *  Deliberately NOT zero — a ratchet only fails on a RISE. Lower it in the SAME
  *  PR that actually removes the sites. */
 const MIN_LIVE_SITES = 200;
@@ -975,8 +1035,8 @@ export function extractSites(src) {
     const placeholder = attrValue(code, src, start, end, 'placeholder');
     const defaultValue = attrValue(code, src, start, end, 'defaultValue');
     const aria = attrValue(code, src, start, end, 'aria-label') ?? attrValue(code, src, start, end, 'ariaLabel');
-    const id = attrValue(code, src, start, end, 'id');
-    const nameAttr = attrValue(code, src, start, end, 'name');
+    const id = domKeyless(attrValue(code, src, start, end, 'id'));
+    const nameAttr = domKeyless(attrValue(code, src, start, end, 'name'));
     const bound = attrValue(code, src, start, end, 'value');
 
     // NAME evidence is deliberately narrower than SHAPE evidence: it excludes
@@ -1008,6 +1068,28 @@ export function extractSites(src) {
 function decamel(s) {
   if (!s) return s;
   return String(s).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[._]/g, ' ');
+}
+
+/**
+ * Drop an `id`/`name` attribute that is a TEMPLATE INTERPOLATION, because such
+ * a value is a DOM uniqueness key rather than a statement about what the field
+ * wants. `<Input id={`user-${row.armResourceId}`}>` names the ROW; the field
+ * under it is a SQL login.
+ *
+ * MEASURED before it was written (temp probe over all 1,286 tracked .tsx): the
+ * tree has exactly five templated `id`/`name` attributes on a free-text site.
+ * Three (`${baseId}-name`, `${baseId}-title`, `${baseId}-name` in the report
+ * panes) produce no NAME hit at all, so they are unaffected in both directions.
+ * The other two are `add-existing-wizard.tsx`'s Username and Password rows,
+ * which matched `resource-id` on the interpolated ARM id and on nothing else —
+ * i.e. this narrowing changes exactly the two classifications it was written
+ * for, and a control pins that it cannot widen.
+ *
+ * A LITERAL id is still evidence and is untouched: `id="cmk-uri"` on the AI
+ * Search CMK form is the only label that site carries.
+ */
+function domKeyless(v) {
+  return v && v.includes('${') ? null : v;
 }
 
 /**
@@ -1075,6 +1157,30 @@ export function extractDescriptors(src) {
     const hint = read('hint') ?? read('description');
     const key = read('key') ?? read('name');
     const secret = /\bsecret\s*:\s*true\b/.test(struct);
+
+    // A DISPLAY ROW, not an ask. `{ key: 'fqdn', label: 'Server FQDN', value:
+    // cfg.server.fqdn }` is the descriptor form of the shape this guard's own
+    // control already calls compliant — "a READ-ONLY display of a resolved
+    // endpoint is a receipt, not an ask". It carries a `value:` that is a BOUND
+    // EXPRESSION (the resolved value, read off the live resource) and neither a
+    // `placeholder:` nor a `secret:`, which is what every real input descriptor
+    // in this tree carries.
+    //
+    // MEASURED before it was written: 26 descriptor hits, of which 5 have this
+    // exact shape — the Event Hubs / Service Bus namespace endpoints, the
+    // Lakebase server FQDN, the ML model artifact URI and the model-serving
+    // scoring URI, all rendered into a read-only "Endpoints" list. The
+    // narrowing is keyed to `value:` and NOT to "has no placeholder", so
+    // manage-panel.tsx's `{ key: 'accessKeyId', label: 'Access key ID',
+    // required: true }` — a real ask with no placeholder — is untouched, as is
+    // every `secret: true` row and the OP_DESCRIPTOR_CONNSTRING control.
+    //
+    // `struct` is MASKED, so a quoted default (`value: 'prod'`) reads as `''`
+    // and is correctly NOT treated as a resolved display.
+    const valueProp = struct.match(/\bvalue\s*:\s*([^,}]*)/);
+    const rendersResolvedValue =
+      !!valueProp && valueProp[1].trim() !== '' && !/^['"`]/.test(valueProp[1].trim());
+    if (rendersResolvedValue && !/\bplaceholder\s*:/.test(struct) && !/\bsecret\s*:/.test(struct)) continue;
 
     const nameEvidence = [label, hint, decamel(key)].filter(Boolean).join(' │ ');
     const shapeEvidence = [placeholder, label, hint].filter(Boolean).join(' │ ');
@@ -1311,6 +1417,41 @@ export const CONTROLS = [
     src: '<Field label="Cluster" hint="the host is a.dfs.core.windows.net. Then click save."><Input value={v} onChange={f} /></Field>',
     expect: true,
   },
+
+  // ── the two WAVE-1B narrowings, both directions ────────────────────────
+  {
+    // add-existing-wizard.tsx writes `id={`user-${row.armResourceId}`}` to keep
+    // the <Label htmlFor> unique per adopted resource. That interpolation made
+    // a SQL login and a password read as `resource-id` asks.
+    name: 'good: a templated `id` is a DOM uniqueness key, not a field name',
+    src: '<Label htmlFor={`user-${r.armResourceId}`}>Username</Label><Input id={`user-${r.armResourceId}`} value={st.username} placeholder="SQL login or AAD username" onChange={f} />',
+    expect: false,
+  },
+  {
+    name: 'bad: a LITERAL id is still the only label some sites carry — the narrowing must not reach it',
+    src: '<Input id="cmk-uri" value={cmkKeyVaultUri} onChange={f} />',
+    expect: true,
+  },
+  {
+    name: 'good: a descriptor rendering a RESOLVED value is a receipt, not an ask',
+    src: "const rows = [{ key: 'fqdn', label: 'Server FQDN', value: cfg.server.fqdn }];",
+    expect: false,
+  },
+  {
+    name: 'bad: a descriptor with a placeholder still flags even though it also carries a value',
+    src: "const F = [{ key: 'conn', label: 'Connection string', value: form.conn, placeholder: 'AccountKey=…' }];",
+    expect: true,
+  },
+  {
+    name: 'bad: a descriptor with no placeholder and no value is a real ask (manage-panel\'s access key id)',
+    src: "const F = [{ key: 'accessKeyId', label: 'Access key ID', required: true }];",
+    expect: true,
+  },
+  {
+    name: 'bad: a descriptor whose `value` is a quoted DEFAULT is an ask with a default, not a display',
+    src: "const F = [{ key: 'clusterUri', label: 'Cluster URI', value: 'https://c.kusto.windows.net' }];",
+    expect: true,
+  },
 ];
 
 export function selfTest() {
@@ -1351,6 +1492,26 @@ export function selfTest() {
   if (!masked.includes('<Textarea'))
     failures.push('maskJsx blanked a JSX element after a self-closing `/>` — the regex heuristic is TS-only again');
 
+  // The ACCEPTED table must satisfy its own rules, and the validator must be
+  // able to REJECT — a validator that passes everything is the shape this repo
+  // has shipped before. Mirrors check-python-cve-floors.mjs' pair of checks.
+  const realProblems = validateAccepted();
+  if (realProblems.length)
+    failures.push(`the real ACCEPTED table does not satisfy its own rules: ${realProblems.join(' | ')}`);
+  if (validateAccepted([{ file: 'f.tsx', sites: 1, kind: 'byo', why: 'w' }]).length === 0)
+    failures.push('validateAccepted() passed an entry with NO ref — the reference rule is not enforced.');
+  if (validateAccepted([{ file: 'f.tsx', kind: 'byo', ref: '#1', why: 'w' }]).length === 0)
+    failures.push('validateAccepted() passed an entry with NO site count — the acceptance would be a blanket amnesty.');
+
+  // applyAccepted must FAIL on drift in both directions, or the accepted files
+  // (which leave the ratchet entirely) would be unwatched.
+  if (applyAccepted({}, [{ file: 'f.tsx', sites: 1, kind: 'byo', ref: '#1', why: 'w' }]).problems.length === 0)
+    failures.push('applyAccepted() did not fail on a STALE acceptance (no live site).');
+  if (applyAccepted({ 'f.tsx': 2 }, [{ file: 'f.tsx', sites: 1, kind: 'byo', ref: '#1', why: 'w' }]).problems.length === 0)
+    failures.push('applyAccepted() did not fail on a RISE inside an accepted file — the acceptance is an amnesty.');
+  if (applyAccepted({ 'f.tsx': 1 }, [{ file: 'f.tsx', sites: 1, kind: 'byo', ref: '#1', why: 'w' }]).problems.length !== 0)
+    failures.push('applyAccepted() failed on an EXACT match — a correct acceptance must pass.');
+
   return failures;
 }
 
@@ -1377,6 +1538,357 @@ const META = {
  * PR may modify a baselined file WITHOUT fixing its sites.
  */
 export const TOUCH_EXEMPT = new Map();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4a. ACCEPTED — sites that are a REVIEWED decision, not a backlog item
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The baseline answers "is this population growing?". It cannot answer "is this
+// population a DEFECT?", and two classes in it are not:
+//
+//   byo             the value describes a system Loom does not own and cannot
+//                   enumerate — a customer's Snowflake account, their webhook
+//                   receiver, a credential minted on someone else's tenant. No
+//                   discovery call could supply it, so `auto-bind-by-default.md`
+//                   does not apply and a picker is not the remediation.
+//   false-positive  the classifier fired on evidence that is not an
+//                   infrastructure ask, and the correction is not cheap enough
+//                   to key a classifier rule on (see the two that WERE keyed:
+//                   `domKeyless` and the descriptor display-row rule).
+//
+// Leaving both in the baseline is not free: it makes the boy-scout rule punish
+// an innocent edit to a compliant file, which is how a guard gets ignored, and
+// it hides how much of the 250 is actually work. Removing them silently is
+// worse. So they are declared HERE, with a reason specific enough to argue
+// with, and the guard prints every one on a green run.
+//
+// ── THE CONVENTION, AND THE ONE PLACE IT DEVIATES ──────────────────────────
+// #3533 / #3531 established the shape for an accepted exception in this repo:
+// an entry PRINTS on every green run (an exception nobody is reminded of is an
+// exception nobody reviews), a STALE acceptance is itself a failure (the list
+// cannot rot into a graveyard the way an ignore-file does), and
+// `validateAccepted()` makes an incomplete entry impossible rather than leaving
+// it to a reviewer. All three are implemented below, deliberately in the same
+// shape rather than a private variant.
+//
+// It deviates in ONE field, stated rather than smuggled. #3533 requires `ref`
+// to be a GitHub issue "naming the issue that closes it", because ITS
+// acceptances are temporary — a starlette cap pending a fastapi migration, with
+// acceptance criteria requiring the entry to be DELETED. A BYO acceptance has
+// no closing condition: nobody will ever ship the discovery call that
+// enumerates a customer's on-prem Airflow. Demanding `#NNNN` on it would
+// manufacture an issue that can only be closed by deciding the rule no longer
+// applies, which is the exact "exception nobody revisits" #3531 was written
+// against. So `ref` here is REQUIRED and validated, and must be either a
+// tracking issue (`#3542`) for a deferred fix, or the rule clause that permits
+// the exception (`auto-bind-by-default.md §Allowed`) for a permanent one.
+//
+// ── THE TEETH ──────────────────────────────────────────────────────────────
+// An accepted file leaves `current` entirely, so it is NOT in the baseline and
+// the boy-scout rule cannot fire on it. `sites` is what keeps that from being a
+// blanket amnesty: it must EQUAL the file's live classified count, so a new
+// hand-typed endpoint added to a BYO file fails the run, and a fix that drains
+// one fails it too until the number is corrected by a human. `--update-baseline`
+// deliberately does NOT rewrite this table.
+
+/** @typedef {{file:string, sites:number, kind:'byo'|'false-positive', ref:string, why:string}} Acceptance */
+
+/** @type {Acceptance[]} */
+export const ACCEPTED = [
+  // ── BYO: a system Loom does not own and cannot enumerate ────────────────
+  {
+    file: 'apps/fiab-console/app/admin/migrate/page.tsx',
+    sites: 3,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The three fields describe a source estate in another VENDOR or another TENANT: a Snowflake account ' +
+      'URL / Databricks workspace URL, the workspace-or-group id inside that system, and a token minted ' +
+      'there. Loom holds no credential for the source until these are supplied — the assessment reader is ' +
+      'the first thing that ever talks to it — so there is no discovery call that could enumerate any of ' +
+      'them. The token field is already the compliant secret shape: it accepts an ' +
+      '`@Microsoft.KeyVault(SecretUri=…)` reference, and its hint records that the value is resolved ' +
+      'server-side and never rendered back.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/access/request-access-button.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The PRE-AUTH front door. This dialog renders to someone with no session and POSTs to the ' +
+      'UNAUTHENTICATED /api/access-requests/public endpoint (the file says so in its header, and uses a ' +
+      'plain fetch for exactly that reason). Both ids were scoped as "derive them from the session"; there ' +
+      'is no session on this surface, and the requester is by definition not yet known to the tenant, so ' +
+      'Graph cannot resolve them either. Both are optional, behind an "advanced" Accordion, and exist so a ' +
+      'requester who knows their own ids can save the admin a lookup.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/admin/apim-apis-pane.tsx',
+    sites: 1,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The origin an API Management API forwards to. Fronting an arbitrary HTTP backend — including one ' +
+      'outside the Azure estate entirely — is what APIM IS; no discovery call enumerates "every service ' +
+      'the customer might proxy". The field is optional: a façade-only API leaves it blank.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/admin/apim-backends-pane.tsx',
+    sites: 3,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'An APIM Backend entity IS the declaration of a third-party origin: its runtime URL plus the ' +
+      'credential that origin issued (an Authorization scheme + parameter, or a header/query key). The ' +
+      'credential is minted by the backend owner, not by Loom, and is written to APIM\'s own ' +
+      'BackendCredentialsContract rather than to a Loom record — so a Key Vault indirection here would be ' +
+      'APIM named-values, a different resource on a different pane, not a change to this form.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/admin/mcp-servers-panel.tsx',
+    sites: 4,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'Endpoints and auth for MCP servers Loom does not host: :248/:274 register an arbitrary third-party ' +
+      'server, :1105/:1125 override a Microsoft-hosted server whose endpoint is not yet GA (the hint names ' +
+      'the env var it overrides). Both secret-side fields are ALREADY the compliant shape — the auth-method ' +
+      'Dropdown beside :274 offers "Key Vault secret", which mcp-client.ts resolves through Key Vault REST, ' +
+      'and :1125 takes a secret NAME with "never the value" written into its hint.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/admin/webhooks-panel.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The customer\'s own receiver (the placeholder is an ops PagerDuty bridge) — an endpoint outside the ' +
+      'estate, which nothing in Azure can enumerate — and the HMAC signing secret, which the platform ' +
+      'GENERATES when the field is left blank (webhook-registry.ts generateWebhookSecret, 32 random bytes). ' +
+      'That field exists only so a customer whose receiver already validates a known shared secret can ' +
+      'supply theirs; the compliant default is to leave it empty.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/apim/apim-tree.tsx',
+    sites: 1,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The runtime URL of an APIM Backend created from the tree\'s "new" dialog — the same third-party ' +
+      'origin declaration as apim-backends-pane.tsx, reached from the explorer instead of the pane.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/marketplace/api-marketplace.tsx',
+    sites: 1,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The try-it console\'s subscription-key OVERRIDE. The enumerable case is already a picker — the ' +
+      'sibling Dropdown lists the caller\'s own APIM subscriptions — and this box exists for a key issued ' +
+      'to a consumer this console cannot see. The value is transient: it is sent on the one try-it request ' +
+      'and never persisted, so there is nothing for a Key Vault reference to point at.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/marketplace/data-shares.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The endpoint and bearer token of an EXTERNAL Delta Sharing provider, taken from the activation file ' +
+      'that provider issued. Both are fields of the Delta Sharing recipient-profile format and are posted ' +
+      'verbatim as `recipient_profile_str`; the protocol carries the token in the profile and has no Key ' +
+      'Vault indirection to point at instead. The compliant bulk path already sits under them — "Paste ' +
+      'activation file (JSON) to auto-fill" parses the provider\'s own file into both fields.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/airflow-job-editor.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'Both are labelled "BYO override" against a day-one managed Apache Airflow host this deployment runs ' +
+      'on Container Apps, and the editor says so in a success MessageBar directly above the second one. ' +
+      'Blank means the managed host — the platform already did the binding — and the field exists only to ' +
+      'point a job at an Airflow the customer runs themselves.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/apim-editors/api-editor.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      ':677 is the backend origin (see apim-backends-pane.tsx). :922 is the URL of an OpenAPI / WSDL / ' +
+      'GraphQL document to import — a spec published somewhere on the internet, chosen per import, which ' +
+      'is why the sibling Dropdown offers "inline JSON" as the alternative rather than a picker.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/loom-app-runtime-editor.tsx',
+    sites: 1,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'A PAT for the user\'s own private git repository, used only at build time. Loom cannot mint a ' +
+      'credential on a customer\'s GitHub / Azure DevOps / GitLab / Bitbucket account. Already the ' +
+      'compliant storage shape: a dedicated Save / rotate / Remove flow writes it to Key Vault and the ' +
+      'hint names the vault, the provider and the set time — the value is never stored on the item.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/phase4/graphql-api-editor.tsx',
+    sites: 1,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The optional resolver target an APIM GraphQL API forwards to — the same third-party origin ' +
+      'declaration as apim-backends-pane.tsx, in the GraphQL editor.',
+  },
+  {
+    file: 'apps/fiab-console/lib/panes/git-integration.tsx',
+    sites: 4,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The customer\'s Azure DevOps / GitHub credentials, plus the Entra tenant and application ids of a ' +
+      'service principal THEY registered for THEIR ADO organization. The tenant id was scoped as a ' +
+      'delete-it ("the deployment\'s own tenant") and that is wrong twice: nothing derives it — ' +
+      '`spnTenantId` is persisted by git-binding-store.ts and read by nothing that builds a token — and ' +
+      'this pane\'s own MessageBar records that Azure DevOps runs on commercial endpoints in EVERY Loom ' +
+      'boundary, so for a GCC-High / IL5 deployment the ADO organization\'s directory is definitionally ' +
+      'not the deployment\'s tenant (cloud-parity.md). The PAT / client secret is already Key Vault-backed: ' +
+      'saveBinding() calls putKeyVaultSecret and Cosmos holds only the secretRef.',
+  },
+  {
+    file: 'apps/fiab-console/lib/power-platform/flow-builder.tsx',
+    sites: 1,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The URI an HTTP action calls inside a flow the user is AUTHORING. It is automation content — the ' +
+      'same class as the report canvas\'s webUrl button — not an address of this deployment\'s ' +
+      'infrastructure, and the flow is meaningless if Loom picks it.',
+  },
+
+  // ── FALSE POSITIVE: the classifier fired on evidence that is not an ask ──
+  {
+    file: 'apps/fiab-console/app/admin/scaling/page.tsx',
+    sites: 1,
+    kind: 'false-positive',
+    ref: 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES',
+    why:
+      'The container MOUNT PATH (`/data`) at which the loom-mcp container sees an Azure Files share — a ' +
+      'path inside a container filesystem, not a storage address. The share name and storage account are ' +
+      'rendered as resolved text immediately above it, which is the platform having already done the ' +
+      'binding. It matched `storage-loc` on `mount path`, a pattern written for a Databricks DBFS mount ' +
+      'point; narrowing the pattern would lose that, so the correction is recorded here instead.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/components/inline-attribute-panel.tsx',
+    sites: 1,
+    kind: 'false-positive',
+    ref: 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES',
+    why:
+      'The target of a compliance link attached to a data asset — placeholder `https://contoso.gov/terms`, ' +
+      'paired with a "Friendly name" of "Terms of service". NOT_INFRA_RE already suppresses this class ' +
+      'when the label says "documentation"/"help"/"homepage"; this one is labelled bare "URL", so the weak ' +
+      '`bare-locator` fires with no Azure-specific evidence anywhere on the site.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/report/canvas-elements.tsx',
+    sites: 1,
+    kind: 'false-positive',
+    ref: 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES',
+    why:
+      'The destination of a report BUTTON whose action type is `webUrl` — content the report author is ' +
+      'designing, the same class NOT_INFRA_RE already suppresses for image / embed / navigate URLs. The ' +
+      'label is bare "URL" and the action type that would disambiguate it lives in a sibling Dropdown, ' +
+      'outside the site-local evidence window this guard deliberately reads.',
+  },
+  {
+    file: 'apps/fiab-console/lib/governance/workspace-egress-pane.tsx',
+    sites: 1,
+    kind: 'false-positive',
+    ref: 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES',
+    why:
+      'The value cell of an outbound ALLOW-LIST row, whose whole purpose is an arbitrary customer ' +
+      'destination. The enumerable case IS already a picker: choosing "Service tag" swaps this Input for a ' +
+      'Dropdown fed by a service-tag discovery call, and this branch renders only for "IP / CIDR" and ' +
+      '"FQDN". It matched `azure-host` on its own example placeholder, `*.blob.core.windows.net` — a ' +
+      'wildcard allow-list pattern rather than an address.',
+  },
+];
+
+/**
+ * An acceptance must be complete and must carry a reference. Returns the
+ * problems so the driver can fail on them.
+ *
+ * Enforced here rather than left to review, on #3533's reasoning: a convention
+ * that depends on a reviewer noticing is the one that rots. `ref` is either a
+ * tracking issue (a deferred fix somebody owns closing) or the rule clause that
+ * permits the exception (a permanent one) — see the deviation note above.
+ */
+export function validateAccepted(accepted = ACCEPTED) {
+  const problems = [];
+  const seen = new Set();
+  for (const a of accepted) {
+    const label = a && a.file ? a.file : '(unnamed)';
+    if (!a || !a.file || !a.why || !a.kind) {
+      problems.push(`ACCEPTED entry for ${label} is incomplete — it must name a file, a kind and a reason.`);
+      continue;
+    }
+    if (a.kind !== 'byo' && a.kind !== 'false-positive') {
+      problems.push(`ACCEPTED entry for ${label} has kind '${a.kind}' — expected 'byo' or 'false-positive'.`);
+    }
+    if (!Number.isInteger(a.sites) || a.sites < 1) {
+      problems.push(
+        `ACCEPTED entry for ${label} must declare how many sites it covers (\`sites\`, a positive integer). ` +
+          'Without it the entry is a blanket amnesty and a new violation in the file would be invisible.',
+      );
+    }
+    if (!a.ref || !(/#\d+/.test(a.ref) || /\.(?:md|mjs)\s+§\S/.test(a.ref))) {
+      problems.push(
+        `ACCEPTED entry for ${label} carries no reference. Every accepted exception needs a \`ref\`: a ` +
+          "tracking issue that closes it (e.g. '#3542') for a deferred fix, or the clause that permits it " +
+          "(e.g. 'auto-bind-by-default.md §Allowed', 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES') " +
+          'for a permanent one — otherwise it is an exception nobody owns and nobody revisits.',
+      );
+    }
+    if (seen.has(a.file)) problems.push(`ACCEPTED lists ${label} twice; one entry per file.`);
+    seen.add(a.file);
+  }
+  return problems;
+}
+
+/**
+ * Remove the accepted files from `current`, failing on any entry that has gone
+ * stale or drifted. Mutates nothing — returns a new map plus the problems.
+ */
+export function applyAccepted(current, accepted = ACCEPTED) {
+  const problems = [];
+  const remaining = { ...current };
+  for (const a of accepted) {
+    const live = current[a.file];
+    if (live === undefined) {
+      problems.push(
+        `ACCEPTED entry for ${a.file} no longer matches ANY classified site. Either the sites were fixed ` +
+          '(delete the entry) or the detector stopped seeing them (a silent regression). A dead acceptance ' +
+          'is cover for the next violation in that file.',
+      );
+      continue;
+    }
+    if (live !== a.sites) {
+      problems.push(
+        `ACCEPTED entry for ${a.file} declares ${a.sites} site(s); the classifier now finds ${live}. ` +
+          (live > a.sites
+            ? 'A NEW hand-typed infrastructure value was added to an accepted file — judge it before ' +
+              'raising the number, because the acceptance does not cover it.'
+            : 'A site was cleared — lower the number in the same PR so the acceptance keeps its teeth.'),
+      );
+      continue;
+    }
+    delete remaining[a.file];
+  }
+  return { remaining, problems };
+}
 
 export function collect() {
   const files = execFileSync('git', ['ls-files', SCOPE], { cwd: REPO_ROOT, encoding: 'utf8' })
@@ -1407,8 +1919,8 @@ export function collect() {
  * @returns {number} exit code
  */
 export function judge(
-  { files, current, detail = [], sites },
-  { argv = process.argv, baselineFile = BASELINE_FILE, touchedFiles } = {},
+  { files, current: measured, detail = [], sites },
+  { argv = process.argv, baselineFile = BASELINE_FILE, touchedFiles, accepted = ACCEPTED } = {},
 ) {
   const regen = argv.includes('--update-baseline');
 
@@ -1428,7 +1940,11 @@ export function judge(
     );
     return 1;
   }
-  const total = Object.values(current).reduce((a, b) => a + b, 0);
+  // The population floors read the MEASURED map, before acceptances. They are a
+  // control on the DETECTOR, and an acceptance is a judgement about a site the
+  // detector correctly found — netting them off here would let the table walk
+  // the floor down without anything having been fixed.
+  const total = Object.values(measured).reduce((a, b) => a + b, 0);
   if (total < MIN_LIVE_SITES && !regen) {
     console.error(
       `::error::no-freeform: the classifier found only ${total} site(s) (floor ${MIN_LIVE_SITES}). ` +
@@ -1439,11 +1955,33 @@ export function judge(
     return 1;
   }
 
+  // ── accepted exceptions: validated, applied, and PRINTED every run ───────
+  const acceptProblems = validateAccepted(accepted);
+  const { remaining: current, problems: driftProblems } = applyAccepted(measured, accepted);
+  const acceptedSites = accepted.reduce((n, a) => n + (Number.isInteger(a.sites) ? a.sites : 0), 0);
+
   console.log(
     `no-freeform: ${files.length} tracked .tsx, ${sites} free-text input site(s) extracted, ` +
-      `${total} asking for an infrastructure value across ${Object.keys(current).length} file(s), ` +
+      `${total} asking for an infrastructure value across ${Object.keys(measured).length} file(s), ` +
       `${CONTROLS.length} embedded control(s) passed.`,
   );
+  console.log(
+    `no-freeform [accepted]: ${accepted.length} reviewed exception(s) covering ${acceptedSites} site(s) — ` +
+      `${accepted.filter((a) => a.kind === 'byo').length} bring-your-own, ` +
+      `${accepted.filter((a) => a.kind === 'false-positive').length} classifier false-positive. ` +
+      `${Object.values(current).reduce((a, b) => a + b, 0)} site(s) remain under the ratchet.`,
+  );
+  for (const a of accepted) {
+    console.log(`  ACCEPTED [${a.kind}] (${a.ref}) ${a.file} — ${a.sites} site(s): ${a.why}`);
+  }
+  if (acceptProblems.length || driftProblems.length) {
+    for (const p of [...acceptProblems, ...driftProblems]) console.error(`::error::no-freeform: ${p}`);
+    console.error(
+      '::error::no-freeform: the ACCEPTED table does not describe this tree. An exception that no longer ' +
+        'matches what it excuses is not an exception, it is cover — same reasoning as #3531.',
+    );
+    return 1;
+  }
 
   const { entries: baseline } = loadBaseline(baselineFile);
 
@@ -1467,7 +2005,12 @@ export function judge(
   // outright: on a BOOTSTRAP regen the baseline is empty, so every site reads
   // as over-baseline and the run would emit the entire population as errors.
   const verbose = argv.includes('--report');
+  const acceptedFiles = new Set(accepted.map((a) => a.file));
   for (const b of detail) {
+    // An accepted file's sites are reported above, with their reason. Listing
+    // them again here — or annotating them — would re-file a judgement that has
+    // already been made.
+    if (acceptedFiles.has(b.f)) continue;
     const overBaseline = !regen && (current[b.f] ?? 0) > (baseline[b.f] ?? 0);
     const body =
       `no-freeform [${b.kind}:${b.ids.join(',')}]: this free-text ${b.tag} asks the user for ${b.why}. ` +

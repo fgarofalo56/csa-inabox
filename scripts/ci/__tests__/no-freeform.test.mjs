@@ -23,14 +23,17 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
+  ACCEPTED,
   CONTROLS,
   SHAPE_PATTERNS,
   analyze,
+  applyAccepted,
   collect,
   extractSites,
   judge,
   maskJsx,
   selfTest,
+  validateAccepted,
 } from '../check-no-freeform.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -183,25 +186,25 @@ test('azure-host does NOT match a host that merely CONTAINS an Azure suffix', ()
 
 test('a NEW violation in a baselined file FAILS', () => {
   const file = tmpBaseline({ 'a.tsx': 1 });
-  const code = judge(measured({ 'a.tsx': 2 }), { argv: [], baselineFile: file, touchedFiles: null });
+  const code = judge(measured({ 'a.tsx': 2 }), { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
   assert.equal(code, 1);
 });
 
 test('a violation in a file that is NOT baselined FAILS', () => {
   const file = tmpBaseline({ 'a.tsx': 1 });
-  const code = judge(measured({ 'a.tsx': 1, 'b.tsx': 1 }), { argv: [], baselineFile: file, touchedFiles: null });
+  const code = judge(measured({ 'a.tsx': 1, 'b.tsx': 1 }), { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
   assert.equal(code, 1);
 });
 
 test('a DRAINED baseline entry FAILS — a dead entry is cover for the next violation', () => {
   const file = tmpBaseline({ 'a.tsx': 1, 'b.tsx': 2 });
-  const code = judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, touchedFiles: null });
+  const code = judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
   assert.equal(code, 1);
 });
 
 test('a PARTIAL fix (2 -> 1) passes — that is the ratchet working, not a regression', () => {
   const file = tmpBaseline({ 'a.tsx': 2 });
-  const code = judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, touchedFiles: null });
+  const code = judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
   assert.equal(code, 0);
 });
 
@@ -209,7 +212,7 @@ test('the boy-scout rule fails a baselined file that was touched but not cleared
   const file = tmpBaseline({ 'a.tsx': 1 });
   const code = judge(measured({ 'a.tsx': 1 }), {
     argv: [],
-    baselineFile: file,
+    baselineFile: file, accepted: [],
     touchedFiles: new Set(['a.tsx']),
   });
   assert.equal(code, 1);
@@ -217,20 +220,20 @@ test('the boy-scout rule fails a baselined file that was touched but not cleared
 
 test('an unavailable base-ref diff SKIPS the boy-scout rule rather than failing spuriously', () => {
   const file = tmpBaseline({ 'a.tsx': 1 });
-  assert.equal(judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, touchedFiles: null }), 0);
+  assert.equal(judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, accepted: [], touchedFiles: null }), 0);
 });
 
 // ── 6. the floors ──────────────────────────────────────────────────────────
 
 test('FLOOR: a collapsed file enumeration FAILS instead of reporting a clean sweep', () => {
   const file = tmpBaseline({});
-  const code = judge({ files: ['a.tsx'], current: {}, detail: [], sites: 2298 }, { argv: [], baselineFile: file, touchedFiles: null });
+  const code = judge({ files: ['a.tsx'], current: {}, detail: [], sites: 2298 }, { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
   assert.equal(code, 1);
 });
 
 test('FLOOR: collapsed SITE extraction FAILS — the classifier reports a subset of sites, so this fires first', () => {
   const file = tmpBaseline({});
-  const code = judge({ files: new Array(1286).fill('x'), current: {}, detail: [], sites: 3 }, { argv: [], baselineFile: file, touchedFiles: null });
+  const code = judge({ files: new Array(1286).fill('x'), current: {}, detail: [], sites: 3 }, { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
   assert.equal(code, 1);
 });
 
@@ -240,7 +243,7 @@ test('FLOOR: a classifier that stopped classifying FAILS — a ratchet only fail
   const file = tmpBaseline({});
   const code = judge(
     { files: new Array(1286).fill('x'), current: { 'a.tsx': 1 }, detail: [], sites: 2298 },
-    { argv: [], baselineFile: file, touchedFiles: null },
+    { argv: [], baselineFile: file, accepted: [], touchedFiles: null },
   );
   assert.equal(code, 1);
 });
@@ -254,18 +257,199 @@ test('the floors are ordered so extraction breakage is reported BEFORE a classif
   const orig = console.error;
   console.error = (...a) => errs.push(a.join(' '));
   try {
-    judge({ files: new Array(1286).fill('x'), current: {}, detail: [], sites: 0 }, { argv: [], baselineFile: file, touchedFiles: null });
+    judge({ files: new Array(1286).fill('x'), current: {}, detail: [], sites: 0 }, { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
   } finally {
     console.error = orig;
   }
   assert.match(errs.join('\n'), /site extraction found only 0/);
 });
 
-// ── 7. end to end, as CI runs it ───────────────────────────────────────────
+// ── 7. the ACCEPTED table (wave 1B) ────────────────────────────────────────
+//
+// An accepted file leaves the ratchet entirely, so the ONLY thing watching it
+// is `applyAccepted`. If these properties break, 34 sites across 19 files
+// become unwatched and nothing anywhere says so.
+
+test('every ACCEPTED entry satisfies its own rules — no entry without a reference or a site count', () => {
+  assert.deepEqual(validateAccepted(), []);
+});
+
+test('validateAccepted REJECTS an entry with no reference — the rule is enforced, not documented', () => {
+  const p = validateAccepted([{ file: 'a.tsx', sites: 1, kind: 'byo', why: 'because' }]);
+  assert.equal(p.length, 1);
+  assert.match(p[0], /no reference/);
+});
+
+test('validateAccepted REJECTS an entry with no site count — an acceptance is not a blanket amnesty', () => {
+  const p = validateAccepted([{ file: 'a.tsx', kind: 'byo', ref: '#1', why: 'because' }]);
+  assert.equal(p.length, 1);
+  assert.match(p[0], /how many sites/);
+});
+
+test('validateAccepted REJECTS a duplicate file — two reasons for one file means neither is the reason', () => {
+  const e = { file: 'a.tsx', sites: 1, kind: 'byo', ref: '#1', why: 'because' };
+  assert.equal(validateAccepted([e, { ...e }]).length, 1);
+});
+
+test('a STALE acceptance FAILS — the file no longer classifies, so the entry is cover', () => {
+  assert.equal(applyAccepted({}, [{ file: 'a.tsx', sites: 1, kind: 'byo', ref: '#1', why: 'w' }]).problems.length, 1);
+});
+
+test('a RISE inside an accepted file FAILS — a new hand-typed value is not covered by the old reason', () => {
+  const { problems } = applyAccepted({ 'a.tsx': 2 }, [{ file: 'a.tsx', sites: 1, kind: 'byo', ref: '#1', why: 'w' }]);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /NEW hand-typed/);
+});
+
+test('a DRAIN inside an accepted file FAILS until the count is corrected by a human', () => {
+  const { problems } = applyAccepted({ 'a.tsx': 3 }, [{ file: 'a.tsx', sites: 4, kind: 'byo', ref: '#1', why: 'w' }]);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /cleared/);
+});
+
+test('an EXACT match passes and removes the file from the ratchet population', () => {
+  const { remaining, problems } = applyAccepted(
+    { 'a.tsx': 2, 'b.tsx': 5 },
+    [{ file: 'a.tsx', sites: 2, kind: 'byo', ref: '#1', why: 'w' }],
+  );
+  assert.deepEqual(problems, []);
+  assert.deepEqual(remaining, { 'b.tsx': 5 });
+});
+
+test('judge() FAILS when the real ACCEPTED table does not match the measured tree', () => {
+  const file = tmpBaseline({ 'a.tsx': 1 });
+  // The real table names 19 files; none of them is in this synthetic map, so
+  // every entry is stale and the run must refuse to judge.
+  const code = judge(measured({ 'a.tsx': 1 }), { argv: [], baselineFile: file, touchedFiles: null });
+  assert.equal(code, 1);
+});
+
+test('an accepted file is NOT in the regenerated baseline — otherwise it is counted twice', () => {
+  const baseline = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'ci', 'no-freeform-inputs-baseline.json'), 'utf8'),
+  );
+  for (const a of ACCEPTED) {
+    assert.ok(!(a.file in baseline.entries), `${a.file} is both ACCEPTED and baselined`);
+  }
+});
+
+test('every ACCEPTED file still classifies exactly the number of sites it claims', () => {
+  const { current } = collect();
+  for (const a of ACCEPTED) {
+    assert.equal(current[a.file], a.sites, `${a.file}: ACCEPTED says ${a.sites}, classifier finds ${current[a.file]}`);
+  }
+});
+
+// ── 8. the ACCEPTED reasons are still TRUE of the tree ─────────────────────
+//
+// `applyAccepted` keeps the COUNTS honest. Nothing keeps the REASONS honest,
+// and a reason is what the acceptance is actually made of — #3531's lesson is
+// that an exception survives on the strength of having once been reasonable.
+// Each test below reads the tree for the specific fact its acceptance rests on,
+// so a change that invalidates a reason fails here instead of silently turning
+// a considered judgement into a stale one.
+//
+// These are also the receipts for the three DELETE-THE-FIELD calls this wave
+// DECLINED. Each declined deletion rested on a premise ("the value is the
+// deployment's own tenant / derivable from the session"); the premise is
+// measured here rather than argued.
+
+/** Every tracked file under apps/fiab-console whose text contains `needle`. */
+function filesContaining(needle) {
+  const all = execFileSync('git', ['ls-files', 'apps/fiab-console'], { cwd: REPO_ROOT, encoding: 'utf8' })
+    .split('\n')
+    .filter((f) => /\.(?:tsx?|mjs)$/.test(f));
+  return all.filter((f) => fs.readFileSync(path.join(REPO_ROOT, f), 'utf8').includes(needle));
+}
+
+test('RECEIPT (declined DEL): `spnTenantId` is WRITE-ONLY — nothing derives it, so it cannot be deleted', () => {
+  // The scoping called git-integration.tsx:526 and connection-builder.tsx:262
+  // deletable because they "ask for the deployment's own tenant". Deleting a
+  // field is only safe if the value resolves from somewhere else. It does not:
+  // every consumer either RENDERS the field or PERSISTS it, and no credential
+  // is ever constructed from it.
+  const consumers = filesContaining('spnTenantId').filter((f) => !f.includes('__tests__'));
+  assert.deepEqual(consumers.sort(), [
+    'apps/fiab-console/app/api/admin/workspaces/[id]/git/branch-out/route.ts',
+    'apps/fiab-console/app/api/admin/workspaces/[id]/git/route.ts',
+    'apps/fiab-console/app/api/connections/[id]/route.ts',
+    'apps/fiab-console/app/api/connections/route.ts',
+    'apps/fiab-console/lib/azure/connections-store.ts',
+    'apps/fiab-console/lib/azure/git-binding-store.ts',
+    'apps/fiab-console/lib/components/connections/connection-builder.tsx',
+    'apps/fiab-console/lib/panes/git-integration.tsx',
+  ], 'a NEW consumer of spnTenantId appeared — re-judge the acceptance before trusting it');
+
+  // None of them mints a token from it. If one starts to, the value has a real
+  // authority behind it and this whole argument needs revisiting.
+  for (const f of consumers) {
+    const src = fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
+    assert.ok(
+      !/ClientSecretCredential|ConfidentialClientApplication|\/oauth2\/v2\.0\/token/.test(src),
+      `${f} now builds a credential alongside spnTenantId — the "write-only" premise is dead`,
+    );
+  }
+});
+
+test('RECEIPT (declined DEL): the Request-access dialog is PRE-AUTH, so there is no session to derive ids from', () => {
+  const route = fs.readFileSync(
+    path.join(REPO_ROOT, 'apps/fiab-console/app/api/access-requests/public/route.ts'), 'utf8',
+  );
+  // The endpoint the dialog POSTs to has no session gate — it says so, and it
+  // reads no session helper.
+  assert.match(route, /UNAUTHENTICATED|deliberately reachable pre-auth/);
+  assert.ok(!/getSession|requireSession|readSession/.test(route), 'the public access-request route now has a session');
+
+  // And the deployment's own tenant is a DIFFERENT value from the requester's:
+  // it comes from AZURE_TENANT_ID and is used only as a partition bucket, so
+  // substituting it for the requester's tenant id would be wrong, not lossy.
+  const helper = fs.readFileSync(
+    path.join(REPO_ROOT, 'apps/fiab-console/lib/access/signin-access-request.ts'), 'utf8',
+  );
+  assert.match(helper, /deploymentTenantBucket[\s\S]{0,200}AZURE_TENANT_ID/);
+});
+
+test('RECEIPT: the webhook signing secret is GENERATED when the field is left blank', () => {
+  const registry = fs.readFileSync(path.join(REPO_ROOT, 'apps/fiab-console/lib/events/webhook-registry.ts'), 'utf8');
+  assert.match(registry, /function generateWebhookSecret/);
+  // The compliant default: supplied-and-long-enough, else generate.
+  assert.match(registry, /input\.secret && input\.secret\.length >= \d+ \? input\.secret : generateWebhookSecret\(\)/);
+});
+
+test('RECEIPT: both accepted git credentials are already Key Vault-backed, not stored on the record', () => {
+  const binding = fs.readFileSync(path.join(REPO_ROOT, 'apps/fiab-console/lib/azure/git-binding-store.ts'), 'utf8');
+  assert.match(binding, /putKeyVaultSecret\(/);
+  assert.match(binding, /secretRef: name/);
+  const runtimeRoute = fs.readFileSync(
+    path.join(REPO_ROOT, 'apps/fiab-console/app/api/items/loom-app-runtime/[id]/git-credential/route.ts'), 'utf8',
+  );
+  assert.match(runtimeRoute, /putKeyVaultSecret\(/);
+});
+
+test('RECEIPT: the accepted Airflow URL is an override on a day-one MANAGED host, not the only path', () => {
+  const editor = fs.readFileSync(path.join(REPO_ROOT, 'apps/fiab-console/lib/editors/airflow-job-editor.tsx'), 'utf8');
+  assert.match(editor, /managedHost/);
+  assert.match(editor, /Leave blank to use the managed host/);
+});
+
+test('RECEIPT: the accepted egress allow-list already has a picker for the enumerable case', () => {
+  const pane = fs.readFileSync(path.join(REPO_ROOT, 'apps/fiab-console/lib/governance/workspace-egress-pane.tsx'), 'utf8');
+  // Choosing "Service tag" swaps the Input for a Dropdown fed by discovery.
+  assert.match(pane, /draftType === 'service-tag' \? \(\s*<Dropdown/);
+  assert.match(pane, /serviceTags\.map/);
+});
+
+// ── 9. end to end, as CI runs it ───────────────────────────────────────────
 
 test('the guard passes on the current tree at its baseline', () => {
   const r = execFileSync(process.execPath, [GUARD], { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' });
   assert.match(r, /baseline holds/);
+});
+
+test('every acceptance is PRINTED on a green run — an exception nobody is reminded of is not reviewed', () => {
+  const r = execFileSync(process.execPath, [GUARD], { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' });
+  for (const a of ACCEPTED) assert.ok(r.includes(a.file), `${a.file} is accepted but never printed`);
+  assert.match(r, /no-freeform \[accepted\]: \d+ reviewed exception\(s\)/);
 });
 
 test('the measured population is real: hundreds of sites, and not everything is a violation', () => {
