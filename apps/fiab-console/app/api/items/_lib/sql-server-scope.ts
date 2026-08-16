@@ -277,10 +277,13 @@ function refuse(status: number, code: string, error: string): ScopeRefusal {
  *      MANAGED INSTANCE IS THE KNOWN CASUALTY of that reduction, recorded here
  *      because this is the function that causes it and the function that would
  *      have to change. An Azure SQL Managed Instance host is ZONE-QUALIFIED —
- *      `<instance>.<dnsZone>.database.windows.net` — so reducing it to the first
- *      label yields `<instance>`, and `getPool` then composes
- *      `<instance>.database.windows.net`: a DIFFERENT host from the one the
- *      operator selected, and usually one that does not exist.
+ *      `<instance>.<dnsZone>.<sqlHostSuffix()>`, one label deeper than a logical
+ *      server — so reducing it to the first label yields `<instance>`, and
+ *      `getPool` then composes `<instance>.<sqlHostSuffix()>`: a DIFFERENT host
+ *      from the one the operator selected, and usually one that does not exist.
+ *      (Stated against `sqlHostSuffix()` rather than a literal on purpose — the
+ *      suffix differs per boundary, so this defect is identical in Gov and the
+ *      prose must not teach the Commercial one. See `cloud-parity.md`.)
  *
  *      So `SqlManagedInstanceEditor` is deliberately NOT auto-bound (see the
  *      comment on its `run`): binding it would turn a dead button into one that
