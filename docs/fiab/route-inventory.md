@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 104 |
-| Session-only | 513 |
-| Owner-scoped | 762 |
+| Session-only | 507 |
+| Owner-scoped | 768 |
 | Admin | 301 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -1132,7 +1132,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/automl/jobs/route.ts` | GET | session-only | ● | — |
 | `items/automl/options/route.ts` | GET | session-only | ● | AML |
 | `items/automl/submit/route.ts` | POST | session-only | ● | — |
-| `items/azure-sql-database/[id]/aad-admin/route.ts` | GET PUT | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/aad-admin/route.ts` | GET PUT | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/[id]/connect/route.ts` | POST | owner-scoped |  | — |
 | `items/azure-sql-database/[id]/copilot/route.ts` | POST | owner-scoped | ● | Azure SQL |
 | `items/azure-sql-database/[id]/create-db/route.ts` | POST | session-only |  | Azure SQL |
@@ -1145,11 +1145,11 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/azure-sql-database/[id]/queries/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
 | `items/azure-sql-database/[id]/query/cancel/route.ts` | POST | session-only |  | Azure SQL |
 | `items/azure-sql-database/[id]/query/route.ts` | POST | owner-scoped |  | Azure SQL |
-| `items/azure-sql-database/[id]/replication/route.ts` | POST | session-only |  | Azure SQL |
-| `items/azure-sql-database/[id]/restore/route.ts` | GET POST | session-only |  | Azure SQL |
-| `items/azure-sql-database/[id]/scale/route.ts` | POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/replication/route.ts` | POST | owner-scoped |  | Azure SQL |
+| `items/azure-sql-database/[id]/restore/route.ts` | GET POST | owner-scoped |  | Azure SQL |
+| `items/azure-sql-database/[id]/scale/route.ts` | POST | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/[id]/search-management/route.ts` | GET POST | session-only |  | Azure SQL |
-| `items/azure-sql-database/[id]/share/route.ts` | GET POST DELETE | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/share/route.ts` | GET POST DELETE | owner-scoped |  | Azure SQL |
 | `items/azure-sql-database/[id]/sql2025-features/route.ts` | POST | session-only |  | Azure SQL |
 | `items/azure-sql-database/route.ts` | GET POST | owner-scoped |  | — |
 | `items/azure-sql-managed-instance/route.ts` | GET POST | owner-scoped |  | Azure SQL |
@@ -1548,7 +1548,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/plan/[id]/writeback/route.ts` | GET POST | owner-scoped | ● | — |
 | `items/postgres-flexible-server/[id]/databases/route.ts` | GET | session-only |  | — |
 | `items/postgres-flexible-server/[id]/firewall/route.ts` | GET POST DELETE | session-only |  | — |
-| `items/postgres-flexible-server/[id]/query/route.ts` | POST | session-only |  | — |
+| `items/postgres-flexible-server/[id]/query/route.ts` | POST | owner-scoped |  | — |
 | `items/postgres-flexible-server/route.ts` | GET POST | session-only |  | — |
 | `items/power-app/[id]/publish/route.ts` | POST | owner-scoped |  | — |
 | `items/power-app/[id]/route.ts` | GET | owner-scoped |  | — |

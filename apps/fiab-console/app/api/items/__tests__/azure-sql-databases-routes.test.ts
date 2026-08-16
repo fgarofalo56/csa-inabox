@@ -309,9 +309,29 @@ describe('PostgreSQL flexible server routes', () => {
     expect(deletePgFw).toHaveBeenCalledWith('pg', 'r');
   });
 
+  // GHSA-v8r7-c2p5-mjf2 — /query now resolves its server from the OWNED `[id]`
+  // item's bound connection instead of from the body, so these cases must supply
+  // a route ctx and an owned, bound item to reach the handler at all. The
+  // authorization itself is covered in depth by
+  // `postgres-flexible-server/[id]/query/__tests__/query-scope.test.ts`; the two
+  // specs below stay pointed at what they were always about — the honest config
+  // gate and the sql validation — plus the ownership requirement that is new.
+  const pgBoundItem = {
+    id: 'i1', itemType: 'azure-sql-database', workspaceId: 'ws1',
+    state: { connection: { family: 'postgres', server: 'pg', database: 'app' } },
+  } as any;
+
+  it('query — 404s a caller who does not own the [id] item, before any gate', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await pgQueryPOST(bodyReq('http://x/', { server: 'pg', database: 'app', sql: 'SELECT 1' }), ctx('i1'));
+    expect(res.status).toBe(404);
+  });
+
   it('query — returns an honest config gate (503, never fabricates rows)', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await pgQueryPOST(bodyReq('http://x/', { server: 'pg', database: 'app', sql: 'SELECT 1' }));
+    (loadOwnedItem as any).mockResolvedValue(pgBoundItem);
+    const res = await pgQueryPOST(bodyReq('http://x/', { server: 'pg', database: 'app', sql: 'SELECT 1' }), ctx('i1'));
     const j = await res.json();
     // The unprovisioned-dependency gate (UAMI not registered as a PG Entra
     // principal) is a 503 service-config gate carrying { gated:true }.
@@ -323,7 +343,8 @@ describe('PostgreSQL flexible server routes', () => {
 
   it('query — 400 when sql missing', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await pgQueryPOST(bodyReq('http://x/', { server: 'pg', database: 'app' }));
+    (loadOwnedItem as any).mockResolvedValue(pgBoundItem);
+    const res = await pgQueryPOST(bodyReq('http://x/', { server: 'pg', database: 'app' }), ctx('i1'));
     expect(res.status).toBe(400);
   });
 });

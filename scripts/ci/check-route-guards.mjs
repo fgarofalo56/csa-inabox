@@ -253,6 +253,20 @@ const GUARD_SIGNAL_RE = new RegExp(
     // one out fails this checker instead of silently disarming it.
     'authorizeDatabricksJobItem(?:<[^()]*>)?\\s*\\(',
     'authorizeDatabricksPipelineItem(?:<[^()]*>)?\\s*\\(',
+    // GHSA-v8r7-c2p5-mjf2 — `withBoundSqlServer(` is the Azure SQL / PostgreSQL
+    // item-route guard (`app/api/items/_lib/sql-server-scope.ts`). It composes on
+    // `withWorkspaceOwner`, resolves the target server from the item's bound
+    // connection, and admits that binding against `loomSubscriptionScope()`.
+    // Matched AS A CALL, so a `{@link withBoundSqlServer}` in prose cannot
+    // satisfy it — the way `assertOwner` lied.
+    //
+    // ADDED TO GETSESSION_RE AND generate-route-inventory's SESSION_RE/OWNER_RE
+    // IN THE SAME CHANGE, deliberately. Measured on this advisory: with the six
+    // routes hardened but the name unlisted, `scanned session-based routes` fell
+    // from 1526 to 1520 — the guard moved into a wrapper and the routes silently
+    // left the checker's REMIT, which is the same under-reporting the ADX pass
+    // recorded and the `guard-adoption gap` this repo has been bitten by before.
+    'withBoundSqlServer(?:<[^()]*>)?\\s*\\(',
     // #3572 — `authorizeStorageAccount(` bounds which storage account a caller
     // may drive the Console UAMI at: the deployment's own lake (any session),
     // DLZ authority (tenant/domain admin), or an account a lakehouse in the
@@ -360,7 +374,7 @@ const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // did not. That is #2977 again, verbatim: a control passing on prose. Now that
 // matching runs on comment-stripped source the prose is gone, so the pattern
 // has to match the real call.
-const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)(?:<[^()]*>)?\s*\(/;
+const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability|BoundSqlServer)(?:<[^()]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)(?:<[^()]*>)?\s*\(/;
 
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
@@ -1041,6 +1055,36 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/experience/warp/transforms/route.ts',
   'apps/fiab-console/app/api/governance/scans/route.ts',
   'apps/fiab-console/app/api/governance/scans/register-existing/route.ts',
+  // ── GHSA-v8r7-c2p5-mjf2 ──────────────────────────────────────────────────
+  // The Azure SQL / PostgreSQL routes that took a full ARM resource id — or a
+  // bare server name — from the REQUEST BODY and used it verbatim against ARM
+  // or a database data plane as the Console UAMI. They sat in
+  // SHARED_BACKEND_ITEM_ROUTES under "no per-tenant Cosmos ownership to scope",
+  // a premise their own sibling `[id]/connect` had already falsified by
+  // persisting exactly such a binding, which `[id]/query` has resolved its
+  // target from since #2723.
+  //
+  // NOTE FOR falsifiedSharedBackendPremise (CHECK 3): these were OUTSIDE that
+  // control's population BY CONSTRUCTION — it filters to handlers that CONSUME
+  // `[id]`, and `[id]/scale` is `POST(req)` with no `ctx` parameter at all, so
+  // the id was not merely ignored, it was not accepted. CHECK 3 reported zero on
+  // this family and always had. That zero was evidence the case was outside the
+  // population, not evidence of safety.
+  //
+  // Every one now runs `withBoundSqlServer`: owner check, target resolved from
+  // the item's bound connection, and that binding admitted against
+  // `loomSubscriptionScope()`. Listed here rather than left allowlisted so
+  // dropping the guard RE-FLAGS instead of falling back to a class reason that
+  // was only ever true because nobody looked.
+  //
+  // The REST of both families is untouched and still allowlisted — see the
+  // advisory's triage table. This is a partial fix with an honest ledger.
+  'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/query/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/share/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/aad-admin/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/restore/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/replication/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/scale/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
@@ -1610,6 +1654,12 @@ const ITEM_OWNERSHIP_RESOLVER_RE = new RegExp(
     'loadContentBackedItem', 'withWorkspaceOwner', 'authorizeItemWorkspace',
     'resolveItemAccessByOid',
     'authorizeNotebookItem', 'authorizeDatabricksJobItem', 'authorizeDatabricksPipelineItem',
+    // GHSA-v8r7-c2p5-mjf2 — the Azure SQL / PostgreSQL item-route guard. Listed
+    // here so `azure-sql-database` and `postgres-flexible-server` count as types
+    // whose `[id]` IS resolvable as an owned item: that is what makes CHECK 3
+    // falsify the "no per-tenant Cosmos ownership to scope" premise for any
+    // SIBLING in those families that is still body-addressed.
+    'withBoundSqlServer',
   ].map((n) => `${n}(?:<[^()]*>)?\\s*\\(`).join('|'),
 );
 
@@ -1766,6 +1816,32 @@ const GUARD_WRAPPERS = [
       'getSession\\s*\\(',
       'authorizeItemWorkspace\\s*\\(',
       'database:\\s*resolveItemSynapseDatabase\\s*\\(\\s*item\\s*\\)',
+    ],
+  },
+  {
+    // GHSA-v8r7-c2p5-mjf2 — the Azure SQL / PostgreSQL item-route guard. Six
+    // routes delegate their ENTIRE authorization to it, so hollowing it out must
+    // fail HERE rather than silently disarming all six while they keep matching
+    // GUARD_SIGNAL_RE.
+    //
+    // THE LAST TWO REGEXES ARE PINNED TO EXPRESSIONS, NOT NAMES, for the reason
+    // the sibling above records. `mustCall` is a PRESENCE test, so
+    // `admitGovernedServer\s*\(` alone is satisfied by a wrapper that admits the
+    // binding, ignores the answer, and hands the handler the RAW value:
+    //     const admitted = admitGovernedServer(bound.server, opts.provider);
+    //     return handler(req, { …, server: bound.server as ScopedSqlServer });
+    // — which reinstates the whole advisory with the checker green. Pinning
+    // `server: admitted.server` asserts that what reaches the handler is the
+    // ADMITTED value, and pinning the `withWorkspaceOwner` composition asserts
+    // Layer 1 is still there. A refactor that legitimately renames either binding
+    // must update this line; that cost is the point.
+    name: 'withBoundSqlServer',
+    file: path.join(CONSOLE_ROOT, 'app', 'api', 'items', '_lib', 'sql-server-scope.ts'),
+    exportKind: 'function',
+    mustCall: [
+      'withWorkspaceOwner\\s*(?:<[^()]*>)?\\s*\\(',
+      'admitGovernedServer\\s*\\(\\s*bound\\.server\\s*,',
+      'server:\\s*admitted\\.server',
     ],
   },
   // C22 (#3088) — the route-toolkit wrappers are guard signals too, and they

@@ -774,6 +774,32 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   // this item so `run()` binds the connection at most once per selection.
   const boundKeyRef = useRef<string>('');
 
+  // GHSA-v8r7-c2p5-mjf2 — PERSIST the selection as soon as it changes, not only
+  // when a query runs.
+  //
+  // The scale / restore / replication / share / Entra-admin panels now derive
+  // their target from THIS item's bound connection (the request body can only
+  // trigger a rejection, never pick the target), so an item that has never been
+  // bound would refuse every one of them with 409 `no_bound_connection` —
+  // refusing legitimate users, which is not a fix. Binding on selection also
+  // covers PostgreSQL, whose `/query` route previously took its server from the
+  // body and was therefore skipped here.
+  //
+  // `bindItemConnection` short-circuits on `boundKeyRef`, so this is at most one
+  // POST per distinct selection, and `run()` keeps its own awaited bind so a
+  // query never races this effect.
+  useEffect(() => {
+    if (!server || !id || id === 'new') return;
+    let cancelled = false;
+    void (async () => {
+      const b = await bindItemConnection({
+        id, family, server, database, cachedKey: boundKeyRef.current, postJson: fetchJson,
+      });
+      if (!cancelled && b.ok) boundKeyRef.current = b.key;
+    })();
+    return () => { cancelled = true; };
+  }, [id, family, server, database]);
+
   const serverFqdn = useMemo(() => {
     if (!inv) return '';
     if (family === 'azure-sql') return inv.sql.servers.find((x) => x.name === server)?.fqdn || '';
@@ -864,9 +890,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     if (family !== 'postgres' && !database) { setQResult({ ok: false, error: 'select a database first' }); return; }
     // #2723 — the azure-sql /query route DERIVES its target from THIS item's
     // bound connection (authority comes from the item id, not the request body),
-    // so persist the current selection before running. PostgreSQL has its own
-    // route/binding. Bound at most once per selection (boundKeyRef).
-    if (family !== 'postgres' && id !== 'new') {
+    // so persist the current selection before running. GHSA-v8r7-c2p5-mjf2 puts
+    // the PostgreSQL /query route on the same footing, so it binds too — the
+    // family is carried through so the route can tell which backend it is.
+    // Bound at most once per selection (boundKeyRef).
+    if (id !== 'new') {
       const b = await bindItemConnection({ id, family, server, database, cachedKey: boundKeyRef.current, postJson: fetchJson });
       if (!b.ok) { setQResult({ ok: false, error: b.error }); return; }
       boundKeyRef.current = b.key;
