@@ -24,21 +24,26 @@
  * away from any signed-in user.
  *
  * VAULT SELECTION. `?vault=` accepts a bare vault name or a full https URI, and
- * the URI's host MUST end with the ACTIVE CLOUD's Key Vault suffix
- * (`kvSuffix()` — `vault.azure.net` in Commercial, `vault.usgovcloudapi.net` in
- * GCC-High/IL5/DoD). That is both a sovereignty check and an SSRF guard: an
- * unchecked `vault` parameter would let a caller aim a bearer-token-bearing
- * request at any host. With no `vault=` the route falls back to the deployment's
- * own vault (LOOM_KEY_VAULT_URI / _NAME) and says so honestly when that is unset.
+ * the URI's host MUST end with the ACTIVE CLOUD's Key Vault suffix, which is
+ * read from `kvSuffix()` and never written down here — Commercial and the
+ * sovereign clouds each return their own. That is both a sovereignty check and
+ * an SSRF guard: an unchecked `vault` parameter would let a caller aim a
+ * bearer-token-bearing request at any host. With no `vault=` the route falls
+ * back to the deployment's own vault (LOOM_KEY_VAULT_URI / _NAME) and says so
+ * honestly when that is unset.
  *
- * Auth: withSession. A 403 from Key Vault is surfaced with the exact role to
- * grant ("Key Vault Secrets User" is enough to LIST — listing does not require
- * the Officer role that writing does).
+ * Auth: withSession, plus `requireTenantAdmin` for any vault this deployment
+ * does NOT own. Listing the deployment's own vault is ordinary product use;
+ * pointing `?vault=` at an arbitrary tenant vault is an estate-wide read and
+ * sits behind the same bar as /api/admin/azure-resources. A 403 from Key Vault
+ * itself is surfaced with the exact role to grant ("Key Vault Secrets User" is
+ * enough to LIST — listing does not require the Officer role that writing does).
  */
 import { NextRequest } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiOk, apiError } from '@/lib/api/respond';
-import { vaultUrl } from '@/lib/azure/kv-secrets-client';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { vaultUrl, shortcutVaultUrl, certVaultUrl } from '@/lib/azure/kv-secrets-client';
 import { kvScope, kvSuffix, kvUrlFromName } from '@/lib/azure/cloud-endpoints';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
@@ -103,6 +108,19 @@ export function resolveVaultBase(raw: string | null): { base: string } | { error
   return { base: kvUrlFromName(v).replace(/\/$/, '') };
 }
 
+/**
+ * The vaults THIS DEPLOYMENT owns — the Loom vault plus the two purpose vaults
+ * an operator may split out. Listing names in one of these is ordinary product
+ * use (a picker for a connection's `secretRef`) and any signed-in user may do
+ * it. Listing names in ANY OTHER vault is an estate-wide read, so it is gated
+ * on tenant admin below — the same bar /api/admin/azure-resources sits behind.
+ */
+export function deploymentVaults(): string[] {
+  return [vaultUrl(), shortcutVaultUrl(), certVaultUrl()]
+    .filter((v): v is string => !!v)
+    .map((v) => v.replace(/\/$/, '').toLowerCase());
+}
+
 export interface KeyVaultSecretRef {
   /** Bare secret name — the value a `secretRef` field stores. */
   name: string;
@@ -114,12 +132,19 @@ export interface KeyVaultSecretRef {
   contentType?: string;
 }
 
-export const GET = withSession(async (req: NextRequest) => {
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const resolved = resolveVaultBase(req.nextUrl.searchParams.get('vault'));
   if ('error' in resolved) {
     return apiError(resolved.error, 400, { code: 'bad_request' });
   }
   const base = resolved.base;
+
+  // A vault this deployment does not own is an estate-wide enumeration, not
+  // product use of the caller's own item. Tenant admins only.
+  if (!deploymentVaults().includes(base.toLowerCase())) {
+    const gate = requireTenantAdmin(session);
+    if (gate) return gate;
+  }
 
   let token: string;
   try {

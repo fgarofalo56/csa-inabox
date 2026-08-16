@@ -52,6 +52,7 @@ import {
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
@@ -267,14 +268,20 @@ export function AdlsBrowseDialog({
                   </div>
                 ) : (
                   <>
-                    <MessageBar intent="warning" layout="multiline">
-                      <MessageBarBody>
-                        <MessageBarTitle>No containers could be listed on {account}</MessageBarTitle>
-                        {containersError || 'The listing returned nothing.'} Grant the Loom Console identity
-                        (LOOM_UAMI_CLIENT_ID) the &quot;Storage Blob Data Reader&quot; role at account scope to
-                        enumerate them. If you already know the container, open it directly below.
-                      </MessageBarBody>
-                    </MessageBar>
+                    {/* G2: the shared gate, so the operator gets the Fix-it
+                        wizard and the gate is discoverable at /admin/gates —
+                        not a bare bar naming a role and leaving. */}
+                    <HonestGate
+                      gateId="svc-adls"
+                      surface={`ADLS browser (${account})`}
+                      detail={
+                        `${containersError || 'The container listing returned nothing.'} `
+                        + 'Enumerating containers needs the "Storage Blob Data Reader" role at ACCOUNT scope for the '
+                        + 'Loom Console identity; a container-scope grant can read inside a container but cannot list them. '
+                        + 'If you already know the container, open it directly below.'
+                      }
+                      onResolved={() => { void loadContainers(account); }}
+                    />
                     {/* The escape hatch — a container this caller cannot enumerate
                         but CAN read. Without it the denial above is a dead end,
                         which auto-bind-by-default.md forbids outright. */}
@@ -296,7 +303,7 @@ export function AdlsBrowseDialog({
                             void loadPaths(account, c, '');
                           }}
                         >
-                          Open
+                          Open container
                         </Button>
                       </div>
                     </Field>
