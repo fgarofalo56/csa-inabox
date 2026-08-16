@@ -411,7 +411,6 @@
     "apps/fiab-console/app/api/items/[type]/[id]/share/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/shortcuts/[name]/test/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/shortcuts/route.ts": 1,
-    "apps/fiab-console/app/api/items/[type]/[id]/sql-security/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/statistics/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/versions/[versionId]/restore/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/versions/[versionId]/route.ts": 1,

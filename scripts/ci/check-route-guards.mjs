@@ -504,7 +504,27 @@ const ALLOWLIST = new Map([
   ['apps/fiab-console/app/api/items/[type]/[id]/monitoring/route.ts', 'read-only monitoring over a shared Azure backend resolved by item type'],
   ['apps/fiab-console/app/api/items/[type]/[id]/optimize/route.ts', 'optimize action over a shared Azure backend resolved by item type'],
   ['apps/fiab-console/app/api/items/[type]/[id]/security/route.ts', 'security-scan over a shared Azure backend resolved by item-type gate'],
-  ['apps/fiab-console/app/api/items/[type]/[id]/sql-security/route.ts', 'SQL security over a shared Azure backend resolved by item-type gate'],
+  // GHSA-v8r7-c2p5-mjf2 — `[type]/[id]/sql-security` USED TO SIT HERE, with the
+  // reason "SQL security over a shared Azure backend resolved by item-type gate".
+  // THE ENTRY IS DELETED RATHER THAN REWORDED, and that distinction is the point.
+  //
+  // The reason was TRUE OF TWO BRANCHES and false of the third. `resolveBackend`
+  // is named as though the item TYPE selects the backend, and for the Synapse
+  // branches it does — they read LOOM_SYNAPSE_WORKSPACE /
+  // LOOM_SYNAPSE_DEDICATED_POOL from the environment and ignore `opts` entirely.
+  // The `azure-sql-database` family took `server` and `database` straight off the
+  // REQUEST (`searchParams` on GET, the body on POST) and handed them to
+  // `azureSqlExecute` — TDS with an Entra token as the Console UAMI — so any
+  // authenticated session read that database's full security catalog and
+  // executed generated DDL/DCL there. `[id]` reached no ownership call on either
+  // verb.
+  //
+  // That is why a REWORDED entry would have been the wrong fix: a reason
+  // accurate about a sibling branch reads as verified, which is exactly how this
+  // one survived a sweep that explicitly examined the family. The route now
+  // carries Layer 1 (`loadOwnedSqlItem`) on both verbs plus Layer 2+3
+  // (`resolveOwnedSqlTarget`) on the Azure SQL branch, so it passes CHECK 2 on a
+  // real guard signal and needs no excuse at all.
   ['apps/fiab-console/app/api/items/[type]/[id]/statistics/route.ts', 'read-only statistics over a shared Azure backend resolved by item type'],
 
   // ── GHSA-v8r7-c2p5-mjf2 — the three tabled routes that are OUT OF CLASS ──
