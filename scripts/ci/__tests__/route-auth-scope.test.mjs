@@ -320,7 +320,7 @@ const GUARDED = [
  *
  *   :24  `withSession(async (req, { session, params }) => {`  — no item guard
  *   :28  `const { id } = params;`  — the id IS read...
- *   :42  ...but only by `resolveAccessMode(id, 'synapse-serverless-sql-pool')`,
+ *   :41  ...but only by `resolveAccessMode(id, 'synapse-serverless-sql-pool')`,
  *        which picks OBO-vs-managed-identity mode. It is not an authorization.
  *   :31  `const database = (body?.database || 'master').toString();` — the
  *        coordinate comes from the request
@@ -331,13 +331,29 @@ const GUARDED = [
  * ownership check. That is exactly the shape the derivation must not be fooled
  * by.
  *
- * STATE ITS SEVERITY HONESTLY rather than implying it is the old subject's
- * equal. On `accessMode === 'user'` this route runs the statement through OBO
- * (`executeQueryAsUser`), so the caller's OWN SQL RBAC is consulted and the
- * Console identity is not the actor. It is therefore NOT an open cross-tenant
- * hole in the way the fourth route was — it is simply not OWNER-SCOPED, which
- * is the only thing this column claims to measure. If it is ever hardened, move
- * it into GUARDED and repoint this again.
+ * ITS SEVERITY, BOTH BRANCHES — and the DEFAULT is the service identity.
+ * An earlier revision of this comment said the route "runs the statement through
+ * OBO … therefore NOT an open cross-tenant hole". That was materially
+ * incomplete, and incompleteness in a section headed "severity" is the
+ * `deploy-integrity.md` R7 shape: asserting something the code does not
+ * establish. Corrected, with both branches named:
+ *
+ *   `accessMode === 'user'`    :59 → `executeQueryAsUser(…, userToken, …)`.
+ *        The caller's OWN Azure identity runs the statement, so their SQL RBAC
+ *        is consulted. This branch is genuinely mitigated.
+ *   `accessMode === 'service'` :61 → `executeQuery(serverlessTarget(database),
+ *        sqlText, …)` as the CONSOLE identity, with `database` from the body
+ *        (:31) and no ownership check. **This is the DEFAULT** —
+ *        `lib/azure/sql-access-mode.ts` documents `'service'` as "the
+ *        always-works default", `normalizeAccessMode` returns it for anything
+ *        that is not the literal `'user'` (:48-50), and `resolveAccessMode`
+ *        returns it on ANY miss or thrown lookup (:70-72). An item only leaves
+ *        it after an explicit PATCH /access-mode.
+ *
+ * So on the default branch this is the SAME class as the route it replaced, not
+ * a milder one. It is pinned here because the CLASSIFIER must keep getting it
+ * right, and it is a live finding in its own right — not a claim that the route
+ * is safe. If it is ever hardened, move it into GUARDED and repoint this again.
  */
 const STILL_UNGUARDED = 'items/synapse-serverless-sql-pool/[id]/query/route.ts';
 

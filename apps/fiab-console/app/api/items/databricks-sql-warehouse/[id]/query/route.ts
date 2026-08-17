@@ -75,6 +75,42 @@
  *   authenticated session, plus one POST". The real bound needs the
  *   item→warehouse binding tracked in #3669 and is deliberately NOT improvised
  *   here.
+ *
+ * ── EVERY PRODUCER OF THIS URL, INCLUDING THE DYNAMIC ONE ───────────────────
+ *
+ * The item-TYPE axis is what shipped a dead end in #3664, so the walk is
+ * written down rather than summarised — including the producers that build the
+ * path from a VARIABLE, which a grep for the literal route would miss:
+ *
+ *   `sql-warehouse-editor.tsx:399,602`   its own route `id`. The editor is
+ *       registered for `databricks-sql-warehouse` and nothing else
+ *       (`lib/editors/registry.ts:180`).
+ *   `streaming-object-dialog.tsx:149`    `itemId` prop, passed `id` by the
+ *       editor at :1952 — the same id.
+ *   `lib/editors/sql-explorer-helpers.ts:23`  **DYNAMIC** —
+ *       `/api/items/${itemType}/${id}/query`, so it can address ANY item family.
+ *       Ruled out by its call sites, not by its shape: both callers pass a
+ *       different type — `phase3/warehouse-editor.tsx:276` passes `'warehouse'`
+ *       and `synapse-sql-editors.tsx:779` passes
+ *       `'synapse-dedicated-sql-pool'`. Neither reaches this file.
+ *   `[id]/iqy/route.ts:41`               emits this URL INTO the generated .iqy
+ *       for Excel to POST later. It interpolates its own `[id]`, and it is in
+ *       the same item family, so the type cannot diverge.
+ *   `app/api/notebook/execute/route.ts:35`  NOT a call — the path is a string
+ *       in a 501 dispatch body.
+ *
+ * So no cross-type call site exists and a single `ITEM_TYPE` is correct here —
+ * unlike `adx/anomaly`, which is legitimately called with a `kql-dashboard` id
+ * and whose one-type guard 404'd the dashboard's own creator in #3664.
+ *
+ * ── WHAT GRADUATING THIS ROUTE DOES **NOT** DO TO ITS SIBLINGS ──────────────
+ *
+ * `check-route-guards`'s CHECK 3 (`falsifiedSharedBackendPremise`) filters to
+ * handlers that CONSUME `params`, and the rest of this family mostly takes no
+ * `ctx` at all. So graduating this route applies NO new pressure to them — the
+ * contradiction count is 0 both before and after. Recorded because the
+ * alternative reading ("fixing one sibling re-judges the others") is how this
+ * change might otherwise be mistaken for tightening the whole family.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -150,6 +186,26 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     notFound: ITEM_UNREACHABLE,
   });
   if (guard.res) return guard.res;
+  /**
+   * CONSUMED DELIBERATELY, so the TYPE SYSTEM participates in the guard.
+   *
+   * Review measured that deleting ONLY `if (guard.res) return guard.res;`
+   * (−35 B) was `tsc` EXIT=0 while the route ran unauthorized — because nothing
+   * downstream read `guard.ctx`, so the two-shape union was never narrowed and
+   * the compiler had no opinion. Binding the authorized session here makes that
+   * deletion a type error (`guard.ctx` is possibly undefined), which is the
+   * property `_lib/synapse-item-scope.ts` records as holding "solely where the
+   * code goes on to CONSUME the binding".
+   *
+   * NOT a substitute for the spec — the same module records that a variant which
+   * drops the binding compiles clean again. It raises the cost of the cheapest
+   * edit; `ghsa-v2g8-warehouse-query.test.ts` is the control that holds.
+   *
+   * Behaviourally identical: `guardSynapseItemRequest` resolves its session from
+   * the same `getSession()` the wrapper did, so this is the SAME value, now
+   * reached through the authorization result rather than around it.
+   */
+  const { session: authorized } = guard.ctx;
 
   const body = await req.json().catch(() => ({}));
   const sql = (body?.sql || '').toString().trim();
@@ -187,7 +243,7 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     );
     // B-N19e — FOCUS cost attribution for this SQL-warehouse run (best-effort).
     void recordQueryRun({
-      tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+      tenantId: tenantScopeId(authorized), userOid: authorized.claims.oid, userName: authorized.claims.upn,
       engine: 'databricks-sql', statement: sql, durationMs: Date.now() - started,
       rowCount: (result as { rowCount?: number }).rowCount,
       queryId: clientQueryId || undefined,
@@ -203,7 +259,7 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       statement: sql,
       parameters: parameters.map((p) => ({ name: p.name, value: p.value, type: p.type })),
       parametersCount: parameters.length,
-      executedBy: session.claims?.upn,
+      executedBy: authorized.claims?.upn,
     });
   } catch (e: any) {
     // A user Cancel surfaces as a terminal CANCELED state from the poll loop.

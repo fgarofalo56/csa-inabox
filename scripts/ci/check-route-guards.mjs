@@ -459,16 +459,27 @@ const GUARD_SIGNAL_RE = new RegExp(
  * file had not been, so the SAME route defeated the SAME way twice, one control
  * apart.
  *
- * WHY THE FIX IS SCOPED TO NOW_GUARDED RATHER THAN GLOBAL. Dropping the weak
- * tokens from GUARD_SIGNAL_RE outright would re-flag every tenant-partitioned
- * route that legitimately scopes by `claims.tid` alone — the advisory measured
- * 271 such rows in the inventory — and mass-flagging a control's population to
- * fix one route is how a checker gets widened back open by the next person who
- * has to silence it. NOW_GUARDED is different in kind: it is the set of routes
- * this checker has been TOLD carry a real per-item owner check, and its stated
- * promise is that "if a future edit drops the guard, the checker re-flags them".
- * Accepting an attribution token there makes that promise false. So the
- * graduated set — and only it — must show a STRONG signal.
+ * WHY THE FIX IS SCOPED TO NOW_GUARDED RATHER THAN GLOBAL — and the number is
+ * MEASURED HERE, not reasoned. Forcing `strong` on for every route yields
+ *
+ *     [route-guards] violations: 210
+ *
+ * i.e. 210 routes are currently judged on a weak identity token and nothing
+ * else. Re-flagging all of them in a security fix is how a control gets widened
+ * back open by whoever has to silence it. (A DIFFERENT measurement is sometimes
+ * quoted alongside this one and they must not be conflated: the advisory's "271
+ * of 773 owner-scoped rows rested on a `claims.*` token" is about the ROUTE
+ * INVENTORY's published column, produced by `_route-auth-scope.mjs`, not about
+ * this checker's population. 210 is this file's number.)
+ *
+ * NOW_GUARDED is different in kind: it is the set of routes this checker has
+ * been TOLD carry a real per-item owner check, and its stated promise is that
+ * "if a future edit drops the guard, the checker re-flags them". Accepting an
+ * attribution token there makes that promise false. So the graduated set — and
+ * only it — must show a STRONG signal. This STRICTLY TIGHTENS: every route
+ * outside NOW_GUARDED keeps exactly the judgement it had, so the change creates
+ * no new blind spot. What it does NOT do is fix the general case — those 210
+ * remain, and "presence read as enforcement" is untouched for them.
  *
  * Same scoping precedent, and the same reasoning, as the fail-closed remit rule
  * further down: "deliberately scoped to the graduated set rather than to all
@@ -748,26 +759,6 @@ const ALLOWLIST = new Map([
   // asset-store.ts:41-51 and :68-78. An assetKey from another tenant resolves to
   // nothing. Same class as the (B) session-scoped stores allowlisted by prefix.
   ['apps/fiab-console/app/api/assets/freshness/route.ts', { handlers: ['GET'], reason: 'asset-store partitions every read by tenantOf(session) (verified lib/assets/asset-store.ts:41-78); a cross-tenant assetKey resolves to nothing' }],
-
-  // GHSA-v2g8-gp3r-rg4r, seventh pass — surfaced by OWNERSHIP_SIGNAL_RE, which
-  // stopped accepting a bare `claims.oid` as an ownership signal on GRADUATED
-  // routes. This was the ONLY pre-existing NOW_GUARDED route the change flagged,
-  // and it is a FALSE POSITIVE of the new rule, not a hole — VERIFIED AT SOURCE
-  // rather than waved through, which is the whole point of the entry:
-  //
-  //   `GET()` calls `tenantWorkspaceIds(session.claims.oid)` (:95), which runs
-  //   `SELECT c.id FROM c WHERE c.tenantId = @t` with `partitionKey: tenantId`
-  //   (:79-88), and every subsequent Cosmos query is constrained to
-  //   `c.workspaceId IN (<those ids>)`. So `claims.oid` here is role 2 in
-  //   `_route-auth-scope.mjs`'s taxonomy — a PARTITION/PREDICATE that scopes the
-  //   read — not role 3, the attribution field that fooled this checker on
-  //   `databricks-sql-warehouse/[id]/query`.
-  //
-  // Per-handler, deliberately: the POST is NOT excused and does not need to be —
-  // it runs `authorizeWorkspace(session, workspaceId)` (:198), a strong signal.
-  // This is exactly the "legitimately MIXED file" case the per-handler form was
-  // added for.
-  ['apps/fiab-console/app/api/experience/warp/transforms/route.ts', { handlers: ['GET'], reason: 'GET scopes every Cosmos read to workspaces the CALLER owns via tenantWorkspaceIds(session.claims.oid) → partitionKey + `c.workspaceId IN (…)` (verified :79-88, :95, :107, :133) — claims.oid as a partition predicate, not an attribution field. POST is not excused; it runs authorizeWorkspace at :198' }],
 
   // Deployment-wide operational reads — no per-tenant resource exists to scope.
   ['apps/fiab-console/app/api/admin/mcp-servers/deploy/route.ts', { handlers: ['GET'], reason: 'reads deployment-wide MCP files/ACA config from env (readMcpFilesConfig); no per-tenant resource. The DEPLOY half is not excused' }],
@@ -2097,15 +2088,59 @@ function handlerTexts(code) {
  * — i.e. an attribution token like `claims.oid` no longer counts. Callers pass
  * it for routes in NOW_GUARDED; see OWNERSHIP_SIGNAL_RE for the measurement that
  * forced the distinction.
+ *
+ * `weakExempt` names handlers that fall BACK to the weak test within an
+ * otherwise-strong file. It is a downgrade to WEAK, never to NOTHING — see
+ * {@link STRONG_SIGNAL_EXEMPT}.
  */
-function unguardedHandlers(code, strong = false) {
-  const re = strong ? OWNERSHIP_SIGNAL_RE : GUARD_SIGNAL_RE;
+function unguardedHandlers(code, strong = false, weakExempt = null) {
   const gaps = [];
   for (const [h, text] of handlerTexts(code)) {
+    const re = strong && !(weakExempt && weakExempt.includes(h)) ? OWNERSHIP_SIGNAL_RE : GUARD_SIGNAL_RE;
     if (!re.test(text)) gaps.push(h);
   }
   return gaps;
 }
+
+/**
+ * ── HANDLERS THAT FALL BACK TO THE **WEAK** TEST, NEVER TO NO TEST ──────────
+ *
+ * A graduated route is judged on {@link OWNERSHIP_SIGNAL_RE}. A handler here is
+ * judged on {@link GUARD_SIGNAL_RE} instead — it must still show a
+ * session-derived token, it merely may not be an item-ownership resolver.
+ *
+ * WHY THIS EXISTS RATHER THAN AN `ALLOWLIST` ENTRY, and the reason is a defect
+ * this file caught in review of its own fix. The first version of the
+ * strong-signal rule routed `warp/transforms` GET through `ALLOWLIST` with a
+ * prose reason. `isAllowed` excuses a handler UNCONDITIONALLY, so that entry did
+ * not weaken the check by a tier — it REMOVED it. Measured both directions:
+ * de-scoping that GET (swapping `tenantWorkspaceIds(session.claims.oid)` for a
+ * CALLER-CONTROLLED tenantId — a real cross-tenant hole, +39 B) is caught by the
+ * merge-base checker (`violations: 1`, naming it) and was NOT caught by the
+ * allowlisted version (`violations: 0`). The weak token was the only thing
+ * pinning that handler, and the "fix" deleted it.
+ *
+ * That is precisely the failure this advisory is about — a static prose claim
+ * standing in for a live test — reproduced inside the change that was meant to
+ * close it. The entry's reason even cited line numbers, which is exactly the
+ * kind of assertion that reads as verified and is never re-run.
+ *
+ * So: a two-tier downgrade with a live floor. `warp/transforms` GET keeps its
+ * weak test, and the mutation above stays RED.
+ *
+ * PER HANDLER, never per file: `warp/transforms` POST is NOT listed and does not
+ * need to be — it runs `authorizeWorkspace` (`:198`), a strong signal.
+ */
+const STRONG_SIGNAL_EXEMPT = new Map([
+  // GET scopes every Cosmos read to workspaces the CALLER owns:
+  // `tenantWorkspaceIds(session.claims.oid)` (:95) → `SELECT c.id FROM c WHERE
+  // c.tenantId = @t` with `partitionKey` (:79-88), then every later query is
+  // constrained to `c.workspaceId IN (…)` (:107, :133). That is `claims.oid` as
+  // a PARTITION PREDICATE — role 2 in `_route-auth-scope.mjs`'s taxonomy — not
+  // role 3, the attribution field that fooled this checker on
+  // `databricks-sql-warehouse/[id]/query`. Weak, but real, and still tested.
+  ['apps/fiab-console/app/api/experience/warp/transforms/route.ts', ['GET']],
+]);
 
 /**
  * ── THE ALLOWLIST'S OWN PREMISE, RE-TESTED EVERY RUN (GHSA-hf73-rp4q-66pf) ──
@@ -2842,7 +2877,11 @@ function main() {
     // `session.claims.oid`) satisfied the weak half of GUARD_SIGNAL_RE, so
     // deleting its entire Layer 1 left this checker green — a billing record
     // standing in for an ownership check. See OWNERSHIP_SIGNAL_RE.
-    const gaps = unguardedHandlers(src, NOW_GUARDED.has(r));
+    //
+    // STRONG_SIGNAL_EXEMPT downgrades a named handler to the WEAK test, never
+    // to no test — see that map for the review finding that forced the
+    // distinction.
+    const gaps = unguardedHandlers(src, NOW_GUARDED.has(r), STRONG_SIGNAL_EXEMPT.get(r));
     if (gaps.length === 0) continue; // every handler carries its own authorization
     if (isAllowed(r, gaps)) {
       allowlistedHits++;
