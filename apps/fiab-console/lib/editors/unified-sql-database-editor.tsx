@@ -745,6 +745,16 @@ function SqlServerAdminPanel({
 export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
 
+  /**
+   * #3669 — the THIRD editor `sql-security/route.ts` enumerates as reaching its
+   * `id === 'new'` gate (:376-381), alongside the two Synapse triggers. The
+   * sharper reason this one cannot be left to the panel: the bind-on-selection
+   * effect the route's Layer 2 relies on returns early for an unsaved item
+   * (`:792  if (!server || !id || id === 'new') return;`), so the item is not
+   * merely unowned — it is UNBINDABLE until saved.
+   */
+  const isNew = id === 'new';
+
   // ---- tenant inventory ----
   const [inv, setInv] = useState<Inventory | null>(null);
   const [invLoading, setInvLoading] = useState(true);
@@ -1446,7 +1456,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         { label: 'Restore', onClick: (family === 'azure-sql' && server && database) ? () => setTab('restore') : undefined, disabled: !(family === 'azure-sql' && server && database), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Point-in-time restore to a new database, or restore a dropped database' },
       ]},
       { label: 'Data security', actions: [
-        { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
+        { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql' && !isNew) ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql') || isNew, title: isNew ? 'Save this item first — the SQL security wizards run against the saved item\'s bound database, and an unsaved item has nothing to bind to yet.' : family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
       { label: 'Share', actions: [
         { label: 'Manage access', onClick: (server && database && family === 'azure-sql') ? () => setTab('share') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Assign Azure RBAC roles on this database (Access control / IAM)' },
@@ -1495,7 +1505,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         },
       ]},
     ]},
-  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, id, loadSavedQueries, openSaveNew, copilotOpen, copilotEligible, invokeCopilot, getDataBusy, openGetData]);
+  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, id, loadSavedQueries, openSaveNew, copilotOpen, copilotEligible, invokeCopilot, getDataBusy, openGetData, isNew]);
 
   const pgGate = inv?.postgres.error;
   const sqlGate = inv?.sql.error;

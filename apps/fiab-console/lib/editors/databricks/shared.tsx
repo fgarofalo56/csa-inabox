@@ -182,6 +182,15 @@ interface WarehouseState {
   max_num_clusters?: number;
   auto_stop_mins?: number;
   error?: string;
+  /**
+   * GHSA-v2g8-gp3r-rg4r / #3669 — the route's gate discriminator. The
+   * `[id]/state` GET returns `{ ok:false, code:'unsaved_item' }` at status 200
+   * for `[id] === 'new'` (`state/route.ts:119-127`), which is how the editor
+   * learns the item is not saved yet from the SERVER rather than by guessing.
+   * Typed here because `refreshState` assigns the whole payload into
+   * `warehouseState`, so without it the discriminator is invisible to `tsc`.
+   */
+  code?: string;
 }
 
 interface SchemaResponse {
