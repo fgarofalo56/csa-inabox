@@ -219,8 +219,14 @@ const CONSOLE_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
 
 const API_ROOT = path.join(CONSOLE_ROOT, 'app', 'api');
 
-const GUARD_SIGNAL_RE = new RegExp(
-  [
+/**
+ * ── STRONG signals: tokens that ESTABLISH ownership of the route's own item ──
+ *
+ * Split out from the weak identity tokens below by GHSA-v2g8-gp3r-rg4r's
+ * seventh pass, and the split is MEASURED rather than stylistic. See
+ * {@link OWNERSHIP_SIGNAL_RE}.
+ */
+const STRONG_OWNERSHIP_SIGNALS = [
     'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem',
     // #2977 — `assertOwner` USED TO BE LISTED HERE AND IS DELIBERATELY GONE.
     // PR #2973 DELETED the function (see lib/auth/workspace-guard.ts), so from
@@ -400,7 +406,19 @@ const GUARD_SIGNAL_RE = new RegExp(
     // carried a `claims.oid`. Moving to per-handler scoping exposed that gap, so
     // it is named now rather than allowlisting a dozen correctly-scoped routes.
     // Matched AS A CALL so `{@link tenantScopeId}` in prose cannot satisfy it.
-    'tenantScopeId\\s*\\(',
+];
+
+/**
+ * ── WEAK signals: the caller's identity is PRESENT, but nothing established
+ *    that it may reach THIS item ───────────────────────────────────────────
+ *
+ * These stay in {@link GUARD_SIGNAL_RE} — removing them there would re-flag
+ * hundreds of correctly-scoped tenant-partitioned routes, which is a separate
+ * triage and not a security fix. They are EXCLUDED from
+ * {@link OWNERSHIP_SIGNAL_RE}.
+ */
+const WEAK_IDENTITY_SIGNALS = [
+  'tenantScopeId\\s*\\(',
     // C22 round 2 (#3122): OPTIONAL CHAINING must match. `s?.claims?.oid` is the
     // idiom when the session may be null (api/iq/mcp resolveTenant), and the
     // literal-dot form `claims\.oid` silently missed it — a route could hold a
@@ -408,8 +426,66 @@ const GUARD_SIGNAL_RE = new RegExp(
     // a false NEGATIVE for the checker's remit test and a false POSITIVE for its
     // violation list, depending on where the token sits; both are wrong.
     'claims\\??\\.\\s*oid', 'claims\\??\\.\\s*tid', 'claims\\??\\.\\s*tenantId',
-  ].join('|'),
+];
+
+const GUARD_SIGNAL_RE = new RegExp(
+  [...STRONG_OWNERSHIP_SIGNALS, ...WEAK_IDENTITY_SIGNALS].join('|'),
 );
+
+/**
+ * ── THE GRADUATED SET'S OWN SIGNAL — strong tokens only ─────────────────────
+ *
+ * MEASURED ON 2026-08-17, while graduating `databricks-sql-warehouse/[id]/query`
+ * under GHSA-v2g8-gp3r-rg4r. Deleting that route's ENTIRE Layer 1 — the
+ * `guardSynapseItemRequest` call and its refusal, byte delta -158 — left this
+ * checker at `violations: 0`. The same deletion on its sibling `[id]/start`
+ * (graduated by #3665, same `withSession<{id}>` shape) went RED immediately.
+ *
+ * The difference is the FinOps attribution receipt this route carries and that
+ * one does not:
+ *
+ *     void recordQueryRun({ tenantId: tenantScopeId(session),
+ *                           userOid: session.claims.oid, … });
+ *
+ * `tenantScopeId(` and `claims.oid` are both members of GUARD_SIGNAL_RE, so a
+ * BILLING RECORD satisfied the ownership test and the handler reported no gap.
+ *
+ * THIS IS THE ADVISORY'S OWN FINDING, REPRODUCED INSIDE ITS OWN CHECKER. The
+ * advisory records that `items/databricks-sql-warehouse/[id]/query` published
+ * `owner-scoped` in the route inventory because "its only owner-shaped tokens
+ * were `routeParams.id` and `session.claims.oid`, both inside the attribution
+ * receipt", and states the general form: *presence read as enforcement*.
+ * `_route-auth-scope.mjs` (#3625/#3643) was rewritten to stop doing that. This
+ * file had not been, so the SAME route defeated the SAME way twice, one control
+ * apart.
+ *
+ * WHY THE FIX IS SCOPED TO NOW_GUARDED RATHER THAN GLOBAL — and the number is
+ * MEASURED HERE, not reasoned. Forcing `strong` on for every route yields
+ *
+ *     [route-guards] violations: 210
+ *
+ * i.e. 210 routes are currently judged on a weak identity token and nothing
+ * else. Re-flagging all of them in a security fix is how a control gets widened
+ * back open by whoever has to silence it. (A DIFFERENT measurement is sometimes
+ * quoted alongside this one and they must not be conflated: the advisory's "271
+ * of 773 owner-scoped rows rested on a `claims.*` token" is about the ROUTE
+ * INVENTORY's published column, produced by `_route-auth-scope.mjs`, not about
+ * this checker's population. 210 is this file's number.)
+ *
+ * NOW_GUARDED is different in kind: it is the set of routes this checker has
+ * been TOLD carry a real per-item owner check, and its stated promise is that
+ * "if a future edit drops the guard, the checker re-flags them". Accepting an
+ * attribution token there makes that promise false. So the graduated set — and
+ * only it — must show a STRONG signal. This STRICTLY TIGHTENS: every route
+ * outside NOW_GUARDED keeps exactly the judgement it had, so the change creates
+ * no new blind spot. What it does NOT do is fix the general case — those 210
+ * remain, and "presence read as enforcement" is untouched for them.
+ *
+ * Same scoping precedent, and the same reasoning, as the fail-closed remit rule
+ * further down: "deliberately scoped to the graduated set rather than to all
+ * 119 — the broader remit change still needs those 80 triaged first".
+ */
+const OWNERSHIP_SIGNAL_RE = new RegExp(STRONG_OWNERSHIP_SIGNALS.join('|'));
 
 
 // A route "exports a data surface" when it exports a mutating/GET handler as
@@ -801,34 +877,31 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/start/route.ts',
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/stop/route.ts',
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/updates/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/cancel/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/connection/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/create/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/ctas/route.ts',
-  // GHSA-v2g8-gp3r-rg4r — `[id]/{state,start,edit,delete,clone}` USED TO SIT IN
-  // THIS BLOCK AND ARE GONE, DELETED RATHER THAN REWORDED. They are in
-  // NOW_GUARDED below.
+  //
+  // ── GHSA-v2g8-gp3r-rg4r — THE WHOLE `databricks-sql-warehouse/[id]/*` FAMILY
+  //    IS GONE FROM THIS LIST. Seventeen entries DELETED, never reworded,
+  //    across #3665 (`state`, `start`, `edit`, `delete`, `clone`), the seventh
+  //    pass (`query`) and the eighth (`cancel`, `connection`, `create`, `ctas`,
+  //    `iqy`, `query-history`, `query-profile`, `schema`, `script-out`,
+  //    `warehouses`). `ctas` and `model` carried a real guard already; `ctas`'s
+  //    entry was INERT (NOW_GUARDED wins) and is deleted here rather than left
+  //    to read as an excuse it never had. All of them are in NOW_GUARDED below.
   //
   // The class reason above this list — "operate on a single deployment-shared
   // Azure resource resolved by item TYPE + the id in the URL … there is NO
-  // per-tenant Cosmos ownership to scope" — was FALSE of all five on both
-  // halves of the sentence. None of them resolved anything "by the id in the
-  // URL": every one took `(req: NextRequest)` with NO `ctx` at all, so `[id]`
-  // was never read. And the resource was not resolved by item type either — it
-  // came from a caller-supplied `warehouseId` on the query string or the body.
+  // per-tenant Cosmos ownership to scope" — was FALSE of every one of them, on
+  // BOTH halves of the sentence. None resolved anything "by the id in the URL":
+  // all but `iqy` took `(req: NextRequest)` with NO `ctx` at all, so `[id]` was
+  // never read, and `iqy` read it only to interpolate into a URL. And the
+  // resource was not resolved by item type either — it came from a
+  // caller-supplied `warehouseId`, `statementId`, `queryId` or creation spec on
+  // the query string or the body.
   //
   // The wording is the recorded root cause of this whole advisory section, so
   // rewording preserves the failure: a reason that is accurate about a SIBLING
   // BRANCH, or about a route that genuinely has nothing to scope, reads as
   // verified when a reviewer skims the list. Deleted for the same reason the
   // `[type]/[id]` entries were deleted in #3648 / #3655.
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/iqy/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-history/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-profile/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/schema/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/script-out/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/warehouses/route.ts',
   'apps/fiab-console/app/api/items/dataflow/[id]/refresh/route.ts',
   'apps/fiab-console/app/api/items/dataflow/[id]/route.ts',
   'apps/fiab-console/app/api/items/dataset/[id]/lineage/route.ts',
@@ -1472,6 +1545,127 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/edit/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/delete/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/clone/route.ts',
+  // ── GHSA-v2g8-gp3r-rg4r, SEVENTH PASS — `[id]/query` ──────────────────────
+  //
+  // The advisory records this route as unauthorized TODAY, by name and
+  // separately from the family sweep. Restating the shape, because it is the
+  // reason both this checker and the published inventory called it clean:
+  //
+  //   `withSession` was the entire authorization. `warehouseId` came from the
+  //   BODY. `[id]` WAS read — in exactly one place, `recordQueryRun`, the
+  //   FinOps attribution receipt — and never reached an authorization call.
+  //
+  // So it ran CALLER-AUTHORED SQL on a CALLER-CHOSEN warehouse while carrying
+  // two owner-shaped tokens (`routeParams.id`, `session.claims.oid`), both
+  // inside the billing record. It published `owner-scoped` on `main` on the
+  // strength of exactly that. This is the finding `_route-auth-scope.mjs`
+  // (#3625/#3643) was rewritten to catch: PRESENCE READ AS ENFORCEMENT.
+  //
+  // IT IS NOT A READ AND IS NOT SCOPED AS ONE. `sql` is unrestricted — no
+  // `^select` shape check of the kind the sibling `[id]/ctas` carries — so the
+  // same handler runs SELECT, INSERT, CREATE TABLE, DROP and GRANT alike on
+  // Unity Catalog, and `streaming-object-dialog.tsx:149` is a shipped
+  // in-product caller that uses it for CREATE DDL. It is also the READ half of
+  // the advisory's materialize-then-read pair with `[id]/clone`. Hence
+  // `guardSynapseItemRequest` WRITE-scoped, with the split asserted in
+  // `databricks-sql-warehouse/__tests__/ghsa-v2g8-warehouse-query.test.ts`
+  // rather than assumed.
+  //
+  // STILL UNGUARDED IN THIS FAMILY, named so the gap stays visible rather than
+  // implied closed: `cancel`, `connection`, `create`, `iqy`, `query-history`,
+  // `query-profile`, `schema`, `script-out`, `warehouses`.
+  //
+  // READ THE LEDGER BEFORE READING THIS AS CLOSURE. `warehouseId`, `sql`,
+  // `catalog` and `schema` all stay CALLER-SUPPLIED: no item→warehouse binding
+  // exists in this tree to resolve them from, and a state-anchored one cannot
+  // close it because `_lib/databricks-resource-binding.ts:12-27` records that
+  // `PATCH /api/cosmos-items/[type]/[id]` replaces `state` WHOLESALE from the
+  // request body, so the caller would write the value the bound reads. LAYER 1
+  // IS A FLOOR, NOT A BOUND, AND THE FLOOR IS SELF-SERVICE — `createOwnedItem`
+  // (`_lib/item-crud.ts:423`) lets any session holder create a qualifying item,
+  // moving the reachable population from "any authenticated session" to "any
+  // authenticated session, plus one POST". The real bound is tracked in #3669
+  // and is deliberately not improvised inside a security fix.
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query/route.ts',
+  // ── GHSA-v2g8-gp3r-rg4r, EIGHTH PASS — THE REMAINDER OF THE FAMILY ────────
+  //
+  // With these nine the `databricks-sql-warehouse/[id]/*` family is CLOSED at
+  // Layer 1: 17 route files, 17 guarded, 0 unguarded. The tally was re-derived
+  // by FOLLOWING DELEGATION through `_route-auth-scope.mjs`'s import graph, not
+  // by a file-local grep — that method is what produced three wrong counts on
+  // this advisory, because it cannot see `[id]/model`, whose guard is
+  // `readModelState` → `loadOwnedItem` (`_lib/model-store.ts:182`).
+  //
+  // EACH ROUTE WAS TREATED ON ITS OWN EVIDENCE. The advisory warns that `cancel`
+  // takes a `statementId` and `create` a creation spec, so they are NOT the same
+  // shape as the caller-supplied-`warehouseId` members; `query-profile` takes a
+  // `queryId`. Read/write split, decided per route and ASSERTED in
+  // `databricks-sql-warehouse/__tests__/ghsa-v2g8-warehouse-reads.test.ts`:
+  //
+  //   WRITE-scoped (no allowReadRoles)
+  //     cancel   `cancelStatement(<caller statementId>)` ABORTS A RUNNING QUERY
+  //              — someone else's. Paired with `query-history`, which hands out
+  //              statement ids workspace-wide, that is targeted DoS.
+  //     create   PROVISIONS INFRASTRUCTURE — `createWarehouse` on Commercial/GCC,
+  //              an ARM `createDedicatedSqlPool` (a new DATABASE, at a
+  //              caller-named DWU SKU) on GCC-High/DoD. An unbounded spend
+  //              primitive. BOTH BOUNDARIES were affected, and the guard sits
+  //              ABOVE the `isGovCloud()` branch so one check covers both —
+  //              the same placement #3665 used on `delete` (`cloud-parity.md`).
+  //              Its deploy target now comes from the AUTHORIZED ITEM's
+  //              workspace rather than `?workspaceId=` / `body.workspace_id`.
+  //
+  //   READ-scoped (allowReadRoles: true) — each justified, not assumed
+  //     schema        `SHOW CATALOGS/SCHEMAS/TABLES/VIEWS` + `DESCRIBE TABLE`.
+  //                   The family's ENUMERATION primitive: it tells an attacker
+  //                   which table to name for `clone`/`query`.
+  //     script-out    `SHOW CREATE TABLE|FUNCTION` — full source disclosure of
+  //                   any UC object. Its `drop` branch FORMATS a DROP string and
+  //                   returns it WITHOUT EXECUTING, which is why "it emits DROP"
+  //                   is the wrong reason to call it a write.
+  //     query-history `warehouseId` is OPTIONAL, so omitting it returned recent
+  //                   statements — `query_text` and `user_name` — across the
+  //                   ENTIRE shared workspace. That residual SURVIVES Layer 1.
+  //     query-profile caller-supplied `statement_id` → full SQL, user, metrics,
+  //                   plan. Config gate MOVED BELOW the guard.
+  //     connection    hostname / HTTP path / JDBC URL for a caller-named
+  //                   warehouse — reconnaissance, plus an existence probe.
+  //     iqy           makes NO data-plane call; it formats a file out of values
+  //                   the caller already supplied. Guarded so the artefact and
+  //                   the `[id]/query` it re-POSTs to stay consistent. Its
+  //                   unsaved gate is 409, NOT 200, because `openInExcel`
+  //                   branches on `r.ok` and would otherwise DOWNLOAD the gate
+  //                   JSON as a corrupt .iqy.
+  //
+  //   warehouses    READ-scoped on a real id — AND SESSION-ONLY ON `id ===
+  //                 'new'`, DELIBERATELY. Read that carve-out in the route
+  //                 header before treating this family as fully closed. The
+  //                 editor's mount effect calls it FIRST and unconditionally,
+  //                 and `sql-warehouse-editor.tsx` has no `isNew` (measured,
+  //                 `grep -c` = 0), so gating it would paint a red banner on a
+  //                 freshly created item and leave every other control dead —
+  //                 the dead end `auto-bind-by-default.md` forbids. The
+  //                 pre-existing enumeration exposure at `.../new/warehouses` is
+  //                 therefore UNCHANGED, not closed. AUTHENTICATION still
+  //                 applies there: the carve-out is inside `withSession`.
+  //
+  // FLOOR, NOT BOUND, unchanged and not re-litigated per route: every
+  // caller-supplied coordinate stays caller-supplied, because no item→warehouse
+  // binding exists and a state-anchored one cannot work
+  // (`_lib/databricks-resource-binding.ts:12-27` — `PATCH /api/cosmos-items/
+  // [type]/[id]` replaces `state` WHOLESALE from the request body). With
+  // `createOwnedItem` self-service (`_lib/item-crud.ts:423`) this moves the
+  // reachable population from "any authenticated session" to "any authenticated
+  // session, plus one POST". The real bound is #3669.
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/cancel/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/connection/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/create/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/iqy/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-history/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-profile/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/schema/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/script-out/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/warehouses/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
@@ -1960,14 +2154,64 @@ function handlerTexts(code) {
 /**
  * Which exported handlers in this file carry NO authorization signal of their
  * own? Returns [] when the file is authorized handler-by-handler.
+ *
+ * `strong` selects {@link OWNERSHIP_SIGNAL_RE} instead of {@link GUARD_SIGNAL_RE}
+ * — i.e. an attribution token like `claims.oid` no longer counts. Callers pass
+ * it for routes in NOW_GUARDED; see OWNERSHIP_SIGNAL_RE for the measurement that
+ * forced the distinction.
+ *
+ * `weakExempt` names handlers that fall BACK to the weak test within an
+ * otherwise-strong file. It is a downgrade to WEAK, never to NOTHING — see
+ * {@link STRONG_SIGNAL_EXEMPT}.
  */
-function unguardedHandlers(code) {
+function unguardedHandlers(code, strong = false, weakExempt = null) {
   const gaps = [];
   for (const [h, text] of handlerTexts(code)) {
-    if (!GUARD_SIGNAL_RE.test(text)) gaps.push(h);
+    const re = strong && !(weakExempt && weakExempt.includes(h)) ? OWNERSHIP_SIGNAL_RE : GUARD_SIGNAL_RE;
+    if (!re.test(text)) gaps.push(h);
   }
   return gaps;
 }
+
+/**
+ * ── HANDLERS THAT FALL BACK TO THE **WEAK** TEST, NEVER TO NO TEST ──────────
+ *
+ * A graduated route is judged on {@link OWNERSHIP_SIGNAL_RE}. A handler here is
+ * judged on {@link GUARD_SIGNAL_RE} instead — it must still show a
+ * session-derived token, it merely may not be an item-ownership resolver.
+ *
+ * WHY THIS EXISTS RATHER THAN AN `ALLOWLIST` ENTRY, and the reason is a defect
+ * this file caught in review of its own fix. The first version of the
+ * strong-signal rule routed `warp/transforms` GET through `ALLOWLIST` with a
+ * prose reason. `isAllowed` excuses a handler UNCONDITIONALLY, so that entry did
+ * not weaken the check by a tier — it REMOVED it. Measured both directions:
+ * de-scoping that GET (swapping `tenantWorkspaceIds(session.claims.oid)` for a
+ * CALLER-CONTROLLED tenantId — a real cross-tenant hole, +39 B) is caught by the
+ * merge-base checker (`violations: 1`, naming it) and was NOT caught by the
+ * allowlisted version (`violations: 0`). The weak token was the only thing
+ * pinning that handler, and the "fix" deleted it.
+ *
+ * That is precisely the failure this advisory is about — a static prose claim
+ * standing in for a live test — reproduced inside the change that was meant to
+ * close it. The entry's reason even cited line numbers, which is exactly the
+ * kind of assertion that reads as verified and is never re-run.
+ *
+ * So: a two-tier downgrade with a live floor. `warp/transforms` GET keeps its
+ * weak test, and the mutation above stays RED.
+ *
+ * PER HANDLER, never per file: `warp/transforms` POST is NOT listed and does not
+ * need to be — it runs `authorizeWorkspace` (`:198`), a strong signal.
+ */
+const STRONG_SIGNAL_EXEMPT = new Map([
+  // GET scopes every Cosmos read to workspaces the CALLER owns:
+  // `tenantWorkspaceIds(session.claims.oid)` (:95) → `SELECT c.id FROM c WHERE
+  // c.tenantId = @t` with `partitionKey` (:79-88), then every later query is
+  // constrained to `c.workspaceId IN (…)` (:107, :133). That is `claims.oid` as
+  // a PARTITION PREDICATE — role 2 in `_route-auth-scope.mjs`'s taxonomy — not
+  // role 3, the attribution field that fooled this checker on
+  // `databricks-sql-warehouse/[id]/query`. Weak, but real, and still tested.
+  ['apps/fiab-console/app/api/experience/warp/transforms/route.ts', ['GET']],
+]);
 
 /**
  * ── THE ALLOWLIST'S OWN PREMISE, RE-TESTED EVERY RUN (GHSA-hf73-rp4q-66pf) ──
@@ -2698,7 +2942,17 @@ function main() {
     scanned++;
     // Per HANDLER, not per file: a guard in a sibling handler does not authorize
     // this one (measured on app/api/workspaces/route.ts — see unguardedHandlers).
-    const gaps = unguardedHandlers(src);
+    //
+    // A GRADUATED route is judged on STRONG signals only. GHSA-v2g8-gp3r-rg4r
+    // measured that `[id]/query`'s FinOps receipt (`tenantScopeId(session)`,
+    // `session.claims.oid`) satisfied the weak half of GUARD_SIGNAL_RE, so
+    // deleting its entire Layer 1 left this checker green — a billing record
+    // standing in for an ownership check. See OWNERSHIP_SIGNAL_RE.
+    //
+    // STRONG_SIGNAL_EXEMPT downgrades a named handler to the WEAK test, never
+    // to no test — see that map for the review finding that forced the
+    // distinction.
+    const gaps = unguardedHandlers(src, NOW_GUARDED.has(r), STRONG_SIGNAL_EXEMPT.get(r));
     if (gaps.length === 0) continue; // every handler carries its own authorization
     if (isAllowed(r, gaps)) {
       allowlistedHits++;

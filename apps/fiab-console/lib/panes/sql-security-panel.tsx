@@ -90,6 +90,24 @@ export function SqlSecurityPanel({ itemType, itemId, server, database }: SqlSecu
   const [gate, setGate] = useState<string | null>(null);
   const [tab, setTab] = useState<WizardTab>('object');
 
+  /**
+   * #3669 — TITLE THE GATE TRUTHFULLY FOR AN UNSAVED ITEM.
+   *
+   * `sql-security/route.ts:399` returns its honest gate for `[id] === 'new'`,
+   * and `reload()` below routes any `gated` response into the single `gate`
+   * banner — which was titled "Configuration required" unconditionally. That is
+   * a FALSE statement about an unsaved item: nothing is misconfigured, the item
+   * simply has not been saved yet, and the sibling panels say so
+   * (`uc-security-panel.tsx:172`, `warehouse-alerts.tsx:300`).
+   *
+   * Derived from `itemId` rather than a response discriminator BECAUSE THE
+   * ROUTE SENDS NONE: its `gate()` helper emits `{ ok:false, gated:true, error }`
+   * with no `code` field, unlike the `security` / `alerts` / `monitoring`
+   * routes which carry `code:'unsaved_item'`. Reported as a route-side
+   * inconsistency rather than patched here — this change does not own routes.
+   */
+  const isNew = itemId === 'new';
+
   const qs = useMemo(() => {
     const p = new URLSearchParams();
     if (server) p.set('server', server);
@@ -132,7 +150,7 @@ export function SqlSecurityPanel({ itemType, itemId, server, database }: SqlSecu
       {gate && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>Configuration required</MessageBarTitle>
+            <MessageBarTitle>{isNew ? 'Save this item first' : 'Configuration required'}</MessageBarTitle>
             {gate}
           </MessageBarBody>
         </MessageBar>
