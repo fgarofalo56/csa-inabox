@@ -39,19 +39,64 @@
  * shares one warehouse across items, i.e. all of them. Binding `catalog.schema`
  * needs a UC three-level scoping helper that does not exist. Both are design
  * work with a brownfield migration, not a mechanical adoption. FLOOR, not BOUND.
+ *
+ * ── EIGHTH PASS — THE UNSAVED-ITEM DEAD END, and why it was NOT a one-liner ──
+ *
+ * `ctas` was guarded but had NO `id === 'new'` gate, so it 404'd on a freshly
+ * created item while its TWIN `[id]/clone` returned the honest gate — the same
+ * day-one dead end three PRs in this series shipped (`auto-bind-by-default.md`,
+ * `ux-baseline.md` "new-item first-open is clean"). Reachable: `submitCtas`
+ * (`sql-warehouse-editor.tsx:833`) gates only on the dialog fields, that file
+ * has NO `isNew` anywhere (measured, `grep -c isNew` = 0), and it renders
+ * `j.error` verbatim as the Save-as-table dialog's error text.
+ *
+ * ADDING THE GATE REQUIRED ADOPTING `withSession`, and that is the whole lesson
+ * of #3655 rather than an incidental refactor. This handler had no session read
+ * of its own — `guardSynapseItemRequest` reads the session INTERNALLY. So a bare
+ * `if (id === UNSAVED_ITEM_ID) return …` placed above the guard would have sat
+ * ABOVE THE ONLY AUTHENTICATION IN THE FILE, and `…/new/ctas` would have
+ * answered 200 to a caller with NO cookie where it previously returned 401.
+ * That is precisely the regression review MEASURED on #3655, reproduced by the
+ * "obvious" one-line fix. `withSession` puts authentication above the gate and
+ * makes it unskippable (the handler is an ARGUMENT); the 401-at-`new` case is
+ * asserted in the family suite.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import { executeStatement, getWarehouse, databricksConfigGate } from '@/lib/azure/databricks-client';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
-import { guardSynapseItemRequest } from '../../../_lib/synapse-item-scope';
+import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const WAREHOUSE_NOT_FOUND = 'databricks sql warehouse not found';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const { id } = await ctx.params;
+/**
+ * The unsaved-item honest gate — after authentication, before the guard.
+ *
+ * 200, matching the twin `[id]/clone`, and checked against this route's caller:
+ * `submitCtas` reads `j.error` and renders it as the dialog's error text, so the
+ * body surfaces as the actionable next step rather than "not found".
+ *
+ * Match `UNSAVED_ITEM_ID` EXACTLY — real ids are `crypto.randomUUID()`
+ * (`_lib/item-crud.ts:467`), so a substring test would let a real id skip the
+ * ownership check on a route that emits CREATE TABLE.
+ */
+function unsavedItemGate(): NextResponse {
+  return NextResponse.json({
+    ok: false,
+    code: 'unsaved_item',
+    error:
+      'Save this SQL warehouse item first — saving a query as a table runs in the name of the ' +
+      'saved item, and an unsaved item has no owner to check that against yet.',
+  }, { status: 200 });
+}
+
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { params }) => {
+  const { id } = params;
+  if (id === UNSAVED_ITEM_ID) return unsavedItemGate();
+
   // CTAS creates a table — a write. No allowReadRoles.
   const guard = await guardSynapseItemRequest({
     itemId: id,
@@ -113,4 +158,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       { status: 502 },
     );
   }
-}
+});

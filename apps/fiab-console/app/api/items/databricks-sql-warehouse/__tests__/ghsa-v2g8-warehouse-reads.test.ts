@@ -89,6 +89,7 @@ vi.mock('@/lib/sql/quoting', () => ({ quoteIdent: (s: string) => s }));
 import { POST as cancelPOST } from '../[id]/cancel/route';
 import { GET as connectionGET } from '../[id]/connection/route';
 import { POST as createPOST } from '../[id]/create/route';
+import { POST as ctasPOST } from '../[id]/ctas/route';
 import { POST as iqyPOST } from '../[id]/iqy/route';
 import { GET as historyGET } from '../[id]/query-history/route';
 import { GET as profileGET } from '../[id]/query-profile/route';
@@ -125,6 +126,13 @@ type Verb = [name: string, handler: (r: any, c: any) => Promise<Response>, reque
 const VERBS: Verb[] = [
   ['cancel POST', cancelPOST as any, req('', { statementId: 'st-victim' }), 'write'],
   ['create POST', createPOST as any, req('', { name: 'wh-new' }), 'write'],
+  // `ctas` was ALREADY guarded (write-scoped) before this pass; it joins the
+  // table for the eighth pass because it gained the unsaved-item gate, and
+  // adding that gate required adopting `withSession` — see its route header.
+  // Including it here makes the 401/404/exact-match assertions cover it too.
+  ['ctas POST', ctasPOST as any, req('', {
+    warehouseId: 'wh-victim', sql: 'SELECT 1', catalog: 'c', schema: 's', tableName: 't',
+  }), 'write'],
   ['connection GET', connectionGET as any, req('?warehouseId=wh-victim'), 'read'],
   ['iqy POST', iqyPOST as any, req('', { sql: 'SELECT 1', warehouseId: 'wh-victim' }), 'read'],
   ['query-history GET', historyGET as any, req('?warehouseId=wh-victim'), 'read'],
@@ -470,8 +478,7 @@ describe('the admitted path still works', () => {
     expect((executeStatement as any).mock.calls[0][1]).toBe('SHOW CREATE TABLE `c`.`s`.`v`');
   });
 
-  it('warehouses lists on a real, owned id', async () => {
-    const res = await warehousesGET(req('') as any, ctx('sw-1') as any);
+  it('warehouses lists on a real, owned id', async () => {    const res = await warehousesGET(req('') as any, ctx('sw-1') as any);
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j).toMatchObject({ ok: true, gov: false });
@@ -486,5 +493,32 @@ describe('the admitted path still works', () => {
     expect(j).toMatchObject({ ok: true, gov: true });
     expect(j.warehouses[0]).toMatchObject({ id: 'p1', state: 'RUNNING', cluster_size: 'DW100c' });
     expect(listWarehouses).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `ctas` — the previously-guarded twin of `clone` that had NO unsaved gate and
+   * 404'd a freshly created item. Its ADMITTED path is unchanged by the gate,
+   * asserted so the fix is not mistaken for a behaviour change.
+   */
+  it('ctas still emits CREATE TABLE … USING DELTA AS <select> on an owned item', async () => {
+    (executeStatement as any).mockResolvedValue({ executionMs: 12 });
+    const res = await ctasPOST(
+      req('', { warehouseId: 'wh-1', sql: 'SELECT 1', catalog: 'main', schema: 'gold', tableName: 't' }) as any,
+      ctx('sw-1') as any,
+    );
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j).toMatchObject({ ok: true, table: 'main.gold.t' });
+    expect((executeStatement as any).mock.calls[0][1])
+      .toBe('CREATE TABLE `main`.`gold`.`t` USING DELTA\nAS\nSELECT 1');
+  });
+
+  it('ctas still refuses a non-SELECT body with 400, AFTER authorization', async () => {
+    const res = await ctasPOST(
+      req('', { warehouseId: 'wh-1', sql: 'DROP TABLE x', catalog: 'c', schema: 's', tableName: 't' }) as any,
+      ctx('sw-1') as any,
+    );
+    expect(res.status).toBe(400);
+    expect(executeStatement).not.toHaveBeenCalled();
   });
 });

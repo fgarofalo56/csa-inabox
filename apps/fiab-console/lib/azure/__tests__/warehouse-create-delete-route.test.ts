@@ -29,9 +29,14 @@
  * This file stays the CLOUD-MATRIX contract test: which endpoint each boundary
  * calls.
  *
- * `[id]/create` is UNCHANGED and still called without a ctx, deliberately: it is
- * one of the routes still on the ledger, and quietly passing it a ctx would read
- * as coverage it does not have.
+ * `[id]/create` IS NOW GUARDED TOO (GHSA-v2g8-gp3r-rg4r, eighth pass) and this
+ * file supplies it a route `ctx` for the same reason it supplies one to
+ * `[id]/delete`: the route takes an AUTHORIZED ITEM rather than an id. It also
+ * gained a Layer 2 — the DEPLOY TARGET now comes from `guard.ctx.item.workspaceId`
+ * instead of `?workspaceId=` / `body.workspace_id`, because a caller-supplied
+ * deploy target on a provisioning route is the same class of defect as a
+ * caller-supplied database name. That change is asserted below rather than
+ * assumed harmless; see "the deploy target is unchanged" test.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -62,6 +67,24 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
           };
         },
       }),
+    },
+  }),
+  // GHSA-v2g8-gp3r-rg4r, eighth pass — `[id]/create` now resolves its deploy
+  // target from the AUTHORIZED ITEM's workspace (`guard.ctx.item.workspaceId`
+  // = 'ws-1'), so `topology.resolveDeployTarget` calls `readWorkspaceById`,
+  // which reaches THIS container.
+  //
+  // IT IS STUBBED DELIBERATELY, and the reason is the point. Without it,
+  // `workspacesContainer` is undefined, `readWorkspaceById` THROWS, and
+  // `resolveDeployTarget`'s `.catch(() => null)` (topology.ts:282) swallows it
+  // into the same `singleSubTarget()` the old empty-string path reached at
+  // :256. The tests would pass — for the wrong reason, on a swallowed
+  // exception, and the Layer 2 change would be untested rather than verified.
+  // With the stub the INTENDED path runs: a workspace with no `domain` falls to
+  // `singleSubTarget()` at :283, which is the real behaviour.
+  workspacesContainer: async () => ({
+    items: {
+      query: () => ({ fetchAll: async () => ({ resources: [{ id: 'ws-1', tenantId: 'tid-1' }] }) }),
     },
   }),
 }));
@@ -101,10 +124,15 @@ function stubFetch(impl: (url: string, init?: RequestInit) => { status?: number;
 }
 
 describe('create route — Commercial (Databricks)', () => {
+  /** The route ctx for item `w1` — the id in makeReq's URL, and the one the
+   *  Cosmos stub above resolves (workspaceId `ws-1`). The route reads `[id]`
+   *  from HERE, not from the URL, which is the point of the fix. */
+  const createCtx = { params: Promise.resolve({ id: 'w1' }) } as any;
+
   it('POSTs the Databricks warehouses endpoint and returns the new id', async () => {
     const calls = stubFetch(() => ({ body: { id: 'wh-new' } }));
     const { POST } = await import('@/app/api/items/databricks-sql-warehouse/[id]/create/route');
-    const res = await POST(makeReq({ name: 'loom-test-wh', cluster_size: 'Small', warehouse_type: 'PRO', enable_photon: true }));
+    const res = await POST(makeReq({ name: 'loom-test-wh', cluster_size: 'Small', warehouse_type: 'PRO', enable_photon: true }), createCtx);
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.ok).toBe(true);
@@ -117,17 +145,19 @@ describe('create route — Commercial (Databricks)', () => {
   it('rejects a missing name with 400', async () => {
     stubFetch(() => ({ body: {} }));
     const { POST } = await import('@/app/api/items/databricks-sql-warehouse/[id]/create/route');
-    const res = await POST(makeReq({ cluster_size: 'Small' }));
+    const res = await POST(makeReq({ cluster_size: 'Small' }), createCtx);
     expect(res.status).toBe(400);
   });
 });
 
 describe('create route — Gov (Synapse Dedicated pool)', () => {
+  const createCtx = { params: Promise.resolve({ id: 'w1' }) } as any;
+
   it('PUTs an ARM dedicated SQL pool when LOOM_CLOUD=GCC-High', async () => {
     process.env.LOOM_CLOUD = 'GCC-High';
     const calls = stubFetch(() => ({ body: { name: 'loom-pool', sku: { name: 'DW100c' } } }));
     const { POST } = await import('@/app/api/items/databricks-sql-warehouse/[id]/create/route');
-    const res = await POST(makeReq({ name: 'loom-pool', gov_sku: 'DW100c' }));
+    const res = await POST(makeReq({ name: 'loom-pool', gov_sku: 'DW100c' }), createCtx);
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.ok).toBe(true);
@@ -139,11 +169,40 @@ describe('create route — Gov (Synapse Dedicated pool)', () => {
     expect(calls.some((c) => c.url.includes('/api/2.0/sql/warehouses'))).toBe(false);
   });
 
+  /**
+   * LAYER 2 REGRESSION GUARD — the deploy target did NOT move when its source
+   * changed from the request to the authorized item.
+   *
+   * This is the caveat that was flagged before the edit and is PROVEN here
+   * rather than assumed. `create` used to pass `?workspaceId=` / `body.workspace_id`
+   * — both absent on every shipped path, so the value was `''` — and now passes
+   * `guard.ctx.item.workspaceId` = `'ws-1'`. Those reach `resolveDeployTarget`
+   * by DIFFERENT routes (`''` returns null at topology.ts:256; `'ws-1'` reads a
+   * workspace with no `domain` and falls through at :283) and must land on the
+   * SAME `singleSubTarget()` — i.e. the ARM PUT still addresses the subscription
+   * and resource group from env, not some other domain's.
+   *
+   * Asserted on the OBSERVABLE (the ARM URL), because that is what an operator
+   * would see change if this ever regressed.
+   */
+  it('resolves the same deploy target from the ITEM as it did from the empty request value', async () => {
+    process.env.LOOM_CLOUD = 'GCC-High';
+    const calls = stubFetch(() => ({ body: { name: 'loom-pool', sku: { name: 'DW100c' } } }));
+    const { POST } = await import('@/app/api/items/databricks-sql-warehouse/[id]/create/route');
+    const res = await POST(makeReq({ name: 'loom-pool', gov_sku: 'DW100c' }), createCtx);
+    expect(res.status).toBe(200);
+    const armPut = calls.find((c) => c.url.includes('/sqlPools/loom-pool') && c.init?.method === 'PUT');
+    expect(armPut).toBeTruthy();
+    // LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG from the beforeEach — singleSubTarget().
+    expect(armPut!.url).toContain('/subscriptions/sub-1/');
+    expect(armPut!.url).toContain('/resourceGroups/rg-dlz/');
+  });
+
   it('rejects a bad gov_sku with 400', async () => {
     process.env.LOOM_CLOUD = 'GCC-High';
     stubFetch(() => ({ body: {} }));
     const { POST } = await import('@/app/api/items/databricks-sql-warehouse/[id]/create/route');
-    const res = await POST(makeReq({ name: 'loom-pool', gov_sku: 'F100' }));
+    const res = await POST(makeReq({ name: 'loom-pool', gov_sku: 'F100' }), createCtx);
     expect(res.status).toBe(400);
   });
 });

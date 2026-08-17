@@ -877,15 +877,15 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/start/route.ts',
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/stop/route.ts',
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/updates/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/ctas/route.ts',
   //
   // ── GHSA-v2g8-gp3r-rg4r — THE WHOLE `databricks-sql-warehouse/[id]/*` FAMILY
-  //    IS GONE FROM THIS LIST. Sixteen entries DELETED, never reworded, across
-  //    #3665 (`state`, `start`, `edit`, `delete`, `clone`), the seventh pass
-  //    (`query`) and the eighth (`cancel`, `connection`, `create`, `iqy`,
-  //    `query-history`, `query-profile`, `schema`, `script-out`, `warehouses`).
-  //    `ctas` above and `model` were guarded already. All of them are in
-  //    NOW_GUARDED below.
+  //    IS GONE FROM THIS LIST. Seventeen entries DELETED, never reworded,
+  //    across #3665 (`state`, `start`, `edit`, `delete`, `clone`), the seventh
+  //    pass (`query`) and the eighth (`cancel`, `connection`, `create`, `ctas`,
+  //    `iqy`, `query-history`, `query-profile`, `schema`, `script-out`,
+  //    `warehouses`). `ctas` and `model` carried a real guard already; `ctas`'s
+  //    entry was INERT (NOW_GUARDED wins) and is deleted here rather than left
+  //    to read as an excuse it never had. All of them are in NOW_GUARDED below.
   //
   // The class reason above this list — "operate on a single deployment-shared
   // Azure resource resolved by item TYPE + the id in the URL … there is NO
