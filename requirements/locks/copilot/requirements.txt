@@ -182,9 +182,9 @@ attrs==26.1.0 \
     #   cyclopts
     #   jsonschema
     #   referencing
-authlib==1.7.0 \
-    --hash=sha256:b3e326c9aa9cc3ea95fe7d89fd880722d3608da4d00e8a27e061e64b48d801d5 \
-    --hash=sha256:e36817afb02f6f0b6bf55f150782499ddd6ddf44b402bb055d3263cc65ac9ae0
+authlib==1.7.1 \
+    --hash=sha256:8470f4aa6b5590ac41bd81d6e6ee12448ce36a0da0af19bbed69fb53fb4e8ad9 \
+    --hash=sha256:8c09b0f9d080c823e594b52316af70f79a1fa4eed64d0363a076233c04ef063a
     # via fastmcp
 azure-common==1.1.28 \
     --hash=sha256:4ac0cd3214e36b6a1b6a442686722a5d8cc449603aa833f3f0f40bda836704a3 \
