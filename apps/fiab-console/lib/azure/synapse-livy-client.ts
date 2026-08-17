@@ -31,6 +31,7 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { PagingBudget, PAGE_DEADLINE, type PagingTruncation } from '@/lib/azure/paging-budget';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -71,17 +72,21 @@ function livyBase(pool: string): string {
   return `${devBase()}/livyApi/versions/${LIVY_API}/sparkPools/${encodeURIComponent(pool)}`;
 }
 
-async function callDev(url: string, init?: RequestInit): Promise<Response> {
+async function callDev(url: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
-  return fetchWithTimeout(url, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      authorization: `Bearer ${tok.token}`,
-      'content-type': 'application/json',
+  return fetchWithTimeout(
+    url,
+    {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        authorization: `Bearer ${tok.token}`,
+        'content-type': 'application/json',
+      },
     },
-  });
+    timeoutMs,
+  );
 }
 
 async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
@@ -207,37 +212,128 @@ export async function getLivySession(poolName: string, sessionId: number): Promi
 }
 
 /**
- * Enumerate ALL interactive Livy sessions on a Spark pool (paged). Livy's list
- * endpoint returns `{ from, total, sessions }` and caps a page's size, so we page
- * with `from`/`size` until we've collected `total` (bounded by `hardCap` so a
- * pathological pool can't spin us forever). Used by the warm-pool stale-session
- * REAPER (#1796) to find leaked sessions from crashed runs/replicas that hold
- * vcores with no active lease and starve new sessions. Real Livy REST, no mocks.
+ * The Livy SESSIONS list endpoint carries the IDENTICAL per-request cap as the
+ * batches endpoint: "size — Optional param specifying the size of the returned
+ * list. By default it is 20 and that is the maximum."
+ * (https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/get-spark-sessions)
+ *
+ * `listLivySessions` defaulted `pageSize` to 100 and never validated it — the
+ * exact defect #3568 reported against `listSparkBatchJobs`, on the sibling
+ * endpoint. Clamping it here is only half the fix: at size=100 the old guard
+ * `ceil(hardCap/size)+1` allowed 21 pages, but at the correct size=20 the same
+ * expression allows 101 — so a bare clamp makes the UNBOUNDED-TIME problem
+ * five times worse. The clamp therefore ships together with a
+ * {@link PagingBudget} that bounds the walk in pages AND wall clock, and with
+ * a truncation signal so a caller can tell a COMPLETE census from a partial
+ * one instead of quietly acting on a short list.
+ */
+const LIVY_MAX_PAGE_SIZE = 20;
+
+/** What a bounded session census collected, and whether it is the WHOLE list. */
+export interface LivySessionCensus {
+  sessions: LivySession[];
+  /** Livy's count of ALL sessions on the pool (`sessionManager.size()`). */
+  total: number;
+  /** How many distinct sessions the walk actually collected. */
+  scanned: number;
+  /**
+   * Non-null when a ceiling cut the walk short — the census is INCOMPLETE and
+   * MUST NOT be treated as "these are all the sessions that exist". See the
+   * caller note on {@link listLivySessions}.
+   */
+  truncatedBy: PagingTruncation | null;
+}
+
+/**
+ * Enumerate ALL interactive Livy sessions on a Spark pool (paged), reporting
+ * whether the census is complete.
+ *
+ * Livy's list endpoint returns `{ from, total, sessions }` and caps a page at
+ * 20 rows, so we page with `from`/`size` until we've collected `total`, the
+ * server runs dry, `hardCap` rows are reached, or the budget trips. Every
+ * fetch — including the first — goes through `claimPage()` + `runPage()`, so
+ * the walk is bounded in wall clock and not merely in page count: a fetch
+ * issued outside `runPage` gets `DEFAULT_SERVER_FETCH_TIMEOUT_MS` (30s) of its
+ * own, which is how a "bounded" loop silently becomes 100 x 30s.
+ *
+ * Used by the warm-pool stale-session REAPER (#1796) to find leaked sessions
+ * from crashed runs/replicas that hold vcores with no active lease and starve
+ * new sessions, and by the admin Spark-health census. Real Livy REST, no mocks.
+ */
+export async function listLivySessionsResult(
+  poolName: string,
+  opts?: { pageSize?: number; hardCap?: number; budgetMs?: number },
+): Promise<LivySessionCensus> {
+  const requested = Math.max(1, Math.floor(opts?.pageSize ?? LIVY_MAX_PAGE_SIZE));
+  const size = Math.min(LIVY_MAX_PAGE_SIZE, requested);
+  const hardCap = Math.max(size, Math.floor(opts?.hardCap ?? 2000));
+  // `hardCap` keeps its documented meaning — a ROW ceiling — by translating it
+  // into the budget's page cap at the (now correct) page size.
+  const budget = new PagingBudget(`listLivySessions(${poolName})`, {
+    maxPages: Math.ceil(hardCap / size),
+    ...(opts?.budgetMs ? { budgetMs: opts.budgetMs } : {}),
+  });
+
+  const out: LivySession[] = [];
+  const seen = new Set<number>();
+  let from = 0;
+  let total = 0;
+
+  while (out.length < hardCap && budget.claimPage()) {
+    // detailed=true adds `name` (and errorInfo) — the reaper's busy-zombie rule
+    // matches pool-owned sessions by their loom-warmpool-* name.
+    const page = await budget.runPage((timeoutMs) =>
+      callDev(
+        `${livyBase(poolName)}/sessions?from=${from}&size=${size}&detailed=true`,
+        undefined,
+        timeoutMs,
+      ).then((r) =>
+        jsonOrThrow<{ from?: number; total?: number; sessions?: LivySession[] }>(
+          r,
+          `listLivySessions(${poolName})`,
+        ),
+      ),
+    );
+    if (page === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
+    const batch = Array.isArray(page.sessions) ? page.sessions : [];
+    for (const s of batch) {
+      if (typeof s?.id === 'number' && seen.has(s.id)) continue;
+      if (typeof s?.id === 'number') seen.add(s.id);
+      out.push(s);
+    }
+    if (typeof page.total === 'number' && Number.isFinite(page.total)) total = page.total;
+    from += batch.length;
+    if (batch.length === 0 || out.length >= total) break; // complete — NOT a truncation
+  }
+
+  budget.warnIfTruncated(out.length);
+  // Reaching `hardCap` with more rows still on the server is a truncation too,
+  // even when neither budget ceiling tripped — the caller must not read the
+  // result as a complete census.
+  const cappedShort = out.length >= hardCap && total > out.length;
+  return {
+    sessions: out.slice(0, hardCap),
+    total: total || out.length,
+    scanned: out.length,
+    truncatedBy: budget.truncatedBy ?? (cappedShort ? 'pages' : null),
+  };
+}
+
+/**
+ * {@link listLivySessionsResult} for callers that only want the rows.
+ *
+ * CALLER WARNING: this shape CANNOT express an incomplete census. Any caller
+ * that treats "not in this array" as "no longer exists on the pool" must use
+ * `listLivySessionsResult` and check `truncatedBy` first — `reapStaleSessions`
+ * in `spark-session-pool.ts` does exactly that with its `liveIds` tracker GC,
+ * and on a truncated census would forget the grace-window timestamps of
+ * sessions that are still very much alive.
  */
 export async function listLivySessions(
   poolName: string,
-  opts?: { pageSize?: number; hardCap?: number },
+  opts?: { pageSize?: number; hardCap?: number; budgetMs?: number },
 ): Promise<LivySession[]> {
-  const size = Math.max(1, opts?.pageSize ?? 100);
-  const hardCap = Math.max(size, opts?.hardCap ?? 2000);
-  const out: LivySession[] = [];
-  let from = 0;
-  // Page until we reach `total`, run dry, or hit the hard cap.
-  for (let guard = 0; guard < Math.ceil(hardCap / size) + 1; guard++) {
-    // detailed=true adds `name` (and errorInfo) — the reaper's busy-zombie rule
-    // matches pool-owned sessions by their loom-warmpool-* name.
-    const r = await callDev(`${livyBase(poolName)}/sessions?from=${from}&size=${size}&detailed=true`);
-    const page = await jsonOrThrow<{ from?: number; total?: number; sessions?: LivySession[] }>(
-      r,
-      `listLivySessions(${poolName})`,
-    );
-    const batch = Array.isArray(page.sessions) ? page.sessions : [];
-    out.push(...batch);
-    const total = typeof page.total === 'number' ? page.total : out.length;
-    from += batch.length;
-    if (batch.length === 0 || out.length >= total || out.length >= hardCap) break;
-  }
-  return out;
+  return (await listLivySessionsResult(poolName, opts)).sessions;
 }
 
 /**

@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadMlvItem } from '../../_lib/load';
-import { listSparkBatchJobs, type SparkBatchJob } from '@/lib/azure/synapse-dev-client';
+import { listRecentSparkBatchJobs, type SparkBatchJob } from '@/lib/azure/synapse-dev-client';
 import { defaultSparkPool } from '@/lib/azure/synapse-livy-client';
 
 export const runtime = 'nodejs';
@@ -39,7 +39,16 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
   const size = Math.min(100, Math.max(1, parseInt(req.nextUrl.searchParams.get('size') || '25', 10) || 25));
   const pool = defaultSparkPool();
   try {
-    const list = await listSparkBatchJobs(pool, 0, 100);
+    // MOST RECENT first. `listSparkBatchJobs(pool, 0, N)` would return the
+    // pool's OLDEST N batches — `from` is an index into Livy's ASCENDING
+    // batch-id list — and this grid is labelled "Runs". While the old size=100
+    // was over Livy's 20-row cap that at least failed loudly with a 400;
+    // clamping the size without fixing the window would have turned it into a
+    // silent wrong-rows surface. We scan a window WIDER than `size` because the
+    // tag filter below is applied client-side: only some of the pool's recent
+    // batches belong to this MLV.
+    const scanLimit = Math.min(200, Math.max(size, size * 4));
+    const list = await listRecentSparkBatchJobs(pool, scanLimit);
     const mine = (list.sessions || []).filter((b: SparkBatchJob) => b.tags?.loomItemId === id);
     return NextResponse.json({
       ok: true,
@@ -53,6 +62,14 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
         submittedAt: b.submittedAt,
         trigger: b.tags?.loomTrigger,
       })),
+      // Truncation is DISCLOSED, never dropped: the tag filter runs over a
+      // bounded window of the pool's run history, so an MLV whose refreshes are
+      // older than that window legitimately shows nothing. Without these fields
+      // the surface cannot tell "no runs" from "no runs in the part I looked at".
+      truncatedBy: list.truncatedBy ?? null,
+      scanned: list.scanned,
+      poolTotal: list.total,
+      windowComplete: !list.truncatedBy && list.scanned >= list.total,
     });
   } catch (e: any) {
     const msg = (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
