@@ -282,13 +282,26 @@ _lease_clear() { _lease_write "none" "0" "none"; }
 # Writing to $GITHUB_ENV is what makes the state a fact about the RUN rather
 # than about one shell. Outside Actions this is a no-op and the existing
 # same-process behaviour is unchanged.
+#
+# IT EXPORTS THE STATE AND *NOT* THE OWNER, and that distinction is load-bearing.
+# The first draft exported LOOM_ACR_LEASE_OWNER too — which is an INPUT override
+# (_lease_parse_args prefers it over the derived id), so exporting it hijacks
+# every later lease call in the same job. CI caught it immediately and in the
+# ugliest possible way: the guardrails job runs scripts/ci/test-acr-firewall-lease.sh,
+# which drives this script with GITHUB_ACTIONS=true against a REAL $GITHUB_ENV,
+# so the self-test's fixture owner ('runA') and state ('held') leaked into every
+# subsequent step of that job.
+#
+# The owner does not need carrying anyway: _lease_default_owner derives
+# `gha:<repo>:<run id>:<attempt>`, which is IDENTICAL in the acquiring job and
+# the releasing job of the same run. Only the state is genuinely unknowable
+# downstream.
 _lease_persist_state() {
   ACR_LEASE_STATE="$1"
   [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
   [ -n "${GITHUB_ENV:-}" ] || return 0
   [ -w "${GITHUB_ENV}" ] || return 0
   printf 'ACR_LEASE_STATE=%s\n' "$1" >> "$GITHUB_ENV"
-  printf 'LOOM_ACR_LEASE_OWNER=%s\n' "$_LEASE_OWNER" >> "$GITHUB_ENV"
 }
 
 _lease_open_firewall() {

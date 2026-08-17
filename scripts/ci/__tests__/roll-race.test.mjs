@@ -1018,6 +1018,15 @@ function runLease(args, { state = {}, env = {} } = {}) {
       encoding: 'utf8',
       env: {
         ...process.env,
+        // EXPLICITLY CLEARED, not merely "not set". scripts/ci/test-acr-firewall-lease.sh
+        // runs earlier in the SAME guardrails job, drives this script with
+        // GITHUB_ACTIONS=true against a REAL $GITHUB_ENV, and therefore used to
+        // leak its fixture's ACR_LEASE_STATE=held into every later step. This
+        // suite then inherited it, and "a process that never held the lease"
+        // went red in CI while passing locally. Inheriting ambient state is how
+        // a harness ends up testing a different program than it claims to.
+        ACR_LEASE_STATE: '',
+        LOOM_ACR_LEASE_OWNER: '',
         ...env,
         PATH: `${binDir}${delimiter}${process.env.PATH}`,
         STATE: toPosixPath(statePath),
@@ -1089,7 +1098,20 @@ test('LEASE: acquire PERSISTS its state to $GITHUB_ENV so a later STEP can read 
   assert.match(r.ghEnv, /^ACR_LEASE_STATE=held$/m,
     'acquire and release run in different shells in every CI caller; without this the state is always back at ' +
       'its default by release time and "my lease was erased" cannot be told from "I never had one"');
-  assert.match(r.ghEnv, /^LOOM_ACR_LEASE_OWNER=deployRun$/m);
+});
+
+test('LEASE: acquire must NOT export LOOM_ACR_LEASE_OWNER — that hijacks every later lease call', { skip: shellSkip }, () => {
+  // LOOM_ACR_LEASE_OWNER is an INPUT override (_lease_parse_args prefers it
+  // over the derived id), so putting it in $GITHUB_ENV rewrites the identity of
+  // every subsequent acquire/release in the job. Measured on the first CI run
+  // of this PR: the guardrails job runs scripts/ci/test-acr-firewall-lease.sh,
+  // which drives the real script under GITHUB_ACTIONS=true against a real
+  // $GITHUB_ENV, so the self-test's fixture owner ('runA') and state leaked into
+  // every later step. The owner needs no carrying — it derives to
+  // gha:<repo>:<run id>:<attempt>, identical in both jobs of one run.
+  const r = runLease(['acquire', '--acr', 'acrtest', '--no-open'], { env: { LOOM_ACR_LEASE_OWNER: 'deployRun' } });
+  assert.doesNotMatch(r.ghEnv, /^LOOM_ACR_LEASE_OWNER=/m,
+    `acquire wrote an owner override into $GITHUB_ENV; it read:\n${r.ghEnv}`);
 });
 
 test('LEASE: a holder whose lease was ERASED says so, and names the ARM re-render', { skip: shellSkip }, () => {
@@ -1152,7 +1174,12 @@ test('CONTRACT: the build lane carries ACR_LEASE_STATE across the acquire/releas
   assert.match(yaml, /needs: \[resolve, build, acr_enable\]/,
     'acr_restore must depend on acr_enable or it cannot read those outputs');
   assert.match(yaml, /ACR_LEASE_STATE: \$\{\{ needs\.acr_enable\.outputs\.lease_state \|\| 'none' \}\}/,
-    'and it must actually consume them — a published output nobody reads is the guard-adoption gap');
+    'and it must actually consume it — a published output nobody reads is the guard-adoption gap');
+  assert.ok(
+    !/LOOM_ACR_LEASE_OWNER:\s*\$\{\{/.test(yaml),
+    'the holder id must NOT be carried between the jobs: it is an input override that would replace the derived ' +
+      'identity for every later lease call, and it derives identically in both jobs of one run anyway',
+  );
 });
 
 // ---------------------------------------------------------------------------
