@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.5...csa-inabox-v0.98.6) (2026-08-17)
+
+
+### Bug Fixes
+
+* **test:** anchor an S3 call selector to the origin, not a bare host substring ([#3663](https://github.com/fgarofalo56/csa-inabox/issues/3663)) ([9393165](https://github.com/fgarofalo56/csa-inabox/commit/9393165e7e68ccc7e33fcaad9c112feb82dd0c77))
+
 ## [0.98.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.4...csa-inabox-v0.98.5) (2026-08-17)
 
 
