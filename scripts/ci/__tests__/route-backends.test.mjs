@@ -43,6 +43,7 @@ import {
   classifyRouteBackends,
   unnamedClientModules,
   unpopulatedSeeds,
+  identifiersReachingRoutes,
   staleModuleReferences,
   detectIdentifiers,
   canonicalHost,
@@ -125,7 +126,7 @@ test('the control set contains BOTH directions, and the negative half is not tok
  * the opposite. That is #3644, and the `assert.notEqual(patched, original)`
  * below is what makes an unapplied mutation fail LOUDLY instead of vacuously.
  */
-test('FALSIFICATION — eight breaks of the analyzer, each must turn a control red', async () => {
+test('FALSIFICATION — ten breaks of the analyzer, each must turn a control red', async () => {
   const original = readNorm(path.join(REPO_ROOT, 'scripts/ci/_route-backends.mjs'));
 
   const MUTANTS = [
@@ -162,6 +163,17 @@ test('FALSIFICATION — eight breaks of the analyzer, each must turn a control r
     {
       id: 'B2 is disabled — a client that fetches and names nothing stops being reported',
       patch: (s) => s.replace('  const bad = [];\n  for (const file of reached) {', '  const bad = [];\n  for (const file of []) {'),
+    },
+    {
+      id: 'the PLACEHOLDER filter is removed — an admin fill-in-the-blank example counts as an endpoint',
+      patch: (s) => s.replace('    if (inPlaceholderString(dataCode, m.index)) continue;', '    if (false) continue;'),
+    },
+    {
+      id: 'B2 is narrowed back to lib/azure/** — a network client outside that directory stops being policed',
+      patch: (s) => s.replace(
+        "    if (/(?:^|\\/)route\\.ts$/.test(file)) continue;",
+        "    if (!file.startsWith(`${CONSOLE_ROOT}/lib/azure/`)) continue;",
+      ),
     },
   ];
 
@@ -232,14 +244,33 @@ test('longest-suffix matching keeps neighbouring services apart', () => {
   assert.equal(labelFor(`host:${canonicalHost('app.fabric.microsoft.com')}`), null);
 });
 
-test('every seeded signal has a POPULATION — the `keyvault-client` shape cannot recur', () => {
-  const { derivation } = tree();
+test('every seeded signal is INHERITED BY A ROUTE — the `keyvault-client` shape cannot recur', () => {
+  const { graph, derivation, routes } = tree();
   assert.deepEqual(
-    unpopulatedSeeds(derivation.origins),
+    unpopulatedSeeds(identifiersReachingRoutes(graph, derivation, routes)),
     [],
-    'a seeded identifier occurs NOWHERE in the tree. That is exactly what `keyvault-client` was: an entry that ' +
-      'looked like coverage while covering nothing, which is how 19 Key Vault routes stayed invisible.',
+    'a seeded identifier reaches no route. That is what `keyvault-client` was: an entry that looked like ' +
+      'coverage while covering nothing, which is how 19 Key Vault routes stayed invisible.',
   );
+});
+
+test('B3 measures REACH, not mere occurrence — the weaker form is satisfiable without the property', () => {
+  // The first draft tested `origins` (textual occurrence anywhere in the tree),
+  // and that is satisfiable by ONE display string in a module no route reaches —
+  // which is precisely the state three shipped seeds were already in. This pins
+  // the stronger definition: a seed mentioned somewhere unreachable still fails.
+  const files = {
+    'apps/fiab-console/lib/azure/unreachable-note.ts':
+      "export const NOTE = 'see providers/Microsoft.ZzDeadSeed/things for the shape';",
+    'apps/fiab-console/app/api/items/probe/route.ts':
+      'export async function GET() { return json({ ok: true }); }',
+  };
+  const graph = buildGraph({ repoRoot: '/synthetic', files: Object.keys(files), readFile: (f) => files[f] });
+  const derivation = deriveBackendReach(graph);
+  const routeIds = identifiersReachingRoutes(graph, derivation, ['apps/fiab-console/app/api/items/probe/route.ts']);
+  // The identifier OCCURS (it is in origins) but no route inherits it.
+  assert.ok(derivation.origins.has('arm:Microsoft.ZzDeadSeed'), 'the fixture must actually contain the token');
+  assert.ok(!routeIds.has('arm:Microsoft.ZzDeadSeed'), 'no route should inherit it');
 });
 
 test('every module NAMED in the analyzer still exists', () => {
@@ -422,8 +453,15 @@ test('the judgement lists stay small and every entry carries a real reason', () 
     assert.ok(v.backend === null || typeof v.backend === 'string');
   }
   // A cut can only ever REMOVE a label — the direction that produced this issue.
+  // THIS CAPS THE NUMBER OF CUTS, NOT THE BLAST RADIUS OF ONE: the single
+  // shipped cut already moves 1,213 rows (Azure Monitor off 1,179, Cosmos off
+  // 352). What bounds the radius is the measured disclosure in the code comment
+  // and the published table, not this assertion.
   assert.ok(PROPAGATION_CUTS.size <= 3, `${PROPAGATION_CUTS.size} propagation cuts — each one can hide a backend`);
-  for (const [k, why] of PROPAGATION_CUTS) assert.ok(why.length > 60, `${k} has no substantive reason recorded`);
+  for (const [k, why] of PROPAGATION_CUTS) {
+    assert.ok(why.length > 60, `${k} has no substantive reason recorded`);
+    assert.match(why, /MEASURED BLAST RADIUS/, `${k} does not state what cutting it actually removes`);
+  }
 });
 
 test('the published document carries the derived sets, not just the rows', () => {

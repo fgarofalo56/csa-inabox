@@ -62,20 +62,22 @@
  *
  * 3. **"TOUCHES NO BACKEND" IS AN ASSERTION, NOT A DEFAULT.** Per
  *    `deploy-integrity.md` R7 the generator says what it does not know. Three
- *    triggers, each naming the module and line:
+ *    triggers, each naming the module it was seeded in:
  *      B1  an Azure identifier that reaches a route and is in NEITHER the label
  *          table NOR `NOT_A_BACKEND` — i.e. a service this vocabulary has never
  *          seen. The DETECTOR is generic (any `Microsoft.*` provider, any host
  *          under a Microsoft cloud DNS namespace, any `@azure/*` package), so a
  *          new backend cannot be dropped: it is detected, fails to translate,
  *          and stops the build naming itself.
- *      B2  a module under `lib/azure/**` that a route reaches, that makes a
- *          NETWORK CALL, and that the derivation attributes NO backend to. That
- *          is "this module talks to something and I cannot name it", which is
- *          exactly how the four instances above published `—`.
- *      B3  a seeded identifier that no longer occurs anywhere in the tree —
- *          the `keyvault-client` shape, a vocabulary entry with zero population,
- *          which verifies nothing while looking like coverage.
+ *      B2  ANY module a route reaches that makes a NETWORK CALL and to which the
+ *          derivation attributes NO backend. That is "this module talks to
+ *          something and I cannot name it", which is exactly how the four
+ *          instances above published `—`. The remit is the whole reachable set,
+ *          not one directory: scoped to `lib/azure/**` it missed a client at
+ *          `lib/integrations/` calling a real IoT Hub data plane.
+ *      B3  a seeded identifier that NO ROUTE INHERITS. Population is REACH, not
+ *          textual occurrence — see `unpopulatedSeeds`, where the difference is
+ *          the whole control.
  *
  * ── WHAT IS DELIBERATELY *NOT* CLAIMED ─────────────────────────────────────
  * Stated because an unstated limit reads as coverage.
@@ -95,9 +97,27 @@
  *     parse) cannot be attributed to one function, so it is attributed to every
  *     function in its module. That is the OVER-report direction, chosen because
  *     the under-report direction is this issue.
+ *   - **B2 is per MODULE.** A route that reaches only the config-reading
+ *     function of a module whose OTHER functions name a backend can still
+ *     publish `—` without tripping anything. `maps/tiles` is that shape and its
+ *     verdict is independently correct, but the gap is real.
  *   - **A host in a COMMENT cannot reach anything** — everything is matched over
  *     `dataCode` (comments blanked, strings kept), because a URL genuinely lives
- *     in a string and a Learn link genuinely lives in a comment.
+ *     in a string and a Learn link genuinely lives in a comment. Two further
+ *     string-level filters (PROSE, and `<placeholder>` EXAMPLES) are documented
+ *     on `detectIdentifiers`; both were measured false-positive sources, the
+ *     second one large.
+ *   - **AN ARM PROVIDER IN A DISPLAY STRING IS STILL COUNTED**, and the string
+ *     filters above deliberately apply to HOSTS only. `foundry-compute-gate.ts:46`
+ *     carries `resource: 'Microsoft.MachineLearningServices/workspaces (AML /
+ *     AI Foundry hub workspace)'` — a human-readable field in a 403 remediation
+ *     body, which contributes AML. Not filtered, for two reasons: the statement
+ *     is ACCURATE (that route does operate on an AML workspace, and it
+ *     independently reaches AML through `getCompute`), and the honest form of
+ *     the ARM signal is itself a string literal — `type === 'Microsoft.Sql/
+ *     servers'` — so a prose filter over providers would suppress the main way
+ *     the signal legitimately appears. The cost is a less informative `why`
+ *     chain, not a wrong row.
  *
  * Run the controls:  node --test scripts/ci/__tests__/route-backends.test.mjs
  */
@@ -129,28 +149,23 @@ export const ARM_PROVIDER_BACKEND = new Map([
   ['Microsoft.AnalysisServices', 'AAS'],
   ['Microsoft.ApiManagement', 'APIM'],
   ['Microsoft.App', 'Container Apps'],
-  ['Microsoft.AppConfiguration', 'App Configuration'],
   ['Microsoft.ApplicationInsights', 'Azure Monitor'],
   ['Microsoft.Authorization', 'Azure RBAC'],
-  ['Microsoft.AzureCosmosDB', 'Cosmos'],
   ['Microsoft.Batch', 'Batch'],
   ['Microsoft.Billing', 'Cost Management'],
   ['Microsoft.BotService', 'Bot Service'],
   ['Microsoft.BusinessAppPlatform', 'Power Platform'],
-  ['Microsoft.Cache', 'Azure Cache for Redis'],
   ['Microsoft.CognitiveServices', 'Azure AI Services'],
   ['Microsoft.Compute', 'Compute'],
   ['Microsoft.Consumption', 'Cost Management'],
   ['Microsoft.ContainerRegistry', 'ACR'],
   ['Microsoft.ContainerService', 'AKS'],
   ['Microsoft.CostManagement', 'Cost Management'],
-  ['Microsoft.Dashboard', 'Azure Managed Grafana'],
   ['Microsoft.DataFactory', 'ADF'],
   ['Microsoft.Databricks', 'Databricks'],
   ['Microsoft.DBforPostgreSQL', 'PostgreSQL'],
   ['Microsoft.DBForPostgreSQL', 'PostgreSQL'], // ARM is case-insensitive; both spellings occur
   ['Microsoft.Devices', 'IoT Hub'],
-  ['Microsoft.DigitalTwins', 'Azure Digital Twins'],
   ['Microsoft.DocumentDB', 'Cosmos'],
   ['Microsoft.Dynamics', 'Dataverse'],
   ['Microsoft.EventGrid', 'Event Grid'],
@@ -216,7 +231,6 @@ export const HOST_SUFFIX_BACKEND = new Map([
   ['database.usgovcloudapi.net', 'Azure SQL'],
   ['postgres.database.azure.com', 'PostgreSQL'],
   ['postgres.database.usgovcloudapi.net', 'PostgreSQL'],
-  ['mysql.database.azure.com', 'MySQL'],
   // Synapse
   ['sql.azuresynapse.net', 'Synapse SQL'],
   ['sql.azuresynapse.usgovcloudapi.net', 'Synapse SQL'],
@@ -244,14 +258,11 @@ export const HOST_SUFFIX_BACKEND = new Map([
   ['purview.azure.net', 'Purview'],
   ['purview.azure.us', 'Purview'],
   ['purview.microsoft.com', 'Purview'],
-  ['purview-service.microsoft.com', 'Purview'],
   // AI
   ['openai.azure.com', 'Azure OpenAI'],
   ['openai.azure.us', 'Azure OpenAI'],
   ['cognitiveservices.azure.com', 'Azure AI Services'],
   ['cognitiveservices.azure.us', 'Azure AI Services'],
-  ['contentsafety.cognitive.azure.com', 'Azure AI Services'],
-  ['services.ai.azure.com', 'AI Foundry'],
   ['ai.azure.com', 'AI Foundry'],
   ['ai.azure.us', 'AI Foundry'],
   ['ml.azure.com', 'AML'],
@@ -270,37 +281,38 @@ export const HOST_SUFFIX_BACKEND = new Map([
   ['asazure.usgovcloudapi.net', 'AAS'],
   // Power Platform family
   ['bap.microsoft.com', 'Power Platform'],
-  ['admin.powerplatform.microsoft.com', 'Power Platform'],
   ['flow.microsoft.com', 'Power Automate'],
-  ['make.powerpages.microsoft.com', 'Power Pages'],
   ['copilotstudio.microsoft.com', 'Copilot Studio'],
   ['crm.dynamics.com', 'Dataverse'],
   // Monitor family
   ['monitor.azure.com', 'Azure Monitor'],
   ['monitor.azure.us', 'Azure Monitor'],
   ['loganalytics.azure.com', 'Log Analytics'],
-  ['opinsights.azure.us', 'Log Analytics'],
-  ['grafana.azure.com', 'Azure Managed Grafana'],
   // ARM control plane
   ['management.azure.com', 'ARM'],
   ['management.usgovcloudapi.net', 'ARM'],
-  ['management.core.windows.net', 'ARM'],
   // Misc real data planes
   ['redis.azure.com', 'Azure Cache for Redis'],
-  ['redis.azure.net', 'Azure Cache for Redis'],
-  ['digitaltwins.azure.net', 'Azure Digital Twins'],
   ['atlas.microsoft.com', 'Azure Maps'],
   ['batch.core.windows.net', 'Batch'],
   ['batch.core.usgovcloudapi.net', 'Batch'],
   ['azconfig.io', 'App Configuration'],
   ['azconfig.azure.us', 'App Configuration'],
   ['azurecr.io', 'ACR'],
-  ['logic.azure.com', 'Logic Apps'],
   ['dev.azure.com', 'Azure DevOps'],
   ['devcenter.azure.com', 'Dev Center'],
   ['graph.microsoft.com', 'Microsoft Graph'],
   ['sentinel.microsoft.com', 'Microsoft Sentinel'],
   ['prices.azure.com', 'Retail Prices API'],
+  // The Container Apps managed-ingress namespace. `data-agent-client.ts:82`
+  // uses it as an SSRF ALLOWLIST (`AGENT_INVOKE_HOST_SUFFIXES`) and then fetches
+  // `https://${host}/invoke` on a host that passes it — so it is a real endpoint
+  // namespace, not a classification token.
+  ['azurecontainerapps.io', 'Container Apps'],
+  ['azurecontainerapps.us', 'Container Apps'],
+  // The Bot Framework Direct Line token endpoint — `copilot-studio-client.ts:1478`
+  // (`LOOM_DIRECTLINE_TOKEN_URL` default) and `:1529`. A live authenticated call.
+  ['directline.botframework.com', 'Direct Line'],
 ]);
 
 /** npm client SDK → backend. An import of the SDK IS the dependency. */
@@ -351,6 +363,8 @@ export const NOT_A_BACKEND = new Map([
   ['host:usgovcloudapi.net', 'a bare sovereign-cloud DNS namespace used to TEST which boundary a URI belongs to, not an endpoint.'],
   ['host:azure.us', 'ditto — the bare Gov namespace, listed beside `openai.azure.us` in a suffix-classification table.'],
   ['host:microsoftonline.com', 'the bare Entra namespace in the same suffix table; the token endpoint itself is login.microsoftonline.com and is recorded above.'],
+  ['host:microsoftonline.us', 'the bare Gov Entra namespace, in `lib/copilot/agent-registry.ts::GOV_INTERNAL_SUFFIXES` — a boundary discriminator, not an endpoint.'],
+  ['host:login.microsoftonline.us', 'the Gov Entra token authority (`lib/auth/msal.ts::authorityHost`). Authentication, not a data plane — same verdict as its commercial twin.'],
 ]);
 
 /**
@@ -358,24 +372,40 @@ export const NOT_A_BACKEND = new Map([
  *
  * A cut can only ever REMOVE a label, which is the direction that produced this
  * issue — so there is exactly one, it names a chaos-test facility rather than a
- * product dependency, and it is published in the generated document.
+ * product dependency, and its FULL blast radius is published in the generated
+ * document rather than described by its headline effect.
  *
- * MEASURED: `cosmos-client.ts::ensure` calls `injectCosmosFault()`, which can
- * emit an audit event, which posts to the Azure Monitor ingestion endpoint. That
- * chain is real but it is the FAULT-INJECTION harness (`LOOM_FAULT_INJECTION`),
- * and because every Cosmos read passes through it, it put **Azure Monitor on
+ * MEASURED, by emptying this map and re-deriving over the whole tree:
+ *
+ *     rows whose label set SHRINKS because of the cut      1,213
+ *       …losing Azure Monitor                              1,179
+ *       …losing Cosmos                                       352
+ *     labels ADDED by the cut                                  0   (it cannot add)
+ *     rows that publish `—` SOLELY because of the cut          0
+ *
+ * BOTH removals are the same mechanism and both are disclosed, because quoting
+ * only the headline one would be the incomplete-disclosure habit this issue is
+ * about: `cosmos-client.ts::ensure` calls `injectCosmosFault()`, which can emit
+ * an audit event, which posts to the Azure Monitor ingestion endpoint — and the
+ * harness imports `cosmos-client` back, so its reach carries Cosmos too. Because
+ * every Cosmos operation passes through it, uncut it put **Azure Monitor on
  * 1,564 of 1,680 routes** — a label on 93% of the table that says nothing about
- * any of them. Cutting it takes Azure Monitor to 389, which are routes that
- * reach Monitor through a Monitor client or an audit write. The AUDIT sink
- * itself is deliberately NOT cut: a route that writes an audit event really does
- * write to that backend.
+ * any of them. The AUDIT sink itself is deliberately NOT cut: a route that
+ * writes an audit event really does write to that backend.
+ *
+ * NOTE ON THE CAP: `route-backends.test.mjs` caps this map at 3 entries. That is
+ * a cap on the NUMBER of cuts, NOT a bound on what one cut can hide — a single
+ * cut already moves 1,213 rows. The bound on blast radius is this disclosure and
+ * the published table, not the cap.
  */
 export const PROPAGATION_CUTS = new Map([
   [
     `${CONSOLE_ROOT}/lib/resilience/fault-injection.ts`,
     'the chaos/fault-injection harness. It hangs off every Cosmos operation and can emit an audit event, so its ' +
       'reach propagated Azure Monitor onto 1,564 of 1,680 routes. It is a test facility gated on ' +
-      'LOOM_FAULT_INJECTION, not a dependency of any route.',
+      'LOOM_FAULT_INJECTION, not a dependency of any route. MEASURED BLAST RADIUS: cutting it shrinks 1,213 row ' +
+      'label-sets — Azure Monitor drops off 1,179 and Cosmos off 352 (it imports cosmos-client back) — adds ' +
+      'nothing, and leaves 0 rows publishing `—` solely because of it.',
   ],
 ]);
 
@@ -491,6 +521,67 @@ export const CLIENT_WITHOUT_AZURE_IDENTIFIER = new Map([
         'surface. The route\'s dependency is the sidecar; the SCC endpoint is reached from there.',
     },
   ],
+  // ── outside lib/azure/, in remit since B2 was widened to the reachable set ──
+  [
+    `${CONSOLE_ROOT}/app/api/dab/_lib/dab-runtime.ts`,
+    {
+      backend: 'Loom service',
+      why:
+        'the Data API builder bridge. It calls a DAB engine at `LOOM_DAB_PREVIEW_URL` — the shared preview ' +
+        'Container App from platform/fiab/bicep/modules/admin-plane/dab-runtime.bicep, one of Loom\'s own ' +
+        'deployments. Whatever data source DAB is configured against is attributed there, not on the route.',
+    },
+  ],
+  [
+    `${CONSOLE_ROOT}/lib/migrate/migrate-client.ts`,
+    {
+      backend: 'Loom service',
+      why:
+        'the only door to the `apps/loom-migrate` estate-enumeration reader, an internal-ingress ACA app at ' +
+        '`LOOM_MIGRATE_URL`. The SOURCE estates it enumerates (Snowflake / Unity Catalog / Fabric / Power BI) ' +
+        'are reached by that reader, not by the console.',
+    },
+  ],
+  [
+    `${CONSOLE_ROOT}/lib/parity/parity-issue.ts`,
+    {
+      backend: 'GitHub',
+      why:
+        'real GitHub REST (`const GH_API = \'https://api.github.com\'`, :23, used at :78 and the issue-create ' +
+        'call) under LOOM_FEEDBACK_GITHUB_TOKEN. A genuine backend dependency that is not an AZURE one, so no ' +
+        'ARM provider / Azure DNS namespace / Azure SDK identifies it and the derivation cannot see it.',
+    },
+  ],
+  [
+    `${CONSOLE_ROOT}/lib/copilot/a2a-client.ts`,
+    {
+      backend: null,
+      why:
+        'the OUTBOUND half of A2A delegation: it fetches an EXTERNAL agent\'s card and JSON-RPC endpoint at a ' +
+        'URL the caller supplies, gated by a2a-egress-guard (refused entirely with no LOOM_A2A_EGRESS_ALLOW). ' +
+        'There is no fixed host to name, and by design the target is outside the boundary.',
+    },
+  ],
+  [
+    `${CONSOLE_ROOT}/lib/access/signin-access-request.ts`,
+    {
+      backend: null,
+      why:
+        'its one fetch (:123) POSTs to `LOOM_ACCESS_REQUEST_WEBHOOK` — an operator-supplied Teams incoming ' +
+        'webhook or Logic App URL. Which service that is, is deployment configuration and not a property of ' +
+        'the code; unset, the function returns false without calling anything.',
+    },
+  ],
+  [
+    `${CONSOLE_ROOT}/lib/editors/_palantir-codegen.ts`,
+    {
+      backend: null,
+      why:
+        'makes NO network call. Its `fetch(` occurrences (:196, :203, :406) are inside GENERATED CLIENT CODE ' +
+        'emitted as text — `lines.push(\'... await fetch(...) ...\')` — which NETWORK_CALL_RE matches because ' +
+        'strings are deliberately kept. The generator is pure and unit-tested as such.',
+    },
+  ],
 ]);
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -501,14 +592,24 @@ export const CLIENT_WITHOUT_AZURE_IDENTIFIER = new Map([
  * The Microsoft cloud DNS namespaces a data-plane host can live under. A host
  * matched here whose suffix is in NEITHER table is a B1 unknown, so this list
  * bounds what can be SEEN — it does not bound what can be labelled. It is kept
- * broad for that reason.
+ * broad for that reason, and it is the FIRST thing to widen when a real endpoint
+ * turns out to be invisible.
+ *
+ * `azure-devices.net` (IoT Hub) and `botframework.com` (Direct Line) were added
+ * after review measured the gap: a client calling either was invisible to B1
+ * (host outside this list) AND, if it lived outside `lib/azure/`, to B2 as well.
+ * `Microsoft.Devices` was already a labelled seed, so the ARM half of IoT Hub
+ * was reported while its data plane was not.
  */
 const CLOUD_TLDS = [
   'azure\\.com', 'azure\\.net', 'azure\\.us', 'windows\\.net', 'usgovcloudapi\\.net',
-  'microsoft\\.com', 'microsoftonline\\.com', 'powerbi\\.com', 'powerbigov\\.us',
+  'microsoft\\.com', 'microsoftonline\\.com', 'microsoftonline\\.us', 'powerbi\\.com', 'powerbigov\\.us',
   'azuredatabricks\\.net', 'azuresynapse\\.net', 'databricks\\.com', 'dynamics\\.com',
   'azure-api\\.net', 'azurewebsites\\.net', 'azconfig\\.io', 'azurecr\\.io',
   'cloudapp\\.azure\\.com', 'microsoftazure\\.us', 'azureedge\\.net', 'office\\.com',
+  'azure-devices\\.net', 'azurehdinsight\\.net', 'botframework\\.com', 'azurecontainerapps\\.io',
+  'azurecontainerapps\\.us',
+  'trafficmanager\\.net', 'azurefd\\.net', 'servicebus\\.windows\\.net', 'powerplatform\\.com',
 ];
 /**
  * A hostname under one of those namespaces.
@@ -547,22 +648,70 @@ export function canonicalHost(host) {
 }
 
 /**
+ * A `<placeholder>` template token — `<workspace>`, `<region>`, `<adx-cluster>`.
+ * A string carrying one is an EXAMPLE for a human to fill in, never a URL the
+ * code fetches.
+ */
+const PLACEHOLDER_RE = /<[A-Za-z][A-Za-z0-9._+-]*>/;
+
+/**
+ * Does the string literal enclosing `at` carry a `<placeholder>` token?
+ *
+ * Bounded local scan rather than a tokeniser: `detectIdentifiers` runs once per
+ * span (20k+ times), so a full pass per call is not affordable. A `'`/`"` string
+ * cannot contain a raw newline, so the scan stops at one — which fails toward
+ * KEEPING the host, the safe direction.
+ */
+function inPlaceholderString(src, at) {
+  let q = -1;
+  let qc = '';
+  for (let i = at - 1; i >= Math.max(0, at - 600); i--) {
+    const c = src[i];
+    if (c === '\n') break;
+    if (c === "'" || c === '"' || c === '`') { q = i; qc = c; break; }
+  }
+  if (q === -1) return false;
+  let end = -1;
+  for (let i = at; i < Math.min(src.length, at + 600); i++) {
+    if (src[i] === qc) { end = i; break; }
+    if (src[i] === '\n' && qc !== '`') break;
+  }
+  if (end === -1) return false;
+  return PLACEHOLDER_RE.test(src.slice(q, end));
+}
+
+/**
  * Azure identifiers in one blob of masked source (`dataCode`: comments blanked,
  * strings kept). Returns canonical tokens — `arm:*` / `host:*` / `pkg:*`.
  *
- * A host preceded by WHITESPACE is prose, not an endpoint, and is dropped. That
- * is not a guess either: `lib/mcp/catalog.ts` carries the description string
- * "Targets the cloud-specific ARM endpoint (commercial or usgovcloudapi.net)",
- * which is help text shown in the UI, and it reached routes as an unrecognised
- * Azure service. A real endpoint is always preceded by `/`, `.`, a quote, `$`,
- * `{` or `=` — never by a space. Comments are already gone; this handles PROSE
- * INSIDE A STRING, which comment-stripping cannot.
+ * TWO string-level filters, each of which was a MEASURED false-positive source,
+ * not a precaution. Comment-stripping cannot help with either, because both live
+ * inside string literals that the code genuinely carries.
+ *
+ * 1. PROSE — a host preceded by WHITESPACE. `lib/mcp/catalog.ts` carries the
+ *    description string "Targets the cloud-specific ARM endpoint (commercial or
+ *    usgovcloudapi.net)", which is help text shown in the UI, and it reached
+ *    routes as an unrecognised Azure service. A real endpoint is always preceded
+ *    by `/`, `.`, a quote, `$`, `{` or `=` — never by a space.
+ *
+ * 2. PLACEHOLDER EXAMPLES — a host inside a string that also carries a
+ *    `<template-token>`. `lib/admin/env-checks/core.ts:128`'s `VALUE_HINT` is a
+ *    table of ADMIN PLACEHOLDER EXAMPLES rendered into an `az containerapp
+ *    update` snippet by `envVarFix()` — never fetched. It seeded 22 identifiers
+ *    (21 labels), and **92 of 1,680 routes carried at least one backend
+ *    attributable ONLY to it** — the same 88 rows that showed 20+ labels.
+ *    The worst case landed on the exact rule-level question this column exists
+ *    to answer: **Power BI on 166 routes, 79 of them (48%) solely from the
+ *    literal `'powerbi://api.powerbi.com/v1.0/myorg/<workspace> (opt-in only)'`.**
+ *    Every hint carries a `<...>` token, and that token is what makes it an
+ *    example rather than an endpoint.
  */
 export function detectIdentifiers(dataCode) {
   const out = new Set();
   for (const m of dataCode.matchAll(PROVIDER_RE)) out.add(`arm:${m[0]}`);
   for (const m of dataCode.matchAll(HOST_RE)) {
     if (m.index > 0 && /\s/.test(dataCode[m.index - 1])) continue;
+    if (inPlaceholderString(dataCode, m.index)) continue;
     out.add(`host:${canonicalHost(m[1])}`);
   }
   for (const m of dataCode.matchAll(PACKAGE_RE)) out.add(`pkg:${m[1]}`);
@@ -917,16 +1066,27 @@ export function classifyRouteBackends(graph, derivation, file) {
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
- * B3 — a seeded identifier with ZERO population in the tree.
+ * B3 — a seeded identifier that NO ROUTE INHERITS.
  *
  * This is the `keyvault-client` shape that made Wave 0's instance invisible: a
- * vocabulary entry that LOOKS like coverage while covering nothing. Reported for
- * the label tables only; `NOT_A_BACKEND` is deliberately exempt, because an
- * entry there exists to record a JUDGEMENT ("this is not a backend") that stays
- * true after the last occurrence is deleted.
+ * vocabulary entry that LOOKS like coverage while covering nothing.
+ *
+ * POPULATION IS REACH, NOT OCCURRENCE, and the difference is the whole control.
+ * The first draft tested `origins` — mere textual occurrence anywhere in the
+ * tree — and that is satisfiable without the property holding: a seed for a
+ * service Loom never calls stays "populated" by ONE display string in a module
+ * no route reaches. Proven on this tree: a synthetic `Microsoft.ZzDeadSeed`
+ * fired B3 correctly, and adding a single mention of it in an unreachable module
+ * SILENCED it. Three shipped seeds (`grafana.azure.com`, `redis.azure.net`,
+ * `digitaltwins.azure.net`) were already in exactly that state, populated only
+ * by a placeholder table — i.e. the control was passing while its stated purpose
+ * was not met. Population now means: at least one ROUTE publishes it.
+ *
+ * `NOT_A_BACKEND` is deliberately exempt — an entry there records a JUDGEMENT
+ * ("this is not a backend") that stays true after the last occurrence is gone.
  */
-export function unpopulatedSeeds(origins) {
-  const seen = new Set(origins.keys());
+export function unpopulatedSeeds(routeIdentifiers) {
+  const seen = routeIdentifiers instanceof Set ? routeIdentifiers : new Set(routeIdentifiers);
   const dead = [];
   for (const k of ARM_PROVIDER_BACKEND.keys()) if (!seen.has(`arm:${k}`)) dead.push(`arm:${k}`);
   for (const k of HOST_SUFFIX_BACKEND.keys()) if (!seen.has(`host:${k}`)) dead.push(`host:${k}`);
@@ -934,15 +1094,36 @@ export function unpopulatedSeeds(origins) {
   return dead;
 }
 
+/** Every identifier that at least one route inherits — B3's population. */
+export function identifiersReachingRoutes(graph, derivation, routeFiles) {
+  const out = new Set();
+  for (const f of routeFiles) {
+    for (const id of classifyRouteBackends(graph, derivation, f).identifiers) out.add(id);
+  }
+  return out;
+}
+
 /**
- * B2 — modules under `lib/azure/**` that a route reaches, that make a network
- * call, and to which the derivation attributes no backend at all.
+ * B2 — modules that a route reaches, that make a network call, and to which the
+ * derivation attributes no backend at all.
  *
  * This is what makes `—` an ASSERTION. A route publishes "touches no backend"
  * only when every client module it reaches has been NAMED: either the
  * derivation read an Azure identifier out of it, or it is recorded in
  * `CLIENT_WITHOUT_AZURE_IDENTIFIER` with the verdict read at its definition.
  * A module in neither state stops the generator.
+ *
+ * THE REMIT IS EVERY ROUTE-REACHABLE MODULE, not `lib/azure/**`. The first draft
+ * was scoped to that one directory and review proved the hole end to end: a
+ * client at `lib/integrations/*-client.ts` doing
+ * `fetchWithTimeout('https://${h}.azure-devices.net/devices/query')` — a real
+ * IoT Hub data plane whose ARM provider IS a labelled seed — was reached by a
+ * route, published `—`, and exited 0. Neither control fired: the host was
+ * outside `CLOUD_TLDS` so B1 could not see it, and the module was outside
+ * `lib/azure/` so B2 did not police it. The identical client INSIDE `lib/azure/`
+ * was caught, which is what made the directory predicate, not the logic, the
+ * bound. Both halves are fixed: the namespace is now visible, and the remit is
+ * the reachable set.
  */
 export function unnamedClientModules(graph, derivation, routeFiles) {
   const { fnReach, spansOf, networkModules } = derivation;
@@ -962,7 +1143,9 @@ export function unnamedClientModules(graph, derivation, routeFiles) {
   }
   const bad = [];
   for (const file of reached) {
-    if (!file.startsWith(`${CONSOLE_ROOT}/lib/azure/`)) continue;
+    // Route files themselves are excluded: a route IS the caller, and its own
+    // `fetch` of a relative path is not a backend client.
+    if (/(?:^|\/)route\.ts$/.test(file)) continue;
     if (!networkModules.has(file)) continue;
     if (CLIENT_WITHOUT_AZURE_IDENTIFIER.has(file)) continue;
     let any = false;
@@ -1239,6 +1422,64 @@ export const CONTROLS = [
       ),
     },
     expect: { has: [], hasNot: ['ARM'], unknown: false },
+  },
+  {
+    name:
+      'A PLACEHOLDER EXAMPLE is not an endpoint. `lib/admin/env-checks/core.ts`\'s VALUE_HINT table is admin ' +
+      'fill-in-the-blank text rendered into an `az containerapp update` snippet — never fetched. Uncaught it ' +
+      'put a backend on 92 routes attributable to nothing else, including POWER BI ON 79 ROUTES from the single ' +
+      'literal `powerbi://api.powerbi.com/v1.0/myorg/<workspace>`, landing on the exact rule-level question ' +
+      '(no-fabric-dependency.md) this column exists to answer. The `<workspace>` token is what makes it an ' +
+      'example',
+    files: {
+      [CONTROL_ROUTE]: L(
+        'const VALUE_HINT = {',
+        "  LOOM_POWERBI_XMLA_ENDPOINT: 'powerbi://api.powerbi.com/v1.0/myorg/<workspace> (opt-in only)',",
+        "  LOOM_AAS_SERVER: 'asazure://<region>.asazure.windows.net/<server>',",
+        '};',
+        'export async function GET() { return json({ ok: true, hint: VALUE_HINT }); }',
+      ),
+    },
+    expect: { has: [], hasNot: ['Power BI', 'AAS'], unknown: false },
+  },
+  {
+    name:
+      'A REAL endpoint built from a variable is NOT suppressed by the placeholder rule — the same file shape, ' +
+      'with `${}` interpolation instead of a `<token>`. Without this pair the placeholder filter could be ' +
+      'over-broad and nothing would say so',
+    files: {
+      'apps/fiab-console/lib/azure/xmla-client.ts': L(
+        'export async function queryModel(ws, dax) {',
+        '  return fetch(`powerbi://api.powerbi.com/v1.0/myorg/${ws}`, { body: dax });',
+        '}',
+      ),
+      [CONTROL_ROUTE]: L(
+        "import { queryModel } from '@/lib/azure/xmla-client';",
+        'export async function POST(req, ctx) { return json(await queryModel(ctx.params.id, req.dax)); }',
+      ),
+    },
+    expect: { has: ['Power BI'], hasNot: [], unknown: false },
+  },
+  {
+    name:
+      'B2 POLICES EVERY ROUTE-REACHABLE MODULE, not just lib/azure/**. Scoped to that one directory, a client ' +
+      'at lib/integrations/ calling a real IoT Hub data plane published `—` and exited 0 — B1 could not see ' +
+      'the host and B2 did not police the directory. The identical file inside lib/azure/ WAS caught, which is ' +
+      'what made the predicate rather than the logic the bound',
+    files: {
+      'apps/fiab-console/lib/integrations/zzprobe-client.ts': L(
+        'const HOST = process.env.LOOM_PROBE_HOST;',
+        'export async function queryDevices(q) { return fetch(`https://${HOST}/devices/query?q=${q}`); }',
+      ),
+      [CONTROL_ROUTE]: L(
+        "import { queryDevices } from '@/lib/integrations/zzprobe-client';",
+        'export async function GET(req, ctx) { return json(await queryDevices(ctx.params.id)); }',
+      ),
+    },
+    expect: {
+      has: [], hasNot: [], unknown: false,
+      unnamed: ['apps/fiab-console/lib/integrations/zzprobe-client.ts'],
+    },
   },
   // ── UNKNOWN, not a guess ─────────────────────────────────────────────────
   {

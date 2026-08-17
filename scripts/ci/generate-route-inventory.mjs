@@ -296,6 +296,7 @@ function classify(raw, relPath, ownership, backendsOf) {
     scope,
     gated,
     backends: backendsOf.backends,
+    identifiers: backendsOf.identifiers,
     backendUnknowns: backendsOf.unknowns,
     unknowns,
     why: ownership.why,
@@ -452,11 +453,24 @@ function render(rows, resolvers, backendReach) {
   lines.push('host under a Microsoft cloud DNS namespace, any `@azure/*` package), so it is');
   lines.push('SEEN, fails to translate, and names itself.');
   lines.push('');
-  lines.push('**`—` is an assertion.** A route publishes it only when every `lib/azure/**`');
-  lines.push('module it reaches that makes a network call has been named — by the derivation,');
-  lines.push('or in the table below with the verdict read at its definition. A client that');
-  lines.push('talks to something the analyzer cannot name FAILS this generator');
-  lines.push('(`deploy-integrity.md` R7).');
+  lines.push('**`—` is an assertion.** A route publishes it only when every module it reaches');
+  lines.push('that makes a network call has been named — by the derivation, or in the table');
+  lines.push('below with the verdict read at its definition. A client that talks to something');
+  lines.push('the analyzer cannot name FAILS this generator (`deploy-integrity.md` R7). That');
+  lines.push('remit is the whole route-reachable set, not one directory: scoped to');
+  lines.push('`lib/azure/**` it missed a client under `lib/integrations/` calling a real IoT');
+  lines.push('Hub data plane. It is per MODULE, though — a route that reaches only the');
+  lines.push('config-reading function of a module whose OTHER functions name a backend can');
+  lines.push('still publish `—` without tripping anything.');
+  lines.push('');
+  lines.push('Two string-level filters keep help text out of the column, and both were');
+  lines.push('measured rather than assumed. **Prose**: a host preceded by whitespace is a');
+  lines.push('sentence, not an endpoint. **Placeholder examples**: a host in a string that');
+  lines.push('also carries a `<template-token>` is an admin fill-in-the-blank. The second');
+  lines.push('was the larger — `lib/admin/env-checks/core.ts`\'s `VALUE_HINT` table put a');
+  lines.push('backend on **92 routes** attributable to nothing else, including **Power BI on');
+  lines.push('79 routes** from the single literal');
+  lines.push('`powerbi://api.powerbi.com/v1.0/myorg/<workspace>`.');
   lines.push('');
   lines.push('What this does NOT claim: that the route calls the backend on EVERY request — a');
   lines.push('branch behind a feature flag or an error path counts, which is the honest');
@@ -557,11 +571,11 @@ function render(rows, resolvers, backendReach) {
   lines.push('');
   lines.push('### Clients whose backend the code does not name');
   lines.push('');
-  lines.push('The B2 residue: `lib/azure/**` modules that make a network call and carry no');
-  lines.push('Azure identifier, because the host only exists in deployment configuration. Each');
-  lines.push('was read at its definition. **A module in this state that is NOT listed here');
-  lines.push('fails the generator** — which is what makes `—` an assertion rather than the');
-  lines.push('default an absent map entry fell into.');
+  lines.push('The B2 residue: modules that make a network call and carry no Azure identifier,');
+  lines.push('because the host only exists in deployment configuration — or because they are');
+  lines.push('not an Azure service at all. Each was read at its definition. **A module in');
+  lines.push('this state that is NOT listed here fails the generator** — which is what makes');
+  lines.push('`—` an assertion rather than the default an absent map entry fell into.');
   lines.push('');
   lines.push('| Module | Backend | Read at its definition |');
   lines.push('| --- | --- | --- |');
@@ -572,7 +586,11 @@ function render(rows, resolvers, backendReach) {
   lines.push('### Propagation cuts');
   lines.push('');
   lines.push('A cut can only ever REMOVE a label, which is the direction that produced #3592,');
-  lines.push('so there is one and it is published here.');
+  lines.push('so there is one and its full measured effect is stated here — not just its');
+  lines.push('headline. Emptying it and re-deriving over the whole tree: **1,213 row');
+  lines.push('label-sets shrink** (Azure Monitor drops off 1,179, **Cosmos off 352**), **0');
+  lines.push('labels are added**, and **0 rows publish `—` solely because of it**. The test');
+  lines.push('caps the NUMBER of cuts at three; it does not bound what one cut can hide.');
   lines.push('');
   lines.push('| Module | Why its reach does not propagate to callers |');
   lines.push('| --- | --- |');
@@ -655,8 +673,10 @@ function main() {
   }
   // B2 — a client that talks to the network and cannot be named.
   const unnamed = unnamedClientModules(graph, backendReach, routeKeys);
-  // B3 — a seeded identifier with zero population, the `keyvault-client` shape.
-  const dead = unpopulatedSeeds(backendReach.origins);
+  // B3 — a seeded identifier NO ROUTE INHERITS, the `keyvault-client` shape.
+  // Population is REACH, not textual occurrence: a seed kept alive by one
+  // display string in a module no route reaches is the defect, not the control.
+  const dead = unpopulatedSeeds(new Set(rows.flatMap((r) => r.identifiers)));
 
   if (backendUnknowns.size || unnamed.length || dead.length) {
     for (const [id, info] of backendUnknowns) {
