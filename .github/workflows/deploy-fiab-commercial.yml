@@ -114,6 +114,11 @@ on:
 permissions:
   contents: read
   issues: write
+  # #3676 — the post-apply estate gate asks the Actions API which console-rolling
+  # run last actually SHIPPED an image. `contents: read` does not grant that;
+  # without this the gate would fail closed on every run and read as a broken
+  # deploy path rather than as a missing scope.
+  actions: read
 
 env:
   AZURE_CLOUD: AzureCloud
@@ -1208,6 +1213,213 @@ jobs:
             --zone-rg "$RG" \
             ${DEPLOY_SUB:+--zone-subscription "$DEPLOY_SUB"}
 
+      # ── THE APPLY WRITES THE REGISTRY, SO IT MUST HOLD THE LEASE (#3676) ──
+      #
+      # `az deployment sub create` submits a template that CARRIES
+      # Microsoft.ContainerRegistry/registries/<acr>. An ARM resource PUT
+      # re-asserts publicNetworkAccess and REPLACES the resource's tags — and
+      # the #2603 firewall lease IS four ARM tags on that resource. So the apply
+      # writes, unarbitrated, exactly the state the lease exists to arbitrate.
+      #
+      # MEASURED, 2026-08-17 (all times UTC, all from run logs):
+      #   07:05:39  this workflow's own what-if printed, for the registry:
+      #               - tags.loomAcrFwExpiresEpoch / HolderUrl / Owner / SinceUtc
+      #               ~ properties.networkRuleSet.defaultAction "Deny" => "Allow"
+      #   07:09:09  the apply starts
+      #   07:11:16  build run 32004290228 takes the lease, TTL 120m, opens ACR
+      #   07:17:06  last successful push (loom-mirroring)
+      #   07:17:23  first `denied: client with IP ... is not allowed access`
+      #   07:23:58  the apply finishes
+      #   07:35:07  that build's OWN release reads the owner as 'none'
+      # Five of six images never shipped. The lease did NOT expire (96 minutes
+      # were left) and no lane released it under the holder (the roll's last
+      # release was 07:10:43, this workflow's was 07:09:07). The apply erased it.
+      #
+      # THE MUTEX IS CLAIM-ONLY. This run is not pushing, so it must not make the
+      # registry public for a quarter of an hour; `--no-open` takes the lease and
+      # leaves the firewall exactly as it is.
+      #
+      # THE BUILD WINS TIES, DELIBERATELY. A bounded wait that expires FAILS this
+      # step, before the apply, naming the holder run. A nightly reconcile that
+      # skips a night costs nothing and runs again tomorrow; six image builds
+      # destroyed at minute 20 cost a merge. The wait is short (default 8m
+      # against the lease's own 25m default) because a build holds for up to
+      # 120m and waiting most of that out would burn a runner to no purpose.
+      #
+      # THE TTL IS SHORT. 45m covers an apply that has historically taken ~15m
+      # with room for the retry classes deploy-retry.mjs allows, and bounds how
+      # long a crashed reconcile can block the build lane. A crash is also swept
+      # by acr-firewall-sweeper.yml.
+      #
+      # WHAT THIS DOES NOT FIX: the apply still DELETES the loomAcrFw* tags,
+      # because the fix for that is in the ACR bicep module (it must carry the
+      # tags, or stop managing tags on that resource) and this lane cannot reach
+      # it. Holding the mutex means nobody is relying on those tags while they
+      # are wiped, which removes the harm; the wipe itself is tracked separately.
+      - name: Take the ACR firewall lease for the apply (claim-only — #3676)
+        id: acr_apply_lease
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          GH_TOKEN: ${{ github.token }}
+          LOOM_ACR_LEASE_TTL_MINUTES: '45'
+          LOOM_ACR_LEASE_WAIT_MINUTES: '8'
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR_ERR="$RUNNER_TEMP/acr-apply-lease.err"
+          : > "$ACR_ERR"
+          set +e
+          ACR=$(az acr list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+                  --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2> "$ACR_ERR")
+          ACR_RC=$?
+          set -e
+          ACR="$(printf '%s' "$ACR" | tr -d '\r')"
+          ACR="${ACR%%$'\n'*}"
+          [ "$ACR" = "None" ] && ACR=""
+
+          if [ $ACR_RC -ne 0 ]; then
+            DETAIL="$(tr '\n' ' ' < "$ACR_ERR")"
+            if node scripts/ci/deploy-classify.mjs --text "${DETAIL:0:400}" \
+                 --assert-signal config.resource-group-not-found > /dev/null; then
+              echo "::notice::acr-apply-lease: ARM answered ResourceGroupNotFound for ${RG} — from-scratch deploy, there is no registry to arbitrate over yet."
+              echo "held=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::acr-apply-lease: could NOT enumerate registries in ${RG}, so it is NOT established whether this apply is about to rewrite a registry that another run is pushing to. Refusing rather than repeating #3676. Detail: ${DETAIL:0:400}"
+            exit 1
+          fi
+          if [ -z "$ACR" ]; then
+            echo "::notice::acr-apply-lease: ARM ANSWERED and ${RG} holds no acrloom* registry — nothing to arbitrate."
+            echo "held=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "acr=$ACR" >> "$GITHUB_OUTPUT"
+          # No `|| true`, no `2>/dev/null`: a lease this run could not take is a
+          # refusal, and the script's own message names the holder and its URL.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR" --no-open \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
+          echo "held=true" >> "$GITHUB_OUTPUT"
+
+      # ── I-FRESH — RE-MEASURE THE RUNNING IMAGES, SECONDS BEFORE THE APPLY ──
+      #
+      # THE INCIDENT (#3676, measured 2026-08-17). `Resolve reconcile target`
+      # reads the tag every Container App is running and pins appImageTags to
+      # it, so the ARM PUT is a no-op for the image. That read was CORRECT. It
+      # was just taken SIXTEEN MINUTES before it was used, and loom-roll-and-
+      # validate.yml writes the same field:
+      #
+      #   07:03:40  [reconcile] PIN console loom-console:587ac3b8…  <- true then
+      #   07:10:56  revision 0000755 — loom-console:b9ca620b…       <- the roll
+      #   07:19:48  revision 0000756 — loom-console:587ac3b8…       <- this apply
+      #   07:27:26  deploy-fiab-commercial: SUCCESS
+      #
+      # A merged, rolled, cosign-verified, UAT-validated security fix (PR #3665,
+      # GHSA-v2g8-gp3r-rg4r) was reverted off production nine minutes after it
+      # went live, and both lanes reported success. The same shape is on record
+      # two days earlier: run 31870181337 pinned 8f8e569a at 06:44:38, roll
+      # 31870718201 moved the console to 2dda97b4, and this workflow's own
+      # deployment outputs at 07:26:33 record `"console": "8f8e569a…"`.
+      #
+      # WHY RE-PIN RATHER THAN REFUSE. Rolls land roughly once every 70 minutes
+      # and this job's read->apply window is ~20 of them, so refusing would
+      # redden the nightly reconcile about one night in three — and a guard that
+      # cries wolf is a guard that gets switched off. Re-pinning is also the
+      # SAFER write: the tag it applies is one the estate is running right now,
+      # which is a stronger guarantee than the image preflight's "the tag is in
+      # ACR". It refuses only on the two states it genuinely cannot resolve — an
+      # unreadable estate, and a key that was pinned and has become UNKNOWN.
+      #
+      # WHY THIS CAN RE-PIN AT ALL, THIS LATE. `commercial.bicepparam` resolves
+      # `readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v0.1')` when `az deployment
+      # sub create` COMPILES it — not when the args file was composed. So a
+      # $GITHUB_ENV write here reaches the apply while `deploy_args_file` stays
+      # byte-identical and its sha256 assertion below still holds. The what-if
+      # previewed the EARLIER tag for the image fields; that is stated in the log
+      # rather than glossed, because applying the earlier tag is the defect.
+      #
+      # IT DOES NOT CLOSE THE WINDOW, and does not claim to: a roll can still
+      # land while ARM is mid-apply. `Estate must not be BEHIND the last roll`
+      # below is what NOTICES that, which is the half #3676 says matters most.
+      # The step is named "narrows", not "closes", for that reason — an earlier
+      # draft was named "closes the roll race" while the paragraph above it
+      # correctly said it does not.
+      #
+      # IT RUNS *AFTER* THE ACR LEASE STEP, AND THAT ORDER IS LOAD-BEARING.
+      # With the re-pin first, the lease's bounded wait (up to 8 minutes) sat
+      # BETWEEN the measurement and the apply — and the lane it waits for is the
+      # roll lane, i.e. exactly the writer that invalidates the measurement. In
+      # roll run 32004219673 the lease release and the image write are the same
+      # second:
+      #     07:10:43.9909  released the ACR firewall lease ... VERIFIED re-locked
+      #     07:10:43.9960  Run az containerapp update -n loom-console ...
+      # So the old order could measure, wait up to 8 minutes for precisely the
+      # lane about to write, and then apply the pin that lane had just
+      # invalidated — a gap POSITIVELY CORRELATED with the race it exists to
+      # narrow. Taking the lease first makes the wait happen before the
+      # measurement instead of after it. Nothing is lost: the lease step
+      # consumes no output from this one.
+      #
+      # Decision logic + tests: scripts/ci/reconcile-policy.mjs
+      # (decidePinRefresh / comparePins) and __tests__/roll-race.test.mjs.
+      - name: Re-pin appImageTags to the RUNNING images (narrows the roll race — #3676)
+        id: repin
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
+          HUB_PRESENT: ${{ steps.reconcile.outputs.hub_present }}
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          CONTAINERS="$RUNNER_TEMP/repin-containers.json"
+          LIST_ERR="$RUNNER_TEMP/repin-list.err"
+
+          # Truncation is done with parameter expansion, never `| head -c`.
+          # GitHub runs `run:` under `bash -e`, and `pipefail` is set above, so
+          # `cmd | head -c N` kills `cmd` with SIGPIPE on any input longer than
+          # N and takes the whole STEP down — a guard that aborts on the error
+          # path it exists to report is a guard that never reports.
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+
+          # The measurement timestamp is recorded BEFORE the read, so the
+          # post-apply gate's "did a roll finish after we measured?" window is
+          # never narrower than the truth. An over-inclusive window costs one
+          # extra comparison; an under-inclusive one hides the incident.
+          MEASURED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "measured_at=$MEASURED_AT" >> "$GITHUB_OUTPUT"
+
+          if [ "${HUB_PRESENT}" != "true" ]; then
+            echo "::notice::pin-refresh: ${RG} does not exist, so no Container App is running and no pin can be stale. This is a from-scratch install; the apply CREATES the apps."
+            printf '[]' > "$CONTAINERS"
+            node scripts/ci/reconcile-policy.mjs pin-refresh \
+              --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
+            exit $?
+          fi
+
+          # stdout and stderr are captured SEPARATELY, never merged and never
+          # discarded: `2>&1` would splice az's warnings into the JSON, and
+          # `2>/dev/null` is what once turned a permission denial into an empty
+          # string and then into a false claim (deploy-integrity R7, #3090).
+          set +e
+          az containerapp list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --query '[].{name:name, image:properties.template.containers[0].image}' \
+            -o json > "$CONTAINERS" 2> "$LIST_ERR"
+          LIST_RC=$?
+          set -e
+          if [ $LIST_RC -ne 0 ]; then
+            node scripts/ci/reconcile-policy.mjs pin-refresh \
+              --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" \
+              --read-error "az containerapp list exited ${LIST_RC}: $(trim400 "$LIST_ERR")"
+            exit $?
+          fi
+          if [ -s "$LIST_ERR" ]; then
+            echo "::warning::pin-refresh: az wrote to stderr while SUCCEEDING; recording it rather than hiding it: $(trim400 "$LIST_ERR")"
+          fi
+          node scripts/ci/reconcile-policy.mjs pin-refresh \
+            --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
+
       - name: Provision (idempotent)
         id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
@@ -1292,6 +1504,178 @@ jobs:
           else
             echo "::notice::Console URL (VNet-internal): $CONSOLE_URL"
           fi
+
+      # Released the moment the apply is done, so the build lane waits minutes
+      # rather than the full TTL. `always()` because a FAILED apply has written
+      # the registry just as surely as a successful one, and the mutex must not
+      # outlive the writer. The script exits non-zero when it cannot VERIFY the
+      # registry locked (C24/#3088) and that failure is NOT swallowed here —
+      # `|| true` on this line would restore a green step over a publicly
+      # reachable registry.
+      - name: Release the ACR firewall lease taken for the apply (#3676)
+        if: always() && steps.acr_apply_lease.outputs.held == 'true'
+        env:
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          ACR: ${{ steps.acr_apply_lease.outputs.acr }}
+        run: |
+          set -uo pipefail
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
+
+      # ── I-BEHIND — DID THIS APPLY LEAVE THE ESTATE BEHIND THE LAST ROLL? ───
+      #
+      # THE DEFECT THIS EXISTS FOR is the SECOND half of #3676, and the half
+      # that mattered: not that the estate went backwards, but that NOTHING SAID
+      # SO. deploy-fiab-commercial reported success, loom-roll-and-validate
+      # reported success (its own gates all passed and its rollback step is
+      # `skipped`, correctly — it did roll, it was overwritten afterwards), and
+      # /build-marker.txt honestly reported an estate that had moved backwards.
+      # No gate anywhere compared the estate AFTER a deploy with what the last
+      # roll had established, so a backwards move produced no signal at all.
+      #
+      # This step is that comparison, and it is deliberately POST-APPLY: the
+      # re-pin above narrows the race but cannot close it (a roll can land while
+      # ARM is mid-apply), so the last line of defence has to be detection.
+      #
+      # THREE WAYS IT FAILS, ALL LOUD:
+      #   - the estate is not on the SHA the last effective roll shipped;
+      #   - loom-console's running image cannot be read;
+      #   - the roll history cannot be read, or the run that shipped cannot be
+      #     resolved to a SHA.
+      # The last two are UNKNOWN, and UNKNOWN fails the step. "I could not look"
+      # spent as "nothing is wrong" is the collapse deploy-integrity R7 forbids
+      # and the one this repo keeps re-finding.
+      #
+      # IT ASKS THE JOBS, NOT THE RUN. A roll run can conclude SUCCESS having
+      # rolled NOTHING — run 32006479915 (2026-08-17T07:35Z) is eight seconds
+      # long: `Should this roll proceed?` succeeded and `Roll image + validate
+      # live URL` was SKIPPED because the console image had not built. Reading
+      # the run conclusion would have named that run's SHA as "what the estate
+      # should be running" and hidden the very revert this gate is for.
+      #
+      # IT SCANS BOTH CONSOLE WRITERS. full-app-deploy-commercial.yml also rolls
+      # the console (from its own head SHA), so scanning only the roll lane
+      # would report a REGRESSION every time that lane is used — a false red is
+      # how a gate gets switched off.
+      #
+      # THIS STEP DOES NOT REPAIR. Restoring the image would make this workflow a
+      # THIRD writer of the field two lanes already race over, and attribution is
+      # the thing that was missing, not writes. The remediation it prints is the
+      # exact roll dispatch that puts the estate back.
+      #
+      # Decision logic + tests: scripts/ci/reconcile-policy.mjs
+      # (selectLastConsoleRoll / decideEstateRegression / parseRollRunTitle) and
+      # scripts/ci/__tests__/roll-race.test.mjs.
+      - name: Estate must not be BEHIND the last successful roll (#3676)
+        id: estate_behind
+        if: always() && steps.provision.conclusion != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          APPLIED_TAG: ${{ steps.repin.outputs.console_tag }}
+          MEASURED_AT: ${{ steps.repin.outputs.measured_at }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          TMP="$RUNNER_TEMP"
+          ROLLS="$TMP/console-rolls.json"
+          ROLL_ERR="$TMP/console-rolls.err"
+          SHOW_ERR="$TMP/console-show.err"
+          : > "$ROLL_ERR"
+          : > "$SHOW_ERR"
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+
+          # A run that wrote no console image cannot have moved the estate, and
+          # the verdict below says so on its own. Short-circuiting here keeps a
+          # whatif-only dispatch from making ~60 Actions API calls to answer a
+          # question its own first clause already answers. The step still RUNS
+          # and still prints a verdict — a skipped gate reads as a passed one.
+          if [ -z "${APPLIED_TAG:-}" ]; then
+            node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
+              --applied-tag "" \
+              --read-error "not read: this run applied no loom-console image tag" \
+              --rolls-error "not read: this run applied no loom-console image tag"
+            exit $?
+          fi
+
+          # ---- what is loom-console running RIGHT NOW? ------------------------
+          set +e
+          IMAGE=$(az containerapp show -n loom-console -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+                    --query "properties.template.containers[0].image" -o tsv 2> "$SHOW_ERR")
+          SHOW_RC=$?
+          set -e
+          IMAGE="$(printf '%s' "$IMAGE" | tr -d '\r')"
+          IMAGE="${IMAGE%%$'\n'*}"
+
+          # ---- which console-writing run last actually SHIPPED an image? ------
+          # `updated_at` on a COMPLETED run is when it finished; GitHub returns
+          # RFC3339 Z timestamps, so the jq string comparison against
+          # MEASURED_AT is a valid ordering.
+          : > "$TMP/rolls.ndjson"
+          ROLLS_OK=1
+          for WF in loom-roll-and-validate.yml full-app-deploy-commercial.yml; do
+            if ! RUNS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WF}/runs?status=completed&per_page=30" \
+                          --jq ".workflow_runs[] | {id:.id, workflow:\"${WF}\", title:.display_title, headSha:.head_sha, completedAt:.updated_at}" \
+                          2>> "$ROLL_ERR"); then
+              ROLLS_OK=0
+              break
+            fi
+            printf '%s\n' "$RUNS" >> "$TMP/rolls.ndjson"
+          done
+
+          if [ "$ROLLS_OK" = "1" ]; then
+            : > "$TMP/rolls-with-jobs.ndjson"
+            CANDIDATES="$(jq -c --arg since "${MEASURED_AT:-}" 'select(.completedAt > $since)' "$TMP/rolls.ndjson")"
+            while IFS= read -r LINE; do
+              if [ -z "$LINE" ]; then
+                continue
+              fi
+              RID="$(printf '%s' "$LINE" | jq -r '.id')"
+              WFN="$(printf '%s' "$LINE" | jq -r '.workflow')"
+              case "$WFN" in
+                loom-roll-and-validate.yml)     JOBNAME='Roll image + validate live URL' ;;
+                full-app-deploy-commercial.yml) JOBNAME='Roll Container Apps to new image' ;;
+                *) JOBNAME='__no_such_job__' ;;
+              esac
+              # An empty answer means NO job of that name — a rename, or a shape
+              # this gate does not understand. It becomes null (UNKNOWN), never
+              # "did not roll": that collapse is the whole bug class.
+              #
+              # The job's `completed_at` is captured alongside the conclusion
+              # because the RUN's `updated_at` trails the actual
+              # `az containerapp update` by minutes — 4m45s on the incident
+              # night (update 07:10:44, run completed 07:15:30). Ordering two
+              # close writers by the run can name the wrong "latest".
+              if ! JOB=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RID}/jobs?per_page=100" \
+                            --jq "[.jobs[] | select(.name == \"${JOBNAME}\") | {c:.conclusion, t:.completed_at}] | first // {}" \
+                            2>> "$ROLL_ERR"); then
+                ROLLS_OK=0
+                break
+              fi
+              printf '%s' "$LINE" \
+                | jq -c --argjson j "${JOB:-{\}}" '. + {jobConclusion: ($j.c // null), jobCompletedAt: ($j.t // null)}' \
+                >> "$TMP/rolls-with-jobs.ndjson"
+            done <<< "$CANDIDATES"
+          fi
+
+          if [ "$ROLLS_OK" = "1" ]; then
+            jq -s '.' "$TMP/rolls-with-jobs.ndjson" > "$ROLLS"
+            ROLL_ARGS=(--rolls "$ROLLS")
+          else
+            ROLL_ARGS=(--rolls-error "gh could not read the console-rolling workflow runs: $(trim400 "$ROLL_ERR")")
+          fi
+
+          if [ $SHOW_RC -ne 0 ] || [ -z "$IMAGE" ]; then
+            node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
+              --applied-tag "${APPLIED_TAG}" \
+              --read-error "az containerapp show -n loom-console -g ${RG} exited ${SHOW_RC}: $(trim400 "$SHOW_ERR")" \
+              "${ROLL_ARGS[@]}"
+            exit $?
+          fi
+          node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
+            --applied-tag "${APPLIED_TAG}" \
+            --estate-image "$IMAGE" \
+            "${ROLL_ARGS[@]}"
 
       - name: Export bootstrap coordinates (for the chained bootstrap)
         id: bootstrap_coords

@@ -13,6 +13,17 @@ name: loom-roll-and-validate
 # Both deployed exactly the SHA they were given; both were read as deploying
 # the wrong image, and #2963 was filed (and then auto-closed, see the
 # auto-close step) off that misreading. The run title now states the truth.
+#
+# THE TITLE IS NOW A LOAD-BEARING CONTRACT, NOT JUST A LABEL (#3676).
+# deploy-fiab-commercial.yml's post-apply gate reads `display_title` to answer
+# "what did the last effective roll actually ship?", because for a
+# `workflow_run` run there is nowhere else the rolled SHA exists in the Actions
+# API — `head_sha` is the default-branch head, as the paragraph above records.
+# The shape it parses is
+#     roll <tag> (build-triggered)  |  roll <tag> (manual dispatch)
+# in scripts/ci/reconcile-policy.mjs (`parseRollRunTitle`). Reword this line and
+# that gate reports UNKNOWN and fails closed rather than passing quietly; the
+# pairing is asserted by scripts/ci/__tests__/roll-race.test.mjs.
 run-name: >-
   roll ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.image_tag }}
   (${{ github.event_name == 'workflow_run' && 'build-triggered' || 'manual dispatch' }})
@@ -317,6 +328,16 @@ jobs:
           fi
 
   roll-and-validate:
+    # THIS JOB'S NAME IS ALSO A CONTRACT (#3676). A roll run can conclude
+    # SUCCESS having rolled NOTHING — when `gate` sets proceed=false this job is
+    # SKIPPED and the RUN still reports success. Measured 2026-08-17: run
+    # 32006479915 is eight seconds long, `Should this roll proceed?` succeeded,
+    # this job was skipped, conclusion `success`. So "did the estate actually
+    # get rolled?" can only be answered by THIS JOB's conclusion, and
+    # deploy-fiab-commercial.yml's post-apply gate asks for it by name via the
+    # jobs API. Rename it and that gate reports UNKNOWN and fails closed rather
+    # than treating a skipped roll as a shipped one; the pairing is asserted by
+    # scripts/ci/__tests__/roll-race.test.mjs.
     name: Roll image + validate live URL
     runs-on: ubuntu-latest
     needs: gate

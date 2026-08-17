@@ -31,6 +31,21 @@ mkdir -p "$WORK/bin"
 export STATE="$WORK/state.env"
 export PATH="$WORK/bin:$PATH"
 
+# CONTAIN THE SCRIPT'S OWN SIDE EFFECTS (#3676 review).
+#
+# acr-firewall-lease.sh now records ACR_LEASE_STATE in $GITHUB_ENV / $GITHUB_OUTPUT
+# so an acquire in one step (or job) can tell a later release whether it ever
+# held the lease. This file drives that script with GITHUB_ACTIONS already true
+# under loom-guardrails.yml, so without redirecting them it writes its FIXTURE
+# state into the real job environment — measured: 10 lines, ending
+# ACR_LEASE_STATE=held, injected into every subsequent step of the guardrails
+# job. Nothing consumes it there today, which is precisely why it would have sat
+# unnoticed until something did.
+export GITHUB_ENV="$WORK/gh_env"
+export GITHUB_OUTPUT="$WORK/gh_output"
+: > "$GITHUB_ENV"
+: > "$GITHUB_OUTPUT"
+
 # ── fake az ───────────────────────────────────────────────────────────────────
 cat > "$WORK/bin/az" <<'FAKEAZ'
 #!/usr/bin/env bash
