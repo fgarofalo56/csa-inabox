@@ -904,12 +904,18 @@ export const AUTH_SHAPED_EXEMPT = new Map([
   // ── read at their definitions while landing #3625 ─────────────────────────
   [
     'guardAdxRequest',
-    "app/api/adx/_shared.ts — session + `kustoConfigGate()` + best-effort database resolution. It does NOT " +
-      'refuse a caller who names an item they do not own: `loadKustoItem` returns null for that case and ' +
-      '`resolveDatabase(null)` falls through to `defaultDatabase()`, so the request proceeds against the ' +
-      'deployment default DB. No cross-tenant read (the other tenant\'s database name is never reached) and ' +
-      'no per-item authorization decision either — so these 27 ADX-navigator routes are `session-only`. ' +
-      'They published `owner-scoped` before #3625 because the OLD hand list carried the NAME `guardAdxRequest`.',
+    'app/api/adx/_shared.ts — RETAINED FOR THE EMBEDDED CONTROL, not for the real helper. ' +
+      'HISTORY, because this entry asserted the opposite until 2026-08-17 and the generated inventory ' +
+      'repeated it to humans: the real wrapper used to resolve its database with ' +
+      '`loadKustoItem(itemId, kql-database, oid)` -> `resolveDatabase(item)` and NEVER null-checked, so a ' +
+      'caller naming an item they could not reach silently proceeded against the deployment default DB. ' +
+      'That was GHSA-v2g8-gp3r-rg4r finding 1, and it is FIXED — the wrapper now runs `authorizeItemWorkspace` ' +
+      'and fails closed with a 404. The derivation therefore reaches a seeded root authorizer through its ' +
+      'BODY and resolves before U2 is ever consulted, which is why the eleven adx/* navigator routes now ' +
+      'publish `owner-scoped` on evidence rather than on this name. This entry is consequently INERT for ' +
+      'the shipped code and is kept only because the exempt list is keyed by NAME: the embedded control ' +
+      '"session reached through an unnamed wrapper" builds a SYNTHETIC same-named wrapper that performs no ' +
+      'authorization, and deleting this entry fails that control as `unknown`.',
   ],
   [
     'admit',
@@ -1474,9 +1480,17 @@ export const CONTROLS = [
       ),
     },
     // `guardAdxRequest` is auth-SHAPED, so U2 would fire — except it is recorded
-    // in AUTH_SHAPED_EXEMPT, having been READ at its definition (it degrades to
-    // the default database rather than refusing). So this control also proves the
-    // exempt list is wired: delete that entry and this control fails as `unknown`.
+    // in AUTH_SHAPED_EXEMPT. So this control also proves the exempt list is
+    // wired: delete that entry and this control fails as `unknown`.
+    //
+    // THE WRAPPER ABOVE IS SYNTHETIC AND DELIBERATELY DOES NOT AUTHORIZE. Do not
+    // read it as a description of the shipped helper. The real
+    // `app/api/adx/_shared.ts::guardAdxRequest` used to degrade to the default
+    // database rather than refusing — that was GHSA-v2g8-gp3r-rg4r finding 1 —
+    // and it now runs `authorizeItemWorkspace` and fails closed. What this
+    // control fixes in place is the SESSION signal reaching a route through a
+    // wrapper `SESSION_RE` does not name; the no-authorization body is what
+    // makes it a clean test of that one axis.
     expect: { owner: false, session: true, unknown: false },
   },
   // ── UNKNOWN, not a guess ────────────────────────────────────────────────

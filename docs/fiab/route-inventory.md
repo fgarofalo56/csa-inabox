@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 667 |
-| Owner-scoped | 654 |
+| Session-only | 656 |
+| Owner-scoped | 665 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -338,17 +338,17 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `adx/anomaly/route.ts` | POST | admin |  | ADX |
-| `adx/continuous-exports/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/external-tables/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/functions/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/ingestion-mappings/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/materialized-views/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/overview/route.ts` | GET | session-only |  | ADX |
-| `adx/policies/route.ts` | GET POST | session-only |  | ADX |
-| `adx/policy-authoring/route.ts` | POST | session-only |  | ADX |
-| `adx/principals/route.ts` | GET POST | session-only |  | ADX |
-| `adx/rls/route.ts` | GET POST | session-only |  | ADX |
-| `adx/tables/route.ts` | GET POST PATCH DELETE | session-only |  | ADX |
+| `adx/continuous-exports/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/external-tables/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/functions/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/ingestion-mappings/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/materialized-views/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/overview/route.ts` | GET | owner-scoped |  | ADX |
+| `adx/policies/route.ts` | GET POST | owner-scoped |  | ADX |
+| `adx/policy-authoring/route.ts` | POST | owner-scoped |  | ADX |
+| `adx/principals/route.ts` | GET POST | owner-scoped |  | ADX |
+| `adx/rls/route.ts` | GET POST | owner-scoped |  | ADX |
+| `adx/tables/route.ts` | GET POST PATCH DELETE | owner-scoped |  | ADX |
 
 ## agents
 
@@ -2355,7 +2355,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 
 ## Authorization resolvers (derived)
 
-171 function(s) across 78 module(s) reach an owner / workspace-ACL
+172 function(s) across 79 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2363,6 +2363,7 @@ authorization surface moved.
 | Module | Resolvers |
 | --- | --- |
 | `apps/fiab-console/app/api/admin/workspaces/[id]/networking/_gate.ts` | `authorizeNetworking` |
+| `apps/fiab-console/app/api/adx/_shared.ts` | `guardAdxRequest` |
 | `apps/fiab-console/app/api/data-products/_lib/access-gate.ts` | `resolveDataProductDataAccess` |
 | `apps/fiab-console/app/api/deployment-pipelines/loom/_lib/pipeline-store.ts` | `loadPipeline`, `ownedWorkspace` |
 | `apps/fiab-console/app/api/git-integration/_lib/ctx.ts` | `loadGitCtx` |
@@ -2452,6 +2453,6 @@ silently downgrading the route.
 | `admit` | lib/azure/capacity-broker-client.ts — CAPACITY admission (an LCU budget broker POST /admit), not caller authorization. The name collides with the `admit*` family in items/_lib/sql-server-scope.ts, which bounds a TARGET rather than a caller and is likewise not an owner check. |
 | `authorizeTrinoCatalogs` | lib/azure/trino-authz.ts — a pure decision over (referenced, allowed, configured) catalog sets. It authorizes WHICH FEDERATION CATALOGS a statement may touch, a different axis from item ownership; the caller's allowed set is computed by the route. Real authorization, but not the owner/workspace-ACL check this column reports. |
 | `enforceCapability` | capability gate — classified by the admin column |
-| `guardAdxRequest` | app/api/adx/_shared.ts — session + `kustoConfigGate()` + best-effort database resolution. It does NOT refuse a caller who names an item they do not own: `loadKustoItem` returns null for that case and `resolveDatabase(null)` falls through to `defaultDatabase()`, so the request proceeds against the deployment default DB. No cross-tenant read (the other tenant's database name is never reached) and no per-item authorization decision either — so these 27 ADX-navigator routes are `session-only`. They published `owner-scoped` before #3625 because the OLD hand list carried the NAME `guardAdxRequest`. |
+| `guardAdxRequest` | app/api/adx/_shared.ts — RETAINED FOR THE EMBEDDED CONTROL, not for the real helper. HISTORY, because this entry asserted the opposite until 2026-08-17 and the generated inventory repeated it to humans: the real wrapper used to resolve its database with `loadKustoItem(itemId, kql-database, oid)` -> `resolveDatabase(item)` and NEVER null-checked, so a caller naming an item they could not reach silently proceeded against the deployment default DB. That was GHSA-v2g8-gp3r-rg4r finding 1, and it is FIXED — the wrapper now runs `authorizeItemWorkspace` and fails closed with a 404. The derivation therefore reaches a seeded root authorizer through its BODY and resolves before U2 is ever consulted, which is why the eleven adx/* navigator routes now publish `owner-scoped` on evidence rather than on this name. This entry is consequently INERT for the shipped code and is kept only because the exempt list is keyed by NAME: the embedded control "session reached through an unnamed wrapper" builds a SYNTHETIC same-named wrapper that performs no authorization, and deleting this entry fails that control as `unknown`. |
 | `requireDomainRole` | domain-role gate — classified by the admin column |
 | `requireTenantAdmin` | tenant-admin gate — classified by the admin column |
