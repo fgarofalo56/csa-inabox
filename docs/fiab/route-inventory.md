@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 672 |
-| Owner-scoped | 649 |
+| Session-only | 661 |
+| Owner-scoped | 660 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -338,17 +338,17 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `adx/anomaly/route.ts` | POST | admin |  | ADX |
-| `adx/continuous-exports/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/external-tables/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/functions/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/ingestion-mappings/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/materialized-views/route.ts` | GET POST DELETE | session-only |  | ADX |
-| `adx/overview/route.ts` | GET | session-only |  | ADX |
-| `adx/policies/route.ts` | GET POST | session-only |  | ADX |
-| `adx/policy-authoring/route.ts` | POST | session-only |  | ADX |
-| `adx/principals/route.ts` | GET POST | session-only |  | ADX |
-| `adx/rls/route.ts` | GET POST | session-only |  | ADX |
-| `adx/tables/route.ts` | GET POST PATCH DELETE | session-only |  | ADX |
+| `adx/continuous-exports/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/external-tables/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/functions/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/ingestion-mappings/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/materialized-views/route.ts` | GET POST DELETE | owner-scoped |  | ADX |
+| `adx/overview/route.ts` | GET | owner-scoped |  | ADX |
+| `adx/policies/route.ts` | GET POST | owner-scoped |  | ADX |
+| `adx/policy-authoring/route.ts` | POST | owner-scoped |  | ADX |
+| `adx/principals/route.ts` | GET POST | owner-scoped |  | ADX |
+| `adx/rls/route.ts` | GET POST | owner-scoped |  | ADX |
+| `adx/tables/route.ts` | GET POST PATCH DELETE | owner-scoped |  | ADX |
 
 ## agents
 
@@ -2355,7 +2355,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 
 ## Authorization resolvers (derived)
 
-171 function(s) across 78 module(s) reach an owner / workspace-ACL
+172 function(s) across 79 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2363,6 +2363,7 @@ authorization surface moved.
 | Module | Resolvers |
 | --- | --- |
 | `apps/fiab-console/app/api/admin/workspaces/[id]/networking/_gate.ts` | `authorizeNetworking` |
+| `apps/fiab-console/app/api/adx/_shared.ts` | `guardAdxRequest` |
 | `apps/fiab-console/app/api/data-products/_lib/access-gate.ts` | `resolveDataProductDataAccess` |
 | `apps/fiab-console/app/api/deployment-pipelines/loom/_lib/pipeline-store.ts` | `loadPipeline`, `ownedWorkspace` |
 | `apps/fiab-console/app/api/git-integration/_lib/ctx.ts` | `loadGitCtx` |
