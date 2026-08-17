@@ -46,27 +46,28 @@
  * shaped like real `az containerapp list` / Actions API output, and the CLI is
  * driven through its real entrypoint rather than through a copy of its logic.
  *
- * ── MUTATION RECORD (MEASURED, not predicted; baseline 34 pass / 0 fail) ────
+ * ── MUTATION RECORD ────────────────────────────────────────────────────────
  *
- * Each mutation was applied with a byte-delta assertion (the repo is checked
- * out CRLF, so every read here normalises to LF first — a multi-line needle
- * with a literal newline matches NOTHING against the on-disk bytes and a
- * "mutation" that never applied proves the opposite of what it looks like).
+ * Kept in the PR, not here. An earlier revision of this header carried a table
+ * (M1-M7, "baseline 34 pass") that was already stale against the shipped suite
+ * within a day — wrong baseline, wrong red counts, and one entry describing a
+ * mutation that had been replaced. A mutation record that drifts is worse than
+ * none: it reads as evidence while asserting numbers nobody re-measured.
  *
- *   M1  decideEstateRegression: return {verdict:'ok'} when estateTag !== the
- *       roll's SHA — i.e. the gate that cannot fail          -> 4 RED
- *   M2  decideEstateRegression: treat an unreadable estate as 'ok'
- *       (UNKNOWN collapsed into a pass)                       -> 2 RED
- *   M3  selectLastConsoleRoll: take the last run by conclusion rather than by
- *       JOB conclusion — the 32006479915 shape                -> 2 RED
- *   M4  decidePinRefresh: drop the re-pin and keep the stale pins
- *                                                             -> 3 RED
- *   M5  decidePinRefresh: proceed when the fresh read failed   -> 2 RED
- *   M6  rename the roll lane's `Roll image + validate live URL` job
- *                                                             -> 1 RED
- *   M7  delete the deploy lane's post-apply gate step          -> 3 RED
+ * What belongs here is the METHOD, which does not drift:
  *
- * The four CONTROL tests at the bottom stayed GREEN under all seven.
+ *   - single-line needles only. The repo is checked out CRLF, so a needle
+ *     carrying a literal newline matches NOTHING — producing a "mutation" that
+ *     never applied and a green run that proves the opposite of what it looks
+ *     like. Every read in this file normalises to LF first (`readNorm`).
+ *   - each mutation is asserted APPLIED by byte delta before the suite runs,
+ *     and the file is restored and confirmed byte-identical by sha256 after.
+ *   - a mutation that turns out to be a NO-OP is discarded, not counted as
+ *     coverage. One did: injecting an export into the CLI's refusal path emits
+ *     nothing, because `repin` is already {} there.
+ *   - "delete the step" and "move the step" are DIFFERENT mutations and are
+ *     measured separately. Conflating them overstates the controls exactly
+ *     where ordering is what matters.
  *
  * Run: node --test scripts/ci/__tests__/roll-race.test.mjs
  * (Discovered automatically by scripts/ci/check-node-test-suites.mjs, which the
@@ -369,6 +370,78 @@ test('a run that applied NO console tag cannot have regressed, and says why', ()
   const v = decideEstateRegression({ appliedTag: '', estateTag: STALE, rollSelection: selectLastConsoleRoll(null) });
   assert.equal(v.verdict, 'ok');
   assert.match(v.reason, /applied no loom-console image tag/);
+});
+
+test('an unattributable estate tag is DRIFTED, not "went backwards", and names no rollback target', () => {
+  // The realistic producer: a roll whose `az containerapp update` landed after
+  // the apply but whose RUN has not completed, so it is not in the population.
+  // The estate is then AHEAD. Calling that a regression and printing "roll to
+  // <last completed roll>" would move a healthy estate BACKWARDS — the gate
+  // causing the defect it exists to catch.
+  const sel = selectLastConsoleRoll([
+    {
+      id: 7, workflow: 'loom-roll-and-validate.yml', title: `roll ${STALE} (build-triggered)`,
+      completedAt: '2026-08-17T07:15:30Z', jobCompletedAt: '2026-08-17T07:10:44Z', jobConclusion: 'success',
+    },
+  ]);
+  const v = decideEstateRegression({ appliedTag: 'aaaa'.padEnd(40, '0'), estateTag: ROLLED, rollSelection: sel });
+  assert.equal(v.verdict, 'drifted');
+  assert.doesNotMatch(v.reason, /WENT BACKWARDS/, 'no direction may be asserted for a state it cannot attribute');
+  assert.match(v.reason, /NO DIRECTION IS BEING CLAIMED/);
+  assert.equal(v.rollForwardTo, undefined, 'a drifted verdict must not carry a rollback target');
+});
+
+test('the CLI prints a rollback target ONLY for an attributable regression', () => {
+  const rolls = [{
+    id: 8, workflow: 'loom-roll-and-validate.yml', title: `roll ${ROLLED} (build-triggered)`,
+    completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
+  }];
+  const regression = runCli(
+    ['assert-estate-not-behind-roll', '--applied-tag', STALE,
+      '--estate-image', `acr.azurecr.io/loom-console:${STALE}`, '--rolls', 'r.json'],
+    { files: { 'r.json': rolls } },
+  );
+  assert.equal(regression.code, 1);
+  assert.match(regression.logs, new RegExp(`image_tag=${ROLLED}`),
+    'an attributable regression names the exact SHA to roll forward to');
+
+  const drifted = runCli(
+    ['assert-estate-not-behind-roll', '--applied-tag', STALE,
+      '--estate-image', `acr.azurecr.io/loom-console:${'c'.repeat(40)}`, '--rolls', 'r.json'],
+    { files: { 'r.json': rolls } },
+  );
+  assert.equal(drifted.code, 1, 'drift still fails closed');
+  assert.match(drifted.logs, /ESTATE DRIFT/);
+  assert.doesNotMatch(drifted.logs, /image_tag=/,
+    'drift must name NO rollback target — the estate may be ahead, and rolling to the last completed roll ' +
+      'would move it backwards');
+});
+
+test('selectLastConsoleRoll orders by the JOB completion, not the run finishing', () => {
+  // On the incident night the roll's image write and its run completion were
+  // 4m45s apart (update 07:10:44, run done 07:15:30). Ordering by the run can
+  // therefore name the wrong "latest" when two writers finish close together.
+  const sel = selectLastConsoleRoll([
+    {
+      id: 'wrote-last', workflow: 'loom-roll-and-validate.yml', title: `roll ${ROLLED} (build-triggered)`,
+      completedAt: '2026-08-17T07:15:30Z', jobCompletedAt: '2026-08-17T07:14:00Z', jobConclusion: 'success',
+    },
+    {
+      id: 'finished-last', workflow: 'loom-roll-and-validate.yml', title: `roll ${STALE} (build-triggered)`,
+      completedAt: '2026-08-17T07:16:00Z', jobCompletedAt: '2026-08-17T07:10:44Z', jobConclusion: 'success',
+    },
+  ]);
+  assert.equal(sel.status, 'found');
+  assert.equal(sel.roll.id, 'wrote-last',
+    'the run that finished last is not necessarily the one that WROTE last');
+});
+
+test('selectLastConsoleRoll falls back to the run time when no job time is supplied', () => {
+  const sel = selectLastConsoleRoll([
+    { id: 'a', workflow: 'loom-roll-and-validate.yml', title: `roll ${STALE} (build-triggered)`, completedAt: '2026-08-17T07:00:00Z', jobConclusion: 'success' },
+    { id: 'b', workflow: 'loom-roll-and-validate.yml', title: `roll ${ROLLED} (build-triggered)`, completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success' },
+  ]);
+  assert.equal(sel.roll.id, 'b', 'a caller that cannot supply the job time must still get an answer');
 });
 
 // ---------------------------------------------------------------------------
@@ -1012,7 +1085,9 @@ function runLease(args, { state = {}, env = {} } = {}) {
     const s = { PNA: 'Disabled', DA: 'Deny', OWNER: '', EXPIRES: '', URL: '', TAGWRITE: 'ok', ...state };
     writeFileSync(statePath, Object.entries(s).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
     const ghEnv = join(dir, 'github_env');
+    const ghOut = join(dir, 'github_output');
     writeFileSync(ghEnv, '');
+    writeFileSync(ghOut, '');
     const res = spawnSync('bash', [toPosixPath(LEASE_SCRIPT), ...args], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
@@ -1032,6 +1107,7 @@ function runLease(args, { state = {}, env = {} } = {}) {
         STATE: toPosixPath(statePath),
         GITHUB_ACTIONS: 'true',
         GITHUB_ENV: toPosixPath(ghEnv),
+        GITHUB_OUTPUT: toPosixPath(ghOut),
         GITHUB_REPOSITORY: 'acme/csa-inabox',
         GITHUB_RUN_ID: '999',
         LOOM_ACR_LEASE_OPEN_SECONDS: '0',
@@ -1056,6 +1132,7 @@ function runLease(args, { state = {}, env = {} } = {}) {
       state: after,
       calls,
       ghEnv: readFileSync(ghEnv, 'utf8'),
+      ghOut: readFileSync(ghOut, 'utf8'),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1094,10 +1171,40 @@ test('LEASE: --no-open still REFUSES behind a live foreign holder (bounded, loud
 });
 
 test('LEASE: acquire PERSISTS its state to $GITHUB_ENV so a later STEP can read it', { skip: shellSkip }, () => {
-  const r = runLease(['acquire', '--acr', 'acrtest', '--no-open'], { env: { LOOM_ACR_LEASE_OWNER: 'deployRun' } });
+  const r = runLease(['acquire', '--acr', 'acrtest'], { env: { LOOM_ACR_LEASE_OWNER: 'buildRun' } });
   assert.match(r.ghEnv, /^ACR_LEASE_STATE=held$/m,
     'acquire and release run in different shells in every CI caller; without this the state is always back at ' +
       'its default by release time and "my lease was erased" cannot be told from "I never had one"');
+});
+
+test('LEASE: acquire PUBLISHES lease_state to $GITHUB_OUTPUT — the cross-JOB hand-off (BLOCKER)', { skip: shellSkip }, () => {
+  // $GITHUB_ENV reaches SUBSEQUENT steps only, and this script is a CHILD of
+  // the step that calls it. The build lane's step used to do
+  //     bash acr-firewall-lease.sh acquire ...
+  //     echo "lease_state=${ACR_LEASE_STATE:-none}" >> "$GITHUB_OUTPUT"
+  // which reads its OWN shell, where the variable was never set — measured
+  // against the repo's az stub, the lease was HELD and the output said `none`.
+  // The whole cross-job hand-off was inert and the erased-lease branch was
+  // unreachable in the one workflow that needed it. The previous contract test
+  // asserted only that three YAML strings EXISTED, which is presence, not
+  // enforcement — this repo's own recurring class.
+  const r = runLease(['acquire', '--acr', 'acrtest'], { env: { LOOM_ACR_LEASE_OWNER: 'buildRun' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.ghOut, /^lease_state=held$/m,
+    `the step output must carry the REAL state; it read:\n${r.ghOut || '(empty)'}`);
+  assert.doesNotMatch(r.ghOut, /^lease_state=none$/m);
+});
+
+test('LEASE: claim-only publishes a DISTINCT state, exactly once', { skip: shellSkip }, () => {
+  const r = runLease(['acquire', '--acr', 'acrtest', '--no-open'], { env: { LOOM_ACR_LEASE_OWNER: 'deployRun' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.ghOut, /^lease_state=held-claim-only$/m);
+  assert.equal(
+    (r.ghOut.match(/^lease_state=/gm) || []).length, 1,
+    `lease_state was written ${(r.ghOut.match(/^lease_state=/gm) || []).length} times; a duplicated output key ` +
+      `leaves the result depending on undocumented runner precedence. Output was:\n${r.ghOut}`,
+  );
+  assert.equal((r.ghEnv.match(/^ACR_LEASE_STATE=/gm) || []).length, 1);
 });
 
 test('LEASE: acquire must NOT export LOOM_ACR_LEASE_OWNER — that hijacks every later lease call', { skip: shellSkip }, () => {
@@ -1125,6 +1232,127 @@ test('LEASE: a holder whose lease was ERASED says so, and names the ARM re-rende
   assert.match(r.out, /#3676/);
   assert.match(r.out, /is not allowed access/, 'it must connect the cause to the symptom the operator actually saw');
   assert.equal(r.state.PNA, 'Disabled', 'and it must still fail closed');
+});
+
+test('LEASE: a CLAIM-ONLY holder does NOT accuse itself — its own apply erased the lease', { skip: shellSkip }, () => {
+  // The deploy takes the claim-only lease, its apply deletes the loomAcrFw*
+  // tags (#3681), and its release then sees owner=''. Emitting the foreign-
+  // erasure ::error:: there would put a red annotation on EVERY healthy nightly
+  // whose remediation is "investigate this run" — cry-wolf, and an R7 violation
+  // because the code knows exactly who did it.
+  const r = runLease(['release', '--acr', 'acrtest'], {
+    state: { PNA: 'Disabled', DA: 'Deny', OWNER: 'none', EXPIRES: '0' },
+    env: { LOOM_ACR_LEASE_OWNER: 'deployRun', ACR_LEASE_STATE: 'held-claim-only' },
+  });
+  assert.doesNotMatch(r.out, /WAS ERASED WHILE THIS PROCESS HELD IT/,
+    'a claim-only holder must not report its own expected tag deletion as a foreign erasure');
+  assert.doesNotMatch(r.out, /::error::.*lease/i, 'and must not emit an error annotation for it at all');
+  assert.match(r.out, /THIS RUN'S OWN ARM apply/);
+  assert.match(r.out, /#3681/, 'it must point at the tracked cause rather than at an investigation');
+  assert.equal(r.state.PNA, 'Disabled', 'and it must still fail closed');
+});
+
+test('LEASE: CHAIN — acquire --no-open then release, carrying the state acquire actually produced', { skip: shellSkip }, () => {
+  // The two halves are covered separately above, which leaves the LINK between
+  // them uncovered: acquire could persist one spelling and release check
+  // another and both tests would still pass. This runs the real pair against
+  // ONE registry, feeds release exactly the ACR_LEASE_STATE that acquire wrote
+  // to $GITHUB_ENV, and simulates the apply in between by wiping the tags the
+  // way an ARM PUT does.
+  const dir = mkdtempSync(join(tmpdir(), 'acr-chain-'));
+  try {
+    const binDir = join(dir, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, 'az'), AZ_LEASE_STUB);
+    chmodSync(join(binDir, 'az'), 0o755);
+    const statePath = join(dir, 'state.env');
+    const write = (s) => writeFileSync(statePath, Object.entries(s).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
+    write({ PNA: 'Disabled', DA: 'Deny', OWNER: '', EXPIRES: '', URL: '', TAGWRITE: 'ok' });
+    const ghEnv = join(dir, 'gh_env');
+    writeFileSync(ghEnv, '');
+
+    const base = {
+      ...process.env,
+      ACR_LEASE_STATE: '',
+      LOOM_ACR_LEASE_OWNER: 'deployRun',
+      PATH: `${binDir}${delimiter}${process.env.PATH}`,
+      STATE: toPosixPath(statePath),
+      GITHUB_ACTIONS: 'true',
+      GITHUB_ENV: toPosixPath(ghEnv),
+      GITHUB_OUTPUT: toPosixPath(join(dir, 'gh_out')),
+      LOOM_ACR_LEASE_OPEN_SECONDS: '0',
+      LOOM_ACR_LEASE_SETTLE_SECONDS: '0',
+      LOOM_ACR_LEASE_WAIT_MINUTES: '0',
+      LOOM_ACR_CLOSE_ATTEMPTS: '2',
+      LOOM_ACR_CLOSE_RETRY_SECONDS: '0',
+    };
+    writeFileSync(join(dir, 'gh_out'), '');
+
+    const acq = spawnSync('bash', [toPosixPath(LEASE_SCRIPT), 'acquire', '--acr', 'acrtest', '--no-open'],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: base });
+    assert.equal(acq.status, 0, `${acq.stdout}${acq.stderr}`);
+
+    // The state acquire actually recorded — read, not assumed.
+    const envText = readFileSync(ghEnv, 'utf8');
+    const carried = /^ACR_LEASE_STATE=(.+)$/m.exec(envText);
+    assert.ok(carried, `acquire recorded no state; $GITHUB_ENV was:\n${envText}`);
+
+    // The apply: an ARM PUT replaces the resource's tags (#3681).
+    write({ PNA: 'Disabled', DA: 'Deny', OWNER: '', EXPIRES: '', URL: '', TAGWRITE: 'ok' });
+
+    const rel = spawnSync('bash', [toPosixPath(LEASE_SCRIPT), 'release', '--acr', 'acrtest'],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...base, ACR_LEASE_STATE: carried[1] } });
+    const out = `${rel.stdout ?? ''}${rel.stderr ?? ''}`;
+    assert.equal(rel.status, 0, out);
+    assert.doesNotMatch(
+      out, /WAS ERASED WHILE THIS PROCESS HELD IT/,
+      `the claim-only holder accused itself. acquire recorded ${JSON.stringify(carried[1])}; release did not ` +
+        'recognise it, so the two halves disagree about the spelling.',
+    );
+    assert.match(out, /THIS RUN'S OWN ARM apply/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('LEASE: the lease self-test does not write into the CALLER\'s $GITHUB_ENV', { skip: shellSkip }, () => {
+  // scripts/ci/test-acr-firewall-lease.sh runs inside loom-guardrails.yml with
+  // GITHUB_ACTIONS already true. Once the lease script started recording
+  // ACR_LEASE_STATE, the self-test's FIXTURE state began leaking into the real
+  // job environment — 10 lines, ending ACR_LEASE_STATE=held, injected into every
+  // later step. Nothing consumed it, which is exactly why it would have sat
+  // there until something did. This is the control for that containment; without
+  // it the fix is a line of code with nothing watching it.
+  const dir = mkdtempSync(join(tmpdir(), 'acr-selftest-'));
+  try {
+    const callerEnv = join(dir, 'caller_github_env');
+    const callerOut = join(dir, 'caller_github_output');
+    writeFileSync(callerEnv, '');
+    writeFileSync(callerOut, '');
+    const res = spawnSync('bash', [toPosixPath(join(REPO_ROOT, 'scripts', 'ci', 'test-acr-firewall-lease.sh'))], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_ACTIONS: 'true',
+        GITHUB_ENV: toPosixPath(callerEnv),
+        GITHUB_OUTPUT: toPosixPath(callerOut),
+        ACR_LEASE_STATE: '',
+        LOOM_ACR_LEASE_OWNER: '',
+      },
+    });
+    assert.equal(res.status, 0, `the lease self-test itself failed:\n${res.stdout}${res.stderr}`);
+    assert.equal(
+      readFileSync(callerEnv, 'utf8'), '',
+      `the self-test wrote into the caller's $GITHUB_ENV:\n${readFileSync(callerEnv, 'utf8')}`,
+    );
+    assert.equal(
+      readFileSync(callerOut, 'utf8'), '',
+      `the self-test wrote into the caller's $GITHUB_OUTPUT:\n${readFileSync(callerOut, 'utf8')}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('LEASE: a process that never held the lease does NOT emit the erased-lease error', { skip: shellSkip }, () => {
@@ -1180,6 +1408,19 @@ test('CONTRACT: the build lane carries ACR_LEASE_STATE across the acquire/releas
     'the holder id must NOT be carried between the jobs: it is an input override that would replace the derived ' +
       'identity for every later lease call, and it derives identically in both jobs of one run anyway',
   );
+  // PRESENCE IS NOT ENFORCEMENT. Every assertion above passed while the
+  // hand-off was completely inert, because the acquire step re-derived
+  // `${ACR_LEASE_STATE:-none}` in its OWN shell after running the script as a
+  // child — always `none`. The behavioural proof that it publishes the truth is
+  // the $GITHUB_OUTPUT test above; this is the shape check that the step has
+  // not gone back to re-deriving it.
+  const acquire = stepBodyByName(yaml, 'Acquire the ACR firewall lease (opens the registry)', 6);
+  assert.ok(acquire, 'acquire step not found by name');
+  assert.ok(
+    !/lease_state=\$\{ACR_LEASE_STATE/.test(acquire),
+    'the acquire step re-derives lease_state from its own shell again. The lease script runs as a CHILD, so that ' +
+      'variable is unset there and the output is always `none` — measured, with the lease genuinely HELD.',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1227,25 +1468,26 @@ test('every workflow named in CONSOLE_ROLL_SOURCES exists on disk', () => {
   }
 });
 
-test('the deploy lane RE-PINS immediately before the apply, and the apply follows it', () => {
+test('the re-pin is the LAST step before the apply — nothing may sit between them', () => {
   const yaml = readNorm(DEPLOY_WORKFLOW);
-  const repin = yaml.indexOf('- name: Re-pin appImageTags to the RUNNING images');
-  const provision = yaml.indexOf('- name: Provision (idempotent)');
-  assert.notEqual(repin, -1, 'the re-pin step is gone; the pin applied would again be the one measured ~20 minutes earlier (#3676)');
-  assert.notEqual(provision, -1);
-  assert.ok(repin < provision, 'the re-pin must run BEFORE the apply — after it, it changes nothing');
-  // Comments are stripped for the same reason as in the result-discarding test:
-  // the step between these two EXPLAINS why `az deployment sub create` rewrites
-  // the registry, and matching that prose reported a violation that was a
-  // sentence, not a command.
-  const between = yaml
-    .slice(repin, provision)
-    .split('\n')
-    .filter((l) => !/^\s*#/.test(l))
-    .join('\n');
+  // ADJACENCY, not ordering. The first version of this test asserted only
+  // `repin < provision`, so an arbitrarily long step could sit between them and
+  // it stayed green — and one did: the ACR lease step, whose bounded wait is up
+  // to EIGHT MINUTES and whose whole purpose is to wait for the roll lane, i.e.
+  // exactly the writer that invalidates the measurement. A measurement is only
+  // as fresh as the last thing that happens before it is used.
+  const names = [...yaml.matchAll(/^ {6}- name: (.+)$/gm)].map((m) => m[1]);
+  const i = names.findIndex((n) => n.startsWith('Re-pin appImageTags to the RUNNING images'));
+  assert.notEqual(i, -1, 're-pin step is gone; the pin applied would again be the one measured minutes earlier');
+  assert.equal(
+    names[i + 1], 'Provision (idempotent)',
+    `the step immediately after the re-pin is ${JSON.stringify(names[i + 1])}, not the apply. Whatever it is, its ` +
+      'duration is added to the staleness of the measurement this PR exists to keep fresh.',
+  );
   assert.ok(
-    !/az deployment sub create/.test(between),
-    'nothing may submit a deployment between the re-measurement and the apply it is for',
+    names.slice(0, i).some((n) => n.startsWith('Take the ACR firewall lease for the apply')),
+    'the ACR lease must be taken BEFORE the re-pin: its wait is for the roll lane, so waiting after measuring ' +
+      'reopens the exact window being narrowed',
   );
 });
 
@@ -1270,11 +1512,12 @@ test('the deploy lane still runs the post-apply estate-vs-roll gate, and it cann
  * exist. A guard keyed to a string that also appears in prose about that string
  * is the same defect class as one keyed to a string that never appears.
  */
-function stepBodyByName(yaml, name) {
-  const start = yaml.indexOf(`      - name: ${name}`);
+function stepBodyByName(yaml, name, indent = 6) {
+  const pad = ' '.repeat(indent);
+  const start = yaml.indexOf(`${pad}- name: ${name}`);
   if (start === -1) return null;
   const rest = yaml.slice(start + 1);
-  const nextRel = rest.search(/\n {6}- name: /);
+  const nextRel = rest.search(new RegExp(`\\n {${indent}}- name: `));
   const body = nextRel === -1 ? rest : rest.slice(0, nextRel);
   return body
     .split('\n')
@@ -1285,7 +1528,7 @@ function stepBodyByName(yaml, name) {
 test('neither new deploy step discards a result (no continue-on-error / || true / 2>/dev/null)', () => {
   const yaml = readNorm(DEPLOY_WORKFLOW);
   const names = [
-    'Re-pin appImageTags to the RUNNING images (closes the roll race — #3676)',
+    'Re-pin appImageTags to the RUNNING images (narrows the roll race — #3676)',
     'Estate must not be BEHIND the last successful roll (#3676)',
   ];
   const forbidden = [/continue-on-error/, /\|\|\s*true/, /2>\s*\/dev\/null/];

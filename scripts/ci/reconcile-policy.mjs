@@ -797,10 +797,20 @@ export function parseRollRunTitle(title) {
  * Which console-writing run last actually shipped an image?
  *
  * @param {Array<{id:(number|string), workflow:string, title?:string, headSha?:string,
- *                completedAt:string, jobConclusion:(string|null)}>|null} runs
+ *                completedAt:string, jobCompletedAt?:string, jobConclusion:(string|null)}>|null} runs
  *        Already filtered by the caller to runs that COMPLETED after the pin was
  *        measured. `jobConclusion: null` means the run's jobs could not be read.
  *        `runs: null` means the run list itself could not be read.
+ *
+ *        ORDERING USES `jobCompletedAt` WHEN PRESENT. The run's `updated_at` is
+ *        when the whole run finished, which for the roll lane trails the actual
+ *        `az containerapp update` by minutes — on the incident night, 4m45s
+ *        (update 07:10:44, run completed 07:15:30). With two writers finishing
+ *        close together, ordering by the run can name the wrong "latest". The
+ *        job's own completion is the closest observable proxy for the write and
+ *        the caller already fetches it. `completedAt` remains the fallback so a
+ *        caller that cannot supply the job time still gets an answer rather than
+ *        an exception.
  * @returns {{status:'none'|'found'|'unknown', roll?:object, reason:string}}
  */
 export function selectLastConsoleRoll(runs) {
@@ -832,7 +842,9 @@ export function selectLastConsoleRoll(runs) {
         'have overwritten a newer image.',
     };
   }
-  const latest = shipped.reduce((a, b) => (Date.parse(b.completedAt) > Date.parse(a.completedAt) ? b : a));
+  /** When the image write actually landed, as closely as this data allows. */
+  const wroteAt = (r) => Date.parse(r?.jobCompletedAt || r?.completedAt || 0) || 0;
+  const latest = shipped.reduce((a, b) => (wroteAt(b) > wroteAt(a) ? b : a));
   const source = CONSOLE_ROLL_SOURCES.find((s) => s.workflow === latest.workflow);
   if (!source) {
     return {
@@ -870,12 +882,27 @@ export function selectLastConsoleRoll(runs) {
 /**
  * Did this deploy leave the estate BEHIND the last thing that rolled it?
  *
+ * THREE FAILING VERDICTS, NOT ONE, AND THE DIFFERENCE IS THE REMEDIATION.
+ * An earlier draft returned `regression` — headline "THE ESTATE WENT
+ * BACKWARDS" — for a state whose own explanatory text said "something else
+ * moved it", and printed a remediation naming the last COMPLETED roll's SHA.
+ * The realistic producer of that state is a roll whose `az containerapp update`
+ * landed AFTER the apply but whose RUN has not finished yet, so it is not in
+ * the population at all (on the incident night that gap was 4m45s). In that
+ * case the estate is AHEAD, and rolling to the named SHA would move it
+ * BACKWARDS — the gate causing the very defect it exists to catch.
+ *
+ * So: `regression` is claimed ONLY when this deploy's own applied tag is what
+ * is live, which is the one case attribution is certain. Anything else that
+ * fails to match is `drifted` — still exit 1, still loud, but it asserts no
+ * direction and names no rollback target.
+ *
  * @param {object} a
  * @param {string} a.appliedTag   the console tag this deploy applied ('' = none)
  * @param {string|null} a.estateTag the console tag running NOW (null = unreadable)
  * @param {string} [a.estateReadError]
  * @param {ReturnType<typeof selectLastConsoleRoll>} a.rollSelection
- * @returns {{verdict:'ok'|'regression'|'unknown', reason:string}}
+ * @returns {{verdict:'ok'|'regression'|'drifted'|'unknown', reason:string}}
  */
 export function decideEstateRegression({ appliedTag = '', estateTag = null, estateReadError = '', rollSelection = null } = {}) {
   const applied = String(appliedTag || '').trim();
@@ -914,15 +941,26 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
         `${completedAt}. This deploy did not overwrite it.`,
     };
   }
+  if (String(estateTag).trim() === applied) {
+    return {
+      verdict: 'regression',
+      reason:
+        `THE ESTATE WENT BACKWARDS. ${workflow} run ${id} shipped loom-console:${sha} at ${completedAt} — after this ` +
+        `deploy measured the tags it was going to write — and loom-console is now running '${estateTag}', which is ` +
+        'the tag THIS DEPLOY applied. This run overwrote that roll. Every merge in that window is inert on the ' +
+        'live estate until it is rolled again (deploy-integrity R2/R3).',
+      rollForwardTo: sha,
+    };
+  }
   return {
-    verdict: 'regression',
+    verdict: 'drifted',
     reason:
-      `THE ESTATE WENT BACKWARDS. ${workflow} run ${id} shipped loom-console:${sha} at ${completedAt} — after this ` +
-      `deploy measured the tags it was going to write — and loom-console is now running '${estateTag}'` +
-      (String(estateTag).trim() === applied
-        ? `, which is the tag THIS DEPLOY applied. This run overwrote that roll.`
-        : `, which is neither that roll's image nor this deploy's applied tag ('${applied}'); something else moved it.`) +
-      ' Every merge in that window is inert on the live estate until it is rolled again (deploy-integrity R2/R3).',
+      `THE ESTATE IS ON AN IMAGE NOBODY IN THIS COMPARISON PUT THERE. loom-console is running '${estateTag}', which ` +
+      `is neither the last shipped roll (${workflow} run ${id} shipped loom-console:${sha} at ${completedAt}) nor ` +
+      `the tag this deploy applied ('${applied}'). The most likely benign explanation is a roll whose image write ` +
+      'has landed but whose RUN has not completed, so it is not yet in the population — in which case the estate is ' +
+      'AHEAD, not behind. NO DIRECTION IS BEING CLAIMED and no rollback target is named, because rolling to the SHA ' +
+      'above could move a healthy estate backwards. Read the container app and the in-flight runs before acting.',
   };
 }
 
@@ -1099,12 +1137,19 @@ function finishRegression(log, verdict) {
     return 0;
   }
   if (verdict.verdict === 'regression') {
+    // The remediation is printed ONLY here, because this is the only verdict in
+    // which the SHA to roll to is established: the estate is running the tag
+    // this deploy applied, so the roll's SHA is provably newer. See `drifted`.
     log(
       `::error::ESTATE REGRESSION (#3676) — ${verdict.reason} REMEDIATION: dispatch ` +
-        'loom-roll-and-validate.yml with image_tag set to the SHA named above, then confirm with ' +
+        `loom-roll-and-validate.yml with image_tag=${verdict.rollForwardTo}, then confirm with ` +
         '`az containerapp show -n loom-console -g rg-csa-loom-admin-<region> --query ' +
         '"properties.template.containers[0].image"` — the container app, not /build-marker.txt.',
     );
+    return 1;
+  }
+  if (verdict.verdict === 'drifted') {
+    log(`::error::ESTATE DRIFT (#3676) — ${verdict.reason}`);
     return 1;
   }
   log(`::error::estate-vs-roll: UNKNOWN, which fails closed — ${verdict.reason}`);

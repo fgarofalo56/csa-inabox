@@ -296,12 +296,33 @@ _lease_clear() { _lease_write "none" "0" "none"; }
 # `gha:<repo>:<run id>:<attempt>`, which is IDENTICAL in the acquiring job and
 # the releasing job of the same run. Only the state is genuinely unknowable
 # downstream.
+#
+# IT ALSO WRITES $GITHUB_OUTPUT, AND THAT IS NOT REDUNDANT (#3676 review).
+# $GITHUB_ENV reaches SUBSEQUENT steps only. This script runs as a CHILD of the
+# step that invokes it, so a caller doing
+#
+#     bash acr-firewall-lease.sh acquire --acr "$ACR"
+#     echo "lease_state=${ACR_LEASE_STATE:-none}" >> "$GITHUB_OUTPUT"   # WRONG
+#
+# reads its own shell, where the variable was never set, and publishes `none`
+# every time. Measured against the repo's own `az` stub: the lease was HELD and
+# the step output said `none`. That made the whole cross-job hand-off inert and
+# the erased-lease branch below unreachable in the one workflow whose 2026-08-17
+# release actually needed it.
+#
+# A step's outputs are collected from $GITHUB_OUTPUT at step END, so a CHILD's
+# append is picked up. Writing it here rather than asking every caller to
+# re-derive it is the chokepoint: a caller cannot get it wrong by omission.
 _lease_persist_state() {
   ACR_LEASE_STATE="$1"
   [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
-  [ -n "${GITHUB_ENV:-}" ] || return 0
-  [ -w "${GITHUB_ENV}" ] || return 0
-  printf 'ACR_LEASE_STATE=%s\n' "$1" >> "$GITHUB_ENV"
+  if [ -n "${GITHUB_ENV:-}" ] && [ -w "${GITHUB_ENV}" ]; then
+    printf 'ACR_LEASE_STATE=%s\n' "$1" >> "$GITHUB_ENV"
+  fi
+  if [ -n "${GITHUB_OUTPUT:-}" ] && [ -w "${GITHUB_OUTPUT}" ]; then
+    printf 'lease_state=%s\n' "$1" >> "$GITHUB_OUTPUT"
+  fi
+  return 0
 }
 
 _lease_open_firewall() {
@@ -537,7 +558,12 @@ acr_lease_acquire() {
           fi
         done
         if [ "$confirmed" = "true" ]; then
-          _lease_persist_state held
+          # THE STATE IS PERSISTED EXACTLY ONCE, on whichever branch is taken.
+          # An earlier draft wrote `held` here and then `held-claim-only` below,
+          # which appends the SAME output key twice and leaves the result
+          # depending on undocumented runner precedence — a belief this code has
+          # no way to verify offline, which is how a checker ends up measuring
+          # nothing.
           _lease_note "HELD the ACR firewall lease on '$_LEASE_ACR' as '$me' for ${ttl_min}m (attempt ${attempt})."
           if [ "${_LEASE_NO_OPEN:-false}" = "true" ]; then
             # CLAIM-ONLY (#3676). The holder is not pushing; it is about to
@@ -558,8 +584,17 @@ acr_lease_acquire() {
             # release step later read the owner as 'none'. Five of six images
             # never shipped.
             _lease_note "CLAIM-ONLY: not opening the firewall on '$_LEASE_ACR'. This holder needs the MUTEX (it is about to rewrite the registry resource), not public reachability."
+            # A DISTINCT STATE, because this holder is the one writer whose own
+            # work is EXPECTED to erase its lease (#3681). Persisting plain
+            # `held` made the release below accuse this run of a foreign
+            # erasure — an ::error:: on every healthy nightly apply whose
+            # remediation was "investigate this run", which is the cry-wolf
+            # dynamic that gets a guard switched off, and an R7 violation since
+            # the cause was known precisely.
+            _lease_persist_state held-claim-only
             return 0
           fi
+          _lease_persist_state held
           _lease_open_firewall || { _lease_err "failed to open ACR '$_LEASE_ACR' after taking the lease."; return 1; }
           return 0
         fi
@@ -667,7 +702,17 @@ acr_lease_release() {
   # change what happens next (the close below is still correct and still fails
   # closed) — it names the cause, because a failure whose only output is a
   # symptom is a deploy-integrity R6 violation.
-  if [ "$ACR_LEASE_STATE" = "held" ] && { [ -z "$owner" ] || [ "$owner" = "none" ]; }; then
+  #
+  # IT FIRES ONLY FOR A *PUSHER* (`held`), NEVER FOR A CLAIM-ONLY HOLDER
+  # (`held-claim-only`). The claim-only holder is the ARM writer itself: its own
+  # apply is EXPECTED to delete these tags until #3681 lands, so accusing it of
+  # a foreign erasure would put an ::error:: on every healthy nightly whose
+  # remediation is "investigate this run". That is the cry-wolf dynamic this PR
+  # used to justify re-pinning over refusing, and it is an R7 violation too —
+  # the code knows exactly who did it. It gets a ::notice:: naming itself.
+  if [ "$ACR_LEASE_STATE" = "held-claim-only" ] && { [ -z "$owner" ] || [ "$owner" = "none" ]; }; then
+    _lease_note "the lease this run took on '$_LEASE_ACR' is gone, and THIS RUN'S OWN ARM apply is what removed it: the deployment template carries the registry, and an ARM resource PUT replaces its tags. Expected until #3681 lands (the ACR bicep module must carry the loomAcrFw* tags). No investigation needed; re-locking now."
+  elif [ "$ACR_LEASE_STATE" = "held" ] && { [ -z "$owner" ] || [ "$owner" = "none" ]; }; then
     _lease_err "THE LEASE ON '$_LEASE_ACR' WAS ERASED WHILE THIS PROCESS HELD IT. This run ('$me') took the lease and never released it, yet the registry now records owner='${owner:-<empty>}'. ARM tag writes are the lease, so the overwhelmingly likely cause is a deployment that PUTs the registry resource (any template carrying Microsoft.ContainerRegistry/registries/$_LEASE_ACR) — an ARM PUT replaces the resource's tags and re-asserts publicNetworkAccess, which also closes the firewall under this run. That is #3676: if a push in this run was denied with 'client with IP ... is not allowed access', THIS is why, and it is not a registry or a network fault. Check whether deploy-fiab-commercial / deploy-fiab-gcch / deploy-fiab-il5 was applying during this window."
   fi
 

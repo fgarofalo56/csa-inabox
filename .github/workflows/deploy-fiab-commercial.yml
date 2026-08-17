@@ -1213,106 +1213,6 @@ jobs:
             --zone-rg "$RG" \
             ${DEPLOY_SUB:+--zone-subscription "$DEPLOY_SUB"}
 
-      # ── I-FRESH — RE-MEASURE THE RUNNING IMAGES, SECONDS BEFORE THE APPLY ──
-      #
-      # THE INCIDENT (#3676, measured 2026-08-17). `Resolve reconcile target`
-      # reads the tag every Container App is running and pins appImageTags to
-      # it, so the ARM PUT is a no-op for the image. That read was CORRECT. It
-      # was just taken SIXTEEN MINUTES before it was used, and loom-roll-and-
-      # validate.yml writes the same field:
-      #
-      #   07:03:40  [reconcile] PIN console loom-console:587ac3b8…  <- true then
-      #   07:10:56  revision 0000755 — loom-console:b9ca620b…       <- the roll
-      #   07:19:48  revision 0000756 — loom-console:587ac3b8…       <- this apply
-      #   07:27:26  deploy-fiab-commercial: SUCCESS
-      #
-      # A merged, rolled, cosign-verified, UAT-validated security fix (PR #3665,
-      # GHSA-v2g8-gp3r-rg4r) was reverted off production nine minutes after it
-      # went live, and both lanes reported success. The same shape is on record
-      # two days earlier: run 31870181337 pinned 8f8e569a at 06:44:38, roll
-      # 31870718201 moved the console to 2dda97b4, and this workflow's own
-      # deployment outputs at 07:26:33 record `"console": "8f8e569a…"`.
-      #
-      # WHY RE-PIN RATHER THAN REFUSE. Rolls land roughly once every 70 minutes
-      # and this job's read->apply window is ~20 of them, so refusing would
-      # redden the nightly reconcile about one night in three — and a guard that
-      # cries wolf is a guard that gets switched off. Re-pinning is also the
-      # SAFER write: the tag it applies is one the estate is running right now,
-      # which is a stronger guarantee than the image preflight's "the tag is in
-      # ACR". It refuses only on the two states it genuinely cannot resolve — an
-      # unreadable estate, and a key that was pinned and has become UNKNOWN.
-      #
-      # WHY THIS CAN RE-PIN AT ALL, THIS LATE. `commercial.bicepparam` resolves
-      # `readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v0.1')` when `az deployment
-      # sub create` COMPILES it — not when the args file was composed. So a
-      # $GITHUB_ENV write here reaches the apply while `deploy_args_file` stays
-      # byte-identical and its sha256 assertion below still holds. The what-if
-      # previewed the EARLIER tag for the image fields; that is stated in the log
-      # rather than glossed, because applying the earlier tag is the defect.
-      #
-      # IT DOES NOT CLOSE THE WINDOW, and does not claim to: a roll can still
-      # land while ARM is mid-apply. `Estate must not be BEHIND the last roll`
-      # below is what NOTICES that, which is the half #3676 says matters most.
-      #
-      # Decision logic + tests: scripts/ci/reconcile-policy.mjs
-      # (decidePinRefresh / comparePins) and __tests__/roll-race.test.mjs.
-      - name: Re-pin appImageTags to the RUNNING images (closes the roll race — #3676)
-        id: repin
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
-        env:
-          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
-          HUB_PRESENT: ${{ steps.reconcile.outputs.hub_present }}
-          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
-        run: |
-          set -uo pipefail
-          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
-          CONTAINERS="$RUNNER_TEMP/repin-containers.json"
-          LIST_ERR="$RUNNER_TEMP/repin-list.err"
-
-          # Truncation is done with parameter expansion, never `| head -c`.
-          # GitHub runs `run:` under `bash -e`, and `pipefail` is set above, so
-          # `cmd | head -c N` kills `cmd` with SIGPIPE on any input longer than
-          # N and takes the whole STEP down — a guard that aborts on the error
-          # path it exists to report is a guard that never reports.
-          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
-
-          # The measurement timestamp is recorded BEFORE the read, so the
-          # post-apply gate's "did a roll finish after we measured?" window is
-          # never narrower than the truth. An over-inclusive window costs one
-          # extra comparison; an under-inclusive one hides the incident.
-          MEASURED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo "measured_at=$MEASURED_AT" >> "$GITHUB_OUTPUT"
-
-          if [ "${HUB_PRESENT}" != "true" ]; then
-            echo "::notice::pin-refresh: ${RG} does not exist, so no Container App is running and no pin can be stale. This is a from-scratch install; the apply CREATES the apps."
-            printf '[]' > "$CONTAINERS"
-            node scripts/ci/reconcile-policy.mjs pin-refresh \
-              --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
-            exit $?
-          fi
-
-          # stdout and stderr are captured SEPARATELY, never merged and never
-          # discarded: `2>&1` would splice az's warnings into the JSON, and
-          # `2>/dev/null` is what once turned a permission denial into an empty
-          # string and then into a false claim (deploy-integrity R7, #3090).
-          set +e
-          az containerapp list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-            --query '[].{name:name, image:properties.template.containers[0].image}' \
-            -o json > "$CONTAINERS" 2> "$LIST_ERR"
-          LIST_RC=$?
-          set -e
-          if [ $LIST_RC -ne 0 ]; then
-            node scripts/ci/reconcile-policy.mjs pin-refresh \
-              --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" \
-              --read-error "az containerapp list exited ${LIST_RC}: $(trim400 "$LIST_ERR")"
-            exit $?
-          fi
-          if [ -s "$LIST_ERR" ]; then
-            echo "::warning::pin-refresh: az wrote to stderr while SUCCEEDING; recording it rather than hiding it: $(trim400 "$LIST_ERR")"
-          fi
-          node scripts/ci/reconcile-policy.mjs pin-refresh \
-            --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
-
       # ── THE APPLY WRITES THE REGISTRY, SO IT MUST HOLD THE LEASE (#3676) ──
       #
       # `az deployment sub create` submits a template that CARRIES
@@ -1401,6 +1301,124 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR" --no-open \
             ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
           echo "held=true" >> "$GITHUB_OUTPUT"
+
+      # ── I-FRESH — RE-MEASURE THE RUNNING IMAGES, SECONDS BEFORE THE APPLY ──
+      #
+      # THE INCIDENT (#3676, measured 2026-08-17). `Resolve reconcile target`
+      # reads the tag every Container App is running and pins appImageTags to
+      # it, so the ARM PUT is a no-op for the image. That read was CORRECT. It
+      # was just taken SIXTEEN MINUTES before it was used, and loom-roll-and-
+      # validate.yml writes the same field:
+      #
+      #   07:03:40  [reconcile] PIN console loom-console:587ac3b8…  <- true then
+      #   07:10:56  revision 0000755 — loom-console:b9ca620b…       <- the roll
+      #   07:19:48  revision 0000756 — loom-console:587ac3b8…       <- this apply
+      #   07:27:26  deploy-fiab-commercial: SUCCESS
+      #
+      # A merged, rolled, cosign-verified, UAT-validated security fix (PR #3665,
+      # GHSA-v2g8-gp3r-rg4r) was reverted off production nine minutes after it
+      # went live, and both lanes reported success. The same shape is on record
+      # two days earlier: run 31870181337 pinned 8f8e569a at 06:44:38, roll
+      # 31870718201 moved the console to 2dda97b4, and this workflow's own
+      # deployment outputs at 07:26:33 record `"console": "8f8e569a…"`.
+      #
+      # WHY RE-PIN RATHER THAN REFUSE. Rolls land roughly once every 70 minutes
+      # and this job's read->apply window is ~20 of them, so refusing would
+      # redden the nightly reconcile about one night in three — and a guard that
+      # cries wolf is a guard that gets switched off. Re-pinning is also the
+      # SAFER write: the tag it applies is one the estate is running right now,
+      # which is a stronger guarantee than the image preflight's "the tag is in
+      # ACR". It refuses only on the two states it genuinely cannot resolve — an
+      # unreadable estate, and a key that was pinned and has become UNKNOWN.
+      #
+      # WHY THIS CAN RE-PIN AT ALL, THIS LATE. `commercial.bicepparam` resolves
+      # `readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v0.1')` when `az deployment
+      # sub create` COMPILES it — not when the args file was composed. So a
+      # $GITHUB_ENV write here reaches the apply while `deploy_args_file` stays
+      # byte-identical and its sha256 assertion below still holds. The what-if
+      # previewed the EARLIER tag for the image fields; that is stated in the log
+      # rather than glossed, because applying the earlier tag is the defect.
+      #
+      # IT DOES NOT CLOSE THE WINDOW, and does not claim to: a roll can still
+      # land while ARM is mid-apply. `Estate must not be BEHIND the last roll`
+      # below is what NOTICES that, which is the half #3676 says matters most.
+      # The step is named "narrows", not "closes", for that reason — an earlier
+      # draft was named "closes the roll race" while the paragraph above it
+      # correctly said it does not.
+      #
+      # IT RUNS *AFTER* THE ACR LEASE STEP, AND THAT ORDER IS LOAD-BEARING.
+      # With the re-pin first, the lease's bounded wait (up to 8 minutes) sat
+      # BETWEEN the measurement and the apply — and the lane it waits for is the
+      # roll lane, i.e. exactly the writer that invalidates the measurement. In
+      # roll run 32004219673 the lease release and the image write are the same
+      # second:
+      #     07:10:43.9909  released the ACR firewall lease ... VERIFIED re-locked
+      #     07:10:43.9960  Run az containerapp update -n loom-console ...
+      # So the old order could measure, wait up to 8 minutes for precisely the
+      # lane about to write, and then apply the pin that lane had just
+      # invalidated — a gap POSITIVELY CORRELATED with the race it exists to
+      # narrow. Taking the lease first makes the wait happen before the
+      # measurement instead of after it. Nothing is lost: the lease step
+      # consumes no output from this one.
+      #
+      # Decision logic + tests: scripts/ci/reconcile-policy.mjs
+      # (decidePinRefresh / comparePins) and __tests__/roll-race.test.mjs.
+      - name: Re-pin appImageTags to the RUNNING images (narrows the roll race — #3676)
+        id: repin
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
+          HUB_PRESENT: ${{ steps.reconcile.outputs.hub_present }}
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          CONTAINERS="$RUNNER_TEMP/repin-containers.json"
+          LIST_ERR="$RUNNER_TEMP/repin-list.err"
+
+          # Truncation is done with parameter expansion, never `| head -c`.
+          # GitHub runs `run:` under `bash -e`, and `pipefail` is set above, so
+          # `cmd | head -c N` kills `cmd` with SIGPIPE on any input longer than
+          # N and takes the whole STEP down — a guard that aborts on the error
+          # path it exists to report is a guard that never reports.
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+
+          # The measurement timestamp is recorded BEFORE the read, so the
+          # post-apply gate's "did a roll finish after we measured?" window is
+          # never narrower than the truth. An over-inclusive window costs one
+          # extra comparison; an under-inclusive one hides the incident.
+          MEASURED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "measured_at=$MEASURED_AT" >> "$GITHUB_OUTPUT"
+
+          if [ "${HUB_PRESENT}" != "true" ]; then
+            echo "::notice::pin-refresh: ${RG} does not exist, so no Container App is running and no pin can be stale. This is a from-scratch install; the apply CREATES the apps."
+            printf '[]' > "$CONTAINERS"
+            node scripts/ci/reconcile-policy.mjs pin-refresh \
+              --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
+            exit $?
+          fi
+
+          # stdout and stderr are captured SEPARATELY, never merged and never
+          # discarded: `2>&1` would splice az's warnings into the JSON, and
+          # `2>/dev/null` is what once turned a permission denial into an empty
+          # string and then into a false claim (deploy-integrity R7, #3090).
+          set +e
+          az containerapp list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --query '[].{name:name, image:properties.template.containers[0].image}' \
+            -o json > "$CONTAINERS" 2> "$LIST_ERR"
+          LIST_RC=$?
+          set -e
+          if [ $LIST_RC -ne 0 ]; then
+            node scripts/ci/reconcile-policy.mjs pin-refresh \
+              --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" \
+              --read-error "az containerapp list exited ${LIST_RC}: $(trim400 "$LIST_ERR")"
+            exit $?
+          fi
+          if [ -s "$LIST_ERR" ]; then
+            echo "::warning::pin-refresh: az wrote to stderr while SUCCEEDING; recording it rather than hiding it: $(trim400 "$LIST_ERR")"
+          fi
+          node scripts/ci/reconcile-policy.mjs pin-refresh \
+            --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
 
       - name: Provision (idempotent)
         id: provision
@@ -1622,14 +1640,20 @@ jobs:
               # An empty answer means NO job of that name — a rename, or a shape
               # this gate does not understand. It becomes null (UNKNOWN), never
               # "did not roll": that collapse is the whole bug class.
-              if ! CONC=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RID}/jobs?per_page=100" \
-                            --jq "[.jobs[] | select(.name == \"${JOBNAME}\") | .conclusion] | first // \"\"" \
+              #
+              # The job's `completed_at` is captured alongside the conclusion
+              # because the RUN's `updated_at` trails the actual
+              # `az containerapp update` by minutes — 4m45s on the incident
+              # night (update 07:10:44, run completed 07:15:30). Ordering two
+              # close writers by the run can name the wrong "latest".
+              if ! JOB=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RID}/jobs?per_page=100" \
+                            --jq "[.jobs[] | select(.name == \"${JOBNAME}\") | {c:.conclusion, t:.completed_at}] | first // {}" \
                             2>> "$ROLL_ERR"); then
                 ROLLS_OK=0
                 break
               fi
               printf '%s' "$LINE" \
-                | jq -c --arg c "$CONC" '. + {jobConclusion: (if $c == "" then null else $c end)}' \
+                | jq -c --argjson j "${JOB:-{\}}" '. + {jobConclusion: ($j.c // null), jobCompletedAt: ($j.t // null)}' \
                 >> "$TMP/rolls-with-jobs.ndjson"
             done <<< "$CANDIDATES"
           fi

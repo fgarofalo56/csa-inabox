@@ -617,17 +617,15 @@ jobs:
         id: acquire
         run: |
           set -uo pipefail
+          # The script writes `lease_state=<state>` straight to $GITHUB_OUTPUT.
+          # It is NOT re-derived here, and that is deliberate: this step used to
+          # read `${ACR_LEASE_STATE:-none}` from its own shell after invoking the
+          # script as a CHILD, which always expanded to `none` and made the whole
+          # hand-off inert (measured — the lease was HELD, the output said
+          # `none`). A step's outputs are collected from the file at step end, so
+          # the child's append is what publishes the truth.
           bash scripts/csa-loom/acr-firewall-lease.sh acquire \
             --acr "${{ needs.resolve.outputs.acr_name }}"
-          # The script wrote ACR_LEASE_STATE to $GITHUB_ENV; promote it to a JOB
-          # OUTPUT so acr_restore — a different runner — is handed the same
-          # fact. Reading it back rather than hard-coding 'held' keeps degraded
-          # mode (unleased) distinguishable, which it has never been across
-          # jobs. The OWNER is deliberately not carried: it derives to
-          # `gha:<repo>:<run id>:<attempt>`, identical in both jobs, and
-          # exporting it would override the derived id for every later lease
-          # call in the job.
-          echo "lease_state=${ACR_LEASE_STATE:-none}" >> "$GITHUB_OUTPUT"
 
   acr_restore:
     name: Release ACR firewall lease (re-lock if still the holder)
