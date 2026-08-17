@@ -26,6 +26,12 @@ const h = vi.hoisted(() => {
     storeMode: 'memory' as 'cosmos' | 'memory',
     allDocs: [] as any[],
     liveSessions: [] as any[],
+    /**
+     * Non-null simulates a Livy census a paging ceiling cut short. The reaper
+     * must NOT run its tracker GC on a partial census — see the truncation
+     * guard in `reapStaleSessions`.
+     */
+    censusTruncatedBy: null as 'pages' | 'time' | null,
   };
   return {
     state,
@@ -35,6 +41,12 @@ const h = vi.hoisted(() => {
     keepaliveLivySession: vi.fn(async () => {}),
     killLivySession: vi.fn(async () => {}),
     listLivySessions: vi.fn(async () => state.liveSessions),
+    listLivySessionsResult: vi.fn(async () => ({
+      sessions: state.liveSessions,
+      total: state.liveSessions.length,
+      scanned: state.liveSessions.length,
+      truncatedBy: state.censusTruncatedBy,
+    })),
     listAllDocs: vi.fn(async () => state.allDocs),
     publishSlot: vi.fn(async () => {}),
     removeSlot: vi.fn(async () => {}),
@@ -53,6 +65,7 @@ vi.mock('@/lib/azure/synapse-livy-client', () => ({
   keepaliveLivySession: h.keepaliveLivySession,
   killLivySession: h.killLivySession,
   listLivySessions: h.listLivySessions,
+  listLivySessionsResult: h.listLivySessionsResult,
   defaultSparkPool: () => 'loompool',
 }));
 
@@ -127,6 +140,7 @@ beforeEach(() => {
   h.state.storeMode = 'memory';
   h.state.allDocs = [];
   h.state.liveSessions = [];
+  h.state.censusTruncatedBy = null;
   createLivySessionAsync.mockClear();
   getLivySession.mockClear();
   killLivySession.mockClear();
@@ -357,5 +371,65 @@ describe('#1796 — stale-session reaper unjams the pool (kills leaked, spares l
     const killed = await reapStaleSessions('loompool', new Set([401]));
     expect(killed).toBe(0);
     expect(killLivySession).not.toHaveBeenCalled();
+  });
+
+  // ── Truncated-census guard (review of PR #3689) ──────────────────────────
+  //
+  // The tracker GC at the bottom of reapStaleSessions reads "absent from the
+  // census" as "gone from the pool". That is only true of a COMPLETE census.
+  //
+  // This became reachable BECAUSE of the Livy page-size clamp in this PR: the
+  // old `pageSize: 100` was over the sessions endpoint's documented max of 20,
+  // so the census 400'd and the reaper's `catch` made the whole thing a silent
+  // no-op. Correcting the page size is what lets the walk run — and therefore
+  // what lets it hit a paging ceiling. Shipping the clamp without this guard
+  // would upgrade a dead reaper into an actively broken one.
+  describe('a TRUNCATED census must not be read as "these are all the sessions"', () => {
+    it('keeps a still-live session\'s grace timestamp when the census was cut short', async () => {
+      synapseConfigGate.mockReturnValue(undefined);
+      // Session 501 IS alive on the pool, but the walk stopped before reaching
+      // it, so it is absent from the census we got back.
+      h.state.liveSessions = [{ id: 500, state: 'idle' }];
+      h.state.censusTruncatedBy = 'time';
+      const stamp = Date.now() - 60_000;
+      poolStore()!.firstSeenUntracked.set('loompool#501', stamp);
+      markSessionInUse('loompool', 501);
+
+      await reapStaleSessions('loompool');
+
+      // WITHOUT the guard the GC deletes both trackers, so the next sweep sees
+      // 501 as a first sighting, Guard 4 defers, and the grace window restarts
+      // forever — a genuinely leaked session is never reaped (the #1796 jam).
+      expect(poolStore()!.firstSeenUntracked.get('loompool#501')).toBe(stamp);
+      expect(poolStore()!.inUse.has('loompool#501')).toBe(true);
+    });
+
+    it('a session that ages past grace still dies on the sweep AFTER a truncated one', async () => {
+      synapseConfigGate.mockReturnValue(undefined);
+      h.state.liveSessions = [{ id: 502, state: 'idle' }];
+      h.state.censusTruncatedBy = 'pages';
+      // Truncated sweep: 502 is IN this census, so it is reaped normally —
+      // truncation suppresses the tracker GC, never the reaping itself.
+      poolStore()!.firstSeenUntracked.set('loompool#502', Date.now() - GRACE_MS - 1);
+
+      const killed = await reapStaleSessions('loompool');
+
+      expect(killed).toBe(1);
+      expect(killLivySession).toHaveBeenCalledWith('loompool', 502);
+    });
+
+    it('a COMPLETE census still GCs trackers for sessions that really are gone', async () => {
+      synapseConfigGate.mockReturnValue(undefined);
+      h.state.liveSessions = [{ id: 600, state: 'idle' }];
+      h.state.censusTruncatedBy = null;
+      poolStore()!.firstSeenUntracked.set('loompool#601', Date.now() - 60_000);
+      markSessionInUse('loompool', 601);
+
+      await reapStaleSessions('loompool');
+
+      // 601 is absent from a census we KNOW is whole → it is genuinely gone.
+      expect(poolStore()!.firstSeenUntracked.has('loompool#601')).toBe(false);
+      expect(poolStore()!.inUse.has('loompool#601')).toBe(false);
+    });
   });
 });

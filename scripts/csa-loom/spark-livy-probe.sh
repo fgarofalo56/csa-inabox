@@ -27,16 +27,21 @@ WITH_LA="${WITH_LA:-false}"
 
 DEV="https://${SYN_WS}.dev.azuresynapse.net"
 API="livyApi/versions/2019-11-01-preview/sparkPools/${POOL}/sessions"
+# Livy caps the sessions list at `size=20` per request ("By default it is 20 and
+# that is the maximum" — Learn), so the `size=100` this probe used was either
+# 400ing or being silently clamped. Combined with the `|| true` / `2>/dev/null`
+# on those lines, a failed census printed as `by state: {}` — i.e. the probe
+# built to diagnose the #1796 700-session jam would have reported no jam. A bare
+# clamp to 20 would be no better (the first 20 of 700 presented as the total),
+# so the census pages properly and declares completeness. See #3568.
+CENSUS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/livy-session-census.py"
+export DEV API
 TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
 echo "== list existing sessions (count by state) =="
-curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=100" | python3 -c "
-import sys,json;from collections import Counter
-d=json.load(sys.stdin);ss=d.get('sessions') or []
-print('total reported:', d.get('total'), '| in list:', len(ss), '| by state:', dict(Counter(s.get('state') for s in ss)))
-" || true
+TOK="$TOK" python3 "$CENSUS" census
 
 echo "== CLEAN leaked/error/dead sessions (free the pool) =="
-IDS=$(curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=100" | python3 -c "import sys,json;ss=json.load(sys.stdin).get('sessions') or [];print(' '.join(str(s['id']) for s in ss if s.get('state') in ('error','dead','killed','not_started','shutting_down')))" 2>/dev/null)
+IDS=$(TOK="$TOK" python3 "$CENSUS" ids)
 N=0
 for id in $IDS; do
   TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
@@ -45,7 +50,8 @@ done
 echo "  deleted $N stale sessions"
 sleep 10
 TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
-curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=100" | python3 -c "import sys,json;from collections import Counter;ss=json.load(sys.stdin).get('sessions') or [];print('  after clean — by state:', dict(Counter(s.get('state') for s in ss)))" || true
+echo "  after clean —"
+TOK="$TOK" python3 "$CENSUS" census
 
 echo "== MINIMAL session (1 exec / 1 core / 512m driver) — is it a quota issue? =="
 MINRESP=$(curl -s -X POST -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" "${DEV}/${API}" -d '{"name":"loom-min-probe","kind":"pyspark","numExecutors":1,"executorCores":1,"executorMemory":"1g","driverCores":1,"driverMemory":"1g"}')
