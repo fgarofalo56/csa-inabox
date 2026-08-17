@@ -45,6 +45,14 @@ vi.mock('@/lib/auth/session', () => ({
 const guard = vi.hoisted(() => ({ authorizeItemWorkspace: vi.fn(async () => null as any) }));
 vi.mock('@/lib/auth/workspace-guard', () => guard);
 
+// `route-toolkit`'s OTHER imports, stubbed so the module graph loads without
+// dragging in the gate registry → loom-search → foundry-client (which calls
+// `armScope()` at module scope and blew up against this file's partial
+// cloud-endpoints mock). Same three stubs `sql-security-scope.test.ts` uses.
+vi.mock('@/lib/auth/feature-gate', () => ({ requireTenantAdmin: vi.fn(), enforceCapability: vi.fn() }));
+vi.mock('@/lib/auth/dlz-gate', () => ({ denyIfNoDlzAccess: vi.fn() }));
+vi.mock('@/lib/gates/registry', () => ({ getGate: vi.fn(), gateStatus: vi.fn() }));
+
 const DBX_ITEM: any = {
   id: 'sw-1', itemType: 'databricks-sql-warehouse', workspaceId: 'ws-1', displayName: 'SQL WH', state: {},
 };
@@ -101,7 +109,20 @@ const cloud = vi.hoisted(() => ({
   isGovCloud: vi.fn(() => false),
   cloudBoundaryLabel: vi.fn(() => 'Azure Government'),
 }));
-vi.mock('@/lib/azure/cloud-endpoints', () => cloud);
+/**
+ * PARTIAL mock, via `importOriginal`. A full replacement broke the module graph
+ * once `route-toolkit` entered it: something under it reaches
+ * `lib/azure/foundry-client.ts:32`, which calls `armScope()` AT MODULE SCOPE, and
+ * a mock that omitted `armScope` failed the whole file at collect time with
+ * "no tests" — a red that looks like a route defect and is a harness defect.
+ * Spreading the real module keeps every other export genuine and overrides only
+ * the two this suite steers.
+ */
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isGovCloud: () => cloud.isGovCloud(),
+  cloudBoundaryLabel: () => cloud.cloudBoundaryLabel(),
+}));
 
 const synapse = vi.hoisted(() => ({
   dedicatedTarget: vi.fn(() => ({ server: 's', database: 'dwhpool01', cacheKey: 'k' })),
@@ -221,6 +242,74 @@ describe('layer 1 — unauthenticated', () => {
 
     expect(guard.authorizeItemWorkspace).not.toHaveBeenCalled();
     noBackendRan();
+  });
+
+  /**
+   * THE AUTHENTICATION CONTRACT, asserted on the paths that SHORT-CIRCUIT.
+   *
+   * FOUND IN INDEPENDENT REVIEW OF THIS FIX. On `main` every one of these seven
+   * handlers opened with `const session = getSession(); if (!session) return
+   * 401`. The first version of this PR moved the session read inside
+   * `guardSynapseItemRequest` — which is correct — but placed the item-TYPE gate
+   * and the `id === 'new'` gate ABOVE it, so four responses came back 200 to a
+   * caller with no cookie at all:
+   *
+   *     SEC_UNSUPPORTED_TYPE  200  {"ok":false,"gated":true,…}
+   *     ALERTS_ID_NEW         200  {"ok":false,"gated":true,"code":"unsaved_item"}
+   *     MON_ID_NEW            200  {"ok":false,"code":"unsaved_item"}
+   *     ALERTS_DELETE_NEW     200  {"ok":false,"gated":true,"code":"unsaved_item"}
+   *
+   * The bodies were static product copy — no estate config, no env var names, no
+   * tenant data — so the disclosure impact was nil. That is NOT why it had to
+   * change. It was an unannounced weakening of the authentication contract
+   * inside a security fix, on a tree where `apps/fiab-console` has NO
+   * `middleware.ts` (verified: no `export function middleware`, no
+   * `NextMiddleware` anywhere outside node_modules), so the route handler is the
+   * ONLY enforcement point. An unauthenticated DELETE answering 200 is also a
+   * finding to any scanner, whatever its body says.
+   *
+   * The type gate had a disclosure argument ("a pure function of the URL"); the
+   * two `unsaved_item` short-circuits had none — they were justified purely on
+   * logged-in-editor UX grounds and still sat above the session read.
+   *
+   * MUTATION: delete the `if (!getSession()) return 401` line from any of the
+   * three authorize helpers → these go 200 and this spec goes red. Without this
+   * spec the hole reopens silently, which is why it is asserted and not merely
+   * fixed.
+   */
+  it('401s the SHORT-CIRCUIT paths too — the type gate and the unsaved-item gate are BELOW the session check', async () => {
+    session.current = null;
+
+    // The item-TYPE gate: a pure URL function, but still not free to anonymous.
+    expect((await secGET(req({}, { catalog: 'c' }), ctx('warehouse', 'wh-1'))).status).toBe(401);
+    expect((await secPOST(req(MASK_BODY), ctx('warehouse', 'wh-1'))).status).toBe(401);
+
+    // The unsaved-item gate, on every route and every verb that has one.
+    expect((await secGET(req({}, { catalog: 'c' }), ctx(DBX, 'new'))).status).toBe(401);
+    expect((await secPOST(req(MASK_BODY), ctx(DBX, 'new'))).status).toBe(401);
+    expect((await alertsGET(req(), ctx(DBX, 'new'))).status).toBe(401);
+    expect((await alertsPOST(req(ALERT_BODY), ctx(DBX, 'new'))).status).toBe(401);
+    expect((await alertsPATCH(req({ name: 'x' }, { alertId: 'a-1' }), ctx(DBX, 'new'))).status).toBe(401);
+    expect((await alertsDELETE(req({}, { alertId: 'a-1' }), ctx(DBX, 'new'))).status).toBe(401);
+    expect((await monGET(req({}, { warehouseId: 'w' }), ctx(DBX, 'new'))).status).toBe(401);
+
+    expect(guard.authorizeItemWorkspace).not.toHaveBeenCalled();
+    noBackendRan();
+  });
+
+  // The 401 must be the SAME envelope the handlers returned on `main`, so no
+  // caller's error handling changes. MUTATION: return `apiError(...)` or a bare
+  // `new Response(null, {status:401})` instead → red.
+  it('the 401 envelope is unchanged from the pre-fix handlers', async () => {
+    session.current = null;
+    for (const r of [
+      await secGET(req(), ctx(DBX)),
+      await alertsDELETE(req({}, { alertId: 'a' }), ctx(DBX, 'new')),
+      await monGET(req({}, { warehouseId: 'w' }), ctx('warehouse', 'wh-1')),
+    ]) {
+      expect(r.status).toBe(401);
+      expect(await r.json()).toEqual({ ok: false, error: 'unauthenticated' });
+    }
   });
 });
 

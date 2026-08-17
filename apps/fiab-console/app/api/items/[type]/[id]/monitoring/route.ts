@@ -71,10 +71,18 @@
  *   RESIDUAL, RECORDED: an authenticated caller who owns any item of the route's
  *   `[type]` can still read the event timeline and query history — including
  *   `query_text` — of any warehouse in this deployment. LAYER 1 IS A FLOOR HERE,
- *   NOT A BOUND, the same ledger entry the two siblings carry. Closing it needs
- *   a per-item warehouse binding that does not exist today.
+ *   NOT A BOUND, the same ledger entry the two siblings carry — AND THE FLOOR IS
+ *   SELF-SERVICE: `createOwnedItem` (`_lib/item-crud.ts:423`) lets any session
+ *   holder create a qualifying item in a workspace they own, so the reachable
+ *   attacker population goes from "any authenticated session" to "any
+ *   authenticated session, plus one POST". Closing it needs a per-item warehouse
+ *   binding that does not exist today, and it cannot be an item-state one —
+ *   `_lib/databricks-resource-binding.ts:12-27` records that `PATCH
+ *   /api/cosmos-items/[type]/[id]` replaces `state` wholesale from the request
+ *   body, so the caller would write the value the bound reads.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 import {
   databricksConfigGate,
@@ -156,8 +164,22 @@ function unsavedItemGate(): NextResponse {
   }, { status: 200 });
 }
 
-export async function GET(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const { type, id } = await props.params;
+/**
+ * LAYER 0 — AUTHENTICATION, as the route-toolkit `withSession` wrapper rather
+ * than a line inside the handler, and that placement is the fix for a defect
+ * review MEASURED on the first version of this PR.
+ *
+ * `guardSynapseItemRequest` reads the session itself, so the first version
+ * relied on it for authentication too — but the `id === 'new'` gate below sits
+ * ABOVE the guard, so `…/new` answered **200 to a caller with no cookie**. On
+ * `main` this handler opened with `getSession()` → 401, and `apps/fiab-console`
+ * has NO `middleware.ts` (verified), so the route handler is the ONLY
+ * enforcement point. `withSession` makes the check unskippable (the handler is
+ * an ARGUMENT), returns the byte-identical `apiUnauthorized()` envelope, and
+ * keeps `check-route-toolkit`'s ratchet satisfied.
+ */
+export const GET = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
+  const { type, id } = params;
   if (id === UNSAVED_ITEM_ID) return unsavedItemGate();
 
   // LAYER 1. Read-scoped: this handler only reads, so shared read roles are
@@ -252,4 +274,4 @@ export async function GET(req: NextRequest, props: { params: Promise<{ type: str
     { ok: false, code: 'unsupported_item_type', error: `Monitoring is available for SQL warehouses and dedicated pools, not '${type}'.` },
     { status: 400 },
   );
-}
+});

@@ -82,18 +82,28 @@
  *   RESIDUAL, RECORDED: after this change an authenticated caller who owns ANY
  *   item of the route's `[type]` can still list and delete any alert in this
  *   deployment. LAYER 1 IS A FLOOR HERE, NOT A BOUND — the same ledger entry
- *   `[id]/optimize` and `[id]/statistics` carry. Closing it needs the
- *   server-attested ownership marker `_lib/databricks-resource-binding.ts`
- *   already models for jobs and DLT pipelines (`settings.tags['loom_item_id']`),
- *   extended to SQL alerts and to Monitor rule tags, PLUS an adoption path for
- *   every alert created before that marker existed. That is a design change with
- *   a brownfield migration and is deliberately not improvised inside a
- *   security fix — the advisory's own remediation note warns against exactly
+ *   `[id]/optimize` and `[id]/statistics` carry — AND THE FLOOR IS SELF-SERVICE:
+ *   `createOwnedItem` (`_lib/item-crud.ts:423`) lets any session holder create a
+ *   qualifying item in a workspace they own, so the reachable attacker
+ *   population goes from "any authenticated session" to "any authenticated
+ *   session, plus one POST". Attributable and refused for a read-only member of
+ *   someone else's workspace, yes; meaningfully smaller, no.
+ *
+ *   Closing it needs the server-attested ownership marker
+ *   `_lib/databricks-resource-binding.ts` already models for jobs and DLT
+ *   pipelines (`settings.tags['loom_item_id']`), extended to SQL alerts and to
+ *   Monitor rule tags, PLUS an adoption path for every alert created before that
+ *   marker existed. It specifically CANNOT be an item-state binding: that same
+ *   module's header (`:12-27`) records that `PATCH /api/cosmos-items/[type]/[id]`
+ *   replaces `state` WHOLESALE from the request body, so a state-anchored
+ *   binding is writable by the caller it is meant to bound. That is a design
+ *   change with a brownfield migration and is deliberately not improvised inside
+ *   a security fix — the advisory's own remediation note warns against exactly
  *   that ("a scope-narrowing fix is only as strong as the write path into the
  *   scope").
  */
 import { NextRequest, NextResponse } from 'next/server';
-import type { SessionPayload } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import {
@@ -221,18 +231,21 @@ function unsavedItemGate(): NextResponse {
 }
 
 /** Authorized to proceed, or the response to return verbatim. */
-type Authorized = { ok: true; session: SessionPayload } | { ok: false; res: NextResponse };
+type Authorized = { ok: true } | { ok: false; res: NextResponse };
 
 /**
- * LAYER 1 for every verb. `read` is passed ONLY by the GET; the three mutating
- * verbs must stay write-scoped, which is why this takes the flag rather than
- * defaulting it.
+ * LAYER 1 (ownership) for every verb. LAYER 0 (authentication) is the
+ * `withSession` wrapper on the exports below — see the GET for why it is the
+ * wrapper and not a line in here.
+ *
+ * `read` is passed ONLY by the GET; the three mutating verbs must stay
+ * write-scoped, which is why this takes the flag rather than defaulting it.
  */
 async function authorizeAlertsRequest(
-  ctx: { params: Promise<{ type: string; id: string }> },
+  params: { type: string; id: string },
   opts: { read?: boolean } = {},
 ): Promise<Authorized> {
-  const { type, id } = await ctx.params;
+  const { type, id } = params;
   if (id === UNSAVED_ITEM_ID) return { ok: false, res: unsavedItemGate() };
 
   const guard = await guardSynapseItemRequest({
@@ -242,15 +255,36 @@ async function authorizeAlertsRequest(
     ...(opts.read ? { allowReadRoles: true } : {}),
   });
   if (guard.res) return { ok: false, res: guard.res };
-  return { ok: true, session: guard.ctx.session };
+  return { ok: true };
 }
 
 // ============================================================
 // GET — list alerts for the active cloud boundary
 // ============================================================
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
+
+/**
+ * LAYER 0 — AUTHENTICATION, as the route-toolkit `withSession` wrapper rather
+ * than a line inside each handler, and that placement is the fix for a defect
+ * review MEASURED on the first version of this PR.
+ *
+ * `guardSynapseItemRequest` reads the session itself, so the first version
+ * relied on it for authentication too — but the `id === 'new'` gate sits ABOVE
+ * the guard, so `GET/POST/PATCH/DELETE …/new` all answered **200 to a caller
+ * with no cookie**. An unauthenticated DELETE returning 200 is a finding to any
+ * scanner whatever its body contains, and on `main` all four verbs opened with
+ * `getSession()` → 401. `apps/fiab-console` has NO `middleware.ts`, so the route
+ * handler is the ONLY enforcement point.
+ *
+ * `withSession` rather than a hand-rolled prologue: the handler is an ARGUMENT
+ * so the check cannot be dropped while the name stays; `apiUnauthorized()` is
+ * byte-identical to the pre-fix envelope (pinned by a spec); it keeps
+ * `check-route-toolkit`'s ratchet satisfied (a hand-rolled `getSession` prologue
+ * put all three routes straight back into it — which is how this was caught);
+ * and an unexpected throw becomes a safe JSON 500 rather than Next's HTML 500.
+ */
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { params }) => {
   // READ-ONLY — shared read roles admitted.
-  const auth = await authorizeAlertsRequest(ctx, { read: true });
+  const auth = await authorizeAlertsRequest(params, { read: true });
   if (!auth.ok) return auth.res;
 
   if (isGovCloud()) {
@@ -303,14 +337,14 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ type: stri
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 // ============================================================
 // POST — create an alert (returns the live alert id in the receipt)
 // ============================================================
-export async function POST(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
   // CREATES a real alert rule — write-scoped, no allowReadRoles.
-  const auth = await authorizeAlertsRequest(ctx);
+  const auth = await authorizeAlertsRequest(params);
   if (!auth.ok) return auth.res;
 
   const body = (await req.json().catch(() => ({}))) as AlertBody;
@@ -379,14 +413,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 // ============================================================
 // PATCH — update an existing alert
 // ============================================================
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
+export const PATCH = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
   // MODIFIES a real alert rule — write-scoped, no allowReadRoles.
-  const auth = await authorizeAlertsRequest(ctx);
+  const auth = await authorizeAlertsRequest(params);
   if (!auth.ok) return auth.res;
   const alertId = req.nextUrl.searchParams.get('alertId');
   if (!alertId) return NextResponse.json({ ok: false, error: 'alertId required' }, { status: 400 });
@@ -435,15 +469,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ type: str
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 // ============================================================
 // DELETE — remove / trash an alert
 // ============================================================
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
+export const DELETE = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
   // DELETES a real alert rule — the durable, hardest-to-notice effect in this
   // file. Write-scoped, no allowReadRoles.
-  const auth = await authorizeAlertsRequest(ctx);
+  const auth = await authorizeAlertsRequest(params);
   if (!auth.ok) return auth.res;
   const alertId = req.nextUrl.searchParams.get('alertId');
   if (!alertId) return NextResponse.json({ ok: false, error: 'alertId required' }, { status: 400 });
@@ -465,4 +499,4 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ type: st
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});

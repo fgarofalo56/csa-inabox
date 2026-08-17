@@ -1350,6 +1350,21 @@ const NOW_GUARDED = new Set([
   // LOOM_ALERT_RG || LOOM_ADMIN_RG, which throws when neither is set), so
   // nothing cross-subscription survives — but within the estate Layer 1 is a
   // FLOOR, not a BOUND, exactly as recorded for the round-3 routes above.
+  //
+  // AND THE FLOOR IS SELF-SERVICE. `createOwnedItem` (`_lib/item-crud.ts:423`)
+  // lets any session holder create a qualifying item in a workspace they own, so
+  // graduating these three moves the reachable population from "any
+  // authenticated session" to "any authenticated session, plus one POST". Worth
+  // stating in the file that RECORDS the graduation, so nobody reads a
+  // NOW_GUARDED entry as a bigger reduction than it is.
+  //
+  // A STATE-ANCHORED BINDING WOULD NOT CLOSE IT EITHER, and the repo already
+  // knows why: `_lib/databricks-resource-binding.ts:12-27` records that `PATCH
+  // /api/cosmos-items/[type]/[id]` replaces `state` WHOLESALE from the request
+  // body, so a binding read from item state is writable by the very caller it is
+  // meant to bound. Closing this class needs a server-attested marker on the
+  // resource (the `loom_item_id` tag that module already uses for jobs and DLT
+  // pipelines) plus a brownfield adoption path — not a Layer 2.
   'apps/fiab-console/app/api/items/[type]/[id]/security/route.ts',
   'apps/fiab-console/app/api/items/[type]/[id]/alerts/route.ts',
   'apps/fiab-console/app/api/items/[type]/[id]/monitoring/route.ts',

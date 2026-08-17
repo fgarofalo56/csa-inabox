@@ -269,7 +269,25 @@ export function WarehouseAlerts({ engine, id, warehouseId, open, onOpenChange }:
           <DialogContent>
             <div className={s.body}>
               <div className={s.toolbar}>
-                <Button appearance="primary" icon={<Add20Regular />} onClick={openEditor}>New alert</Button>
+                {/*
+                  GHSA-v8r7-c2p5-mjf2 — DISABLED WHILE THE ITEM IS UNSAVED.
+                  The load-time gate above is a warning and fires first, so the
+                  user has already been told. But the toolbar stayed live, and
+                  `save()` does `if (!j.ok) throw new Error(j.error)` — so
+                  clicking Create at /items/<type>/new turned the SAME honest 200
+                  gate into a red "Create failed" banner. Disabling the entry
+                  point is the cheap fix; the tooltip carries the remediation so
+                  it is not a dead end.
+                */}
+                <Button
+                  appearance="primary"
+                  icon={<Add20Regular />}
+                  onClick={openEditor}
+                  disabled={list?.code === 'unsaved_item'}
+                  title={list?.code === 'unsaved_item'
+                    ? 'Save this item first — alert rules are created in the name of the saved item.'
+                    : undefined}
+                >New alert</Button>
                 <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => void refresh()} disabled={loading}>Refresh</Button>
                 <span className={s.spacer} />
                 {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}

@@ -109,14 +109,29 @@
  *   authenticated caller who owns ANY `databricks-sql-warehouse` item can still
  *   name any catalog in this deployment's own metastore and drop its masks and
  *   row filters. LAYER 1 IS A FLOOR HERE, NOT A BOUND — the same ledger entry
- *   `[id]/optimize` and `[id]/statistics` carry, for the same reason. Closing it
- *   needs a per-item Unity Catalog ownership model that does not exist, plus a
- *   backfill for every existing install; that is a design decision with a
- *   brownfield migration and is deliberately not attempted here.
+ *   `[id]/optimize` and `[id]/statistics` carry, for the same reason.
+ *
+ *   AND THE FLOOR IS SELF-SERVICE, which a reader must not have to infer.
+ *   `createOwnedItem` (`_lib/item-crud.ts:423`) lets any session holder create a
+ *   `databricks-sql-warehouse` item in a workspace they own, so the reachable
+ *   attacker population goes from "any authenticated session" to "any
+ *   authenticated session, plus one POST". That is a real narrowing — the
+ *   request is now attributable to an item and a workspace, and it is refused
+ *   outright for a read-only member of someone else's — but it is NOT a
+ *   meaningful reduction in who can reach the backend, and it should not be read
+ *   as one.
+ *
+ *   Closing it needs a per-item Unity Catalog ownership model that does not
+ *   exist, plus a backfill for every existing install. A state-anchored binding
+ *   would NOT do it: `_lib/databricks-resource-binding.ts:12-27` records that
+ *   `PATCH /api/cosmos-items/[type]/[id]` replaces `state` WHOLESALE from the
+ *   request body, so the binding would be writable by the very caller it is
+ *   meant to bound. That is a design decision with a brownfield migration and is
+ *   deliberately not attempted here.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import type { SessionPayload } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 import {
   databricksConfigGate,
@@ -239,10 +254,12 @@ const ITEM_UNREACHABLE =
   'workspace owner for a Contributor-or-higher role if you need them.';
 
 /** Authorized to proceed, or the response to return verbatim. */
-type Authorized = { ok: true; session: SessionPayload } | { ok: false; res: NextResponse };
+type Authorized = { ok: true } | { ok: false; res: NextResponse };
 
 /**
- * LAYER 1 + the gates, in the one order both verbs use.
+ * LAYER 1 + the gates, in the one order both verbs use. LAYER 0
+ * (authentication) is the `withSession` wrapper on the exports below — see
+ * there for why it is the wrapper and not a line in here.
  *
  *   1. item-type gate   — pure URL function, discloses nothing.
  *   2. UNSAVED ITEM     — the honest gate, NOT a 404 (see below).
@@ -289,7 +306,7 @@ async function authorizeUcSecurityRequest(type: string, id: string): Promise<Aut
   const backendGate = resolveBackendGate();
   if (backendGate) return { ok: false, res: gate(backendGate.error) };
 
-  return { ok: true, session: guard.ctx.session };
+  return { ok: true };
 }
 
 /**
@@ -311,16 +328,41 @@ async function resolveWarehouseId(requested?: string): Promise<string> {
   return running.id;
 }
 
-async function ctxParams(ctx: { params: Promise<{ type: string; id: string }> }) {
-  return ctx.params;
-}
-
 // ============================================================
 // GET — live UC security state for the pickers + state panel
 // ============================================================
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const { type, id } = await ctxParams(ctx);
+/**
+ * LAYER 0 — AUTHENTICATION, as the route-toolkit `withSession` wrapper rather
+ * than a line inside the handler, and that placement is the fix for a defect
+ * review MEASURED on the first version of this PR.
+ *
+ * `guardSynapseItemRequest` reads the session itself, so the first version
+ * relied on it for authentication too — but the item-TYPE gate and the
+ * `id === 'new'` gate sit ABOVE the guard, so both answered **200 to a caller
+ * with no cookie at all**. The bodies were static product copy, so the
+ * disclosure was nil; that is not why it had to change. On `main` these handlers
+ * opened with `getSession()` → 401, `apps/fiab-console` has NO `middleware.ts`
+ * (verified: no `export function middleware`, no `NextMiddleware` outside
+ * node_modules), so the route handler is the ONLY enforcement point — and
+ * silently relaxing an authentication contract inside a security fix is exactly
+ * the class of undisclosed change this advisory exists to stop.
+ *
+ * `withSession` rather than a hand-rolled `if (!getSession()) return 401`:
+ *   - it is UNSKIPPABLE in the way the guard wrappers are — the handler is an
+ *     ARGUMENT, so there is no `if (denied) return denied;` line a later edit can
+ *     drop while leaving the name in the file;
+ *   - `apiUnauthorized()` is byte-identical to the envelope these handlers
+ *     returned on `main` (`{ ok:false, error:'unauthenticated' }`, 401), so no
+ *     caller's error handling changes — pinned by a spec;
+ *   - it keeps `check-route-toolkit`'s ratchet satisfied (a hand-rolled
+ *     `getSession` prologue would have put all three routes back into it, which
+ *     is how this was caught);
+ *   - and it genericizes an unexpected handler throw to a safe 500 instead of
+ *     Next's HTML 500, which the editors' `await r.json()` cannot parse.
+ */
+export const GET = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
+  const { type, id } = params;
   const auth = await authorizeUcSecurityRequest(type, id);
   if (!auth.ok) return auth.res;
 
@@ -385,17 +427,20 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ type: strin
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 // ============================================================
 // POST — preview / execute a wizard, drop a binding, or verify
 // ============================================================
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const { type, id } = await ctxParams(ctx);
+// NOTE the destructured route params are named `routeParams`, not `params`:
+// this handler already has a local `params` (the WIZARD params off the body,
+// `:533`). tsc caught the collision; renaming here keeps the wizard code and its
+// `params.catalog` / `params.schema` reads untouched.
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params: routeParams }) => {
+  const { type, id } = routeParams;
   const auth = await authorizeUcSecurityRequest(type, id);
   if (!auth.ok) return auth.res;
-  const { session } = auth;
 
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || 'wizard');
@@ -538,4 +583,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
     executionMs: Date.now() - started,
     executedBy: session.claims.upn,
   });
-}
+});
