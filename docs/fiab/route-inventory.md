@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 669 |
-| Owner-scoped | 652 |
+| Session-only | 667 |
+| Owner-scoped | 654 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -1315,11 +1315,11 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/databricks-pipeline/[id]/stop/route.ts` | POST | owner-scoped | ● | Databricks |
 | `items/databricks-pipeline/[id]/updates/route.ts` | GET | owner-scoped | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/cancel/route.ts` | POST | session-only | ● | Databricks |
-| `items/databricks-sql-warehouse/[id]/clone/route.ts` | POST | session-only | ● | Databricks |
+| `items/databricks-sql-warehouse/[id]/clone/route.ts` | POST | owner-scoped | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/connection/route.ts` | GET | session-only |  | — |
 | `items/databricks-sql-warehouse/[id]/create/route.ts` | POST | session-only | ● | Databricks, Synapse |
 | `items/databricks-sql-warehouse/[id]/ctas/route.ts` | POST | owner-scoped | ● | Databricks |
-| `items/databricks-sql-warehouse/[id]/delete/route.ts` | POST | session-only | ● | Databricks, Synapse |
+| `items/databricks-sql-warehouse/[id]/delete/route.ts` | POST | owner-scoped | ● | Databricks, Synapse |
 | `items/databricks-sql-warehouse/[id]/edit/route.ts` | POST | owner-scoped |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |
 | `items/databricks-sql-warehouse/[id]/model/route.ts` | GET POST DELETE | owner-scoped |  | Databricks |

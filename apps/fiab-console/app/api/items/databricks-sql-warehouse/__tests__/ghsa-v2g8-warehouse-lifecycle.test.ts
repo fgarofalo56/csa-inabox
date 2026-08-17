@@ -6,13 +6,18 @@
  *   GET    [id]/state   → getWarehouse       (read)
  *   POST   [id]/start   → startWarehouse     (mutation: starts billed compute)
  *   POST   [id]/edit    → editWarehouse      (mutation: rescale + restart)
+ *   POST   [id]/delete  → deleteWarehouse /  (DESTRUCTIVE, irreversible; the Gov
+ *                         deleteDedicatedSqlPool   branch destroys the DATABASE)
+ *   POST   [id]/clone   → CREATE … CLONE     (materialize-then-read; `replace`
+ *                                             OVERWRITES a caller-named table)
  *
  * WHAT THIS FILE IS FOR, stated so it is not mistaken for a contract test: it
  * asserts the AUTHORIZATION contract — that authentication happens FIRST on
  * every verb and every short-circuit path, that an unowned item is refused, and
  * that the unsaved-item gate does not become a hole. The data-plane contracts
- * (which REST call, which body) are covered by the routes' own behaviour and by
- * `lib/azure/__tests__/warehouse-create-delete-route.test.ts`.
+ * (which REST call, which SQL, which boundary) are covered by
+ * `lib/azure/__tests__/warehouse-create-delete-route.test.ts` and
+ * `app/api/items/__tests__/databricks-ctas-clone-routes.test.ts`.
  *
  * THE 401 CASES ARE THE POINT, not filler. Review of #3655 measured that moving
  * a type/`id === 'new'`/config short-circuit ABOVE the session read makes a
@@ -53,14 +58,32 @@ vi.mock('@/lib/azure/databricks-client', () => ({
   startWarehouse: vi.fn(),
   stopWarehouse: vi.fn(),
   editWarehouse: vi.fn(),
+  deleteWarehouse: vi.fn(),
+  executeStatement: vi.fn(),
+  databricksConfigGate: vi.fn(() => null),
+}));
+vi.mock('@/lib/azure/synapse-dev-client', () => ({ deleteDedicatedSqlPool: vi.fn() }));
+// Spread the REAL module and override only `isGovCloud`. A narrow factory here
+// silently drops `armScope` and every other export the client chain imports,
+// which fails as a collection error rather than a test failure.
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/azure/cloud-endpoints')>()),
+  isGovCloud: vi.fn(() => false),
 }));
 
 import { GET as stateGET, POST as statePOST } from '../[id]/state/route';
 import { POST as startPOST } from '../[id]/start/route';
 import { POST as editPOST } from '../[id]/edit/route';
+import { POST as deletePOST } from '../[id]/delete/route';
+import { POST as clonePOST } from '../[id]/clone/route';
 import { getSession } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
-import { getWarehouse, startWarehouse, stopWarehouse, editWarehouse } from '@/lib/azure/databricks-client';
+import {
+  getWarehouse, startWarehouse, stopWarehouse, editWarehouse, deleteWarehouse,
+  executeStatement, databricksConfigGate,
+} from '@/lib/azure/databricks-client';
+import { deleteDedicatedSqlPool } from '@/lib/azure/synapse-dev-client';
+import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 
 const SESSION = { claims: { upn: 'u@contoso.com', oid: 'oid-1', tid: 'tid-1' }, exp: 9_999_999_999 };
 
@@ -78,11 +101,36 @@ const VERBS: Array<[string, (r: any, c: any) => Promise<Response>, any]> = [
   ['state POST', statePOST as any, req('wh-victim', { action: 'stop' })],
   ['start POST', startPOST as any, req()],
   ['edit POST', editPOST as any, req('wh-victim', { cluster_size: '2X-Small' })],
+  ['delete POST', deletePOST as any, req('wh-victim', { warehouseId: 'wh-victim' })],
+  ['clone POST', clonePOST as any, req('wh-victim', { warehouseId: 'wh-victim', source: 'a.b.c', target: 'd.e.f' })],
 ];
+
+/** Asserts NO data-plane call of any kind was reached. */
+function expectNoDataPlaneCall() {
+  expect(getWarehouse).not.toHaveBeenCalled();
+  expect(startWarehouse).not.toHaveBeenCalled();
+  expect(stopWarehouse).not.toHaveBeenCalled();
+  expect(editWarehouse).not.toHaveBeenCalled();
+  expect(deleteWarehouse).not.toHaveBeenCalled();
+  expect(deleteDedicatedSqlPool).not.toHaveBeenCalled();
+  expect(executeStatement).not.toHaveBeenCalled();
+}
+
+/** Asserts no MUTATING data-plane call was reached (reads may legitimately run). */
+function expectNoMutation() {
+  expect(startWarehouse).not.toHaveBeenCalled();
+  expect(stopWarehouse).not.toHaveBeenCalled();
+  expect(editWarehouse).not.toHaveBeenCalled();
+  expect(deleteWarehouse).not.toHaveBeenCalled();
+  expect(deleteDedicatedSqlPool).not.toHaveBeenCalled();
+  expect(executeStatement).not.toHaveBeenCalled();
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
   (authorizeItemWorkspace as any).mockResolvedValue(null);
+  (databricksConfigGate as any).mockReturnValue(null);
+  (isGovCloud as any).mockReturnValue(false);
   (getWarehouse as any).mockResolvedValue({ state: 'STOPPED', name: 'w', cluster_size: 'Small' });
 });
 
@@ -109,10 +157,7 @@ describe('LAYER 0 — authentication is FIRST, on every verb and every short-cir
       (getSession as any).mockReturnValue(null);
       await handler(request, ctx('sw-1'));
       await handler(request, ctx('new'));
-      expect(getWarehouse).not.toHaveBeenCalled();
-      expect(startWarehouse).not.toHaveBeenCalled();
-      expect(stopWarehouse).not.toHaveBeenCalled();
-      expect(editWarehouse).not.toHaveBeenCalled();
+      expectNoDataPlaneCall();
     });
   }
 });
@@ -140,21 +185,41 @@ describe('LAYER 1 — the route item must be owned', () => {
     it(`${name}: a DENIED request reaches no data-plane call`, async () => {
       (getSession as any).mockReturnValue(SESSION);
       await handler(request, ctx('does-not-exist'));
-      expect(startWarehouse).not.toHaveBeenCalled();
-      expect(stopWarehouse).not.toHaveBeenCalled();
-      expect(editWarehouse).not.toHaveBeenCalled();
+      expectNoDataPlaneCall();
     });
   }
 
-  it('state GET admits a shared READ role; the mutating verbs do NOT', async () => {
+  it('the READ verb admits a shared read role; every MUTATION does NOT', async () => {
     (getSession as any).mockReturnValue(SESSION);
-    await stateGET(req() as any, ctx('sw-1') as any);
-    await statePOST(req('wh', { action: 'stop' }) as any, ctx('sw-1') as any);
-    await startPOST(req() as any, ctx('sw-1') as any);
-    await editPOST(req('wh', {}) as any, ctx('sw-1') as any);
+    for (const [, handler, request] of VERBS) await handler(request, ctx('sw-1'));
     const scopes = (authorizeItemWorkspace as any).mock.calls.map((c: any[]) => !!c[1]?.allowReadRoles);
-    // GET read-scoped; the three mutations write-scoped.
-    expect(scopes).toEqual([true, false, false, false]);
+    // Order matches VERBS: state GET read-scoped; the five mutations write-scoped.
+    expect(scopes).toEqual([true, false, false, false, false, false]);
+  });
+
+  // The delete route branches on cloud AFTER the guard, so ONE check covers both
+  // boundaries. Asserted rather than inferred: `cloud-parity.md` — a
+  // Commercial-only receipt proves nothing about Gov, and the Gov branch here is
+  // the more destructive of the two (an ARM pool delete takes the DATABASE).
+  it('delete: the guard runs ABOVE the cloud branch — Gov is refused too', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    (isGovCloud as any).mockReturnValue(true);
+    process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-ws';
+    const res = await deletePOST(req('loom-pool', { warehouseId: 'loom-pool' }) as any, ctx('does-not-exist') as any);
+    expect(res.status).toBe(404);
+    expect(deleteDedicatedSqlPool).not.toHaveBeenCalled();
+  });
+
+  // The config gate must sit BELOW the guard, so a caller who cannot reach the
+  // item does not learn the deployment's Databricks configuration state.
+  it('clone: an unowned caller gets 404, NOT the 503 config gate', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    (databricksConfigGate as any).mockReturnValue({ missing: 'LOOM_DATABRICKS_HOSTNAME' });
+    const res = await clonePOST(
+      req('wh', { warehouseId: 'wh', source: 'a.b.c', target: 'd.e.f' }) as any,
+      ctx('does-not-exist') as any,
+    );
+    expect(res.status).toBe(404);
   });
 });
 
@@ -175,10 +240,7 @@ describe("the unsaved-item gate (id === 'new')", () => {
 
     it(`${name}: the gate reaches NO data-plane call`, async () => {
       await handler(request, ctx('new'));
-      expect(getWarehouse).not.toHaveBeenCalled();
-      expect(startWarehouse).not.toHaveBeenCalled();
-      expect(stopWarehouse).not.toHaveBeenCalled();
-      expect(editWarehouse).not.toHaveBeenCalled();
+      expectNoDataPlaneCall();
     });
 
     // The gate matches the literal id EXACTLY. Real ids are crypto.randomUUID(),
@@ -241,11 +303,55 @@ describe('the admitted path still works', () => {
     });
   });
 
-  it('every verb still 400s without a warehouseId, AFTER authorization', async () => {
-    const noWh = { url: 'http://x/', nextUrl: new URL('http://x/'), json: async () => ({ action: 'stop' }) } as any;
-    for (const [, handler] of VERBS) {
+  it('delete POST deletes the Databricks warehouse when stopped', async () => {
+    const res = await deletePOST(req('wh-1', { warehouseId: 'wh-1' }) as any, ctx('sw-1') as any);
+    expect(res.status).toBe(200);
+    expect(deleteWarehouse).toHaveBeenCalledWith('wh-1');
+  });
+
+  it('delete POST still 409s a RUNNING warehouse without force', async () => {
+    (getWarehouse as any).mockResolvedValue({ state: 'RUNNING' });
+    const res = await deletePOST(req('wh-1', { warehouseId: 'wh-1' }) as any, ctx('sw-1') as any);
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('warehouse_running');
+    expect(deleteWarehouse).not.toHaveBeenCalled();
+  });
+
+  it('delete POST takes the Gov branch to the ARM pool delete', async () => {
+    (isGovCloud as any).mockReturnValue(true);
+    process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-ws';
+    const res = await deletePOST(req('loom-pool', { warehouseId: 'loom-pool' }) as any, ctx('sw-1') as any);
+    expect(res.status).toBe(200);
+    expect(deleteDedicatedSqlPool).toHaveBeenCalledWith('loom-pool');
+    expect(deleteWarehouse).not.toHaveBeenCalled();
+  });
+
+  it('clone POST emits SHALLOW CLONE and reports zero copied files', async () => {
+    (getWarehouse as any).mockResolvedValue({ state: 'RUNNING' });
+    (executeStatement as any).mockResolvedValue({
+      columns: ['source_table_size', 'source_num_of_files', 'num_copied_files'],
+      rows: [[1024, 7, 0]], rowCount: 1, executionMs: 30, truncated: false,
+    });
+    const res = await clonePOST(
+      req('wh-1', { warehouseId: 'wh-1', source: 'main.s.o', target: 'main.d.o', cloneType: 'SHALLOW' }) as any,
+      ctx('sw-1') as any,
+    );
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.numCopiedFiles).toBe(0);
+    expect((executeStatement as any).mock.calls[0][1])
+      .toBe('CREATE TABLE IF NOT EXISTS main.d.o SHALLOW CLONE main.s.o');
+  });
+
+  it('every verb still 400s on a missing warehouseId, AFTER authorization', async () => {
+    // `delete` and `clone` read warehouseId from the BODY, the others from the
+    // query — so the empty request must carry neither.
+    const noWh = { url: 'http://x/', nextUrl: new URL('http://x/'), json: async () => ({ action: 'stop', source: 'a', target: 'b' }) } as any;
+    for (const [name, handler] of VERBS) {
       const res = await handler(noWh, ctx('sw-1'));
-      expect(res.status).toBe(400);
+      expect(res.status, name).toBe(400);
     }
+    expectNoMutation();
   });
 });

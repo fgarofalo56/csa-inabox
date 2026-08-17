@@ -802,21 +802,20 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/stop/route.ts',
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/updates/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/cancel/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/clone/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/connection/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/create/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/ctas/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/delete/route.ts',
-  // GHSA-v2g8-gp3r-rg4r — `[id]/{state,start,edit}` USED TO SIT IN THIS BLOCK
-  // AND ARE GONE, DELETED RATHER THAN REWORDED. They are in NOW_GUARDED below.
+  // GHSA-v2g8-gp3r-rg4r — `[id]/{state,start,edit,delete,clone}` USED TO SIT IN
+  // THIS BLOCK AND ARE GONE, DELETED RATHER THAN REWORDED. They are in
+  // NOW_GUARDED below.
   //
   // The class reason above this list — "operate on a single deployment-shared
   // Azure resource resolved by item TYPE + the id in the URL … there is NO
-  // per-tenant Cosmos ownership to scope" — was FALSE of all three on both
+  // per-tenant Cosmos ownership to scope" — was FALSE of all five on both
   // halves of the sentence. None of them resolved anything "by the id in the
-  // URL": `state` and `start` and `edit` each took `(req: NextRequest)` with NO
-  // `ctx` at all, so `[id]` was never read. And the resource was not resolved by
-  // item type either — it came from a caller-supplied `?warehouseId=`.
+  // URL": every one took `(req: NextRequest)` with NO `ctx` at all, so `[id]`
+  // was never read. And the resource was not resolved by item type either — it
+  // came from a caller-supplied `warehouseId` on the query string or the body.
   //
   // The wording is the recorded root cause of this whole advisory section, so
   // rewording preserves the failure: a reason that is accurate about a SIBLING
@@ -1402,10 +1401,24 @@ const NOW_GUARDED = new Set([
   // same heuristic that produced the first answer. The advisory's earlier "11"
   // was therefore RIGHT and its retraction to 12 was the error.
   //
-  // THIS PASS FIXES THE THREE LIFECYCLE VERBS. All three had `getSession()` as
-  // their entire authorization, took NO `ctx`, and acted on a caller-supplied
-  // `?warehouseId=`:
+  // THIS PASS FIXES THE FIVE MUTATING/DESTRUCTIVE MEMBERS. All five had
+  // `getSession()` as their entire authorization, took NO `ctx`, and acted on a
+  // caller-supplied `warehouseId` from the query string or the body:
   //
+  //   [id]/delete  THE HIGHEST-SEVERITY MEMBER, and irreversible.
+  //     `deleteWarehouse` on Commercial/GCC; `deleteDedicatedSqlPool` on
+  //     GCC-High/DoD, where an ARM pool delete destroys the DATABASE, not just
+  //     compute. BOTH BOUNDARIES were affected — recorded explicitly because
+  //     this family's other members are Databricks-only, so "Commercial-only"
+  //     would be the natural and WRONG assumption (`cloud-parity.md`). The
+  //     `force` flag only bypassed the RUNNING pre-check and was never an
+  //     authorization control; the Gov branch had no pre-check at all.
+  //   [id]/clone   `CREATE [OR REPLACE] TABLE <caller target> <TYPE> CLONE
+  //     <caller source>` — the advisory's headline MATERIALIZE-THEN-READ shape
+  //     on Unity Catalog, and a SHALLOW clone copies no data files, so
+  //     exfiltrating a large victim table costs one metadata operation. Also
+  //     destructive in one direction: `replace: true` OVERWRITES a caller-named
+  //     table. It is `ctas`'s twin and now runs the same guard `ctas` does.
   //   [id]/state   GET reads warehouse metadata; POST calls `stopWarehouse` —
   //     it STOPS a caller-named warehouse, killing live compute and in-flight
   //     queries. This is the member the family was first noticed through, and
@@ -1417,43 +1430,48 @@ const NOW_GUARDED = new Set([
   //   [id]/edit    `editWarehouse` — rewrites cluster_size / min+max clusters /
   //     auto_stop_mins / warehouse_type / serverless on a caller-named
   //     warehouse. Databricks applies an edit by RESTARTING it, so it is a cost
-  //     change AND an availability event. The most consequential of the three.
+  //     change AND an availability event.
   //
-  // All three now run `guardSynapseItemRequest` against the route item — the
+  // All five now run `guardSynapseItemRequest` against the route item — the
   // same backend-agnostic Layer-1 guard the sibling `[id]/ctas` already used,
   // not a new mechanism — write-scoped except the `state` GET, which genuinely
-  // only reads. Authentication is the route-toolkit `withSession` wrapper placed
+  // only reads. On `delete` the guard sits ABOVE the `isGovCloud()` branch, so
+  // ONE check covers both boundaries rather than two that can drift. On `clone`
+  // the config gate moved BELOW the guard (matching `ctas`), so a caller who
+  // cannot reach the item no longer learns the deployment's Databricks config
+  // state. Authentication is the route-toolkit `withSession` wrapper placed
   // ABOVE the `id === 'new'` short-circuit, because a gate above the session
   // read makes an unauthenticated request answer 200 (measured on #3655).
   //
-  // NOT IN THIS PASS, and named so the gap is visible rather than implied
-  // closed: `[id]/delete` (`deleteWarehouse` / `deleteDedicatedSqlPool` — the
-  // highest-severity member of the family) and `[id]/clone` (`CREATE TABLE …
-  // CLONE` DDL). Both are still unguarded. Their existing suites live OUTSIDE
-  // this change's declared file ownership
-  // (`lib/azure/__tests__/warehouse-create-delete-route.test.ts` and
-  // `app/api/items/__tests__/databricks-ctas-clone-routes.test.ts`), and both
-  // call the handlers with NO ctx, so adopting the guard necessarily edits them.
-  // Deferred to a follow-up with those files in scope rather than shipped with
-  // knowingly-red tests or with the tests quietly loosened.
+  // STILL UNGUARDED IN THIS FAMILY, named so the gap stays visible rather than
+  // implied closed — the read-shaped remainder: `connection`, `iqy`, `query`,
+  // `query-history`, `schema`, `script-out`, plus `cancel`, `create`,
+  // `query-profile` and `warehouses`. `query` is separately recorded on the
+  // advisory as unauthorized (caller-authored SQL on a caller-chosen warehouse;
+  // `[id]` read only for the `recordQueryRun` FinOps receipt).
   //
   // READ THE LEDGER BEFORE READING THIS AS CLOSURE. `warehouseId` is still
-  // CALLER-NAMED on all three: no item→warehouse binding exists in this tree to
+  // CALLER-NAMED on all five: no item→warehouse binding exists in this tree to
   // resolve it from — `sql-warehouse-editor.tsx` picks it from a live
   // `listWarehouses()` and never persists it — and a state-anchored binding
   // cannot close it, because `_lib/databricks-resource-binding.ts:12-27` records
   // that `PATCH /api/cosmos-items/[type]/[id]` replaces `state` WHOLESALE from
   // the request body, so the caller would write the value the bound reads.
-  // Everything is bounded by construction to this deployment's own Databricks
-  // workspace (`dbxFetch` → LOOM_DATABRICKS_HOSTNAME), so nothing
+  // Everything is bounded by construction to this deployment's own estate
+  // (`dbxFetch` → LOOM_DATABRICKS_HOSTNAME; the ARM path composed against
+  // LOOM_SUBSCRIPTION_ID / LOOM_SYNAPSE_WORKSPACE), so nothing
   // cross-subscription survives — but within the estate LAYER 1 IS A FLOOR, NOT
   // A BOUND, AND THE FLOOR IS SELF-SERVICE: `createOwnedItem`
   // (`_lib/item-crud.ts:423`) lets any session holder create a qualifying item
   // in a workspace they own, so this moves the reachable population from "any
-  // authenticated session" to "any authenticated session, plus one POST".
+  // authenticated session" to "any authenticated session, plus one POST". On
+  // `delete` that residual is the sharpest in the set, because the effect is
+  // irreversible.
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/state/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/start/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/edit/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/delete/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/clone/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
