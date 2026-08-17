@@ -197,20 +197,47 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
   // click resolves (never on mount — a freshly created item must show no
   // banners per ux-baseline.md's "clean first-open" rule).
   const [unresolvedNames, setUnresolvedNames] = useState<string[]>([]);
+  // The value set the banner above is ALLOWED to name. It is the one the server
+  // actually resolved against (the route echoes it back), NOT the live `tab` —
+  // nothing disables the ribbon/TabList while a resolve is in flight, and
+  // switching tabs afterwards does not re-resolve, so rendering `tab` would
+  // assert "no variable named X exists in the prod value set" about a set that
+  // was never diffed (deploy-integrity.md R7 — a message states only what the
+  // code established).
+  const [resolvedValueSet, setResolvedValueSet] = useState<string | null>(null);
+  // A soft-navigation between two items of the same type changes `id` WITHOUT
+  // remounting this editor: app/items/[type]/[id]/page.tsx renders
+  // `<Editor item={item} id={id} …/>` with no `key={id}`, which is precisely
+  // why useItemState's own load effect is keyed on `[slug, id]`. Every piece of
+  // Resolve output below therefore belongs to the PREVIOUS id and must be
+  // dropped, or the next library opens carrying another item's warning banner
+  // (ux-baseline.md — no error banners on a freshly opened, untouched item).
+  useEffect(() => {
+    setResolved(null);
+    setResolveErr(null);
+    setExpandOut(null);
+    setUnresolvedNames([]);
+    setResolvedValueSet(null);
+  }, [id]);
   const runResolve = useCallback(async () => {
     if (id === 'new') { setResolveErr('Save the library before resolving.'); return; }
-    setResolveBusy(true); setResolveErr(null); setUnresolvedNames([]);
+    setResolveBusy(true); setResolveErr(null); setUnresolvedNames([]); setResolvedValueSet(null);
     const textSent = expandText;
+    const valueSetSent = tab;
     try {
       const r = await clientFetch(`/api/items/variable-library/${encodeURIComponent(id)}/resolve`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ valueSet: tab, text: textSent }),
+        body: JSON.stringify({ valueSet: valueSetSent, text: textSent }),
       });
       const j = await r.json();
       if (!j.ok) { setResolveErr(j.error || 'resolve failed'); setResolved([]); return; }
       const resolvedList: ResolvedVarRow[] = j.resolved || [];
       setResolved(resolvedList);
       setExpandOut(j.expanded ?? null);
+      // Prefer the value set the ROUTE reports it resolved against — it applies
+      // its own allow-list fallback — and fall back to the one this call posted.
+      // Both are facts this call established; the live `tab` is not.
+      setResolvedValueSet(typeof j.valueSet === 'string' ? j.valueSet : valueSetSent);
       // Diff what was REFERENCED in the input against what actually came back
       // resolved — anything referenced but absent from the resolved set is
       // exactly what expandVariables() left verbatim.
@@ -345,18 +372,23 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
                 <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 120 }}>{expandOut || '(empty)'}</div>
               </>
             )}
-            {unresolvedNames.length > 0 && (
+            {/* Gated on `resolvedValueSet` as well as the names: the banner
+                names a value set, so it may not render before the resolve that
+                established which one. */}
+            {unresolvedNames.length > 0 && resolvedValueSet && (
               <MessageBar intent="warning">
                 <MessageBarBody>
                   <MessageBarTitle>
-                    {unresolvedNames.length === 1 ? '1 reference left unresolved' : `${unresolvedNames.length} references left unresolved`}
+                    {/* De-duplicated NAMES, not reference occurrences —
+                        `@{variables.X}@{variables.X}` is one variable. */}
+                    {unresolvedNames.length === 1 ? '1 variable left unresolved' : `${unresolvedNames.length} variables left unresolved`}
                   </MessageBarTitle>
                   <div>
                     No variable named {unresolvedNames.map((n, i) => (
                       <span key={n}>
                         <code>{n}</code>{i < unresolvedNames.length - 1 ? ', ' : ''}
                       </span>
-                    ))} exists in the <strong>{tab}</strong> value set, so {unresolvedNames.length === 1 ? 'its' : 'their'} <code>@{'{'}variables.NAME{'}'}</code> reference{unresolvedNames.length === 1 ? ' was' : 's were'} left verbatim in the expanded text above. Add {unresolvedNames.length === 1 ? 'it' : 'them'} to the table and save, or check the name for a typo.
+                    ))} exists in the <strong>{resolvedValueSet}</strong> value set, so {unresolvedNames.length === 1 ? 'its' : 'their'} <code>@{'{'}variables.NAME{'}'}</code> reference{unresolvedNames.length === 1 ? ' was' : 's were'} left verbatim in the expanded text above. Add {unresolvedNames.length === 1 ? 'it' : 'them'} to the table and save, or check the name for a typo.
                   </div>
                 </MessageBarBody>
               </MessageBar>
