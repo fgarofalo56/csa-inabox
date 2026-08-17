@@ -40,6 +40,44 @@ export const dynamic = 'force-dynamic';
 
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 
+/**
+ * Translate a raw Python interpreter traceback in a non-2xx runtime response
+ * into a specific, actionable message instead of forwarding the stack trace
+ * to the user verbatim (.claude/rules/deploy-integrity.md R6 — a failure must
+ * emit a specific remediation, never a raw interpreter internal).
+ *
+ * Issue #3574: a blank/omitted parameter with no client-side omission or
+ * validation reached the function as `None`, and the function's own
+ * arithmetic/string logic then raised on it (e.g. `weight * 42` ->
+ * "unsupported operand type(s) for *: 'NoneType' and 'int'"). The editor now
+ * omits blank params that declare a default and blocks Run for ones that
+ * don't (see user-data-function-editor.tsx runTest), so this should no
+ * longer trigger from the Test panel — this is defense in depth for any
+ * other caller of this route (generated invocation code, direct API use)
+ * and for tracebacks the client-side fix can't anticipate.
+ *
+ * Returns undefined when the response body isn't a recognizable traceback,
+ * so callers fall back to forwarding it unchanged.
+ */
+function friendlyRuntimeError(rawText: string, parameters: Record<string, unknown>): string | undefined {
+  if (!/Traceback \(most recent call last\)/.test(rawText)) return undefined;
+  const m = rawText.match(/(\w+(?:Error|Exception)):\s*(.*)\s*$/m);
+  const excType = m?.[1] || 'Error';
+  const excMsg = (m?.[2] || '').trim();
+  // The most common shape: arithmetic/string ops on a parameter that was sent
+  // as null. Name the actual parameter(s) rather than the Python internal.
+  if (/NoneType/i.test(excMsg)) {
+    const nullParams = Object.entries(parameters).filter(([, v]) => v === null).map(([k]) => k);
+    if (nullParams.length) {
+      const list = nullParams.join(', ');
+      const plural = nullParams.length > 1;
+      return `The function failed because ${list} ${plural ? 'were' : 'was'} not provided (sent as null). `
+        + `Set a value for ${plural ? 'these parameters' : 'this parameter'} — or add a default in the function signature — and run again.`;
+    }
+  }
+  return `The function raised ${excType}${excMsg ? `: ${excMsg}` : ''}.`;
+}
+
 export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const id = params.id;
   const b = await req.json().catch(() => ({}));
@@ -111,8 +149,11 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       }
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(parameters) });
       const text = await res.text();
+      // Never surface a raw Python traceback as the failure message (R6) —
+      // translate it to a specific, actionable remediation when recognized.
+      const friendly = res.ok ? undefined : friendlyRuntimeError(text, parameters);
       return NextResponse.json({
-        ok: res.ok, backend: 'azure-functions', status: res.status, body: text,
+        ok: res.ok, backend: 'azure-functions', status: res.status, body: friendly || text,
         // Be explicit when we did NOT run the item's authored source, so the Test
         // panel result is never silently the bundled sample (no-vaporware.md).
         ...(ranAuthoredSource || !sourceNote ? {} : { note: sourceNote }),
@@ -154,7 +195,8 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
           body: JSON.stringify(parameters),
         });
         const text = await res.text();
-        return NextResponse.json({ ok: res.ok, backend: 'fabric', status: res.status, body: text });
+        const friendly = res.ok ? undefined : friendlyRuntimeError(text, parameters);
+        return NextResponse.json({ ok: res.ok, backend: 'fabric', status: res.status, body: friendly || text });
       } catch (e: any) {
         return NextResponse.json({ ok: false, backend: 'fabric', error: e?.message || String(e) }, { status: 502 });
       }

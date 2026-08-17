@@ -154,6 +154,10 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const [testBusy, setTestBusy] = useState(false);
   const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string; note?: string } | null>(null);
   const [testGate, setTestGate] = useState<string | null>(null);
+  // Params left blank on Run with NO declared default in the function
+  // signature (issue #3574) — Run is blocked and these fields are flagged
+  // inline instead of dispatching a request the runtime can only fail on.
+  const [testMissing, setTestMissing] = useState<string[]>([]);
   const selectedFn = functions.find((f) => f.name === testFn) || functions[0];
 
   // Generate invocation code dialog. Azure Functions (Azure-native) is the
@@ -194,15 +198,34 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 
   const runTest = useCallback(async () => {
     if (!selectedFn) return;
-    setTestBusy(true); setTestOut(null); setTestGate(null);
-    // Coerce typed params: numbers/bools parsed, everything else string.
+    setTestOut(null); setTestGate(null);
+    // Coerce typed params: numbers/bools parsed, everything else string. A
+    // blank value for a param that DECLARES ITS OWN DEFAULT in the function
+    // signature is OMITTED from the payload entirely so the function's own
+    // default applies — rather than sending an explicit null/None, which
+    // crashes functions that do arithmetic/string ops on it (issue #3574: a
+    // blank `weight` on `compute_score(user_id, weight=1.0)` sent
+    // `{weight: null}`, and `weight * 42` raised
+    // "unsupported operand type(s) for *: 'NoneType' and 'int'").
+    // A blank value for a param with NO declared default is a genuinely
+    // missing required argument: Run is blocked below and the field is
+    // flagged instead of dispatching a request the runtime can only fail.
     const parameters: Record<string, unknown> = {};
+    const missing: string[] = [];
     for (const p of selectedFn.params) {
       const raw = testParams[p.name] ?? '';
-      if (p.type && /int|float|number/i.test(p.type)) parameters[p.name] = raw === '' ? null : Number(raw);
+      if (raw === '') {
+        if (p.default != null) continue; // let the function's own default apply
+        missing.push(p.name);
+        continue;
+      }
+      if (p.type && /int|float|number/i.test(p.type)) parameters[p.name] = Number(raw);
       else if (p.type && /bool/i.test(p.type)) parameters[p.name] = raw === 'true';
       else parameters[p.name] = raw;
     }
+    if (missing.length) { setTestMissing(missing); return; }
+    setTestMissing([]);
+    setTestBusy(true);
     try {
       const r = await clientFetch(`/api/items/user-data-function/${encodeURIComponent(id)}/invoke`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -322,16 +345,31 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
                 placeholder={functions.length ? 'Select a function' : 'No functions to run'}
                 value={selectedFn?.name || ''}
                 selectedOptions={selectedFn ? [selectedFn.name] : []}
-                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); }}
+                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); setTestMissing([]); }}
               >
                 {functions.map((f) => <Option key={f.name} value={f.name}>{f.name}</Option>)}
               </Dropdown>
             </Field>
-            {selectedFn?.params.map((p) => (
-              <Field key={p.name} label={`${p.name}${p.type ? ` : ${p.type}` : ''}${p.default ? ` (default ${p.default})` : ''}`}>
-                <Input value={testParams[p.name] ?? ''} onChange={(_, d) => setTestParams((cur) => ({ ...cur, [p.name]: d.value }))} placeholder={p.default || ''} />
-              </Field>
-            ))}
+            {selectedFn?.params.map((p) => {
+              const isMissing = testMissing.includes(p.name);
+              return (
+                <Field
+                  key={p.name}
+                  label={`${p.name}${p.type ? ` : ${p.type}` : ''}${p.default ? ` (default ${p.default})` : ''}`}
+                  validationState={isMissing ? 'error' : 'none'}
+                  validationMessage={isMissing ? `Required — ${selectedFn.name} declares no default for this parameter.` : undefined}
+                >
+                  <Input
+                    value={testParams[p.name] ?? ''}
+                    onChange={(_, d) => {
+                      setTestParams((cur) => ({ ...cur, [p.name]: d.value }));
+                      if (isMissing) setTestMissing((cur) => cur.filter((n) => n !== p.name));
+                    }}
+                    placeholder={p.default || ''}
+                  />
+                </Field>
+              );
+            })}
             <Button appearance="primary" onClick={runTest} disabled={testBusy || !selectedFn} style={{ alignSelf: 'flex-start' }}>{testBusy ? 'Running…' : 'Run'}</Button>
             {testGate && (
               <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Function not published yet</MessageBarTitle>{testGate}</MessageBarBody></MessageBar>
@@ -339,7 +377,19 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
             {testOut && (
               <>
                 <Caption1>Output {testOut.status != null ? `(HTTP ${testOut.status})` : ''}</Caption1>
-                <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>{testOut.body || '(empty)'}</div>
+                {testOut.ok ? (
+                  <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>{testOut.body || '(empty)'}</div>
+                ) : (
+                  // A failure is surfaced as a specific, actionable message (never a raw
+                  // interpreter traceback — see the invoke route's friendlyRuntimeError
+                  // and .claude/rules/deploy-integrity.md R6 / issue #3574).
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      <MessageBarTitle>Run failed</MessageBarTitle>
+                      {testOut.body || 'The function did not return successfully.'}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 {testOut.note && (
                   <MessageBar intent="info"><MessageBarBody>{testOut.note}</MessageBarBody></MessageBar>
                 )}
