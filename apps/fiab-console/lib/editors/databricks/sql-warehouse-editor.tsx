@@ -674,6 +674,45 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 
   const state = warehouseState?.state || 'UNKNOWN';
   const isRunning = state === 'RUNNING';
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * #3669 — THE ITEM IS NOT SAVED YET, so the lifecycle routes will only gate.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * PR #3665 put an honest 200 gate (`{ ok:false, code:'unsaved_item' }`) on the
+   * five destructive warehouse routes — edit / start / stop (`state` POST) /
+   * delete / clone. This editor had NO notion of an unsaved item at all
+   * (`grep -c isNew` was 0), so on `/items/databricks-sql-warehouse/new` every
+   * one of those five stayed live and the user clicked a real-looking control to
+   * be told no. That is the dead end `auto-bind-by-default.md` forbids and the
+   * day-one error state `ux-baseline.md` forbids ("new-item first-open is
+   * clean").
+   *
+   * WHY THIS IS REACHABLE AT ALL, measured rather than assumed: `[id]/warehouses`
+   * is session-only — it takes no `ctx` and ignores `[id]` entirely — so on an
+   * unsaved item it still returns the real warehouse list, the mount effect sets
+   * `warehouseId` from `list[0].id` (:255), and `refreshState` (:265) therefore
+   * fires. With the gate body assigned into `warehouseState`, `state` falls
+   * through to `'UNKNOWN'` — and `canStart` ADMITS `'UNKNOWN'` (:782), so Start
+   * was not merely enabled, it was enabled BECAUSE of the gate.
+   *
+   * TWO SIGNALS, ONE MEANING, and both are deliberate:
+   *   - `id === 'new'` is known SYNCHRONOUSLY at mount, so the controls are
+   *     never briefly live during the round-trip `/state` takes to answer. It is
+   *     also the same literal the routes match (`UNSAVED_ITEM_ID`), and the
+   *     mechanism the sibling `phase3/warehouse-editor.tsx:130` already uses.
+   *   - `warehouseState?.code === 'unsaved_item'` is the SERVER's own verdict —
+   *     the discriminator #3655 keyed on in `warehouse-alerts.tsx:286`. Keying
+   *     on it too means the editor follows the route rather than re-deriving it,
+   *     so if the gate's id vocabulary ever changes this surface tracks it.
+   */
+  const isUnsavedItem = id === 'new' || warehouseState?.code === 'unsaved_item';
+  /** The route's own remediation text, so the surface never invents its own. */
+  const unsavedRemediation = (isUnsavedItem && warehouseState?.error)
+    || 'Save this SQL warehouse item first — its warehouse state is read and changed in the '
+      + 'name of the saved item, and an unsaved item has no owner to check that against yet.';
+
   const selectedWarehouse = useMemo(
     () => warehouses.find((w) => w.id === warehouseId) || null,
     [warehouses, warehouseId],
@@ -779,9 +818,15 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const refreshAll = useCallback(() => {
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [refreshState, refreshCatalogs]);
-  const canStart = !!warehouseId && !starting && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
-  const canStop = !!warehouseId && isRunning;
+  // #3669 — every lifecycle predicate carries the unsaved-item gate. `canStart`
+  // is the one that MATTERS: it admits `'UNKNOWN'`, which is exactly what the
+  // gate body renders as, so without this clause the gate ENABLED the button.
+  const canStart = !!warehouseId && !starting && !isUnsavedItem
+    && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
+  const canStop = !!warehouseId && isRunning && !isUnsavedItem;
   const canRun = !!warehouseId && isRunning && !loading;
+  /** Edit / Delete / Clone: enabled only for a warehouse on a SAVED item. */
+  const canEditWarehouse = !!warehouseId && !isUnsavedItem;
   // Re-list the tree level a UC write touched, so created catalogs/schemas/
   // tables appear immediately. Re-runs the deepest active query.
   const ucChanged = useCallback(() => {
@@ -890,10 +935,13 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       ]},
       { label: 'Warehouse', actions: [
         { label: 'Create', onClick: () => { setCreateError(null); setCreateOpen(true); }, title: gov ? 'Create a new Synapse Dedicated SQL pool' : 'Create a new SQL Warehouse' },
-        { label: 'Delete', onClick: warehouseId ? () => { setDeleteError(null); setDeleteOpen(true); } : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse' },
-        { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
-        { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
-        { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
+        // #3669 — Delete / Start / Stop / Edit are the four lifecycle routes
+        // #3665 gated for `[id] === 'new'`. Offering them on an unsaved item is
+        // offering a control the route will only refuse.
+        { label: 'Delete', onClick: canEditWarehouse ? () => { setDeleteError(null); setDeleteOpen(true); } : undefined, disabled: !canEditWarehouse, title: isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse' },
+        { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart, title: isUnsavedItem ? unsavedRemediation : undefined },
+        { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop, title: isUnsavedItem ? unsavedRemediation : undefined },
+        { label: 'Edit', onClick: canEditWarehouse ? openEdit : undefined, disabled: !canEditWarehouse, title: isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
         { label: 'Connection details', onClick: warehouseId ? () => setConnOpen(true) : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Server hostname, HTTP path, JDBC URL + CLI snippet (copy)' },
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
@@ -904,11 +952,16 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Create volume', onClick: () => setUcCreateVolumeOpen(true), title: 'Create a managed/external UC volume (api 2.1)' },
         { label: 'Create online table', onClick: () => setUcOnlineTableOpen(true), title: 'Serve a UC feature table for low-latency lookup (Online Table, api 2.0)' },
         { label: 'Drop object', onClick: () => setUcDropOpen(true), title: 'Drop a UC catalog / schema / table / volume (DELETE api 2.1)' },
-        { label: 'Clone table', onClick: canRun ? () => openCloneForTable(
+        // #3669 — `/clone` is the fifth gated route. `canRun` already makes this
+        // unreachable on an unsaved item (it needs state RUNNING, which the gate
+        // body can never report), but that is a TRANSITIVE invariant a future
+        // edit to `canRun` would silently break. The gate is stated directly so
+        // the guard is the thing a mutation test can remove.
+        { label: 'Clone table', onClick: canRun && !isUnsavedItem ? () => openCloneForTable(
             activeCatalog && activeSchema && tables.length > 0
               ? `${activeCatalog}.${activeSchema}.${tables[0]}`
               : '',
-          ) : undefined, disabled: !canRun, title: !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
+          ) : undefined, disabled: !canRun || isUnsavedItem, title: isUnsavedItem ? unsavedRemediation : !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
         { label: 'Manage grants', onClick: () => { setUcGrantSeed(null); setUcGrantsOpen(true); }, title: 'View / grant / revoke UC privileges' },
         { label: 'Column & row security', onClick: () => setUcSecOpen(true), title: 'Unity Catalog column masks + row filters (Commercial / GCC)' },
       ]},
@@ -930,7 +983,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel, statsTarget]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel, statsTarget, canEditWarehouse, isUnsavedItem, unsavedRemediation]);
   useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
@@ -1265,6 +1318,30 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
           )}
           {editorTab === 'query' && (
           <>
+          {/*
+            #3669 — THE GUIDED STATE THAT MAKES THE DISABLED CONTROLS HONEST.
+
+            Disabling Start / Stop / Edit / Delete / Clone without saying why is
+            the dead end `auto-bind-by-default.md` forbids, and it is NOT covered
+            by the ribbon tooltips: `lib/components/ribbon.tsx:254-264` renders a
+            plain ribbon Button with `title={dead ? … : undefined}` and never
+            applies the action's own `title`, so a `disabled` ribbon action's
+            explanation is DISCARDED today (reported separately — that file is
+            not in this change's ownership). This MessageBar is therefore the
+            channel the remediation actually reaches the user through.
+
+            `intent="warning"`, never error: per `ux-baseline.md` a freshly
+            created item must not open on a red banner, and nothing has failed
+            here — the item simply has not been saved yet.
+          */}
+          {isUnsavedItem && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Save this item first</MessageBarTitle>
+                {unsavedRemediation}
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {warehousesError && (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -1297,12 +1374,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <Badge appearance="outline" color="brand">Serverless</Badge>
             )}
             {(state === 'STOPPED' || state === 'STOPPING') && (
-              <Button appearance="primary" icon={<Play20Regular />} disabled={starting || !warehouseId} onClick={start}>
+              <Button appearance="primary" icon={<Play20Regular />} disabled={!canStart} onClick={start}>
                 {starting ? 'Starting…' : 'Start'}
               </Button>
             )}
             {isRunning && (
-              <Button appearance="outline" icon={<Stop20Regular />} onClick={stop}>Stop</Button>
+              <Button appearance="outline" icon={<Stop20Regular />} disabled={!canStop} onClick={stop}>Stop</Button>
             )}
             <Button appearance="outline" icon={<ArrowSync20Regular />} aria-label="Refresh warehouse state" onClick={() => {
               refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
@@ -1319,8 +1396,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             >
               {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
             </Dropdown>
-            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless'} relationship="label">
-              <Button appearance="outline" icon={<Save20Regular />} disabled={!warehouseId} onClick={openEdit}>
+            <Tooltip content={isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless'} relationship="label">
+              <Button appearance="outline" icon={<Save20Regular />} disabled={!canEditWarehouse} onClick={openEdit}>
                 Edit
               </Button>
             </Tooltip>
@@ -1334,8 +1411,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 Create
               </Button>
             </Tooltip>
-            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse'} relationship="label">
-              <Button appearance="outline" icon={<Delete20Regular />} disabled={!warehouseId} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
+            <Tooltip content={isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse'} relationship="label">
+              <Button appearance="outline" icon={<Delete20Regular />} disabled={!canEditWarehouse} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
                 Delete
               </Button>
             </Tooltip>
