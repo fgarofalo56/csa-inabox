@@ -24,6 +24,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armHost, detectLoomCloud } from './cloud-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { PagingBudget, type PagingTruncation } from './paging-budget';
 
 // Cloud-aware endpoint hosts. ARM host comes from cloud-endpoints (AZURE_CLOUD /
 // LOOM_ARM_ENDPOINT aware); AZURE_ARM_HOST stays as an explicit per-call override.
@@ -505,15 +506,95 @@ export async function submitSparkBatchJob(
   return jsonOrThrow<SparkBatchJob>(r, `submitSparkBatchJob(${poolName})`);
 }
 
-export async function listSparkBatchJobs(
+// The Synapse Livy batches list endpoint 400s when `size` exceeds 20 — see
+// #3568. Before this fix the cap was left to each caller to enforce: two call
+// sites hardcoded an over-cap literal (100, 25) and two forwarded an
+// unvalidated caller/query-string value straight through, so patching only
+// the reported call site would have left three other ways to reproduce the
+// 400. The clamp lives HERE, at the shared client, so every current and
+// future caller inherits it for free.
+const LIVY_MAX_PAGE_SIZE = 20;
+
+/** Clamp a requested page size into [1, LIVY_MAX_PAGE_SIZE] for one Livy request. */
+function clampLivyPageSize(size: number): number {
+  const n = Number.isFinite(size) ? Math.floor(size) : 20;
+  return Math.min(LIVY_MAX_PAGE_SIZE, Math.max(1, n));
+}
+
+/** Sanity-clamp the Livy `from` offset to a non-negative integer. */
+function clampLivyFrom(from: number): number {
+  const n = Number.isFinite(from) ? Math.floor(from) : 0;
+  return Math.max(0, n);
+}
+
+async function fetchSparkBatchPage(
   poolName: string,
-  from = 0,
-  size = 20,
+  from: number,
+  size: number,
 ): Promise<{ from: number; total: number; sessions: SparkBatchJob[] }> {
   const r = await callDev(
     `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches?from=${from}&size=${size}&detailed=true`,
   );
   return jsonOrThrow(r, `listSparkBatchJobs(${poolName})`);
+}
+
+/**
+ * List Spark Livy batch jobs for `poolName`.
+ *
+ * `size` is clamped to Livy's documented per-request maximum of 20 (see
+ * `LIVY_MAX_PAGE_SIZE` above); `from` is sanity-clamped to a non-negative
+ * integer. When the caller asks for MORE than 20 rows — e.g. the
+ * materialized-lake-view runs route's historical `size=100`, whose intent was
+ * clearly "fetch many so I can filter client-side by tag" — that intent is
+ * honored by paginating internally rather than silently truncating to one
+ * page: each individual Livy request still obeys the 20-row cap, and we walk
+ * `from` forward, accumulating pages, until `size` rows are collected, Livy's
+ * own `total` is exhausted, or the shared `PagingBudget` (the same page-cap +
+ * wall-clock pattern the ARM `nextLink` walks use — see `paging-budget.ts`)
+ * trips. The budget is capped at 10 pages here, so an internal walk fetches
+ * at most 200 rows (10 x 20) regardless of how large a `size` is requested —
+ * a deliberate, documented bound rather than an unbounded loop. A budget
+ * breach returns the rows already collected instead of throwing (a partial
+ * run-history list beats a wedged request path) and is reported via
+ * `truncatedBy` for a caller that cares whether the list is complete.
+ */
+export async function listSparkBatchJobs(
+  poolName: string,
+  from = 0,
+  size = 20,
+): Promise<{
+  from: number;
+  total: number;
+  sessions: SparkBatchJob[];
+  truncatedBy?: PagingTruncation | null;
+}> {
+  const safeFrom = clampLivyFrom(from);
+  const requested = Number.isFinite(size) && size > 0 ? Math.floor(size) : 20;
+  const firstPageSize = clampLivyPageSize(requested);
+
+  const first = await fetchSparkBatchPage(poolName, safeFrom, firstPageSize);
+  if (requested <= LIVY_MAX_PAGE_SIZE) {
+    return { ...first, truncatedBy: null };
+  }
+
+  const sessions = [...(first.sessions || [])];
+  const total = typeof first.total === 'number' ? first.total : sessions.length;
+  const budget = new PagingBudget(`listSparkBatchJobs(${poolName})`, { maxPages: 10 });
+  budget.claimPage(); // account for the page already fetched above
+  let nextFrom = safeFrom + firstPageSize;
+  while (sessions.length < requested && nextFrom < total && budget.claimPage()) {
+    const pageSize = clampLivyPageSize(requested - sessions.length);
+    const page = await fetchSparkBatchPage(poolName, nextFrom, pageSize);
+    sessions.push(...(page.sessions || []));
+    nextFrom += pageSize;
+  }
+  budget.warnIfTruncated(sessions.length);
+  return {
+    from: safeFrom,
+    total,
+    sessions: sessions.slice(0, requested),
+    truncatedBy: budget.truncatedBy,
+  };
 }
 
 export async function getSparkBatchJob(poolName: string, batchId: number): Promise<SparkBatchJob> {
