@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.10](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.9...csa-inabox-v0.98.10) (2026-08-17)
+
+
+### Bug Fixes
+
+* **ci:** route-inventory's backend column was a 25-of-378 name map whose misses were silently dropped ([#3592](https://github.com/fgarofalo56/csa-inabox/issues/3592)) ([#3675](https://github.com/fgarofalo56/csa-inabox/issues/3675)) ([71127ed](https://github.com/fgarofalo56/csa-inabox/commit/71127ed7999e0135f018f611d441aea7be20c31d))
+* **security:** databricks-sql-warehouse/[id]/query ran caller-authored SQL on a caller-chosen warehouse behind withSession alone (GHSA-v2g8-gp3r-rg4r) ([#3671](https://github.com/fgarofalo56/csa-inabox/issues/3671)) ([a4248f6](https://github.com/fgarofalo56/csa-inabox/commit/a4248f604d37edc9fbc8d8c50654e4787ad874e6))
+* **security:** the nine remaining SQL-warehouse routes enumerated, disclosed, cancelled and PROVISIONED behind getSession() alone (GHSA-v2g8-gp3r-rg4r) ([#3674](https://github.com/fgarofalo56/csa-inabox/issues/3674)) ([0351ca7](https://github.com/fgarofalo56/csa-inabox/commit/0351ca7668dd9c7e68fe4266e7e1aaa1e25a63e5))
+
 ## [0.98.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.8...csa-inabox-v0.98.9) (2026-08-17)
 
 
