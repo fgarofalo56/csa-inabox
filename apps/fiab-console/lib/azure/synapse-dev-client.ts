@@ -64,6 +64,20 @@ const ARM_API = '2021-06-01';
 const DEV_API = '2020-12-01';
 const LIVY_API = '2019-11-01-preview';
 
+/**
+ * Livy data-plane path prefix for one Spark pool.
+ *
+ * `encodeURIComponent` matches the sibling client's `livyBase()` in
+ * synapse-livy-client.ts. Every Livy path here interpolated `poolName` RAW,
+ * while every other data-plane path in this file (`/pipelines/`, `/datasets/`,
+ * `/linkedservices/`) already encoded its name — so a pool name carrying `/`,
+ * `?` or `#` could reshape the request path. Callers include
+ * `synapse-spark-pool/[id]/runs`, which passes a route param straight through.
+ */
+function livyPoolBase(poolName: string): string {
+  return `/livyApi/versions/${LIVY_API}/sparkPools/${encodeURIComponent(poolName)}`;
+}
+
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
@@ -516,7 +530,7 @@ export async function submitSparkBatchJob(
   job: SparkBatchRequest,
 ): Promise<SparkBatchJob> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches?detailed=true`,
+    `${livyPoolBase(poolName)}/batches?detailed=true`,
     { method: 'POST', body: JSON.stringify(job) },
   );
   return jsonOrThrow<SparkBatchJob>(r, `submitSparkBatchJob(${poolName})`);
@@ -566,7 +580,7 @@ async function fetchSparkBatchPage(
   timeoutMs?: number,
 ): Promise<SparkBatchPage> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches?from=${from}&size=${size}&detailed=true`,
+    `${livyPoolBase(poolName)}/batches?from=${from}&size=${size}&detailed=true`,
     undefined,
     timeoutMs,
   );
@@ -591,12 +605,15 @@ async function fetchSparkBatchPage(
  * OR mid-fetch); the caller keeps the rows it already has and reads
  * `budget.truncatedBy` for which ceiling tripped.
  *
- * Caveat, stated rather than overclaimed: `callDev` acquires an AAD token
- * before the HTTP call and that acquisition is not itself inside the fetch
- * deadline, so a pathologically slow token endpoint can add its own latency to
- * one page. The walk still terminates — the next `claimPage()` sees the spent
- * clock — but the bound is "budget + at most one token acquisition", not
- * "budget" exactly.
+ * Caveat, stated rather than overclaimed: TWO things sit outside the fetch
+ * deadline. `callDev` acquires an AAD token before the HTTP call, and
+ * `fetchWithTimeout` clears its timer in a `finally` as soon as `fetch`
+ * resolves — i.e. once the RESPONSE HEADERS arrive — so `jsonOrThrow`'s
+ * `r.text()` body read runs unbounded too. The walk still terminates (the next
+ * `claimPage()` sees the spent clock), but the true bound is "budget + at most
+ * one token acquisition + at most one body read", not "budget" exactly. That is
+ * systemic to every caller of `fetchWithTimeout`, not something this walk
+ * introduced.
  */
 async function readBatchPage(
   budget: PagingBudget,
@@ -614,12 +631,18 @@ async function readBatchPage(
 /**
  * Livy's `total` is the count of ALL batches the server holds, not the length
  * of the page just returned (Apache Livy: `"total" -> sessionManager.size()`).
- * Read it defensively anyway — a backend that returns something else must not
- * be able to drive the walk somewhere nonsensical.
+ *
+ * Returns **null** when the server did not report a usable one. The caller must
+ * NOT substitute the page length: doing so made `total` 20 on a pool of any
+ * size, which drove `listRecentSparkBatchJobs`'s `tailFrom` to
+ * `max(0, 20 - 20) = 0` and sent it down the "everything already fits in the
+ * head window" branch — handing a "recent runs" grid the OLDEST 20 rows of an
+ * ascending list with `truncatedBy: null`. A number we invented is worse than
+ * an absent one, because it silences the truncation signal at the same time.
  */
-function readTotal(page: SparkBatchPage, fallback: number): number {
+function readTotal(page: SparkBatchPage): number | null {
   const t = page.total;
-  return typeof t === 'number' && Number.isFinite(t) && t >= 0 ? Math.floor(t) : fallback;
+  return typeof t === 'number' && Number.isFinite(t) && t >= 0 ? Math.floor(t) : null;
 }
 
 /** Merge a page's rows into `acc`, de-duplicating by batch id. */
@@ -686,10 +709,15 @@ export async function listSparkBatchJobs(
   }
 
   const sessions = [...(first.sessions || [])];
-  const total = readTotal(first, sessions.length);
+  const reportedTotal = readTotal(first);
   let nextFrom = safeFrom + sessions.length;
+  let ranDry = sessions.length === 0;
 
-  while (sessions.length < requested && nextFrom < total) {
+  // `reportedTotal === null` — the server never told us how long the list is,
+  // so there is no upper bound to compare against and the ONLY honest stopping
+  // condition is a page that comes back empty. Comparing against a fabricated
+  // total is what answered a 60-row request with 20.
+  while (sessions.length < requested && !ranDry && (reportedTotal === null || nextFrom < reportedTotal)) {
     const page = await readBatchPage(
       budget,
       poolName,
@@ -698,7 +726,10 @@ export async function listSparkBatchJobs(
     );
     if (!page) break;
     const rows = page.sessions || [];
-    if (rows.length === 0) break; // server ran dry — a complete walk, not a truncation
+    if (rows.length === 0) {
+      ranDry = true; // server ran dry — a complete walk, not a truncation
+      break;
+    }
     sessions.push(...rows);
     nextFrom += rows.length;
   }
@@ -706,7 +737,9 @@ export async function listSparkBatchJobs(
   budget.warnIfTruncated(sessions.length);
   return {
     from: safeFrom,
-    total,
+    // When the server reported no total, the rows we actually saw are the only
+    // count we can stand behind — a LOWER BOUND, not a claim about the pool.
+    total: reportedTotal ?? sessions.length,
     sessions: sessions.slice(0, requested),
     truncatedBy: budget.truncatedBy,
   };
@@ -780,7 +813,47 @@ export async function listRecentSparkBatchJobs(
 
   const head = await readBatchPage(budget, poolName, 0, pageSize);
   if (!head) return finish(0);
-  const total = readTotal(head, (head.sessions || []).length);
+  const headRows = head.sessions || [];
+  const reportedTotal = readTotal(head);
+
+  if (reportedTotal === null) {
+    // NO `total` FROM THE SERVER. Every other branch below navigates by offset
+    // arithmetic on `total`; without it there is no offset to jump to, so the
+    // direction probe is impossible. The previous cut papered over this by
+    // falling back to the page length, which made `tailFrom` 0 and returned the
+    // ascending list's OLDEST rows under a "recent" contract with
+    // `truncatedBy: null` — silently the exact defect this function exists to
+    // remove.
+    //
+    // The honest alternative is to read the list to its END: a walk that ran
+    // dry has SEEN every batch, so the newest `want` of them is genuinely the
+    // newest regardless of which order the server chose. If a ceiling stops us
+    // first we return what we reached and `budget.truncatedBy` says the window
+    // is incomplete — a disclosed partial beats a confident wrong answer.
+    mergeBatches(collected, headRows);
+    let cursor = headRows.length;
+    let ranDry = headRows.length === 0;
+    while (!ranDry) {
+      const page = await readBatchPage(budget, poolName, cursor, pageSize);
+      if (!page) break; // ceiling — `claimPage`/`runPage` recorded which one
+      const rows = page.sessions || [];
+      if (rows.length === 0) {
+        ranDry = true;
+        break;
+      }
+      const before = collected.size;
+      mergeBatches(collected, rows);
+      cursor += rows.length;
+      if (collected.size === before) break; // all duplicates — treat as dry
+    }
+    const result = finish(collected.size);
+    // A walk that never reached the end has NOT established what the newest
+    // rows are. `finish` only reports the budget's own ceilings, so name the
+    // page ceiling here rather than returning a null truncation.
+    return ranDry ? result : { ...result, truncatedBy: result.truncatedBy ?? 'pages' };
+  }
+
+  const total = reportedTotal;
 
   // Everything the pool has already fits in the head window — nothing to page,
   // and no probe needed: sorting by id descending is enough.
@@ -838,14 +911,14 @@ export async function listRecentSparkBatchJobs(
 
 export async function getSparkBatchJob(poolName: string, batchId: number): Promise<SparkBatchJob> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches/${batchId}?detailed=true`,
+    `${livyPoolBase(poolName)}/batches/${batchId}?detailed=true`,
   );
   return jsonOrThrow<SparkBatchJob>(r, `getSparkBatchJob(${poolName},${batchId})`);
 }
 
 export async function cancelSparkBatchJob(poolName: string, batchId: number): Promise<void> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches/${batchId}`,
+    `${livyPoolBase(poolName)}/batches/${batchId}`,
     { method: 'DELETE' },
   );
   if (!r.ok && r.status !== 200) {
@@ -1227,7 +1300,7 @@ export async function submitLivyBatch(args: {
 
   // 1) Create interactive session
   const sessRes = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
+    `${livyPoolBase(poolName)}/sessions`,
     {
       method: 'POST',
       body: JSON.stringify({
@@ -1266,7 +1339,7 @@ export async function submitLivyBatch(args: {
 
   // 3) Submit the code as a statement
   const stmtRes = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sess.id}/statements`,
+    `${livyPoolBase(poolName)}/sessions/${sess.id}/statements`,
     {
       method: 'POST',
       body: JSON.stringify({ code, kind }),
@@ -1283,7 +1356,7 @@ export async function submitLivyBatch(args: {
 
 export async function getLivyStatement(poolName: string, sessionId: number, stmtId: number): Promise<{ id: number; state: string; output?: any }> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}/statements/${stmtId}`,
+    `${livyPoolBase(poolName)}/sessions/${sessionId}/statements/${stmtId}`,
   );
   return jsonOrThrow(r, `getLivyStatement(${poolName}/${sessionId}/${stmtId})`);
 }
@@ -1348,7 +1421,7 @@ export async function createLivySessionAsync(
   };
   request.conf = conf;
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
+    `${livyPoolBase(poolName)}/sessions`,
     { method: 'POST', body: JSON.stringify(request) },
   );
   const sess = await jsonOrThrow<{ id: number; state: string; appInfo?: any }>(r, `createLivySession(${poolName})`);
@@ -1362,13 +1435,13 @@ export async function getLivySession(
   // detailed=true adds `errorInfo` — the REAL reason a session died (e.g. the
   // MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED queue-jam rejection), surfaced to the
   // notebook editor instead of an opaque "entered terminal state 'error'".
-  const r = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}?detailed=true`);
+  const r = await callDev(`${livyPoolBase(poolName)}/sessions/${sessionId}?detailed=true`);
   return jsonOrThrow(r, `getLivySession(${poolName}/${sessionId})`);
 }
 
 export async function submitLivyStatement(poolName: string, sessionId: number, body: { code: string; kind?: 'pyspark' | 'spark' | 'sparkr' | 'sql' }): Promise<{ id: number; state: string }> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}/statements`,
+    `${livyPoolBase(poolName)}/sessions/${sessionId}/statements`,
     { method: 'POST', body: JSON.stringify({ code: body.code, kind: body.kind || 'pyspark' }) },
   );
   return jsonOrThrow(r, `submitStatement(${poolName}/${sessionId})`);

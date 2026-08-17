@@ -107,6 +107,26 @@ function descendingPool(total: number): Responder {
   };
 }
 
+/**
+ * An ascending pool whose backend OMITS `total` from every page.
+ *
+ * Found in review of PR #3689 and NOT hypothetical-only: `readTotal` fell back
+ * to the length of the page just returned, which made `total` 20 on a pool of
+ * any size, `tailFrom = max(0, 20 - 20) = 0`, and therefore sent
+ * `listRecentSparkBatchJobs` down its "everything already fits in the head
+ * window" branch. The head window on an ascending list is the OLDEST 20 rows —
+ * so a "recent runs" grid silently filled with the pool's most ancient batches
+ * and reported `truncatedBy: null` while doing it. That is the exact defect
+ * this PR exists to remove, arriving from the direction the fix did not watch.
+ */
+function totallessAscendingPool(total: number): Responder {
+  const all: BatchRow[] = Array.from({ length: total }, (_, i) => ({ id: i }));
+  return (url) => {
+    const { from, size } = parseFromSize(url);
+    return { sessions: all.slice(from, from + size) } as unknown as PageBody;
+  };
+}
+
 beforeEach(() => {
   requestedUrls = [];
   requestedTimeouts = [];
@@ -380,5 +400,80 @@ describe('listRecentSparkBatchJobs — "recent" must actually mean recent', () =
     expect(result.truncatedBy).toBe('time');
     expect(result.scanned).toBeLessThan(200);
     expect(result.total).toBe(5000);
+  });
+});
+
+/**
+ * A backend that omits `total` must not be able to talk either walker into
+ * claiming a complete window. Learn documents `total` on the batches
+ * collection, so a page without it is schema-violating — but "the server broke
+ * its contract" is exactly when a client must not assert something it did not
+ * establish (`deploy-integrity.md` R7). The consequence here is not a crash, it
+ * is the silent OLDEST-window regression #3568 was filed about.
+ */
+describe('a `total`-less page must never read as a complete window', () => {
+  it('does not present the OLDEST rows as "recent" when the backend omits `total`', async () => {
+    responder = totallessAscendingPool(1000);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    // The head of an ascending list is ids 0..19 — the pool's most ancient
+    // batches. Returning those under a "recent" contract, with truncatedBy
+    // null, is the defect. Either we reached genuinely newer rows, or we say
+    // the window is incomplete; silently-oldest-and-complete is not allowed.
+    const returnedTheOldestWindow =
+      result.sessions.length > 0 && Math.max(...result.sessions.map((s) => s.id)) === 19;
+    expect(returnedTheOldestWindow && result.truncatedBy == null).toBe(false);
+  });
+
+  it('walks a `total`-less pool to the end and returns the genuinely newest rows', async () => {
+    responder = totallessAscendingPool(55);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    // 55 rows fit inside the 10-page cap, so the walk can run the list dry —
+    // and a walk that ran dry HAS established what the newest rows are.
+    expect(result.sessions.map((s) => s.id)).toEqual(
+      Array.from({ length: 20 }, (_, i) => 54 - i),
+    );
+    expect(result.truncatedBy).toBeNull();
+    expect(result.total).toBe(55);
+  });
+
+  it('discloses truncation when a `total`-less pool is too big to run dry', async () => {
+    responder = totallessAscendingPool(1000);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    // Without `total` there is no way to jump to the far end, so the page cap
+    // stops the walk short. That is acceptable — saying so is mandatory.
+    expect(result.truncatedBy).not.toBeNull();
+  });
+
+  it('listSparkBatchJobs keeps paging for the rows it was asked for without a `total`', async () => {
+    responder = totallessAscendingPool(500);
+    const { listSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listSparkBatchJobs('pool1', 0, 60);
+
+    // `total` fell back to the first page's length (20), so `nextFrom < total`
+    // was false on the very first check and the walk stopped one page in —
+    // a 60-row request quietly answered with 20.
+    expect(result.sessions).toHaveLength(60);
+    expect(result.sessions.map((s) => s.id)).toEqual(Array.from({ length: 60 }, (_, i) => i));
+  });
+
+  it('a `total`-less pool that runs dry inside one page is still complete', async () => {
+    responder = totallessAscendingPool(7);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.sessions.map((s) => s.id)).toEqual([6, 5, 4, 3, 2, 1, 0]);
+    expect(result.total).toBe(7);
+    expect(result.truncatedBy).toBeNull();
   });
 });

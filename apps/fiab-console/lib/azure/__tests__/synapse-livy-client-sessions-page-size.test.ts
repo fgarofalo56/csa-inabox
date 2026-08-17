@@ -74,6 +74,28 @@ function pool(total: number) {
   };
 }
 
+/**
+ * The same pool, but the backend OMITS `total` from every page.
+ *
+ * Found in review of PR #3689. `total` was initialised to 0 and only assigned
+ * when the server reported one, so `out.length >= total` was `20 >= 0` after
+ * page one and the walk broke immediately — with `truncatedBy: null`. A 20-row
+ * subset of a 137-session pool therefore reads as a COMPLETE census.
+ *
+ * That is not merely a short list. `reapStaleSessions` gates its tracker GC on
+ * exactly this `truncatedBy` — the guard added earlier in this PR — so a
+ * `total`-less backend walks straight past it and the reaper forgets the grace
+ * window of every session it never paged to. The #1796 jam, re-introduced
+ * through the one direction the new guard does not watch.
+ */
+function totallessPool(total: number) {
+  const all: SessionRow[] = Array.from({ length: total }, (_, i) => ({ id: i }));
+  return (url: string): PageBody => {
+    const { from, size } = parseFromSize(url);
+    return { sessions: all.slice(from, from + size) } as unknown as PageBody;
+  };
+}
+
 beforeEach(() => {
   requestedUrls = [];
   requestedTimeouts = [];
@@ -185,6 +207,46 @@ describe('listLivySessions — the sessions endpoint carries the same max-20 cap
     const res = await listLivySessionsResult('pool1', { hardCap: 400 });
 
     expect(res.sessions).toHaveLength(12);
+    expect(res.truncatedBy).toBeNull();
+    expect(requestedUrls).toHaveLength(1);
+  });
+});
+
+describe('a `total`-less backend must not be able to forge a complete census', () => {
+  it('does not stop after page one when the server omits `total`', async () => {
+    responder = totallessPool(137);
+    const { listLivySessionsResult } = await import('../synapse-livy-client');
+
+    const res = await listLivySessionsResult('pool1');
+
+    // 137 rows, 20 per page, well inside the default hardCap — the walk can run
+    // the list dry, and a walk that ran dry has genuinely seen everything.
+    expect(res.sessions).toHaveLength(137);
+    expect(res.scanned).toBe(137);
+    expect(res.truncatedBy).toBeNull();
+  });
+
+  it('marks the census INCOMPLETE when a `total`-less walk stops on a ceiling', async () => {
+    responder = totallessPool(500);
+    const { listLivySessionsResult } = await import('../synapse-livy-client');
+
+    const res = await listLivySessionsResult('pool1', { hardCap: 40 });
+
+    expect(res.sessions).toHaveLength(40);
+    // THE GUARD BYPASS. `reapStaleSessions` reads "absent from this list" as
+    // "gone from the pool" whenever `truncatedBy` is null. 40 of 500 rows with
+    // a null truncation is how the reaper GCs the grace window of 460 live
+    // sessions and never reaps a leaked one again.
+    expect(res.truncatedBy).not.toBeNull();
+  });
+
+  it('an EMPTY pool that says so is still complete, `total` or not', async () => {
+    responder = totallessPool(0);
+    const { listLivySessionsResult } = await import('../synapse-livy-client');
+
+    const res = await listLivySessionsResult('pool1');
+
+    expect(res.sessions).toHaveLength(0);
     expect(res.truncatedBy).toBeNull();
     expect(requestedUrls).toHaveLength(1);
   });

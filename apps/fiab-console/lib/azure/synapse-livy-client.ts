@@ -277,7 +277,17 @@ export async function listLivySessionsResult(
   const out: LivySession[] = [];
   const seen = new Set<number>();
   let from = 0;
-  let total = 0;
+  // `null` = the server never reported a `total`. It used to be initialised to
+  // 0, which made `out.length >= total` true as `20 >= 0` after the very first
+  // page: the walk broke immediately and reported `truncatedBy: null`, so a
+  // 20-row subset of a 137-session pool read as a COMPLETE census. That is not
+  // merely a short list — `reapStaleSessions` gates its tracker GC on exactly
+  // this field, so a `total`-less backend walks straight past that guard and
+  // the reaper forgets the grace window of every session it never paged to.
+  let total: number | null = null;
+  // Completeness has to be ESTABLISHED, not assumed. Only two things establish
+  // it: the server ran the list dry, or it reported a total and we reached it.
+  let ranDry = false;
 
   while (out.length < hardCap && budget.claimPage()) {
     // detailed=true adds `name` (and errorInfo) — the reaper's busy-zombie rule
@@ -303,19 +313,23 @@ export async function listLivySessionsResult(
     }
     if (typeof page.total === 'number' && Number.isFinite(page.total)) total = page.total;
     from += batch.length;
-    if (batch.length === 0 || out.length >= total) break; // complete — NOT a truncation
+    if (batch.length === 0) {
+      ranDry = true; // the server ran dry — complete, and NOT a truncation
+      break;
+    }
+    if (total !== null && out.length >= total) break; // reached the reported total
   }
 
   budget.warnIfTruncated(out.length);
-  // Reaching `hardCap` with more rows still on the server is a truncation too,
-  // even when neither budget ceiling tripped — the caller must not read the
-  // result as a complete census.
-  const cappedShort = out.length >= hardCap && total > out.length;
+  // Silence must mean "this list is whole". Anything else — the row cap, the
+  // page cap, or a walk that simply never reached an end it could verify — is a
+  // truncation the caller has to see.
+  const sawWholeList = ranDry || (total !== null && out.length >= total);
   return {
     sessions: out.slice(0, hardCap),
-    total: total || out.length,
+    total: total ?? out.length,
     scanned: out.length,
-    truncatedBy: budget.truncatedBy ?? (cappedShort ? 'pages' : null),
+    truncatedBy: budget.truncatedBy ?? (sawWholeList ? null : 'pages'),
   };
 }
 
@@ -348,7 +362,14 @@ export async function listLivySessions(
  * tail by passing from = max(0, total - size) from the previous response.
  *   GET {livyBase(pool)}/sessions/{id}/log?from=&size=
  *   → { id, from, total, log: string[] }
- * Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/get-spark-session-log (Livy log slice)
+ *
+ * NO LEARN CITATION ON PURPOSE. This used to cite
+ * `rest/api/synapse/data-plane/spark-session/get-spark-session-log`, but
+ * Synapse's Livy-compat surface does not implement `/log` — this PR's own table
+ * records that path 404ing, and the fallback below exists precisely because it
+ * does. Citing a reference for behaviour we measured to be absent is the same
+ * class of untrue statement as the error strings in `deploy-integrity.md` R7.
+ * The 404 fallback is the contract; see the live receipt in its comment.
  */
 export async function getLivySessionLog(
   poolName: string,

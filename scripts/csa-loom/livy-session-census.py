@@ -16,9 +16,13 @@ pool that might hold 700 leaked sessions. The probe built to diagnose the #1796
 jam would have reported the jam as absent.
 
 A bare clamp to 20 would not fix it either: it would report the first 20 of 700
-as if that were the whole pool. So this pages at the real cap until Livy's own
-`total` is satisfied, and — when it cannot finish — says so out loud instead of
-presenting a partial census as a total.
+as if that were the whole pool. So this pages at the real cap and reports
+`complete` ONLY when completeness was actually established — the server ran the
+list dry, or it reported a `total` and we reached it. A backend that omits
+`total` (or returns an empty body, or a page with no `sessions` key) cannot talk
+this script into a confident answer: the walk keeps going until a page runs dry,
+and anything it genuinely cannot establish surfaces as a warning or a non-zero
+exit, never as a total.
 
 Usage
 -----
@@ -27,7 +31,9 @@ Usage
 
 Env: DEV (workspace dev endpoint), API (livyApi path), TOK (bearer token).
 Exits non-zero on a genuine HTTP/parse failure so the caller cannot mistake a
-broken census for an empty pool.
+broken census for an empty pool. CALLERS MUST CHECK THAT EXIT CODE — a
+`$(...)`-captured invocation in a script without `set -e` discards it, which is
+how the same swallow this file removed reappears one level up.
 """
 import json
 import os
@@ -46,11 +52,29 @@ REAPABLE_STATES = ("error", "dead", "killed", "not_started", "shutting_down")
 def _get(url: str, token: str) -> dict:
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8") or "{}")
+        raw = resp.read().decode("utf-8")
+    if not raw.strip():
+        # A 200 with an EMPTY BODY is not an empty pool. The old `or "{}"` turned
+        # one into the other, and `{}` walked straight out as
+        # `total: 0 | in list: 0 | complete: True | by state: {}` — a broken
+        # census printing as a healthy pool, exit 0. That is verbatim the class
+        # this file's docstring says it exists to prevent, so it must land in
+        # main()'s `except` and exit non-zero instead.
+        raise ValueError(
+            "empty body from %s — a 200 with no payload means the counts are "
+            "UNKNOWN, not zero" % url)
+    body = json.loads(raw)
+    if not isinstance(body, dict):
+        raise ValueError("expected a JSON object from %s, got %s" % (url, type(body).__name__))
+    return body
 
 
 def census(dev, api, token):
-    """Return (sessions, total_reported, complete).
+    """Return (sessions, total_reported_or_None, complete).
+
+    `total_reported_or_None` is None when the SERVER never reported a usable
+    `total`. Substituting a number of our own there is what turned a partial
+    walk into a confident one, so the unknown is propagated rather than filled.
 
     Deliberately un-annotated: a `tuple[...]` subscript is evaluated at def time
     and raises TypeError on Python < 3.9. This runs on a self-hosted runner
@@ -59,15 +83,24 @@ def census(dev, api, token):
     """
     sessions = []
     seen = set()
-    total = 0
+    total = None
     frm = 0
     complete = False
     for _ in range(MAX_PAGES):
         url = "%s/%s?from=%d&size=%d&detailed=true" % (dev, api, frm, PAGE_SIZE)
         page = _get(url, token)
-        batch = page.get("sessions") or []
+        batch = page.get("sessions")
+        if not isinstance(batch, list):
+            # No `sessions` key at all. We cannot tell an exhausted list from a
+            # malformed response, and guessing "exhausted" is how a broken read
+            # becomes a confident count. Say we do not know.
+            raise ValueError(
+                "page at from=%d carries no 'sessions' list (keys: %s) — cannot "
+                "distinguish an exhausted list from a broken response"
+                % (frm, sorted(page.keys())))
         reported = page.get("total")
-        if isinstance(reported, int):
+        # `isinstance(True, int)` is True in Python; a bool `total` is not a count.
+        if isinstance(reported, int) and not isinstance(reported, bool):
             total = reported
         for s in batch:
             sid = s.get("id")
@@ -77,13 +110,21 @@ def census(dev, api, token):
                 seen.add(sid)
             sessions.append(s)
         if not batch:
+            # The server RAN DRY. This is the one completeness signal that does
+            # not depend on the backend reporting a `total` — it is established,
+            # not assumed.
             complete = True
             break
         frm += len(batch)
-        if len(sessions) >= total:
+        if total is not None and len(sessions) >= total:
             complete = True
             break
-    return sessions, max(total, len(sessions)), complete
+    return sessions, total, complete
+
+
+def _total_phrase(total):
+    """Describe the server's `total` without inventing one when it never sent it."""
+    return "server total %d" % total if total is not None else "server reported NO total"
 
 
 def main():
@@ -108,18 +149,19 @@ def main():
         print(" ".join(str(s["id"]) for s in sessions
                        if s.get("state") in REAPABLE_STATES and s.get("id") is not None))
         if not complete:
-            print("::warning::census incomplete (%d of %d sessions read) — the clean-up "
-                  "below covers only what was enumerated" % (len(sessions), total),
-                  file=sys.stderr)
+            print("::warning::census incomplete (%d sessions read, %s) — the clean-up "
+                  "below covers only what was enumerated"
+                  % (len(sessions), _total_phrase(total)), file=sys.stderr)
         return 0
 
-    print("total reported:", total, "| in list:", len(sessions),
+    print("total reported:", total if total is not None else "UNREPORTED by the server",
+          "| in list:", len(sessions),
           "| complete:", complete,
           "| by state:", dict(Counter(s.get("state") for s in sessions)))
     if not complete:
-        print("::warning::census stopped after %d pages (%d of %d sessions) — treat the "
+        print("::warning::census stopped after %d pages (%d sessions read, %s) — treat the "
               "state counts as a LOWER BOUND, not a total"
-              % (MAX_PAGES, len(sessions), total))
+              % (MAX_PAGES, len(sessions), _total_phrase(total)))
     return 0
 
 
