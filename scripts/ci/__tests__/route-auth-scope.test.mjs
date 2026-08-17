@@ -280,27 +280,68 @@ test('session derivation finds the wrappers SESSION_RE does not name', () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
- * The four routes #3625 names. THREE are genuinely guarded today (the
- * GHSA-v2g8-gp3r-rg4r / GHSA-v8r7-c2p5-mjf2 work landed them); the FOURTH is
- * not, and that is the point of pinning it here.
+ * The four routes #3625 names. ALL FOUR ARE NOW GUARDED — the last of them,
+ * `items/databricks-sql-warehouse/[id]/query`, was hardened under
+ * GHSA-v2g8-gp3r-rg4r's seventh pass (`withSession` + `guardSynapseItemRequest`,
+ * write-scoped), and the assertion below moved with it rather than being
+ * deleted.
  *
- * `items/databricks-sql-warehouse/[id]/query` still has NO item authorization
- * on `main`: it is `withSession` only, `warehouseId` comes from the BODY, and
- * `[id]` is read exclusively for the FinOps receipt. Its only owner tokens are
- * `routeParams.id` and `session.claims.oid`, both inside `recordQueryRun`.
- * Under the old `OWNER_RE` it published `owner-scoped`; the corrected column
- * says `session-only`, which is the true state. If someone hardens it, this
- * expectation flips and the test says so out loud rather than the row moving
- * silently.
+ * WHY IT WAS THE FOURTH FOR SO LONG, kept because it is the classifier's
+ * canonical worked example: it was `withSession` only, `warehouseId` came from
+ * the BODY, and `[id]` was read exclusively for the FinOps receipt. Its only
+ * owner-shaped tokens were `routeParams.id` and `session.claims.oid`, BOTH
+ * inside `recordQueryRun`. Under the old `OWNER_RE` that published
+ * `owner-scoped`; the derived column correctly said `session-only` until a real
+ * guard landed.
+ *
+ * THE NEGATIVE HALF IS REPOINTED, NOT RETIRED — see {@link STILL_UNGUARDED}.
  */
 const GUARDED = [
   'items/warehouse/[id]/query/route.ts',
   'items/synapse-dedicated-sql-pool/[id]/query/route.ts',
   'items/azure-sql-database/[id]/mirroring/route.ts',
+  'items/databricks-sql-warehouse/[id]/query/route.ts',
 ];
-const STILL_UNGUARDED = 'items/databricks-sql-warehouse/[id]/query/route.ts';
 
-test('the three GUARDED routes #3625 names are owner-scoped TODAY — and for a stated reason', () => {
+/**
+ * THE NEGATIVE DIRECTION OF THIS CONTROL SET. It must never be empty.
+ *
+ * This file's own header records why: a control set that models only the SAFE
+ * pattern passes on the very tree that produced the defect. So when the fourth
+ * route was hardened, this constant was REPOINTED rather than removed.
+ *
+ * The replacement is chosen to preserve the DISCRIMINATION being tested, not
+ * merely to name something unguarded. An unguarded route with no owner-shaped
+ * tokens at all would be a weak negative — it would classify correctly even
+ * under the broken `OWNER_RE`. `items/synapse-serverless-sql-pool/[id]/query`
+ * is the strong form, and is a near-twin of `synapse-dedicated-sql-pool/[id]/
+ * query` in the GUARDED list above, so both directions are exercised on almost
+ * identical shapes. VERIFIED AT SOURCE, not inferred from the column:
+ *
+ *   :24  `withSession(async (req, { session, params }) => {`  — no item guard
+ *   :28  `const { id } = params;`  — the id IS read...
+ *   :42  ...but only by `resolveAccessMode(id, 'synapse-serverless-sql-pool')`,
+ *        which picks OBO-vs-managed-identity mode. It is not an authorization.
+ *   :31  `const database = (body?.database || 'master').toString();` — the
+ *        coordinate comes from the request
+ *   :47  `getUserSqlToken(session.claims.oid)`   — a TOKEN MINT
+ *   :69  `userOid: session.claims.oid`           — a FinOps ATTRIBUTION field
+ *
+ * So: two `claims.oid` reads and a consumed route id, and still no per-item
+ * ownership check. That is exactly the shape the derivation must not be fooled
+ * by.
+ *
+ * STATE ITS SEVERITY HONESTLY rather than implying it is the old subject's
+ * equal. On `accessMode === 'user'` this route runs the statement through OBO
+ * (`executeQueryAsUser`), so the caller's OWN SQL RBAC is consulted and the
+ * Console identity is not the actor. It is therefore NOT an open cross-tenant
+ * hole in the way the fourth route was — it is simply not OWNER-SCOPED, which
+ * is the only thing this column claims to measure. If it is ever hardened, move
+ * it into GUARDED and repoint this again.
+ */
+const STILL_UNGUARDED = 'items/synapse-serverless-sql-pool/[id]/query/route.ts';
+
+test('the four GUARDED routes #3625 names are owner-scoped TODAY — and for a stated reason', () => {
   for (const rel of GUARDED) {
     const c = classify(rel);
     assert.equal(c.owner, true, `${rel} is not owner-scoped`);
@@ -315,9 +356,9 @@ test('the three GUARDED routes #3625 names are owner-scoped TODAY — and for a 
   }
 });
 
-test('the FOURTH route is still unguarded, and the corrected column says so', () => {
+test('the NEGATIVE half still holds — a session-only route carrying owner-shaped tokens is not owner-scoped', () => {
   const c = classify(STILL_UNGUARDED);
-  assert.equal(c.owner, false, `${STILL_UNGUARDED} now authorizes — update GUARDED/STILL_UNGUARDED above`);
+  assert.equal(c.owner, false, `${STILL_UNGUARDED} now authorizes — move it into GUARDED and REPOINT STILL_UNGUARDED (do not delete it: the negative direction must survive)`);
   assert.equal(c.session, true, 'it does check a session; only the per-item authorization is missing');
 });
 
