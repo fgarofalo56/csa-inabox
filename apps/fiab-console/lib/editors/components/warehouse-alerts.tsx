@@ -57,6 +57,13 @@ interface ListResp {
   alerts?: AlertRow[];
   gated?: boolean;
   error?: string;
+  /**
+   * GHSA-v8r7-c2p5-mjf2 — the route's gate discriminator. `'unsaved_item'` is
+   * returned for `[id] === 'new'`, which BOTH mounts of this dialog can reach:
+   * neither ribbon trigger conditions on the item being saved. Titled separately
+   * because "Configuration required" would be a false statement about it.
+   */
+  code?: string;
   gate?: { reason?: string; remediation?: string };
 }
 
@@ -271,7 +278,9 @@ export function WarehouseAlerts({ engine, id, warehouseId, open, onOpenChange }:
               {list?.gated && (
                 <MessageBar intent="warning">
                   <MessageBarBody>
-                    <MessageBarTitle>Configuration required</MessageBarTitle>
+                    <MessageBarTitle>
+                      {list.code === 'unsaved_item' ? 'Save this item first' : 'Configuration required'}
+                    </MessageBarTitle>
                     {list.gate?.remediation || list.error}
                   </MessageBarBody>
                 </MessageBar>

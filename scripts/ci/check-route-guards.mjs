@@ -492,7 +492,45 @@ const ALLOWLIST = new Map([
   // Generic per-item handlers that operate on a SHARED Azure backend resolved
   // by item TYPE (warehouse/AOAI/etc.) — no per-tenant Cosmos ownership to
   // scope; gated by getSession + a type gate.
-  ['apps/fiab-console/app/api/items/[type]/[id]/alerts/route.ts', 'analytics alerts over a shared Azure backend resolved by item type'],
+  //
+  // GHSA-v8r7-c2p5-mjf2 — FIVE ENTRIES USED TO SIT IN THIS BLOCK AND ARE GONE.
+  // Three were false and are now fixed; two were true once and had gone STALE.
+  // They are recorded here rather than reworded, because the WORDING is the
+  // recorded root cause of this whole advisory section: four of the five shared
+  // the sentence "over a shared Azure backend resolved by item type", and a
+  // reason that is accurate about a SIBLING BRANCH — or about a PREVIOUS
+  // revision of the file — reads as verified.
+  //
+  //   [type]/[id]/security    "security-scan over a shared Azure backend
+  //     resolved by item-type gate". FALSE. `resolveWarehouseId`'s own
+  //     doc-comment says it "honours an explicit warehouseId", and `catalog`
+  //     came off the query string / body. Both reached `ucSql` — `CREATE OR
+  //     REPLACE FUNCTION`, `ALTER TABLE … SET MASK` / `SET ROW FILTER` and the
+  //     DROPs — on Unity Catalog as the Console MI, with `[id]` never even
+  //     destructured. Dropping a column mask is the highest-severity effect in
+  //     this advisory's second sweep.
+  //   [type]/[id]/alerts      "analytics alerts over a shared Azure backend
+  //     resolved by item type". FALSE, and not even branch-true: the backend
+  //     split is `isGovCloud()`, an ENVIRONMENT read, and the alert acted on is
+  //     named by `?alertId=`. All four verbs took `_ctx` — the author's own
+  //     signal the params were unread — so any session could list, create,
+  //     modify and DELETE alert rules.
+  //   [type]/[id]/monitoring  "read-only monitoring over a shared Azure backend
+  //     resolved by item type". "read-only" is true; "resolved by item type" is
+  //     true of the Synapse branch and FALSE of the Databricks branch, which
+  //     REQUIRES a caller-supplied `?warehouseId=` and returned that warehouse's
+  //     query history — other tenants' submitted `query_text`.
+  //   [type]/[id]/optimize    STALE, not false. Both adopted
+  //   [type]/[id]/statistics  `guardSynapseItemRequest` in GHSA-v2g8-gp3r-rg4r
+  //     round 3 and were graduated into NOW_GUARDED then; these entries were the
+  //     old reason left behind. NOW_GUARDED wins over the allowlist today, so
+  //     they were INERT — but an inert stale entry is exactly the mask this
+  //     file's own SQL block documents ("guard stripped + entry deleted →
+  //     violations: 0"), and it re-arms silently if that precedence is ever
+  //     edited. Deleted for the same reason the SQL entries were.
+  //
+  // All five are in NOW_GUARDED below, so dropping a guard RE-FLAGS instead of
+  // falling back to a class reason nobody re-tested.
   ['apps/fiab-console/app/api/items/[type]/[id]/assist/route.ts', 'AOAI assist resolved by item type; no per-tenant Cosmos read'],
   ['apps/fiab-console/app/api/items/[type]/[id]/explain/route.ts', 'AOAI explain grounded on the caller-supplied live definition; no per-tenant Cosmos read'],
   // WS-2.3 AI/BI "Explain this metric" AI-authored viz: a stateless AOAI transform
@@ -501,9 +539,9 @@ const ALLOWLIST = new Map([
   // ai-enrich sample probe). Session-gated; the chart is validated against the real
   // column list before it is returned.
   ['apps/fiab-console/app/api/analytics/visualize/route.ts', 'stateless AOAI chart-recommendation grounded purely on caller-supplied columns/sample rows; no per-tenant Cosmos read'],
-  ['apps/fiab-console/app/api/items/[type]/[id]/monitoring/route.ts', 'read-only monitoring over a shared Azure backend resolved by item type'],
-  ['apps/fiab-console/app/api/items/[type]/[id]/optimize/route.ts', 'optimize action over a shared Azure backend resolved by item type'],
-  ['apps/fiab-console/app/api/items/[type]/[id]/security/route.ts', 'security-scan over a shared Azure backend resolved by item-type gate'],
+  // GHSA-v8r7-c2p5-mjf2 — `[type]/[id]/{monitoring,optimize,security}` used to
+  // sit here; see the block comment above this group. All three are in
+  // NOW_GUARDED.
   // GHSA-v8r7-c2p5-mjf2 — `[type]/[id]/sql-security` USED TO SIT HERE, with the
   // reason "SQL security over a shared Azure backend resolved by item-type gate".
   // THE ENTRY IS DELETED RATHER THAN REWORDED, and that distinction is the point.
@@ -525,7 +563,10 @@ const ALLOWLIST = new Map([
   // carries Layer 1 (`loadOwnedSqlItem`) on both verbs plus Layer 2+3
   // (`resolveOwnedSqlTarget`) on the Azure SQL branch, so it passes CHECK 2 on a
   // real guard signal and needs no excuse at all.
-  ['apps/fiab-console/app/api/items/[type]/[id]/statistics/route.ts', 'read-only statistics over a shared Azure backend resolved by item type'],
+  //
+  // `[type]/[id]/statistics` used to sit on the line below with the reason
+  // "read-only statistics over a shared Azure backend resolved by item type". It
+  // was STALE, not false — see the block comment above this group.
 
   // ── GHSA-v8r7-c2p5-mjf2 — the three tabled routes that are OUT OF CLASS ──
   //
@@ -1269,6 +1310,49 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/create-db/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-server/[id]/databases/route.ts',
   'apps/fiab-console/app/api/items/postgres-flexible-server/[id]/databases/route.ts',
+  // ── GHSA-v8r7-c2p5-mjf2, FIFTH PASS — the `[type]/[id]/*` dispatchers ─────
+  // The advisory's own closing sweep measured that exactly two ALLOWLIST entries
+  // used the phrase "resolved by item-type gate" (`security`, `sql-security`)
+  // and that broadening to the parent wording gave eighteen, of which four were
+  // `items/[type]/[id]/*` siblings of those two. `optimize` and `statistics`
+  // were already fixed and already here; these three were not.
+  //
+  //   [type]/[id]/security    UC column masks + row filters. `[id]` was never
+  //     destructured; `catalog` + `warehouseId` came off the request into
+  //     `ucSql` — CREATE OR REPLACE FUNCTION, ALTER TABLE … SET MASK / SET ROW
+  //     FILTER, and the DROPs — as the Console MI. Dropping a mask or a row
+  //     filter is removing the control itself, which makes this the most severe
+  //     of the three.
+  //   [type]/[id]/alerts      all four verbs took `_ctx`. `?alertId=` reached
+  //     `trashDbxAlert` / `deleteScheduledQueryRule`. The only WRITE + DELETE
+  //     entry in this sweep, and the hardest to notice after the fact: a deleted
+  //     rule simply never fires again.
+  //   [type]/[id]/monitoring  READ-ONLY — stated precisely, not softened: no
+  //     DDL and no mutation. `?warehouseId=` was REQUIRED and reached
+  //     `listQueryHistory`, disclosing other tenants' submitted `query_text`.
+  //     The Synapse branch is env-bound and was never part of the finding.
+  //
+  // All three now run `guardSynapseItemRequest` against the route item — the
+  // same backend-agnostic Layer-1 guard `optimize` and `statistics` adopted, not
+  // a new mechanism. Write-scoped except where the handler genuinely only reads
+  // (`monitoring` GET, `alerts` GET).
+  //
+  // Listed here rather than left allowlisted so that dropping a guard RE-FLAGS.
+  // Their allowlist entries were DELETED in this same change — including the two
+  // STALE ones for `optimize` and `statistics`, which had been left behind by
+  // the round-3 graduation and were inert only because NOW_GUARDED wins today.
+  //
+  // READ THE LEDGER BEFORE READING THIS AS CLOSURE. `catalog`, `warehouseId` and
+  // `alertId` are all still CALLER-NAMED: no item→catalog, item→warehouse or
+  // item→alert binding exists in this tree to resolve them from. Every one is
+  // bounded by construction to this deployment's own estate (`dbxFetch` →
+  // LOOM_DATABRICKS_HOSTNAME; every Monitor call composed against
+  // LOOM_ALERT_RG || LOOM_ADMIN_RG, which throws when neither is set), so
+  // nothing cross-subscription survives — but within the estate Layer 1 is a
+  // FLOOR, not a BOUND, exactly as recorded for the round-3 routes above.
+  'apps/fiab-console/app/api/items/[type]/[id]/security/route.ts',
+  'apps/fiab-console/app/api/items/[type]/[id]/alerts/route.ts',
+  'apps/fiab-console/app/api/items/[type]/[id]/monitoring/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a

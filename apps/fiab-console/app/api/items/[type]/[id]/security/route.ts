@@ -35,10 +35,89 @@
  * BOUNDARY GATE: Unity Catalog (Entra-connected metastore) is a Commercial/GCC
  * capability. At GCC-High / IL5 / DoD the route returns an honest gate pointing
  * to the Synapse Dedicated SQL pool column-GRANT + RLS path instead.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * GHSA-v8r7-c2p5-mjf2 — THE HOLE THIS FILE USED TO BE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `getSession()` at the top of each verb was the ENTIRE authorization, and
+ * `[id]` was never destructured at all: both handlers did `const { type } =
+ * await ctxParams(ctx)`. The item id sat in the URL and was read nowhere — not
+ * for ownership, not even for attribution — while the execution coordinates came
+ * off the REQUEST: `catalog` and `warehouseId` from the query string on GET,
+ * from the body on POST. They reached `ucSql(warehouseId, sql, { target:
+ * catalog })`, which runs on Unity Catalog AS THE CONSOLE MANAGED IDENTITY.
+ *
+ * What it runs is not read-only. The POST path issues `CREATE OR REPLACE
+ * FUNCTION`, then `ALTER TABLE … SET MASK` / `SET ROW FILTER`; the drop actions
+ * issue `ALTER TABLE … DROP MASK` / `DROP ROW FILTER`. So any authenticated
+ * session named a warehouse and a catalog and had the Console MI create
+ * functions and ATTACH OR REMOVE column masks and row filters on tables there.
+ * Masking and row-level security are exactly the controls a caller must not be
+ * able to drop.
+ *
+ * WHY NO CONTROL SAW IT — and why the allowlist entry is DELETED rather than
+ * reworded. `check-route-guards.mjs` carried this path with the reason
+ *
+ *     "security-scan over a shared Azure backend resolved by item-type gate"
+ *
+ * `resolveWarehouseId(warehouseIdParam)` is what that reason points at, and its
+ * own doc-comment says it "honours an explicit warehouseId" — i.e. the entry
+ * asserts an item-type gate resolves the backend, while the function it names is
+ * DESIGNED to let the caller override it. The word "resolved" was doing work the
+ * code did not do. Rewording would have preserved exactly that failure, so the
+ * entry is gone and the route now passes CHECK 2 on a real guard signal. Its
+ * twin `[type]/[id]/sql-security` carried the identical sentence and was fixed
+ * the same way in #3648.
+ *
+ * ── WHAT IS AND IS NOT CLOSED ───────────────────────────────────────────────
+ *
+ * LAYER 1 — OWN THE ROUTE ITEM. Both verbs now run `guardSynapseItemRequest`,
+ *   the backend-agnostic Layer-1 guard the two siblings in this same directory
+ *   (`[id]/optimize`, `[id]/statistics`) already adopted for GHSA-v2g8-gp3r-rg4r:
+ *   session → the canonical `authorizeItemWorkspace` ladder (owner →
+ *   tenant-admin → shared-ACL) resolved FROM THE ITEM → a fail-closed item load.
+ *   404-not-403, so an id cannot be probed for existence across tenants.
+ *
+ *   WRITE-SCOPED ON BOTH VERBS — no `allowReadRoles`, including on the GET, and
+ *   that is deliberate rather than copied. This route's twin `sql-security`
+ *   records the rule: the GET's reads are `information_schema.column_masks` and
+ *   `.row_filters` — WHICH COLUMNS ARE MASKED AND WHICH TABLES CARRY A ROW
+ *   FILTER, i.e. the catalog's protection map, which is a reconnaissance list
+ *   for the POST that drops them. The sibling `[id]/statistics` GET does pass
+ *   `allowReadRoles`, and the difference is the sensitivity of what is read, not
+ *   an inconsistency. A read-only Viewer of a shared workspace therefore now
+ *   gets the 404 rather than the map; the message names both causes.
+ *
+ * LAYER 3 — DELIBERATELY NOT INVENTED, and this is the honest part.
+ *   `warehouseId` and `catalog` remain CALLER-NAMED, because no item→warehouse
+ *   and no item→catalog binding exists anywhere in this tree to resolve them
+ *   from: `sql-warehouse-editor.tsx` picks its warehouse from a LIVE
+ *   `listWarehouses()` response (`:255`) and never persists it to item state,
+ *   and the catalog is typed into the panel. Both coordinates are nonetheless
+ *   bounded BY CONSTRUCTION to this deployment's own estate — `ucSql` →
+ *   `executeStatement` → `dbxFetch` targets `LOOM_DATABRICKS_HOSTNAME`, so
+ *   unlike the ARM-id class this advisory opened with, no other subscription or
+ *   workspace is reachable and no credential can be egressed to a caller-named
+ *   host. Neither value is interpolated into a path either: `warehouseId` goes
+ *   into the `warehouse_id` JSON field and `catalog` through
+ *   `uc-security-builders.ts`, which back-tick-quotes and refuses control
+ *   characters. A shape check here would therefore be ceremony, and a ceremonial
+ *   layer that reads as closure is worse than none.
+ *
+ *   RESIDUAL, RECORDED RATHER THAN IMPLIED AWAY: after this change an
+ *   authenticated caller who owns ANY `databricks-sql-warehouse` item can still
+ *   name any catalog in this deployment's own metastore and drop its masks and
+ *   row filters. LAYER 1 IS A FLOOR HERE, NOT A BOUND — the same ledger entry
+ *   `[id]/optimize` and `[id]/statistics` carry, for the same reason. Closing it
+ *   needs a per-item Unity Catalog ownership model that does not exist, plus a
+ *   backfill for every existing install; that is a design decision with a
+ *   brownfield migration and is deliberately not attempted here.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import type { SessionPayload } from '@/lib/auth/session';
+import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 import {
   databricksConfigGate,
   listWarehouses,
@@ -76,10 +155,13 @@ function rowsToObjects(r: QueryResult): Record<string, unknown>[] {
 }
 
 /**
- * Resolve gating for this request. Returns an honest gate or null (good to go).
- * Order: item-type support → Databricks config → sovereign-boundary support.
+ * The ITEM-TYPE gate — a PURE function of the URL segment. No backend, no
+ * Cosmos, no environment: it discloses nothing an unauthenticated caller could
+ * not already infer from the path they typed, which is why it may run before
+ * authorization. The CONFIG and BOUNDARY gates may not — see
+ * {@link resolveBackendGate}.
  */
-function resolveGate(type: string): Gate | null {
+function resolveTypeGate(type: string): Gate | null {
   if (!SUPPORTED_TYPES.has(type)) {
     return {
       gated: true,
@@ -88,6 +170,22 @@ function resolveGate(type: string): Gate | null {
         `For Synapse / warehouse items use the SQL granular-security wizards (Column GRANT + RLS) instead.`,
     };
   }
+  return null;
+}
+
+/**
+ * The DEPLOYMENT gates: is Databricks configured, and is Unity Catalog available
+ * at this sovereign boundary.
+ *
+ * RUNS AFTER LAYER 1, DELIBERATELY. Both answers describe the ESTATE — which
+ * `LOOM_*` env vars this Console is missing, and which cloud it runs in — so
+ * returning either to a caller who has not been authorized against the route
+ * item is an estate-configuration disclosure, and it also masks the denial from
+ * anyone reading the response. `ghsa-shared-backend-dispatchers.test.ts` already
+ * pins this ordering for the sibling routes ("the guard runs BEFORE the config
+ * gate"); this route now shares it.
+ */
+function resolveBackendGate(): Gate | null {
   const cfg = databricksConfigGate();
   if (cfg) {
     return {
@@ -111,10 +209,97 @@ function resolveGate(type: string): Gate | null {
   return null;
 }
 
+/** The route's honest-gate shape: 200 + `gated:true`, rendered by the panel as a
+ *  warning MessageBar rather than a red error. */
+function gate(error: string, code?: string): NextResponse {
+  return NextResponse.json({ ok: false, gated: true, ...(code ? { code } : {}), error }, { status: 200 });
+}
+
+/**
+ * The 404 body for an item the caller cannot reach — naming BOTH causes and
+ * asserting NEITHER.
+ *
+ * `authorizeItemWorkspace` denies for two different situations — the item does
+ * not exist, or it exists and the caller's workspace role is read-only — and
+ * this route cannot tell them apart without a second read, which is precisely
+ * the cross-tenant existence probe 404-not-403 exists to prevent. So the status
+ * stays 404 and the message states the disjunction rather than picking a side,
+ * per `deploy-integrity.md` R7: an error must not assert a cause it did not
+ * establish.
+ *
+ * The read-role half is a REAL consequence of write-scoping this route's GET
+ * (see the header): a Viewer/Contributor of a shared workspace could previously
+ * reach it — that was the vulnerability — and a bare "not found" would leave
+ * them nothing to act on.
+ */
+const ITEM_UNREACHABLE =
+  'This item is not available to you. Either it does not exist, or your role in its ' +
+  'workspace is read-only — the Unity Catalog security wizards read the catalog’s ' +
+  'protection map and execute mask/filter DDL, so they require write access. Ask a ' +
+  'workspace owner for a Contributor-or-higher role if you need them.';
+
+/** Authorized to proceed, or the response to return verbatim. */
+type Authorized = { ok: true; session: SessionPayload } | { ok: false; res: NextResponse };
+
+/**
+ * LAYER 1 + the gates, in the one order both verbs use.
+ *
+ *   1. item-type gate   — pure URL function, discloses nothing.
+ *   2. UNSAVED ITEM     — the honest gate, NOT a 404 (see below).
+ *   3. LAYER 1          — `guardSynapseItemRequest`, write-scoped.
+ *   4. deployment gates — config + sovereign boundary, only once authorized.
+ *
+ * STEP 2 IS THE DEAD-END FIX, and it is reachable. `UcSecurityPanel` has exactly
+ * one mount — `sql-warehouse-editor.tsx:1980`, inside the "Column & row
+ * security" dialog — and that editor has NO `isNew` guard anywhere in the file:
+ * the ribbon action at `:913` is `onClick: () => setUcSecOpen(true)`,
+ * unconditional, and the page renders the editor's full ribbon immediately at
+ * `/items/databricks-sql-warehouse/new`. The panel fetches on mount and paints a
+ * non-gated `!ok` as a RED "Could not load UC security state" banner
+ * (`lib/panes/uc-security-panel.tsx`), so without this branch Layer 1 would put
+ * a red banner four clicks from a create page — `ux-baseline.md` ("new-item
+ * first-open is clean") and `auto-bind-by-default.md` (a dead end) both forbid
+ * it. The gate carries `code:'unsaved_item'` so the panel can title it truthfully
+ * instead of "Configuration required", which would be a false statement.
+ */
+async function authorizeUcSecurityRequest(type: string, id: string): Promise<Authorized> {
+  const typeGate = resolveTypeGate(type);
+  if (typeGate) return { ok: false, res: gate(typeGate.error) };
+
+  if (id === UNSAVED_ITEM_ID) {
+    return {
+      ok: false,
+      res: gate(
+        'Save this item first — Unity Catalog column masks and row filters are applied ' +
+          'in the name of the saved warehouse item, and an unsaved item has no owner to ' +
+          'check them against yet.',
+        'unsaved_item',
+      ),
+    };
+  }
+
+  // LAYER 1 — write-scoped on BOTH verbs; see the header for why the GET too.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: type,
+    notFound: ITEM_UNREACHABLE,
+  });
+  if (guard.res) return { ok: false, res: guard.res };
+
+  const backendGate = resolveBackendGate();
+  if (backendGate) return { ok: false, res: gate(backendGate.error) };
+
+  return { ok: true, session: guard.ctx.session };
+}
+
 /**
  * Resolve the SQL warehouse to run against. Honours an explicit warehouseId
  * (the editor's warehouse picker); otherwise falls back to the first RUNNING
  * warehouse, then any warehouse (executeStatement tolerates STARTING).
+ *
+ * CALLER-NAMED, AND THAT IS NOT AN OVERSIGHT — see the header's Layer 3 note.
+ * It is bounded to this deployment's own Databricks workspace by `dbxFetch`, and
+ * the ownership check that now precedes every call to it is the boundary.
  */
 async function resolveWarehouseId(requested?: string): Promise<string> {
   if (requested) return requested;
@@ -135,12 +320,9 @@ async function ctxParams(ctx: { params: Promise<{ type: string; id: string }> })
 // ============================================================
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { type } = await ctxParams(ctx);
-  const gate = resolveGate(type);
-  if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
+  const { type, id } = await ctxParams(ctx);
+  const auth = await authorizeUcSecurityRequest(type, id);
+  if (!auth.ok) return auth.res;
 
   const catalog = req.nextUrl.searchParams.get('catalog') || undefined;
   const schema = req.nextUrl.searchParams.get('schema') || undefined;
@@ -210,12 +392,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ type: strin
 // ============================================================
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { type } = await ctxParams(ctx);
-  const gate = resolveGate(type);
-  if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
+  const { type, id } = await ctxParams(ctx);
+  const auth = await authorizeUcSecurityRequest(type, id);
+  if (!auth.ok) return auth.res;
+  const { session } = auth;
 
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || 'wizard');

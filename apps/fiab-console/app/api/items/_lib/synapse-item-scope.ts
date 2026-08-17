@@ -264,6 +264,32 @@ export async function workspaceSynapseScope(item: WorkspaceItem): Promise<Set<st
   return scope;
 }
 
+/**
+ * The route `[id]` an UNSAVED editor carries. `/items/<type>/new` is the create
+ * page (`app/items/[type]/[id]/page.tsx:100  const isNew = id === 'new'`), so
+ * `[id]` is the literal string `new` until the item is first saved.
+ *
+ * It can NEVER collide with a real item: `createOwnedItem` mints ids with
+ * `crypto.randomUUID()` (`_lib/item-crud.ts:467`, and :275 records the same
+ * invariant), so special-casing it downgrades nothing. Match it EXACTLY — a
+ * substring or prefix test would let a real id skip the ownership check.
+ *
+ * WHY A ROUTE NEEDS IT. {@link guardSynapseItemRequest} FAILS CLOSED on an id
+ * that names no item — correctly — so an unsaved item 404s, and the editors
+ * render a 404 as a RED error banner on a freshly created item. That is a dead
+ * end (`auto-bind-by-default.md`) and a day-one error state (`ux-baseline.md`,
+ * "new-item first-open is clean"), and it is the defect review caught in #3648.
+ * A route reachable at `/items/<type>/new` must therefore short-circuit to its
+ * OWN honest gate BEFORE the guard runs — never after it, and never by
+ * loosening the guard.
+ *
+ * #3648 introduced this constant as a file-local `const` in
+ * `[type]/[id]/sql-security/route.ts`; this is the shared home for the routes
+ * that adopted it afterwards. That file still carries its own copy — collapsing
+ * the two is a follow-up, deliberately not folded into a security fix.
+ */
+export const UNSAVED_ITEM_ID = 'new';
+
 /** Result of {@link guardSynapseItemRequest}: a ready context or the response to return. */
 export type SynapseItemGuardResult =
   | { ctx: SynapseItemContext; res?: undefined }

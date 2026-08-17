@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 675 |
-| Owner-scoped | 646 |
+| Session-only | 672 |
+| Owner-scoped | 649 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -1039,7 +1039,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | --- | --- | --- | :---: | --- |
 | `items/[type]/[id]/access-mode/route.ts` | PATCH | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/ai-function/route.ts` | GET POST | session-only | ● | Databricks |
-| `items/[type]/[id]/alerts/route.ts` | GET POST PATCH DELETE | session-only | ● | Azure Monitor, Databricks |
+| `items/[type]/[id]/alerts/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | Azure Monitor, Databricks |
 | `items/[type]/[id]/assist/route.ts` | POST | session-only | ● | Databricks, Synapse SQL |
 | `items/[type]/[id]/audit/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/business-metadata/route.ts` | GET POST | owner-scoped |  | Cosmos, Purview |
@@ -1056,7 +1056,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/[type]/[id]/export-check/route.ts` | POST | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/impact/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/lineage/route.ts` | GET | owner-scoped | ● | Cosmos, Purview |
-| `items/[type]/[id]/monitoring/route.ts` | GET | session-only | ● | Databricks, Synapse SQL, Synapse pool |
+| `items/[type]/[id]/monitoring/route.ts` | GET | owner-scoped | ● | Databricks, Synapse SQL, Synapse pool |
 | `items/[type]/[id]/onelake-security/[role]/cls/route.ts` | GET POST | session-only |  | — |
 | `items/[type]/[id]/onelake-security/[role]/rls/route.ts` | GET POST | session-only |  | — |
 | `items/[type]/[id]/onelake-security/schema/route.ts` | GET | session-only |  | ADLS |
@@ -1067,7 +1067,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/[type]/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/security-roles/preview-as/route.ts` | POST | admin |  | — |
 | `items/[type]/[id]/security-roles/route.ts` | GET POST PUT DELETE | admin |  | — |
-| `items/[type]/[id]/security/route.ts` | GET POST | session-only | ● | Databricks |
+| `items/[type]/[id]/security/route.ts` | GET POST | owner-scoped | ● | Databricks |
 | `items/[type]/[id]/sensitivity-label/route.ts` | GET PUT PATCH DELETE | owner-scoped | ● | Cosmos, Purview |
 | `items/[type]/[id]/sensitivity/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Purview |
 | `items/[type]/[id]/share/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |

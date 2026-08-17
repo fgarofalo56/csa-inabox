@@ -14,9 +14,68 @@
  * Honest gates: a missing LOOM_DATABRICKS_HOSTNAME / LOOM_SYNAPSE_WORKSPACE
  * returns 503 { code: 'not_configured', missing } so the UI shows a precise
  * MessageBar; a Paused Synapse pool returns 409 { code: 'pool_paused' }.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * GHSA-v8r7-c2p5-mjf2 — THE HOLE THIS FILE USED TO BE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `const { type } = await props.params` — `[id]` was never destructured, so the
+ * item id sat in the URL and was read nowhere. `getSession()` was the entire
+ * authorization. On the Databricks branch `warehouseId` came off the query
+ * string and was REQUIRED (400 without it), then went straight to
+ * `listWarehouseEvents(warehouseId, 200)` and `listQueryHistory({ warehouseId
+ * })` as the Console identity.
+ *
+ * BE PRECISE ABOUT WHAT THIS IS AND IS NOT. It is READ-ONLY — no DDL, no
+ * mutation, no rule deletion — so it is materially less severe than the UC
+ * `[id]/security` and `[id]/alerts` entries recorded alongside it. What it
+ * leaked is `query_text`: the SUBMITTED SQL of every statement run on any
+ * warehouse the Console identity can reach, which is other tenants' query text.
+ * That is information disclosure of exactly the kind the `warehouse/[id]/query`
+ * family was fixed for, and it is the whole of the finding.
+ *
+ * THE SYNAPSE BRANCH WAS NEVER PART OF IT, stated so the fix is not read as
+ * wider than it is: `dedicatedTarget()` derives workspace AND pool from
+ * `LOOM_SYNAPSE_WORKSPACE` / `LOOM_SYNAPSE_DEDICATED_POOL`, the branch takes no
+ * caller coordinate at all, and its DMV reads are pool-wide either way. Layer 1
+ * is a real addition there too (it was equally unauthorized) but the disclosure
+ * finding is the Databricks branch only.
+ *
+ * WHY NO CONTROL SAW IT — and why the allowlist entry is DELETED rather than
+ * reworded. `check-route-guards.mjs` carried this path with
+ *
+ *     "read-only monitoring over a shared Azure backend resolved by item type"
+ *
+ * "read-only" is true. "resolved by item type" is true of the Synapse branch and
+ * FALSE of the Databricks branch, which requires a caller-supplied
+ * `?warehouseId=`. A reason that is accurate about a sibling branch reads as
+ * verified — the same wording defect this advisory records for `sql-security`
+ * and the UC `security` route, one directory apart, on the same sentence.
+ * Rewording preserves that failure, so the entry is gone.
+ *
+ * ── WHAT IS AND IS NOT CLOSED ───────────────────────────────────────────────
+ *
+ * LAYER 1 — OWN THE ROUTE ITEM. `guardSynapseItemRequest`, the backend-agnostic
+ *   Layer-1 guard the siblings `[id]/optimize` and `[id]/statistics` already
+ *   use, with `allowReadRoles: true` because this handler genuinely only reads —
+ *   the same scope `[id]/statistics`'s GET carries. 404-not-403.
+ *
+ * LAYER 3 — NOT PRESENT, and named. `warehouseId` stays caller-named because no
+ *   item→warehouse binding exists in this tree: `sql-warehouse-editor.tsx` picks
+ *   it from a LIVE `listWarehouses()` response (`:255`) and never persists it to
+ *   item state, which is why the panel passes it as a prop rather than reading
+ *   it back. It is bounded by construction to this deployment's own Databricks
+ *   workspace (`dbxFetch` → `LOOM_DATABRICKS_HOSTNAME`) and is URL-encoded into
+ *   the path / set as a `URLSearchParams` filter value, never interpolated.
+ *
+ *   RESIDUAL, RECORDED: an authenticated caller who owns any item of the route's
+ *   `[type]` can still read the event timeline and query history — including
+ *   `query_text` — of any warehouse in this deployment. LAYER 1 IS A FLOOR HERE,
+ *   NOT A BOUND, the same ledger entry the two siblings carry. Closing it needs
+ *   a per-item warehouse binding that does not exist today.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 import {
   databricksConfigGate,
   listWarehouseEvents,
@@ -51,10 +110,65 @@ function toRecords(result: { columns: string[]; rows: unknown[][] }): Array<Reco
   });
 }
 
+/**
+ * The 404 body for an item the caller cannot reach — naming BOTH causes and
+ * asserting NEITHER (`deploy-integrity.md` R7). Read-scoped here, so the second
+ * cause is narrower than on the mutating siblings: only a caller with NO role at
+ * all in the item's workspace is refused.
+ */
+const ITEM_UNREACHABLE =
+  'This item is not available to you. Either it does not exist, or you have no role in ' +
+  'its workspace. Ask a workspace owner to share it with you.';
+
+/**
+ * The unsaved-item honest gate, returned INSTEAD of Layer 1's 404 and before the
+ * guard runs.
+ *
+ * REACHABLE FROM TWO OF THE THREE CALL SITES, checked rather than assumed:
+ *
+ *   `databricks/sql-warehouse-editor.tsx:1244` — the Monitoring tab renders
+ *     unconditionally; that editor has NO `isNew` guard anywhere in the file.
+ *   `synapse-sql-editors.tsx:1099`             — same shape; the string `isNew`
+ *     does not occur in that file at all.
+ *   `phase3/warehouse-editor.tsx:725`          — SAFE, and it is the model: it
+ *     renders `isNew ? <MessageBar …"Save the warehouse first"> :
+ *     <WarehouseMonitoringTab …>`. This gate is that same answer, moved to the
+ *     route so the other two editors get it and a direct API call cannot skip it.
+ *
+ * `WarehouseMonitoringTab` fetches on mount (`useEffect(() => { void load(); })`,
+ * unconditional) and paints a `!ok` response with NO recognised `code` as a RED
+ * "Could not load monitoring" banner — so a bare 404 here would be a red error
+ * on a freshly created item (`ux-baseline.md`) reached by clicking one tab. The
+ * gate therefore carries `code: 'unsaved_item'`, which the panel now renders as
+ * a warning with an accurate title.
+ *
+ * 200, NOT 4xx, and deliberately: this is the "not yet applicable" state of a
+ * read surface, not a refusal of a hostile request, and the panel's own
+ * `data.ok` branches key off the body rather than the status.
+ */
+function unsavedItemGate(): NextResponse {
+  return NextResponse.json({
+    ok: false,
+    code: 'unsaved_item',
+    error:
+      'Save this item first — monitoring reads the live backend in the name of the saved ' +
+      'item, and an unsaved item has no owner to check that against yet.',
+  }, { status: 200 });
+}
+
 export async function GET(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const { type } = await props.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const { type, id } = await props.params;
+  if (id === UNSAVED_ITEM_ID) return unsavedItemGate();
+
+  // LAYER 1. Read-scoped: this handler only reads, so shared read roles are
+  // admitted — the same scope the sibling `[id]/statistics` GET carries.
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: type,
+    notFound: ITEM_UNREACHABLE,
+    allowReadRoles: true,
+  });
+  if (guard.res) return guard.res;
 
   const windowSecs = (() => {
     const n = Number(req.nextUrl.searchParams.get('window'));
