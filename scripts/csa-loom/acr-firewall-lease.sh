@@ -88,10 +88,60 @@
 # lease-infrastructure failure fatal instead.
 #
 # -----------------------------------------------------------------------------
+# THE WRITER THE LEASE DID NOT COVER (#3676)
+# -----------------------------------------------------------------------------
+#
+# Every participant above is a PUSHER: it wants the firewall open. There is a
+# second class of writer that the design missed entirely — a process that
+# REWRITES THE REGISTRY RESOURCE. `az deployment sub create` on a template
+# carrying Microsoft.ContainerRegistry/registries/<acr> does two things an ARM
+# resource PUT always does: it re-asserts publicNetworkAccess/networkRuleSet,
+# and it REPLACES the resource's tags. The lease IS four of those tags.
+#
+# Measured 2026-08-17 (all from run logs). build-fiab-images-acr-tasks run
+# 32004290228 took the lease at 07:11:16 with a 120-minute TTL and opened the
+# registry. deploy-fiab-commercial run 32004118361 was mid-apply
+# (07:09:09-07:23:58). The last successful push was 07:17:06; the first
+# `denied: client with IP ... is not allowed access` was 07:17:23. Five of six
+# images never shipped. The build's own release at 07:35:07 read the owner as
+# 'none' with ~96 minutes still on the clock. That deploy's own what-if had
+# predicted it at 07:05:39:
+#
+#     - tags.loomAcrFwExpiresEpoch / HolderUrl / Owner / SinceUtc
+#     ~ properties.networkRuleSet.defaultAction: "Deny" => "Allow"
+#
+# The lease was not violated by a bad last-holder check, and it did not expire.
+# It was ERASED, together with the firewall opening it was protecting, by a
+# writer that never took it.
+#
+# Two things follow, and both are implemented here:
+#
+#   `acquire --no-open`  a CLAIM-ONLY mode for exactly that writer. It needs the
+#                        MUTEX (nobody may be mid-push while ARM rewrites the
+#                        resource) but must NOT make the registry public for the
+#                        length of a deployment.
+#
+#   the ERASED branch    `release` now distinguishes "I held this and it was
+#   in acr_lease_release taken from under me" from "I never held one", and says
+#                        which, naming the likely ARM re-render. Its symptom is
+#                        a raw `denied: client with IP` twenty minutes into a
+#                        build, which names an IP and explains nothing.
+#
+# For that second one to work at all, ACR_LEASE_STATE has to survive from the
+# acquiring process to the releasing one — see _lease_persist_state, and note
+# that a CALLER whose acquire and release are separate JOBS must additionally
+# carry it as a job output (build-fiab-images-acr-tasks.yml does).
+#
+# STILL NOT FIXED HERE: the ARM apply continues to DELETE the lease tags,
+# because the remedy for that is in the ACR bicep module (carry the tags, or
+# stop managing tags on that resource). Holding the mutex means nobody is
+# relying on them while they are wiped, which removes the harm.
+#
+# -----------------------------------------------------------------------------
 # USAGE
 # -----------------------------------------------------------------------------
 #
-#   scripts/csa-loom/acr-firewall-lease.sh acquire --acr <name> [--subscription <sub>]
+#   scripts/csa-loom/acr-firewall-lease.sh acquire --acr <name> [--subscription <sub>] [--no-open]
 #   scripts/csa-loom/acr-firewall-lease.sh release --acr <name> [--subscription <sub>]
 #   scripts/csa-loom/acr-firewall-lease.sh status  --acr <name> [--subscription <sub>]
 #   scripts/csa-loom/acr-firewall-lease.sh sweep   --acr <name> [--subscription <sub>] [--force]
@@ -213,6 +263,33 @@ _lease_write() {
 }
 
 _lease_clear() { _lease_write "none" "0" "none"; }
+
+# Carry ACR_LEASE_STATE across STEPS, not just across function calls.
+#
+# THIS WAS BROKEN AND THE BREAKAGE WAS INVISIBLE (#3676). Every CI caller
+# acquires in one `run:` block and releases in another, i.e. in a DIFFERENT
+# shell process, so the variable `acr_lease_acquire` sets was always back at its
+# `${ACR_LEASE_STATE:-none}` default by release time. Two consequences:
+#
+#   - the degraded-mode message ("re-locking unleased ... grant Tag Contributor")
+#     could never be selected from CI, so a permission gap read as an ordinary
+#     release for the entire life of the script;
+#   - a holder could not tell "my lease was taken from me" from "I never had
+#     one". Measured 2026-08-17: build run 32004290228 held the lease with 96
+#     minutes left and its own release step reported the recorded holder as
+#     'none' with no idea that was abnormal.
+#
+# Writing to $GITHUB_ENV is what makes the state a fact about the RUN rather
+# than about one shell. Outside Actions this is a no-op and the existing
+# same-process behaviour is unchanged.
+_lease_persist_state() {
+  ACR_LEASE_STATE="$1"
+  [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+  [ -n "${GITHUB_ENV:-}" ] || return 0
+  [ -w "${GITHUB_ENV}" ] || return 0
+  printf 'ACR_LEASE_STATE=%s\n' "$1" >> "$GITHUB_ENV"
+  printf 'LOOM_ACR_LEASE_OWNER=%s\n' "$_LEASE_OWNER" >> "$GITHUB_ENV"
+}
 
 _lease_open_firewall() {
   _lease_note "opening ACR '$_LEASE_ACR' (publicNetworkAccess=Enabled, defaultAction=Allow) ..."
@@ -350,13 +427,14 @@ _lease_close_firewall() {
 
 # Parse the shared --acr / --subscription / --owner flags into _LEASE_* vars.
 _lease_parse_args() {
-  _LEASE_ACR=""; _LEASE_SUB=""; _LEASE_OWNER=""; _LEASE_FORCE="false"
+  _LEASE_ACR=""; _LEASE_SUB=""; _LEASE_OWNER=""; _LEASE_FORCE="false"; _LEASE_NO_OPEN="false"
   while [ $# -gt 0 ]; do
     case "$1" in
       --acr)          _LEASE_ACR="${2:-}"; shift 2 ;;
       --subscription) _LEASE_SUB="${2:-}"; shift 2 ;;
       --owner)        _LEASE_OWNER="${2:-}"; shift 2 ;;
       --force)        _LEASE_FORCE="true"; shift ;;
+      --no-open)      _LEASE_NO_OPEN="true"; shift ;;
       *) _lease_err "unknown argument: $1"; return 2 ;;
     esac
   done
@@ -446,8 +524,29 @@ acr_lease_acquire() {
           fi
         done
         if [ "$confirmed" = "true" ]; then
-          ACR_LEASE_STATE="held"
+          _lease_persist_state held
           _lease_note "HELD the ACR firewall lease on '$_LEASE_ACR' as '$me' for ${ttl_min}m (attempt ${attempt})."
+          if [ "${_LEASE_NO_OPEN:-false}" = "true" ]; then
+            # CLAIM-ONLY (#3676). The holder is not pushing; it is about to
+            # REWRITE the registry resource (an `az deployment sub create` whose
+            # template carries the ACR), and that write flips
+            # publicNetworkAccess/networkRuleSet and replaces the resource's
+            # tags. Both are the shared state this lease exists to arbitrate, so
+            # the writer must hold the mutex — but opening the firewall for it
+            # would be a security regression for no benefit.
+            #
+            # This is the mode that was missing on 2026-08-17. Measured: the
+            # scheduled deploy's apply ran 07:09:09-07:23:58; build run
+            # 32004290228 held the lease from 07:11:16 (TTL 120m); the last
+            # successful push was 07:17:06 and the first `denied: client with
+            # IP` was 07:17:23. Nothing released the lease in that window — the
+            # deploy's ARM PUT re-asserted publicNetworkAccess=Disabled and
+            # DELETED the four loomAcrFw* tags, which is why that build's own
+            # release step later read the owner as 'none'. Five of six images
+            # never shipped.
+            _lease_note "CLAIM-ONLY: not opening the firewall on '$_LEASE_ACR'. This holder needs the MUTEX (it is about to rewrite the registry resource), not public reachability."
+            return 0
+          fi
           _lease_open_firewall || { _lease_err "failed to open ACR '$_LEASE_ACR' after taking the lease."; return 1; }
           return 0
         fi
@@ -460,7 +559,11 @@ acr_lease_acquire() {
           return 1
         fi
         _lease_warn "LOOM_ACR_LEASE_FALLBACK=legacy — proceeding UNLEASED (pre-#2603 behavior: unconditional re-lock on release). This is fail-closed but NOT race-free."
-        ACR_LEASE_STATE="unleased"
+        _lease_persist_state unleased
+        if [ "${_LEASE_NO_OPEN:-false}" = "true" ]; then
+          _lease_note "CLAIM-ONLY + unleased: not opening the firewall on '$_LEASE_ACR'. Nothing is protected, but nothing is exposed either."
+          return 0
+        fi
         _lease_open_firewall || { _lease_err "failed to open ACR '$_LEASE_ACR'."; return 1; }
         return 0
       fi
@@ -506,7 +609,7 @@ acr_lease_release() {
     fi
     _lease_clear || _lease_warn "re-locked ACR '$_LEASE_ACR' but could not clear the lease tags; the sweeper will tidy them."
     _lease_note "released the ACR firewall lease on '$_LEASE_ACR' and VERIFIED it re-locked."
-    ACR_LEASE_STATE="none"
+    _lease_persist_state none
     return 0
   fi
 
@@ -516,8 +619,43 @@ acr_lease_release() {
     # upload after minutes of work. Leave it open; they will re-lock on their
     # own release, and the sweeper re-locks if they die.
     _lease_warn "NOT re-locking ACR '$_LEASE_ACR': the firewall lease is held by '$owner' ($holder_url) for another $(( expires - $(_lease_now) ))s, not by this process ('$me'). Re-locking now would deny that holder's in-flight push — this is exactly issue #2603. The holder re-locks on release; acr-firewall-sweeper re-locks if the holder dies."
-    ACR_LEASE_STATE="none"
+    _lease_persist_state none
     return 0
+  fi
+
+  # ── THE LEASE WAS ERASED UNDER A LIVE HOLDER (#3676) ───────────────────────
+  #
+  # This process took the lease, believes it still holds it, and the registry no
+  # longer records it as the owner — and no other holder took over either. The
+  # lease was not lost to a race between participants; it was DELETED by
+  # something that never participated.
+  #
+  # Measured 2026-08-17. build-fiab-images-acr-tasks run 32004290228 acquired
+  # the lease at 07:11:16 with a 120-minute TTL, and its own release step at
+  # 07:35:07 read the owner as 'none' — with ~96 minutes still on the clock. In
+  # between, deploy-fiab-commercial run 32004118361 ran `az deployment sub
+  # create` (07:09:09-07:23:58) over a template that carries the ACR resource.
+  # That run's OWN what-if, printed at 07:05:39, predicted it exactly:
+  #
+  #     - tags.loomAcrFwExpiresEpoch:              "0"
+  #     - tags.loomAcrFwHolderUrl:                 "none"
+  #     - tags.loomAcrFwOwner:                     "none"
+  #     - tags.loomAcrFwSinceUtc:                  "2026-08-17T07:04:28Z"
+  #     ~ properties.networkRuleSet.defaultAction: "Deny" => "Allow"
+  #
+  # An ARM resource PUT replaces the resource's tags, so a bicep module that
+  # manages the registry deletes the lease every time it runs — and re-asserts
+  # publicNetworkAccess=Disabled, slamming the firewall shut on the holder. The
+  # last successful push in that build was 07:17:06; the first `denied: client
+  # with IP` was 07:17:23. Five of six images never shipped, and the only
+  # message anyone got was a raw registry denial that named an IP.
+  #
+  # This branch exists so that never again reads as a mystery. It does not
+  # change what happens next (the close below is still correct and still fails
+  # closed) — it names the cause, because a failure whose only output is a
+  # symptom is a deploy-integrity R6 violation.
+  if [ "$ACR_LEASE_STATE" = "held" ] && { [ -z "$owner" ] || [ "$owner" = "none" ]; }; then
+    _lease_err "THE LEASE ON '$_LEASE_ACR' WAS ERASED WHILE THIS PROCESS HELD IT. This run ('$me') took the lease and never released it, yet the registry now records owner='${owner:-<empty>}'. ARM tag writes are the lease, so the overwhelmingly likely cause is a deployment that PUTs the registry resource (any template carrying Microsoft.ContainerRegistry/registries/$_LEASE_ACR) — an ARM PUT replaces the resource's tags and re-asserts publicNetworkAccess, which also closes the firewall under this run. That is #3676: if a push in this run was denied with 'client with IP ... is not allowed access', THIS is why, and it is not a registry or a network fault. Check whether deploy-fiab-commercial / deploy-fiab-gcch / deploy-fiab-il5 was applying during this window."
   fi
 
   # No live holder recorded — either we were unleased (degraded mode) or the
@@ -533,7 +671,7 @@ acr_lease_release() {
     return 1
   fi
   _lease_clear >/dev/null 2>&1 || true
-  ACR_LEASE_STATE="none"
+  _lease_persist_state none
   return 0
 }
 
@@ -633,11 +771,17 @@ _acr_lease_usage() {
   cat >&2 <<'EOF'
 
 usage:
-  acr-firewall-lease.sh acquire --acr <name> [--subscription <sub>] [--owner <id>]
+  acr-firewall-lease.sh acquire --acr <name> [--subscription <sub>] [--owner <id>] [--no-open]
   acr-firewall-lease.sh release --acr <name> [--subscription <sub>] [--owner <id>]
   acr-firewall-lease.sh status  --acr <name> [--subscription <sub>]
   acr-firewall-lease.sh sweep   --acr <name> [--subscription <sub>] [--force]
   acr-firewall-lease.sh verify  --acr <name> [--subscription <sub>]
+
+  --no-open  take the MUTEX without opening the firewall. For a holder that is
+             about to REWRITE the registry resource (an ARM deployment whose
+             template carries the ACR) rather than push to it: that write flips
+             publicNetworkAccess and replaces the resource's tags, so it must
+             exclude pushers — but it must not make the registry public (#3676).
 
 exit codes:
   release / sweep : 0 = registry VERIFIED locked (or legitimately left open for

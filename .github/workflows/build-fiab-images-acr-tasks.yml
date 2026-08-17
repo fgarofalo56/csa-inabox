@@ -562,6 +562,21 @@ jobs:
     name: Acquire ACR firewall lease + open (temp)
     needs: resolve
     runs-on: ubuntu-latest
+    # ACR_LEASE_STATE MUST CROSS THE JOB BOUNDARY (#3676).
+    #
+    # acr-firewall-lease.sh keeps `ACR_LEASE_STATE` so that `release` can tell
+    # "I held this and lost it" from "I never had it". Acquire and release are
+    # SEPARATE JOBS here, on separate runners, so that variable was always back
+    # at its default by release time and the distinction did not exist. On
+    # 2026-08-17 run 32004290228 acquired the lease at 07:11:16 with a 120-minute
+    # TTL and its own release step at 07:35:07 reported the recorded owner as
+    # 'none' — the lease had been ERASED by a concurrent `az deployment sub
+    # create` re-rendering the registry resource — and the log had no way to say
+    # so. It read like ordinary tidy-up while five of six images had just failed
+    # to push. Carrying the state forward is what lets the release name it.
+    outputs:
+      lease_state: ${{ steps.acquire.outputs.lease_state }}
+      lease_owner: ${{ steps.acquire.outputs.lease_owner }}
     steps:
       - uses: actions/checkout@v7
       - name: Azure login (Commercial)
@@ -600,13 +615,22 @@ jobs:
         if: env.BOUNDARY != 'Commercial'
         run: az cloud set --name AzureUSGovernment
       - name: Acquire the ACR firewall lease (opens the registry)
+        id: acquire
         run: |
+          set -uo pipefail
           bash scripts/csa-loom/acr-firewall-lease.sh acquire \
             --acr "${{ needs.resolve.outputs.acr_name }}"
+          # The script wrote ACR_LEASE_STATE / LOOM_ACR_LEASE_OWNER to
+          # $GITHUB_ENV; promote them to JOB OUTPUTS so acr_restore — a
+          # different runner — can be handed the same facts. Reading them back
+          # rather than hard-coding 'held' keeps degraded mode (unleased)
+          # distinguishable, which it has never been across jobs.
+          echo "lease_state=${ACR_LEASE_STATE:-none}" >> "$GITHUB_OUTPUT"
+          echo "lease_owner=${LOOM_ACR_LEASE_OWNER:-}" >> "$GITHUB_OUTPUT"
 
   acr_restore:
     name: Release ACR firewall lease (re-lock if still the holder)
-    needs: [resolve, build]
+    needs: [resolve, build, acr_enable]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -654,7 +678,17 @@ jobs:
       # registry is left open for them (they release it; the scheduled
       # acr-firewall-sweeper re-locks if they die). If NOBODY holds it, this
       # re-locks anyway — never leave a registry publicly reachable.
+      # ACR_LEASE_STATE / LOOM_ACR_LEASE_OWNER come from acr_enable's outputs
+      # (#3676) so this job knows whether it EVER held the lease. Without them
+      # the script cannot distinguish "the lease was taken from me" from "I
+      # never had one", and it emits ordinary tidy-up wording over an incident.
+      # `build` failing does not skip this job (`if: always()` above), and
+      # acr_enable failing yields empty outputs, which resolve to 'none' — the
+      # same conservative default as before.
       - name: Release the ACR firewall lease
+        env:
+          ACR_LEASE_STATE: ${{ needs.acr_enable.outputs.lease_state || 'none' }}
+          LOOM_ACR_LEASE_OWNER: ${{ needs.acr_enable.outputs.lease_owner }}
         run: |
           bash scripts/csa-loom/acr-firewall-lease.sh release \
             --acr "${{ needs.resolve.outputs.acr_name }}"

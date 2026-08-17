@@ -1,6 +1,11 @@
 /**
- * reconcile-policy.mjs — pure decision logic for the SCHEDULED reconcile of
- * deploy-fiab-commercial.yml.
+ * reconcile-policy.mjs — decision logic for the SCHEDULED reconcile of
+ * deploy-fiab-commercial.yml, plus a FILE-FED CLI the workflow calls.
+ *
+ * Everything above the `CLI` banner at the bottom is pure: no Azure calls, no
+ * network, no clock. The CLI reads files and argv that the workflow's own
+ * `run:` blocks produced (they own the `az` / `gh` I/O and its exit codes) and
+ * turns them into a verdict, so the decisions stay unit-testable end to end.
  *
  * WHY THIS EXISTS (refs #2775, refs #2860)
  * ---------------------------------------------------
@@ -49,6 +54,47 @@
  * mechanism `gcc-high.bicepparam` / `commercial-full.bicepparam` already use.
  * The resulting ARM PUT is a no-op for the image and applies everything else.
  *
+ * …AND THE WAY THAT MEASUREMENT WENT STALE (#3676, measured 2026-08-17)
+ * --------------------------------------------------------------------
+ * The measurement was correct. It was just taken SIXTEEN MINUTES before it was
+ * used, and the roll lane writes the same field.
+ *
+ *   07:03:06  deploy-fiab-commercial starts (schedule)
+ *   07:03:40  [reconcile] PIN console loom-console:587ac3b8…   <- true then
+ *   07:04:36  loom-roll-and-validate starts for b9ca620b
+ *   07:10:56  revision 0000755 — loom-console:b9ca620b…        <- the roll lands
+ *   07:19:48  revision 0000756 — loom-console:587ac3b8…        <- the APPLY, stale
+ *   07:27:26  deploy-fiab-commercial: success
+ *
+ * Both lanes reported success. Nothing anywhere compared the estate AFTER the
+ * apply with what the roll had established, so a nine-minute-old security fix
+ * (PR #3665, GHSA-v2g8-gp3r-rg4r) was reverted off production in silence.
+ *
+ * It had happened before. The 2026-08-15 scheduled run (31870181337) pinned
+ * `8f8e569a` at 06:44:38, roll 31870718201 moved the console to `2dda97b4`
+ * between 06:57 and 07:10, and the deploy's own outputs at 07:26:33 record
+ * `"console": "8f8e569a…"` — the same revert, two days earlier, equally silent.
+ *
+ * SO THIS FILE NOW HOLDS TWO MORE INVARIANTS:
+ *
+ *   I-FRESH   The pin that is APPLIED was measured immediately before the
+ *             apply, not at the top of the job. decidePinRefresh() re-reads and
+ *             RE-PINS to whatever is running now; it refuses only when the
+ *             estate could not be read at all, or when a key that was pinned
+ *             has become UNKNOWN. Re-pinning (rather than refusing) is
+ *             deliberate: a roll lands inside a scheduled deploy's window
+ *             roughly one night in three, and a guard that refuses one night in
+ *             three is a guard that gets switched off. Re-pinning to the tag
+ *             that is RUNNING is also strictly safer than the tag that was
+ *             running — a running image is a proven-pullable image.
+ *
+ *   I-BEHIND  After the apply, the console must be running what the most recent
+ *             EFFECTIVE roll put there. decideEstateRegression() fails the run
+ *             loudly when it is not, and fails CLOSED when either side of that
+ *             comparison cannot be established. This is the half that matters:
+ *             I-FRESH narrows the window, it does not close it (a roll can land
+ *             while ARM is mid-apply), so something has to NOTICE.
+ *
  * FAIL-CLOSED, AND NOT THE SAME WAY THE OLD BASH FAILED
  * -----------------------------------------------------
  * `deployAppsEnabled` starts at the SAFE value ('false', from
@@ -63,6 +109,7 @@
  *
  * Run: node --test scripts/ci/__tests__/reconcile-policy.test.mjs
  */
+import { readFileSync, appendFileSync } from 'node:fs';
 
 /**
  * Every `appImageTags` key, the container-image REPOSITORY it names, and the
@@ -493,4 +540,587 @@ export function tagEnvLines(pinned = {}) {
     lines.push(`${entry.envVar}=${tag}`);
   }
   return lines;
+}
+
+// ===========================================================================
+// I-FRESH — the pin that is APPLIED must have been measured just now (#3676)
+// ===========================================================================
+
+/** envVar -> appImageTags key, for reading pins back out of the environment. */
+export const KEY_BY_TAG_ENV_VAR = Object.freeze(
+  Object.fromEntries(APP_IMAGE_TAGS.map((e) => [e.envVar, e.key])),
+);
+
+/**
+ * The pins a previous step exported, read back out of an environment bag.
+ *
+ * `reconcile-resolve.mjs` writes `LOOM_<APP>_TAG=<tag>` to $GITHUB_ENV, which
+ * GitHub then injects into every later step. That environment IS the record of
+ * what the apply will write, because `commercial.bicepparam` resolves
+ * `readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v0.1')` at bicep-compile time —
+ * i.e. inside `az deployment sub create`, not when the args file was composed.
+ * (That is also what makes re-pinning possible at all: a later $GITHUB_ENV
+ * write reaches the apply without touching the sha256-locked args file.)
+ *
+ * @param {Record<string,string|undefined>} env
+ * @returns {Record<string,string>} key -> tag
+ */
+export function pinsFromEnv(env = {}) {
+  const out = {};
+  for (const entry of APP_IMAGE_TAGS) {
+    const v = env?.[entry.envVar];
+    if (typeof v === 'string' && v.trim()) out[entry.key] = v.trim();
+  }
+  return out;
+}
+
+/**
+ * Compare the pins already exported with a FRESH read of the estate.
+ *
+ * Four classes, deliberately kept apart:
+ *   moved     pinned to X, now running Y — the roll race. RE-PIN to Y.
+ *   appeared  not pinned, now running Y — an app came up under us and the
+ *             param-file default would be written over it. RE-PIN to Y.
+ *   vanished  pinned to X, no longer running anything. Not a revert (writing X
+ *             CREATES the app), so it is reported, not refused.
+ *   unknown   pinned to X, and the fresh read cannot say what it runs.
+ *
+ * @param {Record<string,string>} previous  key -> tag, from pinsFromEnv()
+ * @param {ReturnType<typeof resolveRunningImageTags>} resolution fresh read
+ */
+export function comparePins(previous = {}, resolution = null) {
+  const moved = [];
+  const appeared = [];
+  const vanished = [];
+  const unknown = [];
+  if (!resolution || resolution.probed !== true) {
+    return { probed: false, moved, appeared, vanished, unknown };
+  }
+  const unknownWhy = new Map((resolution.unknown || []).map((u) => [u.key, u.why]));
+  const absent = new Set(resolution.absent || []);
+  for (const entry of APP_IMAGE_TAGS) {
+    const was = previous?.[entry.key];
+    const now = resolution.pinned?.[entry.key];
+    if (was && unknownWhy.has(entry.key)) {
+      unknown.push({ key: entry.key, repo: entry.repo, was, why: unknownWhy.get(entry.key) });
+      continue;
+    }
+    if (was && absent.has(entry.key)) {
+      vanished.push({ key: entry.key, repo: entry.repo, was });
+      continue;
+    }
+    if (was && now && was !== now) {
+      moved.push({ key: entry.key, repo: entry.repo, was, now });
+      continue;
+    }
+    if (!was && now) {
+      appeared.push({ key: entry.key, repo: entry.repo, now });
+    }
+  }
+  return { probed: true, moved, appeared, vanished, unknown };
+}
+
+/**
+ * Decide what to do immediately before the apply.
+ *
+ * @param {object} a
+ * @param {string} a.deployAppsEnabled  the FINAL value the az command carries
+ * @param {Record<string,string>} a.previous  pins already exported
+ * @param {ReturnType<typeof resolveRunningImageTags>|null} a.resolution fresh read
+ * @param {string} [a.readError]  why the fresh read failed, when it did
+ * @returns {{decision:'proceed'|'refuse', repin:Record<string,string>,
+ *            comparison:ReturnType<typeof comparePins>, reason:string}}
+ */
+export function decidePinRefresh({ deployAppsEnabled, previous = {}, resolution = null, readError = '' } = {}) {
+  const comparison = comparePins(previous, resolution);
+  const none = { repin: {}, comparison };
+
+  // A run that does not render the Container Apps writes no image, so there is
+  // no pin to be stale. Saying this out loud beats a silent skip: the step is
+  // still reached, still logs, and still cannot be mistaken for a check that
+  // ran and found nothing.
+  if (String(deployAppsEnabled) !== 'true') {
+    return {
+      ...none,
+      decision: 'proceed',
+      reason:
+        `deployAppsEnabled=${String(deployAppsEnabled) || '(empty)'} — app-deployments.bicep does not run on this ` +
+        'deploy, so no container image is written and no pin can go stale. Nothing to re-measure.',
+    };
+  }
+
+  if (!resolution || resolution.probed !== true) {
+    return {
+      ...none,
+      decision: 'refuse',
+      reason:
+        'the RUNNING container images could not be re-read immediately before the apply, so it is UNKNOWN ' +
+        'whether the tags this deploy is about to write are still the tags that are running. They were measured ' +
+        'minutes ago and the roll lane writes the same field (#3676). Refusing rather than applying a pin that ' +
+        'cannot be shown to be current — an unreadable estate is not permission to proceed (deploy-integrity R7)' +
+        (readError ? `. Detail: ${String(readError).slice(0, 400)}` : '.'),
+    };
+  }
+
+  if (comparison.unknown.length) {
+    return {
+      ...none,
+      decision: 'refuse',
+      reason:
+        'these images were pinned by this run and the fresh read can no longer say what they are running: ' +
+        comparison.unknown.map((u) => `${u.key} (pinned ${u.was}; ${u.why})`).join('; ') +
+        '. Applying the earlier pin might revert them and might not — UNKNOWN is not "unchanged". Refusing.',
+    };
+  }
+
+  const repin = { ...(resolution.pinned || {}) };
+  const drifted = comparison.moved.length + comparison.appeared.length;
+  if (drifted === 0) {
+    return {
+      ...none,
+      repin,
+      decision: 'proceed',
+      reason:
+        `re-measured ${Object.keys(repin).length} running image(s) immediately before the apply; every one still ` +
+        'matches the tag this deploy will write. The ARM PUT is a no-op for every image.',
+    };
+  }
+
+  const parts = [];
+  if (comparison.moved.length) {
+    parts.push(
+      'MOVED under this run: ' +
+        comparison.moved.map((m) => `${m.repo} ${m.was} -> ${m.now}`).join(', '),
+    );
+  }
+  if (comparison.appeared.length) {
+    parts.push(
+      'came up under this run: ' +
+        comparison.appeared.map((m) => `${m.repo} now running ${m.now}`).join(', '),
+    );
+  }
+  return {
+    ...none,
+    repin,
+    decision: 'proceed',
+    reason:
+      `RE-PINNED ${drifted} image(s) to what is running RIGHT NOW — ${parts.join('; ')}. ` +
+      'Applying the earlier measurement would have written the older tag back over the estate, which is exactly ' +
+      'how PR #3665 was reverted nine minutes after it went live (#3676). The what-if above previewed the earlier ' +
+      'tag for these image fields; every other argument is byte-identical, and the tags written are tags that are ' +
+      'currently RUNNING, so they are known-pullable without a further registry read.',
+  };
+}
+
+// ===========================================================================
+// I-BEHIND — after the apply, the estate must not be behind the last roll
+// ===========================================================================
+
+/**
+ * The lanes that legitimately write `loom-console`'s image, and how to read the
+ * SHA each run actually shipped.
+ *
+ * WHY BOTH. Scanning only loom-roll-and-validate would make this gate cry wolf
+ * the moment somebody uses full-app-deploy-commercial (which builds AND rolls
+ * from its own head SHA): the estate would be ahead of the roll lane and the
+ * gate would call that a regression. A guard that cries wolf is a guard that
+ * gets switched off, so both writers are in the population.
+ *
+ * `job` is matched against the run's JOB names, not the run conclusion, because
+ * a roll run can conclude SUCCESS having rolled NOTHING — measured 2026-08-17,
+ * run 32006479915: `Should this roll proceed?` succeeded, `Roll image + validate
+ * live URL` was SKIPPED (the console image had not built), and the run reports
+ * `success`. Reading the run conclusion would have named 66bb26e7 as "the last
+ * successful roll" when nothing of the sort had been deployed.
+ *
+ * `tagFrom` says where that run's shipped SHA lives:
+ *   'title'    loom-roll-and-validate's `run-name` — `roll <sha> (…)`. Its
+ *              `head_sha` is the DEFAULT-BRANCH HEAD at trigger time, NOT the
+ *              SHA it rolls (#2963), so the title is the only honest source.
+ *   'headSha'  full-app-deploy-commercial builds from its own checkout, so the
+ *              run's head_sha IS the tag it pushes and rolls.
+ */
+export const CONSOLE_ROLL_SOURCES = Object.freeze([
+  Object.freeze({
+    workflow: 'loom-roll-and-validate.yml',
+    jobPattern: 'Roll image + validate live URL',
+    tagFrom: 'title',
+  }),
+  Object.freeze({
+    workflow: 'full-app-deploy-commercial.yml',
+    jobPattern: 'Roll Container Apps to new image',
+    tagFrom: 'headSha',
+  }),
+]);
+
+/** A 40-hex commit SHA — the only tag shape this gate can compare. */
+export const SHA_TAG_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * The `appImageTags` key that drives `loom-console`, DERIVED from the table
+ * rather than spelled 'console' at each use site.
+ *
+ * The repo has already shipped one key whose name and repository disagreed
+ * (`directLake` pins loom-direct-lake-shim, `directLakeSvc` pins loom-
+ * directlake), so a literal 'console' here would be a second place that can
+ * drift. If the table ever stops naming loom-console this throws at import,
+ * which is the honest outcome: the gate cannot pin a repository it cannot find.
+ */
+export const CONSOLE_IMAGE_KEY = (() => {
+  const e = APP_IMAGE_TAGS.find((x) => x.repo === 'loom-console');
+  if (!e) throw new Error('reconcile-policy: APP_IMAGE_TAGS names no entry for the loom-console repository.');
+  return e.key;
+})();
+
+/**
+ * Pull the rolled SHA out of loom-roll-and-validate's `run-name`.
+ *
+ * The contract is that workflow's `run-name:` literal:
+ *   roll <tag> (build-triggered)   |   roll <tag> (manual dispatch)
+ *
+ * A dispatch may name a floating tag ('latest', a prefix). That is a perfectly
+ * normal roll and NOT an error — but the SHA it resolved to lives only inside
+ * that run, so this returns `sha: null` and the caller must treat it as
+ * UNKNOWN rather than comparing a floating name to a commit SHA.
+ *
+ * @param {string} title
+ * @returns {{tag:string, sha:string|null, trigger:string}|null} null = unparseable
+ */
+export function parseRollRunTitle(title) {
+  const m = /^roll\s+(\S+)\s+\((build-triggered|manual dispatch)\)\s*$/.exec(String(title ?? '').trim());
+  if (!m) return null;
+  const tag = m[1];
+  return { tag, sha: SHA_TAG_RE.test(tag) ? tag : null, trigger: m[2] };
+}
+
+/**
+ * Which console-writing run last actually shipped an image?
+ *
+ * @param {Array<{id:(number|string), workflow:string, title?:string, headSha?:string,
+ *                completedAt:string, jobConclusion:(string|null)}>|null} runs
+ *        Already filtered by the caller to runs that COMPLETED after the pin was
+ *        measured. `jobConclusion: null` means the run's jobs could not be read.
+ *        `runs: null` means the run list itself could not be read.
+ * @returns {{status:'none'|'found'|'unknown', roll?:object, reason:string}}
+ */
+export function selectLastConsoleRoll(runs) {
+  if (runs === null || runs === undefined) {
+    return {
+      status: 'unknown',
+      reason:
+        'the console-rolling workflow runs could not be listed, so it is UNKNOWN what the estate was last rolled ' +
+        'to and therefore UNKNOWN whether this deploy moved it backwards.',
+    };
+  }
+  const unreadable = runs.filter((r) => r && r.jobConclusion === null);
+  if (unreadable.length) {
+    return {
+      status: 'unknown',
+      reason:
+        `${unreadable.length} console-rolling run(s) completed in this window but their jobs could not be read ` +
+        `(${unreadable.map((r) => `${r.workflow}#${r.id}`).join(', ')}), so it is UNKNOWN whether any of them ` +
+        'shipped an image. "I could not look" is not "nothing happened".',
+    };
+  }
+  const shipped = runs.filter((r) => r && r.jobConclusion === 'success');
+  if (!shipped.length) {
+    return {
+      status: 'none',
+      reason:
+        `no console-rolling run shipped an image after this deploy measured the tags it applied (${runs.length} ` +
+        'run(s) completed in that window, none with a successful roll job), so nothing this deploy wrote could ' +
+        'have overwritten a newer image.',
+    };
+  }
+  const latest = shipped.reduce((a, b) => (Date.parse(b.completedAt) > Date.parse(a.completedAt) ? b : a));
+  const source = CONSOLE_ROLL_SOURCES.find((s) => s.workflow === latest.workflow);
+  if (!source) {
+    return {
+      status: 'unknown',
+      reason:
+        `run ${latest.id} came from '${latest.workflow}', which is not in CONSOLE_ROLL_SOURCES, so this file ` +
+        'does not know how to read the SHA it shipped. An unrecognised writer is not a pass.',
+    };
+  }
+  let sha = null;
+  if (source.tagFrom === 'headSha') {
+    const v = String(latest.headSha || '').trim();
+    sha = SHA_TAG_RE.test(v) ? v : null;
+  } else {
+    const parsed = parseRollRunTitle(latest.title);
+    sha = parsed ? parsed.sha : null;
+  }
+  if (!sha) {
+    return {
+      status: 'unknown',
+      reason:
+        `${latest.workflow} run ${latest.id} shipped an image at ${latest.completedAt}, but the SHA it shipped ` +
+        `could not be read from ${source.tagFrom === 'headSha' ? `its head_sha ('${latest.headSha || ''}')` : `its run title (${JSON.stringify(latest.title || '')})`}` +
+        ' — a floating tag, or a changed run-name. Comparing the estate to a SHA that was never established would ' +
+        'assert something this code did not measure (deploy-integrity R7).',
+    };
+  }
+  return {
+    status: 'found',
+    roll: { id: latest.id, workflow: latest.workflow, sha, completedAt: latest.completedAt },
+    reason: `${latest.workflow} run ${latest.id} shipped loom-console:${sha} at ${latest.completedAt}.`,
+  };
+}
+
+/**
+ * Did this deploy leave the estate BEHIND the last thing that rolled it?
+ *
+ * @param {object} a
+ * @param {string} a.appliedTag   the console tag this deploy applied ('' = none)
+ * @param {string|null} a.estateTag the console tag running NOW (null = unreadable)
+ * @param {string} [a.estateReadError]
+ * @param {ReturnType<typeof selectLastConsoleRoll>} a.rollSelection
+ * @returns {{verdict:'ok'|'regression'|'unknown', reason:string}}
+ */
+export function decideEstateRegression({ appliedTag = '', estateTag = null, estateReadError = '', rollSelection = null } = {}) {
+  const applied = String(appliedTag || '').trim();
+  if (!applied) {
+    return {
+      verdict: 'ok',
+      reason:
+        'this run applied no loom-console image tag (app-deployments.bicep did not render the Container Apps), ' +
+        'so it cannot have moved the estate backwards.',
+    };
+  }
+  if (estateTag === null || estateTag === undefined || !String(estateTag).trim()) {
+    return {
+      verdict: 'unknown',
+      reason:
+        'the image loom-console is running could not be read after the apply, so it is NOT established that this ' +
+        'deploy left the estate where the last roll put it. It is equally not established that it did not' +
+        (estateReadError ? `. Detail: ${String(estateReadError).slice(0, 400)}` : '.'),
+    };
+  }
+  if (!rollSelection || rollSelection.status === 'unknown') {
+    return {
+      verdict: 'unknown',
+      reason: `estate is running loom-console:${estateTag}, but ${rollSelection ? rollSelection.reason : 'no roll selection was supplied'}`,
+    };
+  }
+  if (rollSelection.status === 'none') {
+    return { verdict: 'ok', reason: `estate is running loom-console:${estateTag}; ${rollSelection.reason}` };
+  }
+  const { sha, workflow, id, completedAt } = rollSelection.roll;
+  if (String(estateTag).trim() === sha) {
+    return {
+      verdict: 'ok',
+      reason:
+        `estate is running loom-console:${sha}, which is exactly what ${workflow} run ${id} shipped at ` +
+        `${completedAt}. This deploy did not overwrite it.`,
+    };
+  }
+  return {
+    verdict: 'regression',
+    reason:
+      `THE ESTATE WENT BACKWARDS. ${workflow} run ${id} shipped loom-console:${sha} at ${completedAt} — after this ` +
+      `deploy measured the tags it was going to write — and loom-console is now running '${estateTag}'` +
+      (String(estateTag).trim() === applied
+        ? `, which is the tag THIS DEPLOY applied. This run overwrote that roll.`
+        : `, which is neither that roll's image nor this deploy's applied tag ('${applied}'); something else moved it.`) +
+      ' Every merge in that window is inert on the live estate until it is rolled again (deploy-integrity R2/R3).',
+  };
+}
+
+// ===========================================================================
+// CLI — file-fed, so every verdict above stays unit-testable
+// ===========================================================================
+//
+// The workflow owns the `az` / `gh` calls and their exit codes (it already
+// captures rc explicitly rather than swallowing stderr, per #3090 / R7) and
+// hands the RESULT in here. This file never shells out, so a test can drive
+// exactly the states production hits — including the unreadable ones, which are
+// the states a live run cannot cheaply reproduce.
+//
+//   node scripts/ci/reconcile-policy.mjs pin-refresh
+//        --deploy-apps-enabled true|false
+//        (--containers <file> | --read-error <text>)
+//   node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll
+//        --applied-tag <tag>
+//        (--estate-image <ref> | --read-error <text>)
+//        (--rolls <file>       | --rolls-error <text>)
+//
+// Exit 0 = proceed / ok, 1 = refuse / regression / unknown, 2 = usage error.
+
+/** `--name value`, or '' when absent. Last occurrence wins. */
+function cliArg(argv, name) {
+  const i = argv.lastIndexOf(`--${name}`);
+  return i !== -1 && argv[i + 1] && !String(argv[i + 1]).startsWith('--') ? String(argv[i + 1]) : '';
+}
+
+function cliHas(argv, name) {
+  return argv.includes(`--${name}`);
+}
+
+/**
+ * @param {string[]} argv        process.argv.slice(2)
+ * @param {object} io            injected so the tests drive the real entrypoint
+ * @param {(p:string)=>string} io.readFile
+ * @param {(line:string)=>void} io.writeEnv
+ * @param {(line:string)=>void} io.writeOutput
+ * @param {(s:string)=>void} io.log
+ * @param {Record<string,string|undefined>} io.env
+ * @returns {number} process exit code
+ */
+export function cliMain(argv, io) {
+  const { readFile, writeEnv, writeOutput, log, env } = io;
+  const cmd = argv[0] || '';
+
+  const readJson = (file) => {
+    const raw = readFile(file);
+    const v = JSON.parse(raw);
+    return v;
+  };
+
+  if (cmd === 'pin-refresh') {
+    const deployAppsEnabled = cliArg(argv, 'deploy-apps-enabled');
+    const containersFile = cliArg(argv, 'containers');
+    const readError = cliArg(argv, 'read-error');
+    if (!containersFile && !cliHas(argv, 'read-error')) {
+      log('::error::reconcile-policy pin-refresh: exactly one of --containers <file> or --read-error <text> is required. Neither was supplied, and defaulting either way would invent a fact about the estate.');
+      return 2;
+    }
+    let resolution = null;
+    if (containersFile) {
+      let containers;
+      try {
+        containers = readJson(containersFile);
+      } catch (e) {
+        log(`::error::reconcile-policy pin-refresh: --containers ${containersFile} could not be read or parsed (${String(e?.message || e).slice(0, 200)}). That is an UNREADABLE estate, not an empty one.`);
+        return 1;
+      }
+      if (!Array.isArray(containers)) {
+        log(`::error::reconcile-policy pin-refresh: --containers ${containersFile} did not contain a JSON array, so the az projection has changed shape. Refusing to read a pass out of it.`);
+        return 1;
+      }
+      resolution = resolveRunningImageTags(containers);
+    }
+
+    const previous = pinsFromEnv(env);
+    const verdict = decidePinRefresh({
+      deployAppsEnabled,
+      previous,
+      resolution,
+      readError,
+    });
+
+    for (const m of verdict.comparison.moved) {
+      log(`::warning::[pin-refresh] MOVED ${m.repo}: pinned ${m.was}, now running ${m.now} — re-pinning to the running tag (#3676).`);
+    }
+    for (const m of verdict.comparison.appeared) {
+      log(`::warning::[pin-refresh] APPEARED ${m.repo}: not pinned by this run, now running ${m.now} — pinning it so the param-file default is not written over it.`);
+    }
+    for (const m of verdict.comparison.vanished) {
+      log(`::notice::[pin-refresh] GONE ${m.repo}: was running ${m.was}, no longer deployed. The apply will CREATE it at that tag; that is not a revert.`);
+    }
+
+    if (verdict.decision === 'refuse') {
+      log(`::error::PIN REFRESH REFUSED — ${verdict.reason}`);
+      return 1;
+    }
+
+    for (const line of tagEnvLines(verdict.repin)) writeEnv(line);
+    const consoleTag = verdict.repin[CONSOLE_IMAGE_KEY] || '';
+    writeOutput(`console_tag=${consoleTag}`);
+    writeOutput(`drift_count=${verdict.comparison.moved.length + verdict.comparison.appeared.length}`);
+    log(`[pin-refresh] ${verdict.reason}`);
+    if (verdict.comparison.moved.length || verdict.comparison.appeared.length) {
+      log(`::notice::PIN REFRESH — ${verdict.reason}`);
+    }
+    return 0;
+  }
+
+  if (cmd === 'assert-estate-not-behind-roll') {
+    const appliedTag = cliArg(argv, 'applied-tag');
+    const estateImage = cliArg(argv, 'estate-image');
+    const estateReadError = cliArg(argv, 'read-error');
+    const rollsFile = cliArg(argv, 'rolls');
+    const rollsError = cliArg(argv, 'rolls-error');
+    if (!estateImage && !cliHas(argv, 'read-error')) {
+      log('::error::reconcile-policy assert-estate-not-behind-roll: exactly one of --estate-image <ref> or --read-error <text> is required.');
+      return 2;
+    }
+    if (!rollsFile && !cliHas(argv, 'rolls-error')) {
+      log('::error::reconcile-policy assert-estate-not-behind-roll: exactly one of --rolls <file> or --rolls-error <text> is required.');
+      return 2;
+    }
+
+    let estateTag = null;
+    if (estateImage) {
+      const ref = parseImageRef(estateImage);
+      estateTag = ref && ref.tag ? ref.tag : null;
+      if (!estateTag) {
+        return finishRegression(log, {
+          verdict: 'unknown',
+          reason:
+            `loom-console's image reference '${estateImage}' carries no tag this gate can compare ` +
+            `${ref && ref.digest ? '(it is digest-pinned, and a digest does not name a commit)' : '(unparseable)'} — ` +
+            'so whether the estate is behind the last roll is UNKNOWN.',
+        });
+      }
+    }
+
+    let rollSelection;
+    if (!rollsFile) {
+      rollSelection = selectLastConsoleRoll(null);
+      if (rollsError) rollSelection = { ...rollSelection, reason: `${rollSelection.reason} Detail: ${rollsError.slice(0, 400)}` };
+    } else {
+      let runs;
+      try {
+        runs = readJson(rollsFile);
+      } catch (e) {
+        rollSelection = selectLastConsoleRoll(null);
+        rollSelection = { ...rollSelection, reason: `${rollSelection.reason} Detail: --rolls ${rollsFile} could not be parsed (${String(e?.message || e).slice(0, 200)}).` };
+        runs = undefined;
+      }
+      if (Array.isArray(runs)) rollSelection = selectLastConsoleRoll(runs);
+      else if (runs !== undefined) rollSelection = selectLastConsoleRoll(null);
+    }
+
+    return finishRegression(log, decideEstateRegression({
+      appliedTag,
+      estateTag,
+      estateReadError,
+      rollSelection,
+    }));
+  }
+
+  log(`::error::reconcile-policy: unknown subcommand ${JSON.stringify(cmd)}. Expected 'pin-refresh' or 'assert-estate-not-behind-roll'.`);
+  return 2;
+}
+
+function finishRegression(log, verdict) {
+  if (verdict.verdict === 'ok') {
+    log(`::notice::estate-vs-roll: OK — ${verdict.reason}`);
+    return 0;
+  }
+  if (verdict.verdict === 'regression') {
+    log(
+      `::error::ESTATE REGRESSION (#3676) — ${verdict.reason} REMEDIATION: dispatch ` +
+        'loom-roll-and-validate.yml with image_tag set to the SHA named above, then confirm with ' +
+        '`az containerapp show -n loom-console -g rg-csa-loom-admin-<region> --query ' +
+        '"properties.template.containers[0].image"` — the container app, not /build-marker.txt.',
+    );
+    return 1;
+  }
+  log(`::error::estate-vs-roll: UNKNOWN, which fails closed — ${verdict.reason}`);
+  return 1;
+}
+
+if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('scripts/ci/reconcile-policy.mjs')) {
+  const append = (file, line) => {
+    if (!file) { console.log(`[dry] ${line}`); return; }
+    appendFileSync(file, `${line}\n`);
+  };
+  process.exit(cliMain(process.argv.slice(2), {
+    readFile: (p) => readFileSync(p, 'utf8'),
+    writeEnv: (line) => append(process.env.GITHUB_ENV, line),
+    writeOutput: (line) => append(process.env.GITHUB_OUTPUT, line),
+    log: (s) => console.log(s),
+    env: process.env,
+  }));
 }
