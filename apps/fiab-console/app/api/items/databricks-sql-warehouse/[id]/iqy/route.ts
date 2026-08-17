@@ -52,6 +52,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
+import { externalOrigin } from '@/lib/auth/auth-breaker';
 import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
@@ -117,7 +118,19 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { param
   const schema = body?.schema ? String(body.schema) : undefined;
 
   // Excel calls back into the same Databricks query route the editor uses.
-  const origin = req.nextUrl.origin;
+  //
+  // THE FORWARDED ORIGIN, NOT `req.nextUrl.origin` — cleared under the
+  // external-origin-urls boy-scout rule (#3442/#3443/#3467/#3468) while this
+  // file was open, and it is a REAL defect on this route rather than a lint
+  // chore. This URL is not a redirect the browser resolves in-flight: it is
+  // BAKED INTO A FILE THE USER DOWNLOADS and is re-resolved by EXCEL, off-box,
+  // possibly days later. Behind Front Door / the Container Apps ingress
+  // `req.nextUrl.origin` is the INTERNAL origin, so every .iqy minted in
+  // production would have pointed Excel at a host it cannot reach — and the
+  // failure would surface as a broken refresh in Excel, far from this code.
+  // `externalOrigin` reads `x-forwarded-host` (falling back to `host`), which
+  // is the origin the user's browser actually used.
+  const origin = externalOrigin(req.headers);
   const target = `${origin}/api/items/databricks-sql-warehouse/${encodeURIComponent(id)}/query`;
   const postBody = JSON.stringify({ sql, warehouseId, ...(catalog && { catalog }), ...(schema && { schema }) });
 

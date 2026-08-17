@@ -110,10 +110,18 @@ import { handleConnectionDetails } from '@/app/api/items/_lib/connection-handler
 
 const SESSION = { claims: { upn: 'u@contoso.com', oid: 'oid-1', tid: 'tid-1' }, exp: 9_999_999_999 };
 
-/** A request with a query string and an optional JSON body. */
-function req(qs = '', body: any = {}) {
+/** A request with a query string and an optional JSON body.
+ *
+ *  `headers` carries `x-forwarded-host` because `[id]/iqy` builds Excel's
+ *  callback URL on `externalOrigin(req.headers)` — see the iqy assertion below. */
+function req(qs = '', body: any = {}, host = 'loom.contoso.com') {
   const url = new URL(`http://x/${qs}`);
-  return { url: url.toString(), nextUrl: url, json: async () => body } as any;
+  return {
+    url: url.toString(),
+    nextUrl: url,
+    headers: new Headers({ 'x-forwarded-host': host, 'x-forwarded-proto': 'https' }),
+    json: async () => body,
+  } as any;
 }
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) }) as any;
 
@@ -424,6 +432,25 @@ describe('the admitted path still works', () => {
     const text = await res.text();
     expect(text.split('\r\n')[0]).toBe('WEB');
     expect(text).toContain('/api/items/databricks-sql-warehouse/sw-1/query');
+  });
+
+  /**
+   * The .iqy callback URL is built on the FORWARDED origin, not
+   * `req.nextUrl.origin`. Cleared under the external-origin-urls boy-scout rule
+   * while this file was open, and asserted because it is a real defect on this
+   * route: the URL is baked into a DOWNLOADED FILE and re-resolved by Excel
+   * off-box, so an internal origin would have produced .iqy files that cannot
+   * reach the deployment at all — failing in Excel, far from this code.
+   */
+  it('iqy builds the callback URL on the FORWARDED host, not the internal origin', async () => {
+    const res = await iqyPOST(
+      req('', { sql: 'SELECT 1', warehouseId: 'wh-1' }, 'csa-loom.limitlessdata.ai') as any,
+      ctx('sw-1') as any,
+    );
+    const text = await res.text();
+    expect(text).toContain('https://csa-loom.limitlessdata.ai/api/items/databricks-sql-warehouse/sw-1/query');
+    // The internal origin the request actually arrived on must NOT appear.
+    expect(text).not.toContain('http://x/');
   });
 
   it('query-history lists, and query-profile reads a profile', async () => {
