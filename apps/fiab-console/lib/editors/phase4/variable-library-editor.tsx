@@ -110,6 +110,12 @@ import {
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+// `referencedVariableNames` extracts every @{variables.NAME} reference from a
+// text blob — used below to tell the user EXACTLY which names Resolve could
+// not find, instead of a silent verbatim echo (#3575). expandVariables()
+// itself is correct (unknown refs stay verbatim by design); the UI just never
+// surfaced which refs those were.
+import { referencedVariableNames } from '@/lib/variables/resolve';
 
 // ----- Variable Library (Cosmos, typed key/value with value sets) -----
 // v3.27: extended to Fabric's 7 variable types — String/Integer/Number/
@@ -179,23 +185,38 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
 
   // Resolve panel — calls the real dereference layer (/resolve), which pulls
   // secret-ref variables out of Key Vault and expands @{variables.NAME}.
-  const [resolved, setResolved] = useState<Array<{ name: string; type: string; value: string; secret: boolean; resolvedFromKv?: boolean; error?: string }> | null>(null);
+  type ResolvedVarRow = { name: string; type: string; value: string; secret: boolean; resolvedFromKv?: boolean; error?: string };
+  const [resolved, setResolved] = useState<ResolvedVarRow[] | null>(null);
   const [resolveBusy, setResolveBusy] = useState(false);
   const [resolveErr, setResolveErr] = useState<string | null>(null);
   const [expandText, setExpandText] = useState('@{variables.ENV}/batch?size=@{variables.BatchSize}');
   const [expandOut, setExpandOut] = useState<string | null>(null);
+  // Names referenced in the resolved text that came back verbatim because no
+  // matching variable existed in the resolved set — the ONLY signal that told
+  // #3575's reporter Resolve wasn't a no-op. Populated only after a Resolve
+  // click resolves (never on mount — a freshly created item must show no
+  // banners per ux-baseline.md's "clean first-open" rule).
+  const [unresolvedNames, setUnresolvedNames] = useState<string[]>([]);
   const runResolve = useCallback(async () => {
     if (id === 'new') { setResolveErr('Save the library before resolving.'); return; }
-    setResolveBusy(true); setResolveErr(null);
+    setResolveBusy(true); setResolveErr(null); setUnresolvedNames([]);
+    const textSent = expandText;
     try {
       const r = await clientFetch(`/api/items/variable-library/${encodeURIComponent(id)}/resolve`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ valueSet: tab, text: expandText }),
+        body: JSON.stringify({ valueSet: tab, text: textSent }),
       });
       const j = await r.json();
       if (!j.ok) { setResolveErr(j.error || 'resolve failed'); setResolved([]); return; }
-      setResolved(j.resolved || []);
+      const resolvedList: ResolvedVarRow[] = j.resolved || [];
+      setResolved(resolvedList);
       setExpandOut(j.expanded ?? null);
+      // Diff what was REFERENCED in the input against what actually came back
+      // resolved — anything referenced but absent from the resolved set is
+      // exactly what expandVariables() left verbatim.
+      const resolvedNames = new Set(resolvedList.map((rv) => rv.name));
+      const missing = referencedVariableNames(textSent).filter((n) => !resolvedNames.has(n));
+      setUnresolvedNames(missing);
     } catch (e: any) { setResolveErr(e?.message || String(e)); setResolved([]); }
     finally { setResolveBusy(false); }
   }, [id, tab, expandText]);
@@ -323,6 +344,22 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
                 <Caption1>Expanded</Caption1>
                 <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 120 }}>{expandOut || '(empty)'}</div>
               </>
+            )}
+            {unresolvedNames.length > 0 && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>
+                    {unresolvedNames.length === 1 ? '1 reference left unresolved' : `${unresolvedNames.length} references left unresolved`}
+                  </MessageBarTitle>
+                  <div>
+                    No variable named {unresolvedNames.map((n, i) => (
+                      <span key={n}>
+                        <code>{n}</code>{i < unresolvedNames.length - 1 ? ', ' : ''}
+                      </span>
+                    ))} exists in the <strong>{tab}</strong> value set, so {unresolvedNames.length === 1 ? 'its' : 'their'} <code>@{'{'}variables.NAME{'}'}</code> reference{unresolvedNames.length === 1 ? ' was' : 's were'} left verbatim in the expanded text above. Add {unresolvedNames.length === 1 ? 'it' : 'them'} to the table and save, or check the name for a typo.
+                  </div>
+                </MessageBarBody>
+              </MessageBar>
             )}
             {resolved && resolved.length > 0 && (
               <Table size="small" aria-label="Resolved values">
