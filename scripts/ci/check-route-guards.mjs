@@ -877,39 +877,31 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/start/route.ts',
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/stop/route.ts',
   'apps/fiab-console/app/api/items/databricks-pipeline/[id]/updates/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/cancel/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/connection/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/create/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/ctas/route.ts',
-  // GHSA-v2g8-gp3r-rg4r — `[id]/{state,start,edit,delete,clone}` USED TO SIT IN
-  // THIS BLOCK AND ARE GONE, DELETED RATHER THAN REWORDED. They are in
-  // NOW_GUARDED below.
+  //
+  // ── GHSA-v2g8-gp3r-rg4r — THE WHOLE `databricks-sql-warehouse/[id]/*` FAMILY
+  //    IS GONE FROM THIS LIST. Seventeen entries DELETED, never reworded,
+  //    across #3665 (`state`, `start`, `edit`, `delete`, `clone`), the seventh
+  //    pass (`query`) and the eighth (`cancel`, `connection`, `create`, `ctas`,
+  //    `iqy`, `query-history`, `query-profile`, `schema`, `script-out`,
+  //    `warehouses`). `ctas` and `model` carried a real guard already; `ctas`'s
+  //    entry was INERT (NOW_GUARDED wins) and is deleted here rather than left
+  //    to read as an excuse it never had. All of them are in NOW_GUARDED below.
   //
   // The class reason above this list — "operate on a single deployment-shared
   // Azure resource resolved by item TYPE + the id in the URL … there is NO
-  // per-tenant Cosmos ownership to scope" — was FALSE of all five on both
-  // halves of the sentence. None of them resolved anything "by the id in the
-  // URL": every one took `(req: NextRequest)` with NO `ctx` at all, so `[id]`
-  // was never read. And the resource was not resolved by item type either — it
-  // came from a caller-supplied `warehouseId` on the query string or the body.
+  // per-tenant Cosmos ownership to scope" — was FALSE of every one of them, on
+  // BOTH halves of the sentence. None resolved anything "by the id in the URL":
+  // all but `iqy` took `(req: NextRequest)` with NO `ctx` at all, so `[id]` was
+  // never read, and `iqy` read it only to interpolate into a URL. And the
+  // resource was not resolved by item type either — it came from a
+  // caller-supplied `warehouseId`, `statementId`, `queryId` or creation spec on
+  // the query string or the body.
   //
   // The wording is the recorded root cause of this whole advisory section, so
   // rewording preserves the failure: a reason that is accurate about a SIBLING
   // BRANCH, or about a route that genuinely has nothing to scope, reads as
   // verified when a reviewer skims the list. Deleted for the same reason the
   // `[type]/[id]` entries were deleted in #3648 / #3655.
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/iqy/route.ts',
-  // GHSA-v2g8-gp3r-rg4r, SEVENTH PASS — `[id]/query` USED TO SIT HERE AND IS
-  // GONE, DELETED RATHER THAN REWORDED, for the same reason as the five above.
-  // Its class reason was false on BOTH halves: it does not resolve a resource
-  // "by the id in the URL" (the id reached only `recordQueryRun`, a FinOps
-  // receipt), and the resource was not resolved by item type either — the
-  // `warehouseId` came off the request BODY. It is in NOW_GUARDED below.
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-history/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-profile/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/schema/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/script-out/route.ts',
-  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/warehouses/route.ts',
   'apps/fiab-console/app/api/items/dataflow/[id]/refresh/route.ts',
   'apps/fiab-console/app/api/items/dataflow/[id]/route.ts',
   'apps/fiab-console/app/api/items/dataset/[id]/lineage/route.ts',
@@ -1595,6 +1587,85 @@ const NOW_GUARDED = new Set([
   // authenticated session, plus one POST". The real bound is tracked in #3669
   // and is deliberately not improvised inside a security fix.
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query/route.ts',
+  // ── GHSA-v2g8-gp3r-rg4r, EIGHTH PASS — THE REMAINDER OF THE FAMILY ────────
+  //
+  // With these nine the `databricks-sql-warehouse/[id]/*` family is CLOSED at
+  // Layer 1: 17 route files, 17 guarded, 0 unguarded. The tally was re-derived
+  // by FOLLOWING DELEGATION through `_route-auth-scope.mjs`'s import graph, not
+  // by a file-local grep — that method is what produced three wrong counts on
+  // this advisory, because it cannot see `[id]/model`, whose guard is
+  // `readModelState` → `loadOwnedItem` (`_lib/model-store.ts:182`).
+  //
+  // EACH ROUTE WAS TREATED ON ITS OWN EVIDENCE. The advisory warns that `cancel`
+  // takes a `statementId` and `create` a creation spec, so they are NOT the same
+  // shape as the caller-supplied-`warehouseId` members; `query-profile` takes a
+  // `queryId`. Read/write split, decided per route and ASSERTED in
+  // `databricks-sql-warehouse/__tests__/ghsa-v2g8-warehouse-reads.test.ts`:
+  //
+  //   WRITE-scoped (no allowReadRoles)
+  //     cancel   `cancelStatement(<caller statementId>)` ABORTS A RUNNING QUERY
+  //              — someone else's. Paired with `query-history`, which hands out
+  //              statement ids workspace-wide, that is targeted DoS.
+  //     create   PROVISIONS INFRASTRUCTURE — `createWarehouse` on Commercial/GCC,
+  //              an ARM `createDedicatedSqlPool` (a new DATABASE, at a
+  //              caller-named DWU SKU) on GCC-High/DoD. An unbounded spend
+  //              primitive. BOTH BOUNDARIES were affected, and the guard sits
+  //              ABOVE the `isGovCloud()` branch so one check covers both —
+  //              the same placement #3665 used on `delete` (`cloud-parity.md`).
+  //              Its deploy target now comes from the AUTHORIZED ITEM's
+  //              workspace rather than `?workspaceId=` / `body.workspace_id`.
+  //
+  //   READ-scoped (allowReadRoles: true) — each justified, not assumed
+  //     schema        `SHOW CATALOGS/SCHEMAS/TABLES/VIEWS` + `DESCRIBE TABLE`.
+  //                   The family's ENUMERATION primitive: it tells an attacker
+  //                   which table to name for `clone`/`query`.
+  //     script-out    `SHOW CREATE TABLE|FUNCTION` — full source disclosure of
+  //                   any UC object. Its `drop` branch FORMATS a DROP string and
+  //                   returns it WITHOUT EXECUTING, which is why "it emits DROP"
+  //                   is the wrong reason to call it a write.
+  //     query-history `warehouseId` is OPTIONAL, so omitting it returned recent
+  //                   statements — `query_text` and `user_name` — across the
+  //                   ENTIRE shared workspace. That residual SURVIVES Layer 1.
+  //     query-profile caller-supplied `statement_id` → full SQL, user, metrics,
+  //                   plan. Config gate MOVED BELOW the guard.
+  //     connection    hostname / HTTP path / JDBC URL for a caller-named
+  //                   warehouse — reconnaissance, plus an existence probe.
+  //     iqy           makes NO data-plane call; it formats a file out of values
+  //                   the caller already supplied. Guarded so the artefact and
+  //                   the `[id]/query` it re-POSTs to stay consistent. Its
+  //                   unsaved gate is 409, NOT 200, because `openInExcel`
+  //                   branches on `r.ok` and would otherwise DOWNLOAD the gate
+  //                   JSON as a corrupt .iqy.
+  //
+  //   warehouses    READ-scoped on a real id — AND SESSION-ONLY ON `id ===
+  //                 'new'`, DELIBERATELY. Read that carve-out in the route
+  //                 header before treating this family as fully closed. The
+  //                 editor's mount effect calls it FIRST and unconditionally,
+  //                 and `sql-warehouse-editor.tsx` has no `isNew` (measured,
+  //                 `grep -c` = 0), so gating it would paint a red banner on a
+  //                 freshly created item and leave every other control dead —
+  //                 the dead end `auto-bind-by-default.md` forbids. The
+  //                 pre-existing enumeration exposure at `.../new/warehouses` is
+  //                 therefore UNCHANGED, not closed. AUTHENTICATION still
+  //                 applies there: the carve-out is inside `withSession`.
+  //
+  // FLOOR, NOT BOUND, unchanged and not re-litigated per route: every
+  // caller-supplied coordinate stays caller-supplied, because no item→warehouse
+  // binding exists and a state-anchored one cannot work
+  // (`_lib/databricks-resource-binding.ts:12-27` — `PATCH /api/cosmos-items/
+  // [type]/[id]` replaces `state` WHOLESALE from the request body). With
+  // `createOwnedItem` self-service (`_lib/item-crud.ts:423`) this moves the
+  // reachable population from "any authenticated session" to "any authenticated
+  // session, plus one POST". The real bound is #3669.
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/cancel/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/connection/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/create/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/iqy/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-history/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/query-profile/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/schema/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/script-out/route.ts',
+  'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/warehouses/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a

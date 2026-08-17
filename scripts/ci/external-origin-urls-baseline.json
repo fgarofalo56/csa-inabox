@@ -16,7 +16,6 @@
     "apps/fiab-console/app/api/items/aip-logic/[id]/publish/route.ts": 1,
     "apps/fiab-console/app/api/items/data-agent/[id]/a2a/route.ts": 2,
     "apps/fiab-console/app/api/items/data-agent/[id]/publish-mcp/route.ts": 1,
-    "apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/iqy/route.ts": 1,
     "apps/fiab-console/app/api/items/loom-app-runtime/[id]/publish-mcp/route.ts": 1,
     "apps/fiab-console/app/api/items/materialized-lake-view/[id]/adf-pipeline/route.ts": 1,
     "apps/fiab-console/app/api/items/plan/[id]/approval/route.ts": 1,

@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 655 |
-| Owner-scoped | 666 |
+| Session-only | 646 |
+| Owner-scoped | 675 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -1367,23 +1367,23 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/databricks-pipeline/[id]/start/route.ts` | POST | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/databricks-pipeline/[id]/stop/route.ts` | POST | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/databricks-pipeline/[id]/updates/route.ts` | GET | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
-| `items/databricks-sql-warehouse/[id]/cancel/route.ts` | POST | session-only | ● | Azure Monitor, Cosmos |
+| `items/databricks-sql-warehouse/[id]/cancel/route.ts` | POST | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/databricks-sql-warehouse/[id]/clone/route.ts` | POST | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
-| `items/databricks-sql-warehouse/[id]/connection/route.ts` | GET | session-only |  | Azure Monitor, Azure SQL, Cosmos, Synapse SQL |
-| `items/databricks-sql-warehouse/[id]/create/route.ts` | POST | session-only | ● | ARM, Azure Monitor, Cosmos, Fabric, Resource Graph, Synapse |
+| `items/databricks-sql-warehouse/[id]/connection/route.ts` | GET | owner-scoped |  | Azure Monitor, Azure SQL, Cosmos, Microsoft Graph, Synapse SQL |
+| `items/databricks-sql-warehouse/[id]/create/route.ts` | POST | owner-scoped | ● | ARM, Azure Monitor, Cosmos, Fabric, Microsoft Graph, Resource Graph, Synapse |
 | `items/databricks-sql-warehouse/[id]/ctas/route.ts` | POST | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/databricks-sql-warehouse/[id]/delete/route.ts` | POST | owner-scoped | ● | ARM, Azure Monitor, Cosmos, Microsoft Graph, Resource Graph, Synapse |
 | `items/databricks-sql-warehouse/[id]/edit/route.ts` | POST | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph |
-| `items/databricks-sql-warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |
+| `items/databricks-sql-warehouse/[id]/iqy/route.ts` | POST | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/databricks-sql-warehouse/[id]/model/route.ts` | GET POST DELETE | owner-scoped |  | AI Search, Azure Monitor, Cosmos, Microsoft Graph |
-| `items/databricks-sql-warehouse/[id]/query-history/route.ts` | GET | session-only |  | Azure Monitor, Cosmos |
-| `items/databricks-sql-warehouse/[id]/query-profile/route.ts` | GET | session-only | ● | Azure Monitor, Cosmos |
+| `items/databricks-sql-warehouse/[id]/query-history/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph |
+| `items/databricks-sql-warehouse/[id]/query-profile/route.ts` | GET | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/databricks-sql-warehouse/[id]/query/route.ts` | POST | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph |
-| `items/databricks-sql-warehouse/[id]/schema/route.ts` | GET | session-only |  | Azure Monitor, Cosmos |
-| `items/databricks-sql-warehouse/[id]/script-out/route.ts` | GET | session-only |  | Azure Monitor, Cosmos |
+| `items/databricks-sql-warehouse/[id]/schema/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph |
+| `items/databricks-sql-warehouse/[id]/script-out/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/databricks-sql-warehouse/[id]/start/route.ts` | POST | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/databricks-sql-warehouse/[id]/state/route.ts` | GET POST | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph |
-| `items/databricks-sql-warehouse/[id]/warehouses/route.ts` | GET | session-only |  | ARM, Azure Monitor, Cosmos, Resource Graph, Synapse |
+| `items/databricks-sql-warehouse/[id]/warehouses/route.ts` | GET | owner-scoped |  | ARM, Azure Monitor, Cosmos, Microsoft Graph, Resource Graph, Synapse |
 | `items/dataflow/[id]/refresh/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Cosmos, Microsoft Graph, Resource Graph |
 | `items/dataflow/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/dataflow/config/route.ts` | GET | session-only | ● | — |
