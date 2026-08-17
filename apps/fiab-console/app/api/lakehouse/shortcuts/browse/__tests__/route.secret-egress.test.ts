@@ -245,7 +245,18 @@ describe('the legitimate browse flow still works', () => {
     const res = await GET(req('sourceType=s3&kvSecret=loom-shortcut-abc&bucket=my-bucket&region=eu-west-2'));
 
     expect(res.status).toBe(200);
-    const s3Call = fetchWithTimeoutMock.mock.calls.map((c) => String(c[0])).find((u) => u.includes('amazonaws.com'));
+    // Selector is anchored to the full ORIGIN, not a bare `.includes('amazonaws.com')`.
+    // The substring form picks the first call whose URL merely CONTAINS that text —
+    // `https://evil.test/?x=amazonaws.com` would satisfy it — so a regression that
+    // signed against the wrong host could still be selected here and then compared
+    // against the expected URL, turning a host-confusion bug into a diff on the
+    // assertion rather than a clear failure. It also trips CodeQL
+    // `js/incomplete-url-substring-sanitization` (alert #971), which cannot tell a
+    // test-call selector from a real sanitizer — and that ambiguity is the point:
+    // the anchored form is unambiguous to both the reader and the scanner.
+    const s3Call = fetchWithTimeoutMock.mock.calls
+      .map((c) => String(c[0]))
+      .find((u) => u.startsWith('https://s3.eu-west-2.amazonaws.com/'));
     expect(s3Call).toBe('https://s3.eu-west-2.amazonaws.com/my-bucket?delimiter=%2F&list-type=2&max-keys=100');
   });
 
