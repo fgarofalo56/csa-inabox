@@ -105,6 +105,14 @@ export const RETURNED_VALUE_GATES = [
   'authorizeDatabricksPipelineItem',
   'guardAdxItemRequest',
   'guardSynapseItemRequest',
+  // app/api/adx/_shared.ts. Added 2026-08-17 with GHSA-v2g8-gp3r-rg4r finding 1:
+  // until that fix this wrapper made no authorization decision at all (it
+  // degraded to the deployment default database), so there was no answer to
+  // discard. It now runs `authorizeItemWorkspace` and returns a 404 denial.
+  // Measured at the time of adding: 12 route files, 28 handlers, 28
+  // `guardAdxRequest(` calls, 28 `if (g.res) return g.res;` — consumed
+  // everywhere TODAY, with nothing pinning that it stays so.
+  'guardAdxRequest',
 ];
 
 /**
@@ -138,6 +146,12 @@ const DENIAL_BINDINGS = {
   authorizeDatabricksPipelineItem: ['denied'],
   guardAdxItemRequest: ['res'],
   guardSynapseItemRequest: ['res'],
+  // Same `{ ctx } | { res }` contract as its item-scoped sibling above, so the
+  // generic "at least one binding short-circuits" rule is NOT sufficient for it:
+  // `const { database } = g.ctx ?? { database: defaultDatabase() }` is exactly
+  // the fallback-read-of-the-success-half shape measured above, and it would
+  // discard the refusal while leaving DISCARDED: 0 green.
+  guardAdxRequest: ['res'],
 };
 
 /**

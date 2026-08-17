@@ -3,15 +3,16 @@
  * (`/api/adx/<group>`). Each route:
  *   1. validates the session cookie,
  *   2. applies the honest config gate (LOOM_KUSTO_CLUSTER_URI),
- *   3. resolves the target database from `?id=<kql-database item id>`
+ *   3. resolves the target database from `?id=<kql-database | kql-dashboard item id>`
  *      (falling back to the env-pinned default DB only when NO item is named),
  *   4. calls a real Kusto control command and returns `{ ok, ... }` JSON.
  *
  * The database is item-scoped: each kql-database Cosmos item carries its own
- * `state.databaseName`, and the caller is authorized against that item's
+ * `state.databaseName` (a kql-dashboard resolves through its sibling — see
+ * `resolveDashboardDatabase`), and the caller is authorized against that item's
  * workspace through the canonical `authorizeItemWorkspace` ladder before it is
- * read. An id the caller may not reach — or that names no kql-database item —
- * is REFUSED (404); it does not fall through to the shared default database.
+ * read. An id the caller may not reach — or that names no ADX-backed item — is
+ * REFUSED (404); it does not fall through to the shared default database.
  * See {@link guardAdxRequest} for the defect that behaviour replaces.
  */
 
@@ -22,7 +23,8 @@ import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { cosmosIdFromLoomId } from '@/app/api/items/_lib/loom-content-id';
 import { UNSAVED_ITEM_ID } from '@/app/api/items/_lib/synapse-item-scope';
 import {
-  kustoConfigGate, loadKustoItemUnscoped, resolveDatabase, defaultDatabase, resolvedClusterUri, KustoError,
+  kustoConfigGate, loadKustoItemUnscoped, resolveDatabase, resolveDashboardDatabase,
+  defaultDatabase, resolvedClusterUri, KustoError, type KustoItem,
 } from '@/lib/azure/kusto-client';
 
 export interface AdxRouteContext {
@@ -46,11 +48,34 @@ export type AdxGuardResult =
   | { ctx: AdxRouteContext; res?: undefined }
   | { ctx?: undefined; res: NextResponse };
 
-/** The Cosmos item family the `?id=` param names. */
-const ITEM_TYPE = 'kql-database';
+/**
+ * The Cosmos item families a `?id=` on these routes may legitimately name, each
+ * with the resolver that turns it into a database name.
+ *
+ * BOTH ARE REQUIRED, and shipping only `kql-database` is a REGRESSION — this is
+ * the defect independent review caught on the first cut of this fix. The
+ * navigator routes are opened from the kql-database editor, but
+ * `adx/anomaly/route.ts` calls {@link guardAdxRequest} FIRST and its `?id=` is
+ * legitimately a **kql-dashboard** id: `kql-dashboard-editor.tsx:2120` mounts
+ * `AnomalyForecastDialog itemId={id}` with the dashboard's own id and
+ * `anomaly-forecast.tsx:162` POSTs it to `/api/adx/anomaly?id=<that id>`. The
+ * route is BUILT for both — its `resolveOwnedItemDatabase` tries `kql-database`
+ * then falls back to `kql-dashboard` → `resolveDashboardDatabase`. A guard that
+ * only knew `kql-database` therefore 404'd the dashboard's OWN CREATOR before
+ * the handler's dashboard-aware resolution could run: a red banner in a working
+ * editor, and precisely the dead end this guard's own docstring argues against.
+ *
+ * Order matters only for an id that somehow names both; `kql-database` is tried
+ * first because it is the overwhelmingly common case and matches the order
+ * `resolveOwnedItemDatabase` already documents.
+ */
+const ITEM_FAMILIES = [
+  { itemType: 'kql-database', resolve: async (i: KustoItem) => resolveDatabase(i) },
+  { itemType: 'kql-dashboard', resolve: (i: KustoItem) => resolveDashboardDatabase(i) },
+] as const;
 
 /**
- * The refusal for an id that names no `kql-database` item the caller may reach.
+ * The refusal for an id that names no ADX-backed item the caller may reach.
  *
  * 404-NOT-403, and IDENTICAL for "no such item" and "not yours" — the same
  * non-leaking convention `authorizeItemWorkspace` documents, so the response
@@ -91,11 +116,12 @@ const NOT_FOUND = 'KQL database not found';
  *     shared-ACL). The workspace is resolved FROM THE ITEM, so authorization
  *     cannot be skipped by omitting a parameter.
  *
- *   LAYER 2 — BIND THE DATABASE to that item, and FAIL CLOSED when the id names
- *     no item: `authorizeItemWorkspace` deliberately returns null (= allow) for
- *     an id naming nothing, and with no item there is no scope to bind, so
- *     proceeding would run unbound on the shared cluster. That is the exact
- *     fall-through being removed.
+ *   LAYER 2 — BIND THE DATABASE to that item via its family's own resolver
+ *     ({@link ITEM_FAMILIES}), and FAIL CLOSED when the id names no item of
+ *     EITHER family: `authorizeItemWorkspace` deliberately returns null
+ *     (= allow) for an id naming nothing, and with no item there is no scope to
+ *     bind, so proceeding would run unbound on the shared cluster. That is the
+ *     exact fall-through being removed.
  *
  * WHY THE LADDER AND NOT A BARE `if (!item) return 404`. A bare null check on
  * `loadKustoItem` would have shipped a DIFFERENT defect. That helper's
@@ -121,9 +147,10 @@ const NOT_FOUND = 'KQL database not found';
  * not, and per `auto-bind-by-default.md` the unbound path must be opted into,
  * never inherited from a denied authorization.
  *
- * READ vs WRITE. All 11 GET handlers on these routes are `.show`-only, so they
- * pass `allowReadRoles` and a Viewer of a shared workspace keeps their reads.
- * The 17 POST/PATCH/DELETE handlers issue real DDL (`.create` / `.alter` /
+ * READ vs WRITE. All 10 GET handlers on these routes are `.show`-only (verified
+ * per handler: every GET body calls only `list*` / `show*` / `getTableCslSchema`),
+ * so they pass `allowReadRoles` and a Viewer of a shared workspace keeps their
+ * reads. The 18 POST/PATCH/DELETE handlers issue real DDL (`.create` / `.alter` /
  * `.drop` / `.alter … policy`) and stay write-scoped, so sharing can never
  * escalate a read-only member into a writer.
  */
@@ -152,11 +179,36 @@ export async function guardAdxRequest(req: NextRequest): Promise<AdxGuardResult>
   let database = defaultDatabase();
   if (itemId && itemId !== UNSAVED_ITEM_ID) {
     try {
-      // LAYER 1 — authorize the caller against the item's own workspace.
+      // `cosmosIdFromLoomId` is the IDENTITY function for every id that is not
+      // `loom:`-prefixed (see `_lib/loom-content-id`), so applying it at this
+      // Cosmos chokepoint costs nothing and keeps a synthetic list id from
+      // 404-ing on an item that is sitting right there.
+      const cosmosId = cosmosIdFromLoomId(itemId);
+
+      // WHICH FAMILY is this? Resolved by an UNSCOPED load per family, which
+      // returns NOTHING to the caller and makes no authorization decision — it
+      // only answers "what kind of item is this id", so that Layer 1 can be run
+      // against the right `itemType`. A foreign item is deliberately still
+      // FOUND here; it is refused by the ladder below, not by failing to look.
+      let found: { item: KustoItem; resolve: (i: KustoItem) => Promise<string> } | null = null;
+      for (const family of ITEM_FAMILIES) {
+        const item = await loadKustoItemUnscoped(cosmosId, family.itemType);
+        if (item) { found = { item, resolve: family.resolve }; break; }
+      }
+
+      // FAIL CLOSED — the id names no ADX-backed item of either family, so
+      // there is no scope to bind a database to and proceeding would run
+      // unbound on the shared cluster. That is the exact fall-through the
+      // shipped code had, and it is what this refusal removes.
+      if (!found) {
+        return { res: NextResponse.json({ ok: false, error: NOT_FOUND }, { status: 404 }) };
+      }
+
+      // LAYER 1 — authorize the caller against THAT item's own workspace.
       const denied = await authorizeItemWorkspace(session, {
         workspaceId: null,
         itemId,
-        itemType: ITEM_TYPE,
+        itemType: found.item.itemType,
         // Read-only `.show` handlers admit any workspace role; every mutating
         // handler stays write-scoped (Owner/Admin/Member).
         ...(req.method === 'GET' ? { allowReadRoles: true } : {}),
@@ -164,16 +216,10 @@ export async function guardAdxRequest(req: NextRequest): Promise<AdxGuardResult>
       });
       if (denied) return { res: denied };
 
-      // LAYER 2 — bind the database to that item, refusing when the id names no
-      // kql-database item. `cosmosIdFromLoomId` is the IDENTITY function for
-      // every id that is not `loom:`-prefixed (see `_lib/loom-content-id`), so
-      // applying it at this Cosmos chokepoint costs nothing and keeps a
-      // synthetic list id from 404-ing on an item that is sitting right there.
-      const item = await loadKustoItemUnscoped(cosmosIdFromLoomId(itemId), ITEM_TYPE);
-      if (!item) {
-        return { res: NextResponse.json({ ok: false, error: NOT_FOUND }, { status: 404 }) };
-      }
-      database = resolveDatabase(item);
+      // LAYER 2 — bind the database to that item, via the resolver its family
+      // documents. A kql-dashboard resolves through `resolveDashboardDatabase`,
+      // which finds the sibling kql-database its tiles actually query.
+      database = await found.resolve(found.item);
     } catch (e: any) {
       const status = e instanceof KustoError ? e.status : 502;
       return { res: NextResponse.json({ ok: false, error: e?.message || String(e) }, { status }) };
