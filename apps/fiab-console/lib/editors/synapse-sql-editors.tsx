@@ -249,6 +249,13 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
   // SQL granular security (F11) — GRANT / column-GRANT / DDM wizards (Entra-only
   // TDS). RLS is gated off for Serverless by the panel (not supported there).
   const [secOpen, setSecOpen] = useState(false);
+  /**
+   * #3669 — `/items/<type>/new` mounts this editor with the literal id `new`
+   * until the item is first saved, and `[type]/[id]/sql-security` answers that
+   * id with an honest gate rather than a usable wizard. Same literal the routes
+   * match (`UNSAVED_ITEM_ID`), same derivation as `phase3/warehouse-editor.tsx:130`.
+   */
+  const isNew = id === 'new';
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
 
@@ -389,10 +396,18 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
       { label: 'Security', actions: [
         // Object/column GRANT + Dynamic Data Masking over the serverless
         // database (views). Real T-SQL via /sql-security (Entra-only TDS).
-        { label: 'GRANT / masking', onClick: () => setSecOpen(true), title: 'Object/column GRANT and Dynamic Data Masking (RLS is not supported on Serverless)' },
+        //
+        // #3669 — this trigger was UNCONDITIONAL, and `sql-security/route.ts`
+        // names it by name (:382) as one of the three editors that could reach
+        // its `id === 'new'` gate. The wizards execute DDL/DCL in the name of
+        // the saved item's bound database; an unsaved item has none.
+        { label: 'GRANT / masking', onClick: isNew ? undefined : () => setSecOpen(true), disabled: isNew,
+          title: isNew
+            ? 'Save this item first — the SQL security wizards run against the saved item\'s bound database.'
+            : 'Object/column GRANT and Dynamic Data Masking (RLS is not supported on Serverless)' },
       ]},
     ]},
-  ], [loading, run, openInExcel, sqlText]);
+  ], [loading, run, openInExcel, sqlText, isNew]);
 
   return (
     <ItemEditorChrome splitKeyPrefix={item.slug}
@@ -595,6 +610,13 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [computeId, setComputeId] = useState('');
   // SQL granular security (F11) — GRANT / RLS / DDM wizards over TDS (Entra-only).
   const [secOpen, setSecOpen] = useState(false);
+  /**
+   * #3669 — as on the Serverless editor. `sql-security/route.ts:386` records why
+   * `isOnline` is NOT a sufficient guard here: it comes from
+   * `synapse-dedicated-sql-pool/[id]/state`, whose GET takes no `ctx` at all and
+   * is env-derived, so it reports Online for `id === 'new'` too.
+   */
+  const isNew = id === 'new';
   // Connection details panel (server FQDN, JDBC URL, sqlcmd snippet).
   const [connOpen, setConnOpen] = useState(false);
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
@@ -929,7 +951,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
       { label: 'Security', actions: [
         // Object/column GRANT, Row-Level Security and Dynamic Data Masking
         // wizards — real T-SQL over TDS (Entra-only) via /sql-security.
-        { label: 'GRANT / RLS / masking', onClick: isOnline ? () => setSecOpen(true) : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
+        { label: 'GRANT / RLS / masking', onClick: isOnline && !isNew ? () => setSecOpen(true) : undefined, disabled: !isOnline || isNew, title: isNew ? 'Save this item first — the SQL security wizards run against the saved item\'s bound database.' : !isOnline ? 'Resume the pool first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
       { label: 'Connect', actions: [
         // Server FQDN, JDBC URL + sqlcmd snippet (copy). Env-derived — works
@@ -941,7 +963,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         { label: 'Model view', onClick: () => setEditorTab('model') },
       ]},
     ]},
-  ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema, openQueryHistory, sqlText, openCtas]);
+  ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema, openQueryHistory, sqlText, openCtas, isNew]);
 
   return (
     <ItemEditorChrome splitKeyPrefix={item.slug}

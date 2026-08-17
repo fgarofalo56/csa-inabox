@@ -56,6 +56,7 @@ import { WarehouseAlerts } from '../components/warehouse-alerts';
 import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { VisualQueryCanvas, type VqSourceTable } from '../components/visual-query-canvas';
 import { StreamingObjectDialog, RefreshScheduleDialog } from './streaming-object-dialog';
+import { useUnsavedWarehouseAffordances, UnsavedItemGate } from './unsaved-item-affordances';
 import type { StreamingObjectKind } from './streaming-sql';
 import { downloadResultsCsv, downloadResultsJson } from '../components/result-export';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
@@ -674,6 +675,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 
   const state = warehouseState?.state || 'UNKNOWN';
   const isRunning = state === 'RUNNING';
+
+  // #3669 — predicates + guided gate: see ./unsaved-item-affordances.
+  const { isUnsavedItem, unsavedRemediation, cloneBlocked } = useUnsavedWarehouseAffordances(id, warehouseState);
+
   const selectedWarehouse = useMemo(
     () => warehouses.find((w) => w.id === warehouseId) || null,
     [warehouses, warehouseId],
@@ -779,9 +784,13 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const refreshAll = useCallback(() => {
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [refreshState, refreshCatalogs]);
-  const canStart = !!warehouseId && !starting && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
-  const canStop = !!warehouseId && isRunning;
+  // #3669 — canStart admits UNKNOWN, what a stateless gate/404 renders as.
+  const canStart = !!warehouseId && !starting && !isUnsavedItem
+    && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
+  const canStop = !!warehouseId && isRunning && !isUnsavedItem;
   const canRun = !!warehouseId && isRunning && !loading;
+  /** Edit / Delete: enabled only for a warehouse on a SAVED item. */
+  const canEditWarehouse = !!warehouseId && !isUnsavedItem;
   // Re-list the tree level a UC write touched, so created catalogs/schemas/
   // tables appear immediately. Re-runs the deepest active query.
   const ucChanged = useCallback(() => {
@@ -845,6 +854,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 
   // ---- Clone table (SHALLOW = zero-copy / DEEP = full copy) ----
   const openCloneForTable = useCallback((fqn: string) => {
+    if (cloneBlocked) return; // #3669 — choke point: ribbon + schema-tree both land here.
     setCloneSource(fqn);
     setCloneTarget('');
     setCloneKind('SHALLOW');
@@ -852,7 +862,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setCloneError(null);
     setCloneReceipt(null);
     setCloneOpen(true);
-  }, []);
+  }, [cloneBlocked]);
 
   const submitClone = useCallback(async () => {
     if (!cloneSource.trim() || !cloneTarget.trim()) { setCloneError('source and target are required'); return; }
@@ -890,10 +900,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       ]},
       { label: 'Warehouse', actions: [
         { label: 'Create', onClick: () => { setCreateError(null); setCreateOpen(true); }, title: gov ? 'Create a new Synapse Dedicated SQL pool' : 'Create a new SQL Warehouse' },
-        { label: 'Delete', onClick: warehouseId ? () => { setDeleteError(null); setDeleteOpen(true); } : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse' },
-        { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
-        { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
-        { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
+        // #3669 — four of the five lifecycle routes #3665 gated for id==='new'.
+        { label: 'Delete', onClick: canEditWarehouse ? () => { setDeleteError(null); setDeleteOpen(true); } : undefined, disabled: !canEditWarehouse, title: isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse' },
+        { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart, title: isUnsavedItem ? unsavedRemediation : undefined },
+        { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop, title: isUnsavedItem ? unsavedRemediation : undefined },
+        { label: 'Edit', onClick: canEditWarehouse ? openEdit : undefined, disabled: !canEditWarehouse, title: isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
         { label: 'Connection details', onClick: warehouseId ? () => setConnOpen(true) : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Server hostname, HTTP path, JDBC URL + CLI snippet (copy)' },
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
@@ -904,11 +915,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Create volume', onClick: () => setUcCreateVolumeOpen(true), title: 'Create a managed/external UC volume (api 2.1)' },
         { label: 'Create online table', onClick: () => setUcOnlineTableOpen(true), title: 'Serve a UC feature table for low-latency lookup (Online Table, api 2.0)' },
         { label: 'Drop object', onClick: () => setUcDropOpen(true), title: 'Drop a UC catalog / schema / table / volume (DELETE api 2.1)' },
-        { label: 'Clone table', onClick: canRun ? () => openCloneForTable(
+        // #3669 — cloneBlocked: same boolean as the tree action + openCloneForTable.
+        { label: 'Clone table', onClick: canRun && !cloneBlocked ? () => openCloneForTable(
             activeCatalog && activeSchema && tables.length > 0
               ? `${activeCatalog}.${activeSchema}.${tables[0]}`
               : '',
-          ) : undefined, disabled: !canRun, title: !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
+          ) : undefined, disabled: !canRun || cloneBlocked, title: cloneBlocked ? unsavedRemediation : !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
         { label: 'Manage grants', onClick: () => { setUcGrantSeed(null); setUcGrantsOpen(true); }, title: 'View / grant / revoke UC privileges' },
         { label: 'Column & row security', onClick: () => setUcSecOpen(true), title: 'Unity Catalog column masks + row filters (Commercial / GCC)' },
       ]},
@@ -930,7 +942,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel, statsTarget]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel, statsTarget, canEditWarehouse, isUnsavedItem, unsavedRemediation, cloneBlocked]);
   useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
@@ -1071,12 +1083,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                           onClick={(e) => { e.stopPropagation(); setStatsTarget({ catalog: c, schema: sch, table: t }); setEditorTab('lineage'); }}
                                         />
                                       </Tooltip>
-                                      <Tooltip content={`Clone ${t}`} relationship="label">
+                                      <Tooltip content={cloneBlocked ? unsavedRemediation : `Clone ${t}`} relationship="label">
                                         <Button
                                           size="small" appearance="subtle" icon={<Copy20Regular />}
-                                          aria-label={`Clone ${t}`}
-                                          onClick={(e) => { e.stopPropagation(); openCloneForTable(`${c}.${sch}.${t}`); }}
-                                        />
+                                          aria-label={`Clone ${t}`} disabled={cloneBlocked}
+                                          onClick={(e) => { e.stopPropagation(); openCloneForTable(`${c}.${sch}.${t}`); }} />
                                       </Tooltip>
                                     </>
                                   }
@@ -1234,6 +1245,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       }
       main={
         <div className={s.pad}>
+          {/* #3669 — the guided gate; ABOVE the TabList so every tab explains its disabled ribbon controls. */}
+          <UnsavedItemGate show={isUnsavedItem} remediation={unsavedRemediation} />
           <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'lineage')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
@@ -1297,12 +1310,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <Badge appearance="outline" color="brand">Serverless</Badge>
             )}
             {(state === 'STOPPED' || state === 'STOPPING') && (
-              <Button appearance="primary" icon={<Play20Regular />} disabled={starting || !warehouseId} onClick={start}>
-                {starting ? 'Starting…' : 'Start'}
-              </Button>
+              <Button appearance="primary" icon={<Play20Regular />} disabled={!canStart} onClick={start}>{starting ? 'Starting…' : 'Start'}</Button>
             )}
             {isRunning && (
-              <Button appearance="outline" icon={<Stop20Regular />} onClick={stop}>Stop</Button>
+              <Button appearance="outline" icon={<Stop20Regular />} disabled={!canStop} onClick={stop}>Stop</Button>
             )}
             <Button appearance="outline" icon={<ArrowSync20Regular />} aria-label="Refresh warehouse state" onClick={() => {
               refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
@@ -1319,10 +1330,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             >
               {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
             </Dropdown>
-            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless'} relationship="label">
-              <Button appearance="outline" icon={<Save20Regular />} disabled={!warehouseId} onClick={openEdit}>
-                Edit
-              </Button>
+            <Tooltip content={isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless'} relationship="label">
+              <Button appearance="outline" icon={<Save20Regular />} disabled={!canEditWarehouse} onClick={openEdit}>Edit</Button>
             </Tooltip>
             {loading && (
               <Button appearance="outline" icon={<Stop20Regular />} onClick={cancel} disabled={canceling}>
@@ -1334,10 +1343,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 Create
               </Button>
             </Tooltip>
-            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse'} relationship="label">
-              <Button appearance="outline" icon={<Delete20Regular />} disabled={!warehouseId} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
-                Delete
-              </Button>
+            <Tooltip content={isUnsavedItem ? unsavedRemediation : !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse'} relationship="label">
+              <Button appearance="outline" icon={<Delete20Regular />} disabled={!canEditWarehouse} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>Delete</Button>
             </Tooltip>
             <Tooltip
               content={

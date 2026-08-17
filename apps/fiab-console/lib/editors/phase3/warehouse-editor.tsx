@@ -451,7 +451,15 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Query acceleration', onClick: () => setAccelOpen(true), title: 'GPU acceleration (Fabric-engine, opt-in) and result-set caching (Azure-native) for the warehouse' },
       ]},
       { label: 'Alerts', actions: [
-        { label: 'Alerts', onClick: () => setAlertsOpen(true), title: 'Query-result alerts — query + condition + schedule + notification (Azure Monitor scheduled-query rule)' },
+        // #3669 — the one control in this file that knew about `isNew` and did
+        // not use it. `[type]/[id]/alerts` returns the same honest 200 gate the
+        // Monitoring (:718) and Time-travel (:723) tabs already condition on, so
+        // the trigger now matches its siblings rather than opening a dialog in
+        // which every action is refused.
+        { label: 'Alerts', onClick: isNew ? undefined : () => setAlertsOpen(true), disabled: isNew,
+          title: isNew
+            ? 'Save the warehouse first — alert rules are created in the name of the saved item.'
+            : 'Query-result alerts — query + condition + schedule + notification (Azure Monitor scheduled-query rule)' },
       ]},
       { label: 'Security', actions: [
         // Column-level GRANT, Row-Level Security and Dynamic Data Masking over
@@ -459,7 +467,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Column & Row security', onClick: canRun ? () => setSecOpen(true) : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : 'Column-level GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
     ]},
-  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, copilot.openPrompt, copilot.explain, copilot.optimize]);
+  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, copilot.openPrompt, copilot.explain, copilot.optimize, isNew]);
 
   return (
     <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
