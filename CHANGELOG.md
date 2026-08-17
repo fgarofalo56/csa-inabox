@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.3...csa-inabox-v0.98.4) (2026-08-17)
+
+
+### Bug Fixes
+
+* **security:** sql-security ran the Console UAMI at a caller-named server, behind an allowlist reason that was true of a sibling branch (GHSA-v8r7-c2p5-mjf2) ([#3648](https://github.com/fgarofalo56/csa-inabox/issues/3648)) ([d4b7618](https://github.com/fgarofalo56/csa-inabox/commit/d4b76189123a95e4fa7e142328793463b7efb377))
+
 ## [0.98.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.2...csa-inabox-v0.98.3) (2026-08-16)
 
 
