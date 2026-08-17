@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.7...csa-inabox-v0.98.8) (2026-08-17)
+
+
+### Bug Fixes
+
+* **security:** the five destructive SQL-warehouse routes deleted, cloned, stopped, started and rescaled a caller-named warehouse behind getSession() alone (GHSA-v2g8-gp3r-rg4r) ([#3665](https://github.com/fgarofalo56/csa-inabox/issues/3665)) ([b9ca620](https://github.com/fgarofalo56/csa-inabox/commit/b9ca620b2a4add7fb7d14bd301f695aadfc71a3b))
+
 ## [0.98.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.6...csa-inabox-v0.98.7) (2026-08-17)
 
 
