@@ -18,6 +18,7 @@ import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
+  Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -152,12 +153,17 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const [testFn, setTestFn] = useState('');
   const [testParams, setTestParams] = useState<Record<string, string>>({});
   const [testBusy, setTestBusy] = useState(false);
-  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string; note?: string } | null>(null);
+  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string; detail?: string; note?: string } | null>(null);
   const [testGate, setTestGate] = useState<string | null>(null);
   // Params left blank on Run with NO declared default in the function
   // signature (issue #3574) — Run is blocked and these fields are flagged
   // inline instead of dispatching a request the runtime can only fail on.
   const [testMissing, setTestMissing] = useState<string[]>([]);
+  // Params whose typed entry cannot be coerced to the declared type. Same
+  // family of defect as #3574 and equally silent: `Number('abc')` is NaN and
+  // `JSON.stringify({w: NaN})` is `{"w":null}`, so unparseable text in a
+  // numeric field arrived at the runtime as the exact `None` #3574 removed.
+  const [testInvalid, setTestInvalid] = useState<Record<string, string>>({});
   const selectedFn = functions.find((f) => f.name === testFn) || functions[0];
 
   // Generate invocation code dialog. Azure Functions (Azure-native) is the
@@ -210,21 +216,43 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
     // A blank value for a param with NO declared default is a genuinely
     // missing required argument: Run is blocked below and the field is
     // flagged instead of dispatching a request the runtime can only fail.
+    //
+    // Typed coercion is guarded for the same reason. `Number('')` and
+    // `Number('   ')` are both 0, so a whitespace-only numeric field would
+    // silently invent a real 0 the user never typed; and `Number('abc')` is
+    // NaN, which `JSON.stringify` serialises as `null` — re-creating the exact
+    // `None` that #3574 exists to prevent. Both now block Run and flag the
+    // field. Booleans are likewise parsed explicitly: `raw === 'true'` turned
+    // the Python-style `True` (which is what the placeholder shows for a
+    // `= True` default) into `false` without a word.
     const parameters: Record<string, unknown> = {};
     const missing: string[] = [];
+    const invalid: Record<string, string> = {};
     for (const p of selectedFn.params) {
-      const raw = testParams[p.name] ?? '';
+      const entered = testParams[p.name] ?? '';
+      const isNum = !!p.type && /int|float|number|decimal/i.test(p.type);
+      const isBool = !!p.type && /bool/i.test(p.type);
+      // Whitespace is meaningful in a string param and never in a numeric or
+      // boolean one, so only the typed fields are trimmed.
+      const raw = isNum || isBool ? entered.trim() : entered;
       if (raw === '') {
         if (p.default != null) continue; // let the function's own default apply
         missing.push(p.name);
         continue;
       }
-      if (p.type && /int|float|number/i.test(p.type)) parameters[p.name] = Number(raw);
-      else if (p.type && /bool/i.test(p.type)) parameters[p.name] = raw === 'true';
-      else parameters[p.name] = raw;
+      if (isNum) {
+        const n = Number(raw);
+        if (!Number.isFinite(n)) { invalid[p.name] = `Enter a number — “${raw}” is not a valid ${p.type}.`; continue; }
+        parameters[p.name] = n;
+      } else if (isBool) {
+        const b = raw.toLowerCase();
+        if (['true', '1', 'yes'].includes(b)) parameters[p.name] = true;
+        else if (['false', '0', 'no'].includes(b)) parameters[p.name] = false;
+        else { invalid[p.name] = `Enter true or false — “${raw}” is neither.`; continue; }
+      } else parameters[p.name] = raw;
     }
-    if (missing.length) { setTestMissing(missing); return; }
-    setTestMissing([]);
+    if (missing.length || Object.keys(invalid).length) { setTestMissing(missing); setTestInvalid(invalid); return; }
+    setTestMissing([]); setTestInvalid({});
     setTestBusy(true);
     try {
       const r = await clientFetch(`/api/items/user-data-function/${encodeURIComponent(id)}/invoke`, {
@@ -233,7 +261,10 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       });
       const j = await r.json();
       if (r.status === 409 && j.gated) { setTestGate(j.hint || j.error); return; }
-      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error, note: j.note });
+      // `detail` carries the raw interpreter traceback the summary in `body`
+      // was derived from — surfaced below in a collapsed disclosure so the
+      // friendly summary never destroys the evidence.
+      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error, detail: j.detail || j.hint, note: j.note });
     } catch (e: any) { setTestOut({ ok: false, body: e?.message || String(e) }); }
     finally { setTestBusy(false); }
   }, [id, selectedFn, testParams]);
@@ -345,25 +376,30 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
                 placeholder={functions.length ? 'Select a function' : 'No functions to run'}
                 value={selectedFn?.name || ''}
                 selectedOptions={selectedFn ? [selectedFn.name] : []}
-                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); setTestMissing([]); }}
+                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); setTestMissing([]); setTestInvalid({}); }}
               >
                 {functions.map((f) => <Option key={f.name} value={f.name}>{f.name}</Option>)}
               </Dropdown>
             </Field>
             {selectedFn?.params.map((p) => {
               const isMissing = testMissing.includes(p.name);
+              const badValue = testInvalid[p.name];
               return (
                 <Field
                   key={p.name}
                   label={`${p.name}${p.type ? ` : ${p.type}` : ''}${p.default ? ` (default ${p.default})` : ''}`}
-                  validationState={isMissing ? 'error' : 'none'}
-                  validationMessage={isMissing ? `Required — ${selectedFn.name} declares no default for this parameter.` : undefined}
+                  validationState={isMissing || badValue ? 'error' : 'none'}
+                  validationMessage={
+                    isMissing ? `Required — ${selectedFn.name} declares no default for this parameter.`
+                      : badValue || undefined
+                  }
                 >
                   <Input
                     value={testParams[p.name] ?? ''}
                     onChange={(_, d) => {
                       setTestParams((cur) => ({ ...cur, [p.name]: d.value }));
                       if (isMissing) setTestMissing((cur) => cur.filter((n) => n !== p.name));
+                      if (badValue) setTestInvalid((cur) => { const { [p.name]: _drop, ...rest } = cur; return rest; });
                     }}
                     placeholder={p.default || ''}
                   />
@@ -389,6 +425,19 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
                       {testOut.body || 'The function did not return successfully.'}
                     </MessageBarBody>
                   </MessageBar>
+                )}
+                {!testOut.ok && testOut.detail && (
+                  // The summary above must never be the ONLY thing left: the raw
+                  // interpreter output it was derived from stays reachable here,
+                  // collapsed, so the failing frame is still debuggable.
+                  <Accordion collapsible>
+                    <AccordionItem value="traceback">
+                      <AccordionHeader>Show full traceback</AccordionHeader>
+                      <AccordionPanel>
+                        <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 240 }}>{testOut.detail}</div>
+                      </AccordionPanel>
+                    </AccordionItem>
+                  </Accordion>
                 )}
                 {testOut.note && (
                   <MessageBar intent="info"><MessageBarBody>{testOut.note}</MessageBarBody></MessageBar>

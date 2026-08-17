@@ -215,8 +215,119 @@ describe('the legitimate default path still works unchanged', () => {
   });
 });
 
-describe('the opt-in Fabric branch obeys the same rule', () => {
-  it('refuses an item-chosen Fabric endpoint and never mints a token for it', async () => {
+// ── PR #3692 review — validation is a CONTROL, not a UX affordance ─────────
+//
+// The Test panel's blank-parameter checks (#3574) live in the editor, so every
+// other caller — generated invocation code, curl, a notebook — bypassed them
+// entirely. These pin the server-side equivalent, and pin that the friendly
+// summary does not destroy the traceback it was derived from.
+
+/** The bundled sample's signature: user_id required, weight defaulted. */
+const DECORATED = '@udf.function()\n'
+  + 'def compute_score(user_id: str, weight: float = 1.0) -> dict:\n'
+  + '    return {"user": user_id, "score": weight * 42}\n';
+
+describe('server-side parameter validation (a direct API caller cannot bypass it)', () => {
+  beforeEach(() => { loadOwnedItemMock.mockResolvedValue({ state: { source: DECORATED } }); });
+
+  it.each([
+    ['an array', [1, 2]],
+    ['a string', 'user_id=1'],
+    ['a number', 42],
+  ])('rejects %s in place of a parameters object, without dispatching', async (_label, parameters) => {
+    const res = await POST(req({ functionName: 'compute_score', parameters }), ctx);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/must be a JSON object/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a parameter name that is not a Python identifier, naming it', async () => {
+    const res = await POST(req({ functionName: 'compute_score', parameters: { 'user id': 'u1' } }), ctx);
+    expect(res.status).toBe(400);
+    expect((await res.json()).invalidParameters).toEqual(['user id']);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing required parameter the editor would have blocked', async () => {
+    const res = await POST(req({ functionName: 'compute_score', parameters: { weight: 2.5 } }), ctx);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ ok: false, invalidParameters: ['user_id'] });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects the explicit null that #3574 was about', async () => {
+    const res = await POST(
+      req({ functionName: 'compute_score', parameters: { user_id: 'u1', weight: null } }), ctx,
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).invalidParameters).toEqual(['weight']);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('lets a defaulted parameter be OMITTED — the #3574 fix, server-side', async () => {
+    const res = await POST(req({ functionName: 'compute_score', parameters: { user_id: 'u1' } }), ctx);
+    expect(res.status).toBe(200);
+    expect((fetchSpy.mock.calls[0][1] as any).body).toBe('{"user_id":"u1"}');
+  });
+
+  it('does NOT validate against item source when the DEPLOYED code is what runs', async () => {
+    // A keyed endpoint runs its own deployed function, so the item's source is
+    // not authoritative and must not be used to reject a caller.
+    process.env.LOOM_UDF_ALLOWED_FUNCTION_BASES = `${APPROVED_FN}=contoso-udf-key`;
+    loadOwnedItemMock.mockResolvedValue({
+      state: { azureFunctionUrl: APPROVED_FN, functionKeySecret: 'contoso-udf-key', source: DECORATED },
+    });
+    const res = await POST(req({ functionName: 'compute_score', parameters: { weight: 2.5 } }), ctx);
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a runtime failure is summarised WITHOUT destroying the traceback', () => {
+  const RAW = [
+    'Traceback (most recent call last):',
+    '  File "/app/app.py", line 88, in invoke',
+    '    result = fn(**params)',
+    '  File "<udf-source>", line 3, in compute_score',
+    '    return {"user": user_id, "score": weight * 42}',
+    "TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'",
+  ].join('\n');
+
+  it('returns the summary on `body` and the raw interpreter output on `detail`', async () => {
+    // `= None` in the signature, so an explicit null is legitimate input and
+    // reaches the runtime — which is exactly when the translation matters.
+    loadOwnedItemMock.mockResolvedValue({
+      state: { source: '@udf.function()\ndef compute_score(user_id: str, weight: float = None) -> dict:\n    return 1\n' },
+    });
+    fetchSpy.mockResolvedValue(new Response(RAW, { status: 400 }));
+
+    const res = await POST(
+      req({ functionName: 'compute_score', parameters: { user_id: 'u1', weight: null } }), ctx,
+    );
+    const body = await res.json();
+
+    expect(body.ok).toBe(false);
+    // R6: the traceback is not the user-facing message …
+    expect(body.body).not.toContain('Traceback (most recent call last)');
+    expect(body.body).toMatch(/references weight/);
+    // … and it is not destroyed either.
+    expect(body.detail).toBe(RAW);
+    // R7: the response states how much the summary actually established.
+    expect(body.attribution).toEqual({ basis: 'frame', parameters: ['weight'] });
+  });
+
+  it('forwards a non-traceback failure body unchanged, inventing no detail', async () => {
+    loadOwnedItemMock.mockResolvedValue({ state: { source: DECORATED } });
+    fetchSpy.mockResolvedValue(new Response('upstream 503', { status: 503 }));
+    const res = await POST(req({ functionName: 'compute_score', parameters: { user_id: 'u1' } }), ctx);
+    const body = await res.json();
+    expect(body.body).toBe('upstream 503');
+    expect(body.detail).toBeUndefined();
+    expect(body.attribution).toBeUndefined();
+  });
+});
+
+describe('the opt-in Fabric branch obeys the same rule', () => {  it('refuses an item-chosen Fabric endpoint and never mints a token for it', async () => {
     process.env.LOOM_UDF_BACKEND = 'fabric';
     delete process.env.LOOM_UDF_FUNCTION_BASE;
     loadOwnedItemMock.mockResolvedValue({ state: { fabricEndpoint: 'https://attacker.example/ws/item' } });
