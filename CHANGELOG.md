@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.6...csa-inabox-v0.98.7) (2026-08-17)
+
+
+### Bug Fixes
+
+* **security:** guardAdxRequest never refused an unowned item — it fell through to the shared default DB (GHSA-v2g8-gp3r-rg4r) ([#3664](https://github.com/fgarofalo56/csa-inabox/issues/3664)) ([ad89144](https://github.com/fgarofalo56/csa-inabox/commit/ad891448de8b5200c616700be79b84bf2af7a953))
+
 ## [0.98.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.5...csa-inabox-v0.98.6) (2026-08-17)
 
 
