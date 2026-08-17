@@ -97,11 +97,21 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     } catch (e: any) {
       listError = e?.message || String(e);
     }
-    // Preview graph for bundle-installed (unbound) items: surface the rich
-    // activity graph stamped into state.content so the editor can render the
-    // FULLY BUILT-OUT canvas while the bind gate still prompts the user to push
-    // it to a real ADF factory pipeline. Null when no pipeline content.
-    const preview = bound ? null : pipelineDefinitionFromContent(item.state?.content);
+    // Preview graph for bundle-installed items: surface the rich activity graph
+    // stamped into state.content so the editor can render the FULLY BUILT-OUT
+    // canvas. Null when no pipeline content.
+    //
+    // #3549 — WHY THIS IS NOT SIMPLY `bound ? null : …`. Suppressing the
+    // preview the moment an item is bound is correct only when the BOUND OBJECT
+    // actually holds the content. When auto-bind created the pipeline but could
+    // not author the graph into it (`seedError` — an RBAC refusal, or a
+    // Databricks linked service this estate cannot satisfy), the live pipeline
+    // is real and EMPTY, and suppressing the preview here is what made that
+    // state indistinguishable from a healthy one. So we keep the preview
+    // whenever the seed did not land, and the editor can render the authored
+    // graph instead of presenting an empty pipeline as complete.
+    const seedIncomplete = autoBind?.status === 'bound' && !!autoBind.seedError;
+    const preview = bound && !seedIncomplete ? null : pipelineDefinitionFromContent(item.state?.content);
     // Surface the SELECTED factory the item was bound against (persisted at bind
     // time) so the editor rehydrates its factory picker + Factory Resources tree
     // on reload — keeping the tree, the bind list, and the bound item all on the

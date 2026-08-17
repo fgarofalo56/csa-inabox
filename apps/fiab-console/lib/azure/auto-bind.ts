@@ -106,6 +106,24 @@ export interface AutoBindContext {
 /** How the current binding came to be. Recorded for support/diagnosis. */
 export type AutoBindVia = 'created' | 'attached' | 'existing' | 'recreated';
 
+/**
+ * What a provider's `seedFromContent` did with the item's authored content.
+ *
+ * `seeded:false` with no `error` means "there was nothing to seed" (a blank
+ * item a user just created has no bundle content, and an EMPTY backing object
+ * is the correct outcome for it). `seeded:false` WITH an `error` means the
+ * content existed and we failed to author it — which must reach the user
+ * honestly rather than being swallowed into a green bind.
+ */
+export interface AutoBindSeedResult {
+  /** True only when the item's authored content was actually written. */
+  seeded: boolean;
+  /** Human-readable summary for the step log / support (e.g. "3 activities"). */
+  detail?: string;
+  /** Set when content EXISTED but could not be authored. */
+  error?: string;
+}
+
 /** The inspectable mapping record written to `state.autoBind`. */
 export interface AutoBindRecord {
   /** Provider key, e.g. 'adf-pipeline'. */
@@ -133,6 +151,22 @@ export interface AutoBindRecord {
    * an explicit re-map, and so support can see it without guessing.
    */
   nameDrift?: boolean;
+  /**
+   * True when the item's AUTHORED CONTENT (the bundle's activity graph, table
+   * DDL, stream topology …) was written into the backing object at create time.
+   *
+   * #3549: without this the create path authored an EMPTY twin of a Loom item
+   * that already carried real content. A bundle-installed pipeline whose
+   * install had config-gated (so no ADF pipeline existed and `pipelineName` was
+   * never stamped) got an empty pipeline manufactured under it on first open —
+   * a genuinely published ARM resource with `activities: []`. It then reported
+   * `ok:true` forever, because the item WAS bound and the live object DID
+   * exist; only its contents were missing. 36 of 41 pipelines in the live
+   * factory were in that state.
+   */
+  seeded?: boolean;
+  /** Set when authored content existed but could not be written. Honest, not fatal. */
+  seedError?: string;
 }
 
 /** Everything a caller can learn from one ensure. */
@@ -192,6 +226,26 @@ export interface AutoBindProvider {
   /** Create the object. Called only when `probe` said false. */
   create(name: string, coords: Record<string, string>, ctx: AutoBindContext): Promise<void>;
   /**
+   * OPTIONAL, but see the coverage test in `__tests__/auto-bind-seed.test.ts`:
+   * a provider that omits this MUST be on the documented opt-out list, so a new
+   * provider cannot silently inherit the #3549 empty-twin defect.
+   *
+   * Author the item's EXISTING content into the object `create` just made.
+   * Called by the ENGINE, and ONLY on the create paths (`via:'created'` /
+   * `'recreated'`) — never for `'existing'` or `'attached'`, because those
+   * objects already hold whatever the user or the installer put there and
+   * re-authoring bundle content over them would destroy real work.
+   *
+   * Must NOT throw: return `{seeded:false, error}` instead. A seed failure
+   * leaves a REAL, bound backing object behind, so it is reported honestly on
+   * the record rather than being turned into a dead end.
+   */
+  seedFromContent?(
+    name: string,
+    coords: Record<string, string>,
+    ctx: AutoBindContext,
+  ): Promise<AutoBindSeedResult>;
+  /**
    * The binding fields the EXISTING downstream resolvers read (e.g.
    * `pipelineName`). Merged into the state patch so nothing downstream changes.
    */
@@ -222,6 +276,8 @@ export function readAutoBindRecord(state: Record<string, unknown> | undefined): 
     boundAt: typeof r.boundAt === 'string' ? r.boundAt : '',
     coords: r.coords && typeof r.coords === 'object' ? (r.coords as Record<string, string>) : undefined,
     nameDrift: r.nameDrift === true,
+    ...(r.seeded === true ? { seeded: true } : {}),
+    ...(typeof r.seedError === 'string' && r.seedError ? { seedError: r.seedError } : {}),
   };
 }
 
@@ -299,7 +355,12 @@ export interface EnsureAutoBindingOptions {
  *   5. No candidate (or it vanished) → probe the TARGET name.
  *        - present → `via:'attached'` (the object already existed; we adopt it
  *          rather than failing or duplicating).
- *        - absent  → CREATE it, then `via:'created'` / `'recreated'`.
+ *        - absent  → CREATE it, then SEED it from the item's own authored
+ *          content (`seedFromContent`), then `via:'created'` / `'recreated'`.
+ *
+ * Step 5's seed is what stops the platform manufacturing an EMPTY twin of an
+ * item that already has content (#3549). It runs on the create paths ONLY —
+ * an attached/existing object holds real work and is never overwritten.
  *
  * Step 4's probe is what makes repeat calls cheap AND makes deletion detectable
  * — it is the single line that both idempotency and self-heal hang off. Break
@@ -340,8 +401,19 @@ export async function ensureAutoBinding(
   const candidate =
     record && record.provider === provider.provider ? record.backingName : legacy || null;
 
-  const finish = (name: string, via: AutoBindVia, sanitized: boolean): AutoBindOutcome => {
+  const finish = (
+    name: string,
+    via: AutoBindVia,
+    sanitized: boolean,
+    seed?: AutoBindSeedResult,
+  ): AutoBindOutcome => {
     const nameDrift = name !== target.name;
+    // Seeding runs ONLY on the create paths. On 'existing'/'attached' we carry
+    // the PRIOR record's seed provenance forward untouched: re-deriving it as
+    // `undefined` every steady-state open would flip `changed` to true and make
+    // the editor write Cosmos on every single open.
+    const seeded = seed ? seed.seeded : record?.seeded === true;
+    const seedError = seed ? seed.error : record?.seedError;
     const next: AutoBindRecord = {
       provider: provider.provider,
       backingName: name,
@@ -351,6 +423,8 @@ export async function ensureAutoBinding(
       boundAt: now().toISOString(),
       ...(Object.keys(coords).length ? { coords } : {}),
       ...(nameDrift ? { nameDrift: true } : {}),
+      ...(seeded ? { seeded: true } : {}),
+      ...(seedError ? { seedError } : {}),
     };
     const keys = provider.stateKeys(name, coords);
     // The legacy keys are what every downstream resolver actually reads
@@ -373,6 +447,8 @@ export async function ensureAutoBinding(
       record.sourceName !== next.sourceName ||
       record.sanitized !== next.sanitized ||
       (record.nameDrift === true) !== (next.nameDrift === true) ||
+      (record.seeded === true) !== (next.seeded === true) ||
+      (record.seedError || '') !== (next.seedError || '') ||
       via !== 'existing';
     return {
       status: 'bound',
@@ -407,7 +483,29 @@ export async function ensureAutoBinding(
       return finish(target.name, 'attached', target.sanitized);
     }
     await provider.create(target.name, coords, ctx);
-    return finish(target.name, candidate ? 'recreated' : 'created', target.sanitized);
+    // ---- 5b. SEED the object we just made with the item's own content -----
+    //
+    // #3549. `create` deliberately makes an EMPTY object — that is right for a
+    // blank item a user just created, and wrong for an item that already
+    // carries an authored graph (a bundle install whose provisioner config-
+    // gated, so it stamped `state.content` but never authored the backing
+    // pipeline). Without this step the platform manufactures an empty twin of
+    // real content and then reports it as bound and healthy forever.
+    //
+    // Only on create/recreate: an 'existing'/'attached' object holds the user's
+    // work and must never be overwritten from a stale bundle.
+    let seed: AutoBindSeedResult | undefined;
+    if (provider.seedFromContent) {
+      try {
+        seed = await provider.seedFromContent(target.name, coords, ctx);
+      } catch (e) {
+        // A provider is contracted not to throw here; if one does, the binding
+        // still stands (the object exists) and the failure is recorded rather
+        // than converted into a dead end.
+        seed = { seeded: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return finish(target.name, candidate ? 'recreated' : 'created', target.sanitized, seed);
   } catch (e) {
     const c = classifyThrow(e);
     return c.kind === 'unavailable'
@@ -481,6 +579,17 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
   sourceName?: string;
   sanitized?: boolean;
   nameDrift?: boolean;
+  /**
+   * True when the item's authored content was written into the backing object
+   * at create time. Absent for a binding that was merely attached/existing.
+   */
+  seeded?: boolean;
+  /**
+   * Set when authored content existed but could not be written — the object is
+   * REAL and bound but may be empty, so the caller must not present it as
+   * complete (that is exactly the #3549 "silently empty" failure).
+   */
+  seedError?: string;
   /** Present for 'retry' and 'unavailable' — human-readable, already remediation-shaped. */
   reason?: string;
   /** Present for 'unavailable' — the resource/env the estate is missing. */
@@ -497,6 +606,8 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
         sourceName: outcome.record.sourceName,
         sanitized: outcome.record.sanitized,
         nameDrift: outcome.record.nameDrift,
+        ...(outcome.record.seeded === true ? { seeded: true } : {}),
+        ...(outcome.record.seedError ? { seedError: outcome.record.seedError } : {}),
       };
     case 'retry':
       return { status: 'retry', reason: outcome.reason, retryable: true };

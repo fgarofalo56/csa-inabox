@@ -9,12 +9,35 @@
  *   probe           does an object of this name exist  (MUST NOT create)
  *   create          make it                            (only when probe said no)
  *
+ * …plus one OPTIONAL fifth, added by #3549:
+ *
+ *   seedFromContent author the item's OWN content into the object `create` just
+ *                   made (delegated to `./auto-bind-seed`, which in turn calls
+ *                   the INSTALLER's seeder so the two cannot diverge)
+ *
  * Idempotency, self-heal, drift detection and outcome classification are the
  * ENGINE's job. A provider that implements the four hooks correctly gets all of
  * those for free and cannot get them wrong — which is the whole point of the
  * seam, given that the five pre-existing per-item provisioners each re-derived
  * this logic (and its naming) independently.
  *
+ * ---------------------------------------------------------------------------
+ * SEEDING DISCIPLINE (#3549 — "the empty twin")
+ * ---------------------------------------------------------------------------
+ * `create` deliberately makes an EMPTY object, which is right for a blank item
+ * the user just made from the catalog picker. It is WRONG for an item that
+ * already carries authored content — a bundle install stamps the graph onto
+ * `state.content` and then config-gates before authoring the Azure object, so
+ * the first open found nothing, created an empty object, bound to it, and
+ * reported healthy forever. Live: 36 of 41 ADF pipelines had `activities: []`.
+ *
+ * So every provider whose backing object can hold bundle content implements
+ * `seedFromContent`. That is ALL FIVE below, and the coverage test in
+ * `__tests__/auto-bind-seed.test.ts` FAILS if a provider is registered without
+ * it and without a documented reason — the enumeration is mechanical, not
+ * eyeballed.
+ *
+ * ---------------------------------------------------------------------------
  * PREFLIGHT DISCIPLINE (auto-bind-by-default §5 — "Infra prerequisites are
  * DEPLOYED, not requested"). A provider must NOT report `unavailable` for a
  * value the platform could have discovered. The ADF provider is the worked
@@ -27,7 +50,7 @@
  * ---------------------------------------------------------------------------
  * COVERAGE — the honest table
  * ---------------------------------------------------------------------------
- * COVERED here:
+ * COVERED here (all five seed their content):
  *   data-pipeline / adf-pipeline     → ADF pipeline           (adf-client)
  *   data-pipeline / synapse-pipeline → Synapse pipeline       (synapse-dev-client)
  *   eventstream                      → Event Hubs entity      (eventhubs-client)
@@ -204,7 +227,26 @@ export const adfPipelineAutoBind: AutoBindProvider = {
       { factoryName: coords.factoryName, subscriptionId: coords.subscriptionId, resourceGroup: coords.resourceGroup },
       // An EMPTY pipeline: the canvas opens on it immediately and the user
       // authors activities there. Seeding activities would fight the editor.
+      //
+      // For an item that ALREADY has an authored graph (a bundle install whose
+      // provisioner config-gated), `seedFromContent` below fills this in right
+      // after — see #3549. Creating empty first keeps `create` a single
+      // idempotent PUT that cannot half-succeed.
       () => upsertPipeline(name, { name, properties: { activities: [] } }),
+    );
+  },
+
+  /**
+   * #3549. Author the bundle's activity graph into the pipeline we just made,
+   * inside the SAME factory override, so a bundle-installed pipeline whose
+   * install was gated opens on its real activities instead of an empty twin.
+   */
+  seedFromContent: async (name, coords, ctx) => {
+    const { seedPipelineFromContent } = await import('./auto-bind-seed');
+    const { withFactoryOverride } = await import('./adf-factory-context');
+    return withFactoryOverride(
+      { factoryName: coords.factoryName, subscriptionId: coords.subscriptionId, resourceGroup: coords.resourceGroup },
+      () => seedPipelineFromContent('adf', name, ctx),
     );
   },
 
@@ -281,6 +323,12 @@ export const synapsePipelineAutoBind: AutoBindProvider = {
     await upsertPipeline(name, { name, properties: { activities: [] } } as never);
   },
 
+  /** #3549 — see the ADF twin above. */
+  seedFromContent: async (name, _coords, ctx) => {
+    const { seedPipelineFromContent } = await import('./auto-bind-seed');
+    return seedPipelineFromContent('synapse', name, ctx);
+  },
+
   stateKeys: (name, coords) => ({
     pipelineName: name,
     ...(coords.workspace ? { workspace: coords.workspace } : {}),
@@ -340,6 +388,16 @@ export const eventstreamAutoBind: AutoBindProvider = {
     );
   },
 
+  /**
+   * #3549. `create` makes the transport hub and stops, so a bundle eventstream
+   * declaring destinations + transforms landed as a bare hub with no consumer
+   * groups and no Stream Analytics job — the streaming shape of `activities:[]`.
+   */
+  seedFromContent: async (name, _coords, ctx) => {
+    const { seedEventstreamFromContent } = await import('./auto-bind-seed');
+    return seedEventstreamFromContent(name, ctx);
+  },
+
   /** The keys the eventstream editor already reads to decide live-vs-draft. */
   stateKeys: (name, coords) => ({
     transportHub: name,
@@ -395,6 +453,17 @@ export const adxDatabaseAutoBind: AutoBindProvider = {
     if (res.provisioningState && res.provisioningState !== 'Succeeded') {
       throw statusError(`ADX database "${name}" is still provisioning (${res.provisioningState}).`, 202);
     }
+  },
+
+  /**
+   * #3549. `create` returns as soon as ARM reports Succeeded, so a bundle
+   * eventhouse declaring tables + sample rows landed as an EMPTY database —
+   * and being a real database, every downstream query answered "no results"
+   * rather than erroring, which is why it went unnoticed.
+   */
+  seedFromContent: async (name, _coords, ctx) => {
+    const { seedKqlDatabaseFromContent } = await import('./auto-bind-seed');
+    return seedKqlDatabaseFromContent(name, ctx);
   },
 
   stateKeys: (name, coords) => ({
@@ -466,6 +535,15 @@ export const lakehouseAutoBind: AutoBindProvider = {
   create: async (name, coords) => {
     const { createDirectory } = await import('./adls-client');
     await createDirectory(coords.container, name);
+  },
+
+  /**
+   * #3549. `create` makes ONE directory — the root — so a bundle lakehouse
+   * declaring folders and seeded Delta tables opened onto an empty tree.
+   */
+  seedFromContent: async (name, coords, ctx) => {
+    const { seedLakehouseFromContent } = await import('./auto-bind-seed');
+    return seedLakehouseFromContent(name, coords, ctx);
   },
 
   stateKeys: (name, coords) => ({

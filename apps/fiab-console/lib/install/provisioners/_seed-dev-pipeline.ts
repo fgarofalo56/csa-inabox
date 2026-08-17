@@ -407,12 +407,18 @@ export function buildDevPipelineProperties(content: any): DevPipelineProperties 
  * Upsert the pipeline, trigger an on-demand run, and short-poll its status.
  * Never throws — returns a structured result the provisioner folds into its
  * ProvisionResult.
+ *
+ * `opts.skipRun` authors the pipeline and STOPS — no `createRun`, no polling.
+ * That is the open-time auto-bind path (`lib/azure/auto-bind-providers`), which
+ * reuses this exact translation + reference-stubbing so an auto-bound pipeline
+ * is byte-for-byte the pipeline install would have authored, but must not fire
+ * a billed pipeline run merely because a user opened the editor.
  */
 export async function upsertAndRunDevPipeline(
   adapter: DevPipelineAdapter,
   pipelineName: string,
   rawContent: any,
-  opts: { maxPolls?: number; pollMs?: number } = {},
+  opts: { maxPolls?: number; pollMs?: number; skipRun?: boolean } = {},
 ): Promise<DevPipelineSeedResult> {
   const steps: string[] = [];
   const maxPolls = opts.maxPolls ?? 2;
@@ -483,6 +489,13 @@ export async function upsertAndRunDevPipeline(
   }
 
   // 2) Trigger an on-demand run.
+  //    Skipped on the open-time auto-bind path: authoring the pipeline is the
+  //    whole job there, and firing a run because someone opened an editor would
+  //    bill compute and re-execute side effects nobody asked for.
+  if (opts.skipRun) {
+    steps.push(`${adapter.label}: authored pipeline only (no on-demand run on this path).`);
+    return { upserted: true, pipelineName, triggered: false, steps };
+  }
   let runId: string | undefined;
   try {
     runId = await adapter.createRun(pipelineName, runParams);
