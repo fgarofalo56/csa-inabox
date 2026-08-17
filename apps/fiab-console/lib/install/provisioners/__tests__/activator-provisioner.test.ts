@@ -204,6 +204,38 @@ describe('#3551 activatorProvisioner — state.rules persistence gates the statu
     expect(written.state.rules[0].azureRuleName).toBe('DL-Shim-Activator-rule');
   });
 
+  it('a Cosmos 403 whose TEXT carries no infra token still classifies as a remediation, not a bug', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+    // A real Cosmos rejection: the status is on the error object, and the message
+    // is the service's prose — it need not contain 'forbidden'/'403' at all.
+    // Carrying only `e.message` forward strips the status, so
+    // isInfraOrPermissionError (types.ts) can never see it and the install is
+    // reported as `failed` — which types.ts reserves for genuine code bugs.
+    const err: any = new Error('Request is blocked by the account policy.');
+    err.status = 403;
+    replace.mockRejectedValue(err);
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('remediation');
+    expect(res.status).not.toBe('failed');
+    expect(res.gate?.remediation).toContain('Request is blocked by the account policy.');
+  });
+
+  it('a Cosmos 429 whose TEXT carries no infra token still classifies as a remediation', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+    // @azure/cosmos ErrorResponse carries the HTTP status on `code` (number) —
+    // it has NO `status`/`statusCode` field (ErrorResponse.d.ts) — so a throttle
+    // reaches the classifier as prose alone unless `code` is read too.
+    const err: any = new Error('Request rate is large.');
+    err.code = 429;
+    replace.mockRejectedValue(err);
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('remediation');
+  });
+
   it('re-running the install REPLACES its own rule instead of duplicating it', async () => {
     process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
     // The item already carries this install's rule plus one the user added.

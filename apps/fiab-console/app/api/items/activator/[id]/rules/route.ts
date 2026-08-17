@@ -11,10 +11,14 @@
  * selected with LOOM_ACTIVATOR_BACKEND=fabric — only then do we call
  * api.fabric.microsoft.com. No Fabric workspace is required for the default.
  *
- * #3551 — GET is SELF-HEALING. When state.rules is empty it reconciles against
- * the live scheduledQueryRules before falling back to the static bundle
- * projection, so an activator whose install created real alert rules but lost
- * the record shows those rules (and can act on them) instead of an empty list.
+ * #3551 — GET is SELF-HEALING. When state.rules is empty AND the item carries
+ * evidence its install authored alert rules, it reconciles against the live
+ * scheduledQueryRules before falling back to the static bundle projection, so an
+ * activator whose install created real alert rules but lost the record shows
+ * those rules (and can act on them) instead of an empty list. A rule is claimed
+ * only on an authoritative join (the `loom-item-id` ARM tag, else the Loom
+ * description marker AND the exact derived name), the write-back is merged under
+ * an IfMatch, and a truncated listing is shown but never persisted.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -26,10 +30,11 @@ import {
 import {
   createMonitorActivatorRule, triggerMonitorActivatorRule,
   enableMonitorRule, disableMonitorRule, deleteMonitorActivatorRule,
-  isOnDemandAdxRule, appendRunHistory, safeRuleName,
+  isOnDemandAdxRule, appendRunHistory,
+  loomRuleNameFromDescription, ruleBelongsToItem,
   type MonitorRuleRecord, type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
-import { MonitorNotConfiguredError, MonitorError, listScheduledQueryRules, type ScheduledQueryRule } from '@/lib/azure/monitor-client';
+import { MonitorNotConfiguredError, MonitorError, listScheduledQueryRulesPaged, type ScheduledQueryRule } from '@/lib/azure/monitor-client';
 import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
 import { loadContentBackedItem, activatorRuleFromContent } from '../../../_lib/ai-content-fallback';
@@ -50,9 +55,10 @@ async function bundleRules(id: string, tenantId: string) {
   return rule ? [rule] : null;
 }
 
-/**
- * #3551 self-heal — rebuild the Loom rule records from the LIVE Azure Monitor
- * scheduledQueryRules when `state.rules` is empty.
+// ── #3551 self-heal ────────────────────────────────────────────────────────
+/*
+ * Rebuild the Loom rule records from the LIVE Azure Monitor scheduledQueryRules
+ * when `state.rules` is empty.
  *
  * Install authors REAL scheduledQueryRules and then records them on the item.
  * When that record was lost (the pre-#3551 best-effort write), the alert rules
@@ -63,25 +69,145 @@ async function bundleRules(id: string, tenantId: string) {
  * .claude/rules/auto-bind-by-default.md §3 (a stale binding is repaired
  * automatically, not shown to the user).
  *
- * The join key is the SAME deterministic name the provisioner authors with:
- * `safeRuleName(item.displayName, <rule-suffix>)`, so every rule belonging to
- * this activator starts with `safeRuleName(displayName, '')`. Two activators
- * whose display names sanitize to the same base would share that prefix — but
- * they already collide at WRITE time (they upsert the same azureRuleName), so
- * this does not introduce the ambiguity, it inherits it.
+ * A claimed rule is not merely DISPLAYED — it is recorded on the item, and
+ * DELETE / enable / disable then act on the live Azure resource through it. So
+ * the join key must be authoritative, never plausible: `ruleBelongsToItem`
+ * answers on the `loom-item-id` ARM tag, else on the description marker AND the
+ * exact deterministic name this item's own authoring path produces. See its
+ * docstring in lib/azure/activator-monitor.ts.
+ */
+
+/** How long a no-match reconcile suppresses the next deployment-wide ARM list. */
+const RECONCILE_COOLDOWN_MS = 10 * 60_000;
+/** Bounded re-read + retry for the heal write when it loses an etag race. */
+const HEAL_WRITE_ATTEMPTS = 3;
+/** Cap on the per-item tombstone list (deleted ARM rule names). */
+const MAX_TOMBSTONES = 50;
+
+/** ARM rule names this item has deleted. A `listScheduledQueryRules` is
+ *  eventually consistent, so a just-deleted rule can still appear in it; without
+ *  this the next open would write the deleted rule back into `state.rules`, where
+ *  it would stay forever (a non-empty `state.rules` never re-reconciles). */
+function tombstonesOf(item: WorkspaceItem | null | undefined): string[] {
+  const t = (item?.state as any)?.rulesDeleted;
+  return Array.isArray(t) ? t.filter((n: any) => typeof n === 'string') : [];
+}
+
+function withTombstone(state: any, azureRuleName?: string): string[] {
+  const cur = Array.isArray(state?.rulesDeleted) ? state.rulesDeleted.filter((n: any) => typeof n === 'string') : [];
+  if (!azureRuleName) return cur;
+  return [...cur.filter((n: string) => n !== azureRuleName), azureRuleName].slice(-MAX_TOMBSTONES);
+}
+
+/** Drop a name from the tombstone list — used when the same rule is re-created,
+ *  so a legitimate re-create is not permanently shadowed by its own deletion. */
+function withoutTombstone(state: any, azureRuleName?: string): string[] {
+  const cur = Array.isArray(state?.rulesDeleted) ? state.rulesDeleted.filter((n: any) => typeof n === 'string') : [];
+  return azureRuleName ? cur.filter((n: string) => n !== azureRuleName) : cur;
+}
+
+/** The `rulesDeleted` state field, omitted entirely on items that have never had
+ *  one — a create/edit should not add an empty key to every activator's state. */
+function tombstoneField(next: string[], prev: string[]): { rulesDeleted?: string[] } {
+  return next.length || prev.length ? { rulesDeleted: next } : {};
+}
+
+/** True for a Cosmos optimistic-concurrency rejection (the IfMatch lost). */
+function isEtagConflict(e: any): boolean {
+  const code = e?.code ?? e?.statusCode ?? e?.status;
+  return code === 412 || /precondition\s*failed/i.test(String(e?.message || ''));
+}
+
+/**
+ * Read the CURRENT document, let `mutate` build the next one from it, and write
+ * it back conditionally on that document's etag.
  *
- * Nothing is invented (no-vaporware.md): every field comes from ARM, except
- * `condition`/`action`, which ARM does not return — those are filled ONLY when
- * the item's own bundle content carries a rule of the same name.
+ * The GET path reads the item, then spends a multi-hundred-ms ARM call, then
+ * writes. An unconditional `replace` of the pre-call document silently discards
+ * anything that landed in between — including a rule the user POSTed during the
+ * window, which is exactly the "the rule exists in Azure but not in state.rules"
+ * symptom #3551 exists to remove. Re-read + merge + IfMatch, mirroring the
+ * install-side pattern in lib/install/provisioners/activator.ts.
+ *
+ * `mutate` returning null means "nothing to write" and is reported as success.
+ */
+async function replaceWithMerge(
+  item: WorkspaceItem,
+  mutate: (cur: WorkspaceItem) => WorkspaceItem | null,
+): Promise<{ ok: boolean; error?: string }> {
+  let lastError = '';
+  for (let attempt = 1; attempt <= HEAL_WRITE_ATTEMPTS; attempt++) {
+    try {
+      const items = await itemsContainer();
+      const { resource } = await items.item(item.id, item.workspaceId).read<WorkspaceItem>();
+      const cur = resource || item;
+      const next = mutate(cur);
+      if (!next) return { ok: true };
+      const etag = (cur as any)?._etag;
+      await items.item(cur.id, cur.workspaceId).replace(
+        next,
+        etag ? { accessCondition: { type: 'IfMatch', condition: etag } } : undefined,
+      );
+      return { ok: true };
+    } catch (e: any) {
+      lastError = e?.message || String(e);
+      // An etag conflict means someone else wrote first — re-read and re-merge
+      // against THEIR document rather than overwriting it.
+      if (!isEtagConflict(e) || attempt === HEAL_WRITE_ATTEMPTS) return { ok: false, error: lastError };
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
+/**
+ * Whether this item has any REASON to spend a deployment-wide ARM list.
+ *
+ * The listing enumerates the whole `LOOM_ALERT_RG`, and a no-match writes no
+ * rules — so without a gate every GET of every zero-rule activator lists ARM
+ * forever, including the first open of a freshly created item that cannot
+ * possibly have install-authored rules. Returns the evidence (for the honest
+ * response) or null.
+ */
+function reconcileEvidence(item: WorkspaceItem, bundleRule: any | null): string | null {
+  const created = Number((item.state as any)?.provisioning?.secondaryIds?.rulesCreated);
+  if (Number.isFinite(created) && created > 0) {
+    return `the install recorded ${created} Azure Monitor alert rule(s) for this item`;
+  }
+  if (bundleRule) return "this item's content bundle defines an alert rule";
+  return null;
+}
+
+/** True while a previous reconcile's no-match result is still fresh. */
+function inReconcileCooldown(item: WorkspaceItem): boolean {
+  const last = (item.state as any)?.rulesReconcile;
+  if (!last || last.outcome !== 'none' || typeof last.at !== 'string') return false;
+  const at = Date.parse(last.at);
+  return Number.isFinite(at) && Date.now() - at < RECONCILE_COOLDOWN_MS;
+}
+
+/**
+ * Project a live ARM rule onto the Loom rule record.
+ *
+ * Everything here comes from ARM except:
+ *   - `condition` / `action`, which ARM does not return — filled ONLY from the
+ *     item's OWN bundle content when it carries a rule of the same name;
+ *   - `severity` / `evaluationFrequency` / `windowSize` when the ARM payload
+ *     omits them, which fall back to the SAME defaults the create path uses
+ *     (severity 3, PT5M, PT5M — see upsertScheduledQueryRule). Those are stated
+ *     rather than presented as read values (deploy-integrity.md R7).
  */
 function recordFromLiveRule(r: ScheduledQueryRule, bundleRule?: any): MonitorRuleRecord {
   // createMonitorActivatorRule stamps the Loom-facing rule name into the ARM
   // description: "Loom Activator rule '<name>'" (+ " (Eventhouse / ADX)").
-  const named = /Loom Activator rule '([^']*)'/.exec(r.description || '')?.[1];
+  const named = loomRuleNameFromDescription(r.description);
   // The alert SCOPE is the authoritative source backend — an ADX-scoped rule is
   // scoped to the Kusto cluster, an LA rule to the workspace.
   const sourceKind: 'log-analytics' | 'adx' =
     (r.scopes || []).some((s) => /\/providers\/Microsoft\.Kusto\/clusters\//i.test(s)) ? 'adx' : 'log-analytics';
+  const defaulted: string[] = [];
+  if (typeof r.severity !== 'number') defaulted.push('severity');
+  if (!r.evaluationFrequency) defaulted.push('evaluationFrequency');
+  if (!r.windowSize) defaulted.push('windowSize');
   return {
     id: r.name,
     name: named || r.name,
@@ -103,43 +229,93 @@ function recordFromLiveRule(r: ScheduledQueryRule, bundleRule?: any): MonitorRul
     createdAt: new Date().toISOString(),
     note:
       'Recovered from the live Azure Monitor alert rule: this rule was created by the install but its record was missing from the item. ' +
-      'The created timestamp is when it was recovered — Azure Monitor does not report the rule\'s original creation time.',
+      'The created timestamp is when it was recovered — Azure Monitor does not report the rule\'s original creation time.' +
+      (defaulted.length
+        ? ` The Azure listing did not return ${defaulted.join(' / ')}; the create path's default was used for ${defaulted.length > 1 ? 'those' : 'that'}.`
+        : ''),
   };
 }
 
 /**
- * Returns the reconciled records (already written back to the item when the
- * write succeeded), or null when there is nothing to reconcile / Azure Monitor
- * cannot be listed. NEVER throws: a reconcile that can't run must not break a
- * GET that would otherwise fall through to the bundle projection.
+ * Returns the reconciled records (written back to the item when the listing was
+ * COMPLETE and the write succeeded), or null when there is nothing to reconcile
+ * / no reason to look / Azure Monitor cannot be listed. NEVER throws: a
+ * reconcile that can't run must not break a GET that would otherwise fall
+ * through to the bundle projection.
  */
 async function reconcileFromAzureMonitor(
   item: WorkspaceItem,
   bundleRule: any | null,
-): Promise<{ rules: MonitorRuleRecord[]; healed: boolean } | null> {
+): Promise<{ rules: MonitorRuleRecord[]; healed: boolean; partial: boolean; note?: string } | null> {
   try {
-    const prefix = safeRuleName(item.displayName || '', '');
-    if (!prefix || prefix === '-') return null;
-    const live = await listScheduledQueryRules();
-    const mine = live.filter((r) => typeof r.name === 'string' && r.name.startsWith(prefix));
-    if (mine.length === 0) return null;
-    const rules = mine.map((r) => {
-      const named = /Loom Activator rule '([^']*)'/.exec(r.description || '')?.[1];
+    const evidence = reconcileEvidence(item, bundleRule);
+    if (!evidence) return null;
+    if (inReconcileCooldown(item)) return null;
+
+    const listed = await listScheduledQueryRulesPaged();
+    const tombstoned = new Set(tombstonesOf(item));
+    const mine = listed.rules.filter((r) => ruleBelongsToItem(r, item) && !tombstoned.has(r.name));
+
+    if (mine.length === 0) {
+      // Remember the miss so the next open is a plain read. Not on a truncated
+      // listing: "I did not find it in the part I read" is not "it is not there"
+      // (deploy-integrity.md R7).
+      if (!listed.truncatedBy) {
+        const at = new Date().toISOString();
+        await replaceWithMerge(item, (cur) => ({
+          ...cur,
+          // updatedAt is deliberately NOT bumped: nothing about the item changed.
+          state: { ...(cur.state || {}), rulesReconcile: { at, outcome: 'none', evidence } },
+        }));
+      }
+      return null;
+    }
+
+    const records = mine.map((r) => {
+      const named = loomRuleNameFromDescription(r.description);
       const match = bundleRule && (bundleRule.name === named || bundleRule.name === r.name) ? bundleRule : undefined;
       return recordFromLiveRule(r, match);
     });
+
+    if (listed.truncatedBy) {
+      // The listing stopped at its paging ceiling, so this set is what fit — not
+      // "this item's rules". Persisting it would freeze a PARTIAL record: a
+      // non-empty state.rules never reconciles again, so the rules that were cut
+      // off would be unreachable permanently. Show what was found, persist
+      // nothing, and reconcile again on the next open.
+      return {
+        rules: records,
+        healed: false,
+        partial: true,
+        note:
+          `The Azure Monitor listing stopped at its ${listed.truncatedBy} ceiling after ${listed.pagesFetched} page(s), ` +
+          'so this may not be every rule for this activator. Nothing was recorded on the item — the next open re-reads Azure. ' +
+          `Raise ${listed.truncatedBy === 'pages' ? 'LOOM_ARM_PAGING_MAX_PAGES' : 'LOOM_ARM_PAGING_BUDGET_MS'} if this alert resource group is legitimately larger.`,
+      };
+    }
+
     // Write the recovered records back so the NEXT open is a plain read and every
-    // per-rule action (Start/Stop/Edit/Delete) resolves. Best-effort here and
-    // honestly reported: the response is correct either way, and a failed write
-    // just means the next GET reconciles again.
-    let healed = false;
-    try {
-      const items = await itemsContainer();
-      const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules }, updatedAt: new Date().toISOString() };
-      await items.item(item.id, item.workspaceId).replace(next);
-      healed = true;
-    } catch { /* reported as healed:false below */ }
-    return { rules, healed };
+    // per-rule action (Start/Stop/Edit/Delete) resolves. Merged against the
+    // CURRENT document under an IfMatch, so a rule added during the ARM call
+    // survives. Honestly reported: the response is correct either way, and a
+    // failed write just means the next GET reconciles again.
+    let view: MonitorRuleRecord[] = records;
+    const at = new Date().toISOString();
+    const write = await replaceWithMerge(item, (cur) => {
+      const curTomb = new Set(tombstonesOf(cur));
+      const keep = records.filter((r) => !curTomb.has(r.azureRuleName));
+      const existing: MonitorRuleRecord[] = Array.isArray((cur.state as any)?.rules) ? (cur.state as any).rules : [];
+      const merged = [...existing.filter((e) => !keep.some((k) => k.id === e.id)), ...keep];
+      view = merged;
+      if (keep.length === 0) return null;
+      return {
+        ...cur,
+        state: { ...(cur.state || {}), rules: merged, rulesReconcile: { at, outcome: 'healed', count: keep.length } },
+        updatedAt: at,
+      };
+    });
+    if (view.length === 0) return null;
+    return { rules: view, healed: write.ok, partial: false };
   } catch {
     // Monitor not configured / not authorized / unreachable — fall through to
     // the bundle projection. The caller's existing gates cover the write paths.
@@ -231,6 +407,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
           source: 'azure-monitor-reconciled',
           backend: 'azure-monitor',
           healed: reconciled.healed,
+          ...(reconciled.partial ? { partial: true } : {}),
+          ...(reconciled.note ? { note: reconciled.note } : {}),
         });
       }
     }
@@ -324,6 +502,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const rule = await createMonitorActivatorRule(item.displayName, {
       name,
+      // Stamp the owning Loom item onto the ARM rule so a later read can join it
+      // back on an identity instead of on the derived, user-controlled name.
+      loomItemId: item.id,
       condition: body?.condition || undefined,
       action: body?.action || undefined,
       query: typeof body?.query === 'string' ? body.query : undefined,
@@ -345,10 +526,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       noDataMinutes: typeof body?.noDataMinutes === 'number' ? body.noDataMinutes : undefined,
       timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : undefined,
     });
-    // Persist onto the Cosmos item so the rule list survives reload.
+    // Persist onto the Cosmos item so the rule list survives reload. Re-creating
+    // a previously deleted rule lifts its tombstone, so a later reconcile is not
+    // shadowed by the old deletion.
     const nextRules = [...rules.filter((r) => r.id !== rule.id), rule];
     const items = await itemsContainer();
-    const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
+    const next: WorkspaceItem = {
+      ...item,
+      state: {
+        ...(item.state || {}),
+        rules: nextRules,
+        ...tombstoneField(withoutTombstone(item.state, rule.azureRuleName), tombstonesOf(item)),
+      },
+      updatedAt: new Date().toISOString(),
+    };
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, rule, backend: 'azure-monitor' });
   } catch (e: any) {
@@ -480,7 +671,16 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     if (rule.azureRuleName) await deleteMonitorActivatorRule(rule.azureRuleName);
     const nextRules = rules.filter((r) => r.id !== rule.id);
     const items = await itemsContainer();
-    const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
+    // Record the deleted ARM name. The scheduledQueryRules listing is eventually
+    // consistent, so a reopen right after this can still see the rule; without
+    // the tombstone the #3551 reconcile would write it back into state.rules and
+    // — since a non-empty state.rules never re-reconciles — it would stay there
+    // permanently, pointing at a rule that no longer exists.
+    const next: WorkspaceItem = {
+      ...item,
+      state: { ...(item.state || {}), rules: nextRules, rulesDeleted: withTombstone(item.state, rule.azureRuleName) },
+      updatedAt: new Date().toISOString(),
+    };
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, backend: 'azure-monitor' });
   } catch (e: any) {
@@ -542,15 +742,31 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   try {
     // Upsert the backing scheduledQueryRule by name. Omitted body fields fall
     // back to the existing record so a partial PUT doesn't reset live config.
+    //
+    // The condition builder rebuilds the query ONLY when the body actually
+    // carries a condition (a property/field/metric) or a typed trigger model.
+    // The editor always sends `condition` and `ruleKind:'event'`, even when the
+    // builder is empty — and a rule recovered from ARM (#3551) has a real KQL
+    // query but NO structured condition, so its Edit dialog opens empty. Treating
+    // that empty shape as "rebuild" made a severity-only edit push buildRuleQuery's
+    // defaults (property='value', operator='==', value=0) over a working query.
+    const bodyConditionHasShape = !!(
+      body?.condition && (body.condition.property || body.condition.field || body.condition.metric)
+    );
+    const bodyHasTriggerModel = !!(
+      body?.propertyConditionType || (typeof body?.ruleKind === 'string' && body.ruleKind !== 'event')
+    );
+    const rebuildFromCondition = bodyConditionHasShape || bodyHasTriggerModel;
     const rec = await createMonitorActivatorRule(item.displayName, {
       name: typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : old.name,
+      loomItemId: item.id,
       condition: body?.condition ?? old.condition ?? undefined,
       action: body?.action ?? old.action ?? undefined,
       // A new verbatim query wins; else a new structured condition rebuilds it;
       // else keep the rule's existing query (don't lose a verbatim KQL rule).
       query: typeof body?.query === 'string' && body.query.trim()
         ? body.query
-        : ((body?.condition || body?.ruleKind || body?.propertyConditionType) ? undefined : old.query),
+        : (rebuildFromCondition ? undefined : old.query),
       sourceTable: typeof body?.sourceTable === 'string' ? body.sourceTable : undefined,
       severity: typeof body?.severity === 'number' ? body.severity : old.severity,
       evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : old.evaluationFrequency,
@@ -572,7 +788,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : old.timestampColumn,
     });
     // Rename → drop the orphan ARM rule left behind under the old name.
+    let renamedFrom: string | undefined;
     if (rec.azureRuleName !== old.azureRuleName) {
+      renamedFrom = old.azureRuleName;
       try { await deleteMonitorActivatorRule(old.azureRuleName); } catch { /* best-effort */ }
     }
     // Preserve a paused rule's state — an edit must not surprise-re-enable it.
@@ -589,7 +807,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     rec.updatedAt = new Date().toISOString();
     const nextRules = rules.map((r) => (r.id === old.id ? rec : r));
     const items = await itemsContainer();
-    const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
+    // A rename deletes the ARM rule under the OLD name — tombstone it (and lift
+    // the new name's tombstone) so a later reconcile cannot resurrect the orphan.
+    const rulesDeleted = withoutTombstone({ rulesDeleted: withTombstone(item.state, renamedFrom) }, rec.azureRuleName);
+    const next: WorkspaceItem = {
+      ...item,
+      state: { ...(item.state || {}), rules: nextRules, ...tombstoneField(rulesDeleted, tombstonesOf(item)) },
+      updatedAt: new Date().toISOString(),
+    };
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, rule: rec, backend: 'azure-monitor' });
   } catch (e: any) {

@@ -32,7 +32,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE, walkPagedList } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE, walkPagedList, walkPagedListResult, type PagingTruncation } from './paging-budget';
 import {
   loomResourceGroupScopes,
   loomSubscriptionScope,
@@ -1734,6 +1734,13 @@ export interface ScheduledQueryRuleInput {
   /** Whether the rule evaluates. Default true; set false to "stop" the rule. */
   enabled?: boolean;
   /**
+   * ARM resource tags to stamp on the rule. Loom uses these to record WHICH Loom
+   * item owns the rule (`loom-item-id`), so a later read can join a live rule
+   * back to its item on an identity rather than on a derived, user-controlled
+   * name. This is a full PUT, so the tags supplied here are the rule's tags.
+   */
+  tags?: Record<string, string>;
+  /**
    * Skip create-time KQL validation. Default TRUE for Loom-created rules: a
    * bundled alert's query often targets a table that doesn't exist on a fresh
    * estate yet (e.g. AppEvents_CL before any data lands), and Azure Monitor
@@ -1761,6 +1768,7 @@ export async function upsertScheduledQueryRule(input: ScheduledQueryRuleInput): 
     `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules/${encodeURIComponent(input.name)}?api-version=${SCHEDULED_QUERY_RULES_API}`;
   const body = {
     location,
+    ...(input.tags && Object.keys(input.tags).length ? { tags: input.tags } : {}),
     properties: {
       displayName: input.name,
       description: input.description || 'Created by CSA Loom Activator',
@@ -1808,6 +1816,62 @@ export interface ScheduledQueryRule {
   windowSize?: string;
   actionGroupIds?: string[];
   resourceGroup?: string;
+  /** ARM resource tags — carries `loom-item-id` on rules Loom authored. */
+  tags?: Record<string, string>;
+}
+
+/**
+ * List scheduled query alert rules in the alert resource group, REPORTING
+ * whether the listing is whole.
+ *
+ * ARM returns this collection paged. A caller that only DISPLAYS the rules can
+ * live with page 1; a caller that PERSISTS a conclusion drawn from the list (—
+ * "these are all of item X's rules") cannot: a truncated page turns into a
+ * partial record that is then treated as complete. So the truncation is returned
+ * rather than swallowed, and the caller decides (deploy-integrity.md R6/R7 —
+ * never report a conclusion the code did not establish).
+ */
+export async function listScheduledQueryRulesPaged(): Promise<{
+  rules: ScheduledQueryRule[];
+  truncatedBy: PagingTruncation | null;
+  pagesFetched: number;
+}> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  const first =
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules?api-version=${SCHEDULED_QUERY_RULES_API}`;
+  const walked = await walkPagedListResult<any>(
+    `scheduledQueryRules ${rg}`,
+    (next, timeoutMs) => armGet(next ?? first, timeoutMs),
+  );
+  return {
+    rules: walked.rows.map((r) => mapScheduledQueryRule(r, rg)),
+    truncatedBy: walked.truncatedBy,
+    pagesFetched: walked.pagesFetched,
+  };
+}
+
+function mapScheduledQueryRule(r: any, fallbackRg: string): ScheduledQueryRule {
+  const p = r?.properties || {};
+  const crit = (p.criteria?.allOf || [])[0] || {};
+  return {
+    id: r.id,
+    name: r.name,
+    enabled: p.enabled !== false,
+    severity: p.severity,
+    description: p.description,
+    displayName: p.displayName,
+    scopes: p.scopes,
+    query: crit.query,
+    operator: crit.operator,
+    threshold: crit.threshold,
+    evaluationFrequency: p.evaluationFrequency,
+    windowSize: p.windowSize,
+    actionGroupIds: p.actions?.actionGroups,
+    resourceGroup: rgFromId(r.id || '') || fallbackRg,
+    ...(r.tags && typeof r.tags === 'object' ? { tags: r.tags as Record<string, string> } : {}),
+  };
 }
 
 /**
@@ -1816,34 +1880,12 @@ export interface ScheduledQueryRule {
  * the Loom alerts editor creates on the Government path — the parity for a
  * Databricks SQL alert when Databricks is not authorized (GCC-High / IL5 / DoD).
  *   GET .../resourceGroups/{rg}/providers/Microsoft.Insights/scheduledQueryRules
+ *
+ * Rows only. Callers that must distinguish "this is the whole list" from "this
+ * is what fit in the budget" use {@link listScheduledQueryRulesPaged}.
  */
 export async function listScheduledQueryRules(): Promise<ScheduledQueryRule[]> {
-  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
-  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
-  const rg = alertResourceGroup();
-  const j = await armGet(
-    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules?api-version=${SCHEDULED_QUERY_RULES_API}`,
-  );
-  return (j?.value || []).map((r: any): ScheduledQueryRule => {
-    const p = r?.properties || {};
-    const crit = (p.criteria?.allOf || [])[0] || {};
-    return {
-      id: r.id,
-      name: r.name,
-      enabled: p.enabled !== false,
-      severity: p.severity,
-      description: p.description,
-      displayName: p.displayName,
-      scopes: p.scopes,
-      query: crit.query,
-      operator: crit.operator,
-      threshold: crit.threshold,
-      evaluationFrequency: p.evaluationFrequency,
-      windowSize: p.windowSize,
-      actionGroupIds: p.actions?.actionGroups,
-      resourceGroup: rgFromId(r.id || '') || rg,
-    };
-  });
+  return (await listScheduledQueryRulesPaged()).rules;
 }
 
 /**

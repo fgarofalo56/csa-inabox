@@ -89,7 +89,19 @@ const PERSIST_BACKOFF_MS = [150, 400];
 
 type PersistOutcome =
   | { ok: true; attempts: number }
-  | { ok: false; attempts: number; reason: 'item-not-found' | 'write-failed'; error: string };
+  | {
+      ok: false;
+      attempts: number;
+      reason: 'item-not-found' | 'write-failed';
+      /** The message, for the step log / receipt text. */
+      error: string;
+      /** The ORIGINAL thrown error. Kept because the classifier
+       *  (isInfraOrPermissionError) reads the status off the error OBJECT — a
+       *  Cosmos 403/429 whose prose carries no infra keyword would otherwise
+       *  classify as a genuine `failed`, which types.ts reserves for real bugs.
+       *  Undefined for 'item-not-found', which is not a throw. */
+      cause?: unknown;
+    };
 
 async function persistRulesToItem(
   input: any,
@@ -98,6 +110,7 @@ async function persistRulesToItem(
 ): Promise<PersistOutcome> {
   let reason: 'item-not-found' | 'write-failed' = 'write-failed';
   let error = '';
+  let cause: unknown;
   for (let attempt = 1; attempt <= PERSIST_ATTEMPTS; attempt++) {
     try {
       const items = await itemsContainer();
@@ -106,6 +119,7 @@ async function persistRulesToItem(
       const { resource: cur } = await items.item(input.cosmosItemId, input.workspaceId).read<WorkspaceItem>();
       if (!cur) {
         reason = 'item-not-found';
+        cause = undefined;
         error = `item '${input.cosmosItemId}' not found in workspace '${input.workspaceId}' (the Cosmos read returned no document)`;
       } else {
         const existing: MonitorRuleRecord[] = Array.isArray((cur.state as any)?.rules) ? (cur.state as any).rules : [];
@@ -125,6 +139,7 @@ async function persistRulesToItem(
       }
     } catch (e: any) {
       reason = 'write-failed';
+      cause = e;
       error = e?.message || String(e);
     }
     if (attempt < PERSIST_ATTEMPTS) {
@@ -132,7 +147,7 @@ async function persistRulesToItem(
       await new Promise((r) => setTimeout(r, PERSIST_BACKOFF_MS[attempt - 1] ?? 400));
     }
   }
-  return { ok: false, attempts: PERSIST_ATTEMPTS, reason, error };
+  return { ok: false, attempts: PERSIST_ATTEMPTS, reason, error, cause };
 }
 
 async function provisionAzureMonitor(input: any, steps: string[]): Promise<ProvisionResult> {
@@ -191,6 +206,10 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
           : r.condition;
       const rec = await createMonitorActivatorRule(input.displayName, {
         name: r.name,
+        // Stamp the owning Loom item onto the ARM rule (the `loom-item-id` tag)
+        // so the rules route can join a live rule back to this item on an
+        // identity rather than on the derived, user-controlled name.
+        loomItemId: input.cosmosItemId,
         condition: cond,
         action: r.action,
         // Scope the rule against whichever alert host this deployment actually
@@ -274,9 +293,11 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
     );
     // Only what the code ESTABLISHED (deploy-integrity.md R7): the rules were
     // created, and the write did not confirm. The cause is NOT asserted — the
-    // underlying error is carried verbatim by resolveInfraResidual.
+    // underlying error is carried verbatim by resolveInfraResidual. The ORIGINAL
+    // error object is handed over (not just its text) so a Cosmos 403/429 whose
+    // prose carries no infra keyword is still classified from its status.
     return resolveInfraResidual(
-      persisted.error,
+      persisted.cause ?? persisted.error,
       `Retry this install step. The retry is idempotent: the scheduledQueryRules are upserted by name, so it will not create duplicate alert rules. ` +
         `Until the record is written the activator's rule list stays empty even though the alert rule(s) exist in Azure Monitor. ` +
         `If the retry keeps failing, check the underlying error below and verify the Console UAMI holds the Cosmos DB Built-in Data Contributor role on the Loom Cosmos account.`,

@@ -121,7 +121,12 @@ const INFRA_SIGNAL_RE =
 export function isInfraOrPermissionError(e: unknown, status?: number): boolean {
   if (status === 401 || status === 403 || status === 404 || status === 429) return true;
   const anyE = e as any;
-  const s = anyE?.status ?? anyE?.statusCode;
+  // @azure/cosmos ErrorResponse carries the HTTP status on `code` (a number) and
+  // has NO `status`/`statusCode` — so a Cosmos 403/429 was reaching the regex as
+  // prose alone and classifying as a genuine `failed`. Only a NUMERIC `code` is
+  // read: a Node system error's `code` is a string ('ENOTFOUND') and must not be
+  // mistaken for a status.
+  const s = anyE?.status ?? anyE?.statusCode ?? (typeof anyE?.code === 'number' ? anyE.code : undefined);
   if (s === 401 || s === 403 || s === 404 || s === 429) return true;
   const msg =
     typeof e === 'string'
