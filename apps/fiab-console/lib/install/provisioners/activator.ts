@@ -23,6 +23,13 @@
  * activator therefore behaves exactly like a net-new one: every per-rule
  * Start/Stop/Enable/Disable/Delete/Trigger action keys off a real backing
  * scheduledQueryRule recorded in state.rules (no empty array, no stub).
+ *
+ * #3551 — that state.rules write is NOT best-effort. Azure Monitor accepting
+ * the rules is only half the install: if the record never reaches state.rules
+ * the editor shows an EMPTY rule list while real alert rules bill and fire in
+ * Azure, with no error anywhere. So the write is retried with bounded backoff
+ * and the returned status reflects whether the record actually landed — per
+ * deploy-integrity.md R6, never report success on an unverified outcome.
  */
 import { listActivators, createActivator, addRule, ActivatorError, listRules } from '@/lib/azure/activator-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
@@ -62,6 +69,72 @@ function pickAlertScope(): { sourceKind: 'log-analytics' | 'adx' } | { missing: 
 }
 
 // ── Azure Monitor backend (DEFAULT) ────────────────────────────────────────
+
+/**
+ * #3551 — write the authored rules onto the Cosmos item's `state.rules` with a
+ * bounded retry, because the Azure Monitor rules genuinely DO exist by this
+ * point and losing the record is pure data loss: `state.rules` is the ONLY
+ * place the editor's GET (and every per-rule Start/Stop/Edit/Delete handler)
+ * looks for a deployed activator's rules.
+ *
+ * Per deploy-integrity.md R6 this retries with bounded backoff and FAILS CLOSED
+ * — it reports the outcome to its caller instead of swallowing it into steps[].
+ * The merge is idempotent, matching the rules route's POST pattern
+ * (`rules.filter(r => r.id !== rule.id)` then append), so re-running an install
+ * updates each rule in place instead of duplicating it, and never discards rules
+ * a user added interactively.
+ */
+const PERSIST_ATTEMPTS = 3;
+const PERSIST_BACKOFF_MS = [150, 400];
+
+type PersistOutcome =
+  | { ok: true; attempts: number }
+  | { ok: false; attempts: number; reason: 'item-not-found' | 'write-failed'; error: string };
+
+async function persistRulesToItem(
+  input: any,
+  records: MonitorRuleRecord[],
+  steps: string[],
+): Promise<PersistOutcome> {
+  let reason: 'item-not-found' | 'write-failed' = 'write-failed';
+  let error = '';
+  for (let attempt = 1; attempt <= PERSIST_ATTEMPTS; attempt++) {
+    try {
+      const items = await itemsContainer();
+      // Re-read on EVERY attempt so a retry merges against the CURRENT document
+      // (and so an item still replicating is picked up by a later attempt).
+      const { resource: cur } = await items.item(input.cosmosItemId, input.workspaceId).read<WorkspaceItem>();
+      if (!cur) {
+        reason = 'item-not-found';
+        error = `item '${input.cosmosItemId}' not found in workspace '${input.workspaceId}' (the Cosmos read returned no document)`;
+      } else {
+        const existing: MonitorRuleRecord[] = Array.isArray((cur.state as any)?.rules) ? (cur.state as any).rules : [];
+        const nextRules = [...existing.filter((r) => !records.some((n) => n.id === r.id)), ...records];
+        const next: WorkspaceItem = {
+          ...cur,
+          state: { ...(cur.state || {}), rules: nextRules },
+          updatedAt: new Date().toISOString(),
+        };
+        await items.item(cur.id, cur.workspaceId).replace(next);
+        steps.push(
+          `Persisted ${records.length} activator rule(s) to the item state.rules` +
+            (attempt > 1 ? ` on attempt ${attempt}/${PERSIST_ATTEMPTS}` : '') +
+            ' so the editor + pane are self-sufficient.',
+        );
+        return { ok: true, attempts: attempt };
+      }
+    } catch (e: any) {
+      reason = 'write-failed';
+      error = e?.message || String(e);
+    }
+    if (attempt < PERSIST_ATTEMPTS) {
+      steps.push(`state.rules write attempt ${attempt}/${PERSIST_ATTEMPTS} did not complete (${error}); retrying.`);
+      await new Promise((r) => setTimeout(r, PERSIST_BACKOFF_MS[attempt - 1] ?? 400));
+    }
+  }
+  return { ok: false, attempts: PERSIST_ATTEMPTS, reason, error };
+}
+
 async function provisionAzureMonitor(input: any, steps: string[]): Promise<ProvisionResult> {
   const content = input.content as any;
   const rules = rulesFromContent(content);
@@ -171,33 +244,61 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
 
   const created = records.length;
 
-  // Option B persistence: write the authored MonitorRuleRecord[] back onto the
-  // Cosmos activator item's state.rules using the SAME write path the rules BFF
-  // route proves works (itemsContainer().item(id, workspaceId).read/replace).
-  // Best-effort — a persistence failure is logged into steps[] and NEVER throws,
-  // so it cannot sink the install. (Without this, a deployed activator lands
-  // with an empty state.rules and every editor/pane action reads as dead/404.)
-  if (created > 0) {
-    try {
-      const items = await itemsContainer();
-      const { resource: cur } = await items.item(input.cosmosItemId, input.workspaceId).read<WorkspaceItem>();
-      if (cur) {
-        const next: WorkspaceItem = { ...cur, state: { ...(cur.state || {}), rules: records }, updatedAt: new Date().toISOString() };
-        await items.item(cur.id, cur.workspaceId).replace(next);
-        steps.push(`Persisted ${created} activator rule(s) to the item state.rules so the editor + pane are self-sufficient.`);
-      } else {
-        steps.push('Authored alert rules but the activator item was not found to persist state.rules (editor falls back to the bundle projection).');
-      }
-    } catch (e: any) {
-      steps.push(`Authored alert rules but failed to persist state.rules (editor falls back to the bundle projection): ${e?.message || String(e)}`);
-    }
+  if (created === 0) {
+    return {
+      status: 'remediation',
+      secondaryIds: { backend: 'azure-monitor', rulesCreated: '0' },
+      gate: { reason: 'No alert rules could be created.', remediation: 'See step log for the per-rule errors above.' },
+      steps,
+    };
+  }
+
+  // Persist the authored MonitorRuleRecord[] onto the Cosmos activator item's
+  // state.rules — the SAME write path the rules BFF route's POST/PUT/PATCH/DELETE
+  // handlers use, and the ONLY place the editor's GET looks for a deployed
+  // activator's rules.
+  //
+  // #3551: this write used to be BEST-EFFORT — a failure was appended to steps[]
+  // and the returned status was computed SOLELY from whether Azure Monitor
+  // accepted the rules. A lost write therefore produced real scheduledQueryRules,
+  // a green 'created', and an editor showing NOTHING, with no error anywhere.
+  // Per deploy-integrity.md R6 the write is now retried with bounded backoff and
+  // FAILS CLOSED: the returned status reflects whether the record reached
+  // state.rules, not only whether Azure Monitor accepted the rules.
+  const persisted = await persistRulesToItem(input, records, steps);
+  const ruleNames = records.map((r) => r.azureRuleName).join(', ');
+
+  if (!persisted.ok) {
+    steps.push(
+      `Azure Monitor accepted ${created} alert rule(s) (${ruleNames}) but the record could not be written to the activator item's state.rules after ${persisted.attempts} attempt(s).`,
+    );
+    // Only what the code ESTABLISHED (deploy-integrity.md R7): the rules were
+    // created, and the write did not confirm. The cause is NOT asserted — the
+    // underlying error is carried verbatim by resolveInfraResidual.
+    return resolveInfraResidual(
+      persisted.error,
+      `Retry this install step. The retry is idempotent: the scheduledQueryRules are upserted by name, so it will not create duplicate alert rules. ` +
+        `Until the record is written the activator's rule list stays empty even though the alert rule(s) exist in Azure Monitor. ` +
+        `If the retry keeps failing, check the underlying error below and verify the Console UAMI holds the Cosmos DB Built-in Data Contributor role on the Loom Cosmos account.`,
+      {
+        reason:
+          `Created ${created} Azure Monitor alert rule(s) (${ruleNames}) but could not record them on the activator item: ` +
+          (persisted.reason === 'item-not-found'
+            ? `reading item '${input.cosmosItemId}' in workspace '${input.workspaceId}' returned no document.`
+            : `the Cosmos write did not complete.`),
+        link: 'https://learn.microsoft.com/azure/cosmos-db/nosql/security/how-to-grant-data-plane-role-based-access',
+        errorPrefix: `Authored ${created} Azure Monitor alert rule(s) but failed to persist state.rules: `,
+        resourceId: records[records.length - 1]?.azureRuleName,
+        secondaryIds: { backend: 'azure-monitor', rulesCreated: String(created), rulesPersisted: 'false' },
+        steps,
+      },
+    );
   }
 
   return {
-    status: created > 0 ? 'created' : 'remediation',
+    status: 'created',
     resourceId: records[records.length - 1]?.azureRuleName,
-    secondaryIds: { backend: 'azure-monitor', rulesCreated: String(created) },
-    ...(created === 0 ? { gate: { reason: 'No alert rules could be created.', remediation: 'See step log for the per-rule errors above.' } } : {}),
+    secondaryIds: { backend: 'azure-monitor', rulesCreated: String(created), rulesPersisted: 'true' },
     steps,
   };
 }

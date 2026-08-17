@@ -10,6 +10,11 @@
  * Cosmos activator item (state.rules). A Fabric Reflex is an OPT-IN alternative
  * selected with LOOM_ACTIVATOR_BACKEND=fabric — only then do we call
  * api.fabric.microsoft.com. No Fabric workspace is required for the default.
+ *
+ * #3551 — GET is SELF-HEALING. When state.rules is empty it reconciles against
+ * the live scheduledQueryRules before falling back to the static bundle
+ * projection, so an activator whose install created real alert rules but lost
+ * the record shows those rules (and can act on them) instead of an empty list.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -21,10 +26,10 @@ import {
 import {
   createMonitorActivatorRule, triggerMonitorActivatorRule,
   enableMonitorRule, disableMonitorRule, deleteMonitorActivatorRule,
-  isOnDemandAdxRule, appendRunHistory,
+  isOnDemandAdxRule, appendRunHistory, safeRuleName,
   type MonitorRuleRecord, type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
-import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { MonitorNotConfiguredError, MonitorError, listScheduledQueryRules, type ScheduledQueryRule } from '@/lib/azure/monitor-client';
 import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
 import { loadContentBackedItem, activatorRuleFromContent } from '../../../_lib/ai-content-fallback';
@@ -43,6 +48,103 @@ async function bundleRules(id: string, tenantId: string) {
   if (!item) return null;
   const rule = activatorRuleFromContent(item);
   return rule ? [rule] : null;
+}
+
+/**
+ * #3551 self-heal — rebuild the Loom rule records from the LIVE Azure Monitor
+ * scheduledQueryRules when `state.rules` is empty.
+ *
+ * Install authors REAL scheduledQueryRules and then records them on the item.
+ * When that record was lost (the pre-#3551 best-effort write), the alert rules
+ * still exist and still fire in Azure, but this GET returned `rules: []` and the
+ * editor showed nothing — with no way for the user to recover, since every
+ * per-rule action keys off `state.rules`. Rather than leave those items dead,
+ * re-derive the records from ARM and write them back, per
+ * .claude/rules/auto-bind-by-default.md §3 (a stale binding is repaired
+ * automatically, not shown to the user).
+ *
+ * The join key is the SAME deterministic name the provisioner authors with:
+ * `safeRuleName(item.displayName, <rule-suffix>)`, so every rule belonging to
+ * this activator starts with `safeRuleName(displayName, '')`. Two activators
+ * whose display names sanitize to the same base would share that prefix — but
+ * they already collide at WRITE time (they upsert the same azureRuleName), so
+ * this does not introduce the ambiguity, it inherits it.
+ *
+ * Nothing is invented (no-vaporware.md): every field comes from ARM, except
+ * `condition`/`action`, which ARM does not return — those are filled ONLY when
+ * the item's own bundle content carries a rule of the same name.
+ */
+function recordFromLiveRule(r: ScheduledQueryRule, bundleRule?: any): MonitorRuleRecord {
+  // createMonitorActivatorRule stamps the Loom-facing rule name into the ARM
+  // description: "Loom Activator rule '<name>'" (+ " (Eventhouse / ADX)").
+  const named = /Loom Activator rule '([^']*)'/.exec(r.description || '')?.[1];
+  // The alert SCOPE is the authoritative source backend — an ADX-scoped rule is
+  // scoped to the Kusto cluster, an LA rule to the workspace.
+  const sourceKind: 'log-analytics' | 'adx' =
+    (r.scopes || []).some((s) => /\/providers\/Microsoft\.Kusto\/clusters\//i.test(s)) ? 'adx' : 'log-analytics';
+  return {
+    id: r.name,
+    name: named || r.name,
+    query: r.query || '',
+    azureRuleName: r.name,
+    ...(bundleRule?.condition ? { condition: bundleRule.condition } : {}),
+    ...(bundleRule?.action ? { action: bundleRule.action } : {}),
+    ...(r.actionGroupIds?.[0] ? { actionGroupId: r.actionGroupIds[0] } : {}),
+    severity: typeof r.severity === 'number' ? r.severity : 3,
+    evaluationFrequency: r.evaluationFrequency || 'PT5M',
+    windowSize: r.windowSize || 'PT5M',
+    state: r.enabled ? 'Active' : 'Disabled',
+    backend: 'azure-monitor',
+    sourceKind,
+    scheduled: true,
+    // ARM's scheduledQueryRules listing does not return a creation time, so this
+    // is the RECOVERY time, not the rule's creation time — said plainly in the
+    // note rather than presented as the original (deploy-integrity.md R7).
+    createdAt: new Date().toISOString(),
+    note:
+      'Recovered from the live Azure Monitor alert rule: this rule was created by the install but its record was missing from the item. ' +
+      'The created timestamp is when it was recovered — Azure Monitor does not report the rule\'s original creation time.',
+  };
+}
+
+/**
+ * Returns the reconciled records (already written back to the item when the
+ * write succeeded), or null when there is nothing to reconcile / Azure Monitor
+ * cannot be listed. NEVER throws: a reconcile that can't run must not break a
+ * GET that would otherwise fall through to the bundle projection.
+ */
+async function reconcileFromAzureMonitor(
+  item: WorkspaceItem,
+  bundleRule: any | null,
+): Promise<{ rules: MonitorRuleRecord[]; healed: boolean } | null> {
+  try {
+    const prefix = safeRuleName(item.displayName || '', '');
+    if (!prefix || prefix === '-') return null;
+    const live = await listScheduledQueryRules();
+    const mine = live.filter((r) => typeof r.name === 'string' && r.name.startsWith(prefix));
+    if (mine.length === 0) return null;
+    const rules = mine.map((r) => {
+      const named = /Loom Activator rule '([^']*)'/.exec(r.description || '')?.[1];
+      const match = bundleRule && (bundleRule.name === named || bundleRule.name === r.name) ? bundleRule : undefined;
+      return recordFromLiveRule(r, match);
+    });
+    // Write the recovered records back so the NEXT open is a plain read and every
+    // per-rule action (Start/Stop/Edit/Delete) resolves. Best-effort here and
+    // honestly reported: the response is correct either way, and a failed write
+    // just means the next GET reconciles again.
+    let healed = false;
+    try {
+      const items = await itemsContainer();
+      const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules }, updatedAt: new Date().toISOString() };
+      await items.item(item.id, item.workspaceId).replace(next);
+      healed = true;
+    } catch { /* reported as healed:false below */ }
+    return { rules, healed };
+  } catch {
+    // Monitor not configured / not authorized / unreachable — fall through to
+    // the bundle projection. The caller's existing gates cover the write paths.
+    return null;
+  }
 }
 
 /** Honest Azure infra-gate (NOT a Fabric gate) for Monitor errors. */
@@ -114,8 +216,25 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const item = await loadContentBackedItem(id, 'activator', session.claims.oid);
     const persisted = Array.isArray((item?.state as any)?.rules) ? (item!.state as any).rules : [];
     if (persisted.length > 0) return NextResponse.json({ ok: true, rules: persisted, backend: 'azure-monitor' });
-    const fb = await bundleRules(id, session.claims.oid);
-    if (fb) return NextResponse.json({ ok: true, rules: fb, source: 'bundle', backend: 'azure-monitor' });
+
+    // state.rules is empty. Before falling back to the STATIC bundle projection
+    // (which carries no azureRuleName, so no per-rule Start/Stop/Edit/Delete can
+    // resolve), check whether the install DID create real Azure Monitor rules
+    // whose record was lost — #3551 — and heal the item from them.
+    const bundleRule = item ? activatorRuleFromContent(item) : null;
+    if (item) {
+      const reconciled = await reconcileFromAzureMonitor(item, bundleRule);
+      if (reconciled) {
+        return NextResponse.json({
+          ok: true,
+          rules: reconciled.rules,
+          source: 'azure-monitor-reconciled',
+          backend: 'azure-monitor',
+          healed: reconciled.healed,
+        });
+      }
+    }
+    if (bundleRule) return NextResponse.json({ ok: true, rules: [bundleRule], source: 'bundle', backend: 'azure-monitor' });
     return NextResponse.json({ ok: true, rules: [], backend: 'azure-monitor' });
   } catch (e: any) {
     return apiServerError(e);

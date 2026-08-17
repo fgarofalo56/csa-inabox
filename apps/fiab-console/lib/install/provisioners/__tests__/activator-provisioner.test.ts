@@ -12,6 +12,11 @@
  *   - only ADX scope set → rule authored with sourceKind 'adx', created
  *   - neither scope → honest gate naming BOTH env vars (not "no rules created")
  *   - no rules in bundle → created (no rules to author) — unchanged
+ *
+ * The second describe covers #3551: the returned status must reflect whether the
+ * authored records reached the Cosmos item's state.rules — the ONLY place the
+ * editor's GET reads a deployed activator's rules — and not merely whether Azure
+ * Monitor accepted the rules.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -114,5 +119,108 @@ describe('activatorProvisioner (Azure Monitor default)', () => {
     expect(res.status).toBe('created');
     expect(createMonitorActivatorRule).not.toHaveBeenCalled();
     expect(res.steps?.some((s) => /no alert rules to author/i.test(s))).toBe(true);
+  });
+});
+
+/**
+ * #3551 — the status must reflect whether the record reached state.rules, not
+ * only whether Azure Monitor accepted the rules.
+ *
+ * Before the fix, the state.rules write was best-effort: a failure was appended
+ * to steps[] and `status: created > 0 ? 'created' : 'remediation'` was computed
+ * SOLELY from Azure Monitor's acceptance. So a lost write produced real
+ * scheduledQueryRules, a green 'created', and an editor showing NOTHING. Every
+ * test below FAILS against that code (it returned 'created' in all three).
+ */
+describe('#3551 activatorProvisioner — state.rules persistence gates the status', () => {
+  const LA = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law';
+
+  it('Azure Monitor created the rules but EVERY Cosmos write fails → NOT a green created', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+    replace.mockRejectedValue(new Error('Request timed out'));
+
+    const res = await activatorProvisioner(input());
+
+    // The core regression guard: install must not report success.
+    expect(res.status).not.toBe('created');
+    expect(res.status).not.toBe('exists');
+    // The write was genuinely retried, not attempted once.
+    expect(replace).toHaveBeenCalledTimes(3);
+    // The receipt still names the REAL alert rules that exist in Azure, and
+    // records that they are not persisted (deploy-integrity.md R7 — say only
+    // what was established).
+    expect(res.secondaryIds?.rulesCreated).toBe('1');
+    expect(res.secondaryIds?.rulesPersisted).toBe('false');
+    const detail = `${res.error || ''} ${res.gate?.reason || ''} ${res.gate?.remediation || ''}`;
+    expect(detail).toContain('Request timed out');
+    expect(res.steps?.some((s) => /could not be written to the activator item's state\.rules/i.test(s))).toBe(true);
+  });
+
+  it('a permission-shaped write failure classifies as a retryable remediation gate', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+    replace.mockRejectedValue(new Error('Forbidden (403): request is not authorized'));
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('remediation');
+    expect(res.gate?.reason).toMatch(/could not record them on the activator item/i);
+    // The remediation is an action, and it states the retry is safe to run.
+    expect(res.gate?.remediation).toMatch(/idempotent/i);
+  });
+
+  it('the item read never resolving a document → remediation, not created', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+    read.mockResolvedValue({ resource: undefined } as any);
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('remediation');
+    expect(replace).not.toHaveBeenCalled();
+    expect(res.gate?.reason).toMatch(/returned no document/i);
+  });
+
+  it('a TRANSIENT write failure is recovered by the retry → created', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+    replace
+      .mockRejectedValueOnce(new Error('503 Service Unavailable'))
+      .mockResolvedValue({} as any);
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('created');
+    expect(replace).toHaveBeenCalledTimes(2);
+    expect(res.secondaryIds?.rulesPersisted).toBe('true');
+    expect(res.steps?.some((s) => /on attempt 2\/3/.test(s))).toBe(true);
+  });
+
+  it('the persisted document carries the authored records on state.rules', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('created');
+    const written = replace.mock.calls[0][0] as any;
+    expect(written.state.rules).toHaveLength(1);
+    expect(written.state.rules[0].azureRuleName).toBe('DL-Shim-Activator-rule');
+  });
+
+  it('re-running the install REPLACES its own rule instead of duplicating it', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = LA;
+    // The item already carries this install's rule plus one the user added.
+    read.mockResolvedValue({
+      resource: {
+        id: 'act-1', workspaceId: 'w',
+        state: { rules: [{ id: 'r1', name: 'stale' }, { id: 'user-rule', name: 'added by hand' }] },
+      },
+    } as any);
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('created');
+    const written = replace.mock.calls[0][0] as any;
+    expect(written.state.rules).toHaveLength(2);
+    // The user's own rule survives; the install's rule is updated in place.
+    expect(written.state.rules.map((r: any) => r.id).sort()).toEqual(['r1', 'user-rule']);
+    expect(written.state.rules.find((r: any) => r.id === 'r1').name).toBe('DL-Shim refresh SLA breach');
   });
 });
