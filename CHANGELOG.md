@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.8...csa-inabox-v0.98.9) (2026-08-17)
+
+
+### Bug Fixes
+
+* **ux:** five destructive warehouse controls stayed live on an unsaved item — the gate ENABLED Start ([#3669](https://github.com/fgarofalo56/csa-inabox/issues/3669)) ([#3672](https://github.com/fgarofalo56/csa-inabox/issues/3672)) ([1d684f1](https://github.com/fgarofalo56/csa-inabox/commit/1d684f1d31de0ba545aabbe59b678be68246e099))
+
 ## [0.98.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.7...csa-inabox-v0.98.8) (2026-08-17)
 
 
