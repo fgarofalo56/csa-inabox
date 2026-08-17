@@ -23,11 +23,20 @@
  * one.
  *
  * THE FIX IS THE CONVENTION ALREADY IN THE REPO, not a new one:
- * `app/api/adx/_shared.ts::guardAdxRequest` — used by thirteen `/api/adx/*`
- * routes — resolves the target database FROM AN OWNER-CHECKED ITEM
- * (`loadKustoItem(itemId, 'kql-database', oid)` → `resolveDatabase(item)`).
- * This module is the same contract for the `items/<type>/[id]/**` family, where
- * the item id arrives as a route param rather than `?id=`:
+ * `app/api/adx/_shared.ts::guardAdxRequest` — used by the `/api/adx/*`
+ * navigator routes — resolves the target database FROM AN ITEM rather than from
+ * the request body. This module is the same contract for the
+ * `items/<type>/[id]/**` family, where the item id arrives as a route param
+ * rather than `?id=`:
+ *
+ * ONE CORRECTION TO THAT LINEAGE, recorded because this module was written
+ * citing the sibling as already correct. At the time, `guardAdxRequest` did NOT
+ * actually authorize: it called `loadKustoItem(itemId,'kql-database',oid)` and
+ * passed the result to `resolveDatabase` WITHOUT a null check, so an item the
+ * caller could not reach degraded to `defaultDatabase()` instead of refusing.
+ * That was GHSA-v2g8-gp3r-rg4r finding 1, fixed 2026-08-17 by giving the
+ * sibling the same two layers described below. So the convention is real, but
+ * this module implemented it first — the citation ran the other way around.
  *
  *   LAYER 1 — AUTHORIZE THE CALLER against the route item.
  *     {@link guardAdxItemRequest} runs the canonical `authorizeItemWorkspace`
