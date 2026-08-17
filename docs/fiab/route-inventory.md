@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 676 |
-| Owner-scoped | 645 |
+| Session-only | 675 |
+| Owner-scoped | 646 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -1074,7 +1074,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/[type]/[id]/shortcuts/[name]/route.ts` | PATCH DELETE | owner-scoped |  | — |
 | `items/[type]/[id]/shortcuts/[name]/test/route.ts` | POST | owner-scoped |  | — |
 | `items/[type]/[id]/shortcuts/route.ts` | GET POST | owner-scoped |  | — |
-| `items/[type]/[id]/sql-security/route.ts` | GET POST | session-only | ● | Azure SQL, Synapse SQL |
+| `items/[type]/[id]/sql-security/route.ts` | GET POST | owner-scoped | ● | Azure SQL, Synapse SQL |
 | `items/[type]/[id]/statistics/route.ts` | GET POST | owner-scoped | ● | Databricks, Synapse SQL |
 | `items/[type]/[id]/versions/[versionId]/restore/route.ts` | POST | owner-scoped | ● | Cosmos |
 | `items/[type]/[id]/versions/[versionId]/route.ts` | GET | owner-scoped | ● | — |
