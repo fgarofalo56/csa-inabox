@@ -19,10 +19,19 @@
  * ghsa-shared-backend-dispatchers.test.ts`), which is where the authorization
  * assertions and their mutation receipts live.
  *
- * `databricks-sql-warehouse/[id]/clone` is UNCHANGED by that pass and is still
- * called without a ctx, deliberately: it is one of the routes left on the
- * ledger, and a test that quietly started passing a ctx would read as coverage
- * it does not have.
+ * `databricks-sql-warehouse/[id]/clone` WAS left on the ledger by that pass and
+ * is now FIXED too (GHSA-v2g8-gp3r-rg4r, sixth pass): it runs `withSession` +
+ * `guardSynapseItemRequest` like its twin `ctas`, so it takes an AUTHORIZED ITEM
+ * rather than an id and this file now supplies it a route `ctx`.
+ *
+ * THAT CTX WAS ADDED TO MATCH THE ROUTE, NOT TO KEEP THIS FILE GREEN. Stated
+ * because the inverse is the failure mode here: a test edited to keep passing
+ * against a WEAKENED route is worse than a red test. The route was not loosened
+ * — the ownership guard is unconditional and the DENIED paths are asserted in
+ * `databricks-sql-warehouse/__tests__/ghsa-v2g8-warehouse-lifecycle.test.ts`,
+ * which is where the authorization assertions and their mutation receipts live.
+ * This file remains the CONTRACT test: which SQL is emitted, and what is
+ * returned.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -130,13 +139,13 @@ describe('POST /databricks-sql-warehouse/[id]/ctas', () => {
 describe('POST /databricks-sql-warehouse/[id]/clone', () => {
   it('401 without session', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'a', target: 'b' }));
+    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'a', target: 'b' }), swCtx);
     expect(res.status).toBe(401);
   });
 
   it('400 when source/target missing', async () => {
     (getSession as any).mockReturnValue(SESSION);
-    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'a' }));
+    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'a' }), swCtx);
     expect(res.status).toBe(400);
   });
 
@@ -146,7 +155,7 @@ describe('POST /databricks-sql-warehouse/[id]/clone', () => {
       columns: ['source_table_size', 'source_num_of_files', 'num_copied_files'],
       rows: [[1024, 7, 0]], rowCount: 1, executionMs: 30, truncated: false,
     });
-    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'main.s.o', target: 'main.d.o', cloneType: 'SHALLOW' }));
+    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'main.s.o', target: 'main.d.o', cloneType: 'SHALLOW' }), swCtx);
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.ok).toBe(true);
@@ -163,7 +172,7 @@ describe('POST /databricks-sql-warehouse/[id]/clone', () => {
       columns: ['source_num_of_files', 'num_copied_files'],
       rows: [[7, 7]], rowCount: 1, executionMs: 99, truncated: false,
     });
-    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'main.s.o', target: 'main.d.o', cloneType: 'DEEP', replace: true }));
+    const res = await dbxClonePOST(bodyReq({ warehouseId: 'w', source: 'main.s.o', target: 'main.d.o', cloneType: 'DEEP', replace: true }), swCtx);
     const j = await res.json();
     expect(j.cloneType).toBe('DEEP');
     expect(j.numCopiedFiles).toBe(7);
