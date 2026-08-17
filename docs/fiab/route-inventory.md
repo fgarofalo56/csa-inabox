@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1680 |
 | Public (no session) | 58 |
-| Session-only | 672 |
-| Owner-scoped | 649 |
+| Session-only | 669 |
+| Owner-scoped | 652 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -1320,7 +1320,7 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/databricks-sql-warehouse/[id]/create/route.ts` | POST | session-only | ● | Databricks, Synapse |
 | `items/databricks-sql-warehouse/[id]/ctas/route.ts` | POST | owner-scoped | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/delete/route.ts` | POST | session-only | ● | Databricks, Synapse |
-| `items/databricks-sql-warehouse/[id]/edit/route.ts` | POST | session-only |  | Databricks |
+| `items/databricks-sql-warehouse/[id]/edit/route.ts` | POST | owner-scoped |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |
 | `items/databricks-sql-warehouse/[id]/model/route.ts` | GET POST DELETE | owner-scoped |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/query-history/route.ts` | GET | session-only |  | Databricks |
@@ -1328,8 +1328,8 @@ Full statement of limits: `scripts/ci/_route-auth-scope.mjs` header.
 | `items/databricks-sql-warehouse/[id]/query/route.ts` | POST | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/schema/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/script-out/route.ts` | GET | session-only |  | Databricks |
-| `items/databricks-sql-warehouse/[id]/start/route.ts` | POST | session-only |  | Databricks |
-| `items/databricks-sql-warehouse/[id]/state/route.ts` | GET POST | session-only |  | Databricks |
+| `items/databricks-sql-warehouse/[id]/start/route.ts` | POST | owner-scoped |  | Databricks |
+| `items/databricks-sql-warehouse/[id]/state/route.ts` | GET POST | owner-scoped |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/warehouses/route.ts` | GET | session-only |  | Databricks, Synapse |
 | `items/dataflow/[id]/refresh/route.ts` | POST | owner-scoped |  | — |
 | `items/dataflow/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos |
