@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.4...csa-inabox-v0.98.5) (2026-08-17)
+
+
+### Bug Fixes
+
+* **security:** three [type]/[id] routes ran the Console MI at caller-named Databricks coordinates, behind allowlist reasons that were true of a sibling branch (GHSA-v8r7-c2p5-mjf2) ([#3655](https://github.com/fgarofalo56/csa-inabox/issues/3655)) ([ca5d704](https://github.com/fgarofalo56/csa-inabox/commit/ca5d7049b062938c9fc5c3fadf780107a50bf946))
+
 ## [0.98.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.3...csa-inabox-v0.98.4) (2026-08-17)
 
 
