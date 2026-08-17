@@ -314,8 +314,19 @@ test('the B1/B2 paths are ALIVE, not dead code', () => {
     ].join('\n'),
   });
   assert.equal(unknownFired.result.unknowns.length, 1);
-  assert.match(unknownFired.result.unknowns[0].identifier, /brandnew\.azure\.com/);
-  assert.ok(unknownFired.result.unknowns[0].module.includes('new-svc-client'), 'the failure must NAME the module');
+  // EXACT, not a substring match. `assert.match(id, /brandnew\.azure\.com/)` is
+  // the weaker assertion and CodeQL is right to flag the shape
+  // (js/regex/missing-regexp-anchor): it passes on any string that merely
+  // CONTAINS the host, so a derivation bug that wrapped or concatenated the
+  // identifier would still satisfy the control. Equality also pins two things
+  // the regex never checked — the `host:` prefix, and that `canonicalHost`
+  // leaves an UNKNOWN host un-reduced, which is what makes B1 able to name it.
+  assert.equal(unknownFired.result.unknowns[0].identifier, 'host:x.brandnew.azure.com');
+  assert.equal(
+    unknownFired.result.unknowns[0].module,
+    'apps/fiab-console/lib/azure/new-svc-client.ts',
+    'the failure must NAME the module',
+  );
 
   const b2Fired = analyze({
     'apps/fiab-console/lib/azure/opaque-client.ts':
