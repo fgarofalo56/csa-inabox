@@ -26,9 +26,85 @@
  * Neither path touches a Fabric / Power BI host. The receipt carries the
  * server-assigned alert id from the live response, satisfying the acceptance
  * gate ("receipt shows the created alert id from the live response").
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * GHSA-v8r7-c2p5-mjf2 — THE HOLE THIS FILE USED TO BE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ALL FOUR VERBS took `_ctx` — the underscore is the original author's own
+ * signal that the route params were deliberately unread — and `getSession()` was
+ * the entire authorization on each. `alertId` came off the QUERY STRING on PATCH
+ * and DELETE and went straight to `updateDbxAlert` / `trashDbxAlert` (Commercial
+ * / GCC) or `deleteScheduledQueryRule` (Gov).
+ *
+ * So any authenticated session could LIST, CREATE, MODIFY and — the one that
+ * matters most — DELETE alert rules by id, as the Console identity. Deleting a
+ * monitoring rule is a durable, cross-tenant effect and the hardest of this
+ * advisory's findings to notice after the fact: nothing fails, an alert simply
+ * never fires again. It is also the only entry in this family that carries WRITE
+ * and DELETE rather than disclosure alone.
+ *
+ * WHY NO CONTROL SAW IT — and why the allowlist entry is DELETED rather than
+ * reworded. `check-route-guards.mjs` carried this path with
+ *
+ *     "analytics alerts over a shared Azure backend resolved by item type"
+ *
+ * Nothing here is resolved by item type. The backend split is
+ * `isGovCloud()` — an ENVIRONMENT read — and the alert the request acts on is
+ * named by `?alertId=`. The reason described a mechanism the file does not
+ * contain, and it survived because it reads like the four sentences either side
+ * of it in the same allowlist block. Rewording would have preserved exactly that
+ * failure, so the entry is gone and the route now passes CHECK 2 on a real guard
+ * signal.
+ *
+ * ── WHAT IS AND IS NOT CLOSED ───────────────────────────────────────────────
+ *
+ * LAYER 1 — OWN THE ROUTE ITEM, on every verb. `guardSynapseItemRequest` is the
+ *   backend-agnostic Layer-1 guard the two siblings in this directory
+ *   (`[id]/optimize`, `[id]/statistics`) adopted for GHSA-v2g8-gp3r-rg4r:
+ *   session → the canonical `authorizeItemWorkspace` ladder (owner →
+ *   tenant-admin → shared-ACL) resolved FROM THE ITEM → a fail-closed item load.
+ *   404-not-403. The GET is read-scoped (`allowReadRoles`); POST, PATCH and
+ *   DELETE are write-scoped, so a read-only Viewer of a shared workspace can see
+ *   the alert list and cannot touch it.
+ *
+ * LAYER 3 — NOT PRESENT, and named rather than implied. `alertId` stays
+ *   caller-named because no item→alert binding exists in this tree: neither
+ *   `createDbxAlert` nor `upsertScheduledQueryRule` stamps the owning Loom item
+ *   onto the resource it creates, and nothing persists the returned id to item
+ *   state. Both backends ARE bounded to Loom's own estate by construction —
+ *   `dbxFetch` targets `LOOM_DATABRICKS_HOSTNAME`, and every Monitor call is
+ *   composed against `LOOM_ALERT_RG || LOOM_ADMIN_RG` inside
+ *   `monitor-client.ts` (`:1391`, and it THROWS when neither is set) — so no
+ *   other subscription or resource group is reachable; what survives is
+ *   within-estate, cross-tenant.
+ *
+ *   RESIDUAL, RECORDED: after this change an authenticated caller who owns ANY
+ *   item of the route's `[type]` can still list and delete any alert in this
+ *   deployment. LAYER 1 IS A FLOOR HERE, NOT A BOUND — the same ledger entry
+ *   `[id]/optimize` and `[id]/statistics` carry — AND THE FLOOR IS SELF-SERVICE:
+ *   `createOwnedItem` (`_lib/item-crud.ts:423`) lets any session holder create a
+ *   qualifying item in a workspace they own, so the reachable attacker
+ *   population goes from "any authenticated session" to "any authenticated
+ *   session, plus one POST". Attributable and refused for a read-only member of
+ *   someone else's workspace, yes; meaningfully smaller, no.
+ *
+ *   Closing it needs the server-attested ownership marker
+ *   `_lib/databricks-resource-binding.ts` already models for jobs and DLT
+ *   pipelines (`settings.tags['loom_item_id']`), extended to SQL alerts and to
+ *   Monitor rule tags, PLUS an adoption path for every alert created before that
+ *   marker existed. It specifically CANNOT be an item-state binding: that same
+ *   module's header (`:12-27`) records that `PATCH /api/cosmos-items/[type]/[id]`
+ *   replaces `state` WHOLESALE from the request body, so a state-anchored
+ *   binding is writable by the caller it is meant to bound. That is a design
+ *   change with a brownfield migration and is deliberately not improvised inside
+ *   a security fix — the advisory's own remediation note warns against exactly
+ *   that ("a scope-narrowing fix is only as strong as the write path into the
+ *   scope").
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
+import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import {
   databricksConfigGate,
@@ -98,12 +174,118 @@ const monitorGateBodies: MonitorGateBodies = {
     }),
 };
 
+/**
+ * The 404 body for an item the caller cannot reach — naming BOTH causes and
+ * asserting NEITHER.
+ *
+ * `authorizeItemWorkspace` denies both for "no such item" and for "exists, but
+ * your workspace role is read-only", and this route cannot tell them apart
+ * without a second read — which is the cross-tenant existence probe 404-not-403
+ * exists to prevent. So the status stays 404 and the message states the
+ * disjunction rather than picking a side (`deploy-integrity.md` R7).
+ */
+const ITEM_UNREACHABLE =
+  'This item is not available to you. Either it does not exist, or your role in its ' +
+  'workspace is read-only — creating, editing and deleting alert rules requires write ' +
+  'access. Ask a workspace owner for a Contributor-or-higher role if you need them.';
+
+/**
+ * The unsaved-item honest gate, returned INSTEAD of Layer 1's 404 and before the
+ * guard runs.
+ *
+ * REACHABLE FROM BOTH CALL SITES, checked rather than assumed. `WarehouseAlerts`
+ * is mounted twice and its trigger is unconditional in both:
+ *
+ *   `databricks/sql-warehouse-editor.tsx:1943` — ribbon action `:920` is
+ *     `onClick: () => setAlertsOpen(true)`; that editor has NO `isNew` guard
+ *     anywhere in the file.
+ *   `phase3/warehouse-editor.tsx:914`          — ribbon action `:454` is the
+ *     same unconditional `setAlertsOpen(true)`, even though that editor DOES
+ *     compute `isNew` (`:130`) and uses it to gate its Monitoring and Time-travel
+ *     tabs (`:718`, `:723`). The Alerts dialog was simply never included.
+ *
+ * The dialog fetches the moment it opens (`useEffect(() => { if (open) void
+ * refresh(); }`), and the panel paints a non-gated `!ok` as a RED "Could not load
+ * alerts" banner — a red error state on a freshly created item, which
+ * `ux-baseline.md` forbids, reached in two clicks from a create page. So the
+ * route answers with its OWN gate shape (200 + `gated:true`, a warning
+ * MessageBar) and a `code` the panel titles truthfully.
+ *
+ * EXACT-MATCH ONLY. Real ids are `crypto.randomUUID()`, so this downgrades
+ * nothing; a prefix or substring test would let a real id skip ownership.
+ */
+function unsavedItemGate(): NextResponse {
+  return NextResponse.json({
+    ok: false,
+    gated: true,
+    code: 'unsaved_item',
+    error:
+      'Save this item first — alert rules are created and managed in the name of the ' +
+      'saved item, and an unsaved item has no owner to check them against yet.',
+    gate: {
+      reason: 'Alert rules are authorized against the saved item they belong to.',
+      remediation:
+        'Save this item, then reopen Alerts. No Microsoft Fabric required.',
+    },
+  }, { status: 200 });
+}
+
+/** Authorized to proceed, or the response to return verbatim. */
+type Authorized = { ok: true } | { ok: false; res: NextResponse };
+
+/**
+ * LAYER 1 (ownership) for every verb. LAYER 0 (authentication) is the
+ * `withSession` wrapper on the exports below — see the GET for why it is the
+ * wrapper and not a line in here.
+ *
+ * `read` is passed ONLY by the GET; the three mutating verbs must stay
+ * write-scoped, which is why this takes the flag rather than defaulting it.
+ */
+async function authorizeAlertsRequest(
+  params: { type: string; id: string },
+  opts: { read?: boolean } = {},
+): Promise<Authorized> {
+  const { type, id } = params;
+  if (id === UNSAVED_ITEM_ID) return { ok: false, res: unsavedItemGate() };
+
+  const guard = await guardSynapseItemRequest({
+    itemId: id,
+    itemType: type,
+    notFound: ITEM_UNREACHABLE,
+    ...(opts.read ? { allowReadRoles: true } : {}),
+  });
+  if (guard.res) return { ok: false, res: guard.res };
+  return { ok: true };
+}
+
 // ============================================================
 // GET — list alerts for the active cloud boundary
 // ============================================================
-export async function GET(_req: NextRequest, _ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+/**
+ * LAYER 0 — AUTHENTICATION, as the route-toolkit `withSession` wrapper rather
+ * than a line inside each handler, and that placement is the fix for a defect
+ * review MEASURED on the first version of this PR.
+ *
+ * `guardSynapseItemRequest` reads the session itself, so the first version
+ * relied on it for authentication too — but the `id === 'new'` gate sits ABOVE
+ * the guard, so `GET/POST/PATCH/DELETE …/new` all answered **200 to a caller
+ * with no cookie**. An unauthenticated DELETE returning 200 is a finding to any
+ * scanner whatever its body contains, and on `main` all four verbs opened with
+ * `getSession()` → 401. `apps/fiab-console` has NO `middleware.ts`, so the route
+ * handler is the ONLY enforcement point.
+ *
+ * `withSession` rather than a hand-rolled prologue: the handler is an ARGUMENT
+ * so the check cannot be dropped while the name stays; `apiUnauthorized()` is
+ * byte-identical to the pre-fix envelope (pinned by a spec); it keeps
+ * `check-route-toolkit`'s ratchet satisfied (a hand-rolled `getSession` prologue
+ * put all three routes straight back into it — which is how this was caught);
+ * and an unexpected throw becomes a safe JSON 500 rather than Next's HTML 500.
+ */
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { params }) => {
+  // READ-ONLY — shared read roles admitted.
+  const auth = await authorizeAlertsRequest(params, { read: true });
+  if (!auth.ok) return auth.res;
 
   if (isGovCloud()) {
     try {
@@ -155,14 +337,15 @@ export async function GET(_req: NextRequest, _ctx: { params: Promise<{ type: str
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 // ============================================================
 // POST — create an alert (returns the live alert id in the receipt)
 // ============================================================
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
+  // CREATES a real alert rule — write-scoped, no allowReadRoles.
+  const auth = await authorizeAlertsRequest(params);
+  if (!auth.ok) return auth.res;
 
   const body = (await req.json().catch(() => ({}))) as AlertBody;
   const name = String(body.name || '').trim();
@@ -230,14 +413,15 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ type: str
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 // ============================================================
 // PATCH — update an existing alert
 // ============================================================
-export async function PATCH(req: NextRequest, _ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
+  // MODIFIES a real alert rule — write-scoped, no allowReadRoles.
+  const auth = await authorizeAlertsRequest(params);
+  if (!auth.ok) return auth.res;
   const alertId = req.nextUrl.searchParams.get('alertId');
   if (!alertId) return NextResponse.json({ ok: false, error: 'alertId required' }, { status: 400 });
 
@@ -285,14 +469,16 @@ export async function PATCH(req: NextRequest, _ctx: { params: Promise<{ type: st
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 // ============================================================
 // DELETE — remove / trash an alert
 // ============================================================
-export async function DELETE(req: NextRequest, _ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
+  // DELETES a real alert rule — the durable, hardest-to-notice effect in this
+  // file. Write-scoped, no allowReadRoles.
+  const auth = await authorizeAlertsRequest(params);
+  if (!auth.ok) return auth.res;
   const alertId = req.nextUrl.searchParams.get('alertId');
   if (!alertId) return NextResponse.json({ ok: false, error: 'alertId required' }, { status: 400 });
 
@@ -313,4 +499,4 @@ export async function DELETE(req: NextRequest, _ctx: { params: Promise<{ type: s
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
   }
-}
+});

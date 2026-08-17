@@ -94,6 +94,16 @@ export function UcSecurityPanel({ itemType, itemId, warehouseId, catalog: catalo
   const [sec, setSec] = useState<UcState | null>(null);
   const [loading, setLoading] = useState(false);
   const [gate, setGate] = useState<string | null>(null);
+  /**
+   * GHSA-v8r7-c2p5-mjf2 — the route's gate discriminator. `'unsaved_item'` is
+   * returned for `[id] === 'new'`, which this panel's ONE mount
+   * (`sql-warehouse-editor.tsx`, the "Column & row security" dialog) can reach:
+   * its ribbon trigger does not condition on the item being saved. Titled
+   * separately because "Configuration required" would be a false statement
+   * about it, and a 404 here would paint the red `loadError` banner on a
+   * freshly created item.
+   */
+  const [gateCode, setGateCode] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tab, setTab] = useState<UcTab>('mask');
 
@@ -110,11 +120,11 @@ export function UcSecurityPanel({ itemType, itemId, warehouseId, catalog: catalo
   }, [warehouseId, catalog, schema, table]);
 
   const reload = useCallback(async () => {
-    setLoading(true); setLoadError(null); setGate(null);
+    setLoading(true); setLoadError(null); setGate(null); setGateCode(null);
     try {
       const r = await fetch(`${base}${qs}`);
       const j = await r.json();
-      if (j.gated) { setGate(j.error); setSec(null); }
+      if (j.gated) { setGate(j.error); setGateCode(j.code || null); setSec(null); }
       else if (!j.ok) { setLoadError(j.error || 'failed to load UC security state'); setSec(null); }
       else setSec(j as UcState);
     } catch (e: any) {
@@ -158,7 +168,9 @@ export function UcSecurityPanel({ itemType, itemId, warehouseId, catalog: catalo
       {gate && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>Configuration required</MessageBarTitle>
+            <MessageBarTitle>
+              {gateCode === 'unsaved_item' ? 'Save this item first' : 'Configuration required'}
+            </MessageBarTitle>
             {gate}
           </MessageBarBody>
         </MessageBar>

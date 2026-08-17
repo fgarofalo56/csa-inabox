@@ -255,6 +255,15 @@ export function WarehouseMonitoringTab({
         </MessageBar>
       )}
 
+      {data && !data.ok && data.code === 'unsaved_item' && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Save this item first</MessageBarTitle>
+            {data.error || 'Monitoring activates once the item is saved.'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
       {data && !data.ok && data.code === 'pool_paused' && (
         <MessageBar intent="warning">
           <MessageBarBody>
