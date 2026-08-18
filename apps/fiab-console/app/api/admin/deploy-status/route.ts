@@ -33,6 +33,7 @@ import { withCapability } from '@/lib/api/route-toolkit';
 import { readBuildMarker, resolveCurrentVersion } from '@/lib/updates/current-version';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+import type { LoomCloud } from '@/lib/azure/cloud-boundary';
 import {
   classifyDeployPath,
   classifyEstateDrift,
@@ -216,11 +217,11 @@ async function compareSha(
  * It is never rendered as current and never as behind (deploy-integrity.md R7).
  */
 async function computeFleet(
-  cloud: string,
+  cloud: LoomCloud,
   selfBuild: { sha?: string; stamp?: string },
   selfDrift: ReturnType<typeof classifyEstateDrift>,
 ): Promise<FleetEstate[]> {
-  const selfId = estateIdForCloud(cloud as any);
+  const selfId = estateIdForCloud(cloud);
 
   return Promise.all(LOOM_ESTATES.map(async (endpoint): Promise<FleetEstate> => {
     const isSelf = endpoint.id === selfId;

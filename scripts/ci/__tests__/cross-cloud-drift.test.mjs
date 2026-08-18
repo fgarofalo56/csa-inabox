@@ -59,6 +59,7 @@ import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { classifyEstate } from '../check-deploy-staleness.mjs';
 import {
   CLOUD_ESTATES,
   GIT_OBJECT_ID,
@@ -583,17 +584,98 @@ test('MUTATION PROOF — a 200 carrying an HTML error page is UNKNOWN, not curre
   });
 });
 
+test('an estate AHEAD of the ref is reported as ahead, not accused of a force-push', () => {
+  // R7 REGRESSION TEST (found live during review). The old message asserted the
+  // build "was built from a branch, a revert, or a force-pushed history" for any
+  // non-ancestor — three causes it never verified — while the cause that
+  // actually fires, "the estate is ahead of the ref I compared against", was not
+  // in the list. Commercial reported divergent while running origin/main's tip.
+  //
+  // Compare an OLD commit as the ref against a NEWER live sha: the live build is
+  // then genuinely ahead of the ref, which is the shape a not-yet-fetched ref
+  // produces.
+  const r = resolveAgainstGit(REPO_FIXTURE.head, {
+    cwd: REPO_FIXTURE.dir,
+    branch: REPO_FIXTURE.shas[0],
+  });
+  assert.equal(r.error, null, `expected the head sha to resolve, got ${r.error}`);
+  assert.equal(r.ancestor, false, 'HEAD is not an ancestor of the first commit');
+  assert.equal(r.aheadOfRef, true, 'the other direction must be measured, not assumed');
+
+  const verdict = classifyEstate({
+    name: 'Commercial', liveSha: REPO_FIXTURE.head,
+    ancestor: r.ancestor, aheadOfRef: r.aheadOfRef,
+    commitsBehind: r.commitsBehind, ageDays: r.ageDays,
+    behindGraceMinutes: 90, maxAgeDays: 7,
+  });
+  assert.equal(verdict.state, 'ahead');
+  assert.equal(verdict.stale, true, 'ahead is still not "running main"');
+  assert.match(verdict.detail, /is AHEAD of the compared ref/);
+  // The three unverified causes must be gone.
+  assert.doesNotMatch(verdict.detail, /force-pushed/);
+  assert.doesNotMatch(verdict.detail, /a revert/);
+});
+
+test('a GENUINELY divergent build says so without enumerating causes', () => {
+  // Neither direction is an ancestor. The message may say the histories
+  // diverged — that IS established — but must still not invent a mechanism.
+  const verdict = classifyEstate({
+    name: 'Commercial', liveSha: 'abcdef1234567890',
+    ancestor: false, aheadOfRef: false,
+    commitsBehind: null, ageDays: 1,
+    behindGraceMinutes: 90, maxAgeDays: 7,
+  });
+  assert.equal(verdict.state, 'divergent');
+  assert.equal(verdict.stale, true);
+  assert.match(verdict.detail, /genuinely diverged/);
+  assert.doesNotMatch(verdict.detail, /force-pushed/);
+});
+
 // ---------------------------------------------------------------------------
 // the workflow that runs it
 // ---------------------------------------------------------------------------
 
+/**
+ * Everything about a workflow body that would stop the alarm from failing.
+ * PURE, over the workflow TEXT, so these assertions can be mutation-proved
+ * against sabotaged fixtures instead of only ever seeing a compliant file.
+ *
+ * COMMENTS DO NOT COUNT, and the first cut getting that wrong is worth
+ * recording: the workflow's own header explains that it uses none of these
+ * constructs, so scanning the raw text matched its PROSE and failed a compliant
+ * file. A check that cannot tell an executed line from a line describing one is
+ * the guard-keyed-to-the-pattern shape.
+ */
+function workflowFailureModes(text) {
+  const executable = text
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+  const problems = [];
+  if (/continue-on-error/.test(executable)) problems.push('continue-on-error');
+  if (/\|\|\s*true/.test(executable)) problems.push('|| true');
+  if (/2>\s*\/dev\/null/.test(executable)) problems.push('2>/dev/null');
+  // THE ONE THE WORKFLOW WARNS ABOUT MOST, AND THE ONE THIS TEST ORIGINALLY
+  // COULD NOT SEE. `node … | tee -a "$GITHUB_STEP_SUMMARY"` reports TEE's exit
+  // status, not the checker's: GitHub's default shell is `bash -e {0}` and sets
+  // no pipefail. The workflow spends twelve lines explaining exactly that, and
+  // until now nothing asserted it — so the protection was a comment. A reviewer
+  // applied precisely that mutation and this suite stayed green at 22/22.
+  if (/check-cross-cloud-drift\.mjs[^\n]*\|/.test(executable)) problems.push('piped invocation');
+  // The captured status must actually be re-raised. Capturing `rc` and never
+  // exiting with it is the same defect wearing a different hat.
+  if (!/exit "\$rc"/.test(executable)) problems.push('missing exit "$rc"');
+  // The estate comparison is a commit distance, so a shallow checkout would
+  // make every row UNKNOWN for a reason unrelated to either estate.
+  if (!/fetch-depth:\s*0/.test(executable)) problems.push('missing fetch-depth: 0');
+  // A scheduled workflow that does not run the check is the "control that does
+  // not run at all" shape.
+  if (!/node scripts\/ci\/check-cross-cloud-drift\.mjs/.test(executable)) problems.push('does not invoke the checker');
+  return problems;
+}
+
 test('the alarm workflow exists, is scheduled off-minute, and can fail', () => {
   const text = readFileSync(WORKFLOW, 'utf8');
-
-  // It must actually invoke the control. A scheduled workflow that does not run
-  // the check is the "control that does not run at all" shape.
-  assert.match(text, /node scripts\/ci\/check-cross-cloud-drift\.mjs/,
-    'the workflow must invoke the checker');
 
   // Scheduled, and NOT on the top or half hour: GitHub drops and delays
   // schedules that pile onto the scheduler surge, and a dropped run is a
@@ -607,30 +689,40 @@ test('the alarm workflow exists, is scheduled off-minute, and can fail', () => {
     assert.notEqual(minute, '30', `cron "${c}": minute 30 lands in the half-hour scheduler surge`);
   }
 
-  // NOTHING MAY DISCARD THE RESULT. Every one of these has been used in this
-  // repo to turn a failing control into a green step.
-  //
-  // COMMENTS DO NOT COUNT, and the first cut of this assertion getting that
-  // wrong is worth recording: the workflow's own header explains that it uses
-  // none of these, so scanning the raw text matched its PROSE and failed a
-  // compliant file. A guard that cannot tell an executed line from a line
-  // describing it is the same defect as one keyed to the unsafe pattern —
-  // check-ci-guard-reachability.mjs carries this lesson verbatim. So strip
-  // whole-line comments first and assert on what actually runs.
-  const executable = text
-    .split('\n')
-    .filter((l) => !/^\s*#/.test(l))
-    .join('\n');
-  assert.doesNotMatch(executable, /continue-on-error/, 'continue-on-error would make the alarm unable to fail');
-  assert.doesNotMatch(executable, /\|\|\s*true/, 'a `|| true` would swallow the exit code');
-  assert.doesNotMatch(executable, /2>\s*\/dev\/null/, 'discarding stderr is how a false claim gets manufactured');
-  // The strip must not have eaten the whole file — otherwise the three
-  // assertions above would pass over an empty string, which is the vacuous-green
-  // shape this suite is built to avoid.
-  assert.match(executable, /node scripts\/ci\/check-cross-cloud-drift\.mjs/,
-    'the comment strip must leave the executable body intact');
-
-  // The estate comparison is a commit distance, so a shallow checkout would make
-  // every row UNKNOWN. Asserted rather than assumed.
-  assert.match(text, /fetch-depth:\s*0/, 'the check needs full history to compute commit distances');
+  assert.deepEqual(workflowFailureModes(text), [],
+    'the committed workflow must carry none of the constructs that stop a step failing');
 });
+
+test('CONTROL — the can-fail check DETECTS each way the alarm could be muted', () => {
+  // An assertion that has only ever seen a compliant file is an assertion
+  // nobody has watched fail — the same criticism this whole PR levels at the
+  // deploy paths it monitors. Each mutation below is applied to the REAL
+  // workflow text and must be caught.
+  const real = readFileSync(WORKFLOW, 'utf8');
+  assert.deepEqual(workflowFailureModes(real), [], 'precondition: the real file is clean');
+
+  // The pipe. Pinned first because a reviewer demonstrated it slipping through.
+  const piped = real.replace(
+    /node scripts\/ci\/check-cross-cloud-drift\.mjs > "\$RUNNER_TEMP\/cross-cloud-drift\.txt" 2>&1/,
+    'node scripts/ci/check-cross-cloud-drift.mjs | tee -a "$GITHUB_STEP_SUMMARY"',
+  );
+  assert.notEqual(piped, real, 'precondition: the pipe mutation must actually apply');
+  assert.ok(workflowFailureModes(piped).includes('piped invocation'),
+    'a piped checker reports tee\'s status, not the check\'s, and must be caught');
+
+  assert.ok(workflowFailureModes(real.replace('exit "$rc"', 'true')).includes('missing exit "$rc"'),
+    'capturing rc and never re-raising it must be caught');
+  assert.ok(workflowFailureModes(`${real}\n        continue-on-error: true\n`).includes('continue-on-error'));
+  assert.ok(workflowFailureModes(real.replace('exit "$rc"', 'exit "$rc" || true')).includes('|| true'));
+  assert.ok(workflowFailureModes(real.replace('fetch-depth: 0', 'fetch-depth: 1')).includes('missing fetch-depth: 0'));
+  assert.ok(workflowFailureModes(real.replace('node scripts/ci/check-cross-cloud-drift.mjs', 'echo skipped'))
+    .includes('does not invoke the checker'));
+
+  // …and the comment strip must not be what is doing the work: the workflow's
+  // header NAMES these constructs in prose, and a compliant file must stay
+  // compliant with that prose present. Without this, a strip bug that ate the
+  // whole file would make every assertion above vacuously true.
+  assert.ok(real.includes('continue-on-error'),
+    'precondition: the header discusses these constructs, so the comment strip is load-bearing');
+});
+

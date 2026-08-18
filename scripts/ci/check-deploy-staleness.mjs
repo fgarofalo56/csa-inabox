@@ -901,7 +901,7 @@ export function classifyWorkflowState(state) {
  *          behindGraceMinutes:number, maxAgeDays:number}} a
  */
 export function classifyEstate({
-  name, liveSha, commitsBehind, ageDays, ancestor, error,
+  name, liveSha, commitsBehind, ageDays, ancestor, aheadOfRef, error,
   behindSince, behindForMinutes,
   behindGraceMinutes, maxAgeDays,
 }) {
@@ -913,10 +913,36 @@ export function classifyEstate({
     };
   }
   if (ancestor === false) {
+    // WHY THIS BRANCH NO LONGER ENUMERATES CAUSES (deploy-integrity R7, #3730).
+    // It used to read: "it was built from a branch, a revert, or a force-pushed
+    // history". The code knows only that `git merge-base --is-ancestor <sha>
+    // <ref>` returned non-zero — it verified NONE of those three, and the cause
+    // that actually fires most often was missing from the list entirely.
+    //
+    // Measured during review: the Commercial estate reported `[divergent] … a
+    // branch, a revert, or a force-pushed history` while running origin/main's
+    // EXACT TIP. The truth was that the ref it was compared against had not been
+    // fetched yet, i.e. the estate was AHEAD. A false accusation, produced by a
+    // control whose entire thesis is that errors must be true.
+    //
+    // `aheadOfRef` is the answer to the other direction of the same cheap
+    // question, so the two are now distinguished; when the caller does not
+    // supply it the message states only what was established and stops.
+    if (aheadOfRef === true) {
+      return {
+        name, state: 'ahead', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
+        behindSince: null, behindForMinutes: null,
+        detail: `the running build ${liveSha.slice(0, 8)} is AHEAD of the compared ref — it contains commits the ref does not. `
+          + 'That is either a roll from a commit that has not reached the ref being compared (a fetch behind, benign), '
+          + 'or code deployed that was never merged. Both are worth knowing; neither is "running main".',
+      };
+    }
     return {
       name, state: 'divergent', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
       behindSince: null, behindForMinutes: null,
-      detail: `the running build ${liveSha.slice(0, 8)} is NOT an ancestor of main — it was built from a branch, a revert, or a force-pushed history`,
+      detail: `the running build ${liveSha.slice(0, 8)} is not an ancestor of the compared ref`
+        + (aheadOfRef === false ? ', and the ref is not an ancestor of it — the two histories have genuinely diverged' : '')
+        + '. A commit distance between unrelated histories would be arithmetic on two timelines, so none is reported.',
     };
   }
   if (commitsBehind === null || commitsBehind === undefined) {

@@ -260,7 +260,7 @@ export function resolveAgainstGit(sha, opts = {}) {
   const branch = opts.branch ?? resolveComparisonRef(cwd);
   const now = opts.now ?? Date.now();
   const empty = {
-    ancestor: undefined, commitsBehind: null, ageDays: null,
+    ancestor: undefined, aheadOfRef: undefined, commitsBehind: null, ageDays: null,
     behindSince: null, behindForMinutes: null, error: null,
   };
   let head;
@@ -277,16 +277,31 @@ export function resolveAgainstGit(sha, opts = {}) {
   }
 
   let ancestor;
+  let aheadOfRef;
   try {
     git(['merge-base', '--is-ancestor', sha, head], cwd);
     ancestor = true;
   } catch {
     // Exit 1 from --is-ancestor is a genuine ANSWER ("no"), not a malfunction,
-    // which is why this one catch does not become an error: the estate is
-    // running a build off a branch / revert / force-pushed history. Reporting a
-    // commit distance between unrelated histories would be arithmetic on two
-    // different timelines, so classifyEstate reports `divergent` and no number.
+    // which is why this catch does not become an error.
     ancestor = false;
+  }
+  if (ancestor === false) {
+    // ASK THE OTHER DIRECTION BEFORE SAYING ANYTHING (deploy-integrity R7).
+    // "Not an ancestor" has two very different causes and the code can tell
+    // them apart cheaply, so it must: an estate running a commit the compared
+    // ref does not yet contain is AHEAD (a roll that landed before the ref was
+    // fetched, or code deployed that was never merged) — it is not a divergent
+    // history. Measured live during review: Commercial `649526d4` reported
+    // `[divergent] … built from a branch, a revert, or a force-pushed history`
+    // while being origin/main's exact tip. Three causes asserted, none verified,
+    // and the true one absent from the list.
+    try {
+      git(['merge-base', '--is-ancestor', head, sha], cwd);
+      aheadOfRef = true;
+    } catch {
+      aheadOfRef = false;
+    }
   }
 
   let commitsBehind = null;
@@ -320,7 +335,7 @@ export function resolveAgainstGit(sha, opts = {}) {
   } catch (e) {
     return { ...empty, ancestor, error: `could not measure the distance from ${sha} to ${branch} — ${e.message}` };
   }
-  return { ancestor, commitsBehind, ageDays, behindSince, behindForMinutes, error: null };
+  return { ancestor, aheadOfRef, commitsBehind, ageDays, behindSince, behindForMinutes, error: null };
 }
 
 // ── the verdict ─────────────────────────────────────────────────────────────
@@ -379,6 +394,7 @@ export async function buildRow(estate, deps = {}) {
     // rather than reporting an unexplained null distance.
     error: g.error,
     ancestor: g.ancestor,
+    aheadOfRef: g.aheadOfRef,
     commitsBehind: g.commitsBehind,
     ageDays: g.ageDays,
     behindSince: g.behindSince,

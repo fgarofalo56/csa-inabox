@@ -63,13 +63,21 @@ name: cross-cloud-drift-alarm
 
 on:
   schedule:
-    # DAILY at 11:53 UTC. The minute is off both the top and the half hour on
-    # purpose: GitHub delays and DROPS schedules that pile onto the top-of-hour
-    # surge, and a dropped run is a control that silently did not execute — the
-    # measurement in scripts/ci/measure-cron-cadence.mjs found workflows running
-    # at 3-10x their declared cadence for exactly this reason. 53 is also unused
-    # by every other cron in this repo, so this lane does not queue behind one.
-    - cron: '53 11 * * *'
+    # EVERY 6 HOURS at 53 past. The cadence is chosen against the thing being
+    # measured, not by habit: the per-estate roll windows are 90 minutes
+    # (Commercial) and 240 (Gov), and a DAILY check cannot enforce a 90-minute
+    # window — it would be 16x coarser than the tolerance it reports against,
+    # which is a control whose stated precision it cannot actually deliver.
+    # 6-hourly is the coarsest cadence that still sits inside a day of drift and
+    # near the Gov window.
+    #
+    # The MINUTE is off both the top and the half hour on purpose: GitHub delays
+    # and DROPS schedules that pile onto the top-of-hour surge, and a dropped run
+    # is a control that silently did not execute. scripts/ci/measure-cron-cadence.mjs
+    # measured workflows in this repo running at 3-10x their declared cadence for
+    # exactly that reason. 53 is also unused by every other cron here, so this
+    # lane does not queue behind one.
+    - cron: '53 */6 * * *'
   workflow_dispatch:
 
 permissions:

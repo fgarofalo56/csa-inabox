@@ -90,18 +90,30 @@ export interface EstateEndpoint {
 /**
  * THE FLEET.
  *
- * Env-overridable per estate so a private-preview or relocated estate can be
- * pointed at without a redeploy — and so the values are inspectable rather than
- * wired in. The defaults are the live 2026-08-18 endpoints.
+ * Env-overridable per estate so a relocated estate can be re-pointed without a
+ * code change. The defaults are the live 2026-08-18 endpoints.
+ *
+ * THE OVERRIDE NAMES ARE DELIBERATELY THE SAME FOUR the CI registry uses
+ * (scripts/ci/_estate-registry.mjs). They were not, briefly: this file invented
+ * `LOOM_ESTATE_URL_COMMERCIAL` / `_GOV` while CI read
+ * `LOOM_ESTATE_MARKER_URL` / `LOOM_GOV_ESTATE_MARKER_URL`, which meant EIGHT
+ * names for FOUR logical endpoints and a Gov Front Door change needing two
+ * edits under two different spellings — a trap, and one that only shows up the
+ * day someone re-points an estate and half the product follows. One name per
+ * endpoint, both surfaces.
+ *
+ * `LOOM_ESTATE_MARKER_URL` also predates this work: check-deploy-staleness.mjs
+ * has read it since the Commercial estate probe was written, so adopting it
+ * here is re-use rather than a new convention.
  */
 export const LOOM_ESTATES: EstateEndpoint[] = [
   {
     id: 'commercial',
     name: 'Commercial',
     clouds: ['Commercial'],
-    markerUrl: process.env.LOOM_ESTATE_URL_COMMERCIAL
+    markerUrl: process.env.LOOM_ESTATE_MARKER_URL
       || 'https://csa-loom.limitlessdata.ai/build-marker.txt',
-    versionUrl: process.env.LOOM_ESTATE_VERSION_URL_COMMERCIAL
+    versionUrl: process.env.LOOM_ESTATE_VERSION_URL
       || 'https://csa-loom.limitlessdata.ai/api/version',
     graceMinutes: 90,
   },
@@ -111,9 +123,9 @@ export const LOOM_ESTATES: EstateEndpoint[] = [
     // GCC-High, DoD and GCC all resolve to the sovereign console. An IL5 estate
     // folds to GCC-High upstream in detectLoomCloud(), so it lands here too.
     clouds: ['GCC-High', 'DoD', 'GCC'],
-    markerUrl: process.env.LOOM_ESTATE_URL_GOV
+    markerUrl: process.env.LOOM_GOV_ESTATE_MARKER_URL
       || 'https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us/build-marker.txt',
-    versionUrl: process.env.LOOM_ESTATE_VERSION_URL_GOV
+    versionUrl: process.env.LOOM_GOV_ESTATE_VERSION_URL
       || 'https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us/api/version',
     graceMinutes: 240,
   },

@@ -83,8 +83,26 @@ const DRIFT_LABEL = {
  * reason. It is never drawn as `On main` (a green over an estate nobody read)
  * and never as `Behind` (a claim nobody measured). deploy-integrity.md R7.
  */
-function EstateFleetTable({ estates, styles }: { estates: FleetEstate[]; styles: Styles }) {
-  if (!estates?.length) return null;
+function EstateFleetTable({ estates, styles }: { estates: FleetEstate[] | null; styles: Styles }) {
+  // ABSENT IS NOT EMPTY, and rendering nothing for both would recreate this
+  // surface's founding defect one level up. `estates` is optional on the report
+  // (an older CACHED payload predates #3730, and the route caches for 10 minutes
+  // with serve-stale-on-error), so "no fleet was reported" and "there are no
+  // other clouds" would otherwise look identical — a silent absence standing in
+  // for a measurement, which is the whole thing this table exists to stop.
+  if (!estates) {
+    return (
+      <MessageBar intent="warning" layout="multiline" style={{ marginBottom: tokens.spacingVerticalM }}>
+        <MessageBarBody>
+          <MessageBarTitle>Per-cloud drift not reported</MessageBarTitle>
+          This response carried no per-estate data, so how far each cloud is behind main is UNKNOWN
+          — not zero. A cached response from before this view existed looks exactly like this;
+          refresh to re-measure.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (estates.length === 0) return null;
   return (
     <Card className={styles.fleetCard}>
       <div className={styles.fleetHead}>
@@ -169,7 +187,7 @@ function DeployStatusBanner() {
   if (!status) return null;
 
   const problems = status.paths.filter((p) => p.severity !== 'ok');
-  const estates = (status.estates || []) as FleetEstate[];
+  const estates = (status.estates as FleetEstate[] | undefined) ?? null;
   return (
     <>
       <MessageBar
@@ -367,7 +385,12 @@ const useStyles = makeStyles({
   loading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalXXL },
   // ── per-cloud drift table (#3730) ──────────────────────────────────────
   // Card elevation + borderRadiusLarge + a section icon, matching the sibling
-  // polished surfaces (web3-ui.md). Every value is a token; no raw px.
+  // polished surfaces (web3-ui.md). Spacing, colour, radius and shadow all come
+  // from tokens; the ONE raw value is the 3px accent rule below, which Fluent
+  // ships no token for and which matches four sibling surfaces (readiness's own
+  // `node`, and the canvas node-kit accent). Called out rather than claimed
+  // away: `check-no-raw-px` scans inline `style={{}}` only and never reads this
+  // makeStyles block, so it was never evidence either way.
   fleetCard: {
     padding: tokens.spacingHorizontalL,
     marginBottom: tokens.spacingVerticalM,
