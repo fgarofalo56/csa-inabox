@@ -20,12 +20,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { synapseConfigGate, getSparkJobDefinition } from '@/lib/azure/synapse-artifacts-client';
 import {
-  submitSparkBatchJob, listSparkBatchJobs, getSparkBatchJob,
+  submitSparkBatchJob, listRecentSparkBatchJobs, getSparkBatchJob,
   type SparkBatchRequest,
 } from '@/lib/azure/synapse-dev-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,11 +43,9 @@ function gate() {
   return null;
 }
 
-export async function POST(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ name: string }>(async (_req: NextRequest, { session, params }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
+  const name = decodeURIComponent(params.name).trim();
   if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid Spark job definition name' }, { status: 400 });
 
   try {
@@ -84,13 +82,11 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ name: str
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ name: string }>(async (req: NextRequest, { params }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
+  const name = decodeURIComponent(params.name).trim();
   if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid Spark job definition name' }, { status: 400 });
 
   try {
@@ -107,10 +103,21 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ name: strin
       return NextResponse.json({ ok: true, run: { id: b.id, state: b.state, appId: b.appId, result: b.result, submittedAt: b.submittedAt } });
     }
 
-    const list = await listSparkBatchJobs(pool, 0, 25);
+    // MOST RECENT first — `listSparkBatchJobs(pool, 0, 25)` returned the pool's
+    // OLDEST 25 batches (Livy lists in ASCENDING batch-id order and `from` is an
+    // index into that list) under a "list recent batches" contract. `truncatedBy`
+    // is forwarded rather than dropped so the caller can tell a complete window
+    // from one a paging ceiling cut short.
+    const list = await listRecentSparkBatchJobs(pool, 25);
     const runs = (list.sessions || []).map((b) => ({ id: b.id, state: b.state, appId: b.appId, result: b.result, submittedAt: b.submittedAt }));
-    return NextResponse.json({ ok: true, runs });
+    return NextResponse.json({
+      ok: true,
+      runs,
+      truncatedBy: list.truncatedBy ?? null,
+      scanned: list.scanned,
+      poolTotal: list.total,
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
