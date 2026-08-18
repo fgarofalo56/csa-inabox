@@ -88,6 +88,26 @@ import { GET } from '../route';
 
 const HOST = 'https://api.github.com';
 
+/**
+ * Is this URL actually addressed to api.github.com?
+ *
+ * PARSED HOST, NEVER A PREFIX MATCH. `u.startsWith('https://api.github.com')` —
+ * which is what this file's helpers first used — is true of
+ * `https://api.github.com.evil.example/…`, and CodeQL flagged all three sites
+ * (js/incomplete-url-substring-sanitization, 3 high). In a test that is not a
+ * runtime hole, but it is worse than cosmetic: these helpers CLASSIFY the calls
+ * the SSRF assertions are made over, so a diverted URL that merely started with
+ * the right prefix would be filed as a legitimate compare call and the guard
+ * would pass over it. Fixing it makes the control sharper, not just quieter.
+ */
+function isGitHubApi(u: string): boolean {
+  try {
+    return new URL(u).host === 'api.github.com';
+  } catch {
+    return false;
+  }
+}
+
 beforeEach(() => {
   MARKER = {};
   FETCHED = [];
@@ -165,12 +185,12 @@ async function run(): Promise<any> {
  * rather than leaving them merely excluded.
  */
 function compareCalls(): string[] {
-  return FETCHED.filter((u) => u.startsWith(HOST) && !u.includes('/actions/workflows/'));
+  return FETCHED.filter((u) => isGitHubApi(u) && !new URL(u).pathname.includes('/actions/workflows/'));
 }
 
 /** Every fetch that is NOT to api.github.com — i.e. the peer-estate probes. */
 function estateCalls(): string[] {
-  return FETCHED.filter((u) => !u.startsWith(HOST));
+  return FETCHED.filter((u) => !isGitHubApi(u));
 }
 
 /**
@@ -333,7 +353,7 @@ describe('deploy-status — the build marker cannot choose the endpoint (#776)',
     vi.stubGlobal('fetch', async (url: string) => {
       const u = String(url);
       FETCHED.push(u);
-      if (!u.startsWith(HOST)) throw new Error('getaddrinfo ENOTFOUND');
+      if (!isGitHubApi(u)) throw new Error('getaddrinfo ENOTFOUND');
       return ({
         ok: true, status: 200, headers: { get: () => null },
         json: async () => ({ status: 'identical', ahead_by: 0, behind_by: 0, commits: [] }),
