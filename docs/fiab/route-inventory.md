@@ -2408,7 +2408,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-172 function(s) across 79 module(s) reach an owner / workspace-ACL
+174 function(s) across 80 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2486,6 +2486,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/coe-library/builder/dashboard-store.ts` | `deleteDashboard`, `getDashboard`, `setDashboardPublished`, `updateDashboard` |
 | `apps/fiab-console/lib/coe-library/coe-library-client.ts` | `deleteClone`, `setClonePublished` |
 | `apps/fiab-console/lib/copilot/a2a-platform-execute.ts` | `executePlatformSkill` |
+| `apps/fiab-console/lib/copilot/activator-tools.ts` | `buildActivatorTools`, `resolveRuleOwner` |
 | `apps/fiab-console/lib/copilot/dax-tools.ts` | `getModelState`, `handleDescribeModel`, `handleSaveDescriptions` |
 | `apps/fiab-console/lib/events/webhook-registry.ts` | `bumpHookStats`, `deleteHook`, `getHook`, `updateHook` |
 | `apps/fiab-console/lib/foundry/ontology-resolver.ts` | `resolveOntologyObjectForGrounding` |
