@@ -1,13 +1,19 @@
 # PRP — V&V Sweep Remediation (item catalog, apps catalog, admin pages, workspace settings)
 
 **Status:** DRAFT (execution-ready — 2026-08-18). Author: Claude Code, operator-directed.
-**Origin:** Every item below is an **already-filed, already-reproduced** GitHub issue — not a
-speculative backlog. Source is a live-browser V&V sweep run 2026-08-18 against the Commercial
+**Rev. 2 (2026-08-18, same day):** added Wave 0 and Wave G/G2 — operator asked, after reviewing
+the first draft, whether any broader gaps or process failures were visible across the sweep as a
+whole, beyond the 30 filed issues. Sections (b)/(c)/(d) below were extended to cover the answer;
+nothing in the original Waves R–C changed.
+**Origin:** Every item in Waves R–C below is an **already-filed, already-reproduced** GitHub issue —
+not a speculative backlog. Source is a live-browser V&V sweep run 2026-08-18 against the Commercial
 deployment (`https://csa-loom.limitlessdata.ai`), driven through the operator's own authenticated
 Chrome session, that walked: the "+ New item" catalog (142/142 item types), the Apps catalog
 (29/29 apps), every admin page (52/52 routes across 8 sidebar clusters), and the per-workspace
-Settings drawer (12/12 tabs). This PRP is a **planning artifact** — it sequences fix work; it does
-not build features itself.
+Settings drawer (12/12 tabs). Wave 0 and Wave G/G2 are a different kind of item — cross-cutting
+observations from reviewing the sweep as a whole, not individually root-caused issues — see each
+wave's own evidence note. This PRP is a **planning artifact** — it sequences fix work; it does not
+build features itself.
 
 **Cross-references (authoritative):**
 - [`#3527`](https://github.com/fgarofalo56/csa-inabox/issues/3527) — the parent V&V epic. Its
@@ -17,10 +23,18 @@ not build features itself.
   and its roll path has stopped applying `main`. **Not owned by this PRP** (infra/CI, not console
   code), but it **blocks** the Gov-parity follow-up sweep named in Non-goals below — do not start
   that follow-up until this is resolved, or its findings will be unattributable (real bug vs.
-  fix-hasn't-shipped-here-yet).
+  fix-hasn't-shipped-here-yet). Also part of Wave 0 below.
+- [`#3676`](https://github.com/fgarofalo56/csa-inabox/issues/3676), [`#3713`](https://github.com/fgarofalo56/csa-inabox/issues/3713),
+  [`#3714`](https://github.com/fgarofalo56/csa-inabox/issues/3714) — the rest of the deploy-pipeline
+  reliability cluster named in Wave 0. Not owned by this PRP; named for sequencing priority.
 - [`#3615`](https://github.com/fgarofalo56/csa-inabox/issues/3615) — the pre-existing no-freeform
   program EPIC (~150 untracked freeform sites). This PRP's Wave F items are net-new findings from
   this sweep, additive to that epic, not a duplicate of it.
+- [`PR #3534`](https://github.com/fgarofalo56/csa-inabox/pull/3534) — `e2e/full-catalog-click-sweep.uat.ts`,
+  opened 2026-08-15, still unmerged as of this PRP. Central to Wave G2's recommendation.
+- [`PRPs/completed/remediation-backlog/PRP.md`](../../completed/remediation-backlog/PRP.md) —
+  item **A3** (`check-parity-doc-freshness.mjs`) from that PRP is cross-referenced in Wave G2; still
+  OPEN there as of this PRP's writing.
 - `docs/fiab/parity/MASTER-SCORECARD.md`, `docs/fiab/parity/<slug>.md` (486 docs) — per-surface
   grades; several are cited as stale evidence below.
 
@@ -81,6 +95,30 @@ duplicates (every issue was searched against existing tracking before filing).
 ---
 
 ## (b) Wave plan — sequenced by blast radius and dependency, not issue number
+
+### Wave 0 — Deploy-pipeline reliability (sequence BEFORE Wave R)
+Not filed by this sweep — surfaced while checking this backlog's own assumptions (the Gov-parity
+check in #3527's final rounds) — but higher-leverage than anything below it: four open issues
+together describe a currently-unreliable release pipeline on **both** cloud boundaries.
+- [`#3730`](https://github.com/fgarofalo56/csa-inabox/issues/3730) (P0) — Gov/GCC-High estate 62
+  commits / ~31h behind `main`, its own readiness page says the roll path has stopped applying.
+- [`#3676`](https://github.com/fgarofalo56/csa-inabox/issues/3676) (P0) — the scheduled deploy
+  silently REVERTS rolled images (a security fix was live 9 minutes, then undone, both lanes
+  reported success).
+- [`#3713`](https://github.com/fgarofalo56/csa-inabox/issues/3713) — `deploy-fiab-commercial` is
+  failing (as of 2026-08-18).
+- [`#3714`](https://github.com/fgarofalo56/csa-inabox/issues/3714) (P0) — Commercial apply fails
+  `InvalidTemplate`, a regression from #3691.
+
+**Why this goes first:** every fix in Waves R–C below is worthless if it can't reliably reach
+either cloud — a PR merged against a broken deploy pipeline is functionally unshipped, and #3676
+proves a rolled fix can even get silently reverted after landing. **Not scoped in detail here** —
+root-causing #3713/#3714/#3676 individually is its own investigation this PRP doesn't have the
+evidence to plan; this wave names the cluster and its sequencing priority, not a fix plan. Whoever
+picks this up should start with #3714 (a named regression, likely the fastest to root-cause) and
+#3676 (already has a repro: "live 9 minutes then undone").
+*Acceptance:* a merge to `main` reaches both Commercial and GCC-High within their documented roll
+allowance (see #3730's own "allowance 90 [minutes]"), verified twice in a row, not once.
 
 ### Wave R — Root-cause fixes (fix first; two of these are prerequisites for trusting everything downstream)
 - **R1** Grep the full `apps/fiab-console/app/api/**` tree for the caller-oid-vs-resource-key
@@ -175,6 +213,42 @@ duplicates (every issue was searched against existing tracking before filing).
 - These can run in parallel with any other wave — no code dependency — and are good candidates for
   a lower-priority/background lane.
 
+### Wave G — Guardrail: catch partial fixes across sibling surfaces
+Nearly every bug in Waves R and T has the same shape: a fix or safeguard exists in one place and a
+sibling surface — the same component reused elsewhere, a second panel in the same file, a second
+route matching the first — never got it (T3's own filing found the right guard on 2 of 4 panels in
+one file and missing on the other 2; R1 is the 3rd occurrence of the exact same class of bug in a
+different file each time). `MASTER-SCORECARD.md` already names this pattern — "backend exists, UI
+doesn't call it" — as the program's cheapest parity ground, but no CI guard catches *new* instances
+of it before they ship.
+- **G-1** Write a script that, given a PR diff touching a picker / error-guard / status-derivation
+  pattern, flags sibling files or components with a structurally similar but unmodified pattern —
+  even a coarse heuristic (same prop shape, same surrounding JSX/route structure) would have caught
+  T3's two-fixed/two-missing panels and R1's repeated sibling-route gap before they shipped.
+*Acceptance:* the guard runs in CI, **advisory-first** (matches this repo's own rollout pattern for
+`check-bicep-sync.mjs` / `check-health-coverage.mjs`), with a documented escalation-to-fail policy
+once the initial backlog it surfaces is cleared. This is genuinely new scope — do not fold it into
+an existing guard without confirming overlap first.
+
+### Wave G2 — Land the durable click-sweep; stop re-discovering staleness by hand
+`docs/fiab/prp/README.md`'s own grade table has 11 of 12 top-level experience grades marked `_TBD_`,
+explicitly because "the catalog-wide functional-E2E sweep that would produce these grades... NOT
+DONE." Today's sweep found real, reproducible defects on dozens of surfaces whose own parity docs
+claimed "zero ❌" / A-grade. That's not a documentation problem on its own — it's evidence that
+grading-by-reading no longer scales at this product's size, and every "A-grade" claim is only as
+trustworthy as the last time a human or agent actually clicked through it.
+- **G2-1** Land and run **[PR #3534](https://github.com/fgarofalo56/csa-inabox/pull/3534)**
+  (`e2e/full-catalog-click-sweep.uat.ts`, opened 2026-08-15, still unmerged) ahead of scheduling any
+  more manual sweeps like this one. It's designed to do — repeatably, in CI — what took a full day
+  of live-browser agent work today.
+- **G2-2** Revisit item **A3** from `PRPs/completed/remediation-backlog/PRP.md`
+  (`scripts/ci/check-parity-doc-freshness.mjs`) — scoped a month ago, still OPEN there per that
+  PRP's own validation ledger. **Not re-scoped here** (owned by that PRP), but flagged: its absence
+  is a direct cause of why this sweep had to re-discover staleness by hand (Wave C's four items).
+  Whoever owns that PRP should know G2-2 is a second, independent data point that A3 is overdue.
+*Acceptance:* G2-1 — the sweep runs in CI and produces the 11 missing experience-level grades from
+real receipts, not a static read. G2-2 — not this PRP's to accept; flagged for the owning PRP.
+
 ---
 
 ## (c) Sequencing rationale
@@ -199,6 +273,16 @@ duplicates (every issue was searched against existing tracking before filing).
 5. **Gov/GCC-High is explicitly out of this PRP's scope** (see Non-goals) — not because it isn't
    found work, but because #3730 makes any Gov-specific finding unattributable until the estate
    catches up to `main`.
+6. **Why Wave 0 outranks Wave R:** R1/R2 are real and worth fixing early, but they're still
+   individual code fixes that reach production through the same deploy pipeline Wave 0 describes as
+   unreliable. A fix that can't ship, or that ships and then gets silently reverted (#3676's exact
+   repro), is worse than a known bug — it's a false sense of progress. Wave 0 is a sequencing call,
+   not a claim that it's bigger engineering work than Wave R; it may well be smaller.
+7. **Why Wave G/G2 sit after Wave C, not interleaved:** both are process/tooling investments rather
+   than fixes to a specific defect, so they don't block any single Wave R–C item from shipping —
+   but they determine whether this kind of backlog keeps recurring. Sequenced last on the page, not
+   last in priority: G2-1 (landing PR #3534) in particular could reasonably run in parallel with
+   Wave 0, since neither touches the other's files.
 
 ---
 
@@ -210,6 +294,15 @@ duplicates (every issue was searched against existing tracking before filing).
   additive to it, not a replacement.
 - **Not** fixing #3730 itself — that's infra/CI deploy-pipeline work, cross-referenced but not
   owned by this PRP.
+- **Not** root-causing #3676/#3713/#3714 in detail — Wave 0 names the cluster and its sequencing
+  priority; the actual investigation is separate work this PRP doesn't have the evidence to plan.
+- **Not** re-scoping item A3 (`check-parity-doc-freshness.mjs`) from
+  `PRPs/completed/remediation-backlog/PRP.md` — cross-referenced in Wave G2, owned there.
+- **Not** auditing dependency or security posture. `git push` during this sweep surfaced "GitHub
+  found 9 vulnerabilities (9 moderate)" on `main` — this PRP did not look at that at all, it was
+  scoped to UI functional correctness. **Flagged, not covered:** for a GCC-High-adjacent product
+  this shouldn't be assumed handled by omission; recommend a dedicated Dependabot/security triage
+  pass as separate work, outside this PRP's scope and evidence base.
 - **Not** starting build work on Wave B's four breadth gaps before their grooming pass produces
   sized sub-issues.
 - **Not** a framework or architecture change — every fix here is scoped to the file(s) named in
@@ -227,6 +320,7 @@ every item in it has a live receipt with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
 ## Backlog index (compact)
 
+- **Wave 0 (P0, sequence before everything — not scoped in detail):** #3730 #3676 #3713 #3714
 - **Wave R (P0, fix first):** R1 (#3753) R2 (#3729)
 - **Wave T (P0/P1, same shape):** T1 (#3746) T2 (#3741) T3 (#3739) T4 (#3733) T5 (#3749)
 - **Wave D (P0-P2, data correctness):** D1 (#3743) D2 (#3735) D3 (#3737) D4 (#3750) D5 (#3752)
@@ -235,6 +329,10 @@ every item in it has a live receipt with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 - **Wave N (P2, nav):** N1 (#3724)
 - **Wave B (P2, groom before fixing):** B1 (#3719) B2 (#3721) B3 (#3722) B4 (#3720)
 - **Wave C (P2, docs-only, parallelizable):** C1 (#3723) C2 (#3725) C3 (#3726) C4 (#3738)
+- **Wave G (P1, new guardrail tooling, not yet an issue):** G-1
+- **Wave G2 (P1, land existing infra + escalate a stalled item):** G2-1 (PR #3534) G2-2 (A3, cross-ref only)
 - **Subsumed, not separate work:** #3747, #3751 (both = R1)
+- **Flagged, not scoped by this PRP:** dependency/security posture (9 open Dependabot alerts on `main`)
 
-**Total: 28 distinct work items (30 issues, 2 subsumed) across 8 waves.**
+**Total: 28 distinct filed-issue work items (30 issues, 2 subsumed) across Waves R–C, plus Wave 0's
+4-issue deploy-reliability cluster and Wave G/G2's 3 process recommendations — 10 waves overall.**
