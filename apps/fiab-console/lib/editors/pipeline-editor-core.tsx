@@ -74,7 +74,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
  */
 import {
   AutoBindProgress, AutoBindRetry, AutoBindRebindNotice, AutoBindUnavailable,
-  AutoBindFallbackGate, PipelineSeedIncomplete, type AutoBindWire,
+  AutoBindFallbackGate, PipelineSeedIncomplete, AuthoredGraphPanel, type AutoBindWire,
 } from './pipeline-autobind-surfaces';
 /** The create-new-factory branch of the factory picker — its own module. */
 import { CreateFactoryForm } from './pipeline-create-factory-form';
@@ -88,11 +88,6 @@ const useStyles = makeStyles({
   // panel scrolls instead.
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%', flex: '1 0 auto' },
   gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px', minWidth: 0 },
-  // Un-caged starter-graph region: full width (mirrors the bound-state canvas),
-  // so the installed-app graph is readable instead of squeezed into the 720px
-  // form column. The PipelineDesigner supplies its own bounded canvas height.
-  starterGraph: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0, maxWidth: '100%' },
-  starterGraphHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   // #2942 — the PROVISIONING surface. Auto-bind runs while the editor opens, so
@@ -669,9 +664,6 @@ export function PipelineEditorCore({
   // symptom #3549 is about. `preview` carries the authored graph the bind GET
   // deliberately keeps in this state (`seedIncomplete` in the bind routes).
   const seedIncomplete = !!bound && autoBind?.status === 'bound' && !!autoBind.seedError;
-  const previewActivities: any[] = Array.isArray(preview?.properties?.activities)
-    ? preview.properties.activities
-    : [];
 
   // ------------------------------------------------------------------
   // Pipeline-level config model (Parameters / Variables / Settings) — these
@@ -826,7 +818,7 @@ export function PipelineEditorCore({
         ] },
       ] },
     ];
-  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
+  }, [config.supportsValidate, isAdf, busy, bound, dirty, seedIncomplete, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
 
   // SC-9 — publish this editor's ribbon actions to the shared command registry
   // so the in-ribbon Ctrl+Q / Alt+Q CommandSearch surfaces Save / Run / Debug /
@@ -1152,29 +1144,7 @@ export function PipelineEditorCore({
                 width below the bind form (mirrors the bound-state canvas), so the
                 built-out activity graph is actually readable instead of squeezed
                 into the 720px form column. Read-only until bound. */}
-            {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
-              <div className={s.starterGraph}>
-                <div className={s.starterGraphHead}>
-                  <Subtitle2>Starter graph from this app</Subtitle2>
-                  <Badge appearance="outline">
-                    {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
-                  </Badge>
-                  <Badge appearance="filled" color="informative">Preview · read-only</Badge>
-                </div>
-                <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
-                  This pipeline was installed from an app with a fully built-out activity graph
-                  (every activity, dependency, and parameter). Bind it to a real
-                  {` ${config.containerLabel}`} pipeline above to push this graph live and enable
-                  Save / Run / Validate / Triggers.
-                </Body1>
-                <PipelineDesigner
-                  activities={extractActivities(JSON.stringify(preview)) as any}
-                  parameters={paramsFromSpec(preview as PipelineSpec)}
-                  variables={varsFromSpec(preview as PipelineSpec)}
-                  onActivitiesChange={() => { /* read-only until bound */ }}
-                />
-              </div>
-            )}
+            <AuthoredGraphPanel containerLabel={config.containerLabel} preview={preview} variant="unbound" />
             </>
           ) : (
             <>
@@ -1197,7 +1167,7 @@ export function PipelineEditorCore({
                 <PipelineSeedIncomplete
                   containerLabel={config.containerLabel}
                   reason={autoBind?.seedError}
-                  activityCount={previewActivities.length}
+                  preview={preview}
                   onRetry={() => void loadBinding()}
                 />
               )}
@@ -1227,34 +1197,6 @@ export function PipelineEditorCore({
                 </MessageBar>
               )}
               {error && (<BackendStateBar error={error} title="Pipeline API" />)}
-              {/* #3549 — the graph that SHOULD be live, rendered read-only
-                  beneath the gate. Showing it is what turns "0 activities" from
-                  a silent, plausible state into a visible gap the user can act
-                  on. Read-only: the live canvas below is still the authoring
-                  surface, and this is a record of what the seed failed to
-                  write. */}
-              {seedIncomplete && previewActivities.length > 0 && (
-                <div className={s.starterGraph}>
-                  <div className={s.starterGraphHead}>
-                    <Subtitle2>Authored graph — not yet published</Subtitle2>
-                    <Badge appearance="outline">
-                      {previewActivities.length} activit{previewActivities.length === 1 ? 'y' : 'ies'}
-                    </Badge>
-                    <Badge appearance="filled" color="warning">Not live · read-only</Badge>
-                  </div>
-                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
-                    This is the activity graph this item carries. It is NOT what the{' '}
-                    {config.containerLabel} is currently running — the bound pipeline is empty.
-                    Use <strong>Retry seeding</strong> above once the reason is resolved.
-                  </Body1>
-                  <PipelineDesigner
-                    activities={extractActivities(JSON.stringify(preview)) as any}
-                    parameters={paramsFromSpec(preview as PipelineSpec)}
-                    variables={varsFromSpec(preview as PipelineSpec)}
-                    onActivitiesChange={() => { /* read-only — the live canvas below authors */ }}
-                  />
-                </div>
-              )}
               {validation && (
                 <MessageBar intent={validation.ok ? 'success' : 'error'}><MessageBarBody>{validation.message}</MessageBarBody></MessageBar>
               )}

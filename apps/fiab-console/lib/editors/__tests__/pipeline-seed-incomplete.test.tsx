@@ -35,7 +35,7 @@
  * keeps Trigger now enabled.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { AdfPipelineEditor, SynapsePipelineEditor } from '../azure-services-editors';
 import { makeItem } from './test-helpers';
 
@@ -150,6 +150,52 @@ describe('#3549 BLOCKER 1 — a bound-but-unseeded pipeline is never presented a
     expect(screen.queryByTestId('pipeline-seed-incomplete')).toBeNull();
 
     expect(screen.getByRole('button', { name: /trigger now/i })).not.toBeDisabled();
+  });
+
+  it('a SUCCESSFUL Retry seeding clears the gate and re-enables Trigger now', async () => {
+    // The ribbon is a useMemo. `seedIncomplete` was missing from its dependency
+    // array, so a repaired pipeline kept Run/Debug disabled forever — the Fix-it
+    // would have "worked" while leaving the editor stuck. Caught by lint, pinned
+    // here so it cannot come back silently.
+    let seedFailed = true;
+    vi.spyOn(global, 'fetch').mockImplementation((async (url: any) => {
+      const u = String(url);
+      if (u.includes(`/api/items/adf-pipeline/${ID}/bind`)) {
+        return json({
+          ok: true, bound: BOUND, pipelines: [{ name: BOUND }],
+          autoBind: seedFailed
+            ? { status: 'bound', via: 'created', backingName: BOUND, seedError: SEED_ERROR }
+            : { status: 'bound', via: 'existing', backingName: BOUND, seeded: true },
+          preview: seedFailed ? AUTHORED_PREVIEW : null,
+        });
+      }
+      if (u.includes(`/api/items/adf-pipeline/${ID}/runs`)) return json({ ok: true, runs: [] });
+      if (u.includes(`/api/items/adf-pipeline/${ID}/triggers`)) return json({ ok: true, triggers: [] });
+      if (u.match(new RegExp(`/api/items/adf-pipeline/${ID}(\\?|$)`))) {
+        return json({
+          ok: true,
+          spec: seedFailed
+            ? { name: BOUND, properties: { activities: [] } }
+            : { name: BOUND, properties: AUTHORED_PREVIEW.properties },
+        });
+      }
+      return json({ ok: true });
+    }) as any);
+
+    renderEditor();
+
+    await waitFor(() => expect(screen.getByTestId('pipeline-seed-incomplete')).toBeInTheDocument(),
+      { timeout: 8000 });
+    expect(screen.getByRole('button', { name: /trigger now/i })).toBeDisabled();
+
+    // The operator grants the role; the engine's re-seed succeeds on reload.
+    seedFailed = false;
+    fireEvent.click(screen.getByRole('button', { name: /retry seeding/i }));
+
+    await waitFor(() => expect(screen.queryByTestId('pipeline-seed-incomplete')).toBeNull(),
+      { timeout: 8000 });
+    await waitFor(() => expect(screen.getByRole('button', { name: /trigger now/i })).not.toBeDisabled(),
+      { timeout: 8000 });
   });
 });
 

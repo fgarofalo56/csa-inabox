@@ -32,9 +32,20 @@
  *                  presented as complete (#3549).
  */
 import {
-  Button, Caption1, MessageBar, MessageBarBody, MessageBarTitle, Spinner, tokens,
+  Badge, Body1, Button, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Spinner, Subtitle2, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync20Regular, Link20Regular } from '@fluentui/react-icons';
+import { PipelineDesigner } from '@/lib/components/pipeline/pipeline-designer';
+import { extractActivities } from '@/lib/components/pipeline/pipeline-dag-view';
+import { paramsFromSpec, varsFromSpec, type PipelineSpec } from '@/lib/components/pipeline/types';
+
+const useStyles = makeStyles({
+  // Full width, mirroring the bound-state canvas, so the authored graph is
+  // readable rather than squeezed into a form column.
+  graph: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0, maxWidth: '100%' },
+  graphHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+});
 
 /**
  * The `autoBind` block the bind GET returns (`lib/azure/auto-bind →
@@ -200,30 +211,90 @@ export function AutoBindUnavailable({ reason, onRetry }: {
  * than a bare complaint, because a re-run genuinely resolves the common cases
  * (a role granted since, a transient control-plane refusal).
  */
-export function PipelineSeedIncomplete({ containerLabel, reason, activityCount, onRetry }: {
+/**
+ * The item's AUTHORED activity graph, rendered read-only at full width.
+ *
+ * Shared by the two states that need to show a graph the live pipeline does not
+ * have, because the difference between them is copy, not structure:
+ *
+ *   'unbound'  a bundle-installed item not yet bound to anything — "here is what
+ *              you are about to push live".
+ *   'unseeded' BOUND to a real pipeline that is EMPTY because the seed failed
+ *              (#3549) — "this is NOT what the factory is running".
+ *
+ * Read-only in both: the live canvas is the authoring surface.
+ */
+export function AuthoredGraphPanel({ containerLabel, preview, variant }: {
   containerLabel: string;
+  preview: { properties?: { activities?: unknown[] } } | null;
+  variant: 'unbound' | 'unseeded';
+}) {
+  const s = useStyles();
+  const activities: unknown[] = Array.isArray(preview?.properties?.activities)
+    ? preview!.properties!.activities!
+    : [];
+  if (activities.length === 0) return null;
+  const unseeded = variant === 'unseeded';
+  return (
+    <div className={s.graph}>
+      <div className={s.graphHead}>
+        <Subtitle2>{unseeded ? 'Authored graph — not yet published' : 'Starter graph from this app'}</Subtitle2>
+        <Badge appearance="outline">
+          {activities.length} activit{activities.length === 1 ? 'y' : 'ies'}
+        </Badge>
+        <Badge appearance="filled" color={unseeded ? 'warning' : 'informative'}>
+          {unseeded ? 'Not live · read-only' : 'Preview · read-only'}
+        </Badge>
+      </div>
+      <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+        {unseeded
+          ? (<>This is the activity graph this item carries. It is NOT what the {containerLabel} is
+              currently running — the bound pipeline is empty. Use <strong>Retry seeding</strong> above
+              once the reason is resolved.</>)
+          : (<>This pipeline was installed from an app with a fully built-out activity graph (every
+              activity, dependency, and parameter). Bind it to a real {containerLabel} pipeline above
+              to push this graph live and enable Save / Run / Validate / Triggers.</>)}
+      </Body1>
+      <PipelineDesigner
+        activities={extractActivities(JSON.stringify(preview)) as never}
+        parameters={paramsFromSpec(preview as PipelineSpec)}
+        variables={varsFromSpec(preview as PipelineSpec)}
+        onActivitiesChange={() => { /* read-only */ }}
+      />
+    </div>
+  );
+}
+
+export function PipelineSeedIncomplete({ containerLabel, reason, preview, onRetry }: {
+  containerLabel: string;
+  /** The item's authored pipeline document (the bind GET's `preview`). */
+  preview: { properties?: { activities?: unknown[] } } | null;
   reason?: string;
-  /** How many activities the item's authored graph declares. */
-  activityCount: number;
   onRetry: () => void;
 }) {
+  const activities: unknown[] = Array.isArray(preview?.properties?.activities)
+    ? preview!.properties!.activities!
+    : [];
   return (
-    <MessageBar intent="warning" layout="multiline" data-testid="pipeline-seed-incomplete">
-      <MessageBarBody>
-        <MessageBarTitle>This pipeline is live but EMPTY — its activities were not published</MessageBarTitle>
-        Loom created the {containerLabel} pipeline for this item and bound it, but could not write
-        the {activityCount > 0 ? `${activityCount} activit${activityCount === 1 ? 'y' : 'ies'}` : 'activities'}
-        {' '}this item already carries into it. The pipeline below is real and running-capable, so a
-        run would SUCCEED and do nothing — Run and Debug are disabled until the graph is published.
-        The authored graph is shown underneath so you can see exactly what is missing.
-        {reason && (<><br /><Caption1>{reason}</Caption1></>)}
-        <div style={actionRow}>
-          <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={onRetry}>
-            Retry seeding
-          </Button>
-        </div>
-      </MessageBarBody>
-    </MessageBar>
+    <>
+      <MessageBar intent="warning" layout="multiline" data-testid="pipeline-seed-incomplete">
+        <MessageBarBody>
+          <MessageBarTitle>This pipeline is live but EMPTY — its activities were not published</MessageBarTitle>
+          Loom created the {containerLabel} pipeline for this item and bound it, but could not write
+          the {activities.length > 0 ? `${activities.length} activit${activities.length === 1 ? 'y' : 'ies'}` : 'activities'}
+          {' '}this item already carries into it. The pipeline below is real and running-capable, so a
+          run would SUCCEED and do nothing — Run and Debug are disabled until the graph is published.
+          The authored graph is shown underneath so you can see exactly what is missing.
+          {reason && (<><br /><Caption1>{reason}</Caption1></>)}
+          <div style={actionRow}>
+            <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={onRetry}>
+              Retry seeding
+            </Button>
+          </div>
+        </MessageBarBody>
+      </MessageBar>
+      <AuthoredGraphPanel containerLabel={containerLabel} preview={preview} variant="unseeded" />
+    </>
   );
 }
 
