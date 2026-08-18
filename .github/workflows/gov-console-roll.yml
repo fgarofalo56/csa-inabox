@@ -560,14 +560,38 @@ jobs:
         #
         # SO IT KEYS ON THE STEP THAT ACQUIRES THE LEASE, not on `always()` and
         # not on the gate. `Build + push console image on the Gov ACR` is where
-        # `acr-firewall-lease.sh acquire` runs, so:
-        #   - it EXECUTED (success or failure) -> a lease may be held, release it.
-        #   - it was SKIPPED (gate refused, or the Azure login failed) -> nothing
-        #     was ever opened and there is nothing to release.
-        # Testing the two executed conclusions POSITIVELY rather than `!=
-        # 'skipped'` also covers a cancelled job, where an unrun step's
-        # conclusion is empty rather than 'skipped'.
-        if: always() && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure')
+        # `acr-firewall-lease.sh acquire` runs (the sole call site in this file),
+        # so the question "might a lease be held?" is exactly "did that step
+        # execute?". The three EXECUTED conclusions are listed positively:
+        #
+        #   success    -> built; lease was taken and must be released.
+        #   failure    -> died mid-build; the lease is very likely still held.
+        #   cancelled  -> THE STEP WAS RUNNING WHEN THE JOB WAS KILLED. The lease
+        #                 IS held and the Gov ACR IS open. This is the row that
+        #                 matters most and the one an earlier revision of this
+        #                 condition missed.
+        #   skipped / '' -> the gate refused (exit 3/4) or the Azure login
+        #                 failed, so the build never started, nothing was ever
+        #                 opened, and there is nothing to release.
+        #
+        # `cancelled` IS NOT HYPOTHETICAL AND IT IS NOT THE UNRUN CASE. GitHub
+        # gives a step that was RUNNING at cancellation `status: completed,
+        # conclusion: cancelled` — confirmed against this repo's own history
+        # (runs 32170342821, 32165740737: `Run vitest …`, `Build (next build)`).
+        # An unrun step in the same cancelled job carries an EMPTY conclusion
+        # instead, which is why both are excluded and only the executed three are
+        # listed. Cancellation is documented behaviour here, not a corner: the
+        # #2706 notes above record builds sitting 3.5-4.5 hours with no output,
+        # the concurrency block acknowledges rolls being killed mid-flight, and
+        # the 90-minute job timeout is a second route to the same state.
+        #
+        # Dropping `cancelled` would leave the sovereign registry publicly
+        # reachable until acr-firewall-sweeper catches it — declared `*/15` but
+        # measured at a 54-minute median (#3226). Bare `always()` covered this
+        # case, which is why every other lease-releasing lane in the repo still
+        # uses it; this condition has to keep that coverage while dropping only
+        # the genuinely-nothing-acquired paths.
+        if: always() && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
         run: |
           set -euo pipefail
           # #2603: re-locks only if this run still holds the firewall lease; if
