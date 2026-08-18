@@ -61,7 +61,7 @@ the cloud client-side.
 ## Bicep sync
 
 The Console UAMI already holds **Monitoring Contributor**
-(`749f88ad-0bdc-4e1b-a8b6-bfb96b995e05`) on the alert resource group via
+(`749f88d5-cbae-40b8-bcfc-e573ddc772fa`) on the alert resource group via
 `platform/fiab/bicep/modules/admin-plane/monitoring.bicep` — this grant now
 backs both the Activator wizard and the warehouse Alerts editor (Gov path).
 Env (`LOOM_ALERT_RG`, `LOOM_LOG_ANALYTICS_RESOURCE_ID`, `LOOM_ALERT_LOCATION`,

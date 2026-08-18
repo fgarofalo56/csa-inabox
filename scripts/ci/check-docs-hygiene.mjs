@@ -82,18 +82,18 @@ const WELL_KNOWN = new Set([
   '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd', // Cognitive Services OpenAI User
   'a97b65f3-24c7-4388-baec-2e87135dc908', // Cognitive Services User
   '5bd9cd88-fe45-4216-938b-f97437e15450', // DocumentDB Account Contributor
-  '749f88ad-0bdc-4e1b-a8b6-bfb96b995e05', // Monitoring Contributor
+  '749f88d5-cbae-40b8-bcfc-e573ddc772fa', // Monitoring Contributor
   '73c42c96-874c-492b-b04d-ab87d138a893', // Log Analytics Reader
   '43d0d8ad-25c7-4714-9337-8ba259a9fe05', // Monitoring Reader
   '72fafb9e-0641-4937-9268-a91bfd8191a3', // Cost Management Reader
   '9b7fa17d-e63e-47b0-bb0a-15c516ac86ec', // SQL DB Contributor
   '17d1049b-9a84-46fb-8f53-869881c3d3ab', // Storage Account Contributor
   'a638d3c7-ab3a-418d-83e6-5f17a39d4fde', // Azure Event Hubs Data Receiver
-  '5dffeca3-4936-4216-b2bc-10343a5abb25', // Azure Event Hubs Data Owner
-  'f58310d9-a9f6-439a-9e8d-f62e7b41a168', // Storage Blob Data Owner
-  'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba', // Key Vault Crypto Officer
-  '1ec5b3c1-b17e-4e25-8312-2acb3c3c5abf', // Automation/runbook role constant
-  '6e4bf58a-b8e1-4cc3-bbf9-d73143322b78', // Synapse SQL Administrator constant
+  '5dffeca3-4936-4216-b2bc-10343a5abb25', // Schema Registry Contributor
+  'f58310d9-a9f6-439a-9e8d-f62e7b41a168', // Role Based Access Control Administrator
+  'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba', // Key Vault Certificate User
+  '1ec5b3c1-b17e-4e25-8312-2acb3c3c5abf', // Stream Analytics Query Tester
+  '6e4bf58a-b8e1-4cc3-bbf9-d73143322b78', // Synapse Administrator (Synapse RBAC id space, not an ARM role)
   // Microsoft first-party application IDs
   '00000003-0000-0000-c000-000000000000', // Microsoft Graph
   '797f4846-ba00-4fd7-ba43-dac1f8f63013', // Windows Azure Service Management API

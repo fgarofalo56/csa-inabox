@@ -65,6 +65,33 @@ describe('pure helpers', () => {
     }
   });
 
+  // #3608. The shape assertion above is NOT enough and never was: a wrong GUID
+  // is still a well-shaped GUID, so `b24988ac-6180-42a0-bb6f-b91a8f3d3d0e` sat
+  // under `name: 'Contributor'` for the module's entire life with this suite
+  // green, while every automatic ARM Contributor grant on a DLZ attach was
+  // rejected. grantRgScopedRoles() interpolates `guid` straight into
+  // roleDefinitionId and ARM resolves by ID, never by name.
+  //
+  // Ids from learn.microsoft.com/azure/role-based-access-control/built-in-roles
+  // and identical in Commercial, GCC, GCC-High and DoD — built-in role
+  // definition ids are global, so a wrong one is wrong in every cloud at once.
+  // Repo-wide, this same property is enforced by
+  // scripts/ci/check-role-guid-consistency.mjs.
+  it('each role carries the DOCUMENTED built-in id, not merely a GUID-shaped string', () => {
+    const documented: Record<string, string> = {
+      Contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24c',
+      'Storage Blob Data Contributor': 'ba92f5b4-2d11-453d-a403-e96b0029c9fe',
+      'Azure Event Hubs Data Owner': 'f526a384-b230-433a-b45c-95f59c4a2dec',
+    };
+    // Every role in the set is pinned — a role added later without an id here
+    // fails rather than slipping through unchecked.
+    for (const r of RG_SCOPED_LZ_ROLES) {
+      expect(Object.keys(documented), `no documented id pinned for role "${r.name}"`).toContain(r.name);
+      expect(r.guid.toLowerCase(), `${r.name} is bound to the wrong role definition id`).toBe(documented[r.name]);
+    }
+    expect(RG_SCOPED_LZ_ROLES.length).toBe(Object.keys(documented).length);
+  });
+
   it('resourceGroupScope builds an RG-scoped (never sub-wide) id', () => {
     expect(resourceGroupScope(SUB, RG)).toBe(`/subscriptions/${SUB}/resourceGroups/${RG}`);
   });
@@ -94,6 +121,17 @@ describe('pure helpers', () => {
 });
 
 describe('grantRgScopedRoles (LIVE ARM PUT)', () => {
+  // #3608. Asserting the CONSTANT is right is worth nothing if the value that
+  // reaches ARM is something else, so this asserts on the wire: the ARM body
+  // must carry the documented Contributor roleDefinitionId.
+  it('PUTs the documented Contributor roleDefinitionId', async () => {
+    const calls = stubFetch(201, { id: '/ra/1' });
+    await grantRgScopedRoles({ subscriptionId: SUB, resourceGroup: RG, principalObjectId: PRINCIPAL, getToken: async () => 'tk' });
+    const bodies = calls.map((c) => String(c.init?.body));
+    expect(bodies.some((b) => b.includes('/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c'))).toBe(true);
+    expect(bodies.some((b) => b.includes('b24988ac-6180-42a0-bb6f-b91a8f3d3d0e'))).toBe(false);
+  });
+
   it('grants the full set on 201 and reports allGranted', async () => {
     const calls = stubFetch(201, { id: '/ra/1' });
     const r = await grantRgScopedRoles({ subscriptionId: SUB, resourceGroup: RG, principalObjectId: PRINCIPAL, getToken: async () => 'tk' });
