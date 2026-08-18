@@ -26,7 +26,7 @@
  *      inherits the previous one's warning.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { VariableLibraryEditor } from '../variable-library-editor';
@@ -63,6 +63,50 @@ function bannerText(root: HTMLElement): string | null {
 /** The Resolve panel's input, addressed by its placeholder. */
 function expandInput(root: HTMLElement): HTMLTextAreaElement {
   return within(root).getByPlaceholderText('@{variables.ENV}/path') as HTMLTextAreaElement;
+}
+
+/**
+ * The Resolve panel's `expanded` output — the element immediately after the
+ * "Expanded" caption. Addressed structurally because the expanded value often
+ * also appears in the resolved-values table (`dev` is both), so a plain text
+ * query is ambiguous.
+ */
+function expandedText(root: HTMLElement): string | null {
+  const caption = Array.from(root.querySelectorAll('*')).find(
+    (el) => el.children.length === 0 && (el.textContent || '').trim() === 'Expanded',
+  );
+  const out = caption?.nextElementSibling as HTMLElement | null;
+  return out ? (out.textContent ?? null) : null;
+}
+
+/** A promise whose settlement the test controls, for modelling request ordering. */function deferred<T>() {
+  let settle!: (v: T) => void;
+  const promise = new Promise<T>((res) => { settle = res; });
+  return { promise, settle };
+}
+
+/**
+ * Like `installFetchMock`, but the handler may return a PROMISE — which lets a
+ * spec hold one request open and choose the order responses arrive in.
+ */
+function installOrderedFetch(handler: (url: string, init?: RequestInit) => unknown | Promise<unknown>) {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  vi.spyOn(global, 'fetch').mockImplementation((async (url: any, init?: RequestInit) => {
+    const u = typeof url === 'string' ? url : (url?.toString?.() ?? String(url));
+    calls.push({ url: u, init });
+    const body = await handler(u, init);
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as any);
+  return { calls };
+}
+
+/** Let a settled fetch chain (`await fetch` → `await .json()` → setState) flush. */
+async function flushPending() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  });
 }
 
 const VL_ITEM = makeItem('variable-library', 'Variable library');
@@ -441,5 +485,144 @@ describe('VariableLibraryEditor — unresolved banner states only what it establ
     await waitFor(() => expect(bannerText(main)).not.toBeNull());
     expect(bannerText(main)).toContain('${variables.NAME}');
     expect(bannerText(main)).not.toContain('@{variables.NAME}');
+  });
+
+  it('counts one unresolved variable when the same malformed name is written with both sigils', async () => {
+    // The title says "de-duplicated NAMES". `invalidRefs` used to de-duplicate
+    // by REF, so `@{variables.a-b} ${variables.a-b}` counted 2 for one name and
+    // the title contradicted itself.
+    installFetchMock({
+      '/api/items/variable-library/lib1/resolve': () => ({
+        ok: true,
+        valueSet: 'default',
+        resolved: [{ name: 'ENV', type: 'string', value: 'dev', secret: false }],
+        expanded: '@{variables.a-b} ${variables.a-b}',
+      }),
+      '/api/items/variable-library/lib1': () => ({
+        id: 'lib1',
+        displayName: 'Saved Library',
+        state: { variables: [{ name: 'ENV', type: 'string', default: 'dev' }] },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<VariableLibraryEditor item={VL_ITEM} id="lib1" />);
+    const main = await waitFor(() => screen.getByTestId('main-panel'));
+    fireEvent.change(expandInput(main), { target: { value: '@{variables.a-b} ${variables.a-b}' } });
+    await user.click(await waitFor(() => within(main).getByRole('button', { name: /^Resolve$/ })));
+
+    await waitFor(() => expect(bannerText(main)).not.toBeNull());
+    expect(bannerText(main)).toContain('1 variable left unresolved');
+    expect(bannerText(main)).not.toContain('2 variables left unresolved');
+  });
+});
+
+/**
+ * Ordering. The banner reports a diff between "what the text referenced" and
+ * "what the SAVED library returned" — so it is only true while those two halves
+ * come from the same moment. Two ways they can come apart, both of which end in
+ * the banner asserting a cause that is no longer real (deploy-integrity.md R7,
+ * the same defect class this PR removes):
+ *
+ *   1. Resolve stays clickable while a save is in flight, so a click in that
+ *      window resolves the PRE-save library and then contradicts the save.
+ *   2. A slow earlier response lands after a newer one and repaints the banner
+ *      from a superseded read.
+ *
+ * `disabled` closes the click path; the monotonic request id closes the
+ * in-flight path. Neither alone is sufficient, so both are tested.
+ */
+describe('VariableLibraryEditor — a superseded resolve may not repaint the banner', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('disables Resolve while a save is in flight', async () => {
+    // Without this, Save-and-resolve leaves `saving` true while `resolveBusy`
+    // is still false — a window in which Resolve is clickable and would run
+    // against the library as it was BEFORE the PATCH lands.
+    const patch = deferred<unknown>();
+    installOrderedFetch((url, init) => {
+      if (url.includes('/resolve')) {
+        return {
+          ok: true, valueSet: 'default', resolved: [],
+          expanded: '@{variables.ENV}/batch?size=@{variables.BatchSize}',
+        };
+      }
+      if (init?.method === 'PATCH') return patch.promise;
+      return { id: 'lib1', displayName: 'Fresh Library', state: {} };
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<VariableLibraryEditor item={VL_ITEM} id="lib1" />);
+    const main = await waitFor(() => screen.getByTestId('main-panel'));
+
+    const resolveBtn = await waitFor(() => within(main).getByRole('button', { name: /^Resolve$/ }));
+    await user.click(resolveBtn);
+    // Precondition: with no save running, Resolve is clickable.
+    await waitFor(() => expect(within(main).getByRole('button', { name: /Save and resolve/i })).toBeInTheDocument());
+    expect(within(main).getByRole('button', { name: /^Resolve$/ })).not.toBeDisabled();
+
+    // Start the save and hold the PATCH open.
+    await user.click(within(main).getByRole('button', { name: /Save and resolve/i }));
+    await waitFor(() => expect(within(main).getByRole('button', { name: /^Resolve$/ })).toBeDisabled());
+
+    patch.settle({ updatedAt: new Date().toISOString() });
+    await flushPending();
+  });
+
+  it('drops a stale response that arrives after a newer resolve', async () => {
+    // Reachable with no double-click at all: soft-navigating between two
+    // libraries changes `id` WITHOUT remounting, and navigation is not gated on
+    // `resolveBusy`. So lib1's in-flight resolve can land on lib2.
+    const stale = deferred<unknown>();
+    let resolveCalls = 0;
+    installOrderedFetch((url) => {
+      if (url.includes('/resolve')) {
+        resolveCalls += 1;
+        // R1 (lib1) hangs; R2 (lib2) answers immediately and cleanly.
+        if (resolveCalls === 1) return stale.promise;
+        return {
+          ok: true, valueSet: 'default',
+          resolved: [{ name: 'ENV', type: 'string', value: 'dev', secret: false }],
+          expanded: 'dev',
+        };
+      }
+      if (url.includes('/lib2')) {
+        return { id: 'lib2', displayName: 'Second', state: { variables: [{ name: 'ENV', type: 'string', default: 'dev' }] } };
+      }
+      return { id: 'lib1', displayName: 'First', state: {} };
+    });
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}><VariableLibraryEditor item={VL_ITEM} id="lib1" /></QueryClientProvider>,
+    );
+    let main = await waitFor(() => screen.getByTestId('main-panel'));
+    fireEvent.change(expandInput(main), { target: { value: '@{variables.ENV}' } });
+
+    // R1 goes out against lib1 and is still in flight.
+    await user.click(await waitFor(() => within(main).getByRole('button', { name: /^Resolve$/ })));
+    expect(resolveCalls).toBe(1);
+
+    // Soft-navigate to lib2, whose SAVED library really does contain ENV.
+    view.rerender(
+      <QueryClientProvider client={queryClient}><VariableLibraryEditor item={VL_ITEM} id="lib2" /></QueryClientProvider>,
+    );
+    main = await waitFor(() => screen.getByTestId('main-panel'));
+    await waitFor(() => expect(within(main).queryByDisplayValue('BatchSize')).not.toBeInTheDocument());
+
+    // R2 resolves lib2 cleanly: no banner, expanded == 'dev'.
+    await user.click(await waitFor(() => within(main).getByRole('button', { name: /^Resolve$/ })));
+    await waitFor(() => expect(expandedText(main)).toBe('dev'));
+    expect(bannerText(main)).toBeNull();
+
+    // NOW lib1's response lands, last. It carries `resolved: []`, so applying it
+    // would claim ENV "is in the table above but not in the saved library" —
+    // about an ENV the resolve the user is actually looking at just returned.
+    stale.settle({ ok: true, valueSet: 'default', resolved: [], expanded: '@{variables.ENV}' });
+    await flushPending();
+
+    expect(bannerText(main)).toBeNull();
+    // The stale `expanded` must not have overwritten the live one either.
+    expect(expandedText(main)).toBe('dev');
   });
 });

@@ -65,10 +65,17 @@ describe('referencedVariableTokens (advisory scanner)', () => {
   });
 
   // ---- RUNTIME BEHAVIOUR MUST NOT MOVE -----------------------------------
-  // Every executor path (pipelines, notebooks, the /resolve route) goes
-  // through expandVariables. A widened VAR_REF would start substituting
-  // references it has never substituted — a live regression dressed as a
-  // reporting fix. These are the guard.
+  // Measured at this commit, `expandVariables` has exactly ONE production
+  // caller: app/api/items/variable-library/[id]/resolve/route.ts. No executor
+  // reaches it today — `lib/install/pipeline-variables.ts` promotes a different
+  // `{{var:NAME}}` token via `rawValueForSet`. So the blast radius of a widened
+  // VAR_REF is currently that one route's `expanded` output, not the pipeline
+  // and notebook runtimes.
+  //
+  // The guard is still the right one to keep: `expandVariables` is exported as
+  // the shared substitution primitive precisely so executors CAN adopt it, and
+  // these specs mean a widened regex cannot silently change what it substitutes
+  // if they do.
   it('expandVariables still leaves a malformed reference verbatim even when a value is supplied', () => {
     expect(expandVariables('@{variables.Order-Count}/x', { 'Order-Count': '42' }))
       .toBe('@{variables.Order-Count}/x');

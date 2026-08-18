@@ -250,6 +250,14 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
   // was never diffed (deploy-integrity.md R7 — a message states only what the
   // code established).
   const [resolvedValueSet, setResolvedValueSet] = useState<string | null>(null);
+  // Monotonic resolve id. A response may only write state if it is still the
+  // LATEST request — otherwise a slow earlier call lands after a newer one and
+  // repaints the banner from a library state that has since been superseded
+  // (e.g. "X is not in the saved library" about an X the newer resolve just
+  // proved IS saved). That is the same R7 false-cause this banner exists to
+  // remove, so the ordering guard belongs here and not only on the buttons:
+  // `disabled` closes the click path, this closes the in-flight path.
+  const resolveSeq = useRef(0);
   // A soft-navigation between two items of the same type changes `id` WITHOUT
   // remounting this editor: app/items/[type]/[id]/page.tsx renders
   // `<Editor item={item} id={id} …/>` with no `key={id}`, which is precisely
@@ -258,15 +266,23 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
   // dropped, or the next library opens carrying another item's warning banner
   // (ux-baseline.md — no error banners on a freshly opened, untouched item).
   useEffect(() => {
+    // Bump FIRST: any resolve still in flight belongs to the previous item and
+    // is now abandoned, so its response must not land on this one.
+    resolveSeq.current += 1;
     setResolved(null);
     setResolveErr(null);
     setExpandOut(null);
     setUnresolvedRefs([]);
     setInvalidRefs([]);
     setResolvedValueSet(null);
+    // The abandoned request will never clear this itself (its `finally` is
+    // seq-guarded), and leaving it true would wedge Resolve on the new item.
+    setResolveBusy(false);
   }, [id]);
   const runResolve = useCallback(async () => {
     if (id === 'new') { setResolveErr('Save the library before resolving.'); return; }
+    const seq = resolveSeq.current + 1;
+    resolveSeq.current = seq;
     setResolveBusy(true); setResolveErr(null); setUnresolvedRefs([]); setInvalidRefs([]); setResolvedValueSet(null);
     const textSent = expandText;
     const valueSetSent = tab;
@@ -276,6 +292,10 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
         body: JSON.stringify({ valueSet: valueSetSent, text: textSent }),
       });
       const j = await r.json();
+      // Superseded while in flight — drop the whole response. Writing ANY of it
+      // (expanded, resolved, or the banner) would mix two different reads of
+      // the library into one surface.
+      if (seq !== resolveSeq.current) return;
       if (!j.ok) { setResolveErr(j.error || 'resolve failed'); setResolved([]); return; }
       const resolvedList: ResolvedVarRow[] = j.resolved || [];
       setResolved(resolvedList);
@@ -293,7 +313,10 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
       // expansion regex rejects was never a candidate for substitution, so
       // "it isn't in the resolved set" is true but irrelevant — the reason it
       // came back verbatim is the name shape, and that is what we must say.
-      setInvalidRefs(dedupeBy(tokens.filter((t) => !t.substitutable), (t) => t.ref).map((t) => t.ref));
+      // De-duplicated by NAME like the group below, so the title's count means
+      // the same thing for every group: `@{variables.a-b} ${variables.a-b}` is
+      // ONE unresolved variable, not two. The first ref seen is what we show.
+      setInvalidRefs(dedupeBy(tokens.filter((t) => !t.substitutable), (t) => t.name).map((t) => t.ref));
       // De-duplicated NAMES — `@{variables.X}@{variables.X}` is one variable.
       setUnresolvedRefs(
         dedupeBy(
@@ -301,8 +324,14 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
           (t) => t.name,
         ).map((t) => ({ name: t.name, ref: t.ref })),
       );
-    } catch (e: any) { setResolveErr(e?.message || String(e)); setResolved([]); }
-    finally { setResolveBusy(false); }
+    } catch (e: any) {
+      if (seq !== resolveSeq.current) return;
+      setResolveErr(e?.message || String(e)); setResolved([]);
+    } finally {
+      // Only the LATEST request owns the busy flag — an abandoned earlier call
+      // clearing it would re-enable Resolve while a newer one is still running.
+      if (seq === resolveSeq.current) setResolveBusy(false);
+    }
   }, [id, tab, expandText]);
 
   // ---- Why a reference came back verbatim: THREE distinct causes -----------
@@ -473,7 +502,11 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
           </Caption1>
           <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
             <Textarea value={expandText} onChange={(_, d) => setExpandText(d.value)} rows={2} placeholder="@{variables.ENV}/path" />
-            <Button appearance="primary" onClick={runResolve} disabled={resolveBusy || id === 'new'} style={{ alignSelf: 'flex-start' }}>
+            {/* `saving` gates this too: Save-and-resolve leaves `saving` true
+                while `resolveBusy` is still false, and a Resolve fired in that
+                window runs against the PRE-save library — whose response would
+                then claim a just-saved variable "is not in the saved library". */}
+            <Button appearance="primary" onClick={runResolve} disabled={resolveBusy || saving || id === 'new'} style={{ alignSelf: 'flex-start' }}>
               {resolveBusy ? 'Resolving…' : 'Resolve'}
             </Button>
             {resolveErr && <MessageBar intent="error"><MessageBarBody>{resolveErr}</MessageBarBody></MessageBar>}
