@@ -57,6 +57,77 @@ export function safeRuleName(displayName: string, suffix: string): string {
   return `${base}-${suffix}`.slice(0, 90);
 }
 
+/** ARM tag keys stamped on every scheduledQueryRule Loom authors. The item id is
+ *  the ONLY authoritative join key back to the Loom item: the resource group is
+ *  deployment-wide, and the rule NAME is derived from a user-controlled display
+ *  name that can change (or be chosen to collide) after the rule is created. */
+export const LOOM_RULE_TAG_ITEM_ID = 'loom-item-id';
+export const LOOM_RULE_TAG_ITEM_TYPE = 'loom-item-type';
+
+/** The deterministic ARM name suffix for a Loom-facing rule name. */
+export function ruleNameSuffix(ruleName: string | undefined): string {
+  return (ruleName || 'rule').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 16) || 'rule';
+}
+
+/**
+ * The EXACT scheduledQueryRule name `createMonitorActivatorRule` authors for
+ * (activator display name, Loom rule name). Exported so a reader can re-derive
+ * it and compare for equality instead of guessing from a prefix.
+ */
+export function expectedAzureRuleName(activatorDisplayName: string, ruleName: string | undefined): string {
+  return safeRuleName(activatorDisplayName, ruleNameSuffix(ruleName));
+}
+
+/** The Loom-facing rule name stamped into the ARM description by
+ *  {@link createMonitorActivatorRule}, or null when the marker is absent (i.e.
+ *  the rule was not authored by the Loom Activator). Lives next to the writer so
+ *  the marker and its parser cannot drift apart. */
+export function loomRuleNameFromDescription(description?: string): string | null {
+  return /Loom Activator rule '([^']*)'/.exec(description || '')?.[1] ?? null;
+}
+
+/** The subset of a live ARM scheduledQueryRule the ownership test reads. */
+export interface RuleOwnershipProbe {
+  name?: string;
+  description?: string;
+  tags?: Record<string, string> | null;
+}
+
+/**
+ * Does this LIVE Azure Monitor rule belong to THIS Loom activator item?
+ *
+ * This is a write-authorizing decision, not a display filter: a claimed rule is
+ * recorded on the item, and DELETE / enable / disable then act on the live
+ * resource. So it answers only on evidence that is authoritative:
+ *
+ *  1. A `loom-item-id` tag — conclusive both ways. Ours ⇒ claimed (even if the
+ *     activator has since been renamed); someone else's ⇒ refused outright, no
+ *     matter what the name looks like.
+ *  2. No Loom tag (every rule authored before the tag existed — precisely the
+ *     #3551 recovery population) ⇒ BOTH the `Loom Activator rule '<name>'`
+ *     description marker AND `name === expectedAzureRuleName(displayName, that
+ *     name)` must hold. Equality against the name this item's own authoring path
+ *     would have produced, never a prefix: 'Model Drift Alert' + rule 'churn' is
+ *     Model-Drift-Alert-churn, which is NOT the Model-Drift-Alert-Prod-churn that
+ *     the separate activator 'Model Drift Alert Prod' owns.
+ *
+ * Fails CLOSED. A rule whose Loom name contains an apostrophe (the description
+ * marker is single-quoted, so the parse is lossy), or one belonging to an
+ * activator that was renamed before it was tagged, is left unclaimed rather than
+ * claimed on a guess.
+ */
+export function ruleBelongsToItem(
+  rule: RuleOwnershipProbe,
+  item: { id: string; displayName?: string },
+): boolean {
+  const taggedItemId = rule.tags?.[LOOM_RULE_TAG_ITEM_ID];
+  if (taggedItemId) return taggedItemId === item.id;
+  if (typeof rule.name !== 'string' || !rule.name) return false;
+  const named = loomRuleNameFromDescription(rule.description);
+  if (named === null) return false;
+  return rule.name === expectedAzureRuleName(item.displayName || '', named);
+}
+
 /**
  * Normalize a schedule/window duration to the ISO-8601 form Azure Monitor
  * scheduledQueryRules require (PT5M / PT1H / P1D). The Loom editor already emits
@@ -251,6 +322,12 @@ export interface MonitorRuleInput {
   query?: string;
   sourceTable?: string;
   severity?: number;
+  /** Cosmos id of the Loom activator item that owns this rule. Stamped onto the
+   *  ARM resource as the `loom-item-id` tag so a later read can join a live rule
+   *  back to its item on an IDENTITY rather than on the derived, user-controlled
+   *  rule name (which two different activators can produce a prefix collision
+   *  on, and which a rename invalidates). Callers should always pass it. */
+  loomItemId?: string;
   /** ISO-8601 schedule, e.g. PT5M. How often the alert query is evaluated. */
   evaluationFrequency?: string;
   /** ISO-8601 lookback window the query spans, e.g. PT15M. Must be ≥ frequency. */
@@ -401,8 +478,13 @@ export async function createMonitorActivatorRule(
       receivers = { emails: emails.length, sms: smsArr.length, webhooks: webhooks.length, logicApps: logicApps.length };
     }
   }
-  const ruleSuffix = (input.name || 'rule').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 16) || 'rule';
+  const ruleSuffix = ruleNameSuffix(input.name);
   const azureRuleName = safeRuleName(activatorDisplayName, ruleSuffix);
+  // Ownership tag — the authoritative join key back to the Loom item for any
+  // later read of the deployment-wide alert resource group.
+  const loomTags = input.loomItemId
+    ? { [LOOM_RULE_TAG_ITEM_ID]: input.loomItemId, [LOOM_RULE_TAG_ITEM_TYPE]: 'activator' }
+    : undefined;
   const severity = typeof input.severity === 'number' ? input.severity : 3;
   // Normalize to ISO-8601 — bundle rules carry shorthand ('5m'/'1h') that ARM
   // rejects as an invalid TimeSpan; the editor already emits ISO (passes through).
@@ -430,6 +512,7 @@ export async function createMonitorActivatorRule(
         windowSize,
         scopes: [adxScope],
         skipQueryValidation: true,
+        ...(loomTags ? { tags: loomTags } : {}),
         actionGroupIds: actionGroupId ? [actionGroupId] : undefined,
       });
       scheduled = true;
@@ -472,6 +555,7 @@ export async function createMonitorActivatorRule(
     severity,
     evaluationFrequency,
     windowSize,
+    ...(loomTags ? { tags: loomTags } : {}),
     actionGroupIds: actionGroupId ? [actionGroupId] : undefined,
   });
   return {
