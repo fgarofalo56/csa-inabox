@@ -144,9 +144,10 @@ beforeEach(() => {
   resolveWorkspaceAccessByOid.mockResolvedValue(OWNER);
   delete process.env.LOOM_ACTIVATOR_BACKEND;
   // isTenantAdmin runs for real — make sure the fixture caller is not one, or
-  // every role below would be admitted by the bypass and prove nothing.
+  // every role below would be admitted by the bypass and prove nothing. The
+  // names are the ones lib/auth/feature-gate.ts actually reads.
   delete process.env.LOOM_TENANT_ADMIN_OID;
-  delete process.env.LOOM_TENANT_ADMIN_GROUP_IDS;
+  delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
 });
 
 // ---------------------------------------------------------------------------
