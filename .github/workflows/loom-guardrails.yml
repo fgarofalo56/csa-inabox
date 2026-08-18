@@ -215,6 +215,21 @@ jobs:
       - name: bicep-sync (orphan modules + env-sync core)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bicep-sync.mjs
+      # bicep-sync says the module is WIRED IN. This says the wiring consults the
+      # cloud-parity quota gate: three of the four flexibleServers consumers in
+      # admin-plane/main.bicep routed through postgresQuotaAvailable and the
+      # fourth (the Weave AGE store) did not, so a GCC-High deploy attempted a
+      # Postgres server in a boundary whose own bicepparam pins that gate false
+      # and died on the leaf with an EMPTY permitted-version list — which no
+      # postgresVersion value can satisfy. R2 also requires every CALLER to
+      # forward the param, because a module that gates on its own
+      # `param postgresQuotaAvailable bool = true` is defaulted back ON by any
+      # call site that omits it (story 3449d).
+      - name: postgres-quota-gate (every PG flexible server consults the Gov quota gate — 3449d)
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-postgres-quota-gate.mjs --self-test
+          node scripts/ci/check-postgres-quota-gate.mjs
       - name: deploy-script-reachability (every deploy-*-job.sh runs from CI — #2816)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-script-reachability.mjs

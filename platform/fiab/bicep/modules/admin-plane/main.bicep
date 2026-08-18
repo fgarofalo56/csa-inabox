@@ -1102,9 +1102,52 @@ var directLakeSvcActive = directLakeSvcEnabled && containerPlatform == 'containe
 // AGE,VECTOR), so this is one server for two capabilities rather than two.
 // ADMIN OPT-OUT: observabilityConfig.backendOverrides = { weaveOntology: 'disabled' }
 // (or the weaveOntologyEnabled=false root param, which maps to the same key).
+//
+// ── THE POSTGRES QUOTA GATE, WHICH THIS DERIVATION USED TO BYPASS (3449d) ─────
+// `postgresQuotaAvailable` is designated THE cloud-parity gate for
+// Microsoft.DBforPostgreSQL/flexibleServers by the comment block below (~L1180),
+// and BOTH Gov param files pin it false:
+//     params/gcc-high.bicepparam:273  param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
+//     params/il5.bicepparam:340       (same line)
+// Every other Postgres consumer in this file routes through it —
+// `airflowPostgresAllowed` (the Airflow metadata DB) and `postgresStoresAllowed`
+// (DuckLake + Loom Unity). This one did not: it was
+// `weaveOntologyBackendEnabled && !weavePgSuppliedByDlz`, full stop. So the
+// server was attempted in a boundary whose own param file says Postgres cannot
+// be provisioned there, and the deploy died on it.
+//
+// MEASURED (live GCC-High leaf, resource psql-loom-weave-default-dcmt6cqoezlgs):
+//     ParameterOutOfRange -> The value of the 'Version' should be in: []
+// The permitted-version set came back EMPTY. That is stated here only as far as
+// it is established (deploy-integrity.md R7): an EMPTY set is satisfied by NO
+// value, so no `postgresVersion` — 16, 15, 14 — can clear it, and "bump the
+// version" is provably the wrong fix. WHY the set is empty (a subscription quota
+// restriction vs the region not offering the type at all) is NOT established by
+// that message and is not claimed here; either way this deployment cannot create
+// the server, which is exactly the condition postgresQuotaAvailable encodes.
+//
+// The override rides the loomBackends bag under its own key (`weavePostgres`),
+// the same lever airflowPostgres/postgresStores use, so a Gov boundary with
+// CONFIRMED flexibleServers quota can turn just this one back on:
+//     observabilityConfig.backendOverrides = { weavePostgres: 'enabled' }
+// Default = postgresQuotaAvailable ⇒ a NO-OP on every Commercial estate (the
+// param defaults true and no shipped Commercial bicepparam sets it false).
+//
+// WHAT THIS DOES **NOT** DO — stated plainly, because cloud-parity.md would
+// otherwise be half-satisfied. Honouring the gate turns a HARD DEPLOY FAILURE
+// into a REGISTERED HONEST GATE: LOOM_WEAVE_PG_FQDN is emitted empty, and the
+// Console already gates on exactly that (gates/registry/builders.ts
+// 'svc-weave-ontology' / legacy code weave_ontology_not_configured;
+// apps/app-resources.ts throws a named error rather than dialling a host that
+// does not exist). That makes the rest of the Gov deploy succeed. It does NOT
+// give Gov the Weave ontology graph store — under cloud-parity.md the capability
+// is INCOMPLETE in Gov until an Azure-native/OSS equivalent backs it there, and
+// that substitute is deliberately NOT in this change.
 var weaveOntologyBackendEnabled = (loomBackends.?weaveOntology ?? 'enabled') != 'disabled'
 var weavePgSuppliedByDlz = !empty(loomWeavePgFqdn)
-var weavePgLocalActive = weaveOntologyBackendEnabled && !weavePgSuppliedByDlz
+var weavePgOverride = toLower(string(loomBackends.?weavePostgres ?? ''))
+var weavePgAllowed = weavePgOverride == 'enabled' ? true : (weavePgOverride == 'disabled' ? false : postgresQuotaAvailable)
+var weavePgLocalActive = weaveOntologyBackendEnabled && !weavePgSuppliedByDlz && weavePgAllowed
 
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap

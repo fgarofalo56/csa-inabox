@@ -877,7 +877,21 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
 @description('Provision the Weave ontology PostgreSQL + Apache AGE graph store to back object/link/action instance write-back. Default on — Palantir-class ontology write-back requires the graph store.')
 param weaveOntologyEnabled bool = true
 
-module postgresWeave 'postgres-weave.bicep' = if (weaveOntologyEnabled) {
+@description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally.')
+param postgresQuotaAvailable bool = true
+
+// 3449d — the DLZ half of the same gate the admin plane carries. Before this,
+// this module deployed the Weave PG server on `weaveOntologyEnabled` alone, so a
+// Gov single-sub / multi-sub / dlz-attach deploy hit the identical
+// ParameterOutOfRange 'Version' should be in: [] that the admin-plane server hit
+// on the tenant topology — an EMPTY permitted-version set, which no
+// postgresVersion value can satisfy. The shipped Gov params are topology='tenant'
+// today, so this call site is not what the live GCC-High leaf failed on; it is
+// the same defect one topology over, and fixing only the measured one would leave
+// it armed. OPT-OUT/OVERRIDE lever is main.bicep's postgresQuotaAvailable.
+var weavePgActive = weaveOntologyEnabled && postgresQuotaAvailable
+
+module postgresWeave 'postgres-weave.bicep' = if (weavePgActive) {
   name: 'dlz-postgres-weave'
   params: {
     location: location
@@ -954,9 +968,13 @@ output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVect
 
 // Weave (Semantic Ontology) graph store outputs — wired to the Console env
 // (LOOM_WEAVE_PG_FQDN / LOOM_WEAVE_PG_DATABASE) by the admin-plane.
-output weavePgServerName string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgServerName : ''
-output weavePgFqdn string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgFqdn : ''
-output weavePgDatabase string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgDatabase : ''
+// Keyed on `weavePgActive`, NOT on weaveOntologyEnabled: the module's condition
+// is what decides whether `postgresWeave!` exists, so an output that tests a
+// LOOSER predicate would dereference a module that was never deployed the moment
+// postgresQuotaAvailable is false (3449d).
+output weavePgServerName string = weavePgActive ? postgresWeave!.outputs.weavePgServerName : ''
+output weavePgFqdn string = weavePgActive ? postgresWeave!.outputs.weavePgFqdn : ''
+output weavePgDatabase string = weavePgActive ? postgresWeave!.outputs.weavePgDatabase : ''
 
 // CSA Loom no-cuts-sweep — ADF wiring outputs
 output adfFactoryId string = adfOn ? adf!.outputs.factoryId : ''
