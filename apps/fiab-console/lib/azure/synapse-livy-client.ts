@@ -232,7 +232,12 @@ const LIVY_MAX_PAGE_SIZE = 20;
 /** What a bounded session census collected, and whether it is the WHOLE list. */
 export interface LivySessionCensus {
   sessions: LivySession[];
-  /** Livy's count of ALL sessions on the pool (`sessionManager.size()`). */
+  /**
+   * The session count this census can stand behind: the server's `total` when
+   * it reported one that CANNOT be the length of a single page, otherwise the
+   * number of distinct sessions actually collected. Never a number this client
+   * invented — see the `total > batch.length` note in `listLivySessionsResult`.
+   */
   total: number;
   /** How many distinct sessions the walk actually collected. */
   scanned: number;
@@ -264,9 +269,32 @@ export async function listLivySessionsResult(
   poolName: string,
   opts?: { pageSize?: number; hardCap?: number; budgetMs?: number },
 ): Promise<LivySessionCensus> {
-  const requested = Math.max(1, Math.floor(opts?.pageSize ?? LIVY_MAX_PAGE_SIZE));
-  const size = Math.min(LIVY_MAX_PAGE_SIZE, requested);
-  const hardCap = Math.max(size, Math.floor(opts?.hardCap ?? 2000));
+  // `pageSize` and `hardCap` arrive from callers and from config, so they get
+  // the NON-FINITE guard the sibling `clampLivyPageSize` in livy-batch-paging.ts
+  // has and this function lacked. Two values were silently wrong rather than
+  // rejected:
+  //
+  //   pageSize: NaN → `Math.floor(NaN)` is NaN, `Math.max(1, NaN)` is NaN, the
+  //     request went out as `size=NaN`, AND `maxPages: ceil(hardCap/NaN)` was
+  //     NaN — which `claimPage()` evaluates as `0 < NaN` = false. Zero pages
+  //     fetched, an EMPTY census, and `truncatedBy` from a budget that never ran.
+  //   pageSize: 0  → floored to 1, turning the documented 2000-ROW `hardCap`
+  //     into a 2000-PAGE ceiling: 2000 budgeted requests to read one pool.
+  //
+  // A page size below 1 is not a smaller request, it is a nonsense one, so it
+  // falls back to the documented default instead of to 1. (That is the one
+  // place this deliberately differs from `clampLivyPageSize`, which floors to 1
+  // because it only ever sees an internally-computed remainder, never a
+  // caller's value.)
+  const asPageSize = (v: number | undefined): number =>
+    typeof v === 'number' && Number.isFinite(v) && Math.floor(v) >= 1
+      ? Math.floor(v)
+      : LIVY_MAX_PAGE_SIZE;
+  const size = Math.min(LIVY_MAX_PAGE_SIZE, asPageSize(opts?.pageSize));
+  const rawCap = typeof opts?.hardCap === 'number' && Number.isFinite(opts.hardCap)
+    ? Math.floor(opts.hardCap)
+    : 2000;
+  const hardCap = Math.max(size, rawCap);
   // `hardCap` keeps its documented meaning — a ROW ceiling — by translating it
   // into the budget's page cap at the (now correct) page size.
   const budget = new PagingBudget(`listLivySessions(${poolName})`, {
@@ -288,6 +316,9 @@ export async function listLivySessionsResult(
   // Completeness has to be ESTABLISHED, not assumed. Only two things establish
   // it: the server ran the list dry, or it reported a total and we reached it.
   let ranDry = false;
+  // Set by any page whose body carried NO `sessions` array. That is a broken
+  // read, not an exhausted list, and the two must not collapse — see below.
+  let malformed = false;
 
   while (out.length < hardCap && budget.claimPage()) {
     // detailed=true adds `name` (and errorInfo) — the reaper's busy-zombie rule
@@ -305,13 +336,53 @@ export async function listLivySessionsResult(
       ),
     );
     if (page === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
-    const batch = Array.isArray(page.sessions) ? page.sessions : [];
+    if (!Array.isArray(page.sessions)) {
+      // A 200 whose body has no `sessions` array ANSWERED NOTHING. Treating it
+      // as an empty page (which `Array.isArray(...) ? ... : []` did) set
+      // `ranDry` on the next line and handed the reaper a "complete" census of
+      // whatever had been read so far. `livy-session-census.py` in this same PR
+      // already refuses that inference — "cannot distinguish an exhausted list
+      // from a broken response" — and this is the TypeScript side of the same
+      // rule.
+      malformed = true;
+      break;
+    }
+    const batch = page.sessions;
     for (const s of batch) {
       if (typeof s?.id === 'number' && seen.has(s.id)) continue;
       if (typeof s?.id === 'number') seen.add(s.id);
       out.push(s);
     }
-    if (typeof page.total === 'number' && Number.isFinite(page.total)) total = page.total;
+    // TRUST `total` ONLY WHEN IT CANNOT BE THIS PAGE'S OWN LENGTH.
+    //
+    // Synapse's REST spec — the one swagger that generates the JS, Java and
+    // .NET SDKs — describes the batch collection's sibling field as "Number of
+    // sessions fetched", i.e. the page length, while Apache Livy's server means
+    // `sessionManager.size()`, i.e. the pool. `SparkSessionCollection` in that
+    // same swagger carries NO description at all, so this endpoint's contract
+    // is weaker still.
+    //
+    // Under the page-length reading a 137-session pool answers page one with
+    // `total: 20` next to 20 rows, `out.length >= total` is `20 >= 20`, and the
+    // walk breaks after ONE page with `truncatedBy: null` — a 20-of-137 subset
+    // reported as a COMPLETE census. `reapStaleSessions` gates its tracker GC
+    // on exactly that field, so it then forgets the grace window of the 117
+    // sessions this never paged to: #1796, reopened.
+    //
+    // `total > batch.length` is the one observation impossible under the
+    // page-length reading (a page length cannot exceed itself), so it alone is
+    // treated as evidence of a pool-wide count. Everything else leaves `total`
+    // null and lets the walk end the only way that is honest under BOTH
+    // readings: an empty page. On a pool holding one page or less that costs
+    // one extra request, and `total ?? out.length` still reports the exact
+    // count.
+    if (
+      typeof page.total === 'number' &&
+      Number.isFinite(page.total) &&
+      page.total > batch.length
+    ) {
+      total = page.total;
+    }
     from += batch.length;
     if (batch.length === 0) {
       ranDry = true; // the server ran dry — complete, and NOT a truncation
@@ -322,9 +393,9 @@ export async function listLivySessionsResult(
 
   budget.warnIfTruncated(out.length);
   // Silence must mean "this list is whole". Anything else — the row cap, the
-  // page cap, or a walk that simply never reached an end it could verify — is a
-  // truncation the caller has to see.
-  const sawWholeList = ranDry || (total !== null && out.length >= total);
+  // page cap, a broken page, or a walk that simply never reached an end it
+  // could verify — is a truncation the caller has to see.
+  const sawWholeList = !malformed && (ranDry || (total !== null && out.length >= total));
   return {
     sessions: out.slice(0, hardCap),
     total: total ?? out.length,

@@ -127,6 +127,66 @@ function totallessAscendingPool(total: number): Responder {
   };
 }
 
+/**
+ * An ascending pool whose `total` is the LENGTH OF THE PAGE JUST RETURNED —
+ * Synapse's documented semantics, and the one shape none of the fixtures above
+ * modelled.
+ *
+ * `ascendingPool`/`descendingPool` both serve a pool-wide `total` (Apache
+ * Livy's `sessionManager.size()`); `totallessAscendingPool` omits it entirely.
+ * A suite made only of those three is green regardless of which reading the
+ * client assumes, so it is not evidence about the thing that actually decides
+ * whether "recent runs" shows recent runs.
+ *
+ * The reading modelled here is the one in the Azure REST spec that GENERATES
+ * every Synapse Spark SDK — `specification/synapse/data-plane/
+ * Microsoft.Synapse/preview/2019-11-01-preview/sparkJob.json` describes
+ * `SparkBatchJobCollection.total` as "Number of sessions fetched." (which is
+ * why the JS, Java and .NET reference pages all carry that identical
+ * sentence). Under it, a 137-batch pool answers a `from=0&size=20` request with
+ * `total: 20` — and the pre-fix client computed
+ * `tailFrom = max(0, 20 - 20) = 0`, took its "everything already fits in the
+ * head window" shortcut, skipped the direction probe entirely and returned the
+ * OLDEST 20 rows with `truncatedBy: null`. Verbatim the defect the function was
+ * written to remove.
+ */
+function pageLengthTotalPool(total: number): Responder {
+  const all: BatchRow[] = Array.from({ length: total }, (_, i) => ({ id: i }));
+  return (url) => {
+    const { from, size } = parseFromSize(url);
+    const sessions = all.slice(from, from + size);
+    return { total: sessions.length, sessions };
+  };
+}
+
+/** {@link pageLengthTotalPool}, served NEWEST-FIRST. */
+function pageLengthTotalDescendingPool(total: number): Responder {
+  const all: BatchRow[] = Array.from({ length: total }, (_, i) => ({ id: total - 1 - i }));
+  return (url) => {
+    const { from, size } = parseFromSize(url);
+    const sessions = all.slice(from, from + size);
+    return { total: sessions.length, sessions };
+  };
+}
+
+/**
+ * A backend that answers 200 with a body carrying NO `sessions` array at all.
+ *
+ * `{"total":0,"sessions":[]}` and `{"total":0}` are different facts: the first
+ * says the list is exhausted, the second says the server did not answer the
+ * question. Collapsing the second into the first is how a broken backend gets
+ * to hand back a confident "no batch jobs" / a complete census.
+ */
+function malformedAfter(goodPages: number, total: number): Responder {
+  const all: BatchRow[] = Array.from({ length: total }, (_, i) => ({ id: i }));
+  let served = 0;
+  return (url) => {
+    const { from, size } = parseFromSize(url);
+    if (served++ >= goodPages) return { total: 0 } as unknown as PageBody;
+    return { total, sessions: all.slice(from, from + size) };
+  };
+}
+
 beforeEach(() => {
   requestedUrls = [];
   requestedTimeouts = [];
@@ -183,15 +243,23 @@ describe('listSparkBatchJobs — #3568 size/from clamp', () => {
     expect(parseFromSize(requestedUrls[0]).from).toBe(0);
   });
 
-  it('a plain in-cap request makes exactly ONE request and reports a complete walk', async () => {
-    responder = () => ({ total: 3, sessions: [{ id: 1 }, { id: 2 }, { id: 3 }] });
+  it('a plain in-cap request confirms the end of the list, then reports a complete walk', async () => {
+    responder = ascendingPool(3);
     const { listSparkBatchJobs } = await import('../synapse-dev-client');
 
     const result = await listSparkBatchJobs('pool1', 0, 20);
 
-    expect(requestedUrls).toHaveLength(1);
+    // TWO requests, not one, and the second is the price of the `readTotal`
+    // fix. The first page answers `total: 3` alongside 3 rows — a value that is
+    // identical under BOTH documented readings of `total` (pool-wide, and
+    // "number of sessions fetched"), so it cannot be used to conclude the list
+    // is finished. The only thing that settles it is asking again and getting
+    // nothing back. `size` is still clamped and the walk still reports
+    // complete.
+    expect(requestedUrls).toHaveLength(2);
     expect(parseFromSize(requestedUrls[0])).toEqual({ from: 0, size: 20 });
-    expect(result.sessions).toHaveLength(3);
+    expect(parseFromSize(requestedUrls[1]).from).toBe(3);
+    expect(result.sessions.map((s) => s.id)).toEqual([0, 1, 2]);
     expect(result.truncatedBy).toBeNull();
   });
 
@@ -315,13 +383,20 @@ describe('listRecentSparkBatchJobs — "recent" must actually mean recent', () =
     );
   });
 
-  it('a pool smaller than one page costs exactly ONE request and no tail probe', async () => {
+  it('a pool smaller than one page runs the list dry instead of probing a tail', async () => {
     responder = ascendingPool(7);
     const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
 
     const result = await listRecentSparkBatchJobs('pool1', 20);
 
-    expect(requestedUrls).toHaveLength(1);
+    // The head page reports `total: 7` next to 7 rows. That is exactly what a
+    // page-length `total` looks like too, so it cannot drive `tailFrom`; the
+    // walk instead reads on until the list runs dry. Two requests, and neither
+    // is a tail probe at a computed offset — the second continues forward from
+    // where the first stopped.
+    expect(requestedUrls).toHaveLength(2);
+    expect(parseFromSize(requestedUrls[0]).from).toBe(0);
+    expect(parseFromSize(requestedUrls[1]).from).toBe(7);
     expect(result.sessions.map((s) => s.id)).toEqual([6, 5, 4, 3, 2, 1, 0]);
     expect(result.scanned).toBe(7);
     expect(result.truncatedBy).toBeNull();
@@ -474,6 +549,193 @@ describe('a `total`-less page must never read as a complete window', () => {
 
     expect(result.sessions.map((s) => s.id)).toEqual([6, 5, 4, 3, 2, 1, 0]);
     expect(result.total).toBe(7);
+    expect(result.truncatedBy).toBeNull();
+  });
+});
+
+/**
+ * B1 FROM THE PR #3689 REVIEW — `total` may be the PAGE LENGTH, not the pool.
+ *
+ * The recency algorithm navigates by offset arithmetic on `total`, which is
+ * only sound under Apache Livy's reading (`"total" -> sessionManager.size()`).
+ * The Azure REST spec that generates every Synapse Spark SDK says the other
+ * thing, in one sentence, for the field this client reads:
+ *
+ *   specification/synapse/data-plane/Microsoft.Synapse/preview/
+ *   2019-11-01-preview/sparkJob.json
+ *     SparkBatchJobCollection.total -> "Number of sessions fetched."
+ *
+ * That single swagger is why `@azure/synapse-spark`, the Java
+ * `com.azure.analytics.synapse.spark.models` getter and the .NET
+ * `Azure.Analytics.Synapse.Spark.Models` property all carry the identical
+ * wording — they are generated from it, so the three surfaces are ONE source,
+ * not three independent confirmations.
+ *
+ * Which reading the LIVE service exhibits is NOT settled here and cannot be
+ * settled from source: it needs a real request against a pool holding more than
+ * 20 batches. These specs make that unnecessary by pinning the behaviour under
+ * BOTH readings — every fixture above serves a pool-wide `total` (or none),
+ * every fixture below serves a page-length one. Green on both is the point.
+ */
+describe('a `total` that is really the PAGE LENGTH must not steer the walk', () => {
+  it('returns the NEWEST rows from a 137-batch ascending pool whose `total` is always the page length', async () => {
+    // THE REPORTED DEFECT, byte for byte. `tailFrom = max(0, 20 - 20) = 0` sent
+    // this straight into the "everything already fits" shortcut, which returns
+    // the head window — ids 0..19, the pool's OLDEST — under a "recent"
+    // contract, with `truncatedBy: null` to silence the doubt.
+    responder = pageLengthTotalPool(137);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.sessions.map((s) => s.id)).toEqual(
+      Array.from({ length: 20 }, (_, i) => 136 - i),
+    );
+    expect(result.scanned).toBe(137);
+    expect(result.total).toBe(137);
+    expect(result.truncatedBy).toBeNull();
+  });
+
+  it('never reports a complete window while holding the oldest rows, at any pool size', async () => {
+    // A ratchet across sizes rather than one lucky number: at 21 the pool is
+    // one row past a single page, the smallest pool where the two readings of
+    // `total` disagree at all.
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    for (const size of [21, 40, 137, 199]) {
+      requestedUrls = [];
+      responder = pageLengthTotalPool(size);
+
+      const result = await listRecentSparkBatchJobs('pool1', 20);
+      const newest = Math.max(...result.sessions.map((s) => s.id));
+
+      // Either we genuinely reached the newest row, or the result says it is
+      // incomplete. "Oldest window, reported complete" must not exist.
+      expect(newest === size - 1 || result.truncatedBy != null).toBe(true);
+      expect(newest === 19 && result.truncatedBy == null).toBe(false);
+    }
+  });
+
+  it('MEASURES direction even under page-length `total` — a descending backend still yields the newest', async () => {
+    responder = pageLengthTotalDescendingPool(137);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.sessions.map((s) => s.id)).toEqual(
+      Array.from({ length: 20 }, (_, i) => 136 - i),
+    );
+    expect(result.truncatedBy).toBeNull();
+  });
+
+  it('collects a >1-page recent window under page-length `total` without padding it with the oldest', async () => {
+    responder = pageLengthTotalPool(137);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 60);
+
+    expect(result.sessions).toHaveLength(60);
+    expect(result.sessions[0].id).toBe(136);
+    expect(Math.min(...result.sessions.map((s) => s.id))).toBe(77);
+  });
+
+  it('listSparkBatchJobs answers a 100-row request with 100 rows, not one page of 20', async () => {
+    // `listSparkBatchJobs(pool, 0, 100)` exited after a single page because
+    // `nextFrom < reportedTotal` was `20 < 20` — false on the very first check —
+    // and then reported the 20-row result as a COMPLETE walk.
+    responder = pageLengthTotalPool(137);
+    const { listSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listSparkBatchJobs('pool1', 0, 100);
+
+    expect(result.sessions).toHaveLength(100);
+    expect(result.sessions.map((s) => s.id)).toEqual(Array.from({ length: 100 }, (_, i) => i));
+    expect(result.truncatedBy).toBeNull();
+  });
+
+  it('still uses a `total` that CANNOT be a page length — no extra requests on a big pool', async () => {
+    // `total: 200` next to a 20-row page is impossible under the page-length
+    // reading, so it is unambiguous evidence of a pool-wide count and the
+    // offset probe runs exactly as before. The fix must not cost anything here.
+    responder = ascendingPool(200);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(requestedUrls).toHaveLength(2); // head probe + tail probe, nothing more
+    expect(parseFromSize(requestedUrls[1]).from).toBe(180); // the computed tail
+    expect(result.sessions.map((s) => s.id)).toEqual(
+      Array.from({ length: 20 }, (_, i) => 199 - i),
+    );
+    expect(result.total).toBe(200);
+    expect(result.truncatedBy).toBeNull();
+  });
+});
+
+/**
+ * A 200 whose body carries NO `sessions` array is a BROKEN RESPONSE, and must
+ * not be read as an exhausted list.
+ *
+ * Flagged in the same review: this PR ships `livy-session-census.py`, which
+ * refuses that inference in as many words — "cannot distinguish an exhausted
+ * list from a broken response" — while the TypeScript walkers in the same PR
+ * did the opposite and set `ranDry = true`. Two implementations of one rule,
+ * inside one PR, disagreeing on the single case that decides whether a census
+ * reads as complete.
+ */
+describe('a page with no `sessions` array is a broken read, not an empty pool', () => {
+  it('listSparkBatchJobs does not report a complete walk after a bodyless page', async () => {
+    responder = malformedAfter(0, 137);
+    const { listSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listSparkBatchJobs('pool1', 0, 20);
+
+    expect(result.sessions).toEqual([]);
+    // `truncatedBy: null` here reads as "this pool has no batch jobs".
+    expect(result.truncatedBy).not.toBeNull();
+  });
+
+  it('listSparkBatchJobs keeps the rows it did read and still discloses the break', async () => {
+    responder = malformedAfter(2, 137);
+    const { listSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listSparkBatchJobs('pool1', 0, 100);
+
+    expect(result.sessions).toHaveLength(40); // two good pages, kept
+    expect(result.truncatedBy).not.toBeNull();
+  });
+
+  it('listRecentSparkBatchJobs does not present an empty pool when the first body is broken', async () => {
+    responder = malformedAfter(0, 137);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.sessions).toEqual([]);
+    expect(result.truncatedBy).not.toBeNull();
+  });
+
+  it('listRecentSparkBatchJobs marks the window incomplete when the walk hits a broken page', async () => {
+    // One good page, then a bodyless one. Under the old rule the broken page
+    // set `ranDry` and the 20 OLDEST rows came back as a complete recent
+    // window.
+    responder = malformedAfter(1, 137);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.truncatedBy).not.toBeNull();
+  });
+
+  it('an EMPTY `sessions` array is still a genuinely complete walk', async () => {
+    // The counterfactual that keeps the rule from degenerating into "everything
+    // is a truncation": `{"total":0,"sessions":[]}` DID answer the question.
+    responder = () => ({ total: 0, sessions: [] });
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.sessions).toEqual([]);
     expect(result.truncatedBy).toBeNull();
   });
 });

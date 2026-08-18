@@ -6,18 +6,16 @@
  * Livy batch history — no mock data. Honest gate when Synapse is unconfigured.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadMlvItem } from '../../_lib/load';
 import { listRecentSparkBatchJobs, type SparkBatchJob } from '@/lib/azure/synapse-dev-client';
 import { defaultSparkPool } from '@/lib/azure/synapse-livy-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
 
   const item = await loadMlvItem(id, session.claims.oid).catch(() => null);
   if (!item) return NextResponse.json({ ok: false, error: 'MLV not found' }, { status: 404 });
@@ -75,4 +73,4 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
     const msg = (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     return NextResponse.json({ ok: false, error: msg.slice(0, 300) }, { status: 502 });
   }
-}
+});

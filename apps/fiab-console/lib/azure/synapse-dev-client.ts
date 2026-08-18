@@ -30,6 +30,16 @@ import {
   type PagingBudgetOptions,
   type PagingTruncation,
 } from './paging-budget';
+import {
+  walkBatchWindow,
+  walkRecentBatches,
+  type FetchBatchPage,
+  type RecentSparkBatchJobs,
+  type SparkBatchJob,
+  type SparkBatchPage,
+  type SparkBatchRequest,
+  type SparkBatchWindow,
+} from './livy-batch-paging';
 
 // Cloud-aware endpoint hosts. ARM host comes from cloud-endpoints (AZURE_CLOUD /
 // LOOM_ARM_ENDPOINT aware); AZURE_ARM_HOST stays as an explicit per-call override.
@@ -486,44 +496,19 @@ export async function updateBigDataPool(
 // Spark Livy batch jobs (dev endpoint)
 // ============================================================
 
-export interface SparkBatchJob {
-  id: number;
-  livyInfo?: { currentState?: string; jobCreationRequest?: unknown };
-  name?: string;
-  state?: string;
-  appId?: string | null;
-  artifactId?: string;
-  result?: 'Uncertain' | 'Succeeded' | 'Failed' | 'Cancelled';
-  schedulerInfo?: unknown;
-  log?: string[];
-  submitterId?: string;
-  submitterName?: string;
-  pluginInfo?: unknown;
-  errorInfo?: unknown[];
-  tags?: Record<string, string>;
-  workspaceName?: string;
-  sparkPoolName?: string;
-  submittedAt?: string;
-  jobType?: string;
-}
-
-export interface SparkBatchRequest {
-  name: string;
-  file: string;                 // wasbs://… or abfss://… URI to JAR / .py
-  className?: string;
-  args?: string[];
-  jars?: string[];
-  pyFiles?: string[];
-  files?: string[];
-  archives?: string[];
-  conf?: Record<string, string>;
-  driverMemory?: string;
-  driverCores?: number;
-  executorMemory?: string;
-  executorCores?: number;
-  numExecutors?: number;
-  tags?: Record<string, string>;
-}
+// The Livy `/batches` types and the paging + recency algorithm live in
+// `livy-batch-paging.ts` (split out of this file in the PR #3689 review: that
+// is the part with the actual algorithm in it, it is pure, and this file was
+// 1830 LOC). This module keeps the TRANSPORT and binds it to those walkers.
+// Every type is re-exported so the ~10 existing importers keep working
+// unchanged.
+export type {
+  SparkBatchJob,
+  SparkBatchPage,
+  SparkBatchRequest,
+  SparkBatchWindow,
+  RecentSparkBatchJobs,
+} from './livy-batch-paging';
 
 export async function submitSparkBatchJob(
   poolName: string,
@@ -536,377 +521,56 @@ export async function submitSparkBatchJob(
   return jsonOrThrow<SparkBatchJob>(r, `submitSparkBatchJob(${poolName})`);
 }
 
-// The Synapse Livy batches list endpoint documents `size` as "By default it is
-// 20 and that is the maximum" and 400s above it — see #3568 and
-// https://learn.microsoft.com/rest/api/synapse/data-plane/spark-batch/get-spark-batch-jobs
-// Before this fix the cap was left to each caller to enforce: two call sites
-// hardcoded an over-cap literal (100, 25) and two forwarded an unvalidated
-// caller/query-string value straight through, so patching only the reported
-// call site would have left three other ways to reproduce the 400. The clamp
-// lives HERE, at the shared client, so every current and future caller
-// inherits it for free. The sessions endpoint carries the IDENTICAL cap — see
-// `LIVY_MAX_PAGE_SIZE` in synapse-livy-client.ts.
-const LIVY_MAX_PAGE_SIZE = 20;
-
 /**
- * Hard ceiling on how many pages ONE bounded Livy walk may fetch: 10 x 20 =
- * 200 rows. Paired with the budget's wall clock (see `paging-budget.ts`) so a
- * walk is bounded BOTH ways — a page cap alone still allows 10 x 30s.
+ * Bind the Livy batches list endpoint for `poolName` into a {@link FetchBatchPage}.
+ *
+ * `timeoutMs` comes from the paging budget's remaining wall clock and is
+ * forwarded to `callDev` — dropping it is how a "bounded" walk silently becomes
+ * N x 30s.
  */
-const LIVY_MAX_WALK_PAGES = 10;
-
-/** Clamp a requested page size into [1, LIVY_MAX_PAGE_SIZE] for one Livy request. */
-function clampLivyPageSize(size: number): number {
-  const n = Number.isFinite(size) ? Math.floor(size) : LIVY_MAX_PAGE_SIZE;
-  return Math.min(LIVY_MAX_PAGE_SIZE, Math.max(1, n));
+function batchPageFetcher(poolName: string): FetchBatchPage {
+  return async (from, size, timeoutMs) => {
+    const r = await callDev(
+      `${livyPoolBase(poolName)}/batches?from=${from}&size=${size}&detailed=true`,
+      undefined,
+      timeoutMs,
+    );
+    return jsonOrThrow<SparkBatchPage>(r, `listSparkBatchJobs(${poolName})`);
+  };
 }
 
-/** Sanity-clamp the Livy `from` offset to a non-negative integer. */
-function clampLivyFrom(from: number): number {
-  const n = Number.isFinite(from) ? Math.floor(from) : 0;
-  return Math.max(0, n);
-}
-
-interface SparkBatchPage {
-  from: number;
-  total: number;
-  sessions: SparkBatchJob[];
-}
-
-async function fetchSparkBatchPage(
-  poolName: string,
-  from: number,
-  size: number,
-  timeoutMs?: number,
-): Promise<SparkBatchPage> {
-  const r = await callDev(
-    `${livyPoolBase(poolName)}/batches?from=${from}&size=${size}&detailed=true`,
-    undefined,
-    timeoutMs,
-  );
-  return jsonOrThrow(r, `listSparkBatchJobs(${poolName})`);
-}
-
-/**
- * A budgeted page reader for the Livy `/batches` list.
- *
- * Every fetch — INCLUDING THE FIRST — goes through `budget.claimPage()` +
- * `budget.runPage()`. That pairing is what actually bounds the walk in wall
- * clock: `runPage` hands the fetch the budget's REMAINING milliseconds as its
- * `timeoutMs` and absorbs the resulting `FetchTimeoutError` into a `time`
- * truncation. A fetch issued OUTSIDE `runPage` inherits
- * `DEFAULT_SERVER_FETCH_TIMEOUT_MS` (30s) instead and can therefore hang for
- * 30s on its own no matter what the budget says — which is precisely the hole
- * the first cut of #3568 left: it constructed the budget AFTER the first fetch
- * and never called `runPage` at all, so `claimPage()` was pure bookkeeping and
- * the "bounded in wall-clock time" claim was untrue.
- *
- * Returns null when the page cap or the wall clock is spent (at the loop top
- * OR mid-fetch); the caller keeps the rows it already has and reads
- * `budget.truncatedBy` for which ceiling tripped.
- *
- * Caveat, stated rather than overclaimed: TWO things sit outside the fetch
- * deadline. `callDev` acquires an AAD token before the HTTP call, and
- * `fetchWithTimeout` clears its timer in a `finally` as soon as `fetch`
- * resolves — i.e. once the RESPONSE HEADERS arrive — so `jsonOrThrow`'s
- * `r.text()` body read runs unbounded too. The walk still terminates (the next
- * `claimPage()` sees the spent clock), but the true bound is "budget + at most
- * one token acquisition + at most one body read", not "budget" exactly. That is
- * systemic to every caller of `fetchWithTimeout`, not something this walk
- * introduced.
- */
-async function readBatchPage(
-  budget: PagingBudget,
-  poolName: string,
-  from: number,
-  size: number,
-): Promise<SparkBatchPage | null> {
-  if (!budget.claimPage()) return null;
-  const page = await budget.runPage((timeoutMs) =>
-    fetchSparkBatchPage(poolName, from, size, timeoutMs),
-  );
-  return page === PAGE_DEADLINE ? null : page;
-}
-
-/**
- * Livy's `total` is the count of ALL batches the server holds, not the length
- * of the page just returned (Apache Livy: `"total" -> sessionManager.size()`).
- *
- * Returns **null** when the server did not report a usable one. The caller must
- * NOT substitute the page length: doing so made `total` 20 on a pool of any
- * size, which drove `listRecentSparkBatchJobs`'s `tailFrom` to
- * `max(0, 20 - 20) = 0` and sent it down the "everything already fits in the
- * head window" branch — handing a "recent runs" grid the OLDEST 20 rows of an
- * ascending list with `truncatedBy: null`. A number we invented is worse than
- * an absent one, because it silences the truncation signal at the same time.
- */
-function readTotal(page: SparkBatchPage): number | null {
-  const t = page.total;
-  return typeof t === 'number' && Number.isFinite(t) && t >= 0 ? Math.floor(t) : null;
-}
-
-/** Merge a page's rows into `acc`, de-duplicating by batch id. */
-function mergeBatches(acc: Map<number, SparkBatchJob>, rows: SparkBatchJob[] | undefined): void {
-  for (const row of rows || []) {
-    if (row && typeof row.id === 'number') acc.set(row.id, row);
-    else if (row) acc.set(-1 - acc.size, row); // id-less row: keep it, never collide
-  }
-}
-
-/** Highest batch id in a page (-Infinity when the page is empty). */
-function maxBatchId(rows: SparkBatchJob[] | undefined): number {
-  let max = Number.NEGATIVE_INFINITY;
-  for (const row of rows || []) {
-    if (row && typeof row.id === 'number' && row.id > max) max = row.id;
-  }
-  return max;
-}
-
-/**
- * List Spark Livy batch jobs for `poolName` as an EXPLICIT OFFSET WINDOW.
- *
- * `from` is an index into Livy's list in the order the server returns it, and
- * the rows come back in that same server order — this function makes no
- * recency claim. Callers that want "the most recent runs" must use
- * {@link listRecentSparkBatchJobs}; asking this one for `from=0` and calling
- * the result "recent" is a bug, because Livy lists in ASCENDING batch-id order
- * (insertion-ordered `LinkedHashMap` + a monotonic id counter), so `from=0` is
- * the OLDEST end of the list.
- *
- * `size` is clamped to Livy's documented per-request maximum of 20; `from` is
- * sanity-clamped to a non-negative integer. A request for more than 20 walks
- * `from` forward across additional <=20-row requests, bounded BOTH by
- * `LIVY_MAX_WALK_PAGES` and by the `PagingBudget` wall clock — every fetch,
- * including the first, runs through {@link readBatchPage}. A ceiling breach
- * returns the rows collected so far (a partial run list beats a wedged request
- * path) and names itself in `truncatedBy`.
- */
+/** An EXPLICIT OFFSET WINDOW of the batches list, in server order — see
+ *  {@link walkBatchWindow}. Makes NO recency claim; use
+ *  {@link listRecentSparkBatchJobs} for that. */
 export async function listSparkBatchJobs(
   poolName: string,
   from = 0,
   size = 20,
   opts?: PagingBudgetOptions,
-): Promise<{
-  from: number;
-  total: number;
-  sessions: SparkBatchJob[];
-  truncatedBy?: PagingTruncation | null;
-}> {
-  const safeFrom = clampLivyFrom(from);
-  const requested = Number.isFinite(size) && size > 0 ? Math.floor(size) : LIVY_MAX_PAGE_SIZE;
-
-  // Constructed BEFORE the first fetch — the wall clock starts here, so the
-  // first page is inside the budget rather than a free 30s ahead of it.
-  const budget = new PagingBudget(`listSparkBatchJobs(${poolName})`, {
-    maxPages: LIVY_MAX_WALK_PAGES,
-    ...opts,
-  });
-
-  const first = await readBatchPage(budget, poolName, safeFrom, clampLivyPageSize(requested));
-  if (!first) {
-    budget.warnIfTruncated(0);
-    return { from: safeFrom, total: 0, sessions: [], truncatedBy: budget.truncatedBy };
-  }
-
-  const sessions = [...(first.sessions || [])];
-  const reportedTotal = readTotal(first);
-  let nextFrom = safeFrom + sessions.length;
-  let ranDry = sessions.length === 0;
-
-  // `reportedTotal === null` — the server never told us how long the list is,
-  // so there is no upper bound to compare against and the ONLY honest stopping
-  // condition is a page that comes back empty. Comparing against a fabricated
-  // total is what answered a 60-row request with 20.
-  while (sessions.length < requested && !ranDry && (reportedTotal === null || nextFrom < reportedTotal)) {
-    const page = await readBatchPage(
-      budget,
-      poolName,
-      nextFrom,
-      clampLivyPageSize(requested - sessions.length),
-    );
-    if (!page) break;
-    const rows = page.sessions || [];
-    if (rows.length === 0) {
-      ranDry = true; // server ran dry — a complete walk, not a truncation
-      break;
-    }
-    sessions.push(...rows);
-    nextFrom += rows.length;
-  }
-
-  budget.warnIfTruncated(sessions.length);
-  return {
-    from: safeFrom,
-    // When the server reported no total, the rows we actually saw are the only
-    // count we can stand behind — a LOWER BOUND, not a claim about the pool.
-    total: reportedTotal ?? sessions.length,
-    sessions: sessions.slice(0, requested),
-    truncatedBy: budget.truncatedBy,
-  };
+): Promise<SparkBatchWindow> {
+  return walkBatchWindow(
+    batchPageFetcher(poolName),
+    `listSparkBatchJobs(${poolName})`,
+    from,
+    size,
+    opts,
+  );
 }
 
-/** What {@link listRecentSparkBatchJobs} collected, and how complete it is. */
-export interface RecentSparkBatchJobs {
-  /** The newest `limit` batches the walk could reach, NEWEST FIRST (id desc). */
-  sessions: SparkBatchJob[];
-  /** Livy's count of ALL batches on the pool. */
-  total: number;
-  /** How many distinct batches the walk actually looked at. */
-  scanned: number;
-  /** Non-null when a ceiling cut the walk short — the window is INCOMPLETE. */
-  truncatedBy?: PagingTruncation | null;
-}
-
-/**
- * List the MOST RECENT batch jobs on `poolName`, newest first.
- *
- * WHY THIS EXISTS — the defect it fixes. Livy returns its batch list in
- * ASCENDING batch-id order and `from` is an index into that ascending list, so
- * `from=0` is the OLDEST end. Verified against Apache Livy's server:
- * `SessionServlet.get("/")` slices `sessionManager.all().view(from, from+size)`,
- * `all()` is `sessions.values` over a `mutable.LinkedHashMap` (insertion
- * ordered), and ids come from a monotonic `AtomicInteger` — so index order IS
- * ascending id order IS oldest-first. Every "recent runs" surface in the
- * console was calling `from=0` and labelling the result recent. While `size`
- * was over the cap that at least failed LOUDLY with a 400; clamping `size`
- * alone would have converted the loud failure into a silent one — the grid
- * would fill with the pool's OLDEST runs under a "Runs" header. That is the
- * `no-vaporware.md` failure mode (a surface that looks right and shows the
- * wrong rows), so the clamp ships with the recency fix, not ahead of it.
- *
- * HOW IT AVOIDS TAKING THAT ORDERING ON FAITH. Synapse's Livy surface is a
- * Microsoft reimplementation, not literally Apache Livy, and its ordering is
- * not contractual in the REST reference. So this does not assume — it
- * MEASURES, per call: it reads the head window, then probes the tail window
- * (`from = total - pageSize`) and compares the highest batch id at each end.
- * Whichever end actually holds the newer ids is the end it walks. If Synapse
- * ever flipped to descending, this keeps returning the newest rows instead of
- * silently inverting. Rows are finally sorted by id descending, which is
- * authoritative regardless of the order the server chose (higher id = newer;
- * the same assumption `getLastLivyError` already relies on).
- *
- * The whole walk runs under ONE {@link PagingBudget} — page cap AND wall clock,
- * every fetch through {@link readBatchPage}. On a breach the caller gets the
- * newest rows reached so far plus a non-null `truncatedBy`, never an exception
- * and never a silently short list.
- */
+/** The MOST RECENT batch jobs on `poolName`, newest first — see
+ *  {@link walkRecentBatches} for why it probes both ends of the list and will
+ *  not navigate by a `total` indistinguishable from a page length. */
 export async function listRecentSparkBatchJobs(
   poolName: string,
   limit = 20,
   opts?: PagingBudgetOptions,
 ): Promise<RecentSparkBatchJobs> {
-  const want = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : LIVY_MAX_PAGE_SIZE;
-  const pageSize = clampLivyPageSize(want);
-  const budget = new PagingBudget(`listRecentSparkBatchJobs(${poolName})`, {
-    maxPages: LIVY_MAX_WALK_PAGES,
-    ...opts,
-  });
-  const collected = new Map<number, SparkBatchJob>();
-
-  const finish = (total: number): RecentSparkBatchJobs => {
-    budget.warnIfTruncated(collected.size);
-    const sessions = [...collected.values()]
-      .sort((a, b) => (b?.id ?? 0) - (a?.id ?? 0))
-      .slice(0, want);
-    return { sessions, total, scanned: collected.size, truncatedBy: budget.truncatedBy };
-  };
-
-  const head = await readBatchPage(budget, poolName, 0, pageSize);
-  if (!head) return finish(0);
-  const headRows = head.sessions || [];
-  const reportedTotal = readTotal(head);
-
-  if (reportedTotal === null) {
-    // NO `total` FROM THE SERVER. Every other branch below navigates by offset
-    // arithmetic on `total`; without it there is no offset to jump to, so the
-    // direction probe is impossible. The previous cut papered over this by
-    // falling back to the page length, which made `tailFrom` 0 and returned the
-    // ascending list's OLDEST rows under a "recent" contract with
-    // `truncatedBy: null` — silently the exact defect this function exists to
-    // remove.
-    //
-    // The honest alternative is to read the list to its END: a walk that ran
-    // dry has SEEN every batch, so the newest `want` of them is genuinely the
-    // newest regardless of which order the server chose. If a ceiling stops us
-    // first we return what we reached and `budget.truncatedBy` says the window
-    // is incomplete — a disclosed partial beats a confident wrong answer.
-    mergeBatches(collected, headRows);
-    let cursor = headRows.length;
-    let ranDry = headRows.length === 0;
-    while (!ranDry) {
-      const page = await readBatchPage(budget, poolName, cursor, pageSize);
-      if (!page) break; // ceiling — `claimPage`/`runPage` recorded which one
-      const rows = page.sessions || [];
-      if (rows.length === 0) {
-        ranDry = true;
-        break;
-      }
-      const before = collected.size;
-      mergeBatches(collected, rows);
-      cursor += rows.length;
-      if (collected.size === before) break; // all duplicates — treat as dry
-    }
-    const result = finish(collected.size);
-    // A walk that never reached the end has NOT established what the newest
-    // rows are. `finish` only reports the budget's own ceilings, so name the
-    // page ceiling here rather than returning a null truncation.
-    return ranDry ? result : { ...result, truncatedBy: result.truncatedBy ?? 'pages' };
-  }
-
-  const total = reportedTotal;
-
-  // Everything the pool has already fits in the head window — nothing to page,
-  // and no probe needed: sorting by id descending is enough.
-  const tailFrom = Math.max(0, total - pageSize);
-  if (tailFrom === 0) {
-    mergeBatches(collected, head.sessions);
-    return finish(total);
-  }
-
-  // Probe the far end and let the DATA say which end is newest. The two probe
-  // pages are NOT both merged: exactly one end holds the newest rows, and
-  // folding the other end's rows into the answer is how a "recent runs" grid
-  // ends up padded with the pool's oldest batches once `limit` exceeds one page.
-  const tail = await readBatchPage(budget, poolName, tailFrom, pageSize);
-  if (!tail) {
-    // The budget ran out before we learned which end is newest. Returning the
-    // head window here would be returning the OLDEST rows under a "recent"
-    // contract — the exact defect this function exists to remove — so return
-    // nothing and say why. `truncatedBy` is non-null, so the caller can render
-    // "couldn't reach the recent window" rather than "no runs".
-    return finish(total);
-  }
-  const newestAtTail = maxBatchId(tail.sessions) > maxBatchId(head.sessions);
-
-  if (newestAtTail) {
-    // Ascending list: the newest live at the tail, so walk BACKWARD toward 0.
-    mergeBatches(collected, tail.sessions);
-    let cursor = tailFrom;
-    while (collected.size < want && cursor > 0) {
-      const step = Math.min(pageSize, cursor);
-      cursor -= step;
-      const page = await readBatchPage(budget, poolName, cursor, step);
-      if (!page) break;
-      const before = collected.size;
-      mergeBatches(collected, page.sessions);
-      if (collected.size === before) break; // ran dry / all duplicates
-    }
-  } else {
-    // Descending (or a `total` that did not mean what we assumed): the newest
-    // are already at the head, so walk FORWARD from it.
-    mergeBatches(collected, head.sessions);
-    let cursor = (head.sessions || []).length;
-    while (collected.size < want && cursor < total) {
-      const page = await readBatchPage(budget, poolName, cursor, pageSize);
-      if (!page) break;
-      const rows = page.sessions || [];
-      if (rows.length === 0) break;
-      mergeBatches(collected, rows);
-      cursor += rows.length;
-    }
-  }
-
-  return finish(total);
+  return walkRecentBatches(
+    batchPageFetcher(poolName),
+    `listRecentSparkBatchJobs(${poolName})`,
+    limit,
+    opts,
+  );
 }
 
 export async function getSparkBatchJob(poolName: string, batchId: number): Promise<SparkBatchJob> {
