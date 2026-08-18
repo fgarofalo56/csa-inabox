@@ -75,6 +75,40 @@ const TOUCH_EXEMPT = new Map([
   // a drive-by inside a security fix.
   ['apps/fiab-console/lib/azure/kusto-client.ts',
    'GHSA-v2g8-gp3r-rg4r: +10 LOC on createDatabase only; migrating loadKustoItem WIDENS access for 13 /api/adx routes — separate PR'],
+  // #3697/#3698 touched this file ONLY to fix `accessOptsFor`, which is itself a
+  // correction IN THIS GUARD'S DIRECTION: the helper hand-built the
+  // workspace-access options and DROPPED `tenantAdmin`, so the ~345 routes behind
+  // `loadOwnedItem` / `listOwnedItems` / `listAllOwnedItems` refused a tenant
+  // admin who did not personally CREATE the workspace — the #2941/#2942 defect
+  // this ratchet exists for, reached through the shared helper rather than an
+  // inline point read. It now delegates to `ambientAccessOptsFor`.
+  //
+  // NONE OF THE FOUR BASELINED LINES IS IN THIS PR'S DIFF — measured, not
+  // assumed. The detector's hits in this file are src lines 63, 172, 477 and
+  // 637; the PR's hunks are the import line, 243-300 (`accessOptsFor` itself)
+  // and the five one-line call sites that await it (326, 356, 383, 427, 437).
+  // What each hit actually is, and why none is migrated here:
+  //   :63  mirrorGovernanceDoc — reads the workspace NAME/domain to label an AI
+  //        Search doc. Not an authorization decision at all; the read is
+  //        try/catch'd and falls back to the raw workspace id. Shape-detector
+  //        false positive.
+  //   :172 applyLabelInheritance — confirms an upstream SOURCE item's workspace
+  //        is in the caller's own partition before inheriting its sensitivity
+  //        label. Owner-only, and CONSERVATIVE: it under-inherits for a shared
+  //        or admin-reached source. A governance-completeness gap, not an
+  //        access hole.
+  //   :477 createOwnedItem — this is the OWNER FAST PATH, and it already falls
+  //        through to the canonical ladder: the `if (!workspace || …)` branch
+  //        below it re-resolves the workspace cross-partition and authorizes
+  //        with `authorizeWorkspace(session, workspaceId)` (write-scoped).
+  //   :637 loadRecycledItem — the one genuine #2941-shaped read: recycle-bin
+  //        restore/purge is limited to the workspace CREATOR, so a tenant admin
+  //        or write-capable ACL member cannot restore. It fails CLOSED, and
+  //        migrating it WIDENS who can restore and purge items. That is an
+  //        authorization change that needs its own review and its own tests,
+  //        not a drive-by inside a 404 fix.
+  ['apps/fiab-console/app/api/items/_lib/item-crud.ts',
+   '#3697/#3698: the diff fixes accessOptsFor (adds the dropped tenantAdmin — a correction in THIS guard\'s direction) and touches none of the four baselined lines (63/172/477/637, measured); :63 is a name lookup, :172 fails closed, :477 already falls through to authorizeWorkspace, and migrating :637 (loadRecycledItem) would WIDEN recycle-bin restore/purge — separate PR'],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */

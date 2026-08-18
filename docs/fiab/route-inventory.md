@@ -2408,7 +2408,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-172 function(s) across 79 module(s) reach an owner / workspace-ACL
+173 function(s) across 79 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2424,7 +2424,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/_lib/ai-content-fallback.ts` | `loadContentBackedItem` |
 | `apps/fiab-console/app/api/items/_lib/copilot-builder-checkpoints.ts` | `captureBuilderCheckpoint`, `listBuilderCheckpoints`, `restoreBuilderCheckpoint` |
 | `apps/fiab-console/app/api/items/_lib/copilot-builder-route.ts` | `GET`, `POST`, `makeCopilotBuilderRoute` |
-| `apps/fiab-console/app/api/items/_lib/item-crud.ts` | `createOwnedItem`, `deleteOwnedItem`, `listAllOwnedItems`, `listOwnedItems`, `loadOwnedItem`, `loadRecycledItem`, `purgeRecycledItem`, `restoreOwnedItem`, `softDeleteOwnedItem`, `updateOwnedItem` |
+| `apps/fiab-console/app/api/items/_lib/item-crud.ts` | `accessOptsFor`, `createOwnedItem`, `deleteOwnedItem`, `listAllOwnedItems`, `listOwnedItems`, `loadOwnedItem`, `loadRecycledItem`, `purgeRecycledItem`, `restoreOwnedItem`, `softDeleteOwnedItem`, `updateOwnedItem` |
 | `apps/fiab-console/app/api/items/_lib/model-store.ts` | `readModelState`, `writeModelState` |
 | `apps/fiab-console/app/api/items/_lib/ontology-binding.ts` | `GET`, `POST`, `makeOntologyBindRoute` |
 | `apps/fiab-console/app/api/items/_lib/palantir-crud.ts` | `GET`, `PATCH`, `POST`, `listOntologies`, `loadOntologySurface`, `makeCollectionRoute`, `makeItemRoute` |
