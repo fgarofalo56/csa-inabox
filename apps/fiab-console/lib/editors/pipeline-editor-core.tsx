@@ -624,7 +624,35 @@ export function PipelineEditorCore({
 
   const openTriggers = useCallback(() => { setTriggersOpen(true); if (bound) loadTriggers(); }, [bound, loadTriggers]);
 
+  /**
+   * #3549 — auto-bind CREATED a real pipeline for this item but could not
+   * author its graph into it, so the BOUND pipeline is live and EMPTY. Every
+   * control that puts it on a compute refuses while this is true; the full
+   * rationale (and why `Add trigger` was the one that got missed) is on
+   * `buildPipelineRibbon` in `./pipeline-editor-ribbon`.
+   *
+   * Declared HERE, above the trigger callbacks, because they consult it — a
+   * `const` referenced from a dependency array below its own declaration is a
+   * TDZ ReferenceError at render, not a lint nit.
+   */
+  const seedIncomplete = !!bound && autoBind?.status === 'bound' && !!autoBind.seedError;
+
+  /** The one sentence every empty-pipeline refusal says, so they cannot drift. */
+  const EMPTY_PIPELINE_REASON =
+    'This pipeline is live but EMPTY — its activities were not published. Use “Retry seeding” first.';
+
   const triggerAction = useCallback(async (name: string, action: 'start' | 'stop' | 'delete') => {
+    // #3549 review round 3, BLOCKER 2. STARTING a trigger puts an EMPTY
+    // pipeline on a RECURRENCE — unattended, repeating, every run reporting
+    // Succeeded having done nothing. Stop and Delete stay allowed: they are the
+    // remediations, and blocking them would strand a trigger already running.
+    //
+    // DEFENCE IN DEPTH, AND UNTESTED — stated rather than implied. The control
+    // that opens this dialog is gated too, so no UI path reaches this line
+    // while `seedIncomplete`, and MEASURED: removing this guard and the one in
+    // `createTriggerWith` moves ZERO tests. Kept because a disabled button is
+    // not an authorization boundary.
+    if (action === 'start' && seedIncomplete) { setTriggersError(EMPTY_PIPELINE_REASON); return; }
     setTriggersBusy(true); setTriggersError(null);
     try {
       const res = await fetch(`${apiBase}/triggers`, {
@@ -636,7 +664,7 @@ export function PipelineEditorCore({
       await loadTriggers();
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
     finally { setTriggersBusy(false); }
-  }, [apiBase, loadTriggers]);
+  }, [apiBase, loadTriggers, seedIncomplete, EMPTY_PIPELINE_REASON]);
 
   // Create ANY ADF trigger type from the deepened guided wizard's structured
   // payload (no cron / no JSON). `properties` is the assembled ADF trigger
@@ -649,6 +677,11 @@ export function PipelineEditorCore({
     paramBindings: Record<string, ParamBinding>,
   ) => {
     if (!bound || !name.trim()) return;
+    // #3549 review round 3, BLOCKER 2 — see `triggerAction`. A schedule trigger
+    // created here fires on its own recurrence, so the refusal has to sit on
+    // the CREATE as well as the start. Same defence-in-depth status: untested,
+    // because the wizard cannot be opened while `seedIncomplete`.
+    if (seedIncomplete) { setTriggersError(EMPTY_PIPELINE_REASON); return; }
     setTriggersBusy(true); setTriggersError(null);
     try {
       const res = await fetch(`${apiBase}/triggers`, {
@@ -661,7 +694,7 @@ export function PipelineEditorCore({
       await loadTriggers();
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
     finally { setTriggersBusy(false); }
-  }, [apiBase, bound, loadTriggers]);
+  }, [apiBase, bound, loadTriggers, seedIncomplete, EMPTY_PIPELINE_REASON]);
 
   // ------------------------------------------------------------------
   // Activities — extracted from the spec; the designer (palette + canvas)
@@ -669,14 +702,6 @@ export function PipelineEditorCore({
   // ------------------------------------------------------------------
   const activities = extractActivities(spec);
   const activityCount = activities.length;
-
-  // #3549 (review BLOCKER 1) — auto-bind CREATED a real pipeline for this item
-  // but could not author its graph into it. The item is BOUND, so it renders
-  // the bound branch below; without this flag that branch showed a healthy
-  // canvas over an empty pipeline with Trigger now enabled, which is the exact
-  // symptom #3549 is about. `preview` carries the authored graph the bind GET
-  // deliberately keeps in this state (`seedIncomplete` in the bind routes).
-  const seedIncomplete = !!bound && autoBind?.status === 'bound' && !!autoBind.seedError;
 
   // ------------------------------------------------------------------
   // Pipeline-level config model (Parameters / Variables / Settings) — these
@@ -775,16 +800,17 @@ export function PipelineEditorCore({
   // Run · Layout. The toolbar's SHAPE lives in `./pipeline-editor-ribbon`
   // (extracted for the WS-E E3 monolith ratchet, same as the auto-bind surfaces
   // and the create-factory form); every affordance is still driven by this
-  // component's state and callbacks, over the same dependency list as before.
+  // component's state and callbacks.
   //
-  // MERGE NOTE (#3702 x #3549). This hunk conflicted: main extracted the whole
-  // ribbon into `buildPipelineRibbon`, and this branch had added the #3549
-  // `seedIncomplete` gate to Run/Debug INSIDE the inline version main deleted.
-  // Both sides are kept — main's extraction, plus `seedIncomplete` threaded
-  // through as an argument and left in the dependency list. Taking main's side
-  // alone would have silently dropped the gate that stops a "successful" run
-  // over an EMPTY pipeline, which is the #3549 headline and is pinned by
-  // `__tests__/pipeline-seed-incomplete.test.tsx`.
+  // MERGE NOTE (#3702 x #3549). This hunk conflicted: main extracted the ribbon
+  // while this branch had added the #3549 `seedIncomplete` gate INSIDE the
+  // inline version main deleted. Both sides are kept — main's extraction, plus
+  // `seedIncomplete` threaded through and left in the dependency list. Taking
+  // main's side alone would have compiled and silently dropped the gate.
+  // The dep is pinned by the CONTROL in
+  // `__tests__/pipeline-seed-incomplete.test.tsx` — the other specs there
+  // cannot see it, because their retry also changes `spec` and therefore
+  // `save`'s identity, so the memo recomputes regardless.
   const ribbon: RibbonTab[] = useMemo(() => buildPipelineRibbon({
     supportsValidate: config.supportsValidate, isAdf, busy, bound, dirty, seedIncomplete,
     save, kick, validate, openTriggers,
@@ -1404,7 +1430,7 @@ export function PipelineEditorCore({
                 <DialogContent>
                   <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                     <Caption1 style={{ flex: 1, minWidth: '200px' }}>Triggers that fire this pipeline — schedule, tumbling window, storage event, or custom event. Start / stop / delete existing ones, or create a new one with the guided wizard (real ARM REST).</Caption1>
-                    <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={triggersBusy} onClick={() => { setTriggersError(null); setTriggerWizardOpen(true); }}>New trigger</Button>
+                    <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={triggersBusy || seedIncomplete} title={seedIncomplete ? EMPTY_PIPELINE_REASON : undefined} onClick={() => { setTriggersError(null); setTriggerWizardOpen(true); }}>New trigger</Button>
                   </div>
                   <div style={{ overflow: 'auto', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM }}>
                     <Table aria-label="Triggers for pipeline" size="small">
@@ -1423,7 +1449,7 @@ export function PipelineEditorCore({
                             <TableCell><Badge appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>{t.runtimeState || '—'}</Badge></TableCell>
                             <TableCell>
                               <div style={{ display: 'flex', gap: tokens.spacingVerticalXS }}>
-                                <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started'} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
+                                <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started' || seedIncomplete} title={seedIncomplete ? EMPTY_PIPELINE_REASON : undefined} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
                                 <Button size="small" disabled={triggersBusy || t.runtimeState !== 'Started'} onClick={() => triggerAction(t.name, 'stop')}>Stop</Button>
                                 <Button size="small" appearance="subtle" disabled={triggersBusy} onClick={() => triggerAction(t.name, 'delete')}>Delete</Button>
                               </div>

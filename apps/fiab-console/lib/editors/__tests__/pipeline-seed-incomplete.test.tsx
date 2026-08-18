@@ -182,7 +182,15 @@ describe('#3549 BLOCKER 1 — a bound-but-unseeded pipeline is never presented a
     // 1. The ribbon is a useMemo. `seedIncomplete` was missing from its
     //    dependency array, so a repaired pipeline kept Run/Debug disabled
     //    forever — the Fix-it would have "worked" while leaving the editor
-    //    stuck. Caught by lint, pinned here so it cannot come back silently.
+    //    stuck.
+    //
+    //    THIS TEST DOES NOT PIN THAT. Measured: remove `seedIncomplete` from
+    //    the dep array at `pipeline-editor-core.tsx` and this spec still passes
+    //    6/6. The reason is `save = useCallback(…, [apiBase, bound, spec])` —
+    //    the retry below changes `spec` (empty document → authored graph), so
+    //    `save`'s identity changes, so the memo recomputes whatever the dep
+    //    list says. The dep is pinned by the CONTROL further down, which holds
+    //    `spec` byte-identical so `seedIncomplete` is the only mover.
     //
     // 2. (#3549 review, SHOULD-FIX 4) `onRetry` was `() => void loadBinding()`.
     //    That re-runs the SERVER seed and refreshes `autoBind`, so the gate
@@ -236,6 +244,110 @@ describe('#3549 BLOCKER 1 — a bound-but-unseeded pipeline is never presented a
     // than offering Run over a canvas that still says the pipeline is empty.
     await waitFor(() => expect(screen.getByText('3 activities')).toBeInTheDocument(),
       { timeout: 8000 });
+  });
+
+  it('CONTROL — the ribbon re-enables when seedIncomplete is the ONLY thing that changed', async () => {
+    // THE DEPENDENCY-ARRAY CONTROL (#3549 review round 3).
+    //
+    // The test above cannot see whether `seedIncomplete` is in the ribbon's
+    // `useMemo` dependency list, and I claimed it could. Measured: remove the
+    // dep and that spec still passes 6/6, because its retry changes `spec`
+    // (empty document → authored graph) and `save` is
+    // `useCallback(…, [apiBase, bound, spec])`, so the memo recomputes off a
+    // changed callback identity no matter what the dep list says. A receipt
+    // that does not reproduce is worse than no receipt, so here is one that
+    // does.
+    //
+    // This models the OTHER real repair shape, the one `maybeRepairSeed`
+    // produces when `isEmpty` reports the backing object already holds content:
+    // the record flips to `seeded:true` and `seedError` clears, while the
+    // pipeline DOCUMENT was never empty and does not change. The spec route
+    // therefore returns a BYTE-IDENTICAL body across the retry, `setSpec` bails
+    // on the Object.is check, `save` keeps its identity, and `busy` / `bound` /
+    // `dirty` / every other ribbon dep is unchanged. `seedIncomplete` is the
+    // only mover, so the memo MUST list it or the ribbon stays stale.
+    //
+    // MUTATION PROOF (measured): drop `seedIncomplete` from the dep array at
+    // `pipeline-editor-core.tsx` → this test RED ("Trigger now" stays disabled
+    // forever), the other five still green.
+    let seedFailed = true;
+    vi.spyOn(global, 'fetch').mockImplementation((async (url: any) => {
+      const u = String(url);
+      if (u.includes(`/api/items/adf-pipeline/${ID}/bind`)) {
+        return json({
+          ok: true, bound: BOUND, pipelines: [{ name: BOUND }],
+          autoBind: seedFailed
+            ? { status: 'bound', via: 'created', backingName: BOUND, seedError: SEED_ERROR }
+            : { status: 'bound', via: 'existing', backingName: BOUND, seeded: true },
+          // `preview` is not a ribbon dependency, so it may move freely.
+          preview: seedFailed ? AUTHORED_PREVIEW : null,
+        });
+      }
+      if (u.includes(`/api/items/adf-pipeline/${ID}/runs`)) return json({ ok: true, runs: [] });
+      if (u.includes(`/api/items/adf-pipeline/${ID}/triggers`)) return json({ ok: true, triggers: [] });
+      if (u.match(new RegExp(`/api/items/adf-pipeline/${ID}(\\?|$)`))) {
+        // IDENTICAL both times — this is what makes the control a control.
+        return json(specBody(AUTHORED_PREVIEW.properties));
+      }
+      return json({ ok: true });
+    }) as any);
+
+    renderEditor();
+
+    await waitFor(() => expect(screen.getByTestId('pipeline-seed-incomplete')).toBeInTheDocument(),
+      { timeout: 8000 });
+    const before = screen.getByRole('button', { name: /trigger now/i });
+    expect(before).toBeDisabled();
+    // The canvas already holds the graph, and it will not change across the
+    // retry — so nothing but `seedIncomplete` can drive the ribbon. (Two nodes
+    // match while the gate is up: the bound-state badge and the authored-graph
+    // panel the gate renders beneath itself.)
+    expect(screen.getAllByText('3 activities').length).toBeGreaterThan(0);
+
+    seedFailed = false;
+    fireEvent.click(screen.getByRole('button', { name: /retry seeding/i }));
+
+    await waitFor(() => expect(screen.queryByTestId('pipeline-seed-incomplete')).toBeNull(),
+      { timeout: 8000 });
+    await waitFor(() => expect(screen.getByRole('button', { name: /trigger now/i })).not.toBeDisabled(),
+      { timeout: 8000 });
+    // The canvas is unchanged, which is the point: the ribbon moved on its own.
+    expect(screen.getByText('3 activities')).toBeInTheDocument();
+  });
+
+  it('BLOCKER 2 — Add trigger is refused too, so the empty pipeline cannot be SCHEDULED', async () => {
+    // Review round 3. `Add trigger` gated on `!bound` alone, and `bound` is true
+    // BY DEFINITION whenever `seedIncomplete` is — so it sat enabled next to a
+    // correctly-greyed Run and Debug. From it a schedule trigger puts the empty
+    // pipeline on a recurrence: every run returns Succeeded having executed
+    // nothing, unattended and repeating. That is strictly worse than the single
+    // manual trigger the original fix blocked, and it was found by enumerating
+    // the pipeline-invoking controls rather than reading the one that was fixed.
+    installFetch({
+      autoBind: { status: 'bound', via: 'created', backingName: BOUND, seedError: SEED_ERROR },
+      preview: AUTHORED_PREVIEW,
+    });
+
+    renderEditor();
+
+    await waitFor(() => expect(screen.getByTestId('pipeline-seed-incomplete')).toBeInTheDocument(),
+      { timeout: 8000 });
+    const addTrigger = screen.getByRole('button', { name: /add trigger/i });
+    expect(addTrigger).toBeDisabled();
+  });
+
+  it('CONTROL — Add trigger is live on a healthy pipeline', async () => {
+    // Without this, "disabled" above would also pass against a button that is
+    // disabled unconditionally.
+    installFetch({
+      autoBind: { status: 'bound', via: 'created', backingName: BOUND, seeded: true },
+      preview: null,
+    });
+
+    renderEditor();
+
+    await waitFor(() => expect(screen.getAllByText(BOUND).length).toBeGreaterThan(0), { timeout: 8000 });
+    expect(screen.getByRole('button', { name: /add trigger/i })).not.toBeDisabled();
   });
 });
 
