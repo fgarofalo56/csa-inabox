@@ -120,6 +120,25 @@ const ALLOWLIST = new Set([
   'LOOM_DATABRICKS_UC_STORAGE_ROOT', // opt-in managed-location base (abfss://…) for domain→UC-catalog sync when the metastore has no default storage_root; unset = send no storage_root (metastores with a default root work as-is)
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_DAB_APP_NAME',              // opt-in override for the shared DAB preview Container App name (apply-to-runtime route #19); unset = derived from the LOOM_DAB_PREVIEW_URL host's first FQDN label
+  // ---- #3730 cross-cloud estate drift: per-estate endpoint OVERRIDES ----
+  // The four below are optional overrides of the LOOM_ESTATES registry in
+  // apps/fiab-console/lib/admin/estate-fleet.ts, whose defaults are the LIVE,
+  // measured, unauthenticated endpoints of each console. Unset is the working
+  // production state — the readiness fleet table reads both estates with none of
+  // these set — so they are runtime-only knobs, never a deploy dependency, and
+  // emitting them from bicep would only restate a constant the image already has.
+  //
+  // STATED PLAINLY BECAUSE IT IS A REAL LIMITATION, not a shrug: the Gov default
+  // is an Azure Front Door FQDN with a generated label
+  // (loom-console-<hash>.z01.azurefd.us). If Gov is ever redeployed behind a NEW
+  // Front Door, that default goes stale and the estate reads UNREACHABLE — which
+  // is loud and honest (never a false "current"), but it is a redeploy away from
+  // needing LOOM_ESTATE_URL_GOV set. These overrides are how that is fixed
+  // without a code change, which is why they exist at all.
+  'LOOM_ESTATE_URL_COMMERCIAL',
+  'LOOM_ESTATE_URL_GOV',
+  'LOOM_ESTATE_VERSION_URL_COMMERCIAL',
+  'LOOM_ESTATE_VERSION_URL_GOV',
   'LOOM_CANVAS_COMMENT_CAP',        // opt-in tuning knob for the per-(item,canvas) comment/sticky retention cap (W4); unset default = 300 in code (lib/collab/canvas-comment-model.ts)
   'LOOM_ADT_ENDPOINT',
   'LOOM_SPARK_POOL_REAP',            // opt-out kill switch for the stale-Livy-session reaper (#1796; default ON — pool self-cleans leaked sessions)

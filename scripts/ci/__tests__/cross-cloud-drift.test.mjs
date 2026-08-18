@@ -276,11 +276,30 @@ test('an ABBREVIATED sha resolves — the Gov marker shape must work', () => {
   assert.equal(r.commitsBehind, 0);
 });
 
+/**
+ * How many commits `base..HEAD` actually contains, asked of git directly.
+ *
+ * WHY THIS IS MEASURED AND NOT ASSUMED. The first cut of these tests used
+ * `HEAD~5` and asserted `commitsBehind === 5`. That passed locally and FAILED in
+ * CI, because `HEAD~N` walks FIRST-PARENT while `rev-list --count` counts every
+ * commit reachable from HEAD and not from base — so on any history containing
+ * merges the two numbers differ, and a pull_request build checks out a MERGE
+ * COMMIT (`refs/pull/N/merge`) by construction. The number was never the point:
+ * the properties under test are "an older commit yields a POSITIVE distance" and
+ * "the alarm reports the same distance git does".
+ */
+const distanceToHead = (base) => Number(git(['rev-list', '--count', `${base}..HEAD`]));
+
 test('an older commit resolves to a POSITIVE distance', () => {
   const base = git(['rev-parse', 'HEAD~5']);
+  const expected = distanceToHead(base);
   const r = resolveAgainstGit(base);
   assert.equal(r.error, null, `expected HEAD~5 to resolve, got ${r.error}`);
-  assert.equal(r.commitsBehind, 5);
+  // The property that matters: an ancestor is BEHIND. A mutation returning 0 or
+  // null for an older commit — the arithmetic that would render a stale estate
+  // as current — goes red here.
+  assert.ok(r.commitsBehind > 0, `an ancestor must be behind by at least one commit, got ${r.commitsBehind}`);
+  assert.equal(r.commitsBehind, expected, 'the alarm must report the distance git reports');
   assert.ok(r.behindSince, 'the oldest unapplied commit date must be measured');
   assert.ok(Number.isFinite(r.behindForMinutes));
 });
@@ -419,6 +438,9 @@ test('MUTATION PROOF — a STALE fabricated marker FAILS (exit 1, reported as DR
   assert.ok(measured.behindForMinutes > 240,
     `precondition: HEAD~40's oldest unapplied commit must be older than the widest roll window; `
     + `measured ${measured.behindForMinutes}min. This test is not exercising staleness otherwise.`);
+  // The expected COUNT is measured, not assumed to be 40 — see distanceToHead.
+  const expected = distanceToHead(base);
+  assert.ok(expected > 0, 'precondition: HEAD~40 must be behind HEAD');
 
   const marker = `loom-build-marker sha=${base} stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n`;
   await withMarkerServer(serve(marker, '0.90.2'), async (port) => {
@@ -428,7 +450,8 @@ test('MUTATION PROOF — a STALE fabricated marker FAILS (exit 1, reported as DR
     assert.equal(r.status, 1, `expected exit 1 for a behind estate; got ${r.status}\n${out}`);
     assert.match(out, /DRIFT/, 'a behind estate must be reported as drift');
     assert.match(out, /live estate\(s\) are NOT running main/);
-    assert.match(out, /40 commit\(s\) behind main/);
+    assert.match(out, new RegExp(`${expected} commit\\(s\\) behind main`),
+      `the reported distance must be the one git measures (${expected})`);
     assert.doesNotMatch(out, /could NOT BE MEASURED/,
       'a measured-and-behind estate must NOT be reported as unmeasurable');
   });
