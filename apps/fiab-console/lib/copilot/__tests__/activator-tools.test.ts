@@ -5,9 +5,14 @@
  *   - activator_author_rule        deterministic NL → draft (SigninLogs etc.)
  *   - activator_suggest_threshold  stubs the Log Analytics KQL query API and
  *                                  asserts p95-derived suggestedThreshold
- *   - activator_create_rule        confirm=false → no ARM PUT; confirm=true →
- *                                  real scheduledQueryRules ARM PUT
+ *   - activator_create_rule        confirm=false → no ARM PUT; confirm=true +
+ *                                  a resolvable owning Loom item → real
+ *                                  scheduledQueryRules ARM PUT
  *   - activator_list_rules         scheduledQueryRules ARM list
+ *
+ * The ownership half of activator_create_rule (which item the rule is tagged to,
+ * and what happens when that cannot be resolved) lives in its own file:
+ * activator-rule-ownership.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -15,6 +20,15 @@ vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
 });
+
+/** The activator the rule belongs to — resolved WRITE-scoped by the tool before
+ *  it provisions anything (PR #3693 review B2). */
+const ACTIVATOR = { id: 'act-1', workspaceId: 'ws-1', itemType: 'activator', displayName: 'security-reflex' };
+vi.mock('@/app/api/items/_lib/item-crud', () => ({
+  loadOwnedItem: vi.fn(async (id: string, itemType: string) =>
+    (id === ACTIVATOR.id && itemType === 'activator' ? ACTIVATOR : null)),
+  listOwnedItems: vi.fn(async (itemType: string) => (itemType === 'activator' ? [ACTIVATOR] : [])),
+}));
 
 beforeEach(() => {
   process.env.LOOM_SUBSCRIPTION_ID = 'sub-1';
@@ -149,6 +163,7 @@ describe('activator_create_rule', () => {
     const out: any = await tool.handler({
       name: 'failed-logins-alert',
       activatorName: 'security-reflex',
+      activatorItemId: 'act-1',
       sourceTable: 'SigninLogs',
       whereClause: "ResultType != '0'",
       summarizeExpr: 'count()',
@@ -168,6 +183,9 @@ describe('activator_create_rule', () => {
     expect(put!.url).toContain('api-version=2023-12-01');
     const body = JSON.parse(String(put!.init!.body));
     expect(body.properties.criteria.allOf[0].query).toContain('failedSignIns > 12');
+    // …and the rule is OWNED: the tag is what makes it visible + manageable in
+    // the activator's editor (PR #3693 review B2).
+    expect(body.tags['loom-item-id']).toBe('act-1');
   });
 });
 
