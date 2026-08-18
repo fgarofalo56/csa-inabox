@@ -49,11 +49,25 @@ on:
     paths:
       - "azure-functions/copilot-chat/**"
       - ".github/workflows/deploy-copilot-function.yml"
-      # #3429 — the bicep producer this lane APPLIES. Without it here, a change
-      # to the Function App's shape (a new app setting, a role grant, the plan
-      # SKU) would merge and never reach the estate, which is the
-      # deploy-integrity.md R2 "merged is not done" shape in its quietest form:
-      # a deploy path that exists and is simply never triggered.
+      # #3429 — the bicep producer this lane applies. Being here means a change
+      # to the module RE-RUNS this lane. It does NOT mean the change reaches the
+      # estate, and the first version of this comment claimed it did.
+      #
+      # The apply step is gated `if: verdict == 'absent-here'`. Where the app
+      # already exists the preflight returns `found` and the module is not
+      # applied — so a shape change (a new app setting, a role grant, the plan
+      # SKU) merges, re-triggers this lane, redeploys the code, and is still not
+      # on the estate. That is deploy-integrity.md R2/R3 and it is NOT closed by
+      # this trigger; the "Report what this run did NOT apply" step below states
+      # it in the run log rather than leaving a green check to imply otherwise.
+      #
+      # The gate itself is deliberate, not an oversight. The module declares
+      # `siteConfig.appSettings` in full, and a full re-apply over a live app
+      # DROPS every setting it does not name — including WEBSITE_RUN_FROM_PACKAGE,
+      # which Azure/functions-action sets on every deploy and which the running
+      # app needs to start. Re-applying blind would break production to fix
+      # drift; that is the bicep-re-render-drops-out-of-band-state hazard. The
+      # reconciliation path is the explicit one printed by that step.
       - "platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep"
   workflow_dispatch:
 
@@ -138,10 +152,25 @@ jobs:
         #
         # The liveness clause used to be a HARD-CODED sentence: every branch
         # printed "The app IS live: …/api/health answers 200" whether or not this
-        # run had asked. It was true when it was written, which is why it went
-        # unnoticed for six weeks — but a message that asserts a present-tense
+        # run had asked — there is no curl anywhere in that block, the only one
+        # being in the later smoke step. A message that asserts a present-tense
         # fact it never measured is the R7 defect, not a shortcut. It is measured
         # now, and the branches quote the status code they actually got.
+        #
+        # It was introduced by 1b555a02 (2026-08-14) and is fixed here three days
+        # later — MEASURED, because the first draft of this very comment claimed
+        # it had "gone unnoticed for six weeks", which was an unmeasured duration
+        # asserted as fact inside the comment explaining R7:
+        #
+        #     $ git show 1b555a02~1:.github/workflows/deploy-copilot-function.yml \
+        #         | grep -c "The app IS live"     -> 0
+        #     $ git show 1b555a02:.github/workflows/deploy-copilot-function.yml \
+        #         | grep -c "The app IS live"     -> 2
+        #
+        # Six weeks is the length of the RED WINDOW (2026-07-02 .. 2026-08-14, 43
+        # days) described at the top of this file. It is not the age of this
+        # sentence, and reusing the number for both is how a true figure becomes
+        # a false claim.
         #
         # Everything below is an ARM CONTROL-plane read plus one unauthenticated
         # public GET. No data plane, no VNet, no secret values are printed — only
@@ -191,10 +220,21 @@ jobs:
           RG_EXISTS=$(printf '%s' "$RG_EXISTS" | tr -d '\r')
 
           # Is it visible ANYWHERE in this subscription under a different group?
-          ELSEWHERE=""
-          if HITS=$(az resource list --name "$FUNCTION_APP_NAME" --resource-type Microsoft.Web/sites --query "[].resourceGroup" -o tsv 2>/dev/null); then
-            ELSEWHERE=$(printf '%s' "$HITS" | tr -d '\r' | tr '\n' ' ')
+          #
+          # This capture used to end `2>/dev/null`, which discarded the failure
+          # and fell through to ELSEWHERE="" — i.e. "not found anywhere". That
+          # swallow was benign when its only consequence was choosing an error
+          # string; it is not benign now, because the branch below it decides
+          # whether the next step WRITES. "I could not look" must not become
+          # "it is not there" on the path to a provisioning decision
+          # (deploy-integrity.md R7, and the forbidden-constructs list that names
+          # `2>/dev/null` explicitly). It fails closed instead.
+          if ! HITS=$(az resource list --name "$FUNCTION_APP_NAME" --resource-type Microsoft.Web/sites --query "[].resourceGroup" -o tsv 2>&1); then
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
+            echo "::error::preflight: ${FUNCTION_APP_NAME} was not readable in ${FUNCTION_APP_RG}, and the subscription-wide lookup that would say whether it lives in a DIFFERENT resource group FAILED — so its location is UNKNOWN, not established. Provisioning on that basis could build a second copy beside a live one. Grant the deploy principal Reader on the subscription. az said: ${HITS}. Original read error: ${SHOW_ERR}"
+            exit 1
           fi
+          ELSEWHERE=$(printf '%s' "$HITS" | tr -d '\r' | tr '\n' ' ')
 
           if [[ -n "$ELSEWHERE" ]]; then
             echo "verdict=wrong-resource-group" >> "$GITHUB_OUTPUT"
@@ -267,13 +307,24 @@ jobs:
             exit 1
           fi
 
-          # Every discovery below uses a LIST, not a SHOW, and captures stderr.
-          # That is deliberate: a `show` that exits non-zero cannot tell "the
-          # resource is absent" from "I am not allowed to look", and collapsing
-          # the second into the first is precisely the R7 defect that turned a
-          # registry permission denial into "the tag does not exist". A `list`
-          # succeeds-and-returns-empty for genuine absence and FAILS for a
-          # permission problem, so the exit code carries the distinction.
+          # Every EXISTENCE test below is a LIST, never a SHOW. That is
+          # deliberate: a `show` that exits non-zero cannot tell "the resource is
+          # absent" from "I am not allowed to look" (or "the CLI extension that
+          # implements this command is not installed"), and collapsing those into
+          # "absent" is precisely the R7 defect that turned a registry permission
+          # denial into "the tag does not exist". A `list` succeeds-and-returns-
+          # empty for genuine absence and FAILS for a permission problem, so the
+          # exit code carries the distinction.
+          #
+          # `show` IS used, three times, and only ever as a PROPERTY FETCH on an
+          # identity a preceding `list` already established (the App Insights
+          # connection string, the two Cognitive Services endpoints). Those fail
+          # CLOSED — a non-zero exit aborts the step rather than being read as a
+          # value. The rule is about which question the exit code is answering,
+          # not about the verb.
+          #
+          # Every capture folds stderr in, so the message quotes az rather than
+          # guessing at it.
 
           # ── discover: storage account ────────────────────────────────────
           if ! STORAGE_HIT=$(az storage account list --resource-group "$FUNCTION_APP_RG" --query "[?name=='${FUNCTION_APP_STORAGE}'].name | [0]" -o tsv 2>&1); then
@@ -290,19 +341,48 @@ jobs:
           fi
 
           # ── discover: Application Insights ───────────────────────────────
+          #
+          # This was `az monitor app-insights component show` used as an
+          # EXISTENCE test, whose failure branch set CREATE_AI=true and announced
+          # "a workspace-based component will be created". That is the exact R7
+          # collapse the comment above forbids, sitting twenty lines under it, and
+          # it had a second trigger the permission story does not cover: that
+          # command lives in the `application-insights` CLI EXTENSION ("This
+          # command is from the following extension: application-insights"), which
+          # this workflow never installs. A missing extension, a Reader gap and a
+          # genuinely absent component all exited non-zero and all read as
+          # "absent" — and the consequence is a WRITE, not an exit: createAppInsights=true
+          # PUTs a component of this exact name pointed at a brand-new Log
+          # Analytics workspace, re-binding a live one.
+          #
+          # `az resource list` is core CLI (no extension), is a LIST, and fails on
+          # a permission problem instead of returning empty.
           CREATE_AI=true
           AI_CONN=""
-          if ! AI_LIST=$(az monitor app-insights component show --app "$FUNCTION_APP_INSIGHTS" --resource-group "$FUNCTION_APP_RG" --query connectionString -o tsv 2>&1); then
-            echo "discovered: Application Insights ${FUNCTION_APP_INSIGHTS} was not readable in ${FUNCTION_APP_RG} — a workspace-based component will be created. az said: ${AI_LIST}"
+          if ! AI_ID=$(az resource list --resource-group "$FUNCTION_APP_RG" --resource-type Microsoft.Insights/components --name "$FUNCTION_APP_INSIGHTS" --query "[0].id" -o tsv 2>&1); then
+            echo "::error::provision: could not list Application Insights components in ${FUNCTION_APP_RG}, so whether ${FUNCTION_APP_INSIGHTS} exists is UNKNOWN — not absent. Creating one on that assumption would re-point a live component at a new workspace. Grant the deploy principal Reader on ${FUNCTION_APP_RG}. az said: ${AI_ID}"
+            exit 1
+          fi
+          AI_ID=$(printf '%s' "$AI_ID" | tr -d '\r')
+          if [[ -z "$AI_ID" ]]; then
+            # ESTABLISHED absence: the list succeeded and returned nothing.
+            echo "discovered: no Application Insights component named ${FUNCTION_APP_INSIGHTS} in ${FUNCTION_APP_RG} — a workspace-based one will be created."
           else
-            AI_CONN=$(printf '%s' "$AI_LIST" | tr -d '\r')
-            if [[ -n "$AI_CONN" ]]; then
-              CREATE_AI=false
-              # The connection string carries an instrumentation key. Mask it
-              # before it can reach a log line.
-              echo "::add-mask::${AI_CONN}"
-              echo "discovered: Application Insights ${FUNCTION_APP_INSIGHTS} exists — reusing it (value masked)."
+            # Property fetch on an id the list established. Fails CLOSED.
+            if ! AI_CONN=$(az resource show --ids "$AI_ID" --api-version 2020-02-02 --query properties.ConnectionString -o tsv 2>&1); then
+              echo "::error::provision: Application Insights ${FUNCTION_APP_INSIGHTS} EXISTS (${AI_ID}) but its connection string could not be read. Refusing to fall through to 'create one' — that would re-point a live component at a new workspace. az said: ${AI_CONN}"
+              exit 1
             fi
+            AI_CONN=$(printf '%s' "$AI_CONN" | tr -d '\r')
+            if [[ -z "$AI_CONN" ]]; then
+              echo "::error::provision: Application Insights ${FUNCTION_APP_INSIGHTS} EXISTS (${AI_ID}) but returned an EMPTY connection string. That is UNKNOWN, not 'telemetry off', and it is not a state this step will paper over by creating a second component."
+              exit 1
+            fi
+            CREATE_AI=false
+            # The connection string carries an instrumentation key. Mask it
+            # before it can reach a log line.
+            echo "::add-mask::${AI_CONN}"
+            echo "discovered: Application Insights ${FUNCTION_APP_INSIGHTS} exists — reusing it (value masked)."
           fi
 
           # ── discover: Azure OpenAI account (REQUIRED — the app cannot chat
@@ -432,6 +512,35 @@ jobs:
               COPILOT_MS_LEARN_MCP_URL=https://learn.microsoft.com/api/mcp \
             --output none
           echo "MS Learn fallback enabled on $FUNCTION_APP_NAME"
+
+      - name: Report what this run did NOT apply (deploy-integrity R2/R3)
+        # Placed AFTER the code deploy so its own claim is one this run
+        # established: at this point code HAS been published and app settings
+        # HAVE been synced, so "code yes, infrastructure no" is a measured
+        # statement rather than a prediction. (The first draft of this step sat
+        # before the deploy and still said "code was deployed" — the same
+        # asserting-what-you-have-not-established error the preflight above
+        # exists to fix, reintroduced in the fix for it.)
+        #
+        # The provision step is gated on verdict `absent-here`. On a live estate
+        # the verdict is `found`, so NOTHING in this run applies
+        # copilot-chat-function.bicep — while the `paths:` trigger means a change
+        # to that module DOES start this run. Without this step the result is a
+        # green check on a run that carried an infrastructure change it never
+        # applied, which is strictly worse than not running at all: before, the
+        # gap was visible as "no run"; after, it hides behind a tick.
+        # deploy-integrity.md R3 — drift is surfaced, not left silent.
+        #
+        # It does NOT claim the module and the estate differ, because this run
+        # never compared them. Saying "the estate is out of date" here would be
+        # the same R7 error in the other direction.
+        if: steps.preflight.outputs.verdict == 'found'
+        env:
+          BICEP_PATH: platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep
+        run: |
+          set -uo pipefail
+          echo "::warning::${FUNCTION_APP_NAME} already existed, so this run applied NO infrastructure: ${BICEP_PATH} was NOT deployed. Code was published and app settings were synced; the app's SHAPE — the full app-setting list, the plan SKU, the two Cognitive Services role assignments, COSMOS_ENDPOINT — is whatever the last apply left it. Whether that MATCHES the module is UNKNOWN: this run did not compare them."
+          echo "::warning::If this push changed ${BICEP_PATH}, that change is merged and NOT deployed. Reconciling is a deliberate, documented step — see azure-functions/copilot-chat/DEPLOYMENT.md, 'Reconciling an existing app'. It is not automatic because the module declares siteConfig.appSettings in FULL, and a re-apply drops every setting it does not name, including WEBSITE_RUN_FROM_PACKAGE which Azure/functions-action sets and the running host needs to start."
 
       - name: Smoke test the deployed endpoint
         # Hits /api/health with a valid request token. Doesn't call the OpenAI

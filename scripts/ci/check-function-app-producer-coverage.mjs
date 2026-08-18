@@ -60,6 +60,16 @@
  * only understood literals would have to skip both, and a skip is the blind spot
  * this whole file exists to close. So prefixes are matched as prefixes.
  *
+ * Matching them is ONE-DIRECTIONAL, and the first version of this file got the
+ * direction wrong. A declaration covers a target only when EVERY name it can
+ * emit satisfies the target's selector — `decl.startsWith(target)`. The reverse,
+ * `target.startsWith(decl)`, is merely NECESSARY, and treating it as sufficient
+ * hands a generic producer credit for an app it can never create. It did exactly
+ * that here: `deploy-planner/functions.bicep` emits `func-loom-<uniqueString>`
+ * and "covered" BOTH posture lanes (Commercial and GCC-High/IL5) plus, under a
+ * rename, the copilot app itself — so deleting the real producers scored GREEN.
+ * See `matches()` for the measurement and cases M9/M10 for the pins.
+ *
  * What it will NOT do is guess. A target it cannot resolve to a literal or a
  * prefix is a FAILURE, not a skip — including an EMPTY `app-name:`, which is
  * UNKNOWN and not "harmless". If a target is genuinely unresolvable it goes in
@@ -426,12 +436,48 @@ function collectSites(files) {
 
 // ── matching ────────────────────────────────────────────────────────────────
 
+/**
+ * Does `decl` (a bicep producer, or an `existing` consumer) DEMONSTRABLY name
+ * the app that `target` deploys to?
+ *
+ * Coverage is proven in ONE direction only, and this function shipped with the
+ * other one. `decl.startsWith(target)` says every name the declaration can emit
+ * satisfies the target's selector — that is proof. `target.startsWith(decl)`
+ * says only that the two share a leading substring — NECESSARY, never
+ * SUFFICIENT — and accepting it credits a generic producer for an app it can
+ * never create. That is a guess, in the one direction that produces silence,
+ * from a file whose own header says it will not guess.
+ *
+ * MEASURED on this tree, not reasoned: platform/fiab/bicep/modules/deploy-planner/
+ * functions.bicep builds `take('func-loom-${uniqueString(resourceGroup().id)}', 60)`
+ * — prefix `func-loom-`, a different app entirely. Under the old rule:
+ *
+ *   • deleting azure-functions/posture-refresh/deploy/main.bicep left the verdict
+ *     GREEN, both posture targets re-attributed to that module — and one of them
+ *     is gov-provision-posture.yml (GCC-High / IL5), the boundary this guard's
+ *     header names as the reason it exists (cloud-parity.md);
+ *   • renaming the copilot target to a literal under that prefix and deleting its
+ *     producer ALSO left it GREEN — #3429 itself scoring covered.
+ *
+ * So 2 of 3 real targets were unguarded and the third only by the accident that
+ * no producer prefix happened to lead its name. Cases M9 and M10 pin both.
+ */
 function matches(target, decl) {
   if (target.kind === 'unknown' || decl.kind === 'unknown') return false;
-  if (target.kind === 'literal' && decl.kind === 'literal') return target.value === decl.value;
-  if (target.kind === 'literal' && decl.kind === 'prefix') return target.value.startsWith(decl.value);
-  if (target.kind === 'prefix' && decl.kind === 'literal') return decl.value.startsWith(target.value);
-  return decl.value.startsWith(target.value) || target.value.startsWith(decl.value);
+
+  if (target.kind === 'literal') {
+    // The lane deploys to exactly this name, so only a declaration that emits
+    // exactly this name proves coverage. A `prefix` declaration's remainder is
+    // computed at deploy time (uniqueString, a param, a suffix); it can never be
+    // shown to equal a specific literal, however much of that literal it shares.
+    return decl.kind === 'literal' && decl.value === target.value;
+  }
+
+  // target.kind === 'prefix': the lane deploys to whatever
+  // `starts_with(name, target.value)` discovers. A declaration covers it when
+  // EVERY name it can emit starts with that prefix — i.e. the declaration's own
+  // literal (or literal prefix) EXTENDS the target's, never the reverse.
+  return decl.value.startsWith(target.value);
 }
 
 // ── the analyzer ────────────────────────────────────────────────────────────
@@ -568,6 +614,56 @@ resource site 'Microsoft.Web/sites@2024-04-01' = {
 }
 `;
 
+/** The posture shape: a `starts_with(...)` discovery target. */
+const POSTURE_WORKFLOW = `name: posture
+on: push
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          FUNC=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-loom-posture')].name | [0]" -o tsv)
+          ( cd azure-functions/posture-refresh && func azure functionapp publish "$FUNC" --python )
+`;
+
+/** Its real producer: a literal prefix that EXTENDS the target's. Genuine cover. */
+const POSTURE_BICEP = `var siteName = 'func-loom-posture-refresh-\${uniqueString(resourceGroup().id)}'
+resource site 'Microsoft.Web/sites@2024-04-01' = {
+  name: siteName
+  location: 'eastus'
+}
+`;
+
+/**
+ * A DIFFERENT app whose literal prefix LEADS the posture target and the
+ * `func-loom-copilot-fg` literal without ever being able to emit either. This is
+ * platform/fiab/bicep/modules/deploy-planner/functions.bicep reduced — a Node
+ * app built as `take('func-loom-${uniqueString(resourceGroup().id)}', 60)`.
+ *
+ * No fixture contained a SECOND, MORE GENERIC producer before, and that is
+ * precisely why the self-test stayed 10/10 green while the real tree had two
+ * unguarded targets. C3/M9/M10 exist to reproduce the shape the tree actually
+ * has.
+ */
+const GENERIC_PREFIX_BICEP = `var siteName = take('func-loom-\${uniqueString(resourceGroup().id)}', 60)
+resource site 'Microsoft.Web/sites@2024-04-01' = {
+  name: siteName
+  location: 'eastus'
+}
+`;
+
+/** A lane deploying a LITERAL that the generic producer's prefix leads. */
+const LITERAL_UNDER_GENERIC_WORKFLOW = `name: deploy literal under generic
+on: push
+jobs:
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Azure/functions-action@abc123
+        with:
+          app-name: func-loom-copilot-fg
+`;
+
 function selfTest() {
   const cases = [
     {
@@ -584,22 +680,24 @@ function selfTest() {
       files: {
         '.github/workflows/good.yml': GOOD_WORKFLOW,
         'infra/good.bicep': GOOD_BICEP,
-        '.github/workflows/posture.yml': `name: posture
-on: push
-jobs:
-  p:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          FUNC=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-loom-posture')].name | [0]" -o tsv)
-          ( cd azure-functions/posture-refresh && func azure functionapp publish "$FUNC" --python )
-`,
-        'infra/posture.bicep': `var siteName = 'func-loom-posture-refresh-\${uniqueString(resourceGroup().id)}'
-resource site 'Microsoft.Web/sites@2024-04-01' = {
-  name: siteName
-  location: 'eastus'
-}
-`,
+        '.github/workflows/posture.yml': POSTURE_WORKFLOW,
+        'infra/posture.bicep': POSTURE_BICEP,
+      },
+      expectFail: false,
+    },
+    {
+      // CONTROL. Must PASS. The real tree's shape: the correct producer AND a
+      // more-generic one that merely LEADS the target's name, side by side.
+      // Without this the M9/M10 pins below would also be satisfied by a matcher
+      // that had simply become "always false" — this is what proves the fix
+      // DISCRIMINATES rather than just rejects.
+      name: 'control: a colliding generic producer does not mask the real one',
+      files: {
+        '.github/workflows/good.yml': GOOD_WORKFLOW,
+        'infra/good.bicep': GOOD_BICEP,
+        '.github/workflows/posture.yml': POSTURE_WORKFLOW,
+        'infra/posture.bicep': POSTURE_BICEP,
+        'infra/generic.bicep': GENERIC_PREFIX_BICEP,
       },
       expectFail: false,
     },
@@ -755,6 +853,44 @@ jobs:
       expectFail: true,
       expectText: 'has no bicep producer',
     },
+    {
+      // REGRESSION PIN for the defect this guard SHIPPED WITH, direction 1:
+      // a PREFIX target credited to a producer whose prefix is SHORTER than it.
+      // `func-loom-` can only ever emit `func-loom-<uniqueString>`, which never
+      // satisfies `starts_with(name,'func-loom-posture')` — yet the old
+      // `target.value.startsWith(decl.value)` disjunct accepted it, and deleting
+      // the real posture producer on the REAL TREE left the verdict GREEN for
+      // BOTH posture lanes, one of which is gov-provision-posture.yml
+      // (GCC-High / IL5). cloud-parity.md: the guard was blindest exactly where
+      // its own header says it matters most.
+      name: 'M9 collision: a prefix target must NOT be covered by a shorter, more generic producer prefix',
+      files: {
+        '.github/workflows/good.yml': GOOD_WORKFLOW,
+        'infra/good.bicep': GOOD_BICEP,
+        '.github/workflows/posture.yml': POSTURE_WORKFLOW,
+        'infra/generic.bicep': GENERIC_PREFIX_BICEP,
+      },
+      expectFail: true,
+      expectText: 'func-loom-posture',
+    },
+    {
+      // REGRESSION PIN, direction 2: a LITERAL target credited to a prefix
+      // producer merely because the literal starts with that prefix. A prefix
+      // producer's remainder is computed at deploy time and can never be shown
+      // to equal a specific literal. On the real tree this scored #3429 ITSELF
+      // as covered — the copilot target renamed under `func-loom-`, its producer
+      // deleted, exit 0. This is why the rework was not one line: the hole was
+      // never confined to prefix targets.
+      name: 'M10 collision: a literal target must NOT be covered by a prefix producer that merely leads it',
+      files: {
+        '.github/workflows/good.yml': GOOD_WORKFLOW,
+        'infra/good.bicep': GOOD_BICEP,
+        '.github/workflows/literal.yml': LITERAL_UNDER_GENERIC_WORKFLOW,
+        'infra/generic.bicep': GENERIC_PREFIX_BICEP,
+      },
+      expectFail: true,
+      expectText: 'func-loom-copilot-fg',
+    },
   ];
 
   let bad = 0;
@@ -783,7 +919,7 @@ jobs:
     console.error(`\n[function-app-producer-coverage] SELF-TEST FAILED — ${bad} case(s). The analyzer cannot see the defects it exists to catch; do not trust its verdict on the real tree.`);
     process.exit(1);
   }
-  console.log('[function-app-producer-coverage] self-test OK — every mutant detected, both controls pass.');
+  console.log('[function-app-producer-coverage] self-test OK — every mutant detected, all controls pass.');
 }
 
 // ── entrypoint ──────────────────────────────────────────────────────────────

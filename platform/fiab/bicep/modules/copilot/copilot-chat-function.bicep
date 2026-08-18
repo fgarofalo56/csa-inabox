@@ -34,8 +34,28 @@
 //   2. copilot-chat/deploy/main.bicep -> Cosmos + the data-plane role for it
 //   3. this module again, with `cosmosEndpoint` set -> COSMOS_ENDPOINT wired
 //
-// Step 3 is a no-op re-apply on everything else; that is what makes the binding
-// self-healing per auto-bind-by-default.md §3.
+// ── WHAT AUTOMATION ACTUALLY REACHES, AND WHAT IT DOES NOT ──────────────────
+//
+// Steps 1 and 2 are reachable from CI: deploy-copilot-function.yml applies THIS
+// module on the `absent-here` preflight verdict, and main.bicep is applied by
+// its own documented path. STEP 3 IS NOT. That lane's apply is gated on the app
+// being ABSENT, so once the app exists it never re-applies — which is exactly
+// when step 3 would matter. An earlier draft of this header called step 3 "a
+// no-op re-apply … what makes the binding self-healing per
+// auto-bind-by-default.md §3". That was false: nothing invokes it, so the
+// binding is NOT self-healing today and this header is not going to claim it is.
+//
+// The gate is the right call, not an oversight. `siteConfig.appSettings` below
+// is declared IN FULL, so a re-apply removes every setting it does not name —
+// including WEBSITE_RUN_FROM_PACKAGE, which Azure/functions-action sets on each
+// code deploy and which the running host needs to start. An automatic re-apply
+// would take production down to reconcile configuration.
+//
+// So step 3 is a DOCUMENTED OPERATOR STEP (azure-functions/copilot-chat/
+// DEPLOYMENT.md, "Reconciling an existing app"), the lane announces on every
+// `found` run that it applied no infrastructure, and closing the gap properly —
+// a reconcile that preserves out-of-band settings, so §3 self-healing is real
+// rather than asserted — is tracked in #3429 rather than implied here.
 //
 // ── CLOUD PARITY (cloud-parity.md) ──────────────────────────────────────────
 //
@@ -225,11 +245,30 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (createAppI
 }
 
 // `.?` (safe dereference), NOT `createAppInsights ? appInsights.properties… : …`.
-// The ternary form compiles with BCP318: `appInsights` is a CONDITIONAL resource,
-// so its symbol is null whenever createAppInsights is false, and an ARM `if()`
-// does not reliably avoid evaluating the untaken branch. That form would have
-// failed the deployment on exactly the path the production estate uses (reuse the
-// existing appi-csa-inabox-copilot-fg, create nothing).
+//
+// The mechanism, MEASURED by compiling both forms rather than asserted — an
+// earlier draft of this comment blamed "an ARM `if()` does not reliably avoid
+// evaluating the untaken branch", which the compiled template refutes, because
+// the accepted form emits the SAME `if()`:
+//
+//   ternary -> if(parameters('createAppInsights'),
+//                 reference(resourceId(...), '2020-02-02').ConnectionString,
+//                 parameters('appInsightsConnectionString'))
+//   this    -> coalesce(tryGet(if(parameters('createAppInsights'),
+//                 reference(resourceId(...), '2020-02-02', 'full'), null()),
+//                 'properties', 'ConnectionString'),
+//                 parameters('appInsightsConnectionString'))
+//
+// The difference is the ACCESS, not the branch. `appInsights` is a CONDITIONAL
+// resource, so its symbol is typed `Microsoft.Insights/components | null` and a
+// direct `.properties` on it earns BCP318 in bicep's own words: "The value of
+// type "Microsoft.Insights/components | null" may be null at the start of the
+// deployment, which would cause this access expression (and the overall
+// deployment with it) to fail." `.?` compiles to `tryGet`, whose untaken branch
+// yields `null()` and which returns null instead of failing on it.
+//
+// The failing path would be exactly the one the production estate uses: reuse
+// the existing appi-csa-inabox-copilot-fg, create nothing.
 var effectiveAppInsightsConnectionString = appInsights.?properties.ConnectionString ?? appInsightsConnectionString
 
 // ── Hosting plan (Linux Consumption, matching the live app) ─────────────────

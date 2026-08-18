@@ -1304,9 +1304,13 @@ jobs:
       # Self-test first: it carries the mutant fixtures (an added lane with no
       # producer, a consumed-only app, an EMPTY app-name, an unresolvable
       # expression, a producer renamed away from its target, a zero-producer
-      # tree, a job-level env override, and a producer relocated into gitignored
-      # temp/) plus two controls that must PASS, so "it always fails" cannot
-      # masquerade as working.
+      # tree, a job-level env override, a producer relocated into gitignored
+      # temp/, and — the two the first version of this guard could not see — a
+      # target credited to a MORE GENERIC producer whose prefix merely leads its
+      # name, in both the prefix-target and literal-target directions) plus
+      # three controls that must PASS, one of which places a colliding generic
+      # producer beside the correct one so "it always fails" cannot masquerade
+      # as working.
       - name: 'function-app-producer-coverage (every deployed Function App has a bicep producer, not just an `existing` reference — #3429)'
         if: ${{ !cancelled() }}
         run: |
