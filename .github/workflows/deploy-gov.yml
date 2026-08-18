@@ -2,6 +2,59 @@
 # Uses Bicep templates from deploy/bicep/gov/
 name: Deploy Gov Infrastructure
 
+# ── WHAT THIS WORKFLOW IS, AND THE THING IT KEPT BEING MISTAKEN FOR (#3730) ──
+#
+# #3730 was filed on the reading that "deploy-gov succeeded on 2026-08-16 yet the
+# Gov console still serves the 2026-08-11 image, therefore deploy-gov applies
+# infra and re-rolls a stale image". Half of that is right and the diagnosis is
+# not, and the difference matters because it points remediation at the wrong file.
+#
+# MEASURED, in this tree:
+#   - `deploy/bicep/gov/` contains ZERO Container Apps, ZERO ACR references and
+#     ZERO image tags. `grep -rniE 'containerApp|azurecr\.|loom-console' deploy/bicep/gov/`
+#     returns nothing. Its modules are aks / dataExplorer / dataFactory /
+#     databricks / eventHub / keyVault / logAnalytics / machineLearning / openAI /
+#     purview / roleAssignment / storage / synapse. This lane therefore does not
+#     roll a stale image — it does not roll ANY image, and never has.
+#   - It is also a DIFFERENT ESTATE: `rg-csa-<env>-platform`, not the Loom admin
+#     plane (`rg-csa-loom-admin-usgovvirginia`) where loom-console lives.
+#   - The 2026-08-16 "success" applied NOTHING AT ALL. `what_if` defaults to true
+#     and the `deploy` job is gated on `what_if == 'false'`, so both successful
+#     runs that day were previews with the apply job SKIPPED, while the run
+#     conclusion read `success` exactly like a deploy.
+#
+# So the real defect this file carries is not a stale image. It is that a
+# PREVIEW and a DEPLOY are indistinguishable from the outside — same green check,
+# same word "success" — which is what let a preview be read as evidence that Gov
+# had shipped. That is deploy-integrity.md R2 ("merged is never done") one layer
+# down: previewed is never deployed. The `run-name` and the terminal
+# `What this run actually did` job below exist to make the two impossible to
+# confuse, and the latter FAILS CLOSED when an apply was requested and did not
+# happen.
+#
+# THE GOV CONSOLE IS ROLLED BY `gov-console-roll.yml`, which since #3730 fires on
+# every merge to main. The Gov admin-plane bicep is applied by
+# `deploy-fiab-gcch.yml` (daily 10:00 UTC). Neither is this file.
+#
+# No stale-image gate is added here, deliberately. A tag-currency check inside a
+# workflow that deploys a different resource group and references no images would
+# measure something unrelated to what the workflow does — a gate that runs, reads
+# green, and protects nothing, which is this repo's most-repeated defect. That
+# gate belongs in the lane that actually rolls an image, and it is there:
+# `gov-console-roll.yml` -> scripts/ci/gov-roll-staleness-gate.mjs.
+
+# The run title carries the distinction the conclusion cannot.
+#
+# `github.event.inputs.*` and NOT `inputs.*`, deliberately and to match the
+# `deploy` job's own `if:`. `what_if` is declared `type: boolean`, so `inputs.what_if`
+# is a real boolean and `inputs.what_if == 'false'` compares a boolean against a
+# string — which GitHub coerces to a number, yields NaN, and is therefore ALWAYS
+# false. Every apply would have been titled "PREVIEW ONLY". `github.event.inputs.*`
+# is always the string form, which is what the comparison needs.
+run-name: >-
+  deploy-gov ${{ github.event.inputs.environment }}
+  ${{ github.event.inputs.what_if == 'false' && '— APPLY' || '— PREVIEW ONLY (what-if; applies nothing)' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -336,3 +389,104 @@ jobs:
             exit 1
           fi
           echo "FedRAMP compliance check complete — every probe returned a real answer."
+
+  # ── THE VERDICT JOB (#3730) ────────────────────────────────────────────────
+  #
+  # Two jobs in one. Both exist because "deploy-gov: success" was read as "Gov
+  # was deployed" for a run that applied nothing.
+  #
+  #   1. FAIL CLOSED when an APPLY was requested and did not happen. Today the
+  #      only way that occurs is the `if: what_if == 'false'` guard on `deploy`
+  #      not firing, which is silent: `what-if` succeeds, `deploy` is skipped,
+  #      and GitHub concludes the RUN as success because a skipped job is not a
+  #      failed one. An operator who selected what_if=false and got a green run
+  #      has been told their infrastructure was applied. This makes that state
+  #      red instead.
+  #   2. STATE THE SCOPE, and MEASURE it rather than asserting it. The claim
+  #      "this workflow rolls no container image" is exactly the kind of comment
+  #      that is true when written and quietly false two refactors later, so the
+  #      step greps the template tree it deploys and reports what it finds. If
+  #      someone adds a Container App to deploy/bicep/gov/, this goes RED and
+  #      says the header is now wrong — rather than the header rotting silently.
+  verdict:
+    name: What this run actually did
+    needs: [validate, what-if, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: State the outcome, and refuse to look like a deploy that did not happen
+        env:
+          # `github.event.inputs.*`, not `inputs.*` — see the run-name note above:
+          # `what_if` is typed boolean and the string comparison this step makes
+          # would never match on the typed form.
+          WHAT_IF: ${{ github.event.inputs.what_if }}
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          WHATIF_RESULT: ${{ needs.what-if.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          TEMPLATE_DIR: deploy/bicep/gov
+        run: |
+          set -uo pipefail
+
+          # ── 2. The scope claim, measured. ──────────────────────────────────
+          # grep's exit status IS the answer here, so it is read rather than
+          # discarded: 0 = matched, 1 = no match, >1 = grep itself failed. The
+          # third case is reported as UNKNOWN, never folded into "no match" —
+          # that fold is the defect deploy-integrity R7 exists for.
+          set +e
+          IMG_REFS=$(grep -rlniE 'Microsoft\.App/containerApps|azurecr\.(io|us)|loom-console' "$TEMPLATE_DIR")
+          GREP_RC=$?
+          set -e
+          case "$GREP_RC" in
+            1)
+              SCOPE_LINE="MEASURED: \`$TEMPLATE_DIR\` references no Container Apps, no ACR and no console image. This run built and rolled NO container image."
+              ;;
+            0)
+              echo "::error::$TEMPLATE_DIR now references container images or Container Apps:"
+              printf '%s\n' "$IMG_REFS"
+              echo "::error::This workflow's header states that it deploys no images, and that statement is now FALSE. Either revert the template change or update deploy-gov.yml's header AND give this lane a real image-currency gate (see scripts/ci/gov-roll-staleness-gate.mjs for the shape). Refusing to keep printing a scope claim this run just disproved."
+              exit 1
+              ;;
+            *)
+              SCOPE_LINE="UNKNOWN: could not read \`$TEMPLATE_DIR\` to confirm the scope claim (grep exit $GREP_RC). This is not a statement that images are absent — the question was not answered."
+              echo "::warning::Could not read $TEMPLATE_DIR to verify the scope claim (grep exit $GREP_RC)."
+              ;;
+          esac
+
+          # ── 1. Preview vs apply. ───────────────────────────────────────────
+          if [ "$WHAT_IF" = "false" ]; then
+            MODE="APPLY"
+          else
+            MODE="PREVIEW ONLY"
+          fi
+
+          {
+            echo "### deploy-gov — $MODE (${ENVIRONMENT:-<no environment>})"
+            echo ""
+            echo "| job | result |"
+            echo "| --- | --- |"
+            echo "| Validate Templates | \`$VALIDATE_RESULT\` |"
+            echo "| What-If Analysis | \`$WHATIF_RESULT\` |"
+            echo "| Deploy | \`$DEPLOY_RESULT\` |"
+            echo ""
+            echo "$SCOPE_LINE"
+            echo ""
+            echo "**The Gov CONSOLE is not deployed by this workflow.** It is built and rolled by"
+            echo "\`gov-console-roll.yml\` (fires on every merge to main since #3730); the Gov admin-plane"
+            echo "bicep is applied by \`deploy-fiab-gcch.yml\` (daily 10:00 UTC)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$MODE" = "PREVIEW ONLY" ]; then
+            echo "::warning::PREVIEW ONLY — this run APPLIED NOTHING. what_if was '${WHAT_IF:-<unset>}' (anything other than the literal 'false' is a preview), so the Deploy job was $DEPLOY_RESULT. A green check on this run is evidence that the template COMPILES and that the what-if RAN — it is not evidence that any Azure Government resource changed. Re-dispatch with what_if=false to apply."
+            exit 0
+          fi
+
+          # APPLY was requested. It must actually have happened.
+          if [ "$DEPLOY_RESULT" != "success" ]; then
+            echo "::error::An APPLY was requested (what_if=false) but the Deploy job concluded '$DEPLOY_RESULT'. This run must NOT report success: nothing was applied to Azure Government, and a green check here would be read as a completed deploy. If the job was 'skipped', its \`if:\` condition did not fire — check the environment/what_if inputs. If it 'failed', read the classified deploy-failure output in that job."
+            exit 1
+          fi
+          echo "::notice::APPLIED — the Deploy job succeeded against $ENVIRONMENT. $SCOPE_LINE"
+
