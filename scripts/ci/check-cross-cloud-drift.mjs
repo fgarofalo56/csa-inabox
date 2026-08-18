@@ -94,8 +94,48 @@ const FETCH_TIMEOUT_MS = 20_000;
 
 const DAY_MS = 86_400_000;
 
-/** Ref this run compares against. Overridable so the self-test can pin one. */
-const BRANCH = process.env.LOOM_DRIFT_BRANCH || 'HEAD';
+/**
+ * The ref every estate is compared against.
+ *
+ * THIS IS NOT COSMETIC, AND GETTING IT WRONG PRODUCES A FALSE ACCUSATION.
+ * The first cut hard-defaulted to `HEAD`, which is correct in the scheduled
+ * workflow (that checks out main) and WRONG anywhere else. Run from a feature
+ * branch, the live Commercial sha is not an ancestor of that branch's HEAD, so
+ * classifyEstate reported:
+ *
+ *     Commercial [divergent] — the running build 649526d4 is NOT an ancestor of
+ *     main — it was built from a branch, a revert, or a force-pushed history
+ *
+ * Measured, on a healthy estate that had just rolled. Every clause after the
+ * dash is a cause the code never established: the truth was "the ref I compared
+ * against does not contain it", which for a feature branch is expected. That is
+ * deploy-integrity.md R7 exactly — an error asserting something it did not
+ * verify — and it is the same shape as the 2026-08-05 "the tag does not exist"
+ * incident this whole file is written against.
+ *
+ * So the ref is RESOLVED, in order of how well it answers the question the
+ * alarm actually asks ("is the estate running MAIN?"), and the answer is
+ * PRINTED next to the verdict so a reader can always see what the comparison
+ * was against rather than having to assume it.
+ */
+export function resolveComparisonRef(cwd = process.cwd()) {
+  const explicit = process.env.LOOM_DRIFT_BRANCH;
+  const candidates = explicit ? [explicit] : ['origin/main', 'main', 'HEAD'];
+  for (const ref of candidates) {
+    try {
+      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+        cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return ref;
+    } catch {
+      // Not present in this checkout — try the next. A shallow or single-branch
+      // clone legitimately lacks origin/main.
+    }
+  }
+  // Nothing resolved. Returning HEAD lets resolveAgainstGit produce its own
+  // honest "could not resolve" error rather than throwing from here.
+  return 'HEAD';
+}
 
 // ── IO: the live estates ────────────────────────────────────────────────────
 
@@ -175,9 +215,9 @@ export async function probeVersion(estate, fetchImpl = fetch) {
  * ambiguous, or that the object is missing, or that this is a shallow clone,
  * the operator gets to read that sentence rather than a guess about it.
  */
-function git(args) {
+function git(args, cwd) {
   try {
-    return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   } catch (e) {
     const stderr = String(e?.stderr || '').trim();
     throw new Error(stderr || String(e?.message || e));
@@ -201,20 +241,36 @@ function git(args) {
  * The sha reaching `execFileSync` has already passed GIT_OBJECT_ID in the
  * parser, and there is no shell, so nothing here interpolates marker bytes into
  * a command line.
+ *
+ * `opts.cwd` selects which repository is measured. It defaults to the process
+ * cwd — the only thing production uses — and exists so the self-test can drive
+ * every branch against a PURPOSE-BUILT fixture repo instead of this one. That
+ * matters more than it looks: the suite originally asserted against `HEAD~5` of
+ * the real checkout and broke twice in CI for two unrelated reasons (a
+ * pull_request MERGE COMMIT makes `HEAD~5..HEAD` count more than five; a
+ * SHALLOW lane has no `HEAD~5` at all). Neither had anything to do with the
+ * behaviour under test, and both were the fixture depending on how CI happens
+ * to clone.
+ *
+ * @param {string} sha
+ * @param {{branch?: string, now?: number, cwd?: string}} [opts]
  */
-export function resolveAgainstGit(sha, branch = BRANCH, now = Date.now()) {
+export function resolveAgainstGit(sha, opts = {}) {
+  const cwd = opts.cwd ?? process.cwd();
+  const branch = opts.branch ?? resolveComparisonRef(cwd);
+  const now = opts.now ?? Date.now();
   const empty = {
     ancestor: undefined, commitsBehind: null, ageDays: null,
     behindSince: null, behindForMinutes: null, error: null,
   };
   let head;
   try {
-    head = git(['rev-parse', branch]);
+    head = git(['rev-parse', branch], cwd);
   } catch (e) {
     return { ...empty, error: `could not resolve ${branch} in this checkout — ${e.message}` };
   }
   try {
-    git(['cat-file', '-e', `${sha}^{commit}`]);
+    git(['cat-file', '-e', `${sha}^{commit}`], cwd);
   } catch (e) {
     // Missing OR ambiguous OR shallow. UNKNOWN, never zero-behind.
     return { ...empty, error: `the commit ${sha} is not resolvable in this checkout — ${e.message}` };
@@ -222,7 +278,7 @@ export function resolveAgainstGit(sha, branch = BRANCH, now = Date.now()) {
 
   let ancestor;
   try {
-    git(['merge-base', '--is-ancestor', sha, head]);
+    git(['merge-base', '--is-ancestor', sha, head], cwd);
     ancestor = true;
   } catch {
     // Exit 1 from --is-ancestor is a genuine ANSWER ("no"), not a malfunction,
@@ -239,7 +295,7 @@ export function resolveAgainstGit(sha, branch = BRANCH, now = Date.now()) {
   let ageDays = null;
   try {
     if (ancestor) {
-      commitsBehind = Number(git(['rev-list', '--count', `${sha}..${head}`]));
+      commitsBehind = Number(git(['rev-list', '--count', `${sha}..${head}`], cwd));
       if (!Number.isFinite(commitsBehind)) {
         return { ...empty, ancestor, error: `git rev-list returned a non-numeric count for ${sha}..${branch}` };
       }
@@ -247,7 +303,7 @@ export function resolveAgainstGit(sha, branch = BRANCH, now = Date.now()) {
         // The OLDEST unapplied commit — "how long has merged code been sitting
         // undeployed". Reduced rather than indexed so the answer does not depend
         // on git's output ordering.
-        const oldest = git(['log', '--format=%cI', `${sha}..${head}`])
+        const oldest = git(['log', '--format=%cI', `${sha}..${head}`], cwd)
           // PHYSICAL-LINES-OK: splits `git log` OUTPUT, not a shell body.
           .split('\n')
           .map((s) => Date.parse(s.trim()))
@@ -260,7 +316,7 @@ export function resolveAgainstGit(sha, branch = BRANCH, now = Date.now()) {
         // an unmeasurable wait as stale, never as a fresh one.
       }
     }
-    ageDays = Math.max(0, Math.round((now - Date.parse(git(['log', '-1', '--format=%cI', sha]))) / DAY_MS));
+    ageDays = Math.max(0, Math.round((now - Date.parse(git(['log', '-1', '--format=%cI', sha], cwd))) / DAY_MS));
   } catch (e) {
     return { ...empty, ancestor, error: `could not measure the distance from ${sha} to ${branch} — ${e.message}` };
   }
@@ -368,7 +424,7 @@ async function main() {
     for (const o of overrides) console.log(`  ${o.id} ${o.kind} URL <- ${o.env}=${o.url}`);
   }
 
-  console.log('[cross-cloud-drift] live estates vs main:');
+  console.log(`[cross-cloud-drift] live estates vs ${resolveComparisonRef()}:`);
   for (const r of rows) console.log(describeRow(r));
 
   const { drifted, unknown, code } = decideCrossCloud(rows);

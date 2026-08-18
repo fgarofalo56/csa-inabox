@@ -50,12 +50,13 @@
  * (Discovered automatically by scripts/ci/check-node-test-suites.mjs, which the
  *  merge-blocking `guardrails` job runs — so these have teeth in CI.)
  */
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -69,6 +70,7 @@ import {
   probeMarker,
   probeVersion,
   resolveAgainstGit,
+  resolveComparisonRef,
 } from '../check-cross-cloud-drift.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -86,7 +88,10 @@ const FIXTURES = JSON.parse(
   readFileSync(path.join(HERE, '..', '__fixtures__', 'build-markers.json'), 'utf8'),
 );
 
-const git = (args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
+// NOTE: there is deliberately no helper that runs git against THIS checkout.
+// Every git-dependent assertion below uses the purpose-built fixture repo, so
+// nothing in this suite changes meaning with `fetch-depth` or with whether the
+// event is a push or a pull_request. See makeFixtureRepo.
 
 // ---------------------------------------------------------------------------
 // parseBuildMarker — the two clouds' shapes, and every way a marker can be bad
@@ -255,12 +260,74 @@ test('decideCrossCloud separates DRIFT from UNKNOWN and fails on either', () => 
 });
 
 // ---------------------------------------------------------------------------
-// resolveAgainstGit — real git, real repo
+// resolveAgainstGit — real git, against a PURPOSE-BUILT repo
 // ---------------------------------------------------------------------------
 
+/**
+ * A throwaway git repo with a known, back-dated history.
+ *
+ * WHY NOT THIS CHECKOUT, which is what the first cut used. Asserting against
+ * `HEAD~5` of the repo under test broke in CI twice, for two unrelated reasons,
+ * neither of which had anything to do with the behaviour being tested:
+ *
+ *   1. `6 !== 5` — a `pull_request` build checks out a MERGE COMMIT
+ *      (refs/pull/N/merge). `HEAD~5` walks FIRST-PARENT while `rev-list --count`
+ *      counts everything reachable, so on a merge the two disagree. Measured on
+ *      this repo: at a merge commit, `HEAD~5..HEAD` counts 304, not 5.
+ *   2. `fatal: ambiguous argument 'HEAD~5': unknown revision` — the
+ *      `node:test suites` lane checks out SHALLOW, so there is no HEAD~5 at all.
+ *
+ * Both are the fixture depending on how CI happens to clone, and the second is
+ * the sharper lesson: a test that needs history is a test that silently changes
+ * meaning with `fetch-depth`. A fixture repo removes the dependency entirely —
+ * history shape, depth and commit DATES are all controlled here, so the
+ * ">240 minutes" precondition of the staleness proof is guaranteed by
+ * construction rather than hoped for.
+ */
+function makeFixtureRepo(commits = 6) {
+  const dir = mkdtempSync(join(tmpdir(), 'loom-drift-'));
+  const g = (args, env) => execFileSync('git', args, {
+    cwd: dir, encoding: 'utf8', env: { ...process.env, ...env },
+  }).trim();
+  g(['init', '-q', '-b', 'main']);
+  g(['config', 'user.email', 'drift-test@example.invalid']);
+  g(['config', 'user.name', 'drift test']);
+  g(['config', 'commit.gpgsign', 'false']);
+  const shas = [];
+  for (let i = 0; i < commits; i += 1) {
+    writeFileSync(join(dir, 'f.txt'), `commit ${i}\n`);
+    g(['add', 'f.txt']);
+    // Commit i is (commits - i) DAYS old. Every commit after the first is
+    // therefore days behind — far past any roll window — so the staleness case
+    // cannot accidentally stop testing staleness.
+    const when = new Date(Date.now() - (commits - i) * 86_400_000).toISOString();
+    g(['commit', '-q', '-m', `c${i}`], { GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when });
+    shas.push(g(['rev-parse', 'HEAD']));
+  }
+  return { dir, shas, head: shas[shas.length - 1] };
+}
+
+/** Fixture repo shared by the git + end-to-end cases. */
+const REPO_FIXTURE = makeFixtureRepo(6);
+after(() => {
+  // force + retries: on Windows a git pack file can still be briefly held.
+  rmSync(REPO_FIXTURE.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+test('CONTROL — the fixture repo is what these tests think it is', () => {
+  // A control on the HARNESS. If the fixture ever stopped producing the history
+  // it claims, every assertion below would be measuring something else while
+  // still reading green — the hollow-gate shape, one level down.
+  assert.equal(REPO_FIXTURE.shas.length, 6);
+  assert.equal(new Set(REPO_FIXTURE.shas).size, 6, 'six DISTINCT commits');
+  const count = execFileSync('git', ['rev-list', '--count', `${REPO_FIXTURE.shas[0]}..HEAD`], {
+    cwd: REPO_FIXTURE.dir, encoding: 'utf8',
+  }).trim();
+  assert.equal(count, '5', 'the first commit must be exactly 5 behind HEAD');
+});
+
 test('HEAD resolves to zero commits behind', () => {
-  const head = git(['rev-parse', 'HEAD']);
-  const r = resolveAgainstGit(head);
+  const r = resolveAgainstGit(REPO_FIXTURE.head, { cwd: REPO_FIXTURE.dir });
   assert.equal(r.error, null, `expected HEAD to resolve, got ${r.error}`);
   assert.equal(r.ancestor, true);
   assert.equal(r.commitsBehind, 0);
@@ -269,39 +336,26 @@ test('HEAD resolves to zero commits behind', () => {
 test('an ABBREVIATED sha resolves — the Gov marker shape must work', () => {
   // This is the case that would have silently produced "unknown" for the entire
   // sovereign boundary if the code had assumed 40-hex.
-  const short = git(['rev-parse', '--short=8', 'HEAD']);
+  const short = execFileSync('git', ['rev-parse', '--short=8', 'HEAD'], {
+    cwd: REPO_FIXTURE.dir, encoding: 'utf8',
+  }).trim();
   assert.equal(short.length, 8);
-  const r = resolveAgainstGit(short);
+  const r = resolveAgainstGit(short, { cwd: REPO_FIXTURE.dir });
   assert.equal(r.error, null, `an 8-hex abbreviation must resolve, got ${r.error}`);
   assert.equal(r.commitsBehind, 0);
 });
 
-/**
- * How many commits `base..HEAD` actually contains, asked of git directly.
- *
- * WHY THIS IS MEASURED AND NOT ASSUMED. The first cut of these tests used
- * `HEAD~5` and asserted `commitsBehind === 5`. That passed locally and FAILED in
- * CI, because `HEAD~N` walks FIRST-PARENT while `rev-list --count` counts every
- * commit reachable from HEAD and not from base — so on any history containing
- * merges the two numbers differ, and a pull_request build checks out a MERGE
- * COMMIT (`refs/pull/N/merge`) by construction. The number was never the point:
- * the properties under test are "an older commit yields a POSITIVE distance" and
- * "the alarm reports the same distance git does".
- */
-const distanceToHead = (base) => Number(git(['rev-list', '--count', `${base}..HEAD`]));
-
 test('an older commit resolves to a POSITIVE distance', () => {
-  const base = git(['rev-parse', 'HEAD~5']);
-  const expected = distanceToHead(base);
-  const r = resolveAgainstGit(base);
-  assert.equal(r.error, null, `expected HEAD~5 to resolve, got ${r.error}`);
+  const r = resolveAgainstGit(REPO_FIXTURE.shas[0], { cwd: REPO_FIXTURE.dir });
+  assert.equal(r.error, null, `expected the first commit to resolve, got ${r.error}`);
   // The property that matters: an ancestor is BEHIND. A mutation returning 0 or
   // null for an older commit — the arithmetic that would render a stale estate
   // as current — goes red here.
   assert.ok(r.commitsBehind > 0, `an ancestor must be behind by at least one commit, got ${r.commitsBehind}`);
-  assert.equal(r.commitsBehind, expected, 'the alarm must report the distance git reports');
+  assert.equal(r.commitsBehind, 5);
   assert.ok(r.behindSince, 'the oldest unapplied commit date must be measured');
-  assert.ok(Number.isFinite(r.behindForMinutes));
+  // Back-dated by days, so this is guaranteed past every roll window.
+  assert.ok(r.behindForMinutes > 240, `expected a days-old wait, got ${r.behindForMinutes}min`);
 });
 
 test('a sha NOT in this clone is an ERROR, never zero commits behind', () => {
@@ -309,11 +363,37 @@ test('a sha NOT in this clone is an ERROR, never zero commits behind', () => {
   // or an image built off a deleted branch must not be able to render as "on
   // main". `deadbeef...` is valid hex and therefore passes GIT_OBJECT_ID; only
   // git can say it is absent.
-  const r = resolveAgainstGit('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef');
+  const r = resolveAgainstGit('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', { cwd: REPO_FIXTURE.dir });
   assert.equal(r.commitsBehind, null, 'an unresolvable commit must not yield a distance');
   assert.ok(typeof r.error === 'string' && r.error.length > 0, 'it must say why');
   // The message must carry git's OWN words, not an inference about them.
   assert.match(r.error, /not resolvable in this checkout/);
+});
+
+test('the comparison ref prefers the DEFAULT BRANCH over whatever is checked out', () => {
+  // R7 REGRESSION TEST. This defaulted to `HEAD`, which is main in the scheduled
+  // workflow and a feature branch anywhere else. Run from a branch, the live
+  // Commercial sha is not an ancestor of that branch, so a HEALTHY, just-rolled
+  // estate was reported as:
+  //
+  //   Commercial [divergent] — the running build 649526d4 is NOT an ancestor of
+  //   main — it was built from a branch, a revert, or a force-pushed history
+  //
+  // Every clause after the dash is a cause the code never established. Measured
+  // live, on a good estate.
+  //
+  // The fixture repo has `main` but no `origin/main`, so the fallback chain is
+  // exercised rather than asserted about: it must skip the missing remote-
+  // tracking ref and land on the local default branch, NOT on HEAD.
+  assert.equal(resolveComparisonRef(REPO_FIXTURE.dir), 'main');
+
+  // An explicit override wins, so an operator can pin a ref deliberately.
+  process.env.LOOM_DRIFT_BRANCH = 'HEAD';
+  try {
+    assert.equal(resolveComparisonRef(REPO_FIXTURE.dir), 'HEAD');
+  } finally {
+    delete process.env.LOOM_DRIFT_BRANCH;
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -368,6 +448,11 @@ async function withMarkerServer(handler, fn) {
 /**
  * Point BOTH estates at `origin` and run the real CLI as a child process.
  *
+ * `cwd` is the FIXTURE repo, not this checkout: the CLI asks git for commit
+ * distances relative to its own working directory, so running it there is what
+ * makes the end-to-end proof independent of how CI clones this repository (see
+ * makeFixtureRepo for the two CI breakages that taught this).
+ *
  * ASYNCHRONOUS, AND THAT IS NOT A STYLE CHOICE. The first cut used spawnSync,
  * which blocks this process's event loop for the whole child run — so the
  * fixture HTTP server above, which lives in THIS process, could never accept a
@@ -378,10 +463,10 @@ async function withMarkerServer(handler, fn) {
  * proving nothing about staleness at all — a control confirming itself against
  * a broken harness.
  */
-function runCli(origin) {
+function runCli(origin, cwd = REPO_FIXTURE.dir) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI], {
-      cwd: REPO_ROOT,
+      cwd,
       env: {
         ...process.env,
         LOOM_ESTATE_MARKER_URL: `${origin}/build-marker.txt`,
@@ -413,8 +498,7 @@ const serve = (markerText, version = '9.9.9') => (req, res) => {
 };
 
 test('MUTATION PROOF — a CURRENT fabricated marker PASSES (exit 0)', async () => {
-  const head = git(['rev-parse', 'HEAD']);
-  const marker = `loom-build-marker sha=${head} stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n`;
+  const marker = `loom-build-marker sha=${REPO_FIXTURE.head} stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n`;
   await withMarkerServer(serve(marker), async (port) => {
     const r = await runCli(`http://127.0.0.1:${port}`);
     const out = `${r.stdout}${r.stderr}`;
@@ -427,20 +511,15 @@ test('MUTATION PROOF — a CURRENT fabricated marker PASSES (exit 0)', async () 
 });
 
 test('MUTATION PROOF — a STALE fabricated marker FAILS (exit 1, reported as DRIFT)', async () => {
-  // Chosen far enough back that the oldest unapplied commit is well past the
-  // widest per-estate roll window (240 min). The precondition is ASSERTED
-  // rather than assumed: if this repo's history ever became sparse enough that
-  // HEAD~40 is under four hours old, this test must say so rather than quietly
-  // stop testing staleness.
-  const base = git(['rev-parse', 'HEAD~40']);
-  const measured = resolveAgainstGit(base);
-  assert.equal(measured.error, null, `HEAD~40 must resolve: ${measured.error}`);
+  // The fixture's FIRST commit: five behind HEAD and back-dated by days, so the
+  // oldest unapplied commit is guaranteed past the widest per-estate roll
+  // window (240 min) by construction rather than by luck.
+  const base = REPO_FIXTURE.shas[0];
+  const measured = resolveAgainstGit(base, { cwd: REPO_FIXTURE.dir });
+  assert.equal(measured.error, null, `the fixture base must resolve: ${measured.error}`);
   assert.ok(measured.behindForMinutes > 240,
-    `precondition: HEAD~40's oldest unapplied commit must be older than the widest roll window; `
+    `precondition: the oldest unapplied commit must be older than the widest roll window; `
     + `measured ${measured.behindForMinutes}min. This test is not exercising staleness otherwise.`);
-  // The expected COUNT is measured, not assumed to be 40 — see distanceToHead.
-  const expected = distanceToHead(base);
-  assert.ok(expected > 0, 'precondition: HEAD~40 must be behind HEAD');
 
   const marker = `loom-build-marker sha=${base} stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n`;
   await withMarkerServer(serve(marker, '0.90.2'), async (port) => {
@@ -450,10 +529,26 @@ test('MUTATION PROOF — a STALE fabricated marker FAILS (exit 1, reported as DR
     assert.equal(r.status, 1, `expected exit 1 for a behind estate; got ${r.status}\n${out}`);
     assert.match(out, /DRIFT/, 'a behind estate must be reported as drift');
     assert.match(out, /live estate\(s\) are NOT running main/);
-    assert.match(out, new RegExp(`${expected} commit\\(s\\) behind main`),
-      `the reported distance must be the one git measures (${expected})`);
+    assert.match(out, /5 commit\(s\) behind main/, 'the reported distance must be the fixture distance');
     assert.doesNotMatch(out, /could NOT BE MEASURED/,
       'a measured-and-behind estate must NOT be reported as unmeasurable');
+  });
+});
+
+test('MUTATION PROOF — a STALE ABBREVIATED sha (the Gov shape) also FAILS', async () => {
+  // Belt and braces on the format that #3730 is actually about: the sovereign
+  // console publishes 8 hex, and a control that only ever saw 40 would have
+  // reported the entire boundary as unmeasurable rather than as behind.
+  const short = execFileSync('git', ['rev-parse', '--short=8', REPO_FIXTURE.shas[0]], {
+    cwd: REPO_FIXTURE.dir, encoding: 'utf8',
+  }).trim();
+  const marker = `loom-build-marker sha=${short} stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n`;
+  await withMarkerServer(serve(marker, '0.90.2'), async (port) => {
+    const r = await runCli(`http://127.0.0.1:${port}`);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(r.status, 1, `expected exit 1 for an abbreviated stale sha; got ${r.status}\n${out}`);
+    assert.match(out, /DRIFT/);
+    assert.match(out, /5 commit\(s\) behind main/);
   });
 });
 
