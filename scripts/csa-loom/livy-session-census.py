@@ -38,6 +38,7 @@ how the same swallow this file removed reappears one level up.
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 from collections import Counter
 
@@ -51,7 +52,17 @@ REAPABLE_STATES = ("error", "dead", "killed", "not_started", "shutting_down")
 
 def _get(url: str, token: str) -> dict:
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    # `DEV` is operator-supplied, so the scheme is checked STRUCTURALLY (parse,
+    # not a substring test) right at the call site. Same shape as the sibling
+    # loom-unity-migrate-catalog.py — it keeps the guarantee next to the
+    # urlopen rather than making a reader trace it back to the caller.
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ValueError(f"refusing non-http(s) request URL: {url!r}")
+    # nosec B310 - the URL scheme is allow-listed to http/https on the two lines
+    # above, so B310's concern (file:/ + custom schemes) cannot be reached.
+    # Suppressed HERE rather than added to the global pyproject skips, so any
+    # FUTURE urlopen elsewhere is still flagged.
+    with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
         raw = resp.read().decode("utf-8")
     if not raw.strip():
         # A 200 with an EMPTY BODY is not an empty pool. The old `or "{}"` turned

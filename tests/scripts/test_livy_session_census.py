@@ -21,6 +21,7 @@ _mod = load_script_module("livy_session_census", _SCRIPT_PATH)
 
 census = _mod.census
 PAGE_SIZE = _mod.PAGE_SIZE
+_get = _mod._get
 
 
 class _PageServer:
@@ -182,3 +183,31 @@ class TestRequestShape:
         # `_get` guards the parse itself: a JSON array walking out as a dict
         # would make `.get("sessions")` explode far from the cause.
         assert json.loads("[]") == []
+
+
+class TestUrlScheme:
+    """`DEV` is operator-supplied, so the scheme is allow-listed at the call site.
+
+    Bandit B310 flags `urlopen` precisely because it will happily open `file:/`
+    and custom schemes. The suppression on that line is only honest if the
+    guard above it actually refuses them — this is that guard's counterfactual.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "file:///etc/passwd",
+            "ftp://example.invalid/x",
+            "gopher://example.invalid/x",
+        ],
+    )
+    def test_refuses_a_non_http_scheme_before_opening_it(self, url: str) -> None:
+        # Must raise from the scheme check, NOT from a failed network call —
+        # `urlopen` is never reached, so no I/O happens in this test.
+        with pytest.raises(ValueError, match="refusing non-http"):
+            _get(url, "tok")
+
+    def test_the_error_names_the_url_it_refused(self) -> None:
+        with pytest.raises(ValueError) as excinfo:
+            _get("file:///etc/passwd", "tok")
+        assert "file:///etc/passwd" in str(excinfo.value)
