@@ -7,6 +7,26 @@ name: gov-exercise
 #   phase 2 (spark): spark alone with a long (~24 min) poll
 # Each probe EXERCISES the real backend (TDS SELECT 1, KQL print 1, lake list,
 # Cosmos query, AOAI completion, domain dry-run, ADF list, Livy session).
+#
+# ── DELIBERATELY STILL DISPATCH-ONLY (#3730) ───────────────────────────────
+# #3730 wired the Gov continuous-deploy chain: gov-console-roll fires on every
+# merge, and gov-gates + gov-bff-verify now run on `workflow_run` after it. This
+# lane was NOT added to that fan-out, and the omission is a decision rather than
+# an oversight:
+#
+#   - It is a ~40-minute run whose Spark phase opens a Livy session on a cold
+#     pool. That is real, recurring Azure spend on a sovereign estate, which
+#     `auto-bind-by-default.md` names as the one category legitimately left
+#     opt-in — but only when the reason is written down. This is that writing.
+#   - Its own siblings say the collision is real: gov-gates' header exists
+#     because it must "never collide with a running gov-exercise", and
+#     gov-selfaudit POSTs the same /api/admin/health/exercise endpoint. Firing
+#     all of them per merge would have them fighting each other.
+#
+# This mirrors Commercial exactly, where the roll gate runs a 13-test UAT slice
+# and the full 84-minute suite is scheduled rather than per-roll (#3164, see
+# loom-roll-and-validate.yml's UAT scope block). If this lane should become
+# scheduled, that is an operator cost decision, not a CI one.
 on:
   workflow_dispatch: {}
 
