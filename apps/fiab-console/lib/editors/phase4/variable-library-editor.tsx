@@ -14,7 +14,7 @@ import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
   Card, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
@@ -110,6 +110,12 @@ import {
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+// `referencedVariableTokens` extracts every @{variables.NAME} reference from a
+// text blob — used below to tell the user EXACTLY which names Resolve could
+// not find, instead of a silent verbatim echo (#3575). expandVariables()
+// itself is correct (unknown refs stay verbatim by design); the UI just never
+// surfaced which refs those were.
+import { referencedVariableTokens } from '@/lib/variables/resolve';
 
 // ----- Variable Library (Cosmos, typed key/value with value sets) -----
 // v3.27: extended to Fabric's 7 variable types — String/Integer/Number/
@@ -148,9 +154,47 @@ const VAR_TYPE_PLACEHOLDERS: Record<VarType, string> = {
 // `validateVarValue` is imported from `_family-utils` (see top-of-file
 // imports — vitest coverage at `lib/editors/__tests__/family-utils.test.ts`).
 
+/** First occurrence per key, in source order. */
+function dedupeBy<T>(items: T[], key: (t: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((t) => {
+    const k = key(t);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/**
+ * The reference syntax to quote back at the user. `VAR_REF` accepts BOTH
+ * `@{variables.NAME}` and `${variables.NAME}`, so hard-coding `@{…}` in the
+ * warning tells a user who wrote `${…}` that a form they did not use was left
+ * verbatim — a small R7 violation of the same kind as the banner itself.
+ * Echo the sigil(s) actually present, and only those.
+ */
+function refSyntaxHint(refs: string[]): string {
+  const at = refs.some((r) => r.startsWith('@'));
+  const dollar = refs.some((r) => r.startsWith('$'));
+  if (at && dollar) return '@{variables.NAME} / ${variables.NAME}';
+  return dollar ? '${variables.NAME}' : '@{variables.NAME}';
+}
+
+/** Comma-separated `<code>` list — one element per name so specs can match a name exactly. */
+function NameList({ names }: { names: string[] }) {
+  return (
+    <>
+      {names.map((n, i) => (
+        <span key={n}>
+          <code>{n}</code>{i < names.length - 1 ? ', ' : ''}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<VlState>('variable-library', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty, lastSaveError } = useItemState<VlState>('variable-library', id, {
     variables: [
       { name: 'ENV', type: 'string', default: 'dev' },
       { name: 'BatchSize', type: 'number', default: '5000' },
@@ -179,26 +223,170 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
 
   // Resolve panel — calls the real dereference layer (/resolve), which pulls
   // secret-ref variables out of Key Vault and expands @{variables.NAME}.
-  const [resolved, setResolved] = useState<Array<{ name: string; type: string; value: string; secret: boolean; resolvedFromKv?: boolean; error?: string }> | null>(null);
+  type ResolvedVarRow = { name: string; type: string; value: string; secret: boolean; resolvedFromKv?: boolean; error?: string };
+  const [resolved, setResolved] = useState<ResolvedVarRow[] | null>(null);
   const [resolveBusy, setResolveBusy] = useState(false);
   const [resolveErr, setResolveErr] = useState<string | null>(null);
   const [expandText, setExpandText] = useState('@{variables.ENV}/batch?size=@{variables.BatchSize}');
   const [expandOut, setExpandOut] = useState<string | null>(null);
+  // Names referenced in the resolved text that came back verbatim because no
+  // matching variable existed in the resolved set — the ONLY signal that told
+  // #3575's reporter Resolve wasn't a no-op. Populated only after a Resolve
+  // click resolves (never on mount — a freshly created item must show no
+  // banners per ux-baseline.md's "clean first-open" rule). Each entry carries
+  // the reference VERBATIM so the copy can echo the sigil the user actually
+  // wrote (`${…}` is as valid as `@{…}`) rather than asserting one of the two.
+  const [unresolvedRefs, setUnresolvedRefs] = useState<Array<{ name: string; ref: string }>>([]);
+  // References whose NAME `expandVariables()` can never match (`Order-Count`,
+  // `2fa`, an empty name). These are reported separately because saving the
+  // library cannot fix them — claiming otherwise would be the same false cause
+  // this banner exists to remove (deploy-integrity.md R7).
+  const [invalidRefs, setInvalidRefs] = useState<string[]>([]);
+  // The value set the banner above is ALLOWED to name. It is the one the server
+  // actually resolved against (the route echoes it back), NOT the live `tab` —
+  // nothing disables the ribbon/TabList while a resolve is in flight, and
+  // switching tabs afterwards does not re-resolve, so rendering `tab` would
+  // assert "no variable named X exists in the prod value set" about a set that
+  // was never diffed (deploy-integrity.md R7 — a message states only what the
+  // code established).
+  const [resolvedValueSet, setResolvedValueSet] = useState<string | null>(null);
+  // Monotonic resolve id. A response may only write state if it is still the
+  // LATEST request — otherwise a slow earlier call lands after a newer one and
+  // repaints the banner from a library state that has since been superseded
+  // (e.g. "X is not in the saved library" about an X the newer resolve just
+  // proved IS saved). That is the same R7 false-cause this banner exists to
+  // remove, so the ordering guard belongs here and not only on the buttons:
+  // `disabled` closes the click path, this closes the in-flight path.
+  const resolveSeq = useRef(0);
+  // A soft-navigation between two items of the same type changes `id` WITHOUT
+  // remounting this editor: app/items/[type]/[id]/page.tsx renders
+  // `<Editor item={item} id={id} …/>` with no `key={id}`, which is precisely
+  // why useItemState's own load effect is keyed on `[slug, id]`. Every piece of
+  // Resolve output below therefore belongs to the PREVIOUS id and must be
+  // dropped, or the next library opens carrying another item's warning banner
+  // (ux-baseline.md — no error banners on a freshly opened, untouched item).
+  useEffect(() => {
+    // Bump FIRST: any resolve still in flight belongs to the previous item and
+    // is now abandoned, so its response must not land on this one.
+    resolveSeq.current += 1;
+    setResolved(null);
+    setResolveErr(null);
+    setExpandOut(null);
+    setUnresolvedRefs([]);
+    setInvalidRefs([]);
+    setResolvedValueSet(null);
+    // The abandoned request will never clear this itself (its `finally` is
+    // seq-guarded), and leaving it true would wedge Resolve on the new item.
+    setResolveBusy(false);
+  }, [id]);
   const runResolve = useCallback(async () => {
     if (id === 'new') { setResolveErr('Save the library before resolving.'); return; }
-    setResolveBusy(true); setResolveErr(null);
+    const seq = resolveSeq.current + 1;
+    resolveSeq.current = seq;
+    setResolveBusy(true); setResolveErr(null); setUnresolvedRefs([]); setInvalidRefs([]); setResolvedValueSet(null);
+    const textSent = expandText;
+    const valueSetSent = tab;
     try {
       const r = await clientFetch(`/api/items/variable-library/${encodeURIComponent(id)}/resolve`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ valueSet: tab, text: expandText }),
+        body: JSON.stringify({ valueSet: valueSetSent, text: textSent }),
       });
       const j = await r.json();
+      // Superseded while in flight — drop the whole response. Writing ANY of it
+      // (expanded, resolved, or the banner) would mix two different reads of
+      // the library into one surface.
+      if (seq !== resolveSeq.current) return;
       if (!j.ok) { setResolveErr(j.error || 'resolve failed'); setResolved([]); return; }
-      setResolved(j.resolved || []);
+      const resolvedList: ResolvedVarRow[] = j.resolved || [];
+      setResolved(resolvedList);
       setExpandOut(j.expanded ?? null);
-    } catch (e: any) { setResolveErr(e?.message || String(e)); setResolved([]); }
-    finally { setResolveBusy(false); }
+      // Prefer the value set the ROUTE reports it resolved against — it applies
+      // its own allow-list fallback — and fall back to the one this call posted.
+      // Both are facts this call established; the live `tab` is not.
+      setResolvedValueSet(typeof j.valueSet === 'string' ? j.valueSet : valueSetSent);
+      // Diff what was REFERENCED in the input against what actually came back
+      // resolved — anything referenced but absent from the resolved set is
+      // exactly what expandVariables() left verbatim.
+      const resolvedNames = new Set(resolvedList.map((rv) => rv.name));
+      const tokens = referencedVariableTokens(textSent);
+      // Split BEFORE the resolved-set diff: a reference whose name the
+      // expansion regex rejects was never a candidate for substitution, so
+      // "it isn't in the resolved set" is true but irrelevant — the reason it
+      // came back verbatim is the name shape, and that is what we must say.
+      // De-duplicated by NAME like the group below, so the title's count means
+      // the same thing for every group: `@{variables.a-b} ${variables.a-b}` is
+      // ONE unresolved variable, not two. The first ref seen is what we show.
+      setInvalidRefs(dedupeBy(tokens.filter((t) => !t.substitutable), (t) => t.name).map((t) => t.ref));
+      // De-duplicated NAMES — `@{variables.X}@{variables.X}` is one variable.
+      setUnresolvedRefs(
+        dedupeBy(
+          tokens.filter((t) => t.substitutable && !resolvedNames.has(t.name)),
+          (t) => t.name,
+        ).map((t) => ({ name: t.name, ref: t.ref })),
+      );
+    } catch (e: any) {
+      if (seq !== resolveSeq.current) return;
+      setResolveErr(e?.message || String(e)); setResolved([]);
+    } finally {
+      // Only the LATEST request owns the busy flag — an abandoned earlier call
+      // clearing it would re-enable Resolve while a newer one is still running.
+      if (seq === resolveSeq.current) setResolveBusy(false);
+    }
   }, [id, tab, expandText]);
+
+  // ---- Why a reference came back verbatim: THREE distinct causes -----------
+  // Resolve reads COSMOS (app/api/items/variable-library/[id]/resolve/route.ts
+  // → loadOwnedItem), never this editor's in-memory table. useItemState seeds
+  // `state` from a client-side `fallback` whose sample rows (ENV / BatchSize /
+  // EnableCopilot) are NOT persisted until the user saves, and a freshly
+  // created library's `state` is `{}` — so on EVERY new library the table shows
+  // three variables the resolver has never seen (#3687, systemic across the
+  // editors sharing this hook).
+  //
+  // The old copy collapsed that into "No variable named ENV exists in the
+  // default value set" printed directly under a table row named ENV: a cause
+  // the code never established, contradicted by what the user is looking at
+  // (deploy-integrity.md R7). Splitting against the LOCAL table is what makes
+  // each sentence true, and it is computed at RENDER time so the banner
+  // re-classifies itself the moment the user adds the row or saves.
+  const localNames = useMemo(
+    () => new Set(arr<VarDef>(state.variables).map((v) => v.name)),
+    [state.variables],
+  );
+  /** In the table the user is looking at, but absent from the SAVED library. */
+  const unsavedRefs = useMemo(() => unresolvedRefs.filter((u) => localNames.has(u.name)), [unresolvedRefs, localNames]);
+  /** Not in the table either — genuinely undefined, or a typo. */
+  const unknownRefs = useMemo(() => unresolvedRefs.filter((u) => !localNames.has(u.name)), [unresolvedRefs, localNames]);
+  const unresolvedCount = unresolvedRefs.length + invalidRefs.length;
+
+  /**
+   * G2 Fix-it #1 — the library is what Resolve reads, so persist the table and
+   * re-run in one click rather than telling the user to go do it.
+   */
+  const saveAndResolve = useCallback(async () => {
+    const ok = await save();
+    if (!ok) {
+      // Say what actually happened. Re-resolving after a failed save would
+      // reproduce the identical banner and read as the button doing nothing.
+      setResolveErr(lastSaveError() || 'Save failed — the library was not saved, so Resolve would return the same result.');
+      return;
+    }
+    await runResolve();
+  }, [save, lastSaveError, runResolve]);
+
+  /**
+   * G2 Fix-it #2 — add a row PRE-NAMED for each reference that resolved to
+   * nothing, so the user only supplies the value. `addRow()`'s generic `varN`
+   * would not match the reference and so would not clear the warning.
+   */
+  const addUnknownRows = useCallback((names: string[]) => {
+    setState((prev) => {
+      const cur = arr<VarDef>(prev.variables);
+      const have = new Set(cur.map((v) => v.name));
+      const add = names.filter((n) => !have.has(n)).map((n): VarDef => ({ name: n, type: 'string', default: '' }));
+      return add.length ? { ...prev, variables: [...cur, ...add] } : prev;
+    });
+  }, [setState]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -314,7 +502,11 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
           </Caption1>
           <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
             <Textarea value={expandText} onChange={(_, d) => setExpandText(d.value)} rows={2} placeholder="@{variables.ENV}/path" />
-            <Button appearance="primary" onClick={runResolve} disabled={resolveBusy || id === 'new'} style={{ alignSelf: 'flex-start' }}>
+            {/* `saving` gates this too: Save-and-resolve leaves `saving` true
+                while `resolveBusy` is still false, and a Resolve fired in that
+                window runs against the PRE-save library — whose response would
+                then claim a just-saved variable "is not in the saved library". */}
+            <Button appearance="primary" onClick={runResolve} disabled={resolveBusy || saving || id === 'new'} style={{ alignSelf: 'flex-start' }}>
               {resolveBusy ? 'Resolving…' : 'Resolve'}
             </Button>
             {resolveErr && <MessageBar intent="error"><MessageBarBody>{resolveErr}</MessageBarBody></MessageBar>}
@@ -323,6 +515,63 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
                 <Caption1>Expanded</Caption1>
                 <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 120 }}>{expandOut || '(empty)'}</div>
               </>
+            )}
+            {/* Gated on `resolvedValueSet` as well as the names: the banner
+                names a value set, so it may not render before the resolve that
+                established which one. Each paragraph below states ONE cause and
+                only that cause — see the three-way split above. */}
+            {unresolvedCount > 0 && resolvedValueSet && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>
+                    {/* De-duplicated NAMES, not reference occurrences —
+                        `@{variables.X}@{variables.X}` is one variable. */}
+                    {unresolvedCount === 1 ? '1 variable left unresolved' : `${unresolvedCount} variables left unresolved`}
+                  </MessageBarTitle>
+                  {unsavedRefs.length > 0 && (
+                    <div>
+                      <NameList names={unsavedRefs.map((u) => u.name)} />{' '}
+                      {unsavedRefs.length === 1 ? 'is' : 'are'} in the table above but not in the <strong>saved</strong> library.
+                      Resolve runs against the saved copy, so {unsavedRefs.length === 1 ? 'its' : 'their'}{' '}
+                      <code>{refSyntaxHint(unsavedRefs.map((u) => u.ref))}</code> reference{unsavedRefs.length === 1 ? ' was' : 's were'} left
+                      verbatim in the expanded text above. Save the library, then resolve again.
+                    </div>
+                  )}
+                  {unknownRefs.length > 0 && (
+                    <div>
+                      No variable named <NameList names={unknownRefs.map((u) => u.name)} /> exists in the{' '}
+                      <strong>{resolvedValueSet}</strong> value set, so {unknownRefs.length === 1 ? 'its' : 'their'}{' '}
+                      <code>{refSyntaxHint(unknownRefs.map((u) => u.ref))}</code> reference{unknownRefs.length === 1 ? ' was' : 's were'} left
+                      verbatim in the expanded text above. Add {unknownRefs.length === 1 ? 'it' : 'them'} to the table and save, or check the name for a typo.
+                    </div>
+                  )}
+                  {invalidRefs.length > 0 && (
+                    <div>
+                      <NameList names={invalidRefs} /> {invalidRefs.length === 1 ? 'is not a valid reference' : 'are not valid references'} —
+                      a variable name must start with a letter or underscore and contain only letters, digits and underscores.
+                      Saving the library cannot fix {invalidRefs.length === 1 ? 'this one' : 'these'}: the name shape alone is why{' '}
+                      {invalidRefs.length === 1 ? 'it was' : 'they were'} left verbatim. Rename the variable and the reference
+                      (for example <code>Order_Count</code> rather than <code>Order-Count</code>).
+                    </div>
+                  )}
+                </MessageBarBody>
+                {/* G2 — an inline Fix-it per cause, never a bare remediation
+                    paragraph. Both actions are things the platform can do. */}
+                {(unsavedRefs.length > 0 || unknownRefs.length > 0) && (
+                  <MessageBarActions>
+                    {unsavedRefs.length > 0 && (
+                      <Button appearance="transparent" icon={<Save16Regular />} disabled={saving || resolveBusy} onClick={saveAndResolve}>
+                        {saving ? 'Saving…' : 'Save and resolve'}
+                      </Button>
+                    )}
+                    {unknownRefs.length > 0 && (
+                      <Button appearance="transparent" icon={<Add16Regular />} onClick={() => addUnknownRows(unknownRefs.map((u) => u.name))}>
+                        {unknownRefs.length === 1 ? 'Add it to the table' : 'Add them to the table'}
+                      </Button>
+                    )}
+                  </MessageBarActions>
+                )}
+              </MessageBar>
             )}
             {resolved && resolved.length > 0 && (
               <Table size="small" aria-label="Resolved values">
