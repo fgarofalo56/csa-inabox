@@ -13,9 +13,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1680 |
+| Total routes | 1681 |
 | Public (no session) | 58 |
-| Session-only | 646 |
+| Session-only | 647 |
 | Owner-scoped | 675 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
@@ -1809,6 +1809,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/transformation-project/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
 | `items/user-data-function/[id]/invoke/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Key Vault, Microsoft Graph |
 | `items/user-data-function/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
+| `items/user-data-function/endpoints/route.ts` | GET | session-only |  | — |
 | `items/variable-library/[id]/resolve/route.ts` | POST | owner-scoped |  | Cosmos, Key Vault, Microsoft Graph |
 | `items/variable-library/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `items/vector-store/[id]/index/route.ts` | GET POST PUT | session-only |  | AI Search, PostgreSQL |

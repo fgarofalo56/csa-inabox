@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1680 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1681 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -611,6 +611,7 @@ export type StaticApiRoute =
   | '/api/items/synapse-spark-pool/list'
   | '/api/items/tracing'
   | '/api/items/transformation-project'
+  | '/api/items/user-data-function/endpoints'
   | '/api/items/vector-store'
   | '/api/items/warehouse/migrate/import'
   | '/api/items/warehouse/migrate/scan'

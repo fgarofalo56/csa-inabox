@@ -60,7 +60,6 @@
     "apps/fiab-console/lib/editors/phase3/eventstream-editor.tsx": 2,
     "apps/fiab-console/lib/editors/phase3/semantic-model-editor/direct-lake-tab.tsx": 1,
     "apps/fiab-console/lib/editors/phase4/ontology-functions-panel.tsx": 2,
-    "apps/fiab-console/lib/editors/phase4/user-data-function-editor.tsx": 2,
     "apps/fiab-console/lib/editors/report/get-data-gallery.tsx": 1,
     "apps/fiab-console/lib/editors/spark-job-definition-editor.tsx": 4,
     "apps/fiab-console/lib/editors/stream-analytics-editor.tsx": 4,
