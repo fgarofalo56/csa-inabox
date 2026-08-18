@@ -251,6 +251,32 @@ export const adfPipelineAutoBind: AutoBindProvider = {
   },
 
   /**
+   * #3549 (review BLOCKER 3). Is the live pipeline an EMPTY twin?
+   *
+   * `probe` above only answers "does a pipeline of this name exist", which is
+   * exactly why the reported population stayed broken: an already-empty
+   * pipeline probes TRUE, takes the `via:'existing'` path, and is never seeded.
+   * This lets the engine repair it — and retry a seed that previously failed.
+   *
+   * Fails CLOSED: any error means we could not establish that it is empty, and
+   * the engine must not overwrite on a guess.
+   */
+  isEmpty: async (name, coords) => {
+    const { getPipeline } = await import('./adf-client');
+    const { withFactoryOverride } = await import('./adf-factory-context');
+    try {
+      const p: any = await withFactoryOverride(
+        { factoryName: coords.factoryName, subscriptionId: coords.subscriptionId, resourceGroup: coords.resourceGroup },
+        () => getPipeline(name),
+      );
+      const activities = p?.properties?.activities;
+      return Array.isArray(activities) && activities.length === 0;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
    * The keys `resolveBinding` (lib/azure/pipeline-binding.ts) already reads, so
    * every existing per-item route — GET/PUT/run/runs/debug/validate/triggers/
    * copilot — resolves an auto-bound item with no change whatsoever.
@@ -327,6 +353,18 @@ export const synapsePipelineAutoBind: AutoBindProvider = {
   seedFromContent: async (name, _coords, ctx) => {
     const { seedPipelineFromContent } = await import('./auto-bind-seed');
     return seedPipelineFromContent('synapse', name, ctx);
+  },
+
+  /** #3549 (review BLOCKER 3) — see the ADF twin. Fails CLOSED. */
+  isEmpty: async (name) => {
+    const { getPipeline } = await import('./synapse-dev-client');
+    try {
+      const p: any = await getPipeline(name);
+      const activities = p?.properties?.activities;
+      return Array.isArray(activities) && activities.length === 0;
+    } catch {
+      return false;
+    }
   },
 
   stateKeys: (name, coords) => ({

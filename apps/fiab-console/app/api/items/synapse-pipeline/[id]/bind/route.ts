@@ -71,7 +71,10 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     // never presented as complete. See the ADF twin for the full reasoning.
     const seedIncomplete = autoBind?.status === 'bound' && !!autoBind.seedError;
     const preview = bound && !seedIncomplete ? null : pipelineDefinitionFromContent(item.state?.content);
-    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, autoBind });
+    // G2 — resolves to `svc-synapse`, whose role ("Synapse Administrator (UAMI)
+    // on the workspace") is the remediation. Inline literal: see the ADF twin.
+    const seedGate = seedIncomplete ? { code: 'synapse_pipeline_seed_incomplete' } : undefined;
+    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, autoBind, ...(seedGate ?? {}) });
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });

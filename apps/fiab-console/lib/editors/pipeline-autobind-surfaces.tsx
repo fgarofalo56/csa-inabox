@@ -24,6 +24,12 @@
  *   Rebind        user asked to re-map        → explicit, never the default
  *   Unavailable   a genuine estate gate       → the reason + Try again, with
  *                                               the picker beneath as the Fix-it
+ *
+ * …plus one that belongs to the BOUND branch rather than the unbound one:
+ *
+ *   SeedIncomplete the object EXISTS and is bound but its authored content
+ *                  could not be written — an empty pipeline that must never be
+ *                  presented as complete (#3549).
  */
 import {
   Button, Caption1, MessageBar, MessageBarBody, MessageBarTitle, Spinner, tokens,
@@ -43,6 +49,15 @@ export interface AutoBindWire {
   sourceName?: string;
   sanitized?: boolean;
   nameDrift?: boolean;
+  /** True when the item's authored content was written into the backing object. */
+  seeded?: boolean;
+  /**
+   * Set when authored content EXISTED but could not be written. The pipeline is
+   * real and bound but EMPTY, so the editor must not present it as complete.
+   * These two fields were missing from this interface while the server was
+   * already sending them, which is how the honest-failure channel stayed dead.
+   */
+  seedError?: string;
   reason?: string;
   missing?: string;
   retryable?: boolean;
@@ -160,6 +175,51 @@ export function AutoBindUnavailable({ reason, onRetry }: {
         <div style={actionRow}>
           <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={onRetry}>
             Try again
+          </Button>
+        </div>
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
+/**
+ * The BOUND-BUT-UNSEEDED gate (#3549 review, BLOCKER 1).
+ *
+ * Auto-bind created a REAL, published pipeline for this item but could not
+ * author the item's activity graph into it — an RBAC refusal, or a linked
+ * service (typically Databricks) this estate cannot satisfy. The item IS bound
+ * and the object DOES exist; only its contents are missing.
+ *
+ * That combination is precisely what made #3549 invisible for so long: the
+ * editor opened on a canvas, reported "0 activities", left **Trigger now**
+ * enabled, and warned about nothing. Running it succeeded and did nothing.
+ *
+ * So this surface is rendered in the BOUND branch — the branch a seedError item
+ * actually takes. The unbound branch's starter-graph block never sees it. It
+ * carries an inline **Retry seeding** Fix-it per `ux-baseline.md` G2 rather
+ * than a bare complaint, because a re-run genuinely resolves the common cases
+ * (a role granted since, a transient control-plane refusal).
+ */
+export function PipelineSeedIncomplete({ containerLabel, reason, activityCount, onRetry }: {
+  containerLabel: string;
+  reason?: string;
+  /** How many activities the item's authored graph declares. */
+  activityCount: number;
+  onRetry: () => void;
+}) {
+  return (
+    <MessageBar intent="warning" layout="multiline" data-testid="pipeline-seed-incomplete">
+      <MessageBarBody>
+        <MessageBarTitle>This pipeline is live but EMPTY — its activities were not published</MessageBarTitle>
+        Loom created the {containerLabel} pipeline for this item and bound it, but could not write
+        the {activityCount > 0 ? `${activityCount} activit${activityCount === 1 ? 'y' : 'ies'}` : 'activities'}
+        {' '}this item already carries into it. The pipeline below is real and running-capable, so a
+        run would SUCCEED and do nothing — Run and Debug are disabled until the graph is published.
+        The authored graph is shown underneath so you can see exactly what is missing.
+        {reason && (<><br /><Caption1>{reason}</Caption1></>)}
+        <div style={actionRow}>
+          <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={onRetry}>
+            Retry seeding
           </Button>
         </div>
       </MessageBarBody>

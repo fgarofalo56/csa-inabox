@@ -74,7 +74,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
  */
 import {
   AutoBindProgress, AutoBindRetry, AutoBindRebindNotice, AutoBindUnavailable,
-  AutoBindFallbackGate, type AutoBindWire,
+  AutoBindFallbackGate, PipelineSeedIncomplete, type AutoBindWire,
 } from './pipeline-autobind-surfaces';
 /** The create-new-factory branch of the factory picker — its own module. */
 import { CreateFactoryForm } from './pipeline-create-factory-form';
@@ -662,6 +662,17 @@ export function PipelineEditorCore({
   const activities = extractActivities(spec);
   const activityCount = activities.length;
 
+  // #3549 (review BLOCKER 1) — auto-bind CREATED a real pipeline for this item
+  // but could not author its graph into it. The item is BOUND, so it renders
+  // the bound branch below; without this flag that branch showed a healthy
+  // canvas over an empty pipeline with Trigger now enabled, which is the exact
+  // symptom #3549 is about. `preview` carries the authored graph the bind GET
+  // deliberately keeps in this state (`seedIncomplete` in the bind routes).
+  const seedIncomplete = !!bound && autoBind?.status === 'bound' && !!autoBind.seedError;
+  const previewActivities: any[] = Array.isArray(preview?.properties?.activities)
+    ? preview.properties.activities
+    : [];
+
   // ------------------------------------------------------------------
   // Pipeline-level config model (Parameters / Variables / Settings) — these
   // round-trip the spec's `properties.parameters|variables|concurrency|
@@ -801,8 +812,12 @@ export function PipelineEditorCore({
         ...validateGroup,
         ...manageGroup,
         { label: 'Run', actions: [
-          { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty ? () => kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
-          { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
+          // #3549 — a pipeline whose seed failed is REAL and runnable, so a run
+          // returns Succeeded having executed nothing. That "successful" no-op
+          // is the defect, so Run/Debug are disabled until the graph is
+          // actually published (the gate above carries the Fix-it).
+          { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty && !seedIncomplete ? () => kick('debug') : undefined, disabled: busy || !bound || dirty || seedIncomplete, title: seedIncomplete ? 'This pipeline is empty — its activities were not published' : (dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined)) },
+          { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty && !seedIncomplete ? () => kick('run') : undefined, disabled: busy || !bound || dirty || seedIncomplete, title: seedIncomplete ? 'This pipeline is empty — its activities were not published' : (dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined)) },
           { label: 'Add trigger', icon: <Clock20Regular />, onClick: bound ? openTriggers : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : undefined },
         ] },
         { label: 'Layout', actions: [
@@ -1171,6 +1186,21 @@ export function PipelineEditorCore({
                 <Button size="small" appearance="subtle" icon={<Link20Regular />} onClick={startRebind}>Rebind</Button>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => { loadPipeline(); loadRuns(); }} style={{ marginLeft: 'auto' }}>Refresh</Button>
               </div>
+              {/* #3549 (review BLOCKER 1) — BOUND, but the authored graph was
+                  never written into the live pipeline. This branch is the one a
+                  seedError item actually takes, so the gate has to live HERE;
+                  the unbound branch's starter-graph block above never sees it.
+                  Without this the editor showed "0 activities" over a real
+                  empty pipeline with Trigger now enabled and warned about
+                  nothing — the original #3549 symptom. */}
+              {seedIncomplete && (
+                <PipelineSeedIncomplete
+                  containerLabel={config.containerLabel}
+                  reason={autoBind?.seedError}
+                  activityCount={previewActivities.length}
+                  onRetry={() => void loadBinding()}
+                />
+              )}
               {/* #2895 — bound but not yet present in the backend. An expected
                   state, so it is a guided WARNING with an inline Fix-it (G2),
                   never a red bar carrying a stringified response body. The
@@ -1197,6 +1227,34 @@ export function PipelineEditorCore({
                 </MessageBar>
               )}
               {error && (<BackendStateBar error={error} title="Pipeline API" />)}
+              {/* #3549 — the graph that SHOULD be live, rendered read-only
+                  beneath the gate. Showing it is what turns "0 activities" from
+                  a silent, plausible state into a visible gap the user can act
+                  on. Read-only: the live canvas below is still the authoring
+                  surface, and this is a record of what the seed failed to
+                  write. */}
+              {seedIncomplete && previewActivities.length > 0 && (
+                <div className={s.starterGraph}>
+                  <div className={s.starterGraphHead}>
+                    <Subtitle2>Authored graph — not yet published</Subtitle2>
+                    <Badge appearance="outline">
+                      {previewActivities.length} activit{previewActivities.length === 1 ? 'y' : 'ies'}
+                    </Badge>
+                    <Badge appearance="filled" color="warning">Not live · read-only</Badge>
+                  </div>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                    This is the activity graph this item carries. It is NOT what the{' '}
+                    {config.containerLabel} is currently running — the bound pipeline is empty.
+                    Use <strong>Retry seeding</strong> above once the reason is resolved.
+                  </Body1>
+                  <PipelineDesigner
+                    activities={extractActivities(JSON.stringify(preview)) as any}
+                    parameters={paramsFromSpec(preview as PipelineSpec)}
+                    variables={varsFromSpec(preview as PipelineSpec)}
+                    onActivitiesChange={() => { /* read-only — the live canvas below authors */ }}
+                  />
+                </div>
+              )}
               {validation && (
                 <MessageBar intent={validation.ok ? 'success' : 'error'}><MessageBarBody>{validation.message}</MessageBarBody></MessageBar>
               )}

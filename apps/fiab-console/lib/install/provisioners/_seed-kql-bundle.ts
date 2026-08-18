@@ -17,6 +17,10 @@
  *     lines have to be trimmed.
  *   - `.ingest inline` can silently land zero shards, so seeds are VERIFIED and
  *     fall back to a transactional `.set-or-append`.
+ *   - `.ingest inline` APPENDS, so a seed must COUNT BEFORE IT INGESTS. Both
+ *     the install path and the auto-bind path apply the bundle to the SAME
+ *     database on one install, and an unconditional ingest duplicated every
+ *     sample row while the `present >= expected` verify still reported success.
  *   - ingest-class commands throttle at Ingestion capacity 1 and must back off.
  *
  * The caller owns the DATABASE lifecycle (ARM create + readiness) and owns
@@ -167,6 +171,9 @@ export function kqlLiteral(value: unknown, type: string): string {
  * exploration and prototyping … don't use in production") with NO automatic
  * retry, and against a freshly-created table it can intermittently produce zero
  * data shards. So we:
+ *   0. COUNT FIRST and skip entirely when the rows are already there — ingest
+ *      APPENDS, and since #3549 two callers apply the same bundle to the same
+ *      database on one install, so an unconditional ingest duplicates the data.
  *   1. Try `.ingest inline`, then VERIFY with `<table> | count`.
  *   2. If the count is short, fall back to `.set-or-append <table> <|
  *      datatable(<schema>) [<rows>]` — a single transactional control command
@@ -196,6 +203,26 @@ async function seedTableRows(
   };
 
   try {
+    // COUNT FIRST. `.ingest inline` APPENDS — it does not replace — so an
+    // unconditional ingest DUPLICATES every row of a bundle that has already
+    // been applied. Since #3549 there are TWO callers against the same
+    // database on a single install (open/create-time `seedFromContent` and
+    // Phase 2 `kqlDatabaseProvisioner`), so this is the normal path, not an
+    // edge case.
+    //
+    // It was self-concealing: the verify below is `present >= expected`, so 2N
+    // rows PASSES and logs "Seeded N row(s) (verified 2N)" — a status line that
+    // asserts something untrue (deploy-integrity R7). The pre-count is what
+    // makes this applier genuinely idempotent, which is the property both its
+    // own header and `kql-db.ts`'s claim.
+    //
+    // `>= expected` rather than `=== expected` deliberately: a table the user
+    // has since appended to must NOT be re-seeded either.
+    const already = await countRows();
+    if (already >= expected) {
+      steps.push(`Sample rows for ${table} are already present (${already} row(s)); skipping ingest.`);
+      return true;
+    }
     await withIngestRetry(() => ingestInline(dbName, table, rows), `Inline ingest into ${table}`, steps);
   } catch (e: any) {
     if (e instanceof KustoError && (e.status === 401 || e.status === 403)) throw e;

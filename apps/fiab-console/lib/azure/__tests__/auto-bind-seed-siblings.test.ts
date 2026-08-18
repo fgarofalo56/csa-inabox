@@ -61,7 +61,13 @@ vi.mock('@/lib/azure/kusto-client', () => {
     }),
     ingestInline: vi.fn(async (_db: string, table: string, rows: any[][]) => {
       adx.ingests.push({ table, rows });
-      adx.rowCounts.set(table, rows.length);
+      // ACCUMULATE, because `.ingest inline` APPENDS — it does not replace the
+      // table. The original fake did `set(table, rows.length)`, which silently
+      // modelled every ingest as idempotent and made a DOUBLE-APPLY invisible:
+      // two ingests of 2 rows read back as 2 instead of 4, so the duplication
+      // regression below could not be observed. A fake that cannot represent
+      // the defect cannot guard against it.
+      adx.rowCounts.set(table, (adx.rowCounts.get(table) ?? 0) + rows.length);
     }),
     createDatabase: vi.fn(async () => ({ provisioningState: 'Succeeded' })),
   };
@@ -90,6 +96,7 @@ vi.mock('@/lib/azure/adls-client', () => ({
 }));
 
 import { applyKqlBundle, normalizePolicyCommand, resolveFunctionPlaceholders } from '@/lib/install/provisioners/_seed-kql-bundle';
+import { kqlDatabaseProvisioner } from '@/lib/install/provisioners/kql-db';
 import { seedLakehouseAdls, columnsFromDdl, buildCsv } from '@/lib/install/provisioners/_seed-lakehouse-adls';
 import { adxDatabaseAutoBind, lakehouseAutoBind } from '@/lib/azure/auto-bind-providers';
 import type { AutoBindContext } from '@/lib/azure/auto-bind';
@@ -171,8 +178,98 @@ describe('eventhouse / kql-database — the empty-database sibling', () => {
   });
 });
 
-describe('applyKqlBundle — the extracted quirk-fixes survived the lift', () => {
-  it('rewrites .alter-merge caching to .alter (SYN0002)', async () => {
+// ===========================================================================
+// THE DOUBLE-APPLY REGRESSION (#3549 review, BLOCKER 2)
+//
+// This PR gave the OPEN/CREATE path its own route into `applyKqlBundle`
+// (`adxDatabaseAutoBind.seedFromContent`). Install ALSO applies the bundle in
+// Phase 2 (`kqlDatabaseProvisioner`). Both now run against the SAME database
+// on a single install:
+//
+//   app install → createOwnedItem → item-crud.ts autoBindOnCreate
+//                 → adxDatabaseAutoBind.seedFromContent → applyKqlBundle   (1)
+//   app install → runProvisioning → kqlDatabaseProvisioner → applyKqlBundle (2)
+//
+// `.ingest inline` APPENDS, so (2) duplicated every sample row. It was
+// invisible twice over: the verify is `present >= expected`, so 2N rows PASSES
+// and logs "Seeded N row(s) (verified 2N)" — a status line that is false (R7) —
+// and the sibling fake modelled ingest as `set(rows.length)` rather than `+=`.
+//
+// Pre-PR the auto-bind path only called `createDatabase`, so this is a
+// regression the PR introduces, not a pre-existing condition.
+// ===========================================================================
+describe('#3549 BLOCKER 2 — the bundle must be applied IDEMPOTENTLY, never twice', () => {
+  it('does not duplicate sample rows when the same bundle is applied twice', async () => {
+    await applyKqlBundle('db', KQL_CONTENT, []);
+    expect(adx.rowCounts.get('RawTelemetry')).toBe(2);
+
+    await applyKqlBundle('db', KQL_CONTENT, []);
+    // 2, not 4. Every row in the live database would otherwise be a duplicate.
+    expect(adx.rowCounts.get('RawTelemetry')).toBe(2);
+  });
+
+  it('does not re-issue .ingest inline for rows that are ALREADY present', async () => {
+    await applyKqlBundle('db', KQL_CONTENT, []);
+    expect(adx.ingests).toHaveLength(1);
+
+    await applyKqlBundle('db', KQL_CONTENT, []);
+    // The second apply must COUNT FIRST and find the rows already landed.
+    expect(adx.ingests).toHaveLength(1);
+  });
+
+  it('reports the already-present count HONESTLY, never "Seeded N (verified 2N)" (R7)', async () => {
+    const first: string[] = [];
+    await applyKqlBundle('db', KQL_CONTENT, first);
+    expect(first.some((s) => /Seeded 2 row\(s\) into RawTelemetry/.test(s))).toBe(true);
+
+    const second: string[] = [];
+    await applyKqlBundle('db', KQL_CONTENT, second);
+    // It must NOT claim to have seeded rows it did not write, and must not
+    // report a verified count larger than the bundle declares.
+    expect(second.some((s) => /already present/i.test(s))).toBe(true);
+    expect(second.some((s) => /verified 4/.test(s))).toBe(false);
+  });
+
+  it('still counts the tables + rows as expected/seeded on the second apply', async () => {
+    await applyKqlBundle('db', KQL_CONTENT, []);
+    const r = await applyKqlBundle('db', KQL_CONTENT, []);
+    // Idempotent does NOT mean "reports nothing" — the bundle IS satisfied, so
+    // the caller must still see a healthy result rather than an ingest failure.
+    expect(r.expectedSeedTables).toBe(1);
+    expect(r.ingestFailures).toBe(0);
+  });
+
+  it('the REAL two-call-site path (auto-bind then install) leaves N rows, not 2N', async () => {
+    vi.stubEnv('LOOM_KUSTO_CLUSTER_URI', 'https://adx-test.eastus2.kusto.windows.net');
+    try {
+      // 1. createOwnedItem → autoBindOnCreate → seedFromContent.
+      const seed = await adxDatabaseAutoBind.seedFromContent!(
+        'Real_Time_Ops', {}, ctxWith('kql-database', KQL_CONTENT),
+      );
+      expect(seed.seeded).toBe(true);
+
+      // 2. …and then Phase 2 provisioning applies the same bundle again.
+      const provision = await kqlDatabaseProvisioner({
+        session: { claims: { oid: 't', name: 'n', upn: 'u', groups: [] }, exp: 0 } as any,
+        target: { mode: 'shared' },
+        cosmosItemId: 'c1',
+        workspaceId: 'ws-1',
+        displayName: 'Real_Time_Ops',
+        content: KQL_CONTENT,
+        appId: 'app-azure-realtime-analytics',
+      });
+
+      expect(provision.status).toBe('created');
+      // The user's dashboard must not read double every metric.
+      expect(adx.rowCounts.get('RawTelemetry')).toBe(2);
+      expect(adx.ingests).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('applyKqlBundle — the extracted quirk-fixes survived the lift', () => {  it('rewrites .alter-merge caching to .alter (SYN0002)', async () => {
     // There is no `-merge` variant of the caching policy command; the raw
     // bundle form is rejected by the engine.
     await applyKqlBundle('db', KQL_CONTENT, []);

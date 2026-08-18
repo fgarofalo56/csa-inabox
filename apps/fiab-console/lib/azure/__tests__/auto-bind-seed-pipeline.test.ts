@@ -89,7 +89,16 @@ import type { AutoBindContext } from '@/lib/azure/auto-bind';
  * named in #3549, including the DatabricksNotebook activities whose
  * `linkedServiceName` the bundle omits (ADF 400s without it, so the seeder has
  * to inject one).
+ *
+ * `processing_date` is the bundle's REAL value — an ADF parameter-reference
+ * expression, not a fixed date (see that file, `baseParameters`). A literal
+ * '2026-08-15' would still be "content the seeder copies", but it would not
+ * exercise the parameter-reference path at all, so a translation bug that
+ * mangled `@{…}` expressions would pass. Fixtures that quietly simplify the
+ * thing they claim to reproduce are how a seeder ships green and fails live.
  */
+const PROCESSING_DATE_EXPR = "@{formatDateTime(pipeline().parameters.ProcessingDate, 'yyyy-MM-dd')}";
+
 const RTA_CONTENT = {
   kind: 'adf-pipeline',
   parameters: { ProcessingDate: { type: 'string', defaultValue: '@utcnow()' } },
@@ -99,7 +108,7 @@ const RTA_CONTENT = {
       type: 'DatabricksNotebook',
       config: {
         notebookPath: '/Shared/RealTimeAnalytics/02_structured_streaming',
-        baseParameters: { processing_date: '2026-08-15' },
+        baseParameters: { processing_date: PROCESSING_DATE_EXPR },
         description: 'Drains the streaming checkpoint + runs the DQ gate (Step 2).',
       },
     },
@@ -182,7 +191,10 @@ describe('adfPipelineAutoBind.seedFromContent', () => {
 
     // The ADF wire contract: engine-specific bits live under typeProperties.
     expect(first.typeProperties.notebookPath).toBe('/Shared/RealTimeAnalytics/02_structured_streaming');
-    expect(first.typeProperties.baseParameters).toEqual({ processing_date: '2026-08-15' });
+    // The parameter-reference expression must survive VERBATIM — an escaped or
+    // re-interpolated `@{…}` is a live ADF failure, not a cosmetic difference.
+    expect(first.typeProperties.baseParameters).toEqual({ processing_date: PROCESSING_DATE_EXPR });
+    expect(first.typeProperties.baseParameters.processing_date).toContain('pipeline().parameters.ProcessingDate');
     // …and NOT at the activity root, which is the canvas-render shape.
     expect(first.notebookPath).toBeUndefined();
     // `description` IS a root sibling and must be lifted out of typeProperties.

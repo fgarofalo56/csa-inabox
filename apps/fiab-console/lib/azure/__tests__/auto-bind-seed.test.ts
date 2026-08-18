@@ -63,11 +63,14 @@ class ContentPlane {
   objects = new Map<string, { activities: unknown[] }>();
   createCalls: string[] = [];
   seedCalls: string[] = [];
+  /** Names `isEmpty` was asked about — proves the steady-state open skips it. */
+  emptyProbes: string[] = [];
 
   reset() {
     this.objects.clear();
     this.createCalls = [];
     this.seedCalls = [];
+    this.emptyProbes = [];
   }
 }
 
@@ -105,6 +108,10 @@ function seedingProvider(over: Partial<AutoBindProvider> = {}): AutoBindProvider
       if (!content?.activities?.length) return { seeded: false };
       plane.objects.set(name, { activities: content.activities });
       return { seeded: true, detail: `${content.activities.length} activities` };
+    },
+    isEmpty: async (name) => {
+      plane.emptyProbes.push(name);
+      return (plane.objects.get(name)?.activities.length ?? 0) === 0;
     },
     stateKeys: (name) => ({ pipelineName: name }),
     existingBinding: (ctx) => (typeof ctx.state.pipelineName === 'string' ? ctx.state.pipelineName : null),
@@ -166,6 +173,115 @@ describe('#3549 — a gated bundle install, opened for the first time', () => {
     const providers = [seedingProvider()];
     const outcome = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers });
     expect(autoBindWireStatus(outcome)).toMatchObject({ status: 'bound', seeded: true });
+  });
+});
+
+// ===========================================================================
+// A FAILED SEED MUST NOT BE TERMINAL, AND THE ALREADY-BROKEN POPULATION MUST
+// BE REPAIRED (#3549 review, BLOCKER 3).
+//
+// Two gaps, one mechanism:
+//
+//   RETRY    `seedError` was carried forward untouched on the 'existing' path
+//            and step 5b ran on CREATE only, so once a seed failed nothing ever
+//            retried it — not even after an operator granted the missing role.
+//            The item stayed bound to an empty pipeline permanently.
+//
+//   BACKFILL `probe` is EXISTENCE-only. An item already bound to an empty
+//            pipeline (the population #3549 was reported for) probes true →
+//            `via:'existing'` → no seed → empty forever. The PR shipped no
+//            backfill, so it prevented NEW occurrences while leaving every
+//            existing one broken.
+//
+// The repair is gated on the backing object actually being EMPTY (the new
+// `isEmpty` provider hook), because seeding over an object that holds work
+// would destroy it. The two CONTROLS below run that direction.
+// ===========================================================================
+describe('#3549 BLOCKER 3 — a failed seed is retried, and empty bindings are repaired', () => {
+  it('RE-SEEDS on a later open after the first seed failed', async () => {
+    // Open 1: the estate refuses the write (no Data Factory Contributor yet).
+    const failing = [seedingProvider({
+      seedFromContent: async () => ({ seeded: false, error: 'ADF 403: cannot author the pipeline.' }),
+    })];
+    const first = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers: failing });
+    if (first.status !== 'bound') throw new Error('expected bound');
+    expect(first.record.seedError).toContain('403');
+    expect(plane.objects.get('P1')?.activities).toEqual([]);
+
+    // The operator grants the role. Open 2 must REPAIR, not report the same
+    // failure forever.
+    const state = { ...gatedInstallState(), ...first.statePatch };
+    const healed = await ensureAutoBinding(ctxFor('P1', state), { providers: [seedingProvider()] });
+
+    expect(healed.status).toBe('bound');
+    if (healed.status === 'bound') {
+      expect(healed.record.seeded).toBe(true);
+      expect(healed.record.seedError).toBeUndefined();
+      // It must be PERSISTED, or the repair is forgotten on the next open.
+      expect(healed.changed).toBe(true);
+    }
+    expect(plane.objects.get('P1')?.activities).toHaveLength(3);
+  });
+
+  it('BACKFILLS an item already bound to an EMPTY pipeline (the live population)', async () => {
+    // The #3549 shape: a real, published, EMPTY pipeline the item is already
+    // bound to via the legacy key, with NO autoBind record at all.
+    plane.objects.set('P1', { activities: [] });
+    const state = { ...gatedInstallState(), pipelineName: 'P1' };
+
+    const outcome = await ensureAutoBinding(ctxFor('P1', state), { providers: [seedingProvider()] });
+
+    expect(outcome.status).toBe('bound');
+    if (outcome.status === 'bound') {
+      // Adopted, not re-created — the object was already there.
+      expect(outcome.record.via).toBe('existing');
+      expect(outcome.record.seeded).toBe(true);
+    }
+    expect(plane.createCalls).toEqual([]);
+    // …and it is no longer the empty twin.
+    expect(plane.objects.get('P1')?.activities).toHaveLength(3);
+  });
+
+  it('CONTROL — NEVER seeds over an existing pipeline that holds work', async () => {
+    plane.objects.set('P1', { activities: [{ name: 'UserAuthored', type: 'Copy' }] });
+    const state = { ...gatedInstallState(), pipelineName: 'P1' };
+
+    const outcome = await ensureAutoBinding(ctxFor('P1', state), { providers: [seedingProvider()] });
+
+    expect(outcome.status).toBe('bound');
+    // The emptiness probe ran and correctly said "not empty" …
+    expect(plane.emptyProbes).toEqual(['P1']);
+    // … so no seed, and the user's activity is intact.
+    expect(plane.seedCalls).toEqual([]);
+    expect(plane.objects.get('P1')?.activities).toEqual([{ name: 'UserAuthored', type: 'Copy' }]);
+  });
+
+  it('CONTROL — a HEALTHY seeded item costs ZERO extra control-plane calls', async () => {
+    const providers = [seedingProvider()];
+    const first = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers });
+    if (first.status !== 'bound') throw new Error('expected bound');
+    const state = { ...gatedInstallState(), ...first.statePatch };
+    plane.emptyProbes = [];
+
+    const second = await ensureAutoBinding(ctxFor('P1', state), { providers });
+
+    expect(second.status).toBe('bound');
+    // `seeded:true` on the record already answers the question, so the engine
+    // must not pay for an emptiness probe on every steady-state open.
+    expect(plane.emptyProbes).toEqual([]);
+    expect(plane.seedCalls).toHaveLength(1);
+    if (second.status === 'bound') expect(second.changed).toBe(false);
+  });
+
+  it('a blank item with no content is NOT repeatedly probed into a seed', async () => {
+    const providers = [seedingProvider()];
+    // No `content` — nothing to seed, and an empty object is correct for it.
+    const outcome = await ensureAutoBinding(ctxFor('blank-item', {}), { providers });
+    expect(outcome.status).toBe('bound');
+    if (outcome.status === 'bound') {
+      expect(outcome.record.seeded).toBeUndefined();
+      expect(outcome.record.seedError).toBeUndefined();
+    }
   });
 });
 
@@ -301,6 +417,62 @@ describe('registry coverage — every provider that can hold content seeds it', 
       .filter((name) => !(name in DOCUMENTED_OPT_OUTS));
 
     expect(missing).toEqual([]);
+  });
+
+  it('every opt-out carries a REAL reason, not an empty placeholder', () => {
+    // An opt-out map is an escape hatch. `{'x': ''}` would silence the walk
+    // above while documenting nothing — the entry has to justify itself.
+    for (const [name, reason] of Object.entries(DOCUMENTED_OPT_OUTS)) {
+      expect(reason.trim().length, `opt-out '${name}' has no stated reason`).toBeGreaterThan(20);
+    }
+  });
+
+  it('every registered seedFromContent ACTUALLY seeds — not just exists', async () => {
+    // `typeof … === 'function'` is satisfied by `async () => ({seeded:false})`.
+    // A provider could be registered with a no-op stub and pass the walk above
+    // while shipping the exact defect #3549 is about, so each hook is INVOKED
+    // against content of its own kind and must report that it wrote something.
+    //
+    // Per-provider content of the right `kind`, since `authoredContent` refuses
+    // a mismatched kind by design.
+    const CONTENT_BY_PROVIDER: Record<string, { itemType: string; content: unknown }> = {
+      'adf-pipeline': { itemType: 'data-pipeline', content: BUNDLE_CONTENT },
+      'synapse-pipeline': { itemType: 'data-pipeline', content: { ...BUNDLE_CONTENT, kind: 'synapse-pipeline' } },
+      eventstream: {
+        itemType: 'eventstream',
+        content: { kind: 'eventstream', sources: [{ name: 's' }], destinations: [{ name: 'd' }], transforms: [] },
+      },
+      'adx-database': {
+        itemType: 'kql-database',
+        content: { kind: 'kql-database', tables: [{ name: 'T', columns: [{ name: 'a', type: 'string' }] }] },
+      },
+      'lakehouse-adls': {
+        itemType: 'lakehouse',
+        content: { kind: 'lakehouse', folders: [{ path: 'Files/raw' }], deltaTables: [] },
+      },
+    };
+
+    // Guard the guard: the map must cover the live registry, or a provider
+    // added tomorrow would be skipped rather than checked.
+    expect(Object.keys(CONTENT_BY_PROVIDER).sort())
+      .toEqual(AUTO_BIND_PROVIDERS.map((p) => p.provider).sort());
+
+    for (const p of AUTO_BIND_PROVIDERS) {
+      const fixture = CONTENT_BY_PROVIDER[p.provider];
+      const ctx: AutoBindContext = {
+        itemId: 'i-1', itemType: fixture.itemType, displayName: 'Seed Probe',
+        workspaceId: 'ws-1', state: { content: fixture.content },
+      };
+      // Every real backing client is absent here, so the call must FAIL — but
+      // it must fail having TRIED, i.e. report an error rather than the
+      // "nothing to seed" answer a no-op stub would give. `{seeded:false}` with
+      // NO error is exactly what a stub returns, so that is the failure case.
+      const r = await p.seedFromContent!('probe-name', { container: 'landing' }, ctx);
+      expect(
+        r.seeded === true || (r.seeded === false && !!r.error),
+        `${p.provider}.seedFromContent returned "nothing to seed" for content of its own kind — a no-op stub would look identical`,
+      ).toBe(true);
+    }
   });
 
   it('covers the five registered backings', () => {

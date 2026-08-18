@@ -246,6 +246,30 @@ export interface AutoBindProvider {
     ctx: AutoBindContext,
   ): Promise<AutoBindSeedResult>;
   /**
+   * OPTIONAL. Does the backing object hold NO authored content?
+   *
+   * This is what makes a failed seed non-terminal and what repairs the items
+   * that were already broken when #3549 was reported. `probe` answers "does it
+   * EXIST", which is why an already-empty pipeline took the `via:'existing'`
+   * path and was never seeded — the platform could not tell a healthy binding
+   * from an empty twin.
+   *
+   * The engine calls this ONLY when the item's provenance does not already say
+   * `seeded:true`, so a healthy item costs zero extra control-plane calls on
+   * its steady-state opens. When it returns true AND the item has authored
+   * content, the engine re-runs `seedFromContent` — safe by construction,
+   * because there is no work in an empty object to destroy.
+   *
+   * A provider that omits this NEVER re-seeds, which is the pre-existing
+   * behaviour. Must not throw: return false if it cannot tell (unknown is not
+   * empty — we do not overwrite on a guess).
+   */
+  isEmpty?(
+    name: string,
+    coords: Record<string, string>,
+    ctx: AutoBindContext,
+  ): Promise<boolean>;
+  /**
    * The binding fields the EXISTING downstream resolvers read (e.g.
    * `pipelineName`). Merged into the state patch so nothing downstream changes.
    */
@@ -330,6 +354,59 @@ export interface EnsureAutoBindingOptions {
   providers?: readonly AutoBindProvider[];
   /** Clock seam for deterministic `boundAt` in tests. */
   now?: () => Date;
+}
+
+/**
+ * Repair an EMPTY backing object we are about to report as bound (#3549).
+ *
+ * Returns a seed result when a repair was attempted, `undefined` when the
+ * question did not arise — in which case `finish()` carries the prior record's
+ * provenance forward untouched, exactly as before.
+ *
+ * The guards, in the order they matter:
+ *
+ *   1. `seeded === true` on the record → the content is already in there.
+ *      Returns immediately, so a healthy item's steady-state open makes ZERO
+ *      extra control-plane calls. This is the common path and it must stay free.
+ *   2. No `seedFromContent` / no `isEmpty` → the provider has not opted in;
+ *      behaviour is unchanged from before this hook existed.
+ *   3. `isEmpty` says the object holds something → NEVER touch it. A user's
+ *      authored graph outranks a stale bundle every time, and an `isEmpty` that
+ *      cannot tell is contracted to answer false, so an unknown is treated as
+ *      "has work". We still record `seeded:true` in that case, because the
+ *      object demonstrably HAS content — that clears a stale `seedError` and
+ *      retires the probe.
+ *
+ * Only once all three pass do we seed — into an object we have just confirmed
+ * is empty, so there is nothing to destroy. `seedFromContent` itself returns
+ * `{seeded:false}` with no error when the item has no authored content, which
+ * leaves a blank item exactly as it was.
+ *
+ * Never throws: a repair failure must not turn a working binding into a dead
+ * end, so it is reported on the record like any other seed failure.
+ */
+async function maybeRepairSeed(
+  provider: AutoBindProvider,
+  name: string,
+  coords: Record<string, string>,
+  ctx: AutoBindContext,
+  record: AutoBindRecord | null,
+): Promise<AutoBindSeedResult | undefined> {
+  if (record?.seeded === true) return undefined;
+  if (!provider.seedFromContent || !provider.isEmpty) return undefined;
+  try {
+    if (!(await provider.isEmpty(name, coords, ctx))) {
+      // The object HOLDS content — whether we wrote it, the installer did, or
+      // the user authored it on the canvas. Record that, which both clears a
+      // now-stale `seedError` (otherwise the editor's gate would accuse a
+      // pipeline that is demonstrably fine, forever) and stops every later
+      // open paying for this probe.
+      return { seeded: true, detail: 'backing object already holds content' };
+    }
+    return await provider.seedFromContent(name, coords, ctx);
+  } catch (e) {
+    return { seeded: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /**
@@ -465,7 +542,12 @@ export async function ensureAutoBinding(
   if (candidate) {
     try {
       if (await provider.probe(candidate, coords, ctx)) {
-        return finish(candidate, 'existing', candidate !== ctx.displayName);
+        // #3549 (review BLOCKER 3) — REPAIR an empty binding before reporting
+        // it healthy. `probe` is existence-only, so both the item whose seed
+        // FAILED and the item that was bound to an empty pipeline long before
+        // auto-bind existed land here and, without this, stay empty forever.
+        const repair = await maybeRepairSeed(provider, candidate, coords, ctx, record);
+        return finish(candidate, 'existing', candidate !== ctx.displayName, repair);
       }
       // Absent → the backing object was deleted/renamed out of band. Fall
       // through and re-create at the TARGET name. This is the self-heal.
@@ -480,7 +562,10 @@ export async function ensureAutoBinding(
   // ---- 5. Probe the target, then create ----------------------------------
   try {
     if (await provider.probe(target.name, coords, ctx)) {
-      return finish(target.name, 'attached', target.sanitized);
+      // Same repair as the candidate path: an object we ATTACH to can equally
+      // be an empty twin an earlier gated install left behind.
+      const repair = await maybeRepairSeed(provider, target.name, coords, ctx, record);
+      return finish(target.name, 'attached', target.sanitized, repair);
     }
     await provider.create(target.name, coords, ctx);
     // ---- 5b. SEED the object we just made with the item's own content -----

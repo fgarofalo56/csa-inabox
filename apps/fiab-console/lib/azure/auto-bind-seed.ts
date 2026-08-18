@@ -63,9 +63,23 @@
  * `.alter-merge … policy caching` has to be rewritten to `.alter …` or ADX
  * rejects it. A second implementation of any of that would drift.
  *
- * So each seed below calls the SAME function the installer calls. An auto-bound
- * object is byte-for-byte the object install would have produced — minus the
- * on-demand RUN, which must not fire merely because a user opened an editor.
+ * So each seed below calls the SAME function the installer calls, which is what
+ * stops the two drifting.
+ *
+ * PRECISELY WHAT "the same" DOES AND DOES NOT MEAN. For the pipeline and KQL
+ * paths the shared function is the whole of what install ran, so an auto-bound
+ * object matches what install would have produced (minus the on-demand RUN,
+ * which must not fire merely because a user opened an editor).
+ *
+ * For the LAKEHOUSE it is deliberately NOT identical, and the difference is
+ * documented rather than implied:
+ *   - the extraction into `_seed-lakehouse-adls` changed the installer's own
+ *     behaviour in two ways — a mid-build 401/403 now short-circuits to a
+ *     remediation instead of logging and continuing, and the folder-create loop
+ *     now runs AFTER the Synapse serverless setup. Both are pinned by
+ *     `lib/install/__tests__/lakehouse-extraction-behaviour.test.ts`.
+ *   - `seedLakehouseFromContent` additionally SKIPS the Synapse OPENROWSET view
+ *     layer (see its own docstring for why).
  *
  * Server-only. Every import is dynamic, matching `auto-bind-providers.ts`: it
  * keeps the Azure control-plane clients out of the module graph until a seed
@@ -202,8 +216,10 @@ async function synapseSeedAdapter() {
  * "Provision to Azure" button make, and it is idempotent: it finds the hub we
  * just created ("already exists; reusing") and adds the consumer groups and the
  * transform. A `partial:true` result (Stream Analytics not configured, or not
- * available in this sovereign boundary) is reported honestly — the transport
- * stream IS live, so the binding stands and the hint is surfaced.
+ * available in this sovereign boundary) is reported as NOT seeded with the
+ * reason — the transport stream IS live and the binding stands, but calling a
+ * missing transform layer "seeded" is the streaming shape of the empty-twin
+ * defect this module exists to close.
  */
 export async function seedEventstreamFromContent(
   _name: string,
@@ -228,8 +244,19 @@ export async function seedEventstreamFromContent(
     const detail =
       `${topology.sinks.length} consumer group(s), ${topology.transforms.length} transform(s)`;
     if (result.partial) {
-      // The stream is real and bound; only the transform layer is un-provisioned.
-      return { seeded: true, detail: `${detail} — transform pending: ${result.hint || 'Stream Analytics unavailable'}` };
+      // The transport stream IS live and the binding stands, but the transform
+      // layer is NOT provisioned. Reporting `seeded:true` here told every wire
+      // consumer the content had landed, which is the same "looks complete,
+      // isn't" shape #3549 is about — just for streaming. So it is reported as
+      // NOT seeded, with the reason, and `seedError` carries the honest hint.
+      // The item stays BOUND (the hub exists), so this is a disclosure, not a
+      // dead end — and the re-seed path will retry it on a later open once
+      // Stream Analytics becomes available.
+      return {
+        seeded: false,
+        detail,
+        error: `Transport stream is live; the transform layer is not provisioned — ${result.hint || 'Stream Analytics unavailable'}`,
+      };
     }
     return { seeded: true, detail };
   } catch (e) {

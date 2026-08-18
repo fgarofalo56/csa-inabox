@@ -112,6 +112,14 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     // graph instead of presenting an empty pipeline as complete.
     const seedIncomplete = autoBind?.status === 'bound' && !!autoBind.seedError;
     const preview = bound && !seedIncomplete ? null : pipelineDefinitionFromContent(item.state?.content);
+    // G2 — a machine-readable gate code so /admin/gates and the Copilot gate
+    // tool can resolve this state. It maps to `svc-adf`, whose declared role
+    // ("Data Factory Contributor (UAMI) on the factory") is exactly the
+    // remediation for a refused pipeline-definition write. Written as an inline
+    // literal because lib/gates/__tests__/route-gate-codes.test.ts reads this
+    // file's SOURCE for the emitted-code shape — a value hidden behind a
+    // variable would sail past that guard.
+    const seedGate = seedIncomplete ? { code: 'adf_pipeline_seed_incomplete' } : undefined;
     // Surface the SELECTED factory the item was bound against (persisted at bind
     // time) so the editor rehydrates its factory picker + Factory Resources tree
     // on reload — keeping the tree, the bind list, and the bound item all on the
@@ -123,7 +131,7 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
       resourceGroup: typeof st.factoryResourceGroup === 'string' && st.factoryResourceGroup ? st.factoryResourceGroup : undefined,
     };
     const boundFactory = bf.name || bf.subscriptionId || bf.resourceGroup ? bf : null;
-    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, boundFactory, autoBind });
+    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, boundFactory, autoBind, ...(seedGate ?? {}) });
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
