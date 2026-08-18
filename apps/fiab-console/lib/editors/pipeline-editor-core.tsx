@@ -28,12 +28,8 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  DocumentTable20Regular, Play20Regular, Server20Regular,
-  ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
-  Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
-  PlugConnected20Regular, Database20Regular, Dismiss24Regular,
-  DocumentArrowRight20Regular, Notebook20Regular, SearchInfo20Regular,
-  Flow20Regular, ErrorCircle20Regular, DataArea20Regular,
+  DocumentTable20Regular, ArrowSync20Regular, Link20Regular, Add20Regular,
+  PlugConnected20Regular, Dismiss24Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
@@ -78,6 +74,8 @@ import {
 } from './pipeline-autobind-surfaces';
 /** The create-new-factory branch of the factory picker — its own module. */
 import { CreateFactoryForm } from './pipeline-create-factory-form';
+/** The ADF-Studio-parity toolbar definition — its own module (see its header). */
+import { buildPipelineRibbon } from './pipeline-editor-ribbon';
 
 const useStyles = makeStyles({
   // `flex: '1 0 auto'` (G3): the editor column FILLS the chrome's mainPanel
@@ -755,63 +753,17 @@ export function PipelineEditorCore({
     setTimeout(() => designerRef.current?.showAuthoringErrors(), 120);
   }, []);
 
-  // ADF Studio toolbar — Save · Validate · Debug · Run (trigger now) · Add
-  // trigger · canvas layout controls (auto-align / fit). Activities are added
-  // from the left palette pane in the designer, matching ADF Studio (no
-  // activity buttons in the toolbar).
-  const ribbon: RibbonTab[] = useMemo(() => {
-    const validateGroup: RibbonTab['groups'] = config.supportsValidate ? [{
-      label: 'Validate', actions: [
-        { label: busy ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
-      ],
-    }] : [];
-    // Manage hub — linked services / datasets (+ integration runtimes for ADF).
-    // Available for BOTH ADF and Synapse pipelines, regardless of pipeline
-    // binding. Synapse pipelines reach their own /api/synapse/* resources; the
-    // backend is selected on the ManagePanel below.
-    const manageGroup: RibbonTab['groups'] = [{
-      label: 'Manage', actions: [
-        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes (quick)' : 'Linked services and datasets (quick)' },
-        { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors, create, edit and delete connections' },
-        { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'Dataset wizard — create, edit and delete datasets (connector → connection → shape → schema)' },
-        { label: 'Integration runtimes', icon: <Server20Regular />, onClick: () => openManageHub('integration-runtimes'), title: 'Azure auto-resolve / Self-Hosted / Azure-SSIS integration runtimes' },
-      ],
-    }];
-    // Quick-insert activity buttons (Fabric Home ribbon parity): drop the most
-    // common activities straight from the ribbon. Enabled once bound; each routes
-    // through the designer's insertActivityByKey handle.
-    const insertGroup: RibbonTab['groups'] = [{
-      label: 'Insert', actions: [
-        { label: 'Copy data', icon: <DocumentArrowRight20Regular />, onClick: bound ? () => quickInsert('Copy') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Copy data activity' },
-        { label: 'Dataflow', icon: <DataArea20Regular />, onClick: bound ? () => quickInsert('DataflowGen2') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Dataflow Gen2 activity' },
-        { label: 'Notebook', icon: <Notebook20Regular />, onClick: bound ? () => quickInsert('Notebook') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Notebook activity' },
-        { label: 'Lookup', icon: <SearchInfo20Regular />, onClick: bound ? () => quickInsert('Lookup') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Lookup activity' },
-        { label: 'Invoke pipeline', icon: <Flow20Regular />, onClick: bound ? () => quickInsert('ExecutePipeline') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add an Invoke pipeline (Execute Pipeline) activity' },
-      ],
-    }];
-    return [
-      { id: 'home', label: 'Home', groups: [
-        { label: 'Save', actions: [
-          { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && bound && dirty ? save : undefined, disabled: busy || !bound || !dirty, title: !bound ? 'Bind a pipeline first' : (!dirty ? 'No changes' : undefined) },
-        ] },
-        ...insertGroup,
-        { label: 'Authoring', actions: [
-          { label: 'Check errors', icon: <ErrorCircle20Regular />, onClick: bound ? checkAuthoringErrors : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'List activities with unmet required fields (pre-run)' },
-        ] },
-        ...validateGroup,
-        ...manageGroup,
-        { label: 'Run', actions: [
-          { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty ? () => kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
-          { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
-          { label: 'Add trigger', icon: <Clock20Regular />, onClick: bound ? openTriggers : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : undefined },
-        ] },
-        { label: 'Layout', actions: [
-          { label: 'Auto align', onClick: bound ? () => designerRef.current?.autoAlign() : undefined, disabled: !bound },
-          { label: 'Zoom to fit', onClick: bound ? () => designerRef.current?.fitToScreen() : undefined, disabled: !bound },
-        ] },
-      ] },
-    ];
-  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
+  // ADF Studio toolbar — Save · Insert · Authoring · Validate (ADF) · Manage ·
+  // Run · Layout. The toolbar's SHAPE lives in `./pipeline-editor-ribbon`
+  // (extracted for the WS-E E3 monolith ratchet, same as the auto-bind surfaces
+  // and the create-factory form); every affordance is still driven by this
+  // component's state and callbacks, over the same dependency list as before.
+  const ribbon: RibbonTab[] = useMemo(() => buildPipelineRibbon({
+    supportsValidate: config.supportsValidate, isAdf, busy, bound, dirty,
+    save, kick, validate, openTriggers,
+    openManagePanel: () => setManageOpen(true),
+    openManageHub, quickInsert, checkAuthoringErrors, designerRef,
+  }), [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
 
   // SC-9 — publish this editor's ribbon actions to the shared command registry
   // so the in-ribbon Ctrl+Q / Alt+Q CommandSearch surfaces Save / Run / Debug /
@@ -1221,6 +1173,16 @@ export function PipelineEditorCore({
                   // U13 — the item id keys the in-canvas run overlay (Debug run
                   // receipts painted on the nodes) + the shared collab layer.
                   itemId={id}
+                  // #3698 — the collab layer addresses `/api/items/[type]/[id]/…`,
+                  // which matches `c.itemType` EXACTLY, so it needs the ITEM'S
+                  // OWN persisted slug — NOT `config.slug`. Those two genuinely
+                  // differ: `config.slug` is the RUNTIME-keyed BFF contract
+                  // ('adf-pipeline' | 'synapse-pipeline', hardcoded per delegate
+                  // editor and accepting the alias via its own ACCEPTED_TYPES),
+                  // whereas a `data-pipeline` item opened on the ADF runtime is
+                  // still persisted as `data-pipeline`. Using config.slug here
+                  // would simply move the 404 from the aliases onto the head type.
+                  itemType={item.slug}
                   apiSlug={config.slug}
                   onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
                   // Guided empty-state / gallery apply the FULL template spec

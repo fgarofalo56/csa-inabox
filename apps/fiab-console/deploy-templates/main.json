@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "2726184101643399028"
+      "templateHash": "16676674359305821188"
     }
   },
   "definitions": {
@@ -2554,7 +2554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "13834695273119758981"
+              "templateHash": "9951262348038123898"
             }
           },
           "definitions": {
@@ -8717,7 +8717,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "15772363634717914476"
+                      "templateHash": "11444507004207991340"
                     }
                   },
                   "parameters": {
@@ -8783,18 +8783,6 @@
                           }
                         }
                       }
-                    },
-                    {
-                      "type": "Microsoft.Resources/tags",
-                      "apiVersion": "2021-04-01",
-                      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
-                      "name": "default",
-                      "properties": {
-                        "tags": "[union(coalesce(tryGet(tryGet(reference(extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), 'Microsoft.Resources/tags', 'default'), '2021-04-01', 'Full'), 'properties'), 'tags'), createObject()), parameters('complianceTags'))]"
-                      },
-                      "dependsOn": [
-                        "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]"
-                      ]
                     },
                     {
                       "type": "Microsoft.Network/privateEndpoints",
