@@ -143,6 +143,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -465,6 +466,27 @@ function spanBetween(lines, aLine, aEnd, bLine, bStart) {
 /**
  * Every (label, guid) binding in one file.
  *
+ * ── LOGICAL LINES, NOT PHYSICAL ONES (#3420) ───────────────────────────────
+ * The scan roots include `scripts/` and `.github/`, i.e. `.sh` and `.yml`, and
+ * MOST of the shapes below need the label and the GUID on ONE line: S2
+ * `{ name: 'X', guid: 'g' }`, S5 `const A = 'g'; // Role Name`, S6
+ * `'Role Name': 'g'`, S7 `'g', // Role Name`, S8 `roleDefinitions … 'g'`. A
+ * shell author routinely folds exactly that pair across a trailing `\`:
+ *
+ *     az role assignment create --assignee "$OID" \
+ *       --role "b24988ac-6180-42a0-bb6f-b91a8f3d3d0e"   # Contributor
+ *
+ * Judged by PHYSICAL line the second token is on a line the matcher has
+ * already left, the binding is not harvested at all, and the guard reports the
+ * tree clean — the #3417 class this repo has paid for twice, and the reason
+ * check-guard-logical-lines.mjs exists. So the source is folded FIRST, by the
+ * one shared primitive, and every index below is an index into LOGICAL lines.
+ *
+ * `lineNo[i]` keeps the 1-based PHYSICAL line the logical line STARTS on, so a
+ * finding still points a reader at the code. A file with no continuation folds
+ * to itself — every `.ts` and `.bicep` here — so this widens what is read
+ * without changing how anything already read is judged.
+ *
  * `unparsed` is NOT the same as "nothing here": a declaration whose identifier
  * names a known role but whose value this cannot read is returned so the
  * caller can fail on it. An empty value read as harmless is the specific way a
@@ -477,10 +499,14 @@ function spanBetween(lines, aLine, aEnd, bLine, bStart) {
  * gap that is invisible rather than merely unread.
  */
 export function harvest(source, file = '<memory>') {
-  const lines = String(source).split(/\r?\n/).map((l) => l.replace(/\r$/, ''));
+  const logical = readLogicalLines(source);
+  const lines = logical.map((l) => l.text);
+  /** 1-based PHYSICAL line each logical line starts on. */
+  const lineNo = logical.map((l) => l.line);
   const pairs = [];
   const unparsed = [];
-  const claimed = new Set(); // 0-based line indexes some shape read
+  const claimed = new Set(); // 0-based LOGICAL line indexes some shape read
+
 
   /** The nearest name key that is inside the SAME object as the guid key. */
   const findPartner = (i, guidStart, guidEnd) => {
@@ -511,7 +537,7 @@ export function harvest(source, file = '<memory>') {
     if (one || oneRev) {
       const label = one ? one[1] : oneRev[2];
       const guid = one ? one[2] : oneRev[1];
-      pairs.push({ file, line: i + 1, shape: 'S2', labels: [{ text: label, from: 'name' }], guid: guid.toLowerCase() });
+      pairs.push({ file, line: lineNo[i], shape: 'S2', labels: [{ text: label, from: 'name' }], guid: guid.toLowerCase() });
       claimed.add(i);
       continue;
     }
@@ -529,7 +555,7 @@ export function harvest(source, file = '<memory>') {
       // be invisible in `--list` rather than merely unjudged.
       pairs.push({
         file,
-        line: i + 1,
+        line: lineNo[i],
         shape: 'S1',
         labels: label ? [{ text: label, from: 'name' }] : [],
         guid: gm[1].toLowerCase(),
@@ -545,7 +571,6 @@ export function harvest(source, file = '<memory>') {
     if (m) {
       const ident = m[1];
       let rhs = m[2].trim();
-      let at = i + 1;
       let atIdx = i;
 
       // A value on the FOLLOWING line is still this binding's value.
@@ -553,13 +578,12 @@ export function harvest(source, file = '<memory>') {
         for (let j = i + 1; j < Math.min(lines.length, i + 3); j += 1) {
           if (lines[j].trim() === '') continue;
           rhs = lines[j].trim();
-          at = j + 1;
           atIdx = j;
           break;
         }
       }
       if (rhs === '' || /^(\/\/|#)/.test(rhs)) {
-        if (resolveLabel(ident)?.name) unparsed.push({ file, line: i + 1, ident, why: 'value is empty' });
+        if (resolveLabel(ident)?.name) unparsed.push({ file, line: lineNo[i], ident, why: 'value is empty' });
         continue;
       }
 
@@ -568,7 +592,7 @@ export function harvest(source, file = '<memory>') {
         const labels = [{ text: ident, from: 'identifier' }];
         const comment = qm[2] ?? qm[3];
         if (comment && comment.trim()) labels.push({ text: comment.trim(), from: 'comment' });
-        pairs.push({ file, line: at, shape: dm ? 'S3' : 'S4', labels, guid: qm[1].toLowerCase() });
+        pairs.push({ file, line: lineNo[atIdx], shape: dm ? 'S3' : 'S4', labels, guid: qm[1].toLowerCase() });
         claimed.add(i);
         claimed.add(atIdx);
         continue;
@@ -581,7 +605,7 @@ export function harvest(source, file = '<memory>') {
     const mk = MAP_KEY_RE.exec(line);
     if (mk) {
       const label = mk[1] ?? mk[2] ?? mk[3];
-      pairs.push({ file, line: i + 1, shape: 'S6', labels: [{ text: label, from: 'map key' }], guid: mk[4].toLowerCase() });
+      pairs.push({ file, line: lineNo[i], shape: 'S6', labels: [{ text: label, from: 'map key' }], guid: mk[4].toLowerCase() });
       claimed.add(i);
       continue;
     }
@@ -592,7 +616,7 @@ export function harvest(source, file = '<memory>') {
       const comment = am[2] ?? am[3];
       pairs.push({
         file,
-        line: i + 1,
+        line: lineNo[i],
         shape: 'S7',
         labels: comment && comment.trim() ? [{ text: comment.trim(), from: 'comment' }] : [],
         guid: am[1].toLowerCase(),
@@ -635,7 +659,7 @@ export function harvest(source, file = '<memory>') {
         const label = (trailing && trailing[1]) || above || null;
         pairs.push({
           file,
-          line: at + 1,
+          line: lineNo[at],
           shape: 'S8',
           labels: label ? [{ text: label, from: 'comment' }] : [],
           guid: guid.toLowerCase(),
@@ -656,7 +680,7 @@ export function harvest(source, file = '<memory>') {
       const lower = g.toLowerCase();
       const near = CANON_GUIDS.has(lower)
         || [...CANON_GUIDS].some((c) => c.slice(0, NEAR_MISS_PREFIX) === lower.slice(0, NEAR_MISS_PREFIX));
-      if (near) unharvested.push({ file, line: i + 1, guid: lower });
+      if (near) unharvested.push({ file, line: lineNo[i], guid: lower });
     }
   }
   return { pairs, unparsed, unharvested };
@@ -1073,6 +1097,71 @@ export const CONTROLS = [
     // No resolvable label at all, so C1 cannot speak — C3 must.
     source: "var frobnicatorRoleId = 'b24988ac-6180-42a0-9999-999999999999'",
     expect: { C3: 1, resolved: 0 },
+  },
+  {
+    id: 'folded-shell-roledef-WRONG',
+    // #3420, and MEASURED against the pre-adoption revision of this file: on
+    // PHYSICAL lines this fixture yields ZERO pairs and ZERO findings. The
+    // `roleDefinitions` marker sits on one physical line and the id on the
+    // next, mid-line, where the bare-GUID lookahead cannot reach it — so the
+    // grant is not harvested at all and the guard reports the tree clean. That
+    // is the #3417 shape: a zero that gets read as evidence. `scripts/` and
+    // `.github/` are scan roots and 196 of the 280 shell/YAML files under them
+    // carry a backslash fold, so this is the ordinary way the shape is written,
+    // not a contrived one. Additive: the correct sibling must stay silent.
+    source: [
+      'az role assignment create --assignee "$OID" \\',
+      '  --role-definition-id "$SCOPE/providers/Microsoft.Authorization/roleDefinitions" \\',
+      "  --id 'acdd72a7-3385-48ef-bd42-f606fba81ae7' --scope \"$SCOPE\"   # Contributor",
+      'az role assignment create --assignee "$OID" \\',
+      '  --role-definition-id "$SCOPE/providers/Microsoft.Authorization/roleDefinitions" \\',
+      "  --id 'acdd72a7-3385-48ef-bd42-f606fba81ae7' --scope \"$SCOPE\"   # Reader",
+    ].join('\n'),
+    expect: { C1: 1, resolved: 2 },
+  },
+  {
+    id: 'folded-shell-roledef-CORRECT',
+    // Must-NOT-fire half of the same shape. Without it, a matcher that flagged
+    // every folded line would look proven by the fixture above alone.
+    source: [
+      'az role assignment create --assignee "$OID" \\',
+      '  --role-definition-id "$SCOPE/providers/Microsoft.Authorization/roleDefinitions" \\',
+      "  --id 'b24988ac-6180-42a0-ab88-20f7382dd24c' --scope \"$SCOPE\"   # Contributor",
+      'az role assignment create --assignee "$OID" \\',
+      '  --role-definition-id "$SCOPE/providers/Microsoft.Authorization/roleDefinitions" \\',
+      "  --id 'acdd72a7-3385-48ef-bd42-f606fba81ae7' --scope \"$SCOPE\"   # Reader",
+    ].join('\n'),
+    expect: { C1: 0, C3: 0, resolved: 2 },
+  },
+  {
+    id: 'folded-shell-env-assignment',
+    // The other half of the blindness, and a different failure mode: on
+    // physical lines this DID harvest a pair — the quoted id on its own line
+    // reads as an array member — but with the identifier stranded on the line
+    // above it, so the pair was UNLABELLED and resolved to nothing. A binding
+    // that is harvested and never judged is not covered by the verdict either;
+    // it just fails quietly in the residue instead of loudly in a finding.
+    source: [
+      'export CONTRIBUTOR_ROLE_ID=\\',
+      "  'acdd72a7-3385-48ef-bd42-f606fba81ae7'",
+      'export READER_ROLE_ID=\\',
+      "  'acdd72a7-3385-48ef-bd42-f606fba81ae7'",
+    ].join('\n'),
+    expect: { C1: 1, resolved: 2 },
+  },
+  {
+    id: 'escaped-backslash-does-not-splice',
+    // The folding must not over-reach. An EVEN run of trailing backslashes is
+    // an escaped backslash and the command ends there. Splice it and the
+    // declaration below is swallowed into the echo, `var …` is no longer at
+    // the start of its logical line, DECL_RE stops matching, and a wrong id
+    // goes UNJUDGED — the same going-quiet failure this whole change is about,
+    // arrived at from the opposite direction.
+    source: [
+      'echo "a literal trailing pair" \\\\',
+      "var contributorRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'",
+    ].join('\n'),
+    expect: { C1: 1, resolved: 1 },
   },
   {
     id: 'clean',

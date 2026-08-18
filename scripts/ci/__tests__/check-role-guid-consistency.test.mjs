@@ -213,6 +213,63 @@ test('a comment above one grant is not attributed to the NEXT grant', () => {
   assert.equal(r.resolved, 1, 'only the commented one is judged');
 });
 
+// ── #3420: a binding folded across a `\` must not be invisible ──────────────
+
+test('a grant folded across a backslash continuation is READ, not skipped', () => {
+  // `scripts/` and `.github/` are scan roots, so `.sh` and `.yml` are in the
+  // population, and a shell author folds a long `az` invocation across a
+  // trailing `\`. Judged by PHYSICAL line the `roleDefinitions` marker is on
+  // one line and the id on the next, mid-line, out of reach of the bare-GUID
+  // lookahead — MEASURED against the pre-adoption revision, this fixture
+  // produced ZERO pairs and ZERO findings there. A guard that reports clean on
+  // a tree carrying the defect is the #3417 class, not a near miss.
+  const r = run([
+    'az role assignment create --assignee "$OID" \\',
+    '  --role-definition-id "$SCOPE/providers/Microsoft.Authorization/roleDefinitions" \\',
+    `  --id '${READER}' --scope "$SCOPE"   # Contributor`,
+  ].join('\n'), 'grant.sh');
+  assert.equal(r.resolved, 1);
+  assert.equal(checks(r, 'C1').length, 1);
+});
+
+test('the same folded grant with the RIGHT id produces nothing', () => {
+  // Must-not-fire half. Without it, a matcher that flagged every folded line
+  // would look proven by the test above.
+  const r = run([
+    'az role assignment create --assignee "$OID" \\',
+    '  --role-definition-id "$SCOPE/providers/Microsoft.Authorization/roleDefinitions" \\',
+    `  --id '${CONTRIB}' --scope "$SCOPE"   # Contributor`,
+  ].join('\n'), 'grant.sh');
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.resolved, 1);
+});
+
+test('a folded finding still points at the PHYSICAL line the statement starts on', () => {
+  // Folding is an analysis device, not a reporting one. If the reported line
+  // were the logical index the annotation would land on the wrong code, which
+  // is how a true finding gets dismissed as noise.
+  const r = run([
+    '# a preamble line',
+    '# another preamble line',
+    'export CONTRIBUTOR_ROLE_ID=\\',
+    `  '${READER}'`,
+  ].join('\n'), 'grant.sh');
+  assert.equal(checks(r, 'C1').length, 1);
+  assert.equal(checks(r, 'C1')[0].line, 3, 'the `export` is on physical line 3');
+});
+
+test('an EVEN run of trailing backslashes does not splice the next line', () => {
+  // Over-reach fails the same way under-reach does: splice this and `var …` is
+  // no longer at the start of its logical line, DECL_RE stops matching, and a
+  // wrong id goes unjudged.
+  const r = run([
+    'echo "a literal trailing pair" \\\\',
+    `var contributorRoleId = '${READER}'`,
+  ].join('\n'), 'grant.sh');
+  assert.equal(r.resolved, 1);
+  assert.equal(checks(r, 'C1').length, 1);
+});
+
 // ── R7: C1 must not assert an outcome it has not established ────────────────
 
 test('C1 says ARM ACCEPTS the grant when the bound id is another KNOWN role', () => {
