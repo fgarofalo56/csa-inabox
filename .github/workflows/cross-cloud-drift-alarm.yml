@@ -1,0 +1,146 @@
+name: cross-cloud-drift-alarm
+
+# IS EVERY LIVE ESTATE RUNNING main? (#3730)
+#
+# WHY THIS LANE EXISTS
+# --------------------
+# On 2026-08-18 the Azure Government console was serving an image built on
+# 2026-08-11 — 251 commits and seven days behind main, reporting version 0.90.2
+# while Commercial reported 0.98.11. Every security fix merged that week was
+# inert in the sovereign boundary, and NOTHING anywhere said so. It was found by
+# hand-curling two URLs.
+#
+# The nearest existing control, deploy-staleness.yml, carried exactly one live
+# estate and this note: "The Gov console has no publicly-reachable marker
+# (private ingress), so this check cannot see it." That premise is false — the
+# Gov marker answers 200 over plain HTTPS with no credential — and the
+# disclosure is a large part of why nobody re-checked. An omission that is
+# DISCLOSED reads as a considered limit rather than an untested assumption
+# (`stale_audit_items_propagate`).
+#
+# WHY A SEPARATE LANE AND NOT ANOTHER ROW IN deploy-staleness
+# -----------------------------------------------------------
+# deploy-staleness now covers both clouds too (it shares the same registry). But
+# it also carries fifteen deploy-lane rows and has exited 1 on effectively every
+# run for months, for reasons unrelated to either console's freshness. A drift
+# signal buried inside a permanently-red report is a signal nobody can read, and
+# being ignored is the failure mode this entire class of control exists to
+# prevent.
+#
+# So this lane does ONE thing, and its red/green means ONE thing: at least one
+# live estate is not running main, or could not be measured. Nothing else can
+# turn it red; nothing else can hide inside its green.
+#
+# NO CREDENTIALS, NO `az`, NO AZURE LOGIN
+# ---------------------------------------
+# Both estates are read through their own /build-marker.txt and /api/version,
+# which are deliberately unauthenticated (loom-roll-and-validate already probes
+# the Commercial marker). That matters most for Gov, where the standing rule is
+# that verification comes from a GitHub Actions run and never from local `az`:
+# this needs neither, so the sovereign estate is measurable from an ordinary
+# ubuntu-latest runner with `permissions: contents: read`.
+#
+# READ-ONLY, AND DELIBERATELY SO
+# ------------------------------
+# It never dispatches, rolls or deploys anything, in either cloud. #3730 flags —
+# and explicitly declines to answer — whether Gov's dispatch-only posture is a
+# deliberate change-control decision for the sovereign boundary. Making the
+# drift VISIBLE does not require settling that question; starting a sovereign
+# deploy from CI would presume an answer nobody has given. Adding a `push` or
+# `workflow_run` trigger to the gov-* lanes is that decision, and it is not
+# taken here.
+#
+# EXPECT THIS LANE TO BE RED ON ITS FIRST RUN, and read that as the point. At
+# the measured 2026-08-18 state Gov exceeds its roll window by a factor of
+# forty. deploy-integrity.md R3: a deploy path that has stopped applying main is
+# the loudest case of drift, never a silent pass. The fix is to roll Gov (or to
+# record an operator acknowledgement), not to widen the window.
+#
+# Deliberately NOT a required PR check: estate freshness is a property of the
+# ESTATE, not of a pull request, and blocking unrelated PRs on it would train
+# people to ignore it — the exact failure mode above. Visibility comes from the
+# schedule, the job summary, and /admin/readiness in the console.
+
+on:
+  schedule:
+    # DAILY at 11:53 UTC. The minute is off both the top and the half hour on
+    # purpose: GitHub delays and DROPS schedules that pile onto the top-of-hour
+    # surge, and a dropped run is a control that silently did not execute — the
+    # measurement in scripts/ci/measure-cron-cadence.mjs found workflows running
+    # at 3-10x their declared cadence for exactly this reason. 53 is also unused
+    # by every other cron in this repo, so this lane does not queue behind one.
+    - cron: '53 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One drift reading at a time. Two concurrent runs would produce two verdicts
+  # about the same estates at the same moment, and the loser's would be the one
+  # people saw.
+  group: cross-cloud-drift-alarm
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Live estates vs main (both clouds)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth 0 is LOAD-BEARING, not hygiene. The check asks git how many
+      # commits separate each estate's live sha from main. On a shallow clone
+      # those shas are absent, every row becomes UNKNOWN, and the lane fails for
+      # a reason that has nothing to do with either estate. The self-test asserts
+      # this line is present.
+      - name: Checkout (full history — the check computes commit distances)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0
+
+      # THE EXIT CODE IS MEASURED DIRECTLY, NOT THROUGH A PIPE.
+      #
+      # The obvious way to write this step is `node … | tee -a
+      # "$GITHUB_STEP_SUMMARY"`. That is a gate that cannot fail: GitHub's
+      # default non-Windows shell is `bash -e {0}` and does NOT set pipefail, so
+      # the pipeline's status is `tee`'s — always 0 — and the step would report
+      # SUCCESS while the check exited 1. deploy-staleness.yml carries the same
+      # note because the same trap was caught there, and it then bit a reviewer
+      # measuring that PR's exit code through a pipe.
+      #
+      # So: redirect to a file, capture `$?` from the command itself, print it,
+      # append it, and re-raise. No pipe, no `|| true`, no `2>/dev/null`, no
+      # continue-on-error — `rc` is propagated verbatim by the final `exit`, and
+      # the self-test asserts none of those four strings appear in this file.
+      - name: Read both live estates and compare against main
+        shell: bash
+        run: |
+          {
+            echo '## Cross-cloud drift — every live estate vs main'
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          node scripts/ci/check-cross-cloud-drift.mjs > "$RUNNER_TEMP/cross-cloud-drift.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/cross-cloud-drift.txt"
+          cat "$RUNNER_TEMP/cross-cloud-drift.txt" >> "$GITHUB_STEP_SUMMARY"
+          echo "[cross-cloud-drift] exit=$rc (measured directly, not through a pipe)"
+          exit "$rc"
+
+      - name: Close the summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '```'
+            echo
+            echo 'A merged fix is not a deployed fix (`deploy-integrity.md` R2). The same verdict is'
+            echo 'in-product on `/admin/readiness` (`GET /api/admin/deploy-status`), which reports'
+            echo 'BOTH clouds side by side.'
+            echo
+            echo 'This lane never rolls anything. Whether Azure Government should deploy'
+            echo 'automatically is an open change-control decision (#3730); this only makes the'
+            echo 'drift visible.'
+          } >> "$GITHUB_STEP_SUMMARY"
