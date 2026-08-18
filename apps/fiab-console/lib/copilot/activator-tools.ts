@@ -12,7 +12,9 @@
  *                                historical per-window distribution
  *   activator_create_rule        createMonitorActivatorRule() → ARM PUT
  *                                Microsoft.Insights/scheduledQueryRules
- *                                (gated on confirm=true)
+ *                                (gated on confirm=true AND on a resolvable,
+ *                                write-authorized owning Loom item, whose id is
+ *                                stamped as the `loom-item-id` ARM tag)
  *   activator_list_rules         listScheduledQueryRules() (real ARM list)
  *   activator_describe_history   getActivatorHistory() →
  *                                Microsoft.AlertsManagement/alerts
@@ -27,7 +29,7 @@ import {
   getActivatorHistory,
   type MonitorRuleInput,
 } from '../azure/activator-monitor';
-import type { ToolDef } from '../azure/copilot-orchestrator';
+import type { ToolContext, ToolDef } from '../azure/copilot-orchestrator';
 
 // ── JSON-schema helpers (mirror copilot-orchestrator.ts) ────────────────────
 const S_STRING = { type: 'string' } as const;
@@ -180,6 +182,103 @@ function num(v: unknown, dflt: number): number {
   return Number.isFinite(n) ? n : dflt;
 }
 
+// ── the owning Loom item (the ARM ownership tag) ────────────────────────────
+/*
+ * WHY THIS EXISTS (#3551 / PR #3693 review B2).
+ *
+ * `createMonitorActivatorRule` stamps the `loom-item-id` ARM tag ONLY when its
+ * input carries `loomItemId` (lib/azure/activator-monitor.ts). This tool used to
+ * omit it, so every Copilot-authored rule was created UNTAGGED. `ruleBelongsToItem`
+ * then falls through to the name-based join — which, per its own docstring, fails
+ * CLOSED — so the rule was live in Azure, billing and firing, and invisible and
+ * unmanageable from the Activator editor: the exact lost-record class #3551 exists
+ * to fix, re-created by the Copilot path.
+ *
+ * The id is NOT taken on the model's word. `personaContext` is composed by the
+ * BROWSER (lib/editors/phase3/activator-editor.tsx sends `activatorId`;
+ * phase4/operations-agent-editor.tsx sends `itemId`) and reaches the model as
+ * text, so a supplied id is caller-controlled input. An unverified tag would let
+ * a rule be planted in someone else's activator, where the #3551 reconcile would
+ * claim it and DELETE/PATCH would act on it — the same "plausible, not
+ * authoritative" join key this PR removed from the reconcile. So every candidate
+ * is resolved through `loadOwnedItem`, which is WRITE-scoped by default
+ * (`!opts.allowReadRoles && !access.canWrite → null`).
+ *
+ * When it cannot be resolved, NOTHING is created and the caller is told exactly
+ * what is missing (deploy-integrity.md R7) — an orphan Azure alert rule is a
+ * worse outcome than a refusal the model can immediately fix, because it has the
+ * id in its editor context.
+ */
+
+/** Item types whose editors drive this tool. Both author rules through the SAME
+ *  ARM path and both tag by item id (activator-monitor stamps
+ *  `loom-item-type: 'activator'` for either — see operations-agent/[id]/deploy). */
+const RULE_OWNER_ITEM_TYPES = ['activator', 'operations-agent'] as const;
+
+interface RuleOwner {
+  /** The resolved Loom item — its Cosmos id is the ARM ownership tag. */
+  item?: { id: string; displayName: string };
+  /** Why no item could be resolved. Present iff `item` is absent. */
+  reason?: string;
+}
+
+/**
+ * Resolve the Loom item a Copilot-authored rule belongs to: the supplied item id
+ * (verified write-scoped), else an EXACT, UNIQUE display-name match (also
+ * verified write-scoped). Never guesses: an ambiguous or unmatched name returns
+ * a reason, not a plausible id.
+ */
+async function resolveRuleOwner(args: any, ctx: ToolContext): Promise<RuleOwner> {
+  const oid = ctx?.session?.claims?.oid || ctx?.userOid || '';
+  if (!oid) return { reason: 'the tool call carried no caller identity, so no Loom item could be resolved' };
+  const { loadOwnedItem, listOwnedItems } = await import('@/app/api/items/_lib/item-crud');
+
+  // 1) An id from the editor context — verified, never trusted as given.
+  const supplied = String(args?.activatorItemId ?? args?.itemId ?? '').trim();
+  if (supplied) {
+    for (const itemType of RULE_OWNER_ITEM_TYPES) {
+      const item = await loadOwnedItem(supplied, itemType, oid);
+      if (item) return { item: { id: item.id, displayName: item.displayName || supplied } };
+    }
+    return {
+      reason: `activatorItemId "${supplied}" did not resolve to an activator (or operations agent) you can edit, `
+        + 'so it was NOT used as the ownership tag',
+    };
+  }
+
+  // 2) No id — an EXACT, UNIQUE display-name match, scoped to the workspace when
+  //    the editor context supplied one.
+  const wanted = String(args?.activatorName ?? '').trim();
+  if (!wanted) return { reason: 'neither activatorItemId nor activatorName was supplied' };
+  const workspaceId = String(args?.workspaceId ?? '').trim();
+  const matches: Array<{ id: string; itemType: string }> = [];
+  for (const itemType of RULE_OWNER_ITEM_TYPES) {
+    const items = await listOwnedItems(itemType, oid, workspaceId ? { workspaceId } : {});
+    for (const it of items) {
+      if ((it.displayName || '').trim().toLowerCase() === wanted.toLowerCase()) {
+        matches.push({ id: it.id, itemType });
+      }
+    }
+  }
+  if (matches.length === 0) {
+    return { reason: `no activator named "${wanted}" is visible to you${workspaceId ? ` in workspace ${workspaceId}` : ''}` };
+  }
+  if (matches.length > 1) {
+    return {
+      reason: `${matches.length} items are named "${wanted}", so the name does not identify one — `
+        + 'it was NOT guessed. Pass activatorItemId',
+    };
+  }
+  // `listOwnedItems` admits READ roles, and this id AUTHORIZES later writes
+  // through the reconcile — so re-resolve it on the WRITE ladder.
+  const owned = await loadOwnedItem(matches[0].id, matches[0].itemType, oid);
+  if (!owned) {
+    return { reason: `"${wanted}" resolves to ${matches[0].id}, but you do not have write access to its workspace` };
+  }
+  return { item: { id: owned.id, displayName: owned.displayName || wanted } };
+}
+
+
 // ── tool builders ───────────────────────────────────────────────────────────
 
 export function buildActivatorTools(): ToolDef[] {
@@ -304,11 +403,17 @@ export function buildActivatorTools(): ToolDef[] {
       'Provision a REAL Azure Monitor scheduled-query alert rule (Microsoft.Insights/scheduledQueryRules) ' +
       'after the user approves the draft. Embeds the data-derived threshold into the alert KQL and creates ' +
       'an action group from the notification action (email / Teams-or-webhook / SMS). MUST be called with ' +
-      'confirm=true — without it the tool returns needsConfirmation and provisions nothing. Returns the ARM ' +
-      'resource id + Azure Portal deep-link so the user can verify the rule is live.',
+      'confirm=true — without it the tool returns needsConfirmation and provisions nothing. ALWAYS pass ' +
+      'activatorItemId: the "activatorId" (Activator editor) or "itemId" (Operations Agent editor) field of ' +
+      'the "Current editor context" JSON. That id is stamped on the Azure rule as its Loom owner, and it is ' +
+      'what makes the rule appear in — and be manageable from — that activator. Without a resolvable owner ' +
+      'the tool creates NOTHING and returns needsItemBinding. Returns the ARM resource id + Azure Portal ' +
+      'deep-link so the user can verify the rule is live.',
     parameters: obj({
       name: S_STRING,
       activatorName: S_STRING,
+      activatorItemId: S_STRING,
+      workspaceId: S_STRING,
       sourceTable: S_STRING,
       whereClause: S_STRING,
       summarizeExpr: S_STRING,
@@ -323,7 +428,7 @@ export function buildActivatorTools(): ToolDef[] {
       existingActionGroupId: S_STRING,
       confirm: S_BOOL,
     }, ['name', 'sourceTable', 'summarizeExpr', 'metricColumn', 'threshold']),
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       if (!args.confirm) {
         return {
           ok: false,
@@ -335,6 +440,23 @@ export function buildActivatorTools(): ToolDef[] {
       }
       const name = String(args.name || '').trim();
       if (!name) throw new Error('name is required');
+
+      // The owning Loom item, resolved and write-authorized BEFORE any ARM call —
+      // an untagged rule is an orphan (see the resolveRuleOwner note), so this
+      // refuses rather than creating one.
+      const owner = await resolveRuleOwner(args, ctx);
+      if (!owner.item) {
+        return {
+          ok: false,
+          needsItemBinding: true,
+          message:
+            `No alert rule was created: ${owner.reason}. An Azure Monitor rule with no Loom owner still bills `
+            + 'and still fires, but no activator can list, pause or delete it. Call activator_create_rule again '
+            + 'with activatorItemId set to the "activatorId" (or "itemId") field of the Current editor context '
+            + 'JSON. If this chat has no activator open, ask the user which activator the rule belongs to.',
+        };
+      }
+
       const sourceTable = String(args.sourceTable || '').trim();
       const summarizeExpr = String(args.summarizeExpr || 'count()').trim() || 'count()';
       const metricColumn = String(args.metricColumn || 'metricVal').trim() || 'metricVal';
@@ -357,6 +479,10 @@ export function buildActivatorTools(): ToolDef[] {
       const input: MonitorRuleInput = {
         name,
         query,
+        // The ownership tag. Without it the rule is created untagged and
+        // `ruleBelongsToItem` — which fails closed — leaves it unclaimed, so the
+        // activator's editor never lists it (#3551's lost-record class).
+        loomItemId: owner.item.id,
         severity: num(args.severity, 2),
         evaluationFrequency: String(args.evaluationFrequency || 'PT5M'),
         windowSize: String(args.windowSize || 'PT5M'),
@@ -364,7 +490,10 @@ export function buildActivatorTools(): ToolDef[] {
         ...(args.existingActionGroupId ? { existingActionGroupId: String(args.existingActionGroupId) } : {}),
       };
 
-      const record = await createMonitorActivatorRule(String(args.activatorName || name), input);
+      // The RESOLVED display name, not the model's rendering of it: the ARM rule
+      // name is derived from it, and `expectedAzureRuleName(displayName, ruleName)`
+      // is the reconcile's second join key for any rule created before the tag.
+      const record = await createMonitorActivatorRule(owner.item.displayName || name, input);
       // Deep-link to the rule's Azure Portal overview. The ARM resource id is
       // /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Insights/
       // scheduledQueryRules/{name}; fall back to the Alerts blade if env unset.
@@ -377,6 +506,8 @@ export function buildActivatorTools(): ToolDef[] {
         ok: true,
         ruleId: record.id,
         azureRuleName: record.azureRuleName,
+        loomItemId: owner.item.id,
+        activatorName: owner.item.displayName,
         query: record.query,
         threshold,
         severity: record.severity,
@@ -387,7 +518,9 @@ export function buildActivatorTools(): ToolDef[] {
         portalUrl,
         note:
           'Rule created. Verify it in Azure Portal → Monitor → Alerts → Alert rules ' +
-          `(scheduledQueryRule "${record.azureRuleName}").` + (record.note ? ` ${record.note}` : ''),
+          `(scheduledQueryRule "${record.azureRuleName}"). It is tagged loom-item-id=${owner.item.id}, so ` +
+          `"${owner.item.displayName}" lists it and can pause, edit or delete it.` +
+          (record.note ? ` ${record.note}` : ''),
       };
     },
   });
