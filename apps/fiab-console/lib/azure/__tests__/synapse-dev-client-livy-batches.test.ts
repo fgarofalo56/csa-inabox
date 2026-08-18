@@ -187,6 +187,28 @@ function malformedAfter(goodPages: number, total: number): Responder {
   };
 }
 
+/**
+ * A server that returns FEWER rows per page than asked for, while reporting a
+ * pool-wide `total` that exceeds them.
+ *
+ * This is the ONLY shape that reaches `walkRecentBatches`'s `tailFrom === 0`
+ * path with a non-null `total`, and none of the fixtures above produce it —
+ * which is exactly why the fast path that used to guard it went unnoticed as
+ * dead code. `readTotal` returns a number only when `total > headRows.length`,
+ * so `tailFrom === 0` (`total <= pageSize`) additionally requires a head page
+ * SHORTER than `total`. A normal offset pager never does that; a server that
+ * dribbles short pages mid-list does, and this module deliberately refuses to
+ * assume such a server cannot exist — that refusal is the whole reason
+ * `readTotal` will not trust a short page's `total`.
+ */
+function shortPagePool(total: number, rowsPerPage: number): Responder {
+  const all: BatchRow[] = Array.from({ length: total }, (_, i) => ({ id: i }));
+  return (url) => {
+    const { from, size } = parseFromSize(url);
+    return { total, sessions: all.slice(from, from + Math.min(size, rowsPerPage)) };
+  };
+}
+
 beforeEach(() => {
   requestedUrls = [];
   requestedTimeouts = [];
@@ -737,5 +759,84 @@ describe('a page with no `sessions` array is a broken read, not an empty pool', 
 
     expect(result.sessions).toEqual([]);
     expect(result.truncatedBy).toBeNull();
+  });
+});
+
+/**
+ * `tailFrom === 0` WITH A USABLE `total` — the path a dead fast path used to sit on.
+ *
+ * Round-2 review measured that `if (tailFrom === 0 && headRows.length >= total)`
+ * was UNREACHABLE: `readTotal` returns a number only when
+ * `total > pageRows(head).rows.length`, and `headRows` comes from the same call,
+ * so the conjunct is a contradiction. A `throw` as the branch's first statement
+ * left all 34 specs passing, and so did deleting the conjunct — the branch was
+ * dead in one direction and toothless in the other.
+ *
+ * The path itself is real, and no fixture reached it. These specs do, via a
+ * server that returns short pages while claiming more rows exist — the exact
+ * behaviour `readTotal` refuses to assume away.
+ */
+describe('a short head page with a bigger `total` has no tail to probe', () => {
+  it('enumerates the whole list instead of probing a tail window identical to the head', async () => {
+    // total=15 > headRows=10, and 15 <= pageSize 20, so tailFrom = 0.
+    responder = shortPagePool(15, 10);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.sessions.map((s) => s.id)).toEqual(
+      Array.from({ length: 15 }, (_, i) => 14 - i),
+    );
+    expect(result.scanned).toBe(15);
+    expect(result.truncatedBy).toBeNull();
+  });
+
+  it('issues NO duplicate from=0 request — the tail probe would have been byte-identical', async () => {
+    responder = shortPagePool(15, 10);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    await listRecentSparkBatchJobs('pool1', 20);
+
+    // The old fall-through fetched from=0 twice: once as the head, once as a
+    // "tail probe" at `tailFrom = 0`. A byte-identical page that decides
+    // nothing, burning one of only 10 budgeted slots.
+    const fromZero = requestedUrls.filter((u) => parseFromSize(u).from === 0);
+    expect(fromZero).toHaveLength(1);
+    // Forward-only: 0 → 10 → 15, then the empty page that proves the end.
+    expect(requestedUrls.map((u) => parseFromSize(u).from)).toEqual([0, 10, 15]);
+  });
+
+  it('reports the rows it actually saw, not a `total` the server contradicted', async () => {
+    // The server claims 15 but runs dry after 10. Echoing 15 next to 10 rows
+    // repeats a number the walk just disproved.
+    responder = (url) => {
+      const { from } = parseFromSize(url);
+      return from === 0
+        ? { total: 15, sessions: Array.from({ length: 10 }, (_, i) => ({ id: i })) }
+        : { total: 15, sessions: [] };
+    };
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.scanned).toBe(10);
+    expect(result.total).toBe(10);
+    expect(result.sessions.map((s) => s.id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => 9 - i),
+    );
+  });
+
+  it('still discloses a ceiling when a short-page server cannot be run dry', async () => {
+    // total=15 (> the 1 row the head returns, and <= pageSize) so this is still
+    // the tailFrom === 0 path — but 1 row per page cannot reach the end inside
+    // the 10-page cap, so the window is incomplete and must say so.
+    responder = shortPagePool(15, 1);
+    const { listRecentSparkBatchJobs } = await import('../synapse-dev-client');
+
+    const result = await listRecentSparkBatchJobs('pool1', 20);
+
+    expect(result.truncatedBy).not.toBeNull();
+    expect(result.scanned).toBeLessThan(15);
+    expect(result.scanned).toBeGreaterThan(0);
   });
 });

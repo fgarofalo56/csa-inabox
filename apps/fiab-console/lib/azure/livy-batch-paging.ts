@@ -39,7 +39,25 @@
  *
  * So this file does not pick a reading. It uses `total` ONLY where the two
  * readings cannot disagree — see {@link readTotal} — and otherwise falls
- * through to the walk-to-the-end path, which is correct under both.
+ * through to the walk-to-the-end path.
+ *
+ * WHAT THAT BUYS, STATED PRECISELY — "correct under both readings" would be an
+ * over-claim, so it is not made:
+ *
+ *   Reading A (pool-wide).  `total > page length` on any pool holding more than
+ *     one page, so the offset probe runs exactly as before: CORRECT, and with
+ *     no extra requests.
+ *   Reading B (page length). `readTotal` returns null for every page, so every
+ *     call walks to the end. Correct only while the end is REACHABLE, and
+ *     `LIVY_MAX_WALK_PAGES` caps that at 10 x 20 = 200 rows. On a 1000-batch
+ *     pool the walk stops at batch #199 and returns ids #180-199 with
+ *     `truncatedBy: 'pages'`. Those are not the newest 20 — so the answer is
+ *     CORRECT-OR-DISCLOSED-INCOMPLETE, not correct.
+ *
+ * That distinction is the whole point of the truncation signal, and it is only
+ * honest as far as the caller carries it: a surface that renders `sessions` and
+ * drops `truncatedBy` turns reading B's disclosed partial back into a silent
+ * wrong answer. Callers MUST surface it (`RecentSparkBatchJobs.truncatedBy`).
  */
 
 import {
@@ -174,11 +192,15 @@ export function pageRows(page: SparkBatchPage): { rows: SparkBatchJob[]; malform
  * So that, and only that, is treated as evidence of a pool-wide count.
  *
  * Null is not a degraded answer here — it routes both walkers into their
- * `reportedTotal === null` path, which navigates by reading the list to its END
- * rather than by jumping to a computed offset, and is therefore correct under
- * BOTH readings. The cost is one extra (empty) request when a pool genuinely
- * holds one page or less; on the pools where paging actually matters
- * (`total > 20`) the value is unambiguous and nothing extra is fetched.
+ * walk-to-the-end path, which navigates by reading the list to its END rather
+ * than by jumping to a computed offset. That path needs no `total` and no
+ * direction, so it cannot be misled by either reading: it either reaches the
+ * end (correct) or trips a ceiling and SAYS SO (`truncatedBy` non-null). Note
+ * the second outcome is a disclosed partial, NOT a correct answer — see the
+ * "WHAT THAT BUYS" note in this module's header for the 1000-batch case. The
+ * cost is one extra (empty) request when a pool genuinely holds one page or
+ * less; on the pools where paging actually matters (`total > 20` under the
+ * pool-wide reading) the value is unambiguous and nothing extra is fetched.
  *
  * The caller must NOT substitute the page length instead. Doing so made `total`
  * 20 on a pool of any size, which drove `listRecentSparkBatchJobs`'s `tailFrom`
@@ -439,21 +461,23 @@ export async function walkRecentBatches(
   const headRows = headPage.rows;
   const reportedTotal = readTotal(head);
 
-  if (reportedTotal === null) {
-    // NO NAVIGABLE `total` FROM THE SERVER — it was absent, or equal to this
-    // page's own length and therefore unusable as an offset. Every other branch
-    // below navigates by offset arithmetic on `total`; without one there is no
-    // offset to jump to, so the direction probe is impossible. The previous cut
-    // papered over this by falling back to the page length, which made
-    // `tailFrom` 0 and returned the ascending list's OLDEST rows under a
-    // "recent" contract with `truncatedBy: null` — silently the exact defect
-    // this function exists to remove.
-    //
-    // The honest alternative is to read the list to its END: a walk that ran
-    // dry has SEEN every batch, so the newest `want` of them is genuinely the
-    // newest regardless of which order the server chose. If a ceiling stops us
-    // first we return what we reached and `budget.truncatedBy` says the window
-    // is incomplete — a disclosed partial beats a confident wrong answer.
+  /**
+   * Read the list to its END, then return the newest `want` of everything seen.
+   *
+   * Used whenever there is no offset this walk can trust. It needs neither a
+   * `total` nor a direction: a walk that ran dry has SEEN every batch, so the
+   * newest `want` of them are genuinely the newest whatever order the server
+   * chose and whatever `total` meant. If a ceiling stops it first, the rows
+   * reached are returned with a non-null `truncatedBy` — a disclosed partial
+   * beats a confident wrong answer.
+   *
+   * `total` is reported as the number of DISTINCT ROWS ACTUALLY SEEN, never the
+   * server's claim. On the `tailFrom === 0` path below the server has already
+   * contradicted itself (it claimed more batches than it put in a page it did
+   * not fill), so echoing that claim next to a shorter list would be repeating
+   * a number we just disproved.
+   */
+  const walkToEnd = async (): Promise<RecentSparkBatchJobs> => {
     mergeBatches(collected, headRows);
     let cursor = headRows.length;
     let ranDry = !malformed && headRows.length === 0;
@@ -480,24 +504,43 @@ export async function walkRecentBatches(
     // page, so name the page ceiling here rather than returning a null
     // truncation.
     return ranDry ? result : { ...result, truncatedBy: result.truncatedBy ?? 'pages' };
+  };
+
+  if (reportedTotal === null) {
+    // NO NAVIGABLE `total` FROM THE SERVER — it was absent, or equal to this
+    // page's own length and therefore unusable as an offset. The probe below
+    // navigates by offset arithmetic on `total`; without one there is no offset
+    // to jump to, so the direction probe is impossible. The previous cut
+    // papered over this by falling back to the page length, which made
+    // `tailFrom` 0 and returned the ascending list's OLDEST rows under a
+    // "recent" contract with `truncatedBy: null` — silently the exact defect
+    // this function exists to remove.
+    return walkToEnd();
   }
 
   const total = reportedTotal;
 
-  // Everything the pool has already fits in the head window — nothing to page,
-  // and no probe needed: sorting by id descending is enough.
+  // NO DISTINCT TAIL WINDOW EXISTS. `readTotal` returns a number ONLY when
+  // `total > headRows.length`, so reaching here guarantees that — which makes
+  // `tailFrom === 0` (i.e. `total <= pageSize`) mean the server reported MORE
+  // batches than it put in a page it did not fill. The tail window would then
+  // be byte-identical to the head, so probing it costs a budget slot and
+  // decides nothing, and the forward walk that followed stopped at
+  // `cursor < total` and could return short under a null truncation.
   //
-  // Reaching here means `total > headRows.length` (that is the only shape
-  // `readTotal` returns a number for), so `tailFrom === 0` requires
-  // `total <= pageSize` AND a head page shorter than `total`. The second
-  // conjunct is the anomalous case — a server that returned fewer rows than it
-  // says exist — and taking the shortcut there would drop the remainder with a
-  // null truncation, so it falls through to the walk instead.
+  // This is NOT a hypothetical branch: a server returning a short page while
+  // more rows remain is precisely the behaviour this module refuses to assume
+  // away (it is why `readTotal` will not trust a short page's `total`), so it
+  // gets the same treatment as having no usable `total` at all.
+  //
+  // A PREVIOUS CUT GUARDED THIS WITH `tailFrom === 0 && headRows.length >= total`
+  // and a comment claiming the shortcut handled "everything fits in the head
+  // window". That conjunct is a CONTRADICTION of `readTotal`'s postcondition,
+  // so the branch was unreachable — measured: a `throw` as its first statement
+  // left all 34 specs passing, and so did deleting the conjunct. Do not
+  // reintroduce a fast path here; there is no reachable case for one.
   const tailFrom = Math.max(0, total - pageSize);
-  if (tailFrom === 0 && headRows.length >= total) {
-    mergeBatches(collected, headRows);
-    return finish(total);
-  }
+  if (tailFrom === 0) return walkToEnd();
 
   // Probe the far end and let the DATA say which end is newest. The two probe
   // pages are NOT both merged: exactly one end holds the newest rows, and

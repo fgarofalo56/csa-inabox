@@ -8,7 +8,13 @@ and must never let a number the server sent talk it into a confident partial.
 
 from __future__ import annotations
 
+import io
 import json
+import threading
+import urllib.error
+import urllib.request
+from http.client import HTTPMessage
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +28,7 @@ _mod = load_script_module("livy_session_census", _SCRIPT_PATH)
 census = _mod.census
 PAGE_SIZE = _mod.PAGE_SIZE
 _get = _mod._get
+_OPENER = _mod._OPENER
 
 
 class _PageServer:
@@ -86,10 +93,13 @@ class TestPageLengthTotal:
         assert len(sessions) == 137
         assert complete is True
         assert total is None  # never invented — the server gave nothing navigable
+        # The walk really did page: 7 pages of 20 plus the empty one that proves
+        # the end. A single request here would mean the fixture, not the fix.
+        assert len(server.urls) == 8
 
     @pytest.mark.parametrize("size", [21, 40, 137])
     def test_never_claims_complete_on_a_partial_walk(self, patch_get: Any, size: int) -> None:
-        server = patch_get(_PageServer(size, total_mode="page"))
+        patch_get(_PageServer(size, total_mode="page"))
 
         sessions, _total, complete = census("https://d", "livyApi", "tok")
 
@@ -208,6 +218,105 @@ class TestUrlScheme:
             _get(url, "tok")
 
     def test_the_error_names_the_url_it_refused(self) -> None:
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="refusing non-http") as excinfo:
             _get("file:///etc/passwd", "tok")
         assert "file:///etc/passwd" in str(excinfo.value)
+
+
+class TestRedirectCannotLeaveHttp:
+    """The scheme check vets OUR url; it says nothing about where the server sends us.
+
+    `HTTPRedirectHandler.http_error_302` permits a `Location:` whose scheme is
+    in ``('http', 'https', 'ftp', '')`` and `redirect_request` copies every
+    header except content-length/content-type. So `file:`/`data:`/`gopher:`
+    redirects are already refused by the stdlib, but an `ftp:` one is followed —
+    carrying ``Authorization: Bearer $TOK`` to whatever host it names.
+    """
+
+    def test_the_stdlib_really_would_carry_the_bearer_token_to_ftp(self) -> None:
+        # The premise, asserted rather than assumed. If a future Python starts
+        # stripping Authorization across a scheme change, THIS is the test that
+        # says so, and the opener below can be reconsidered.
+        req = urllib.request.Request(
+            "http://example.invalid/sessions",
+            headers={"Authorization": "Bearer SECRET"},
+        )
+        redirected = urllib.request.HTTPRedirectHandler().redirect_request(
+            req, io.BytesIO(), 302, "Found", HTTPMessage(), "ftp://attacker.invalid/loot"
+        )
+        assert redirected is not None
+        assert redirected.full_url.startswith("ftp://")
+        assert redirected.get_header("Authorization") == "Bearer SECRET"
+
+    def test_the_opener_can_reach_http_and_nothing_else(self) -> None:
+        routes = set(_OPENER.handle_open)
+        assert "http" in routes
+        assert "https" in routes
+        # The exfiltration route, and its neighbours.
+        assert "ftp" not in routes
+        assert "file" not in routes
+        assert "data" not in routes
+
+    def test_an_ftp_redirect_is_refused_without_dialling_out(self) -> None:
+        # A real 302 -> ftp:, served locally. Port 1 is chosen so that IF the
+        # opener were to follow it, the failure would be a CONNECTION error
+        # (proving it tried) rather than the routing error we require.
+        seen: dict[str, object] = {}
+
+        class Redirector(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                seen["auth"] = self.headers.get("Authorization")
+                self.send_response(302)
+                self.send_header("Location", "ftp://127.0.0.1:1/loot")
+                self.end_headers()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), Redirector)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
+            with pytest.raises(urllib.error.URLError) as excinfo:
+                _get(url, "SECRET")
+            # "unknown url type: ftp" — UnknownHandler, i.e. no ftp route
+            # existed. A socket/connection error here would mean the redirect
+            # WAS followed and the token left the process.
+            assert "unknown url type" in str(excinfo.value.reason)
+            assert "ftp" in str(excinfo.value.reason)
+            # Sanity: the request really did happen and really did carry the token,
+            # so the test is exercising the dangerous path, not a no-op.
+            assert seen["auth"] == "Bearer SECRET"
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_an_ordinary_http_redirect_is_still_followed(self) -> None:
+        # The counterfactual. Locking the opener down must not break normal
+        # redirects — otherwise the "fix" is just a broken census.
+        class Redirector(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path == "/sessions":
+                    self.send_response(302)
+                    self.send_header("Location", "/moved")
+                    self.end_headers()
+                    return
+                body = b'{"total": 1, "sessions": [{"id": 1, "state": "idle"}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), Redirector)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
+            body = _get(url, "tok")
+            assert body["sessions"][0]["id"] == 1
+        finally:
+            srv.shutdown()
+            srv.server_close()

@@ -50,19 +50,64 @@ MAX_PAGES = 40
 REAPABLE_STATES = ("error", "dead", "killed", "not_started", "shutting_down")
 
 
+def _http_only_opener():
+    """An opener that can reach http(s) AND NOTHING ELSE.
+
+    The scheme check in `_get` vets the URL WE build. It says nothing about
+    where the server then sends us, and the stdlib's default opener will follow
+    a redirect out of http entirely:
+
+      * `HTTPRedirectHandler.http_error_302` allows a `Location:` whose scheme
+        is in `('http', 'https', 'ftp', '')` — so `file:`, `data:` and `gopher:`
+        redirects ARE already refused by the stdlib (B310's stated concern is
+        closed), but `ftp:` is permitted.
+      * `HTTPRedirectHandler.redirect_request` rebuilds the Request copying
+        EVERY header except content-length/content-type. Measured directly:
+        the redirected Request to `ftp://…` carries `Authorization: Bearer …`.
+
+    So a hostile or compromised `DEV` endpoint answering `302 -> ftp://attacker/`
+    exfiltrates `$TOK`. With the default opener that connection is genuinely
+    attempted; with this one the redirect dies in `UnknownHandler`
+    ("unknown url type: ftp") having dialled nothing.
+
+    NOTE — `urllib.request.build_opener(HTTPHandler, HTTPSHandler,
+    HTTPRedirectHandler)` does NOT do this. Its handler arguments only
+    DE-DUPLICATE the default set; `FTPHandler`, `FileHandler` and `DataHandler`
+    are still installed and the ftp route stays live (measured: routes were
+    still {ftp, file, data, http, https, …}). The list has to be built
+    explicitly, which is why this is a function and not a one-liner.
+
+    `ProxyHandler` is kept deliberately: the default opener had it, self-hosted
+    runners may sit behind a proxy, and dropping it would be a silent
+    connectivity regression.
+    """
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.ProxyHandler(),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(),
+        urllib.request.HTTPRedirectHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.UnknownHandler(),
+    ):
+        opener.add_handler(handler)
+    return opener
+
+
+_OPENER = _http_only_opener()
+
+
 def _get(url: str, token: str) -> dict:
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     # `DEV` is operator-supplied, so the scheme is checked STRUCTURALLY (parse,
     # not a substring test) right at the call site. Same shape as the sibling
-    # loom-unity-migrate-catalog.py — it keeps the guarantee next to the
-    # urlopen rather than making a reader trace it back to the caller.
+    # loom-unity-migrate-catalog.py — it keeps the guarantee next to the open
+    # rather than making a reader trace it back to the caller. This covers the
+    # URL we build; `_OPENER` covers where the server tries to send us next.
     if urllib.parse.urlparse(url).scheme not in ("http", "https"):
         raise ValueError(f"refusing non-http(s) request URL: {url!r}")
-    # nosec B310 - the URL scheme is allow-listed to http/https on the two lines
-    # above, so B310's concern (file:/ + custom schemes) cannot be reached.
-    # Suppressed HERE rather than added to the global pyproject skips, so any
-    # FUTURE urlopen elsewhere is still flagged.
-    with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
+    with _OPENER.open(req, timeout=60) as resp:
         raw = resp.read().decode("utf-8")
     if not raw.strip():
         # A 200 with an EMPTY BODY is not an empty pool. The old `or "{}"` turned
@@ -101,8 +146,14 @@ def _pool_wide_total(reported, page_len):
     `reported > page_len` is the one observation impossible under the
     page-length reading (a page length cannot exceed itself), so it alone is
     accepted. Anything else leaves the total unknown and lets the walk end the
-    only way that is honest under BOTH readings: a page that comes back empty.
-    On a pool holding one page or less that costs one extra request.
+    only way that is established under BOTH readings: a page that comes back
+    empty. On a pool holding one page or less that costs one extra request.
+
+    That is HONEST under both readings, not correct under both. Under the
+    page-length reading no `total` is ever accepted, so every census walks to
+    the end — and `MAX_PAGES` caps that at 40 x 20 = 800 sessions. A pool larger
+    than that returns `complete = False`, and the caller prints the counts as an
+    explicit LOWER BOUND rather than a total. Disclosed-incomplete, not correct.
 
     Position-independent on purpose: this runs on EVERY page, so it cannot lean
     on "a short page means the list is exhausted" the way a first-page-only
