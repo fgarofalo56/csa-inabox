@@ -25,6 +25,17 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.12](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.11...csa-inabox-v0.98.12) (2026-08-18)
+
+
+### Bug Fixes
+
+* **activator:** install reported 'created' without confirming the rule, and the self-heal wrote from a read-scoped GET ([#3551](https://github.com/fgarofalo56/csa-inabox/issues/3551)) ([#3693](https://github.com/fgarofalo56/csa-inabox/issues/3693)) ([537d93a](https://github.com/fgarofalo56/csa-inabox/commit/537d93a34fd737274ea4ba5ae62c6936ca8ad8d3))
+* **bicep:** P0 — registry.bicep's acrComplianceTags read its OWN resource id, so every Commercial apply failed InvalidTemplate ([#3714](https://github.com/fgarofalo56/csa-inabox/issues/3714)) ([a115502](https://github.com/fgarofalo56/csa-inabox/commit/a1155022a787c930bf0581b92c33994f18ed5c84))
+* **items:** canvas-collab 404s were loadOwnedItem dropping the tenant, plus the wrong item type on the ADF/Synapse delegates ([#3697](https://github.com/fgarofalo56/csa-inabox/issues/3697) [#3698](https://github.com/fgarofalo56/csa-inabox/issues/3698)) ([#3702](https://github.com/fgarofalo56/csa-inabox/issues/3702)) ([4e461ed](https://github.com/fgarofalo56/csa-inabox/commit/4e461ed7fbe14990cc82ee75856cb8a150595f3a))
+* **user-data-function:** blank optional params sent as null, a raw Python traceback shown to users, and two free-text boxes that could only ever produce a 409 ([#3574](https://github.com/fgarofalo56/csa-inabox/issues/3574)) ([#3692](https://github.com/fgarofalo56/csa-inabox/issues/3692)) ([09ac251](https://github.com/fgarofalo56/csa-inabox/commit/09ac2517e8139f4fb6dff87ff2dac6c029b7f8d0))
+* **variable-library:** the unresolved-refs banner named a cause the code never established ([#3575](https://github.com/fgarofalo56/csa-inabox/issues/3575)) ([#3690](https://github.com/fgarofalo56/csa-inabox/issues/3690)) ([d7cd3c5](https://github.com/fgarofalo56/csa-inabox/commit/d7cd3c540213977a2da240178a422f06472d720c))
+
 ## [0.98.11](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.10...csa-inabox-v0.98.11) (2026-08-18)
 
 
