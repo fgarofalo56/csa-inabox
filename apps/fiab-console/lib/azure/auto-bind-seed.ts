@@ -133,6 +133,15 @@ function errText(e: unknown): string {
  * `_seed-dev-pipeline.ensurePipelineReferences`): a name that already belongs to
  * something Loom did not create is used as-is, never overwritten.
  *
+ * SCOPE OF THAT PROTECTION, stated so it is not read as more than it is. It
+ * covers the REFERENCES (linked services and datasets) only. The PIPELINE
+ * document itself is guarded by the engine, which seeds solely on a create or
+ * after `isEmpty` — and `isEmpty` today asks only whether `activities` is an
+ * empty array, WITHOUT checking `loom-autoprovisioned`. So a pre-existing
+ * EMPTY pipeline whose name and factory a caller can choose is still
+ * seedable through this path. That gap is pre-existing, is NOT closed here,
+ * and is filed separately by the reviewer.
+ *
  * `runPipelineSeed` is parameterized by adapter so ADF and Synapse share it;
  * the two differ only in which client PUTs the document.
  */
@@ -165,8 +174,11 @@ export async function seedPipelineFromContent(
     }
     // Adoption is a SUCCESS (see the skip-semantics note on
     // `upsertAndRunDevPipeline`) — the graph landed and the references resolve.
-    // It is still stated rather than implied, so a support read of the record
-    // shows which objects Loom did not author.
+    // It is still stated rather than implied: the engine persists this string
+    // to `state.autoBind.seedDetail` and the bind GET returns it, so which
+    // objects Loom did NOT author is recoverable from the item itself.
+    // (Round 2 of this review caught that it was computed and DROPPED — the
+    // record had no such field. `AutoBindRecord.seedDetail` is that fix.)
     const adopted = seed.adoptedReferences?.length
       ? `; used ${seed.adoptedReferences.length} pre-existing reference(s) as-is: ${seed.adoptedReferences.join(', ')}`
       : '';

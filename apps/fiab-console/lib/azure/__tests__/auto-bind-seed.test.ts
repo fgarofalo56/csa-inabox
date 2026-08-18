@@ -177,6 +177,150 @@ describe('#3549 — a gated bundle install, opened for the first time', () => {
 });
 
 // ===========================================================================
+// THE SEED'S OWN ACCOUNT OF WHAT IT WROTE MUST BE RECORDED, NOT COMPUTED AND
+// DROPPED (#3549 review round 2).
+//
+// `seedPipelineFromContent` builds a detail string naming every linked service
+// and dataset it ADOPTED rather than created — the disclosure that makes
+// create-if-absent auditable — and returns it on `AutoBindSeedResult.detail`.
+// `finish()` persisted only `seeded` and `seedError`, so `AutoBindRecord` had no
+// field to hold it and the string was thrown away on every single call. The
+// comment above it claimed "a support read of the record shows which objects
+// Loom did not author" while nothing carried it: a described mechanism that did
+// not exist, which is the exact defect class the previous review round opened.
+//
+// MUTATION PROOF (measured, restored after each):
+//   a) drop `seedDetail` from the `next` record in `finish()` → 5 RED here.
+//   b) drop `seedDetail` from the `changed` comparison → 1 RED, on the last
+//      test only. The FIRST version of that test did not move the verdict:
+//      every other path that alters the detail also flips `seeded`, `seedError`
+//      or `via`, all of which already force `changed`. So the clause was
+//      unwatched until a case was built that reaches it — `via:'existing'`
+//      with only the detail different. Recorded rather than papered over,
+//      because "two overlapping controls hide each other" is the exact finding
+//      this review round was opened on.
+// ===========================================================================
+describe('#3549 round 2 — the adopted-reference disclosure is actually persisted', () => {
+  /** A provider whose seed reports adopting a reference it did not create. */
+  const adoptingProvider = () => seedingProvider({
+    seedFromContent: async (name, _coords, ctx) => {
+      plane.seedCalls.push(name);
+      const content = authoredContent<{ activities?: unknown[] }>(ctx, ['adf-pipeline', 'synapse-pipeline']);
+      if (!content?.activities?.length) return { seeded: false };
+      plane.objects.set(name, { activities: content.activities });
+      return {
+        seeded: true,
+        detail: '3 activities; used 1 pre-existing reference(s) as-is: SalesDW_Prod',
+      };
+    },
+  });
+
+  it('writes the detail onto the provenance record', async () => {
+    const outcome = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers: [adoptingProvider()] });
+    if (outcome.status !== 'bound') throw new Error('expected bound');
+
+    expect(outcome.record.seedDetail).toContain('SalesDW_Prod');
+    expect(outcome.record.seedDetail).toContain('pre-existing reference');
+  });
+
+  it('survives the round-trip through Cosmos, so support can read it off the item', async () => {
+    const outcome = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers: [adoptingProvider()] });
+    if (outcome.status !== 'bound') throw new Error('expected bound');
+
+    // `statePatch` is verbatim what the caller merges into `item.state`.
+    const roundTripped = readAutoBindRecord(outcome.statePatch as Record<string, unknown>);
+    expect(roundTripped?.seedDetail).toContain('SalesDW_Prod');
+  });
+
+  it('reaches the bind GET, so it is recoverable without a Cosmos read', async () => {
+    const outcome = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers: [adoptingProvider()] });
+    expect(autoBindWireStatus(outcome).seedDetail).toContain('SalesDW_Prod');
+  });
+
+  it('is carried forward untouched on a steady-state open (no churn, no loss)', async () => {
+    const first = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers: [adoptingProvider()] });
+    if (first.status !== 'bound') throw new Error('expected bound');
+    const state = { ...gatedInstallState(), ...first.statePatch };
+
+    const second = await ensureAutoBinding(ctxFor('P1', state), { providers: [adoptingProvider()] });
+
+    expect(second.status).toBe('bound');
+    if (second.status === 'bound') {
+      // Still there …
+      expect(second.record.seedDetail).toContain('SalesDW_Prod');
+      // … and NOT re-written, or every open would churn Cosmos.
+      expect(second.changed).toBe(false);
+    }
+  });
+
+  it('a CHANGED detail is persisted — the record cannot go stale', async () => {
+    const first = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers: [adoptingProvider()] });
+    if (first.status !== 'bound') throw new Error('expected bound');
+    // The pipeline was deleted out of band, and the re-seed adopts a DIFFERENT
+    // set of references this time.
+    const state = { ...gatedInstallState(), ...first.statePatch };
+    plane.objects.delete('P1');
+    const reseeded = seedingProvider({
+      seedFromContent: async (name, _coords, ctx) => {
+        plane.seedCalls.push(name);
+        const content = authoredContent<{ activities?: unknown[] }>(ctx, ['adf-pipeline', 'synapse-pipeline']);
+        plane.objects.set(name, { activities: content?.activities ?? [] });
+        return { seeded: true, detail: '3 activities; used 2 pre-existing reference(s) as-is: A, B' };
+      },
+    });
+
+    const healed = await ensureAutoBinding(ctxFor('P1', state), { providers: [reseeded] });
+
+    expect(healed.status).toBe('bound');
+    if (healed.status === 'bound') {
+      expect(healed.record.seedDetail).toContain('A, B');
+      expect(healed.changed).toBe(true);
+    }
+  });
+
+  it('a blank item records NO detail rather than an empty string', async () => {
+    const outcome = await ensureAutoBinding(ctxFor('blank', {}), { providers: [adoptingProvider()] });
+    if (outcome.status !== 'bound') throw new Error('expected bound');
+    expect(outcome.record.seedDetail).toBeUndefined();
+    expect(autoBindWireStatus(outcome).seedDetail).toBeUndefined();
+  });
+
+  it('a detail that changes with NOTHING ELSE changing is still written', async () => {
+    // The narrow case the `changed` comparison exists for, reached deliberately
+    // because every OTHER path that alters the detail also flips `seeded`,
+    // `seedError` or `via` — so without this the clause would be an unwatched
+    // line, which is the shape this review round is about.
+    //
+    // `AutoBindSeedResult` declares `detail` independently of `seeded`, so a
+    // seed reporting "nothing landed, and here is what I saw" is a legal
+    // contract shape, not an invented one.
+    const detailOnly = (detail: string) => seedingProvider({
+      seedFromContent: async (name) => { plane.seedCalls.push(name); return { seeded: false, detail }; },
+    });
+
+    const first = await ensureAutoBinding(ctxFor('P1', gatedInstallState()), { providers: [detailOnly('D1')] });
+    if (first.status !== 'bound') throw new Error('expected bound');
+    expect(first.record.seedDetail).toBe('D1');
+    const state = { ...gatedInstallState(), ...first.statePatch };
+
+    // Open 2 takes the `via:'existing'` path (the object is there), the repair
+    // re-runs because `seeded` is not true, and only the DETAIL comes back
+    // different.
+    const second = await ensureAutoBinding(ctxFor('P1', state), { providers: [detailOnly('D2')] });
+
+    expect(second.status).toBe('bound');
+    if (second.status === 'bound') {
+      expect(second.record.via).toBe('existing');
+      expect(second.record.seeded).toBeUndefined();      // unchanged
+      expect(second.record.seedError).toBeUndefined();   // unchanged
+      expect(second.record.seedDetail).toBe('D2');       // the only difference
+      // …so `changed` can ONLY be true because the detail is compared.
+      expect(second.changed).toBe(true);
+    }
+  });
+});
+
+// ===========================================================================
 // A FAILED SEED MUST NOT BE TERMINAL, AND THE ALREADY-BROKEN POPULATION MUST
 // BE REPAIRED (#3549 review, BLOCKER 3).
 //
@@ -473,7 +617,17 @@ describe('registry coverage — every provider that can hold content seeds it', 
         `${p.provider}.seedFromContent returned "nothing to seed" for content of its own kind — a no-op stub would look identical`,
       ).toBe(true);
     }
-  });
+    // EXPLICIT TIMEOUT, and the reason it is needed (#3549 review round 2,
+    // finding 5). This test invokes all five real providers, and each one
+    // dynamically imports a full Azure client module graph — measured on this
+    // box: adf 2224ms, synapse 3486ms, eventstream 1485ms, adx 2835ms, with no
+    // network involved (every call ends at a config gate). At 11.3s isolated it
+    // fits inside the 30s default; in a 7-file run it took 41.4s and FAILED,
+    // and CI only stayed green because `vitest.config.ts` sets `retry: 2` on
+    // CI. A test that passes only because it is retried is not passing, and a
+    // retry that masks a real regression is worse than a slow test — so the
+    // budget is stated here rather than left to the default.
+  }, 90_000);
 
   it('covers the five registered backings', () => {
     // Guards the test above against silently passing on an EMPTY registry —

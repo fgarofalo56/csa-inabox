@@ -378,6 +378,13 @@ async function ensureReference(
  *              and unknown is not absent. We do not write. The pipeline PUT
  *              then fails with the service's own "invalid reference" and the
  *              caller turns that into an honest gate.
+ *
+ * WHAT THIS DOES NOT COVER. Only the REFERENCES are guarded here. The pipeline
+ * DOCUMENT is guarded elsewhere — the auto-bind engine seeds it only on a
+ * create, or after `isEmpty` reports the live pipeline holds no activities —
+ * and that `isEmpty` does NOT check `loom-autoprovisioned`. A pre-existing
+ * EMPTY pipeline in a caller-chosen factory can therefore still be written
+ * through. Pre-existing, deliberately not changed here, filed separately.
  */
 async function ensurePipelineReferences(
   adapter: DevPipelineAdapter,
@@ -442,12 +449,25 @@ async function ensurePipelineReferences(
   if (nonDbxLinkedServices.length === 0 && refs.datasets.size === 0) return { unresolvedDatabricks: [], adopted };
   const url = adlsStubUrl();
   const lsList = nonDbxLinkedServices;
+  // Tally what actually happened. The summary below used to read
+  // "ensured N linked service(s) + M dataset(s)" off the REFERENCE COUNTS, so
+  // a run where every read 500'd and NOTHING was written still claimed to have
+  // ensured them — an error message asserting what it did not establish
+  // (`deploy-integrity.md` R7), and doubly misleading because it printed
+  // directly under the "NOT overwriting it" lines that say the opposite.
+  const tally = { written: 0, adopted: 0, untouched: 0 };
+  const count = (verdict: RefEnsureVerdict) => {
+    if (verdict === 'created' || verdict === 'refreshed') tally.written++;
+    else if (verdict === 'adopted') tally.adopted++;
+    else tally.untouched++; // 'blocked' (could not tell) or 'failed' (refused)
+  };
   for (const ls of lsList) {
     const r = await ensureLs(ls, {
       type: 'AzureBlobFS',
       typeProperties: { url },
       annotations: [LOOM_AUTOPROVISIONED],
     });
+    count(r.verdict);
     if (r.verdict === 'adopted') adopted.push(ls);
   }
   const defaultLs = lsList.find((n) => /adls|blob|storage|gen2/i.test(n)) || lsList[0] || 'ls_loom_adls';
@@ -455,6 +475,7 @@ async function ensurePipelineReferences(
   // pipeline only referenced non-ADLS linked services.
   if (!refs.linkedServices.has(defaultLs)) {
     const r = await ensureLs(defaultLs, { type: 'AzureBlobFS', typeProperties: { url }, annotations: [LOOM_AUTOPROVISIONED] });
+    count(r.verdict);
     if (r.verdict === 'adopted') adopted.push(defaultLs);
   }
   for (const [ds, paramNames] of refs.datasets) {
@@ -471,9 +492,21 @@ async function ensurePipelineReferences(
       },
       annotations: [LOOM_AUTOPROVISIONED],
     });
+    count(r.verdict);
     if (r.verdict === 'adopted') adopted.push(ds);
   }
-  steps.push(`${adapter.label}: ensured ${lsList.length} linked service(s) + ${refs.datasets.size} dataset(s) the pipeline references.`);
+  // One line, each clause backed by a verdict we actually observed. Clauses
+  // that are zero are omitted rather than printed as "0 created", and a run
+  // that wrote nothing says so instead of claiming it ensured anything.
+  const parts: string[] = [];
+  if (tally.written > 0) parts.push(`${tally.written} created or refreshed`);
+  if (tally.adopted > 0) parts.push(`${tally.adopted} already present and left untouched`);
+  if (tally.untouched > 0) parts.push(`${tally.untouched} NOT written (could not be read, or the write was refused)`);
+  steps.push(
+    tally.written === 0 && tally.adopted === 0
+      ? `${adapter.label}: no reference was written — see the lines above for why.`
+      : `${adapter.label}: pipeline references — ${parts.join(', ')}.`,
+  );
   return { unresolvedDatabricks: [], adopted };
 }
 

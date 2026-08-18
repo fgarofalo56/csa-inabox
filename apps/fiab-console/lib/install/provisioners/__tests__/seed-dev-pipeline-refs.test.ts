@@ -59,6 +59,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   upsertAndRunDevPipeline,
+  nullOn404,
   LOOM_AUTOPROVISIONED,
   type DevPipelineAdapter,
   type DevPipelineExistingRef,
@@ -329,6 +330,67 @@ describe('CONTROL — the guard did not disable reference stubbing', () => {
   });
 });
 
+// ===========================================================================
+// THE SUMMARY LINE MUST NOT CLAIM WORK IT DID NOT DO (#3549 review round 2).
+//
+// The step log ended with `ensured N linked service(s) + M dataset(s)`, counted
+// off the REFERENCES the pipeline names rather than off what was written. So a
+// run where every read 500'd printed two "NOT overwriting it" lines and then
+// "ensured 1 + 1" — an operator reading the install log is told the opposite of
+// what happened, directly under the evidence. `deploy-integrity.md` R7: a
+// message must not assert what the code did not establish.
+//
+// MUTATION PROOF (measured): restore the unconditional
+// `ensured ${lsList.length} linked service(s) + ${refs.datasets.size} dataset(s)`
+// → 2 RED (the two "does not claim" tests).
+// ===========================================================================
+describe('the reference summary reports VERDICTS, not reference counts', () => {
+  it('claims nothing when every read failed and nothing was written', async () => {
+    plane.readFailures.set('linkedService:SalesDW_Prod', httpError(500, 'getLinkedService(SalesDW_Prod)'));
+    plane.readFailures.set('dataset:ProdOrders', httpError(500, 'getDataset(ProdOrders)'));
+
+    const r = await seed(refAdapter());
+
+    // Ground truth: only the pipeline itself was written.
+    expect(plane.writes).toEqual(['pipeline:Attacker-Pipeline']);
+    const log = r.steps.join('\n');
+    expect(log).not.toMatch(/ensured \d+ linked service/);
+    expect(log).toContain('no reference was written');
+  });
+
+  it('does not report an ADOPTED reference as one it ensured', async () => {
+    plane.linkedServices.set('SalesDW_Prod', CUSTOMER_LS);
+    plane.datasets.set('ProdOrders', CUSTOMER_DS);
+
+    const r = await seed(refAdapter());
+
+    const log = r.steps.join('\n');
+    expect(log).not.toMatch(/ensured \d+ linked service/);
+    expect(log).toContain('2 already present and left untouched');
+    expect(log).not.toContain('created or refreshed');
+  });
+
+  it('CONTROL — it DOES report what it genuinely created', async () => {
+    const r = await seed(refAdapter());
+
+    expect(plane.writes).toContain('linkedService:SalesDW_Prod');
+    expect(plane.writes).toContain('dataset:ProdOrders');
+    expect(r.steps.join('\n')).toContain('2 created or refreshed');
+  });
+
+  it('reports a MIXED run clause by clause', async () => {
+    plane.linkedServices.set('SalesDW_Prod', CUSTOMER_LS);          // adopted
+    plane.readFailures.set('dataset:ProdOrders', httpError(500, 'getDataset(ProdOrders)')); // blocked
+
+    const r = await seed(refAdapter());
+    const log = r.steps.join('\n');
+
+    expect(log).toContain('1 already present and left untouched');
+    expect(log).toContain('1 NOT written');
+    expect(log).not.toContain('created or refreshed');
+  });
+});
+
 describe('#3549 BLOCKER 1 — the Databricks linked service gets the same guard', () => {
   it('does NOT overwrite an existing LS a Databricks activity names', async () => {
     // `normalizePipelineContent` takes the activity's OWN referenceName, so the
@@ -386,5 +448,82 @@ describe('#3549 BLOCKER 1 — the Databricks linked service gets the same guard'
 
     expect(r.authGate?.status).toBe(403);
     expect(plane.writes).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// `nullOn404` — the chokepoint, tested DIRECTLY (#3549 review round 2).
+//
+// Every test above drives `ensureReference` through a FAKE adapter whose reads
+// return `null` for absent and throw for anything else. The four PRODUCTION
+// adapters do not: they call a real client that throws on 404 as well, and
+// `nullOn404` is the single translator that decides which throws mean "the name
+// is free". So the security property the suite above pins is, in production,
+// only as good as this function — and no test above touches it.
+//
+// Measured before adding these: widening `nullOn404` to
+// `if (status !== undefined) return null;` — which re-authorizes the blind PUT
+// for ALL FOUR production adapters by reporting every 403 and 500 as "definitely
+// absent" — left the suite above at 58/58 and 40/40 GREEN. Two overlapping
+// controls hiding each other, one layer below where that same shape was caught.
+//
+// MUTATION PROOF (measured):
+//   a) `if (status !== undefined) return null;`     → 2 RED (403, 500 rethrow)
+//   b) `catch { return null }` (swallow everything) → 3 RED (+ the statusless
+//      500 case)
+//   c) drop the statusless message fallback          → 1 RED (statusless 404)
+// ===========================================================================
+describe('nullOn404 — only a definite 404 may be reported as absent', () => {
+  /** The shape both clients throw: `.status` plus a formatted message. */
+  const clientError = (status: number, label = 'getDataset(x)') =>
+    Object.assign(new Error(`${label} failed ${status}: {"error":{}}`), { status });
+
+  it('maps a 404 to null — the name is free, so the caller may create', async () => {
+    await expect(nullOn404(async () => { throw clientError(404); })).resolves.toBeNull();
+  });
+
+  it('RETHROWS a 403 — denied is not absent', async () => {
+    // If this leaked through as `null`, `ensureReference` would treat a factory
+    // the identity cannot read as an empty name and PUT over whatever is there.
+    await expect(nullOn404(async () => { throw clientError(403); })).rejects.toThrow(/failed 403/);
+  });
+
+  it('RETHROWS a 500 — a broken control plane is not absent', async () => {
+    await expect(nullOn404(async () => { throw clientError(500); })).rejects.toThrow(/failed 500/);
+  });
+
+  it('RETHROWS a transport failure that carries no status at all', async () => {
+    await expect(nullOn404(async () => { throw new Error('ECONNRESET'); })).rejects.toThrow('ECONNRESET');
+  });
+
+  it('reads the status out of the MESSAGE when the error carries none — 404 → null', async () => {
+    // Belt-and-braces for a client that formats the status but forgets to
+    // attach it. Only consulted when `.status` is absent.
+    await expect(
+      nullOn404(async () => { throw new Error('getLinkedService(x) failed 404: {"error":{}}'); }),
+    ).resolves.toBeNull();
+  });
+
+  it('…but a statusless 500 MESSAGE still rethrows', async () => {
+    await expect(
+      nullOn404(async () => { throw new Error('getLinkedService(x) failed 500: {"error":{}}'); }),
+    ).rejects.toThrow(/failed 500/);
+  });
+
+  it('a message merely CONTAINING 404 is not a 404 (no substring guessing)', async () => {
+    // e.g. a body echoing a path or a correlation id with 404 in it. The needle
+    // is `failed 404`, not `404`, so this must still rethrow.
+    await expect(
+      nullOn404(async () => { throw new Error('getDataset(ds404x) failed 500: upstream said 404 earlier'); }),
+    ).rejects.toThrow(/failed 500/);
+  });
+
+  it('passes a successful read straight through', async () => {
+    const doc = { name: 'x', properties: { annotations: [LOOM_AUTOPROVISIONED] } };
+    await expect(nullOn404(async () => doc)).resolves.toBe(doc);
+  });
+
+  it('does NOT convert a legitimately null-returning read into a throw', async () => {
+    await expect(nullOn404(async () => null)).resolves.toBeNull();
   });
 });

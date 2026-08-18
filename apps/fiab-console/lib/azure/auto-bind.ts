@@ -167,6 +167,27 @@ export interface AutoBindRecord {
   seeded?: boolean;
   /** Set when authored content existed but could not be written. Honest, not fatal. */
   seedError?: string;
+  /**
+   * The seed's own summary of what it did — "3 activities", or "3 activities;
+   * used 2 pre-existing reference(s) as-is: SalesDW_Prod, ProdOrders".
+   *
+   * WHY THIS FIELD EXISTS (#3549 review round 2). `seedPipelineFromContent`
+   * computed that adopted-reference disclosure and returned it on
+   * `AutoBindSeedResult.detail`, and `finish()` below persisted only `seeded`
+   * and `seedError` — so the string was built and dropped on every call. A
+   * comment claimed "a support read of the record shows which objects Loom did
+   * not author" while nothing carried it: the same describes-a-mechanism-that-
+   * does-not-exist shape as the eventstream re-seed comment this review round
+   * was opened for.
+   *
+   * WHERE IT LANDS, precisely: `state.autoBind.seedDetail` in Cosmos, and the
+   * `autoBind` block the two pipeline bind GETs return
+   * (`autoBindWireStatus`). No UI renders it today — it is diagnostic, for
+   * support reading the item or the bind response. The USER-facing copy of the
+   * same disclosure is the installer's step log (`adf-pipeline.ts` pushes
+   * `seed.steps`), which the auto-bind path has no equivalent of.
+   */
+  seedDetail?: string;
 }
 
 /** Everything a caller can learn from one ensure. */
@@ -313,6 +334,7 @@ export function readAutoBindRecord(state: Record<string, unknown> | undefined): 
     nameDrift: r.nameDrift === true,
     ...(r.seeded === true ? { seeded: true } : {}),
     ...(typeof r.seedError === 'string' && r.seedError ? { seedError: r.seedError } : {}),
+    ...(typeof r.seedDetail === 'string' && r.seedDetail ? { seedDetail: r.seedDetail } : {}),
   };
 }
 
@@ -502,6 +524,11 @@ export async function ensureAutoBinding(
     // the editor write Cosmos on every single open.
     const seeded = seed ? seed.seeded : record?.seeded === true;
     const seedError = seed ? seed.error : record?.seedError;
+    // `detail` is the seed's own account of what it wrote — including which
+    // references it ADOPTED rather than created (#3549 review round 2). It is
+    // carried forward on the non-create paths exactly like the two above, so a
+    // steady-state open neither loses it nor re-writes Cosmos over it.
+    const seedDetail = seed ? seed.detail : record?.seedDetail;
     const next: AutoBindRecord = {
       provider: provider.provider,
       backingName: name,
@@ -513,6 +540,7 @@ export async function ensureAutoBinding(
       ...(nameDrift ? { nameDrift: true } : {}),
       ...(seeded ? { seeded: true } : {}),
       ...(seedError ? { seedError } : {}),
+      ...(seedDetail ? { seedDetail } : {}),
     };
     const keys = provider.stateKeys(name, coords);
     // The legacy keys are what every downstream resolver actually reads
@@ -537,6 +565,7 @@ export async function ensureAutoBinding(
       (record.nameDrift === true) !== (next.nameDrift === true) ||
       (record.seeded === true) !== (next.seeded === true) ||
       (record.seedError || '') !== (next.seedError || '') ||
+      (record.seedDetail || '') !== (next.seedDetail || '') ||
       via !== 'existing';
     return {
       status: 'bound',
@@ -686,6 +715,13 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
    * complete (that is exactly the #3549 "silently empty" failure).
    */
   seedError?: string;
+  /**
+   * The seed's summary of what it wrote, including any references it ADOPTED
+   * rather than created. DIAGNOSTIC: no surface renders it today — it is here
+   * so the disclosure is reachable from the bind GET without a Cosmos read.
+   * See `AutoBindRecord.seedDetail`.
+   */
+  seedDetail?: string;
   /** Present for 'retry' and 'unavailable' — human-readable, already remediation-shaped. */
   reason?: string;
   /** Present for 'unavailable' — the resource/env the estate is missing. */
@@ -704,6 +740,7 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
         nameDrift: outcome.record.nameDrift,
         ...(outcome.record.seeded === true ? { seeded: true } : {}),
         ...(outcome.record.seedError ? { seedError: outcome.record.seedError } : {}),
+        ...(outcome.record.seedDetail ? { seedDetail: outcome.record.seedDetail } : {}),
       };
     case 'retry':
       return { status: 'retry', reason: outcome.reason, retryable: true };
