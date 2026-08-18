@@ -171,6 +171,30 @@ export function udfEndpointGate(requestedOverride?: string | null): UdfEndpointG
  *                            `state.functionKeySecret`). It may only AGREE with
  *                            the selected endpoint's configured key.
  */
+/**
+ * Does an item's requested key-secret name DISAGREE with the endpoint's
+ * configured one? An EMPTY request is not a disagreement — item state that
+ * names no key is the normal, compliant case, and the endpoint's own configured
+ * key is used.
+ *
+ * EXPORTED for the same reason `udfEndpointKey` is, and this one was learned
+ * the hard way: the editor hand-rolled this comparison and dropped the
+ * empty-request clause, so it warned "Run returns 409" on every keyed endpoint
+ * whose item named no key — a 409 `resolveUdfEndpoint` does not raise, on a
+ * brand-new untouched item, contradicting the old UI's own "Optional. Blank =
+ * anonymous / Entra-protected". A UI that answers a policy question with a
+ * second implementation of the policy is the defect this whole change set
+ * exists to remove, so there is now exactly one implementation and both callers
+ * use it.
+ */
+export function udfKeySecretDisagrees(
+  requestedKeySecret: string | null | undefined,
+  endpointKeySecretName?: string,
+): boolean {
+  const askedKey = String(requestedKeySecret || '').trim();
+  return !!askedKey && askedKey.toLowerCase() !== (endpointKeySecretName || '').toLowerCase();
+}
+
 export function resolveUdfEndpoint(
   requestedBase?: string | null,
   requestedKeySecret?: string | null,
@@ -189,7 +213,7 @@ export function resolveUdfEndpoint(
   }
 
   const askedKey = String(requestedKeySecret || '').trim();
-  if (askedKey && askedKey.toLowerCase() !== (endpoint.keySecretName || '').toLowerCase()) {
+  if (udfKeySecretDisagrees(askedKey, endpoint.keySecretName)) {
     // The item named a Key Vault secret this endpoint is not configured to use.
     // Refusing (rather than ignoring) keeps the failure honest: the operator is
     // told exactly which env var turns the item's intent into approved config.

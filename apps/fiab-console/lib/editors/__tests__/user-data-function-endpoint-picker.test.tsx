@@ -135,18 +135,81 @@ describe('UserDataFunctionEditor — Execution endpoint is selected, not typed',
     });
   });
 
-  it('shows the honest gate — not an empty picker — when nothing is configured', async () => {
+  /**
+   * THE REGRESSION PROBE. The first cut of `keySecretMismatch` hand-rolled the
+   * policy's comparison and dropped its `askedKey &&` clause, so an item that
+   * names NO key against a KEYED endpoint was reported as a 409 that
+   * `resolveUdfEndpoint` does not raise — on a brand-new untouched item, and
+   * contradicting the old UI's own "Optional. Blank = anonymous /
+   * Entra-protected". That is deploy-integrity R7 (an error asserting something
+   * it did not establish) and ux-baseline §6 (clean first-open), and it is the
+   * exact class this change set exists to remove: a UI answering a policy
+   * question with its own second implementation of the policy.
+   *
+   * This MOVES THE VERDICT — restore the dropped clause and it goes red, which
+   * is what makes it a control rather than decoration. The unit-level twin
+   * lives in the policy's own suite (`udfKeySecretDisagrees('', 'x') === false`).
+   */
+  it('does NOT warn when a KEYED endpoint is selected and the item names no key — the policy raises no 409 there', async () => {
+    renderEditor({ azureFunctionUrl: APPROVED_FN, functionKeySecret: '' });
+
+    // The keyed endpoint really is selected — otherwise this passes vacuously.
+    await screen.findByText(/Key Vault secret .*udf-fnapp-key/);
+    expect(
+      screen.queryByText('This item names a function key this endpoint is not configured to use'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('does NOT warn on a first open of an untouched item against a keyed default endpoint', async () => {
+    // No item state at all — the ux-baseline §6 case: a freshly created item
+    // must not open on a red banner.
+    const { calls } = installFetchMock({
+      '/api/items/user-data-function/endpoints': () => ({
+        ok: true,
+        endpoints: [{ base: RUNTIME, keySecretName: 'udf-runtime-key', acceptsPushedSource: false, isDefault: true }],
+      }),
+      '/api/items/user-data-function/udf-1': () => ({ id: 'udf-1', state: {}, updatedAt: '2026-08-17T00:00:00Z' }),
+    });
+    renderWithProviders(
+      <UserDataFunctionEditor item={makeItem('user-data-function', 'User data function')} id="udf-1" />,
+    );
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.includes('/api/items/user-data-function/endpoints'))).toBe(true);
+    });
+    await screen.findByText(/Key Vault secret .*udf-runtime-key/);
+    expect(
+      screen.queryByText('This item names a function key this endpoint is not configured to use'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('This item names an endpoint the deployment has not approved'),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * G2: the SHARED gate, not a bespoke warning bar. `svc-udf-function` is
+   * registered in the gate registry with `fixit: { kind: 'env-picker' }`, so
+   * what has to be asserted is the affordances a hand-rolled MessageBar cannot
+   * have — the inline Fix-it, the registry link, and the exact env var named.
+   */
+  it('shows the SHARED honest gate with a Fix-it — not an empty picker, not a bespoke bar', async () => {
     installFetchMock({
       '/api/items/user-data-function/endpoints': () => ({
         ok: true,
         endpoints: [],
         gate: { missing: 'LOOM_UDF_FUNCTION_BASE', detail: 'No function execution endpoint is configured for this deployment.' },
       }),
+      '/api/items/user-data-function/udf-1': () => ({ id: 'udf-1', state: {}, updatedAt: '2026-08-17T00:00:00Z' }),
     });
     renderWithProviders(
       <UserDataFunctionEditor item={makeItem('user-data-function', 'User data function')} id="udf-1" />,
     );
 
-    await screen.findByText(/No execution endpoint is configured \(LOOM_UDF_FUNCTION_BASE\)/);
+    // The gate names the surface and the exact unmet env var...
+    await screen.findByText((t) => t.includes('User data function — Execution endpoint') && t.includes('needs'));
+    await screen.findByText('LOOM_UDF_FUNCTION_BASE');
+    // ...and carries the G2 affordances the bespoke bar did not.
+    await screen.findByRole('button', { name: /Fix it/i });
+    expect(screen.getByRole('link', { name: /Gate registry/i })).toHaveAttribute('href', '/admin/gates');
   });
 });

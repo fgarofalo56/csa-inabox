@@ -539,8 +539,21 @@ const ALLOWLIST = new Map([
   // and the entry stops being true the moment the handler reads a param, a body
   // or an item. `keySecretName` is a Key Vault secret NAME (the same name-only
   // shape /api/keyvault/secret-names ships); the material is read server-side by
-  // the invoke route with the Console UAMI and is never in this payload —
-  // check-credential-route-authz.mjs is the control on that and passes.
+  // the invoke route with the Console UAMI and is never in this payload.
+  //
+  // WHAT DOES *NOT* PROVE THAT, MEASURED RATHER THAN ASSUMED: an earlier
+  // revision of this comment cited check-credential-route-authz.mjs as "the
+  // control on that, and it passes". It does pass — by NOT SCANNING THIS ROUTE.
+  // That checker's population is routes calling a CREDENTIAL_SINKS function
+  // (`listAccountKeys`, `regenerate*Key`, …) and it `continue`s before
+  // `scanned += 1` on a zero-hit file. This route calls none, so its green is
+  // silence, not evidence. Nor does it cover the invoke route, which reaches
+  // Key Vault through `getKeyVaultSecretValue` — also not a listed sink. The
+  // control that actually holds the no-material claim for THIS route is its own
+  // suite (`endpoints/__tests__/route.test.ts`), which asserts the response
+  // carries `keySecretName` as a name plus `acceptsPushedSource`, and nothing
+  // else; the invoke route's material handling is held by
+  // `invoke/__tests__/route.secret-egress.test.ts`.
   ['apps/fiab-console/app/api/items/user-data-function/endpoints/route.ts', 'deployment-wide approved-endpoint list derived purely from env; no [id], no body, no Cosmos, no data plane — no per-tenant resource to scope, and key-secret NAMES only, never material'],
   // RUM1 browser-telemetry ingest: WRITE-ONLY beacon sink (page-load timings /
   // Web Vitals / scrubbed errors → App Insights). There is NO per-tenant

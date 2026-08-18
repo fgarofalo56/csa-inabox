@@ -20,7 +20,7 @@ const sessionMock = vi.fn(() => ({ claims: { oid: 'o1', tid: 't1', groups: [] },
 vi.mock('@/lib/auth/session', () => ({ getSession: () => sessionMock() }));
 
 import { GET } from '../route';
-import { configuredUdfEndpoints } from '@/lib/azure/udf-endpoint-policy';
+import { configuredUdfEndpoints, udfKeySecretDisagrees, resolveUdfEndpoint } from '@/lib/azure/udf-endpoint-policy';
 
 const RUNTIME = 'https://loom-udf-runtime.internal.example.io';
 const APPROVED_FN = 'https://contoso-udf.azurewebsites.net';
@@ -105,5 +105,50 @@ describe('GET /api/items/user-data-function/endpoints', () => {
     const j = await (await call()).json();
     expect(j.endpoints).toHaveLength(1);
     expect(j.gate).toBeUndefined();
+  });
+});
+
+/**
+ * `udfKeySecretDisagrees` is the policy's key comparison, extracted so the
+ * editor cannot answer the question with a second implementation.
+ *
+ * That is not hypothetical tidiness: the editor DID hand-roll it, dropped the
+ * empty-request clause, and warned "Run returns 409" on every keyed endpoint
+ * whose item named no key — a refusal `resolveUdfEndpoint` does not issue. The
+ * first case below is the one that was wrong, and it is asserted against BOTH
+ * the predicate and the resolver so the two can never disagree again.
+ */
+describe('udfKeySecretDisagrees — an EMPTY asked key is not a disagreement', () => {
+  it('an item naming NO key never disagrees, keyed endpoint or not', () => {
+    expect(udfKeySecretDisagrees('', 'udf-fnapp-key')).toBe(false);
+    expect(udfKeySecretDisagrees('   ', 'udf-fnapp-key')).toBe(false);
+    expect(udfKeySecretDisagrees(undefined, 'udf-fnapp-key')).toBe(false);
+    expect(udfKeySecretDisagrees(null, 'udf-fnapp-key')).toBe(false);
+    expect(udfKeySecretDisagrees('', undefined)).toBe(false);
+  });
+
+  it('a NAMED key disagrees only when it differs, case-insensitively', () => {
+    expect(udfKeySecretDisagrees('udf-fnapp-key', 'udf-fnapp-key')).toBe(false);
+    expect(udfKeySecretDisagrees('UDF-FNAPP-KEY', 'udf-fnapp-key')).toBe(false);
+    expect(udfKeySecretDisagrees(' udf-fnapp-key ', 'udf-fnapp-key')).toBe(false);
+    expect(udfKeySecretDisagrees('some-other-secret', 'udf-fnapp-key')).toBe(true);
+    // Named a key against an endpoint configured with none — still a refusal.
+    expect(udfKeySecretDisagrees('some-other-secret', undefined)).toBe(true);
+  });
+
+  it('THE RESOLVER AGREES: a keyed default + an item naming no key returns an endpoint, no gate', () => {
+    process.env.LOOM_UDF_FUNCTION_BASE = RUNTIME;
+    process.env.LOOM_UDF_FUNCTION_KEY_SECRET = 'udf-fnapp-key';
+    const resolved = resolveUdfEndpoint('', '');
+    expect('gate' in resolved).toBe(false);
+    expect('endpoint' in resolved && resolved.endpoint.keySecretName).toBe('udf-fnapp-key');
+  });
+
+  it('THE RESOLVER AGREES: a DISAGREEING named key does gate', () => {
+    process.env.LOOM_UDF_FUNCTION_BASE = RUNTIME;
+    process.env.LOOM_UDF_FUNCTION_KEY_SECRET = 'udf-fnapp-key';
+    const resolved = resolveUdfEndpoint('', 'some-other-secret');
+    expect('gate' in resolved).toBe(true);
+    expect('gate' in resolved && resolved.gate.missing).toBe('LOOM_UDF_FUNCTION_KEY_SECRET');
   });
 });

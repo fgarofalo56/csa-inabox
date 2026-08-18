@@ -109,8 +109,9 @@ import {
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 import { clientFetch } from '@/lib/client-fetch';
-import { udfEndpointKey } from '@/lib/azure/udf-endpoint-policy';
+import { udfEndpointKey, udfKeySecretDisagrees } from '@/lib/azure/udf-endpoint-policy';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 
 // ----- User Data Function (Fabric UDF — code, test/invoke, connections, libraries) -----
 const UDF_SAMPLE = `import datetime\nimport fabric.functions as fn\nimport logging\n\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    logging.info('Python UDF trigger function processed a request.')\n    return {"user": user_id, "score": weight * 42}`;
@@ -276,10 +277,12 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const endpointUnapproved =
     !!(state.azureFunctionUrl || '').trim() && !endpointQuery.isLoading && !selectedEndpoint && udfEndpoints.length > 0;
   // A saved key-secret name that disagrees with the selected endpoint's
-  // configured key — the other 409 the policy raises.
+  // configured key — the other 409 the policy raises. Answered by the POLICY'S
+  // OWN predicate: an item that names NO key is the compliant default (the
+  // endpoint's configured key is used), and a hand-rolled comparison here that
+  // dropped that clause warned about a 409 resolveUdfEndpoint never raises.
   const keySecretMismatch =
-    !!selectedEndpoint
-    && (state.functionKeySecret || '').trim().toLowerCase() !== (selectedEndpoint.keySecretName || '').toLowerCase();
+    !!selectedEndpoint && udfKeySecretDisagrees(state.functionKeySecret, selectedEndpoint.keySecretName);
   /** Point the item at an approved endpoint AND at that endpoint's configured key. */
   const selectEndpoint = useCallback((ep?: UdfEndpointView) => {
     setState((p) => ({
@@ -647,13 +650,19 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
               </MessageBarBody>
             </MessageBar>
           )}
+          {/* The shared G2 gate, not a sixteenth bespoke warning MessageBar.
+              `svc-udf-function` is already registered (lib/gates/registry/
+              builders.ts) with `fixit: { kind: 'env-picker' }`, so this carries
+              the inline Fix-it wizard, the /admin/gates link, and a Recheck
+              that re-lists in place — none of which a hand-rolled bar has. */}
           {!endpointQuery.isLoading && endpointGate && (
-            <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalXS }}>
-              <MessageBarBody>
-                <MessageBarTitle>No execution endpoint is configured ({endpointGate.missing})</MessageBarTitle>
-                {endpointGate.detail}
-              </MessageBarBody>
-            </MessageBar>
+            <HonestGate
+              gateId="svc-udf-function"
+              surface="User data function — Execution endpoint"
+              missing={[endpointGate.missing]}
+              detail={endpointGate.detail}
+              onResolved={() => { void endpointQuery.refetch(); }}
+            />
           )}
 
           {/* Manage connections — reusable, Key Vault-backed Loom Connections */}
