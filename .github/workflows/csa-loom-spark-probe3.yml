@@ -28,6 +28,8 @@ jobs:
     runs-on: [self-hosted, loom-aca]
     timeout-minutes: 20
     steps:
+      - name: Checkout (the census script lives in the repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Azure login (deploy SP — Synapse Spark admin)
         uses: azure/login@v2
         with:
@@ -42,17 +44,26 @@ jobs:
           set -uo pipefail
           DEV="https://${SYN_WS}.dev.azuresynapse.net"
           API="livyApi/versions/2019-11-01-preview/sparkPools/${POOL}/sessions"
+          export DEV API
+          # Livy caps the sessions list at size=20 per request ("By default it is
+          # 20 and that is the maximum" — Learn). This probe asked for size=100,
+          # so the census was either 400ing or silently clamped, and a probe whose
+          # whole job is spotting a ~700-session jam would have reported the first
+          # 20 — or, on a 400, an empty pool. A bare clamp would not fix that, so
+          # the census pages properly and declares whether it finished. Shared with
+          # spark-livy-probe.sh so the two cannot drift (#3568, and #3034 for why
+          # the python lives in a file rather than in this block scalar).
+          CENSUS=scripts/csa-loom/livy-session-census.py
           tok() { az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r'; }
           T=$(tok)
           echo "== sessions by state =="
-          curl -s -H "Authorization: Bearer $T" "${DEV}/${API}?from=0&size=100" > /tmp/sess.json
-          python3 -c "import json,collections;d=json.load(open('/tmp/sess.json'));ss=d.get('sessions') or [];print('total',d.get('total'),'inlist',len(ss),'states',dict(collections.Counter(s.get('state') for s in ss)))"
+          TOK="$T" python3 "$CENSUS" census
           echo "== clean leaked/error/dead/not_started sessions =="
-          IDS=$(python3 -c "import json;d=json.load(open('/tmp/sess.json'));print(' '.join(str(s['id']) for s in (d.get('sessions') or []) if s.get('state') in ('error','dead','killed','not_started','shutting_down')))")
+          IDS=$(TOK="$T" python3 "$CENSUS" ids)
           N=0; for id in $IDS; do curl -s -X DELETE -H "Authorization: Bearer $(tok)" "${DEV}/${API}/${id}" -o /dev/null && N=$((N+1)); done
           echo "  deleted $N stale sessions"; sleep 8
-          T=$(tok); curl -s -H "Authorization: Bearer $T" "${DEV}/${API}?from=0&size=100" > /tmp/sess2.json
-          python3 -c "import json,collections;d=json.load(open('/tmp/sess2.json'));ss=d.get('sessions') or [];print('after clean states',dict(collections.Counter(s.get('state') for s in ss)))"
+          echo "== after clean =="
+          TOK="$(tok)" python3 "$CENSUS" census
           probe_session() {
             local label="$1"; local body="$2"; local st="" sid=""
             local resp; resp=$(curl -s -X POST -H "Authorization: Bearer $(tok)" -H 'Content-Type: application/json' "${DEV}/${API}" -d "$body")

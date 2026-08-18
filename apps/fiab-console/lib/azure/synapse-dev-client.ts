@@ -24,6 +24,22 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armHost, detectLoomCloud } from './cloud-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import {
+  PagingBudget,
+  PAGE_DEADLINE,
+  type PagingBudgetOptions,
+  type PagingTruncation,
+} from './paging-budget';
+import {
+  walkBatchWindow,
+  walkRecentBatches,
+  type FetchBatchPage,
+  type RecentSparkBatchJobs,
+  type SparkBatchJob,
+  type SparkBatchPage,
+  type SparkBatchRequest,
+  type SparkBatchWindow,
+} from './livy-batch-paging';
 
 // Cloud-aware endpoint hosts. ARM host comes from cloud-endpoints (AZURE_CLOUD /
 // LOOM_ARM_ENDPOINT aware); AZURE_ARM_HOST stays as an explicit per-call override.
@@ -57,6 +73,20 @@ const DEV_SCOPE = `https://${DEV_HOST_SUFFIX}/.default`;
 const ARM_API = '2021-06-01';
 const DEV_API = '2020-12-01';
 const LIVY_API = '2019-11-01-preview';
+
+/**
+ * Livy data-plane path prefix for one Spark pool.
+ *
+ * `encodeURIComponent` matches the sibling client's `livyBase()` in
+ * synapse-livy-client.ts. Every Livy path here interpolated `poolName` RAW,
+ * while every other data-plane path in this file (`/pipelines/`, `/datasets/`,
+ * `/linkedservices/`) already encoded its name — so a pool name carrying `/`,
+ * `?` or `#` could reshape the request path. Callers include
+ * `synapse-spark-pool/[id]/runs`, which passes a route param straight through.
+ */
+function livyPoolBase(poolName: string): string {
+  return `/livyApi/versions/${LIVY_API}/sparkPools/${encodeURIComponent(poolName)}`;
+}
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -181,17 +211,28 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
   return res ?? callArmRaw(url, init);
 }
 
-async function callDev(path: string, init?: RequestInit): Promise<Response> {
+/**
+ * `timeoutMs` is optional and defaults to `fetchWithTimeout`'s own
+ * DEFAULT_SERVER_FETCH_TIMEOUT_MS (30s). Callers running inside a
+ * {@link PagingBudget} pass the walk's REMAINING wall clock so one slow page
+ * cannot out-live the walk — without it a paged loop inherits no ceiling at
+ * all beyond 30s x pages (see `paging-budget.ts`).
+ */
+async function callDev(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
-  return fetchWithTimeout(`${devBase()}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      authorization: `Bearer ${tok.token}`,
-      'content-type': 'application/json',
+  return fetchWithTimeout(
+    `${devBase()}${path}`,
+    {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        authorization: `Bearer ${tok.token}`,
+        'content-type': 'application/json',
+      },
     },
-  });
+    timeoutMs,
+  );
 }
 
 async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
@@ -455,77 +496,93 @@ export async function updateBigDataPool(
 // Spark Livy batch jobs (dev endpoint)
 // ============================================================
 
-export interface SparkBatchJob {
-  id: number;
-  livyInfo?: { currentState?: string; jobCreationRequest?: unknown };
-  name?: string;
-  state?: string;
-  appId?: string | null;
-  artifactId?: string;
-  result?: 'Uncertain' | 'Succeeded' | 'Failed' | 'Cancelled';
-  schedulerInfo?: unknown;
-  log?: string[];
-  submitterId?: string;
-  submitterName?: string;
-  pluginInfo?: unknown;
-  errorInfo?: unknown[];
-  tags?: Record<string, string>;
-  workspaceName?: string;
-  sparkPoolName?: string;
-  submittedAt?: string;
-  jobType?: string;
-}
-
-export interface SparkBatchRequest {
-  name: string;
-  file: string;                 // wasbs://… or abfss://… URI to JAR / .py
-  className?: string;
-  args?: string[];
-  jars?: string[];
-  pyFiles?: string[];
-  files?: string[];
-  archives?: string[];
-  conf?: Record<string, string>;
-  driverMemory?: string;
-  driverCores?: number;
-  executorMemory?: string;
-  executorCores?: number;
-  numExecutors?: number;
-  tags?: Record<string, string>;
-}
+// The Livy `/batches` types and the paging + recency algorithm live in
+// `livy-batch-paging.ts` (split out of this file in the PR #3689 review: that
+// is the part with the actual algorithm in it, it is pure, and this file was
+// 1830 LOC). This module keeps the TRANSPORT and binds it to those walkers.
+// Every type is re-exported so the ~10 existing importers keep working
+// unchanged.
+export type {
+  SparkBatchJob,
+  SparkBatchPage,
+  SparkBatchRequest,
+  SparkBatchWindow,
+  RecentSparkBatchJobs,
+} from './livy-batch-paging';
 
 export async function submitSparkBatchJob(
   poolName: string,
   job: SparkBatchRequest,
 ): Promise<SparkBatchJob> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches?detailed=true`,
+    `${livyPoolBase(poolName)}/batches?detailed=true`,
     { method: 'POST', body: JSON.stringify(job) },
   );
   return jsonOrThrow<SparkBatchJob>(r, `submitSparkBatchJob(${poolName})`);
 }
 
+/**
+ * Bind the Livy batches list endpoint for `poolName` into a {@link FetchBatchPage}.
+ *
+ * `timeoutMs` comes from the paging budget's remaining wall clock and is
+ * forwarded to `callDev` — dropping it is how a "bounded" walk silently becomes
+ * N x 30s.
+ */
+function batchPageFetcher(poolName: string): FetchBatchPage {
+  return async (from, size, timeoutMs) => {
+    const r = await callDev(
+      `${livyPoolBase(poolName)}/batches?from=${from}&size=${size}&detailed=true`,
+      undefined,
+      timeoutMs,
+    );
+    return jsonOrThrow<SparkBatchPage>(r, `listSparkBatchJobs(${poolName})`);
+  };
+}
+
+/** An EXPLICIT OFFSET WINDOW of the batches list, in server order — see
+ *  {@link walkBatchWindow}. Makes NO recency claim; use
+ *  {@link listRecentSparkBatchJobs} for that. */
 export async function listSparkBatchJobs(
   poolName: string,
   from = 0,
   size = 20,
-): Promise<{ from: number; total: number; sessions: SparkBatchJob[] }> {
-  const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches?from=${from}&size=${size}&detailed=true`,
+  opts?: PagingBudgetOptions,
+): Promise<SparkBatchWindow> {
+  return walkBatchWindow(
+    batchPageFetcher(poolName),
+    `listSparkBatchJobs(${poolName})`,
+    from,
+    size,
+    opts,
   );
-  return jsonOrThrow(r, `listSparkBatchJobs(${poolName})`);
+}
+
+/** The MOST RECENT batch jobs on `poolName`, newest first — see
+ *  {@link walkRecentBatches} for why it probes both ends of the list and will
+ *  not navigate by a `total` indistinguishable from a page length. */
+export async function listRecentSparkBatchJobs(
+  poolName: string,
+  limit = 20,
+  opts?: PagingBudgetOptions,
+): Promise<RecentSparkBatchJobs> {
+  return walkRecentBatches(
+    batchPageFetcher(poolName),
+    `listRecentSparkBatchJobs(${poolName})`,
+    limit,
+    opts,
+  );
 }
 
 export async function getSparkBatchJob(poolName: string, batchId: number): Promise<SparkBatchJob> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches/${batchId}?detailed=true`,
+    `${livyPoolBase(poolName)}/batches/${batchId}?detailed=true`,
   );
   return jsonOrThrow<SparkBatchJob>(r, `getSparkBatchJob(${poolName},${batchId})`);
 }
 
 export async function cancelSparkBatchJob(poolName: string, batchId: number): Promise<void> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches/${batchId}`,
+    `${livyPoolBase(poolName)}/batches/${batchId}`,
     { method: 'DELETE' },
   );
   if (!r.ok && r.status !== 200) {
@@ -943,7 +1000,7 @@ export async function submitLivyBatch(args: {
 
   // 1) Create interactive session
   const sessRes = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
+    `${livyPoolBase(poolName)}/sessions`,
     {
       method: 'POST',
       body: JSON.stringify({
@@ -982,7 +1039,7 @@ export async function submitLivyBatch(args: {
 
   // 3) Submit the code as a statement
   const stmtRes = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sess.id}/statements`,
+    `${livyPoolBase(poolName)}/sessions/${sess.id}/statements`,
     {
       method: 'POST',
       body: JSON.stringify({ code, kind }),
@@ -999,7 +1056,7 @@ export async function submitLivyBatch(args: {
 
 export async function getLivyStatement(poolName: string, sessionId: number, stmtId: number): Promise<{ id: number; state: string; output?: any }> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}/statements/${stmtId}`,
+    `${livyPoolBase(poolName)}/sessions/${sessionId}/statements/${stmtId}`,
   );
   return jsonOrThrow(r, `getLivyStatement(${poolName}/${sessionId}/${stmtId})`);
 }
@@ -1064,7 +1121,7 @@ export async function createLivySessionAsync(
   };
   request.conf = conf;
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
+    `${livyPoolBase(poolName)}/sessions`,
     { method: 'POST', body: JSON.stringify(request) },
   );
   const sess = await jsonOrThrow<{ id: number; state: string; appInfo?: any }>(r, `createLivySession(${poolName})`);
@@ -1078,13 +1135,13 @@ export async function getLivySession(
   // detailed=true adds `errorInfo` — the REAL reason a session died (e.g. the
   // MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED queue-jam rejection), surfaced to the
   // notebook editor instead of an opaque "entered terminal state 'error'".
-  const r = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}?detailed=true`);
+  const r = await callDev(`${livyPoolBase(poolName)}/sessions/${sessionId}?detailed=true`);
   return jsonOrThrow(r, `getLivySession(${poolName}/${sessionId})`);
 }
 
 export async function submitLivyStatement(poolName: string, sessionId: number, body: { code: string; kind?: 'pyspark' | 'spark' | 'sparkr' | 'sql' }): Promise<{ id: number; state: string }> {
   const r = await callDev(
-    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}/statements`,
+    `${livyPoolBase(poolName)}/sessions/${sessionId}/statements`,
     { method: 'POST', body: JSON.stringify({ code: body.code, kind: body.kind || 'pyspark' }) },
   );
   return jsonOrThrow(r, `submitStatement(${poolName}/${sessionId})`);

@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""livy-session-census.py — an HONEST census of a Synapse Spark pool's Livy sessions.
+
+Why this exists
+---------------
+`spark-livy-probe.sh` and the `csa-loom-spark-probe3` workflow both asked Livy
+for `?from=0&size=100`. Livy's sessions endpoint documents `size` as "By default
+it is 20 and that is the maximum"
+(https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/get-spark-sessions)
+and 400s above it — the same defect #3568 reported against the batches endpoint.
+
+That made the probes wrong in the worst possible way. The census lines carried
+`|| true` and `2>/dev/null`, so a 400 became an empty string, the empty string
+became `sessions: []`, and the probe printed a confident `by state: {}` for a
+pool that might hold 700 leaked sessions. The probe built to diagnose the #1796
+jam would have reported the jam as absent.
+
+A bare clamp to 20 would not fix it either: it would report the first 20 of 700
+as if that were the whole pool. So this pages at the real cap and reports
+`complete` ONLY when completeness was actually established — the server ran the
+list dry, or it reported a `total` and we reached it. A backend that omits
+`total` (or returns an empty body, or a page with no `sessions` key) cannot talk
+this script into a confident answer: the walk keeps going until a page runs dry,
+and anything it genuinely cannot establish surfaces as a warning or a non-zero
+exit, never as a total.
+
+Usage
+-----
+    livy-session-census.py census   # counts by state, + completeness
+    livy-session-census.py ids      # space-separated ids in reapable states
+
+Env: DEV (workspace dev endpoint), API (livyApi path), TOK (bearer token).
+Exits non-zero on a genuine HTTP/parse failure so the caller cannot mistake a
+broken census for an empty pool. CALLERS MUST CHECK THAT EXIT CODE — a
+`$(...)`-captured invocation in a script without `set -e` discards it, which is
+how the same swallow this file removed reappears one level up.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections import Counter
+
+# Livy's documented per-request maximum. NOT a tuning knob.
+PAGE_SIZE = 20
+# 40 x 20 = 800 sessions — comfortably above the ~700 seen in the #1796 jam.
+MAX_PAGES = 40
+
+REAPABLE_STATES = ("error", "dead", "killed", "not_started", "shutting_down")
+
+# Default ports, so `http://h/x` and `http://h:80/x` compare as one origin.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url):
+    """The (scheme, host, port) triple two URLs must share to be same-origin."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
+
+
+def _origin_str(origin):
+    """Render an origin triple for an error message, omitting an unknown port."""
+    scheme, host, port = origin
+    return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse any redirect that leaves the origin the request was aimed at.
+
+    THIS is the guard that closes the exfiltration vector; the opener's scheme
+    scoping below is defence in depth, not the fix. The distinction matters
+    because an earlier cut got it backwards: it removed the `ftp:` transport and
+    then claimed the redirect vector was closed, when the far easier `http:`
+    variant needed no proxy variable and was one character's difference.
+
+    Measured against that cut, with a local `302 -> http://<attacker>/loot`:
+
+        census _get returned: {'total': 0, 'sessions': []}
+        ATTACKER RECEIVED path : /loot
+        ATTACKER RECEIVED auth : Bearer SUPER_SECRET_TOKEN
+
+    Note the census SUCCEEDED. Nothing was raised, nothing was logged, and the
+    operator would have read a healthy-looking empty pool while the token sat in
+    someone else's access log — the exact "broken read that prints like an empty
+    pool" class this whole file exists to prevent, arriving through the network
+    instead of through a parse.
+
+    The mechanism is `HTTPRedirectHandler.redirect_request`, which rebuilds the
+    Request copying EVERY header except content-length/content-type. urllib does
+    not strip `Authorization` across a host change the way `requests` does, so
+    the bearer token travels to whatever host `Location:` names.
+
+    A Livy `/sessions` list has no legitimate cross-host redirect, so this
+    REFUSES rather than stripping the header: a request that silently loses its
+    credentials would come back 401 from an unexpected host and send the reader
+    somewhere else entirely. Refusing names the real cause. Same-origin
+    redirects (path changes, trailing-slash normalisation) still work.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(req.full_url):
+            raise urllib.error.HTTPError(
+                target, code,
+                f"refusing cross-origin redirect "
+                f"{_origin_str(_origin(req.full_url))} -> "
+                f"{_origin_str(_origin(target))} — urllib copies the "
+                f"Authorization header across a host change, so following this "
+                f"would hand the bearer token to that host",
+                headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _http_only_opener():
+    """An opener whose only URL schemes are http and https.
+
+    THIS IS DEFENCE IN DEPTH, NOT THE REDIRECT FIX. The guard that actually
+    closes the exfiltration vector is `_SameOriginRedirectHandler` above, which
+    refuses ANY redirect off the origin — including the `http:` variant that
+    needs no proxy variable and that an earlier cut of this file left wide open
+    while claiming the vector was closed. What this function does is remove the
+    non-http transports entirely, so a bug in the redirect guard cannot reach a
+    scheme this script never had any business opening.
+
+    The stdlib's default opener will follow a redirect out of http:
+
+      * `HTTPRedirectHandler.http_error_302` allows a `Location:` whose scheme
+        is in `('http', 'https', 'ftp', '')` — so `file:`, `data:` and `gopher:`
+        redirects ARE already refused by the stdlib (B310's stated concern is
+        closed), but `ftp:` is permitted.
+      * `HTTPRedirectHandler.redirect_request` rebuilds the Request copying
+        EVERY header except content-length/content-type. Measured directly:
+        the redirected Request to `ftp://…` carries `Authorization: Bearer …`.
+
+    NOTE — `urllib.request.build_opener(HTTPHandler, HTTPSHandler,
+    HTTPRedirectHandler)` does NOT restrict anything. Its handler arguments only
+    DE-DUPLICATE the default set; `FTPHandler`, `FileHandler` and `DataHandler`
+    are still installed and the ftp route stays live (measured: routes were
+    still {ftp, file, data, http, https, …}). The list has to be built
+    explicitly, which is why this is a function and not a one-liner.
+
+    THE PROXY DICT IS SCOPED ON PURPOSE, and this is the subtle one.
+    `ProxyHandler.__init__` does `setattr(self, '%s_open' % type, …)` for EVERY
+    key in the proxies dict, and the default `ProxyHandler()` reads
+    `getproxies()` — env vars plus, on Windows, the registry. So a single
+    `ftp_proxy` puts the ftp route straight back:
+
+        routes, no proxy vars : ['http', 'https', 'unknown']
+        routes, ftp_proxy set : ['ftp', 'http', 'https', 'unknown']
+
+    and it fails OPEN, not closed: `proxy_open` sees `orig_type='ftp'` differ
+    from `proxy_type='http'` and re-dispatches through `self.parent.open()`, so
+    the request goes to the proxy over HTTP with every header intact. Measured
+    against a recording listener, the proxy received:
+
+        GET ftp://attacker.invalid/loot HTTP/1.1
+        Authorization: Bearer SECRET
+
+    (`all_proxy` registers an `all_open` rather than an `ftp_open`, and
+    `OpenerDirector._open` dispatches on `req.type`, so `all_open` is never
+    reached for an ftp URL — measured: "unknown url type: ftp". It is covered by
+    the same filter as defence in depth, but it is NOT a demonstrated exploit
+    and is not claimed as one.)
+
+    Filtering the dict to http/https keeps proxy support for the schemes we
+    actually use — a self-hosted runner behind `http_proxy` still reaches its
+    upstream — while making the ftp route unreachable no matter what the
+    environment says. That matters most in exactly the environment this handler
+    exists for: a PROXIED runner is where the unscoped version fails open.
+
+    Filtering does NOT break `no_proxy`, which is the reasonable worry:
+    `getproxies()` returns it as a `'no'` key that this comprehension drops, but
+    `ProxyHandler.proxy_open` calls the module-level `proxy_bypass(req.host)`,
+    which re-reads the environment (and the Windows registry) itself. Verified:
+    with the scoped dict, `proxy_bypass('127.0.0.1')` is still True when
+    `no_proxy` names it and False when it does not.
+    """
+    proxies = {
+        scheme: url
+        for scheme, url in urllib.request.getproxies().items()
+        if scheme in ("http", "https")
+    }
+    handlers = [
+        urllib.request.ProxyHandler(proxies),
+        urllib.request.HTTPHandler(),
+        _SameOriginRedirectHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.UnknownHandler(),
+    ]
+    # The stdlib itself defines HTTPSHandler only under
+    # `hasattr(http.client, "HTTPSConnection")`. Referencing it unconditionally
+    # would turn an ssl-less interpreter into an ImportError at module load —
+    # i.e. a probe that dies at import, which this file's `census()` docstring
+    # already argues is indistinguishable from a probe that found nothing.
+    https_handler = getattr(urllib.request, "HTTPSHandler", None)
+    if https_handler is not None:
+        handlers.insert(2, https_handler())
+
+    opener = urllib.request.OpenerDirector()
+    for handler in handlers:
+        opener.add_handler(handler)
+    return opener
+
+
+_OPENER = _http_only_opener()
+
+
+def _get(url: str, token: str) -> dict:
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    # `DEV` is operator-supplied, so the scheme is checked STRUCTURALLY (parse,
+    # not a substring test) right at the call site. Same shape as the sibling
+    # loom-unity-migrate-catalog.py — it keeps the guarantee next to the open
+    # rather than making a reader trace it back to the caller.
+    #
+    # THREE separate guards, and they cover different things — the earlier cut
+    # of this file conflated them and claimed the redirect vector was closed
+    # when only its ftp branch was:
+    #   this check         — the URL WE build
+    #   _SameOriginRedirectHandler — where the server tries to send us next,
+    #                                for ANY scheme including plain http
+    #   _http_only_opener  — which transports exist at all (defence in depth)
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ValueError(f"refusing non-http(s) request URL: {url!r}")
+    with _OPENER.open(req, timeout=60) as resp:
+        raw = resp.read().decode("utf-8")
+    if not raw.strip():
+        # A 200 with an EMPTY BODY is not an empty pool. The old `or "{}"` turned
+        # one into the other, and `{}` walked straight out as
+        # `total: 0 | in list: 0 | complete: True | by state: {}` — a broken
+        # census printing as a healthy pool, exit 0. That is verbatim the class
+        # this file's docstring says it exists to prevent, so it must land in
+        # main()'s `except` and exit non-zero instead.
+        raise ValueError(
+            f"empty body from {url} — a 200 with no payload means the counts are "
+            f"UNKNOWN, not zero")
+    body = json.loads(raw)
+    if not isinstance(body, dict):
+        raise ValueError(f"expected a JSON object from {url}, got {type(body).__name__}")
+    return body
+
+
+def _pool_wide_total(reported, page_len):
+    """Return `reported` only when it CANNOT be this page's own length.
+
+    Livy's server means `sessionManager.size()` — the whole pool — but the
+    Azure REST spec that generates every Synapse Spark SDK documents the
+    sibling batches field the other way:
+
+        specification/synapse/data-plane/Microsoft.Synapse/preview/
+        2019-11-01-preview/sparkJob.json
+          SparkBatchJobCollection.total -> "Number of sessions fetched."
+
+    and gives `SparkSessionCollection` — the shape THIS endpoint returns — no
+    description at all. Under the page-length reading a 137-session pool
+    answers page one with `total: 20` beside 20 rows, `len(sessions) >= total`
+    is `20 >= 20`, and the walk stops one page in reporting `complete: True`.
+    A 20-of-137 census printed as the whole pool is the #1796 jam reported as
+    absent — exactly what this script exists to prevent.
+
+    `reported > page_len` is the one observation impossible under the
+    page-length reading (a page length cannot exceed itself), so it alone is
+    accepted. Anything else leaves the total unknown and lets the walk end the
+    only way that is established under BOTH readings: a page that comes back
+    empty. On a pool holding one page or less that costs one extra request.
+
+    That is HONEST under both readings, not correct under both. Under the
+    page-length reading no `total` is ever accepted, so every census walks to
+    the end — and `MAX_PAGES` caps that at 40 x 20 = 800 sessions. A pool larger
+    than that returns `complete = False`, and the caller prints the counts as an
+    explicit LOWER BOUND rather than a total. Disclosed-incomplete, not correct.
+
+    Position-independent on purpose: this runs on EVERY page, so it cannot lean
+    on "a short page means the list is exhausted" the way a first-page-only
+    check could.
+    """
+    if not isinstance(reported, int) or isinstance(reported, bool):
+        # `isinstance(True, int)` is True in Python; a bool `total` is not a count.
+        return None
+    return reported if reported > page_len else None
+
+
+def census(dev, api, token):
+    """Return (sessions, total_reported_or_None, complete).
+
+    `total_reported_or_None` is None when the SERVER never reported a total we
+    can navigate by — absent, or indistinguishable from the length of the page
+    it arrived on (see `_pool_wide_total`). Substituting a number of our own
+    there is what turned a partial walk into a confident one, so the unknown is
+    propagated rather than filled.
+
+    Deliberately un-annotated: a `tuple[...]` subscript is evaluated at def time
+    and raises TypeError on Python < 3.9. This runs on a self-hosted runner
+    whose interpreter version is not pinned anywhere, and a probe that dies at
+    import is indistinguishable from a probe that found nothing.
+    """
+    sessions = []
+    seen = set()
+    total = None
+    frm = 0
+    complete = False
+    for _ in range(MAX_PAGES):
+        url = f"{dev}/{api}?from={frm}&size={PAGE_SIZE}&detailed=true"
+        page = _get(url, token)
+        batch = page.get("sessions")
+        if not isinstance(batch, list):
+            # No `sessions` key at all. We cannot tell an exhausted list from a
+            # malformed response, and guessing "exhausted" is how a broken read
+            # becomes a confident count. Say we do not know.
+            raise ValueError(
+                f"page at from={frm} carries no 'sessions' list "
+                f"(keys: {sorted(page.keys())}) — cannot distinguish an "
+                f"exhausted list from a broken response")
+        reported = _pool_wide_total(page.get("total"), len(batch))
+        if reported is not None:
+            total = reported
+        for s in batch:
+            sid = s.get("id")
+            if sid is not None and sid in seen:
+                continue
+            if sid is not None:
+                seen.add(sid)
+            sessions.append(s)
+        if not batch:
+            # The server RAN DRY. This is the one completeness signal that does
+            # not depend on the backend reporting a `total` — it is established,
+            # not assumed.
+            complete = True
+            break
+        frm += len(batch)
+        if total is not None and len(sessions) >= total:
+            complete = True
+            break
+    return sessions, total, complete
+
+
+def _total_phrase(total):
+    """Describe the server's `total` without inventing one when it never sent it."""
+    return f"server total {total}" if total is not None else "server reported NO total"
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "census"
+    dev = os.environ["DEV"].rstrip("/")
+    api = os.environ["API"].strip("/")
+    token = os.environ["TOK"]
+
+    try:
+        sessions, total, complete = census(dev, api, token)
+    except Exception as err:
+        # Intentionally broad. The ONLY thing worse than a failed census is a
+        # failed census that prints like an empty pool: an HTTPError, a socket
+        # timeout (TimeoutError, not URLError, on 3.10+), a proxy fault and a
+        # malformed body must ALL surface as "unknown", never as zero sessions.
+        # That is precisely what the old `2>/dev/null` did.
+        print(f"::error::livy session census FAILED ({type(err).__name__}: {err}) — "
+              f"the counts are UNKNOWN, not zero", file=sys.stderr)
+        return 1
+
+    if mode == "ids":
+        print(" ".join(str(s["id"]) for s in sessions
+                       if s.get("state") in REAPABLE_STATES and s.get("id") is not None))
+        if not complete:
+            print(f"::warning::census incomplete ({len(sessions)} sessions read, "
+                  f"{_total_phrase(total)}) — the clean-up below covers only what "
+                  f"was enumerated", file=sys.stderr)
+        return 0
+
+    print("total reported:", total if total is not None else "UNREPORTED by the server",
+          "| in list:", len(sessions),
+          "| complete:", complete,
+          "| by state:", dict(Counter(s.get("state") for s in sessions)))
+    if not complete:
+        print(f"::warning::census stopped after {MAX_PAGES} pages "
+              f"({len(sessions)} sessions read, {_total_phrase(total)}) — treat the "
+              f"state counts as a LOWER BOUND, not a total")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
