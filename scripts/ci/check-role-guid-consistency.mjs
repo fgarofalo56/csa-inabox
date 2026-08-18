@@ -63,15 +63,26 @@
  *   S3  declaration               `var xRoleId = 'g'`  /  `param xRoleId string = 'g'`
  *   S4  env / shell assignment    `X_ROLE_ID='g'`
  *   S5  trailing-comment label    `const A = 'g'; // Role Name`
- *   S6  name-keyed map entry      `'Role Name': 'g',`  (TS Record, JSON, YAML)
+ *   S6  name-keyed map entry      `'Role Name': 'g',`  (TS Record, JSON, YAML —
+ *                                 the value's quotes are OPTIONAL, because a
+ *                                 YAML scalar does not carry them)
  *   S7  array member              `'g', // Role Name`   (and unlabelled members)
  *   S8  inline role-definition id `subscriptionResourceId('…/roleDefinitions', 'g')`,
  *                                 compact on one line or WRAPPED across three
  *
- * NOT READ, and deliberately COUNTED so the gap is visible rather than
- * invisible: any other line carrying a GUID that is a canonical role id or a
- * near-miss to one is reported as `unharvested` residue (`--list` prints the
- * file and line). That count is the honest measure of this guard's blind spot.
+ * NOT READ, and PARTLY counted. Any other line carrying a GUID that is a
+ * canonical role id, or a near-miss to one, is reported as `unharvested`
+ * residue (`--list` prints the file and line).
+ *
+ * That count is a PARTIAL measure of the blind spot, not a complete one, and
+ * the difference matters: residue is keyed on the VALUE resembling a role id,
+ * so a binding to a GUID that is neither canonical nor near-canonical — which
+ * is what most wrong ids look like — lands in NO section at all. Measured: a
+ * foreign id planted on `ACRPULL_ROLE` in gov-provision-streaming-migrate.yml
+ * appeared in neither judged, nor unjudged, nor residue. The remedy for that is
+ * to widen the HARVESTER (as S6 was widened to unquoted YAML values), never to
+ * widen the residue, which would only relabel the gap.
+ *
  * Markdown and other prose under `docs/` is outside the scan roots entirely —
  * a wrong role id in a doc is NOT caught here.
  *
@@ -202,14 +213,29 @@ export const CANONICAL = [
 
 /**
  * Abbreviations this repo genuinely uses for a role, each checked against the
- * declaration it appears on. An alias is only safe when it is unambiguous
- * across the whole built-in catalogue, so each one is justified individually —
- * an alias that could denote two roles is how a guard starts asserting things
- * it has not established.
+ * declaration it appears on.
+ *
+ * An earlier revision of this comment said an alias "is only safe when it is
+ * unambiguous across the whole built-in catalogue". Measured against the 928
+ * role definitions live in ARM, that is not true of two entries below:
+ * `rbacadmin` is a substring of three AKS/Fleet RBAC Admin roles, and
+ * `sqldbcontrib` of "ClearDB MySQL DB Contributor". Neither is reachable here —
+ * LOOKUP is an EXACT-match map, not a substring search, and none of those roles
+ * is bound anywhere in this tree — so the aliases are sound and the claim about
+ * them was not. Stating a stronger property than was tested is the same R7
+ * error this guard exists to catch, so the accurate rule is below.
+ *
+ * The real safety property: an alias must be unambiguous among the roles this
+ * repo BINDS, and its failure direction must be a loud false positive (C2
+ * naming two roles) rather than a silent pass. Each entry is justified
+ * individually against that.
  */
 export const ALIASES = new Map([
   // `blobData*` — the only "Blob Data" roles in Azure are the Storage ones.
   ['blobdatacontributor', 'Storage Blob Data Contributor'],
+  // gov-provision-streaming-migrate.yml's `BLOB_CONTRIB_ROLE`, the Gov sink
+  // grant. "Blob Contrib" has one referent in the built-in catalogue.
+  ['blobcontrib', 'Storage Blob Data Contributor'],
   ['blobdataowner', 'Storage Blob Data Owner'],
   ['blobdatareader', 'Storage Blob Data Reader'],
   ['blobowner', 'Storage Blob Data Owner'],
@@ -377,9 +403,33 @@ const QUOTED_GUID_RE = new RegExp(`^['"]?(${GUID_SRC})['"]?\\s*[;,]*\\s*(?://\\s
  * `Record<string,string>` literals whose KEY is the role name and whose value
  * reaches ARM, and a YAML mapping has the same shape. The key may be quoted or
  * bare; a key that resolves to no known role becomes residue, never a guess.
+ *
+ * THE VALUE'S QUOTES ARE OPTIONAL, and requiring them was a live Gov hole.
+ * TypeScript and JSON always quote a string value, so a matcher written against
+ * those two reads as complete — but YAML does not, and a workflow `env:` block
+ * is a YAML mapping:
+ *
+ *     .github/workflows/gov-provision-streaming-migrate.yml:96
+ *       BLOB_CONTRIB_ROLE: ba92f5b4-2d11-453d-a403-e96b0029c9fe
+ *
+ * consumed 235 lines later in a real grant:
+ *
+ *     :331  az role assignment create … --role "$BLOB_CONTRIB_ROLE" --scope "$LAKE_ID"
+ *
+ * MEASURED: with quotes required, planting Reader's id on that line and a
+ * foreign id on ACRPULL_ROLE (:94) both returned EXIT=0, and did not move the
+ * population by one — 152/325/173/154 before and after.
+ *
+ * The ACRPULL case is the sharper half, and it is why the residue count could
+ * not have surfaced this. `unharvested` only records a GUID that is canonical
+ * or a near-miss to one, so a binding whose value is NEITHER — which is what
+ * most wrong GUIDs look like — appears in NO section of `--list`: not judged,
+ * not unjudged, not residue. The honesty contract "counted so the gap is
+ * visible" holds only for shapes some matcher CLAIMS. Widening the matcher is
+ * the fix; widening the residue would only relabel the blind spot.
  */
 const MAP_KEY_RE = new RegExp(
-  `^\\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z][A-Za-z0-9_.-]*))\\s*:\\s*['"](${GUID_SRC})['"]${OBJ_TAIL}`,
+  `^\\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z][A-Za-z0-9_.-]*))\\s*:\\s*['"]?(${GUID_SRC})['"]?${OBJ_TAIL}`,
 );
 /** S7 — an array member: a bare quoted GUID, optionally labelled by a comment. */
 const ARRAY_MEMBER_RE = new RegExp(
@@ -1271,6 +1321,28 @@ export const REPO_SHAPES = [
       "            '2b629674-e913-4c01-ae53-ef4638d8f975', // Event Hubs Data Sender",
     ],
     expect: { pairs: 3, resolved: 3 },
+  },
+  {
+    id: 'S6 name-keyed map, UNQUOTED YAML value — gov-provision-streaming-migrate.yml (a live GOV grant)',
+    // The shape the quoted-value matcher could not read at all. `env:` keys in
+    // a workflow are a YAML mapping and YAML does not quote a scalar, so a
+    // matcher validated only against TS/JSON reads as complete and is blind
+    // here. BLOB_CONTRIB_ROLE is consumed at :331 by a real
+    // `az role assignment create --role "$BLOB_CONTRIB_ROLE"`.
+    //
+    // ACRPULL_ROLE is anchored beside it deliberately even though AcrPull is
+    // NOT in CANONICAL: `pairs: 2, resolved: 1` pins that this file yields two
+    // harvested bindings of which exactly one is judged. Had only the resolved
+    // one been anchored, the same regression would still hide the AcrPull
+    // binding in the unreadable residue rather than the honest unjudged list.
+    file: '.github/workflows/gov-provision-streaming-migrate.yml',
+    excerpt: [
+      '  # AcrPull — cloud-invariant built-in role id.',
+      '  ACRPULL_ROLE: 7f951dda-4ed3-4680-a7ca-43fe172d538d',
+      '  # Storage Blob Data Contributor — cloud-invariant built-in role id.',
+      '  BLOB_CONTRIB_ROLE: ba92f5b4-2d11-453d-a403-e96b0029c9fe',
+    ],
+    expect: { pairs: 2, resolved: 1 },
   },
   {
     id: 'S8 inline role-definition id — adx-cluster.bicep',

@@ -270,6 +270,53 @@ test('an EVEN run of trailing backslashes does not splice the next line', () => 
   assert.equal(checks(r, 'C1').length, 1);
 });
 
+// ── S6 with an UNQUOTED value: the YAML half of the name-keyed map ──────────
+
+test('an UNQUOTED YAML map value is read — the live Gov `env:` grant shape', () => {
+  // TypeScript and JSON always quote a string, so a matcher validated only
+  // against those reads as complete and is blind to YAML, where a scalar is
+  // bare. gov-provision-streaming-migrate.yml:96 writes exactly this and
+  // :331 spends it on `az role assignment create --role "$BLOB_CONTRIB_ROLE"`.
+  // MEASURED with quotes required: planting a wrong id here returned EXIT=0
+  // and did not move the population by one.
+  const r = run([
+    '  # Storage Blob Data Contributor — cloud-invariant built-in role id.',
+    `  BLOB_CONTRIB_ROLE: ${READER}`,
+  ].join('\n'), 'gov.yml');
+  assert.equal(r.resolved, 1);
+  assert.equal(checks(r, 'C1').length, 1);
+  assert.match(checks(r, 'C1')[0].detail, /does not grant "Storage Blob Data Contributor"/);
+});
+
+test('the same unquoted YAML binding with the RIGHT id produces nothing', () => {
+  const r = run(`  BLOB_CONTRIB_ROLE: ${BLOB_CONTRIB}`, 'gov.yml');
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.resolved, 1);
+});
+
+test('a quoted YAML value still reads — widening the matcher did not narrow it', () => {
+  const r = run(`  Contributor: '${READER}'`, 'gov.yml');
+  assert.equal(r.resolved, 1);
+  assert.equal(checks(r, 'C1').length, 1);
+});
+
+test('an unquoted binding whose GUID is neither canonical NOR near-canonical is still SEEN', () => {
+  // The sharper half, and the one the residue count could not have surfaced.
+  // `unharvested` only records a GUID that is canonical or a near-miss, so a
+  // binding to a foreign id — what most wrong GUIDs look like — appeared in NO
+  // section of `--list`: not judged, not unjudged, not residue. AcrPull is not
+  // in CANONICAL, so this must NOT become a finding; it must become an honest
+  // unjudged entry, which is the difference between a disclosed gap and an
+  // invisible one.
+  const { pairs, unparsed } = harvest('  ACRPULL_ROLE: 7f951dda-4ed3-4680-a7ca-000000000000', 'gov.yml');
+  assert.deepEqual(unparsed, []);
+  assert.equal(pairs.length, 1, 'the binding must be harvested even though its role is unknown');
+  const { findings, resolved, unresolved } = evaluate(pairs);
+  assert.deepEqual(findings, [], 'AcrPull is not in the table, so nothing may be asserted about it');
+  assert.equal(resolved, 0);
+  assert.equal(unresolved.length, 1, 'and it must appear in the honest not-judged list');
+});
+
 // ── R7: C1 must not assert an outcome it has not established ────────────────
 
 test('C1 says ARM ACCEPTS the grant when the bound id is another KNOWN role', () => {
@@ -590,6 +637,10 @@ test('REPO_SHAPES covers the live grant paths the rework review reintroduced the
     'apps/fiab-console/lib/azure/adls-client.ts',        // BLOB_DATA_ROLES -> grant value + allow-list
     '.github/workflows/gov-workspace-identity.yml',      // the GOV lane, pinned nowhere before this
     'apps/fiab-console/lib/setup/lz-rbac.ts',            // #3608 itself
+    // The second GOV lane, and the shape a TS/JSON-only matcher cannot see:
+    // YAML does not quote a scalar, so `KEY: <guid>` in a workflow `env:` block
+    // read as absent. Consumed at :331 by a real role assignment.
+    '.github/workflows/gov-provision-streaming-migrate.yml',
   ]) {
     assert.ok(files.includes(need), `no repo-anchored shape sample for ${need}`);
   }
