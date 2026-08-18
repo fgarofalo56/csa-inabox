@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.98.11](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.10...csa-inabox-v0.98.11) (2026-08-18)
+
+
+### Bug Fixes
+
+* **bicep:** stop the ACR module erasing the loomAcrFw* firewall-lease tags on every apply ([#3681](https://github.com/fgarofalo56/csa-inabox/issues/3681)) ([#3691](https://github.com/fgarofalo56/csa-inabox/issues/3691)) ([d580439](https://github.com/fgarofalo56/csa-inabox/commit/d580439910377151c1330700f4fcf3862db23376))
+* **deploy:** the nightly reconcile ran with an EMPTY region and DELETED the lake env vars while reporting success ([#3701](https://github.com/fgarofalo56/csa-inabox/issues/3701)) ([#3703](https://github.com/fgarofalo56/csa-inabox/issues/3703)) ([f1bae5a](https://github.com/fgarofalo56/csa-inabox/commit/f1bae5a0a921b3b75425f76275d1562e60026d85))
+* **deploy:** the scheduled deploy silently REVERTED a rolled security fix and ERASED the ACR lease under five image builds ([#3676](https://github.com/fgarofalo56/csa-inabox/issues/3676)) ([#3680](https://github.com/fgarofalo56/csa-inabox/issues/3680)) ([085b6e1](https://github.com/fgarofalo56/csa-inabox/commit/085b6e1b7aa4a78c992f6d74a0e88e4a3ab4ae0c))
+
 ## [0.98.10](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.9...csa-inabox-v0.98.10) (2026-08-17)
 
 

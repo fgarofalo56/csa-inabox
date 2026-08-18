@@ -51,6 +51,17 @@
  *   S6  The MSAL client-id resolution precedes the compose step and is not
  *       gated on the trigger, so both commands compile the paramfile with the
  *       same environment.
+ *   S8  No step TRUSTS the raw `region` input: a step reading `inputs.region`
+ *       must also hold the MEASURED region — it must run reconcile-resolve.mjs,
+ *       or carry `steps.reconcile.outputs.region`, or compare the input against
+ *       `$AZURE_LOCATION` on one line. A bare MENTION of `$AZURE_LOCATION` does
+ *       NOT exempt it: thirteen steps interpolate it to build a resource-group
+ *       name, and treating that as evidence of reconciliation would have let the
+ *       defect back in unseen. The input is
+ *       EMPTY on a `schedule` event, so a step that trusts it runs with no
+ *       region every night — which is #3701: the DLZ adopt step did, discovered
+ *       nothing, and the deploy silently REMOVED the seven lake LOOM_* env vars
+ *       from the running console while reporting success.
  *
  * FAILING CLOSED. Every discovery has a floor: if the parser stops finding the
  * workflow, the inputs block, or the steps, that is an ERROR. A guard that
@@ -78,6 +89,53 @@ export const GATE_SCRIPT = 'scripts/ci/deploy-input-safety.mjs';
 export const COMPOSE_MARKER = 'deploy_args_file=';
 /** How both commands must consume it. */
 export const CONSUME_MARKER = '"${DEPLOY_ARGS[@]}"';
+/**
+ * S8. Reading the raw `region` input is only safe when the step ALSO holds the
+ * MEASURED region, because then it is reconciling the two rather than trusting
+ * the input. Two steps legitimately do:
+ *
+ *   - `Resolve reconcile target` RUNS reconcile-resolve.mjs, which turns an
+ *     absent region into a measured one (or refuses). It produces the answer.
+ *   - `Deploy input safety gate` passes `steps.reconcile.outputs.region`
+ *     alongside it and REFUSES when a supplied region contradicts the resolved
+ *     one (#3029). It consumes the answer.
+ *
+ * The DLZ adopt step held neither: it took `inputs.region` as the truth, and on
+ * a schedule that truth was the empty string (#3701).
+ */
+export const REGION_RECONCILIATION_MARKERS = [
+  'scripts/ci/reconcile-resolve.mjs',
+  'steps.reconcile.outputs.region',
+];
+
+/**
+ * The MEASURED region, as `Resolve reconcile target` writes it to $GITHUB_ENV.
+ *
+ * This is deliberately NOT in the list above. Thirteen steps interpolate
+ * `${AZURE_LOCATION}` to build a resource-group name; as a bare substring
+ * marker it exempted any step that merely MENTIONED it. A step could therefore
+ * carry `REGION: ${{ inputs.region }}` in its `env:`, consume `$REGION`, and be
+ * waved through because an unrelated line said `RG="rg-…-${AZURE_LOCATION}"` —
+ * i.e. the exact #3701 shape, still invisible. Using the measured region for
+ * something ELSE does not license trusting the input.
+ *
+ * It exempts only when PAIRED: some wiring line must name both AZURE_LOCATION
+ * and the variable the raw input was bound to, which is what an actual
+ * reconciliation looks like (`[ "$INPUT_REGION" != "$AZURE_LOCATION" ]`).
+ * No step in the workflow takes that branch today, so its control is embedded
+ * in the tests rather than in the live population.
+ */
+export const REGION_MEASUREMENT_VAR = 'AZURE_LOCATION';
+
+/**
+ * `INPUT_REGION: ${{ inputs.region }}` — an `env:` entry binding the RAW input.
+ * Optional quoting and a trailing YAML comment are tolerated so that ordinary
+ * reformatting does not trip the extraction floor below; anything MORE than a
+ * bare binding (`${{ inputs.region || '' }}`, a nested expression) deliberately
+ * does not match, because it is no longer a shape this guard has reasoned about.
+ */
+export const ENV_BINDS_REGION_INPUT =
+  /^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(['"]?)\$\{\{\s*inputs\.region\s*\}\}\2\s*(?:#.*)?$/;
 
 /**
  * The raw text of a `workflow_dispatch` input's block.
@@ -352,6 +410,163 @@ export function checkSteps(yaml) {
           'what-if previewed, and the sha256 assertion cannot see it (#3022, #3067).',
         );
       }
+    }
+  }
+
+  // ---- S8 no step may read `inputs.region` except the one that MEASURES it --
+  //
+  // THE DEFECT THIS EXISTS FOR (#3701). `inputs.region` is EMPTY on a `schedule`
+  // event — there are no inputs — which is the same trap #2775 documents for
+  // `allow_existing_hub`. S3 above already forbids a FALLBACK region in the job
+  // `env:`, but nothing watched a STEP that reaches for `inputs.region` directly.
+  //
+  // The `Adopt the DLZ` step did exactly that: `REGION: ${ inputs.region }` in
+  // its `env:`. Every nightly therefore ran resolve-dlz-coordinates.mjs with
+  // `--region ""`, which exits USAGE(2), and the step's `|| echo` rendered that
+  // as "found no unambiguous DLZ". The adopt plan came out `{}`,
+  // `loomStorageAccount` composed to '', and because the lake env block in
+  // modules/admin-plane/main.bicep is `!empty(loomStorageAccount) ? [ … ] : []`,
+  // the deploy REMOVED seven LOOM_* variables from the running console and
+  // reported success. Measured: runs 31870181337 / 31932209496 / 32004118361 all
+  // green with `adopting: (none)`, against 31898068403 (a dispatch, same code)
+  // which adopted `databricks,eventhubs,storage-adls,synapse`.
+  //
+  // Two sibling steps had already learned this — the MSAL resolve and the
+  // internal-token adopt both read `$AZURE_LOCATION` from the SHELL, with a
+  // comment saying why. The adopt step was added later and did not adopt the
+  // pattern: the guard-adoption gap, again.
+  //
+  // THE ONE THING THAT MAKES SUCH A READ SAFE is holding the MEASURED region
+  // too — then the step is RECONCILING the input rather than trusting it. Two
+  // steps legitimately do (see REGION_RECONCILIATION_MARKERS): the reconcile
+  // step produces the measurement, and the input-safety gate refuses when a
+  // supplied region contradicts it (#3029). The adopt step held neither.
+  //
+  // Comment lines are stripped first: the fix's own explanation names
+  // `inputs.region`, and a step's body absorbs the comment block introducing the
+  // NEXT step, so a prose mention would otherwise be indistinguishable from a use.
+  {
+    const readers = steps.filter((s) => /\binputs\.region\b/.test(code(s)));
+    // The markers are hunted with `echo`/`printf` lines ALSO removed, on S7's
+    // reasoning: an echo produces output and assigns nothing. Several steps name
+    // AZURE_LOCATION inside an ::error:: string — including this fix's own
+    // refusal message — and a step that merely PRINTS the measured region has
+    // not consumed it. Without this, adding one diagnostic would silently exempt
+    // a step from S8.
+    const live = (s) => s.body.filter((l) => !/^\s*#/.test(l));
+    const wiringLines = (s) => live(s).filter((l) => !/^\s*(echo|printf)\s/.test(l));
+    const wiring = (s) => wiringLines(s).join('\n');
+    /** The `env:` variable names this step binds the RAW input to. */
+    const boundVars = (s) => live(s).map((l) => ENV_BINDS_REGION_INPUT.exec(l)?.[1]).filter(Boolean);
+    /**
+     * Safe iff the step PRODUCES or CONSUMES the measurement — or pairs the
+     * measured region with the variable carrying the raw input on one line,
+     * which is what a real reconciliation looks like. A bare mention of
+     * AZURE_LOCATION elsewhere in the step does NOT count; that leniency is
+     * what would have let the #3701 shape back in behind an unrelated
+     * `rg-…-${AZURE_LOCATION}` interpolation.
+     *
+     * TWO WAYS THE PAIRING TEST WAS ITSELF DEFEATED (measured, PR #3703 review):
+     *
+     *  1. `l.includes(v)` is a SUBSTRING test, and `AZURE_LOCATION` contains
+     *     `LOCATION`. So `LOCATION: ${{ inputs.region }}` was exempted by ANY of
+     *     the thirteen ordinary `rg-…-${AZURE_LOCATION}` lines. Short names were
+     *     worse still — `R` and `A` matched almost any line.
+     *  2. The `env:` binding line itself contains both tokens when the bound
+     *     name IS `AZURE_LOCATION`, so `AZURE_LOCATION: ${{ inputs.region }}`
+     *     self-satisfied the exemption with no other line present at all — and
+     *     that is the WORST case, because a step-level `env:` entry overrides
+     *     the measured `$GITHUB_ENV` value for that step. #3701 exactly, guard
+     *     silent.
+     *
+     * So: the binding lines are excluded from the candidate set, and the bound
+     * name must appear as a real shell REFERENCE (`$VAR` / `${VAR}`), not as a
+     * substring of some longer identifier.
+     *
+     * THIRD ROUND — co-occurrence is not reconciliation. Requiring both tokens
+     * on one line still exempted a step that merely USED both:
+     *
+     *     DIAG="${AZURE_LOCATION}/${REGION}"          <- 0 violations, and the
+     *     node …/resolve-dlz-coordinates.mjs --region "$REGION"    step still
+     *                                                 trusts the empty input
+     *
+     * and with two bindings, reconciling EITHER exempted the step for BOTH.
+     * A reconciliation is a COMPARISON, so the line must carry a comparison
+     * token, and EVERY bound variable must have one of its own.
+     */
+    const COMPARISON = /(\[\[|\[ |\btest\b|!=|==|-ne\b|-eq\b)/;
+    const reconciles = (s) => {
+      if (REGION_RECONCILIATION_MARKERS.some((m) => wiring(s).includes(m))) return true;
+      const vars = boundVars(s);
+      if (vars.length === 0) return false;
+      const candidates = wiringLines(s).filter(
+        (l) => !ENV_BINDS_REGION_INPUT.test(l)
+          && l.includes(REGION_MEASUREMENT_VAR)
+          && COMPARISON.test(l),
+      );
+      // EVERY bound variable, not just one: a step binding two names and
+      // comparing one of them still trusts the other.
+      return vars.every((v) => {
+        const ref = new RegExp(`\\$\\{?${v}\\b`);
+        return candidates.some((l) => ref.test(l));
+      });
+    };
+    if (readers.length === 0) {
+      problems.push(
+        'DISCOVERY FLOOR: no step reads `inputs.region` at all. The region is this workflow\'s ' +
+        'target-selection input, so finding zero readers means the parser stopped matching and every ' +
+        'S8 check below would pass by seeing nothing.',
+      );
+    }
+    if (!readers.some((s) => wiring(s).includes(REGION_RECONCILIATION_MARKERS[0]))) {
+      problems.push(
+        `DISCOVERY FLOOR: no step both reads \`inputs.region\` and runs ${REGION_RECONCILIATION_MARKERS[0]}. ` +
+        'One step must — it is what turns an absent region into a measured one, or refuses.',
+      );
+    }
+    // The `env:`-binding regex is the other thing that can silently stop
+    // matching: if it did, `boundVars` would be empty everywhere, the pairing
+    // branch would be unreachable, and S8 would quietly narrow to the strong
+    // markers alone. Both legitimate readers bind `INPUT_REGION`, so a zero here
+    // means the extraction broke, not that the workflow changed shape.
+    if (readers.length > 0 && !readers.some((s) => boundVars(s).length > 0)) {
+      problems.push(
+        'DISCOVERY FLOOR: `inputs.region` is read by ' + readers.length + ' step(s) but ENV_BINDS_REGION_INPUT ' +
+        'extracted ZERO bound variable names. The extraction stopped matching, so the pairing exemption ' +
+        'below can no longer be reached and S8 is measuring less than it reports.',
+      );
+    }
+    for (const s of readers) {
+      // SHADOWING THE MEASUREMENT is unconditionally unsafe, and no amount of
+      // pairing can redeem it. `AZURE_LOCATION: ${{ inputs.region }}` in a step
+      // `env:` OVERRIDES the value `Resolve reconcile target` wrote to
+      // $GITHUB_ENV — for that step only — so every ordinary
+      // `rg-…-${AZURE_LOCATION}` in the body silently becomes the EMPTY input
+      // on a schedule. It also defeats the pairing test by construction: the
+      // bound name and the measurement token are then the same string, so any
+      // interpolation of the measured region reads as a reference to the bound
+      // variable. Caught by name, before pairing is consulted.
+      if (boundVars(s).includes(REGION_MEASUREMENT_VAR)) {
+        problems.push(
+          `step "${s.name}" (line ${s.startLine}) binds \`inputs.region\` to \`${REGION_MEASUREMENT_VAR}\` in its ` +
+          '`env:`, which SHADOWS the measured region for the whole step. A step-level `env:` entry overrides ' +
+          'what `Resolve reconcile target` wrote to $GITHUB_ENV, so every `${' + REGION_MEASUREMENT_VAR + '}` in ' +
+          'the body silently becomes the raw input — the empty string on a `schedule` event. Never bind the ' +
+          'input to the measurement variable\'s own name; read `$' + REGION_MEASUREMENT_VAR + '` from the shell ' +
+          'instead (#3701).',
+        );
+        continue;
+      }
+      if (reconciles(s)) continue;
+      problems.push(
+        `step "${s.name}" (line ${s.startLine}) reads \`inputs.region\` without holding the MEASURED ` +
+        'region, so it TRUSTS the input. That input is EMPTY on a `schedule` event, meaning the nightly ' +
+        'reconcile runs this step with no region at all. Consume the measured `$AZURE_LOCATION` from the ' +
+        'shell (as the MSAL and internal-token steps do), or pass `steps.reconcile.outputs.region` ' +
+        'alongside it and reconcile the two. This is #3701: the DLZ adopt step trusted it, discovered ' +
+        'nothing, and the deploy silently DELETED the seven lake LOOM_* env vars from the running ' +
+        'console while reporting success.',
+      );
     }
   }
 
