@@ -1104,7 +1104,51 @@ var directLakeSvcActive = directLakeSvcEnabled && containerPlatform == 'containe
 // (or the weaveOntologyEnabled=false root param, which maps to the same key).
 var weaveOntologyBackendEnabled = (loomBackends.?weaveOntology ?? 'enabled') != 'disabled'
 var weavePgSuppliedByDlz = !empty(loomWeavePgFqdn)
-var weavePgLocalActive = weaveOntologyBackendEnabled && !weavePgSuppliedByDlz
+// THE QUOTA GATE THIS SERVER WAS MISSING (#3754). Every OTHER consumer of
+// Microsoft.DBforPostgreSQL/flexibleServers in this file rides
+// `postgresQuotaAvailable`: the Airflow metadata DB through
+// `airflowPostgresAllowed`, and the DuckLake catalog + LU-1 Loom Unity stores
+// through `postgresStoresAllowed` below. When #3371 made the Weave server
+// topology-independent it (correctly) closed the Commercial gap and (incorrectly)
+// shipped the ONLY ungated PG flexible server in the template — the N+1 sibling.
+//
+// MEASURED, not inferred. `params/gcc-high.bicepparam` and `params/il5.bicepparam`
+// both default `postgresQuotaAvailable=false`, and
+// docs/fiab/gov-replacements/gov-89-92-gap-and-operator-runbook.md §B1 records
+// why: "usgovvirginia is quota-restricted from
+// Microsoft.DBforPostgreSQL/flexibleServers" — naming `svc-weave-ontology` as one
+// of the four gates that a quota grant unblocks. So on GCC-High the admin plane
+// asked a quota-restricted boundary for a flexible server on every run, and ARM
+// answered (deploy-fiab-gcch run 32126019475, ARM leaf on
+// 'psql-loom-weave-default-dcmt6cqoezlgs'):
+//
+//   ParameterOutOfRange: The value of the 'Version' should be in: [].
+//
+// An EMPTY allowed-versions set is the RP reporting that the boundary offers no
+// flexible-server version at all, not that '16' is the wrong number — there is no
+// version that satisfies an empty set, so this can never be fixed by changing
+// `postgresVersion`.
+//
+// WHY THIS IS THE WHOLE DEPLOY'S PROBLEM, not one capability's. The failure is an
+// ARM leaf inside `az deployment sub create`, so it fails the ENTIRE subscription
+// deployment — every unrelated bicep change merged since is inert in GCC-High
+// because of this one server (deploy-integrity.md R1/R3).
+//
+// CLOUD PARITY (.claude/rules/cloud-parity.md): this is NOT a Gov-only divergence
+// and it removes no capability from any boundary. Commercial/GCC default
+// `postgresQuotaAvailable=true`, so `postgresStoresAllowed` is true and this var is
+// unchanged there. It rides the SAME `postgresStores` lever the two sibling PG
+// stores already use — an operator with confirmed Gov quota sets
+// `observabilityConfig.backendOverrides = { postgresStores: 'enabled' }` (or
+// LOOM_POSTGRES_QUOTA_AVAILABLE=true) and gets the Weave server in Gov too, which
+// is exactly what unity-gov.md and the Gov runbook already document as the path.
+// The quota grant itself is a support request only the subscription owner can
+// make, so it is the narrow "genuinely cannot be performed by the platform" case
+// auto-bind-by-default.md allows — and when it trips the Ontology surfaces
+// honest-gate on LOOM_WEAVE_PG_FQDN exactly as they do today (all three consumers
+// below already fall back to `loomWeavePgFqdn`), rather than taking the boundary's
+// whole deploy down with them.
+var weavePgLocalActive = weaveOntologyBackendEnabled && !weavePgSuppliedByDlz && postgresStoresAllowed
 
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
@@ -1358,6 +1402,9 @@ var risingwaveRootPasswordSecretUri = '${keyvault.outputs.keyVaultUri}secrets/${
 
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers ("Subscriptions are restricted from provisioning in location ..."). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate.')
 param postgresQuotaAvailable bool = true
+
+@description('Static private IP the DNS Private Resolver INBOUND endpoint holds (network.bicep); empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so a literal that matches one estate fails every other one. It has already broken Commercial as Static (#2775) and GCC-High as Dynamic (#3754). The deploy lane DISCOVERS the live value with scripts/ci/resolve-dns-inbound-allocation.mjs and passes it here; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam.')
+param dnsResolverInboundStaticIp string = ''
 
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
 param loomVersion string = '0.45.0'
@@ -2648,6 +2695,11 @@ module network 'network.bicep' = {
     // firewalls"). Reuse that signal so the network module references the EXISTING
     // policy instead of re-PUTing it — no extra top-level param needed.
     firewallPolicyReconcile: skipRoleGrants
+    // #3754 — IMMUTABLE, so it is DISCOVERED by the lane and passed through here
+    // rather than decided by a literal that can only ever be right on one estate.
+    // See the block on the resource in network.bicep for the two deploys this
+    // literal has already broken, one per direction.
+    dnsResolverInboundStaticIp: dnsResolverInboundStaticIp
   }
 }
 

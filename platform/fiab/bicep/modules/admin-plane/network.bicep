@@ -47,6 +47,25 @@ sidestepping the faulted-firewall race. Wired from the admin-plane skipRoleGrant
 false.''')
 param firewallPolicyReconcile bool = false
 
+@description('''Private IP the DNS Private Resolver INBOUND endpoint holds, when it
+holds a STATIC one. Empty (the default) means dynamic allocation.
+
+BOTH halves of this are IMMUTABLE on the live resource: ARM rejects any deployment
+naming an allocation method — or a static address — differing from what the
+endpoint was created with, and the rejection fails the WHOLE nested network
+template. There is therefore no literal that is correct on every estate, which is
+the defect this parameter removes (#3754).
+
+ONE PARAMETER, NOT TWO, and no derived value anywhere: a Static endpoint is fully
+described by its address, and a Dynamic one by the absence of it. The lane reads
+the live endpoint with scripts/ci/resolve-dns-inbound-allocation.mjs and passes
+what it found. A genuinely absent endpoint (greenfield) leaves this empty and the
+deploy CREATES a dynamically-allocated one — the behaviour every estate has had
+since #2881. An UNREADABLE control plane refuses rather than guessing
+(deploy-integrity.md R5.3/R7). Do not replace this with a per-boundary literal in
+a .bicepparam — that is the same bug in a different file.''')
+param dnsResolverInboundStaticIp string = ''
+
 
 // =====================================================================
 // Subnet calculations
@@ -768,34 +787,53 @@ resource dnsResolverInbound 'Microsoft.Network/dnsResolvers/inboundEndpoints@202
   location: location
   properties: {
     ipConfigurations: [
-      {
-        // Dynamic, NOT Static (refs #2775). The allocation method of a DNS
-        // private resolver inbound endpoint is IMMUTABLE, and the live endpoint
-        // was created Dynamic. Declaring Static made every subsequent deploy
-        // fail PREFLIGHT — not at apply time, at validation — with:
-        //
-        //   Microsoft.Network/dnsResolvers (2022-07-01) reported preflight
-        //   validation errors ... IP allocation method cannot be changed after
-        //   creation. ipAllocationMethod=Static, existingIpAllocationMethod=Dynamic
-        //
-        // That aborted the whole nested `network` template, and with it the
-        // 2026-07-23 admin-plane deployment (the last time this template was
-        // applied). It is a preflight error, so it would equally have failed the
-        // `az deployment sub what-if` step that runs on every trigger.
-        //
-        // Nothing is lost by matching the live state. snet-dns-inbound is a
-        // DEDICATED /28 delegated to Microsoft.Network/dnsResolvers whose only
-        // occupant is this endpoint, and Azure reserves x.x.x.0-3, so dynamic
-        // allocation lands on `${prefix}.9.4` — the address the Static block
-        // asked for, and the address the live endpoint actually holds.
-        //
-        // Switching back to Static is NOT a code change: it needs the inbound
-        // endpoint deleted and recreated, which drops VPN DNS resolution for the
-        // hub while it is gone. That is an operator decision with an outage
-        // window, for no functional gain.
-        privateIpAllocationMethod: 'Dynamic'
-        subnet: { id: '${hubVnet.id}/subnets/snet-dns-inbound' }
-      }
+      // THE ALLOCATION METHOD IS SUPPLIED, NOT DECIDED HERE (#3754).
+      //
+      // HISTORY, because this literal has now broken a deploy in BOTH directions
+      // and the second break was caused by the fix for the first:
+      //
+      //   * Originally `Static` + `${prefix}.9.4`. The live COMMERCIAL endpoint
+      //     had been created Dynamic, so every Commercial deploy failed:
+      //       ... IP allocation method cannot be changed after creation.
+      //           ipAllocationMethod=Static, existingIpAllocationMethod=Dynamic
+      //     That aborted the whole nested `network` template and with it the
+      //     2026-07-23 admin-plane deployment (refs #2775).
+      //   * #2881 (2026-08-03) therefore hard-coded `Dynamic` to match Commercial.
+      //     The live GCC-High endpoint had been created by the EARLIER template,
+      //     so it holds Static — and the exact mirror image has failed every
+      //     GCC-High deploy since (deploy-fiab-gcch run 32126019475, ARM leaf on
+      //     `admin-plane`):
+      //       ... IP allocation method cannot be changed after creation.
+      //           .../dnsResolvers/dnspr-loom-usgovvirginia/inboundEndpoints/inbound,
+      //           ipAllocationMethod=Dynamic, existingIpAllocationMethod=Static
+      //
+      // Both literals were correct for the estate they were measured against and
+      // wrong for the other. A per-boundary literal in each .bicepparam would only
+      // move the guess; the property is immutable, so the ONLY correct source is
+      // the live resource. The lane discovers it and passes it in — greenfield
+      // (no endpoint) leaves it empty and gets Dynamic, an unreadable control
+      // plane refuses. See scripts/ci/resolve-dns-inbound-allocation.mjs.
+      //
+      // THE ADDRESS IS MEASURED, NOT DERIVED. An earlier revision of this fix
+      // emitted `${prefix}.9.4` on the Static branch, reasoning that the /28
+      // snet-dns-inbound has this endpoint as its only occupant and that Azure
+      // reserves x.x.x.0-3, so the first assignable address is the one the
+      // original Static template asked for and the one a Dynamic allocation
+      // lands on. That reasoning is sound and it is still only an INFERENCE —
+      // and `privateIpAddress` is immutable too, so being wrong would have
+      // swapped this failure for the identical one about a different field.
+      // Passing the address the live endpoint actually reports removes the last
+      // guess from the resource.
+      empty(dnsResolverInboundStaticIp)
+        ? {
+            privateIpAllocationMethod: 'Dynamic'
+            subnet: { id: '${hubVnet.id}/subnets/snet-dns-inbound' }
+          }
+        : {
+            privateIpAllocationMethod: 'Static'
+            privateIpAddress: dnsResolverInboundStaticIp
+            subnet: { id: '${hubVnet.id}/subnets/snet-dns-inbound' }
+          }
     ]
   }
 }

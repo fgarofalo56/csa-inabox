@@ -1099,6 +1099,9 @@ param appImageTags object = {
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov.')
 param postgresQuotaAvailable bool = true
 
+@description('Static private IP the DNS Private Resolver INBOUND endpoint holds; empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so no literal is correct on every estate: a Static literal broke Commercial (#2775) and the Dynamic literal that replaced it has broken every GCC-High deploy since (#3754). The deploy lane DISCOVERS the live value (scripts/ci/resolve-dns-inbound-allocation.mjs) and passes it on the command line; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam — that only moves the guess.')
+param dnsResolverInboundStaticIp string = ''
+
 // =====================================================================
 // Resource group for Admin Plane
 // =====================================================================
@@ -1528,6 +1531,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomVersion: loomVersion
     appImageTags: appImageTags
     postgresQuotaAvailable: postgresQuotaAvailable
+    // #3754 — discovered by the lane, never assumed. See the param declaration.
+    dnsResolverInboundStaticIp: dnsResolverInboundStaticIp
     // Standalone AML workspace coords for the AML control-plane navigator.
     loomAmlWorkspace: loomAmlWorkspace
     loomAmlResourceGroup: loomAmlResourceGroup

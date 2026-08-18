@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "16676674359305821188"
+      "templateHash": "14067950312013746897"
     }
   },
   "definitions": {
@@ -1989,6 +1989,13 @@
       "metadata": {
         "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov."
       }
+    },
+    "dnsResolverInboundStaticIp": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Static private IP the DNS Private Resolver INBOUND endpoint holds; empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so no literal is correct on every estate: a Static literal broke Commercial (#2775) and the Dynamic literal that replaced it has broken every GCC-High deploy since (#3754). The deploy lane DISCOVERS the live value (scripts/ci/resolve-dns-inbound-allocation.mjs) and passes it on the command line; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam — that only moves the guess."
+      }
     }
   },
   "variables": {
@@ -2494,6 +2501,9 @@
           "postgresQuotaAvailable": {
             "value": "[parameters('postgresQuotaAvailable')]"
           },
+          "dnsResolverInboundStaticIp": {
+            "value": "[parameters('dnsResolverInboundStaticIp')]"
+          },
           "loomAmlWorkspace": {
             "value": "[parameters('loomAmlWorkspace')]"
           },
@@ -2554,7 +2564,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9951262348038123898"
+              "templateHash": "11533051796949261616"
             }
           },
           "definitions": {
@@ -3658,6 +3668,13 @@
               "defaultValue": true,
               "metadata": {
                 "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers (\"Subscriptions are restricted from provisioning in location ...\"). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate."
+              }
+            },
+            "dnsResolverInboundStaticIp": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Static private IP the DNS Private Resolver INBOUND endpoint holds (network.bicep); empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so a literal that matches one estate fails every other one. It has already broken Commercial as Static (#2775) and GCC-High as Dynamic (#3754). The deploy lane DISCOVERS the live value with scripts/ci/resolve-dns-inbound-allocation.mjs and passes it here; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam."
               }
             },
             "loomVersion": {
@@ -5061,7 +5078,7 @@
             "directLakeSvcActive": "[and(and(variables('directLakeSvcEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "weaveOntologyBackendEnabled": "[not(equals(coalesce(tryGet(parameters('loomBackends'), 'weaveOntology'), 'enabled'), 'disabled'))]",
             "weavePgSuppliedByDlz": "[not(empty(parameters('loomWeavePgFqdn')))]",
-            "weavePgLocalActive": "[and(variables('weaveOntologyBackendEnabled'), not(variables('weavePgSuppliedByDlz')))]",
+            "weavePgLocalActive": "[and(and(variables('weaveOntologyBackendEnabled'), not(variables('weavePgSuppliedByDlz'))), variables('postgresStoresAllowed'))]",
             "mapsTileServerEnabled": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
             "mapsTileServerActive": "[and(and(variables('mapsTileServerEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "airflowHostEnabled": true,
@@ -6429,6 +6446,9 @@
                   },
                   "firewallPolicyReconcile": {
                     "value": "[parameters('skipRoleGrants')]"
+                  },
+                  "dnsResolverInboundStaticIp": {
+                    "value": "[parameters('dnsResolverInboundStaticIp')]"
                   }
                 },
                 "template": {
@@ -6438,7 +6458,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "2278007435835095030"
+                      "templateHash": "795448562349216658"
                     }
                   },
                   "parameters": {
@@ -6515,6 +6535,13 @@
                       "defaultValue": false,
                       "metadata": {
                         "description": "Idempotent-reconcile guard for the hub firewall policy. On a re-PUT,\nARM pushes the firewall *policy* down to every firewall that references it; if the\nreferenced firewall is in any non-Succeeded provisioning state at that instant the\npolicy PUT aborts with `FirewallPolicyUpdateFailed: Put on Firewall Policy ... Failed\nwith 1 faulted referenced firewalls`. On a fresh deploy leave this false (the policy\nis created). On a reconcile/redeploy of an environment whose firewall + policy already\nexist UNCHANGED, set this true: the module then references the EXISTING policy instead\nof re-PUTing it, so the firewall keeps its reference but no policy push is triggered —\nsidestepping the faulted-firewall race. Wired from the admin-plane skipRoleGrants flag\n(the existing \"this is a reconcile pass\" signal). Has no effect when firewallEnabled is\nfalse."
+                      }
+                    },
+                    "dnsResolverInboundStaticIp": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Private IP the DNS Private Resolver INBOUND endpoint holds, when it\nholds a STATIC one. Empty (the default) means dynamic allocation.\n\nBOTH halves of this are IMMUTABLE on the live resource: ARM rejects any deployment\nnaming an allocation method — or a static address — differing from what the\nendpoint was created with, and the rejection fails the WHOLE nested network\ntemplate. There is therefore no literal that is correct on every estate, which is\nthe defect this parameter removes (#3754).\n\nONE PARAMETER, NOT TWO, and no derived value anywhere: a Static endpoint is fully\ndescribed by its address, and a Dynamic one by the absence of it. The lane reads\nthe live endpoint with scripts/ci/resolve-dns-inbound-allocation.mjs and passes\nwhat it found. A genuinely absent endpoint (greenfield) leaves this empty and the\ndeploy CREATES a dynamically-allocated one — the behaviour every estate has had\nsince #2881. An UNREADABLE control plane refuses rather than guessing\n(deploy-integrity.md R5.3/R7). Do not replace this with a per-boundary literal in\na .bicepparam — that is the same bug in a different file."
                       }
                     }
                   },
@@ -7025,12 +7052,7 @@
                       "location": "[parameters('location')]",
                       "properties": {
                         "ipConfigurations": [
-                          {
-                            "privateIpAllocationMethod": "Dynamic",
-                            "subnet": {
-                              "id": "[format('{0}/subnets/snet-dns-inbound', resourceId('Microsoft.Network/virtualNetworks', format('vnet-csa-loom-hub-{0}', parameters('location'))))]"
-                            }
-                          }
+                          "[if(empty(parameters('dnsResolverInboundStaticIp')), createObject('privateIpAllocationMethod', 'Dynamic', 'subnet', createObject('id', format('{0}/subnets/snet-dns-inbound', resourceId('Microsoft.Network/virtualNetworks', format('vnet-csa-loom-hub-{0}', parameters('location')))))), createObject('privateIpAllocationMethod', 'Static', 'privateIpAddress', parameters('dnsResolverInboundStaticIp'), 'subnet', createObject('id', format('{0}/subnets/snet-dns-inbound', resourceId('Microsoft.Network/virtualNetworks', format('vnet-csa-loom-hub-{0}', parameters('location')))))))]"
                         ]
                       },
                       "dependsOn": [
