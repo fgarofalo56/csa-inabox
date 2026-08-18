@@ -41,6 +41,16 @@ name: gov-console-roll
 # of ACR time. Decision logic + mutation proofs:
 # scripts/ci/gov-roll-staleness-gate.mjs, scripts/ci/__tests__/.
 #
+# BE CLEAR ABOUT WHICH PATH THAT GATE ACTUALLY PROTECTS. On `push` its only
+# non-zero verdicts — `behind` and `diverged` — are precisely the ones the
+# trigger makes unreachable (GitHub fires `push: branches: [main]` only for
+# commits on main), so every REACHABLE push verdict exits 0. The gate's teeth are
+# on the DISPATCH path, which is the path #3730 measured: the single
+# gov-console-roll run in seventeen days was a dispatch. What protects the
+# automatic lane is the `push: branches: [main]` filter itself, not this gate.
+# Stated explicitly so nobody later reads the gate as guarding the auto path and
+# relaxes the trigger on that assumption.
+#
 # ── WHAT THIS LANE DOES NOT DO ─────────────────────────────────────────────
 # It does not apply bicep. The Gov admin-plane template is deploy-fiab-gcch.yml's
 # job, and `deploy-gov.yml` is a DIFFERENT estate entirely (deploy/bicep/gov/ —
@@ -272,6 +282,7 @@ jobs:
         run: az cloud set --name AzureUSGovernment
 
       - name: Build + push console image on the Gov ACR
+        id: build
         run: |
           set -euo pipefail
           SHA=$(git rev-parse --short=8 HEAD)
@@ -524,7 +535,39 @@ jobs:
           echo "::warning::skip_supply_chain is set — SKIPPING the SC1 Trivy CRITICAL gate + cosign sign/verify. This roll ships an UNSCANNED, UNSIGNED image; a later commercial-style roll of this tag will be rejected by the verification gates."
 
       - name: Re-lock ACR (always)
-        if: always()
+        # `always()` IS NOT ENOUGH ONCE A GATE RUNS BEFORE THE AZURE LOGIN.
+        #
+        # The staleness gate (`id: staleness`) sits ahead of `Azure login` so a
+        # refusal costs seconds instead of a 20-minute build. That made this
+        # cleanup reachable on a path where NO `az` credential exists and NO
+        # lease was ever taken — and traced through acr-firewall-lease.sh the
+        # consequences are worse than a wasted step:
+        #
+        #   ACR_LEASE_STATE defaults to `none`; `_lease_acr_q` swallows stderr,
+        #   so an UNAUTHENTICATED `az acr show` returns empty; with no owner and
+        #   no live holder the state matches none of held / held-claim-only /
+        #   unleased, so it falls to the fail-closed branch, runs `az acr update`
+        #   unauthenticated, burns 6 retries x 20s, and exits 1 printing
+        #   "release FAILED on ACR 'acrloomdcmt6cqoezlgs' (no live lease holder).
+        #   The registry may be PUBLICLY REACHABLE".
+        #
+        # An operator dispatching from a stale ref during an incident would get a
+        # correct refusal followed by two minutes of red telling them a sovereign
+        # registry may be exposed — about a registry this run never opened. That
+        # is a false claim of exactly the "the tag does not exist" shape
+        # (deploy-integrity R7) that this PR exists to remove, fired precisely
+        # when someone is recovering.
+        #
+        # SO IT KEYS ON THE STEP THAT ACQUIRES THE LEASE, not on `always()` and
+        # not on the gate. `Build + push console image on the Gov ACR` is where
+        # `acr-firewall-lease.sh acquire` runs, so:
+        #   - it EXECUTED (success or failure) -> a lease may be held, release it.
+        #   - it was SKIPPED (gate refused, or the Azure login failed) -> nothing
+        #     was ever opened and there is nothing to release.
+        # Testing the two executed conclusions POSITIVELY rather than `!=
+        # 'skipped'` also covers a cancelled job, where an unrun step's
+        # conclusion is empty rather than 'skipped'.
+        if: always() && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure')
         run: |
           set -euo pipefail
           # #2603: re-locks only if this run still holds the firewall lease; if
@@ -589,6 +632,32 @@ jobs:
             echo "::notice::Rollback target = the image currently running: $ROLLBACK_IMAGE"
           fi
 
+          # THE REMEDIATION MUST BE PASTEABLE INTO THE INPUT IT NAMES.
+          #
+          # `lastgood` is consumed as a TAG above ("$ACR_LOGIN/loom-console:$LASTGOOD_IN"),
+          # so telling an operator `lastgood=<full ref>` yields
+          #   …/loom-console:acrloomdcmt6cqoezlgs.azurecr.us/loom-console:28de89fb
+          # which is not a valid reference and makes the rollback they were told
+          # to run fail. A remediation that cannot be followed is the same defect
+          # class as one that is untrue (deploy-integrity R6/R7).
+          #
+          # Digest-pinned refs are a REAL shape on Gov, not a hypothetical: a Gov
+          # apply can set `<acr>/<app>@sha256:…` (see
+          # scripts/ci/assert-no-silent-image-tag-revert.mjs). `${VAR##*:}` on one
+          # of those returns the hex digest, which is not a tag either — so that
+          # case is detected and gets different advice rather than a confident
+          # wrong answer.
+          case "$ROLLBACK_IMAGE" in
+            *@sha256:*)
+              LASTGOOD_HINT=""
+              ROLLBACK_ADVICE="the previous image is DIGEST-pinned ($ROLLBACK_IMAGE) and the lastgood input takes a TAG, so roll back directly with: az containerapp update -n $APP -g $RG --image '$ROLLBACK_IMAGE'"
+              ;;
+            *)
+              LASTGOOD_HINT="${ROLLBACK_IMAGE##*:}"
+              ROLLBACK_ADVICE="re-dispatch with lastgood=$LASTGOOD_HINT"
+              ;;
+          esac
+
           az containerapp update -n "$APP" -g "$RG" --image "$IMG" -o none
           NEWREV=$(az containerapp revision list -n "$APP" -g "$RG" \
             --query "[?properties.template.containers[0].image=='$IMG'].name | [0]" -o tsv | tr -d '\r')
@@ -623,8 +692,8 @@ jobs:
             sleep 30
           done
           if [ "$READS" -eq 0 ]; then
-            echo "::error::The health probe for revision $NEWREV NEVER returned an answer in 24 attempts (see the per-attempt stderr above), so this run established NOTHING about whether the new Gov revision is healthy — it is not 'unhealthy', it is unmeasured. The roll DID happen; investigate the Gov control-plane read (token, RBAC, throttling) before concluding anything about the image. Roll back deliberately with lastgood if the estate is degraded."
+            echo "::error::The health probe for revision $NEWREV NEVER returned an answer in 24 attempts (see the per-attempt stderr above), so this run established NOTHING about whether the new Gov revision is healthy — it is not 'unhealthy', it is unmeasured. The roll DID happen; investigate the Gov control-plane read (token, RBAC, throttling) before concluding anything about the image. If the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
             exit 1
           fi
-          echo "::error::Revision $NEWREV never reached Healthy within ~12 minutes (last state read: ${H:-<unread>}, successful probes: $READS/24). NOT rolling back automatically on a timeout — an inconclusive health read is not evidence the new revision is bad, and traffic stays on the previous revision until this one goes Healthy. Roll back deliberately with lastgood=$ROLLBACK_IMAGE if the estate is degraded."
+          echo "::error::Revision $NEWREV never reached Healthy within ~12 minutes (last state read: ${H:-<unread>}, successful probes: $READS/24). NOT rolling back automatically on a timeout — an inconclusive health read is not evidence the new revision is bad, and traffic stays on the previous revision until this one goes Healthy. If the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
           exit 1

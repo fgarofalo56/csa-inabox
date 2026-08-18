@@ -41,9 +41,10 @@ name: gov-build-images
 #
 # So the split is: gov-console-roll.yml carries the per-merge path for the image
 # users see, and this lane keeps the DEPLOY-REFERENCED `:v0.1` pointer and the
-# non-console images fresh nightly. 03:00 UTC is chosen to sit well clear of both
-# the merge day and deploy-fiab-gcch.yml's 10:00 UTC apply, so the tag that apply
-# adopts is at most a few hours old.
+# non-console images fresh nightly. 07:37 UTC is chosen from MEASURED merge
+# traffic — see the note on the `schedule:` trigger below — so this lane's
+# 45-60 minutes of held ACR firewall lease sit in the quietest window rather
+# than competing with merge-triggered rolls for the same registry.
 #
 # TAGS — THE THING THAT MUST MATCH
 #   Every Gov .bicepparam resolves image tags with
@@ -109,6 +110,25 @@ on:
   # NIGHTLY, so the deploy-referenced `:v0.1` pointer tracks main without a human
   # dispatch (#3730). See the header for why this is a schedule and not a `push`.
   #
+  # THE HOUR IS CHOSEN AGAINST MEASURED MERGE TRAFFIC, not by habit. This lane is
+  # a `max-parallel: 1` three-app matrix at 17-23 min each and every build takes
+  # the PER-REGISTRY ACR firewall lease — the same lease gov-console-roll needs on
+  # every console-touching merge. `acquire` waits `LOOM_ACR_LEASE_WAIT_MINUTES`
+  # (default 25) and then FAILS. Overlap therefore does not corrupt anything (the
+  # lease is a real mutex and the next console merge re-rolls), but it produces
+  # recurring red on a brand-new lane, which is how people learn to ignore a
+  # lane's failures.
+  #
+  # Measured over the last 30 days, console-touching commits by UTC hour: 03h is
+  # one of the BUSIEST (37 commits landed 03:00-04:59), while 07:00-09:00 is a
+  # trough at ~4 commits per hour. Hence 07:37 rather than the 03:00 this first
+  # carried. The off-minute is deliberate: GitHub schedules a great deal at :00
+  # and delays crons under load.
+  #
+  # It also lands well clear of deploy-fiab-gcch.yml's 10:00 UTC apply, so the
+  # `:v0.1` tag that apply may adopt is at most a couple of hours old, and the
+  # two are not competing for the registry.
+  #
   # EVERY `inputs.*` READ IN THIS FILE IS EMPTY ON THIS PATH. `inputs` exists on a
   # schedule event but carries nothing, and a `workflow_dispatch` `default:` does
   # NOT apply to other triggers — that exact trap froze deploy-fiab-commercial's
@@ -118,7 +138,7 @@ on:
   # SUCCESS having produced no image at all. Every consumer below therefore reads
   # the defaulted `env.*` values, and `resolve` asserts the matrix is non-empty.
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '37 7 * * *'
   workflow_dispatch:
     inputs:
       boundary:
