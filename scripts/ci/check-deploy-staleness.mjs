@@ -353,6 +353,16 @@ export const WATCHED = [
       // answers 504 while that connection is Pending, so a change here changes
       // whether the deployed estate is reachable at all.
       'scripts/csa-loom/approve-cae-private-endpoints.sh',
+      // #3714 — the ACR compliance tags moved OUT of the template and into this
+      // lane. They cannot be declared in bicep at all: `tags:` on the registry
+      // PUT-replaces the dictionary and erases the `loomAcrFw*` firewall-lease
+      // mutex mid-apply (#3676), and a declarative `Microsoft.Resources/tags`
+      // resource has to read its own id, which ARM rejects as a circular
+      // dependency (#3714). So this script is now the ONLY thing that tags the
+      // registry, and a commit touching it without a subsequent successful run
+      // leaves the estate's compliance tagging diverged from what the repo says
+      // it should be — exactly the drift this watchdog exists to catch.
+      'scripts/csa-loom/apply-acr-compliance-tags.sh',
       // refs #3230 — the ACR data-plane token exchange has its own propagation
       // window after the firewall opens, so this lane retries `az acr login`
       // through a shared helper. Editing it changes whether the lane can
@@ -448,6 +458,16 @@ export const WATCHED = [
       // is Pending, so this decides whether the deployed sovereign estate is
       // reachable at all.
       'scripts/csa-loom/approve-cae-private-endpoints.sh',
+      // #3714 — the ACR compliance tags moved OUT of the template and into this
+      // lane. They cannot be declared in bicep at all: `tags:` on the registry
+      // PUT-replaces the dictionary and erases the `loomAcrFw*` firewall-lease
+      // mutex mid-apply (#3676), and a declarative `Microsoft.Resources/tags`
+      // resource has to read its own id, which ARM rejects as a circular
+      // dependency (#3714). So this script is now the ONLY thing that tags the
+      // registry, and a commit touching it without a subsequent successful run
+      // leaves the estate's compliance tagging diverged from what the repo says
+      // it should be — exactly the drift this watchdog exists to catch.
+      'scripts/csa-loom/apply-acr-compliance-tags.sh',
       // #3056 / #2681 — the two adoption resolvers. If either starts returning
       // nothing, this apply re-mints the internal trust token (stranding every
       // holder) or blanks LOOM_MSAL_CLIENT_ID (taking sovereign sign-in dark),
@@ -473,6 +493,16 @@ export const WATCHED = [
       // hand-listed.
       'platform/fiab/azd/azure.yaml',
       'scripts/csa-loom/approve-cae-private-endpoints.sh',
+      // #3714 — the ACR compliance tags moved OUT of the template and into this
+      // lane. They cannot be declared in bicep at all: `tags:` on the registry
+      // PUT-replaces the dictionary and erases the `loomAcrFw*` firewall-lease
+      // mutex mid-apply (#3676), and a declarative `Microsoft.Resources/tags`
+      // resource has to read its own id, which ARM rejects as a circular
+      // dependency (#3714). So this script is now the ONLY thing that tags the
+      // registry, and a commit touching it without a subsequent successful run
+      // leaves the estate's compliance tagging diverged from what the repo says
+      // it should be — exactly the drift this watchdog exists to catch.
+      'scripts/csa-loom/apply-acr-compliance-tags.sh',
       'scripts/csa-loom/resolve-internal-token.sh',
     ],
     maxDays: 7,
