@@ -283,6 +283,14 @@ export interface PipelineDesignerProps {
   /** Pipeline item id — enables live property-panel helpers (e.g. the Approval
    *  activity's "Fetch trigger URL" call). Omit to hide them. */
   itemId?: string;
+  /**
+   * The owning item's REAL catalog slug ('data-pipeline' | 'adf-pipeline' |
+   * 'synapse-pipeline'), forwarded to the canvas so the shared collaboration
+   * endpoints under `/api/items/[type]/[id]/…` address the right item (#3698).
+   * Omit only when the host genuinely cannot name the type — the collaboration
+   * overlay is then suppressed rather than pointed at the wrong item.
+   */
+  itemType?: string;
   /** Workspace id of the pipeline item. */
   workspaceId?: string;
   /** Editor host API slug (default 'data-pipeline'). */
@@ -315,6 +323,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   selectedName: controlledSelected,
   onSelectedNameChange,
   itemId,
+  itemType,
   workspaceId,
   apiSlug,
   onApplyTemplateSpec,
@@ -867,6 +876,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
               selectedName={selectedName || undefined}
               onSelect={setSelectedName}
               itemId={itemId}
+              itemType={itemType}
               snapToGrid={snapToGrid}
               showGrid={showGrid}
               onDrillInto={drillInto}

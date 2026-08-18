@@ -71,7 +71,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ type: stri
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   const { type, id } = await ctx.params;
-  const item = await loadOwnedItem(id, type, session.claims.oid);
+  // READ-SCOPED (#3697). This GET only reads `state.endorsement`, but it used to
+  // call `loadOwnedItem` at its WRITE-capable default, so a shared read-only
+  // Viewer/Contributor was refused with a 404 on a pure read — the editor chrome
+  // renders this control for every member, so it 404'd for them on every open.
+  // PATCH below keeps the write scope (promote/clear IS a mutation).
+  const item = await loadOwnedItem(id, type, session.claims.oid, { allowReadRoles: true });
   if (!item) {
     return NextResponse.json({ ok: false, error: 'item not found or not owned by you' }, { status: 404 });
   }

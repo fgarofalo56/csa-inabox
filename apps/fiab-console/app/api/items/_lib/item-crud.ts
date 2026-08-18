@@ -7,7 +7,7 @@
  */
 
 import type { SessionPayload } from '@/lib/auth/session';
-import { resolveWorkspaceAccessByOid, type WorkspaceAccessOpts } from '@/lib/auth/workspace-access';
+import { resolveWorkspaceAccessByOid, ambientAccessOptsFor, type WorkspaceAccessOpts } from '@/lib/auth/workspace-access';
 import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
@@ -243,9 +243,51 @@ export async function loadItemRaw(itemId: string, itemType: string): Promise<Wor
  * So a route that threads `opts.session` gets the boundary from the session it
  * already has, and a route that does not still gets it from the request cookie.
  * Never `skipTidBoundary` — none of these helpers is off-request.
+ *
+ * #3697 — THIS FUNCTION USED TO DROP `tenantAdmin` ENTIRELY:
+ *
+ *     return { callerTid: session?.claims.tid, groups: session?.claims.groups };
+ *
+ * `ambientCallerTid` recovered the tid for the oid-only call sites, but the
+ * ADMIN-OPEN bypass (`resolveWorkspaceAccessByOid` step 6) had no equivalent —
+ * so EVERY caller of `loadOwnedItem` / `listOwnedItems` / `listAllOwnedItems`
+ * ran without it. A tenant admin who did not personally CREATE the workspace
+ * resolved to no access, and the ~345 routes behind this helper returned
+ * `apiNotFound('item not found')` on an item that plainly exists — while
+ * `GET /api/cosmos-items/<type>/<id>` returned 200 for the SAME caller in the
+ * SAME session, because that route resolves through `resolveItemAccessByOid`,
+ * which DOES pass `tenantAdmin`. That divergence is what made the canvas
+ * collaboration endpoints (canvas-comments / canvas-presence / collab/stream)
+ * 404 on every canvas open.
+ *
+ * This is the SAME defect as #2941 (`assertOwner` on the semantic-model route)
+ * and #2942 (`loadPipelineItem`), and `ambientAccessOptsFor` is the helper that
+ * was built to fix that class. It had exactly two adopters — `/api/cosmos-items`
+ * and `pipeline-binding` — and this shared helper, the single largest consumer,
+ * was never migrated onto it. Delegating here closes the class for all of them.
+ *
+ * NOT A WIDENING: the admin-open bypass only ever grants a tenant admin what
+ * `/api/cosmos-items/<type>/<id>` (GET and PATCH) already grants that same
+ * admin for that same item. It closes a divergence between two resolvers; it
+ * does not confer authority nobody had. The owner and ACL fast-paths still run
+ * FIRST, so a non-admin caller is completely unaffected, and the tid boundary
+ * still scopes the bypass to the admin's own tenant.
  */
-function accessOptsFor(session?: SessionPayload): WorkspaceAccessOpts {
-  return { callerTid: session?.claims.tid, groups: session?.claims.groups };
+async function accessOptsFor(oid: string, session?: SessionPayload): Promise<WorkspaceAccessOpts> {
+  if (session) {
+    // The call site handed us the request session — use it directly (and the
+    // dynamic import keeps this module's static graph free of a feature-gate
+    // edge, matching `ambientAccessOptsFor`).
+    const { isTenantAdmin } = await import('@/lib/auth/feature-gate');
+    return {
+      callerTid: session.claims.tid,
+      groups: session.claims.groups,
+      tenantAdmin: isTenantAdmin(session),
+    };
+  }
+  // Oid-only call site: recover callerTid + groups + tenantAdmin from the
+  // AMBIENT request session, but ONLY when it belongs to this same principal.
+  return ambientAccessOptsFor(oid);
 }
 
 export async function loadOwnedItem(
@@ -284,7 +326,7 @@ export async function loadOwnedItem(
     .fetchAll();
   const item = resources[0];
   if (!item) return null;
-  const access = await resolveWorkspaceAccessByOid(tenantId, item.workspaceId, accessOptsFor(opts.session));
+  const access = await resolveWorkspaceAccessByOid(tenantId, item.workspaceId, await accessOptsFor(tenantId, opts.session));
   if (!access) return null;
   if (!opts.allowReadRoles && !access.canWrite) return null;
   return item;
@@ -314,7 +356,7 @@ export async function listOwnedItems(
   if (opts.workspaceId) {
     const access = opts.session
       ? await authorizeWorkspaceList(opts.session, opts.workspaceId)
-      : await resolveWorkspaceAccessByOid(tenantId, opts.workspaceId, accessOptsFor());
+      : await resolveWorkspaceAccessByOid(tenantId, opts.workspaceId, await accessOptsFor(tenantId));
     if (!access) return [];
     const { resources } = await items.items
       .query<WorkspaceItem>(
@@ -341,7 +383,7 @@ export async function listOwnedItems(
   const owned: WorkspaceItem[] = [];
   // Resolve unique workspace visibility in one pass.
   const wsCache = new Map<string, boolean>();
-  const accessOpts = accessOptsFor(opts.session);
+  const accessOpts = await accessOptsFor(tenantId, opts.session);
   for (const it of resources) {
     let visible = wsCache.get(it.workspaceId);
     if (visible === undefined) {
@@ -385,7 +427,7 @@ export async function listAllOwnedItems(
   if (workspaceId) {
     const access = opts.session
       ? await authorizeWorkspaceList(opts.session, workspaceId)
-      : await resolveWorkspaceAccessByOid(tenantId, workspaceId, accessOptsFor());
+      : await resolveWorkspaceAccessByOid(tenantId, workspaceId, await accessOptsFor(tenantId));
     if (!access) return [];
   }
   const query = workspaceId
@@ -395,7 +437,7 @@ export async function listAllOwnedItems(
   if (resources.length === 0) return [];
   const owned: WorkspaceItem[] = [];
   const wsCache = new Map<string, boolean>();
-  const accessOpts = accessOptsFor(opts.session);
+  const accessOpts = await accessOptsFor(tenantId, opts.session);
   for (const it of resources) {
     let visible = wsCache.get(it.workspaceId);
     if (visible === undefined) {

@@ -275,6 +275,24 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   const s = useStyles();
   const ws = useWorkspaces();
 
+  /**
+   * #3698 — THIS ITEM'S REAL catalog slug, for every GENERIC item route.
+   *
+   * This one editor opens for THREE slugs: `data-pipeline` plus `adf-pipeline`
+   * and `synapse-pipeline`, which BOTH carry `aliasOf:'data-pipeline'` (see
+   * `catalog/item-types/azure-data-factory.ts` and `synapse-analytics.ts`), so
+   * the item page resolves them onto this editor while the URL — and the
+   * PERSISTED `c.itemType` — stay the original slug.
+   *
+   * The generic routes under `/api/items/[type]/[id]/…` and
+   * `/api/cosmos-items/[type]/[id]` match `c.itemType` EXACTLY, so a hardcoded
+   * `'data-pipeline'` 404s for every adf-/synapse-pipeline item. Use this, never
+   * a literal, for those. (The per-runtime ADF/Synapse BFF routes are a separate
+   * contract — they take the runtime-keyed slug and accept the alias explicitly
+   * via their own ACCEPTED_TYPES.)
+   */
+  const itemSlug = item.slug;
+
   // ── Runtime selector (Contract A/B) — the ONE unified pipeline authoring
   //    experience. 'adf' (Azure-native ADF, standalone factory) is the DEFAULT
   //    per no-fabric-dependency.md. 'synapse' is the Azure-native Synapse path.
@@ -282,7 +300,10 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   //    bound, never auto-selected, never a gate. When a runtimePreset prop is
   //    set, the selector is locked. In practice the only slug that reaches THIS
   //    editor with a preset is `adf-pipeline` (aliasOf:'data-pipeline' → preset
-  //    'adf'); `synapse-pipeline` has no aliasOf and opens SynapsePipelineEditor
+  //    'adf'); `synapse-pipeline` ALSO carries aliasOf:'data-pipeline' (preset
+  //    'synapse') and therefore reaches this editor too — an earlier revision of
+  //    this comment claimed it did not, which is contradicted by
+  //    catalog/item-types/synapse-analytics.ts. geo-pipeline (templateOf →
   //    directly, so its preset never flows in here. geo-pipeline (templateOf →
   //    'adf' preset + templateId) also reaches this editor and locks to ADF.
   const [runtime, setRuntime] = useState<PipelineRuntime>(runtimePreset ?? DEFAULT_PIPELINE_RUNTIME);
@@ -457,7 +478,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     let alive = true;
     (async () => {
       try {
-        const r = await clientFetch(`/api/cosmos-items/data-pipeline/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(itemSlug)}/${encodeURIComponent(id)}`);
         const j = await r.json().catch(() => ({}));
         if (alive && j?.workspaceId) { setWorkspaceId(j.workspaceId); setPipelineId(id); }
       } catch { /* fall back to manual workspace pick */ }
@@ -1101,10 +1122,11 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   // editors (Contract B) — they consume the existing
   // `/api/items/{adf-pipeline|synapse-pipeline}/{id}/*` routes and ship the same
   // rich three-pane designer. We only prepend the runtime selector so the user
-  // can switch backends. (Note: the `synapse-pipeline` SLUG itself isn't routed
-  // here — it has no aliasOf and opens SynapsePipelineEditor directly; this
-  // delegation only fires when the user picks the 'synapse' runtime inside the
-  // unified editor.) 'fabric' keeps this file's existing body below.
+  // can switch backends. (Note: the `synapse-pipeline` SLUG also carries
+  // aliasOf:'data-pipeline', so it reaches this editor and then delegates here
+  // via its 'synapse' runtimePreset; this delegation ALSO fires when the user
+  // picks the 'synapse' runtime inside the unified editor.) 'fabric' keeps this
+  // file's existing body below.
   //
   // Exception (Contract F): when this editor is hosting a TEMPLATE instantiation
   // (templateId set, e.g. the geo-pipeline alias → 'geo-enrich'), we stay on
@@ -1195,7 +1217,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
           <ExplainNodeDrawer
             open={!!explainActivity}
             onOpenChange={(o) => { if (!o) setExplainActivity(null); }}
-            itemType="data-pipeline"
+            itemType={itemSlug}
             itemId={pipelineId || id}
             family="pipeline"
             node={explainNodeTarget}
@@ -1379,7 +1401,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
                             onDeleteActivity={deleteActivity}
                             onExplainNode={setExplainActivity}
                             aiSuggest
-                            itemType="data-pipeline"
+                            itemType={itemSlug}
                             itemId={pipelineId || undefined}
                           />
                         </div>

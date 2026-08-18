@@ -1221,6 +1221,16 @@ export function PipelineEditorCore({
                   // U13 — the item id keys the in-canvas run overlay (Debug run
                   // receipts painted on the nodes) + the shared collab layer.
                   itemId={id}
+                  // #3698 — the collab layer addresses `/api/items/[type]/[id]/…`,
+                  // which matches `c.itemType` EXACTLY, so it needs the ITEM'S
+                  // OWN persisted slug — NOT `config.slug`. Those two genuinely
+                  // differ: `config.slug` is the RUNTIME-keyed BFF contract
+                  // ('adf-pipeline' | 'synapse-pipeline', hardcoded per delegate
+                  // editor and accepting the alias via its own ACCEPTED_TYPES),
+                  // whereas a `data-pipeline` item opened on the ADF runtime is
+                  // still persisted as `data-pipeline`. Using config.slug here
+                  // would simply move the 404 from the aliases onto the head type.
+                  itemType={item.slug}
                   apiSlug={config.slug}
                   onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
                   // Guided empty-state / gallery apply the FULL template spec
