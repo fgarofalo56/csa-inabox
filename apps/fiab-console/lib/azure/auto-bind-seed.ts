@@ -126,6 +126,13 @@ function errText(e: unknown): string {
  * proves the pipeline by triggering a run, but an editor open must not bill a
  * pipeline execution or re-fire its side effects.
  *
+ * THIS FUNCTION IS THE UNTRUSTED-CONTENT ENTRY POINT. `ctx.state.content` is
+ * whatever the item carries, and `POST /api/cosmos-items/[type]` writes
+ * `state` straight from the request body before calling `autoBindOnCreate`. So
+ * the reference stubbing it drives is create-if-absent (see
+ * `_seed-dev-pipeline.ensurePipelineReferences`): a name that already belongs to
+ * something Loom did not create is used as-is, never overwritten.
+ *
  * `runPipelineSeed` is parameterized by adapter so ADF and Synapse share it;
  * the two differ only in which client PUTs the document.
  */
@@ -156,7 +163,14 @@ export async function seedPipelineFromContent(
         || 'pipeline document was not accepted; see install steps.';
       return { seeded: false, error: why };
     }
-    return { seeded: true, detail: `${content.activities.length} activities` };
+    // Adoption is a SUCCESS (see the skip-semantics note on
+    // `upsertAndRunDevPipeline`) — the graph landed and the references resolve.
+    // It is still stated rather than implied, so a support read of the record
+    // shows which objects Loom did not author.
+    const adopted = seed.adoptedReferences?.length
+      ? `; used ${seed.adoptedReferences.length} pre-existing reference(s) as-is: ${seed.adoptedReferences.join(', ')}`
+      : '';
+    return { seeded: true, detail: `${content.activities.length} activities${adopted}` };
   } catch (e) {
     return { seeded: false, error: errText(e) };
   }
@@ -164,8 +178,9 @@ export async function seedPipelineFromContent(
 
 /** ADF adapter — the same four calls `lib/install/provisioners/adf-pipeline.ts` wires. */
 async function adfSeedAdapter() {
-  const { upsertPipeline, runPipeline, listPipelineRuns, upsertLinkedService, upsertDataset } =
+  const { upsertPipeline, runPipeline, listPipelineRuns, upsertLinkedService, upsertDataset, getLinkedService, getDataset } =
     await import('./adf-client');
+  const { nullOn404 } = await import('@/lib/install/provisioners/_seed-dev-pipeline');
   return {
     label: 'ADF',
     async upsert(n: string, properties: any) { await upsertPipeline(n, { name: n, properties }); },
@@ -181,13 +196,21 @@ async function adfSeedAdapter() {
     async upsertDataset(n: string, properties: Record<string, unknown>) {
       await upsertDataset(n, { name: n, properties } as any);
     },
+    // #3549 review, BLOCKER 1. THIS PATH is why the reads exist: unlike the
+    // installer, whose content comes from the curated bundle registry, the
+    // content here is `state.content` — which reaches the platform verbatim
+    // from a request body. Without an existence check a caller could name a
+    // production linked service / dataset and have the stubber PUT over it.
+    async getLinkedService(n: string) { return nullOn404(() => getLinkedService(n)); },
+    async getDataset(n: string) { return nullOn404(() => getDataset(n)); },
   };
 }
 
 /** Synapse adapter — mirrors `lib/install/provisioners/synapse-pipeline.ts`. */
 async function synapseSeedAdapter() {
-  const { upsertPipeline, runPipeline, getPipelineRun, upsertLinkedService, upsertDataset } =
+  const { upsertPipeline, runPipeline, getPipelineRun, upsertLinkedService, upsertDataset, getLinkedService, getDataset } =
     await import('./synapse-dev-client');
+  const { nullOn404 } = await import('@/lib/install/provisioners/_seed-dev-pipeline');
   return {
     label: 'Synapse',
     async upsert(n: string, properties: any) { await upsertPipeline(n, { name: n, properties }); },
@@ -198,6 +221,9 @@ async function synapseSeedAdapter() {
     },
     async upsertLinkedService(n: string, properties: Record<string, unknown>) { await upsertLinkedService(n, properties); },
     async upsertDataset(n: string, properties: Record<string, unknown>) { await upsertDataset(n, properties); },
+    /** See the ADF twin — never PUT over a reference we did not create. */
+    async getLinkedService(n: string) { return nullOn404(() => getLinkedService(n)); },
+    async getDataset(n: string) { return nullOn404(() => getDataset(n)); },
   };
 }
 
@@ -249,13 +275,31 @@ export async function seedEventstreamFromContent(
       // consumer the content had landed, which is the same "looks complete,
       // isn't" shape #3549 is about — just for streaming. So it is reported as
       // NOT seeded, with the reason, and `seedError` carries the honest hint.
-      // The item stays BOUND (the hub exists), so this is a disclosure, not a
-      // dead end — and the re-seed path will retry it on a later open once
-      // Stream Analytics becomes available.
+      //
+      // WHAT REPAIRS IT, precisely (#3549 review, BLOCKER 2). An earlier draft
+      // of this comment claimed "the re-seed path will retry it on a later
+      // open". THAT IS NOT TRUE and was never true:
+      //   - `maybeRepairSeed` needs BOTH `seedFromContent` and `isEmpty`, and
+      //     `eventstreamAutoBind` has no `isEmpty` (see ISEMPTY_OPT_OUTS in
+      //     `__tests__/auto-bind-seed.test.ts` for the reasoned opt-out), and
+      //   - `autoBindOnOpen` is wired into the two PIPELINE bind routes only,
+      //     so nothing re-runs the engine for an eventstream anyway.
+      // The repair that DOES exist is the editor's own **Provision to Azure**
+      // button (`POST /api/items/eventstream/[id]/provision`), which calls this
+      // very same idempotent stand-up: once Stream Analytics is available it
+      // adds the ASA job and the item goes fully live. So this is a disclosure
+      // with a real in-product fix, not a dead end — and the string below says
+      // that rather than promising an automatic retry that does not run.
+      // Making it automatic needs `autoBindOnOpen` wired into the eventstream
+      // editor, tracked in #3694.
       return {
         seeded: false,
         detail,
-        error: `Transport stream is live; the transform layer is not provisioned — ${result.hint || 'Stream Analytics unavailable'}`,
+        error:
+          'Transport stream is live; the transform layer is not provisioned — '
+          + `${result.hint || 'Stream Analytics unavailable'} `
+          + 'Re-run "Provision to Azure" from the eventstream editor once that is resolved; the stand-up is '
+          + 'idempotent and adds only what is missing.',
       };
     }
     return { seeded: true, detail };

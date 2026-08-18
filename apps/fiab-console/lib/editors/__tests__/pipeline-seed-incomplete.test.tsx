@@ -26,11 +26,20 @@
  * ---------------------------------------------------------------------------
  * WHY EACH TEST WOULD FAIL ON THE PR HEAD
  * ---------------------------------------------------------------------------
- * All four assert on surface the bound branch never rendered. The gate testid
- * does not exist, the authored activity names are absent from the DOM, and
- * Trigger now is enabled on a pipeline with no activities.
+ * The first four assert on surface the bound branch never rendered. The gate
+ * testid does not exist, the authored activity names are absent from the DOM,
+ * and Trigger now is enabled on a pipeline with no activities.
  *
- * CONTROL PAIR — the last test runs the opposite direction so the fix cannot
+ * The fifth covers the Fix-it itself, and its MEASURED mutation receipts are:
+ *   - revert `onRetry` to `() => void loadBinding()` (the PR-head form) → RED
+ *     on "3 activities": the gate clears and Run/Debug re-enable, but the
+ *     canvas is still showing the pre-seed empty graph (SHOULD-FIX 4).
+ *   - revert `specBody` to the `{ ok, spec }` key this file used to send → RED
+ *     on the same assertion, because `loadPipeline` reads `data.pipeline`. The
+ *     old fixture could not exercise the canvas AT ALL, which is why the
+ *     stale-surface defect survived a test whose comment claimed to cover it.
+ *
+ * CONTROL PAIR — the fourth test runs the opposite direction so the fix cannot
  * overshoot into "always warn": a healthy seeded pipeline shows NO gate and
  * keeps Trigger now enabled.
  */
@@ -64,6 +73,21 @@ function json(body: unknown, status = 200) {
 }
 
 /**
+ * The item's spec GET. The real route
+ * (`app/api/items/adf-pipeline/[id]/route.ts`) answers `{ ok, pipeline }` and
+ * `loadPipeline` reads `data.pipeline` — this fixture said `spec`, so `setSpec`
+ * was fed `JSON.stringify(undefined)` and the canvas rendered nothing on EVERY
+ * one of these tests. Nothing noticed, because the only canvas-dependent
+ * assertion (Trigger now) is driven by `seedIncomplete`, not by the graph.
+ * A fixture that does not model the route it stands in for cannot fail for the
+ * reason its comment claims, so it is corrected here and the Retry test below
+ * now actually reads the canvas.
+ */
+function specBody(properties: unknown) {
+  return { ok: true, pipeline: { name: BOUND, properties } };
+}
+
+/**
  * The live shape of a failed seed: the pipeline EXISTS and is bound, the spec
  * GET returns it with `activities: []`, and the bind GET reports the seedError
  * plus the authored preview.
@@ -78,7 +102,7 @@ function installFetch(bindExtras: Record<string, unknown>) {
     if (u.includes(`/api/items/adf-pipeline/${ID}/triggers`)) return json({ ok: true, triggers: [] });
     if (u.match(new RegExp(`/api/items/adf-pipeline/${ID}(\\?|$)`))) {
       // The EMPTY twin: a genuinely published pipeline with no activities.
-      return json({ ok: true, spec: { name: BOUND, properties: { activities: [] } } });
+      return json(specBody({ activities: [] }));
     }
     return json({ ok: true });
   }) as any);
@@ -152,11 +176,24 @@ describe('#3549 BLOCKER 1 — a bound-but-unseeded pipeline is never presented a
     expect(screen.getByRole('button', { name: /trigger now/i })).not.toBeDisabled();
   });
 
-  it('a SUCCESSFUL Retry seeding clears the gate and re-enables Trigger now', async () => {
-    // The ribbon is a useMemo. `seedIncomplete` was missing from its dependency
-    // array, so a repaired pipeline kept Run/Debug disabled forever — the Fix-it
-    // would have "worked" while leaving the editor stuck. Caught by lint, pinned
-    // here so it cannot come back silently.
+  it('a SUCCESSFUL Retry seeding clears the gate, re-enables Trigger now, AND refreshes the canvas', async () => {
+    // Two defects in one flow.
+    //
+    // 1. The ribbon is a useMemo. `seedIncomplete` was missing from its
+    //    dependency array, so a repaired pipeline kept Run/Debug disabled
+    //    forever — the Fix-it would have "worked" while leaving the editor
+    //    stuck. Caught by lint, pinned here so it cannot come back silently.
+    //
+    // 2. (#3549 review, SHOULD-FIX 4) `onRetry` was `() => void loadBinding()`.
+    //    That re-runs the SERVER seed and refreshes `autoBind`, so the gate
+    //    disappears and the ribbon re-enables — but the canvas reads `spec`,
+    //    which only `loadPipeline` refreshes, and the effect that calls it is
+    //    keyed on `[bound, …]`. `bound` does not change across a reseed, so
+    //    React bails and the canvas keeps rendering `activities: []`. Run and
+    //    Debug re-enable over a pipeline the editor is still showing as empty.
+    //
+    // The activity-count assertion is the one that separates them: it is the
+    // ONLY thing here that reads the canvas rather than the gate.
     let seedFailed = true;
     vi.spyOn(global, 'fetch').mockImplementation((async (url: any) => {
       const u = String(url);
@@ -172,12 +209,9 @@ describe('#3549 BLOCKER 1 — a bound-but-unseeded pipeline is never presented a
       if (u.includes(`/api/items/adf-pipeline/${ID}/runs`)) return json({ ok: true, runs: [] });
       if (u.includes(`/api/items/adf-pipeline/${ID}/triggers`)) return json({ ok: true, triggers: [] });
       if (u.match(new RegExp(`/api/items/adf-pipeline/${ID}(\\?|$)`))) {
-        return json({
-          ok: true,
-          spec: seedFailed
-            ? { name: BOUND, properties: { activities: [] } }
-            : { name: BOUND, properties: AUTHORED_PREVIEW.properties },
-        });
+        // Before the reseed the live pipeline is the empty twin; after it, the
+        // factory holds the authored graph.
+        return json(specBody(seedFailed ? { activities: [] } : AUTHORED_PREVIEW.properties));
       }
       return json({ ok: true });
     }) as any);
@@ -187,6 +221,8 @@ describe('#3549 BLOCKER 1 — a bound-but-unseeded pipeline is never presented a
     await waitFor(() => expect(screen.getByTestId('pipeline-seed-incomplete')).toBeInTheDocument(),
       { timeout: 8000 });
     expect(screen.getByRole('button', { name: /trigger now/i })).toBeDisabled();
+    // The bound-state badge counts what the CANVAS holds: nothing, so far.
+    expect(screen.getByText('0 activities')).toBeInTheDocument();
 
     // The operator grants the role; the engine's re-seed succeeds on reload.
     seedFailed = false;
@@ -195,6 +231,10 @@ describe('#3549 BLOCKER 1 — a bound-but-unseeded pipeline is never presented a
     await waitFor(() => expect(screen.queryByTestId('pipeline-seed-incomplete')).toBeNull(),
       { timeout: 8000 });
     await waitFor(() => expect(screen.getByRole('button', { name: /trigger now/i })).not.toBeDisabled(),
+      { timeout: 8000 });
+    // …and the surface the user is looking at caught up with the repair, rather
+    // than offering Run over a canvas that still says the pipeline is empty.
+    await waitFor(() => expect(screen.getByText('3 activities')).toBeInTheDocument(),
       { timeout: 8000 });
   });
 });
@@ -222,7 +262,7 @@ describe('#3549 BLOCKER 1 — the Synapse twin carries the same gate', () => {
       if (u.includes(`/api/items/synapse-pipeline/${ID}/runs`)) return json({ ok: true, runs: [] });
       if (u.includes(`/api/items/synapse-pipeline/${ID}/triggers`)) return json({ ok: true, triggers: [] });
       if (u.match(new RegExp(`/api/items/synapse-pipeline/${ID}(\\?|$)`))) {
-        return json({ ok: true, spec: { name: BOUND, properties: { activities: [] } } });
+        return json({ ok: true, pipeline: { name: BOUND, properties: { activities: [] } } });
       }
       return json({ ok: true });
     }) as any);

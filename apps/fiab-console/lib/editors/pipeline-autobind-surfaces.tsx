@@ -210,6 +210,27 @@ export function AutoBindUnavailable({ reason, onRetry }: {
  * carries an inline **Retry seeding** Fix-it per `ux-baseline.md` G2 rather
  * than a bare complaint, because a re-run genuinely resolves the common cases
  * (a role granted since, a transient control-plane refusal).
+ *
+ * ---------------------------------------------------------------------------
+ * SEQUENCING — what `onRetry` MUST do (#3549 review, SHOULD-FIX 4)
+ * ---------------------------------------------------------------------------
+ * `onRetry` has to re-run auto-bind AND re-read the pipeline document, in that
+ * order. It shipped doing only the first (`() => void loadBinding()`), which
+ * looks right and is not:
+ *
+ *   - `loadBinding` is what makes the SERVER re-seed — the bind GET calls
+ *     `autoBindOnOpen`, which repairs an empty backing pipeline — and it
+ *     refreshes `autoBind`, so the gate correctly disappears.
+ *   - but the spec the CANVAS renders comes from `loadPipeline`, and the effect
+ *     that calls it is keyed on `[bound, …]`. `bound` does not change across a
+ *     successful reseed (same pipeline, same name), so React bails and the
+ *     canvas keeps rendering the pre-seed `activities: []`.
+ *
+ * Net effect of getting it wrong: the gate vanishes and Run/Debug re-enable
+ * over a canvas that still reads "0 activities" — the Fix-it appearing to work
+ * while leaving its own surface stale, which is a smaller copy of the #3549
+ * defect it exists to close. `loadPipeline` must also be AWAITED after
+ * `loadBinding`, or it reads the pipeline as it was BEFORE the reseed.
  */
 /**
  * The item's AUTHORED activity graph, rendered read-only at full width.
@@ -295,6 +316,49 @@ export function PipelineSeedIncomplete({ containerLabel, reason, preview, onRetr
       </MessageBar>
       <AuthoredGraphPanel containerLabel={containerLabel} preview={preview} variant="unseeded" />
     </>
+  );
+}
+
+/**
+ * BOUND, but the backend has nothing published under that name yet (#2895).
+ *
+ * An expected, recoverable state rather than a backend failure — the item was
+ * bound before the pipeline was ever pushed, or the pipeline was deleted out
+ * from under it — so it is a guided WARNING with two inline Fix-its
+ * (`ux-baseline.md` G2), never a red bar carrying a stringified response body.
+ * The canvas below it still renders and is authorable: **Save** creates the
+ * pipeline under this name.
+ *
+ * Lives here rather than in `pipeline-editor-core.tsx` for the same reason as
+ * its five siblings above — it is one of the states an item passes through
+ * while the platform binds its backing pipeline, it is purely presentational,
+ * and the core is at the monolith-creep ceiling.
+ */
+export function PipelineMissingGate({ containerLabel, bound, onRebind, onRetry }: {
+  containerLabel: string;
+  /** The name the item is bound to — the name that has nothing behind it. */
+  bound: string | null;
+  onRebind: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <MessageBar intent="warning" layout="multiline" data-testid="pipeline-missing-gate">
+      <MessageBarBody>
+        <MessageBarTitle>Nothing published under this name yet</MessageBarTitle>
+        This item is bound to a pipeline named <strong>{bound}</strong>, but the{' '}
+        {containerLabel} doesn&apos;t have one by that name yet — it was never
+        published, or it was deleted. Build the pipeline on the canvas below and{' '}
+        <strong>Save</strong> to create it, or rebind this item to a different pipeline.
+        <div style={actionRow}>
+          <Button size="small" appearance="primary" icon={<Link20Regular />} onClick={onRebind}>
+            Rebind or create
+          </Button>
+          <Button size="small" appearance="secondary" icon={<ArrowSync20Regular />} onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      </MessageBarBody>
+    </MessageBar>
   );
 }
 

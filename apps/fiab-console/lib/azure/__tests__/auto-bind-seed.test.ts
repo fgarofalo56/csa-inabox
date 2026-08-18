@@ -493,6 +493,84 @@ describe('registry coverage — every provider that can hold content seeds it', 
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE SECOND HOOK NEEDS THE SAME MECHANICAL WALK (#3549 review, BLOCKER 2).
+//
+// `maybeRepairSeed` returns early unless the provider has BOTH `seedFromContent`
+// AND `isEmpty`. The walk above only enumerates the first, so three of the five
+// registered providers could — and do — silently get exactly one seed attempt
+// ever, while the engine's own docstring described a self-heal. Undocumented
+// partial coverage is the shape this repo has been bitten by before (six
+// consumers fixed, a seventh missed), so `isEmpty` gets the identical treatment:
+// implement it, or say WHY not, per provider, mechanically enforced.
+// ---------------------------------------------------------------------------
+describe('registry coverage — every provider either re-seeds or says why not', () => {
+  /**
+   * Providers deliberately WITHOUT `isEmpty`, each with the reason it is not a
+   * defect TODAY and what would change that. These are not "we didn't get to
+   * it" — each one turns on the same missing wire, tracked in #3694.
+   */
+  const ISEMPTY_OPT_OUTS: Record<string, string> = {
+    eventstream:
+      'No call site would reach it. `autoBindOnOpen` is wired into the two PIPELINE bind routes only, so the '
+      + 'engine runs for an eventstream exactly once, at item-create; an `isEmpty` here would be a hook with zero '
+      + 'callers, which this repo has recorded as its own class of defect (a guard with no population). The repair '
+      + 'that DOES exist and IS wired is the editor\'s "Provision to Azure" button — `POST /api/items/eventstream/'
+      + '[id]/provision` calls the same idempotent `standUpEventstreamAzure`, so a stream whose Stream Analytics '
+      + 'transform could not be provisioned (DoD/IL5, where ASA does not exist) is completed from the editor once '
+      + 'it can be. Wiring `autoBindOnOpen` into the three non-pipeline editors is the change that makes an '
+      + '`isEmpty` here meaningful, and is tracked in #3694.',
+    'adx-database':
+      'Same missing wire as eventstream (#3694) — no `autoBindOnOpen` call site for `kql-database` / `eventhouse`, '
+      + 'so the hook would never run. It would also not be free: emptiness for an ADX database is a `.show tables` '
+      + 'data-plane round-trip against the cluster, paid on every open, to answer a question nothing currently '
+      + 'asks. The install-time provisioner and the editor\'s own schema surface both re-apply the bundle DDL, '
+      + 'which is the path that actually repairs a half-seeded database today.',
+    'lakehouse-adls':
+      'Same missing wire again (#3694). Additionally, "empty" for a lakehouse root is a directory LISTING rather '
+      + 'than a point read (`create` makes exactly one directory, and a real lakehouse has folders under it), so '
+      + 'the probe is materially more expensive than the pipeline twins\' single GET. The lakehouse editor '
+      + 're-creates missing folders/tables from the item content on its own save path.',
+  };
+
+  it('has no provider missing isEmpty without a documented reason', () => {
+    const missing = AUTO_BIND_PROVIDERS
+      .filter((p) => typeof p.isEmpty !== 'function')
+      .map((p) => p.provider)
+      .filter((name) => !(name in ISEMPTY_OPT_OUTS));
+
+    expect(missing).toEqual([]);
+  });
+
+  it('every isEmpty opt-out carries a REAL reason, not an empty placeholder', () => {
+    for (const [name, reason] of Object.entries(ISEMPTY_OPT_OUTS)) {
+      expect(reason.trim().length, `opt-out '${name}' has no stated reason`).toBeGreaterThan(20);
+    }
+  });
+
+  it('every isEmpty opt-out names a provider that is actually REGISTERED', () => {
+    // A stale entry is worse than no entry: it silently pre-authorizes a
+    // provider that no longer exists, and would keep a REGRESSION green if a
+    // future provider reused the name. So the map may not drift from the
+    // registry in either direction.
+    const registered = new Set(AUTO_BIND_PROVIDERS.map((p) => p.provider));
+    for (const name of Object.keys(ISEMPTY_OPT_OUTS)) {
+      expect(registered.has(name), `opt-out '${name}' is not a registered provider`).toBe(true);
+    }
+  });
+
+  it('the PIPELINE providers do implement isEmpty — the walk has a live population', () => {
+    // Guards the walk against passing on an all-opt-out registry. These two are
+    // the providers `autoBindOnOpen` actually reaches, so they are the two that
+    // must be able to repair an empty binding (#3549's live population).
+    for (const provider of ['adf-pipeline', 'synapse-pipeline']) {
+      const p = AUTO_BIND_PROVIDERS.find((x) => x.provider === provider);
+      expect(typeof p?.isEmpty, `${provider} must implement isEmpty`).toBe('function');
+      expect(provider in ISEMPTY_OPT_OUTS, `${provider} must NOT be opted out`).toBe(false);
+    }
+  });
+});
+
 describe('authoredContent — the shared "is there anything to seed?" decision', () => {
   it('returns the content when the kind matches the backing service', () => {
     const c = authoredContent(ctxFor('P1', gatedInstallState()), ['adf-pipeline', 'synapse-pipeline']);

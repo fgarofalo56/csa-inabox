@@ -38,7 +38,18 @@ export interface DevPipelineProperties {
   parameters?: Record<string, { type: string; defaultValue?: unknown }>;
 }
 
-/** Adapter the provisioner hands us so this helper stays client-agnostic. */
+/**
+ * Adapter the provisioner hands us so this helper stays client-agnostic.
+ *
+ * THE REFERENCE SURFACE IS A SET OF FOUR, NOT TWO (see `ensurePipelineReferences`
+ * for why). `upsertLinkedService` / `upsertDataset` are ADF/Synapse PUTs, which
+ * are create-**or-update**: handed a name that already exists they REPLACE the
+ * customer's object. So the two GETs are not a convenience — they are the only
+ * thing that distinguishes "create the stub this pipeline needs" from "overwrite
+ * something that was already there". An adapter that supplies the writes without
+ * the reads gets NO reference stubbing at all: this helper fails CLOSED rather
+ * than falling back to a blind PUT, because the fallback IS the defect.
+ */
 export interface DevPipelineAdapter {
   /** Friendly backend label for step logs, e.g. "Synapse" / "ADF". */
   label: string;
@@ -48,10 +59,51 @@ export interface DevPipelineAdapter {
   createRun(name: string, params?: Record<string, unknown>): Promise<string>;
   /** Resolve the latest run status for the given runId (best-effort). */
   getRunStatus(runId: string): Promise<DevPipelineRunStatus | undefined>;
-  /** Optional — PUT a linked service (to satisfy a pipeline's references). */
+  /** Optional — PUT a linked service (to satisfy a pipeline's references).
+   *  Requires `getLinkedService` alongside it, or it is never called. */
   upsertLinkedService?(name: string, properties: Record<string, unknown>): Promise<void>;
-  /** Optional — PUT a dataset (to satisfy a pipeline's DatasetReferences). */
+  /** Optional — PUT a dataset (to satisfy a pipeline's DatasetReferences).
+   *  Requires `getDataset` alongside it, or it is never called. */
   upsertDataset?(name: string, properties: Record<string, unknown>): Promise<void>;
+  /**
+   * READ a linked service by name. MUST resolve `null` for "definitely not
+   * there" (a 404) and THROW for "I could not tell" — an unknown must never be
+   * reported as absent, because absent is what authorizes the PUT.
+   */
+  getLinkedService?(name: string): Promise<DevPipelineExistingRef | null>;
+  /** READ a dataset by name. Same null-vs-throw contract as above. */
+  getDataset?(name: string): Promise<DevPipelineExistingRef | null>;
+}
+
+/**
+ * The slice of an existing ADF/Synapse linked service or dataset this helper
+ * reads. Only the annotations matter: they are how we tell an object LOOM
+ * auto-provisioned (safe to refresh) from one the customer owns (never touched).
+ */
+export interface DevPipelineExistingRef {
+  name?: string;
+  properties?: { annotations?: unknown[] };
+  annotations?: unknown[];
+}
+
+/**
+ * Adapt a client GET that THROWS on 404 to the adapter's null-for-absent
+ * contract. Everything else PROPAGATES: a 403 or a transport failure means we
+ * could not tell, and the whole point of the read is that only a definite
+ * "absent" authorizes a write. Shared by all four adapters so none of them can
+ * quietly widen "not found" to "anything that threw".
+ */
+export async function nullOn404<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch (e: any) {
+    const status: unknown = e?.status;
+    if (status === 404) return null;
+    // Clients that don't attach `.status` format it into the message
+    // ("getDataset(x) failed 404: …"). Only consulted when there is no status.
+    if (typeof status !== 'number' && /\bfailed 404\b/.test(e?.message || '')) return null;
+    throw e;
+  }
 }
 
 /** A linked-service / dataset reference discovered in a pipeline's activities. */
@@ -112,6 +164,14 @@ const DATABRICKS_ACTIVITY_TYPES = new Set([
  * service when a Databricks activity omits its own. */
 export const CANONICAL_DATABRICKS_LS = 'AzureDatabricks_LinkedService';
 
+/**
+ * The annotation Loom stamps on every linked service / dataset it creates for
+ * itself. It is the ONLY signal that separates "a stub we made and may refresh"
+ * from "a customer object we must never overwrite", so it is exported and
+ * asserted rather than restated as a literal at each call site.
+ */
+export const LOOM_AUTOPROVISIONED = 'loom-autoprovisioned';
+
 /** Resolve the opt-in Databricks workspace domain (https URL, no trailing
  * slash) from env, or null when Databricks isn't wired on this estate.
  * Databricks is an Azure-native compute — this is NOT a Fabric dependency. */
@@ -138,7 +198,7 @@ function buildDatabricksLinkedService(domain: string): Record<string, unknown> {
       newClusterVersion: '13.3.x-scala2.12',
       newClusterNumOfWorker: '1',
     },
-    annotations: ['loom-autoprovisioned'],
+    annotations: [LOOM_AUTOPROVISIONED],
   };
 }
 
@@ -197,25 +257,148 @@ function adlsStubUrl(): string {
   return 'https://loomdlzstub.dfs.core.windows.net';
 }
 
+/** Does an existing ADF/Synapse artifact carry Loom's auto-provision marker?
+ *  Reads `properties.annotations` (both services' wire shape) and tolerates a
+ *  flattened `annotations` for adapters that hand us the properties bag alone. */
+function isLoomAutoprovisioned(existing: DevPipelineExistingRef | null): boolean {
+  const ann = existing?.properties?.annotations ?? existing?.annotations;
+  return Array.isArray(ann) && ann.some((a) => a === LOOM_AUTOPROVISIONED);
+}
+
+/** What one create-if-absent reference ensure actually did. See the
+ *  CREATE-IF-ABSENT block on `ensurePipelineReferences` for the full reasoning.
+ *
+ *   created    the name was free (404) → we PUT the Loom stub.
+ *   refreshed  it existed and was OURS (annotated) → re-PUT, so a stub whose
+ *              coordinates moved with a redeploy self-heals.
+ *   adopted    it existed and was NOT ours → left untouched; the pipeline
+ *              references the customer's object as-is.
+ *   blocked    we could not establish existence → we did NOT write.
+ *   failed     the PUT itself was refused (non-auth).
+ */
+type RefEnsureVerdict = 'created' | 'refreshed' | 'adopted' | 'blocked' | 'failed';
+
+/**
+ * Create-or-refresh ONE reference object, never overwriting one we did not make.
+ *
+ * The read comes first and its failure modes are NOT collapsed: a 404 is the
+ * only answer that authorizes a write. Per `deploy-integrity.md` R7 an unknown
+ * says it is unknown — the step log names which of "not ours" or "could not
+ * read" happened, because the two want different remediations.
+ *
+ * EVERY non-success path logs. `authGate` is returned for the caller that acts
+ * on it (the Databricks branch maps it to a "grant the role" remediation), but
+ * the callers that do NOT — the ADLS/dataset stubs, which are best-effort —
+ * must not turn a 403 into silence, so the reason is on `steps` regardless.
+ */
+async function ensureReference(
+  read: (name: string) => Promise<DevPipelineExistingRef | null>,
+  write: (name: string, properties: Record<string, unknown>) => Promise<void>,
+  label: string,
+  kind: 'linked service' | 'dataset',
+  name: string,
+  properties: Record<string, unknown>,
+  steps: string[],
+): Promise<{ verdict: RefEnsureVerdict; authGate?: { status: number; message: string } }> {
+  let existing: DevPipelineExistingRef | null;
+  try {
+    existing = await read(name);
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    const status = typeof e?.status === 'number' ? e.status : statusFromError(msg);
+    if (status === 404) {
+      existing = null; // definitively absent — the name is ours to take
+    } else {
+      steps.push(`${label}: could not read ${kind} '${name}' (${msg}) — NOT overwriting it.`);
+      // 401/403 additionally means the identity cannot even READ the factory /
+      // workspace, which is an RBAC fact a caller can map to a precise
+      // "grant the role" remediation rather than a missing-reference gate.
+      return status === 401 || status === 403
+        ? { verdict: 'blocked', authGate: { status, message: msg } }
+        : { verdict: 'blocked' };
+    }
+  }
+  if (existing && !isLoomAutoprovisioned(existing)) {
+    steps.push(
+      `${label}: ${kind} '${name}' already exists and was not created by Loom — using it as-is (not overwritten).`,
+    );
+    return { verdict: 'adopted' };
+  }
+  try {
+    await write(name, properties);
+    return { verdict: existing ? 'refreshed' : 'created' };
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    const status = typeof e?.status === 'number' ? e.status : statusFromError(msg);
+    steps.push(`${label}: could not auto-create ${kind} '${name}': ${msg}`);
+    return status === 401 || status === 403
+      ? { verdict: 'failed', authGate: { status, message: msg } }
+      : { verdict: 'failed' };
+  }
+}
+
 /**
  * Auto-provision minimal valid stubs for every linked service + dataset the
  * pipeline references, so the pipeline document validates on commit. Linked
  * services are AzureBlobFS (workspace MI auth); datasets are parameterized
  * DelimitedText on the first referenced ADLS linked service. Best-effort: each
  * failure is logged and skipped (the pipeline upsert then surfaces an honest
- * gate). No-op when the adapter doesn't support reference upserts. */
+ * gate). No-op when the adapter doesn't support reference upserts.
+ *
+ * ---------------------------------------------------------------------------
+ * CREATE-IF-ABSENT, NEVER BLIND UPSERT (#3549 review, BLOCKER 1)
+ * ---------------------------------------------------------------------------
+ * `collectPipelineRefs` walks the CALLER'S graph and takes every
+ * `referenceName` it finds. Until #3549 the only caller was the installer,
+ * whose content comes from the in-process curated bundle registry. #3549 wired
+ * `auto-bind-seed` in, and its content is `state.content` — which reaches the
+ * platform verbatim from a request body (`POST /api/cosmos-items/[type]` line
+ * 76 → `autoBindOnCreate`). A user with write access to ONE workspace could
+ * therefore name `SalesDW_Prod` in an activity's `linkedServiceName`, point the
+ * item's `state.factory*` at a shared production factory, and have this
+ * function PUT a Loom stub over the customer's linked service — breaking every
+ * other pipeline that references it and, for a dataset, redirecting where a
+ * Copy activity lands its data.
+ *
+ * So a reference is written ONLY when we have positively established one of:
+ *
+ *   ABSENT     the GET returned "not found" → the name is free, create the stub.
+ *   OURS       it exists and carries the `loom-autoprovisioned` annotation →
+ *              we made it, so refreshing it is safe AND is the self-heal for a
+ *              stub whose ADLS URL moved with a redeploy.
+ *
+ * Anything else is left ALONE:
+ *
+ *   ADOPTED    it exists without our annotation → the customer owns it. The
+ *              pipeline references it as-is. This is also the ordinary case for
+ *              the 2nd..Nth pipeline of a bundle sharing one linked service, so
+ *              it is a SUCCESS, not a failure — see the note on skip semantics
+ *              in `upsertAndRunDevPipeline`.
+ *   BLOCKED    the GET failed for any reason other than 404 → we do not know,
+ *              and unknown is not absent. We do not write. The pipeline PUT
+ *              then fails with the service's own "invalid reference" and the
+ *              caller turns that into an honest gate.
+ */
 async function ensurePipelineReferences(
   adapter: DevPipelineAdapter,
   content: any,
   databricksLs: Set<string>,
   steps: string[],
-): Promise<{ unresolvedDatabricks: string[]; authGate?: { status: number; message: string } }> {
-  // No reference-upsert surface on this adapter: any Databricks activity is
-  // unresolvable here (caller gates). Non-Databricks refs are left to the PUT.
-  if (!adapter.upsertLinkedService || !adapter.upsertDataset) {
-    return { unresolvedDatabricks: [...databricksLs] };
+): Promise<{ unresolvedDatabricks: string[]; adopted: string[]; authGate?: { status: number; message: string } }> {
+  // No reference-upsert surface on this adapter — or writes without the reads
+  // that make them safe, which this helper treats identically. Any Databricks
+  // activity is unresolvable here (caller gates); a non-Databricks reference is
+  // left to the pipeline PUT, which the service rejects with its own "invalid
+  // reference" if the object really is missing → the caller's honest gate.
+  if (!adapter.upsertLinkedService || !adapter.upsertDataset || !adapter.getLinkedService || !adapter.getDataset) {
+    return { unresolvedDatabricks: [...databricksLs], adopted: [] };
   }
   const refs = collectPipelineRefs(content);
+  const adopted: string[] = [];
+  const ensureLs = (name: string, properties: Record<string, unknown>) =>
+    ensureReference(adapter.getLinkedService!, adapter.upsertLinkedService!, adapter.label, 'linked service', name, properties, steps);
+  const ensureDs = (name: string, properties: Record<string, unknown>) =>
+    ensureReference(adapter.getDataset!, adapter.upsertDataset!, adapter.label, 'dataset', name, properties, steps);
 
   // ── Databricks linked services need an AzureDatabricks-typed LS (NOT the
   //    AzureBlobFS stub used for ADLS refs). Auto-stub from the opt-in
@@ -232,70 +415,66 @@ async function ensurePipelineReferences(
       continue;
     }
     if (!domain) { unresolvedDatabricks.push(ls); continue; }
-    try {
-      await adapter.upsertLinkedService(ls, buildDatabricksLinkedService(domain));
-      steps.push(`${adapter.label}: ensured Databricks linked service '${ls}' → ${domain}.`);
-    } catch (e: any) {
-      const msg = e?.message || String(e);
-      const status = statusFromError(msg);
-      // An auth failure authoring the LS is an RBAC gate, not a missing
-      // reference — surface it precisely so the operator grants the role.
-      if (status === 401 || status === 403) {
-        return { unresolvedDatabricks, authGate: { status, message: msg } };
-      }
-      steps.push(`${adapter.label}: could not auto-create Databricks linked service '${ls}': ${msg}`);
-      unresolvedDatabricks.push(ls);
+    const r = await ensureLs(ls, buildDatabricksLinkedService(domain));
+    // An auth failure authoring the LS is an RBAC gate, not a missing
+    // reference — surface it precisely so the operator grants the role.
+    if (r.authGate) return { unresolvedDatabricks, adopted, authGate: r.authGate };
+    if (r.verdict === 'adopted') {
+      // It is already there and it is not ours to replace. The activity's
+      // reference RESOLVES, which is the only thing the pipeline PUT needs.
+      adopted.push(ls);
+      continue;
     }
+    if (r.verdict === 'created' || r.verdict === 'refreshed') {
+      steps.push(`${adapter.label}: ensured Databricks linked service '${ls}' → ${domain}.`);
+      continue;
+    }
+    // 'blocked' (could not read) or 'failed' (the PUT was refused) — we cannot
+    // assert the reference resolves, so it becomes the caller's honest gate.
+    unresolvedDatabricks.push(ls);
   }
   // A Databricks activity that can't bind its LS on this estate → the pipeline
   // PUT would 400. Short-circuit to an honest gate; skip the rest of the stubs.
-  if (unresolvedDatabricks.length > 0) return { unresolvedDatabricks };
+  if (unresolvedDatabricks.length > 0) return { unresolvedDatabricks, adopted };
 
-  // ── ADLS / dataset stubs (unchanged) for every NON-Databricks reference. ──
+  // ── ADLS / dataset stubs for every NON-Databricks reference. ──
   const nonDbxLinkedServices = [...refs.linkedServices].filter((n) => !databricksLs.has(n));
-  if (nonDbxLinkedServices.length === 0 && refs.datasets.size === 0) return { unresolvedDatabricks: [] };
+  if (nonDbxLinkedServices.length === 0 && refs.datasets.size === 0) return { unresolvedDatabricks: [], adopted };
   const url = adlsStubUrl();
   const lsList = nonDbxLinkedServices;
   for (const ls of lsList) {
-    try {
-      await adapter.upsertLinkedService(ls, {
-        type: 'AzureBlobFS',
-        typeProperties: { url },
-        annotations: ['loom-autoprovisioned'],
-      });
-    } catch (e: any) {
-      steps.push(`${adapter.label}: could not auto-create linked service '${ls}': ${e?.message || e}`);
-    }
+    const r = await ensureLs(ls, {
+      type: 'AzureBlobFS',
+      typeProperties: { url },
+      annotations: [LOOM_AUTOPROVISIONED],
+    });
+    if (r.verdict === 'adopted') adopted.push(ls);
   }
   const defaultLs = lsList.find((n) => /adls|blob|storage|gen2/i.test(n)) || lsList[0] || 'ls_loom_adls';
   // Ensure a fallback ADLS linked service exists for datasets even if the
   // pipeline only referenced non-ADLS linked services.
   if (!refs.linkedServices.has(defaultLs)) {
-    try {
-      await adapter.upsertLinkedService(defaultLs, { type: 'AzureBlobFS', typeProperties: { url }, annotations: ['loom-autoprovisioned'] });
-    } catch { /* best-effort */ }
+    const r = await ensureLs(defaultLs, { type: 'AzureBlobFS', typeProperties: { url }, annotations: [LOOM_AUTOPROVISIONED] });
+    if (r.verdict === 'adopted') adopted.push(defaultLs);
   }
   for (const [ds, paramNames] of refs.datasets) {
     const parameters: Record<string, { type: string }> = {};
     for (const p of paramNames) parameters[p] = { type: 'String' };
-    try {
-      await adapter.upsertDataset(ds, {
-        type: 'DelimitedText',
-        linkedServiceName: { referenceName: defaultLs, type: 'LinkedServiceReference' },
-        ...(paramNames.size > 0 ? { parameters } : {}),
-        typeProperties: {
-          location: { type: 'AzureBlobFSLocation', fileSystem: 'landing' },
-          columnDelimiter: ',',
-          firstRowAsHeader: true,
-        },
-        annotations: ['loom-autoprovisioned'],
-      });
-    } catch (e: any) {
-      steps.push(`${adapter.label}: could not auto-create dataset '${ds}': ${e?.message || e}`);
-    }
+    const r = await ensureDs(ds, {
+      type: 'DelimitedText',
+      linkedServiceName: { referenceName: defaultLs, type: 'LinkedServiceReference' },
+      ...(paramNames.size > 0 ? { parameters } : {}),
+      typeProperties: {
+        location: { type: 'AzureBlobFSLocation', fileSystem: 'landing' },
+        columnDelimiter: ',',
+        firstRowAsHeader: true,
+      },
+      annotations: [LOOM_AUTOPROVISIONED],
+    });
+    if (r.verdict === 'adopted') adopted.push(ds);
   }
   steps.push(`${adapter.label}: ensured ${lsList.length} linked service(s) + ${refs.datasets.size} dataset(s) the pipeline references.`);
-  return { unresolvedDatabricks: [] };
+  return { unresolvedDatabricks: [], adopted };
 }
 
 export interface DevPipelineSeedResult {
@@ -321,6 +500,13 @@ export interface DevPipelineSeedResult {
    * auto-created (e.g. a Databricks linked service on an estate without
    * Databricks). The provisioner maps this to a precise remediation gate. */
   needsReference?: { message: string };
+  /**
+   * Linked services / datasets the pipeline references that ALREADY EXISTED and
+   * were NOT created by Loom, so they were used as-is rather than overwritten
+   * (#3549 review, BLOCKER 1). Disclosure, not failure — see the skip-semantics
+   * note on `upsertAndRunDevPipeline`. Surfaced in `steps` for the install path.
+   */
+  adoptedReferences?: string[];
   /** Set when a non-auth REST error occurred; provisioner reports as failed. */
   error?: string;
 }
@@ -413,6 +599,32 @@ export function buildDevPipelineProperties(content: any): DevPipelineProperties 
  * reuses this exact translation + reference-stubbing so an auto-bound pipeline
  * is byte-for-byte the pipeline install would have authored, but must not fire
  * a billed pipeline run merely because a user opened the editor.
+ *
+ * ---------------------------------------------------------------------------
+ * SKIP SEMANTICS FOR AN ADOPTED REFERENCE (#3549 review, BLOCKER 1)
+ * ---------------------------------------------------------------------------
+ * `ensurePipelineReferences` no longer PUTs over a linked service or dataset it
+ * did not create. When one is adopted instead of created, THE SEED STILL
+ * SUCCEEDS, deliberately:
+ *
+ *   - The seed's job is the ACTIVITY GRAPH — the #3549 defect is an
+ *     `activities: []` pipeline, not a missing stub. The reference RESOLVES, so
+ *     the graph lands.
+ *   - Adoption is the ordinary case, not the exceptional one: the 2nd..Nth
+ *     pipeline of a bundle shares one ADLS linked service, and every re-install
+ *     re-encounters the objects the first install made. Reporting those as a
+ *     seed FAILURE would light the editor's "live but EMPTY" gate on a pipeline
+ *     that is demonstrably fine — a false alarm on the common path, which is
+ *     its own defect.
+ *
+ * The incompatible-shape case is not silently swallowed either: ADF/Synapse
+ * validate references at commit, so a pipeline whose `DatasetReference` passes
+ * parameters an adopted dataset does not declare (or whose linked-service type
+ * is wrong) is REJECTED by the service, and that rejection already becomes
+ * `needsReference` → the caller's honest gate carrying the service's own words.
+ * So the user-visible outcome is truthful in both branches. What adoption is
+ * NOT is invisible: every adopted name goes into `steps` (which the installer
+ * prints) and onto `adoptedReferences`.
  */
 export async function upsertAndRunDevPipeline(
   adapter: DevPipelineAdapter,
@@ -444,6 +656,9 @@ export async function upsertAndRunDevPipeline(
     return { upserted: false, triggered: false, steps, authGate: refResult.authGate };
   }
   const { unresolvedDatabricks } = refResult;
+  // Every reference we adopted rather than created, threaded onto every return
+  // below so no exit path can drop the disclosure.
+  const adoptedReferences = refResult.adopted.length > 0 ? { adoptedReferences: refResult.adopted } : {};
 
   // A Databricks-orchestrating pipeline on an estate with no Databricks bound
   // (LOOM_DATABRICKS_HOSTNAME unset) can't have its notebook/Spark activities
@@ -457,6 +672,7 @@ export async function upsertAndRunDevPipeline(
       upserted: false,
       triggered: false,
       steps,
+      ...adoptedReferences,
       needsReference: {
         message:
           `Pipeline '${pipelineName}' orchestrates Databricks notebook/Spark activities that require an ` +
@@ -475,17 +691,17 @@ export async function upsertAndRunDevPipeline(
     const msg = e?.message || String(e);
     const status = statusFromError(msg);
     if (status === 401 || status === 403) {
-      return { upserted: false, triggered: false, steps, authGate: { status, message: msg } };
+      return { upserted: false, triggered: false, steps, ...adoptedReferences, authGate: { status, message: msg } };
     }
     // An "invalid reference" after auto-provisioning means the pipeline still
     // points at an artifact we can't synthesize on this estate (typically a
-    // Databricks linked service when Databricks isn't wired). Honest gate, not
-    // a hard product failure — the pipeline definition is saved to Cosmos and
-    // commits once the referenced backend is provisioned.
+    // Databricks linked service when Databricks isn't wired) — or, since #3549
+    // review BLOCKER 1, one we ADOPTED whose shape the service rejects. Honest
+    // gate carrying the service's own words, not a hard product failure.
     if (/invalid reference|not exist|cannot be found|notfound/i.test(msg)) {
-      return { upserted: false, triggered: false, steps, needsReference: { message: msg } };
+      return { upserted: false, triggered: false, steps, ...adoptedReferences, needsReference: { message: msg } };
     }
-    return { upserted: false, triggered: false, steps, error: msg };
+    return { upserted: false, triggered: false, steps, ...adoptedReferences, error: msg };
   }
 
   // 2) Trigger an on-demand run.
@@ -494,7 +710,7 @@ export async function upsertAndRunDevPipeline(
   //    bill compute and re-execute side effects nobody asked for.
   if (opts.skipRun) {
     steps.push(`${adapter.label}: authored pipeline only (no on-demand run on this path).`);
-    return { upserted: true, pipelineName, triggered: false, steps };
+    return { upserted: true, pipelineName, triggered: false, steps, ...adoptedReferences };
   }
   let runId: string | undefined;
   try {
@@ -509,10 +725,10 @@ export async function upsertAndRunDevPipeline(
     const status = statusFromError(msg);
     if (status === 401 || status === 403) {
       // Pipeline ITSELF was created; only the run couldn't be authorized.
-      return { upserted: true, pipelineName, triggered: false, steps, authGate: { status, message: msg } };
+      return { upserted: true, pipelineName, triggered: false, steps, ...adoptedReferences, authGate: { status, message: msg } };
     }
     steps.push(`${adapter.label}: on-demand run could not be triggered: ${msg}`);
-    return { upserted: true, pipelineName, triggered: false, steps };
+    return { upserted: true, pipelineName, triggered: false, steps, ...adoptedReferences };
   }
 
   // 3) Short-poll the run status — settle, don't block.
@@ -530,5 +746,5 @@ export async function upsertAndRunDevPipeline(
   }
   steps.push(`${adapter.label}: pipeline run ${runId} → ${status || 'InProgress'} (still executing if not terminal).`);
 
-  return { upserted: true, pipelineName, triggered: true, runId, status, steps };
+  return { upserted: true, pipelineName, triggered: true, runId, status, steps, ...adoptedReferences };
 }

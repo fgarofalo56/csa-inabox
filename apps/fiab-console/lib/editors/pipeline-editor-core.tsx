@@ -74,7 +74,8 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
  */
 import {
   AutoBindProgress, AutoBindRetry, AutoBindRebindNotice, AutoBindUnavailable,
-  AutoBindFallbackGate, PipelineSeedIncomplete, AuthoredGraphPanel, type AutoBindWire,
+  AutoBindFallbackGate, PipelineSeedIncomplete, PipelineMissingGate, AuthoredGraphPanel,
+  type AutoBindWire,
 } from './pipeline-autobind-surfaces';
 /** The create-new-factory branch of the factory picker — its own module. */
 import { CreateFactoryForm } from './pipeline-create-factory-form';
@@ -498,6 +499,20 @@ export function PipelineEditorCore({
     // `isNew` (loadBinding short-circuits), so this never targets "new".
     if (bound && !isNew) { loadPipeline(); loadRuns(); }
   }, [bound, isNew, loadPipeline, loadRuns]);
+
+  /**
+   * "Retry seeding" — re-run auto-bind (`loadBinding` → the bind GET →
+   * `autoBindOnOpen`, which re-seeds an EMPTY backing pipeline) and THEN
+   * re-read the canvas. Both halves are required, and in this order: see the
+   * SEQUENCING note on `PipelineSeedIncomplete` in `pipeline-autobind-surfaces`
+   * for why `loadBinding` alone leaves the canvas showing the pre-seed graph
+   * (#3549 review, SHOULD-FIX 4).
+   */
+  const retrySeed = useCallback(async () => {
+    await loadBinding();
+    await loadPipeline();
+    await loadRuns();
+  }, [loadBinding, loadPipeline, loadRuns]);
 
   const save = useCallback(async () => {
     if (!bound) return;
@@ -1168,33 +1183,17 @@ export function PipelineEditorCore({
                   containerLabel={config.containerLabel}
                   reason={autoBind?.seedError}
                   preview={preview}
-                  onRetry={() => void loadBinding()}
+                  onRetry={retrySeed}
                 />
               )}
-              {/* #2895 — bound but not yet present in the backend. An expected
-                  state, so it is a guided WARNING with an inline Fix-it (G2),
-                  never a red bar carrying a stringified response body. The
-                  canvas below still renders and is authorable. */}
+              {/* #2895 — bound but not yet present in the backend. */}
               {missing && (
-                <MessageBar intent="warning" layout="multiline" data-testid="pipeline-missing-gate">
-                  <MessageBarBody>
-                    <MessageBarTitle>Nothing published under this name yet</MessageBarTitle>
-                    This item is bound to a pipeline named <strong>{bound}</strong>, but the{' '}
-                    {config.containerLabel} doesn&apos;t have one by that name yet — it was never
-                    published, or it was deleted. Build the pipeline on the canvas below and{' '}
-                    <strong>Save</strong> to create it, or rebind this item to a different pipeline.
-                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
-                      <Button size="small" appearance="primary" icon={<Link20Regular />}
-                        onClick={startRebind}>
-                        Rebind or create
-                      </Button>
-                      <Button size="small" appearance="secondary" icon={<ArrowSync20Regular />}
-                        onClick={() => loadPipeline()}>
-                        Retry
-                      </Button>
-                    </div>
-                  </MessageBarBody>
-                </MessageBar>
+                <PipelineMissingGate
+                  containerLabel={config.containerLabel}
+                  bound={bound}
+                  onRebind={startRebind}
+                  onRetry={() => void loadPipeline()}
+                />
               )}
               {error && (<BackendStateBar error={error} title="Pipeline API" />)}
               {validation && (

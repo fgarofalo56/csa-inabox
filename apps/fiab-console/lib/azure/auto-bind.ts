@@ -263,6 +263,17 @@ export interface AutoBindProvider {
    * A provider that omits this NEVER re-seeds, which is the pre-existing
    * behaviour. Must not throw: return false if it cannot tell (unknown is not
    * empty — we do not overwrite on a guess).
+   *
+   * COVERAGE, stated rather than implied (#3549 review, BLOCKER 2). Only the
+   * two PIPELINE providers implement it today, so only they self-heal an empty
+   * binding. `eventstream`, `adx-database` and `lakehouse-adls` do not — and
+   * would gain nothing yet if they did, because `autoBindOnOpen` is wired into
+   * the two pipeline bind routes ONLY, so nothing re-runs the engine for those
+   * item types after create (that wiring is tracked in #3694). Each of the
+   * three carries a reasoned entry in `ISEMPTY_OPT_OUTS`
+   * (`__tests__/auto-bind-seed.test.ts`), which walks the live registry
+   * mechanically: adding a sixth provider without either an `isEmpty` or an
+   * entry turns that walk red.
    */
   isEmpty?(
     name: string,

@@ -53,6 +53,19 @@ const synapsePlane = {
   runs: [] as string[],
 };
 
+/**
+ * A fresh factory/workspace: nothing exists under any of the names the pipeline
+ * references, so every GET 404s and the stubber is free to create.
+ *
+ * These reads are load-bearing, not scenery (#3549 review, BLOCKER 1): the
+ * reference stubber is create-if-absent, and answering "already there" would
+ * make it adopt instead of author. A `.status = 404` throw is exactly what
+ * `adf-client` / `synapse-dev-client` raise for a missing artifact.
+ */
+function notFound(label: string) {
+  return Object.assign(new Error(`${label} failed 404: {"error":{"code":"NotFound"}}`), { status: 404 });
+}
+
 vi.mock('@/lib/azure/adf-client', () => ({
   upsertPipeline: vi.fn(async (name: string, body: any) => {
     if (adfPlane.putThrows) { const e = adfPlane.putThrows; adfPlane.putThrows = null; throw e; }
@@ -62,6 +75,8 @@ vi.mock('@/lib/azure/adf-client', () => ({
   listPipelineRuns: vi.fn(async () => []),
   upsertLinkedService: vi.fn(async (name: string) => { adfPlane.linkedServices.push(name); }),
   upsertDataset: vi.fn(async (name: string) => { adfPlane.datasets.push(name); }),
+  getLinkedService: vi.fn(async (name: string) => { throw notFound(`getLinkedService(${name})`); }),
+  getDataset: vi.fn(async (name: string) => { throw notFound(`getDataset(${name})`); }),
 }));
 
 vi.mock('@/lib/azure/synapse-dev-client', () => ({
@@ -70,6 +85,8 @@ vi.mock('@/lib/azure/synapse-dev-client', () => ({
   getPipelineRun: vi.fn(async () => ({ status: 'Succeeded' })),
   upsertLinkedService: vi.fn(async () => {}),
   upsertDataset: vi.fn(async () => {}),
+  getLinkedService: vi.fn(async (name: string) => { throw notFound(`getLinkedService(${name})`); }),
+  getDataset: vi.fn(async (name: string) => { throw notFound(`getDataset(${name})`); }),
   synapseConfigGate: vi.fn(() => null),
 }));
 
