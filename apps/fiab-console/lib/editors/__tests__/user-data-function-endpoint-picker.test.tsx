@@ -32,6 +32,18 @@ const RUNTIME = 'https://loom-udf-runtime.internal.example.io';
 /** An operator-approved Function App, keyed — so it never receives pushed source. */
 const APPROVED_FN = 'https://contoso-udf.azurewebsites.net';
 
+/**
+ * Match an option by SUBSTRINGS, not by a regex built from a URL.
+ *
+ * `new RegExp(`${APPROVED_FN}.*keyed`)` reads as an exact host match and is not
+ * one: every `.` in `contoso-udf.azurewebsites.net` is a metacharacter, so the
+ * pattern also matches `contoso-udfXazurewebsitesYnet`. CodeQL flags exactly
+ * that (`js/incomplete-hostname-regexp` + `js/regex/missing-regexp-anchor`), and
+ * it is right to — a host comparison that is accidentally a wildcard is the same
+ * class of bug wherever it appears, including in a test's own assertions.
+ */
+const optionNamed = (...parts: string[]) => (name: string) => parts.every((p) => name.includes(p));
+
 const ENDPOINTS = {
   ok: true,
   endpoints: [
@@ -77,8 +89,8 @@ describe('UserDataFunctionEditor — Execution endpoint is selected, not typed',
       expect(calls.some((c) => c.url.includes('/api/items/user-data-function/endpoints'))).toBe(true);
     });
     fireEvent.click(await screen.findByRole('combobox', { name: /Run target/i }));
-    await screen.findByRole('option', { name: new RegExp(`${RUNTIME}.*deployment default`) });
-    await screen.findByRole('option', { name: new RegExp(`${APPROVED_FN}.*keyed`) });
+    await screen.findByRole('option', { name: optionNamed(RUNTIME, 'deployment default') });
+    await screen.findByRole('option', { name: optionNamed(APPROVED_FN, 'keyed') });
   });
 
   it('derives the function key from the picked endpoint — it is never typed', async () => {
@@ -88,7 +100,7 @@ describe('UserDataFunctionEditor — Execution endpoint is selected, not typed',
     await screen.findByText(/Anonymous \/ Entra-protected/i);
 
     fireEvent.click(await screen.findByRole('combobox', { name: /Run target/i }));
-    fireEvent.click(await screen.findByRole('option', { name: new RegExp(`${APPROVED_FN}.*keyed`) }));
+    fireEvent.click(await screen.findByRole('option', { name: optionNamed(APPROVED_FN, 'keyed') }));
 
     // The keyed endpoint's configured secret NAME is shown, and the consequence
     // the policy attaches to it (no pushed source) is stated with it.
