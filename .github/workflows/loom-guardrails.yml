@@ -219,12 +219,16 @@ jobs:
       # cloud-parity quota gate: three of the four flexibleServers consumers in
       # admin-plane/main.bicep routed through postgresQuotaAvailable and the
       # fourth (the Weave AGE store) did not, so a GCC-High deploy attempted a
-      # Postgres server in a boundary whose own bicepparam pins that gate false
-      # and died on the leaf with an EMPTY permitted-version list — which no
-      # postgresVersion value can satisfy. R2 also requires every CALLER to
-      # forward the param, because a module that gates on its own
-      # `param postgresQuotaAvailable bool = true` is defaulted back ON by any
-      # call site that omits it (story 3449d).
+      # Postgres server on a path that never consults the gate its own bicepparam
+      # pins false, and that leaf died with an EMPTY permitted-version list —
+      # which no postgresVersion value can satisfy (receipt: Actions run
+      # 32019775757, deploy-fiab-gcch, 2026-08-17). WHY that list is empty is not
+      # asserted by this guard; each Gov bicepparam records its own reason.
+      # R2 also requires every CALLER to forward the param AND to forward a value
+      # that reaches it — a module gating on its own
+      # `param postgresQuotaAvailable bool = true` is defaulted back ON by a call
+      # site that omits the key, and equally by one that passes a literal `true`
+      # (story 3449d).
       - name: postgres-quota-gate (every PG flexible server consults the Gov quota gate — 3449d)
         if: ${{ !cancelled() }}
         run: |

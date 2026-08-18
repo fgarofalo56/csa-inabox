@@ -1096,7 +1096,7 @@ param appImageTags object = {
   unity: 'v0.1'
 }
 
-@description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov.')
+@description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. When false, every Postgres-backed component is SKIPPED so the rest of the estate still deploys and each affected editor honest-gates. WHY a given boundary sets it false is recorded in that boundary\'s .bicepparam next to the assignment — read it there. Do NOT read this flag as "the region/subscription lacks the service": both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government, and pin it false as a deliberate posture hold. Not a Fabric dependency.')
 param postgresQuotaAvailable bool = true
 
 // =====================================================================
@@ -2382,12 +2382,21 @@ var dpConsolePrincipalId = hub.consolePrincipalId
 // gates every other flexibleServers consumer: `postgresEnabled` says the
 // OPERATOR wants a Lakebase Postgres, it does not say the SUBSCRIPTION can
 // create one. In a boundary whose bicepparam pins the quota gate false, opting
-// in here produced the same ParameterOutOfRange 'Version' should be in: []
+// in here WOULD produce the same ParameterOutOfRange 'Version' should be in: []
 // hard-failure the Weave server produced — an empty permitted-version set that
-// no postgresVersion value satisfies. Skipping instead leaves LOOM_POSTGRES_HOST
-// empty, which svc-postgres already reads as its honest gate (#2755). Commercial
-// is unaffected: postgresQuotaAvailable defaults true and no shipped Commercial
-// bicepparam sets it false.
+// no postgresVersion value satisfies.
+//
+// "WOULD", not "did": `postgresEnabled` defaults false (see its param above) and
+// NO shipped .bicepparam sets it, so no Gov deploy has ever opted in and that
+// event has not been observed. The observed one is the Weave leaf —
+// psql-loom-weave-default-*, GitHub Actions run 32019775757 (deploy-fiab-gcch,
+// 2026-08-17). Stating an unobserved event in the past tense is the R7 shape
+// this repo has already paid for.
+//
+// Skipping instead leaves LOOM_POSTGRES_HOST empty, which svc-postgres already
+// reads as its honest gate (#2755). Commercial is unaffected:
+// postgresQuotaAvailable defaults true and no shipped Commercial bicepparam sets
+// it false.
 module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (useSingleDlz && postgresEnabled && postgresQuotaAvailable) {
   name: 'dp-postgres'
   scope: singleDlzRg

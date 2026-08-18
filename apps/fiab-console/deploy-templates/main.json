@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "16682242396616015162"
+      "templateHash": "13564274139018378030"
     }
   },
   "definitions": {
@@ -1987,7 +1987,7 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov."
+        "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. When false, every Postgres-backed component is SKIPPED so the rest of the estate still deploys and each affected editor honest-gates. WHY a given boundary sets it false is recorded in that boundary's .bicepparam next to the assignment — read it there. Do NOT read this flag as \"the region/subscription lacks the service\": both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government, and pin it false as a deliberate posture hold. Not a Fabric dependency."
       }
     }
   },
@@ -2554,7 +2554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "346231350100123034"
+              "templateHash": "12452681496919198830"
             }
           },
           "definitions": {
@@ -3657,7 +3657,7 @@
               "type": "bool",
               "defaultValue": true,
               "metadata": {
-                "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers (\"Subscriptions are restricted from provisioning in location ...\"). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate."
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same name, same meaning). When false, every Postgres-backed component in this module is SKIPPED so the core app-tier still deploys — the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT, the Weave ontology editor on LOOM_WEAVE_PG_FQDN, and Loom Unity falls back to its EmptyDir H2 store. WHY a given boundary sets it false is recorded in that boundary's .bicepparam next to the assignment — read it there rather than assuming a quota restriction; both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government and pin it false as a deliberate posture hold. If a subscription genuinely IS quota-restricted, https://aka.ms/postgres-request-quota-increase is the request path. NOT a Fabric dependency."
               }
             },
             "loomVersion": {
@@ -29959,7 +29959,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15042706289162412903"
+              "templateHash": "10661877972815013237"
             }
           },
           "functions": [
@@ -30464,7 +30464,7 @@
               "type": "bool",
               "defaultValue": true,
               "metadata": {
-                "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally."
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary's .bicepparam — do not read it as \"the service is unavailable there\"."
               }
             }
           },
@@ -39315,7 +39315,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15042706289162412903"
+              "templateHash": "10661877972815013237"
             }
           },
           "functions": [
@@ -39820,7 +39820,7 @@
               "type": "bool",
               "defaultValue": true,
               "metadata": {
-                "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally."
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary's .bicepparam — do not read it as \"the service is unavailable there\"."
               }
             }
           },
@@ -48958,7 +48958,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15042706289162412903"
+              "templateHash": "10661877972815013237"
             }
           },
           "functions": [
@@ -49463,7 +49463,7 @@
               "type": "bool",
               "defaultValue": true,
               "metadata": {
-                "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally."
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary's .bicepparam — do not read it as \"the service is unavailable there\"."
               }
             }
           },

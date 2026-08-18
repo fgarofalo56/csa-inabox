@@ -1107,24 +1107,39 @@ var directLakeSvcActive = directLakeSvcEnabled && containerPlatform == 'containe
 // `postgresQuotaAvailable` is designated THE cloud-parity gate for
 // Microsoft.DBforPostgreSQL/flexibleServers by the comment block below (~L1180),
 // and BOTH Gov param files pin it false:
-//     params/gcc-high.bicepparam:273  param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
-//     params/il5.bicepparam:340       (same line)
+//     params/gcc-high.bicepparam  param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
+//     params/il5.bicepparam       (same line)  — cited by NAME, not line number,
+//                                 because both files were re-edited in this story
+//                                 and a stale line citation is a claim that has
+//                                 quietly stopped being true.
 // Every other Postgres consumer in this file routes through it —
 // `airflowPostgresAllowed` (the Airflow metadata DB) and `postgresStoresAllowed`
 // (DuckLake + Loom Unity). This one did not: it was
 // `weaveOntologyBackendEnabled && !weavePgSuppliedByDlz`, full stop. So the
-// server was attempted in a boundary whose own param file says Postgres cannot
-// be provisioned there, and the deploy died on it.
+// server was attempted on a path that never consults the gate its own param
+// file pins false, and the deploy died on it.
 //
-// MEASURED (live GCC-High leaf, resource psql-loom-weave-default-dcmt6cqoezlgs):
+// MEASURED (live GCC-High leaf, resource psql-loom-weave-default-dcmt6cqoezlgs;
+// receipt: GitHub Actions run 32019775757, `deploy-fiab-gcch`, 2026-08-17,
+// conclusion=failure — per the Gov access rule a Gov observation comes from an
+// Actions run, never local `az`):
 //     ParameterOutOfRange -> The value of the 'Version' should be in: []
 // The permitted-version set came back EMPTY. That is stated here only as far as
 // it is established (deploy-integrity.md R7): an EMPTY set is satisfied by NO
 // value, so no `postgresVersion` — 16, 15, 14 — can clear it, and "bump the
-// version" is provably the wrong fix. WHY the set is empty (a subscription quota
-// restriction vs the region not offering the type at all) is NOT established by
-// that message and is not claimed here; either way this deployment cannot create
-// the server, which is exactly the condition postgresQuotaAvailable encodes.
+// version" is provably the wrong fix.
+//
+// WHY the set is empty is NOT established and is NOT claimed here. The ARM
+// message does not say, and that run's own failure classifier logged the leaf as
+// `ParameterOutOfRange -> unknown` ("No cause is asserted ... Unknown fails
+// closed"). In particular it must NOT be read as "Postgres cannot be
+// provisioned in Gov": params/gcc-high.bicepparam and params/il5.bicepparam both
+// state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS an
+// Azure Government service, and pin the flag false as a deliberate posture hold
+// pending an ACR mirror of `apache/airflow` and a private endpoint for that
+// host. Read those files before concluding anything about the boundary. Either
+// way, THIS deployment must not attempt the server while the flag is false —
+// which is exactly the condition postgresQuotaAvailable encodes.
 //
 // The override rides the loomBackends bag under its own key (`weavePostgres`),
 // the same lever airflowPostgres/postgresStores use, so a Gov boundary with
@@ -1221,12 +1236,17 @@ var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airf
 // is precisely the opt-IN posture loom_default_on_opt_out forbids. It is now
 // deployed by default so a FRESH push-button deploy lights the gate.
 //
-// Gated on postgresQuotaAvailable for the SAME honest Azure reason as the
-// Airflow metadata DB: some sovereign subscriptions are quota-restricted from
-// provisioning Microsoft.DBforPostgreSQL/flexibleServers. That is a regional
-// quota gate, NOT a Fabric one — when it trips the DuckLake editor renders in
-// full and honest-gates with a Fix-it, and every other surface is unaffected.
-// Cost: one Standard_B1ms burstable server ≈ $16/mo/cloud (see the module).
+// Gated on postgresQuotaAvailable for the SAME reason as the Airflow metadata
+// DB: that flag says whether THIS deployment should attempt
+// Microsoft.DBforPostgreSQL/flexibleServers. It must NOT be read as "the
+// subscription is quota-restricted" — both shipped Gov param files state, with
+// Microsoft Learn citations, that PostgreSQL Flexible Server IS an Azure
+// Government service and pin the flag false as a deliberate posture hold; read
+// the reason next to the assignment in params/gcc-high.bicepparam. Either way
+// it is an Azure-side gate, NOT a Fabric one — when it trips the DuckLake editor
+// renders in full and honest-gates with a Fix-it, and every other surface is
+// unaffected. Cost: one Standard_B1ms burstable server ≈ $16/mo/cloud (see the
+// module).
 //
 // ROUND-3 FIX — the activation gate now matches `airflowHostActive` exactly
 // (`containerApps && deployAppsEnabled && postgresQuotaAvailable`). Round 2
@@ -1399,7 +1419,7 @@ var risingwaveRootPasswordSecretName = 'loom-risingwave-root-password'
 var risingwaveRootPassword = 'Rw7${uniqueString(loomGeneratedSecretSeed, 'loom-risingwave-root-v1')}!Qz'
 var risingwaveRootPasswordSecretUri = '${keyvault.outputs.keyVaultUri}secrets/${risingwaveRootPasswordSecretName}'
 
-@description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers ("Subscriptions are restricted from provisioning in location ..."). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate.')
+@description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same name, same meaning). When false, every Postgres-backed component in this module is SKIPPED so the core app-tier still deploys — the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT, the Weave ontology editor on LOOM_WEAVE_PG_FQDN, and Loom Unity falls back to its EmptyDir H2 store. WHY a given boundary sets it false is recorded in that boundary\'s .bicepparam next to the assignment — read it there rather than assuming a quota restriction; both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government and pin it false as a deliberate posture hold. If a subscription genuinely IS quota-restricted, https://aka.ms/postgres-request-quota-increase is the request path. NOT a Fabric dependency.')
 param postgresQuotaAvailable bool = true
 
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')

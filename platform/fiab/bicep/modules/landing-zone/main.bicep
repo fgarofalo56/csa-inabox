@@ -877,18 +877,29 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
 @description('Provision the Weave ontology PostgreSQL + Apache AGE graph store to back object/link/action instance write-back. Default on — Palantir-class ontology write-back requires the graph store.')
 param weaveOntologyEnabled bool = true
 
-@description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally.')
+@description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary\'s .bicepparam — do not read it as "the service is unavailable there".')
 param postgresQuotaAvailable bool = true
 
 // 3449d — the DLZ half of the same gate the admin plane carries. Before this,
 // this module deployed the Weave PG server on `weaveOntologyEnabled` alone, so a
-// Gov single-sub / multi-sub / dlz-attach deploy hit the identical
+// Gov single-sub / multi-sub / dlz-attach deploy would hit the identical
 // ParameterOutOfRange 'Version' should be in: [] that the admin-plane server hit
-// on the tenant topology — an EMPTY permitted-version set, which no
+// on the tenant topology (receipt: GitHub Actions run 32019775757,
+// deploy-fiab-gcch, 2026-08-17) — an EMPTY permitted-version set, which no
 // postgresVersion value can satisfy. The shipped Gov params are topology='tenant'
-// today, so this call site is not what the live GCC-High leaf failed on; it is
-// the same defect one topology over, and fixing only the measured one would leave
-// it armed. OPT-OUT/OVERRIDE lever is main.bicep's postgresQuotaAvailable.
+// today, so this call site is not what that live leaf failed on; it is the same
+// defect one topology over, and fixing only the measured one would leave it
+// armed.
+//
+// LEVER, stated precisely because it differs by topology: main.bicep's
+// `postgresQuotaAvailable` is the only opt-out/override reaching HERE. The
+// per-capability `loomBackends.weavePostgres` key exists only on the admin-plane
+// derivation (admin-plane/main.bicep weavePgAllowed) because this module is not
+// handed the loomBackends bag. So on a single-sub / multi-sub / dlz-attach
+// topology there is no way to re-enable JUST the Weave server without also
+// un-gating the Airflow and DuckLake/Unity hosts. That asymmetry is named here
+// rather than left for the next reader to discover; closing it means plumbing
+// loomBackends into this module, which is a separate change.
 var weavePgActive = weaveOntologyEnabled && postgresQuotaAvailable
 
 module postgresWeave 'postgres-weave.bicep' = if (weavePgActive) {

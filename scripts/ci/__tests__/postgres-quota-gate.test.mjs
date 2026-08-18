@@ -9,12 +9,15 @@ import {
   blankComments,
   blankStrings,
   declaresPostgres,
+  forwardedGateValue,
   forwardsGate,
+  identifierReads,
   identifiersOf,
   parseModules,
   parseParams,
   parseVars,
   reachesGate,
+  resolveModuleTarget,
   runControls,
 } from '../check-postgres-quota-gate.mjs';
 
@@ -157,4 +160,142 @@ test('an unbalanced module body throws rather than silently skipping the file', 
 
 test('the judged tree is the one where the gate parameter actually exists', () => {
   assert.equal(JUDGED_PREFIX, 'platform/fiab/bicep/');
+});
+
+// ── R2 checks the forwarded VALUE, not just the key ──────────────────────────
+// Rework 2026-08-18. `postgresQuotaAvailable: true` is runtime-identical to
+// omitting the forward, and the key-only check accepted it — measured on the
+// real repo by mutating main.bicep's singleDlz call site.
+
+test('a HARDCODED forward is extracted, and the value does not reach the gate', () => {
+  const src = [
+    `param ${GATE} bool = true`,
+    "module lz 'lz.bicep' = if (x) {",
+    '  params: {',
+    `    ${GATE}: true`,
+    '  }',
+    '}',
+  ].join('\n');
+  const mod = parseModules(src, 'fixture.bicep')[0];
+  assert.equal(forwardsGate(src, mod), true, 'the KEY is present — this is what used to pass');
+  const clean = blankComments(src);
+  const value = forwardedGateValue(src, mod, 'fixture.bicep');
+  assert.equal(value.trim(), 'true');
+  assert.equal(reachesGate(value, parseVars(clean), new Set([...parseParams(clean), 'x'])).reached, false);
+});
+
+test('forwarding the param itself DOES reach the gate', () => {
+  const src = [
+    `param ${GATE} bool = true`,
+    "module lz 'lz.bicep' = if (x) {",
+    '  params: {',
+    `    ${GATE}: ${GATE}`,
+    '  }',
+    '}',
+  ].join('\n');
+  const mod = parseModules(src, 'fixture.bicep')[0];
+  const clean = blankComments(src);
+  const value = forwardedGateValue(src, mod, 'fixture.bicep');
+  assert.equal(reachesGate(value, parseVars(clean), new Set([...parseParams(clean), 'x'])).reached, true);
+});
+
+test('an absent forward yields a null value rather than an empty string', () => {
+  const src = ["module lz 'lz.bicep' = if (x) {", '  params: {', '    other: 1', '  }', '}'].join('\n');
+  const mod = parseModules(src, 'fixture.bicep')[0];
+  assert.equal(forwardedGateValue(src, mod, 'fixture.bicep'), null);
+});
+
+test('a forwarded value that continues on the next line THROWS rather than judging a truncation', () => {
+  const src = [
+    `param ${GATE} bool = true`,
+    "module lz 'lz.bicep' = {",
+    '  params: {',
+    `    ${GATE}: cond`,
+    `      ? ${GATE}`,
+    '      : false',
+    '  }',
+    '}',
+  ].join('\n');
+  const mod = parseModules(src, 'fixture.bicep')[0];
+  assert.throws(() => forwardedGateValue(src, mod, 'fixture.bicep'), /cannot read that shape whole/);
+});
+
+test('a forwarded value spanning a balanced call is read WHOLE, not truncated', () => {
+  const src = [
+    `param ${GATE} bool = true`,
+    "module lz 'lz.bicep' = {",
+    '  params: {',
+    `    ${GATE}: union(`,
+    `      ${GATE},`,
+    '      other)',
+    '  }',
+    '}',
+  ].join('\n');
+  const mod = parseModules(src, 'fixture.bicep')[0];
+  const value = forwardedGateValue(src, mod, 'fixture.bicep');
+  assert.match(value, /other/, 'the value must include the continuation lines inside the parens');
+  const clean = blankComments(src);
+  assert.equal(reachesGate(value, parseVars(clean), new Set([...parseParams(clean), 'other'])).reached, true);
+});
+
+// ── polarity: a reference is not a gate if it is inverted ────────────────────
+
+test('identifierReads marks a directly negated identifier', () => {
+  const reads = identifierReads(`flag && !${GATE}`);
+  assert.deepEqual(reads.find((r) => r.name === GATE), { name: GATE, negated: true });
+  assert.deepEqual(reads.find((r) => r.name === 'flag'), { name: 'flag', negated: false });
+});
+
+test('identifierReads keeps offsets valid across a property access, so negation is read correctly', () => {
+  const reads = identifierReads(`!bag.?weavePostgres && ${GATE}`);
+  assert.deepEqual(reads.find((r) => r.name === 'bag'), { name: 'bag', negated: true });
+  assert.deepEqual(reads.find((r) => r.name === GATE), { name: GATE, negated: false });
+});
+
+test('a NEGATED gate reference is reached but flagged negatedOnly', () => {
+  const src = [`param ${GATE} bool = true`, `var active = flag && !${GATE}`].join('\n');
+  const clean = blankComments(src);
+  const res = reachesGate('active', parseVars(clean), new Set([...parseParams(clean), 'flag']));
+  assert.equal(res.reached, true);
+  assert.equal(res.negatedOnly, true, 'the one-character inversion must be distinguishable from a correct gate');
+});
+
+test('negation THROUGH a var chain is still negation', () => {
+  const src = [`param ${GATE} bool = true`, `var allowed = ${GATE}`, 'var active = flag && !allowed'].join('\n');
+  const clean = blankComments(src);
+  assert.equal(reachesGate('active', parseVars(clean), new Set([...parseParams(clean), 'flag'])).negatedOnly, true);
+});
+
+test('a DOUBLE negation cancels and is not flagged', () => {
+  const src = [`param ${GATE} bool = true`, `var allowed = !${GATE}`, 'var active = flag && !allowed'].join('\n');
+  const clean = blankComments(src);
+  const res = reachesGate('active', parseVars(clean), new Set([...parseParams(clean), 'flag']));
+  assert.equal(res.reached, true);
+  assert.equal(res.negatedOnly, false);
+});
+
+test('a correct gate is NOT flagged negatedOnly — the check has both directions', () => {
+  const src = [`param ${GATE} bool = true`, `var active = flag && ${GATE}`].join('\n');
+  const clean = blankComments(src);
+  assert.equal(reachesGate('active', parseVars(clean), new Set([...parseParams(clean), 'flag'])).negatedOnly, false);
+});
+
+// ── R3: an unresolvable module target is a hard failure, not a skip ──────────
+
+test('resolveModuleTarget resolves a sibling and a cross-tree relative path', () => {
+  assert.equal(
+    resolveModuleTarget('platform/fiab/bicep/main.bicep', 'modules/landing-zone/main.bicep'),
+    'platform/fiab/bicep/modules/landing-zone/main.bicep',
+  );
+  assert.equal(
+    resolveModuleTarget('platform/fiab/bicep/modules/landing-zone/main.bicep', '../../../../../deploy/bicep/DLZ/modules/geoanalytics.bicep'),
+    'deploy/bicep/DLZ/modules/geoanalytics.bicep',
+  );
+});
+
+test('one `..` too few resolves somewhere that does not exist — which R3 must not absorb', () => {
+  assert.equal(
+    resolveModuleTarget('platform/fiab/bicep/modules/landing-zone/main.bicep', '../../../../deploy/bicep/DLZ/modules/geoanalytics.bicep'),
+    'platform/deploy/bicep/DLZ/modules/geoanalytics.bicep',
+  );
 });

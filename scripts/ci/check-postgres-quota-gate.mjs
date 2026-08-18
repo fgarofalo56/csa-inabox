@@ -9,24 +9,41 @@
  * ── THE DEFECT ──────────────────────────────────────────────────────────────
  * `platform/fiab/bicep/main.bicep` designates `postgresQuotaAvailable` as THE
  * gate for `Microsoft.DBforPostgreSQL/flexibleServers`, and both sovereign param
- * files pin it false:
+ * files pin it false (cited by NAME, not by line — a line number goes stale the
+ * next time either file is edited, and a stale citation is a small claim that
+ * has quietly stopped being true):
  *
- *     params/gcc-high.bicepparam:273  param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
- *     params/il5.bicepparam:340       (identical)
+ *     params/gcc-high.bicepparam  param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
+ *     params/il5.bicepparam       (identical)
  *
  * Three of the four Postgres consumers in admin-plane/main.bicep routed through
  * it. The fourth — the Weave ontology AGE store — did not: its activation var
  * was `weaveOntologyBackendEnabled && !weavePgSuppliedByDlz`, and nothing else.
- * So a GCC-High deploy attempted a flexible server in a boundary whose own param
- * file says one cannot be created there, and the deploy died on the leaf:
+ * So a GCC-High deploy attempted a flexible server on a path that never consults
+ * the gate its own param file pins false, and that leaf failed:
  *
  *     ParameterOutOfRange -> The value of the 'Version' should be in: []
  *     (resource psql-loom-weave-default-dcmt6cqoezlgs)
  *
+ * RECEIPT for that string, so it is citable rather than asserted: GitHub Actions
+ * run 32019775757 (`deploy-fiab-gcch`, 2026-08-17, conclusion=failure) — one of
+ * three unclassified ARM leaves in that run. Per the Gov access rule a Gov
+ * observation comes from an Actions run, never local `az`.
+ *
  * An EMPTY permitted-version set is satisfied by no value at all, so no
  * `postgresVersion` could have cleared it — the tempting "bump 16 to 15" fix was
- * provably not a fix. (Why the set is empty is NOT asserted here; the message
- * does not establish it. deploy-integrity.md R7.)
+ * provably not a fix.
+ *
+ * WHY the set is empty is NOT established, here or anywhere in this repo. The
+ * ARM message does not say, and that run's own failure classifier recorded the
+ * leaf as `ParameterOutOfRange -> unknown` ("No cause is asserted ... Unknown
+ * fails closed"). Note in particular that the two Gov param files do NOT claim a
+ * quota restriction: both state, with Microsoft Learn citations, that PostgreSQL
+ * Flexible Server IS available in Azure Government, and that their `false` is a
+ * deliberate posture hold pending an ACR mirror of `apache/airflow` plus a
+ * private endpoint for the Airflow metadata server. Any message this file prints
+ * must therefore point at those files rather than supply a cause of its own
+ * (deploy-integrity.md R7).
  *
  * Reading the four call sites side by side, three correct and one not, is
  * exactly the review that does not happen reliably. Hence a guard.
@@ -47,30 +64,64 @@
  * R2  If a file satisfies R1 via a PARAM named `postgresQuotaAvailable` that it
  *     DECLARES ITSELF (params carry defaults — landing-zone/main.bicep defaults
  *     it `true`), then every invocation of THAT file must pass
- *     `postgresQuotaAvailable:` in its params object. Without R2 the gate is
- *     real and defaulted away: deleting one of the three forwards in main.bicep
+ *     `postgresQuotaAvailable:` in its params object, AND the value passed must
+ *     itself reach the gate in the CALLER's scope. Without R2 the gate is real
+ *     and defaulted away: deleting one of the three forwards in main.bicep
  *     silently re-arms the failure on one topology while the other two keep the
  *     guard green. That "delete one of several, not the only one" shape is the
  *     blind spot this repo keeps paying for.
  *
+ *     R2 checks the VALUE, not just the key, because `postgresQuotaAvailable:
+ *     true` is runtime-identical to omitting the forward and was measurably
+ *     accepted by the key-only form (rework 2026-08-18). Keying a guard to the
+ *     presence of a safe-looking token rather than to the mismatch is the repo's
+ *     `csa_loom_guard_keyed_to_the_unsafe_pattern` shape.
+ *
+ *     R2 also fails when a gated target has ZERO call sites while a resolver-
+ *     independent textual scan finds some — that disagreement means the module-
+ *     path resolver drifted, and a per-target zero must not be absorbed by a
+ *     sibling target still having callers (the aggregate check it replaces only
+ *     fired when EVERY gated target lost EVERY caller).
+ *
+ * R3  A module target that does not resolve to a tracked .bicep file is a HARD
+ *     FAILURE, not a skip. Before this rule such an invocation was dropped in
+ *     silence, so any drift in the path resolver — or a hand-written probe with
+ *     one `..` too few — read as "nothing to judge" instead of "I could not
+ *     tell". Every one of the 177 module invocations in the judged tree resolves
+ *     today, so this rule has no legitimate population to suppress.
+ *
  * ── HONESTY BOUNDARIES (what a PASS here does NOT claim) ────────────────────
- *   • PG-declaring modules are discovered REPO-WIDE, but only invocations under
- *     platform/fiab/bicep/** are judged, because `postgresQuotaAvailable` is a
- *     concept of that deploy tree and does not exist in deploy/bicep/**. Any
- *     PG-declaring bicep outside the judged tree is PRINTED on every run, never
- *     silently dropped — and if a judged file invokes one, that invocation IS
- *     judged, so the seam cannot be used to launder an ungated server.
+ *   • PG-declaring modules are discovered REPO-WIDE, but only invocations whose
+ *     CALLER lives under platform/fiab/bicep/** are judged, because
+ *     `postgresQuotaAvailable` is a concept of that deploy tree and does not
+ *     exist in deploy/bicep/**. Any PG-declaring bicep outside the judged tree
+ *     is PRINTED on every run, never silently dropped. A judged file that
+ *     invokes one of them IS judged on that invocation — measured, not asserted:
+ *     an unconditional `module launderProbe
+ *     '../../../../../deploy/bicep/DLZ/modules/geoanalytics.bicep'` added to
+ *     landing-zone/main.bicep FAILS this guard (exit 1). Combined with R3, the
+ *     seam cannot be used to launder an ungated server.
  *   • A PG module with ZERO invocations is out-of-band by construction; whether
  *     it SHOULD be wired in is check-bicep-sync.mjs's ORPHAN_ALLOWLIST, not
  *     this file's. It is printed, not judged.
- *   • Reaching the gate proves the condition CONSULTS it. It does not prove the
- *     surrounding boolean algebra is what the author intended.
+ *   • Reaching the gate proves the condition CONSULTS it, and a gate reference
+ *     that is NEGATED — `!postgresQuotaAvailable`, directly or through a var
+ *     that resolves to it — is rejected. What is still NOT proven is the rest of
+ *     the boolean algebra: a negation applied to a compound sub-expression that
+ *     does not immediately precede the reference (`!(x && postgresQuotaAvailable)`)
+ *     or a disjunction that makes the gate non-load-bearing
+ *     (`postgresQuotaAvailable || somethingElse`) would still pass. Closing
+ *     those needs an exhaustive evaluation of the resolved condition, which this
+ *     file does not do.
  *
  * ── FAIL-CLOSED (a scan that stopped scanning is not a verdict) ─────────────
  * Hard failure, before any repo verdict, when: the embedded controls disagree;
  * zero bicep files are discovered; zero PG-declaring modules are found; zero
- * invocations of them are found; a module header cannot be parsed; or a
- * condition names an identifier that is neither a `var` nor a `param` of its
+ * invocations of them are found; a module header cannot be parsed; a module
+ * target does not resolve to a tracked .bicep file (R3); a forwarded
+ * `postgresQuotaAvailable:` value has a shape this file cannot read whole; a
+ * gated target has zero resolved call sites while a textual scan finds some; or
+ * a condition names an identifier that is neither a `var` nor a `param` of its
  * file (unresolvable ⇒ refuse to guess).
  *
  * Usage:
@@ -238,24 +289,49 @@ export function parseParams(clean) {
 }
 
 /**
- * Identifiers an expression READS. Property accesses (`x.y`, `x.?y`) yield only
- * the root, function names are dropped (an identifier immediately followed by
- * `(`), string content is dropped, and literals are dropped.
+ * Identifiers an expression READS, each with whether a logical NOT applies to it.
+ *
+ * Property accesses (`x.y`, `x.?y`) yield only the root, function names are
+ * dropped (an identifier immediately followed by `(`), string content is
+ * dropped, and literals are dropped.
+ *
+ * `negated` is computed by scanning BACKWARDS from the identifier over
+ * whitespace and open parens, counting `!`. That reads `!gate`, `! gate` and
+ * `!(gate && x)` as negated, and an even count (`!!gate`) as not. A negation
+ * applied to a compound sub-expression that does not immediately precede the
+ * identifier — `!(x && gate)` — is NOT detected; that limitation is stated in
+ * the honesty boundaries rather than papered over.
  *
  * @param {string} expr
- * @returns {string[]}
+ * @returns {{name: string, negated: boolean}[]}
  */
-export function identifiersOf(expr) {
+export function identifierReads(expr) {
   const noStrings = blankStrings(expr);
-  const noProps = noStrings.replace(/\.\s*\??\s*[A-Za-z_]\w*/g, ' ');
+  const noProps = noStrings.replace(/\.\s*\??\s*[A-Za-z_]\w*/g, (m) => ' '.repeat(m.length));
   const out = [];
   for (const m of noProps.matchAll(/[A-Za-z_]\w*/g)) {
     const after = noProps.slice(m.index + m[0].length);
     if (/^\s*\(/.test(after)) continue; // function call
     if (LITERALS.has(m[0])) continue;
-    out.push(m[0]);
+    let k = m.index - 1;
+    let bangs = 0;
+    while (k >= 0 && /[\s(!]/.test(noProps[k])) {
+      if (noProps[k] === '!') bangs += 1;
+      k -= 1;
+    }
+    out.push({ name: m[0], negated: bangs % 2 === 1 });
   }
   return out;
+}
+
+/**
+ * Identifiers an expression READS (names only).
+ *
+ * @param {string} expr
+ * @returns {string[]}
+ */
+export function identifiersOf(expr) {
+  return identifierReads(expr).map((r) => r.name);
 }
 
 /**
@@ -264,36 +340,43 @@ export function identifiersOf(expr) {
  * @param {string} expr the module's activation condition
  * @param {Map<string,string>} vars
  * @param {Set<string>} params
- * @returns {{reached: boolean, viaParam: boolean, unresolved: string[]}}
+ * @returns {{reached: boolean, viaParam: boolean, negatedOnly: boolean, unresolved: string[]}}
  *   `viaParam` is true when the gate was reached as a PARAM of this file, which
  *   is what triggers R2 (a param carries a default and can be silently omitted
- *   by a caller).
+ *   by a caller). `negatedOnly` is true when the gate WAS reached but every path
+ *   that reaches it applies a logical NOT — i.e. the module deploys precisely
+ *   when the gate says not to, which is the one-character inversion a
+ *   presence-only check cannot tell from a correct gate.
  */
 export function reachesGate(expr, vars, params) {
   const seen = new Set();
   const unresolved = [];
   let reached = false;
   let viaParam = false;
-  const visit = (e, depth) => {
+  let positiveReach = false;
+  const visit = (e, depth, negated) => {
     if (depth > 24) throw new Error(`var resolution exceeded depth 24 — refusing to guess: ${e.slice(0, 80)}`);
-    for (const id of identifiersOf(e)) {
+    for (const { name: id, negated: here } of identifierReads(e)) {
+      const eff = negated !== here; // XOR: nested NOTs cancel
       if (id === GATE) {
         reached = true;
+        if (!eff) positiveReach = true;
         if (params.has(id)) viaParam = true;
         continue;
       }
-      if (seen.has(id)) continue;
-      seen.add(id);
+      const key = `${id}|${eff ? '1' : '0'}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       if (vars.has(id)) {
-        visit(vars.get(id), depth + 1);
+        visit(vars.get(id), depth + 1, eff);
         continue;
       }
       if (params.has(id)) continue; // a param of this file; nothing further to resolve
       unresolved.push(id);
     }
   };
-  visit(expr, 0);
-  return { reached, viaParam, unresolved };
+  visit(expr, 0, false);
+  return { reached, viaParam, negatedOnly: reached && !positiveReach, unresolved };
 }
 
 /**
@@ -370,7 +453,64 @@ export function parseModules(src, rel) {
   return out;
 }
 
-/** @returns {boolean} does this module invocation pass `postgresQuotaAvailable:`? */
+/**
+ * The value a module invocation passes for `postgresQuotaAvailable:`, or null
+ * when the key is absent.
+ *
+ * The value runs to the end of its line, extended while parens/brackets/braces
+ * are unbalanced so a `union(...)` or object value is read whole. If the NEXT
+ * line continues the expression (a leading `?`, `:`, or a binary operator — the
+ * multi-line-ternary shape), the value cannot be read whole and this THROWS
+ * rather than judging a truncated expression. An unparsed shape is a hard
+ * failure here for the same reason it is in {@link parseModules}.
+ *
+ * @param {string} src raw bicep source of the CALLER
+ * @param {{name: string, bodyStart: number, bodyEnd: number, line: number}} mod
+ * @param {string} rel repo-relative path, for error messages
+ * @returns {string|null}
+ */
+export function forwardedGateValue(src, mod, rel = '<src>') {
+  const clean = blankComments(src);
+  const body = clean.slice(mod.bodyStart, mod.bodyEnd);
+  const m = new RegExp(`^[^\\S\\n]*${GATE}\\s*:`, 'm').exec(body);
+  if (!m) return null;
+  const lines = body.slice(m.index + m[0].length).split('\n');
+  let value = lines[0];
+  let i = 0;
+  const depth = (s) => {
+    let d = 0;
+    for (const c of blankStrings(s)) {
+      if (c === '(' || c === '[' || c === '{') d += 1;
+      else if (c === ')' || c === ']' || c === '}') d -= 1;
+    }
+    return d;
+  };
+  while (depth(value) > 0 && i + 1 < lines.length) {
+    i += 1;
+    value += `\n${lines[i]}`;
+  }
+  const next = (lines[i + 1] ?? '').trim();
+  if (/^(\?|:|&&|\|\||==|!=|\?\?|\+)/.test(next)) {
+    throw new Error(
+      `${rel}:${mod.line}: the ${GATE}: value passed to module ${mod.name} continues on the next line ` +
+        `(${JSON.stringify(next.slice(0, 40))}) — this file cannot read that shape whole, and judging a ` +
+        'truncated expression would be a guess. Refusing to skip it.',
+    );
+  }
+  return value;
+}
+
+/**
+ * Does this module invocation pass `postgresQuotaAvailable:` AT ALL?
+ *
+ * Kept separate from the VALUE check so the two failure modes report
+ * differently: an omitted forward and a hardcoded one are both violations, but
+ * they are different mistakes and a reviewer needs to know which they made.
+ *
+ * @param {string} src
+ * @param {{name: string, bodyStart: number, bodyEnd: number, line: number}} mod
+ * @returns {boolean}
+ */
 export function forwardsGate(src, mod) {
   const body = blankComments(src).slice(mod.bodyStart, mod.bodyEnd);
   return new RegExp(`^[^\\S\\n]*${GATE}\\s*:`, 'm').test(body);
@@ -473,7 +613,77 @@ export const CONTROLS = [
       '}',
     ].join('\n'),
     extraParams: ['deployLandingZones', 'weaveOntologyEnabled'],
-    expect: { forwards: false },
+    expect: { forwards: false, forwardedValue: null },
+  },
+  {
+    // The rework finding: `postgresQuotaAvailable: true` is runtime-identical to
+    // omitting the forward, and the key-only check accepted it. Measured on the
+    // real repo before the fix: mutating main.bicep:1824 to a literal `true`
+    // printed PASS, exit 0, with R2 still reporting "3 call site(s) checked".
+    name: 'a caller that HARDCODES the forward to true -> the value does not reach the gate',
+    src: [
+      'param postgresQuotaAvailable bool = true',
+      "module lz 'lz.bicep' = if (deployLandingZones) {",
+      '  params: {',
+      '    postgresQuotaAvailable: true',
+      '  }',
+      '}',
+    ].join('\n'),
+    extraParams: ['deployLandingZones'],
+    expect: { forwards: true, forwardedValue: ' true', valueReaches: false },
+  },
+  {
+    name: 'a caller that forwards the real param -> the value reaches the gate',
+    src: [
+      'param postgresQuotaAvailable bool = true',
+      "module lz 'lz.bicep' = if (deployLandingZones) {",
+      '  params: {',
+      '    postgresQuotaAvailable: postgresQuotaAvailable',
+      '  }',
+      '}',
+    ].join('\n'),
+    extraParams: ['deployLandingZones'],
+    expect: { forwards: true, valueReaches: true },
+  },
+  {
+    // The polarity inversion the honesty boundary used to only disclose. One
+    // character re-arms the Gov break AND strips the server from Commercial.
+    name: 'a condition that NEGATES the gate -> reached, but negatedOnly',
+    src: [
+      'param postgresQuotaAvailable bool = true',
+      'var active = enabledFlag && !postgresQuotaAvailable',
+      "module pg 'pg.bicep' = if (active) {",
+      '  params: {}',
+      '}',
+    ].join('\n'),
+    extraParams: ['enabledFlag'],
+    expect: { reached: true, viaParam: true, negatedOnly: true },
+  },
+  {
+    name: 'negation THROUGH a var chain is still negation',
+    src: [
+      'param postgresQuotaAvailable bool = true',
+      'var allowed = postgresQuotaAvailable',
+      'var active = enabledFlag && !allowed',
+      "module pg 'pg.bicep' = if (active) {",
+      '  params: {}',
+      '}',
+    ].join('\n'),
+    extraParams: ['enabledFlag'],
+    expect: { reached: true, viaParam: true, negatedOnly: true },
+  },
+  {
+    name: 'a DOUBLE negation is not a negation',
+    src: [
+      'param postgresQuotaAvailable bool = true',
+      'var allowed = !postgresQuotaAvailable',
+      'var active = enabledFlag && !allowed',
+      "module pg 'pg.bicep' = if (active) {",
+      '  params: {}',
+      '}',
+    ].join('\n'),
+    extraParams: ['enabledFlag'],
+    expect: { reached: true, viaParam: true, negatedOnly: false },
   },
 ];
 
@@ -520,6 +730,41 @@ export const CONTROL_STATS = { ran: 0 };
     normalised.has('active') && reachesGate('active', normalised, new Set([GATE, 'flag'])).reached,
     'normalising CRLF did NOT restore the parse — readSource() does not close the hazard',
   );
+  // The resolver control. A drifted resolver used to produce a path matching no
+  // tracked file, and the invocation was then dropped in silence; R3 now hard-
+  // fails on that, so the resolver itself must be proven on a known pair.
+  check(
+    resolveModuleTarget('platform/fiab/bicep/modules/landing-zone/main.bicep', '../../../../../deploy/bicep/DLZ/modules/geoanalytics.bicep')
+      === 'deploy/bicep/DLZ/modules/geoanalytics.bicep',
+    'resolveModuleTarget() no longer resolves a cross-tree relative path — R3 would fire on correct paths',
+  );
+  check(
+    resolveModuleTarget('platform/fiab/bicep/main.bicep', 'modules/landing-zone/main.bicep')
+      === 'platform/fiab/bicep/modules/landing-zone/main.bicep',
+    'resolveModuleTarget() no longer resolves a sibling module path',
+  );
+  // The unreadable-forward control. A `postgresQuotaAvailable:` value split
+  // across lines by a ternary cannot be read whole, and judging the truncated
+  // first line would be a guess dressed as a measurement.
+  {
+    const multiline = [
+      'param postgresQuotaAvailable bool = true',
+      "module lz 'lz.bicep' = {",
+      '  params: {',
+      '    postgresQuotaAvailable: someCondition',
+      '      ? postgresQuotaAvailable',
+      '      : false',
+      '  }',
+      '}',
+    ].join('\n');
+    let threw = false;
+    try {
+      forwardedGateValue(multiline, parseModules(multiline, '<control:multiline-forward>')[0], '<control:multiline-forward>');
+    } catch {
+      threw = true;
+    }
+    check(threw, 'forwardedGateValue() silently truncated a multi-line forwarded value instead of refusing to guess');
+  }
   for (const c of CONTROLS) {
     CONTROL_STATS.ran += 1;
     let mods;
@@ -546,6 +791,39 @@ export const CONTROL_STATS = { ran: 0 };
     if ('forwards' in c.expect && forwardsGate(c.src, mod) !== c.expect.forwards) {
       failures.push(`${c.name}: forwardsGate() returned ${!c.expect.forwards}, expected ${c.expect.forwards}`);
     }
+    if ('forwardedValue' in c.expect) {
+      CONTROL_STATS.ran += 1;
+      let got;
+      try {
+        got = forwardedGateValue(c.src, mod, `<control:${c.name}>`);
+      } catch (err) {
+        failures.push(`${c.name}: forwardedGateValue threw — ${err.message}`);
+        continue;
+      }
+      if (got !== c.expect.forwardedValue) {
+        failures.push(`${c.name}: forwardedGateValue=${JSON.stringify(got)}, expected ${JSON.stringify(c.expect.forwardedValue)}`);
+      }
+    }
+    if ('valueReaches' in c.expect) {
+      CONTROL_STATS.ran += 1;
+      let value;
+      try {
+        value = forwardedGateValue(c.src, mod, `<control:${c.name}>`);
+      } catch (err) {
+        failures.push(`${c.name}: forwardedGateValue threw — ${err.message}`);
+        continue;
+      }
+      if (value === null) {
+        failures.push(`${c.name}: expected a forwarded value, found none`);
+      } else {
+        const vr = reachesGate(value, vars, params);
+        if (vr.reached !== c.expect.valueReaches) {
+          failures.push(
+            `${c.name}: the forwarded VALUE ${JSON.stringify(value.trim())} reached=${vr.reached}, expected ${c.expect.valueReaches}`,
+          );
+        }
+      }
+    }
     if (!('reached' in c.expect)) continue;
     if (mod.condition === null) {
       failures.push(`${c.name}: expected a condition, parsed none`);
@@ -567,6 +845,12 @@ export const CONTROL_STATS = { ran: 0 };
     if ('viaParam' in c.expect && res.viaParam !== c.expect.viaParam) {
       failures.push(`${c.name}: viaParam=${res.viaParam}, expected ${c.expect.viaParam}`);
     }
+    if ('negatedOnly' in c.expect) {
+      CONTROL_STATS.ran += 1;
+      if (res.negatedOnly !== c.expect.negatedOnly) {
+        failures.push(`${c.name}: negatedOnly=${res.negatedOnly}, expected ${c.expect.negatedOnly}`);
+      }
+    }
   }
   return failures;
 }
@@ -582,6 +866,22 @@ function trackedBicep() {
     maxBuffer: 32 * 1024 * 1024,
   });
   return out.split('\n').map((s) => s.trim()).filter(Boolean).map((s) => s.replace(/\\/g, '/'));
+}
+
+/**
+ * Repo-relative path a `module NAME '<target>'` statement points at.
+ *
+ * Exported so the embedded controls can prove the resolver on a known pair
+ * instead of trusting it — a drifted resolver used to produce a path that
+ * matched no tracked file, and the invocation was then dropped in SILENCE.
+ * {@link main} now treats that as a hard failure (R3).
+ *
+ * @param {string} rel repo-relative path of the CALLER
+ * @param {string} target the quoted module path
+ * @returns {string}
+ */
+export function resolveModuleTarget(rel, target) {
+  return path.posix.normalize(path.posix.join(path.posix.dirname(rel), target));
 }
 
 function main() {
@@ -629,8 +929,29 @@ function main() {
       process.exit(1);
     }
   }
-  const resolveTarget = (rel, target) =>
-    path.posix.normalize(path.posix.join(path.posix.dirname(rel), target));
+  const resolveTarget = resolveModuleTarget;
+
+  // 2a. R3 — every module target must resolve to a tracked .bicep file. Before
+  //     this, an unresolvable target hit `!provisions.has(target)` and was
+  //     skipped without a word, so a drifted resolver (or a probe path with one
+  //     `..` too few) read as "nothing to judge". A guard that goes quiet on its
+  //     own drift is the `csa_loom_gates_that_measure_nothing` shape.
+  const unresolvedTargets = [];
+  for (const [rel, list] of mods) {
+    for (const m of list) {
+      const target = resolveTarget(rel, m.target);
+      if (!sources.has(target)) unresolvedTargets.push({ rel, line: m.line, name: m.name, raw: m.target, target });
+    }
+  }
+  if (unresolvedTargets.length) {
+    console.error('[postgres-quota-gate] FAIL: module target(s) that resolve to no tracked .bicep file:');
+    for (const u of unresolvedTargets) {
+      console.error(`  ${u.rel}:${u.line}: module ${u.name} -> '${u.raw}' resolves to ${u.target}, which git does not track.`);
+    }
+    console.error('  Either the path is wrong or this resolver drifted. Both mean the invocation cannot be judged,');
+    console.error('  and an unjudged PG deploy must not read as a clean one.');
+    process.exit(1);
+  }
 
   const provisions = new Set(pgDeclaring);
   for (let pass = 0; pass < 20; pass += 1) {
@@ -698,6 +1019,17 @@ function main() {
         });
         continue;
       }
+      if (res.negatedOnly) {
+        violations.push({
+          rel,
+          line: m.line,
+          why:
+            `module ${m.name} deploys a PostgreSQL flexible server (via ${m.target}) and its condition ` +
+            `\`${m.condition.trim()}\` reaches ${GATE} only under a logical NOT — it deploys precisely when ` +
+            'the gate says not to. A reference is not a gate if its polarity is inverted.',
+        });
+        continue;
+      }
       any = true;
       if (res.viaParam) gatedFiles.add(rel);
     }
@@ -714,29 +1046,86 @@ function main() {
   }
   console.log(`[postgres-quota-gate] judged ${judgedInvocations} invocation(s) that deploy a PG flexible server.`);
 
-  // 4. R2 — a file gated on its OWN param must be handed that param by every caller.
-  let forwardChecks = 0;
+  // 4. R2 — a file gated on its OWN param must be handed that param by every
+  //    caller, AND the value handed over must itself reach the gate.
   for (const target of [...gatedFiles].sort()) {
     let callers = 0;
     for (const [rel, list] of mods) {
+      const callerClean = blankComments(sources.get(rel));
+      const callerVars = parseVars(callerClean);
+      const callerParams = parseParams(callerClean);
       for (const m of list) {
         if (resolveTarget(rel, m.target) !== target) continue;
         callers += 1;
-        forwardChecks += 1;
         if (!forwardsGate(sources.get(rel), m)) {
           violations.push({
             rel,
             line: m.line,
             why: `module ${m.name} invokes ${target}, whose PG deploy is gated on its OWN \`param ${GATE}\` (which carries a default), but this call site does not pass \`${GATE}:\` — the gate is defaulted away on this path`,
           });
+          continue;
+        }
+        let value;
+        try {
+          value = forwardedGateValue(sources.get(rel), m, rel);
+        } catch (err) {
+          console.error(`[postgres-quota-gate] FAIL: ${err.message}`);
+          process.exit(1);
+        }
+        let vr;
+        try {
+          vr = reachesGate(value, callerVars, callerParams);
+        } catch (err) {
+          console.error(`[postgres-quota-gate] FAIL: ${rel}:${m.line}: ${err.message}`);
+          process.exit(1);
+        }
+        if (vr.unresolved.length) {
+          console.error(
+            `[postgres-quota-gate] FAIL: ${rel}:${m.line}: the ${GATE}: value passed to module ${m.name} names ` +
+              `${vr.unresolved.join(', ')}, which is neither a var nor a param of this file — cannot determine ` +
+              'whether the forwarded value carries the gate, so this is a hard failure rather than a skip.',
+          );
+          process.exit(1);
+        }
+        if (!vr.reached || vr.negatedOnly) {
+          violations.push({
+            rel,
+            line: m.line,
+            why:
+              `module ${m.name} invokes ${target}, whose PG deploy is gated on its OWN \`param ${GATE}\`, and it ` +
+              `passes \`${GATE}: ${value.trim()}\` — a value that ${vr.reached ? `reaches ${GATE} only NEGATED` : `never reaches ${GATE}`}. ` +
+              'Forwarding a constant is runtime-identical to omitting the forward: the gate is defaulted away on this path.',
+          });
         }
       }
     }
-    console.log(`[postgres-quota-gate] R2: ${target} gates on its own param; ${callers} call site(s) checked for the forward.`);
-  }
-  if (gatedFiles.size > 0 && forwardChecks === 0) {
-    console.error('[postgres-quota-gate] FAIL: a file gates on its own param but ZERO call sites were found for it.');
-    process.exit(1);
+    // A per-target zero must not be absorbed by a sibling target that still has
+    // callers. Cross-check against a scan that does NOT use resolveTarget, so a
+    // drifted resolver cannot make a target look like a root.
+    const suffix = target.split('/').slice(-2).join('/');
+    let textualCallers = 0;
+    for (const [rel, list] of mods) {
+      if (rel === target) continue;
+      for (const m of list) if (m.target.replace(/\\/g, '/').endsWith(suffix)) textualCallers += 1;
+    }
+    console.log(
+      `[postgres-quota-gate] R2: ${target} gates on its own param; ${callers} call site(s) checked for the forward ` +
+        `(textual cross-check on '${suffix}': ${textualCallers}).`,
+    );
+    if (callers === 0 && textualCallers > 0) {
+      console.error(
+        `[postgres-quota-gate] FAIL: ${target} gates on its own param and resolved ZERO call sites, but a ` +
+          `resolver-independent scan finds ${textualCallers} invocation(s) ending in '${suffix}'. The module-path ` +
+          'resolver disagrees with the source; a zero here is drift, not a root.',
+      );
+      process.exit(1);
+    }
+    if (callers === 0) {
+      console.log(
+        `[postgres-quota-gate] R2: ${target} has no callers by either method — a deployment ENTRYPOINT, so no ` +
+          'caller can default the param away. Its value comes from the .bicepparam.',
+      );
+    }
   }
 
   // 5. Disclosure — what was found but deliberately NOT judged.
@@ -760,9 +1149,20 @@ function main() {
     for (const v of violations) console.error(`  ${v.rel}:${v.line}: ${v.why}`);
     console.error('');
     console.error(`  FIX: put ${GATE} in the activation condition (directly or through a var chain),`);
-    console.error('  and forward it from every caller. Both Gov param files pin it false because those');
-    console.error('  subscriptions return an EMPTY permitted-version set for flexibleServers, which no');
-    console.error('  postgresVersion value can satisfy — an ungated deploy fails the whole leaf.');
+    console.error(`  and forward the PARAM ITSELF from every caller (not a literal). Both Gov param`);
+    console.error('  files pin it false, so an ungated PG deploy fails the whole leaf there — the');
+    console.error('  observed failure was ParameterOutOfRange, "The value of the \'Version\' should be');
+    console.error('  in: []", on psql-loom-weave-default-* (GitHub Actions run 32019775757,');
+    console.error('  deploy-fiab-gcch, 2026-08-17).');
+    console.error('');
+    console.error('  WHY those files pin it false is NOT asserted here, and it is NOT a quota finding');
+    console.error('  this check made. Each param file records its own reason in-file — read it there');
+    console.error('  before concluding anything about the boundary:');
+    console.error('    platform/fiab/bicep/params/gcc-high.bicepparam  (search postgresQuotaAvailable)');
+    console.error('    platform/fiab/bicep/params/il5.bicepparam       (search postgresQuotaAvailable)');
+    console.error('  Both state that PostgreSQL Flexible Server IS available in Azure Government and');
+    console.error('  that their false is a deliberate posture hold, not a service gap. Do not "fix"');
+    console.error('  this by flipping the flag without reading them.');
     process.exit(1);
   }
   console.log(`[postgres-quota-gate] PASS — every judged PostgreSQL deploy consults ${GATE}.`);

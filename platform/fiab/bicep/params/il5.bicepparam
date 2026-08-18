@@ -323,8 +323,8 @@ param apimEnabled = true
 // So `false` is not a service gap; it is a DELIBERATE, reviewable IL5 posture
 // stated here rather than inherited.
 //
-// ROUND-4: kept OFF in this PR. `postgresQuotaAvailable` gates TWO hosts, and
-// turning it on would bring the OSS Airflow host into IL5 with (1) an anonymous
+// ROUND-4: kept OFF in this PR. Turning it on would bring the OSS Airflow host
+// into IL5 with (1) an anonymous
 // `apache/airflow:2.10.5-python3.12` DOCKER HUB pull that nothing mirrors into
 // the IL5 ACR (unpullable in a locked-egress boundary, unscanned on the way in),
 // and (2) a metadata Postgres created with `publicNetworkAccess: 'Enabled'` and a
@@ -334,9 +334,25 @@ param apimEnabled = true
 // upstream images into each cloud's ACR and adds the private endpoint; flip this
 // true there.
 //
+// ── BLAST RADIUS OF THE FLIP — WHAT THIS FLAG ACTUALLY GATES ────────────────
+// An earlier revision of this note said "TWO hosts". That was already understated
+// (loom-unity made it three) and 3449d added two more. Whoever performs the
+// follow-up flip turns on ALL of these at once in an IL5 boundary and owns the
+// review of each. Full enumeration and per-capability override keys are kept in
+// params/gcc-high.bicepparam next to the same assignment; the list is identical:
+//   1. OSS Airflow metadata DB   admin-plane/airflow.bicep            (the two defects above)
+//   2. N8 DuckLake catalog store data-plane/ducklake-catalog-postgres.bicep
+//   3. Loom Unity metastore      data-plane/loom-unity-postgres.bicep (else EmptyDir H2)
+//   4. Weave ontology AGE store  landing-zone/postgres-weave.bicep    [3449d, also LOOM_PGVECTOR_HOST]
+//   5. Lakebase Postgres         deploy-planner/postgres.bicep        [3449d, inert: postgresEnabled defaults false and no param sets it]
+//
 // Consequence: the N8 DuckLake catalog store is skipped in IL5 and its editor
-// honest-gates with a Fix-it (the pre-existing state). The DuckDB serving tier
-// has no Postgres dependency and still deploys by default.
+// honest-gates with a Fix-it (the pre-existing state). NEW in 3449d: the Weave
+// ontology store is skipped too and svc-weave-ontology honest-gates on
+// LOOM_WEAVE_PG_FQDN — a registered gate in place of a hard deploy failure, NOT
+// an ontology graph store. Under .claude/rules/cloud-parity.md that capability
+// stays INCOMPLETE in IL5 until an Azure-native/OSS substitute backs it. The
+// DuckDB serving tier has no Postgres dependency and still deploys by default.
 param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 param hubFirewallEnabled = true
 param aiSearchEnabled = false
