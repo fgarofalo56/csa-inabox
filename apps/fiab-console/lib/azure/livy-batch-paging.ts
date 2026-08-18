@@ -418,8 +418,14 @@ export interface RecentSparkBatchJobs {
  *
  * That offset probe only runs when {@link readTotal} produced a count the two
  * documented `total` semantics cannot disagree about. Otherwise the walk reads
- * the list to its END, which needs no offset arithmetic and is correct either
- * way.
+ * the list to its END, which needs no offset arithmetic — but note that is
+ * "correct OR disclosed-incomplete", NOT "correct either way": the end has to
+ * be REACHABLE within `LIVY_MAX_WALK_PAGES` (10 x 20 = 200 rows), and past that
+ * the caller gets the newest rows reached so far under a non-null
+ * `truncatedBy`. See the "WHAT THAT BUYS" note in this module's header for the
+ * worked 1000-batch case. A caller that renders `sessions` and drops
+ * `truncatedBy` converts that disclosed partial back into a silent wrong
+ * answer.
  *
  * The whole walk runs under ONE {@link PagingBudget} — page cap AND wall clock,
  * every fetch through {@link readBatchPage}. On a breach the caller gets the

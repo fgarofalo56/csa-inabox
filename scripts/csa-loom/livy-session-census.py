@@ -51,7 +51,7 @@ REAPABLE_STATES = ("error", "dead", "killed", "not_started", "shutting_down")
 
 
 def _http_only_opener():
-    """An opener that can reach http(s) AND NOTHING ELSE.
+    """An opener whose only URL schemes are http and https.
 
     The scheme check in `_get` vets the URL WE build. It says nothing about
     where the server then sends us, and the stdlib's default opener will follow
@@ -77,20 +77,61 @@ def _http_only_opener():
     still {ftp, file, data, http, https, …}). The list has to be built
     explicitly, which is why this is a function and not a one-liner.
 
-    `ProxyHandler` is kept deliberately: the default opener had it, self-hosted
-    runners may sit behind a proxy, and dropping it would be a silent
-    connectivity regression.
+    THE PROXY DICT IS SCOPED ON PURPOSE, and this is the subtle one.
+    `ProxyHandler.__init__` does `setattr(self, '%s_open' % type, …)` for EVERY
+    key in the proxies dict, and the default `ProxyHandler()` reads
+    `getproxies()` — env vars plus, on Windows, the registry. So a single
+    `ftp_proxy` (or `all_proxy`) puts the ftp route straight back:
+
+        routes, no proxy vars : ['http', 'https', 'unknown']
+        routes, ftp_proxy set : ['ftp', 'http', 'https', 'unknown']
+        routes, all_proxy set : ['all', 'http', 'https', 'unknown']
+
+    and it fails OPEN, not closed: `proxy_open` sees `orig_type='ftp'` differ
+    from `proxy_type='http'` and re-dispatches through `self.parent.open()`, so
+    the request goes to the proxy over HTTP with every header intact. Measured
+    against a recording listener, the proxy received:
+
+        GET ftp://attacker.invalid/loot HTTP/1.1
+        Authorization: Bearer SECRET
+
+    Filtering the dict to http/https keeps proxy support for the schemes we
+    actually use — a self-hosted runner behind `http_proxy` still reaches its
+    upstream — while making the ftp route unreachable no matter what the
+    environment says. That matters most in exactly the environment this handler
+    exists for: a PROXIED runner is where the unscoped version fails open.
+
+    Filtering does NOT break `no_proxy`, which is the reasonable worry:
+    `getproxies()` returns it as a `'no'` key that this comprehension drops, but
+    `ProxyHandler.proxy_open` calls the module-level `proxy_bypass(req.host)`,
+    which re-reads the environment (and the Windows registry) itself. Verified:
+    with the scoped dict, `proxy_bypass('127.0.0.1')` is still True when
+    `no_proxy` names it and False when it does not.
     """
-    opener = urllib.request.OpenerDirector()
-    for handler in (
-        urllib.request.ProxyHandler(),
+    proxies = {
+        scheme: url
+        for scheme, url in urllib.request.getproxies().items()
+        if scheme in ("http", "https")
+    }
+    handlers = [
+        urllib.request.ProxyHandler(proxies),
         urllib.request.HTTPHandler(),
-        urllib.request.HTTPSHandler(),
         urllib.request.HTTPRedirectHandler(),
         urllib.request.HTTPErrorProcessor(),
         urllib.request.HTTPDefaultErrorHandler(),
         urllib.request.UnknownHandler(),
-    ):
+    ]
+    # The stdlib itself defines HTTPSHandler only under
+    # `hasattr(http.client, "HTTPSConnection")`. Referencing it unconditionally
+    # would turn an ssl-less interpreter into an ImportError at module load —
+    # i.e. a probe that dies at import, which this file's `census()` docstring
+    # already argues is indistinguishable from a probe that found nothing.
+    https_handler = getattr(urllib.request, "HTTPSHandler", None)
+    if https_handler is not None:
+        handlers.insert(2, https_handler())
+
+    opener = urllib.request.OpenerDirector()
+    for handler in handlers:
         opener.add_handler(handler)
     return opener
 

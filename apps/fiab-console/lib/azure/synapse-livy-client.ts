@@ -372,10 +372,17 @@ export async function listLivySessionsResult(
     // `total > batch.length` is the one observation impossible under the
     // page-length reading (a page length cannot exceed itself), so it alone is
     // treated as evidence of a pool-wide count. Everything else leaves `total`
-    // null and lets the walk end the only way that is honest under BOTH
+    // null and lets the walk end the only way that is ESTABLISHED under both
     // readings: an empty page. On a pool holding one page or less that costs
     // one extra request, and `total ?? out.length` still reports the exact
     // count.
+    //
+    // That is honest under both readings, not CORRECT under both. Under the
+    // page-length reading no `total` is ever accepted, so the walk must reach an
+    // empty page to finish — and `hardCap` (default 2000 rows) plus the paging
+    // budget cap that. A pool bigger than the cap comes back with a non-null
+    // `truncatedBy`, which `reapStaleSessions` reads as "do not GC the
+    // trackers". Disclosed-incomplete, not complete.
     if (
       typeof page.total === 'number' &&
       Number.isFinite(page.total) &&

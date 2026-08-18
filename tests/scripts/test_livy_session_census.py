@@ -233,6 +233,26 @@ class TestRedirectCannotLeaveHttp:
     carrying ``Authorization: Bearer $TOK`` to whatever host it names.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_ambient_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Start every test in this class from a KNOWN-EMPTY proxy environment.
+
+        These tests talk to a local `HTTPServer`, so an ambient `http_proxy`
+        (common on a corporate or self-hosted runner) would route 127.0.0.1
+        through a proxy that cannot serve it and fail them for a reason that
+        says nothing about the code. Tests that need a proxy set one themselves,
+        which also makes each test's environment explicit rather than inherited.
+
+        `_OPENER` is rebuilt afterwards because it is constructed at IMPORT time
+        from whatever the environment was then.
+        """
+        for var in (
+            "http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy",
+            "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY", "NO_PROXY",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(_mod, "_OPENER", _mod._http_only_opener())
+
     def test_the_stdlib_really_would_carry_the_bearer_token_to_ftp(self) -> None:
         # The premise, asserted rather than assumed. If a future Python starts
         # stripping Authorization across a scheme change, THIS is the test that
@@ -256,6 +276,95 @@ class TestRedirectCannotLeaveHttp:
         assert "ftp" not in routes
         assert "file" not in routes
         assert "data" not in routes
+
+    @pytest.mark.parametrize("proxy_var", ["ftp_proxy", "FTP_PROXY", "all_proxy", "ALL_PROXY"])
+    def test_a_proxy_env_var_cannot_smuggle_the_ftp_route_back(
+        self, monkeypatch: pytest.MonkeyPatch, proxy_var: str
+    ) -> None:
+        """`ProxyHandler` installs one `<scheme>_open` per key in its proxies dict.
+
+        The default `ProxyHandler()` reads `getproxies()` — env vars plus, on
+        Windows, the registry — so a single `ftp_proxy` reopens the exact route
+        the opener exists to close, and it fails OPEN: `proxy_open` re-dispatches
+        the ftp request over HTTP to the proxy with `Authorization` intact.
+
+        Measured before the fix: routes became
+        ['ftp', 'http', 'https', 'unknown'] and a recording proxy received
+        `GET ftp://attacker.invalid/loot` carrying `Bearer SECRET`.
+
+        This is the environment the handler is kept FOR, which is what made it
+        worth a spec: a proxied runner was the one place it failed open.
+        """
+        monkeypatch.setenv(proxy_var, "http://127.0.0.1:9/")
+        routes = set(_mod._http_only_opener().handle_open)
+        assert "ftp" not in routes
+        assert "all" not in routes
+        assert routes == {"http", "https", "unknown"}
+
+    def test_an_http_proxy_is_still_honoured(self) -> None:
+        """The scoping must not become "no proxy support" — that would be a
+        silent connectivity regression on exactly the runners it protects."""
+        received: list[str] = []
+
+        class ProxyRecorder(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                received.append(self.requestline)
+                body = b'{"total": 0, "sessions": []}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), ProxyRecorder)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setenv("http_proxy", f"http://127.0.0.1:{srv.server_address[1]}/")
+                mp.setattr(_mod, "_OPENER", _mod._http_only_opener())
+                body = _get("http://upstream.invalid/sessions", "tok")
+            assert body == {"total": 0, "sessions": []}
+            # Proof it went THROUGH the proxy: an absolute-form request line.
+            assert received
+            assert received[0].startswith("GET http://upstream.invalid/sessions")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_an_ftp_redirect_is_refused_even_when_an_ftp_proxy_is_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The end-to-end form of the case above — the one that went red.
+
+        With `ftp_proxy` set and the unscoped handler, this test failed with the
+        SAME `WinError 10061 ... actively refused` as the completely unfixed
+        code, i.e. merging would have planted an environment-dependent CI
+        failure that no repo guard watches for.
+        """
+        class Redirector(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(302)
+                self.send_header("Location", "ftp://attacker.invalid/loot")
+                self.end_headers()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), Redirector)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            monkeypatch.setenv("ftp_proxy", "http://127.0.0.1:9/")
+            monkeypatch.setattr(_mod, "_OPENER", _mod._http_only_opener())
+            url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
+            with pytest.raises(urllib.error.URLError) as excinfo:
+                _get(url, "SECRET")
+            assert "unknown url type" in str(excinfo.value.reason)
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
     def test_an_ftp_redirect_is_refused_without_dialling_out(self) -> None:
         # A real 302 -> ftp:, served locally. Port 1 is chosen so that IF the
