@@ -497,6 +497,228 @@ test('EXECUTED: the gate exits NON-ZERO on an apps-enabled dispatch with an UNKN
 });
 
 // ---------------------------------------------------------------------------
+// S8 — #3701: no step may TRUST the raw `region` input
+//
+// `inputs.region` is EMPTY on a `schedule` event. The DLZ adopt step carried
+// `REGION: ${…inputs.region}` in its `env:`, so every nightly ran
+// resolve-dlz-coordinates.mjs with `--region ""`, got EXIT.USAGE(2), and a
+// trailing `|| echo` rendered that as "found no unambiguous DLZ". The adopt plan
+// came out `{}`, `loomStorageAccount` composed to '', and because the lake env
+// block is `!empty(loomStorageAccount) ? [ … ] : []` the deploy REMOVED seven
+// LOOM_* variables from the running console — and reported success.
+//
+// Measured, same code, only the trigger differing:
+//   31898068403  workflow_dispatch  adopting: databricks,eventhubs,storage-adls,synapse
+//   31870181337 / 31932209496 / 32004118361  schedule  adopting: (none), all green
+// ---------------------------------------------------------------------------
+
+test('S8: the real workflow has no step that trusts the raw region input', () => {
+  const problems = checkSteps(YAML);
+  assert.deepEqual(
+    problems.filter((p) => /reads `inputs\.region`/.test(p)), [],
+    'a step is trusting inputs.region — on a schedule that is the empty string',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Restoring the #3701 shape takes TWO edits, not one.
+//
+// The step `env:` is applied BEFORE the `run:` body executes, so putting
+// `REGION: ${{ inputs.region }}` back while the fix's `REGION="${AZURE_LOCATION:-}"`
+// still stands leaves the workflow BEHAVIOURALLY CORRECT — the shell read
+// overwrites the env value. A one-edit mutant therefore proves nothing about the
+// guard; it only proves the guard does not fire on a correct workflow.
+//
+// The defect as it actually shipped was `env:`-ONLY: measured on the pre-fix
+// file, the step had no shell `REGION=` assignment and no `AZURE_LOCATION` at
+// all. Both edits, each with its own precondition, reproduce it.
+// ---------------------------------------------------------------------------
+
+/** `env:` entry the #3701 shape hung off, restored after the surviving one. */
+const ENV_ANCHOR = /(          ADMIN_SUB: \$\{\{ steps\.topology_guard\.outputs\.deploy_sub \}\}\n)/;
+/** The fix's shell read plus the refusal that guards it — absent pre-fix. */
+const SHELL_READ = /          REGION="\$\{AZURE_LOCATION:-\}"\n          if \[ -z "\$REGION" \]; then\n(?:[^\n]*\n)*?          fi\n/;
+
+/** Edit 1 only: the env: binding back, the shell read left standing. */
+function restoreEnvBinding(yaml) {
+  assert.ok(ENV_ANCHOR.test(yaml), 'the ADMIN_SUB env anchor is gone — the mutation would prove nothing');
+  const out = yaml.replace(ENV_ANCHOR, '$1          REGION: ${{ inputs.region }}\n');
+  assert.notEqual(out, yaml, 'the env-binding mutation did not apply');
+  return out;
+}
+
+/** Edit 2: strip the fix, leaving the step with no measured region at all. */
+function stripShellRead(yaml) {
+  assert.ok(SHELL_READ.test(yaml), 'the shell read is gone — the mutation would prove nothing');
+  const out = yaml.replace(SHELL_READ, '');
+  assert.notEqual(out, yaml, 'the shell-read strip did not apply');
+  return out;
+}
+
+test('S8 MUTANT: the #3701 shape restored (env: binding + the shell read stripped) -> the shape guard FAILS', () => {
+  const mutant = stripShellRead(restoreEnvBinding(YAML));
+  // Faithfulness check: the shipped defect had NO measured region in its wiring.
+  // If AZURE_LOCATION survived, the mutant would be a different, weaker shape.
+  const step = mutant.slice(mutant.indexOf('        id: dlz_adopt'));
+  const body = step.slice(0, step.indexOf('      - name:')).split('\n')
+    .filter((l) => !/^\s*#/.test(l) && !/^\s*(echo|printf)\s/.test(l)).join('\n');
+  assert.ok(
+    !body.includes('AZURE_LOCATION'),
+    'the mutant still holds the measured region in its wiring — that is not the #3701 shape',
+  );
+
+  const problems = checkSteps(mutant).filter((p) => /reads `inputs\.region`/.test(p));
+  assert.equal(problems.length, 1, `expected exactly one S8 violation, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /Adopt the DLZ/);
+});
+
+test('S8 CONTROL: restoring the env: binding ALONE is not the defect — the shell read still wins', () => {
+  // The one-edit mutant this test file previously used. Asserting the guard is
+  // SILENT here is what makes the two-edit mutant above meaningful: it proves
+  // the guard distinguishes the real defect from a workflow that merely looks
+  // like it, rather than firing on the presence of a string.
+  const mutant = restoreEnvBinding(YAML);
+  assert.deepEqual(
+    checkSteps(mutant).filter((p) => /reads `inputs\.region`/.test(p)), [],
+    'a step whose shell read overwrites the env binding is behaviourally correct',
+  );
+});
+
+test('S8 MUTANT: the #3701 shape hidden behind an UNRELATED AZURE_LOCATION use -> the shape guard STILL FAILS', () => {
+  // The hole `AZURE_LOCATION`-as-bare-substring left open. Thirteen steps
+  // interpolate `${AZURE_LOCATION}` to build a resource-group name; before the
+  // marker became a PAIRED exemption, one such line anywhere in the adopt step
+  // would have exempted it while it still consumed `$REGION` from `env:` —
+  // #3701 restored, and invisible.
+  let mutant = stripShellRead(restoreEnvBinding(YAML));
+  const before = mutant;
+  mutant = mutant.replace(
+    /(          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""\n)/,
+    '          DIAG_RG="rg-csa-loom-admin-${AZURE_LOCATION}"\n$1',
+  );
+  assert.notEqual(mutant, before, 'the unrelated-use mutation did not apply');
+
+  const problems = checkSteps(mutant).filter((p) => /reads `inputs\.region`/.test(p));
+  assert.equal(problems.length, 1, `expected the S8 violation to survive, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /Adopt the DLZ/);
+});
+
+test('S8 CONTROL: a step that RECONCILES the raw input against $AZURE_LOCATION is allowed', () => {
+  // The pairing exemption. No step in the workflow takes this branch today, so
+  // without this test the branch would be unreachable code that no measurement
+  // ever exercises — a guard clause with zero population is not a guard clause.
+  let mutant = stripShellRead(restoreEnvBinding(YAML));
+  const before = mutant;
+  mutant = mutant.replace(
+    /(          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""\n)/,
+    '          if [ "$REGION" != "$AZURE_LOCATION" ]; then exit 1; fi\n$1',
+  );
+  assert.notEqual(mutant, before, 'the reconciliation mutation did not apply');
+  assert.deepEqual(
+    checkSteps(mutant).filter((p) => /reads `inputs\.region`/.test(p)), [],
+    'a step comparing the input against the measurement is reconciling, not trusting',
+  );
+});
+
+test('S8 CONTROL: the env-binding extraction has a floor — it cannot silently stop matching', () => {
+  // If ENV_BINDS_REGION_INPUT stopped matching, `boundVars` would be empty
+  // everywhere, the pairing exemption would be unreachable, and S8 would narrow
+  // to the two strong markers while still reporting a clean run.
+  //
+  // The mutation gives the binding a fallback — the #3029 shape — which is still
+  // a binding of the raw input but is NOT a shape this guard has reasoned about.
+  // `inputs.region` is left textually intact so the reader-count floors above do
+  // not fire first and mask this one.
+  const mutant = YAML.replace(
+    /INPUT_REGION: \$\{\{ inputs\.region \}\}/g,
+    "INPUT_REGION: ${{ inputs.region || '' }}",
+  );
+  assert.notEqual(mutant, YAML, 'the mutation did not apply');
+  const problems = checkSteps(mutant);
+  assert.ok(
+    problems.some((p) => /DISCOVERY FLOOR:.*ENV_BINDS_REGION_INPUT/.test(p)),
+    `expected the env-binding floor to fire, got: ${problems.join(' | ')}`,
+  );
+  // …and it must be THIS floor, not the reader-count ones firing by accident.
+  assert.ok(
+    !problems.some((p) => /no step reads `inputs\.region` at all/.test(p)),
+    'the reader floor fired too — the mutation is too broad to isolate the extraction',
+  );
+});
+
+test('S8 CONTROL: the guard FAILS on the pre-fix workflow and PASSES on the fixed one', () => {
+  // The strongest available control — the defect as it actually existed in git,
+  // not a hand-written imitation of it.
+  const preFix = execFileSync('git', ['show', 'HEAD:.github/workflows/deploy-fiab-commercial.yml'], {
+    cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  }).replace(/\r\n/g, '\n');
+
+  // `(?:[^\n]*\n)*?` — NOT `(?:.*\n)?`. The earlier form spanned at most ONE
+  // line while the real pre-fix file has SIX between `env:` and `REGION:` (five
+  // comment lines and `ADMIN_SUB:`), so the `if` never fired and this control
+  // asserted nothing at all. Measured on the file, not reasoned about.
+  const PRE_FIX_SHAPE = /id: dlz_adopt\n\s+env:\n(?:[^\n]*\n)*?\s+REGION: \$\{\{ inputs\.region \}\}/;
+  const s8 = (y) => checkSteps(y).filter((p) => /reads `inputs\.region`/.test(p));
+
+  if (PRE_FIX_SHAPE.test(preFix)) {
+    // HEAD still predates the fix: the real defect must produce the real violation.
+    const before = s8(preFix);
+    assert.equal(before.length, 1, 'the pre-fix workflow must produce exactly one S8 violation');
+    assert.match(before[0], /Adopt the DLZ/);
+  } else {
+    // Once merged, the fixed file IS HEAD. Assert THAT rather than falling
+    // silent — a control whose only branch is conditional is a control that
+    // stops watching the moment its condition lapses.
+    assert.deepEqual(s8(preFix), [], 'HEAD no longer carries the #3701 shape, so it must be clean');
+    assert.ok(
+      /REGION="\$\{AZURE_LOCATION:-\}"/.test(preFix),
+      'HEAD has neither the defect nor the fix — the adopt step changed shape and this control is stale',
+    );
+  }
+  assert.deepEqual(s8(YAML), []);
+});
+
+test('S8 CONTROL: the two legitimate readers still read the input', () => {
+  // Two steps legitimately read `inputs.region`: the one that runs
+  // reconcile-resolve.mjs (it produces the measurement) and the input-safety
+  // gate (it is passed steps.reconcile.outputs.region and refuses on a
+  // mismatch, #3029). A guard that flagged those would be switched off.
+  const steps = parseWorkflowSteps(YAML);
+  const code = (s) => s.body.filter((l) => !/^\s*#/.test(l)).join('\n');
+  const readers = steps.filter((s) => /\binputs\.region\b/.test(code(s)));
+  assert.ok(readers.length >= 2, `expected >= 2 legitimate readers, found ${readers.length}`);
+  assert.ok(
+    readers.some((s) => code(s).includes('scripts/ci/reconcile-resolve.mjs')),
+    'the step that MEASURES the region must still read the input',
+  );
+  assert.ok(
+    readers.some((s) => code(s).includes('steps.reconcile.outputs.region')),
+    'the input-safety gate must still receive the resolved region to compare against',
+  );
+});
+
+test('S8 CONTROL: the guard fails closed when nothing reads the region at all', () => {
+  const mutant = YAML.replace(/inputs\.region/g, 'inputs.regionRenamed');
+  const problems = checkSteps(mutant);
+  assert.ok(
+    problems.some((p) => /DISCOVERY FLOOR: no step reads `inputs\.region`/.test(p)),
+    `expected the S8 discovery floor to fire, got: ${problems.join(' | ')}`,
+  );
+});
+
+test('S8 CONTROL: a step merely MENTIONING inputs.region in a comment is not a use', () => {
+  // The fix's own explanation names the input, and a step's body absorbs the
+  // comment block introducing the NEXT step. If comments counted, the fixed
+  // workflow itself would fail — so this is proved against the real file.
+  const mutant = YAML.replace(
+    /(      - name: Setup Bicep\n)/,
+    '      # prose that names inputs.region without using it\n$1',
+  );
+  assert.notEqual(mutant, YAML, 'the mutation did not apply');
+  assert.deepEqual(checkSteps(mutant).filter((p) => /reads `inputs\.region`/.test(p)), []);
+});
+
+// ---------------------------------------------------------------------------
 // CONTROLS — the guard must be capable of failing, and of parsing
 // ---------------------------------------------------------------------------
 
