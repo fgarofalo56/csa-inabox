@@ -34,6 +34,12 @@ const fetchAll = vi.fn();
 
 vi.mock('@/lib/auth/workspace-access', () => ({
   resolveWorkspaceAccessByOid: (...a: any[]) => resolveWorkspaceAccessByOid(...a),
+  // #3697 — item-crud now builds its access options through this helper so the
+  // tenant-admin bypass reaches `loadOwnedItem` (it previously only reached
+  // /api/cosmos-items). These specs assert the workspaceId BRANCHING, not the
+  // admin path, so the stub returns the same "no ambient session" shape the real
+  // helper yields off-request.
+  ambientAccessOptsFor: async () => ({ callerTid: undefined }),
 }));
 vi.mock('@/lib/auth/workspace-list-access', () => ({
   authorizeWorkspaceList: (...a: any[]) => authorizeWorkspaceList(...a),
