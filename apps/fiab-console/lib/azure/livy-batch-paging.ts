@@ -61,11 +61,13 @@
  *
  * AS OF THIS COMMIT, NO UI CALLER CARRIES IT — so this stops short of saying
  * callers MUST, which would be a normative rule the codebase violates at three
- * known sites (`spark-job-definition-editor.tsx:302`,
- * `materialized-lake-view-editor.tsx:238`, `azure-services-editors.tsx:182`,
- * all `setRuns(j.sessions || [])`). Tracked in **#3731**, deliberately out of
- * scope here. New callers SHOULD surface `RecentSparkBatchJobs.truncatedBy`;
- * the routes already return it alongside `scanned` and the pool total.
+ * known sites, each keeping only the rows:
+ *   `spark-job-definition-editor.tsx:302`   `setRuns(j.sessions || [])`
+ *   `materialized-lake-view-editor.tsx:238` `setRuns(j.sessions || [])`
+ *   `azure-services-editors.tsx:182`        `setBatches(j.sessions || [])`
+ * Tracked in **#3731**, deliberately out of scope here. New callers SHOULD
+ * surface `RecentSparkBatchJobs.truncatedBy`; the routes already return it
+ * alongside `scanned` and the pool total.
  */
 
 import {
