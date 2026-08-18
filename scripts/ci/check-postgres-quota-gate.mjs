@@ -99,6 +99,25 @@ const PG_RESOURCE = /^[^\S\n]*resource\s+\w+\s+'Microsoft\.DBforPostgreSQL\/flex
 /** Bicep reserved words / literals that are never a var or param reference. */
 const LITERALS = new Set(['true', 'false', 'null', 'if', 'for', 'in', 'toLower', 'toUpper']);
 
+/**
+ * Read a bicep file with CRLF normalised to LF.
+ *
+ * `platform/fiab/bicep/**` is pinned `text eol=lf` in .gitattributes, but the
+ * repo-wide PG discovery also reads trees that are NOT pinned, and those arrive
+ * CRLF on a Windows checkout with `core.autocrlf=true`. Several patterns here end
+ * in `$`, and JS `.` does not match `\r` — so on a CRLF source `var X = …$` would
+ * fail to match and the declaration would silently vanish from the parse. A
+ * matcher that goes quiet on a line-ending difference is precisely the
+ * `csa_loom_crlf_makes_mutation_needles_silently_noop` shape. Normalising once,
+ * at the single read point, keeps every offset this file computes consistent.
+ *
+ * @param {string} abs
+ * @returns {string}
+ */
+export function readSource(abs) {
+  return readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE HELPERS (exported for the unit test)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -458,19 +477,51 @@ export const CONTROLS = [
   },
 ];
 
-/** @returns {string[]} control failures, empty when every fixture agrees */
-export function runControls() {
+/**
+ * How many control checks the last {@link runControls} actually executed.
+ * Reported instead of a hard-coded literal so the "N checks agreed" line cannot
+ * drift into claiming a count nobody counted (deploy-integrity.md R7).
+ */
+export const CONTROL_STATS = { ran: 0 };
+
+/** @returns {string[]} control failures, empty when every fixture agrees */export function runControls() {
   const failures = [];
+  CONTROL_STATS.ran = 0;
+  const check = (ok, msg) => {
+    CONTROL_STATS.ran += 1;
+    if (!ok) failures.push(msg);
+  };
   if (!declaresPostgres(PG_MODULE_FIXTURE)) {
-    failures.push('declaresPostgres() did not recognise a real flexibleServers resource declaration');
-  }
+    check(false, 'declaresPostgres() did not recognise a real flexibleServers resource declaration');
+  } else check(true);
   if (declaresPostgres("@description('deploys Microsoft.DBforPostgreSQL/flexibleServers')\nparam x bool = true")) {
-    failures.push('declaresPostgres() matched a DESCRIPTION STRING — it would pass on prose');
-  }
+    check(false, 'declaresPostgres() matched a DESCRIPTION STRING — it would pass on prose');
+  } else check(true);
   if (declaresPostgres("// resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {")) {
-    failures.push('declaresPostgres() matched a COMMENTED-OUT resource declaration');
-  }
+    check(false, 'declaresPostgres() matched a COMMENTED-OUT resource declaration');
+  } else check(true);
+  // The CRLF control. `parseVars` ends in `$`, and `.` does not match `\r`, so an
+  // un-normalised CRLF source loses its var declarations silently — the parse
+  // reports nothing rather than reporting a problem. This proves the hazard is
+  // real (raw CRLF loses the var) AND that readSource()'s normalisation closes it.
+  //
+  // The fixture deliberately carries a line AFTER the var: the first draft ended
+  // ON the var line, which therefore had no trailing `\r`, parsed fine, and the
+  // control failed by being unable to reproduce the hazard at all. That failure
+  // is the whole point of running controls before judging anything.
+  const crlfSrc = [`param ${GATE} bool = true`, `var active = flag && ${GATE}`, 'output x bool = active'].join('\r\n');
+  check(
+    !parseVars(blankComments(crlfSrc)).has('active'),
+    'the CRLF control did not reproduce the hazard — it can no longer prove the normalisation matters',
+  );
+  const lfSrc = crlfSrc.replace(/\r\n/g, '\n');
+  const normalised = parseVars(blankComments(lfSrc));
+  check(
+    normalised.has('active') && reachesGate('active', normalised, new Set([GATE, 'flag'])).reached,
+    'normalising CRLF did NOT restore the parse — readSource() does not close the hazard',
+  );
   for (const c of CONTROLS) {
+    CONTROL_STATS.ran += 1;
     let mods;
     try {
       mods = parseModules(c.src, `<control:${c.name}>`);
@@ -542,7 +593,7 @@ function main() {
     console.error('[postgres-quota-gate] no verdict is reported about the repo.');
     process.exit(1);
   }
-  console.log(`[postgres-quota-gate] embedded controls: ${CONTROLS.length + 3} checks agreed.`);
+  console.log(`[postgres-quota-gate] embedded controls: ${CONTROL_STATS.ran} checks agreed.`);
   if (selfTestOnly) {
     console.log('[postgres-quota-gate] --self-test only; repo not scanned.');
     return;
@@ -554,7 +605,7 @@ function main() {
     process.exit(1);
   }
   const sources = new Map();
-  for (const rel of files) sources.set(rel, readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+  for (const rel of files) sources.set(rel, readSource(path.join(REPO_ROOT, rel)));
 
   // 1. PG-declaring modules, repo-wide.
   const pgDeclaring = files.filter((rel) => declaresPostgres(sources.get(rel)));

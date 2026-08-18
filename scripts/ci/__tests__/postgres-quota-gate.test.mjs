@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   CONTROLS,
+  CONTROL_STATS,
   GATE,
   JUDGED_PREFIX,
   blankComments,
@@ -19,6 +20,21 @@ import {
 
 test('the embedded controls agree — the analyzer still separates the cases', () => {
   assert.deepEqual(runControls(), []);
+});
+
+test('the reported control count is COUNTED, not a literal that can drift', () => {
+  runControls();
+  assert.ok(CONTROL_STATS.ran > CONTROLS.length, 'the fixture list is not the whole control set');
+});
+
+test('a CRLF source loses its var declarations unless normalised — the hazard is real', () => {
+  const crlf = ['param x bool = true', 'var active = flag', 'output y bool = active'].join('\r\n');
+  assert.equal(parseVars(blankComments(crlf)).has('active'), false, 'raw CRLF must reproduce the hazard');
+  assert.equal(
+    parseVars(blankComments(crlf.replace(/\r\n/g, '\n'))).has('active'),
+    true,
+    'normalisation must restore the parse',
+  );
 });
 
 test('the controls cover BOTH directions, so they cannot pass by never matching', () => {
