@@ -77,8 +77,14 @@ describe('UserDataFunctionEditor — Execution endpoint is selected, not typed',
     // re-introduced the box under a new name would still fail this.
     expect(screen.queryByLabelText(/Function App base URL/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Key Vault secret name/i)).not.toBeInTheDocument();
-    // And nothing in the section is a textbox at all.
-    expect(screen.queryByPlaceholderText(/azurewebsites\.net/i)).not.toBeInTheDocument();
+    // And nothing in the section is a textbox at all. Substring predicates
+    // again, for the reason `optionNamed` exists: `/azurewebsites\.net/i` is an
+    // unanchored host-shaped pattern, which is the shape CodeQL's
+    // `js/regex/missing-regexp-anchor` is written to catch — and it is not
+    // worth arguing that this one instance is only an assertion.
+    const placeholderContaining = (needle: string) => (text: string | null) =>
+      (text || '').toLowerCase().includes(needle);
+    expect(screen.queryByPlaceholderText(placeholderContaining('azurewebsites.net'))).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('udf-fnapp-key')).not.toBeInTheDocument();
   });
 
