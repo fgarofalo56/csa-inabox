@@ -34,6 +34,29 @@ function looksReal(src: string): boolean {
   return /from '@\/lib\/azure\/synapse-(artifacts|dev)-client'/.test(src);
 }
 
+/**
+ * Does this route enforce a session?
+ *
+ * Two shapes count, because there are two legitimate ones. A hand-rolled
+ * `getSession()` prologue is the older form; a route-toolkit wrapper
+ * (`withSession` and friends) is the one `scripts/ci/check-route-toolkit.mjs`
+ * ratchets the codebase TOWARD — it runs the identical check with a
+ * byte-compatible envelope and adds the try/catch → 500 discipline, so it is
+ * strictly stronger, not weaker.
+ *
+ * Matching only the literal `getSession(` made this assertion fail the moment
+ * `sparkjobdefinitions/[name]/run` was migrated, while the route was better
+ * guarded than before — a control keyed to the SHAPE of the fix rather than to
+ * the property being enforced. The wrapper regex is the one the guard itself
+ * uses (TOOLKIT_RE), including its explicit-type-argument branch, so a route
+ * written `withSession<{ name: string }>(…)` is recognised as the call it is.
+ */
+const TOOLKIT_RE =
+  /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(/;
+function enforcesSession(src: string): boolean {
+  return /getSession\(/.test(src) || TOOLKIT_RE.test(src);
+}
+
 describe('Synapse KQL-script + Spark-job-definition BFF routes', () => {
   for (const [family, subs] of Object.entries(REQUIRED_ROUTES)) {
     for (const sub of subs) {
@@ -44,11 +67,31 @@ describe('Synapse KQL-script + Spark-job-definition BFF routes', () => {
         if (!src) return;
         expect(looksReal(src), `route ${label} must import a real synapse client`).toBe(true);
         // Every route validates the session + honest-gates the workspace.
-        expect(/getSession\(/.test(src), `route ${label} must check session`).toBe(true);
+        expect(enforcesSession(src), `route ${label} must check session`).toBe(true);
         expect(/synapseConfigGate|not_configured/.test(src), `route ${label} must honest-gate the workspace`).toBe(true);
       });
     }
   }
+
+  // The negative control. Widening `enforcesSession` to accept the toolkit
+  // wrappers is only safe if it still REFUSES a route that enforces nothing —
+  // otherwise the assertion above has quietly become unfalsifiable, which is
+  // the failure mode the widening was at risk of introducing.
+  it('the session check still FAILS a route that enforces nothing', () => {
+    const unguarded = [
+      "import { listSparkBatchJobs } from '@/lib/azure/synapse-dev-client';",
+      'export async function GET() { return Response.json({ ok: true }); }',
+    ].join('\n');
+    expect(enforcesSession(unguarded)).toBe(false);
+
+    // …and it accepts BOTH legitimate shapes, so neither form can regress
+    // silently into the other's blind spot.
+    expect(enforcesSession('const s = getSession();')).toBe(true);
+    expect(enforcesSession('export const GET = withSession(async () => {});')).toBe(true);
+    expect(enforcesSession('export const GET = withSession<{ name: string }>(async () => {});')).toBe(true);
+    // A mention in prose is not enforcement.
+    expect(enforcesSession('// this route uses withSession one day')).toBe(false);
+  });
 });
 
 describe('Synapse artifact-client factory shapes', () => {
