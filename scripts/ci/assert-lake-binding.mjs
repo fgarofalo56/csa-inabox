@@ -145,24 +145,39 @@ export function composeLakeBinding({ adoptPlan, topology }) {
 }
 
 /**
+ * Whether this deploy re-renders the console env array at all.
+ *
+ * `main.bicep:1114` — `deployAdminPlane = effectiveTopology != 'dlz-attach'`,
+ * and BOTH `resource adminPlaneRg` (1149) and `module adminPlane` (1159) are
+ * `if (deployAdminPlane)`. On a dlz-attach the admin plane is not deployed, so
+ * the Container App env array is never re-rendered and an empty
+ * `loomStorageAccount` cannot remove anything. Refusing there would be a false
+ * positive that blocks a deploy which is incapable of the harm.
+ */
+export function deployAdminPlane(effectiveTopology) {
+  return effectiveTopology !== 'dlz-attach';
+}
+
+/**
  * The verdict. Pure, so it is testable without Azure.
+ *
+ * ORDER MATTERS, and it is the reverse of the obvious one. The estate read is
+ * load-bearing ONLY when the binding composes EMPTY — that is the sole state in
+ * which anything can be deleted. Checking `estate.status === 'unknown'` first
+ * (as the first revision did) meant one transient Resource Graph failure —
+ * a 503, a throttle, a Reader gap on one subscription, an `az graph` extension
+ * install race — hard-failed the whole P0 reconcile even when the adopt plan
+ * had `storage-adls` and the seven vars were provably about to be emitted. It
+ * also printed "doing so with an unverified EMPTY lake binding would DELETE…",
+ * which is false when the binding is bound (deploy-integrity.md R7).
  *
  * @param {{bound:boolean,source:string,name:string|null}} binding
  * @param {{status:'present'|'absent'|'unknown', accounts?:string[], reason?:string}} estate
+ * @param {{topology?:string}} [ctx]
  */
-export function verdict(binding, estate) {
-  if (estate.status === 'unknown') {
-    return {
-      code: EXIT.UNKNOWN,
-      ok: false,
-      message:
-        'Could NOT determine whether this estate has a Loom-owned Data Lake Gen2 account: ' +
-        `${estate.reason || 'no reason given'}. That is UNKNOWN, not "no lake". This deploy re-renders ` +
-        'the console env array, and doing so with an unverified empty lake binding would DELETE ' +
-        'LOOM_BRONZE_URL/SILVER/GOLD/LANDING/CSV_IMPORTS/SAMPLE_ADLS/RECYCLE_RETENTION_DAYS from the ' +
-        'running app. Refusing rather than guessing (#3701).',
-    };
-  }
+export function verdict(binding, estate, ctx = {}) {
+  // 1. A BOUND binding emits the vars. Nothing can be stripped, so the estate
+  //    is irrelevant and an unreadable one must not fail the run.
   if (binding.bound) {
     return {
       code: EXIT.OK,
@@ -172,6 +187,30 @@ export function verdict(binding, estate) {
         `(source: ${binding.source}). The lake env vars will be emitted.`,
     };
   }
+  // 2. A topology that deploys no admin plane never re-renders the env array.
+  if (ctx.topology && !deployAdminPlane(ctx.topology)) {
+    return {
+      code: EXIT.OK,
+      ok: true,
+      message:
+        `loomStorageAccount composes EMPTY, but topology='${ctx.topology}' does not deploy the admin plane ` +
+        '(main.bicep:1114 `deployAdminPlane = effectiveTopology != \'dlz-attach\'`), so the console env array is ' +
+        'not re-rendered and no lake variable can be removed. Nothing to guard here.',
+    };
+  }
+  // 3. Empty binding + an estate we could not read = we do not know. Refuse.
+  if (estate.status === 'unknown') {
+    return {
+      code: EXIT.UNKNOWN,
+      ok: false,
+      message:
+        'Could NOT determine whether this estate has a Loom-owned Data Lake Gen2 account: ' +
+        `${estate.reason || 'no reason given'}. That is UNKNOWN, not "no lake" — and loomStorageAccount ` +
+        'composes EMPTY on this run, so the deploy would re-render the console env array and DELETE ' +
+        'LOOM_BRONZE_URL/SILVER/GOLD/LANDING/CSV_IMPORTS/SAMPLE_ADLS/RECYCLE_RETENTION_DAYS if a lake ' +
+        'does exist. Refusing rather than guessing (#3701).',
+    };
+  }
   if (estate.status === 'absent') {
     return {
       code: EXIT.OK,
@@ -179,6 +218,21 @@ export function verdict(binding, estate) {
       message:
         'loomStorageAccount composes EMPTY and this estate owns no Loom Data Lake Gen2 account. ' +
         'Consistent — this is the greenfield answer, and nothing is being removed.',
+    };
+  }
+  // DESTRUCTIVE is asserted ONLY on a positive read. Any other status reaching
+  // here means a state this function has not reasoned about (a new status
+  // string, or `not-read` leaking out of a path that should have read it), and
+  // an unrecognised state must not be rendered as a confident verdict in either
+  // direction — that is the R7 error this whole change exists to stop.
+  if (estate.status !== 'present') {
+    return {
+      code: EXIT.UNKNOWN,
+      ok: false,
+      message:
+        `INTERNAL: reached the destructive branch with estate.status='${estate.status}', which this ` +
+        'function does not classify. The binding composes EMPTY and the admin plane WILL be deployed, ' +
+        'so the estate had to be read and was not. Refusing rather than reporting a verdict nothing established.',
     };
   }
   return {
@@ -224,9 +278,29 @@ const FIXTURES = [
     expect: EXIT.OK,
   },
   {
-    name: 'dlz-attach does NOT take the convention branch -> DESTRUCTIVE when a lake exists',
+    name: 'dlz-attach deploys NO admin plane, so an empty binding removes nothing -> OK',
+    // Was asserted as DESTRUCTIVE. That was WRONG, and it was wrong inside an
+    // embedded control — the worst place for a false claim, because the control
+    // is what licenses trusting every other verdict. main.bicep:1114 gates both
+    // `resource adminPlaneRg` (1149) and `module adminPlane` (1159) on
+    // `effectiveTopology != 'dlz-attach'`, so on that topology the console env
+    // array is never re-rendered.
     plan: {}, topology: 'dlz-attach', estate: { status: 'present', accounts: ['saloomdefaultabc'] },
-    expect: EXIT.DESTRUCTIVE,
+    expect: EXIT.OK,
+  },
+  {
+    name: 'dlz-attach + an UNREADABLE estate is still OK — nothing is re-rendered',
+    plan: {}, topology: 'dlz-attach', estate: { status: 'unknown', reason: 'graph query exited 1' },
+    expect: EXIT.OK,
+  },
+  {
+    name: 'a BOUND binding with an UNREADABLE estate proceeds — the vars WILL be emitted',
+    // The estate read is load-bearing only when the binding is EMPTY. Refusing
+    // here would let one transient Resource Graph 503 hard-fail the whole P0
+    // reconcile for a state that cannot delete anything.
+    plan: { 'storage-adls': { mode: 'adopt', target: { name: 'saloomdefaulttr4nm4dcgsq' } } },
+    topology: 'tenant', estate: { status: 'unknown', reason: 'transient ARG 503' },
+    expect: EXIT.OK,
   },
   {
     name: "mode=create is not an adoption, so it does not bind -> DESTRUCTIVE",
@@ -248,7 +322,11 @@ const FIXTURES = [
 export function verifyControls() {
   const failures = [];
   for (const f of FIXTURES) {
-    const got = verdict(composeLakeBinding({ adoptPlan: f.plan, topology: f.topology }), f.estate).code;
+    const got = verdict(
+      composeLakeBinding({ adoptPlan: f.plan, topology: f.topology }),
+      f.estate,
+      { topology: f.topology },
+    ).code;
     if (got !== f.expect) failures.push(`${f.name}: expected exit ${f.expect}, got ${got}`);
   }
   return { total: FIXTURES.length, failures };
@@ -360,11 +438,22 @@ function main() {
   }
 
   const binding = composeLakeBinding({ adoptPlan, topology });
-  const estate = readEstateLakes(region);
-  const v = verdict(binding, estate);
+  // The Resource Graph read is only load-bearing when the binding composes
+  // EMPTY and this topology actually re-renders the console env array. Skipping
+  // it otherwise is not an optimisation — it removes an unnecessary failure
+  // mode from the P0 path: a transient ARG error must not fail a run that is
+  // incapable of deleting anything.
+  const estateMatters = !binding.bound && deployAdminPlane(topology);
+  const estate = estateMatters
+    ? readEstateLakes(region)
+    : { status: 'not-read', reason: 'the binding is bound or this topology deploys no admin plane' };
+  const v = verdict(binding, estate, { topology });
 
   console.log(`[assert-lake-binding] controls: ${controls.total}/${controls.total} passed`);
-  console.log(`[assert-lake-binding] topology=${topology} useSingleDlz=${useSingleDlz(topology)} binding=${binding.source} estate=${estate.status}`);
+  console.log(
+    `[assert-lake-binding] topology=${topology} useSingleDlz=${useSingleDlz(topology)} ` +
+    `deployAdminPlane=${deployAdminPlane(topology)} binding=${binding.source} estate=${estate.status}`,
+  );
 
   const out = arg('--github-output');
   if (out) {

@@ -26,6 +26,7 @@ import {
   checkInputs,
   checkSteps,
   run as runShapeGuard,
+  ENV_BINDS_REGION_INPUT,
   WORKFLOW,
 } from '../check-deploy-input-safety.mjs';
 import { parseWorkflowSteps } from '../check-reconcile-safety.mjs';
@@ -572,16 +573,59 @@ test('S8 MUTANT: the #3701 shape restored (env: binding + the shell read strippe
   assert.match(problems[0], /Adopt the DLZ/);
 });
 
-test('S8 CONTROL: restoring the env: binding ALONE is not the defect — the shell read still wins', () => {
-  // The one-edit mutant this test file previously used. Asserting the guard is
-  // SILENT here is what makes the two-edit mutant above meaningful: it proves
-  // the guard distinguishes the real defect from a workflow that merely looks
-  // like it, rather than firing on the presence of a string.
+test('S8: a DEAD env binding is flagged even though the shell read currently overwrites it', () => {
+  // Restoring the `env:` line alone leaves the fix's `REGION="${AZURE_LOCATION:-}"`
+  // standing, and a step `env:` is applied BEFORE the `run:` body executes — so
+  // the shell read wins and the workflow is, today, behaviourally correct.
+  //
+  // It is still flagged, deliberately. That safety is ORDER-DEPENDENT: the env
+  // entry has no effect other than to arm a trap that fires the moment someone
+  // deletes the shell line as redundant — and "the body happens to overwrite it"
+  // is precisely the kind of evaluation-order reasoning that produced #3701.
+  // The rule stays simple and checkable: do not bind `inputs.region` into a step
+  // `env:` unless that step reconciles it.
+  //
+  // This costs nothing in false positives — the real workflow binds it in no
+  // step at all, which the control below pins.
   const mutant = restoreEnvBinding(YAML);
-  assert.deepEqual(
-    checkSteps(mutant).filter((p) => /reads `inputs\.region`/.test(p)), [],
-    'a step whose shell read overwrites the env binding is behaviourally correct',
+  const problems = checkSteps(mutant).filter((p) => /(reads|binds) `inputs\.region`/.test(p));
+  assert.equal(problems.length, 1, `expected the dead-binding violation, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /Adopt the DLZ/);
+});
+
+test('S8 CONTROL: the only steps binding `inputs.region` bind INPUT_REGION and reconcile it', () => {
+  const steps = parseWorkflowSteps(YAML);
+  const bound = steps.filter((s) => s.body.some((l) => ENV_BINDS_REGION_INPUT.test(l)));
+  assert.ok(bound.length >= 2, `expected >= 2 binding steps, found ${bound.length} — the extraction stopped matching`);
+  // The two legitimate readers bind INPUT_REGION — a DIFFERENT name — and both
+  // carry a strong reconciliation marker, so they are exempt for a stated
+  // reason rather than by accident.
+  for (const s of bound) {
+    const names = s.body.map((l) => ENV_BINDS_REGION_INPUT.exec(l)?.[1]).filter(Boolean);
+    assert.deepEqual(names, ['INPUT_REGION'],
+      `step "${s.name}" binds inputs.region to ${names.join(',')} — only INPUT_REGION is expected here`);
+  }
+  assert.deepEqual(checkSteps(YAML).filter((p) => /(reads|binds) `inputs\.region`/.test(p)), []);
+});
+
+test('the resolver`s exit-1 arm requires the POSITIVE DLZ_STATUS marker, not just the code', () => {
+  // node exits 1 for an uncaught throw AND for a module-load failure — the same
+  // code that means "Resource Graph was read and nothing matched". Rename the
+  // resolver and, on the code alone, the nightly reports a confident greenfield
+  // negative forever. The arm must consult a marker the resolver only writes on
+  // a MEASURED path. Pinned here so it cannot be simplified back to the code.
+  const steps = parseWorkflowSteps(YAML);
+  const adopt = steps.find((s) => /Adopt the DLZ/.test(s.name));
+  assert.ok(adopt, 'the adopt step is gone — this control is stale');
+  const body = adopt.body.join('\n');
+  assert.match(body, /grep -q '\^DLZ_STATUS=not-found\$'/,
+    'the exit-1 arm no longer requires the positive marker, so a crash reads as a greenfield measurement');
+  // …and the resolver must still WRITE it, or the grep above fails every run.
+  const resolver = readFileSync(
+    path.join(REPO_ROOT, 'scripts', 'csa-loom', 'resolve-dlz-coordinates.mjs'), 'utf8',
   );
+  assert.match(resolver, /DLZ_STATUS=\$\{result\.status\}/,
+    'resolve-dlz-coordinates no longer writes DLZ_STATUS — the workflow grep would refuse every run');
 });
 
 test('S8 MUTANT: the #3701 shape hidden behind an UNRELATED AZURE_LOCATION use -> the shape guard STILL FAILS', () => {
@@ -615,9 +659,85 @@ test('S8 CONTROL: a step that RECONCILES the raw input against $AZURE_LOCATION i
   );
   assert.notEqual(mutant, before, 'the reconciliation mutation did not apply');
   assert.deepEqual(
-    checkSteps(mutant).filter((p) => /reads `inputs\.region`/.test(p)), [],
+    checkSteps(mutant).filter((p) => /(reads|binds) `inputs\.region`/.test(p)), [],
     'a step comparing the input against the measurement is reconciling, not trusting',
   );
+});
+
+// ---------------------------------------------------------------------------
+// The pairing exemption was itself defeatable — found in review of THIS PR.
+//
+// `l.includes(v)` is a SUBSTRING test, so the exemption fired on names that
+// merely occur inside `AZURE_LOCATION`, and on the binding line itself. Proved
+// by varying ONLY the bound variable's name on the real #3701 shape:
+//
+//   bound var        alone   + one ordinary `rg-…-${AZURE_LOCATION}` line
+//   REGION             1       1        <- the name the first test happened to use
+//   LOCATION           1       0        <- 'AZURE_LOCATION'.includes('LOCATION')
+//   AZURE_LOCATION     0       0        <- the binding line self-satisfies it
+//   R / A              1       0        <- any line at all
+//
+// Every cell must be a violation. The cases below pin the three that were not.
+// ---------------------------------------------------------------------------
+
+/** Restore the #3701 shape with the raw input bound to an arbitrary name. */
+function restoreShapeBoundTo(yaml, varName) {
+  assert.ok(ENV_ANCHOR.test(yaml), 'the ADMIN_SUB env anchor is gone');
+  const withEnv = yaml.replace(ENV_ANCHOR, `$1          ${varName}: \${{ inputs.region }}\n`);
+  assert.notEqual(withEnv, yaml, `binding ${varName} did not apply`);
+  return stripShellRead(withEnv);
+}
+
+/** One ordinary resource-group interpolation — thirteen real steps have one. */
+function addOrdinaryRgLine(yaml) {
+  const out = yaml.replace(
+    /(          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""\n)/,
+    '          DIAG_RG="rg-csa-loom-admin-${AZURE_LOCATION}"\n$1',
+  );
+  assert.notEqual(out, yaml, 'the ordinary-RG-line mutation did not apply');
+  return out;
+}
+
+const s8Violations = (yaml) => checkSteps(yaml).filter((p) => /(reads|binds) `inputs\.region`/.test(p));
+
+test('S8 MUTANT: the pairing exemption is not satisfied by a SUBSTRING of the measurement var', () => {
+  for (const varName of ['LOCATION', 'R', 'A', 'REGION', 'INPUT_REGION']) {
+    for (const [label, yaml] of [
+      ['alone', restoreShapeBoundTo(YAML, varName)],
+      ['+ ordinary RG line', addOrdinaryRgLine(restoreShapeBoundTo(YAML, varName))],
+    ]) {
+      const problems = s8Violations(yaml);
+      assert.equal(problems.length, 1,
+        `bound var ${varName} (${label}): expected exactly 1 S8 violation, got ${problems.length} — ` +
+        `${problems.join(' | ') || 'the guard was SILENT on the #3701 shape'}`);
+      assert.match(problems[0], /Adopt the DLZ/);
+    }
+  }
+});
+
+test('S8 MUTANT: binding the input to AZURE_LOCATION itself is a violation on its own', () => {
+  // The worst case, and the one neither "exclude the binding line" nor "require
+  // a shell reference" catches: when the bound name IS the measurement token,
+  // every ordinary `${AZURE_LOCATION}` reads as a reference to it. It is also
+  // unconditionally unsafe — a step-level `env:` entry OVERRIDES what
+  // `Resolve reconcile target` wrote to $GITHUB_ENV, for that step, so the whole
+  // body silently sees the empty input. Caught by name, before pairing.
+  const mutant = restoreShapeBoundTo(YAML, 'AZURE_LOCATION');
+  const problems = s8Violations(mutant);
+  assert.equal(problems.length, 1, `expected the shadowing violation, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /SHADOWS the measured region/);
+  assert.match(problems[0], /Adopt the DLZ/);
+
+  // …and it must NOT be redeemable by adding a line that looks like pairing.
+  const withPairing = addOrdinaryRgLine(mutant);
+  assert.equal(s8Violations(withPairing).length, 1,
+    'an ordinary ${AZURE_LOCATION} line must not redeem a step that shadows the measurement');
+});
+
+test('S8 CONTROL: shadowing is judged on the BOUND name, not on mentioning AZURE_LOCATION', () => {
+  // The real workflow mentions AZURE_LOCATION in thirteen steps and binds it in
+  // none. If this fired on a mention, the guard would be unusable.
+  assert.deepEqual(s8Violations(YAML), []);
 });
 
 test('S8 CONTROL: the env-binding extraction has a floor — it cannot silently stop matching', () => {

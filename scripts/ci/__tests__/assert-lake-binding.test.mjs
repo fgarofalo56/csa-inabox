@@ -29,6 +29,7 @@ import {
   effectiveTopology,
   paramValue,
   composeLakeBinding,
+  deployAdminPlane,
   verdict,
   verifyControls,
   readEstateLakes,
@@ -220,4 +221,76 @@ test('the real commercial.bicepparam still pins the topology this check reasons 
     `commercial.bicepparam pins topology='${t}'. useSingleDlz is now ${useSingleDlz(t)}; if that ever ` +
     'becomes true the adopt plan stops being the only source of loomStorageAccount and this guard ' +
     'needs revisiting.');
+});
+
+// ===========================================================================
+// PR #3703 review — three false-refusal / false-claim paths the first revision
+// would have shipped. Each is a state where the guard said NO about something
+// that cannot produce the harm it guards, which is how a P0 fix turns into a
+// nightly hard-failure.
+// ===========================================================================
+
+test('REVIEW-1: a BOUND binding proceeds even when the estate read FAILED', () => {
+  // The first revision tested `estate.status === 'unknown'` BEFORE
+  // `binding.bound`, so one transient Resource Graph 503 hard-failed the whole
+  // P0 reconcile on a run whose adopt plan already carried `storage-adls` —
+  // a run provably about to EMIT the seven vars, not remove them.
+  const bound = composeLakeBinding({
+    adoptPlan: { 'storage-adls': { mode: 'adopt', target: { name: 'saloomdefaulttr4nm4dcgsq' } } },
+    topology: 'tenant',
+  });
+  assert.equal(bound.bound, true, 'precondition: this plan must produce a bound binding');
+  const v = verdict(bound, { status: 'unknown', reason: 'transient ARG 503' }, { topology: 'tenant' });
+  assert.equal(v.code, EXIT.OK, v.message);
+  assert.doesNotMatch(v.message, /EMPTY/,
+    'the refusal text claimed the binding was empty — false when it is bound (deploy-integrity R7)');
+});
+
+test('REVIEW-1 CONTROL: an EMPTY binding with an unreadable estate still REFUSES', () => {
+  // The fix must not have turned the guard off. This is the state where the
+  // estate read is genuinely load-bearing.
+  const empty = composeLakeBinding({ adoptPlan: {}, topology: 'tenant' });
+  assert.equal(empty.bound, false);
+  const v = verdict(empty, { status: 'unknown', reason: 'ARG 503' }, { topology: 'tenant' });
+  assert.equal(v.code, EXIT.UNKNOWN, v.message);
+});
+
+test('REVIEW-5: dlz-attach deploys no admin plane, so an empty binding is not destructive', () => {
+  // main.bicep:1114 `deployAdminPlane = effectiveTopology != 'dlz-attach'`, and
+  // both `resource adminPlaneRg` (1149) and `module adminPlane` (1159) are gated
+  // on it. The console env array is never re-rendered, so nothing can be removed.
+  assert.equal(deployAdminPlane('dlz-attach'), false);
+  assert.equal(deployAdminPlane('tenant'), true);
+  assert.equal(deployAdminPlane('single-sub'), true);
+
+  const empty = composeLakeBinding({ adoptPlan: {}, topology: 'dlz-attach' });
+  assert.equal(empty.bound, false, 'precondition: dlz-attach does not take the single-DLZ branch');
+  for (const estate of [{ status: 'present', accounts: ['sa1'] }, { status: 'unknown', reason: 'x' }]) {
+    const v = verdict(empty, estate, { topology: 'dlz-attach' });
+    assert.equal(v.code, EXIT.OK, `dlz-attach + estate=${estate.status}: ${v.message}`);
+  }
+});
+
+test('REVIEW-5 CONTROL: the SAME empty binding on `tenant` is still DESTRUCTIVE', () => {
+  // Proves the dlz-attach exemption is keyed on the topology and has not
+  // weakened the case the guard exists for.
+  const empty = composeLakeBinding({ adoptPlan: {}, topology: 'tenant' });
+  const v = verdict(empty, { status: 'present', accounts: ['sa1'] }, { topology: 'tenant' });
+  assert.equal(v.code, EXIT.DESTRUCTIVE, v.message);
+});
+
+test('an UNCLASSIFIED estate status never becomes a confident verdict', () => {
+  // `not-read` is produced when the estate read is skipped as irrelevant. If it
+  // ever leaked into the destructive branch, the earlier code would have
+  // returned DESTRUCTIVE — a verdict asserted from a read that never happened.
+  const empty = composeLakeBinding({ adoptPlan: {}, topology: 'tenant' });
+  const v = verdict(empty, { status: 'not-read' }, { topology: 'tenant' });
+  assert.equal(v.code, EXIT.UNKNOWN, v.message);
+  assert.match(v.message, /INTERNAL/);
+});
+
+test('the embedded controls cover the review cases, and still all pass', () => {
+  const { total, failures } = verifyControls();
+  assert.deepEqual(failures, [], failures.join('\n'));
+  assert.ok(total >= 10, `expected the fixture set to have grown past 8, got ${total}`);
 });

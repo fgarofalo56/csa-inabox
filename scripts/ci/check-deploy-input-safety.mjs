@@ -465,13 +465,33 @@ export function checkSteps(yaml) {
      * AZURE_LOCATION elsewhere in the step does NOT count; that leniency is
      * what would have let the #3701 shape back in behind an unrelated
      * `rg-…-${AZURE_LOCATION}` interpolation.
+     *
+     * TWO WAYS THE PAIRING TEST WAS ITSELF DEFEATED (measured, PR #3703 review):
+     *
+     *  1. `l.includes(v)` is a SUBSTRING test, and `AZURE_LOCATION` contains
+     *     `LOCATION`. So `LOCATION: ${{ inputs.region }}` was exempted by ANY of
+     *     the thirteen ordinary `rg-…-${AZURE_LOCATION}` lines. Short names were
+     *     worse still — `R` and `A` matched almost any line.
+     *  2. The `env:` binding line itself contains both tokens when the bound
+     *     name IS `AZURE_LOCATION`, so `AZURE_LOCATION: ${{ inputs.region }}`
+     *     self-satisfied the exemption with no other line present at all — and
+     *     that is the WORST case, because a step-level `env:` entry overrides
+     *     the measured `$GITHUB_ENV` value for that step. #3701 exactly, guard
+     *     silent.
+     *
+     * So: the binding lines are excluded from the candidate set, and the bound
+     * name must appear as a real shell REFERENCE (`$VAR` / `${VAR}`), not as a
+     * substring of some longer identifier.
      */
     const reconciles = (s) => {
       if (REGION_RECONCILIATION_MARKERS.some((m) => wiring(s).includes(m))) return true;
       const vars = boundVars(s);
       if (vars.length === 0) return false;
+      const refs = vars.map((v) => new RegExp(`\\$\\{?${v}\\b`));
       return wiringLines(s).some(
-        (l) => l.includes(REGION_MEASUREMENT_VAR) && vars.some((v) => l.includes(v)),
+        (l) => !ENV_BINDS_REGION_INPUT.test(l)
+          && l.includes(REGION_MEASUREMENT_VAR)
+          && refs.some((re) => re.test(l)),
       );
     };
     if (readers.length === 0) {
@@ -499,7 +519,28 @@ export function checkSteps(yaml) {
         'below can no longer be reached and S8 is measuring less than it reports.',
       );
     }
-    for (const s of readers.filter((s) => !reconciles(s))) {
+    for (const s of readers) {
+      // SHADOWING THE MEASUREMENT is unconditionally unsafe, and no amount of
+      // pairing can redeem it. `AZURE_LOCATION: ${{ inputs.region }}` in a step
+      // `env:` OVERRIDES the value `Resolve reconcile target` wrote to
+      // $GITHUB_ENV — for that step only — so every ordinary
+      // `rg-…-${AZURE_LOCATION}` in the body silently becomes the EMPTY input
+      // on a schedule. It also defeats the pairing test by construction: the
+      // bound name and the measurement token are then the same string, so any
+      // interpolation of the measured region reads as a reference to the bound
+      // variable. Caught by name, before pairing is consulted.
+      if (boundVars(s).includes(REGION_MEASUREMENT_VAR)) {
+        problems.push(
+          `step "${s.name}" (line ${s.startLine}) binds \`inputs.region\` to \`${REGION_MEASUREMENT_VAR}\` in its ` +
+          '`env:`, which SHADOWS the measured region for the whole step. A step-level `env:` entry overrides ' +
+          'what `Resolve reconcile target` wrote to $GITHUB_ENV, so every `${' + REGION_MEASUREMENT_VAR + '}` in ' +
+          'the body silently becomes the raw input — the empty string on a `schedule` event. Never bind the ' +
+          'input to the measurement variable\'s own name; read `$' + REGION_MEASUREMENT_VAR + '` from the shell ' +
+          'instead (#3701).',
+        );
+        continue;
+      }
+      if (reconciles(s)) continue;
       problems.push(
         `step "${s.name}" (line ${s.startLine}) reads \`inputs.region\` without holding the MEASURED ` +
         'region, so it TRUSTS the input. That input is EMPTY on a `schedule` event, meaning the nightly ' +
