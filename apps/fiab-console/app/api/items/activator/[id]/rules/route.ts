@@ -18,7 +18,10 @@
  * those rules (and can act on them) instead of an empty list. A rule is claimed
  * only on an authoritative join (the `loom-item-id` ARM tag, else the Loom
  * description marker AND the exact derived name), the write-back is merged under
- * an IfMatch, and a truncated listing is shown but never persisted.
+ * an IfMatch, and a truncated listing is shown but never persisted. The heal's
+ * WRITE is separately write-scoped: GET authorizes read roles, so the write-back
+ * re-authorizes on the Owner/Admin/Member ladder and a read-only Viewer gets the
+ * live rules un-persisted rather than mutating the item through a GET.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -236,16 +239,36 @@ function recordFromLiveRule(r: ScheduledQueryRule, bundleRule?: any): MonitorRul
   };
 }
 
+/** What a read-only caller is told when the heal was withheld. States what
+ *  happened, not a remediation the caller cannot perform (deploy-integrity R7). */
+const READ_ONLY_HEAL_NOTE =
+  'These rules were read live from Azure Monitor and are real, but they were NOT recorded on the item: '
+  + 'recording is a write and your role on this workspace is read-only. '
+  + 'The next open by a workspace Owner/Admin/Member records them, after which every caller gets a plain read.';
+
 /**
  * Returns the reconciled records (written back to the item when the listing was
- * COMPLETE and the write succeeded), or null when there is nothing to reconcile
- * / no reason to look / Azure Monitor cannot be listed. NEVER throws: a
- * reconcile that can't run must not break a GET that would otherwise fall
- * through to the bundle projection.
+ * COMPLETE, the caller may WRITE, and the write succeeded), or null when there
+ * is nothing to reconcile / no reason to look / Azure Monitor cannot be listed.
+ * NEVER throws: a reconcile that can't run must not break a GET that would
+ * otherwise fall through to the bundle projection.
+ *
+ * `canPersist` — THE READ/WRITE SPLIT. This function runs inside a GET that is
+ * authorized with `allowReadRoles: true`, i.e. any workspace role including a
+ * read-only Viewer. Both of its `replaceWithMerge` calls are WRITES to the
+ * Cosmos item (the second rewrites `state.rules` and bumps `updatedAt`), so
+ * running them on the read-scoped authorization alone would let a Viewer mutate
+ * through a GET — precisely what lib/auth/workspace-guard.ts's contract forbids
+ * ("Mutating handlers must NOT pass it — they stay write-scoped so a read-only
+ * Viewer can never mutate through a route that only 'made the read work'").
+ * The caller therefore hands in a WRITE-scoped authorization probe, evaluated
+ * only when a write is actually about to happen, and a read-only caller still
+ * gets the correct live rules — just un-persisted, and told so.
  */
 async function reconcileFromAzureMonitor(
   item: WorkspaceItem,
   bundleRule: any | null,
+  canPersist: () => Promise<boolean>,
 ): Promise<{ rules: MonitorRuleRecord[]; healed: boolean; partial: boolean; note?: string } | null> {
   try {
     const evidence = reconcileEvidence(item, bundleRule);
@@ -259,8 +282,9 @@ async function reconcileFromAzureMonitor(
     if (mine.length === 0) {
       // Remember the miss so the next open is a plain read. Not on a truncated
       // listing: "I did not find it in the part I read" is not "it is not there"
-      // (deploy-integrity.md R7).
-      if (!listed.truncatedBy) {
+      // (deploy-integrity.md R7). And not for a read-only caller — the cooldown
+      // marker is still a write to the item.
+      if (!listed.truncatedBy && (await canPersist())) {
         const at = new Date().toISOString();
         await replaceWithMerge(item, (cur) => ({
           ...cur,
@@ -299,6 +323,13 @@ async function reconcileFromAzureMonitor(
     // CURRENT document under an IfMatch, so a rule added during the ARM call
     // survives. Honestly reported: the response is correct either way, and a
     // failed write just means the next GET reconciles again.
+    //
+    // A READ-ONLY caller gets the same rules and no write at all: the records
+    // above are derived from a live ARM READ, which any workspace role may do;
+    // persisting them is a mutation, which a Viewer may not.
+    if (!(await canPersist())) {
+      return { rules: records, healed: false, partial: false, note: READ_ONLY_HEAL_NOTE };
+    }
     let view: MonitorRuleRecord[] = records;
     const at = new Date().toISOString();
     const write = await replaceWithMerge(item, (cur) => {
@@ -399,7 +430,29 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     // whose record was lost — #3551 — and heal the item from them.
     const bundleRule = item ? activatorRuleFromContent(item) : null;
     if (item) {
-      const reconciled = await reconcileFromAzureMonitor(item, bundleRule);
+      // WRITE-scoped probe for the self-heal's write-back, evaluated lazily so a
+      // GET that never reaches a write pays nothing for it, and at most once.
+      // The read above ran on `allowReadRoles: true` (any workspace role); the
+      // heal PERSISTS to the item, so it needs the write ladder
+      // (Owner/Admin/Member) — see the `canPersist` note on
+      // reconcileFromAzureMonitor. A denial is NOT returned to the caller: the
+      // READ is legitimately theirs, and turning it into a 404 would break the
+      // editor for every read-only member.
+      let writeScoped: boolean | undefined;
+      const canPersist = async (): Promise<boolean> => {
+        if (writeScoped === undefined) {
+          // The guard's answer is TESTED, not returned: its 404 means "this
+          // caller may not write", which withholds the heal — it is NOT this
+          // request's response, because the READ is legitimately theirs.
+          writeScoped = true;
+          if (await authorizeItemWorkspace(session, {
+            workspaceId, itemId: id, itemType: 'activator',
+            notFound: 'activator not found',
+          })) writeScoped = false;
+        }
+        return writeScoped;
+      };
+      const reconciled = await reconcileFromAzureMonitor(item, bundleRule, canPersist);
       if (reconciled) {
         return NextResponse.json({
           ok: true,
