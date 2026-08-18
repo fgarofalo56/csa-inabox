@@ -257,7 +257,18 @@ export interface PipelineCanvasProps {
    * so existing consumers are unchanged; the data-pipeline editor opts in.
    */
   aiSuggest?: boolean;
-  /** Item type used to ground the suggestion prompt (defaults to 'data-pipeline'). */
+  /**
+   * The OWNING ITEM'S REAL catalog slug — 'data-pipeline', 'adf-pipeline' or
+   * 'synapse-pipeline'. Used to ground the AI suggestion prompt AND to address
+   * the shared collaboration endpoints under `/api/items/[type]/[id]/…`.
+   *
+   * #3698 — this used to DEFAULT to `'data-pipeline'`. Those generic routes
+   * match `c.itemType` EXACTLY, so the default silently addressed every
+   * `adf-pipeline` / `synapse-pipeline` item under the wrong type and every
+   * collab request 404'd. There is deliberately NO default any more: a host
+   * that cannot name the item's type does not get the collaboration layer
+   * (rather than getting it pointed at the wrong item).
+   */
   itemType?: string;
   /** Owning item id — enables the shared collaboration layer (comments/presence). */
   itemId?: string;
@@ -297,7 +308,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
   { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, onDeleteActivity, snapToGrid = true, showGrid = true, onZoomChange,
     onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, onExplainNode, readOnly = false, hideEmptyState = false,
-    aiSuggest = false, itemType = 'data-pipeline', itemId },
+    aiSuggest = false, itemType, itemId },
   ref,
 ) {
   const s = useStyles();
@@ -363,7 +374,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   }, []);
   const { suggestion, loading: suggestLoading, dismiss: dismissSuggestion } = useGhostSuggestion({
     enabled: aiSuggest && !readOnly,
-    itemType,
+    // Prompt GROUNDING only — never an API path, so a generic fallback here is
+    // harmless (unlike the collab layer below, which addresses a real route).
+    itemType: itemType ?? 'data-pipeline',
     nodes: suggestNodes,
     edges: suggestEdges,
     paletteKeys,
@@ -885,8 +898,12 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}
         />
         {/* W4 + W5 — shared collaboration overlay (comments + presence). No-ops
-            without an itemId; no host node-state changes. */}
-        <CanvasCollabLayer itemType={itemType} itemId={itemId} canvasKey="pipeline" />
+            without an itemId; no host node-state changes. #3698 — also requires
+            an explicit `itemType`: addressing `/api/items/[type]/[id]/…` under a
+            guessed type 404s (those routes match `c.itemType` exactly), so a
+            host that cannot name the type gets no overlay instead of a broken
+            one pointed at the wrong item. */}
+        {itemType && <CanvasCollabLayer itemType={itemType} itemId={itemId} canvasKey="pipeline" />}
       </ReactFlow>
 
       {/* U13 — the eyeglass run-monitoring detail (input/output/error JSON). */}

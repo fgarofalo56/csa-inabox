@@ -1686,6 +1686,67 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" \
             ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
 
+      # ── ACR COMPLIANCE TAGS — APPLIED HERE, NOT BY THE TEMPLATE (#3714) ────
+      #
+      # The admin-plane ACR is the ONE resource whose ARM tags are written by
+      # something other than the deployment: acr-firewall-lease.sh records the
+      # firewall mutex there (`loomAcrFw*`) because the ARM control plane stays
+      # reachable when the registry's data plane is firewalled off. Both
+      # declarative options for compliance tags were tried and both shipped
+      # broken:
+      #
+      #   #3676  `tags: complianceTags` on the registry — ARM PUTs top-level
+      #          tags as an absolute REPLACE, erasing the live lease mid-apply
+      #          and denying an in-flight `az acr build` push (8-minute outage).
+      #   #3714  a `Microsoft.Resources/tags` resource that read its own current
+      #          value — its scope expression IS its own resource id, so ARM
+      #          rejected the whole template with "Circular dependency detected"
+      #          and EVERY Commercial `az deployment sub create` failed.
+      #
+      # `az tag update --operation Merge` is a server-side PATCH: it adds the
+      # compliance keys and touches nothing else, so it cannot clobber a lease
+      # and has no read-then-write window on our side.
+      #
+      # RESOLVES THE REGISTRY ITSELF rather than reusing
+      # `steps.acr_apply_lease.outputs.acr`: that step runs BEFORE Provision, so
+      # on a greenfield subscription it found no registry at all — which is
+      # precisely the run where the tags are missing and this step matters most.
+      #
+      # NOT `|| true`, and no discarded stderr. The script verifies by reading
+      # the tags back (a 0 from `az tag update` means "accepted", not "applied"
+      # — that distinction caught a real CR-corruption bug on 2026-08-18) and
+      # fails the deploy if the registry is not actually tagged, or if the
+      # firewall-lease key set changed across the merge.
+      - name: Apply ACR compliance tags (merge-patch, out-of-band — #3714)
+        if: steps.provision.conclusion == 'success'
+        env:
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR_ERR="$RUNNER_TEMP/acr-tag-resolve.err"
+          : > "$ACR_ERR"
+          ACR=$(az acr list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+                  --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2> "$ACR_ERR" | tr -d '\r')
+          ACR_RC=$?
+          # R7 — do not assert a cause the code did not establish. A non-zero
+          # `az` and an empty result are DIFFERENT facts and get different
+          # messages; collapsing "I could not look" into "there is none" is the
+          # exact substitution deploy-integrity R7 exists to forbid.
+          if [ "$ACR_RC" -ne 0 ]; then
+            echo "::error::Could not LIST registries in $RG (az exited $ACR_RC), so whether this estate has an ACR to tag is UNKNOWN. Raw stderr:"
+            sed -n '1,20p' "$ACR_ERR" >&2
+            exit 1
+          fi
+          if [ -z "$ACR" ]; then
+            echo "::error::Provision succeeded but no 'acrloom*' registry exists in $RG. The admin-plane ACR is not optional; a successful apply that produced none means the template did not deploy what this lane assumes."
+            exit 1
+          fi
+          bash scripts/csa-loom/apply-acr-compliance-tags.sh \
+            --acr "$ACR" \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --params-file platform/fiab/bicep/params/commercial.bicepparam
+
       # ── I-BEHIND — DID THIS APPLY LEAVE THE ESTATE BEHIND THE LAST ROLL? ───
       #
       # THE DEFECT THIS EXISTS FOR is the SECOND half of #3676, and the half
