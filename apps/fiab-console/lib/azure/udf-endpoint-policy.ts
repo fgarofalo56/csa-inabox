@@ -70,8 +70,18 @@ export interface UdfEndpointGate {
   detail: string;
 }
 
-/** Normalised comparison key for a base URL: lowercase origin + trimmed path. */
-function endpointKey(raw: string): string | null {
+/**
+ * Normalised comparison key for a base URL: lowercase origin + trimmed path.
+ *
+ * EXPORTED so the editor's endpoint picker decides "is this saved base the same
+ * endpoint as that approved one?" with the EXACT function `resolveUdfEndpoint`
+ * uses. A second, look-alike comparison in the UI is how a picker comes to show
+ * a saved value as unapproved that the invoke route accepts (or the reverse) —
+ * the two answers have to be the same answer, not two implementations of it.
+ * This module imports nothing and touches no `process.env` at load, so it is
+ * safe in a client bundle.
+ */
+export function udfEndpointKey(raw: string): string | null {
   const s = String(raw || '').trim();
   if (!s) return null;
   let u: URL;
@@ -86,6 +96,9 @@ function endpointKey(raw: string): string | null {
   if (u.username || u.password || u.search || u.hash) return null;
   return `${u.origin.toLowerCase()}${u.pathname.replace(/\/+$/, '')}`;
 }
+
+/** Internal alias kept so the call sites below read as they always have. */
+const endpointKey = udfEndpointKey;
 
 /** Split a comma / whitespace separated config list. */
 function splitList(raw?: string | null): string[] {

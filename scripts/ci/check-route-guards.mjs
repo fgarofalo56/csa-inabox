@@ -526,6 +526,22 @@ const ALLOWLIST = new Map([
   // resource to own-scope — a shared Azure backend resolved by env, like the
   // flightsql/connect guidance route above.
   ['apps/fiab-console/app/api/s3-gateway/info/route.ts', 'deployment-wide S3-gateway connect info + secret-free snippets; no per-tenant resource to scope'],
+  // UDF execution endpoints READ half: returns `configuredUdfEndpoints()`, which
+  // is a pure function of THREE env vars (LOOM_UDF_FUNCTION_BASE,
+  // LOOM_UDF_ALLOWED_FUNCTION_BASES, LOOM_UDF_FUNCTION_KEY_SECRET) — the handler
+  // takes no `[id]`, reads no request body, opens no Cosmos container and calls
+  // no Azure data plane, so its response is byte-identical for every caller in
+  // the deployment and there is no resource an owner check could be about.
+  //
+  // THE PREMISE, STATED SO IT CAN BE FALSIFIED: this is not a
+  // SHARED_BACKEND_ITEM_ROUTES-style claim about what an `[id]` means — this
+  // route has no `[id]` at all, so CHECK 3's sibling test cannot apply to it,
+  // and the entry stops being true the moment the handler reads a param, a body
+  // or an item. `keySecretName` is a Key Vault secret NAME (the same name-only
+  // shape /api/keyvault/secret-names ships); the material is read server-side by
+  // the invoke route with the Console UAMI and is never in this payload —
+  // check-credential-route-authz.mjs is the control on that and passes.
+  ['apps/fiab-console/app/api/items/user-data-function/endpoints/route.ts', 'deployment-wide approved-endpoint list derived purely from env; no [id], no body, no Cosmos, no data plane — no per-tenant resource to scope, and key-secret NAMES only, never material'],
   // RUM1 browser-telemetry ingest: WRITE-ONLY beacon sink (page-load timings /
   // Web Vitals / scrubbed errors → App Insights). There is NO per-tenant
   // resource to own-scope — the route reads nothing back and forwards

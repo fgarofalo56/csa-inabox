@@ -109,6 +109,7 @@ import {
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 import { clientFetch } from '@/lib/client-fetch';
+import { udfEndpointKey } from '@/lib/azure/udf-endpoint-policy';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // ----- User Data Function (Fabric UDF — code, test/invoke, connections, libraries) -----
@@ -139,6 +140,30 @@ interface UdfState {
 }
 /** Public (no-secret) connection shape returned by GET /api/connections. */
 interface ConnectionView { id: string; name: string; type: string }
+
+/**
+ * One execution endpoint this deployment approves, from
+ * GET /api/items/user-data-function/endpoints.
+ *
+ * `keySecretName` is a Key Vault secret NAME, never its value — the material is
+ * read server-side by the invoke route and never reaches the browser.
+ */
+interface UdfEndpointView {
+  base: string;
+  keySecretName?: string;
+  acceptsPushedSource: boolean;
+  isDefault: boolean;
+}
+interface UdfEndpointsResponse {
+  endpoints: UdfEndpointView[];
+  gate?: { missing: string; detail: string };
+}
+
+/** Same endpoint? Answered with the policy's own comparison, never a look-alike. */
+function sameEndpointBase(a: string, b: string): boolean {
+  const ka = udfEndpointKey(a);
+  return !!ka && ka === udfEndpointKey(b);
+}
 
 /**
  * Which input kind a parameter annotation implies.
@@ -221,6 +246,50 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const availableConns = connQuery.data || [];
   const connectionRefs = arr<UdfConnectionRef>(state.connectionRefs);
   const selectedConnIds = connectionRefs.map((c) => c.id);
+
+  // Execution endpoints this DEPLOYMENT approves. `lib/azure/udf-endpoint-policy`
+  // made the base URL and its function key operator configuration — item state
+  // may only SELECT one and AGREE with its key — so the editor lists what the
+  // deployment actually accepts instead of asking the user to type a value the
+  // invoke route would refuse (auto-bind-by-default.md §5).
+  const endpointQuery = useQuery({
+    queryKey: ['udf-endpoints'],
+    queryFn: async (): Promise<UdfEndpointsResponse> => {
+      const r = await clientFetch('/api/items/user-data-function/endpoints', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      return { endpoints: Array.isArray(j.endpoints) ? j.endpoints : [], gate: j.gate };
+    },
+  });
+  const udfEndpoints = endpointQuery.data?.endpoints || [];
+  const endpointGate = endpointQuery.data?.gate;
+  // Which approved endpoint this item currently runs on: the one it selected,
+  // else the deployment default (blank state = "use the default", exactly as
+  // resolveUdfEndpoint() reads it).
+  const selectedEndpoint = useMemo(() => {
+    const want = (state.azureFunctionUrl || '').trim();
+    if (!want) return udfEndpoints.find((e) => e.isDefault);
+    return udfEndpoints.find((e) => sameEndpointBase(e.base, want));
+  }, [udfEndpoints, state.azureFunctionUrl]);
+  // A saved base that is no longer approved. The invoke route 409s on it, so it
+  // is surfaced here with a one-click repair rather than left to fail at Run.
+  const endpointUnapproved =
+    !!(state.azureFunctionUrl || '').trim() && !endpointQuery.isLoading && !selectedEndpoint && udfEndpoints.length > 0;
+  // A saved key-secret name that disagrees with the selected endpoint's
+  // configured key — the other 409 the policy raises.
+  const keySecretMismatch =
+    !!selectedEndpoint
+    && (state.functionKeySecret || '').trim().toLowerCase() !== (selectedEndpoint.keySecretName || '').toLowerCase();
+  /** Point the item at an approved endpoint AND at that endpoint's configured key. */
+  const selectEndpoint = useCallback((ep?: UdfEndpointView) => {
+    setState((p) => ({
+      ...p,
+      azureFunctionUrl: ep && !ep.isDefault ? ep.base : '',
+      // Derived, never typed: the key a host receives is deployment config, and
+      // an item may only agree with it (udf-endpoint-policy.ts).
+      functionKeySecret: ep?.keySecretName || '',
+    }));
+  }, [setState]);
 
   // Library form.
   const [libName, setLibName] = useState('');
@@ -312,8 +381,12 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
     const fn = selectedFn;
     if (!fn) return '# Add a function to generate invocation code';
     const jsonArgs = fn.params.map((p) => `"${p.name}": ${paramInputKind(p.type) === 'number' ? '0' : paramInputKind(p.type) === 'bool' ? 'True' : '"value"'}`).join(', ');
-    const fnBase = (state.azureFunctionUrl || '').trim() || 'https://<fnapp>.azurewebsites.net';
-    const keySecret = (state.functionKeySecret || '').trim() || 'udf-fnapp-key';
+    // The generated snippet names the endpoint this item ACTUALLY runs on, and
+    // that endpoint's configured key-secret name — both resolved from the
+    // deployment's approved list rather than from item state, which is the only
+    // thing the invoke route will honour anyway.
+    const fnBase = selectedEndpoint?.base || (state.azureFunctionUrl || '').trim() || 'https://<fnapp>.azurewebsites.net';
+    const keySecret = selectedEndpoint?.keySecretName || (state.functionKeySecret || '').trim() || 'udf-fnapp-key';
 
     if (effectiveGenTarget === 'functions') {
       // Azure-native DEFAULT: POST {fnBase}/api/<fn> with x-functions-key (or Entra).
@@ -354,7 +427,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
     // OpenAPI fragment for the function (Azure Functions HTTP route).
     const props = fn.params.map((p) => `        "${p.name}": { "type": "${paramInputKind(p.type) === 'number' ? 'number' : paramInputKind(p.type) === 'bool' ? 'boolean' : 'string'}" }`).join(',\n');
     return `{\n  "openapi": "3.0.1",\n  "info": { "title": "${item.displayName || id}", "version": "1.0" },\n  "paths": {\n    "/api/${fn.name}": {\n      "post": {\n        "operationId": "${fn.name}",\n        "requestBody": { "content": { "application/json": { "schema": {\n          "type": "object",\n          "properties": {\n${props}\n          }\n        } } } },\n        "responses": { "200": { "description": "OK" } }\n      }\n    }\n  }\n}`;
-  }, [selectedFn, effectiveGenTarget, id, item.displayName, state.azureFunctionUrl, state.functionKeySecret]);
+  }, [selectedFn, effectiveGenTarget, id, item.displayName, state.azureFunctionUrl, state.functionKeySecret, selectedEndpoint]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -504,19 +577,84 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
             )}
           </div>
 
-          {/* Execution endpoint — Azure-native BYO Azure Functions target */}
+          {/* Execution endpoint — SELECTED from what the deployment approves.
+              The base URL and its function key are operator configuration
+              (lib/azure/udf-endpoint-policy.ts): item state may only select an
+              approved endpoint and agree with its key, and the invoke route
+              409s on anything else. These were two free-text boxes, so the only
+              values a user could type were one they already knew or one
+              guaranteed to gate — the ask auto-bind-by-default.md §5 forbids
+              and check-no-freeform.mjs ratchets. */}
           <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Settings20Regular className={s.secHeadIcon} /><Subtitle2>Execution endpoint</Subtitle2></div>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-            Azure-native run target. Leave blank to use the shared runtime (<code>LOOM_UDF_FUNCTION_BASE</code>), which executes this item&apos;s authored source. Set a Function App to run your own deployed code.
+            Azure-native run target, chosen from the endpoints this deployment approves. The default is the shared Loom runtime, which executes this item&apos;s authored source; an operator approves your own Azure Function App by adding it to <code>LOOM_UDF_ALLOWED_FUNCTION_BASES</code>.
           </Caption1>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalXS }}>
-            <Field label="Function App base URL" hint="e.g. https://my-udf.azurewebsites.net — overrides LOOM_UDF_FUNCTION_BASE for this item.">
-              <Input value={state.azureFunctionUrl || ''} onChange={(_, d) => setState((p) => ({ ...p, azureFunctionUrl: d.value }))} placeholder="https://<fnapp>.azurewebsites.net" />
+            <Field
+              label="Run target"
+              hint={endpointQuery.isError ? undefined : 'Approved endpoints only — Loom will not send a credential to a host chosen by item configuration.'}
+              validationState={endpointQuery.isError ? 'error' : 'none'}
+              validationMessage={endpointQuery.isError ? String((endpointQuery.error as any)?.message || 'Failed to load approved endpoints') : undefined}
+            >
+              <Dropdown
+                placeholder={endpointQuery.isLoading ? 'Loading approved endpoints…' : udfEndpoints.length ? 'Select an endpoint' : 'No endpoint configured'}
+                disabled={endpointQuery.isLoading || udfEndpoints.length === 0}
+                selectedOptions={selectedEndpoint ? [selectedEndpoint.base] : []}
+                value={selectedEndpoint ? `${selectedEndpoint.base}${selectedEndpoint.isDefault ? ' (deployment default)' : ''}` : ((state.azureFunctionUrl || '').trim() || '')}
+                onOptionSelect={(_, d) => selectEndpoint(udfEndpoints.find((e) => e.base === d.optionValue))}
+              >
+                {udfEndpoints.map((e) => (
+                  <Option key={e.base} value={e.base} text={e.base}>
+                    {`${e.base}${e.isDefault ? ' · deployment default' : ''}${e.keySecretName ? ' · keyed' : ' · anonymous / Entra'}`}
+                  </Option>
+                ))}
+              </Dropdown>
             </Field>
-            <Field label="Function key — Key Vault secret name" hint="Optional. KV secret holding the function key (sent as x-functions-key). Blank = anonymous / Entra-protected.">
-              <Input value={state.functionKeySecret || ''} onChange={(_, d) => setState((p) => ({ ...p, functionKeySecret: d.value }))} placeholder="udf-fnapp-key" />
+            {/* The function key is DERIVED, never asked for: it is the selected
+                endpoint's configured secret NAME, and item state may only agree
+                with it. Read-only text, so there is no value to hand-type. */}
+            <Field label="Function key" hint="Deployment configuration — the key a host receives is never item configuration.">
+              <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', paddingTop: tokens.spacingVerticalXS }}>
+                {selectedEndpoint?.keySecretName
+                  ? `Key Vault secret “${selectedEndpoint.keySecretName}”, sent as x-functions-key. This endpoint is keyed, so Loom runs its deployed code rather than pushing this item's source to it.`
+                  : selectedEndpoint
+                    ? 'Anonymous / Entra-protected — no credential is attached, and this endpoint executes this item’s authored source.'
+                    : 'Select a run target to see how it authenticates.'}
+              </Caption1>
             </Field>
           </div>
+          {/* Both 409s the policy can raise, surfaced BEFORE Run — each with the
+              inline repair the platform can perform itself (ux-baseline G2). */}
+          {endpointUnapproved && (
+            <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalXS }}>
+              <MessageBarBody>
+                <MessageBarTitle>This item names an endpoint the deployment has not approved</MessageBarTitle>
+                Saved run target <code>{(state.azureFunctionUrl || '').trim()}</code> is not in <code>LOOM_UDF_FUNCTION_BASE</code> or <code>LOOM_UDF_ALLOWED_FUNCTION_BASES</code>, so Run returns 409. Move it back to the deployment default, or ask an operator to approve the host.
+                <div style={{ marginTop: tokens.spacingVerticalXS }}>
+                  <Button size="small" onClick={() => selectEndpoint(udfEndpoints.find((e) => e.isDefault))}>Use the deployment default</Button>
+                </div>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!endpointUnapproved && keySecretMismatch && (
+            <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalXS }}>
+              <MessageBarBody>
+                <MessageBarTitle>This item names a function key this endpoint is not configured to use</MessageBarTitle>
+                Run returns 409 until the item agrees with the endpoint&apos;s configured key.
+                <div style={{ marginTop: tokens.spacingVerticalXS }}>
+                  <Button size="small" onClick={() => selectEndpoint(selectedEndpoint)}>Use the endpoint&apos;s configured key</Button>
+                </div>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!endpointQuery.isLoading && endpointGate && (
+            <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalXS }}>
+              <MessageBarBody>
+                <MessageBarTitle>No execution endpoint is configured ({endpointGate.missing})</MessageBarTitle>
+                {endpointGate.detail}
+              </MessageBarBody>
+            </MessageBar>
+          )}
 
           {/* Manage connections — reusable, Key Vault-backed Loom Connections */}
           <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Link20Regular className={s.secHeadIcon} /><Subtitle2>Manage connections (data-source bindings)</Subtitle2></div>
