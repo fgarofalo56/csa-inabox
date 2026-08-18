@@ -89,7 +89,55 @@ curl -s -X POST \
 
 ## Recreate from scratch
 
-If the resource needs to be rebuilt entirely:
+**Use the Bicep. The shell block below is kept only as provenance.**
+
+`platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep` is the
+producer for this Function App: the app itself, its Linux Consumption (Y1)
+plan, its storage account (reused or created), optional workspace-based
+Application Insights, the full hardening block, every app setting, and the
+two Cognitive Services role assignments that let it call Azure OpenAI and
+Content Safety with its managed identity instead of a key.
+
+`.github/workflows/deploy-copilot-function.yml` applies it automatically when
+its preflight establishes that the app is missing from `rg-dlz-aiml-stack-dev`
+— you do not run anything. That is `auto-bind-by-default.md` §5: the platform
+deploys its own prerequisites. Every input (storage account, App Insights,
+Azure OpenAI account, Content Safety account, Cosmos endpoint) is **discovered**
+from the resource group at deploy time rather than assumed, per
+`deploy-integrity.md` R5.
+
+To apply it by hand anyway — e.g. into a brand-new estate before the workflow
+has ever run there:
+
+```bash
+az deployment group create \
+  -g rg-dlz-aiml-stack-dev \
+  -f platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep \
+  --parameters \
+    functionAppName=func-csa-inabox-copilot-fg \
+    storageAccountName=aimldatastore \
+    createStorageAccount=false \
+    azureOpenAiEndpoint=https://<aoai-account>.cognitiveservices.<suffix>/ \
+    azureOpenAiAccountName=<aoai-account>
+```
+
+Order for a genuinely empty estate: this module first (it creates the app and
+its identity), then `azure-functions/copilot-chat/deploy/main.bicep` (Cosmos +
+the data-plane role for that identity), then this module again with
+`cosmosEndpoint=` set so `COSMOS_ENDPOINT` is wired. The re-apply is a no-op on
+everything else.
+
+**`AZURE_OPENAI_KEY` is deliberately not templated.** `_make_openai_client()` is
+MI-first / key-fallback, so leaving the setting unset takes the managed-identity
+path — which is SEC-COPILOT H-3, and which the module's role assignment is what
+makes work.
+
+<details>
+<summary>Provenance: the original hand-run block (superseded — do not use)</summary>
+
+This is what actually created the live app in 2026-05, and the only way to
+rebuild it for six weeks. It is recorded because the Bicep above was written
+from it; it is not a supported path.
 
 ```bash
 DLZ=<YOUR_SUBSCRIPTION_ID>
@@ -128,6 +176,8 @@ az functionapp config appsettings set --subscription $DLZ -g $RG -n $FUNC --sett
 cd azure-functions/copilot-chat
 func azure functionapp publish $FUNC --python --build remote
 ```
+
+</details>
 
 ## Analytics pipeline (added 2026-05-06)
 
