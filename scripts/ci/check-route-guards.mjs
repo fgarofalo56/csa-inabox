@@ -526,6 +526,35 @@ const ALLOWLIST = new Map([
   // resource to own-scope — a shared Azure backend resolved by env, like the
   // flightsql/connect guidance route above.
   ['apps/fiab-console/app/api/s3-gateway/info/route.ts', 'deployment-wide S3-gateway connect info + secret-free snippets; no per-tenant resource to scope'],
+  // UDF execution endpoints READ half: returns `configuredUdfEndpoints()`, which
+  // is a pure function of THREE env vars (LOOM_UDF_FUNCTION_BASE,
+  // LOOM_UDF_ALLOWED_FUNCTION_BASES, LOOM_UDF_FUNCTION_KEY_SECRET) — the handler
+  // takes no `[id]`, reads no request body, opens no Cosmos container and calls
+  // no Azure data plane, so its response is byte-identical for every caller in
+  // the deployment and there is no resource an owner check could be about.
+  //
+  // THE PREMISE, STATED SO IT CAN BE FALSIFIED: this is not a
+  // SHARED_BACKEND_ITEM_ROUTES-style claim about what an `[id]` means — this
+  // route has no `[id]` at all, so CHECK 3's sibling test cannot apply to it,
+  // and the entry stops being true the moment the handler reads a param, a body
+  // or an item. `keySecretName` is a Key Vault secret NAME (the same name-only
+  // shape /api/keyvault/secret-names ships); the material is read server-side by
+  // the invoke route with the Console UAMI and is never in this payload.
+  //
+  // WHAT DOES *NOT* PROVE THAT, MEASURED RATHER THAN ASSUMED: an earlier
+  // revision of this comment cited check-credential-route-authz.mjs as "the
+  // control on that, and it passes". It does pass — by NOT SCANNING THIS ROUTE.
+  // That checker's population is routes calling a CREDENTIAL_SINKS function
+  // (`listAccountKeys`, `regenerate*Key`, …) and it `continue`s before
+  // `scanned += 1` on a zero-hit file. This route calls none, so its green is
+  // silence, not evidence. Nor does it cover the invoke route, which reaches
+  // Key Vault through `getKeyVaultSecretValue` — also not a listed sink. The
+  // control that actually holds the no-material claim for THIS route is its own
+  // suite (`endpoints/__tests__/route.test.ts`), which asserts the response
+  // carries `keySecretName` as a name plus `acceptsPushedSource`, and nothing
+  // else; the invoke route's material handling is held by
+  // `invoke/__tests__/route.secret-egress.test.ts`.
+  ['apps/fiab-console/app/api/items/user-data-function/endpoints/route.ts', 'deployment-wide approved-endpoint list derived purely from env; no [id], no body, no Cosmos, no data plane — no per-tenant resource to scope, and key-secret NAMES only, never material'],
   // RUM1 browser-telemetry ingest: WRITE-ONLY beacon sink (page-load timings /
   // Web Vitals / scrubbed errors → App Insights). There is NO per-tenant
   // resource to own-scope — the route reads nothing back and forwards
