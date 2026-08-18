@@ -70,8 +70,18 @@ export interface UdfEndpointGate {
   detail: string;
 }
 
-/** Normalised comparison key for a base URL: lowercase origin + trimmed path. */
-function endpointKey(raw: string): string | null {
+/**
+ * Normalised comparison key for a base URL: lowercase origin + trimmed path.
+ *
+ * EXPORTED so the editor's endpoint picker decides "is this saved base the same
+ * endpoint as that approved one?" with the EXACT function `resolveUdfEndpoint`
+ * uses. A second, look-alike comparison in the UI is how a picker comes to show
+ * a saved value as unapproved that the invoke route accepts (or the reverse) —
+ * the two answers have to be the same answer, not two implementations of it.
+ * This module imports nothing and touches no `process.env` at load, so it is
+ * safe in a client bundle.
+ */
+export function udfEndpointKey(raw: string): string | null {
   const s = String(raw || '').trim();
   if (!s) return null;
   let u: URL;
@@ -86,6 +96,9 @@ function endpointKey(raw: string): string | null {
   if (u.username || u.password || u.search || u.hash) return null;
   return `${u.origin.toLowerCase()}${u.pathname.replace(/\/+$/, '')}`;
 }
+
+/** Internal alias kept so the call sites below read as they always have. */
+const endpointKey = udfEndpointKey;
 
 /** Split a comma / whitespace separated config list. */
 function splitList(raw?: string | null): string[] {
@@ -158,6 +171,30 @@ export function udfEndpointGate(requestedOverride?: string | null): UdfEndpointG
  *                            `state.functionKeySecret`). It may only AGREE with
  *                            the selected endpoint's configured key.
  */
+/**
+ * Does an item's requested key-secret name DISAGREE with the endpoint's
+ * configured one? An EMPTY request is not a disagreement — item state that
+ * names no key is the normal, compliant case, and the endpoint's own configured
+ * key is used.
+ *
+ * EXPORTED for the same reason `udfEndpointKey` is, and this one was learned
+ * the hard way: the editor hand-rolled this comparison and dropped the
+ * empty-request clause, so it warned "Run returns 409" on every keyed endpoint
+ * whose item named no key — a 409 `resolveUdfEndpoint` does not raise, on a
+ * brand-new untouched item, contradicting the old UI's own "Optional. Blank =
+ * anonymous / Entra-protected". A UI that answers a policy question with a
+ * second implementation of the policy is the defect this whole change set
+ * exists to remove, so there is now exactly one implementation and both callers
+ * use it.
+ */
+export function udfKeySecretDisagrees(
+  requestedKeySecret: string | null | undefined,
+  endpointKeySecretName?: string,
+): boolean {
+  const askedKey = String(requestedKeySecret || '').trim();
+  return !!askedKey && askedKey.toLowerCase() !== (endpointKeySecretName || '').toLowerCase();
+}
+
 export function resolveUdfEndpoint(
   requestedBase?: string | null,
   requestedKeySecret?: string | null,
@@ -176,7 +213,7 @@ export function resolveUdfEndpoint(
   }
 
   const askedKey = String(requestedKeySecret || '').trim();
-  if (askedKey && askedKey.toLowerCase() !== (endpoint.keySecretName || '').toLowerCase()) {
+  if (udfKeySecretDisagrees(askedKey, endpoint.keySecretName)) {
     // The item named a Key Vault secret this endpoint is not configured to use.
     // Refusing (rather than ignoring) keeps the failure honest: the operator is
     // told exactly which env var turns the item's intent into approved config.
