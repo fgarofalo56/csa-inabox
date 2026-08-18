@@ -57,7 +57,15 @@
  * That distinction is the whole point of the truncation signal, and it is only
  * honest as far as the caller carries it: a surface that renders `sessions` and
  * drops `truncatedBy` turns reading B's disclosed partial back into a silent
- * wrong answer. Callers MUST surface it (`RecentSparkBatchJobs.truncatedBy`).
+ * wrong answer.
+ *
+ * AS OF THIS COMMIT, NO UI CALLER CARRIES IT — so this stops short of saying
+ * callers MUST, which would be a normative rule the codebase violates at three
+ * known sites (`spark-job-definition-editor.tsx:302`,
+ * `materialized-lake-view-editor.tsx:238`, `azure-services-editors.tsx:182`,
+ * all `setRuns(j.sessions || [])`). Tracked in **#3731**, deliberately out of
+ * scope here. New callers SHOULD surface `RecentSparkBatchJobs.truncatedBy`;
+ * the routes already return it alongside `scanned` and the pool total.
  */
 
 import {
@@ -425,7 +433,7 @@ export interface RecentSparkBatchJobs {
  * `truncatedBy`. See the "WHAT THAT BUYS" note in this module's header for the
  * worked 1000-batch case. A caller that renders `sessions` and drops
  * `truncatedBy` converts that disclosed partial back into a silent wrong
- * answer.
+ * answer — which three Runs grids currently do, tracked in #3731.
  *
  * The whole walk runs under ONE {@link PagingBudget} — page cap AND wall clock,
  * every fetch through {@link readBatchPage}. On a breach the caller gets the

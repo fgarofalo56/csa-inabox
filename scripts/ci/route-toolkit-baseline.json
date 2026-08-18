@@ -387,7 +387,6 @@
     "apps/fiab-console/app/api/items/[type]/[id]/canvas-suggest/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/classifications/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/comments/route.ts": 1,
-    "apps/fiab-console/app/api/items/[type]/[id]/endorsement/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/explain/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/export-check/route.ts": 1,
     "apps/fiab-console/app/api/items/[type]/[id]/impact/route.ts": 1,

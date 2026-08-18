@@ -9,7 +9,6 @@ and must never let a number the server sent talk it into a confident partial.
 from __future__ import annotations
 
 import io
-import json
 import threading
 import urllib.error
 import urllib.request
@@ -189,18 +188,97 @@ class TestRequestShape:
             assert int(url.split("size=")[1].split("&")[0]) <= 20
         assert PAGE_SIZE == 20
 
-    def test_json_body_that_is_not_an_object_is_refused(self) -> None:
-        # `_get` guards the parse itself: a JSON array walking out as a dict
-        # would make `.get("sessions")` explode far from the cause.
-        assert json.loads("[]") == []
+
+class _StubResponse:
+    """The minimum `_get` needs from `_OPENER.open`: a context manager + read()."""
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self) -> _StubResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+class _StubOpener:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def open(self, req: object, timeout: float | None = None) -> _StubResponse:
+        return _StubResponse(self._payload)
+
+
+class TestBodyGuards:
+    """`_get`'s two body guards, asserted THROUGH `_get`.
+
+    The previous version of this class asserted `json.loads("[]") == []` — a
+    property of the standard library — and never called `_get` at all. Measured
+    in review: replacing BOTH guards with `if False:` left the suite at 26
+    passed. Two deletable guards with zero signal, protecting the exact failure
+    mode this file exists to prevent (a broken read printing as an empty pool).
+    """
+
+    def test_an_empty_body_is_refused_rather_than_read_as_an_empty_pool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_mod, "_OPENER", _StubOpener(b""))
+        with pytest.raises(ValueError, match="empty body"):
+            _get("https://dev.example/livyApi/sessions", "tok")
+
+    def test_a_whitespace_only_body_is_refused_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `if not raw.strip()` is the guard; a body of spaces must not slip past
+        # it into `json.loads` and raise something less legible.
+        monkeypatch.setattr(_mod, "_OPENER", _StubOpener(b"   \n  "))
+        with pytest.raises(ValueError, match="empty body"):
+            _get("https://dev.example/livyApi/sessions", "tok")
+
+    def test_a_json_array_is_refused_rather_than_walking_out_as_a_dict(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A list walking out of `_get` would make `page.get("sessions")` explode
+        # in `census()`, far from the cause.
+        monkeypatch.setattr(_mod, "_OPENER", _StubOpener(b"[]"))
+        with pytest.raises(ValueError, match="expected a JSON object"):
+            _get("https://dev.example/livyApi/sessions", "tok")
+
+    @pytest.mark.parametrize("payload", [b'"a string"', b"42", b"null"])
+    def test_any_non_object_json_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, payload: bytes
+    ) -> None:
+        monkeypatch.setattr(_mod, "_OPENER", _StubOpener(payload))
+        with pytest.raises(ValueError, match="expected a JSON object"):
+            _get("https://dev.example/livyApi/sessions", "tok")
+
+    def test_a_well_formed_object_still_comes_straight_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The counterfactual — without it, "always raise" would pass everything
+        # above.
+        monkeypatch.setattr(
+            _mod, "_OPENER", _StubOpener(b'{"total": 1, "sessions": [{"id": 7}]}')
+        )
+        body = _get("https://dev.example/livyApi/sessions", "tok")
+        assert body == {"total": 1, "sessions": [{"id": 7}]}
 
 
 class TestUrlScheme:
     """`DEV` is operator-supplied, so the scheme is allow-listed at the call site.
 
-    Bandit B310 flags `urlopen` precisely because it will happily open `file:/`
-    and custom schemes. The suppression on that line is only honest if the
-    guard above it actually refuses them — this is that guard's counterfactual.
+    This is the first of three layers and the narrowest: it vets only the URL
+    the script itself builds. Where the server tries to send us next is
+    `_SameOriginRedirectHandler`'s job, and which transports exist at all is the
+    opener's.
+
+    (There is no `# nosec` to justify any more — `_get` no longer calls
+    `urlopen`, so B310 does not fire and bandit reports
+    `Total lines skipped (#nosec): 0`. The guard stands on its own.)
     """
 
     @pytest.mark.parametrize(
@@ -269,7 +347,12 @@ class TestRedirectCannotLeaveHttp:
         assert redirected.get_header("Authorization") == "Bearer SECRET"
 
     def test_the_opener_can_reach_http_and_nothing_else(self) -> None:
-        routes = set(_OPENER.handle_open)
+        # Read through `_mod`, NOT the module-level `_OPENER` alias bound at
+        # import: the autouse fixture rebuilds `_mod._OPENER`, and `setattr`
+        # cannot rebind this file's own global. Harmless today because both
+        # objects agree, but it would silently stop testing the rebuilt opener
+        # the moment they diverged.
+        routes = set(_mod._OPENER.handle_open)
         assert "http" in routes
         assert "https" in routes
         # The exfiltration route, and its neighbours.
@@ -359,17 +442,19 @@ class TestRedirectCannotLeaveHttp:
             monkeypatch.setenv("ftp_proxy", "http://127.0.0.1:9/")
             monkeypatch.setattr(_mod, "_OPENER", _mod._http_only_opener())
             url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
-            with pytest.raises(urllib.error.URLError) as excinfo:
+            # Refused by the REDIRECT guard, which fires before transport
+            # selection. That layering is deliberate: the redirect guard is the
+            # fix, the missing ftp route is defence in depth beneath it.
+            with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
                 _get(url, "SECRET")
-            assert "unknown url type" in str(excinfo.value.reason)
         finally:
             srv.shutdown()
             srv.server_close()
 
     def test_an_ftp_redirect_is_refused_without_dialling_out(self) -> None:
         # A real 302 -> ftp:, served locally. Port 1 is chosen so that IF the
-        # opener were to follow it, the failure would be a CONNECTION error
-        # (proving it tried) rather than the routing error we require.
+        # redirect were followed, the failure would be a CONNECTION error
+        # (proving it tried) rather than the refusal we require.
         seen: dict[str, object] = {}
 
         class Redirector(BaseHTTPRequestHandler):
@@ -386,19 +471,31 @@ class TestRedirectCannotLeaveHttp:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
             url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
-            with pytest.raises(urllib.error.URLError) as excinfo:
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
                 _get(url, "SECRET")
-            # "unknown url type: ftp" — UnknownHandler, i.e. no ftp route
-            # existed. A socket/connection error here would mean the redirect
-            # WAS followed and the token left the process.
-            assert "unknown url type" in str(excinfo.value.reason)
-            assert "ftp" in str(excinfo.value.reason)
+            # A socket/connection error here would mean the redirect WAS
+            # followed and the token left the process.
+            assert "refusing cross-origin redirect" in str(excinfo.value)
             # Sanity: the request really did happen and really did carry the token,
             # so the test is exercising the dangerous path, not a no-op.
             assert seen["auth"] == "Bearer SECRET"
         finally:
             srv.shutdown()
             srv.server_close()
+
+    def test_the_ftp_transport_is_absent_independently_of_the_redirect_guard(self) -> None:
+        """Defence in depth, tested on its own.
+
+        Every ftp REDIRECT is now stopped one layer earlier, which would leave
+        the opener's scheme scoping untested end-to-end. Opening an ftp URL
+        directly bypasses the redirect handler entirely and proves the transport
+        is genuinely absent rather than merely unreachable-in-practice.
+        """
+        req = urllib.request.Request("ftp://127.0.0.1:1/loot")
+        with pytest.raises(urllib.error.URLError) as excinfo:
+            _mod._OPENER.open(req, timeout=5)
+        assert "unknown url type" in str(excinfo.value.reason)
+        assert "ftp" in str(excinfo.value.reason)
 
     def test_an_ordinary_http_redirect_is_still_followed(self) -> None:
         # The counterfactual. Locking the opener down must not break normal
@@ -426,6 +523,175 @@ class TestRedirectCannotLeaveHttp:
             url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
             body = _get(url, "tok")
             assert body["sessions"][0]["id"] == 1
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+class TestCrossOriginRedirect:
+    """A redirect to ANOTHER ORIGIN hands the bearer token to that origin.
+
+    This is the guard that actually closes the exfiltration vector. An earlier
+    cut removed the `ftp:` transport and declared the redirect vector closed,
+    but the `http:` variant needs no proxy variable and is one character's
+    difference. Measured against that cut, with `302 -> http://<attacker>/loot`:
+
+        census _get returned: {'total': 0, 'sessions': []}
+        ATTACKER RECEIVED path : /loot
+        ATTACKER RECEIVED auth : Bearer SUPER_SECRET_TOKEN
+
+    The census SUCCEEDED — the operator would have read a healthy empty pool
+    while the token sat in someone else's access log.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_ambient_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in (
+            "http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy",
+            "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY", "NO_PROXY",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(_mod, "_OPENER", _mod._http_only_opener())
+
+    @staticmethod
+    def _serve(handler: type[BaseHTTPRequestHandler]) -> HTTPServer:
+        srv = HTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
+
+    def test_a_cross_host_http_redirect_never_reaches_the_attacker(self) -> None:
+        """THE REGRESSION TEST for the reported exploit, end to end."""
+        attacker_saw: list[tuple[str, str | None]] = []
+
+        class Attacker(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                attacker_saw.append((self.path, self.headers.get("Authorization")))
+                body = b'{"total": 0, "sessions": []}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        attacker = self._serve(Attacker)
+        attacker_port = attacker.server_address[1]
+
+        class Origin(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{attacker_port}/loot")
+                self.end_headers()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        origin = self._serve(Origin)
+        try:
+            url = f"http://127.0.0.1:{origin.server_address[1]}/sessions"
+            with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
+                _get(url, "SUPER_SECRET_TOKEN")
+            # The assertion that matters. A raise with the token already sent
+            # would be no fix at all.
+            assert attacker_saw == []
+        finally:
+            origin.shutdown()
+            origin.server_close()
+            attacker.shutdown()
+            attacker.server_close()
+
+    def test_the_refusal_names_both_origins(self) -> None:
+        class Origin(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(302)
+                self.send_header("Location", "http://attacker.invalid/loot")
+                self.end_headers()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        srv = self._serve(Origin)
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                _get(url, "tok")
+            text = str(excinfo.value)
+            assert "attacker.invalid" in text
+            assert "127.0.0.1" in text
+            # R7: the message states the actual reason, not a guess.
+            assert "Authorization" in text
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    @pytest.mark.parametrize(
+        "location",
+        [
+            "https://attacker.invalid/loot",   # scheme change to https
+            "ftp://attacker.invalid/loot",     # the branch the opener also blocks
+            "//attacker.invalid/loot",         # protocol-relative, inherits scheme
+        ],
+    )
+    def test_every_off_origin_shape_is_refused(self, location: str) -> None:
+        class Origin(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.end_headers()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        srv = self._serve(Origin)
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
+            with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
+                _get(url, "tok")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_a_scheme_change_on_the_same_host_is_still_off_origin(self) -> None:
+        # http -> https on the same host and port is a different origin by this
+        # rule, and refused. Deliberate: the token's confidentiality depends on
+        # the transport, and a downgrade/upgrade dance is not something a Livy
+        # sessions list needs.
+        assert _mod._origin("http://h:8080/x") != _mod._origin("https://h:8080/x")
+
+    def test_default_ports_do_not_create_a_false_cross_origin(self) -> None:
+        # `http://h/x` and `http://h:80/x` are ONE origin — otherwise a server
+        # that normalises the port would be refused for no reason.
+        assert _mod._origin("http://h/x") == _mod._origin("http://h:80/x")
+        assert _mod._origin("https://h/x") == _mod._origin("https://h:443/x")
+        assert _mod._origin("http://H/x") == _mod._origin("http://h/x")
+
+    def test_a_same_origin_path_redirect_is_still_followed(self) -> None:
+        # The counterfactual, restated at this layer: the guard must not turn
+        # every redirect into a failure.
+        class Redirector(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path == "/sessions":
+                    self.send_response(302)
+                    self.send_header("Location", "/sessions/")
+                    self.end_headers()
+                    return
+                body = b'{"total": 2, "sessions": [{"id": 1}, {"id": 2}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        srv = self._serve(Redirector)
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}/sessions"
+            body = _get(url, "tok")
+            assert body["total"] == 2
         finally:
             srv.shutdown()
             srv.server_close()

