@@ -13,6 +13,16 @@ name: gov-selfaudit
 # Also dumps the loom-console container-app env (KEYS only + secretRef markers,
 # values redacted) so the medic can diff Gov vs Commercial for day-one config
 # gaps. Read-only — no mutation of any Azure resource.
+#
+# ── DELIBERATELY STILL DISPATCH-ONLY (#3730) ───────────────────────────────
+# #3730 put gov-gates and gov-bff-verify on `workflow_run` after every
+# gov-console-roll. This lane was left off that fan-out on purpose: it POSTs the
+# same /api/admin/health/exercise endpoint gov-exercise drives, so running it per
+# merge would collide with that lane and with itself on back-to-back merges, and
+# its Spark probe carries the same cold-pool cost. It is an operator DIAGNOSTIC
+# — "show me everything, and dump the env keys so I can diff the two clouds" —
+# not a post-deploy smoke. The post-deploy smoke is gov-gates + gov-bff-verify,
+# which are cheap, read-only, and now automatic.
 on:
   workflow_dispatch: {}
 

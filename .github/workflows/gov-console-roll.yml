@@ -1,10 +1,53 @@
 name: gov-console-roll
 
-# Targeted Gov console image build + roll using the Gov deploy SP (the same
-# creds deploy-fiab-gcch.yml uses). Replaces the local `temp/gov-roll.sh` when a
-# local interactive Gov az session isn't available. Builds apps/fiab-console at
-# the dispatched ref on the Gov ACR (server-side az acr build) and rolls the
-# loom-console Container App to it, then health-gates. Non-interactive.
+# THE AZURE GOVERNMENT CONTINUOUS-DEPLOY LANE (#3730).
+#
+# Builds apps/fiab-console on the Gov ACR (server-side `az acr build`) and rolls
+# the loom-console Container App to it, then health-gates. Uses the Gov deploy SP
+# (the same creds deploy-fiab-gcch.yml uses). Non-interactive.
+#
+# ── WHY THIS FILE NOW HAS A `push` TRIGGER ─────────────────────────────────
+# Measured 2026-08-18: the Gov console served `28de89fb`, stamped 2026-08-11,
+# 251 commits behind main and eight minor versions back (0.90.2 vs 0.98.11).
+# Commercial read 0-behind. The difference was not attention or luck — it was
+# trigger configuration. Commercial is a self-driving chain:
+#
+#   build-fiab-images-acr-tasks   push          -> image on every merge
+#   loom-roll-and-validate        workflow_run  -> roll when that build finishes
+#   deploy-fiab-commercial        schedule      -> nightly infra apply
+#
+# Every Gov lane was `workflow_dispatch`-only, so a Gov roll happened only when a
+# human remembered. `cloud-parity.md` is explicit that a capability which works
+# in Commercial and not in Gov is INCOMPLETE — and continuous deployment is a
+# capability. This lane is the Gov half of the first two rows above, collapsed
+# into one job because the Gov registry serializes builds anyway.
+#
+# ── WHY BUILD AND ROLL STAY IN ONE JOB ─────────────────────────────────────
+# Commercial splits them because its producer is a ~13-image parallel matrix and
+# the roll must not be hostage to a sibling image breaking (#3260). Gov has no
+# such split to make here, and keeping them together buys the property #3730
+# actually needs: the tag this job rolls is the tag this job just built and
+# digest-verified, so "an image matching the deployed SHA exists before the roll"
+# is true BY CONSTRUCTION rather than by a cross-workflow assumption. There is no
+# window in which this lane can re-roll an older image.
+#
+# ── AND WHY THERE IS STILL A STALENESS GATE ────────────────────────────────
+# Building what you check out is not the same as checking out what is current.
+# A dispatch from a stale ref, or from a branch, builds a real image, pushes a
+# real digest, and passes every existence gate in this file — while shipping the
+# Gov console code that is not what main says is released. `Gate — the image this
+# roll builds must be CURRENT with main` is the one control that can see that,
+# and it runs BEFORE the build so a refusal costs seconds rather than 20 minutes
+# of ACR time. Decision logic + mutation proofs:
+# scripts/ci/gov-roll-staleness-gate.mjs, scripts/ci/__tests__/.
+#
+# ── WHAT THIS LANE DOES NOT DO ─────────────────────────────────────────────
+# It does not apply bicep. The Gov admin-plane template is deploy-fiab-gcch.yml's
+# job, and `deploy-gov.yml` is a DIFFERENT estate entirely (deploy/bicep/gov/ —
+# a data platform with no Container Apps and no ACR references at all; grep it).
+# So "deploy-gov succeeded" has never been, and still is not, evidence that
+# anything shipped to the Gov console. deploy-gov.yml now says so in its own run
+# name.
 #
 # SC1 supply-chain gate: after the build (while the ACR data plane is still
 # open for the tarball upload), the pushed image is Trivy-scanned (CRITICAL
@@ -14,17 +57,51 @@ name: gov-console-roll
 # reached from the GitHub-hosted runner, not from inside the Gov boundary, so
 # this is cloud-invariant. Emergency valve (mirrors loom-roll-and-validate's
 # skip_uat): the `skip_supply_chain` dispatch input skips scan+sign+verify
-# with a loud warning — this workflow is dispatch-only, so the input is always
-# available and no repo-variable valve is needed. The `lastgood` rollback path
-# intentionally stays unverified: it re-ships the image that was already
-# running. See docs/SUPPLY_CHAIN.md §7.
+# with a loud warning. NOTE that valve is DISPATCH-ONLY by construction — on the
+# `push` path `inputs.*` is the empty string, so `if: ${{ !inputs.skip_supply_chain }}`
+# is TRUE and the automatic lane can never skip its own supply-chain gate. That
+# is the safe direction, and it is a property of the trigger rather than of a
+# default, so it cannot be edited away by changing a `default:`. The `lastgood`
+# rollback path intentionally stays unverified: it re-ships the image that was
+# already running. See docs/SUPPLY_CHAIN.md §7.
+
+# SAY WHICH SHA THIS RUN ROLLS, in the run title — the same contract
+# loom-roll-and-validate.yml carries. `gh run list` and the Actions UI otherwise
+# show only the workflow name, and with two trigger paths (a merge, and a human
+# recovering an estate) "which commit did that Gov roll actually ship?" becomes
+# unanswerable from the run list.
+run-name: >-
+  gov-console-roll ${{ github.sha }}
+  (${{ github.event_name == 'push' && 'merge-triggered' || 'manual dispatch' }})
+
 on:
+  # EVERY MERGE THAT CHANGES THE CONSOLE IMAGE ROLLS GOV. This is the line that
+  # closes #3730's first acceptance criterion.
+  #
+  # The path filter mirrors the Commercial producer's for the console context.
+  # KNOWN GAP, stated rather than hidden: the image also embeds the Copilot RAG
+  # corpus, which `scripts/csa-loom/stage-copilot-corpus.sh` stages from repo-root
+  # docs/ + PRPs/ — neither of which is listed here. A docs-only merge therefore
+  # does not rebuild the Gov console, exactly as it does not rebuild the
+  # Commercial one (build-fiab-images-acr-tasks.yml carries the same filter
+  # shape). Widening it is a parity change for BOTH clouds, not a Gov-only one,
+  # so it is deliberately not made here.
+  push:
+    branches: [main]
+    paths:
+      - 'apps/fiab-console/**'
+      - '.github/workflows/gov-console-roll.yml'
+      - 'scripts/ci/gov-roll-staleness-gate.mjs'
   workflow_dispatch:
     inputs:
       lastgood:
-        description: 'Fallback image tag to roll back to if the new rev is unhealthy'
+        description: 'Rollback image TAG if the new revision is unhealthy. BLANK (the default) means "whatever loom-console is running right now", MEASURED before the roll — that is almost always what you want. Only name a tag to roll back somewhere other than where you came from.'
         required: false
-        default: '26e7f3db'
+        default: ''
+      allow_stale_image:
+        description: 'EMERGENCY VALVE — roll even though this ref is NOT the current tip of main (recovering an estate onto a known-good older commit). Ships a Gov console that is knowingly behind main; the next merge-triggered roll supersedes it. Does NOT waive an UNKNOWN comparison — see scripts/ci/gov-roll-staleness-gate.mjs.'
+        type: boolean
+        default: false
       skip_supply_chain:
         description: 'EMERGENCY VALVE — skip the SC1 Trivy CRITICAL gate + cosign sign/verify (mirrors skip_uat semantics). The roll ships WITHOUT supply-chain verification.'
         type: boolean
@@ -48,6 +125,32 @@ permissions:
   # short-lived Fulcio certificate.
   id-token: write
 
+# SERIALIZE ROLLS AGAINST THE SAME GOV CONTAINER APP.
+#
+# Mandatory now that this lane fires on `push`: before, only a human could start
+# it and only one at a time. Two merges minutes apart would otherwise run two
+# `az containerapp update` calls against loom-console concurrently, which returns
+# ContainerAppOperationInProgress — an unclassified failure in a deploy path
+# under deploy-integrity.md R6 — and both hold the SAME per-registry ACR firewall
+# lease, so the second would sit waiting for the first anyway (see
+# scripts/csa-loom/acr-firewall-lease.sh). Commercial hit exactly this and fixed
+# it the same way in loom-roll-and-validate.yml (#3159).
+#
+# The group names the ROLL TARGET (resource group + app), not `github.ref`: every
+# roll targets the same Container App, so a ref-keyed group would not serialize
+# the thing that actually collides. It is a literal because GitHub does not
+# expose the `env` context to a workflow-level `concurrency:` — it must stay in
+# step with env.RG/env.APP below.
+#
+# cancel-in-progress is FALSE, deliberately. Killing a roll mid-`az containerapp
+# update` is how ContainerAppOperationInProgress gets left behind, and a Gov
+# console build is 17-23 minutes — cancelling one to start another would throw
+# away the expensive half. A queued run that a newer merge supersedes has done
+# nothing yet, and rolling the newer SHA is strictly better.
+concurrency:
+  group: gov-console-roll-rg-csa-loom-admin-usgovvirginia-loom-console
+  cancel-in-progress: false
+
 env:
   RG: rg-csa-loom-admin-usgovvirginia
   ACR: acrloomdcmt6cqoezlgs
@@ -65,6 +168,88 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+
+      # ── #3730: REFUSE TO ROLL A GOV CONSOLE THAT IS NOT CURRENT WITH MAIN ──
+      #
+      # FIRST, before the Azure login and before the 17-23 minute build, because
+      # a refusal should cost seconds and because there is nothing to clean up if
+      # nothing has been touched yet.
+      #
+      # WHY THIS IS NOT REDUNDANT WITH THE DIGEST CHECK IN THE BUILD STEP. That
+      # one answers "did az acr build actually push something?" — the #2706
+      # wedged-agent-pool failure. It CANNOT answer "is this the right commit",
+      # because a build of a two-week-old ref pushes a perfectly real image with a
+      # perfectly real digest. Every existence gate in this file passes on a stale
+      # ref. This is the only step that looks at WHICH commit.
+      #
+      # EVERY INPUT COMES FROM GITHUB, NEVER FROM AZURE — deliberately, so that a
+      # Gov outage, an ACR firewall propagation window, or an expired Gov SP
+      # secret can never render this UNKNOWN and block an emergency roll on a
+      # fault that has nothing to do with the question being asked.
+      #
+      # No `|| true`, no `2>/dev/null`, no `continue-on-error`: the verdict IS the
+      # exit status. 0 current (or waived) / 3 stale or diverged / 4 unknown —
+      # 3 and 4 both stop the roll, and they are kept distinct so the log never
+      # says "stale" about a comparison that never happened (deploy-integrity R7,
+      # the 2026-08-05 "the tag does not exist" incident).
+      #
+      # ENFORCEMENT IS TRIGGER-AWARE, and `--trigger` is what carries that. On
+      # `push` GitHub only fires for commits already on main, so "behind main" can
+      # only mean a newer merge landed while this run queued — a SUPERSEDE, which
+      # proceeds with a warning because failing it would paint an ordinary merge
+      # sequence red. On a DISPATCH — the path #3730 actually measured, and the
+      # only path that can aim this lane at an unmerged ref — every verdict keeps
+      # full teeth. DIVERGED refuses on both. Rationale + mutation proofs live in
+      # the script and scripts/ci/__tests__/gov-roll-staleness-gate.test.mjs.
+      - name: Gate — the image this roll builds must be CURRENT with main
+        id: staleness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # EMPTY on the `push` path — `inputs.*` does not exist outside a
+          # dispatch and a dispatch `default:` does not apply to other triggers.
+          # So the automatic lane structurally cannot waive its own gate.
+          ALLOW_STALE: ${{ inputs.allow_stale_image || 'false' }}
+        run: |
+          set -uo pipefail
+          # The commit this run would ship is the one the build step compiles:
+          # HEAD of THIS checkout. Deliberately not `github.sha` — the gate must
+          # measure the tree that is about to be built, not a context value that
+          # is merely expected to agree with it.
+          ROLLED=$(git rev-parse HEAD | tr -d '\r\n')
+          echo "rolled_sha=$ROLLED" >> "$GITHUB_OUTPUT"
+
+          ERR=$(mktemp)
+          MAIN="unknown"
+          if MAIN_OUT=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha' 2>"$ERR"); then
+            MAIN=$(printf '%s' "$MAIN_OUT" | tr -d '\r\n')
+            [ -n "$MAIN" ] || MAIN="unknown"
+          else
+            echo "::warning::Could not READ the tip of main from the GitHub API. This is not a verdict about the image — the gate below will report UNKNOWN and refuse. Detail: $(head -c 400 "$ERR")"
+          fi
+
+          STATUS="unknown"
+          AHEAD="unknown"
+          if [ "$MAIN" != "unknown" ]; then
+            # base = the commit being rolled, head = main. So `ahead` means MAIN
+            # is ahead, i.e. THIS ROLL is behind by ahead_by commits.
+            if CMP=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${ROLLED}...${MAIN}" \
+                       --jq '[.status, (.ahead_by | tostring)] | @tsv' 2>"$ERR"); then
+              STATUS=$(printf '%s' "$CMP" | cut -f1 | tr -d '\r\n')
+              AHEAD=$(printf '%s' "$CMP" | cut -f2 | tr -d '\r\n')
+              [ -n "$STATUS" ] || STATUS="unknown"
+              [ -n "$AHEAD" ] || AHEAD="unknown"
+            else
+              echo "::warning::Could not COMPARE ${ROLLED} against main via the GitHub API. Detail: $(head -c 400 "$ERR")"
+            fi
+          fi
+          echo "main_sha=$MAIN" >> "$GITHUB_OUTPUT"
+          echo "compare_status=$STATUS" >> "$GITHUB_OUTPUT"
+
+          node scripts/ci/gov-roll-staleness-gate.mjs \
+            --rolled-sha "$ROLLED" --main-sha "$MAIN" \
+            --compare-status "$STATUS" --ahead-by "$AHEAD" \
+            --trigger "${{ github.event_name }}" \
+            --allow-stale "$ALLOW_STALE"
 
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2
@@ -356,22 +541,90 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
 
       - name: Roll loom-console + health-gate
+        env:
+          # THE ROLLBACK TARGET, AND WHY IT IS NO LONGER A LITERAL.
+          #
+          # This was `${{ inputs.lastgood }}` with `default: '26e7f3db'`, read
+          # directly inside the rollback command. Both halves break the moment
+          # this lane fires on `push`:
+          #
+          #   1. `inputs.*` IS THE EMPTY STRING outside a dispatch, and a
+          #      workflow_dispatch `default:` does NOT apply to other triggers.
+          #      So every merge-triggered roll whose revision came up Unhealthy
+          #      would have run
+          #          az containerapp update --image <acr>/loom-console:
+          #      i.e. an empty tag — the rollback would fail, and the estate
+          #      would be left on the unhealthy revision by the very step whose
+          #      job is to rescue it. This is the same class as the schedule-path
+          #      input defect that froze deploy-fiab-commercial's nightly
+          #      reconcile for weeks (scripts/ci/deploy-trigger-policy.mjs).
+          #   2. Even on a dispatch, `26e7f3db` is a hardcoded tag from an
+          #      earlier era. Rolling "back" to it from a recent revision is not
+          #      a rollback, it is a months-long regression that reports success.
+          #
+          # The honest rollback target is the image that was RUNNING before this
+          # roll, and the platform can measure that instead of asking for it
+          # (auto-bind-by-default.md §5). The input is kept as an override for
+          # the case a human genuinely wants somewhere else.
+          LASTGOOD_IN: ${{ inputs.lastgood }}
         run: |
           set -euo pipefail
           IMG="$ACR_LOGIN/loom-console:$SHA"
+
+          # MEASURE the rollback target BEFORE mutating anything. No
+          # `2>/dev/null || echo ""`: an unreadable control plane is not an empty
+          # image, and rolling with no way back is worse than not rolling. Under
+          # `set -e` a failed read aborts here, before the estate is touched.
+          PREV_IMAGE=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].image" -o tsv | tr -d '\r')
+          if [ -z "$PREV_IMAGE" ]; then
+            echo "::error::Read the $APP Container App successfully but it reported NO current image, so this roll would have no rollback target. That is not a state this workflow has reasoned about — refusing before touching the estate rather than rolling without a way back."
+            exit 1
+          fi
+          if [ -n "$LASTGOOD_IN" ]; then
+            ROLLBACK_IMAGE="$ACR_LOGIN/loom-console:$LASTGOOD_IN"
+            echo "::notice::Rollback target OVERRIDDEN by the lastgood input: $ROLLBACK_IMAGE (the image actually running right now is $PREV_IMAGE)."
+          else
+            ROLLBACK_IMAGE="$PREV_IMAGE"
+            echo "::notice::Rollback target = the image currently running: $ROLLBACK_IMAGE"
+          fi
+
           az containerapp update -n "$APP" -g "$RG" --image "$IMG" -o none
           NEWREV=$(az containerapp revision list -n "$APP" -g "$RG" \
             --query "[?properties.template.containers[0].image=='$IMG'].name | [0]" -o tsv | tr -d '\r')
+          if [ -z "$NEWREV" ]; then
+            echo "::error::The Container App update reported success but NO revision on $APP is running $IMG. The roll has therefore not done what it says it did, and the health loop below would probe an empty revision name and report a timeout about nothing. Refusing here instead, while the log still names the real symptom."
+            exit 1
+          fi
           echo "::notice::New revision $NEWREV"
           H=""
+          # `2>/dev/null` is GONE from this read. It made a persistent failure —
+          # an expired token, a throttle, a revision name that never resolved —
+          # look identical to "not Healthy yet", so the loop would spin for the
+          # full twelve minutes and then report a health timeout about a probe
+          # that had never once succeeded (deploy-integrity R7). The stderr is
+          # kept and printed instead, and an unreadable probe is named as such.
+          PROBE_ERR=$(mktemp)
+          READS=0
           for i in $(seq 1 24); do
-            H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$NEWREV" \
-              --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
-            echo "$(date -u +%H:%M:%S) $NEWREV=$H"
+            if H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$NEWREV" \
+                     --query properties.healthState -o tsv 2>"$PROBE_ERR"); then
+              H=$(printf '%s' "$H" | tr -d '\r\n')
+              READS=$((READS + 1))
+            else
+              H=""
+              echo "  [$i/24] health probe FAILED (this is not a health verdict): $(head -c 300 "$PROBE_ERR" | tr -d '\r\n')"
+            fi
+            echo "$(date -u +%H:%M:%S) $NEWREV=${H:-<unread>}"
             case "$H" in
               Healthy) echo "::notice::GOV-CONSOLE-ROLL $SHA HEALTHY"; exit 0 ;;
-              Unhealthy) echo "::error::Unhealthy — rolling back to ${{ inputs.lastgood }}"; az containerapp update -n "$APP" -g "$RG" --image "$ACR_LOGIN/loom-console:${{ inputs.lastgood }}" -o none; exit 1 ;;
+              Unhealthy) echo "::error::Revision $NEWREV came up Unhealthy on $IMG — rolling back to $ROLLBACK_IMAGE"; az containerapp update -n "$APP" -g "$RG" --image "$ROLLBACK_IMAGE" -o none; exit 1 ;;
             esac
             sleep 30
           done
-          echo "::error::Did not reach Healthy"; exit 1
+          if [ "$READS" -eq 0 ]; then
+            echo "::error::The health probe for revision $NEWREV NEVER returned an answer in 24 attempts (see the per-attempt stderr above), so this run established NOTHING about whether the new Gov revision is healthy — it is not 'unhealthy', it is unmeasured. The roll DID happen; investigate the Gov control-plane read (token, RBAC, throttling) before concluding anything about the image. Roll back deliberately with lastgood if the estate is degraded."
+            exit 1
+          fi
+          echo "::error::Revision $NEWREV never reached Healthy within ~12 minutes (last state read: ${H:-<unread>}, successful probes: $READS/24). NOT rolling back automatically on a timeout — an inconclusive health read is not evidence the new revision is bad, and traffic stays on the previous revision until this one goes Healthy. Roll back deliberately with lastgood=$ROLLBACK_IMAGE if the estate is degraded."
+          exit 1
