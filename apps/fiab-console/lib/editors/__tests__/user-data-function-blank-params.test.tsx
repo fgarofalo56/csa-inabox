@@ -33,6 +33,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { UserDataFunctionEditor } from '../phase4-editors';
+import { paramInputKind } from '../phase4/user-data-function-editor';
 import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 describe('UserDataFunctionEditor — blank Test/Run parameters (#3574)', () => {
@@ -167,5 +168,42 @@ describe('UserDataFunctionEditor — blank Test/Run parameters (#3574)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Show full traceback/ }));
     const shown = await screen.findByText(/Traceback \(most recent call last\)/);
     expect(shown.textContent).toContain('line 7, in compute_score');
+  });
+});
+
+// ── PR #3692 second review, finding 14 ─────────────────────────────────────
+//
+// `/int|float|number|decimal/.test(type)` matched the `int` INSIDE `List[int]`,
+// so the Test panel rendered that field as numeric and then rejected every
+// value a list can take: `Enter a number — "[1, 2]" is not a valid List[int]`.
+// The field became impossible to fill. `Optional[float]` tripped the same
+// substring test from the other direction — it IS a float, merely nullable, so
+// it must still coerce.
+describe('paramInputKind — only a genuinely scalar annotation is coerced', () => {
+  it.each([
+    ['int', 'number'],
+    ['float', 'number'],
+    ['Decimal', 'number'],
+    ['bool', 'bool'],
+    ['str', 'text'],
+    [undefined, 'text'],
+  ])('classifies the scalar %s as %s', (type, kind) => {
+    expect(paramInputKind(type as string | undefined)).toBe(kind);
+  });
+
+  it.each([
+    'List[int]', 'list[int]', 'Dict[str, int]', 'Tuple[int, int]',
+    'Set[float]', 'Sequence[bool]', 'Optional[Dict[str, int]]',
+  ])('does NOT treat the container %s as a scalar', (type) => {
+    expect(paramInputKind(type)).toBe('text');
+  });
+
+  it.each([
+    ['Optional[float]', 'number'],
+    ['Union[int, None]', 'number'],
+    ['float | None', 'number'],
+    ['Optional[bool]', 'bool'],
+  ])('unwraps the nullable scalar %s to %s', (type, kind) => {
+    expect(paramInputKind(type)).toBe(kind);
   });
 });

@@ -44,6 +44,24 @@ export const dynamic = 'force-dynamic';
 
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 
+/**
+ * Strip any credential this route just SENT out of the text it relays back.
+ *
+ * `body` and `detail` carry upstream output verbatim so the failing frame stays
+ * debuggable (deploy-integrity.md R6). That is a second egress channel, in the
+ * opposite direction to the one route.secret-egress.test.ts was originally
+ * written for: an upstream that echoes its received headers — or raises with the
+ * key in the exception text — would relay the operator's Key Vault secret to
+ * whoever pressed Run. The endpoint already holds this value; the caller does not.
+ */
+function redactSecrets(text: string, ...secrets: (string | undefined)[]): string {
+  let out = text;
+  for (const s of secrets) {
+    if (s && s.length >= 8 && out.includes(s)) out = out.split(s).join('[redacted credential]');
+  }
+  return out;
+}
+
 export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const id = params.id;
   const b = await req.json().catch(() => ({}));
@@ -143,13 +161,15 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       }
 
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(parameters) });
-      const text = await res.text();
+      const text = redactSecrets(await res.text(), headers['x-functions-key']);
       // Never surface a raw Python traceback AS the failure message (R6) — but
       // never destroy it either: `detail` carries the interpreter output the
-      // summary was derived from.
+      // summary was derived from. `functionName` is passed so an argument error
+      // raised by an INTERNAL helper is not reported as a parameter the caller
+      // was supposed to supply.
       return NextResponse.json({
         ok: res.ok, backend: 'azure-functions', status: res.status,
-        ...(res.ok ? { body: text } : udfFailureBody(text, parameters)),
+        ...(res.ok ? { body: text } : udfFailureBody(text, parameters, functionName)),
         // Be explicit when we did NOT run the item's authored source, so the Test
         // panel result is never silently the bundled sample (no-vaporware.md).
         ...(ranAuthoredSource || !sourceNote ? {} : { note: sourceNote }),
@@ -190,10 +210,10 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
           headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
           body: JSON.stringify(parameters),
         });
-        const text = await res.text();
+        const text = redactSecrets(await res.text(), t.token);
         return NextResponse.json({
           ok: res.ok, backend: 'fabric', status: res.status,
-          ...(res.ok ? { body: text } : udfFailureBody(text, parameters)),
+          ...(res.ok ? { body: text } : udfFailureBody(text, parameters, functionName)),
         });
       } catch (e: any) {
         return NextResponse.json({ ok: false, backend: 'fabric', error: e?.message || String(e) }, { status: 502 });

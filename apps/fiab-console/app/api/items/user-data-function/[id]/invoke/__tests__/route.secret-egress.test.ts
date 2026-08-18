@@ -64,6 +64,16 @@ const secretOnTheWire = (): boolean =>
     return s.includes('SUPER-SECRET-VALUE');
   });
 
+/**
+ * Did the secret come BACK to the caller? `secretOnTheWire` only inspects the
+ * OUTBOUND fetch init, and this PR added a second channel in the other
+ * direction: `detail` carries upstream text verbatim, so an upstream body that
+ * echoes the function key would be relayed straight to the browser. A
+ * secret-egress control has to cover the response too.
+ */
+const secretInResponse = async (res: Response): Promise<boolean> =>
+  (await res.clone().text()).includes('SUPER-SECRET-VALUE');
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.LOOM_UDF_FUNCTION_BASE = RUNTIME;
@@ -324,6 +334,57 @@ describe('a runtime failure is summarised WITHOUT destroying the traceback', () 
     expect(body.body).toBe('upstream 503');
     expect(body.detail).toBeUndefined();
     expect(body.attribution).toBeUndefined();
+  });
+});
+
+// ── PR #3692 second review — the RESPONSE is an egress channel too ─────────
+//
+// Every assertion above watches the outbound request. `detail` (and `body` on
+// the unparsed path) relay upstream text VERBATIM back to the browser, so a
+// keyed endpoint that echoes its own `x-functions-key` in an error body would
+// hand the operator's Key Vault secret to whoever pressed Run. The key is
+// deployment configuration; the caller is any authenticated user.
+
+describe('a credential never returns to the caller in the relayed upstream text', () => {
+  beforeEach(() => {
+    process.env.LOOM_UDF_ALLOWED_FUNCTION_BASES = `${APPROVED_FN}=contoso-udf-key`;
+    loadOwnedItemMock.mockResolvedValue({
+      state: { azureFunctionUrl: APPROVED_FN, functionKeySecret: 'contoso-udf-key', source: DECORATED },
+    });
+  });
+
+  it('redacts the function key from an upstream error body that echoes it', async () => {
+    // A real shape: a gateway/host that dumps the received request headers.
+    fetchSpy.mockResolvedValue(new Response(
+      JSON.stringify({ error: 'unauthorized', received: { 'x-functions-key': 'SUPER-SECRET-VALUE' } }),
+      { status: 401 },
+    ));
+
+    const res = await POST(req({ functionName: 'compute_score', parameters: { user_id: 'u1' } }), ctx);
+    expect(kvRead).toHaveBeenCalled(); // the key really was in play
+    expect(await secretInResponse(res)).toBe(false);
+  });
+
+  it('redacts it from the traceback relayed on `detail`', async () => {
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({
+      error: 'boom',
+      trace: 'Traceback (most recent call last):\n'
+        + '  File "/app/app.py", line 154, in do_POST\n'
+        + '    raise RuntimeError(headers["x-functions-key"])\n'
+        + 'RuntimeError: SUPER-SECRET-VALUE\n',
+    }), { status: 500 }));
+
+    const res = await POST(req({ functionName: 'compute_score', parameters: { user_id: 'u1' } }), ctx);
+    const body = await res.clone().json();
+    expect(body.detail).toBeTruthy();          // the traceback is still there …
+    expect(await secretInResponse(res)).toBe(false); // … minus the credential
+    expect(body.detail).toContain('Traceback (most recent call last)');
+  });
+
+  it('leaves an upstream body that contains no credential untouched', async () => {
+    fetchSpy.mockResolvedValue(new Response('upstream 503', { status: 503 }));
+    const res = await POST(req({ functionName: 'compute_score', parameters: { user_id: 'u1' } }), ctx);
+    expect((await res.json()).body).toBe('upstream 503');
   });
 });
 

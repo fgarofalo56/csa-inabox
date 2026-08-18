@@ -140,6 +140,35 @@ interface UdfState {
 /** Public (no-secret) connection shape returned by GET /api/connections. */
 interface ConnectionView { id: string; name: string; type: string }
 
+/**
+ * Which input kind a parameter annotation implies.
+ *
+ * Substring matching (`/int|float|number|decimal/.test(type)`) classified
+ * `List[int]` as a number and `Optional[float]`'s container as a scalar, so the
+ * Test panel hard-blocked those fields with `Enter a number — "[1, 2]" is not a
+ * valid List[int]` and a legitimate value could not be entered at all (PR #3692
+ * review). Only a genuinely SCALAR annotation is coerced; anything else is sent
+ * as text, which is what the previous behaviour did for un-annotated params.
+ *
+ * `Optional[X]`, `Union[X, None]` and PEP 604 `X | None` unwrap to `X`: those
+ * ARE the scalar, merely nullable.
+ */
+export function paramInputKind(type?: string): 'number' | 'bool' | 'text' {
+  let t = (type || '').trim();
+  if (!t) return 'text';
+  t = t.replace(/\s*\|\s*None\s*$/i, '').trim();
+  const wrapped = t.match(/^(?:Optional|Union)\s*\[([\s\S]+)\]$/i);
+  if (wrapped) {
+    // A naive split is safe here: a nested generic (Optional[Dict[str, int]])
+    // yields >1 part, so it is left alone and correctly classified as text.
+    const inner = wrapped[1].split(',').map((x) => x.trim()).filter((x) => x && !/^None$/i.test(x));
+    if (inner.length === 1) t = inner[0];
+  }
+  if (/^(?:int|float|complex|Decimal|decimal\.Decimal)$/i.test(t)) return 'number';
+  if (/^bool$/i.test(t)) return 'bool';
+  return 'text';
+}
+
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<UdfState>('user-data-function', id, {
@@ -153,7 +182,10 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const [testFn, setTestFn] = useState('');
   const [testParams, setTestParams] = useState<Record<string, string>>({});
   const [testBusy, setTestBusy] = useState(false);
-  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string; detail?: string; note?: string } | null>(null);
+  const [testOut, setTestOut] = useState<{
+    ok: boolean; status?: number; body?: string; detail?: string; hint?: string; note?: string;
+    attribution?: { basis: 'interpreter' | 'frame' | 'message' | 'none'; parameters: string[] };
+  } | null>(null);
   const [testGate, setTestGate] = useState<string | null>(null);
   // Params left blank on Run with NO declared default in the function
   // signature (issue #3574) — Run is blocked and these fields are flagged
@@ -230,8 +262,8 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
     const invalid: Record<string, string> = {};
     for (const p of selectedFn.params) {
       const entered = testParams[p.name] ?? '';
-      const isNum = !!p.type && /int|float|number|decimal/i.test(p.type);
-      const isBool = !!p.type && /bool/i.test(p.type);
+      const isNum = paramInputKind(p.type) === 'number';
+      const isBool = paramInputKind(p.type) === 'bool';
       // Whitespace is meaningful in a string param and never in a numeric or
       // boolean one, so only the typed fields are trimmed.
       const raw = isNum || isBool ? entered.trim() : entered;
@@ -261,10 +293,17 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       });
       const j = await r.json();
       if (r.status === 409 && j.gated) { setTestGate(j.hint || j.error); return; }
-      // `detail` carries the raw interpreter traceback the summary in `body`
-      // was derived from — surfaced below in a collapsed disclosure so the
-      // friendly summary never destroys the evidence.
-      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error, detail: j.detail || j.hint, note: j.note });
+      // `detail` is the raw interpreter traceback the summary in `body` was
+      // derived from; `hint` is a 400's remediation text (R6). They are DIFFERENT
+      // things and are kept apart — folding `hint` into `detail` filed a
+      // remediation under a disclosure labelled "Show full traceback", which is
+      // simply not what it is. `attribution` says how much the summary
+      // established, and is rendered so the sentence is never read as more
+      // certain than it is (deploy-integrity.md R7).
+      setTestOut({
+        ok: j.ok, status: j.status, body: j.body || j.error,
+        detail: j.detail, hint: j.hint, note: j.note, attribution: j.attribution,
+      });
     } catch (e: any) { setTestOut({ ok: false, body: e?.message || String(e) }); }
     finally { setTestBusy(false); }
   }, [id, selectedFn, testParams]);
@@ -272,7 +311,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const invocationCode = useMemo(() => {
     const fn = selectedFn;
     if (!fn) return '# Add a function to generate invocation code';
-    const jsonArgs = fn.params.map((p) => `"${p.name}": ${p.type && /int|float|number/i.test(p.type) ? '0' : p.type && /bool/i.test(p.type) ? 'True' : '"value"'}`).join(', ');
+    const jsonArgs = fn.params.map((p) => `"${p.name}": ${paramInputKind(p.type) === 'number' ? '0' : paramInputKind(p.type) === 'bool' ? 'True' : '"value"'}`).join(', ');
     const fnBase = (state.azureFunctionUrl || '').trim() || 'https://<fnapp>.azurewebsites.net';
     const keySecret = (state.functionKeySecret || '').trim() || 'udf-fnapp-key';
 
@@ -313,7 +352,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
         + `display(result)`;
     }
     // OpenAPI fragment for the function (Azure Functions HTTP route).
-    const props = fn.params.map((p) => `        "${p.name}": { "type": "${p.type && /int|float|number/i.test(p.type) ? 'number' : p.type && /bool/i.test(p.type) ? 'boolean' : 'string'}" }`).join(',\n');
+    const props = fn.params.map((p) => `        "${p.name}": { "type": "${paramInputKind(p.type) === 'number' ? 'number' : paramInputKind(p.type) === 'bool' ? 'boolean' : 'string'}" }`).join(',\n');
     return `{\n  "openapi": "3.0.1",\n  "info": { "title": "${item.displayName || id}", "version": "1.0" },\n  "paths": {\n    "/api/${fn.name}": {\n      "post": {\n        "operationId": "${fn.name}",\n        "requestBody": { "content": { "application/json": { "schema": {\n          "type": "object",\n          "properties": {\n${props}\n          }\n        } } } },\n        "responses": { "200": { "description": "OK" } }\n      }\n    }\n  }\n}`;
   }, [selectedFn, effectiveGenTarget, id, item.displayName, state.azureFunctionUrl, state.functionKeySecret]);
 
@@ -423,8 +462,27 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
                     <MessageBarBody>
                       <MessageBarTitle>Run failed</MessageBarTitle>
                       {testOut.body || 'The function did not return successfully.'}
+                      {/* How much the summary above actually established. The route
+                          computes this precisely so the surface does not have to
+                          guess; leaving it unread let a hedged finding be presented
+                          with the same confidence as one Python itself stated
+                          (.claude/rules/deploy-integrity.md R7). */}
+                      {testOut.attribution && testOut.attribution.basis !== 'interpreter' && (
+                        <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
+                          {testOut.attribution.basis === 'frame'
+                            ? `Loom matched ${testOut.attribution.parameters.join(', ')} in the line that raised. That is evidence, not proof — check the traceback below.`
+                            : testOut.attribution.basis === 'message'
+                              ? `Loom matched ${testOut.attribution.parameters.join(', ')} in the exception message only, not in the failing line.`
+                              : 'Loom could not establish which parameter is responsible — treat the suggestion above as a starting point.'}
+                        </Caption1>
+                      )}
                     </MessageBarBody>
                   </MessageBar>
+                )}
+                {!testOut.ok && testOut.hint && (
+                  // A 400's remediation (R6). NOT interpreter output — it must not
+                  // be filed under "Show full traceback", which is a different thing.
+                  <MessageBar intent="warning"><MessageBarBody>{testOut.hint}</MessageBarBody></MessageBar>
                 )}
                 {!testOut.ok && testOut.detail && (
                   // The summary above must never be the ONLY thing left: the raw
