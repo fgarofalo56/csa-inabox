@@ -132,12 +132,17 @@ jobs:
       - name: Close the summary
         if: always()
         shell: bash
+        # NOTE: no inline backticks in the echoed markdown below. shellcheck
+        # reads a backtick inside a single-quoted string as command
+        # substitution and raises SC2016, which the workflow-actionlint ratchet
+        # counts as a new finding. Bumping the baseline for prose would be the
+        # wrong fix; dropping the code-formatting is free.
         run: |
           {
             echo '```'
             echo
-            echo 'A merged fix is not a deployed fix (`deploy-integrity.md` R2). The same verdict is'
-            echo 'in-product on `/admin/readiness` (`GET /api/admin/deploy-status`), which reports'
+            echo 'A merged fix is not a deployed fix (deploy-integrity.md R2). The same verdict is'
+            echo 'in-product on /admin/readiness (GET /api/admin/deploy-status), which reports'
             echo 'BOTH clouds side by side.'
             echo
             echo 'This lane never rolls anything. Whether Azure Government should deploy'
