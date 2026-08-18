@@ -18,6 +18,7 @@ import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
+  Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -108,7 +109,9 @@ import {
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 import { clientFetch } from '@/lib/client-fetch';
+import { udfEndpointKey, udfKeySecretDisagrees } from '@/lib/azure/udf-endpoint-policy';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 
 // ----- User Data Function (Fabric UDF — code, test/invoke, connections, libraries) -----
 const UDF_SAMPLE = `import datetime\nimport fabric.functions as fn\nimport logging\n\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    logging.info('Python UDF trigger function processed a request.')\n    return {"user": user_id, "score": weight * 42}`;
@@ -139,6 +142,59 @@ interface UdfState {
 /** Public (no-secret) connection shape returned by GET /api/connections. */
 interface ConnectionView { id: string; name: string; type: string }
 
+/**
+ * One execution endpoint this deployment approves, from
+ * GET /api/items/user-data-function/endpoints.
+ *
+ * `keySecretName` is a Key Vault secret NAME, never its value — the material is
+ * read server-side by the invoke route and never reaches the browser.
+ */
+interface UdfEndpointView {
+  base: string;
+  keySecretName?: string;
+  acceptsPushedSource: boolean;
+  isDefault: boolean;
+}
+interface UdfEndpointsResponse {
+  endpoints: UdfEndpointView[];
+  gate?: { missing: string; detail: string };
+}
+
+/** Same endpoint? Answered with the policy's own comparison, never a look-alike. */
+function sameEndpointBase(a: string, b: string): boolean {
+  const ka = udfEndpointKey(a);
+  return !!ka && ka === udfEndpointKey(b);
+}
+
+/**
+ * Which input kind a parameter annotation implies.
+ *
+ * Substring matching (`/int|float|number|decimal/.test(type)`) classified
+ * `List[int]` as a number and `Optional[float]`'s container as a scalar, so the
+ * Test panel hard-blocked those fields with `Enter a number — "[1, 2]" is not a
+ * valid List[int]` and a legitimate value could not be entered at all (PR #3692
+ * review). Only a genuinely SCALAR annotation is coerced; anything else is sent
+ * as text, which is what the previous behaviour did for un-annotated params.
+ *
+ * `Optional[X]`, `Union[X, None]` and PEP 604 `X | None` unwrap to `X`: those
+ * ARE the scalar, merely nullable.
+ */
+export function paramInputKind(type?: string): 'number' | 'bool' | 'text' {
+  let t = (type || '').trim();
+  if (!t) return 'text';
+  t = t.replace(/\s*\|\s*None\s*$/i, '').trim();
+  const wrapped = t.match(/^(?:Optional|Union)\s*\[([\s\S]+)\]$/i);
+  if (wrapped) {
+    // A naive split is safe here: a nested generic (Optional[Dict[str, int]])
+    // yields >1 part, so it is left alone and correctly classified as text.
+    const inner = wrapped[1].split(',').map((x) => x.trim()).filter((x) => x && !/^None$/i.test(x));
+    if (inner.length === 1) t = inner[0];
+  }
+  if (/^(?:int|float|complex|Decimal|decimal\.Decimal)$/i.test(t)) return 'number';
+  if (/^bool$/i.test(t)) return 'bool';
+  return 'text';
+}
+
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<UdfState>('user-data-function', id, {
@@ -152,8 +208,20 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const [testFn, setTestFn] = useState('');
   const [testParams, setTestParams] = useState<Record<string, string>>({});
   const [testBusy, setTestBusy] = useState(false);
-  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string; note?: string } | null>(null);
+  const [testOut, setTestOut] = useState<{
+    ok: boolean; status?: number; body?: string; detail?: string; hint?: string; note?: string;
+    attribution?: { basis: 'interpreter' | 'frame' | 'message' | 'none'; parameters: string[] };
+  } | null>(null);
   const [testGate, setTestGate] = useState<string | null>(null);
+  // Params left blank on Run with NO declared default in the function
+  // signature (issue #3574) — Run is blocked and these fields are flagged
+  // inline instead of dispatching a request the runtime can only fail on.
+  const [testMissing, setTestMissing] = useState<string[]>([]);
+  // Params whose typed entry cannot be coerced to the declared type. Same
+  // family of defect as #3574 and equally silent: `Number('abc')` is NaN and
+  // `JSON.stringify({w: NaN})` is `{"w":null}`, so unparseable text in a
+  // numeric field arrived at the runtime as the exact `None` #3574 removed.
+  const [testInvalid, setTestInvalid] = useState<Record<string, string>>({});
   const selectedFn = functions.find((f) => f.name === testFn) || functions[0];
 
   // Generate invocation code dialog. Azure Functions (Azure-native) is the
@@ -180,6 +248,52 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const connectionRefs = arr<UdfConnectionRef>(state.connectionRefs);
   const selectedConnIds = connectionRefs.map((c) => c.id);
 
+  // Execution endpoints this DEPLOYMENT approves. `lib/azure/udf-endpoint-policy`
+  // made the base URL and its function key operator configuration — item state
+  // may only SELECT one and AGREE with its key — so the editor lists what the
+  // deployment actually accepts instead of asking the user to type a value the
+  // invoke route would refuse (auto-bind-by-default.md §5).
+  const endpointQuery = useQuery({
+    queryKey: ['udf-endpoints'],
+    queryFn: async (): Promise<UdfEndpointsResponse> => {
+      const r = await clientFetch('/api/items/user-data-function/endpoints', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      return { endpoints: Array.isArray(j.endpoints) ? j.endpoints : [], gate: j.gate };
+    },
+  });
+  const udfEndpoints = endpointQuery.data?.endpoints || [];
+  const endpointGate = endpointQuery.data?.gate;
+  // Which approved endpoint this item currently runs on: the one it selected,
+  // else the deployment default (blank state = "use the default", exactly as
+  // resolveUdfEndpoint() reads it).
+  const selectedEndpoint = useMemo(() => {
+    const want = (state.azureFunctionUrl || '').trim();
+    if (!want) return udfEndpoints.find((e) => e.isDefault);
+    return udfEndpoints.find((e) => sameEndpointBase(e.base, want));
+  }, [udfEndpoints, state.azureFunctionUrl]);
+  // A saved base that is no longer approved. The invoke route 409s on it, so it
+  // is surfaced here with a one-click repair rather than left to fail at Run.
+  const endpointUnapproved =
+    !!(state.azureFunctionUrl || '').trim() && !endpointQuery.isLoading && !selectedEndpoint && udfEndpoints.length > 0;
+  // A saved key-secret name that disagrees with the selected endpoint's
+  // configured key — the other 409 the policy raises. Answered by the POLICY'S
+  // OWN predicate: an item that names NO key is the compliant default (the
+  // endpoint's configured key is used), and a hand-rolled comparison here that
+  // dropped that clause warned about a 409 resolveUdfEndpoint never raises.
+  const keySecretMismatch =
+    !!selectedEndpoint && udfKeySecretDisagrees(state.functionKeySecret, selectedEndpoint.keySecretName);
+  /** Point the item at an approved endpoint AND at that endpoint's configured key. */
+  const selectEndpoint = useCallback((ep?: UdfEndpointView) => {
+    setState((p) => ({
+      ...p,
+      azureFunctionUrl: ep && !ep.isDefault ? ep.base : '',
+      // Derived, never typed: the key a host receives is deployment config, and
+      // an item may only agree with it (udf-endpoint-policy.ts).
+      functionKeySecret: ep?.keySecretName || '',
+    }));
+  }, [setState]);
+
   // Library form.
   const [libName, setLibName] = useState('');
   const [libVer, setLibVer] = useState('');
@@ -194,15 +308,56 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 
   const runTest = useCallback(async () => {
     if (!selectedFn) return;
-    setTestBusy(true); setTestOut(null); setTestGate(null);
-    // Coerce typed params: numbers/bools parsed, everything else string.
+    setTestOut(null); setTestGate(null);
+    // Coerce typed params: numbers/bools parsed, everything else string. A
+    // blank value for a param that DECLARES ITS OWN DEFAULT in the function
+    // signature is OMITTED from the payload entirely so the function's own
+    // default applies — rather than sending an explicit null/None, which
+    // crashes functions that do arithmetic/string ops on it (issue #3574: a
+    // blank `weight` on `compute_score(user_id, weight=1.0)` sent
+    // `{weight: null}`, and `weight * 42` raised
+    // "unsupported operand type(s) for *: 'NoneType' and 'int'").
+    // A blank value for a param with NO declared default is a genuinely
+    // missing required argument: Run is blocked below and the field is
+    // flagged instead of dispatching a request the runtime can only fail.
+    //
+    // Typed coercion is guarded for the same reason. `Number('')` and
+    // `Number('   ')` are both 0, so a whitespace-only numeric field would
+    // silently invent a real 0 the user never typed; and `Number('abc')` is
+    // NaN, which `JSON.stringify` serialises as `null` — re-creating the exact
+    // `None` that #3574 exists to prevent. Both now block Run and flag the
+    // field. Booleans are likewise parsed explicitly: `raw === 'true'` turned
+    // the Python-style `True` (which is what the placeholder shows for a
+    // `= True` default) into `false` without a word.
     const parameters: Record<string, unknown> = {};
+    const missing: string[] = [];
+    const invalid: Record<string, string> = {};
     for (const p of selectedFn.params) {
-      const raw = testParams[p.name] ?? '';
-      if (p.type && /int|float|number/i.test(p.type)) parameters[p.name] = raw === '' ? null : Number(raw);
-      else if (p.type && /bool/i.test(p.type)) parameters[p.name] = raw === 'true';
-      else parameters[p.name] = raw;
+      const entered = testParams[p.name] ?? '';
+      const isNum = paramInputKind(p.type) === 'number';
+      const isBool = paramInputKind(p.type) === 'bool';
+      // Whitespace is meaningful in a string param and never in a numeric or
+      // boolean one, so only the typed fields are trimmed.
+      const raw = isNum || isBool ? entered.trim() : entered;
+      if (raw === '') {
+        if (p.default != null) continue; // let the function's own default apply
+        missing.push(p.name);
+        continue;
+      }
+      if (isNum) {
+        const n = Number(raw);
+        if (!Number.isFinite(n)) { invalid[p.name] = `Enter a number — “${raw}” is not a valid ${p.type}.`; continue; }
+        parameters[p.name] = n;
+      } else if (isBool) {
+        const b = raw.toLowerCase();
+        if (['true', '1', 'yes'].includes(b)) parameters[p.name] = true;
+        else if (['false', '0', 'no'].includes(b)) parameters[p.name] = false;
+        else { invalid[p.name] = `Enter true or false — “${raw}” is neither.`; continue; }
+      } else parameters[p.name] = raw;
     }
+    if (missing.length || Object.keys(invalid).length) { setTestMissing(missing); setTestInvalid(invalid); return; }
+    setTestMissing([]); setTestInvalid({});
+    setTestBusy(true);
     try {
       const r = await clientFetch(`/api/items/user-data-function/${encodeURIComponent(id)}/invoke`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -210,7 +365,17 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       });
       const j = await r.json();
       if (r.status === 409 && j.gated) { setTestGate(j.hint || j.error); return; }
-      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error, note: j.note });
+      // `detail` is the raw interpreter traceback the summary in `body` was
+      // derived from; `hint` is a 400's remediation text (R6). They are DIFFERENT
+      // things and are kept apart — folding `hint` into `detail` filed a
+      // remediation under a disclosure labelled "Show full traceback", which is
+      // simply not what it is. `attribution` says how much the summary
+      // established, and is rendered so the sentence is never read as more
+      // certain than it is (deploy-integrity.md R7).
+      setTestOut({
+        ok: j.ok, status: j.status, body: j.body || j.error,
+        detail: j.detail, hint: j.hint, note: j.note, attribution: j.attribution,
+      });
     } catch (e: any) { setTestOut({ ok: false, body: e?.message || String(e) }); }
     finally { setTestBusy(false); }
   }, [id, selectedFn, testParams]);
@@ -218,9 +383,13 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const invocationCode = useMemo(() => {
     const fn = selectedFn;
     if (!fn) return '# Add a function to generate invocation code';
-    const jsonArgs = fn.params.map((p) => `"${p.name}": ${p.type && /int|float|number/i.test(p.type) ? '0' : p.type && /bool/i.test(p.type) ? 'True' : '"value"'}`).join(', ');
-    const fnBase = (state.azureFunctionUrl || '').trim() || 'https://<fnapp>.azurewebsites.net';
-    const keySecret = (state.functionKeySecret || '').trim() || 'udf-fnapp-key';
+    const jsonArgs = fn.params.map((p) => `"${p.name}": ${paramInputKind(p.type) === 'number' ? '0' : paramInputKind(p.type) === 'bool' ? 'True' : '"value"'}`).join(', ');
+    // The generated snippet names the endpoint this item ACTUALLY runs on, and
+    // that endpoint's configured key-secret name — both resolved from the
+    // deployment's approved list rather than from item state, which is the only
+    // thing the invoke route will honour anyway.
+    const fnBase = selectedEndpoint?.base || (state.azureFunctionUrl || '').trim() || 'https://<fnapp>.azurewebsites.net';
+    const keySecret = selectedEndpoint?.keySecretName || (state.functionKeySecret || '').trim() || 'udf-fnapp-key';
 
     if (effectiveGenTarget === 'functions') {
       // Azure-native DEFAULT: POST {fnBase}/api/<fn> with x-functions-key (or Entra).
@@ -259,9 +428,9 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
         + `display(result)`;
     }
     // OpenAPI fragment for the function (Azure Functions HTTP route).
-    const props = fn.params.map((p) => `        "${p.name}": { "type": "${p.type && /int|float|number/i.test(p.type) ? 'number' : p.type && /bool/i.test(p.type) ? 'boolean' : 'string'}" }`).join(',\n');
+    const props = fn.params.map((p) => `        "${p.name}": { "type": "${paramInputKind(p.type) === 'number' ? 'number' : paramInputKind(p.type) === 'bool' ? 'boolean' : 'string'}" }`).join(',\n');
     return `{\n  "openapi": "3.0.1",\n  "info": { "title": "${item.displayName || id}", "version": "1.0" },\n  "paths": {\n    "/api/${fn.name}": {\n      "post": {\n        "operationId": "${fn.name}",\n        "requestBody": { "content": { "application/json": { "schema": {\n          "type": "object",\n          "properties": {\n${props}\n          }\n        } } } },\n        "responses": { "200": { "description": "OK" } }\n      }\n    }\n  }\n}`;
-  }, [selectedFn, effectiveGenTarget, id, item.displayName, state.azureFunctionUrl, state.functionKeySecret]);
+  }, [selectedFn, effectiveGenTarget, id, item.displayName, state.azureFunctionUrl, state.functionKeySecret, selectedEndpoint]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -322,16 +491,36 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
                 placeholder={functions.length ? 'Select a function' : 'No functions to run'}
                 value={selectedFn?.name || ''}
                 selectedOptions={selectedFn ? [selectedFn.name] : []}
-                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); }}
+                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); setTestMissing([]); setTestInvalid({}); }}
               >
                 {functions.map((f) => <Option key={f.name} value={f.name}>{f.name}</Option>)}
               </Dropdown>
             </Field>
-            {selectedFn?.params.map((p) => (
-              <Field key={p.name} label={`${p.name}${p.type ? ` : ${p.type}` : ''}${p.default ? ` (default ${p.default})` : ''}`}>
-                <Input value={testParams[p.name] ?? ''} onChange={(_, d) => setTestParams((cur) => ({ ...cur, [p.name]: d.value }))} placeholder={p.default || ''} />
-              </Field>
-            ))}
+            {selectedFn?.params.map((p) => {
+              const isMissing = testMissing.includes(p.name);
+              const badValue = testInvalid[p.name];
+              return (
+                <Field
+                  key={p.name}
+                  label={`${p.name}${p.type ? ` : ${p.type}` : ''}${p.default ? ` (default ${p.default})` : ''}`}
+                  validationState={isMissing || badValue ? 'error' : 'none'}
+                  validationMessage={
+                    isMissing ? `Required — ${selectedFn.name} declares no default for this parameter.`
+                      : badValue || undefined
+                  }
+                >
+                  <Input
+                    value={testParams[p.name] ?? ''}
+                    onChange={(_, d) => {
+                      setTestParams((cur) => ({ ...cur, [p.name]: d.value }));
+                      if (isMissing) setTestMissing((cur) => cur.filter((n) => n !== p.name));
+                      if (badValue) setTestInvalid((cur) => { const { [p.name]: _drop, ...rest } = cur; return rest; });
+                    }}
+                    placeholder={p.default || ''}
+                  />
+                </Field>
+              );
+            })}
             <Button appearance="primary" onClick={runTest} disabled={testBusy || !selectedFn} style={{ alignSelf: 'flex-start' }}>{testBusy ? 'Running…' : 'Run'}</Button>
             {testGate && (
               <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Function not published yet</MessageBarTitle>{testGate}</MessageBarBody></MessageBar>
@@ -339,7 +528,51 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
             {testOut && (
               <>
                 <Caption1>Output {testOut.status != null ? `(HTTP ${testOut.status})` : ''}</Caption1>
-                <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>{testOut.body || '(empty)'}</div>
+                {testOut.ok ? (
+                  <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>{testOut.body || '(empty)'}</div>
+                ) : (
+                  // A failure is surfaced as a specific, actionable message (never a raw
+                  // interpreter traceback — see the invoke route's friendlyRuntimeError
+                  // and .claude/rules/deploy-integrity.md R6 / issue #3574).
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      <MessageBarTitle>Run failed</MessageBarTitle>
+                      {testOut.body || 'The function did not return successfully.'}
+                      {/* How much the summary above actually established. The route
+                          computes this precisely so the surface does not have to
+                          guess; leaving it unread let a hedged finding be presented
+                          with the same confidence as one Python itself stated
+                          (.claude/rules/deploy-integrity.md R7). */}
+                      {testOut.attribution && testOut.attribution.basis !== 'interpreter' && (
+                        <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
+                          {testOut.attribution.basis === 'frame'
+                            ? `Loom matched ${testOut.attribution.parameters.join(', ')} in the line that raised. That is evidence, not proof — check the traceback below.`
+                            : testOut.attribution.basis === 'message'
+                              ? `Loom matched ${testOut.attribution.parameters.join(', ')} in the exception message only, not in the failing line.`
+                              : 'Loom could not establish which parameter is responsible — treat the suggestion above as a starting point.'}
+                        </Caption1>
+                      )}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {!testOut.ok && testOut.hint && (
+                  // A 400's remediation (R6). NOT interpreter output — it must not
+                  // be filed under "Show full traceback", which is a different thing.
+                  <MessageBar intent="warning"><MessageBarBody>{testOut.hint}</MessageBarBody></MessageBar>
+                )}
+                {!testOut.ok && testOut.detail && (
+                  // The summary above must never be the ONLY thing left: the raw
+                  // interpreter output it was derived from stays reachable here,
+                  // collapsed, so the failing frame is still debuggable.
+                  <Accordion collapsible>
+                    <AccordionItem value="traceback">
+                      <AccordionHeader>Show full traceback</AccordionHeader>
+                      <AccordionPanel>
+                        <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 240 }}>{testOut.detail}</div>
+                      </AccordionPanel>
+                    </AccordionItem>
+                  </Accordion>
+                )}
                 {testOut.note && (
                   <MessageBar intent="info"><MessageBarBody>{testOut.note}</MessageBarBody></MessageBar>
                 )}
@@ -347,19 +580,90 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
             )}
           </div>
 
-          {/* Execution endpoint — Azure-native BYO Azure Functions target */}
+          {/* Execution endpoint — SELECTED from what the deployment approves.
+              The base URL and its function key are operator configuration
+              (lib/azure/udf-endpoint-policy.ts): item state may only select an
+              approved endpoint and agree with its key, and the invoke route
+              409s on anything else. These were two free-text boxes, so the only
+              values a user could type were one they already knew or one
+              guaranteed to gate — the ask auto-bind-by-default.md §5 forbids
+              and check-no-freeform.mjs ratchets. */}
           <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Settings20Regular className={s.secHeadIcon} /><Subtitle2>Execution endpoint</Subtitle2></div>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-            Azure-native run target. Leave blank to use the shared runtime (<code>LOOM_UDF_FUNCTION_BASE</code>), which executes this item&apos;s authored source. Set a Function App to run your own deployed code.
+            Azure-native run target, chosen from the endpoints this deployment approves. The default is the shared Loom runtime, which executes this item&apos;s authored source; an operator approves your own Azure Function App by adding it to <code>LOOM_UDF_ALLOWED_FUNCTION_BASES</code>.
           </Caption1>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalXS }}>
-            <Field label="Function App base URL" hint="e.g. https://my-udf.azurewebsites.net — overrides LOOM_UDF_FUNCTION_BASE for this item.">
-              <Input value={state.azureFunctionUrl || ''} onChange={(_, d) => setState((p) => ({ ...p, azureFunctionUrl: d.value }))} placeholder="https://<fnapp>.azurewebsites.net" />
+            <Field
+              label="Run target"
+              hint={endpointQuery.isError ? undefined : 'Approved endpoints only — Loom will not send a credential to a host chosen by item configuration.'}
+              validationState={endpointQuery.isError ? 'error' : 'none'}
+              validationMessage={endpointQuery.isError ? String((endpointQuery.error as any)?.message || 'Failed to load approved endpoints') : undefined}
+            >
+              <Dropdown
+                placeholder={endpointQuery.isLoading ? 'Loading approved endpoints…' : udfEndpoints.length ? 'Select an endpoint' : 'No endpoint configured'}
+                disabled={endpointQuery.isLoading || udfEndpoints.length === 0}
+                selectedOptions={selectedEndpoint ? [selectedEndpoint.base] : []}
+                value={selectedEndpoint ? `${selectedEndpoint.base}${selectedEndpoint.isDefault ? ' (deployment default)' : ''}` : ((state.azureFunctionUrl || '').trim() || '')}
+                onOptionSelect={(_, d) => selectEndpoint(udfEndpoints.find((e) => e.base === d.optionValue))}
+              >
+                {udfEndpoints.map((e) => (
+                  <Option key={e.base} value={e.base} text={e.base}>
+                    {`${e.base}${e.isDefault ? ' · deployment default' : ''}${e.keySecretName ? ' · keyed' : ' · anonymous / Entra'}`}
+                  </Option>
+                ))}
+              </Dropdown>
             </Field>
-            <Field label="Function key — Key Vault secret name" hint="Optional. KV secret holding the function key (sent as x-functions-key). Blank = anonymous / Entra-protected.">
-              <Input value={state.functionKeySecret || ''} onChange={(_, d) => setState((p) => ({ ...p, functionKeySecret: d.value }))} placeholder="udf-fnapp-key" />
+            {/* The function key is DERIVED, never asked for: it is the selected
+                endpoint's configured secret NAME, and item state may only agree
+                with it. Read-only text, so there is no value to hand-type. */}
+            <Field label="Function key" hint="Deployment configuration — the key a host receives is never item configuration.">
+              <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', paddingTop: tokens.spacingVerticalXS }}>
+                {selectedEndpoint?.keySecretName
+                  ? `Key Vault secret “${selectedEndpoint.keySecretName}”, sent as x-functions-key. This endpoint is keyed, so Loom runs its deployed code rather than pushing this item's source to it.`
+                  : selectedEndpoint
+                    ? 'Anonymous / Entra-protected — no credential is attached, and this endpoint executes this item’s authored source.'
+                    : 'Select a run target to see how it authenticates.'}
+              </Caption1>
             </Field>
           </div>
+          {/* Both 409s the policy can raise, surfaced BEFORE Run — each with the
+              inline repair the platform can perform itself (ux-baseline G2). */}
+          {endpointUnapproved && (
+            <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalXS }}>
+              <MessageBarBody>
+                <MessageBarTitle>This item names an endpoint the deployment has not approved</MessageBarTitle>
+                Saved run target <code>{(state.azureFunctionUrl || '').trim()}</code> is not in <code>LOOM_UDF_FUNCTION_BASE</code> or <code>LOOM_UDF_ALLOWED_FUNCTION_BASES</code>, so Run returns 409. Move it back to the deployment default, or ask an operator to approve the host.
+                <div style={{ marginTop: tokens.spacingVerticalXS }}>
+                  <Button size="small" onClick={() => selectEndpoint(udfEndpoints.find((e) => e.isDefault))}>Use the deployment default</Button>
+                </div>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!endpointUnapproved && keySecretMismatch && (
+            <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalXS }}>
+              <MessageBarBody>
+                <MessageBarTitle>This item names a function key this endpoint is not configured to use</MessageBarTitle>
+                Run returns 409 until the item agrees with the endpoint&apos;s configured key.
+                <div style={{ marginTop: tokens.spacingVerticalXS }}>
+                  <Button size="small" onClick={() => selectEndpoint(selectedEndpoint)}>Use the endpoint&apos;s configured key</Button>
+                </div>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {/* The shared G2 gate, not a sixteenth bespoke warning MessageBar.
+              `svc-udf-function` is already registered (lib/gates/registry/
+              builders.ts) with `fixit: { kind: 'env-picker' }`, so this carries
+              the inline Fix-it wizard, the /admin/gates link, and a Recheck
+              that re-lists in place — none of which a hand-rolled bar has. */}
+          {!endpointQuery.isLoading && endpointGate && (
+            <HonestGate
+              gateId="svc-udf-function"
+              surface="User data function — Execution endpoint"
+              missing={[endpointGate.missing]}
+              detail={endpointGate.detail}
+              onResolved={() => { void endpointQuery.refetch(); }}
+            />
+          )}
 
           {/* Manage connections — reusable, Key Vault-backed Loom Connections */}
           <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Link20Regular className={s.secHeadIcon} /><Subtitle2>Manage connections (data-source bindings)</Subtitle2></div>
