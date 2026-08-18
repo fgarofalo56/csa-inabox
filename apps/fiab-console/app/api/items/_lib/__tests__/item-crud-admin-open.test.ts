@@ -78,8 +78,19 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
           const params: Array<{ name: string; value: any }> = spec?.parameters || [];
           const id = params.find((p) => p.name === '@id')?.value;
           const types = params.filter((p) => p.name.startsWith('@t')).map((p) => p.value);
-          const ok = ITEM.id === id && (types.length === 0 || types.includes(ITEM.itemType));
-          return { resources: ok ? [ITEM] : [] };
+          // POINT LOOKUP (`@id` bound) — unchanged.
+          if (id !== undefined) {
+            const ok = ITEM.id === id && (types.length === 0 || types.includes(ITEM.itemType));
+            return { resources: ok ? [ITEM] : [] };
+          }
+          // LIST query (`listOwnedItems` / `listAllOwnedItems` bind no `@id`).
+          // Without this branch the mock returned [] for EVERY list, which would
+          // make an "enumeration returns nothing" assertion a gate that cannot
+          // fail — it would pass just as well against the widened code.
+          const ws = params.find((p) => p.name === '@w')?.value;
+          const matchesType = types.length === 0 || types.includes(ITEM.itemType);
+          const matchesWs = ws === undefined || ws === ITEM.workspaceId;
+          return { resources: matchesType && matchesWs ? [ITEM] : [] };
         },
       }),
     },
@@ -204,3 +215,63 @@ describe('#3697 WRITE strictness is preserved (read-only roles cannot escalate)'
     expect(await loadOwnedItem(ITEM.id, ITEM.itemType, VIEWER)).toBeNull();
   });
 });
+
+/**
+ * REVIEW FINDING (post-#3697). Every spec above calls `loadOwnedItem` WITHOUT
+ * `opts.session`, so all of them exercise the AMBIENT branch of
+ * `accessOptsFor` — `ambientAccessOptsFor(oid)`. The `session` branch the fix
+ * ADDED had zero coverage, and it is not symmetric with the ambient one:
+ *
+ *   ambient : uses the request session ONLY when `s.claims.oid === oid`
+ *   session : (as first written) used it for ANY `oid` the caller passed
+ *
+ * `ambientAccessOptsFor`'s own docstring gives the reason for that rule — "a
+ * helper resolving access on behalf of a different principal can never borrow
+ * this request's admin status" — and the new branch broke it. That is not
+ * theoretical: `app/api/a2a/agent-cards/route.ts` passes
+ * `tenantScopeId(session)` (= `claims.tid || claims.oid`) as the `oid`
+ * argument while ALSO threading `{ session }`, and `tenantScopeId`'s docstring
+ * says it is "deliberately NOT used for the workspaces / items containers".
+ *
+ * With `oid = tid`: the owner point-read misses (wrong partition), the ACL
+ * lookup misses (roles are keyed by user oid), and step 6 then hands back
+ * `role:'Admin', canWrite:true` for EVERY workspace in the tenant.
+ *
+ * These specs pin the principal match in both directions.
+ */
+describe('#3697 the session branch of accessOptsFor is principal-matched', () => {
+  it('GRANTS the admin bypass when the threaded session IS the principal', async () => {
+    const { loadOwnedItem } = await import('../item-crud');
+    const s = sessionFor(ADMIN);
+    // The positive case: same oid, so the session may supply tenantAdmin.
+    expect(await loadOwnedItem(ITEM.id, ITEM.itemType, ADMIN, { allowReadRoles: true, session: s })).toBeTruthy();
+  });
+
+  it('REFUSES to borrow the session admin status for a DIFFERENT principal', async () => {
+    const { loadOwnedItem } = await import('../item-crud');
+    const s = sessionFor(ADMIN);
+    // The a2a/agent-cards shape, verbatim: oid = tenantScopeId(session) = tid,
+    // session = the same admin's session. The tid is not an owner oid and holds
+    // no ACL row, so the ONLY thing that could grant access is the bypass — and
+    // it must not, because the oid is not this session's principal.
+    expect(await loadOwnedItem(ITEM.id, ITEM.itemType, TID, { allowReadRoles: true, session: s })).toBeNull();
+  });
+
+  it('REFUSES for an unrelated third-party oid too (not just the tid alias)', async () => {
+    const { loadOwnedItem } = await import('../item-crud');
+    const s = sessionFor(ADMIN);
+    expect(await loadOwnedItem(ITEM.id, ITEM.itemType, STRANGER, { allowReadRoles: true, session: s })).toBeNull();
+  });
+
+  it('ENUMERATION is principal-matched too — the a2a list path returns nothing for oid=tid', async () => {
+    // The finding is a LIST surface, so pin the list path, not only the point
+    // read: `listOwnedItems(kind, tenantScopeId(session), { session })`.
+    const { listOwnedItems } = await import('../item-crud');
+    const s = sessionFor(ADMIN);
+    expect(await listOwnedItems(ITEM.itemType, TID, { session: s })).toEqual([]);
+    // ...while the same admin listing under their OWN oid still gets the
+    // admin-open enumeration the fix intends.
+    expect((await listOwnedItems(ITEM.itemType, ADMIN, { session: s })).length).toBe(1);
+  });
+});
+

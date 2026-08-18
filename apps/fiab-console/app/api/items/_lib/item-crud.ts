@@ -266,27 +266,67 @@ export async function loadItemRaw(itemId: string, itemType: string): Promise<Wor
  * and `pipeline-binding` — and this shared helper, the single largest consumer,
  * was never migrated onto it. Delegating here closes the class for all of them.
  *
- * NOT A WIDENING: the admin-open bypass only ever grants a tenant admin what
+ * NOT A WIDENING FOR THE PRINCIPAL THE SESSION BELONGS TO: the admin-open
+ * bypass only ever grants a tenant admin, on THEIR OWN oid, what
  * `/api/cosmos-items/<type>/<id>` (GET and PATCH) already grants that same
- * admin for that same item. It closes a divergence between two resolvers; it
- * does not confer authority nobody had. The owner and ACL fast-paths still run
- * FIRST, so a non-admin caller is completely unaffected, and the tid boundary
- * still scopes the bypass to the admin's own tenant.
+ * admin for that same item. The owner and ACL fast-paths still run FIRST, so a
+ * non-admin caller is completely unaffected.
+ *
+ * TWO LIMITS ON THAT SENTENCE, both found in review and both stated here rather
+ * than left implied:
+ *
+ * 1. IT IS A PER-ITEM CLAIM, AND THE LIST SURFACES ENUMERATE. `listOwnedItems`
+ *    / `listAllOwnedItems` now return every item in every workspace of the
+ *    tenant for an admin, which `/api/cosmos-items/<type>/<id>` — a point read
+ *    — never did. That is the intended behaviour (it is the same set
+ *    `/admin/workspaces` already lists), but it is enumeration, not the
+ *    per-item equivalence above, so it is called out separately and pinned by
+ *    the ENUMERATION spec in `item-crud-admin-open.test.ts`.
+ *
+ * 2. THE TID BOUNDARY SCOPES THE BYPASS ONLY WHEN THE WORKSPACE DOC CARRIES A
+ *    TID. `resolveWorkspaceAccessByOid` step 4 is
+ *    `if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null`, so a
+ *    LEGACY workspace doc written before `tid` was stamped falls through to
+ *    step 6 without a boundary check. Tightening that (requiring
+ *    `wsDoc.tid` present-and-matching before step 6) is a change to
+ *    `lib/auth/workspace-access.ts` that also affects the pre-existing
+ *    `/api/cosmos-items` path, so it is NOT made here; the earlier unqualified
+ *    "the tid boundary still scopes the bypass" is corrected instead.
+ *
+ * PRINCIPAL MATCH (review blocker). The `session` branch below is deliberately
+ * gated on `session.claims.oid === oid`, exactly as `ambientAccessOptsFor`
+ * gates the ambient branch. Without it the two branches were asymmetric, and
+ * that asymmetry was reachable: `app/api/a2a/agent-cards/route.ts` passes
+ * `tenantScopeId(session)` (= `claims.tid || claims.oid`, and documented as
+ * "deliberately NOT used for the workspaces / items containers") as the `oid`
+ * while ALSO threading `{ session }`. With `oid = tid` the owner point-read
+ * misses its partition and the ACL lookup misses too, so step 6 was handing
+ * back `role:'Admin', canWrite:true` on EVERY workspace in the tenant.
  */
 async function accessOptsFor(oid: string, session?: SessionPayload): Promise<WorkspaceAccessOpts> {
-  if (session) {
+  // Only a session belonging to THIS principal may supply the boundary + the
+  // admin bypass. A call site that resolves on behalf of a different oid (or an
+  // oid that is not a principal at all, e.g. a tid) falls through to the ambient
+  // branch, which applies the identical rule and degrades to no access.
+  if (session && session.claims.oid === oid) {
     // The call site handed us the request session — use it directly (and the
     // dynamic import keeps this module's static graph free of a feature-gate
     // edge, matching `ambientAccessOptsFor`).
     const { isTenantAdmin } = await import('@/lib/auth/feature-gate');
     return {
       callerTid: session.claims.tid,
-      groups: session.claims.groups,
+      // An EMPTY `groups` array is truthy and makes `resolveEffectiveRole` take
+      // its "group set already known" fast path, silently skipping the Graph
+      // membership probe. The claim is never populated on the live estate today
+      // (#3175) so this is latent, but passing `undefined` keeps the probe
+      // reachable the moment it is. Mirrors what the ambient branch should mean.
+      groups: session.claims.groups?.length ? session.claims.groups : undefined,
       tenantAdmin: isTenantAdmin(session),
     };
   }
-  // Oid-only call site: recover callerTid + groups + tenantAdmin from the
-  // AMBIENT request session, but ONLY when it belongs to this same principal.
+  // Oid-only call site (or a session for a different principal): recover
+  // callerTid + groups + tenantAdmin from the AMBIENT request session, but ONLY
+  // when it belongs to this same principal.
   return ambientAccessOptsFor(oid);
 }
 

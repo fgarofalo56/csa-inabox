@@ -141,3 +141,71 @@ describe('#3698 the canvas collab layer is addressed with the item\'s real type'
       `a type was invented; saw ${JSON.stringify(seen.map((p) => p.itemType))}`).toBe(true);
   });
 });
+
+/**
+ * REVIEW FINDING — the link that actually carries the #3698 fix was NOT covered.
+ *
+ * The group above starts at `PipelineDesigner` and asserts it forwards the type
+ * it is HANDED. Nothing asserted what hands it that type, i.e.
+ * `pipeline-editor-core.tsx`'s `itemType={item.slug}`. Measured: swapping that
+ * one expression for `itemType={config.slug}` — the exact substitution the line's
+ * own comment warns against — left this file at 6/6 passing.
+ *
+ * The two values only diverge on a real delegation, so the fixture has to be one:
+ * `AdfPipelineEditor` hardcodes `config.slug = 'adf-pipeline'`
+ * (azure-services-editors.tsx:657), so mounting it with a `data-pipeline` ITEM
+ * gives `item.slug = 'data-pipeline'` ≠ `config.slug = 'adf-pipeline'`. That is
+ * the live shape: all three slugs share this editor while `c.itemType` stays the
+ * original, and the generic routes match `c.itemType` EXACTLY.
+ *
+ * Using `config.slug` here would not have fixed #3698 — it would have MOVED the
+ * 404 from the two aliases onto the head type. These specs fail on that.
+ */
+describe('#3698 the editor core hands the canvas the ITEM type, not the runtime slug', () => {
+  beforeEach(() => { canvasProps.length = 0; });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  /** Mount a delegate editor on a BOUND pipeline so the real canvas renders. */
+  async function mountDelegate(
+    itemSlug: string,
+    apiSlug: 'adf-pipeline' | 'synapse-pipeline',
+  ) {
+    installFetchMock({
+      [`/api/items/${apiSlug}/${ITEM_ID}/bind`]: () => ({
+        ok: true, bound: 'sap_extract', pipelines: [{ name: 'sap_extract' }],
+      }),
+      [`/api/items/${apiSlug}/${ITEM_ID}`]: () => ({ ok: true, spec: { properties: { activities: [] } } }),
+      '/api/loom/workspaces': () => ({ ok: true, workspaces: [] }),
+    });
+    const mod = await import('../azure-services-editors');
+    const Delegate = apiSlug === 'adf-pipeline' ? mod.AdfPipelineEditor : mod.SynapsePipelineEditor;
+    render(<Delegate item={makeItem(itemSlug, 'Pipeline')} id={ITEM_ID} />);
+    await waitFor(() => { expect(canvasProps.length).toBeGreaterThan(0); });
+    return canvasProps;
+  }
+
+  it('a data-pipeline item on the ADF runtime keeps data-pipeline (NOT the adf-pipeline apiSlug)', async () => {
+    const seen = await mountDelegate('data-pipeline', 'adf-pipeline');
+    const types = new Set(seen.map((p) => p.itemType));
+    expect(types.has('adf-pipeline'),
+      `core used config.slug — that just moves the 404 onto the head type; saw ${JSON.stringify([...types])}`).toBe(false);
+    expect(types.has('data-pipeline'),
+      `core did not forward the item's own slug; saw ${JSON.stringify([...types])}`).toBe(true);
+  });
+
+  it('a data-pipeline item on the SYNAPSE runtime keeps data-pipeline too (the second divergence)', async () => {
+    const seen = await mountDelegate('data-pipeline', 'synapse-pipeline');
+    const types = new Set(seen.map((p) => p.itemType));
+    expect(types.has('synapse-pipeline'),
+      `core used config.slug on the synapse delegate; saw ${JSON.stringify([...types])}`).toBe(false);
+    expect(types.has('data-pipeline')).toBe(true);
+  });
+
+  it('an adf-pipeline item on the ADF runtime keeps adf-pipeline (CONTROL — the two agree here)', async () => {
+    // Without this control the two specs above would also pass on a core that
+    // simply hard-coded 'data-pipeline'.
+    const seen = await mountDelegate('adf-pipeline', 'adf-pipeline');
+    expect(new Set(seen.map((p) => p.itemType)).has('adf-pipeline')).toBe(true);
+  });
+});
+

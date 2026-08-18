@@ -82,18 +82,21 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 // Azure-native runtime delegates (Contract B): when this unified editor is the
-// one mounted for a slug — `data-pipeline`, or `adf-pipeline` (the ONLY slug
-// that carries `aliasOf:'data-pipeline'` in the catalog, so the item page resolves
-// it to THIS editor with runtimePreset 'adf') — its 'adf'/'synapse' runtime paths
-// delegate to the SAME purpose-built editors so bind/run/save/validate/debug/
-// runs/triggers reuse the EXISTING `/api/items/{adf-pipeline|synapse-pipeline}/{id}/*`
-// routes (no new routes, no duplicated binding logic).
+// one mounted for a slug — `data-pipeline`, or one of the TWO slugs that carry
+// `aliasOf:'data-pipeline'` in the catalog (`adf-pipeline`, runtimePreset 'adf',
+// catalog/item-types/azure-data-factory.ts:12-13; and `synapse-pipeline`,
+// runtimePreset 'synapse', catalog/item-types/synapse-analytics.ts:100-101) —
+// its 'adf'/'synapse' runtime paths delegate to the SAME purpose-built editors
+// so bind/run/save/validate/debug/runs/triggers reuse the EXISTING
+// `/api/items/{adf-pipeline|synapse-pipeline}/{id}/*` routes (no new routes, no
+// duplicated binding logic).
 //
-// IMPORTANT — `synapse-pipeline` is NOT an alias of `data-pipeline`. Its catalog
-// entry has `runtimePreset:'synapse'` but no `aliasOf`, so the item page opens
-// `SynapsePipelineEditor` DIRECTLY; that editor's `{item,id}` signature does not
-// accept (and so ignores) runtimePreset. Back-compat for existing
-// adf-pipeline / synapse-pipeline / geo-pipeline instances still holds because
+// All three slugs therefore share ONE editor while their PERSISTED `c.itemType`
+// stays the original slug — which is the whole of #3698: the generic
+// `/api/items/[type]/[id]/…` routes match `c.itemType` EXACTLY, so the type
+// handed down to the canvas must be the ITEM'S slug, never this editor's
+// runtime-keyed `config.slug`. Back-compat for existing adf-pipeline /
+// synapse-pipeline / geo-pipeline instances holds because
 // `SynapsePipelineEditor` is PipelineEditorCore-backed — the same core this file
 // delegates to. 'fabric' keeps this file's existing body.
 import { AdfPipelineEditor, SynapsePipelineEditor } from './azure-services-editors';
@@ -298,14 +301,10 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   //    per no-fabric-dependency.md. 'synapse' is the Azure-native Synapse path.
   //    'fabric' is STRICTLY opt-in: selectable only when a Fabric workspace is
   //    bound, never auto-selected, never a gate. When a runtimePreset prop is
-  //    set, the selector is locked. In practice the only slug that reaches THIS
-  //    editor with a preset is `adf-pipeline` (aliasOf:'data-pipeline' → preset
-  //    'adf'); `synapse-pipeline` ALSO carries aliasOf:'data-pipeline' (preset
-  //    'synapse') and therefore reaches this editor too — an earlier revision of
-  //    this comment claimed it did not, which is contradicted by
-  //    catalog/item-types/synapse-analytics.ts. geo-pipeline (templateOf →
-  //    directly, so its preset never flows in here. geo-pipeline (templateOf →
-  //    'adf' preset + templateId) also reaches this editor and locks to ADF.
+  //    set, the selector is locked. Two slugs reach THIS editor with a preset,
+  //    both via `aliasOf:'data-pipeline'`: `adf-pipeline` (preset 'adf') and
+  //    `synapse-pipeline` (preset 'synapse'). geo-pipeline (templateOf → 'adf'
+  //    preset + templateId) also reaches this editor and locks to ADF.
   const [runtime, setRuntime] = useState<PipelineRuntime>(runtimePreset ?? DEFAULT_PIPELINE_RUNTIME);
   useEffect(() => { if (runtimePreset) setRuntime(runtimePreset); }, [runtimePreset]);
   const runtimeLocked = !!runtimePreset;
