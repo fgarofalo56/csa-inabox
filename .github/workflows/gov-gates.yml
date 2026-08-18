@@ -3,8 +3,28 @@ name: gov-gates
 # Fast gates-only re-verification (no exercise POST, so it never collides with a
 # running gov-exercise). Mints an admin loom_session and GETs /api/admin/gates,
 # printing the score + blocked list. Read-only.
+#
+# ── NOW RUNS AFTER EVERY GOV ROLL (#3730) ──────────────────────────────────
+# Commercial's roll lane validates what it shipped in the same run (live-URL
+# probe + in-VNet UAT gate). Gov had the verification lanes — this one,
+# gov-bff-verify — but nothing connected them to a roll, so they ran only when a
+# human remembered: last success 2026-07-30, nineteen days before #3730 was
+# filed. A roll nobody checks is how a bad Gov revision sits unnoticed.
+#
+# `workflow_run` and not a job inside gov-console-roll: this probes the LIVE
+# console over the public Front Door endpoint, and it must run AFTER that
+# workflow has finished re-locking the ACR and released its firewall lease.
+#
+# SAFE TO AUTO-TRIGGER because this workflow takes NO inputs. `workflow_dispatch: {}`
+# means there is no `default:` to silently become the empty string on a
+# non-dispatch trigger — the trap that froze deploy-fiab-commercial's nightly
+# reconcile. Everything this lane needs is in `env:` below.
 on:
   workflow_dispatch: {}
+  workflow_run:
+    workflows: ['gov-console-roll']
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -19,6 +39,14 @@ jobs:
     name: Gov gates score
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Only verify a roll that actually SHIPPED something. A failed roll has
+    # already reported itself and either rolled back or left the previous
+    # revision serving, so probing here would grade the OLD image and report it
+    # under the new commit's run — a receipt attached to the wrong artifact.
+    # A dispatch always proceeds: that is the on-demand path.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2
