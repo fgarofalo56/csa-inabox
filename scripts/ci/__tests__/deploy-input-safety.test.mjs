@@ -740,6 +740,102 @@ test('S8 CONTROL: shadowing is judged on the BOUND name, not on mentioning AZURE
   assert.deepEqual(s8Violations(YAML), []);
 });
 
+// ---------------------------------------------------------------------------
+// Third round — CO-OCCURRENCE IS NOT RECONCILIATION.
+//
+// Requiring the measurement and the bound name on one line still exempted a
+// step that merely USED both, and with two bindings, reconciling either one
+// exempted the step for both. A reconciliation is a COMPARISON.
+// ---------------------------------------------------------------------------
+
+/** Restore the #3701 shape with arbitrary `env:` lines and one extra body line. */
+function restoreShapeWith(envLines, bodyLine) {
+  assert.ok(ENV_ANCHOR.test(YAML), 'the ADMIN_SUB env anchor is gone');
+  const withEnv = YAML.replace(ENV_ANCHOR, `$1${envLines}`);
+  assert.notEqual(withEnv, YAML, 'the env mutation did not apply');
+  let out = stripShellRead(withEnv);
+  if (bodyLine) {
+    const before = out;
+    out = out.replace(
+      /(          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""\n)/,
+      `          ${bodyLine}\n$1`,
+    );
+    assert.notEqual(out, before, 'the body mutation did not apply');
+  }
+  return out;
+}
+
+const BIND_REGION = '          REGION: ${{ inputs.region }}\n';
+
+test('S8 MUTANT: merely USING both tokens on one line is not a reconciliation', () => {
+  for (const line of [
+    'DIAG="${AZURE_LOCATION}/${REGION}"',
+    'DIAG="${AZURE_LOCATION}${REGION:-x}"',
+    'echo_target="${REGION}" ; TAG="${AZURE_LOCATION}-${REGION}"',
+  ]) {
+    const problems = s8Violations(restoreShapeWith(BIND_REGION, line));
+    assert.equal(problems.length, 1,
+      `co-occurrence line \`${line}\` exempted the step: ${problems.join(' | ') || '(guard SILENT)'}`);
+    assert.match(problems[0], /Adopt the DLZ/);
+  }
+});
+
+test('S8 CONTROL: a genuine COMPARISON is still exempt, in both test syntaxes', () => {
+  for (const line of [
+    'if [ "$REGION" != "$AZURE_LOCATION" ]; then exit 1; fi',
+    'if [[ "$REGION" == "$AZURE_LOCATION" ]]; then :; fi',
+    'test "$REGION" = "$AZURE_LOCATION" || exit 1',
+  ]) {
+    assert.deepEqual(s8Violations(restoreShapeWith(BIND_REGION, line)), [],
+      `a real comparison was flagged: \`${line}\``);
+  }
+});
+
+test('S8 MUTANT: reconciling ONE of two bound variables does not exempt the other', () => {
+  const mutant = restoreShapeWith(
+    `${BIND_REGION}          OTHER: \${{ inputs.region }}\n`,
+    'if [ "$REGION" != "$AZURE_LOCATION" ]; then exit 1; fi',
+  );
+  const problems = s8Violations(mutant);
+  assert.equal(problems.length, 1,
+    `the unreconciled second binding was exempted: ${problems.join(' | ') || '(guard SILENT)'}`);
+});
+
+test('S8 MUTANT: a trailing COMMENT on the binding line cannot fake a pairing', () => {
+  // This is what the binding-line exclusion blocks. Without that clause the
+  // whole suite still passed, so the clause was load-bearing AND untested —
+  // exactly the shape that gets deleted later as redundant.
+  const mutant = restoreShapeWith(
+    '          REGION: ${{ inputs.region }} # reconciled against ${AZURE_LOCATION} via [ "$REGION" != x ]\n',
+    null,
+  );
+  const problems = s8Violations(mutant);
+  assert.equal(problems.length, 1,
+    `a comment on the binding line satisfied the exemption: ${problems.join(' | ') || '(guard SILENT)'}`);
+  assert.match(problems[0], /Adopt the DLZ/);
+});
+
+test('S8 MUTANT: a COMPARISON that never references the bound variable does not exempt it', () => {
+  // Pins the shell-REFERENCE clause on its own. Adding the comparison
+  // requirement made the earlier substring cases fail for a different reason,
+  // so reverting `new RegExp('\\$\\{?VAR\\b')` back to `l.includes(v)` stopped
+  // failing anything — two overlapping controls hiding each other's absence.
+  // Redundancy is not defence in depth unless each layer is pinned separately.
+  //
+  // Here the bound name `LOCATION` is a SUBSTRING of `AZURE_LOCATION`, and the
+  // line is a genuine comparison — but it compares the measurement against a
+  // literal and never mentions `$LOCATION`. Substring matching exempts it;
+  // reference matching does not.
+  const mutant = restoreShapeWith(
+    '          LOCATION: ${{ inputs.region }}\n',
+    'if [ "$AZURE_LOCATION" != "eastus2" ]; then :; fi',
+  );
+  const problems = s8Violations(mutant);
+  assert.equal(problems.length, 1,
+    `a comparison not naming the bound variable exempted the step: ${problems.join(' | ') || '(guard SILENT)'}`);
+  assert.match(problems[0], /Adopt the DLZ/);
+});
+
 test('S8 CONTROL: the env-binding extraction has a floor — it cannot silently stop matching', () => {
   // If ENV_BINDS_REGION_INPUT stopped matching, `boundVars` would be empty
   // everywhere, the pairing exemption would be unreachable, and S8 would narrow

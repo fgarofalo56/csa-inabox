@@ -482,17 +482,34 @@ export function checkSteps(yaml) {
      * So: the binding lines are excluded from the candidate set, and the bound
      * name must appear as a real shell REFERENCE (`$VAR` / `${VAR}`), not as a
      * substring of some longer identifier.
+     *
+     * THIRD ROUND — co-occurrence is not reconciliation. Requiring both tokens
+     * on one line still exempted a step that merely USED both:
+     *
+     *     DIAG="${AZURE_LOCATION}/${REGION}"          <- 0 violations, and the
+     *     node …/resolve-dlz-coordinates.mjs --region "$REGION"    step still
+     *                                                 trusts the empty input
+     *
+     * and with two bindings, reconciling EITHER exempted the step for BOTH.
+     * A reconciliation is a COMPARISON, so the line must carry a comparison
+     * token, and EVERY bound variable must have one of its own.
      */
+    const COMPARISON = /(\[\[|\[ |\btest\b|!=|==|-ne\b|-eq\b)/;
     const reconciles = (s) => {
       if (REGION_RECONCILIATION_MARKERS.some((m) => wiring(s).includes(m))) return true;
       const vars = boundVars(s);
       if (vars.length === 0) return false;
-      const refs = vars.map((v) => new RegExp(`\\$\\{?${v}\\b`));
-      return wiringLines(s).some(
+      const candidates = wiringLines(s).filter(
         (l) => !ENV_BINDS_REGION_INPUT.test(l)
           && l.includes(REGION_MEASUREMENT_VAR)
-          && refs.some((re) => re.test(l)),
+          && COMPARISON.test(l),
       );
+      // EVERY bound variable, not just one: a step binding two names and
+      // comparing one of them still trusts the other.
+      return vars.every((v) => {
+        const ref = new RegExp(`\\$\\{?${v}\\b`);
+        return candidates.some((l) => ref.test(l));
+      });
     };
     if (readers.length === 0) {
       problems.push(
