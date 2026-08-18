@@ -33,6 +33,17 @@ name: gov-provision-dataplane-images
 # that path performs only discovery + `az deployment group what-if`, touches
 # nothing, and is the cheapest way to validate the coordinate resolution.
 #
+# ── AND WHY #3730 DID NOT AUTOMATE IT ──────────────────────────────────────
+# #3730 gave Gov a continuous-deploy chain (gov-console-roll on `push`,
+# gov-build-images nightly, gov-gates + gov-bff-verify on `workflow_run`). This
+# lane was deliberately left out of it. Putting an automatic trigger on a
+# workflow that has NEVER RUN would not close a drift gap — it would convert an
+# invisible manual gap into a recurring automated failure against a sovereign
+# estate, on a path whose own header says every step is unproven. The correct
+# sequence is: one `apply=false` dispatch, then one `apply=true` dispatch that
+# posts a real log, and only then a trigger. Until that receipt exists, this
+# staying manual is the honest state, not a missed file.
+#
 # ── TAG CONTRACT (round-3 blocker fix) ───────────────────────────────────────
 # The GOV TEMPLATE pulls `<acr>/loom-duckdb:${appImageTags.duckdb}`, and both
 # platform/fiab/bicep/params/gcc-high.bicepparam and .../il5.bicepparam resolve
