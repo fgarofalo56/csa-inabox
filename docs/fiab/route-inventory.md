@@ -2409,7 +2409,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-175 function(s) across 80 module(s) reach an owner / workspace-ACL
+176 function(s) across 80 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2493,7 +2493,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/foundry/ontology-resolver.ts` | `resolveOntologyObjectForGrounding` |
 | `apps/fiab-console/lib/insights/digest-store.ts` | `getDigest`, `requestRunNow` |
 | `apps/fiab-console/lib/semantic-model/calc-objects.ts` | `persistCalcToCosmos` |
-| `apps/fiab-console/lib/semantic-model/model-context.ts` | `loadModelContext` |
+| `apps/fiab-console/lib/semantic-model/model-context.ts` | `contextFromContentItem`, `loadModelContext` |
 | `apps/fiab-console/lib/semantic-model/modeling-objects.ts` | `handleCalculatedTablePost`, `handleDateTableMarkPost`, `handleMeasurePost`, `handleWhatIfPost`, `readLoomModelState` |
 | `apps/fiab-console/lib/semantic-model/plan-metrics.ts` | `persistPlanMetricsToCosmos` |
 

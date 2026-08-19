@@ -33,7 +33,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getSession } from '@/lib/auth/session';
 import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import {
@@ -50,6 +49,7 @@ import { readModelState, writeModelState } from '../../../_lib/model-store';
 import {
   aasXmlaConfig, command as executeXmlaCommand, AasError,
 } from '@/lib/azure/aas-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -286,10 +286,8 @@ async function persistDescriptions(
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const tenantId = session.claims.oid;
 
@@ -313,12 +311,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     existingTableDescriptions: state.tableDescriptions || [],
     ...(mctx.notice ? { notice: mctx.notice } : {}),
   });
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const tenantId = session.claims.oid;
   const body = await req.json().catch(() => ({} as any));
@@ -382,4 +378,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // apply:true with no operator overrides → generate AND persist.
   const applied = await persistDescriptions(id, workspaceId, tenantId, mctx.modelName, proposals.tables, proposals.measures);
   return NextResponse.json({ ok: true, applied: true, ...applied, proposals, modelName: mctx.modelName });
-}
+});

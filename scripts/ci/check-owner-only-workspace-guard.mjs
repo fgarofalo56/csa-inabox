@@ -65,6 +65,20 @@ const SELF = 'apps/fiab-console/lib/auth/workspace-guard.ts';
  * modify a baselined file without migrating it. Keep SHORT.
  */
 const TOUCH_EXEMPT = new Map([
+  // #3549/#3551 touched this file for ONE pure function, `specFromItem`, which
+  // performs no I/O and takes no authorization decision: it reads the MLV
+  // definition out of an ALREADY-LOADED item, and the change adds the
+  // `state.content.spec` / `state.content.mlv` keys the install-time provisioner
+  // writes (materialized-lake-view.ts:29) so a bundle-installed MLV does not
+  // open with an empty definition. `loadMlvItem` — the baselined owner-only
+  // point read, and the only authorization code in the file — is untouched, and
+  // migrating it to `authorizeItemWorkspace` WIDENS access (it would newly admit
+  // tenant admins and shared-ACL members) across the six `/api/items/
+  // materialized-lake-view/*` routes that depend on it. That is a real
+  // authorization change and needs its own review and tests, not a drive-by
+  // inside a content-reachability fix.
+  ['apps/fiab-console/app/api/items/materialized-lake-view/_lib/load.ts',
+   '#3549/#3551: pure specFromItem only; migrating loadMlvItem WIDENS access for 6 MLV routes — separate PR'],
   // GHSA-v2g8-gp3r-rg4r touched this file for +10 LOC that are UNRELATED to the
   // baselined line: `createDatabase` now reports whether ARM returned 201
   // (created) or 200 (updated), so a caller cannot bind a database that already
