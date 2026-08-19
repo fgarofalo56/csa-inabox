@@ -16,7 +16,7 @@ import {
   type PbiTable, type PbiRelationship,
 } from '@/lib/azure/powerbi-client';
 import {
-  isLoomContentId, cosmosIdFromLoomId, loadContentBackedItem, semanticModelDetailFromContent,
+  isLoomContentId, cosmosIdFromLoomId, readContentBackedItem, semanticModelDetailFromContent,
 } from '@/app/api/items/_lib/pbi-content-fallback';
 import {
   type SmModelState, type SmStoredRelationship,
@@ -134,30 +134,97 @@ function pbiRelToCanvas(rels: PbiRelationship[]): ModelRelationship[] {
     }));
 }
 
+/**
+ * Build the model context from a Cosmos-backed item's `state.content`.
+ *
+ * Three outcomes, deliberately not two:
+ *   • a context      — the item resolved and carries a semantic model;
+ *   • `null`         — no such owned item, or it has no model content. The
+ *                      caller may legitimately try Power BI next;
+ *   • `{ readFailed }` — the Cosmos read THREW. The caller must NOT treat that
+ *                      as "no Loom item here" (#3549/#3551): doing so sends a
+ *                      Loom-native model to the live Power BI branch, which with
+ *                      no workspace bound renders "Select a Power BI workspace"
+ *                      over an item that has nothing to do with Power BI — a
+ *                      Fabric-flavoured gate on the Azure-native default path
+ *                      (no-fabric-dependency.md), produced by reporting an
+ *                      UNKNOWN as a NEGATIVE.
+ */
+async function contextFromContentItem(
+  cosmosItemId: string,
+  tenantId: string,
+): Promise<ModelContext | { readFailed: string } | null> {
+  const res = await readContentBackedItem(cosmosItemId, 'semantic-model', tenantId);
+  if (res.outcome === 'read-failed') return { readFailed: res.error };
+  if (res.outcome === 'not-found') return null;
+  const item = res.item;
+  const built = semanticModelDetailFromContent(item);
+  if (!built) return null;
+  const tables: ModelTable[] = (built.tables || []).map((t: any) => ({
+    id: t.name, schema: '', name: t.name,
+    columns: (t.columns || []).map((c: any) => ({ name: c.name, type: c.dataType })),
+  }));
+  const baseRels: ModelRelationship[] = (built.relationships || [])
+    .filter((r: any) => r.fromTable && r.fromColumn && r.toTable && r.toColumn)
+    .map((r: any, i: number) => ({
+      id: `base:${r.name || i}`,
+      name: String(r.name || `rel${i}`).replace(/[^A-Za-z0-9_]/g, '_'),
+      fromTable: r.fromTable, fromColumn: r.fromColumn, toTable: r.toTable, toColumn: r.toColumn,
+      cardinality: 'many-to-one' as Cardinality,
+      crossFilter: /both/i.test(r.crossFilteringBehavior || '') ? 'both' as CrossFilter : 'single' as CrossFilter,
+      active: true, source: 'cosmos' as const, editable: false,
+    }));
+  const measures = (built.tables || []).flatMap((t: any) =>
+    (t.measures || [])
+      .filter((m: any) => m && m.name)
+      .map((m: any) => ({ name: String(m.name), expression: m.expression, table: t.name })));
+  return { modelName: item.displayName || 'Semantic model', tables, baseRels, liveDataset: false, measures };
+}
+
 export async function loadModelContext(id: string, workspaceId: string | null, tenantId: string): Promise<ModelContext> {
   // Loom content-backed model (default, no Fabric/Power BI required).
+  //
+  // #3549/#3551 — WHY THIS IS NOT GATED ON `isLoomContentId(id)`.
+  // `loom:<cosmosItemId>` is a LIST-ROUTE vocabulary: a list route mints it so
+  // the editor can auto-pick a bundle item that has no live Power BI object yet
+  // (see _lib/loom-content-id.ts). But the semantic-model editor is normally
+  // opened from the workspace item list, which threads the item's BARE Cosmos
+  // id — and `LoomNativeModelView` then calls
+  // `/api/items/semantic-model/<bare id>/model` with no `?workspaceId=` at all.
+  //
+  // Gating the content read on the prefix therefore sent every bundle-installed
+  // model down the live-Power-BI branch below, which has no dataset for that id
+  // and returns ZERO tables. Live on 2026-08-18: "Real-Time Analytics Semantic
+  // Model" showed the install banner "2 tables · 4 measures" over a body reading
+  // "This Loom-native tabular model has no tables yet", with every storage
+  // action disabled. The content was never missing — the install stamps it onto
+  // `state.content` (app/api/apps/[id]/install/route.ts) and the provisioner
+  // counts it to report `created`. It was never READ.
+  //
+  // Resolving by the bare id is safe and cannot capture a Power BI dataset:
+  // `readContentBackedItem` matches on `c.itemType = 'semantic-model'` AND
+  // verifies parent-workspace ownership, and a PBI dataset GUID is not a Loom
+  // item id. When nothing resolves we fall through to the live path unchanged.
+  const contentCtx = await contextFromContentItem(cosmosIdFromLoomId(id), tenantId);
+  if (contentCtx && 'readFailed' in contentCtx) {
+    // R7 — say what we could not establish, and do NOT fall through to Power BI
+    // and blame a missing workspace for a Cosmos failure.
+    return {
+      modelName: 'Semantic model',
+      tables: [], baseRels: [], measures: [],
+      liveDataset: false,
+      notice:
+        'Could not read this model\'s definition from Loom storage, so its tables and measures are not shown. '
+        + `This is a storage read failure, not an empty model: ${contentCtx.readFailed}. Retry in a moment; if it `
+        + 'persists, check the Console managed identity\'s Cosmos data-plane role. (No Power BI / Fabric workspace '
+        + 'is required for this model.)',
+    };
+  }
+  if (contentCtx) return contentCtx;
   if (isLoomContentId(id)) {
-    const item = await loadContentBackedItem(cosmosIdFromLoomId(id), 'semantic-model', tenantId);
-    const built = item ? semanticModelDetailFromContent(item) : null;
-    const tables: ModelTable[] = (built?.tables || []).map((t: any) => ({
-      id: t.name, schema: '', name: t.name,
-      columns: (t.columns || []).map((c: any) => ({ name: c.name, type: c.dataType })),
-    }));
-    const baseRels: ModelRelationship[] = (built?.relationships || [])
-      .filter((r: any) => r.fromTable && r.fromColumn && r.toTable && r.toColumn)
-      .map((r: any, i: number) => ({
-        id: `base:${r.name || i}`,
-        name: String(r.name || `rel${i}`).replace(/[^A-Za-z0-9_]/g, '_'),
-        fromTable: r.fromTable, fromColumn: r.fromColumn, toTable: r.toTable, toColumn: r.toColumn,
-        cardinality: 'many-to-one' as Cardinality,
-        crossFilter: /both/i.test(r.crossFilteringBehavior || '') ? 'both' as CrossFilter : 'single' as CrossFilter,
-        active: true, source: 'cosmos' as const, editable: false,
-      }));
-    const measures = (built?.tables || []).flatMap((t: any) =>
-      (t.measures || [])
-        .filter((m: any) => m && m.name)
-        .map((m: any) => ({ name: String(m.name), expression: m.expression, table: t.name })));
-    return { modelName: item?.displayName || 'Semantic model', tables, baseRels, liveDataset: false, measures };
+    // A `loom:` id that resolved no content is still Loom-native by construction
+    // — never fall through to Power BI for it (no-fabric-dependency.md).
+    return { modelName: 'Semantic model', tables: [], baseRels: [], liveDataset: false, measures: [] };
   }
 
   // Live Power BI / Fabric dataset (opt-in). Read tables + relationships; any

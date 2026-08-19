@@ -14,11 +14,12 @@
  *   2. apply that stage's deployment rules (data-source / parameter overrides)
  *      to the base ProvisionTarget;
  *   3. promote the (rebound) definition into the target workspace — updating the
- *      paired item or creating a new one;
+ *      paired item or creating a new one, and WRITING the definition onto that
+ *      item BEFORE step 4 (see the note at the write: a provisioner that
+ *      verifies its own content must not be shown the previous promotion's);
  *   4. re-run the SAME real provisioner the install path uses against the
  *      patched target, so the model/report/etc. is materialized in Test/Prod;
- *   5. persist the rebound definition + provision receipt and write a history
- *      record (the receipt).
+ *   5. persist the provision receipt and write a history record.
  *
  * Cosmos + the Azure-native provisioner backends only — no Fabric / Power BI.
  */
@@ -30,7 +31,7 @@ import { computePipelineDiff, pairKey } from '@/lib/install/pipeline-compare';
 import {
   stageValueSet, collectStageVariableValues, rebindContent,
 } from '@/lib/install/pipeline-variables';
-import { pipelineHistoryContainer } from '@/lib/azure/cosmos-client';
+import { pipelineHistoryContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import type { ProvisionResult } from '@/lib/install/provisioners/types';
 import type { VarDef } from '@/lib/variables/resolve';
 import type { LoomPipeline, LoomPipelineStage, LoomPipelineHistoryRecord } from '@/lib/types/loom-pipeline';
@@ -194,7 +195,33 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
       steps.push(`[${src.displayName}] created target item ${targetItemId} in ${targetStageId}.`);
     }
 
-    // 3) re-run the real provisioner against the patched (rule-applied) target with the rebound content.
+    // 3) PERSIST THE PROMOTED DEFINITION BEFORE PROVISIONING.
+    //
+    // #3549/#3551 — ORDERING IS LOAD-BEARING. This write used to happen only
+    // AFTER the provisioner ran (it was step 4). For a target item that already
+    // existed, that meant the provisioner saw the target's PREVIOUS content —
+    // whatever the last promotion left there, or nothing at all for an item
+    // created outside this path. A provisioner that verifies its content landed
+    // on the item (semantic-model's read-back) therefore compared the SOURCE
+    // stage's shape against the TARGET's stale document and reported
+    // `remediation`, flipping `anyFailed` and recording the stage as
+    // failed/partial — while the write below then landed the correct content,
+    // so the promotion had actually SUCCEEDED and a re-run came back green.
+    //
+    // Writing the definition first makes the item the provisioner inspects the
+    // item the promotion is actually creating, which is what every provisioner
+    // has always assumed. The provision receipt is a SEPARATE, later write
+    // (step 5) because it is a genuinely later fact.
+    const promotedState: Record<string, unknown> = {
+      ...(src.state || {}),
+      ...(content !== rawContent ? { content } : {}),
+      deployedFrom: src.id,
+      deployedFromStage: sourceStageId,
+      deployedAt: new Date().toISOString(),
+    };
+    await updateOwnedItem(targetItemId, src.itemType, tenantId, { state: promotedState });
+
+    // 4) re-run the real provisioner against the patched (rule-applied) target with the rebound content.
     let result: ProvisionResult | undefined;
     const provisioner = PROVISIONERS[src.itemType];
     if (provisioner) {
@@ -219,17 +246,38 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
       anyCreated = true;
     }
 
-    // 4) persist the rebound definition + provision receipt onto the target item.
-    await updateOwnedItem(targetItemId, src.itemType, tenantId, {
-      state: {
-        ...(src.state || {}),
-        ...(content !== rawContent ? { content } : {}),
-        deployedFrom: src.id,
-        deployedFromStage: sourceStageId,
-        deployedAt: new Date().toISOString(),
-        ...(result ? { provisionResult: result } : {}),
-      },
-    });
+    // 5) record the provision receipt onto the target item.
+    //
+    // A DIRECT container write, not `updateOwnedItem`. That helper is not a bare
+    // write: it also snapshots version history, upserts the search doc, mirrors
+    // the data-product + governance docs, and emits `item.updated`
+    // (`item-crud.ts:591-626`). Splitting one call into two therefore doubled
+    // every one of those per promoted item — two version-history rows and two
+    // `item.updated` webhook events for a single promotion. The receipt is
+    // metadata ABOUT the write in step 3, not a second authoring event, so it
+    // takes the same direct-replace path the sibling receipt-stamp in
+    // `app/api/apps/[id]/install/route.ts` uses for exactly this reason.
+    //
+    // Only when a provisioner ran — for a Cosmos-only type step 3 already IS the
+    // promotion. Best-effort: a failed receipt stamp must not undo a promotion
+    // that succeeded, and the definition is already durable from step 3.
+    if (result) {
+      try {
+        const items = await itemsContainer();
+        const { resource: cur } = await items.item(targetItemId, tgtWs).read<WorkspaceItem>();
+        if (cur) {
+          await items.item(cur.id, cur.workspaceId).replace<WorkspaceItem>({
+            ...cur,
+            state: { ...(cur.state || {}), provisionResult: result },
+            updatedAt: new Date().toISOString(),
+          });
+        } else {
+          steps.push(`[${src.displayName}] provision receipt not stamped: target item ${targetItemId} not readable.`);
+        }
+      } catch (e: any) {
+        steps.push(`[${src.displayName}] provision receipt not stamped (${e?.message || String(e)}); the promoted definition is unaffected.`);
+      }
+    }
     deployedItemIds.push(targetItemId);
   }
 
