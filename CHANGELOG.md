@@ -25,6 +25,25 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.99.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.99.0...csa-inabox-v0.99.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **bicep:** Weave PG deployed in GCC-High despite postgresQuotaAvailable=false — weavePgLocalActive never consulted the parity gate (refs [#3449](https://github.com/fgarofalo56/csa-inabox/issues/3449)) ([#3711](https://github.com/fgarofalo56/csa-inabox/issues/3711)) ([7a13240](https://github.com/fgarofalo56/csa-inabox/commit/7a1324041917f071e94d001aa9a732dbc23c159c))
+* **ci:** the three GCC-High ARM leaves both deploy-fiab-gcch runs reported as 'unknown' (refs [#3449](https://github.com/fgarofalo56/csa-inabox/issues/3449)) ([#3710](https://github.com/fgarofalo56/csa-inabox/issues/3710)) ([47151ef](https://github.com/fgarofalo56/csa-inabox/commit/47151ef6958118c9dbe9ed83fccfd47f5a25aaa0))
+* **deploy:** the [#3676](https://github.com/fgarofalo56/csa-inabox/issues/3676) estate gate asked the Actions API and missed the revert it was written for ([#3795](https://github.com/fgarofalo56/csa-inabox/issues/3795)) ([528b01a](https://github.com/fgarofalo56/csa-inabox/commit/528b01a0408b41815ab93bfedc1c02fab7c6c656))
+* **deploy:** the three ARM leaves that have failed every GCC-High apply — an ungated Postgres PUT, an estate literal, and a stopped ADX cluster (refs [#3754](https://github.com/fgarofalo56/csa-inabox/issues/3754)) ([#3779](https://github.com/fgarofalo56/csa-inabox/issues/3779)) ([83e7cab](https://github.com/fgarofalo56/csa-inabox/commit/83e7cab61e8c978de3352b21b05551e4bb85d7a6))
+* **install:** app-installed content was written and counted but never READ ([#3790](https://github.com/fgarofalo56/csa-inabox/issues/3790)) ([ef2cd31](https://github.com/fgarofalo56/csa-inabox/commit/ef2cd313e100caaaa8f399724d1ed387c3a2d364))
+* **readiness:** a 6s ARM-probe timeout was reported as "the Console cannot reach management.azure.com", blocking Core platform ([#3729](https://github.com/fgarofalo56/csa-inabox/issues/3729)) ([#3791](https://github.com/fgarofalo56/csa-inabox/issues/3791)) ([82ee505](https://github.com/fgarofalo56/csa-inabox/commit/82ee505078f4574a17459f2fa16fc31007510f5d))
+* **security:** the caller's oid used as a tenant/resource partition key — swept repo-wide and guarded ([#3792](https://github.com/fgarofalo56/csa-inabox/issues/3792)) ([7bfd2ef](https://github.com/fgarofalo56/csa-inabox/commit/7bfd2ef02c1e645849b65dafff4dfc2d0c6808ce))
+* **setup:** lz-rbac bound 'Contributor' to a GUID that is not Contributor, so every automatic ARM grant it emitted was invalid (refs [#3608](https://github.com/fgarofalo56/csa-inabox/issues/3608)) ([#3709](https://github.com/fgarofalo56/csa-inabox/issues/3709)) ([150d293](https://github.com/fgarofalo56/csa-inabox/commit/150d2937336415545a771fe12f0d7b2fba2093d8))
+
+
+### Documentation
+
+* track the root CLAUDE.md (never committed) and fix a vitest receipt that under-measured ([#3800](https://github.com/fgarofalo56/csa-inabox/issues/3800)) ([e319bbf](https://github.com/fgarofalo56/csa-inabox/commit/e319bbf514f2379a48b547d082b7dd34f6719e94))
+
 ## [0.99.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.12...csa-inabox-v0.99.0) (2026-08-19)
 
 
