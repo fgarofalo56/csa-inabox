@@ -97,14 +97,29 @@ async function loadBulkContext(
   } catch { /* no owned model-store item — measures stay empty */ }
 
   // Tables — Loom content-backed (default, no Fabric).
-  if (isLoomContentId(id)) {
+  //
+  // #3549/#3551 — resolved by the BARE Cosmos id, not only behind the synthetic
+  // `loom:` list-route prefix. The editor opens a model by its own item id, so
+  // gating this on the prefix left every bundle-installed model describing ZERO
+  // tables here while its install receipt reported them created. Same defect,
+  // same file family as `lib/semantic-model/model-context.ts`; fixed the same
+  // way so the two cannot drift. A Power BI dataset GUID resolves no Cosmos
+  // `semantic-model` item, so the live path below is unaffected.
+  {
     const item = await loadContentBackedItem(cosmosIdFromLoomId(id), 'semantic-model', tenantId);
     const built = item ? semanticModelDetailFromContent(item) : null;
-    const tables: BulkTable[] = (built?.tables || []).map((t: any) => ({
-      name: t.name,
-      columns: (t.columns || []).map((c: any) => String(c.name)),
-    }));
-    return { modelName: item?.displayName || 'Semantic model', tables, measures, liveDataset: false };
+    if (built) {
+      const tables: BulkTable[] = (built.tables || []).map((t: any) => ({
+        name: t.name,
+        columns: (t.columns || []).map((c: any) => String(c.name)),
+      }));
+      return { modelName: item?.displayName || 'Semantic model', tables, measures, liveDataset: false };
+    }
+    if (isLoomContentId(id)) {
+      // A `loom:` id is Loom-native by construction — never fall through to
+      // Power BI for it (no-fabric-dependency.md).
+      return { modelName: item?.displayName || 'Semantic model', tables: [], measures, liveDataset: false };
+    }
   }
 
   // Live Power BI / Fabric dataset (opt-in). Requires a workspace; degrade

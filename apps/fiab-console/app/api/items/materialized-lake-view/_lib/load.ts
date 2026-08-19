@@ -35,8 +35,27 @@ export async function loadMlvItem(itemId: string, tenantId: string): Promise<Wor
   return item;
 }
 
-/** Extract the saved MlvSpec from an item's state (or null). */
+/**
+ * Extract the saved MlvSpec from an item's state (or null).
+ *
+ * #3549/#3551 — READS THE BUNDLE SHAPE TOO. `state.spec` is the shape the
+ * editor's own refresh route persists, but an MLV installed from an app bundle
+ * has its definition stamped at `state.content` by
+ * `app/api/apps/[id]/install/route.ts`, and the install-time provisioner reads
+ * exactly `content.spec || content.mlv`
+ * (`lib/install/provisioners/materialized-lake-view.ts`). Reading only
+ * `state.spec` here meant a bundle-installed MLV could be materialized on the
+ * lake, reported `created`, and then open with NO definition — the same
+ * "install claims content the editor cannot see" defect measured live on five
+ * other item types. Preferring `state.spec` keeps user edits winning over the
+ * bundle template; the bundle shape is the fallback, matching the provisioner
+ * key-for-key so the two cannot drift.
+ */
 export function specFromItem(item: WorkspaceItem | null): MlvSpec | null {
-  const s = (item?.state as any)?.spec;
-  return s && typeof s === 'object' ? (s as MlvSpec) : null;
+  const st = item?.state as any;
+  const candidates = [st?.spec, st?.content?.spec, st?.content?.mlv];
+  for (const c of candidates) {
+    if (c && typeof c === 'object') return c as MlvSpec;
+  }
+  return null;
 }

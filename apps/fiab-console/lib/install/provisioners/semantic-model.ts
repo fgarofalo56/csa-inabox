@@ -43,6 +43,7 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
+import { confirmContentReadable } from './_content-readback';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
@@ -491,6 +492,15 @@ async function provisionViaPowerBi(input: any, steps: string[]): Promise<Provisi
  * or a report queries the model. No Power BI / Fabric / Analysis Services
  * workspace is required (no-fabric-dependency.md). "Provisioning" here validates
  * the model shape + records the backing data source so the model is queryable.
+ *
+ * #3549/#3551 — THAT FIRST SENTENCE IS NOW CHECKED, NOT ASSUMED. The write it
+ * depends on happens in a different module (`app/api/apps/[id]/install/route.ts`
+ * stamps `state.content` at item creation). Until this read-back existed, this
+ * function could count the bundle's tables, report `created` with those counts,
+ * and be silently wrong about whether the editor would ever see them — the
+ * live 2026-08-18 symptom of a "2 tables · 4 measures" banner over an editor
+ * reading "no tables yet". A lost read-back is now a retryable remediation, not
+ * a green install (deploy-integrity.md R6).
  */
 async function provisionLoomNative(input: any, steps: string[]): Promise<ProvisionResult> {
   const content = input.content as any;
@@ -512,10 +522,52 @@ async function provisionLoomNative(input: any, steps: string[]): Promise<Provisi
     ? `${input.target.warehouseServer}/${input.target.warehouseDatabase || ''}`
     : (input.target.synapseWorkspace || input.target.adlsAccount || 'the installed warehouse/lakehouse');
   steps.push(`Loom-native tabular model: ${tables.length} table(s), ${measures} measure(s), backed by ${backing}. Measures evaluate live over the warehouse via SQL — no Power BI / Fabric workspace required.`);
+
+  // Confirm the editor can actually READ the model this receipt is about to
+  // claim. The predicate asserts the SAME table count the receipt reports, so a
+  // content bag that lost its tables between item creation and here cannot pass
+  // a truthiness check and be reported as installed.
+  const readback = await confirmContentReadable(
+    { cosmosItemId: input.cosmosItemId, workspaceId: input.workspaceId },
+    'semantic-model',
+    (c) => Array.isArray(c?.tables) && c.tables.length === tables.length,
+    steps,
+  );
+  if (!readback.ok) {
+    steps.push(
+      `The Loom-native model definition could not be read back from the item after ` +
+      `${readback.attempts} attempt(s): ${readback.error}. Not reporting this model as installed — ` +
+      'the editor reads its tables/measures from that item and would open empty.',
+    );
+    return resolveInfraResidual(
+      readback.cause ?? readback.error,
+      'Re-run the app install for this item once the Cosmos item is readable — the install is idempotent and ' +
+      're-stamps the same model definition. If it keeps failing, confirm the Console managed identity holds ' +
+      '"Cosmos DB Built-in Data Contributor" on the Loom Cosmos account and that the items container is reachable ' +
+      'from the Container App subnet. (No Microsoft Fabric or Power BI workspace is involved.)',
+      {
+        reason: `The semantic model's ${tables.length} table(s) were validated but could not be confirmed on the workspace item.`,
+        link: loomDocUrl('fiab/operations/app-install-provisioning'),
+        steps,
+        secondaryIds: {
+          backend: 'loom-native',
+          tables: String(tables.length),
+          measures: String(measures),
+          contentReadable: 'false',
+        },
+      },
+    );
+  }
+
   return {
     status: 'created',
     resourceId: input.cosmosItemId,
-    secondaryIds: { backend: 'loom-native', tables: String(tables.length), measures: String(measures) },
+    secondaryIds: {
+      backend: 'loom-native',
+      tables: String(tables.length),
+      measures: String(measures),
+      contentReadable: 'true',
+    },
     steps,
   };
 }
