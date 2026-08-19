@@ -1762,14 +1762,49 @@ jobs:
       # re-pin above narrows the race but cannot close it (a roll can land while
       # ARM is mid-apply), so the last line of defence has to be detection.
       #
-      # THREE WAYS IT FAILS, ALL LOUD:
+      # ── AND ON 2026-08-19 THIS STEP RAN, PASSED, AND MISSED A REVERT ───────
+      #
+      # It reported: "0 run(s) completed in that window, none with a successful
+      # roll job". At that same moment the Container App's revision history read:
+      #
+      #   0000781  2026-08-19T05:46:46Z  loom-console:83e7cab6…
+      #   0000782  2026-08-19T07:04:56Z  loom-console:150d2937…  <- roll 32225337320
+      #   0000783  2026-08-19T07:10:19Z  loom-console:83e7cab6…  <- this apply
+      #
+      # Roll 32225337320 had COMPLETED at 07:11:02Z with its `Roll image +
+      # validate live URL` job `success`; this step queried at 07:14:52Z, 3m50s
+      # later, and its population came back empty. Replaying the identical query
+      # + jq filter today returns that run as the single candidate and drives
+      # the same code straight to `regression`. The DECISION was never wrong.
+      # The POPULATION was.
+      #
+      # Why the Actions API omitted it is NOT established and nothing here
+      # asserts a cause. The design error is what is established: this gate
+      # asked a third-party, eventually-consistent index a question about OUR
+      # estate, and the estate held a timestamped answer the whole time.
+      #
+      # SO THE ESTATE IS NOW THE PRIMARY WITNESS. `az containerapp revision
+      # list` carries one timestamped row per intermediate state, which is the
+      # only instrument that can tell "never moved" apart from "moved forward
+      # and was moved back" — the exact two-point-sampling error that produced
+      # this issue's premature closure. It needs no token and no Actions API and
+      # has no consistency window to lose a writer in. The Actions-API
+      # comparison is KEPT as corroboration and attribution; the revision read
+      # is STRICTLY ADDITIVE and can only turn an OK into a failure.
+      #
+      # FIVE WAYS IT FAILS, ALL LOUD:
+      #   - a revision created inside this apply's window carries a tag other
+      #     than the one this apply wrote, and this apply's revision is the
+      #     newest — i.e. we overwrote another writer (the incident);
       #   - the estate is not on the SHA the last effective roll shipped;
       #   - loom-console's running image cannot be read;
+      #   - the revision history cannot be read, or a revision inside the window
+      #     cannot be placed in time or carries no comparable tag;
       #   - the roll history cannot be read, or the run that shipped cannot be
       #     resolved to a SHA.
-      # The last two are UNKNOWN, and UNKNOWN fails the step. "I could not look"
-      # spent as "nothing is wrong" is the collapse deploy-integrity R7 forbids
-      # and the one this repo keeps re-finding.
+      # Every "cannot" above is UNKNOWN, and UNKNOWN fails the step. "I could
+      # not look" spent as "nothing is wrong" is the collapse deploy-integrity
+      # R7 forbids, and it is what the empty population above silently did.
       #
       # IT ASKS THE JOBS, NOT THE RUN. A roll run can conclude SUCCESS having
       # rolled NOTHING — run 32006479915 (2026-08-17T07:35Z) is eight seconds
@@ -1789,8 +1824,8 @@ jobs:
       # exact roll dispatch that puts the estate back.
       #
       # Decision logic + tests: scripts/ci/reconcile-policy.mjs
-      # (selectLastConsoleRoll / decideEstateRegression / parseRollRunTitle) and
-      # scripts/ci/__tests__/roll-race.test.mjs.
+      # (selectRevisionOverwrite / selectLastConsoleRoll / decideEstateRegression
+      # / parseRollRunTitle) and scripts/ci/__tests__/roll-race.test.mjs.
       - name: Estate must not be BEHIND the last successful roll (#3676)
         id: estate_behind
         if: always() && steps.provision.conclusion != 'skipped'
@@ -1806,8 +1841,11 @@ jobs:
           ROLLS="$TMP/console-rolls.json"
           ROLL_ERR="$TMP/console-rolls.err"
           SHOW_ERR="$TMP/console-show.err"
+          REVS="$TMP/console-revisions.json"
+          REV_ERR="$TMP/console-revisions.err"
           : > "$ROLL_ERR"
           : > "$SHOW_ERR"
+          : > "$REV_ERR"
           trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
 
           # A run that wrote no console image cannot have moved the estate, and
@@ -1818,8 +1856,10 @@ jobs:
           if [ -z "${APPLIED_TAG:-}" ]; then
             node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
               --applied-tag "" \
+              --measured-at "${MEASURED_AT:-}" \
               --read-error "not read: this run applied no loom-console image tag" \
-              --rolls-error "not read: this run applied no loom-console image tag"
+              --rolls-error "not read: this run applied no loom-console image tag" \
+              --revisions-error "not read: this run applied no loom-console image tag"
             exit $?
           fi
 
@@ -1831,6 +1871,35 @@ jobs:
           set -e
           IMAGE="$(printf '%s' "$IMAGE" | tr -d '\r')"
           IMAGE="${IMAGE%%$'\n'*}"
+
+          # ---- WHAT DID THE ESTATE ITSELF DO DURING THE APPLY? ----------------
+          # THE READ THAT WAS MISSING ON 2026-08-19. `az containerapp show`
+          # answers "what is running now", which is a two-point sample: it
+          # cannot distinguish "never moved" from "moved forward and was moved
+          # back". The revision list carries a TIMESTAMP PER INTERMEDIATE STATE,
+          # so the round trip is visible in it and nowhere else. It is also the
+          # only source here that is not a third-party index — a revision exists
+          # the moment ARM creates it, with no consistency window to lose a
+          # writer in, which is precisely how the Actions-API population below
+          # came back empty three minutes fifty after the roll it was missing.
+          #
+          # Same RBAC as the `show` above, so it adds no permission surface.
+          # stdout and stderr stay separate and neither is discarded: an
+          # unreadable history is UNKNOWN and fails the step, never a quiet pass.
+          set +e
+          az containerapp revision list -n loom-console -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --query "[].{name:name, createdTime:properties.createdTime, image:properties.template.containers[0].image}" \
+            -o json > "$REVS" 2> "$REV_ERR"
+          REV_RC=$?
+          set -e
+          if [ $REV_RC -ne 0 ]; then
+            REV_ARGS=(--revisions-error "az containerapp revision list -n loom-console -g ${RG} exited ${REV_RC}: $(trim400 "$REV_ERR")")
+          else
+            REV_ARGS=(--revisions "$REVS")
+            if [ -s "$REV_ERR" ]; then
+              echo "::warning::estate-vs-roll: az wrote to stderr while SUCCEEDING on the revision list; recording it rather than hiding it: $(trim400 "$REV_ERR")"
+            fi
+          fi
 
           # ---- which console-writing run last actually SHIPPED an image? ------
           # `updated_at` on a COMPLETED run is when it finished; GitHub returns
@@ -1893,14 +1962,16 @@ jobs:
           if [ $SHOW_RC -ne 0 ] || [ -z "$IMAGE" ]; then
             node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
               --applied-tag "${APPLIED_TAG}" \
+              --measured-at "${MEASURED_AT:-}" \
               --read-error "az containerapp show -n loom-console -g ${RG} exited ${SHOW_RC}: $(trim400 "$SHOW_ERR")" \
-              "${ROLL_ARGS[@]}"
+              "${ROLL_ARGS[@]}" "${REV_ARGS[@]}"
             exit $?
           fi
           node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
             --applied-tag "${APPLIED_TAG}" \
+            --measured-at "${MEASURED_AT:-}" \
             --estate-image "$IMAGE" \
-            "${ROLL_ARGS[@]}"
+            "${ROLL_ARGS[@]}" "${REV_ARGS[@]}"
 
       - name: Export bootstrap coordinates (for the chained bootstrap)
         id: bootstrap_coords
