@@ -20,9 +20,10 @@
  * surfaces that honestly per .claude/rules/no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 import type { PlanSubscription, ServiceConfig } from '@/lib/components/deploy-planner/types';
 import { configFor, coerceConfigValue } from '@/lib/components/deploy-planner/service-catalog';
 import { pruneEdges } from '@/lib/components/deploy-planner/plan-validation';
@@ -40,19 +41,28 @@ interface DeployPlanDoc {
   updatedBy: string;
 }
 
-interface DomainsDoc {
-  items?: Array<{ id: string; name: string }>;
-}
-
-async function readDomains(tenantId: string): Promise<Array<{ id: string; name: string }>> {
+/**
+ * The tenant's business-domain list, used to seed a first deploy plan.
+ *
+ * #3753 — this used to inline `c.item(\`domains:${tenantId}\`, tenantId)` with
+ * `tenantId = s.claims.oid`, which bypassed the domain-store chokepoint entirely
+ * and therefore also bypassed `check-domain-store-tenant-scope.mjs`. Post-#3282
+ * the authoritative document is keyed by `tenantScopeId()`, so this read
+ * resolved a PRIVATE, auto-seeded copy and the plan seeded from the wrong list.
+ * It now goes through `loadTenantDomains`, which is the guarded read path.
+ *
+ * `domainScope` is deliberately a SEPARATE parameter from the `deploy-plan:<id>`
+ * document's own scope: re-keying that document would strand every existing
+ * plan, which is the migration hazard #3282 called out.
+ */
+async function readDomains(domainScope: string): Promise<Array<{ id: string; name: string }>> {
   try {
-    const c = await tenantSettingsContainer();
-    const { resource } = await c.item(`domains:${tenantId}`, tenantId).read<DomainsDoc>();
-    return resource?.items?.map((d) => ({ id: d.id, name: d.name })) || [];
+    const domains = await loadTenantDomains(domainScope);
+    return domains.map((d) => ({ id: d.id, name: d.name || d.id }));
   } catch { return []; }
 }
 
-async function loadOrSeed(tenantId: string, who: string): Promise<DeployPlanDoc> {
+async function loadOrSeed(tenantId: string, domainScope: string, who: string): Promise<DeployPlanDoc> {
   const c = await tenantSettingsContainer();
   const docId = `deploy-plan:${tenantId}`;
   try {
@@ -62,7 +72,7 @@ async function loadOrSeed(tenantId: string, who: string): Promise<DeployPlanDoc>
 
   // Seed: one subscription holding the tenant's existing domains (no services
   // pre-selected — the operator chooses what deploys where).
-  const domains = await readDomains(tenantId);
+  const domains = await readDomains(domainScope);
   const seed: DeployPlanDoc = {
     id: docId, tenantId, kind: 'deploy-plan',
     subscriptions: [{
@@ -84,10 +94,11 @@ export async function GET() {
   const denied = requireTenantAdmin(s);
   if (denied) return denied;
   const tenantId = s.claims.oid;
+  const domainScope = tenantScopeId(s);
   try {
     const [plan, domains] = await Promise.all([
-      loadOrSeed(tenantId, s.claims.upn || tenantId),
-      readDomains(tenantId),
+      loadOrSeed(tenantId, domainScope, s.claims.upn || tenantId),
+      readDomains(domainScope),
     ]);
     return NextResponse.json({
       ok: true,
@@ -160,7 +171,7 @@ export async function PUT(req: NextRequest) {
   try {
     const c = await tenantSettingsContainer();
     const docId = `deploy-plan:${tenantId}`;
-    const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
+    const doc = await loadOrSeed(tenantId, tenantScopeId(s), s.claims.upn || tenantId);
     doc.subscriptions = subscriptions;
     doc.updatedAt = new Date().toISOString();
     doc.updatedBy = s.claims.upn || tenantId;

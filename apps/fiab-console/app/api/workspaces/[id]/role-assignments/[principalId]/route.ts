@@ -27,7 +27,7 @@ export async function DELETE(
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
+    const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
     if (role !== 'admin' && !isTenantAdmin(s)) {
       return NextResponse.json(

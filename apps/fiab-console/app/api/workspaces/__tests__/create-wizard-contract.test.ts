@@ -18,9 +18,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const created: any[] = [];
 const replaced: any[] = [];
 const bindingCalls: any[] = [];
+const domainExistsScopes: string[] = [];
 let session: any;
 
-vi.mock('@/lib/auth/session', () => ({ getSession: () => session }));
+vi.mock('@/lib/auth/session', () => ({
+  getSession: () => session,
+  // Real behaviour (`tid || oid`). The domain-existence check keys the
+  // per-TENANT domains registry with this rather than the caller's oid (#3753).
+  tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
+}));
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
   workspacesContainer: async () => ({
@@ -50,7 +56,15 @@ vi.mock('@/lib/azure/workspace-bindings', () => ({
 }));
 
 vi.mock('@/lib/azure/domain-registry', () => ({
-  domainExists: async (_tenant: string, id: string) => id !== 'nope',
+  domainExists: async (tenant: string, id: string) => {
+    // #3753 — record the scope the domain registry was consulted with. The
+    // registry is per-TENANT; validating it against the caller's oid resolved a
+    // private, auto-seeded copy, so only the five STARTER domain ids were ever
+    // accepted. `_tenant` was ignored here before, which is exactly why the
+    // suite could not tell the fix from the defect.
+    domainExistsScopes.push(tenant);
+    return id !== 'nope';
+  },
   DEFAULT_DOMAIN_ID: 'default',
 }));
 
@@ -74,10 +88,24 @@ beforeEach(() => {
   replaced.length = 0;
   bindingCalls.length = 0;
   audited.length = 0;
+  domainExistsScopes.length = 0;
   session = { claims: { oid: 'tenant-1', tid: 'tid-1', upn: 'u@example.com' } };
 });
 
 describe('POST /api/workspaces — wizard field contract', () => {
+  // #3753 — the domains registry is per-TENANT (keyed tenantScopeId() since
+  // #3282). Validating the requested domain against the caller's raw oid read a
+  // private, auto-seeded copy, so a workspace could only ever be bound to one of
+  // the five STARTER domains and every real tenant domain was rejected with
+  // "it is not registered in this tenant" — about a domain that IS registered.
+  // oid and tid are deliberately different values in this fixture.
+  it('validates the domain against the TENANT scope, not the caller oid', async () => {
+    const { POST } = await import('@/app/api/workspaces/route');
+    await POST(req({ name: 'W', domain: 'finance' }));
+    expect(domainExistsScopes).toEqual(['tid-1']);
+    expect(domainExistsScopes).not.toContain('tenant-1');
+  });
+
   it('persists licenseMode, contacts and storageAccountId from the wizard body', async () => {
     const res = await POST(req({
       name: 'Finance Analytics',

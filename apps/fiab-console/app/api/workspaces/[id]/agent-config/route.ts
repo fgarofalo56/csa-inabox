@@ -54,7 +54,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
+    const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
     if (!role) return NextResponse.json({ ok: false, error: 'no access to this workspace' }, { status: 403 });
 
@@ -86,7 +86,7 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ id: strin
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
+    const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
     if (!canEditWorkspaceConfig(role)) {
       return NextResponse.json(

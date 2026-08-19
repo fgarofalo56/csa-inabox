@@ -115,8 +115,32 @@ const TOUCH_EXEMPT = new Map([
   //
   // The PR's edits are confined to `accessOptsFor` and the five call sites that
   // await it; none of them is one of the four above.
+  //
+  // #3753 ALSO touches this file, for a second reason that leaves the same four
+  // sites alone: `resolveDomainName` (the data-product marketplace mirror's
+  // domain DISPLAY-NAME lookup) inlined `c.item(`domains:${tenantId}`, tenantId)`
+  // against `tenant-settings` — a different container, not `workspaces` — and so
+  // read a per-user copy of the tenant domain list ever since #3282 re-keyed that
+  // document. It now reads through `loadTenantDomains`. Re-measured with this
+  // guard's OWN predicate against the current tree, the four detected sites are
+  // at `mirrorGovernanceDoc`, `applyLabelInheritance`, `createOwnedItem` and
+  // `loadRecycledItem`; #3753's hunks are the import line plus `resolveDomainName`
+  // /`domainScopeFor`, and contain none of them.
   ['apps/fiab-console/app/api/items/_lib/item-crud.ts',
-   "#3697/#3698: the diff is confined to accessOptsFor + its five call sites (a correction in THIS guard's direction — it restores the dropped tenantAdmin AND adds the principal match) and touches none of the four baselined sites; mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and migrating loadRecycledItem would WIDEN recycle-bin restore/purge — separate PR"],
+   "#3697/#3698 + #3753: both diffs are confined to helpers that are NOT the four baselined sites (accessOptsFor + its call sites; resolveDomainName's tenant-settings domain-name lookup). mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and migrating loadRecycledItem would WIDEN recycle-bin restore/purge — separate PR"],
+  // #3753 touched this file for ONE line: `resolveWorkspaceRole(item.workspaceId,
+  // session.claims.oid, session.claims.upn)` became `resolveWorkspaceRole(
+  // item.workspaceId, session)` because that helper's second parameter (named
+  // `tenantId`, always filled with the caller's oid) is exactly the defect this
+  // guard exists for and was removed. The BASELINED occurrence is a different
+  // site: `loadItem`'s own owner-only workspace point read (the
+  // `ws.item(item.workspaceId, tenantId)` + `resource.tenantId !== tenantId`
+  // pair). It is not in this PR's diff. Migrating it WIDENS who may flip an
+  // item's data-access mode between service- and user-identity — an
+  // authorization change that needs its own review and its own tests, not a
+  // drive-by inside a 404 fix.
+  ['apps/fiab-console/app/api/items/[type]/[id]/access-mode/route.ts',
+   "#3753: the diff is one line (resolveWorkspaceRole's oid parameter removed — a correction in THIS guard's direction); loadItem's baselined owner-only point read is untouched, and migrating it would WIDEN who can change an item's data-access mode — separate PR"],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */

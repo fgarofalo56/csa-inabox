@@ -23,14 +23,21 @@
  * Auth: getSession() → 401, then tenant-admin → 403. Tenant isolation: every
  * Cosmos query over a /tenantId-partitioned container binds the caller's oid
  * (s.claims.oid) as the tenant partition key — cross-tenant leakage is
- * structurally impossible. The ONE exception is the `audit-log` container,
- * which partitions on /itemId and whose rows carry either the actor's oid or
- * the Entra tid: it is read cross-partition, scoped to the caller's own
- * [oid, tid] (lib/audit/audit-scope.ts, #2635).
+ * structurally impossible. TWO exceptions, each with its own reason:
+ *   • `audit-log` partitions on /itemId and its rows carry either the actor's
+ *     oid or the Entra tid, so it is read cross-partition, scoped to the
+ *     caller's own [oid, tid] (lib/audit/audit-scope.ts, #2635).
+ *   • the `domains` tile reads the per-TENANT domains document in
+ *     tenant-settings, which #3282 keyed with `tenantScopeId()` (tid || oid).
+ *     Keying it with the raw oid — as this route did until #3753 — resolved a
+ *     PRIVATE, auto-seeded copy, so the tile disagreed with /admin/domains.
+ *     Both scopes are threaded explicitly and BOTH are in the cache key.
  */
 import { NextResponse } from 'next/server';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { tenantScopeId } from '@/lib/auth/session';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import {
   workspacesContainer,
@@ -173,16 +180,16 @@ async function itemsCount(tenantId: string): Promise<number> {
   return resources[0] ?? 0;
 }
 
-/** Domains live as an items[] array inside the tenant-settings `domains:<t>` doc. */
-async function domainsCount(tenantId: string): Promise<number> {
-  const c = await tenantSettingsContainer();
-  try {
-    const { resource } = await c.item(`domains:${tenantId}`, tenantId).read<{ items?: unknown[] }>();
-    return (resource?.items || []).length;
-  } catch (e: any) {
-    if (e?.code === 404) return 0; // not seeded yet — a real zero, not a gate
-    throw e;
-  }
+/**
+ * Domains live as an items[] array inside the tenant-settings `domains:<t>` doc.
+ *
+ * #3753 — keyed by the caller's raw `claims.oid` this counted a PRIVATE,
+ * auto-seeded copy of the domain list rather than the tenant's authoritative one
+ * (#3282 moved that document onto `tenantScopeId()`). Reads through the guarded
+ * `loadTenantDomains` chokepoint so the count agrees with /admin/domains.
+ */
+async function domainsCount(domainScope: string): Promise<number> {
+  return (await loadTenantDomains(domainScope)).length;
 }
 
 /** Enabled tenant-wide switches = count of true boolean fields in the settings doc. */
@@ -288,6 +295,11 @@ async function blockedGateCount(): Promise<number> {
 
 export const GET = withTenantAdmin(async (_req, { session }) => {
   const tenantId = session.claims.oid;
+  // The domains document is per-TENANT and keyed by tenantScopeId() since #3282
+  // — a DIFFERENT scope from `tenantId` above, which keys the oid-partitioned
+  // workspaces/items containers. Threaded explicitly (and into the cache key)
+  // rather than derived inside computeTiles, which has no session (#3753).
+  const domainScope = tenantScopeId(session);
   // Audit-log rows are NOT partitioned on tenantId and are written under either
   // the actor's oid or the Entra tid — see lib/audit/audit-scope.ts (#2635).
   const auditScope = auditScopeIds(session.claims);
@@ -296,22 +308,26 @@ export const GET = withTenantAdmin(async (_req, { session }) => {
   // Graph reads per paint — at scale that is the Admin landing page's whole
   // budget. One cached crawl serves every admin (perf directive 2026-07-15).
   const { value: tiles } = await getOrComputeCached(
-    buildScopedCacheKey('admin/overview', { tenantId, auditScope: auditScope.join('|') }),
+    buildScopedCacheKey('admin/overview', { tenantId, domainScope, auditScope: auditScope.join('|') }),
     'admin',
-    () => computeTiles(tenantId, auditScope),
+    () => computeTiles(tenantId, domainScope, auditScope),
     { ttlMs: 2 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
   );
   return NextResponse.json({ ok: true, tiles });
 });
 
-async function computeTiles(tenantId: string, auditScope: string[]): Promise<OverviewTiles> {
+async function computeTiles(
+  tenantId: string,
+  domainScope: string,
+  auditScope: string[],
+): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
     runtimeFlags, rumClientErrors, diagnostics, finops, icebergTables, openIncidents,
   ] = await Promise.all([
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
-    tile(() => domainsCount(tenantId), COSMOS_HINT),
+    tile(() => domainsCount(domainScope), COSMOS_HINT),
     tile(() => itemsCount(tenantId), COSMOS_HINT),
     tile(() => auditEventCount(
       auditScope,

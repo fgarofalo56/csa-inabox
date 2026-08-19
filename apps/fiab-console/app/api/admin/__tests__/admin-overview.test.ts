@@ -17,7 +17,14 @@ const SESSION_TID = 'entra-tenant-id';
 const getSessionMock = vi.fn(
   () => ({ claims: { oid: SESSION_OID, tid: SESSION_TID, upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 }) as any,
 );
-vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+vi.mock('@/lib/auth/session', () => ({
+  getSession: () => getSessionMock(),
+  // Real behaviour (`tid || oid`). The domains tile keys the per-TENANT domains
+  // document with this, NOT with the caller's oid (#3753) — a mock that omitted
+  // it made the route throw rather than fail the domains assertion, which is
+  // why this comment exists.
+  tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
+}));
 
 // credentials (Graph token for the users/$count call)
 vi.mock('@azure/identity', () => {
@@ -122,7 +129,12 @@ function seedHappyCosmos() {
   containers.featurePermissions._setQuery(() => [3]);
   containers.attributeGroups._setQuery(() => [2]);
   containers.labelAssignments._setQuery(() => [9]);
-  containers.tenantSettings._seed('domains:tenant-oid', 'tenant-oid', { items: [{ id: 'fin' }, { id: 'ops' }] });
+  // #3753 — the domains document is per-TENANT and is keyed by tenantScopeId()
+  // (= tid), NOT by the caller's oid. Seeding it under SESSION_TID is what the
+  // real store does; the old fixture seeded it under SESSION_OID, which is the
+  // shape the bug produced (a private, per-user copy) and which therefore could
+  // not distinguish the fix from the defect.
+  containers.tenantSettings._seed(`domains:${SESSION_TID}`, SESSION_TID, { items: [{ id: 'fin' }, { id: 'ops' }] });
   containers.tenantSettings._seed('tenant-oid', 'tenant-oid', { settings: { a: true, b: false, c: true } });
   // C4 — finops tile: enabled cost-anomaly watch rules (SELECT VALUE COUNT(1)).
   containers.costAnomalyRules._setQuery(() => [2]);
@@ -166,6 +178,24 @@ describe('/api/admin/overview', () => {
     getSessionMock.mockReturnValue(null);
     const { GET } = await import('@/app/api/admin/overview/route');
     expect((await GET()).status).toBe(401);
+  });
+
+  // #3753 — the domains tile keys the per-TENANT domains doc by tenantScopeId()
+  // (tid), not by the caller's oid. Before the fix this tile read
+  // `domains:<callerOid>`, i.e. a private copy auto-seeded with the starter list,
+  // so it disagreed with /admin/domains. This asserts the DIRECTION explicitly:
+  // seeded under the tid it counts; a doc parked under the oid is NOT counted.
+  it('counts domains from the TENANT-scoped doc, not the caller-oid doc', async () => {
+    seedHappyCosmos();
+    // A stale per-user copy with a different cardinality. If the route regresses
+    // to oid scoping it will report 5 instead of 2.
+    containers.tenantSettings._seed(`domains:${SESSION_OID}`, SESSION_OID, {
+      items: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }],
+    });
+    const { GET } = await import('@/app/api/admin/overview/route');
+    const j = await (await GET()).json();
+    expect(j.ok).toBe(true);
+    expect(j.tiles.domains).toEqual({ count: 2, gated: false });
   });
 
   it('GET returns all 18 tiles with real counts when every backend resolves', async () => {

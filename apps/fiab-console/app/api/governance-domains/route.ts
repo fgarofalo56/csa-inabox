@@ -22,8 +22,8 @@
  *   - Business Domain (REST): https://learn.microsoft.com/rest/api/purview/purview-unified-catalog/business-domain
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import { apiServerError } from '@/lib/api/respond';
@@ -46,13 +46,23 @@ function resolveUcEndpoint(): string | undefined {
   return undefined;
 }
 
-/** Read the Loom-local domain list (the Cosmos fallback). Never throws. */
-async function cosmosDomains(tenantId: string): Promise<DomainOption[]> {
+/**
+ * Read the Loom-local domain list (the Cosmos fallback). Never throws.
+ *
+ * #3753 — this inlined `c.item(\`domains:${tenantId}\`, tenantId)` with the
+ * caller's raw `claims.oid`, bypassing the domain-store chokepoint (and so
+ * `check-domain-store-tenant-scope.mjs` with it). Post-#3282 the authoritative
+ * document is keyed by `tenantScopeId()`, so this returned a PRIVATE, auto-seeded
+ * copy rather than the tenant's real domain list. Reads through the guarded path.
+ */
+async function cosmosDomains(domainScope: string): Promise<DomainOption[]> {
   try {
-    const c = await tenantSettingsContainer();
-    const { resource } = await c.item(`domains:${tenantId}`, tenantId).read<{ items?: any[] }>();
-    const items = Array.isArray(resource?.items) ? resource!.items : [];
-    return items.map((d: any) => ({ id: String(d.id), name: String(d.name || d.id), description: d.description }));
+    const domains = await loadTenantDomains(domainScope);
+    return domains.map((d) => ({
+      id: String(d.id),
+      name: String(d.name || d.id),
+      description: (d as { description?: string }).description,
+    }));
   } catch (e: any) {
     if (e?.code === 404) return [];
     throw e;
@@ -92,13 +102,12 @@ async function purviewUcDomains(): Promise<DomainOption[] | null> {
 export async function GET() {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const tenantId = session.claims.oid;
   try {
     const uc = await purviewUcDomains();
     if (uc && uc.length > 0) {
       return NextResponse.json({ ok: true, domains: uc, source: 'purview-uc' });
     }
-    const local = await cosmosDomains(tenantId);
+    const local = await cosmosDomains(tenantScopeId(session));
     const ucConfigured = !!resolveUcEndpoint();
     return NextResponse.json({
       ok: true,

@@ -15,7 +15,7 @@
  * whichever target IS configured. No Fabric dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { apiServerError } from '@/lib/api/respond';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { runDomainSync, saveDomainSyncStatus, loadDomainSyncStatus } from '@/lib/azure/domain-sync';
@@ -23,10 +23,12 @@ import { runDomainSync, saveDomainSyncStatus, loadDomainSyncStatus } from '@/lib
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Tenant scope id — the tid claim (multi-tenant) or the caller oid fallback. */
-function tenantScope(claims: { tid?: string; oid: string }): string {
-  return claims.tid || claims.oid;
-}
+// #3753 — this route used to carry its OWN copy of the tenant-scope helper
+// (`function tenantScope(claims) { return claims.tid || claims.oid; }`). The
+// copy was semantically correct, but a second implementation of the tenant
+// scope is how the scope drifts: `tenantScopeId()` is the canonical one and is
+// what every guard and every sibling reader keys the domains document with.
+// Deleted in favour of the shared helper.
 
 export async function GET() {
   const s = getSession();
@@ -34,7 +36,7 @@ export async function GET() {
   const denied = requireTenantAdmin(s);
   if (denied) return denied;
 
-  const tenantId = tenantScope(s.claims);
+  const tenantId = tenantScopeId(s);
   try {
     const last = await loadDomainSyncStatus(tenantId);
     if (last) return NextResponse.json({ ok: true, result: last, fromCache: true });
@@ -52,7 +54,7 @@ export async function POST(req: NextRequest) {
   const denied = requireTenantAdmin(s);
   if (denied) return denied;
 
-  const tenantId = tenantScope(s.claims);
+  const tenantId = tenantScopeId(s);
   const body = await req.json().catch(() => ({}));
   const apply = body?.apply === true;
 
