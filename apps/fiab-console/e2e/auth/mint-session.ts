@@ -44,6 +44,52 @@ const TAG_LEN = 16;
 const HKDF_INFO = 'loom-session-v1';
 const COOKIE_NAME = 'loom_session';
 
+/**
+ * A placeholder/sentinel oid — all-zero except the final nibble. The TS mirror
+ * of the same constant in mint-cookie.mjs; both exist because this module
+ * deliberately imports nothing (see the header note on next/headers).
+ */
+const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
+
+/**
+ * Refuse to mint under an absent or placeholder oid.
+ *
+ * A minted session performs REAL writes, and Cosmos partitions `workspaces` on
+ * the creator oid — so a placeholder writes into a partition no principal can
+ * sign in and enumerate. That debris reports success and is invisible
+ * afterwards (#3801/#3804).
+ *
+ * The parameter is deliberately typed `oid?: string | null` rather than
+ * `Pick<UserClaims, 'oid'>`. This function's whole purpose is the absent case,
+ * and a required `oid: string` declares that case impossible — which forces a
+ * caller holding `string | undefined` (every `process.env` read) to write
+ * `as string` on the very value being validated. A cast that silences the
+ * checker at the guard is how a fail-open gets reintroduced (#3804).
+ *
+ * @param claims - the claims about to be sealed into the cookie.
+ * @returns the validated oid.
+ */
+export function requireAutomationOid(claims: { oid?: string | null }): string {
+  const oid = claims && claims.oid;
+  if (!oid) {
+    throw new Error(
+      '[mint-session] claims.oid is required and was not set.\n' +
+      '  A minted session performs REAL writes and Cosmos partitions on the creator oid,\n' +
+      '  so it must run as a real principal. Set LOOM_AUTOMATION_OID (or UAT_OID) to the\n' +
+      '  automation identity for this estate. Refusing to mint without one (#3804).',
+    );
+  }
+  if (PLACEHOLDER_OID.test(String(oid))) {
+    throw new Error(
+      `[mint-session] claims.oid is a placeholder (${oid}) and was refused.\n` +
+      '  Writes under a placeholder land in a Cosmos partition no principal can sign in to\n' +
+      '  and enumerate — invisible debris that reports success (#3801/#3804).\n' +
+      '  Set LOOM_AUTOMATION_OID (or UAT_OID) to a real automation identity.',
+    );
+  }
+  return String(oid);
+}
+
 /** Derive the AES-256 key from SESSION_SECRET — identical to lib/auth/session.ts */
 function deriveKey(sessionSecret: string): Buffer {
   const ab = crypto.hkdfSync(
@@ -81,6 +127,10 @@ export function mintLoomSessionCookie(
       'and set it via ::add-mask:: before this step.',
     );
   }
+  // Guard the identity here, not only at each call site — this is the single
+  // chokepoint every TS caller (mintStorageState, global-setup, the specs)
+  // funnels through, mirroring requireAutomationOid in mint-cookie.mjs (#3804).
+  requireAutomationOid(claims);
 
   const key = deriveKey(secret);
   const payload: SessionPayload = {

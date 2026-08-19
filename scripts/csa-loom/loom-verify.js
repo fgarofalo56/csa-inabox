@@ -1,7 +1,16 @@
 const crypto=require('crypto');
 const ss=process.env.SESSION_SECRET;
 const url=(process.env.LOOM_URL||'').replace(/\/+$/,'');
-const claims={oid:process.env.LOOM_AUTOMATION_OID,name:process.env.LOOM_AUTOMATION_NAME||'verify',upn:process.env.LOOM_AUTOMATION_UPN||'verify@auto'};
+// Identity guard (#3804). Inlined rather than imported from mint-cookie.mjs
+// because this file is CommonJS and that module is ESM; the regex and the
+// refusal semantics are identical. Without it an unset LOOM_AUTOMATION_OID
+// minted a cookie with NO oid claim (JSON.stringify drops undefined), every
+// endpoint 401'd, and the harness reported those as endpoint failures — a red
+// verdict for entirely the wrong reason.
+const oid=process.env.LOOM_AUTOMATION_OID;
+if(!oid){console.error('[loom-verify] LOOM_AUTOMATION_OID is required - this harness mints a REAL session against a live estate, so it must run as a real principal. Refusing to mint without an oid (#3804).');process.exit(2);}
+if(/^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(oid)){console.error('[loom-verify] LOOM_AUTOMATION_OID is a placeholder ('+oid+') and was refused. Set it to a real automation identity (#3801/#3804).');process.exit(2);}
+const claims={oid,name:process.env.LOOM_AUTOMATION_NAME||'verify',upn:process.env.LOOM_AUTOMATION_UPN||'verify@auto'};
 const exp=Math.floor(Date.now()/1000)+3600;
 const key=Buffer.from(crypto.hkdfSync('sha256',Buffer.from(ss,'utf-8'),Buffer.alloc(32),Buffer.from('loom-session-v1'),32));
 const iv=crypto.randomBytes(12);const c=crypto.createCipheriv('aes-256-gcm',key,iv);

@@ -190,6 +190,11 @@ function runReceipt(route) {
     env: {
       ...process.env,
       SESSION_SECRET: 'unit-test-secret-not-a-real-value',
+      // --dry-run MINTS a cookie (and decodes it back), so it needs an identity
+      // for the same reason it already needs a secret: #3804 made a missing or
+      // placeholder oid fail closed at the mint chokepoint. A real-shaped GUID,
+      // NOT the 0000…0001 placeholder — that one is rejected by design.
+      LOOM_AUTOMATION_OID: '9f1c6a4e-2b7d-4f83-9c15-6ad0e3b74c22',
       LOOM_URL: 'https://console.invalid',
     },
     encoding: 'utf8',

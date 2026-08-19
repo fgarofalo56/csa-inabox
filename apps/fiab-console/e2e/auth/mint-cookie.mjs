@@ -60,6 +60,64 @@ export function requireSessionSecret(explicit) {
 }
 
 /**
+ * A placeholder object id: all-zeros, or all-zeros with a single non-zero final
+ * hex digit. Observed in the wild as `…0000` (tests/*.mjs, demo-seed),
+ * `…0001` (e2e-receipt, parity-autopilot) and `…000e` (cleanup-test-workspaces,
+ * workspace-identity-enforce) — three mutually-invisible fake partitions.
+ *
+ * A real Entra oid of this shape does not occur; if one somehow did, the error
+ * below names the value so the operator can see exactly what was rejected.
+ */
+const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
+
+/**
+ * Resolve the automation identity, throwing when it is absent or a placeholder.
+ *
+ * WHY THIS IS FAIL-CLOSED, symmetric with requireSessionSecret (#3804).
+ *
+ * A minted session performs REAL writes. `workspaces` is partitioned by
+ * /tenantId == the creator's oid, so a placeholder oid does not merely mislabel
+ * the run — it writes into a partition no principal can ever sign in to and
+ * enumerate. Nothing fails at the time: the route returns 200 and the
+ * provisioner reports `created`.
+ *
+ * On 2026-07-12 that left 24 `tut-app-*` workspaces owned by the zero GUID, and
+ * 24 of 32 semantic models have rendered empty editors ever since (#3801). The
+ * debris survived five weeks because `cleanup-test-workspaces.mjs` defaults to a
+ * DIFFERENT placeholder (…000e) and `GET /api/workspaces` scopes on
+ * `session.claims.oid` (app/api/workspaces/route.ts:22) — so the cleanup tool
+ * enumerated an empty partition, found nothing, and exited 0.
+ *
+ * A KNOWN synthetic automation oid is a documented, tolerated cost with an
+ * operator-side cleanup path (scripts/csa-loom/purge-test-workspaces.sh). A
+ * placeholder is different in kind: its debris is attributable to nothing, so
+ * recovery by owner is impossible in principle.
+ *
+ * @param {object} claims - the claims about to be baked into a session.
+ * @returns {string} the validated oid.
+ */
+export function requireAutomationOid(claims) {
+  const oid = claims && claims.oid;
+  if (!oid) {
+    throw new Error(
+      '[mint-cookie] claims.oid is required and was not set.\n' +
+        '  A minted session performs REAL writes and Cosmos partitions on the creator oid,\n' +
+        '  so it must run as a real principal. Set UAT_OID or LOOM_AUTOMATION_OID to the\n' +
+        '  automation identity for this estate. Refusing to mint without one (#3804).',
+    );
+  }
+  if (PLACEHOLDER_OID.test(String(oid))) {
+    throw new Error(
+      `[mint-cookie] claims.oid is a placeholder (${oid}) and was refused.\n` +
+        '  Writes under a placeholder land in a Cosmos partition no principal can sign in to\n' +
+        '  and enumerate — invisible debris that reports success (#3801/#3804).\n' +
+        '  Set UAT_OID or LOOM_AUTOMATION_OID to a real automation identity.',
+    );
+  }
+  return String(oid);
+}
+
+/**
  * Mint a `loom_session` cookie value identical to the one the BFF writes.
  *
  * @param {object}  claims          - Identity claims baked into the session.
@@ -73,6 +131,7 @@ export function requireSessionSecret(explicit) {
  */
 export function mintLoomSessionCookie(claims, ttlSecs = 28_800, sessionSecret) {
   const secret = requireSessionSecret(sessionSecret);
+  requireAutomationOid(claims);
   const key = deriveKey(secret);
   const payload = { claims, exp: Math.floor(Date.now() / 1000) + ttlSecs };
   const iv = crypto.randomBytes(IV_LEN);

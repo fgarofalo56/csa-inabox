@@ -53,7 +53,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { mintLoomSessionCookie, requireSessionSecret } from '../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
+import { mintLoomSessionCookie, requireAutomationOid, requireSessionSecret } from '../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -187,13 +187,15 @@ async function main() {
   const theme = (String(args.theme || 'light').toLowerCase() === 'dark') ? 'dark' : 'light';
 
   const claims = {
-    oid: process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000001',
+    oid: process.env.LOOM_AUTOMATION_OID,
     name: process.env.LOOM_AUTOMATION_NAME || 'Loom Parity Autopilot [automation]',
     upn: process.env.LOOM_AUTOMATION_UPN || 'parity-autopilot@automation.local',
     email: process.env.LOOM_AUTOMATION_UPN || 'parity-autopilot@automation.local',
   };
 
-  try { requireSessionSecret(); }
+  // Secret AND identity both fail closed (#3804) — a placeholder oid captures
+  // parity shots of an empty partition and calls them evidence.
+  try { requireSessionSecret(); requireAutomationOid(claims); }
   catch (err) { console.error(err.message); process.exit(1); }
 
   const targets = resolveTargets(args);

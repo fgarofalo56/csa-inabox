@@ -28,39 +28,36 @@
  *
  *   LOOM_URL   override base (default the live Commercial FD; point at the gov
  *              FD for GCC-High; run via ACA job exec in IL5)
- *   UAT_OID    override the tenant-admin oid the minted session represents
+ *   UAT_OID    REQUIRED — the tenant-admin oid the minted session represents.
+ *              This tool FLIPS ENFORCEMENT FLAGS; the identity it acts as is
+ *              the audit trail for who did it, so it fails closed rather than
+ *              attribute an enforcement change to a placeholder (#3804).
  *   WS_ID      restrict to a single workspace id (preflight/flip just that one)
  */
-import crypto from 'node:crypto';
+import { mintLoomSessionCookie, requireAutomationOid, requireSessionSecret } from '../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
 
 const BASE = process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net';
-const SECRET = process.env.SESSION_SECRET;
-if (!SECRET) {
-  console.error('SESSION_SECRET required (container-app session-secret or KV loom-session-secret)');
-  process.exit(2);
-}
 const APPLY = process.argv.includes('--apply');
 const CONFIRM = process.argv.includes('--confirm');
 const ONLY = process.env.WS_ID || '';
 
-// Mint a Loom session cookie (aes-256-gcm over the HKDF-derived key) — the same
-// scheme lib/auth/session verifies and cleanup-test-workspaces.mjs uses.
-const KEY = Buffer.from(
-  crypto.hkdfSync('sha256', Buffer.from(SECRET, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32),
-);
-const payload = {
-  claims: {
-    oid: process.env.UAT_OID || '00000000-0000-0000-0000-00000000000e',
-    name: 'IdentityEnforce',
-    email: 'identity-enforce@loom',
-    upn: 'identity-enforce@loom',
-  },
-  exp: Math.floor(Date.now() / 1000) + 3600,
+// Mint a Loom session cookie via the shared minter (apps/fiab-console/e2e/auth/
+// mint-cookie.mjs) — the same scheme lib/auth/session verifies. Both the secret
+// and the identity fail closed there.
+const claims = {
+  oid: process.env.UAT_OID,
+  name: 'IdentityEnforce',
+  email: 'identity-enforce@loom',
+  upn: 'identity-enforce@loom',
 };
-const iv = crypto.randomBytes(12);
-const cipher = crypto.createCipheriv('aes-256-gcm', KEY, iv);
-const enc = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(payload))), cipher.final()]);
-const COOKIE = `loom_session=${Buffer.concat([iv, cipher.getAuthTag(), enc]).toString('base64url')}`;
+try {
+  requireSessionSecret();
+  requireAutomationOid(claims);
+} catch (err) {
+  console.error(err.message);
+  process.exit(2);
+}
+const COOKIE = `loom_session=${mintLoomSessionCookie(claims, 3600)}`;
 
 const jget = async (path) => {
   const r = await fetch(`${BASE}${path}`, { headers: { cookie: COOKIE } });

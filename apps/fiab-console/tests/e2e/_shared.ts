@@ -21,6 +21,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { BrowserContext, Page } from '@playwright/test';
+import { requireAutomationOid } from '../../e2e/auth/mint-session';
 
 export const BASE = process.env.LOOM_URL || 'http://localhost:3000';
 export const HOST = new URL(BASE).hostname;
@@ -31,12 +32,36 @@ const STORAGE_PATH = process.env.LOOM_PLAYWRIGHT_STORAGE
 function mintSessionCookie(): string | null {
   const secret = process.env.SESSION_SECRET;
   if (!secret) return null;
+  // Automation identity — FAIL CLOSED, never a placeholder (#3804).
+  //
+  // This used to fall back to the all-zeros GUID. That is syntactically valid,
+  // so every guard expecting a well-formed oid passed, and the harness minted a
+  // real session and performed real writes as a principal that cannot sign in.
+  // On 2026-07-12 that left 24 `tut-app-*` workspaces owned by the zero GUID;
+  // `workspaces` is partitioned by /tenantId == the creator's oid, so they landed
+  // in a partition no operator can enumerate, and 24 of 32 semantic models have
+  // rendered empty editors ever since (#3801). Nothing failed at the time.
+  //
+  // Returning null (rather than throwing) matches this function's existing
+  // contract for a missing secret: the caller falls back to a stored storage
+  // state or skips, which is the correct behaviour for an unrunnable harness.
+  //
+  // An explicitly-set PLACEHOLDER is a different case in kind and stays loud.
+  // Unset means "this harness is not configured here" — skipping is right.
+  // Set to `00000000-0000-0000-0000-000000000001` means someone configured a
+  // sentinel on purpose; that passes every non-empty and GUID-shape test and
+  // would go on to write real data into an unreachable partition. So: null on
+  // absent, throw on placeholder, with the placeholder test delegated to the
+  // shared chokepoint so a newly-found sentinel is added in exactly one place.
+  const oid = process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID;
+  if (!oid) return null;
+  requireAutomationOid({ oid });
   const KEY = Buffer.from(
     crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32),
   );
   const payload = {
     claims: {
-      oid: process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000000',
+      oid,
       name: process.env.UAT_NAME || process.env.LOOM_AUTOMATION_NAME || 'Loom UAT',
       email: process.env.UAT_EMAIL || 'uat@example.invalid',
       upn: process.env.UAT_UPN || 'uat@example.invalid',

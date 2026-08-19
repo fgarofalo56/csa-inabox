@@ -7,31 +7,50 @@
  * timestamp, or any `-e2e-` infix) vs KEEP, prints both, and deletes the
  * TEST ones via the real BFF DELETE /api/workspaces/[id].
  *
+ * SCOPE — READ THIS BEFORE TRUSTING A "0 found" RESULT.
+ *
+ * This tool is OWNER-SCOPED and cannot be otherwise: GET /api/workspaces
+ * filters on `session.claims.oid` (apps/fiab-console/app/api/workspaces/route.ts:22)
+ * because `workspaces` is partitioned by /tenantId == the creator's oid. So it
+ * only ever sees debris created by the SAME oid it mints as. Point it at the
+ * wrong identity and it enumerates an empty partition, finds nothing, and
+ * exits 0 — indistinguishable from a clean estate.
+ *
+ * That is not hypothetical. Until #3804 this script defaulted to
+ * `…00000000000e` while the harnesses that created the debris defaulted to
+ * `…000000000000` — two different fake partitions. The result: 24 `tut-app-*`
+ * workspaces sat unreachable for five weeks (#3801) while this script reported
+ * "Total workspaces: 0" every time it ran. The identity is now required, so a
+ * zero here means a genuinely empty partition for THAT oid — nothing more.
+ *
+ * For debris whose owner is unknown or unreachable, use the operator-side
+ * scripts/csa-loom/purge-test-workspaces.sh, which goes at Cosmos directly and
+ * is not owner-scoped.
+ *
  * Usage:
- *   SESSION_SECRET=<from kv/container secret> node scripts/csa-loom/cleanup-test-workspaces.mjs [--apply]
+ *   SESSION_SECRET=<from kv/container secret> UAT_OID=<owner oid> \
+ *     node scripts/csa-loom/cleanup-test-workspaces.mjs [--apply]
  *     (default is DRY-RUN — prints what it would delete; pass --apply to delete)
  *   LOOM_URL   override base (default the live Commercial FD)
- *   UAT_OID    override the tenant oid the workspaces belong to
+ *   UAT_OID    REQUIRED — the oid that OWNS the workspaces to clean up
  */
-import crypto from 'node:crypto';
+import { mintLoomSessionCookie, requireAutomationOid, requireSessionSecret } from '../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
 
 const BASE = process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net';
-const SECRET = process.env.SESSION_SECRET;
-if (!SECRET) { console.error('SESSION_SECRET required (container-app session-secret or KV loom-session-secret)'); process.exit(2); }
 const APPLY = process.argv.includes('--apply');
 
-const KEY = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(SECRET, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
-const payload = {
-  claims: {
-    oid: process.env.UAT_OID || '00000000-0000-0000-0000-00000000000e',
-    name: 'Cleanup', email: 'cleanup@loom', upn: 'cleanup@loom',
-  },
-  exp: Math.floor(Date.now() / 1000) + 3600,
+const claims = {
+  oid: process.env.UAT_OID,
+  name: 'Cleanup', email: 'cleanup@loom', upn: 'cleanup@loom',
 };
-const iv = crypto.randomBytes(12);
-const c = crypto.createCipheriv('aes-256-gcm', KEY, iv);
-const enc = Buffer.concat([c.update(Buffer.from(JSON.stringify(payload))), c.final()]);
-const COOKIE = `loom_session=${Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64url')}`;
+try {
+  requireSessionSecret();
+  requireAutomationOid(claims);
+} catch (err) {
+  console.error(err.message);
+  process.exit(2);
+}
+const COOKIE = `loom_session=${mintLoomSessionCookie(claims, 3600)}`;
 
 // A workspace is a TEST artifact when its name carries an auto-generated
 // timestamp/date/id, OR a test keyword. A KEEPER is a clean human name with

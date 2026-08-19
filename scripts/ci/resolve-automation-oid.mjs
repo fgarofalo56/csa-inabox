@@ -92,6 +92,14 @@ import { redact } from './_azure-redact.mjs';
 /** An Entra object id is a single GUID. Anything else is not one. */
 export const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+/**
+ * A placeholder/sentinel object id — all-zero except the final nibble. These are
+ * GUID-SHAPED, so GUID_RE alone admits them; that is precisely how they reached
+ * production (#3804). They name no Entra object, and a session minted under one
+ * writes into a Cosmos partition no principal can sign in and enumerate (#3801).
+ */
+export const PLACEHOLDER_OID_RE = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
+
 /** The env var on the console that IS the tenant-admin binding. */
 export const BINDING_VAR = 'LOOM_TENANT_ADMIN_OID';
 
@@ -115,6 +123,17 @@ export function validateCandidate(raw) {
   }
   if (!GUID_RE.test(v)) {
     return { ok: false, code: 'not-a-guid', why: 'it is not a GUID, so it names no Entra object' };
+  }
+  if (PLACEHOLDER_OID_RE.test(v)) {
+    return {
+      ok: false,
+      code: 'placeholder',
+      why:
+        `it is a placeholder object id (${v}). It is GUID-shaped but names no Entra object, so ` +
+        `isTenantAdmin() can never admit it — and every write the minted session makes lands in a ` +
+        `Cosmos partition no principal can sign in and enumerate, which is how 24 workspaces went ` +
+        `invisible for five weeks (#3801/#3804)`,
+    };
   }
   return { ok: true, value: v };
 }
@@ -251,6 +270,16 @@ export function refusal(d) {
 
   let fix;
   switch (d.status) {
+    case 'resolved':
+      // The read COMPLETED; the value is what is wrong. Saying "the read did not
+      // complete" here (the old default branch) asserts a cause this run never
+      // established — deploy-integrity R7.
+      fix =
+        `The console WAS read successfully and ${BINDING_VAR} came back as a value this workflow ` +
+        `will not mint under: ${validateCandidate(d.value).why ?? 'it is unusable'}. Re-deploy with ` +
+        `a real Entra object id — FIAB_TENANT_ADMIN_OID repo variable, or dispatch ` +
+        `deploy-fiab-commercial.yml with tenant_admin_oid=<a HUMAN user's object id>.`;
+      break;
     case 'empty':
     case 'absent':
       fix =
