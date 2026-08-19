@@ -270,7 +270,7 @@ async function probeAdf(h: ProbeHelpers): Promise<CheckResult> {
  * not establish). Before #3729 EVERY non-403 failure — including this probe's
  * own 6 s `withTimeout` firing while 27 sibling probes shared the event loop —
  * was returned as `status:'fail'` carrying the remediation "Verify the Console
- * can reach management.azure.com … and that the UAMI token is being issued".
+ * can reach the ARM endpoint … and that the UAMI token is being issued".
  * That asserted a network/identity outage the probe had never observed, and
  * because the owning `subscription` gate is `severity:'critical'` it drove the
  * ENTIRE Core platform workload to Blocked on /admin/readiness.
@@ -356,6 +356,10 @@ async function probeArmReader(h: ProbeHelpers): Promise<CheckResult> {
   }
 
   const path = `/subscriptions/${sub}/resourcegroups/${rg}?api-version=2021-04-01`;
+  // Cloud-correct ARM host for the remediation copy — Commercial, GCC-High and
+  // DoD each resolve their own, so the message never names the wrong endpoint.
+  const { armHost } = await import('@/lib/azure/cloud-endpoints');
+  const armEndpoint = armHost();
   const attempts: string[] = [];
   let last: { msg: string; klass: ArmProbeOutcome } | null = null;
 
@@ -415,7 +419,7 @@ async function probeArmReader(h: ProbeHelpers): Promise<CheckResult> {
     return {
       ...base, status: 'fail',
       detail: `The ARM endpoint was unreachable from the Console (transport error): ${msg}`,
-      remediation: `Verify the Console subnet can reach ${env('LOOM_ARM_ENDPOINT') || 'management.azure.com'} (the sovereign ARM endpoint is named by LOOM_ARM_ENDPOINT) — egress NSG / firewall rules, private endpoint and its DNS zone. A token WAS acquired, so this is a network path problem, not an identity one.`,
+      remediation: `Verify the Console subnet can reach ${armEndpoint} (the sovereign ARM endpoint is named by LOOM_ARM_ENDPOINT) — egress NSG / firewall rules, private endpoint and its DNS zone. A token WAS acquired, so this is a network path problem, not an identity one.`,
       redeploy: true,
     };
   }
@@ -433,7 +437,7 @@ async function probeArmReader(h: ProbeHelpers): Promise<CheckResult> {
   return {
     ...base, status: 'warn', inconclusive: true,
     detail: `Could not establish whether ARM is readable — the check did not complete: ${attempts.join(' | ')}. This is NOT a finding that ARM is unreachable, nor that the UAMI token failed; neither was observed.`,
-    remediation: `No operator action is known to be required. Every live probe in the self-audit runs in parallel, so one slow ARM round-trip can exhaust this probe's ${ARM_PROBE_BUDGET_MS / 1000}s budget — it already retried once at ${ARM_PROBE_RETRY_BUDGET_MS / 1000}s. Re-check to re-probe (that bypasses the 30s probe cache). If it stays inconclusive across re-checks, look at the ARM path itself: egress from the Console subnet to ${env('LOOM_ARM_ENDPOINT') || 'management.azure.com'}, and UAMI token issuance (see the ACA managed-identity notes).`,
+    remediation: `No operator action is known to be required. Every live probe in the self-audit runs in parallel, so one slow ARM round-trip can exhaust this probe's ${ARM_PROBE_BUDGET_MS / 1000}s budget — it already retried once at ${ARM_PROBE_RETRY_BUDGET_MS / 1000}s. Re-check to re-probe (that bypasses the 30s probe cache). If it stays inconclusive across re-checks, look at the ARM path itself: egress from the Console subnet to ${armEndpoint}, and UAMI token issuance (see the ACA managed-identity notes).`,
   };
 }
 

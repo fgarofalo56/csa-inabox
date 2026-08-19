@@ -98,8 +98,8 @@ export interface CheckResult {
    * `unknown` capability state so an unfinished check can never hard-block a
    * workload, and the UI says "could not establish" rather than inventing a
    * cause. #3729: a 6 s ARM probe timeout was reported as "the Console cannot
-   * reach management.azure.com and the UAMI token is not being issued",
-   * blocking the whole Core platform workload on a fact nobody had observed.
+   * reach the ARM endpoint and the UAMI token is not being issued", blocking
+   * the whole Core platform workload on a fact nobody had observed.
    */
   inconclusive?: boolean;
   /** Set when the healer can apply a safe runtime fix (admin-approved). */
