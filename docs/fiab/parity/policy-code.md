@@ -45,8 +45,13 @@ on the same statement. Every default path is Azure-native.
 ## Verification
 
 - `npx tsc -p tsconfig.build.json --noEmit` → clean.
-- `npx vitest run lib/governance/policy-code/__tests__` → 20 passing (DSL,
+- `npx vitest run lib/governance/policy-code` → 99 passing across 6 files (DSL,
   5 compilers, one-pass ≥4-backend acceptance, reconcile drift self-heal).
+  NOTE: the selector deliberately omits `/__tests__`. A vitest selector containing
+  a literal `__tests__` segment anchors to that one directory and silently skips
+  every nested one — here `lib/governance/policy-code/__tests__` runs 45 of the 99
+  tests, missing `compilers/__tests__/trino.test.ts` entirely. Select the feature
+  directory, not its test directory.
 - CI guards: env-sync, route-guards, file-size, bff-errors, health-coverage,
   no-freeform → all OK.
 
