@@ -163,6 +163,55 @@ export function blankSource(src) {
   return out.join('');
 }
 
+/**
+ * Blank COMMENTS only, preserving string CONTENT and every byte offset.
+ *
+ * Two different questions need two different blankings, and conflating them
+ * broke this analyser once already:
+ *
+ *   • "Does this file DO x?" — a behavioural test. Must blank comments AND
+ *     string text, or prose and SQL literals answer for code. Use
+ *     {@link blankSource}.
+ *   • "Which item types does this registry declare?" — an identifier question
+ *     whose answer IS string content (`'data-pipeline': dataPipelineProvisioner`).
+ *     Blanking strings here erases the very thing being read; the first attempt
+ *     did exactly that and emptied Rule 1's population. Use this.
+ *
+ * Comments are blanked in both, because a commented-out registry entry declares
+ * nothing.
+ */
+export function blankComments(src) {
+  const out = src.split('');
+  let i = 0;
+  const n = src.length;
+  const blank = (from, to) => {
+    for (let k = from; k < to && k < n; k++) if (out[k] !== '\n') out[k] = ' ';
+  };
+  while (i < n) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (c === '/' && d === '/') {
+      let j = i + 2;
+      while (j < n && src[j] !== '\n') j++;
+      blank(i, j); i = j; continue;
+    }
+    if (c === '/' && d === '*') {
+      let j = i + 2;
+      while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
+      blank(i, Math.min(j + 2, n)); i = j + 2; continue;
+    }
+    // Skip OVER strings without blanking them, so a `//` inside a literal
+    // cannot start a phantom comment.
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < n && src[j] !== c) { if (src[j] === '\\') j++; j++; }
+      i = j + 1; continue;
+    }
+    i++;
+  }
+  return out.join('');
+}
+
 /** Index of `{` -> matching `}` over blanked source. */
 function braceMap(src) {
   const stack = [];
@@ -187,25 +236,82 @@ const DIRECT_CONTENT_READ =
   /state\s*\??\s*\.\s*content|loadContentBackedItem\s*\(|\w+FromContent\s*\(|\w+ContentFromItem\s*\(|contentOf\s*</;
 
 /**
- * A provisioner PERSISTS when it performs a Cosmos WRITE.
+ * Does this file READ a Loom item's bundle content?
  *
- * WHY NOT `itemsContainer(`. That was the first spelling and it is satisfied by
- * a MENTION rather than a write — this repo's documented "presence, not
- * enforcement" shape. Independent review proved it: with a real defect present,
- * injecting an unused, never-called helper
+ * Three spellings, all real, all in the current tree. The first two were found
+ * only when Rule 1 started blanking source: they had been passing on an
+ * ACCIDENT — a comment and a SQL string respectively — and the honest detector
+ * has to see the code that was actually there.
  *
- *     async function _peek(id) { const c = await itemsContainer(); return c; }
+ *   1. DIRECT      `item.state.content`, `loadContentBackedItem(`, the
+ *                  `*FromContent` / `*ContentFromItem` / `contentOf<>`
+ *                  projections.
+ *   2. COSMOS SQL  `c.state.content.databricksMirrorItemId` inside a query
+ *                  string (`mirrored-databricks/[id]/sql-endpoint`). The query
+ *                  text IS the read, so it is matched on comment-blanked source
+ *                  where strings survive. `c.state.content` is a Cosmos alias
+ *                  path — it cannot be prose, and comments are already gone.
+ *   3. VIA A LOCAL `const st = (item.state ?? {}); … st.content`
+ *                  (`data-products/[id]/route.ts:contentFold`). Resolved by
+ *                  binding the local to `.state` and then looking for
+ *                  `<local>.content`, rather than by hoping the two tokens are
+ *                  adjacent.
  *
- * flipped the guard to OK while the item type was still genuinely unreachable.
- * Requiring a write VERB means the credit tracks the thing that makes the
- * content readable, not the import that might.
- *
- * `.replace(` / `.upsert(` / `.create(` are the container-item writes; the
- * `updateOwnedItem` / `createOwnedItem` helpers are the shared write chokepoints
- * in `app/api/items/_lib/item-crud.ts`.
+ * @param codeSrc comments AND string text blanked (behavioural)
+ * @param declSrc comments blanked, strings preserved (for the SQL form)
  */
-const PERSISTS_WRITE =
-  /\.\s*(?:replace|upsert|create)\s*(?:<[^>]*>)?\s*\(|\b(?:updateOwnedItem|createOwnedItem)\s*\(/;
+export function readsItemContent(codeSrc, declSrc) {
+  if (DIRECT_CONTENT_READ.test(codeSrc)) return true;
+  if (/\bc\s*\.\s*state\s*\.\s*content\b/.test(declSrc)) return true;
+  for (const m of codeSrc.matchAll(/\b(?:const|let|var)\s+(\w+)\s*=\s*[^;\n]*\.\s*state\b/g)) {
+    if (new RegExp(`\\b${m[1]}\\s*\\??\\s*\\.\\s*content\\b`).test(codeSrc)) return true;
+  }
+  return false;
+}
+
+/**
+ * A provisioner PERSISTS when it performs a Cosmos WRITE — on a COSMOS receiver.
+ *
+ * TWO EVASIONS, BOTH PROVED BY INJECTION, BOTH FIXED HERE.
+ *
+ * 1. `itemsContainer(` alone was satisfied by a MENTION rather than a write:
+ *    an unused, never-called `async function _peek(id) { await itemsContainer(); }`
+ *    flipped the guard to OK while the item type was genuinely unreachable.
+ *
+ * 2. Demanding a write VERB was the right shape but the wrong ANCHOR. A bare
+ *    `/\.(replace|upsert|create)\(/` also matches `String.prototype.replace`, so
+ *    ONE line of name sanitisation —
+ *
+ *        const _slug = String('x').replace(/[^a-z]/g, '_');
+ *
+ *    flipped a genuinely-unreachable `materialized-lake-view` from FAILED to OK.
+ *    Worse, it took `persists` credits from 2 item types to 19, including
+ *    `warehouse` and `synapse-serverless-sql-pool` — which this same file
+ *    declares write-free BECAUSE there is nothing to project onto the Cosmos
+ *    item. Every one of those hits was SQL text or identifier sanitisation. A
+ *    report that contradicts its own declarations is worse than no report.
+ *
+ * So the verb must sit on a Cosmos RECEIVER: `.item(…).replace(` /
+ * `.items.upsert(` / `.items.create(`, AND the file must actually reach the
+ * container (`itemsContainer(`). The `updateOwnedItem` / `createOwnedItem`
+ * chokepoints in `app/api/items/_lib/item-crud.ts` are accepted on their own —
+ * they ARE the Cosmos write.
+ *
+ * Fixing the anchor without fixing the ANALYSIS would have left the sibling
+ * hole open, so every Rule-1 test now runs on BLANKED source (see
+ * `judgeItemTypes`): a comment could satisfy `content-read-route`, which is the
+ * same "prose satisfies the rule" defect wearing a different mechanism.
+ */
+const COSMOS_ITEM_WRITE =
+  /\.\s*item\s*\([^)]*\)\s*\.\s*(?:replace|upsert|delete)\s*(?:<[^>]*>)?\s*\(|\.\s*items\s*\.\s*(?:create|upsert)\s*(?:<[^>]*>)?\s*\(/;
+const OWNED_ITEM_WRITE = /\b(?:updateOwnedItem|createOwnedItem)\s*\(/;
+const CONTAINER_REACHED = /\bitemsContainer\s*\(/;
+
+/** @param blanked source with comments + string TEXT blanked. */
+export function persistsCosmosWrite(blanked) {
+  if (OWNED_ITEM_WRITE.test(blanked)) return true;
+  return CONTAINER_REACHED.test(blanked) && COSMOS_ITEM_WRITE.test(blanked);
+}
 
 /**
  * Local functions in this file whose own body performs a direct content read.
@@ -290,28 +396,43 @@ function walk(dir, out = []) {
  * @returns {{rows: Array, unjudged: Array}}
  */
 export function judgeItemTypes(io) {
-  const engine = io.read(ENGINE);
-  const start = engine.indexOf('export const PROVISIONERS');
+  // BEHAVIOURAL tests read `code()` — comments AND string text blanked, so
+  // neither prose nor a SQL literal can answer for code. IDENTIFIER parsing
+  // (registry keys, import specifiers, `itemTypes:` entries) reads `decl()` —
+  // comments blanked only, because the answer IS string content.
+  //
+  // Rule 1 originally tested RAW source for both, and that was a real hole with
+  // the same shape as the `String.replace` one above: a file whose ONLY
+  // `state.content` was a sentence in a docstring counted as a route that serves
+  // the content. Measured on this very PR — reverting the
+  // `materialized-lake-view` fix left my explanatory comment behind and the
+  // guard still reported the item type reachable, on prose alone. Rule 2 had
+  // blanked from the start; Rule 1 had not, and nothing made that asymmetry
+  // visible. A rule a COMMENT can satisfy measures nothing.
+  const code = (p) => blankSource(io.read(p));
+  const decl = (p) => blankComments(io.read(p));
+  const engineDecl = decl(ENGINE);
+  const start = engineDecl.indexOf('export const PROVISIONERS');
   const rows = [];
   const unjudged = [];
   if (start < 0) {
     unjudged.push({ itemType: '(registry)', why: 'PROVISIONERS registry not found in provisioning-engine.ts' });
     return { rows, unjudged };
   }
-  const regEnd = engine.indexOf('};', start);
-  const registry = engine.slice(start, regEnd < 0 ? engine.length : regEnd);
+  const regEnd = engineDecl.indexOf('};', start);
+  const registry = engineDecl.slice(start, regEnd < 0 ? engineDecl.length : regEnd);
 
   const sym2file = new Map();
-  for (const m of engine.matchAll(
+  for (const m of engineDecl.matchAll(
     /import\s*\{\s*(\w+)\s*\}\s*from\s*'\.\/provisioners\/([\w-]+)'/g,
   )) sym2file.set(m[1], m[2]);
 
   const seeded = new Set();
-  const abp = io.exists(AUTO_BIND) ? io.read(AUTO_BIND) : '';
-  for (const m of abp.matchAll(/itemTypes:\s*\[([^\]]+)\]/g)) {
+  const abpDecl = io.exists(AUTO_BIND) ? decl(AUTO_BIND) : '';
+  for (const m of abpDecl.matchAll(/itemTypes:\s*\[([^\]]+)\]/g)) {
     for (const t of m[1].matchAll(/'([\w-]+)'/g)) seeded.add(t[1]);
   }
-  if (abp && seeded.size === 0) {
+  if (abpDecl && seeded.size === 0) {
     unjudged.push({ itemType: '(auto-bind)', why: 'auto-bind-providers.ts parsed but yielded no itemTypes — the seeding mechanism cannot be credited' });
   }
 
@@ -322,13 +443,13 @@ export function judgeItemTypes(io) {
     if (!file) { unjudged.push({ itemType, why: `provisioner symbol '${sym}' has no resolvable import` }); continue; }
     const path = join(PROVISIONER_DIR, `${file}.ts`);
     if (!io.exists(path)) { unjudged.push({ itemType, why: `provisioner module '${path}' not found` }); continue; }
-    const src = io.read(path);
+    const src = code(path);
     if (!/input\s*\.\s*content/.test(src)) {
       rows.push({ itemType, verdict: 'not-judged', why: 'provisioner reads no bundle content', file });
       continue;
     }
     const mech = [];
-    if (PERSISTS_WRITE.test(src)) mech.push('persists');
+    if (persistsCosmosWrite(src)) mech.push('persists');
     if (seeded.has(itemType)) mech.push('seeds-backing');
 
     const dirs = [
@@ -338,7 +459,9 @@ export function judgeItemTypes(io) {
     ].filter((d) => io.exists(d));
     let routeHits = 0;
     for (const d of dirs) {
-      for (const f of io.walk(d)) if (DIRECT_CONTENT_READ.test(io.read(f))) routeHits++;
+      // BLANKED — a `state.content` that only appears in a docstring is prose,
+      // not a read path.
+      for (const f of io.walk(d)) if (readsItemContent(code(f), decl(f))) routeHits++;
     }
     if (routeHits > 0) mech.push(`content-read-route(${routeHits})`);
 
@@ -771,6 +894,78 @@ function runControls(failures) {
       + 'Tightening the mechanism must not remove it.',
     );
   }
+
+  // CONTROL L — `String.prototype.replace` is NOT a Cosmos write.
+  //
+  // Demanding a write VERB was the right shape but the wrong ANCHOR, and
+  // independent review proved it end to end: one line of name sanitisation
+  // flipped a genuinely-unreachable item type from FAILED to OK, and took
+  // `persists` credits from 2 item types to 19 — including the two this file
+  // DECLARES write-free. Both directions are planted: a bare String.replace must
+  // not be credited, and a `.item(…).replace(` on a Cosmos container must be.
+  const stringReplaceIo = {
+    ...fakeIo,
+    read: (p) => (p.endsWith('thing.ts')
+      ? 'const c = input.content;\n'
+        + "const _slug = String('x').replace(/[^a-z]/g, '_');\n"
+        + 'return { status: "created" };'
+      : fakeIo.read(p)),
+  };
+  const stringReplaceRow = judgeItemTypes(stringReplaceIo).rows.find((r) => r.itemType === 'thing');
+  if (!stringReplaceRow || stringReplaceRow.verdict !== 'unreachable') {
+    failures.push(
+      'CONTROL L BROKEN: a bare String.prototype.replace was credited as a Cosmos write — judged '
+      + `${JSON.stringify(stringReplaceRow)}, expected 'unreachable'. The write verb must sit on a Cosmos `
+      + 'RECEIVER (.item(…).replace / .items.upsert / .items.create) or be one of the updateOwnedItem / '
+      + 'createOwnedItem chokepoints. Without this anchor the report contradicts its own BACKING_IS_TRUTH '
+      + 'declarations, which is worse than no report.',
+    );
+  }
+
+  // CONTROL M — a content read that exists only in a COMMENT is prose.
+  //
+  // Rule 1 tested RAW source until this PR, so a route file whose only
+  // `state.content` was a sentence in a docstring counted as a route that serves
+  // the content. Measured on the real tree: it kept `materialized-lake-view`
+  // green on an explanatory comment alone after its fix was reverted.
+  const commentOnlyIo = {
+    ...fakeIo,
+    exists: (p) => p === ENGINE || p === AUTO_BIND || p.endsWith('thing.ts')
+      || p === join(CONSOLE_DIR, 'app', 'api', 'items', 'thing'),
+    read: (p) => (p.endsWith('route.ts')
+      ? '/** Serves the item from `state.content` — or so this comment says. */\nexport async function GET() { return json({ ok: true }); }'
+      : fakeIo.read(p)),
+    walk: () => [join(CONSOLE_DIR, 'app', 'api', 'items', 'thing', 'route.ts')],
+  };
+  const commentOnlyRow = judgeItemTypes(commentOnlyIo).rows.find((r) => r.itemType === 'thing');
+  if (!commentOnlyRow || commentOnlyRow.verdict !== 'unreachable') {
+    failures.push(
+      'CONTROL M BROKEN: a route whose only `state.content` is inside a COMMENT was credited as a content-read '
+      + `route — judged ${JSON.stringify(commentOnlyRow)}, expected 'unreachable'. A rule a comment can satisfy `
+      + 'measures nothing.',
+    );
+  }
+
+  // CONTROL N — the two REAL non-adjacent read shapes must still be credited,
+  // so the blanking above did not simply delete the mechanism. Both are live in
+  // the tree and both were passing on an accident before blanking exposed them:
+  // a Cosmos-SQL projection inside a query string, and `st.content` where
+  // `st = item.state`.
+  const sqlRead = 'const q = { query: "SELECT * FROM c WHERE c.state.content.databricksMirrorItemId = @m" };';
+  const localRead = 'const st = (item.state ?? {}) as Record<string, unknown>;\nconst content = st.content as any;';
+  for (const [name, body] of [['cosmos-sql', sqlRead], ['via-local', localRead]]) {
+    const readIo = {
+      ...commentOnlyIo,
+      read: (p) => (p.endsWith('route.ts') ? body : fakeIo.read(p)),
+    };
+    const row = judgeItemTypes(readIo).rows.find((r) => r.itemType === 'thing');
+    if (!row || row.verdict !== 'ok') {
+      failures.push(
+        `CONTROL N BROKEN (${name}): a REAL content read was not detected — judged ${JSON.stringify(row)}, `
+        + "expected 'ok'. Blanking must expose accidents, not hide genuine reads.",
+      );
+    }
+  }
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
@@ -885,7 +1080,7 @@ function main() {
     + `${notJudged.length} further registered item type(s) read no bundle content and are NOT judged `
     + `[${notJudged.map((r) => r.itemType).join(', ') || 'none'}]; 0 unjudged. `
     + `RULE 2 — ${sites.length} \`loom:\`-gated content branch(es) JUDGED across ${files.length} scanned files, `
-    + `0 unreachable, 0 unresolvable. 11 embedded controls intact.)`,
+    + `0 unreachable, 0 unresolvable. 15 embedded controls intact.)`,
   );
 }
 

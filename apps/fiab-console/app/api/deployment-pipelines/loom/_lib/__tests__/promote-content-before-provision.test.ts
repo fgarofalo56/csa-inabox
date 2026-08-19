@@ -67,6 +67,19 @@ vi.mock('@/app/api/items/_lib/item-crud', () => ({
   updateOwnedItem: (...a: unknown[]) => updateOwnedItem(...(a as [])),
 }));
 
+/** The direct container write the receipt stamp uses (no version/event fan-out). */
+const itemReplace = vi.fn(async (doc: any) => { targetDoc = doc; return { resource: doc }; });
+const historyCreate = vi.fn(async () => ({}));
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  pipelineHistoryContainer: vi.fn(async () => ({ items: { create: historyCreate } })),
+  itemsContainer: vi.fn(async () => ({
+    item: () => ({
+      read: async () => ({ resource: targetDoc }),
+      replace: (doc: any) => itemReplace(doc),
+    }),
+  })),
+}));
+
 const semanticModelProvisioner = vi.fn(async () => {
   // Stand-in for the real read-back: record what is on the item RIGHT NOW.
   contentSeenByProvisioner = targetDoc?.state?.content ?? null;
@@ -86,9 +99,6 @@ vi.mock('@/lib/install/pipeline-variables', () => ({
   stageValueSet: vi.fn(() => 'default'),
   collectStageVariableValues: vi.fn(() => ({ values: {}, secretNames: new Set() })),
   rebindContent: vi.fn((c: unknown) => ({ content: c, substitutions: [], skippedSecrets: [], unresolved: [] })),
-}));
-vi.mock('@/lib/azure/cosmos-client', () => ({
-  pipelineHistoryContainer: vi.fn(async () => ({ items: { create: vi.fn(async () => ({})) } })),
 }));
 vi.mock('../pipeline-store', () => ({
   loadStageRules: vi.fn(async () => []),
@@ -115,6 +125,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   targetDoc = JSON.parse(JSON.stringify(targetItem));
   contentSeenByProvisioner = undefined;
+  itemReplace.mockImplementation(async (doc: any) => { targetDoc = doc; return { resource: doc }; });
 });
 
 describe('#3549/#3551 runPromotion — the provisioner sees the PROMOTED definition', () => {
@@ -136,16 +147,32 @@ describe('#3549/#3551 runPromotion — the provisioner sees the PROMOTED definit
   it('the definition write happens before the provisioner call, and the receipt after', async () => {
     await runPromotion(input());
 
-    // Two writes: the promoted definition, then the receipt.
-    expect(updateOwnedItem).toHaveBeenCalledTimes(2);
-    const first = updateOwnedItem.mock.calls[0][3] as any;
-    const second = updateOwnedItem.mock.calls[1][3] as any;
+    // ONE authoring write — the promoted definition. The receipt is a separate
+    // DIRECT container replace, so a promotion no longer emits two version-history
+    // rows and two `item.updated` events per item (item-crud.ts:591-626 fans out
+    // recordItemVersion / upsertLoomDoc / mirrorDataProduct / mirrorGovernanceDoc /
+    // emitLoomEvent on every updateOwnedItem call).
+    expect(updateOwnedItem).toHaveBeenCalledTimes(1);
+    const authored = updateOwnedItem.mock.calls[0][3] as any;
+    expect(authored.state.content).toEqual(SOURCE_CONTENT);
+    expect(authored.state.provisionResult).toBeUndefined();
+    expect(authored.state.deployedFromStage).toBe('dev');
 
-    expect(first.state.content).toEqual(SOURCE_CONTENT);
-    expect(first.state.provisionResult).toBeUndefined();
-    expect(second.state.provisionResult).toBeTruthy();
-    // The receipt write must not drop the definition it was promoted with.
-    expect(second.state.content).toEqual(SOURCE_CONTENT);
-    expect(second.state.deployedFromStage).toBe('dev');
+    // …and the receipt landed via the direct write, without dropping the definition.
+    expect(itemReplace).toHaveBeenCalledTimes(1);
+    const stamped = itemReplace.mock.calls[0][0] as any;
+    expect(stamped.state.provisionResult).toBeTruthy();
+    expect(stamped.state.content).toEqual(SOURCE_CONTENT);
+    expect(stamped.state.deployedFromStage).toBe('dev');
+  });
+
+  it('a receipt-stamp failure never undoes a promotion that succeeded', async () => {
+    itemReplace.mockRejectedValueOnce(new Error('429 Too Many Requests'));
+
+    const res = await runPromotion(input());
+
+    // The definition is already durable from step 3, so the promotion stands.
+    expect(res.deployedItemIds).toContain('tgt-1');
+    expect(res.steps.some((s: string) => /provision receipt not stamped/i.test(s))).toBe(true);
   });
 });

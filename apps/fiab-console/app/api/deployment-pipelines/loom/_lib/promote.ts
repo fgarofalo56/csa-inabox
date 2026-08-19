@@ -31,7 +31,7 @@ import { computePipelineDiff, pairKey } from '@/lib/install/pipeline-compare';
 import {
   stageValueSet, collectStageVariableValues, rebindContent,
 } from '@/lib/install/pipeline-variables';
-import { pipelineHistoryContainer } from '@/lib/azure/cosmos-client';
+import { pipelineHistoryContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import type { ProvisionResult } from '@/lib/install/provisioners/types';
 import type { VarDef } from '@/lib/variables/resolve';
 import type { LoomPipeline, LoomPipelineStage, LoomPipelineHistoryRecord } from '@/lib/types/loom-pipeline';
@@ -246,13 +246,37 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
       anyCreated = true;
     }
 
-    // 5) record the provision receipt onto the target item. Only when a
-    // provisioner ran — for a Cosmos-only type step 3 already IS the promotion
-    // and a second identical write would add nothing but a version-history row.
+    // 5) record the provision receipt onto the target item.
+    //
+    // A DIRECT container write, not `updateOwnedItem`. That helper is not a bare
+    // write: it also snapshots version history, upserts the search doc, mirrors
+    // the data-product + governance docs, and emits `item.updated`
+    // (`item-crud.ts:591-626`). Splitting one call into two therefore doubled
+    // every one of those per promoted item — two version-history rows and two
+    // `item.updated` webhook events for a single promotion. The receipt is
+    // metadata ABOUT the write in step 3, not a second authoring event, so it
+    // takes the same direct-replace path the sibling receipt-stamp in
+    // `app/api/apps/[id]/install/route.ts` uses for exactly this reason.
+    //
+    // Only when a provisioner ran — for a Cosmos-only type step 3 already IS the
+    // promotion. Best-effort: a failed receipt stamp must not undo a promotion
+    // that succeeded, and the definition is already durable from step 3.
     if (result) {
-      await updateOwnedItem(targetItemId, src.itemType, tenantId, {
-        state: { ...promotedState, provisionResult: result },
-      });
+      try {
+        const items = await itemsContainer();
+        const { resource: cur } = await items.item(targetItemId, tgtWs).read<WorkspaceItem>();
+        if (cur) {
+          await items.item(cur.id, cur.workspaceId).replace<WorkspaceItem>({
+            ...cur,
+            state: { ...(cur.state || {}), provisionResult: result },
+            updatedAt: new Date().toISOString(),
+          });
+        } else {
+          steps.push(`[${src.displayName}] provision receipt not stamped: target item ${targetItemId} not readable.`);
+        }
+      } catch (e: any) {
+        steps.push(`[${src.displayName}] provision receipt not stamped (${e?.message || String(e)}); the promoted definition is unaffected.`);
+      }
     }
     deployedItemIds.push(targetItemId);
   }

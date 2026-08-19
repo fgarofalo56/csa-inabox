@@ -180,7 +180,7 @@ test('blankSource preserves offsets and keeps template-hole CODE', () => {
 
 // ── RULE 1 ─────────────────────────────────────────────────────────────────
 
-function io({ provisioner, autoBind = '', routes = [] }) {
+function io({ provisioner, autoBind = '', routes = [], routeBody = 'const c = item.state.content;' }) {
   return {
     read: (p) => {
       if (p.endsWith('provisioning-engine.ts')) {
@@ -189,7 +189,7 @@ function io({ provisioner, autoBind = '', routes = [] }) {
       }
       if (p.endsWith('auto-bind-providers.ts')) return autoBind || "itemTypes: ['other'],";
       if (p.endsWith('thing.ts')) return provisioner;
-      return routes.includes(p) ? 'const c = item.state.content;' : '';
+      return routes.includes(p) ? routeBody : '';
     },
     exists: (p) => p.endsWith('provisioning-engine.ts') || p.endsWith('auto-bind-providers.ts')
       || p.endsWith('thing.ts') || p.includes('items' + '/' + 'thing') || p.includes('items\\thing'),
@@ -226,6 +226,28 @@ test('FAIL: a MENTION of itemsContainer() is not a write', () => {
   assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'unreachable');
 });
 
+test('FAIL: String.prototype.replace is not a Cosmos write', () => {
+  // The SECOND evasion, proved end-to-end on the real tree: one line of name
+  // sanitisation flipped a genuinely-unreachable item type from FAILED to OK and
+  // took `persists` credits from 2 item types to 19 — including the two the
+  // guard DECLARES write-free. The verb must sit on a Cosmos receiver.
+  const { rows } = judgeItemTypes(io({
+    provisioner: "const c = input.content;\nconst _slug = String('x').replace(/[^a-z]/g, '_');",
+  }));
+  assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'unreachable');
+});
+
+test('FAIL: a .replace( on a non-Cosmos receiver is not credited even with itemsContainer present', () => {
+  // Both halves of the anchor are required: reaching the container AND writing
+  // through it. Reaching it and then calling String.replace is not a write.
+  const { rows } = judgeItemTypes(io({
+    provisioner: 'const c = input.content;\n'
+      + 'const items = await itemsContainer();\n'
+      + "const name = input.displayName.replace(/[^A-Za-z0-9]/g, '-');",
+  }));
+  assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'unreachable');
+});
+
 test('PASS: updateOwnedItem / createOwnedItem also count as a write', () => {
   for (const verb of ['await updateOwnedItem(id, t, oid, { state })', 'await createOwnedItem(s, t, { state })']) {
     const { rows } = judgeItemTypes(io({ provisioner: `const c = input.content; ${verb};` }));
@@ -247,6 +269,43 @@ test('PASS: a route directory named for the item type reads state.content', () =
   const row = rows.find((r) => r.itemType === 'thing');
   assert.equal(row.verdict, 'ok');
   assert.ok(row.mech.some((m) => m.startsWith('content-read-route')));
+});
+
+test('FAIL: a route whose only state.content is in a COMMENT is prose, not a read path', () => {
+  // Rule 1 tested RAW source until this PR. Measured on the real tree: after the
+  // materialized-lake-view fix was reverted, the guard still reported the item
+  // type reachable on the strength of an explanatory comment alone.
+  const routes = ['apps/fiab-console/app/api/items/thing/[id]/route.ts'];
+  const { rows } = judgeItemTypes(io({
+    provisioner: 'const c = input.content;',
+    routes,
+    routeBody: '/** Serves the item from `state.content`. */\nexport async function GET() { return json({ ok: true }); }',
+  }));
+  assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'unreachable');
+});
+
+test('PASS: a Cosmos-SQL content projection inside a query string is a real read', () => {
+  // mirrored-databricks/[id]/sql-endpoint — the query text IS the read. Blanking
+  // strings hides it, so this shape is matched on comment-blanked source.
+  const routes = ['apps/fiab-console/app/api/items/thing/[id]/route.ts'];
+  const { rows } = judgeItemTypes(io({
+    provisioner: 'const c = input.content;',
+    routes,
+    routeBody: 'const q = { query: "SELECT * FROM c WHERE c.state.content.databricksMirrorItemId = @m" };',
+  }));
+  assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'ok');
+});
+
+test('PASS: content read VIA A LOCAL bound to .state is a real read', () => {
+  // data-products/[id]/route.ts:contentFold — `const st = item.state; st.content`.
+  // The two tokens are never adjacent, so an adjacency regex misses it.
+  const routes = ['apps/fiab-console/app/api/items/thing/[id]/route.ts'];
+  const { rows } = judgeItemTypes(io({
+    provisioner: 'const c = input.content;',
+    routes,
+    routeBody: 'const st = (item.state ?? {}) as Record<string, unknown>;\nconst content = st.content as any;',
+  }));
+  assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'ok');
 });
 
 test('NOT JUDGED: a provisioner that reads no bundle content', () => {
