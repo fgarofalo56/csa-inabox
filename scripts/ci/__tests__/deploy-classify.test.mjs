@@ -394,7 +394,7 @@ test('#3449 matcher sets are EXACTLY the observed strings — additive mutation 
     );
     assert.equal(sig.class, 'config', `${TAXONOMY_REL_3449}: "${signalId}" changed class`);
     assert.ok(
-      /3194108671[0-9]|3201977575[0-9]/.test(sig.observed ?? ''),
+      /31941086712|32019775757/.test(sig.observed ?? ''),
       `${TAXONOMY_REL_3449}: "${signalId}" must cite the run it was observed on — provenance is the ` +
         'only thing separating an observed signal from a guessed one.',
     );
