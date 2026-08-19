@@ -22,11 +22,12 @@
  *   - Business Domain (REST): https://learn.microsoft.com/rest/api/purview/purview-unified-catalog/business-domain
  */
 import { NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -99,9 +100,7 @@ async function purviewUcDomains(): Promise<DomainOption[] | null> {
   }
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
   try {
     const uc = await purviewUcDomains();
     if (uc && uc.length > 0) {
@@ -120,4 +119,4 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

@@ -28,23 +28,19 @@
  * scope fixed here and it is NOT fixed by this change — see the PR for #3753.
  */
 import { NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { apiServerError } from '@/lib/api/respond';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { getDomainMesh } from '@/lib/azure/domain-mesh';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const GET = withTenantAdmin(async (_req, { session: s }) => {
   try {
     const mesh = await getDomainMesh(tenantScopeId(s), s.claims.oid, s.claims.upn || s.claims.oid);
     return NextResponse.json({ ok: true, mesh });
   } catch (e: any) {
     return apiServerError(e, 'Domain mesh read failed');
   }
-}
+});

@@ -20,14 +20,14 @@
  * surfaces that honestly per .claude/rules/no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { tenantScopeId } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
 import type { PlanSubscription, ServiceConfig } from '@/lib/components/deploy-planner/types';
 import { configFor, coerceConfigValue } from '@/lib/components/deploy-planner/service-catalog';
 import { pruneEdges } from '@/lib/components/deploy-planner/plan-validation';
 import { apiServerError } from '@/lib/api/respond';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -88,11 +88,7 @@ async function loadOrSeed(tenantId: string, domainScope: string, who: string): P
   return seed;
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const GET = withTenantAdmin(async (_req, { session: s }) => {
   const tenantId = s.claims.oid;
   const domainScope = tenantScopeId(s);
   try {
@@ -109,7 +105,7 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
 /**
  * Validate one service's stored config against the catalog schema: drop unknown
@@ -160,11 +156,7 @@ function sanitize(subs: unknown): PlanSubscription[] {
   return clean;
 }
 
-export async function PUT(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const PUT = withTenantAdmin(async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
   const subscriptions = sanitize(body?.subscriptions);
@@ -180,4 +172,4 @@ export async function PUT(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

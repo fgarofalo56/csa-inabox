@@ -15,10 +15,10 @@
  * whichever target IS configured. No Fabric dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { apiServerError } from '@/lib/api/respond';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { runDomainSync, saveDomainSyncStatus, loadDomainSyncStatus } from '@/lib/azure/domain-sync';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,11 +30,7 @@ export const dynamic = 'force-dynamic';
 // what every guard and every sibling reader keys the domains document with.
 // Deleted in favour of the shared helper.
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const GET = withTenantAdmin(async (_req, { session: s }) => {
 
   const tenantId = tenantScopeId(s);
   try {
@@ -46,13 +42,9 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e, 'Domain sync failed');
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const POST = withTenantAdmin(async (req: NextRequest, { session: s }) => {
 
   const tenantId = tenantScopeId(s);
   const body = await req.json().catch(() => ({}));
@@ -66,4 +58,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e, 'Domain sync failed');
   }
-}
+});

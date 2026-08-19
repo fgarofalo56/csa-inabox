@@ -24,7 +24,7 @@
  * dependency — this is pure Cosmos + Entra/Graph.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
 import {
@@ -35,13 +35,12 @@ import {
 } from '@/lib/auth/domain-role';
 import { resolveEffectiveRole } from '@/lib/azure/workspace-roles-client';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   // TWO SCOPES (#3753). `tenantId` keys the `workspaces` container, which is
   // partitioned on the CREATOR's oid — `lib/auth/session.ts` states outright that
   // `tenantScopeId()` is NOT valid there, so it stays the raw oid. `domainScope`
@@ -167,4 +166,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

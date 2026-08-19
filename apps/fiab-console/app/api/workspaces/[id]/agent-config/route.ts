@@ -16,7 +16,6 @@
  * See .claude/rules/no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   resolveWorkspaceRole,
   canEditWorkspaceConfig,
@@ -28,6 +27,7 @@ import {
 } from '@/lib/azure/copilot-config-store';
 import type { WorkspaceAgentConfig } from '@/lib/types/copilot-config';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,10 +49,8 @@ function sanitize(input: any): WorkspaceAgentConfig {
   return out;
 }
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session: s, params }) => {
+  const { id } = params;
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
@@ -79,12 +77,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function PUT(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id } = params;
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
@@ -105,4 +101,4 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ id: strin
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

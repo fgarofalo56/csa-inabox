@@ -99,6 +99,26 @@ const TOUCH_EXEMPT = new Map([
   // violations: 0`, exit 0. The contract test remains the only thing watching
   // this 401.
   ['apps/fiab-console/app/api/workspaces/route.ts', '#3064: BFF field-drop fix (provisionBackingRg was inert); codemod skips both handlers — 401 returned via local err() helper, not the literal guard shape; 401 pinned by create-wizard-contract.test.ts:129 (route-guards still does not cover it — re-measured under #3088)'],
+  // #3753 touched this route for ONE line — `resolveWorkspaceRole(item.workspaceId,
+  // session.claims.oid, session.claims.upn)` became `resolveWorkspaceRole(
+  // item.workspaceId, session)`, because that helper's second parameter (named
+  // `tenantId`, always filled with the caller's oid) WAS the defect and was
+  // removed. The auth prologue is UNTOUCHED.
+  //
+  // THE CODEMOD DECLINES IT, measured not assumed: `--file=app/api/items/[type]/
+  // [id]/access-mode/route.ts` reports "0 handlers across 0 files; 1 skipped —
+  // PATCH: getSession() without the exact 401 guard". Same cause as the
+  // workspaces entry above: the 401 is returned through this file's local
+  // `err()` helper (a thin apiError wrapper), not the literal shape withSession
+  // replaces. The other SEVEN route files #3753 touched WERE migrated by the
+  // codemod in that PR (baseline 1068 -> 1061), so this is the residue of a
+  // genuine codemod limitation, not an opt-out of the boy-scout rule.
+  //
+  // Hand-migrating the prologue would put 401-regression risk on an
+  // authorization surface inside a PR whose whole subject is an authorization
+  // defect — for no security gain, since the prologue is already correct.
+  ['apps/fiab-console/app/api/items/[type]/[id]/access-mode/route.ts',
+   "#3753: one-line change (resolveWorkspaceRole's caller-oid parameter removed — the defect itself); auth prologue untouched; codemod reports 'PATCH: getSession() without the exact 401 guard' because the 401 goes through the local err() helper. The other 7 routes this PR touched were migrated (1068 -> 1061)"],
   // FINISHLINE D15 (#3051) touched this route ONLY to carry the new first-class
   // 'opt-in' env status through the response payload (day-one scoring was
   // lying in BOTH directions: policy opt-ins scored unconfigured forever, and

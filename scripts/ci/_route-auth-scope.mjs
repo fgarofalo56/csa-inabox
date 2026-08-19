@@ -131,6 +131,24 @@ export const CONSOLE_ROOT = 'apps/fiab-console';
  *   resolveItemGrantAccess       lib/auth/item-access.ts (via the above)
  *     NOT seeded — it derives, and that is the point of the derivation.
  *
+ *   resolveWorkspaceRole         lib/auth/workspace-role.ts
+ *     The SECOND root, and it is here because #3753 forced it. This resolver
+ *     decides a caller's role on a workspace from `createdBy` (owner) plus a
+ *     `workspace-permissions` row — a different store from the `workspace-roles`
+ *     ACL that `resolveWorkspaceAccessByOid` consults. It used to classify
+ *     owner-scoped only INCIDENTALLY, via the inline
+ *     `workspaces.item(id, callerOid)` + `.tenantId === oid` shape below.
+ *     #3753 removed that point read (it was the #3751 defect: it answered "did
+ *     you CREATE this", so `/admin/permissions` → Workspace access 404'd on any
+ *     workspace the admin had not personally created), and with it went the
+ *     ONLY signal the derivation had — dropping `workspaces/[id]/agent-config`
+ *     from `owner-scoped` to `session-only` while its actual gate was unchanged
+ *     (`role` required, 403 otherwise; PUT still owner/contributor only).
+ *     Under-reporting protection is the failure mode this module's own header
+ *     warns "trains readers to ignore the column", so the primitive is named
+ *     directly rather than inferred from an implementation detail that was
+ *     itself a bug.
+ *
  * SEEDS ARE ASSERTED TO EXIST. `assertSeedsExist()` fails when a seeded module
  * or symbol is absent, because that is exactly how #2977 happened: PR #2973
  * DELETED `assertOwner` and the name survived in a migration comment, so 34
@@ -139,6 +157,7 @@ export const CONSOLE_ROOT = 'apps/fiab-console';
  */
 export const ROOT_AUTHORIZERS = [
   { module: `${CONSOLE_ROOT}/lib/auth/workspace-access.ts`, symbol: 'resolveWorkspaceAccessByOid' },
+  { module: `${CONSOLE_ROOT}/lib/auth/workspace-role.ts`, symbol: 'resolveWorkspaceRole' },
 ];
 
 /**
@@ -1181,6 +1200,10 @@ export function classifyRouteOwnership(graph, resolvers, file, sessionFns = new 
 const STUB_ROOTS = {
   'apps/fiab-console/lib/auth/workspace-access.ts':
     'export async function resolveWorkspaceAccessByOid(oid, workspaceId, opts) { return null; }',
+  // The second root (#3753) — role from `createdBy` + a workspace-permissions
+  // row, keyed by the workspace's own id, bounded by the caller's Entra tid.
+  'apps/fiab-console/lib/auth/workspace-role.ts':
+    'export async function resolveWorkspaceRole(workspaceId, session) { return { workspace: null, role: null }; }',
   'apps/fiab-console/lib/auth/session.ts':
     'export function getSession() { return null; }',
   // A canonical resolver one hop from the root — `item-crud.ts`'s real shape.
