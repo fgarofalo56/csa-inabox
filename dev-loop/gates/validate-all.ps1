@@ -45,11 +45,35 @@ function ShouldRunGate {
     return $false
 }
 
+# A gate has THREE possible outcomes, not two. Collapsing "could not run" into
+# "passed" is the defect behind #3811 in its second form:
+#
+#   0     - the gate ran and found nothing wrong
+#   2     - the gate COULD NOT RUN (its toolchain is absent, there was nothing
+#           for it to check). By convention across dev-loop/gates.
+#   $null - the gate SCRIPT could not be invoked at all. $LASTEXITCODE is not
+#           written in that case, so this is only distinguishable because it is
+#           reset to $null before each call below.
+#   other - the gate ran and found a problem.
+function GateStatus {
+    param($Code)
+    if ($null -eq $Code) { return 'NotRun' }
+    if ($Code -eq 0)     { return 'Pass' }
+    if ($Code -eq 2)     { return 'NotRun' }
+    return 'Fail'
+}
+
 # Gate 1: Bicep
 if (ShouldRunGate @("*.bicep", "deploy/bicep/*")) {
     Write-Host "Running: Bicep validation..." -ForegroundColor White
+    # Reset BEFORE the call. $ErrorActionPreference is 'Continue', which makes a
+    # CommandNotFoundException non-terminating - so if the gate script is
+    # missing or renamed, $LASTEXITCODE is never written and retains the
+    # PREVIOUS gate's value. A missing gate script inherited a stale 0 and
+    # printed [PASS]. Measured, not assumed. See #3811.
+    $LASTEXITCODE = $null
     & (Join-Path $gatesDir "validate-bicep.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "Bicep"; Passed = ($LASTEXITCODE -eq 0) }
+    $results += @{ Gate = "Bicep"; Status = (GateStatus $LASTEXITCODE) }
 } else {
     Write-Host "Skipping: Bicep (no .bicep files changed)" -ForegroundColor DarkGray
 }
@@ -57,8 +81,9 @@ if (ShouldRunGate @("*.bicep", "deploy/bicep/*")) {
 # Gate 2: Python
 if (ShouldRunGate @("*.py", "scripts/*", "domains/*")) {
     Write-Host "Running: Python validation..." -ForegroundColor White
+    $LASTEXITCODE = $null   # see note on Gate 1
     & (Join-Path $gatesDir "validate-python.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "Python"; Passed = ($LASTEXITCODE -eq 0) }
+    $results += @{ Gate = "Python"; Status = (GateStatus $LASTEXITCODE) }
 } else {
     Write-Host "Skipping: Python (no .py files changed)" -ForegroundColor DarkGray
 }
@@ -66,8 +91,9 @@ if (ShouldRunGate @("*.py", "scripts/*", "domains/*")) {
 # Gate 3: dbt
 if (ShouldRunGate @("*.sql", "domains/*/dbt/*", "dbt_project.yml")) {
     Write-Host "Running: dbt validation..." -ForegroundColor White
+    $LASTEXITCODE = $null   # see note on Gate 1
     & (Join-Path $gatesDir "validate-dbt.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "dbt"; Passed = ($LASTEXITCODE -eq 0) }
+    $results += @{ Gate = "dbt"; Status = (GateStatus $LASTEXITCODE) }
 } else {
     Write-Host "Skipping: dbt (no dbt files changed)" -ForegroundColor DarkGray
 }
@@ -78,18 +104,22 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Validation Summary" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
-$allPassed = $true
+$anyFailed = $false
+$anyNotRun = $false
 foreach ($r in $results) {
-    $status = if ($r.Passed) { "[PASS]" } else { "[FAIL]"; $allPassed = $false }
-    $color = if ($r.Passed) { "Green" } else { "Red" }
-    Write-Host "  $($r.Gate): $status" -ForegroundColor $color
+    switch ($r.Status) {
+        'Pass'  { $label = "[PASS]";         $color = "Green" }
+        'Fail'  { $label = "[FAIL]";         $color = "Red";    $anyFailed = $true }
+        default { $label = "[NOT VERIFIED]"; $color = "Yellow"; $anyNotRun = $true }
+    }
+    Write-Host "  $($r.Gate): $label" -ForegroundColor $color
 }
 
-# A gate suite that ran NOTHING must not report a pass. $allPassed is
-# initialised $true and is only ever moved by a gate that actually ran and
-# failed, so an empty $results reaches the success branch below by default:
-# "I measured nothing" and "everything passed" would otherwise print the same
-# words and return the same exit code.
+# A gate suite that ran NOTHING must not report a pass. The verdict below is
+# driven by flags that only a gate which actually RAN can set, so an empty
+# $results would otherwise fall through to the success branch by default:
+# "I measured nothing" and "everything passed" would print the same words and
+# return the same exit code.
 #
 # That case is not rare. It is EVERY console-only, docs-only, workflow-only or
 # script-only change, because dev-loop/gates has no TypeScript leg at all -
@@ -109,10 +139,18 @@ if ($results.Count -eq 0) {
 }
 
 Write-Host ""
-if ($allPassed) {
-    Write-Host "All gates passed!" -ForegroundColor Green
-    exit 0
-} else {
+if ($anyFailed) {
     Write-Host "Some gates failed. Fix issues and re-run." -ForegroundColor Red
     exit 1
+} elseif ($anyNotRun) {
+    # A gate that could not run is not a pass. Reported loudly, but exit stays
+    # 0 for the same reason as the zero-gates case above: "Some gates failed"
+    # would be a false statement about a gate that never ran.
+    $notRunCount = @($results | Where-Object { $_.Status -eq 'NotRun' }).Count
+    Write-Host "NOT FULLY VERIFIED - $notRunCount of $($results.Count) gate(s) could not run." -ForegroundColor Yellow
+    Write-Host "  This is NOT a pass. See the gate output above for what is missing." -ForegroundColor Yellow
+    exit 0
+} else {
+    Write-Host "All gates passed!" -ForegroundColor Green
+    exit 0
 }
