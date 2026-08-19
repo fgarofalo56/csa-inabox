@@ -201,10 +201,31 @@ jobs:
       - name: Detect console changes
         id: changed
         working-directory: ${{ github.workspace }}
-        # Same change-detection as the build job: this job always starts (so it
-        # can safely be wired as a required check without deadlocking bicep- or
-        # workflow-only PRs) but skips the heavy install/test — reporting green —
-        # when apps/fiab-console is untouched.
+        # This job always starts (so it can safely be wired as a required check
+        # without deadlocking bicep- or workflow-only PRs) but skips the heavy
+        # install/test when nothing it covers was touched. It resolves to one of
+        # THREE states, not two:
+        #
+        #   console=true            the console itself changed -> full sharded
+        #                           suite + the ratcheting coverage floor.
+        #   infra=true              the console did NOT change, but the PR
+        #                           touched files that console suites READ ->
+        #                           run just those suites (~66s measured).
+        #   neither                 nothing this suite covers changed -> green.
+        #
+        # The middle state is #3783. The filter used to be keyed to where a test
+        # FILE LIVES (`^apps/fiab-console/`), but ~38 suites under that path are
+        # infra gates that readFileSync a workflow, a bicep module, or a
+        # scripts/ci fixture. A PR touching only .github/workflows/** changes
+        # exactly what those suites watch and was exactly when they were skipped
+        # — this REQUIRED check reported green having executed zero tests (job
+        # 95847683230: steps 4-7 all `skipped`, conclusion `success`).
+        #
+        # The `--ere` pattern is DERIVED from the same source scan that selects
+        # the suites, so the trigger and the selection cannot drift apart. `node`
+        # is preinstalled on ubuntu-latest, which matters because this step runs
+        # BEFORE setup-node; the deriver is dependency-free and uses only
+        # node: builtins so that ordering is safe.
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="origin/${{ github.base_ref }}"
@@ -226,26 +247,40 @@ jobs:
           if ! changed=$(git diff --name-only "$range" 2>&1); then
             echo "::warning::could not resolve '$range' ($changed) — building anyway rather than reporting this required check green on an unexamined tree."
             echo "console=true" >> "$GITHUB_OUTPUT"
+            echo "infra=false" >> "$GITHUB_OUTPUT"
           elif echo "$changed" | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
             echo "console=true" >> "$GITHUB_OUTPUT"
-            echo "Console changed — running vitest."
+            echo "infra=false" >> "$GITHUB_OUTPUT"
+            echo "Console changed — running the full vitest suite."
+          elif ! ere=$(node scripts/ci/derive-infra-reading-suites.mjs --ere); then
+            # FAIL OPEN again, and in the same direction: a broken deriver means
+            # we do not KNOW which subset is safe to skip, so run everything.
+            # Skipping on an unanswerable question is the #3783 defect itself.
+            echo "::warning::the infra-suite deriver failed — running the FULL suite rather than guessing which subset to skip."
+            echo "console=true" >> "$GITHUB_OUTPUT"
+            echo "infra=false" >> "$GITHUB_OUTPUT"
+          elif echo "$changed" | grep -qE "$ere"; then
+            echo "console=false" >> "$GITHUB_OUTPUT"
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+            echo "Console untouched, but this PR changes paths the infra-gate suites read ($ere) — running that subset."
           else
             echo "console=false" >> "$GITHUB_OUTPUT"
-            echo "No apps/fiab-console changes — skipping vitest, reporting this check green."
+            echo "infra=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing this suite covers changed — skipping vitest, reporting this check green."
           fi
 
       - name: Use Node.js 20
-        if: steps.changed.outputs.console == 'true'
+        if: steps.changed.outputs.console == 'true' || steps.changed.outputs.infra == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
 
       - name: Install pnpm
-        if: steps.changed.outputs.console == 'true'
+        if: steps.changed.outputs.console == 'true' || steps.changed.outputs.infra == 'true'
         run: npm install -g pnpm@9
 
       - name: Install dependencies
-        if: steps.changed.outputs.console == 'true'
+        if: steps.changed.outputs.console == 'true' || steps.changed.outputs.infra == 'true'
         run: pnpm install --no-frozen-lockfile
 
       - name: Run vitest (with istanbul coverage floor)
@@ -324,6 +359,56 @@ jobs:
           test -f .vitest-reports/blob-2-2.json || { echo "::error::shard 2 produced no blob"; exit 1; }
           # THE gate: every test from both shards + the ratcheting coverage floor.
           pnpm vitest --merge-reports --coverage
+
+      - name: Run vitest (infra-reading suites only)
+        if: steps.changed.outputs.console != 'true' && steps.changed.outputs.infra == 'true'
+        working-directory: ${{ github.workspace }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        # The #3783 branch: the console is untouched, but this PR edits files
+        # that console suites read. Run exactly those suites.
+        #
+        # NOT SHARDED, and NO COVERAGE FLOOR — both are deliberate, and both
+        # differ from the full-suite step above for the same reason.
+        #
+        #   Sharding exists up there to keep a fork under the ~16 GB runner
+        #   (1302 files at 3072/fork). MEASURED here: all 38 suites run in 66s
+        #   wall / 45.87s vitest / 798 tests, single pass. There is no memory
+        #   pressure to shard away.
+        #
+        #   The coverage floor is a WHOLE-SUITE ratchet. Enforcing it against a
+        #   38-file subset compares a small numerator to a whole-suite
+        #   denominator and fails every time, for a reason that says nothing
+        #   about the diff — the same trap documented on the per-shard
+        #   thresholds above. This lane gates CORRECTNESS of the infra
+        #   assertions, not coverage; coverage is enforced whenever the console
+        #   itself changes, which is when it can be measured honestly.
+        #
+        # The suite list is re-derived here rather than passed from the detect
+        # step: it is the same script and the same tree, so it is the same
+        # answer, and the derivation carries its own controls (a sentinel suite
+        # that must be present and a floor below which it refuses to emit). A
+        # deriver that silently returned nothing would recreate this issue's own
+        # defect one level down — a green check having run zero tests.
+        run: |
+          set -euo pipefail
+          # Command substitution, NOT `mapfile < <(node ...)`. A process
+          # substitution does not propagate its exit status to mapfile, so
+          # `set -e` never sees the deriver fail — its controls would fire, the
+          # step would ignore them, and vitest would be handed an empty filter
+          # (which runs everything, blowing this lane's budget) or nothing at
+          # all. An assignment from $(...) does fail the step, which is the
+          # whole point of the controls.
+          suites_raw=$(node scripts/ci/derive-infra-reading-suites.mjs --suites)
+          if [ -z "$suites_raw" ]; then
+            echo "::error::the deriver emitted no suites but exited 0 — refusing to report this required check green on zero tests (#3783)."
+            exit 1
+          fi
+          mapfile -t suites <<< "$suites_raw"
+          echo "Running ${#suites[@]} infra-reading suites:"
+          printf '  %s\n' "${suites[@]}"
+          cd apps/fiab-console
+          pnpm vitest run --coverage=false "${suites[@]}"
 
   tutorial-coverage:
     # Audits visual-tutorial coverage across ALL THREE dimensions (B-9):
