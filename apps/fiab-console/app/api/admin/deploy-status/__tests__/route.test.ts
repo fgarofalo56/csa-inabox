@@ -50,10 +50,20 @@ let FETCHED: string[] = [];
 
 vi.mock('@/lib/updates/current-version', () => ({
   readBuildMarker: () => MARKER,
+  // #3730 — the self row reports this console's running version alongside its
+  // sha. Modelled on the real resolver's LAST fallback (`build-<sha12>`) rather
+  // than a fixed string, so the value still tracks the marker under test.
+  resolveCurrentVersion: (b: { sha?: string }) => (b?.sha ? `build-${b.sha.slice(0, 12)}` : 'dev'),
 }));
 
 vi.mock('@/lib/azure/cloud-endpoints', () => ({
-  detectLoomCloud: () => 'commercial',
+  // 'Commercial' with the capital, which is what detectLoomCloud() actually
+  // returns (lib/azure/cloud-boundary.ts LoomCloud). The lowercase string this
+  // mock used to return matched no cloud at all, so after #3730 the route would
+  // have treated BOTH estates as remote peers and probed its own console over
+  // the network — a divergence between the fixture and the dependency, which is
+  // exactly the modelling error this file's own beforeEach warns about.
+  detectLoomCloud: () => 'Commercial',
 }));
 
 // The cache is not under test: run the compute function every time.
@@ -74,8 +84,29 @@ vi.mock('@/lib/api/route-toolkit', () => ({
 }));
 
 import { GET } from '../route';
+ import { LOOM_ESTATES } from '@/lib/admin/estate-fleet';
 
 const HOST = 'https://api.github.com';
+
+/**
+ * Is this URL actually addressed to api.github.com?
+ *
+ * PARSED HOST, NEVER A PREFIX MATCH. `u.startsWith('https://api.github.com')` —
+ * which is what this file's helpers first used — is true of
+ * `https://api.github.com.evil.example/…`, and CodeQL flagged all three sites
+ * (js/incomplete-url-substring-sanitization, 3 high). In a test that is not a
+ * runtime hole, but it is worse than cosmetic: these helpers CLASSIFY the calls
+ * the SSRF assertions are made over, so a diverted URL that merely started with
+ * the right prefix would be filed as a legitimate compare call and the guard
+ * would pass over it. Fixing it makes the control sharper, not just quieter.
+ */
+function isGitHubApi(u: string): boolean {
+  try {
+    return new URL(u).host === 'api.github.com';
+  } catch {
+    return false;
+  }
+}
 
 beforeEach(() => {
   MARKER = {};
@@ -98,7 +129,16 @@ beforeEach(() => {
     FETCHED.push(u);
     const p = new URL(u).pathname;
     const body = (data: unknown) =>
-      ({ ok: true, status: 200, headers: { get: () => null }, json: async () => data }) as unknown as Response;
+      ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => data,
+        // `text` is modelled too: the #3730 fleet probe reads the peer estate's
+        // marker with res.text(). A stub carrying only `json` would make every
+        // peer read throw and land in the honest-degrade branch — the suite
+        // would still pass, while silently testing the failure path instead of
+        // the success one.
+        text: async () => (typeof data === 'string' ? data : JSON.stringify(data)),
+      }) as unknown as Response;
 
     if (/^\/repos\/[^/]+\/[^/]+\/compare\/[^/]+$/.test(p)) {
       return body({ status: 'identical', ahead_by: 0, behind_by: 0, commits: [] });
@@ -108,6 +148,15 @@ beforeEach(() => {
     }
     if (/^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/[^/]+$/.test(p)) {
       return body({ state: 'active' });
+    }
+    // #3730 — the peer estate's own unauthenticated endpoints. Answered with a
+    // realistic sovereign marker (8-hex sha, extended-ISO stamp) so the fleet
+    // path is exercised as it behaves in production.
+    if (p === '/build-marker.txt') {
+      return body('loom-build-marker sha=28de89fb stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n');
+    }
+    if (p === '/api/version') {
+      return body({ current: '0.90.2' });
     }
     // Anything else is an endpoint the marker DIVERTED us to. GET /user/repos
     // returns a JSON ARRAY — which is what makes the degraded verdict real.
@@ -120,10 +169,47 @@ async function run(): Promise<any> {
   return res.json();
 }
 
-/** Every fetched URL that is NOT one of the workflow-lane reads. */
+/**
+ * Every api.github.com call that is NOT one of the workflow-lane reads — i.e.
+ * the compare calls, the only place a marker-derived value has ever reached a
+ * URL.
+ *
+ * SCOPED TO THE GITHUB HOST BY #3730, and the scoping is a widening of what is
+ * observed rather than a narrowing of what is enforced. The route now also
+ * fetches each PEER ESTATE's `/build-marker.txt` and `/api/version`; those URLs
+ * come from the static LOOM_ESTATES registry and contain no marker bytes, so
+ * folding them into this list would have said "the marker chose a URL" about
+ * calls the marker cannot influence. The property being protected — no
+ * marker-derived value selects an endpoint — is unchanged, and the test below
+ * (`the peer-estate probes are STATIC`) asserts it directly for the new calls
+ * rather than leaving them merely excluded.
+ */
 function compareCalls(): string[] {
-  return FETCHED.filter((u) => !u.includes('/actions/workflows/'));
+  return FETCHED.filter((u) => isGitHubApi(u) && !new URL(u).pathname.includes('/actions/workflows/'));
 }
+
+/** Every fetch that is NOT to api.github.com — i.e. the peer-estate probes. */
+function estateCalls(): string[] {
+  return FETCHED.filter((u) => !isGitHubApi(u));
+}
+
+/**
+ * The compare the PEER estate legitimately produces (#3730).
+ *
+ * The fleet reads the Gov console's own marker — the stub above serves the real
+ * sovereign shape, `sha=28de89fb` — and compares THAT sha against the branch
+ * too. So from #3730 onward a healthy run makes TWO compare calls, not one, and
+ * the tests below name this one explicitly rather than loosening their
+ * assertions to `toContain`. An exact list is what makes "the local marker
+ * contributed NO request" checkable at all: with a substring match, a traversal
+ * that produced an extra call would still pass.
+ *
+ * Note this sha is itself marker-derived — from a REMOTE marker, which is
+ * strictly less trusted than the local one — so it passes through the same
+ * GIT_OBJECT_ID validation, and the `no fetched URL ever leaves the compare
+ * endpoint` test covers it alongside the local one.
+ */
+const PEER_COMPARE = `${HOST}/repos/fgarofalo56/csa-inabox/compare/28de89fb...main`;
 
 describe('deploy-status — the build marker cannot choose the endpoint (#776)', () => {
   it('CONTROL — `..` in a path IS collapsed by the URL parser before the request', () => {
@@ -153,6 +239,7 @@ describe('deploy-status — the build marker cannot choose the endpoint (#776)',
     return run().then(() => {
       expect(compareCalls()).toEqual([
         `${HOST}/repos/fgarofalo56/csa-inabox/compare/0f50dad764fa748f33acc6112671c26c284faa89...main`,
+        PEER_COMPARE,
       ]);
     });
   });
@@ -163,13 +250,15 @@ describe('deploy-status — the build marker cannot choose the endpoint (#776)',
     await run();
     expect(compareCalls()).toEqual([
       `${HOST}/repos/fgarofalo56/csa-inabox/compare/0f50dad7...main`,
+      PEER_COMPARE,
     ]);
   });
 
   it('a traversal payload in the marker issues NO request at all', async () => {
     MARKER = { sha: '../../../../user/repos' };
     await run();
-    expect(compareCalls()).toEqual([]);
+    // ONLY the peer's compare remains — the local marker contributed nothing.
+    expect(compareCalls()).toEqual([PEER_COMPARE]);
   });
 
   it('the disclosure payload issues NO request at all', async () => {
@@ -177,7 +266,7 @@ describe('deploy-status — the build marker cannot choose the endpoint (#776)',
     // console's own GitHub token attached.
     MARKER = { sha: '../../../../user/repos?x=' };
     await run();
-    expect(compareCalls()).toEqual([]);
+    expect(compareCalls()).toEqual([PEER_COMPARE]);
   });
 
   it('no fetched URL ever leaves the compare endpoint, whatever the marker says', async () => {
@@ -234,6 +323,59 @@ describe('deploy-status — the build marker cannot choose the endpoint (#776)',
     // would trade one true statement for a vaguer one.
   });
 
+  it('the peer-estate probes are STATIC — the marker cannot influence them either (#3730)', async () => {
+    // The #3730 fleet added the first fetches this route makes to a host other
+    // than api.github.com. Excluding them from compareCalls() would be a
+    // narrowing of the guard unless the property is asserted directly, so it is:
+    // whatever the marker says, the peer URLs are byte-identical to the static
+    // registry, and none of them carries any part of the marker.
+    const expected = LOOM_ESTATES
+      .filter((e) => e.id !== 'commercial') // 'Commercial' is self — read from the image
+      .flatMap((e) => [e.markerUrl, e.versionUrl]);
+    expect(expected.length).toBeGreaterThan(0); // population guard
+
+    for (const sha of ['0f50dad7', '../../../../user/repos?x=', 'not-hex-at-all', 'x'.repeat(300)]) {
+      FETCHED = [];
+      MARKER = { sha };
+      await run();
+      expect(estateCalls().sort(), `marker sha=${sha}`).toEqual(expected.slice().sort());
+      for (const u of estateCalls()) {
+        expect(u, `marker sha=${sha}`).not.toContain(sha);
+      }
+    }
+  });
+
+  it('a peer estate that cannot be read is UNKNOWN, never current and never behind', async () => {
+    // deploy-integrity R7. A sovereign boundary with no egress to the other
+    // cloud lands here on every single load, so this is the COMMON path, not an
+    // edge case — and it must never render as a healthy peer.
+    MARKER = { sha: '0f50dad764fa748f33acc6112671c26c284faa89' };
+    vi.stubGlobal('fetch', async (url: string) => {
+      const u = String(url);
+      FETCHED.push(u);
+      if (!isGitHubApi(u)) throw new Error('getaddrinfo ENOTFOUND');
+      return ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ status: 'identical', ahead_by: 0, behind_by: 0, commits: [] }),
+        text: async () => '',
+      }) as unknown as Response;
+    });
+    const body = await run();
+    const gov = (body.estates as any[]).find((e) => e.id === 'gov');
+    expect(gov.reachable).toBe(false);
+    expect(gov.unreachableReason).toMatch(/could not reach/);
+    expect(gov.drift.state).toBe('unknown');
+    expect(gov.drift.state).not.toBe('current');
+    expect(gov.drift.state).not.toBe('behind');
+    expect(gov.drift.commitsBehind).toBeNull();
+    // …and the self row is still reported normally: one cloud being unreadable
+    // must not take the whole surface down.
+    const self = (body.estates as any[]).find((e) => e.id === 'commercial');
+    expect(self.isSelf).toBe(true);
+    expect(self.source).toBe('this-image');
+    expect(self.drift.state).toBe('current');
+  });
+
   it('still reports the no-sha case distinctly from the malformed case', async () => {
     // The two must not collapse into one message: "no fingerprint at all" and
     // "a fingerprint that is not a commit id" have different remediations.
@@ -242,6 +384,6 @@ describe('deploy-status — the build marker cannot choose the endpoint (#776)',
     expect(body.estate.headline).toBe('Running build is unidentified');
     expect(JSON.stringify(body)).toContain('no build fingerprint');
     expect(JSON.stringify(body)).not.toContain('does not carry a git object id');
-    expect(compareCalls()).toEqual([]);
+    expect(compareCalls()).toEqual([PEER_COMPARE]);
   });
 });

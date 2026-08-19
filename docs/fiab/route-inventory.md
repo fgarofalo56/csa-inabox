@@ -13,9 +13,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1680 |
+| Total routes | 1681 |
 | Public (no session) | 58 |
-| Session-only | 646 |
+| Session-only | 647 |
 | Owner-scoped | 675 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
@@ -1809,6 +1809,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/transformation-project/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
 | `items/user-data-function/[id]/invoke/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Key Vault, Microsoft Graph |
 | `items/user-data-function/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
+| `items/user-data-function/endpoints/route.ts` | GET | session-only |  | — |
 | `items/variable-library/[id]/resolve/route.ts` | POST | owner-scoped |  | Cosmos, Key Vault, Microsoft Graph |
 | `items/variable-library/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `items/vector-store/[id]/index/route.ts` | GET POST PUT | session-only |  | AI Search, PostgreSQL |
@@ -2408,7 +2409,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-172 function(s) across 79 module(s) reach an owner / workspace-ACL
+175 function(s) across 80 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2424,7 +2425,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/_lib/ai-content-fallback.ts` | `loadContentBackedItem` |
 | `apps/fiab-console/app/api/items/_lib/copilot-builder-checkpoints.ts` | `captureBuilderCheckpoint`, `listBuilderCheckpoints`, `restoreBuilderCheckpoint` |
 | `apps/fiab-console/app/api/items/_lib/copilot-builder-route.ts` | `GET`, `POST`, `makeCopilotBuilderRoute` |
-| `apps/fiab-console/app/api/items/_lib/item-crud.ts` | `createOwnedItem`, `deleteOwnedItem`, `listAllOwnedItems`, `listOwnedItems`, `loadOwnedItem`, `loadRecycledItem`, `purgeRecycledItem`, `restoreOwnedItem`, `softDeleteOwnedItem`, `updateOwnedItem` |
+| `apps/fiab-console/app/api/items/_lib/item-crud.ts` | `accessOptsFor`, `createOwnedItem`, `deleteOwnedItem`, `listAllOwnedItems`, `listOwnedItems`, `loadOwnedItem`, `loadRecycledItem`, `purgeRecycledItem`, `restoreOwnedItem`, `softDeleteOwnedItem`, `updateOwnedItem` |
 | `apps/fiab-console/app/api/items/_lib/model-store.ts` | `readModelState`, `writeModelState` |
 | `apps/fiab-console/app/api/items/_lib/ontology-binding.ts` | `GET`, `POST`, `makeOntologyBindRoute` |
 | `apps/fiab-console/app/api/items/_lib/palantir-crud.ts` | `GET`, `PATCH`, `POST`, `listOntologies`, `loadOntologySurface`, `makeCollectionRoute`, `makeItemRoute` |
@@ -2486,6 +2487,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/coe-library/builder/dashboard-store.ts` | `deleteDashboard`, `getDashboard`, `setDashboardPublished`, `updateDashboard` |
 | `apps/fiab-console/lib/coe-library/coe-library-client.ts` | `deleteClone`, `setClonePublished` |
 | `apps/fiab-console/lib/copilot/a2a-platform-execute.ts` | `executePlatformSkill` |
+| `apps/fiab-console/lib/copilot/activator-tools.ts` | `buildActivatorTools`, `resolveRuleOwner` |
 | `apps/fiab-console/lib/copilot/dax-tools.ts` | `getModelState`, `handleDescribeModel`, `handleSaveDescriptions` |
 | `apps/fiab-console/lib/events/webhook-registry.ts` | `bumpHookStats`, `deleteHook`, `getHook`, `updateHook` |
 | `apps/fiab-console/lib/foundry/ontology-resolver.ts` | `resolveOntologyObjectForGrounding` |

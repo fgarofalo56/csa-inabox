@@ -653,21 +653,139 @@ jobs:
           # DISCOVERY mode here; the bootstrap workflow keeps its explicit inputs
           # for the cases where an operator must name a DLZ by hand.
           ADMIN_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
-          REGION: ${{ inputs.region }}
         run: |
           set -euo pipefail
+          # ── THE REGION IS READ FROM THE SHELL, NOT FROM THE TRIGGER (#3701) ──
+          #
+          # This step used to carry a `REGION:` entry in the `env:` block above,
+          # set from the workflow's `region` INPUT. There are no inputs on a
+          # `schedule` event, so it expanded to the empty string on EVERY nightly
+          # run (the same trap #2775 documents for allow_existing_hub): the
+          # resolver was
+          # invoked with `--region ""`, exited EXIT.USAGE (2) with "--region is
+          # required.", and the `|| echo` that used to sit below reported that as
+          # "found no unambiguous DLZ". The run went green having measured
+          # nothing.
+          #
+          # MEASURED, same code, same estate, only the trigger differing:
+          #   31898068403  workflow_dispatch  2026-08-15  adopting:
+          #                databricks,eventhubs,storage-adls,synapse
+          #   31870181337  schedule           2026-08-15  --region is required.
+          #   31932209496  schedule           2026-08-16  --region is required.
+          #   32004118361  schedule           2026-08-17  --region is required.
+          # All four conclusion=success. The three scheduled runs adopted (none).
+          #
+          # WHY THAT DELETES CONFIGURATION RATHER THAN MERELY SKIPPING IT. With no
+          # adopted `storage-adls` and topology=tenant (the value
+          # params/commercial.bicepparam pins, and the `topology=` override below
+          # is only appended when CSA_LOOM_TOPOLOGY is non-empty — it is empty on a
+          # schedule), main.bicep's `deployLandingZones` is false, so `useSingleDlz`
+          # is false and `loomStorageAccount` composes to ''. The env array in
+          # modules/admin-plane/main.bicep is CONDITIONAL on that string
+          # (`!empty(loomStorageAccount) ? [ … ] : []`), so an empty value does not
+          # leave the seven lake variables alone — it REMOVES LOOM_BRONZE_URL,
+          # LOOM_SILVER_URL, LOOM_GOLD_URL, LOOM_LANDING_URL, LOOM_CSV_IMPORTS_URL,
+          # LOOM_SAMPLE_ADLS and LOOM_RECYCLE_RETENTION_DAYS from the running
+          # console, plus LOOM_ORG_VISUALS_URL from the sibling array. The nightly
+          # was therefore a RATCHET: the 08-15 dispatch wired the lake and the
+          # 08-16 schedule deleted it ~13 hours later. Any operator fix survived
+          # until the next 06:00 UTC cron.
+          #
+          # $AZURE_LOCATION is the MEASURED region: `Resolve reconcile target`
+          # above (scripts/ci/reconcile-resolve.mjs) writes it to $GITHUB_ENV,
+          # adopting the region of the hub that actually exists, or refusing. That
+          # is precisely why the MSAL resolve step and the internal-token adopt
+          # step read it from the shell — see the note in that step. This step was
+          # added later and did not adopt the pattern. Held by S8 in
+          # scripts/ci/check-deploy-input-safety.mjs so it cannot regress.
+          REGION="${AZURE_LOCATION:-}"
+          if [ -z "$REGION" ]; then
+            echo "::error::[dlz-adopt] No region is available: \$AZURE_LOCATION is empty after 'Resolve reconcile target', which is the step that must either MEASURE the estate's region or refuse the run. Refusing rather than discovering against no region — that is exactly what silently produced 'adopting: (none)' on every scheduled run and stripped the lake env vars off the console (#3701)."
+            exit 1
+          fi
           INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""
           RESOLVED="$RUNNER_TEMP/dlz-coords.env"; : > "$RESOLVED"
           # resolve-dlz-coordinates.mjs DISCOVERS rather than assuming the
           # `…-single-<region>` convention, which is exactly the shape this
-          # estate is not. It fails closed on an ambiguous estate; a clean
-          # "no DLZ" is not a failure and leaves the file empty.
+          # estate is not.
+          #
+          # ITS EXIT CODE IS CLASSIFIED, NEVER SWALLOWED (deploy-integrity.md
+          # R6/R7). The script's own header states the contract this step used to
+          # break: "'Could not determine' and 'not present' are different answers
+          # with different exit codes, and neither is ever rendered as the other".
+          # A single `|| echo "…found no unambiguous DLZ…"` collapsed all four
+          # non-zero codes into one sentence that ASSERTED a measurement the
+          # script had not made.
+          #
+          #   0 resolved    a landing zone was found — adopt what is in it.
+          #   1 not-found   Resource Graph WAS read and nothing matched. A genuine
+          #                 negative, and the correct greenfield answer. Continue.
+          #   2 usage       this caller passed invalid arguments. Our defect, and
+          #                 nothing was measured. Fail.
+          #   3 unreadable  the query failed; the estate is UNKNOWN, which is not
+          #                 the same as "no DLZ". Fail rather than compose an empty
+          #                 adopt plan off an answer nobody established.
+          #   4 ambiguous   several match and nothing was chosen. Fail closed —
+          #                 which is what this step's comment already claimed.
+          RC=0
           node scripts/csa-loom/resolve-dlz-coordinates.mjs \
             --region "$REGION" \
             --admin-subscription "$ADMIN_SUB" \
             ${INPUT_DLZ_SUBSCRIPTION:+--dlz-subscription "$INPUT_DLZ_SUBSCRIPTION"} \
             ${INPUT_DLZ_DOMAIN:+--dlz-domain "$INPUT_DLZ_DOMAIN"} \
-            --github-env "$RESOLVED" || echo "[dlz-adopt] resolver found no unambiguous DLZ — continuing without adoption"
+            --github-env "$RESOLVED" || RC=$?
+          case "$RC" in
+            0)
+              echo "[dlz-adopt] resolver RESOLVED a landing zone for region '$REGION'."
+              ;;
+            1)
+              # EXIT 1 IS ALSO WHAT NODE RETURNS FOR AN UNCAUGHT THROW, so the
+              # code alone cannot tell "Resource Graph was read and nothing
+              # matched" from "this script died before measuring anything".
+              # Rename the resolver and, on the code alone, the nightly would
+              # report a confident greenfield negative forever — the same R7
+              # error this whole change exists to remove. The resolver now writes
+              # DLZ_STATUS on every MEASURED path, so we require that positive
+              # marker rather than inferring a measurement from an exit code.
+              if grep -q '^DLZ_STATUS=not-found$' "$RESOLVED"; then
+                echo "::notice::[dlz-adopt] resolver read Azure Resource Graph SUCCESSFULLY and no landing zone matched region '$REGION'. Continuing without adoption — that is the correct greenfield answer, and it is a measurement, not a fallback."
+              else
+                echo "::error::[dlz-adopt] resolve-dlz-coordinates exited 1 but did NOT write 'DLZ_STATUS=not-found'. Exit 1 is also node's code for an uncaught throw or a module-load failure, so nothing here establishes that the estate was read. Refusing rather than reporting a greenfield negative nobody measured (#3701/#3703). Check that scripts/csa-loom/resolve-dlz-coordinates.mjs exists, loads, and that its dependencies resolve."
+                exit 1
+              fi
+              ;;
+            2)
+              echo "::error::[dlz-adopt] resolve-dlz-coordinates exited USAGE (2): this workflow passed it invalid arguments (region='$REGION', admin-subscription='${ADMIN_SUB:-<empty>}'). NOTHING was established about the estate. Refusing — continuing would compose an EMPTY adopt plan, and an empty plan does not skip the lake binding, it DELETES the seven LOOM_*_URL/LOOM_SAMPLE_ADLS env vars from the running console (#3701)."
+              exit 1
+              ;;
+            3)
+              # NOT FATAL ON dlz-attach. main.bicep:1114 sets
+              # `deployAdminPlane = effectiveTopology != 'dlz-attach'`, and both
+              # `resource adminPlaneRg` (1149) and `module adminPlane` (1159) are
+              # gated on it — so on that topology the console env array is never
+              # re-rendered and an empty adopt plan cannot delete anything. Before
+              # #3703 this arm continued; failing it would BLOCK an attach that is
+              # incapable of the harm, which is a regression, not a fix.
+              if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+                echo "::warning::[dlz-adopt] resolve-dlz-coordinates exited UNREADABLE (3): the Azure Resource Graph query FAILED, so whether this estate has a landing zone is UNKNOWN. Continuing ONLY because topology=dlz-attach deploys no admin plane (main.bicep:1114), so no console env variable can be removed by an empty adopt plan. Discovery still measured nothing — check that the deploy identity can read Resource Graph across this estate's subscriptions."
+              else
+                echo "::error::[dlz-adopt] resolve-dlz-coordinates exited UNREADABLE (3): the Azure Resource Graph query FAILED, so whether this estate has a landing zone is UNKNOWN — it is NOT 'no'. Refusing rather than deploying an empty adopt plan that would strip the lake env vars off the console. Check that the deploy identity can read Resource Graph across this estate's subscriptions (Reader at the DLZ subscription is the usual gap)."
+                exit 1
+              fi
+              ;;
+            4)
+              if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+                echo "::warning::[dlz-adopt] resolve-dlz-coordinates exited AMBIGUOUS (4): more than one landing zone matches region '$REGION' and none was chosen. Continuing ONLY because topology=dlz-attach deploys no admin plane (main.bicep:1114), so nothing can be stripped. Name the intended DLZ explicitly (csa-loom-post-deploy-bootstrap.yml takes dlz_subscription / dlz_domain inputs) if this attach needs a specific one."
+              else
+                echo "::error::[dlz-adopt] resolve-dlz-coordinates exited AMBIGUOUS (4): more than one landing zone matches region '$REGION' and this deploy wires exactly one, so NOTHING was chosen. Failing closed. Name the intended DLZ explicitly (csa-loom-post-deploy-bootstrap.yml takes dlz_subscription / dlz_domain inputs), or remove the duplicate resource group."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::[dlz-adopt] resolve-dlz-coordinates exited with the undocumented code $RC. Its contract is 0 resolved / 1 not-found / 2 usage / 3 unreadable / 4 ambiguous, so nothing it printed can be read as a verdict about this estate. Refusing."
+              exit 1
+              ;;
+          esac
           DLZ_SUB="$(grep '^DLZ_SUB=' "$RESOLVED" | tail -1 | cut -d= -f2- || true)"
           DLZ_RG="$(grep  '^DLZ_RG='  "$RESOLVED" | tail -1 | cut -d= -f2- || true)"
           [ -n "${DLZ_SUB:-}" ] && echo "::add-mask::$DLZ_SUB"
@@ -690,6 +808,52 @@ jobs:
           KEYS="$(PLAN="$PLAN" python -c 'import json,os; print(",".join(sorted(json.loads(os.environ["PLAN"]))) or "(none)")')"
           echo "::notice::[dlz-adopt] adopting: $KEYS"
           echo "adopted=$KEYS" >> "$GITHUB_OUTPUT"
+
+      # ── A DEPLOY MAY NOT DELETE THE LAKE WIRING AND CALL IT SUCCESS (#3701) ─
+      #
+      # The step above is now honest about what it measured, which removes the
+      # CAUSE. This is the FAIL-CLOSED backstop for the CONSEQUENCE, because the
+      # consequence is silent and destructive and has more than one possible
+      # cause: discover-dlz-adopt-plan.sh looks the lake up through a helper that
+      # ends `2>/dev/null || true`, so an unreadable storage list there produces
+      # the same empty plan as a genuinely absent one.
+      #
+      # What it compares (independently, never trusting the plan for both sides):
+      #   1. what `loomStorageAccount` WILL compose to — mirroring main.bicep's
+      #      expression against the adopt plan and the topology that actually
+      #      reaches ARM;
+      #   2. whether this estate ALREADY OWNS a Loom Data Lake Gen2 account, read
+      #      from Resource Graph in its own query.
+      #
+      # Empty binding + existing lake = this apply would REMOVE LOOM_BRONZE_URL,
+      # LOOM_SILVER_URL, LOOM_GOLD_URL, LOOM_LANDING_URL, LOOM_CSV_IMPORTS_URL,
+      # LOOM_SAMPLE_ADLS and LOOM_RECYCLE_RETENTION_DAYS from the running console
+      # (the env array is `!empty(loomStorageAccount) ? [ … ] : []`) and report
+      # success. That run is refused here, before the what-if.
+      #
+      # Greenfield is untouched: no Loom lake in the estate ⇒ empty binding is
+      # consistent ⇒ pass, silently. An UNREADABLE estate is UNKNOWN and refuses
+      # rather than guessing (R7).
+      #
+      # Decision logic + embedded controls + tests:
+      # scripts/ci/assert-lake-binding.mjs, scripts/ci/__tests__/assert-lake-binding.test.mjs.
+      - name: Assert this deploy will not STRIP the lake binding (#3701)
+        id: lake_binding
+        run: |
+          set -euo pipefail
+          # Defaulted on its own line, never inline: a `${VAR:-{\}}` default needs
+          # a brace escaped inside a parameter expansion, and that is exactly the
+          # quoting that silently yields a LITERAL instead of an empty object —
+          # the sibling step below carries the same note for the same reason.
+          PLAN="${LOOM_ADOPT_JSON:-}"
+          [ -n "$PLAN" ] || PLAN='{}'
+          node scripts/ci/assert-lake-binding.mjs \
+            --adopt-json "$PLAN" \
+            --region "$AZURE_LOCATION" \
+            --topology "${CSA_LOOM_TOPOLOGY:-}" \
+            --deployment-mode "${CSA_LOOM_DEPLOYMENT_MODE:-}" \
+            --param-file platform/fiab/bicep/params/commercial.bicepparam \
+            --github-output "$GITHUB_OUTPUT"
 
       # ── CAN THIS DEPLOY IDENTITY ACTUALLY GRANT AT THE LAKE? (#3336) ───────
       #
@@ -1521,6 +1685,67 @@ jobs:
           set -uo pipefail
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" \
             ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
+
+      # ── ACR COMPLIANCE TAGS — APPLIED HERE, NOT BY THE TEMPLATE (#3714) ────
+      #
+      # The admin-plane ACR is the ONE resource whose ARM tags are written by
+      # something other than the deployment: acr-firewall-lease.sh records the
+      # firewall mutex there (`loomAcrFw*`) because the ARM control plane stays
+      # reachable when the registry's data plane is firewalled off. Both
+      # declarative options for compliance tags were tried and both shipped
+      # broken:
+      #
+      #   #3676  `tags: complianceTags` on the registry — ARM PUTs top-level
+      #          tags as an absolute REPLACE, erasing the live lease mid-apply
+      #          and denying an in-flight `az acr build` push (8-minute outage).
+      #   #3714  a `Microsoft.Resources/tags` resource that read its own current
+      #          value — its scope expression IS its own resource id, so ARM
+      #          rejected the whole template with "Circular dependency detected"
+      #          and EVERY Commercial `az deployment sub create` failed.
+      #
+      # `az tag update --operation Merge` is a server-side PATCH: it adds the
+      # compliance keys and touches nothing else, so it cannot clobber a lease
+      # and has no read-then-write window on our side.
+      #
+      # RESOLVES THE REGISTRY ITSELF rather than reusing
+      # `steps.acr_apply_lease.outputs.acr`: that step runs BEFORE Provision, so
+      # on a greenfield subscription it found no registry at all — which is
+      # precisely the run where the tags are missing and this step matters most.
+      #
+      # NOT `|| true`, and no discarded stderr. The script verifies by reading
+      # the tags back (a 0 from `az tag update` means "accepted", not "applied"
+      # — that distinction caught a real CR-corruption bug on 2026-08-18) and
+      # fails the deploy if the registry is not actually tagged, or if the
+      # firewall-lease key set changed across the merge.
+      - name: Apply ACR compliance tags (merge-patch, out-of-band — #3714)
+        if: steps.provision.conclusion == 'success'
+        env:
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR_ERR="$RUNNER_TEMP/acr-tag-resolve.err"
+          : > "$ACR_ERR"
+          ACR=$(az acr list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+                  --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2> "$ACR_ERR" | tr -d '\r')
+          ACR_RC=$?
+          # R7 — do not assert a cause the code did not establish. A non-zero
+          # `az` and an empty result are DIFFERENT facts and get different
+          # messages; collapsing "I could not look" into "there is none" is the
+          # exact substitution deploy-integrity R7 exists to forbid.
+          if [ "$ACR_RC" -ne 0 ]; then
+            echo "::error::Could not LIST registries in $RG (az exited $ACR_RC), so whether this estate has an ACR to tag is UNKNOWN. Raw stderr:"
+            sed -n '1,20p' "$ACR_ERR" >&2
+            exit 1
+          fi
+          if [ -z "$ACR" ]; then
+            echo "::error::Provision succeeded but no 'acrloom*' registry exists in $RG. The admin-plane ACR is not optional; a successful apply that produced none means the template did not deploy what this lane assumes."
+            exit 1
+          fi
+          bash scripts/csa-loom/apply-acr-compliance-tags.sh \
+            --acr "$ACR" \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --params-file platform/fiab/bicep/params/commercial.bicepparam
 
       # ── I-BEHIND — DID THIS APPLY LEAVE THE ESTATE BEHIND THE LAST ROLL? ───
       #

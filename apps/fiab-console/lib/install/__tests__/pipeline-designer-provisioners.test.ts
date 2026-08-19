@@ -10,6 +10,25 @@
  *   - a missing-config env var surfaces as remediation (no silent skip).
  *
  * No real Azure traffic.
+ *
+ * ---------------------------------------------------------------------------
+ * BUDGET — why the three "created" tests carry an explicit 90s timeout
+ * ---------------------------------------------------------------------------
+ * They shipped at `20_000`, which was generous against their ~7s isolated cost
+ * and NOT generous against a parallel run. Each one pays for (a) the seeder's
+ * real settle-poll sleeps — `maxPolls: 2 × pollMs: 3000` = 6s of wall clock
+ * that no fetch stub can shorten — plus (b) a dynamic import of a full Azure
+ * client module graph. Measured on this box: 7.0s in isolation, and TWO
+ * observed 20s timeouts in a multi-file run while other work was competing for
+ * the machine.
+ *
+ * That 13s of margin is exactly the kind that `vitest.config.ts`'s CI-only
+ * `retry: 2` hides: CI went green both times these failed locally. A test that
+ * passes only because it is retried is not passing, and the retry would equally
+ * absorb a genuine regression — so the budget is stated here, sized to the work
+ * the test actually does, rather than left to a number that only holds on an
+ * idle machine. (Same reasoning, same round, as the registry-coverage test in
+ * `lib/azure/__tests__/auto-bind-seed.test.ts`.)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -101,7 +120,7 @@ describe('synapsePipelineProvisioner', () => {
     // PUT pipeline then POST createRun must both have been issued.
     expect(calls.some((c) => c.url.includes('/pipelines/') && c.init?.method === 'PUT')).toBe(true);
     expect(calls.some((c) => c.url.includes('/createRun'))).toBe(true);
-  }, 20_000); // real settle-poll sleeps a few seconds; allow for it.
+  }, 90_000); // see BUDGET below
 
   it('surfaces 403 on author as a structured remediation gate', async () => {
     for (const [k, v] of Object.entries(SYN_ENV)) process.env[k] = v;
@@ -139,7 +158,7 @@ describe('adfPipelineProvisioner', () => {
     expect(r.secondaryIds?.lastRunId).toBe('adf-run-9');
     expect(r.secondaryIds?.backend).toBe('adf');
     expect(calls.some((c) => c.url.includes('Microsoft.DataFactory') && c.url.includes('/pipelines/') && c.init?.method === 'PUT')).toBe(true);
-  }, 20_000);
+  }, 90_000); // see BUDGET below
 
   it('returns remediation when LOOM_ADF_NAME is missing', async () => {
     const { adfPipelineProvisioner } = await import('../provisioners/adf-pipeline');
@@ -172,7 +191,7 @@ describe('databricksJobProvisioner', () => {
     expect(body.tasks).toHaveLength(2);
     expect(body.tasks[0].job_cluster_key).toBe(body.job_clusters[0].job_cluster_key);
     expect(body.tasks[1].depends_on).toEqual([{ task_key: 'bronze' }]);
-  }, 20_000);
+  }, 90_000); // see BUDGET below
 
   it('surfaces 403 on create as a structured remediation gate', async () => {
     for (const [k, v] of Object.entries(DBX_ENV)) process.env[k] = v;

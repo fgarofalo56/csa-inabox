@@ -12,8 +12,23 @@ name: gov-bff-verify
 # crypto + SESSION_SECRET from the console app's own secret store), so every
 # probe exercises the full session → BFF → Azure backend path. Fails when a
 # route reports a config gate for a backend this repo has wired (UC/Purview).
+#
+# ── NOW RUNS AFTER EVERY GOV ROLL (#3730) ──────────────────────────────────
+# Same reasoning as gov-gates.yml: Commercial's roll validates what it shipped in
+# the same run, Gov's verification lanes existed but nothing triggered them — this
+# one last succeeded 2026-07-24, twenty-five days before #3730. Now every
+# successful gov-console-roll is followed by a real minted-session BFF probe of
+# the image it just shipped.
+#
+# SAFE TO AUTO-TRIGGER because this workflow takes NO inputs (`workflow_dispatch: {}`),
+# so there is no dispatch `default:` to silently become the empty string on a
+# non-dispatch trigger.
 on:
   workflow_dispatch: {}
+  workflow_run:
+    workflows: ['gov-console-roll']
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -28,6 +43,12 @@ jobs:
     name: Minted-session BFF probes (Gov)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Only verify a roll that actually shipped — a failed roll has already
+    # reported itself, and probing after it would grade the PREVIOUS image while
+    # attributing the result to the new commit's run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2

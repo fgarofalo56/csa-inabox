@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "8307192504647281126"
+      "templateHash": "16676674359305821188"
     }
   },
   "definitions": {
@@ -2554,7 +2554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "1048808415173044714"
+              "templateHash": "9951262348038123898"
             }
           },
           "definitions": {
@@ -8717,7 +8717,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "5278531533627773159"
+                      "templateHash": "11444507004207991340"
                     }
                   },
                   "parameters": {
@@ -8761,7 +8761,6 @@
                       "apiVersion": "2025-04-01",
                       "name": "[variables('acrName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
                       "sku": {
                         "name": "Premium"
                       },

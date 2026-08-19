@@ -478,12 +478,37 @@ function main() {
   } else {
     process.stdout.write(`${render(result)}\n`);
   }
-  if (result.status === 'resolved' && args.githubEnv) {
-    fs.appendFileSync(args.githubEnv, `${githubEnvLines(result).join('\n')}\n`, 'utf8');
+  // DLZ_STATUS IS WRITTEN ON EVERY MEASURED PATH, not just `resolved` (#3703
+  // review). Callers classify our exit code, and `not-found` is EXIT 1 — but
+  // node also exits 1 on an uncaught throw or a module-load failure (rename this
+  // file and the caller gets 1). Without a positive marker, a crash that
+  // measured NOTHING is indistinguishable from a genuine "Resource Graph was
+  // read and no landing zone matched", and the caller renders the crash as that
+  // measurement. deploy-integrity.md R7: if we did not establish it, we do not
+  // say it. A consumer that requires DLZ_STATUS in this file cannot be fooled by
+  // an exit code alone.
+  if (args.githubEnv) {
+    const lines = result.status === 'resolved' ? githubEnvLines(result) : [];
+    fs.appendFileSync(args.githubEnv, `${[...lines, `DLZ_STATUS=${result.status}`].join('\n')}\n`, 'utf8');
   }
   process.exit(exitCodeFor(result.status));
 }
 
 const isMain =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
-if (isMain) main();
+if (isMain) {
+  // An uncaught throw would exit 1 — the code that means "not-found", a genuine
+  // negative a caller is entitled to continue on. Classify it as UNREADABLE (3)
+  // instead: we did not read the estate, so we must not report a verdict about
+  // it. `process.exit` inside main() is unaffected; it does not throw.
+  try {
+    main();
+  } catch (e) {
+    process.stderr.write(
+      `resolve-dlz-coordinates: UNCAUGHT ${e && e.stack ? e.stack : e}\n` +
+      'Nothing was established about this estate. Exiting UNREADABLE (3) rather than 1, because 1 means ' +
+      '"Resource Graph was read and nothing matched" and the caller is entitled to continue on that.\n',
+    );
+    process.exit(EXIT.UNREADABLE);
+  }
+}

@@ -28,12 +28,8 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  DocumentTable20Regular, Play20Regular, Server20Regular,
-  ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
-  Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
-  PlugConnected20Regular, Database20Regular, Dismiss24Regular,
-  DocumentArrowRight20Regular, Notebook20Regular, SearchInfo20Regular,
-  Flow20Regular, ErrorCircle20Regular, DataArea20Regular,
+  DocumentTable20Regular, ArrowSync20Regular, Link20Regular, Add20Regular,
+  PlugConnected20Regular, Dismiss24Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
@@ -74,10 +70,13 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
  */
 import {
   AutoBindProgress, AutoBindRetry, AutoBindRebindNotice, AutoBindUnavailable,
-  AutoBindFallbackGate, type AutoBindWire,
+  AutoBindFallbackGate, PipelineSeedIncomplete, PipelineMissingGate, AuthoredGraphPanel,
+  type AutoBindWire,
 } from './pipeline-autobind-surfaces';
 /** The create-new-factory branch of the factory picker — its own module. */
 import { CreateFactoryForm } from './pipeline-create-factory-form';
+/** The ADF-Studio-parity toolbar definition — its own module (see its header). */
+import { buildPipelineRibbon } from './pipeline-editor-ribbon';
 
 const useStyles = makeStyles({
   // `flex: '1 0 auto'` (G3): the editor column FILLS the chrome's mainPanel
@@ -88,11 +87,6 @@ const useStyles = makeStyles({
   // panel scrolls instead.
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%', flex: '1 0 auto' },
   gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px', minWidth: 0 },
-  // Un-caged starter-graph region: full width (mirrors the bound-state canvas),
-  // so the installed-app graph is readable instead of squeezed into the 720px
-  // form column. The PipelineDesigner supplies its own bounded canvas height.
-  starterGraph: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0, maxWidth: '100%' },
-  starterGraphHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   // #2942 — the PROVISIONING surface. Auto-bind runs while the editor opens, so
@@ -504,6 +498,20 @@ export function PipelineEditorCore({
     if (bound && !isNew) { loadPipeline(); loadRuns(); }
   }, [bound, isNew, loadPipeline, loadRuns]);
 
+  /**
+   * "Retry seeding" — re-run auto-bind (`loadBinding` → the bind GET →
+   * `autoBindOnOpen`, which re-seeds an EMPTY backing pipeline) and THEN
+   * re-read the canvas. Both halves are required, and in this order: see the
+   * SEQUENCING note on `PipelineSeedIncomplete` in `pipeline-autobind-surfaces`
+   * for why `loadBinding` alone leaves the canvas showing the pre-seed graph
+   * (#3549 review, SHOULD-FIX 4).
+   */
+  const retrySeed = useCallback(async () => {
+    await loadBinding();
+    await loadPipeline();
+    await loadRuns();
+  }, [loadBinding, loadPipeline, loadRuns]);
+
   const save = useCallback(async () => {
     if (!bound) return;
     setBusy(true); setError(null);
@@ -616,7 +624,35 @@ export function PipelineEditorCore({
 
   const openTriggers = useCallback(() => { setTriggersOpen(true); if (bound) loadTriggers(); }, [bound, loadTriggers]);
 
+  /**
+   * #3549 — auto-bind CREATED a real pipeline for this item but could not
+   * author its graph into it, so the BOUND pipeline is live and EMPTY. Every
+   * control that puts it on a compute refuses while this is true; the full
+   * rationale (and why `Add trigger` was the one that got missed) is on
+   * `buildPipelineRibbon` in `./pipeline-editor-ribbon`.
+   *
+   * Declared HERE, above the trigger callbacks, because they consult it — a
+   * `const` referenced from a dependency array below its own declaration is a
+   * TDZ ReferenceError at render, not a lint nit.
+   */
+  const seedIncomplete = !!bound && autoBind?.status === 'bound' && !!autoBind.seedError;
+
+  /** The one sentence every empty-pipeline refusal says, so they cannot drift. */
+  const EMPTY_PIPELINE_REASON =
+    'This pipeline is live but EMPTY — its activities were not published. Use “Retry seeding” first.';
+
   const triggerAction = useCallback(async (name: string, action: 'start' | 'stop' | 'delete') => {
+    // #3549 review round 3, BLOCKER 2. STARTING a trigger puts an EMPTY
+    // pipeline on a RECURRENCE — unattended, repeating, every run reporting
+    // Succeeded having done nothing. Stop and Delete stay allowed: they are the
+    // remediations, and blocking them would strand a trigger already running.
+    //
+    // DEFENCE IN DEPTH, AND UNTESTED — stated rather than implied. The control
+    // that opens this dialog is gated too, so no UI path reaches this line
+    // while `seedIncomplete`, and MEASURED: removing this guard and the one in
+    // `createTriggerWith` moves ZERO tests. Kept because a disabled button is
+    // not an authorization boundary.
+    if (action === 'start' && seedIncomplete) { setTriggersError(EMPTY_PIPELINE_REASON); return; }
     setTriggersBusy(true); setTriggersError(null);
     try {
       const res = await fetch(`${apiBase}/triggers`, {
@@ -628,7 +664,7 @@ export function PipelineEditorCore({
       await loadTriggers();
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
     finally { setTriggersBusy(false); }
-  }, [apiBase, loadTriggers]);
+  }, [apiBase, loadTriggers, seedIncomplete, EMPTY_PIPELINE_REASON]);
 
   // Create ANY ADF trigger type from the deepened guided wizard's structured
   // payload (no cron / no JSON). `properties` is the assembled ADF trigger
@@ -641,6 +677,11 @@ export function PipelineEditorCore({
     paramBindings: Record<string, ParamBinding>,
   ) => {
     if (!bound || !name.trim()) return;
+    // #3549 review round 3, BLOCKER 2 — see `triggerAction`. A schedule trigger
+    // created here fires on its own recurrence, so the refusal has to sit on
+    // the CREATE as well as the start. Same defence-in-depth status: untested,
+    // because the wizard cannot be opened while `seedIncomplete`.
+    if (seedIncomplete) { setTriggersError(EMPTY_PIPELINE_REASON); return; }
     setTriggersBusy(true); setTriggersError(null);
     try {
       const res = await fetch(`${apiBase}/triggers`, {
@@ -653,7 +694,7 @@ export function PipelineEditorCore({
       await loadTriggers();
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
     finally { setTriggersBusy(false); }
-  }, [apiBase, bound, loadTriggers]);
+  }, [apiBase, bound, loadTriggers, seedIncomplete, EMPTY_PIPELINE_REASON]);
 
   // ------------------------------------------------------------------
   // Activities — extracted from the spec; the designer (palette + canvas)
@@ -755,63 +796,27 @@ export function PipelineEditorCore({
     setTimeout(() => designerRef.current?.showAuthoringErrors(), 120);
   }, []);
 
-  // ADF Studio toolbar — Save · Validate · Debug · Run (trigger now) · Add
-  // trigger · canvas layout controls (auto-align / fit). Activities are added
-  // from the left palette pane in the designer, matching ADF Studio (no
-  // activity buttons in the toolbar).
-  const ribbon: RibbonTab[] = useMemo(() => {
-    const validateGroup: RibbonTab['groups'] = config.supportsValidate ? [{
-      label: 'Validate', actions: [
-        { label: busy ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
-      ],
-    }] : [];
-    // Manage hub — linked services / datasets (+ integration runtimes for ADF).
-    // Available for BOTH ADF and Synapse pipelines, regardless of pipeline
-    // binding. Synapse pipelines reach their own /api/synapse/* resources; the
-    // backend is selected on the ManagePanel below.
-    const manageGroup: RibbonTab['groups'] = [{
-      label: 'Manage', actions: [
-        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes (quick)' : 'Linked services and datasets (quick)' },
-        { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors, create, edit and delete connections' },
-        { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'Dataset wizard — create, edit and delete datasets (connector → connection → shape → schema)' },
-        { label: 'Integration runtimes', icon: <Server20Regular />, onClick: () => openManageHub('integration-runtimes'), title: 'Azure auto-resolve / Self-Hosted / Azure-SSIS integration runtimes' },
-      ],
-    }];
-    // Quick-insert activity buttons (Fabric Home ribbon parity): drop the most
-    // common activities straight from the ribbon. Enabled once bound; each routes
-    // through the designer's insertActivityByKey handle.
-    const insertGroup: RibbonTab['groups'] = [{
-      label: 'Insert', actions: [
-        { label: 'Copy data', icon: <DocumentArrowRight20Regular />, onClick: bound ? () => quickInsert('Copy') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Copy data activity' },
-        { label: 'Dataflow', icon: <DataArea20Regular />, onClick: bound ? () => quickInsert('DataflowGen2') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Dataflow Gen2 activity' },
-        { label: 'Notebook', icon: <Notebook20Regular />, onClick: bound ? () => quickInsert('Notebook') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Notebook activity' },
-        { label: 'Lookup', icon: <SearchInfo20Regular />, onClick: bound ? () => quickInsert('Lookup') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Lookup activity' },
-        { label: 'Invoke pipeline', icon: <Flow20Regular />, onClick: bound ? () => quickInsert('ExecutePipeline') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add an Invoke pipeline (Execute Pipeline) activity' },
-      ],
-    }];
-    return [
-      { id: 'home', label: 'Home', groups: [
-        { label: 'Save', actions: [
-          { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && bound && dirty ? save : undefined, disabled: busy || !bound || !dirty, title: !bound ? 'Bind a pipeline first' : (!dirty ? 'No changes' : undefined) },
-        ] },
-        ...insertGroup,
-        { label: 'Authoring', actions: [
-          { label: 'Check errors', icon: <ErrorCircle20Regular />, onClick: bound ? checkAuthoringErrors : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'List activities with unmet required fields (pre-run)' },
-        ] },
-        ...validateGroup,
-        ...manageGroup,
-        { label: 'Run', actions: [
-          { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty ? () => kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
-          { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
-          { label: 'Add trigger', icon: <Clock20Regular />, onClick: bound ? openTriggers : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : undefined },
-        ] },
-        { label: 'Layout', actions: [
-          { label: 'Auto align', onClick: bound ? () => designerRef.current?.autoAlign() : undefined, disabled: !bound },
-          { label: 'Zoom to fit', onClick: bound ? () => designerRef.current?.fitToScreen() : undefined, disabled: !bound },
-        ] },
-      ] },
-    ];
-  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
+  // ADF Studio toolbar — Save · Insert · Authoring · Validate (ADF) · Manage ·
+  // Run · Layout. The toolbar's SHAPE lives in `./pipeline-editor-ribbon`
+  // (extracted for the WS-E E3 monolith ratchet, same as the auto-bind surfaces
+  // and the create-factory form); every affordance is still driven by this
+  // component's state and callbacks.
+  //
+  // MERGE NOTE (#3702 x #3549). This hunk conflicted: main extracted the ribbon
+  // while this branch had added the #3549 `seedIncomplete` gate INSIDE the
+  // inline version main deleted. Both sides are kept — main's extraction, plus
+  // `seedIncomplete` threaded through and left in the dependency list. Taking
+  // main's side alone would have compiled and silently dropped the gate.
+  // The dep is pinned by the CONTROL in
+  // `__tests__/pipeline-seed-incomplete.test.tsx` — the other specs there
+  // cannot see it, because their retry also changes `spec` and therefore
+  // `save`'s identity, so the memo recomputes regardless.
+  const ribbon: RibbonTab[] = useMemo(() => buildPipelineRibbon({
+    supportsValidate: config.supportsValidate, isAdf, busy, bound, dirty, seedIncomplete,
+    save, kick, validate, openTriggers,
+    openManagePanel: () => setManageOpen(true),
+    openManageHub, quickInsert, checkAuthoringErrors, designerRef,
+  }), [config.supportsValidate, isAdf, busy, bound, dirty, seedIncomplete, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
 
   // SC-9 — publish this editor's ribbon actions to the shared command registry
   // so the in-ribbon Ctrl+Q / Alt+Q CommandSearch surfaces Save / Run / Debug /
@@ -1137,29 +1142,7 @@ export function PipelineEditorCore({
                 width below the bind form (mirrors the bound-state canvas), so the
                 built-out activity graph is actually readable instead of squeezed
                 into the 720px form column. Read-only until bound. */}
-            {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
-              <div className={s.starterGraph}>
-                <div className={s.starterGraphHead}>
-                  <Subtitle2>Starter graph from this app</Subtitle2>
-                  <Badge appearance="outline">
-                    {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
-                  </Badge>
-                  <Badge appearance="filled" color="informative">Preview · read-only</Badge>
-                </div>
-                <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
-                  This pipeline was installed from an app with a fully built-out activity graph
-                  (every activity, dependency, and parameter). Bind it to a real
-                  {` ${config.containerLabel}`} pipeline above to push this graph live and enable
-                  Save / Run / Validate / Triggers.
-                </Body1>
-                <PipelineDesigner
-                  activities={extractActivities(JSON.stringify(preview)) as any}
-                  parameters={paramsFromSpec(preview as PipelineSpec)}
-                  variables={varsFromSpec(preview as PipelineSpec)}
-                  onActivitiesChange={() => { /* read-only until bound */ }}
-                />
-              </div>
-            )}
+            <AuthoredGraphPanel containerLabel={config.containerLabel} preview={preview} variant="unbound" />
             </>
           ) : (
             <>
@@ -1171,30 +1154,29 @@ export function PipelineEditorCore({
                 <Button size="small" appearance="subtle" icon={<Link20Regular />} onClick={startRebind}>Rebind</Button>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => { loadPipeline(); loadRuns(); }} style={{ marginLeft: 'auto' }}>Refresh</Button>
               </div>
-              {/* #2895 — bound but not yet present in the backend. An expected
-                  state, so it is a guided WARNING with an inline Fix-it (G2),
-                  never a red bar carrying a stringified response body. The
-                  canvas below still renders and is authorable. */}
+              {/* #3549 (review BLOCKER 1) — BOUND, but the authored graph was
+                  never written into the live pipeline. This branch is the one a
+                  seedError item actually takes, so the gate has to live HERE;
+                  the unbound branch's starter-graph block above never sees it.
+                  Without this the editor showed "0 activities" over a real
+                  empty pipeline with Trigger now enabled and warned about
+                  nothing — the original #3549 symptom. */}
+              {seedIncomplete && (
+                <PipelineSeedIncomplete
+                  containerLabel={config.containerLabel}
+                  reason={autoBind?.seedError}
+                  preview={preview}
+                  onRetry={retrySeed}
+                />
+              )}
+              {/* #2895 — bound but not yet present in the backend. */}
               {missing && (
-                <MessageBar intent="warning" layout="multiline" data-testid="pipeline-missing-gate">
-                  <MessageBarBody>
-                    <MessageBarTitle>Nothing published under this name yet</MessageBarTitle>
-                    This item is bound to a pipeline named <strong>{bound}</strong>, but the{' '}
-                    {config.containerLabel} doesn&apos;t have one by that name yet — it was never
-                    published, or it was deleted. Build the pipeline on the canvas below and{' '}
-                    <strong>Save</strong> to create it, or rebind this item to a different pipeline.
-                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
-                      <Button size="small" appearance="primary" icon={<Link20Regular />}
-                        onClick={startRebind}>
-                        Rebind or create
-                      </Button>
-                      <Button size="small" appearance="secondary" icon={<ArrowSync20Regular />}
-                        onClick={() => loadPipeline()}>
-                        Retry
-                      </Button>
-                    </div>
-                  </MessageBarBody>
-                </MessageBar>
+                <PipelineMissingGate
+                  containerLabel={config.containerLabel}
+                  bound={bound}
+                  onRebind={startRebind}
+                  onRetry={() => void loadPipeline()}
+                />
               )}
               {error && (<BackendStateBar error={error} title="Pipeline API" />)}
               {validation && (
@@ -1221,6 +1203,16 @@ export function PipelineEditorCore({
                   // U13 — the item id keys the in-canvas run overlay (Debug run
                   // receipts painted on the nodes) + the shared collab layer.
                   itemId={id}
+                  // #3698 — the collab layer addresses `/api/items/[type]/[id]/…`,
+                  // which matches `c.itemType` EXACTLY, so it needs the ITEM'S
+                  // OWN persisted slug — NOT `config.slug`. Those two genuinely
+                  // differ: `config.slug` is the RUNTIME-keyed BFF contract
+                  // ('adf-pipeline' | 'synapse-pipeline', hardcoded per delegate
+                  // editor and accepting the alias via its own ACCEPTED_TYPES),
+                  // whereas a `data-pipeline` item opened on the ADF runtime is
+                  // still persisted as `data-pipeline`. Using config.slug here
+                  // would simply move the 404 from the aliases onto the head type.
+                  itemType={item.slug}
                   apiSlug={config.slug}
                   onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
                   // Guided empty-state / gallery apply the FULL template spec
@@ -1438,7 +1430,7 @@ export function PipelineEditorCore({
                 <DialogContent>
                   <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                     <Caption1 style={{ flex: 1, minWidth: '200px' }}>Triggers that fire this pipeline — schedule, tumbling window, storage event, or custom event. Start / stop / delete existing ones, or create a new one with the guided wizard (real ARM REST).</Caption1>
-                    <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={triggersBusy} onClick={() => { setTriggersError(null); setTriggerWizardOpen(true); }}>New trigger</Button>
+                    <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={triggersBusy || seedIncomplete} title={seedIncomplete ? EMPTY_PIPELINE_REASON : undefined} onClick={() => { setTriggersError(null); setTriggerWizardOpen(true); }}>New trigger</Button>
                   </div>
                   <div style={{ overflow: 'auto', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM }}>
                     <Table aria-label="Triggers for pipeline" size="small">
@@ -1457,7 +1449,7 @@ export function PipelineEditorCore({
                             <TableCell><Badge appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>{t.runtimeState || '—'}</Badge></TableCell>
                             <TableCell>
                               <div style={{ display: 'flex', gap: tokens.spacingVerticalXS }}>
-                                <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started'} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
+                                <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started' || seedIncomplete} title={seedIncomplete ? EMPTY_PIPELINE_REASON : undefined} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
                                 <Button size="small" disabled={triggersBusy || t.runtimeState !== 'Started'} onClick={() => triggerAction(t.name, 'stop')}>Stop</Button>
                                 <Button size="small" appearance="subtle" disabled={triggersBusy} onClick={() => triggerAction(t.name, 'delete')}>Delete</Button>
                               </div>

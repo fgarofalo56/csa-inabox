@@ -2,14 +2,49 @@ name: gov-build-images
 
 # CSA Loom — the Azure Government IMAGE PRODUCER.
 #
-# ⚠️ THIS WORKFLOW HAS NEVER BEEN EXECUTED. It is new in PR #2641 and, as of
-# this commit, `gh run list --workflow gov-build-images.yml` returns NOTHING.
-# A green CI run on this PR proves the YAML parses and the repo lints — it does
-# NOT prove this lane builds anything. Treat the first dispatch as the test.
-# Everything downstream of it is written to fail LOUDLY rather than assume it
-# worked: see the "Verify the pulled tag exists" step below, and the image
-# preflight below that refuses to declare success unless every tag a Gov
-# template pulls is really in the registry.
+# ⚠️ HISTORY: this workflow was written in PR #2641 and had never been executed
+# at that time. It has since run for real — last success 2026-08-08 — so the
+# original "treat the first dispatch as the test" warning is retired. What
+# replaced it as the problem is the opposite failure: it ran, and then it did not
+# run again for ten days, because nothing except a human could start it.
+# Everything downstream of the build is still written to fail LOUDLY rather than
+# assume it worked: see the "Verify the pulled tag exists" step below.
+#
+# ── WHY THIS NOW RUNS ON A SCHEDULE (#3730) ────────────────────────────────
+# Measured 2026-08-18: `deploy-gov` reported SUCCESS on 2026-08-16 while the live
+# Gov console still served an image built on 2026-08-11, and THIS lane — the
+# thing that produces the tag Gov templates pull — had last run 2026-08-08.
+#
+# The mechanism is the `:v0.1` tag. Every Gov .bicepparam resolves image tags
+# with `readEnvironmentVariable('LOOM_<X>_TAG', 'v0.1')` and admin-plane/main.bicep
+# falls back to `appImageTags.?<app> ?? 'v0.1'`. So `:v0.1` is a MOVING pointer
+# that only this workflow moves. If it is never rebuilt, a Gov apply re-renders
+# the Container Apps onto whatever `:v0.1` meant the last time a human ran this —
+# and reports success, because from ARM's point of view nothing is wrong. That is
+# deploy-integrity.md R1's "silently broken" case: a path that exits 0 having
+# produced nothing new.
+#
+# A nightly schedule makes `:v0.1` track main without a human in the loop, which
+# is what `cloud-parity.md` requires: Commercial's producer has fired on every
+# merge since #2603, and a Gov customer does not get a lesser product.
+#
+# ── WHY SCHEDULE AND NOT `push` ────────────────────────────────────────────
+# Stated plainly because the asymmetry with Commercial is deliberate, not an
+# oversight. The Commercial producer builds ~13 images IN PARALLEL. This one runs
+# `max-parallel: 1` because each build takes the per-registry ACR firewall lease
+# (scripts/csa-loom/acr-firewall-lease.sh) and the lease cannot be shared. The
+# Gov console build alone measures 17-23 minutes, so the default three-app matrix
+# is roughly 45-60 minutes — longer than the gap between merges on a busy day.
+# On `push` this lane would spend most of its life queued behind itself and would
+# hold the registry lease almost continuously, starving gov-console-roll (the
+# lane that actually reaches the live console on every merge).
+#
+# So the split is: gov-console-roll.yml carries the per-merge path for the image
+# users see, and this lane keeps the DEPLOY-REFERENCED `:v0.1` pointer and the
+# non-console images fresh nightly. 07:37 UTC is chosen from MEASURED merge
+# traffic — see the note on the `schedule:` trigger below — so this lane's
+# 45-60 minutes of held ACR firewall lease sit in the quietest window rather
+# than competing with merge-triggered rolls for the same registry.
 #
 # TAGS — THE THING THAT MUST MATCH
 #   Every Gov .bicepparam resolves image tags with
@@ -72,6 +107,38 @@ name: gov-build-images
 #   cloud-invariant. `skip_supply_chain` is the loud emergency valve.
 
 on:
+  # NIGHTLY, so the deploy-referenced `:v0.1` pointer tracks main without a human
+  # dispatch (#3730). See the header for why this is a schedule and not a `push`.
+  #
+  # THE HOUR IS CHOSEN AGAINST MEASURED MERGE TRAFFIC, not by habit. This lane is
+  # a `max-parallel: 1` three-app matrix at 17-23 min each and every build takes
+  # the PER-REGISTRY ACR firewall lease — the same lease gov-console-roll needs on
+  # every console-touching merge. `acquire` waits `LOOM_ACR_LEASE_WAIT_MINUTES`
+  # (default 25) and then FAILS. Overlap therefore does not corrupt anything (the
+  # lease is a real mutex and the next console merge re-rolls), but it produces
+  # recurring red on a brand-new lane, which is how people learn to ignore a
+  # lane's failures.
+  #
+  # Measured over the last 30 days, console-touching commits by UTC hour: 03h is
+  # one of the BUSIEST (37 commits landed 03:00-04:59), while 07:00-09:00 is a
+  # trough at ~4 commits per hour. Hence 07:37 rather than the 03:00 this first
+  # carried. The off-minute is deliberate: GitHub schedules a great deal at :00
+  # and delays crons under load.
+  #
+  # It also lands well clear of deploy-fiab-gcch.yml's 10:00 UTC apply, so the
+  # `:v0.1` tag that apply may adopt is at most a couple of hours old, and the
+  # two are not competing for the registry.
+  #
+  # EVERY `inputs.*` READ IN THIS FILE IS EMPTY ON THIS PATH. `inputs` exists on a
+  # schedule event but carries nothing, and a `workflow_dispatch` `default:` does
+  # NOT apply to other triggers — that exact trap froze deploy-fiab-commercial's
+  # nightly reconcile for weeks (scripts/ci/deploy-trigger-policy.mjs). Left
+  # unhandled here it would be worse than a failure: `inputs.apps` empty means the
+  # build matrix is `[]`, the `build` job never runs, and the workflow concludes
+  # SUCCESS having produced no image at all. Every consumer below therefore reads
+  # the defaulted `env.*` values, and `resolve` asserts the matrix is non-empty.
+  schedule:
+    - cron: '37 7 * * *'
   workflow_dispatch:
     inputs:
       boundary:
@@ -138,9 +205,27 @@ permissions:
 
 # One image build at a time per boundary: `az acr build` needs the registry
 # firewall open, and the lease in acr-firewall-lease.sh is per-registry.
+#
+# The `|| 'gcc-high'` is not cosmetic. On the schedule path `inputs.boundary` is
+# empty, so the group would be the bare string `gov-build-images-` — which two
+# different boundaries' scheduled runs would both land in, serialising builds
+# against DIFFERENT registries for no reason while failing to name either.
 concurrency:
-  group: gov-build-images-${{ inputs.boundary }}
+  group: gov-build-images-${{ inputs.boundary || 'gcc-high' }}
   cancel-in-progress: false
+
+# THE SINGLE SOURCE OF THE DEFAULTS, for every trigger.
+#
+# These mirror the `workflow_dispatch` / `workflow_call` `default:` values above
+# and exist because those defaults DO NOT APPLY on a `schedule` event. Steps read
+# `$BOUNDARY` / `$APPS_IN` / `$TAG_IN` rather than `${{ inputs.* }}` so that one
+# table governs all three triggers and the schedule cannot silently run with an
+# empty app list. Where a blank is genuinely meaningful — `location`,
+# `resource_group`, `acr` all mean "derive it" — the input is still read raw.
+env:
+  BOUNDARY: ${{ inputs.boundary || 'gcc-high' }}
+  APPS_IN: ${{ inputs.apps || 'loom-console,loom-uat,loom-unity' }}
+  TAG_IN: ${{ inputs.tag || 'v0.1' }}
 
 jobs:
   resolve:
@@ -203,20 +288,34 @@ jobs:
           # 'LOOM_<X>_TAG','v0.1')) and what admin-plane/main.bicep falls back to
           # (appImageTags.?<app> ?? 'v0.1'). If this and the template disagree,
           # ARM points at an image that does not exist.
-          TAG="${{ inputs.tag }}"
+          # `$TAG_IN` and not `${{ inputs.tag }}`: the dispatch default does not
+          # reach a scheduled run (see the `env:` block at the top of this file).
+          TAG="$TAG_IN"
           [ -n "$TAG" ] || TAG=v0.1
           SHA_TAG=$(git rev-parse --short=8 HEAD)
           echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
           # Comma list -> JSON array for the build matrix.
-          MATRIX=$(printf '%s' "${{ inputs.apps }}" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | \
+          MATRIX=$(printf '%s' "$APPS_IN" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | \
             python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+          # A BUILD LANE THAT BUILDS NOTHING MUST NOT REPORT SUCCESS.
+          #
+          # An empty matrix does not error: the `build` job is simply skipped and
+          # the run concludes green having produced no image — deploy-integrity
+          # R1's "exits 0 having produced nothing" verbatim, and the single most
+          # likely way the schedule path could go quietly wrong (an emptied
+          # `apps` input, a mangled default, a tr/grep that eats the list). This
+          # is the floor that makes the schedule trustworthy.
+          if [ "$MATRIX" = "[]" ] || [ -z "$MATRIX" ]; then
+            echo "::error::The app list resolved to NOTHING (apps input='$APPS_IN', trigger='${{ github.event_name }}'), so this run would build zero images and still conclude success. Refusing. On a schedule the list comes from the workflow-level env defaults, not from a workflow_dispatch 'default:' — if this fires on the schedule path, that env block is what to fix."
+            exit 1
+          fi
           {
             echo "rg=$RG"; echo "acr=$ACR"; echo "acr_login=$ACR_LOGIN"; echo "tag=$TAG"; echo "matrix=$MATRIX";
           } >> "$GITHUB_OUTPUT"
-          echo "::notice::boundary=${{ inputs.boundary }} rg=$RG acr=$ACR login=$ACR_LOGIN tag=$TAG apps=$MATRIX"
+          echo "::notice::boundary=$BOUNDARY rg=$RG acr=$ACR login=$ACR_LOGIN tag=$TAG apps=$MATRIX"
           # Every requested app must have a build context in the tree — a build
           # lane that silently skips is how an unbuildable image reaches ARM.
-          for a in $(printf '%s' "${{ inputs.apps }}" | tr -d ' ' | tr ',' ' '); do
+          for a in $(printf '%s' "$APPS_IN" | tr -d ' ' | tr ',' ' '); do
             case "$a" in
               loom-uat) [ -f apps/fiab-console/Dockerfile.uat ] || { echo "::error::apps/fiab-console/Dockerfile.uat missing"; exit 1; } ;;
               loom-console) [ -f apps/fiab-console/Dockerfile ] || { echo "::error::apps/fiab-console/Dockerfile missing"; exit 1; } ;;
@@ -306,7 +405,7 @@ jobs:
           # only one of those would leave one boundary's template pointing at a
           # tag nobody built — the exact failure this lane exists to prevent.
           TAG_LIST="$TAG $SHA_TAG latest"
-          if [ "$APP" = "loom-console" ] && [ "${{ inputs.boundary }}" = "il5" ]; then
+          if [ "$APP" = "loom-console" ] && [ "$BOUNDARY" = "il5" ]; then
             TAG_LIST="$TAG_LIST v3.0"
           fi
           TAG_LIST=$(printf '%s\n' $TAG_LIST | awk 'NF && !seen[$0]++' | tr '\n' ' ')
@@ -468,17 +567,24 @@ jobs:
       - name: Report
         run: |
           {
-            echo "### Gov image build — ${{ inputs.boundary }}"
+            echo "### Gov image build — $BOUNDARY (trigger: ${{ github.event_name }})"
             echo ""
             echo "| field | value |"
             echo "| --- | --- |"
             echo "| resource group | \`${{ needs.resolve.outputs.rg }}\` |"
             echo "| registry | \`${{ needs.resolve.outputs.acr_login }}\` |"
             echo "| tag | \`${{ needs.resolve.outputs.tag }}\` (also \`:latest\`) |"
-            echo "| apps | \`${{ inputs.apps }}\` |"
+            echo "| apps | \`$APPS_IN\` |"
             echo "| build result | \`${{ needs.build.result }}\` |"
             echo ""
-            echo "Next: re-run the subscription deployment with \`deployAppsEnabled=true\` so the Container Apps pull these images."
+            # SAY WHAT THIS RUN DID *NOT* DO. Building an image does not put it on
+            # the estate — that is the exact confusion #3730 was filed off. The
+            # `:v0.1` pointer this lane moves is only picked up when a Gov apply
+            # re-renders the Container Apps; the live Gov console is rolled by
+            # gov-console-roll.yml on every merge.
+            echo "**This lane BUILT images. It did not deploy anything.**"
+            echo "The Gov console is rolled by \`gov-console-roll.yml\`, which fires on every merge to main."
+            echo "These \`:v0.1\` images reach the estate when a Gov apply (\`deploy-fiab-gcch.yml\`) re-renders the Container Apps."
             echo ""
             echo "> **loom-uat / svc-synthetic-monitor:** building the image does NOT make the Journeys tab populate."
             echo "> The scheduled runner signs in as \`svc-loom-synthetic@limitlessdata.ai\`, whose sign-in is blocked by"

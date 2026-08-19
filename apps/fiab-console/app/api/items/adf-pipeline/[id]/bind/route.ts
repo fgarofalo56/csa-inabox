@@ -97,11 +97,29 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     } catch (e: any) {
       listError = e?.message || String(e);
     }
-    // Preview graph for bundle-installed (unbound) items: surface the rich
-    // activity graph stamped into state.content so the editor can render the
-    // FULLY BUILT-OUT canvas while the bind gate still prompts the user to push
-    // it to a real ADF factory pipeline. Null when no pipeline content.
-    const preview = bound ? null : pipelineDefinitionFromContent(item.state?.content);
+    // Preview graph for bundle-installed items: surface the rich activity graph
+    // stamped into state.content so the editor can render the FULLY BUILT-OUT
+    // canvas. Null when no pipeline content.
+    //
+    // #3549 — WHY THIS IS NOT SIMPLY `bound ? null : …`. Suppressing the
+    // preview the moment an item is bound is correct only when the BOUND OBJECT
+    // actually holds the content. When auto-bind created the pipeline but could
+    // not author the graph into it (`seedError` — an RBAC refusal, or a
+    // Databricks linked service this estate cannot satisfy), the live pipeline
+    // is real and EMPTY, and suppressing the preview here is what made that
+    // state indistinguishable from a healthy one. So we keep the preview
+    // whenever the seed did not land, and the editor can render the authored
+    // graph instead of presenting an empty pipeline as complete.
+    const seedIncomplete = autoBind?.status === 'bound' && !!autoBind.seedError;
+    const preview = bound && !seedIncomplete ? null : pipelineDefinitionFromContent(item.state?.content);
+    // G2 — a machine-readable gate code so /admin/gates and the Copilot gate
+    // tool can resolve this state. It maps to `svc-adf`, whose declared role
+    // ("Data Factory Contributor (UAMI) on the factory") is exactly the
+    // remediation for a refused pipeline-definition write. Written as an inline
+    // literal because lib/gates/__tests__/route-gate-codes.test.ts reads this
+    // file's SOURCE for the emitted-code shape — a value hidden behind a
+    // variable would sail past that guard.
+    const seedGate = seedIncomplete ? { code: 'adf_pipeline_seed_incomplete' } : undefined;
     // Surface the SELECTED factory the item was bound against (persisted at bind
     // time) so the editor rehydrates its factory picker + Factory Resources tree
     // on reload — keeping the tree, the bind list, and the bound item all on the
@@ -113,7 +131,7 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
       resourceGroup: typeof st.factoryResourceGroup === 'string' && st.factoryResourceGroup ? st.factoryResourceGroup : undefined,
     };
     const boundFactory = bf.name || bf.subscriptionId || bf.resourceGroup ? bf : null;
-    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, boundFactory, autoBind });
+    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, boundFactory, autoBind, ...(seedGate ?? {}) });
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });

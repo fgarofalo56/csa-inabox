@@ -29,12 +29,21 @@
  * Persistence key (catalog reads this): state.endorsement. ADDITIVE + optional —
  * every other reader/provisioner ignores it (no-freeform-config.md: the editor
  * offers a radio + a certify action, never a free-form field).
+ *
+ * Route-toolkit: withSession (R1/R3). The hand-rolled `getSession()` + literal
+ * 401 prologue on both verbs was migrated by
+ * `scripts/codemods/migrate-route-toolkit.mjs` — the 401 body is byte-identical
+ * (`apiUnauthorized()` = `{ ok:false, error:'unauthenticated' }`, 401) and the
+ * authorization below (loadOwnedItem read/write scoping + the isTenantAdmin
+ * certify gate) is untouched. The only delta is the toolkit's try/catch, which
+ * turns an uncaught throw into the structured `apiServerError` 500 instead of
+ * Next's generic one.
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,25 +75,24 @@ function parseEndorsementInput(
   return { ok: false };
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { type, id } = await ctx.params;
-  const item = await loadOwnedItem(id, type, session.claims.oid);
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { type, id } = params;
+  // READ-SCOPED (#3697). This GET only reads `state.endorsement`, but it used to
+  // call `loadOwnedItem` at its WRITE-capable default, so a shared read-only
+  // Viewer/Contributor was refused with a 404 on a pure read — the editor chrome
+  // renders this control for every member, so it 404'd for them on every open.
+  // PATCH below keeps the write scope (promote/clear IS a mutation).
+  const item = await loadOwnedItem(id, type, session.claims.oid, { allowReadRoles: true });
   if (!item) {
     return NextResponse.json({ ok: false, error: 'item not found or not owned by you' }, { status: 404 });
   }
 
   const endorsement = normalizeEndorsement((item.state as Record<string, unknown> | undefined)?.endorsement);
   return NextResponse.json({ ok: true, endorsement, canCertify: isTenantAdmin(session) });
-}
+});
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { type, id } = await ctx.params;
+export const PATCH = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
+  const { type, id } = params;
 
   let body: { endorsement?: unknown } = {};
   try { body = await req.json(); } catch { /* empty/invalid body → validation below */ }
@@ -128,4 +136,4 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ type: str
   }
 
   return NextResponse.json({ ok: true, endorsement: value, canCertify: isTenantAdmin(session) });
-}
+});

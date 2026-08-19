@@ -130,6 +130,16 @@ describe('data-pipeline Databricks linked-service fix (RTA + ml-pipeline)', () =
       if (u.includes('/pipelineruns/')) return { status: 200, body: { runId: 'rta-run-1', status: 'InProgress' } };
       if (u.includes('/pipelines/') && init?.method === 'PUT') return { status: 200, body: { name: 'x' } };
       if (u.includes('/linkedservices/') && init?.method === 'PUT') return { status: 200, body: { name: 'ls' } };
+      // A FRESH workspace has no linked services or datasets, so a GET by name
+      // must 404. This used to answer 200 like everything else, which modelled
+      // a workspace where every name is already taken — and once the reference
+      // stubber became create-if-absent (#3549 review, BLOCKER 1) that fixture
+      // said "already there, adopt it" and no LS was ever authored. The GETs
+      // are the reads the stubber uses to avoid overwriting a customer object,
+      // so they have to answer truthfully for this scenario.
+      if ((u.includes('/linkedservices/') || u.includes('/datasets/')) && (!init?.method || init.method === 'GET')) {
+        return { status: 404, body: { error: { code: 'NotFound' } } };
+      }
       return { status: 200, body: {} };
     });
     const { dataPipelineProvisioner } = await import('../provisioners/data-pipeline');

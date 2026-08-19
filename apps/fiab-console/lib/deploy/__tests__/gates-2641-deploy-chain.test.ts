@@ -26,6 +26,27 @@ import { join } from 'node:path';
 const REPO = join(__dirname, '..', '..', '..', '..', '..');
 const read = (p: string) => readFileSync(join(REPO, p), 'utf8');
 
+/**
+ * Slice ONE `- name: <name>` step out of a workflow, up to the next sibling
+ * step, so an assertion can be scoped to that step's own YAML keys and `run:`
+ * body instead of matching anywhere in a 590-line file. Returns '' when the
+ * step is absent, which is itself the thing worth failing on.
+ *
+ * Every regex applied to the result must tolerate BOTH line endings: .gitattributes
+ * pins `platform/fiab/bicep/**` and `sdk/**` to LF but NOT `.github/workflows/**`,
+ * so with core.autocrlf=true these files read as CRLF on a Windows checkout and as
+ * LF on the Linux CI runner. A needle spelled `\n` that silently no-ops against
+ * `\r\n` is a gate that passes locally and measures nothing where it counts.
+ */
+function ghStep(wf: string, name: string): string {
+  const marker = `- name: ${name}`;
+  const start = wf.indexOf(marker);
+  if (start < 0) return '';
+  const body = wf.slice(start + marker.length);
+  const end = body.search(/\n {6}- name: /);
+  return end < 0 ? body : body.slice(0, end);
+}
+
 const ADMIN_PLANE = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
 const UAT_STORE = 'platform/fiab/bicep/modules/admin-plane/uat-results-storage.bicep';
 
@@ -184,13 +205,80 @@ describe('the Gov image lane pushes the tag the templates PULL', () => {
     expect(read('platform/fiab/bicep/params/il5.bicepparam'))
       .toMatch(/readEnvironmentVariable\('LOOM_CONSOLE_TAG', 'v3\.0'\)/);
     const wf = read('.github/workflows/gov-build-images.yml');
-    expect(wf).toMatch(/if \[ "\$APP" = "loom-console" \] && \[ "\$\{\{ inputs\.boundary \}\}" = "il5" \]; then\s*\n\s*TAG_LIST="\$TAG_LIST v3\.0"/);
+    // `$BOUNDARY`, NOT `${{ inputs.boundary }}` — and the distinction is the
+    // assertion, not an incidental reflow (#3781).
+    //
+    // #3745 gave this lane a `schedule:` trigger, and a `workflow_dispatch`
+    // `default:` DOES NOT APPLY on a schedule event. So on the nightly run
+    // `${{ inputs.boundary }}` interpolates to the EMPTY STRING, the test
+    // becomes `[ "" = "il5" ]`, and the IL5 console would silently stop being
+    // pushed as :v3.0 — while the lane still exited 0. The workflow-level
+    // `env:` block (`BOUNDARY: ${{ inputs.boundary || 'gcc-high' }}`) is the
+    // single defaults table that makes all three triggers agree, and `$BOUNDARY`
+    // is how the shell reads it.
+    //
+    // This is therefore deliberately NOT written to accept both shapes, unlike
+    // the cosign assertion above. There the two spellings were equally correct;
+    // here the old one is the regression, so matching it would license exactly
+    // the silent failure #3730 was filed off.
+    expect(wf).toMatch(/if \[ "\$APP" = "loom-console" \] && \[ "\$BOUNDARY" = "il5" \]; then\s*\n\s*TAG_LIST="\$TAG_LIST v3\.0"/);
   });
 
-  it('says plainly that the lane has never been executed', () => {
-    // A build lane nobody has run is not evidence of anything, and a green CI
-    // on this PR must not be read as proof that it works.
-    expect(read('.github/workflows/gov-build-images.yml')).toMatch(/HAS NEVER BEEN EXECUTED/);
+  it('refuses to pass on a tag it has not PROVEN landed, on every tag, with no valve', () => {
+    // WHAT THIS REPLACED, AND WHY (#3781).
+    //
+    // This test used to require the literal banner `HAS NEVER BEEN EXECUTED` in
+    // the workflow header, under the name "says plainly that the lane has never
+    // been executed". #3745 removed that banner CORRECTLY: the lane has since
+    // run for real (header records last success 2026-08-08) and now carries
+    // `schedule` + `workflow_call` triggers, so a header claiming nobody had
+    // ever run it had become FALSE. The workflow was right and this gate was
+    // stale — the same trap the two comments above already record twice.
+    //
+    // The INTENT is kept, because it is still valid: a build lane's own exit
+    // code is not evidence that it produced anything, so nothing downstream may
+    // assume it worked. What changed is the FACT that intent was pinned to. A
+    // banner is a narrative whose truth value moves with history; the step that
+    // REFUSES to pass on an unproven tag is behaviour, and it cannot go stale
+    // the same way. The workflow header points here itself: "Everything
+    // downstream of the build is still written to fail LOUDLY rather than assume
+    // it worked: see the … step below."
+    const wf = read('.github/workflows/gov-build-images.yml');
+    const verify = ghStep(wf, 'Verify the DEPLOY-REFERENCED tag exists in the Gov ACR');
+    expect(verify, 'the tag-existence verification step is GONE from the Gov build lane').not.toBe('');
+
+    // It runs on EVERY build. `skip_supply_chain` is the loud emergency valve
+    // for Trivy + cosign; it must not also switch off the proof that the tag ARM
+    // will pull exists. So this step carries no `if:` and no `continue-on-error:`.
+    // Anchored at 8 spaces = the step-key column, so a shell `if [ … ]` inside
+    // the `run:` body (deeper, and with no colon) cannot be mistaken for one.
+    expect(verify).not.toMatch(/^ {8}if:/m);
+    expect(verify).not.toMatch(/^ {8}continue-on-error:/m);
+
+    // Every tag the build pushed, not just the first — the per-boundary matrix
+    // above is the whole reason a single-tag check would ship broken.
+    expect(verify).toMatch(/for T in \$\{TAG_LIST:-/);
+
+    // ...and BOTH outcomes are fail-closed, which is the property with teeth:
+    //   1. the tag is genuinely absent          -> exit 1
+    //   2. the registry could not be READ AT ALL -> exit 1, because UNPROVEN is
+    //      not disproven (deploy-integrity.md R7). It classifies the captured
+    //      stderr through deploy-classify.mjs rather than collapsing a denial,
+    //      a throttle and a real 404 into one empty string and then stating the
+    //      404 as fact — the exact false claim that cost two investigations.
+    //
+    // Two separate needles rather than one spanning regex ON PURPOSE: in the
+    // workflow those tokens sit either side of a shell line-continuation
+    // (`--text "$SHOW_OUT" \` / newline / `--assert-signal …`). Where the author
+    // chose to wrap the line is formatting, and a gate keyed to it would go red
+    // on a reflow that changed nothing — which is the fragility class this whole
+    // test exists to stop repeating.
+    expect(verify).toMatch(/node scripts\/ci\/deploy-classify\.mjs/);
+    expect(verify).toMatch(/--assert-signal config\.image-tag-absent/);
+    expect((verify.match(/exit 1\b/g) || []).length).toBeGreaterThanOrEqual(2);
+
+    // A verification whose result is discarded is not a verification.
+    expect(verify).not.toMatch(/\|\| true/);
   });
 });
 
