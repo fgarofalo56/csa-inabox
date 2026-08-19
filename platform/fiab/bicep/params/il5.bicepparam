@@ -351,8 +351,11 @@ param apimEnabled = true
 // ontology store is skipped too and svc-weave-ontology honest-gates on
 // LOOM_WEAVE_PG_FQDN — a registered gate in place of a hard deploy failure, NOT
 // an ontology graph store. Under .claude/rules/cloud-parity.md that capability
-// stays INCOMPLETE in IL5 until an Azure-native/OSS substitute backs it. The
-// DuckDB serving tier has no Postgres dependency and still deploys by default.
+// stays INCOMPLETE in IL5 until an Azure-native/OSS substitute backs it. That
+// rule requires such a lag be a TRACKED defect with an owner and a date, never
+// a silent state, so it is tracked as ISSUE #3788 — do not treat this prose as
+// the tracking. The DuckDB serving tier has no Postgres dependency and still
+// deploys by default.
 param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 param hubFirewallEnabled = true
 param aiSearchEnabled = false

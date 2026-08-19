@@ -308,9 +308,11 @@ param appImageTags = {
 // psql-loom-weave-default-*, GitHub Actions run 32019775757, deploy-fiab-gcch,
 // 2026-08-17) into a registered gate. It does NOT give GCC-High an ontology
 // graph store; under .claude/rules/cloud-parity.md that capability remains
-// INCOMPLETE here until an Azure-native/OSS substitute backs it. The DuckDB
-// serving tier is NOT affected — it has no Postgres dependency and deploys by
-// default in both Gov boundaries.
+// INCOMPLETE here until an Azure-native/OSS substitute backs it. That rule
+// requires such a lag be a TRACKED defect with an owner and a date, never a
+// silent state, so it is tracked as ISSUE #3788 — do not treat this prose as
+// the tracking. The DuckDB serving tier is NOT affected — it has no Postgres
+// dependency and deploys by default in both Gov boundaries.
 param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 
 // MSAL — Gov tenant client id+secret via env (don't commit)

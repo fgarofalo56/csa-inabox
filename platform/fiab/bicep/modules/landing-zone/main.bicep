@@ -892,14 +892,36 @@ param postgresQuotaAvailable bool = true
 // armed.
 //
 // LEVER, stated precisely because it differs by topology: main.bicep's
-// `postgresQuotaAvailable` is the only opt-out/override reaching HERE. The
-// per-capability `loomBackends.weavePostgres` key exists only on the admin-plane
-// derivation (admin-plane/main.bicep weavePgAllowed) because this module is not
-// handed the loomBackends bag. So on a single-sub / multi-sub / dlz-attach
-// topology there is no way to re-enable JUST the Weave server without also
-// un-gating the Airflow and DuckLake/Unity hosts. That asymmetry is named here
-// rather than left for the next reader to discover; closing it means plumbing
-// loomBackends into this module, which is a separate change.
+// `postgresQuotaAvailable` is the only opt-out/override reaching THIS MODULE.
+// The per-capability `loomBackends.weavePostgres` key exists only on the
+// admin-plane derivation (admin-plane/main.bicep weavePgAllowed) because this
+// module is not handed the loomBackends bag.
+//
+// That does NOT mean the narrow lever is unavailable on single-sub / multi-sub.
+// An earlier revision of this comment said it was, on all three of single-sub /
+// multi-sub / dlz-attach. That was WRONG for the first two, and wrong in the
+// dangerous direction: a Gov operator reading it would conclude the only way to
+// get a Weave server is postgresQuotaAvailable=true, which per the blast-radius
+// table in params/gcc-high.bicepparam ALSO drags in the OSS Airflow host and its
+// anonymous apache/airflow Docker Hub pull — in a sovereign boundary. Measured
+// (main.bicep): `deployAdminPlane = effectiveTopology != 'dlz-attach'` (~L1114)
+// and the adminPlane module (~L1159) IS handed `loomBackends` (~L1577). So on
+// single-sub and multi-sub the admin plane is deployed and receives the bag, and
+// because main.bicep emits `loomWeavePgFqdn` empty when the quota gate is false,
+// `weavePgSuppliedByDlz` is false there — so
+//     observabilityConfig.backendOverrides = { weavePostgres: 'enabled' }
+// reaches `weavePgAllowed` and lights `weavePgLocalActive`, giving exactly ONE
+// Weave server. Note WHERE: the admin-plane module deploys it in the ADMIN RG,
+// not the DLZ RG this module would have used. Anything keying off the DLZ
+// resource group (including the psql-loom-weave-* lookup in
+// csa-loom-post-deploy-bootstrap.yml) will not find it there.
+//
+// The claim is true for ONE topology only: `dlz-attach`, where deployAdminPlane
+// is false, there is no admin plane to carry the override, and
+// `postgresQuotaAvailable` is genuinely the only lever — so re-enabling Weave
+// there also un-gates the Airflow and DuckLake/Unity hosts. That residual
+// asymmetry is named here rather than left for the next reader to discover;
+// closing it means plumbing loomBackends into this module, a separate change.
 var weavePgActive = weaveOntologyEnabled && postgresQuotaAvailable
 
 module postgresWeave 'postgres-weave.bicep' = if (weavePgActive) {

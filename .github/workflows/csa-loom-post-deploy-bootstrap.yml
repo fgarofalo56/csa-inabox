@@ -2371,17 +2371,35 @@ jobs:
           # one-time CREATE EXTENSION AGE + create_graph + pgaadauth_create_principal
           # that cannot be done in bicep. Idempotent — re-runs cleanly.
           set -uo pipefail
-          WEAVE_PG_SERVER=$(az postgres flexible-server list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
-            --query "[?starts_with(name,'psql-loom-weave')].name | [0]" -o tsv 2>/dev/null)
+          # BRANCH ON THE EXIT CODE, NOT ON EMPTINESS. This read used to be
+          # `$(az … 2>/dev/null)` tested with `[ -z ]`, which cannot tell "the
+          # server is not there" apart from "I could not look". A deploy SP
+          # without Reader on $DLZ_SUB, a wrong -g, or a transient az failure all
+          # produced an empty string, and the notice below then ASSERTED the
+          # server was absent. That is deploy-integrity.md R7 verbatim — the same
+          # shape as the roll that reported "the tag does not exist" when the
+          # truth was "I could not reach the registry", and it sent two
+          # investigations down the wrong path. stderr is captured and surfaced,
+          # never discarded.
+          PG_ERR="$(mktemp)"
+          if ! WEAVE_PG_SERVER=$(az postgres flexible-server list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
+            --query "[?starts_with(name,'psql-loom-weave')].name | [0]" -o tsv 2>"$PG_ERR"); then
+            echo "::warning::Could NOT enumerate PostgreSQL flexible servers in $DLZ_RG (subscription $DLZ_SUB). This job did NOT determine whether the Weave server exists — it could not look. Common causes: the deploy identity lacks Reader on that subscription/RG, the RG name is wrong, or a transient az failure. az stderr: $(tr -d '\r' < "$PG_ERR")"
+            rm -f "$PG_ERR"
+            exit 0
+          fi
+          rm -f "$PG_ERR"
+          # az exited 0, so the enumeration genuinely happened and an empty result
+          # genuinely means no matching server IN THIS RESOURCE GROUP.
           if [ -z "$WEAVE_PG_SERVER" ]; then
-            # What this actually established: no psql-loom-weave-* server in THIS
-            # resource group. It did NOT establish that no server exists — on the
-            # tenant topology admin-plane/main.bicep deploys `weavePg` at ADMIN-RG
-            # scope, which this query does not cover. And "deploy with
+            # What this establishes: no psql-loom-weave-* server in THIS resource
+            # group. It does NOT establish that no server exists — admin-plane/
+            # main.bicep deploys `weavePg` at ADMIN-RG scope on every topology
+            # except dlz-attach, which this query does not cover. And "deploy with
             # weaveOntologyEnabled=true" stopped being sufficient advice in 3449d:
             # that param already defaults true, and the server is now ALSO gated on
             # postgresQuotaAvailable, which both Gov param files pin false.
-            echo "::notice::No psql-loom-weave-* server found in $DLZ_RG (this job did not look in the admin RG, where the tenant topology places it). If the server really is absent: weaveOntologyEnabled already defaults true, so check postgresQuotaAvailable — the gcc-high/il5 bicepparams pin it false and the Weave server is skipped there by design (3449d). On the tenant topology you can re-enable just this server with observabilityConfig.backendOverrides={weavePostgres:'enabled'} without un-gating the Airflow/DuckLake hosts; on single-sub/multi-sub topologies only postgresQuotaAvailable reaches it. Then re-run this job."
+            echo "::notice::No psql-loom-weave-* server found in $DLZ_RG (the enumeration succeeded; this job did not look in the admin RG, where every topology except dlz-attach places it). If the server really is absent: weaveOntologyEnabled already defaults true, so check postgresQuotaAvailable — the gcc-high/il5 bicepparams pin it false and the Weave server is skipped there by design (3449d). On tenant, single-sub and multi-sub you can re-enable just this server with observabilityConfig.backendOverrides={weavePostgres:'enabled'} without un-gating the Airflow/DuckLake hosts — it lands in the ADMIN RG, not this one. Only on dlz-attach is postgresQuotaAvailable the sole lever. Then re-run this job."
             exit 0
           fi
           echo "Weave PG server: $WEAVE_PG_SERVER"
