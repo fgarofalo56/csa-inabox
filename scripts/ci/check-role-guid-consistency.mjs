@@ -1275,6 +1275,16 @@ export function controlFaults() {
  * answers "is this value right?"; neither one masks the other. And because the
  * harvested text comes from the file, this cannot degrade into a fixture that
  * models the code instead of running against it.
+ *
+ * THE SAME CLASS RECURRED ONCE MORE, and the fix is in repoShapeFaults() rather
+ * than here. `pairs` and `resolved` shared one failure sentence — "the harvester
+ * has stopped reading a shape the repo still uses" — which is true of `pairs`
+ * and NOT true of `resolved`. `resolved` also moves when CANONICAL or ALIASES
+ * changes, and adding a role is something this file's own docstring calls a pure
+ * improvement: adding AcrPull took the gov-provision-streaming-migrate anchor
+ * from resolved=1 to resolved=2 and reported a regression that had not happened.
+ * A shared message across two counts with different causes is how a floor starts
+ * asserting a cause it did not establish. They are reported separately now.
  */
 export const REPO_SHAPES = [
   {
@@ -1403,12 +1413,40 @@ export function repoShapeFaults(root = REPO_ROOT) {
     const { resolved } = evaluate(pairs);
     const got = { pairs: pairs.length, resolved };
     for (const [k, want] of Object.entries(s.expect)) {
-      if (got[k] !== want) {
+      if (got[k] === want) continue;
+      // `pairs` and `resolved` fail for DIFFERENT reasons and must not share a
+      // sentence. `pairs` is a pure harvester property: only a matcher can
+      // change how many bindings a fixed block of text yields, so the original
+      // wording is exactly right for it.
+      if (k === 'pairs') {
         out.push(
-          `repo shape "${s.id}": expected ${k}=${want}, got ${got[k]} — the harvester has stopped reading a ` +
+          `repo shape "${s.id}": expected pairs=${want}, got ${got[k]} — the harvester has stopped reading a ` +
             'shape the repo still uses, so every binding written that way is now unchecked.',
         );
+        continue;
       }
+      // `resolved` is NOT a harvester property alone — it also moves when
+      // CANONICAL or ALIASES changes, and this file's own docstring calls
+      // adding a role "a pure improvement". So the old shared message asserted
+      // "the harvester has stopped reading" for a change that read MORE, not
+      // less: adding AcrPull to CANONICAL took this anchor from resolved=1 to
+      // resolved=2 and reported a regression that had not happened. That is the
+      // R7 defect this guard polices, in the guard's own output, and it is the
+      // SECOND time this floor has had one — the header already records the
+      // first ("a floor whose failure text sends the reader at the fixture
+      // instead of at the bug"). This floor cannot separate the two causes, so
+      // it names both rather than picking one.
+      const direction = got[k] > want ? 'MORE' : 'FEWER';
+      out.push(
+        `repo shape "${s.id}": expected resolved=${want}, got ${got[k]} (pairs=${got.pairs}) — ${direction} of ` +
+          "this sample's harvested lines now resolve to a known built-in role. That is ALL this establishes. " +
+          'TWO causes produce it and this floor cannot tell them apart: (a) the harvester or the label ' +
+          'resolution REGRESSED, or (b) CANONICAL/ALIASES CHANGED — adding a role moves this number UP with ' +
+          'nothing broken at all. `pairs` is the count that moves on a harvest regression and it is printed ' +
+          `above, so compare it first${got.pairs === s.expect.pairs ? ' (here it is unchanged, which points at (b))' : ''}. ` +
+          'Then re-anchor this expectation to the number that is now correct — do NOT relax the check to ' +
+          'silence it.',
+      );
     }
   }
   return out;

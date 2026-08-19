@@ -655,6 +655,77 @@ test('a repo shape sample that no longer matches its file is a FAULT, not a pass
   assert.ok(faults.some((f) => /unreadable|no longer contains/.test(f)), faults.join('\n'));
 });
 
+test('F6 does NOT blame the harvester when `resolved` moved because the TABLE grew', () => {
+  // R7, in the guard's own output, and the SECOND time this floor has had one.
+  // `pairs` and `resolved` used to share the sentence "the harvester has stopped
+  // reading a shape the repo still uses". That is true of `pairs` and false of
+  // `resolved`, which also moves when CANONICAL/ALIASES changes — and this
+  // file's own docstring calls adding a role "a pure improvement". Adding
+  // AcrPull took the gov-provision-streaming-migrate anchor from resolved=1 to
+  // resolved=2 and reported a regression that had not happened: coverage went
+  // UP. A message that asserts a cause the code did not establish is exactly
+  // what this guard exists to catch.
+  //
+  // Driven through the real repoShapeFaults() against a synthetic anchor whose
+  // `resolved` expectation is deliberately one too low, so the fault fires for
+  // the "more resolved than expected" reason without mutating CANONICAL.
+  const shape = {
+    id: 'synthetic — resolved moved UP',
+    file: '.github/workflows/gov-provision-streaming-migrate.yml',
+    excerpt: [
+      '  # Storage Blob Data Contributor — cloud-invariant built-in role id.',
+      '  BLOB_CONTRIB_ROLE: ba92f5b4-2d11-453d-a403-e96b0029c9fe',
+    ],
+    expect: { pairs: 1, resolved: 0 },
+  };
+  const saved = REPO_SHAPES.splice(0, REPO_SHAPES.length, shape);
+  let faults;
+  try {
+    faults = repoShapeFaults();
+  } finally {
+    REPO_SHAPES.splice(0, REPO_SHAPES.length, ...saved);
+  }
+
+  const [msg] = faults;
+  assert.ok(msg, 'the floor must still fail — this is not about silencing it');
+  assert.match(msg, /expected resolved=0, got 1/);
+  // The load-bearing half: it must not assert the harvester regressed.
+  assert.doesNotMatch(msg, /harvester has stopped reading/);
+  // It must say what it DID establish, and name both causes without picking.
+  assert.match(msg, /MORE of this sample's harvested lines now resolve/);
+  assert.match(msg, /That is ALL this establishes/);
+  assert.match(msg, /REGRESSED/);
+  assert.match(msg, /CANONICAL\/ALIASES CHANGED/);
+  assert.match(msg, /do NOT relax the check/);
+});
+
+test('F6 DOES still blame the harvester when `pairs` moves — that one is its property', () => {
+  // The non-weakening half. Only a matcher can change how many bindings a fixed
+  // block of text yields, so the original wording is exactly right for `pairs`
+  // and must survive the split.
+  const shape = {
+    id: 'synthetic — pairs moved',
+    file: '.github/workflows/gov-provision-streaming-migrate.yml',
+    excerpt: [
+      '  # Storage Blob Data Contributor — cloud-invariant built-in role id.',
+      '  BLOB_CONTRIB_ROLE: ba92f5b4-2d11-453d-a403-e96b0029c9fe',
+    ],
+    expect: { pairs: 99 },
+  };
+  const saved = REPO_SHAPES.splice(0, REPO_SHAPES.length, shape);
+  let faults;
+  try {
+    faults = repoShapeFaults();
+  } finally {
+    REPO_SHAPES.splice(0, REPO_SHAPES.length, ...saved);
+  }
+
+  const [msg] = faults;
+  assert.ok(msg);
+  assert.match(msg, /expected pairs=99, got 1/);
+  assert.match(msg, /harvester has stopped reading a shape the repo still uses/);
+});
+
 test('importing this module runs no scan as a side effect', () => {
   // check-guard-import-side-effects.mjs enforces the same property statically;
   // reaching this line at all is the runtime half.
