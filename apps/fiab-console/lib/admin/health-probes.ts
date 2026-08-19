@@ -40,6 +40,18 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+/**
+ * Word/substring test for an authorization denial, shared by the probes below.
+ *
+ * KNOWN LIMITATION, deliberately not widened here (#3729). The bare `401|403`
+ * alternatives match those digits ANYWHERE in the message — including inside a
+ * subscription GUID or an api-version — so on an estate whose subscription id
+ * contains '403' any probe failure classifies as a denial. `probeArmReader`
+ * no longer uses this: it parses ARM's actual HTTP status (see
+ * `armStatusFromMessage`). The remaining ~20 probes still do, and each carries
+ * a differently-shaped upstream error message, so converting them is its own
+ * change with its own evidence rather than a silent widening of this one.
+ */
 const DENIED = /401|403|forbidden|unauthoriz|not authorized|access denied/i;
 
 /** Pre-filled role-grant script for the Console UAMI on a resource scope. */
@@ -250,35 +262,183 @@ async function probeAdf(h: ProbeHelpers): Promise<CheckResult> {
 
 // ── permissions (control plane) ──────────────────────────────────────────────
 
+/**
+ * How a failed ARM read is classified.
+ *
+ * The distinction that carries the weight is ESTABLISHED vs NOT ESTABLISHED
+ * (deploy-integrity.md R7 — an error must not state as fact something it did
+ * not establish). Before #3729 EVERY non-403 failure — including this probe's
+ * own 6 s `withTimeout` firing while 27 sibling probes shared the event loop —
+ * was returned as `status:'fail'` carrying the remediation "Verify the Console
+ * can reach the ARM endpoint … and that the UAMI token is being issued".
+ * That asserted a network/identity outage the probe had never observed, and
+ * because the owning `subscription` gate is `severity:'critical'` it drove the
+ * ENTIRE Core platform workload to Blocked on /admin/readiness.
+ *
+ * Measured on the live Commercial console 2026-08-19: this same probe returns
+ * `pass` ("resource group rg-csa-loom-admin-centralus resolved (centralus)")
+ * with the UAMI holding Reader + Contributor at both subscription and RG
+ * scope, while a sibling probe in the SAME self-audit run was timing out at
+ * its own budget. The blocked verdict was a timeout wearing a connectivity
+ * diagnosis, not a connectivity failure.
+ */
+export type ArmProbeOutcome =
+  | 'denied'        // ARM answered 401/403 — proven authorization failure.
+  | 'not-found'     // ARM answered 404 — identity accepted, RG does not exist.
+  | 'rejected'      // ARM answered another 4xx — proven client-side error.
+  | 'no-token'      // The credential chain never produced a token.
+  | 'unreachable'   // A transport error — the request could not reach ARM.
+  | 'inconclusive'; // Timeout / throttle / 5xx / unrecognised — NOT established.
+
+/** Credential-chain failures (@azure/identity + the ACA MSI shim). */
+const ARM_NO_TOKEN = /failed to acquire arm token|credentialunavailable|managedidentitycredential|defaultazurecredential|chainedtokencredential|aadsts\d+|authentication failed/i;
+/** Transport failures — the request provably never reached ARM. */
+const ARM_UNREACHABLE = /enotfound|eai_again|econnrefused|econnreset|ehostunreach|enetunreach|epipe|socket hang up|getaddrinfo|fetch failed|self[- ]signed certificate|unable to verify the first certificate|cert_/i;
+/** Authorization wording when no HTTP status could be parsed. */
+const ARM_DENIED_WORDS = /forbidden|unauthoriz|not authorized|access denied/i;
+
+/**
+ * ARM's own HTTP status, as embedded by arm-client's `jsonOrThrow`:
+ * `ARM GET <path> failed <status>: <body>`.
+ *
+ * Parsing the STATUS rather than substring-matching '401'/'403' anywhere in
+ * the message matters: the message carries the subscription GUID and the
+ * api-version, and either can contain those three digits — a subscription id
+ * with '403' in it would have classified every failure as a denial.
+ */
+export function armStatusFromMessage(msg: string): number | null {
+  const m = /\bfailed\s+(\d{3})\b/.exec(msg);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n >= 100 && n <= 599 ? n : null;
+}
+
+/** Classify an ARM read failure. Anything not provable returns 'inconclusive'. */
+export function classifyArmFailure(msg: string): ArmProbeOutcome {
+  const status = armStatusFromMessage(msg);
+  if (status !== null) {
+    if (status === 401 || status === 403) return 'denied';
+    if (status === 404) return 'not-found';
+    // 408 / 429 / 5xx are ARM saying "not now", never "no". Retryable, and
+    // never evidence of an unreachable endpoint or a broken identity.
+    if (status === 408 || status === 429 || status >= 500) return 'inconclusive';
+    return 'rejected';
+  }
+  // No HTTP status => the call never completed. Only three of those are provable.
+  if (ARM_NO_TOKEN.test(msg)) return 'no-token';
+  if (ARM_DENIED_WORDS.test(msg)) return 'denied';
+  if (ARM_UNREACHABLE.test(msg)) return 'unreachable';
+  // Our own `withTimeout`, an AbortError from fetchWithTimeout, or anything
+  // unrecognised: the probe did not finish, so it establishes NOTHING.
+  return 'inconclusive';
+}
+
+/** First-attempt wall clock for the ARM read. */
+export const ARM_PROBE_BUDGET_MS = 6_000;
+/** Second (and last) attempt, used ONLY for a not-established first failure. */
+export const ARM_PROBE_RETRY_BUDGET_MS = 8_000;
+
 async function probeArmReader(h: ProbeHelpers): Promise<CheckResult> {
   const base = { id: 'probe-arm-reader', category: 'permissions' as const, title: 'ARM control plane readable (UAMI Reader on the deployment)', severity: 'critical' as const };
+  const sub = env('LOOM_SUBSCRIPTION_ID');
   const rg = env('LOOM_ADMIN_RG') || env('LOOM_DLZ_RG');
-  if (!has('LOOM_SUBSCRIPTION_ID') || !rg) {
+  if (!sub || !rg) {
+    const missing = [!sub ? 'LOOM_SUBSCRIPTION_ID' : null, !rg ? 'LOOM_ADMIN_RG / LOOM_DLZ_RG' : null].filter(Boolean).join(' + ');
     return {
       ...base, status: 'fail',
-      detail: 'LOOM_SUBSCRIPTION_ID / resource group not configured — ARM discovery, monitoring, scaling, and every navigator are blind.',
+      detail: `${missing} not configured — ARM discovery, monitoring, scaling, and every navigator are blind.`,
       remediation: 'Set LOOM_SUBSCRIPTION_ID and LOOM_ADMIN_RG / LOOM_DLZ_RG. See the "Azure subscription + resource groups" check.',
       redeploy: true,
+      // These three vars ARE the fix for this branch — and only this branch —
+      // so the Fix-it dialog's env form is the right remediation here.
+      ...h.envVarFix(!sub ? ['LOOM_SUBSCRIPTION_ID', 'LOOM_ADMIN_RG'] : ['LOOM_ADMIN_RG']),
     };
   }
-  try {
-    const { armGet } = await import('@/lib/azure/arm-client');
-    const r = await withTimeout(armGet(`/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourcegroups/${rg}?api-version=2021-04-01`), 6000);
-    return { ...base, status: 'pass', detail: `ARM readable as the Console UAMI: resource group "${(r as any)?.name || rg}" resolved (${(r as any)?.location || 'location n/a'}).` };
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+
+  const path = `/subscriptions/${sub}/resourcegroups/${rg}?api-version=2021-04-01`;
+  // Cloud-correct ARM host for the remediation copy — Commercial, GCC-High and
+  // DoD each resolve their own, so the message never names the wrong endpoint.
+  const { armHost } = await import('@/lib/azure/cloud-endpoints');
+  const armEndpoint = armHost();
+  const attempts: string[] = [];
+  let last: { msg: string; klass: ArmProbeOutcome } | null = null;
+
+  // R6 — retry what is genuinely transient, bounded, and fail closed on
+  // exhaustion. A proven denial / 404 / transport break repeats identically, so
+  // it is reported on the first observation instead of being retried.
+  for (const budgetMs of [ARM_PROBE_BUDGET_MS, ARM_PROBE_RETRY_BUDGET_MS]) {
+    const started = Date.now();
+    try {
+      const { armGet } = await import('@/lib/azure/arm-client');
+      const r = await withTimeout(armGet(path), budgetMs);
+      const retried = attempts.length ? ` (first attempt did not complete: ${attempts.join('; ')})` : '';
+      return {
+        ...base, status: 'pass',
+        detail: `ARM readable as the Console UAMI: resource group "${(r as any)?.name || rg}" resolved (${(r as any)?.location || 'location n/a'})${retried}.`,
+      };
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      const klass = classifyArmFailure(msg);
+      attempts.push(`${Date.now() - started}ms budget ${budgetMs}ms → ${msg}`);
+      last = { msg, klass };
+      if (klass !== 'inconclusive') break;
+    }
+  }
+
+  const { msg, klass } = last!;
+  const scope = `/subscriptions/${sub}/resourceGroups/${rg}`;
+
+  if (klass === 'denied') {
     return {
       ...base, status: 'fail',
-      detail: `ARM read failed: ${msg}`,
-      remediation: denied
-        ? `Grant the Console UAMI at least "Reader" on resource group "${rg}" (Contributor is wired by the push-button deploy). Monitoring, cost, navigators, and scaling all read ARM as this identity.`
-        : 'Verify the Console can reach management.azure.com (or the sovereign ARM endpoint via LOOM_ARM_ENDPOINT) and that the UAMI token is being issued (see the ACA managed-identity notes).',
+      detail: `ARM refused the read as the Console UAMI (authorization): ${msg}`,
+      remediation: `Grant the Console UAMI at least "Reader" on resource group "${rg}" (Contributor is wired by the push-button deploy). Monitoring, cost, navigators, and scaling all read ARM as this identity.`,
       redeploy: true,
-      portalSteps: denied ? grantPortalSteps(h, `resource group "${rg}"`, 'Reader') : undefined,
-      fixScript: denied ? grantScript(h, 'Reader', `/subscriptions/${h.ctx.sub}/resourceGroups/${rg}`) : undefined,
+      portalSteps: grantPortalSteps(h, `resource group "${rg}"`, 'Reader'),
+      fixScript: grantScript(h, 'Reader', scope),
     };
   }
+  if (klass === 'not-found') {
+    return {
+      ...base, status: 'fail',
+      detail: `ARM answered 404 for resource group "${rg}" in subscription ${sub} — the identity WAS accepted, the resource group was not found: ${msg}`,
+      remediation: `LOOM_ADMIN_RG / LOOM_DLZ_RG names a resource group that does not exist in LOOM_SUBSCRIPTION_ID (${sub}). Point them at this deployment's real resource groups — a push-button deploy derives both from the deployment scope (modules/admin-plane/main.bicep), so the usual cause is a hand-edited value.`,
+      redeploy: true,
+      ...h.envVarFix(['LOOM_SUBSCRIPTION_ID', 'LOOM_ADMIN_RG']),
+    };
+  }
+  if (klass === 'no-token') {
+    return {
+      ...base, status: 'fail',
+      detail: `No managed-identity token was issued for ARM, so the request never left the Console: ${msg}`,
+      remediation: `The Console could not obtain a token for its user-assigned identity (client id ${h.ctx.uamiClientId}). Confirm the UAMI is still assigned to the Container App and that LOOM_UAMI_CLIENT_ID matches it (see the ACA managed-identity notes). ARM reachability was NOT tested by this run.`,
+      redeploy: true,
+    };
+  }
+  if (klass === 'unreachable') {
+    return {
+      ...base, status: 'fail',
+      detail: `The ARM endpoint was unreachable from the Console (transport error): ${msg}`,
+      remediation: `Verify the Console subnet can reach ${armEndpoint} (the sovereign ARM endpoint is named by LOOM_ARM_ENDPOINT) — egress NSG / firewall rules, private endpoint and its DNS zone. A token WAS acquired, so this is a network path problem, not an identity one.`,
+      redeploy: true,
+    };
+  }
+  if (klass === 'rejected') {
+    return {
+      ...base, status: 'fail',
+      detail: `ARM rejected the read: ${msg}`,
+      remediation: `ARM answered with a client error that is neither an authorization denial nor a missing resource group. Check the values of LOOM_SUBSCRIPTION_ID (${sub}) and LOOM_ADMIN_RG / LOOM_DLZ_RG (${rg}).`,
+      redeploy: true,
+      ...h.envVarFix(['LOOM_SUBSCRIPTION_ID', 'LOOM_ADMIN_RG']),
+    };
+  }
+
+  // NOT ESTABLISHED. Say exactly that — and nothing more (R7).
+  return {
+    ...base, status: 'warn', inconclusive: true,
+    detail: `Could not establish whether ARM is readable — the check did not complete: ${attempts.join(' | ')}. This is NOT a finding that ARM is unreachable, nor that the UAMI token failed; neither was observed.`,
+    remediation: `No operator action is known to be required. Every live probe in the self-audit runs in parallel, so one slow ARM round-trip can exhaust this probe's ${ARM_PROBE_BUDGET_MS / 1000}s budget — it already retried once at ${ARM_PROBE_RETRY_BUDGET_MS / 1000}s. Re-check to re-probe (that bypasses the 30s probe cache). If it stays inconclusive across re-checks, look at the ARM path itself: egress from the Console subnet to ${armEndpoint}, and UAMI token issuance (see the ACA managed-identity notes).`,
+  };
 }
 
 async function probeLogAnalytics(h: ProbeHelpers): Promise<CheckResult> {

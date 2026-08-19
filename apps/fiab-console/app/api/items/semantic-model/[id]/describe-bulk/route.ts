@@ -33,7 +33,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getSession } from '@/lib/auth/session';
 import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import {
@@ -50,6 +49,7 @@ import { readModelState, writeModelState } from '../../../_lib/model-store';
 import {
   aasXmlaConfig, command as executeXmlaCommand, AasError,
 } from '@/lib/azure/aas-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,14 +97,29 @@ async function loadBulkContext(
   } catch { /* no owned model-store item — measures stay empty */ }
 
   // Tables — Loom content-backed (default, no Fabric).
-  if (isLoomContentId(id)) {
+  //
+  // #3549/#3551 — resolved by the BARE Cosmos id, not only behind the synthetic
+  // `loom:` list-route prefix. The editor opens a model by its own item id, so
+  // gating this on the prefix left every bundle-installed model describing ZERO
+  // tables here while its install receipt reported them created. Same defect,
+  // same file family as `lib/semantic-model/model-context.ts`; fixed the same
+  // way so the two cannot drift. A Power BI dataset GUID resolves no Cosmos
+  // `semantic-model` item, so the live path below is unaffected.
+  {
     const item = await loadContentBackedItem(cosmosIdFromLoomId(id), 'semantic-model', tenantId);
     const built = item ? semanticModelDetailFromContent(item) : null;
-    const tables: BulkTable[] = (built?.tables || []).map((t: any) => ({
-      name: t.name,
-      columns: (t.columns || []).map((c: any) => String(c.name)),
-    }));
-    return { modelName: item?.displayName || 'Semantic model', tables, measures, liveDataset: false };
+    if (built) {
+      const tables: BulkTable[] = (built.tables || []).map((t: any) => ({
+        name: t.name,
+        columns: (t.columns || []).map((c: any) => String(c.name)),
+      }));
+      return { modelName: item?.displayName || 'Semantic model', tables, measures, liveDataset: false };
+    }
+    if (isLoomContentId(id)) {
+      // A `loom:` id is Loom-native by construction — never fall through to
+      // Power BI for it (no-fabric-dependency.md).
+      return { modelName: item?.displayName || 'Semantic model', tables: [], measures, liveDataset: false };
+    }
   }
 
   // Live Power BI / Fabric dataset (opt-in). Requires a workspace; degrade
@@ -271,10 +286,8 @@ async function persistDescriptions(
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const tenantId = session.claims.oid;
 
@@ -298,12 +311,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     existingTableDescriptions: state.tableDescriptions || [],
     ...(mctx.notice ? { notice: mctx.notice } : {}),
   });
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const tenantId = session.claims.oid;
   const body = await req.json().catch(() => ({} as any));
@@ -367,4 +378,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // apply:true with no operator overrides → generate AND persist.
   const applied = await persistDescriptions(id, workspaceId, tenantId, mctx.modelName, proposals.tables, proposals.measures);
   return NextResponse.json({ ok: true, applied: true, ...applied, proposals, modelName: mctx.modelName });
-}
+});

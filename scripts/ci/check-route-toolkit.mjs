@@ -64,6 +64,20 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
+  // the bundle definition onto a name-matched EXISTING item that has none. The
+  // dedup path pushed `status:'existed'` and wrote nothing while still handing
+  // `bundle.content` to the provisioner, so an item that pre-dated the bundle was
+  // provisioned from content that never reached it — and, once provisioners began
+  // verifying their own content, re-running the install was the one thing that
+  // could not fix it. The auth prologue is UNTOUCHED.
+  //
+  // THE CODEMOD ITSELF REFUSES THIS FILE, which is what this escape hatch is for.
+  // Re-run it and it says so verbatim — this reason is falsifiable in one command:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/apps/[id]/install/route.ts
+  //   → app/api/apps/[id]/install/route.ts: SKIPPED (POST: body declares its own `params` (collision))
+  ['apps/fiab-console/app/api/apps/[id]/install/route.ts',
+   '#3549/#3551: Phase-1 content backfill only, auth prologue untouched; the codemod SKIPS this file (`params` collision)'],
   // FINISHLINE C7 (#3064) touched this route ONLY to stop the BFF silently
   // DROPPING four of the create-wizard's five fields — the old handler
   // destructured `{ name, description, capacity, domain }` and discarded

@@ -2430,7 +2430,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/_lib/model-store.ts` | `readModelState`, `writeModelState` |
 | `apps/fiab-console/app/api/items/_lib/ontology-binding.ts` | `GET`, `POST`, `makeOntologyBindRoute` |
 | `apps/fiab-console/app/api/items/_lib/palantir-crud.ts` | `GET`, `PATCH`, `POST`, `listOntologies`, `loadOntologySurface`, `makeCollectionRoute`, `makeItemRoute` |
-| `apps/fiab-console/app/api/items/_lib/pbi-content-fallback.ts` | `listContentBackedItems`, `loadContentBackedItem` |
+| `apps/fiab-console/app/api/items/_lib/pbi-content-fallback.ts` | `listContentBackedItems`, `loadContentBackedItem`, `readContentBackedItem` |
 | `apps/fiab-console/app/api/items/_lib/semantic-model-checkpoints.ts` | `captureCheckpoint`, `listCheckpoints`, `restoreCheckpoint` |
 | `apps/fiab-console/app/api/items/_lib/sql-server-scope.ts` | `loadOwnedSqlItem`, `withBoundSqlServer`, `withOwnedSqlItem` |
 | `apps/fiab-console/app/api/items/_lib/synapse-item-scope.ts` | `guardSynapseItemRequest` |
@@ -2494,7 +2494,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/foundry/ontology-resolver.ts` | `resolveOntologyObjectForGrounding` |
 | `apps/fiab-console/lib/insights/digest-store.ts` | `getDigest`, `requestRunNow` |
 | `apps/fiab-console/lib/semantic-model/calc-objects.ts` | `persistCalcToCosmos` |
-| `apps/fiab-console/lib/semantic-model/model-context.ts` | `loadModelContext` |
+| `apps/fiab-console/lib/semantic-model/model-context.ts` | `contextFromContentItem`, `loadModelContext` |
 | `apps/fiab-console/lib/semantic-model/modeling-objects.ts` | `handleCalculatedTablePost`, `handleDateTableMarkPost`, `handleMeasurePost`, `handleWhatIfPost`, `readLoomModelState` |
 | `apps/fiab-console/lib/semantic-model/plan-metrics.ts` | `persistPlanMetricsToCosmos` |
 

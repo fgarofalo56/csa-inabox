@@ -22,7 +22,12 @@ vi.mock('@/lib/auth/feature-gate', () => ({
   enforceCapability: (...a: any[]) => enforceCapability(...a),
 }));
 
-vi.mock('@/lib/azure/cloud-endpoints', () => ({
+// Only `detectLoomCloud` is pinned; everything else comes from the REAL module.
+// Both routes now compose `withCapability` (route-toolkit R1/R3), whose
+// dependency chain reaches other cloud-endpoints resolvers (armScope, …) — a
+// bare object mock silently removed them and every case died at import.
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/azure/cloud-endpoints')>()),
   detectLoomCloud: () => 'AzureCloud',
 }));
 
@@ -52,17 +57,20 @@ describe('GET /api/admin/readiness', () => {
     invalidateModel('readiness-v1');
   });
 
+  /** The route reads `?refresh=1` off the request, so every case supplies one. */
+  const req = (qs = '') => new NextRequest(`http://localhost/api/admin/readiness${qs}`);
+
   it('is capability-gated (403 propagates)', async () => {
     const { NextResponse } = await import('next/server');
     enforceCapability.mockResolvedValueOnce(NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 }));
     const { GET } = await import('../route');
-    const res = await GET();
+    const res = await GET(req());
     expect(res.status).toBe(403);
   });
 
   it('returns the capability graph + workload scorecard with live probes', async () => {
     const { GET } = await import('../route');
-    const res = await GET();
+    const res = await GET(req());
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(j.ok).toBe(true);
@@ -80,11 +88,32 @@ describe('GET /api/admin/readiness', () => {
   it('degrades honestly when the self-audit throws (config-only)', async () => {
     runSelfAudit.mockRejectedValueOnce(new Error('probe boom'));
     const { GET } = await import('../route');
-    const res = await GET();
+    const res = await GET(req());
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.probeError).toContain('probe boom');
     expect(j.probed).toBe(0);
+  });
+
+  /**
+   * #3729 — the Refresh button used to hit this route with no cache-buster, so
+   * a transient probe failure was replayed for the full 30 s TTL. That is how
+   * the defect was "reproduced twice": one measurement, read twice.
+   */
+  it('?refresh=1 BYPASSES the probe cache and re-runs the self-audit', async () => {
+    const { GET } = await import('../route');
+    // Warm the cache.
+    await GET(req());
+    const afterWarm = runSelfAudit.mock.calls.length;
+    // A cached read must NOT re-probe…
+    const cached = await GET(req());
+    expect(await cached.json().then((j: any) => j.probesRefreshed)).toBe(false);
+    expect(runSelfAudit.mock.calls.length).toBe(afterWarm);
+    // …and an explicit re-check MUST.
+    const fresh = await GET(req('?refresh=1'));
+    const j = await fresh.json();
+    expect(j.probesRefreshed).toBe(true);
+    expect(runSelfAudit.mock.calls.length).toBe(afterWarm + 1);
   });
 });
 

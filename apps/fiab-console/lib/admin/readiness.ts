@@ -31,8 +31,18 @@ import type { FixitKind, GateDef, GateStatus } from '@/lib/gates/registry';
 
 // ── public types ─────────────────────────────────────────────────────────────
 
-/** Go/no-go readiness of a single capability or a whole workload. */
-export type ReadinessState = 'ready' | 'partial' | 'blocked' | 'opt-in';
+/**
+ * Go/no-go readiness of a single capability or a whole workload.
+ *
+ * `unknown` is a capability-only state and it is deliberately NOT a synonym for
+ * `partial`: it means the live probe did not finish, so nothing at all was
+ * established — neither that the backend works nor that it is broken
+ * (deploy-integrity.md R7). It exists because #3729 measured the alternative:
+ * a 6 s ARM-probe timeout was scored `blocked` with an invented connectivity
+ * diagnosis, which took the whole Core platform workload no-go on a fact that
+ * had never been observed.
+ */
+export type ReadinessState = 'ready' | 'partial' | 'blocked' | 'opt-in' | 'unknown';
 
 /** How a 'ready' capability was verified. */
 export type VerifiedBy = 'live-probe' | 'config-only';
@@ -50,6 +60,8 @@ export interface ProbeSummary {
   status: AuditStatus;
   detail: string;
   remediation?: string;
+  /** True when the probe did not complete — its result establishes NOTHING. */
+  inconclusive?: boolean;
 }
 
 /** Minimal probe input shape (a self-audit CheckResult, narrowed). */
@@ -58,6 +70,7 @@ export interface ProbeLite {
   status: AuditStatus;
   detail: string;
   remediation?: string;
+  inconclusive?: boolean;
 }
 
 export interface CapabilityNode {
@@ -94,6 +107,18 @@ export interface CapabilityNode {
 export interface WorkloadBlocker {
   id: string;
   title: string;
+  /**
+   * The capability's readiness state.
+   *
+   * Carried explicitly because `blockers` enumerates every NON-READY
+   * capability, and those are not all the same thing: `blocked` is a proven
+   * unmet prerequisite, `partial` is degraded-but-observed, `unknown` is a
+   * live check that never completed, and `opt-in` is a feature deliberately
+   * not deployed. Without this field the exported profile filed all four under
+   * one "Blocked" heading — so a report handed to an auditor during a slow ARM
+   * window read as an outage (#3729).
+   */
+  state: ReadinessState;
   missing: string[];
   remediation: string;
   role?: string;
@@ -110,7 +135,7 @@ export interface WorkloadScore {
   state: ReadinessState;
   /** 0–100, severity-weighted (ready=1, partial=0.5, blocked=0). */
   score: number;
-  summary: { ready: number; partial: number; blocked: number; total: number };
+  summary: { ready: number; partial: number; blocked: number; unknown: number; total: number };
   /** Capability (gate) ids composing this workload that exist in the registry. */
   capabilityIds: string[];
   /** The blocked/partial capabilities, with their remediation, for drill-down. */
@@ -124,7 +149,7 @@ export interface ReadinessInput {
 }
 
 export interface ReadinessSummary {
-  capabilities: { ready: number; partial: number; blocked: number; total: number };
+  capabilities: { ready: number; partial: number; blocked: number; unknown: number; total: number };
   workloads: { ready: number; partial: number; blocked: number; total: number };
   /** 0–100 overall severity-weighted capability score. */
   score: number;
@@ -299,7 +324,11 @@ export const GATE_PROBE_MAP: Record<string, string> = {
 const SEVERITY_WEIGHT: Record<AuditSeverity, number> = { critical: 3, recommended: 2 };
 // 'opt-in' scores as 1 (a healthy, deliberately-not-deployed additive feature is
 // NOT a deduction against the deployment — its absence removes no capability).
-const STATE_VALUE: Record<ReadinessState, number> = { ready: 1, partial: 0.5, blocked: 0, 'opt-in': 1 };
+// 'unknown' scores as 0.5: the probe established nothing, so the score neither
+// credits the capability nor condemns it. Scoring it 0 would let a transient
+// timeout move the operator's headline number (#3729); scoring it 1 would hide
+// a real outage behind a check that never completed.
+const STATE_VALUE: Record<ReadinessState, number> = { ready: 1, partial: 0.5, blocked: 0, 'opt-in': 1, unknown: 0.5 };
 
 // ── H1: capability nodes ─────────────────────────────────────────────────────
 
@@ -332,8 +361,17 @@ export function buildCapabilityNodes(input: ReadinessInput): CapabilityNode[] {
     const probeId = GATE_PROBE_MAP[g.id];
     const probeRaw = probeId ? probeById.get(probeId) : undefined;
     const probe: ProbeSummary | null = probeRaw
-      ? { id: probeRaw.id, status: probeRaw.status, detail: probeRaw.detail, remediation: probeRaw.remediation }
+      ? { id: probeRaw.id, status: probeRaw.status, detail: probeRaw.detail, remediation: probeRaw.remediation, inconclusive: probeRaw.inconclusive }
       : null;
+
+    // A probe that did not COMPLETE proves nothing (deploy-integrity.md R7).
+    // It must never be read as a negative result — see #3729, where a 6 s ARM
+    // timeout scored `blocked` with a fabricated connectivity diagnosis and
+    // took the entire Core platform workload no-go.
+    const probeInconclusive = !!probe && probe.status !== 'pass' && !!probe.inconclusive;
+    /** Map a COMPLETED probe result onto a capability state. */
+    const stateFromProbe = (p: ProbeSummary): ReadinessState =>
+      p.status === 'pass' ? 'ready' : p.status === 'warn' ? 'partial' : 'blocked';
 
     let state: ReadinessState;
     let verified: VerifiedBy = 'config-only';
@@ -352,19 +390,21 @@ export function buildCapabilityNodes(input: ReadinessInput): CapabilityNode[] {
       // deploy never filled scored ready while the backend answered 'fail').
       // Only a probe-less canAutoResolve gate keeps the config-only promotion.
       if (!g.canAutoResolve) {
+        // The env values really ARE missing — that is established, and the
+        // Fix-it env form is the correct remediation for it.
         state = 'blocked';
       } else if (probe) {
-        if (probe.status === 'pass') { state = 'ready'; verified = 'live-probe'; }
-        else if (probe.status === 'warn') { state = 'partial'; verified = 'live-probe'; }
-        else { state = 'blocked'; verified = 'live-probe'; }
+        state = probeInconclusive ? 'unknown' : stateFromProbe(probe);
+        verified = 'live-probe';
       } else {
         state = 'ready';
         verified = 'config-only';
       }
     } else if (probe) {
-      if (probe.status === 'pass') { state = 'ready'; verified = 'live-probe'; }
-      else if (probe.status === 'warn') { state = 'partial'; verified = 'live-probe'; }
-      else { state = 'blocked'; verified = 'live-probe'; }
+      // Configured. The probe is the only remaining question — and when it did
+      // not finish, the honest answer is 'unknown', not 'blocked'.
+      state = probeInconclusive ? 'unknown' : stateFromProbe(probe);
+      verified = 'live-probe';
     } else {
       // Configured, no live probe — env-presence verified but not exercised.
       state = 'ready';
@@ -373,7 +413,7 @@ export function buildCapabilityNodes(input: ReadinessInput): CapabilityNode[] {
 
     const remediation = state === 'blocked'
       ? (probe && probe.status === 'fail' && probe.remediation ? probe.remediation : g.remediation)
-      : state === 'partial'
+      : state === 'partial' || state === 'unknown'
         ? (probe?.remediation || g.remediation)
         : g.remediation;
 
@@ -416,6 +456,10 @@ function severityWeightedScore(nodes: CapabilityNode[]): number {
  *   blocked — any CRITICAL capability blocked, or every capability blocked.
  *   ready   — every capability ready.
  *   partial — otherwise (a mix; nothing critical hard-blocks it).
+ *
+ * An `unknown` member NEVER contributes to `blocked`: a probe that did not
+ * finish has established nothing, and a workload must not go no-go on a
+ * non-observation (#3729).
  */
 export function scoreWorkload(def: WorkloadDef, allNodes: CapabilityNode[]): WorkloadScore {
   const byId = new Map(allNodes.map((n) => [n.id, n]));
@@ -427,6 +471,7 @@ export function scoreWorkload(def: WorkloadDef, allNodes: CapabilityNode[]): Wor
     ready: nodes.filter((n) => n.state === 'ready').length,
     partial: nodes.filter((n) => n.state === 'partial').length,
     blocked: nodes.filter((n) => n.state === 'blocked').length,
+    unknown: nodes.filter((n) => n.state === 'unknown').length,
     total: nodes.length,
   };
 
@@ -447,6 +492,7 @@ export function scoreWorkload(def: WorkloadDef, allNodes: CapabilityNode[]): Wor
     .map((n) => ({
       id: n.id,
       title: n.title,
+      state: n.state,
       missing: n.missing,
       remediation: n.remediation,
       role: n.role,
@@ -478,6 +524,7 @@ function summarize(nodes: CapabilityNode[], workloads: WorkloadScore[]): Readine
       ready: nodes.filter((n) => n.state === 'ready').length,
       partial: nodes.filter((n) => n.state === 'partial').length,
       blocked: nodes.filter((n) => n.state === 'blocked').length,
+      unknown: nodes.filter((n) => n.state === 'unknown').length,
       total: nodes.length,
     },
     workloads: {
@@ -518,6 +565,7 @@ export function buildTenantProfile(
     .map((n) => ({
       id: n.id,
       title: n.title,
+      state: n.state,
       missing: n.missing,
       remediation: n.remediation,
       role: n.role,
@@ -537,6 +585,7 @@ const STATE_LABEL: Record<ReadinessState, string> = {
   partial: 'Partial',
   blocked: 'Blocked',
   'opt-in': 'Opt-in',
+  unknown: 'Not established',
 };
 
 /** Render a readable markdown report of the tenant profile (H3). */
@@ -559,36 +608,56 @@ export function renderProfileMarkdown(profile: TenantProfile): string {
   L.push('## Summary');
   L.push('');
   L.push(`- Overall readiness score: **${profile.summary.score}/100**`);
-  L.push(`- Capabilities: ${cs.ready} ready, ${cs.partial} partial, ${cs.blocked} blocked (of ${cs.total})`);
+  L.push(`- Capabilities: ${cs.ready} ready, ${cs.partial} partial, ${cs.blocked} blocked, ${cs.unknown} not established (of ${cs.total})`);
   L.push(`- Workloads: ${ws.ready} ready, ${ws.partial} partial, ${ws.blocked} blocked (of ${ws.total})`);
   L.push(`- Config-only (not live-probed): ${profile.summary.configOnly}`);
   L.push('');
 
   L.push('## Workload readiness');
   L.push('');
-  L.push('| Workload | Status | Score | Ready | Partial | Blocked |');
-  L.push('| --- | --- | --- | --- | --- | --- |');
+  L.push('| Workload | Status | Score | Ready | Partial | Blocked | Not established |');
+  L.push('| --- | --- | --- | --- | --- | --- | --- |');
   for (const w of profile.workloads) {
-    L.push(`| ${w.title} | ${STATE_LABEL[w.state]} | ${w.score}/100 | ${w.summary.ready} | ${w.summary.partial} | ${w.summary.blocked} |`);
+    L.push(`| ${w.title} | ${STATE_LABEL[w.state]} | ${w.score}/100 | ${w.summary.ready} | ${w.summary.partial} | ${w.summary.blocked} | ${w.summary.unknown} |`);
   }
   L.push('');
 
-  if (profile.blockers.length) {
+  /** Render one blocker's detail block. */
+  const renderBlocker = (b: WorkloadBlocker) => {
+    L.push(`### ${b.title} (\`${b.id}\`)`);
+    if (b.missing.length) L.push(`- Missing: ${b.missing.map((m) => `\`${m}\``).join(', ')}`);
+    if (b.role) L.push(`- Required role: ${b.role}`);
+    if (b.provisionedBy) L.push(`- Provisioned by: \`${b.provisionedBy}\``);
+    if (b.remediation) L.push(`- Remediation: ${b.remediation}`);
+    L.push('');
+  };
+
+  // A capability whose live check DID NOT COMPLETE is not a blocker and must
+  // not be filed as one. Before #3729 every non-ready capability landed under a
+  // single "Blocked" heading, so an export taken during a slow ARM window read
+  // to its reader as an outage while the summary above it said "not
+  // established". The exported artifact now draws the same distinction the
+  // screen does.
+  const unestablished = profile.blockers.filter((b) => b.state === 'unknown');
+  const realBlockers = profile.blockers.filter((b) => b.state !== 'unknown');
+
+  if (realBlockers.length) {
     L.push('## Blocked / partial dependencies + remediation');
     L.push('');
-    for (const b of profile.blockers) {
-      L.push(`### ${b.title} (\`${b.id}\`)`);
-      if (b.missing.length) L.push(`- Missing: ${b.missing.map((m) => `\`${m}\``).join(', ')}`);
-      if (b.role) L.push(`- Required role: ${b.role}`);
-      if (b.provisionedBy) L.push(`- Provisioned by: \`${b.provisionedBy}\``);
-      if (b.remediation) L.push(`- Remediation: ${b.remediation}`);
-      L.push('');
-    }
-  } else {
+    for (const b of realBlockers) renderBlocker(b);
+  } else if (!unestablished.length) {
     L.push('## Blocked / partial dependencies');
     L.push('');
     L.push('All capabilities are ready. 🎉');
     L.push('');
+  }
+
+  if (unestablished.length) {
+    L.push('## Not established — the live check did not complete');
+    L.push('');
+    L.push('These capabilities were NOT found broken. Their live probe did not finish, so nothing was observed either way; re-run the readiness check to re-probe them.');
+    L.push('');
+    for (const b of unestablished) renderBlocker(b);
   }
 
   return L.join('\n');

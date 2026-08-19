@@ -12,10 +12,13 @@
  * team can share its readiness posture. Downloaded with a filename.
  *
  * Admin-scoped to the same capability as the gate registry.
+ *
+ * Route-toolkit: withCapability('admin.env-config', 'Admin') (R1/R3) — the
+ * hand-rolled getSession() + enforceCapability prologue is now structural, so
+ * there is no `if (gate) return gate;` line that can be deleted.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { NextResponse } from 'next/server';
+import { withCapability } from '@/lib/api/route-toolkit';
 import { GATES, allGateStatuses } from '@/lib/gates/registry';
 import {
   buildTenantProfile, renderProfileMarkdown, GATE_PROBE_MAP,
@@ -48,17 +51,13 @@ async function collectProbes(): Promise<ProbeLite[]> {
     const report = await runSelfAudit(new Date().toISOString());
     return report.results
       .filter((r) => wanted.has(r.id))
-      .map((r) => ({ id: r.id, status: r.status, detail: r.detail, remediation: r.remediation }));
+      .map((r) => ({ id: r.id, status: r.status, detail: r.detail, remediation: r.remediation, inconclusive: r.inconclusive }));
   } catch {
     return [];
   }
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  const gate = await enforceCapability(session, 'admin.env-config', 'Admin');
-  if (gate) return gate;
-
+export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
   const format = (req.nextUrl.searchParams.get('format') || 'json').toLowerCase();
   const now = new Date().toISOString();
   const stamp = now.slice(0, 19).replace(/[:T]/g, '-');
@@ -88,4 +87,4 @@ export async function GET(req: NextRequest) {
       'content-disposition': `attachment; filename="loom-readiness-${stamp}.json"`,
     },
   });
-}
+});

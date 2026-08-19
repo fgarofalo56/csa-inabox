@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  Button, Caption1, Spinner, Badge, Field, Input, Combobox, Option,
+  Button, Caption1, Spinner, Badge, Field, Input, Combobox, Option, Tooltip,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -84,32 +84,70 @@ function isSecretVar(k: string): boolean {
   return isSecretEnvKey(k);
 }
 
+/** Live probe result behind a capability, when the caller has one. */
+export interface GateProbeSummary {
+  id: string;
+  status: 'pass' | 'warn' | 'fail';
+  detail: string;
+  remediation?: string;
+  /** True when the probe did not complete — it established nothing. */
+  inconclusive?: boolean;
+}
+
 /**
  * The Fix-it wizard dialog. Loads real ARM options for the gate's settings,
- * lets the operator pick/type values, applies through the shared resolve
- * route, then polls the registry until the new revision makes the gate
- * configured (honest about the ~1–2 min roll — never a fake instant flip).
+ * PRE-FILLS every field from the running deployment's current values, lets the
+ * operator pick/type, applies through the shared resolve route, then polls the
+ * registry until the new revision makes the gate configured (honest about the
+ * ~1–2 min roll — never a fake instant flip).
+ *
+ * TWO DIFFERENT BLOCKERS, TWO DIFFERENT REMEDIATIONS (#3729). A gate can be
+ * unresolved because (1) its env values are missing — the form below IS the
+ * fix — or (2) its env values are all present and a LIVE PROBE is what failed.
+ * Until #3729 the dialog rendered case (2) exactly like case (1): three empty
+ * inputs with placeholder text, for `LOOM_SUBSCRIPTION_ID`, `LOOM_DLZ_RG` and
+ * `LOOM_ADMIN_RG` values the deployment already held and that were never the
+ * problem. Retyping them could not have addressed the stated diagnosis, so the
+ * button was worse than no button. The dialog now leads with whichever of the
+ * two is actually true.
  */
 export function GateFixitDialog({
   gate,
   open,
   onClose,
   onResolved,
+  probe = null,
+  capabilityState,
+  onRecheck,
 }: {
   gate: GateDef;
   open: boolean;
   onClose: () => void;
   onResolved?: () => void;
+  /** The capability's live probe result, when the caller has one. */
+  probe?: GateProbeSummary | null;
+  /** The capability's readiness state, when the caller has one. */
+  capabilityState?: 'ready' | 'partial' | 'blocked' | 'opt-in' | 'unknown';
+  /** Re-run the live probes (bypassing the probe cache) and reload the caller. */
+  onRecheck?: () => void;
 }) {
   const s = useStyles();
   const [options, setOptions] = useState<Record<string, GateOption[]>>({});
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
+  /** Values as they are RIGHT NOW in the running deployment (non-secret only). */
+  const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
+  /** Keys the deployment reports as SET — includes secrets, whose value is never returned. */
+  const [presentKeys, setPresentKeys] = useState<Set<string>>(new Set());
+  const [currentError, setCurrentError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applied, setApplied] = useState<{ message: string; driftWarning?: string } | null>(null);
   const [rolled, setRolled] = useState(false);
+  /** Latched once the caller's re-probe has been fired for this open. */
+  const [recheckRequested, setRecheckRequested] = useState(false);
+  const recheckFiredRef = useRef(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadOptions = useCallback(async () => {
@@ -139,16 +177,70 @@ export function GateFixitDialog({
     }
   }, [gate.id, gate.requiredSettings]);
 
+  /**
+   * Load the CURRENT state from the running deployment so every field opens
+   * pre-filled instead of blank.
+   *
+   * `/api/admin/env-config` is the same authoritative read `/admin/env-config`
+   * renders and is behind the SAME `admin.env-config` capability this dialog
+   * already requires, so this adds no new authorization surface.
+   *
+   * TWO SEPARATE FACTS, TRACKED SEPARATELY. `currentValues` holds the values we
+   * can display; `presentKeys` holds "this key IS set", which is a WIDER set —
+   * a secret-typed key reports `{ set: true }` with no value, by design, and it
+   * is still configured. Deriving presence from the value alone would make
+   * `envComplete` permanently false for any gate carrying a secret setting, so
+   * such a gate would keep opening on the env form even when every value is
+   * present. Latent today (no gate in GATE_PROBE_MAP has a secret setting) —
+   * but `entra-app` is critical severity and one probe mapping away.
+   */
+  const loadCurrent = useCallback(async () => {
+    setCurrentError(null);
+    try {
+      const r = await clientFetch('/api/admin/env-config');
+      const j = await r.json().catch(() => null);
+      if (!j?.ok) { setCurrentError(j?.error || `current config unavailable (${r.status})`); return; }
+      const cur: Record<string, string> = {};
+      const present = new Set<string>();
+      const consider = (envVar: string) => {
+        const row = j.current?.[envVar];
+        if (!row) return;
+        if (row.set === true || row.satisfiedByAlias === true) present.add(envVar);
+        if (!row.secret && typeof row.value === 'string' && row.value.length > 0) {
+          cur[envVar] = row.value;
+          present.add(envVar);
+        }
+      };
+      for (const setting of gate.requiredSettings) {
+        consider(setting.envVar);
+        for (const alias of setting.aliasOf || []) consider(alias);
+      }
+      setCurrentValues(cur);
+      setPresentKeys(present);
+      // Seed the editable form with what is live. An admin who changes nothing
+      // and clicks Apply therefore submits no delta — the resolve route diffs
+      // against the running env, so a no-op stays a no-op.
+      setValues((v) => ({ ...cur, ...v }));
+    } catch (e: any) {
+      setCurrentError(e?.message || String(e));
+    }
+  }, [gate.requiredSettings]);
+
   useEffect(() => {
     if (open) {
       setValues({});
+      setCurrentValues({});
+      setPresentKeys(new Set());
       setApplied(null);
       setApplyError(null);
       setRolled(false);
+      setRecheckRequested(false);
+      recheckFiredRef.current = false;
       void loadOptions();
+      void loadCurrent();
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [open, loadOptions]);
+  }, [open, loadOptions, loadCurrent]);
 
   // After a successful apply, poll the registry until the revision rolls and
   // the gate reports configured (bounded: 12 × 15 s = 3 min).
@@ -199,13 +291,106 @@ export function GateFixitDialog({
   const anyValue = Object.values(values).some((v) => v.trim().length > 0);
   const grantOnly = gate.fixit.kind === 'role-grant' && gate.requiredSettings.length === 0;
 
+  /**
+   * Fire the caller's re-probe exactly once per open.
+   *
+   * A re-check bypasses the probe cache and fans out EVERY live probe, so an
+   * impatient second click would multiply the very load the check is
+   * measuring. The dialog closes on the first click, but both Re-check
+   * affordances render simultaneously — latch rather than trust the unmount.
+   *
+   * The latch is a REF, not the state flag: two clicks in the same tick both
+   * read the pre-render state snapshot, so a `useState` guard fires twice
+   * (the setState-snapshot gotcha). The ref updates synchronously; the state
+   * flag exists only to disable the buttons on the next render.
+   */
+  const recheck = useCallback(() => {
+    if (recheckFiredRef.current) return;
+    recheckFiredRef.current = true;
+    setRecheckRequested(true);
+    onRecheck?.();
+    onClose();
+  }, [onRecheck, onClose]);
+
+  /** True when the operator has actually changed something vs the running env. */
+  const anyChange = useMemo(
+    () => gate.requiredSettings.some((setting) => {
+      const next = (values[setting.envVar] ?? '').trim();
+      return next.length > 0 && next !== (currentValues[setting.envVar] ?? '').trim();
+    }),
+    [gate.requiredSettings, values, currentValues],
+  );
+
+  /**
+   * Which of the two blockers is real (#3729).
+   *
+   * `envComplete` — every required setting already holds a value in the running
+   * deployment, so the form below cannot be the fix. `probeBlocked` — a live
+   * probe is the thing that failed. `probeInconclusive` — it did not even
+   * finish, so nothing was established and the honest action is to re-check.
+   */
+  const envComplete = useMemo(
+    () => gate.requiredSettings.length > 0
+      && gate.requiredSettings.every((setting) => {
+        if (presentKeys.has(setting.envVar)) return true;
+        // An anyOf alias satisfies the requirement just as well.
+        return (setting.aliasOf || []).some((a) => presentKeys.has(a));
+      }),
+    [gate.requiredSettings, presentKeys],
+  );
+  const probeInconclusive = !!probe && probe.status !== 'pass' && !!probe.inconclusive;
+  const probeBlocked = !!probe && probe.status !== 'pass';
+  // The env form is only the remediation when a value is genuinely missing.
+  const envIsTheFix = !envComplete || !probeBlocked;
+
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Fix it — {gate.title}</DialogTitle>
+          <DialogTitle>
+            {probeInconclusive ? 'Re-check' : 'Fix it'} — {gate.title}
+          </DialogTitle>
           <DialogContent>
-            <Caption1 className={s.meta}>{gate.remediation}</Caption1>
+            {/* Lead with the ACTUAL blocker. A gate whose env is complete and
+                whose live probe is what failed must never open on a form asking
+                for values the deployment already holds (#3729). */}
+            {probeBlocked && envComplete ? (
+              <MessageBar intent={probeInconclusive ? 'info' : 'warning'} layout="multiline">
+                <MessageBarBody>
+                  <MessageBarTitle>
+                    {probeInconclusive
+                      ? 'Not established — the live check did not complete'
+                      : 'The configuration is complete; the live check is what failed'}
+                  </MessageBarTitle>
+                  {probeInconclusive
+                    ? 'Nothing was observed either way. Re-check to run the probes again — the values below are already set and were not the problem.'
+                    : 'Every value this gate needs is already set in the running deployment, so re-entering them changes nothing. The remediation is the live-check finding below.'}
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
+                    <strong>{probe!.id}:</strong> {probe!.detail}
+                  </Caption1>
+                  {probe!.remediation && (
+                    <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
+                      {probe!.remediation}
+                    </Caption1>
+                  )}
+                </MessageBarBody>
+                {onRecheck && (
+                  <MessageBarActions>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      icon={<ArrowSync16Regular />}
+                      disabled={recheckRequested}
+                      onClick={recheck}
+                    >
+                      Re-check now
+                    </Button>
+                  </MessageBarActions>
+                )}
+              </MessageBar>
+            ) : (
+              <Caption1 className={s.meta}>{gate.remediation}</Caption1>
+            )}
             {gate.role && (
               <div className={s.meta} style={{ marginTop: tokens.spacingVerticalS }}>
                 <strong>Role required once set:</strong> {gate.role}
@@ -224,21 +409,47 @@ export function GateFixitDialog({
                 </MessageBarBody>
               </MessageBar>
             )}
+            {currentError && (
+              <MessageBar intent="warning" layout="multiline" style={{ marginTop: tokens.spacingVerticalS }}>
+                <MessageBarBody>
+                  <MessageBarTitle>Current values unavailable</MessageBarTitle>
+                  {currentError} — the fields below could not be pre-filled from the running
+                  deployment, so an empty field here does NOT mean the value is unset.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {loadingOptions && (
               <div className={s.applying}><Spinner size="tiny" /><Caption1>Discovering live Azure resources…</Caption1></div>
             )}
             {!grantOnly && (
               <div className={s.fields}>
+                {!envIsTheFix && (
+                  <Caption1 className={s.meta}>
+                    Already set in this deployment — change one only if it is wrong.
+                  </Caption1>
+                )}
                 {gate.requiredSettings.map((setting: GateRequiredSetting) => {
                   const opts = options[setting.envVar] || [];
                   const secret = isSecretVar(setting.envVar);
                   const hint = setting.valueHint || setting.description;
+                  const live = currentValues[setting.envVar];
+                  const aliasLive = (setting.aliasOf || []).find((a) => presentKeys.has(a));
+                  const baseHint = setting.aliasOf ? `Any ONE of ${setting.aliasOf.join(' / ')} satisfies this.` : hint;
+                  // Say what is live NOW. A blank field used to be the only
+                  // signal and it read as "unset" even when the value was set —
+                  // and for a secret the field is ALWAYS blank, so presence has
+                  // to be stated in words or it cannot be stated at all.
+                  const fieldHint = secret
+                    ? presentKeys.has(setting.envVar)
+                      ? `Set in this deployment — a secret value is never shown. ${baseHint}`
+                      : `Not set in this deployment (secret — the value is never shown). ${baseHint}`
+                    : live
+                      ? `Currently set in this deployment. ${baseHint}`
+                      : aliasLive
+                        ? `Unset, but satisfied by ${aliasLive}. ${baseHint}`
+                        : `Not set in this deployment. ${baseHint}`;
                   return (
-                    <Field
-                      key={setting.envVar}
-                      label={setting.envVar}
-                      hint={setting.aliasOf ? `Any ONE of ${setting.aliasOf.join(' / ')} satisfies this.` : hint}
-                    >
+                    <Field key={setting.envVar} label={setting.envVar} hint={fieldHint}>
                       {opts.length > 0 ? (
                         <Combobox
                           freeform
@@ -297,15 +508,43 @@ export function GateFixitDialog({
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Close</Button>
-            {!grantOnly && (
+            {onRecheck && probeBlocked && (
               <Button
-                appearance="primary"
-                icon={applying ? <Spinner size="tiny" /> : <Wrench16Regular />}
-                disabled={!anyValue || applying}
-                onClick={apply}
+                appearance={envIsTheFix ? 'secondary' : 'primary'}
+                icon={<ArrowSync16Regular />}
+                disabled={recheckRequested}
+                onClick={recheck}
               >
-                Apply
+                Re-check now
               </Button>
+            )}
+            {!grantOnly && (
+              <Tooltip
+                content={
+                  anyChange
+                    ? 'Write the changed value(s) through the audited env-config path'
+                    : anyValue
+                      ? 'Nothing to apply — every field still matches the running deployment'
+                      : 'Enter a value to apply'
+                }
+                // `description`, never `label`: a Fluent tooltip with
+                // relationship="label" REPLACES the button's accessible name
+                // with the tooltip text, so the button stops being findable as
+                // "Apply" by a screen reader (and by the tests).
+                relationship="description"
+              >
+                <Button
+                  appearance={envIsTheFix ? 'primary' : 'secondary'}
+                  icon={applying ? <Spinner size="tiny" /> : <Wrench16Regular />}
+                  // Pre-filling made "has a value" meaningless as an enablement
+                  // test — every field has one on open. Enable only on a real
+                  // DELTA, so Apply can never be a no-op revision roll.
+                  disabled={!anyChange || applying}
+                  onClick={apply}
+                >
+                  Apply
+                </Button>
+              </Tooltip>
             )}
           </DialogActions>
         </DialogBody>

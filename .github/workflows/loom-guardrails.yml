@@ -152,6 +152,26 @@ jobs:
       - name: empty-claim-read-evidence (an empty-state claim must be gated on the read having SUCCEEDED — #3281)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-empty-claim-read-evidence.mjs
+      # An app install stamps the bundle's authored definition onto the Cosmos
+      # item and every provisioner then reports `created` with counts read off
+      # that same content. #3549/#3551 measured FIVE item types across FOUR
+      # storage layers all reporting accurate counts and all landing empty —
+      # e.g. a banner reading "2 tables · 4 measures" directly above an editor
+      # reading "no tables yet". The content was written and counted correctly;
+      # nothing could READ it back, because the read was gated on a synthetic
+      # `loom:` id prefix that editors never use.
+      #
+      # Two provisioners had already been fixed in isolation without sweeping
+      # the class, which is precisely why it recurred across five item types.
+      # This guard sweeps it: rule 1 asks whether ANY mechanism can serve an
+      # item type's content, rule 2 asks whether that mechanism is reachable by
+      # the BARE id an editor opens with — #3551's instance passed rule 1 and
+      # was still broken. Nine embedded controls run on every invocation,
+      # including planted regressions of both rules, so a drifted analyser
+      # cannot present a clean codebase.
+      - name: 'installed-content-reachable (an install may not report content the editor cannot read — #3549/#3551)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-installed-content-reachable.mjs
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-quadratic-trims.mjs
