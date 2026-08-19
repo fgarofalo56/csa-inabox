@@ -145,3 +145,73 @@ describe('buildPipelineRibbon — ADF Studio toolbar parity', () => {
     expect(action(args({ isAdf: false }), 'Manage', 'Manage')!.title).not.toContain('integration runtimes');
   });
 });
+
+/**
+ * #3549 — EVERY control that puts this pipeline on a compute must refuse while
+ * the backing pipeline is live-but-EMPTY.
+ *
+ * Pinned at THIS boundary deliberately (review round 3, nit 4). The behaviour is
+ * asserted through the editor in `pipeline-seed-incomplete.test.tsx`, but this
+ * module is where the next extraction will look, and it is where the gate was
+ * lost once already: `buildPipelineRibbon` was carved out of the editor by
+ * #3702 from a base that predated the gate, so main's copy shipped Run and Debug
+ * ungated until the merge restored them.
+ *
+ * `Add trigger` is the case that survived that restore and was caught by review:
+ * it gated on `!bound` alone, and `bound` is true BY DEFINITION when
+ * `seedIncomplete` is — so it stayed enabled beside a correctly-greyed Run,
+ * and a schedule trigger created from it puts the empty pipeline on a
+ * recurrence. Unattended, repeating, every run reporting Succeeded having done
+ * nothing.
+ *
+ * The `onClick` assertions are not decoration: `lib/components/shared/
+ * ribbon-commands` only registers actions with a truthy `onClick`, so nulling
+ * it is what keeps the Ctrl+Q command palette from routing around the disabled
+ * button.
+ */
+describe('buildPipelineRibbon — the empty-pipeline gate (#3549)', () => {
+  const EMPTY = 'This pipeline is empty — its activities were not published';
+  /** Every action that starts real compute against the bound pipeline. */
+  const COMPUTE_ACTIONS: Array<[group: string, label: string]> = [
+    ['Run', 'Debug'], ['Run', 'Trigger now'], ['Run', 'Add trigger'],
+  ];
+
+  it('disables EVERY compute action and says why', () => {
+    const a = args({ seedIncomplete: true });
+    for (const [group, label] of COMPUTE_ACTIONS) {
+      const act = action(a, group, label);
+      expect(act, `${group}/${label} missing`).toBeTruthy();
+      expect(act!.disabled, `${group}/${label} must be disabled`).toBe(true);
+      expect(act!.title, `${group}/${label} must say why`).toBe(EMPTY);
+      // Nulled so the command palette cannot invoke it either.
+      expect(act!.onClick, `${group}/${label} must have no handler`).toBeUndefined();
+    }
+  });
+
+  it('CONTROL — the same three are live when the seed succeeded', () => {
+    // Without this the test above would pass against a ribbon that disables
+    // everything unconditionally.
+    const a = args({ seedIncomplete: false });
+    for (const [group, label] of COMPUTE_ACTIONS) {
+      const act = action(a, group, label);
+      expect(act!.disabled, `${group}/${label} must be enabled`).toBeFalsy();
+      expect(act!.onClick, `${group}/${label} must be wired`).toBeTypeOf('function');
+    }
+  });
+
+  it('omitting seedIncomplete entirely means "not in that state"', () => {
+    // The flag is optional so the extraction stays drop-in; absent must read as
+    // false, never as "unknown → block".
+    for (const [group, label] of COMPUTE_ACTIONS) {
+      expect(action(args(), group, label)!.disabled).toBeFalsy();
+    }
+  });
+
+  it('does NOT block the actions that are the REMEDIATION', () => {
+    // Save and Validate must stay reachable: publishing the graph is how the
+    // user gets OUT of this state, so gating them would be a dead end.
+    const a = args({ seedIncomplete: true, dirty: true });
+    expect(action(a, 'Save', 'Save')!.disabled).toBe(false);
+    expect(action(args({ seedIncomplete: true }), 'Validate', 'Validate')!.disabled).toBe(false);
+  });
+});

@@ -43,6 +43,21 @@ export interface PipelineRibbonArgs {
   bound: string | null;
   /** The spec differs from what was last loaded/saved. */
   dirty: boolean;
+  /**
+   * #3549 — the item is BOUND to a real pipeline whose authored graph could not
+   * be written into it, so the live pipeline is EMPTY.
+   *
+   * This gates Run and Debug, and it is not cosmetic: an empty ADF/Synapse
+   * pipeline is genuinely runnable, so a run returns **Succeeded** having
+   * executed nothing. That "successful" no-op is the whole defect — 36 of 41
+   * pipelines in the live factory were in exactly this state and every trigger
+   * reported success. The editor's `PipelineSeedIncomplete` gate carries the
+   * Fix-it that clears it.
+   *
+   * Optional so the ribbon's own tests can omit it; absent means "not in that
+   * state", which is the pre-#3549 behaviour.
+   */
+  seedIncomplete?: boolean;
   save: () => void | Promise<void>;
   kick: (action: 'run' | 'debug') => void | Promise<void>;
   validate: () => void | Promise<void>;
@@ -59,6 +74,30 @@ const BIND_FIRST = 'Bind a pipeline first';
 
 export function buildPipelineRibbon(a: PipelineRibbonArgs): RibbonTab[] {
   const { bound, busy, dirty, designerRef } = a;
+  // #3549 — see `PipelineRibbonArgs.seedIncomplete`. `runBlocked` is what every
+  // control that PUTS THIS PIPELINE ON A COMPUTE gates on — Debug, Trigger now
+  // AND Add trigger — so the empty-pipeline case cannot be applied to one and
+  // forgotten on another.
+  //
+  // Add trigger was exactly that miss (review round 3): it gated on `!bound`
+  // alone, and `bound` is true BY DEFINITION whenever `seedIncomplete` is, so
+  // it stayed enabled while Run and Debug were correctly greyed. It opens the
+  // Triggers dialog, from which a schedule trigger puts the EMPTY pipeline on a
+  // recurrence — unattended, repeating, every run reporting Succeeded having
+  // done nothing. Strictly worse than the single manual run being blocked
+  // beside it. The dialog's own Start / create paths are guarded in
+  // `pipeline-editor-core` as well, because a disabled button is not an
+  // authorization boundary.
+  const seedIncomplete = a.seedIncomplete === true;
+  const runBlocked = busy || !bound || dirty || seedIncomplete;
+  const EMPTY_PIPELINE = 'This pipeline is empty — its activities were not published';
+  const runTitle = seedIncomplete
+    ? EMPTY_PIPELINE
+    : (dirty ? 'Save the spec first' : (!bound ? BIND_FIRST : undefined));
+  // Add trigger is not blocked by `dirty` or `busy` (scheduling is independent
+  // of the in-flight edit), so it needs its own pair rather than `runBlocked`.
+  const triggerBlocked = !bound || seedIncomplete;
+  const triggerTitle = seedIncomplete ? EMPTY_PIPELINE : (!bound ? BIND_FIRST : undefined);
 
   const validateGroup: RibbonTab['groups'] = a.supportsValidate ? [{
     label: 'Validate', actions: [
@@ -101,9 +140,9 @@ export function buildPipelineRibbon(a: PipelineRibbonArgs): RibbonTab[] {
       ...validateGroup,
       ...manageGroup,
       { label: 'Run', actions: [
-        { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty ? () => a.kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? BIND_FIRST : undefined) },
-        { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => a.kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? BIND_FIRST : undefined) },
-        { label: 'Add trigger', icon: <Clock20Regular />, onClick: bound ? a.openTriggers : undefined, disabled: !bound, title: !bound ? BIND_FIRST : undefined },
+        { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !runBlocked ? () => a.kick('debug') : undefined, disabled: runBlocked, title: runTitle },
+        { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !runBlocked ? () => a.kick('run') : undefined, disabled: runBlocked, title: runTitle },
+        { label: 'Add trigger', icon: <Clock20Regular />, onClick: !triggerBlocked ? a.openTriggers : undefined, disabled: triggerBlocked, title: triggerTitle },
       ] },
       { label: 'Layout', actions: [
         { label: 'Auto align', onClick: bound ? () => designerRef.current?.autoAlign() : undefined, disabled: !bound },

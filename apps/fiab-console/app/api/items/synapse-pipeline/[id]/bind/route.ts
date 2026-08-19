@@ -63,12 +63,18 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     } catch (e: any) {
       listError = e?.message || String(e);
     }
-    // Preview graph for bundle-installed (unbound) items: surface the rich
-    // activity graph stamped into state.content so the editor can render the
-    // FULLY BUILT-OUT canvas while the bind gate still prompts the user to push
-    // it to a real Synapse workspace pipeline. Null when no pipeline content.
-    const preview = bound ? null : pipelineDefinitionFromContent(item.state?.content);
-    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, autoBind });
+    // Preview graph for bundle-installed items: surface the rich activity graph
+    // stamped into state.content so the editor can render the FULLY BUILT-OUT
+    // canvas. Null when no pipeline content.
+    //
+    // #3549 — kept when the seed did NOT land, so a real-but-empty pipeline is
+    // never presented as complete. See the ADF twin for the full reasoning.
+    const seedIncomplete = autoBind?.status === 'bound' && !!autoBind.seedError;
+    const preview = bound && !seedIncomplete ? null : pipelineDefinitionFromContent(item.state?.content);
+    // G2 — resolves to `svc-synapse`, whose role ("Synapse Administrator (UAMI)
+    // on the workspace") is the remediation. Inline literal: see the ADF twin.
+    const seedGate = seedIncomplete ? { code: 'synapse_pipeline_seed_incomplete' } : undefined;
+    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, autoBind, ...(seedGate ?? {}) });
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
