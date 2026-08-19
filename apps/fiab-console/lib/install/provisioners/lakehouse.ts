@@ -80,6 +80,7 @@ import { safeAdlsRelPath, lakehouseRootPath } from '@/lib/azure/backing-name';
 import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 import { readRepoDataset } from '@/lib/apps/repo-datasets';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { buildCsv, columnsFromDdl, seedLakehouseAdls } from './_seed-lakehouse-adls';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -95,57 +96,6 @@ async function getToken(scope: string): Promise<string> {
   const t = await credential.getToken(scope);
   if (!t?.token) throw new FabricError('Failed to acquire AAD token', 401, undefined, undefined, fabricHint(401));
   return t.token;
-}
-
-/**
- * Extract column names from a `CREATE TABLE name ( col TYPE, … )` DDL.
- *
- * Splits the column list on top-level commas (commas inside type parens such
- * as DECIMAL(18,2) or a CHECK (... BETWEEN x AND y) are NOT column separators)
- * and skips table-level constraint clauses (CONSTRAINT/PRIMARY/FOREIGN/UNIQUE/
- * CHECK) so they don't leak in as phantom columns and misalign the seed CSV.
- */
-function columnsFromDdl(ddl: string): string[] {
-  const open = ddl.indexOf('(');
-  const close = ddl.lastIndexOf(')');
-  if (open < 0 || close <= open) return [];
-  const inner = ddl.slice(open + 1, close);
-
-  // Split on commas that are at paren-depth 0 only.
-  const segments: string[] = [];
-  let depth = 0;
-  let cur = '';
-  for (const ch of inner) {
-    if (ch === '(') depth++;
-    else if (ch === ')') depth = Math.max(0, depth - 1);
-    if (ch === ',' && depth === 0) {
-      segments.push(cur);
-      cur = '';
-    } else {
-      cur += ch;
-    }
-  }
-  if (cur.trim()) segments.push(cur);
-
-  const CONSTRAINT_KEYWORDS = new Set(['CONSTRAINT', 'PRIMARY', 'FOREIGN', 'UNIQUE', 'CHECK', 'KEY']);
-  return segments
-    .map((seg) => seg.trim().split(/\s+/)[0])
-    .filter((c) => c && /^[A-Za-z_][A-Za-z0-9_]*$/.test(c) && !CONSTRAINT_KEYWORDS.has(c.toUpperCase()));
-}
-
-/** CSV-escape a single value (RFC-4180-ish: quote if it has comma/quote/newline). */
-function csvCell(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const s = String(v);
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-/** Build CSV text (header + rows) from column names and array-of-array rows. */
-function buildCsv(columns: string[], rows: any[][]): string {
-  const header = columns.map(csvCell).join(',');
-  const body = rows.map((r) => columns.map((_, i) => csvCell(r[i])).join(',')).join('\n');
-  return `${header}\n${body}\n`;
 }
 
 /**
@@ -623,9 +573,8 @@ async function provisionAzureNative(
   steps.push(`Azure-native DLZ backend: container '${container}'.`);
 
   const content = input.content as any;
-  const folders: Array<{ path: string; description?: string }> = Array.isArray(content?.folders)
-    ? content.folders
-    : [];
+  // `folders` is read by the shared materializer directly off `content`; only
+  // the counts the summary line reports are pulled out here.
   const deltaTables: Array<{ name: string; ddl?: string; schema?: string; sampleRows?: any[][] }> = Array.isArray(
     content?.deltaTables,
   )
@@ -664,26 +613,9 @@ async function provisionAzureNative(
     return resolveInfraResidual(msg, `Confirm the DLZ ADLS account/container '${container}' exists and grant the Console managed identity (LOOM_UAMI_CLIENT_ID) Storage Blob Data Contributor on it.`, { reason: 'ADLS: could not create the lakehouse root directory.', errorPrefix: 'Create lakehouse root failed: ', link: 'https://learn.microsoft.com/azure/storage/blobs/assign-azure-role-data-access', steps });
   }
 
-  const createdFolders: string[] = [];
-  for (const f of folders) {
-    const rel = safeRelPath(f?.path || '');
-    if (!rel) continue;
-    const dir = `${root}/${rel}`;
-    try {
-      await adlsCreateDirectory(container, dir);
-      createdFolders.push(rel);
-      steps.push(`Created folder ${container}/${dir}.`);
-    } catch (e: any) {
-      steps.push(`Folder ${rel}: create failed ${e?.statusCode || ''} ${e?.message || String(e)}`);
-    }
-  }
-
-  // 2. Seed each deltaTable's sampleRows as a real CSV under Tables/<name>/.
-  //    The table folder is created even when there are no sampleRows so the
-  //    Tables/ tree is browsable; columns come from the DDL (array-of-array
-  //    sampleRows are aligned to those columns).
-  const seeded: string[] = [];
-  const emptyTables: string[] = [];
+  // 2. Folders + delta-table seed CSVs are materialised by the SHARED helper
+  //    below (`./_seed-lakehouse-adls`), after the optional Synapse serverless
+  //    target is resolved — the per-table view registration hangs off it.
   const externalViews: string[] = [];
 
   // Synapse serverless target (optional) — only when LOOM_SYNAPSE_WORKSPACE set.
@@ -727,44 +659,17 @@ async function provisionAzureNative(
     }
   }
 
-  for (const t of deltaTables) {
-    const tName = safeRelPath(t?.name || '');
-    if (!tName) continue;
-    // F9 — when schemasEnabled, namespace the table under its schema folder
-    // (Tables/<schema>/<table>/); 'dbo' is the default when none is declared.
-    const tSchema = schemasEnabled ? (String(t.schema || 'dbo').replace(/[^A-Za-z0-9_]/g, '_') || 'dbo') : '';
-    const tableDir = schemasEnabled ? `${root}/Tables/${tSchema}/${tName}` : `${root}/Tables/${tName}`;
-    try {
-      await adlsCreateDirectory(container, tableDir);
-    } catch (e: any) {
-      steps.push(`Table ${tName}: directory create failed ${e?.message || String(e)}`);
-      continue;
-    }
-
-    const rows = Array.isArray(t.sampleRows) ? t.sampleRows : [];
-    if (rows.length === 0) {
-      emptyTables.push(tName);
-      steps.push(`Table ${tName}: no sampleRows in bundle; created empty Tables/${tName}/.`);
-      continue;
-    }
-    const columns = t.ddl ? columnsFromDdl(t.ddl) : [];
-    if (columns.length === 0) {
-      steps.push(`Table ${tName}: could not derive columns from DDL; created empty Tables/${tName}/.`);
-      emptyTables.push(tName);
-      continue;
-    }
-
-    const csv = buildCsv(columns, rows);
-    const csvPath = `${tableDir}/${tName}.csv`;
-    try {
-      await adlsUploadFile(container, csvPath, Buffer.from(csv, 'utf-8'), 'text/csv');
-      seeded.push(tName);
-      steps.push(`Table ${tName}: wrote ${rows.length}-row seed CSV to ${container}/${csvPath}.`);
-    } catch (e: any) {
-      steps.push(`Table ${tName}: seed CSV write failed ${e?.statusCode || ''} ${e?.message || String(e)}`);
-      continue;
-    }
-
+  // Materialise the bundle's folder tree + per-table seed CSVs. The SHARED
+  // helper is what the open-time auto-bind seed also calls, so an auto-bound
+  // lakehouse gets the identical tree instead of a bare root directory (#3549).
+  // The Synapse view registration stays HERE, hung off the per-table hook, so
+  // this module keeps its serverless dependency out of the shared helper.
+  const {
+    createdFolders,
+    seeded,
+    emptyTables,
+    authGate: seedAuthGate,
+  } = await seedLakehouseAdls(container, root, content, steps, async (t) => {
     // 3. Optionally register a Synapse serverless OPENROWSET external view so
     //    the seeded CSV is queryable as `SELECT * FROM lakehouse.<view>`.
     //    The view is created in the dedicated USER database [loom_lakehouse]
@@ -773,29 +678,44 @@ async function provisionAzureNative(
     //    doubled single-quotes inside the EXEC string. The BULK arg is the
     //    https DFS endpoint (Synapse OPENROWSET takes https, not abfss).
     //    Idempotent: DROP-if-exists then CREATE so re-install upserts.
-    if (synapse) {
-      const httpsUrl = pathToHttpsUrl(container, csvPath);
-      const viewLeaf = `${tName}`.replace(/[^A-Za-z0-9_]/g, '_');
-      // F9 — when schemasEnabled, register the view under the table's schema
-      // (so the 4-part name workspace.lakehouse.schema.table resolves);
-      // otherwise the classic single `lakehouse` schema.
-      const viewSchema = schemasEnabled ? tSchema : 'lakehouse';
-      const obj = `${viewSchema}.${viewLeaf}`;
-      // Doubled single-quotes for the inner EXEC string literal.
-      const urlLiteral = escapeSqlLiteral(httpsUrl);
-      const ddl =
-        `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA ${viewSchema}');\n` +
-        `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-        `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
-        `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE) AS r');`;
-      try {
-        await synapseExec(synapse, ddl);
-        externalViews.push(obj);
-        steps.push(`Table ${tName}: registered Synapse serverless view ${obj} over the seed CSV.`);
-      } catch (e: any) {
-        steps.push(`Table ${tName}: OPENROWSET view register failed: ${e?.message || String(e)}`);
-      }
+    if (!synapse) return;
+    const httpsUrl = pathToHttpsUrl(container, t.csvPath);
+    const viewLeaf = `${t.name}`.replace(/[^A-Za-z0-9_]/g, '_');
+    // F9 — when schemasEnabled, register the view under the table's schema
+    // (so the 4-part name workspace.lakehouse.schema.table resolves);
+    // otherwise the classic single `lakehouse` schema.
+    const viewSchema = schemasEnabled ? t.schema : 'lakehouse';
+    const obj = `${viewSchema}.${viewLeaf}`;
+    // Doubled single-quotes for the inner EXEC string literal.
+    const urlLiteral = escapeSqlLiteral(httpsUrl);
+    const ddl =
+      `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA ${viewSchema}');\n` +
+      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+      `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
+      `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE) AS r');`;
+    try {
+      await synapseExec(synapse, ddl);
+      externalViews.push(obj);
+      steps.push(`Table ${t.name}: registered Synapse serverless view ${obj} over the seed CSV.`);
+    } catch (e: any) {
+      steps.push(`Table ${t.name}: OPENROWSET view register failed: ${e?.message || String(e)}`);
     }
+  });
+
+  // A 401/403 mid-materialisation is the same missing-role fact the root-create
+  // guard above reports, and every remaining write would fail identically —
+  // surface it as the precise grant rather than a half-built lakehouse.
+  if (seedAuthGate) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: `ADLS ${seedAuthGate.status}: not authorized to write into the DLZ container '${container}'.`,
+        remediation:
+          'Grant the Console managed identity (LOOM_UAMI_CLIENT_ID) the Storage Blob Data Contributor role on the DLZ storage account / container.',
+        link: 'https://learn.microsoft.com/azure/storage/blobs/assign-azure-role-data-access',
+      },
+      steps,
+    };
   }
 
   // 4. Provision declared shortcuts as REAL registry rows (repo-hosted dataset

@@ -30,18 +30,27 @@
  */
 import { NextResponse } from 'next/server';
 import { withCapability } from '@/lib/api/route-toolkit';
-import { readBuildMarker } from '@/lib/updates/current-version';
+import { readBuildMarker, resolveCurrentVersion } from '@/lib/updates/current-version';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+import type { LoomCloud } from '@/lib/azure/cloud-boundary';
 import {
   classifyDeployPath,
   classifyEstateDrift,
   deployPathsForCloud,
   summarizeDeployStatus,
+  worstSeverity,
   type CompareResult,
   type DeployStatusReport,
   type RunLite,
 } from '@/lib/admin/deploy-status';
+import {
+  LOOM_ESTATES,
+  estateIdForCloud,
+  probeEstateEndpoint,
+  summarizeFleet,
+  type FleetEstate,
+} from '@/lib/admin/estate-fleet';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -155,6 +164,118 @@ const RUNS_PER_PAGE = 30;
  */
 const GIT_OBJECT_ID = /^[0-9a-f]{7,40}$/i;
 
+/**
+ * Compare one sha against the default branch. Shared by the local estate and by
+ * every remote one, so a peer cloud's drift is computed exactly the way this
+ * console's own is — the number on the Gov row means the same thing as the
+ * number on the Commercial row.
+ *
+ * The sha is VALIDATED before it reaches the URL. For the local estate that is
+ * defence in depth at the image-build boundary (see GIT_OBJECT_ID above); for a
+ * REMOTE estate it is load-bearing, because the value is then genuinely
+ * off-box input — another cloud's HTTP response deciding which api.github.com
+ * path this console requests. parseBuildMarkerText already rejects a non-hex
+ * value, so this is the second of two gates and neither is removable.
+ *
+ * `subject` names WHOSE marker is being described. Without it the peer rows
+ * would report "this image's build marker is malformed" about a marker served
+ * by a different console in a different cloud — an error asserting something it
+ * did not establish, which is the precise thing deploy-integrity.md R7 forbids.
+ */
+async function compareSha(
+  sha: string | null,
+  subject = "this image's",
+): Promise<{ data?: CompareResult; error?: string }> {
+  if (!sha) return { error: `${subject} image carries no build sha` };
+  if (!GIT_OBJECT_ID.test(sha)) {
+    return {
+      error:
+        `${subject} build marker does not carry a git object id (expected 7–40 hex `
+        + 'from the LOOM_BUILD_SHA build-arg), so it names no commit to compare — '
+        + 'check /build-marker.txt on the running revision',
+    };
+  }
+  return ghJson<CompareResult>(`/repos/${REPO}/compare/${sha}...${BRANCH}`);
+}
+
+/**
+ * Every estate this product knows about, this one and its peers, each compared
+ * against main. (#3730)
+ *
+ * WHY THE PEERS ARE READ OVER HTTP AND THE SELF IS NOT. This console's own
+ * marker is a FILE in its own image — it cannot be wrong about which image is
+ * serving, because it IS the image. A peer has to be asked, and asking can fail.
+ * The two sources are labelled (`source`) rather than blended, so the surface
+ * never implies it knows more about the other cloud than it does.
+ *
+ * A PEER THAT CANNOT BE REACHED IS THE EXPECTED CASE IN A SOVEREIGN BOUNDARY,
+ * NOT AN ERROR TO HIDE. Azure Government has no general egress to the public
+ * internet — it already cannot reach api.github.com, which is why the compare
+ * degrades there too — so the Gov console will normally report Commercial as
+ * unmeasured, and vice versa when Commercial's egress is restricted. Every such
+ * case yields `reachable:false`, a named reason, and a drift state of `unknown`.
+ * It is never rendered as current and never as behind (deploy-integrity.md R7).
+ */
+async function computeFleet(
+  cloud: LoomCloud,
+  selfBuild: { sha?: string; stamp?: string },
+  selfDrift: ReturnType<typeof classifyEstateDrift>,
+): Promise<FleetEstate[]> {
+  const selfId = estateIdForCloud(cloud);
+
+  return Promise.all(LOOM_ESTATES.map(async (endpoint): Promise<FleetEstate> => {
+    const isSelf = endpoint.id === selfId;
+
+    // ── this console: read the image, and REUSE the verdict already computed ──
+    // Step 1 above has already compared this image's sha against the branch.
+    // Recomputing it here would issue a second identical request to
+    // api.github.com for no new information, against an UNAUTHENTICATED budget
+    // of 60/hour per egress IP that this route is already close to (up to 9
+    // upstream calls per miss). One estate, one compare.
+    if (isSelf) {
+      return {
+        id: endpoint.id,
+        name: endpoint.name,
+        isSelf: true,
+        source: 'this-image',
+        markerUrl: endpoint.markerUrl,
+        reachable: true,
+        unreachableReason: null,
+        version: resolveCurrentVersion(selfBuild),
+        versionError: null,
+        drift: selfDrift,
+      };
+    }
+
+    // ── a peer cloud: ask it, and be honest when it does not answer ───────
+    const { marker, version, versionError } = await probeEstateEndpoint(endpoint, FETCH_TIMEOUT_MS);
+    // The marker error is passed straight into the classifier, which turns it
+    // into state:'unknown' carrying that exact sentence. No inference is made
+    // about the peer's freshness from a failure to read it.
+    const compare = marker.error ? { error: marker.error } : await compareSha(marker.sha, `${endpoint.name}'s`);
+    return {
+      id: endpoint.id,
+      name: endpoint.name,
+      isSelf: false,
+      source: 'remote-marker',
+      markerUrl: endpoint.markerUrl,
+      reachable: marker.error === null,
+      unreachableReason: marker.error,
+      version,
+      versionError,
+      drift: classifyEstateDrift({
+        buildSha: marker.sha,
+        buildStamp: marker.stamp,
+        branch: BRANCH,
+        repo: REPO,
+        compare: compare.data ?? null,
+        error: compare.error ?? null,
+        graceMinutes: endpoint.graceMinutes,
+      }),
+    };
+  }));
+}
+
 async function computeDeployStatus(): Promise<DeployStatusReport> {
   const build = readBuildMarker();
   const cloud = detectLoomCloud();
@@ -169,23 +290,7 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
   //    The sha is VALIDATED before it reaches the URL (see GIT_OBJECT_ID): it is
   //    file data, and a request path is not a place to interpolate file data
   //    unchecked. Each branch degrades to an honest reason, never a false green.
-  const sha = build.sha;
-  let compare: { data?: CompareResult; error?: string };
-  if (!sha) {
-    compare = { error: 'this image carries no build sha' };
-  } else if (!GIT_OBJECT_ID.test(sha)) {
-    // Deliberately does NOT echo the value: the fix is that this string never
-    // leaves the process carrying marker bytes. The remediation is the marker,
-    // and naming it is enough to act on.
-    compare = {
-      error:
-        "this image's build marker does not carry a git object id (expected 7–40 hex " +
-        'from the LOOM_BUILD_SHA build-arg), so it names no commit to compare — ' +
-        'check /build-marker.txt on the running revision',
-    };
-  } else {
-    compare = await ghJson<CompareResult>(`/repos/${REPO}/compare/${sha}...${BRANCH}`);
-  }
+  const compare = await compareSha(build.sha ?? null);
   const estate = classifyEstateDrift({
     buildSha: build.sha ?? null,
     buildStamp: build.stamp ?? null,
@@ -217,10 +322,28 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
     });
   }));
 
-  return summarizeDeployStatus(estate, paths, {
+  // 3. And EVERY OTHER CLOUD (#3730). Steps 1 and 2 describe this console and
+  //    the lanes that feed it; neither can see the sovereign estate, which is
+  //    how Gov sat 251 commits behind with every Commercial signal green. The
+  //    fleet is reported alongside — never folded into — the self verdict, so a
+  //    healthy Commercial estate can never average away a stale Gov one.
+  const estates = await computeFleet(cloud, build, estate);
+  const fleet = summarizeFleet(estates);
+
+  const base = summarizeDeployStatus(estate, paths, {
     generatedAt: new Date().toISOString(),
     repo: REPO,
   });
+  return {
+    ...base,
+    estates,
+    // The banner headline names the worst fact across BOTH halves. A peer cloud
+    // being 251 commits behind outranks "this estate is fine", because the
+    // operator reading this page is responsible for both.
+    severity: worstSeverity([base.severity, fleet.severity]),
+    headline: fleet.severity === 'error' && base.severity !== 'error' ? fleet.headline : base.headline,
+    fleetHeadline: fleet.headline,
+  };
 }
 
 /**

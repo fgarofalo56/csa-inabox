@@ -23,7 +23,7 @@ import {
   ArrowSync16Regular, ArrowDownload16Regular, Wrench16Regular,
   CheckmarkCircle20Filled, Warning20Filled, DismissCircle20Filled, Circle20Regular,
   Flash16Regular, DatabaseLink20Regular, Key16Regular, Flowchart16Regular,
-  Server16Regular,
+  Server16Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -36,6 +36,7 @@ import {
   type CapabilityNode, type ReadinessReport, type ReadinessState, type WorkloadScore,
 } from '@/lib/admin/readiness';
 import type { DeployStatusReport } from '@/lib/admin/deploy-status';
+import type { FleetEstate } from '@/lib/admin/estate-fleet';
 
 // ── deploy status (2026-08-05) ───────────────────────────────────────────────
 // The operator watched this page report 98/100 for two weeks while the two
@@ -52,10 +53,107 @@ import type { DeployStatusReport } from '@/lib/admin/deploy-status';
 /** Fluent intent per deploy severity. `ok` is informative, never green-on-nothing. */
 const DEPLOY_INTENT = { ok: 'info', warning: 'warning', error: 'error' } as const;
 
+/** Badge colour per drift state. `unknown` is its OWN colour, never a green. */
+const DRIFT_COLOR = {
+  current: 'success', behind: 'danger', divergent: 'danger', unknown: 'warning',
+} as const;
+
+/** The word shown on each estate's badge. */
+const DRIFT_LABEL = {
+  current: 'On main', behind: 'Behind', divergent: 'Divergent', unknown: 'Unmeasured',
+} as const;
+
+/**
+ * Per-cloud drift table (#3730).
+ *
+ * WHY THIS IS A TABLE OF EVERY CLOUD AND NOT A LINE ABOUT THIS ONE. The banner
+ * above it describes the estate serving the page, which is all it could ever
+ * describe — and that is exactly how Azure Government sat 251 commits and seven
+ * days behind main, at version 0.90.2 against Commercial's 0.98.11, while every
+ * Commercial signal read green. `cloud-parity.md`: a view that structurally
+ * cannot see the sovereign boundary is not a drift view, it is a Commercial
+ * drift view.
+ *
+ * Each row states the four facts the operator had to curl for by hand: live
+ * SHA, build stamp, running version, and commits behind main.
+ *
+ * AN UNMEASURED ESTATE IS ITS OWN STATE. A sovereign boundary usually has no
+ * egress to the other cloud, so "we could not read it" is the COMMON row here,
+ * not an edge case — and it renders as `Unmeasured` in warning, with the exact
+ * reason. It is never drawn as `On main` (a green over an estate nobody read)
+ * and never as `Behind` (a claim nobody measured). deploy-integrity.md R7.
+ */
+function EstateFleetTable({ estates, styles }: { estates: FleetEstate[] | null; styles: Styles }) {
+  // ABSENT IS NOT EMPTY, and rendering nothing for both would recreate this
+  // surface's founding defect one level up. `estates` is optional on the report
+  // (an older CACHED payload predates #3730, and the route caches for 10 minutes
+  // with serve-stale-on-error), so "no fleet was reported" and "there are no
+  // other clouds" would otherwise look identical — a silent absence standing in
+  // for a measurement, which is the whole thing this table exists to stop.
+  if (!estates) {
+    return (
+      <MessageBar intent="warning" layout="multiline" style={{ marginBottom: tokens.spacingVerticalM }}>
+        <MessageBarBody>
+          <MessageBarTitle>Per-cloud drift not reported</MessageBarTitle>
+          This response carried no per-estate data, so how far each cloud is behind main is UNKNOWN
+          — not zero. A cached response from before this view existed looks exactly like this;
+          refresh to re-measure.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (estates.length === 0) return null;
+  return (
+    <Card className={styles.fleetCard}>
+      <div className={styles.fleetHead}>
+        <CloudArrowUp20Regular />
+        <Subtitle2>Every cloud vs main</Subtitle2>
+        <Caption1>live build of each estate, read from its own build marker</Caption1>
+      </div>
+      <div className={styles.fleetRows}>
+        {estates.map((e) => (
+          <div key={e.id} className={styles.fleetRow}>
+            <div className={styles.fleetRowTop}>
+              <Badge appearance="filled" color={DRIFT_COLOR[e.drift.state]} size="small">
+                {DRIFT_LABEL[e.drift.state]}
+              </Badge>
+              <Body1 className={styles.fleetName}>{e.name}</Body1>
+              {e.isSelf && <Badge appearance="tint" size="small">this console</Badge>}
+              {e.version && <Badge appearance="outline" size="small">v{e.version}</Badge>}
+              {/* commitsBehind is rendered ONLY when it was measured. A null
+                  must never render as 0 — that is the arithmetic that turns an
+                  unread estate into a healthy-looking one. */}
+              {typeof e.drift.commitsBehind === 'number' && e.drift.commitsBehind > 0 && (
+                <Badge appearance="filled" color="danger" size="small">
+                  {e.drift.commitsBehind} behind
+                </Badge>
+              )}
+            </div>
+            <Caption1 className={styles.fleetMeta}>
+              <code>{e.drift.buildSha ? e.drift.buildSha.slice(0, 8) : '—'}</code>
+              {e.drift.buildStamp ? ` · built ${e.drift.buildStamp}` : ''}
+              {e.source === 'remote-marker' ? ' · read over HTTPS from its own marker' : ' · read from this image'}
+            </Caption1>
+            <Caption1 className={styles.fleetDetail}>
+              {e.reachable ? e.drift.detail : e.unreachableReason}
+            </Caption1>
+            {e.drift.compareUrl && e.drift.state === 'behind' && e.drift.commitsBehind ? (
+              <a href={e.drift.compareUrl} target="_blank" rel="noreferrer">
+                See the {e.drift.commitsBehind} commits this estate is missing
+              </a>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function DeployStatusBanner() {
   const [status, setStatus] = useState<DeployStatusReport | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const s = useStyles();
 
   useEffect(() => {
     let alive = true;
@@ -89,44 +187,52 @@ function DeployStatusBanner() {
   if (!status) return null;
 
   const problems = status.paths.filter((p) => p.severity !== 'ok');
+  const estates = (status.estates as FleetEstate[] | undefined) ?? null;
   return (
-    <MessageBar
-      intent={DEPLOY_INTENT[status.severity]}
-      layout="multiline"
-      style={{ marginBottom: tokens.spacingVerticalM }}
-    >
-      <MessageBarBody>
-        <MessageBarTitle>{status.headline}</MessageBarTitle>
-        {status.estate.detail}
-        {status.estate.compareUrl && status.estate.state === 'behind' && status.estate.commitsBehind ? (
-          <> <a href={status.estate.compareUrl} target="_blank" rel="noreferrer">See the {status.estate.commitsBehind} commits</a>.</>
-        ) : null}
-        {problems.length > 0 && (
-          <div style={{ marginTop: tokens.spacingVerticalS }}>
-            <Button appearance="transparent" size="small" onClick={() => setOpen((v) => !v)}>
-              {open ? 'Hide' : `Show ${problems.length} deploy path(s) needing attention`}
-            </Button>
-            {open && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS }}>
-                {problems.map((p) => (
-                  <div key={p.workflow} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 }}>
-                      <Badge appearance="filled" size="small" color={p.severity === 'error' ? 'danger' : 'warning'}>
-                        {p.state}
-                      </Badge>
-                      <Body1 style={{ minWidth: 0 }}>{p.title}</Body1>
+    <>
+      <MessageBar
+        intent={DEPLOY_INTENT[status.severity]}
+        layout="multiline"
+        style={{ marginBottom: tokens.spacingVerticalM }}
+      >
+        <MessageBarBody>
+          <MessageBarTitle>{status.headline}</MessageBarTitle>
+          {status.estate.detail}
+          {status.estate.compareUrl && status.estate.state === 'behind' && status.estate.commitsBehind ? (
+            <> <a href={status.estate.compareUrl} target="_blank" rel="noreferrer">See the {status.estate.commitsBehind} commits</a>.</>
+          ) : null}
+          {problems.length > 0 && (
+            <div style={{ marginTop: tokens.spacingVerticalS }}>
+              <Button appearance="transparent" size="small" onClick={() => setOpen((v) => !v)}>
+                {open ? 'Hide' : `Show ${problems.length} deploy path(s) needing attention`}
+              </Button>
+              {open && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS }}>
+                  {problems.map((p) => (
+                    <div key={p.workflow} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 }}>
+                        <Badge appearance="filled" size="small" color={p.severity === 'error' ? 'danger' : 'warning'}>
+                          {p.state}
+                        </Badge>
+                        <Body1 style={{ minWidth: 0 }}>{p.title}</Body1>
+                      </div>
+                      <Caption1>{p.detail}</Caption1>
+                      <Caption1>{p.why}</Caption1>
+                      <a href={p.runsUrl} target="_blank" rel="noreferrer">Open {p.workflow} in Actions</a>
                     </div>
-                    <Caption1>{p.detail}</Caption1>
-                    <Caption1>{p.why}</Caption1>
-                    <a href={p.runsUrl} target="_blank" rel="noreferrer">Open {p.workflow} in Actions</a>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </MessageBarBody>
-    </MessageBar>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </MessageBarBody>
+      </MessageBar>
+      {/* Deliberately OUTSIDE the MessageBar and always shown: the per-cloud
+          table is the fact the operator was missing, and folding it into a
+          collapsed section of a banner would reproduce the "buried where nobody
+          reads it" failure this whole change exists to fix. */}
+      <EstateFleetTable estates={estates} styles={s} />
+    </>
   );
 }
 
@@ -277,6 +383,45 @@ const useStyles = makeStyles({
   },
   badgeRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, minWidth: 0, maxWidth: '100%' },
   loading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalXXL },
+  // ── per-cloud drift table (#3730) ──────────────────────────────────────
+  // Card elevation + borderRadiusLarge + a section icon, matching the sibling
+  // polished surfaces (web3-ui.md). Spacing, colour, radius and shadow all come
+  // from tokens; the ONE raw value is the 3px accent rule below, which Fluent
+  // ships no token for and which matches four sibling surfaces (readiness's own
+  // `node`, and the canvas node-kit accent). Called out rather than claimed
+  // away: `check-no-raw-px` scans inline `style={{}}` only and never reads this
+  // makeStyles block, so it was never evidence either way.
+  fleetCard: {
+    padding: tokens.spacingHorizontalL,
+    marginBottom: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    minWidth: 0,
+    boxShadow: tokens.shadow4,
+    borderRadius: tokens.borderRadiusLarge,
+    transition: 'box-shadow 120ms ease',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  fleetHead: {
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS, minWidth: 0,
+  },
+  fleetRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+  fleetRow: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+    paddingLeft: tokens.spacingHorizontalM,
+    // Light 3px accent rather than a heavy band (ux-baseline node compactness).
+    borderLeft: `3px solid ${tokens.colorNeutralStroke2}`,
+  },
+  // flexWrap + minWidth:0 so the badge row can never overlap at any width
+  // (ux-baseline: "badges never overlap" — overlap at any width is a defect).
+  fleetRowTop: {
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS, minWidth: 0,
+  },
+  fleetName: { minWidth: 0, overflowWrap: 'anywhere' },
+  fleetMeta: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', minWidth: 0 },
+  fleetDetail: { color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', minWidth: 0 },
 });
 
 interface WorkloadGroup { key: string; title: string; glyph: string; nodes: CapabilityNode[]; state?: ReadinessState; }

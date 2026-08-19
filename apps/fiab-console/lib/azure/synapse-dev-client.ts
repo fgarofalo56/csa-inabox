@@ -647,6 +647,9 @@ export async function deletePipeline(name: string): Promise<void> {
  * auto-provision the linked services a bundled pipeline's activities reference
  * so the pipeline document validates on commit (Synapse rejects a pipeline that
  * references a non-existent linked service: "invalid reference '<name>'").
+ *
+ * PUT is create-OR-UPDATE: call `getLinkedService` first and write only when the
+ * name is genuinely free — see `_seed-dev-pipeline.ensureReference`.
  */
 export async function upsertLinkedService(name: string, properties: Record<string, unknown>): Promise<void> {
   const r = await callDev(
@@ -656,8 +659,24 @@ export async function upsertLinkedService(name: string, properties: Record<strin
   await commitArtifact<unknown>(r, `upsertLinkedService(${name})`);
 }
 
+/** GET one dev-plane artifact by name. Throws `.status = 404` when absent —
+ *  that is how the reference stubber tells a free name from someone else's
+ *  object. Kept in THIS module, beside the PUTs they guard, so a read and its
+ *  write can never resolve to different sovereign hosts.
+ *  https://learn.microsoft.com/rest/api/synapse/data-plane/linked-service/get-linked-service */
+async function getArtifact<T>(collection: string, label: string, name: string): Promise<T> {
+  const r = await callDev(`/${collection}/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  return jsonOrThrow<T>(r, `${label}(${name})`);
+}
+export const getLinkedService = (name: string): Promise<SynapseLinkedService> =>
+  getArtifact<SynapseLinkedService>('linkedservices', 'getLinkedService', name);
+export const getDataset = (name: string): Promise<SynapseDataset> =>
+  getArtifact<SynapseDataset>('datasets', 'getDataset', name);
+
 /** Upsert a dataset by name (Synapse Studio dev REST) — same purpose as
- *  upsertLinkedService: satisfy a pipeline's DatasetReference on commit. */
+ *  upsertLinkedService: satisfy a pipeline's DatasetReference on commit. Same
+ *  create-if-absent discipline: PUT REPLACES, which would silently redirect
+ *  where a Copy activity reads or writes. */
 export async function upsertDataset(name: string, properties: Record<string, unknown>): Promise<void> {
   const r = await callDev(
     `/datasets/${encodeURIComponent(name)}?api-version=${DEV_API}`,
@@ -818,7 +837,14 @@ export interface SynapseLinkedService {
   id?: string;
   name: string;
   type?: string;
-  properties: { type: string; description?: string; typeProperties?: Record<string, unknown> };
+  properties: {
+    type: string;
+    description?: string;
+    typeProperties?: Record<string, unknown>;
+    /** Loom stamps `loom-autoprovisioned` on every artifact it creates for
+     *  itself — the marker the reference stubber checks before overwriting. */
+    annotations?: unknown[];
+  };
 }
 
 export async function listLinkedServices(): Promise<SynapseLinkedService[]> {
@@ -835,9 +861,10 @@ export interface SynapseDataset {
     type: string;
     linkedServiceName?: { referenceName: string; type: string };
     typeProperties?: Record<string, unknown>;
+    /** See SynapseLinkedService.properties.annotations. */
+    annotations?: unknown[];
   };
 }
-
 export async function listDatasets(): Promise<SynapseDataset[]> {
   const r = await callDev(`/datasets?api-version=${DEV_API}`);
   const body = await jsonOrThrow<{ value: SynapseDataset[] }>(r, 'listDatasets');

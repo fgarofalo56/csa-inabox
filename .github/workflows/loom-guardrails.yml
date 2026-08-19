@@ -1340,6 +1340,29 @@ jobs:
         run: |
           node scripts/ci/check-msal-credential-hygiene.mjs --self-test
           node scripts/ci/check-msal-credential-hygiene.mjs
+      # #3429 — the Function-App sibling of check-image-producer-coverage.mjs.
+      # `deploy-copilot-function.yml` deploys func-csa-inabox-copilot-fg, the
+      # production docs-site chat backend, and NOTHING in the tree created it:
+      # the one bicep that named it declared it `existing` (a consumer with no
+      # producer), so the only way to rebuild it was a hand-run `az functionapp
+      # create` from DEPLOYMENT.md. Eight consecutive red runs with no recovery
+      # path. `existing` vs a real declaration is the whole distinction and a
+      # grep gets it backwards, which is why this parses rather than greps.
+      # Self-test first: it carries the mutant fixtures (an added lane with no
+      # producer, a consumed-only app, an EMPTY app-name, an unresolvable
+      # expression, a producer renamed away from its target, a zero-producer
+      # tree, a job-level env override, a producer relocated into gitignored
+      # temp/, and — the two the first version of this guard could not see — a
+      # target credited to a MORE GENERIC producer whose prefix merely leads its
+      # name, in both the prefix-target and literal-target directions) plus
+      # three controls that must PASS, one of which places a colliding generic
+      # producer beside the correct one so "it always fails" cannot masquerade
+      # as working.
+      - name: 'function-app-producer-coverage (every deployed Function App has a bicep producer, not just an `existing` reference — #3429)'
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-function-app-producer-coverage.mjs --self-test
+          node scripts/ci/check-function-app-producer-coverage.mjs
       # #3042 — the meta-guard for THIS file: every `run:` step above must
       # carry `if: ${{ !cancelled() }}`, or one failing guard hides the rest
       # behind benign-looking `skipped` steps again. Self-test first (mutant

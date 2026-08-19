@@ -30,9 +30,11 @@ import {
   getPipelineRun,
   upsertLinkedService,
   upsertDataset,
+  getLinkedService,
+  getDataset,
 } from '@/lib/azure/synapse-dev-client';
 import type { Provisioner, ProvisionResult } from './types';
-import { upsertAndRunDevPipeline, type DevPipelineAdapter } from './_seed-dev-pipeline';
+import { upsertAndRunDevPipeline, nullOn404, type DevPipelineAdapter } from './_seed-dev-pipeline';
 import { safePipelineName } from '@/lib/azure/backing-name';
 
 /** synapse-dev-client throws `Missing env var: <K>` for the three workspace
@@ -72,6 +74,14 @@ const adapter: DevPipelineAdapter = {
   },
   async upsertDataset(name, properties) {
     await upsertDataset(name, properties);
+  },
+  // See the ADF twin: the dev-plane PUT is create-OR-UPDATE, so the stubber
+  // must establish absence before it writes (#3549 review, BLOCKER 1).
+  async getLinkedService(name) {
+    return nullOn404(() => getLinkedService(name));
+  },
+  async getDataset(name) {
+    return nullOn404(() => getDataset(name));
   },
 };
 
