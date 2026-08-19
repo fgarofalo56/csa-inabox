@@ -120,6 +120,30 @@ const ALLOWLIST = new Set([
   'LOOM_DATABRICKS_UC_STORAGE_ROOT', // opt-in managed-location base (abfss://…) for domain→UC-catalog sync when the metastore has no default storage_root; unset = send no storage_root (metastores with a default root work as-is)
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_DAB_APP_NAME',              // opt-in override for the shared DAB preview Container App name (apply-to-runtime route #19); unset = derived from the LOOM_DAB_PREVIEW_URL host's first FQDN label
+  // ---- #3730 cross-cloud estate drift: per-estate endpoint OVERRIDES ----
+  // Optional overrides of the estate registry (apps/fiab-console/lib/admin/
+  // estate-fleet.ts and scripts/ci/_estate-registry.mjs, which share these four
+  // names deliberately — one name per endpoint, not one per surface). The
+  // defaults are the LIVE, measured, unauthenticated endpoints of each console,
+  // so unset is the working production state: the readiness fleet table reads
+  // both estates with none of these set. Runtime-only knobs, never a deploy
+  // dependency, and bicep emitting them would only restate a constant the image
+  // already carries.
+  //
+  // STATED PLAINLY BECAUSE IT IS A REAL LIMITATION, not a shrug: the Gov default
+  // is an Azure Front Door FQDN with a generated label
+  // (loom-console-<hash>.z01.azurefd.us). If Gov is ever redeployed behind a NEW
+  // Front Door, that default goes stale and the estate reads UNREACHABLE — which
+  // is loud and honest (never a false "current"), but it is a redeploy away from
+  // needing LOOM_GOV_ESTATE_MARKER_URL set. These overrides are how that is
+  // fixed without a code change, which is why they exist at all.
+  //
+  // LOOM_ESTATE_MARKER_URL predates this work — check-deploy-staleness.mjs has
+  // read it since the Commercial estate probe was written.
+  'LOOM_ESTATE_MARKER_URL',
+  'LOOM_ESTATE_VERSION_URL',
+  'LOOM_GOV_ESTATE_MARKER_URL',
+  'LOOM_GOV_ESTATE_VERSION_URL',
   'LOOM_CANVAS_COMMENT_CAP',        // opt-in tuning knob for the per-(item,canvas) comment/sticky retention cap (W4); unset default = 300 in code (lib/collab/canvas-comment-model.ts)
   'LOOM_ADT_ENDPOINT',
   'LOOM_SPARK_POOL_REAP',            // opt-out kill switch for the stale-Livy-session reaper (#1796; default ON — pool self-cleans leaked sessions)

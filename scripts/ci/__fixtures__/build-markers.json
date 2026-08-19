@@ -1,0 +1,157 @@
+{
+  "$comment": [
+    "CANONICAL /build-marker.txt SAMPLES — the SHARED corpus for every parser of that file.",
+    "",
+    "WHY THIS FILE EXISTS (#3730). The two live consoles serve markers in DIFFERENT",
+    "shapes, and nothing recorded that. Measured 2026-08-18 by unauthenticated HTTPS",
+    "GET against both estates:",
+    "",
+    "  Commercial  sha=09ac2517e8139f4fb6dff87ff2dac6c029b7f8d0  stamp=20260818T152007Z",
+    "  Government  sha=28de89fb                                  stamp=2026-08-11T09:23:46Z",
+    "",
+    "Both the SHA LENGTH and the STAMP FORMAT differ, and the difference is",
+    "structural rather than accidental — it comes from the producers:",
+    "  .github/workflows/build-fiab-images-acr-tasks.yml:447",
+    "      --build-arg LOOM_BUILD_SHA=${{ github.sha }}          -> 40 hex",
+    "  .github/workflows/gov-build-images.yml:208,337",
+    "      SHA_TAG=$(git rev-parse --short=8 HEAD)               -> 8 hex",
+    "Both are written by apps/fiab-console/Dockerfile:152 into /app/public/build-marker.txt.",
+    "",
+    "A parser tested against ONE cloud's shape is a parser that has never been shown",
+    "to read the OTHER cloud — which is the cloud-parity.md failure this issue is",
+    "about. So both the CI alarm (scripts/ci/__tests__/cross-cloud-drift.test.mjs)",
+    "and the console (apps/fiab-console/lib/admin/__tests__/estate-fleet.test.ts)",
+    "assert against THIS file. Two implementations, one corpus: they cannot drift",
+    "apart on format handling without a test going red.",
+    "",
+    "`unparseable` is the half that matters most. Per deploy-integrity.md R7 an",
+    "unreadable marker must produce a NAMED failure, never a default. If a parser",
+    "quietly returned no sha for any of these, the caller would compute zero commits",
+    "behind and a broken estate would render as a current one — an UNKNOWN reported",
+    "as a healthy result, which this repo has shipped three separate times."
+  ],
+  "real": [
+    {
+      "id": "commercial-2026-08-18",
+      "estate": "Commercial",
+      "note": "Live https://csa-loom.limitlessdata.ai/build-marker.txt, read 2026-08-18. Full 40-hex github.sha, compact basic-ISO stamp.",
+      "text": "loom-build-marker sha=09ac2517e8139f4fb6dff87ff2dac6c029b7f8d0 stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n",
+      "expect": {
+        "sha": "09ac2517e8139f4fb6dff87ff2dac6c029b7f8d0",
+        "stamp": "20260818T152007Z"
+      }
+    },
+    {
+      "id": "gov-2026-08-11",
+      "estate": "Azure Government",
+      "note": "Live https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us/build-marker.txt, read 2026-08-18. ABBREVIATED 8-hex sha, extended-ISO stamp. This is the row that the Commercial-only parser shape would have had to guess at.",
+      "text": "loom-build-marker sha=28de89fb stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n",
+      "expect": {
+        "sha": "28de89fb",
+        "stamp": "2026-08-11T09:23:46Z"
+      }
+    },
+    {
+      "id": "no-trailing-newline",
+      "estate": "Commercial",
+      "note": "Same bytes without the trailing newline — a parser anchored on \\n would read the token into the stamp.",
+      "text": "loom-build-marker sha=09ac2517e8139f4fb6dff87ff2dac6c029b7f8d0 stamp=20260818T152007Z token=LOOM_LIVE_BUILD",
+      "expect": {
+        "sha": "09ac2517e8139f4fb6dff87ff2dac6c029b7f8d0",
+        "stamp": "20260818T152007Z"
+      }
+    },
+    {
+      "id": "seven-hex-floor",
+      "estate": "synthetic",
+      "note": "The shortest abbreviation git will produce by default. Accepted; six is not (see unparseable/sha-too-short).",
+      "text": "loom-build-marker sha=28de89f stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n",
+      "expect": {
+        "sha": "28de89f",
+        "stamp": "2026-08-11T09:23:46Z"
+      }
+    },
+    {
+      "id": "uppercase-hex",
+      "estate": "synthetic",
+      "note": "git accepts an uppercase object id; so must the parser, or a legitimate build reads as malformed.",
+      "text": "loom-build-marker sha=28DE89FB stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n",
+      "expect": {
+        "sha": "28DE89FB",
+        "stamp": "2026-08-11T09:23:46Z"
+      }
+    },
+    {
+      "id": "stamp-unknown",
+      "estate": "synthetic",
+      "note": "The Dockerfile ARG default for the TIMESTAMP only. The sha is real, so the drift verdict is still computable — a missing stamp must NOT invalidate the marker. `stamp` degrades to null; `sha` survives.",
+      "text": "loom-build-marker sha=28de89fb stamp=unknown token=LOOM_LIVE_BUILD\n",
+      "expect": {
+        "sha": "28de89fb",
+        "stamp": null
+      }
+    },
+    {
+      "id": "crlf-line-endings",
+      "estate": "synthetic",
+      "note": "The same marker with CRLF terminators. It MUST parse — a CR that leaked into the value would be carried into `git cat-file` and into a compare URL, and CR-carrying values have broken loops in this repo before (az -o tsv). Pinned as a REAL case, not a failure: the field terminator is whitespace, and \\r is whitespace, so the value comes back clean.",
+      "text": "loom-build-marker sha=28de89fb stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\r\n",
+      "expect": {
+        "sha": "28de89fb",
+        "stamp": "2026-08-11T09:23:46Z"
+      }
+    }
+  ],
+  "unparseable": [
+    {
+      "id": "empty-body",
+      "note": "A 200 with an empty body. Naming no commit, it must not resolve to zero-behind.",
+      "text": ""
+    },
+    {
+      "id": "whitespace-only",
+      "note": "Whitespace is not a marker.",
+      "text": "   \n\t\n"
+    },
+    {
+      "id": "front-door-error-page",
+      "note": "A WAF / Front Door / ingress error page answering 200 with HTML. This is the realistic way a marker probe gets a body that is not a marker, and reading it as 'no drift' would report a DOWN estate as a current one.",
+      "text": "<!DOCTYPE html><html><head><title>Our services aren't available right now</title></head><body><h1>Our services aren't available right now</h1><p>We're working to restore all services as soon as possible. Please check back soon.</p></body></html>"
+    },
+    {
+      "id": "no-sha-field",
+      "note": "A marker whose sha= field is absent entirely.",
+      "text": "loom-build-marker stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n"
+    },
+    {
+      "id": "sha-unknown",
+      "note": "apps/fiab-console/Dockerfile:41 `ARG LOOM_BUILD_SHA=unknown` — what the image carries when CI passed no build-arg at all. It names no commit, so it is unparseable, not a sha. readBuildMarker() in lib/updates/current-version.ts already drops this exact value; every parser must.",
+      "text": "loom-build-marker sha=unknown stamp=unknown token=LOOM_LIVE_BUILD\n"
+    },
+    {
+      "id": "sha-empty-value",
+      "note": "`--build-arg LOOM_BUILD_SHA=` expands to an empty field.",
+      "text": "loom-build-marker sha= stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n"
+    },
+    {
+      "id": "sha-too-short",
+      "note": "Six hex. Below git's 7-character abbreviation floor and far too ambiguous to name a commit.",
+      "text": "loom-build-marker sha=28de89 stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n"
+    },
+    {
+      "id": "sha-too-long",
+      "note": "41 hex — one past a full object id.",
+      "text": "loom-build-marker sha=09ac2517e8139f4fb6dff87ff2dac6c029b7f8d0a stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n"
+    },
+    {
+      "id": "sha-not-hex",
+      "note": "A branch name rather than an object id.",
+      "text": "loom-build-marker sha=main stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n"
+    },
+    {
+      "id": "sha-path-traversal",
+      "note": "The exact SSRF payload documented at app/api/admin/deploy-status/route.ts (GIT_OBJECT_ID). Interpolated into an api.github.com path the WHATWG URL parser collapses the ../ segments BEFORE the request goes out, so the marker chooses the endpoint. It must be rejected as unparseable and its bytes must never reach a URL.",
+      "text": "loom-build-marker sha=../../../../user/repos?x= stamp=20260818T152007Z token=LOOM_LIVE_BUILD\n"
+    }
+  ]
+}

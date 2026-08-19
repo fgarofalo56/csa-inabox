@@ -116,6 +116,24 @@ export interface DeployStatusReport {
   /** Worst severity across the estate and every watched path. */
   severity: DeploySeverity;
   headline: string;
+  /**
+   * EVERY live estate, this cloud and its peers, each compared against main.
+   * (#3730 — `estate` above can only ever describe the console answering the
+   * request, which is how Azure Government sat 251 commits behind while every
+   * Commercial signal read green.)
+   *
+   * Optional because the shape is additive: an older cached payload, or a unit
+   * test built on the pre-#3730 report, still type-checks. Consumers MUST treat
+   * absent as "not reported" and never as "no other estates exist".
+   *
+   * Typed as `unknown[]` here rather than importing `FleetEstate` because
+   * estate-fleet.ts imports `EstateDrift` from this module; naming the concrete
+   * type in both directions would be a cycle. The route and the page both
+   * import the real type from estate-fleet.ts.
+   */
+  estates?: unknown[];
+  /** The fleet's own one-line verdict, kept separate from `headline`. */
+  fleetHeadline?: string;
 }
 
 /**
