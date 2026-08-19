@@ -247,8 +247,8 @@ param appImageTags = {
 // true is the right END STATE for `loom_default_on_opt_out`.
 //
 // ROUND-4: THE FLIP IS DELIBERATELY NOT IN THIS PR. It stays `false` because
-// `postgresQuotaAvailable` gates TWO hosts, and enabling it here would drag the
-// OSS Airflow host into a sovereign boundary with two unrelated defects:
+// enabling it here would drag the OSS Airflow host into a sovereign boundary
+// with two unrelated defects:
 //   1. SUPPLY CHAIN. `admin-plane/airflow.bicep` defaults `airflowImage` to
 //      `apache/airflow:2.10.5-python3.12` — an anonymous DOCKER HUB pull. No
 //      caller passes an ACR-mirrored override, and no image producer mirrors it,
@@ -265,11 +265,54 @@ param appImageTags = {
 // description): mirror `apache/airflow` into each cloud's ACR, wire
 // `airflowImage`, give that Postgres a private endpoint — THEN flip this true.
 //
+// ── BLAST RADIUS OF THE FLIP — WHAT THIS FLAG ACTUALLY GATES ────────────────
+// Kept current deliberately: an earlier revision of this note said "TWO hosts",
+// which was already understated when it was written (loom-unity made it three)
+// and is now wrong by two more. Whoever performs the follow-up flip is turning
+// on ALL of the following at once, in a sovereign boundary, and owns the review
+// of each — that is precisely the "side effect of a DuckLake PR" hazard this
+// note exists to prevent, and it must not be re-created in reverse.
+//
+//   1. OSS Airflow metadata DB    admin-plane/airflow.bicep
+//                                 (via airflowPostgresAllowed; per-capability
+//                                  key loomBackends.airflowPostgres) — carries
+//                                  BOTH defects above.
+//   2. N8 DuckLake catalog store  data-plane/ducklake-catalog-postgres.bicep
+//                                 (via postgresStoresAllowed; key
+//                                  loomBackends.postgresStores).
+//   3. Loom Unity metastore       data-plane/loom-unity-postgres.bicep
+//                                 (via postgresStoresAllowed — SAME key as 2, so
+//                                  they flip together). Today Unity still runs:
+//                                  it falls back to the EmptyDir H2 store, a
+//                                  functional catalog whose metadata does not
+//                                  survive a restart.
+//   4. Weave ontology AGE store   landing-zone/postgres-weave.bicep  [3449d]
+//                                 Also backs LOOM_PGVECTOR_HOST. On the tenant
+//                                  topology this boundary uses, the per-capability
+//                                  key is loomBackends.weavePostgres, so Weave
+//                                  CAN be turned on alone without 1-3. On
+//                                  single-sub / multi-sub / dlz-attach there is
+//                                  no such key (landing-zone/main.bicep is not
+//                                  handed loomBackends) — a named gap, not a
+//                                  silent one.
+//   5. Lakebase Postgres          deploy-planner/postgres.bicep       [3449d]
+//                                 Only when postgresEnabled is ALSO true; that
+//                                  defaults false and no shipped .bicepparam
+//                                  sets it, so this row is inert today.
+//
 // Consequence, stated plainly: on GCC-High the N8 DuckLake catalog store is
 // SKIPPED by default and the editor honest-gates with a Fix-it. That is the
-// pre-existing state (unchanged by this PR), not a new gate. The DuckDB serving
-// tier itself is NOT affected — it has no Postgres dependency and deploys by
-// default in both Gov boundaries.
+// pre-existing state, not a new gate. NEW in 3449d: the Weave ontology store is
+// skipped too, and svc-weave-ontology honest-gates on LOOM_WEAVE_PG_FQDN — that
+// converts a HARD DEPLOY FAILURE (the ParameterOutOfRange leaf on
+// psql-loom-weave-default-*, GitHub Actions run 32019775757, deploy-fiab-gcch,
+// 2026-08-17) into a registered gate. It does NOT give GCC-High an ontology
+// graph store; under .claude/rules/cloud-parity.md that capability remains
+// INCOMPLETE here until an Azure-native/OSS substitute backs it. That rule
+// requires such a lag be a TRACKED defect with an owner and a date, never a
+// silent state, so it is tracked as ISSUE #3788 — do not treat this prose as
+// the tracking. The DuckDB serving tier is NOT affected — it has no Postgres
+// dependency and deploys by default in both Gov boundaries.
 param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 
 // MSAL — Gov tenant client id+secret via env (don't commit)

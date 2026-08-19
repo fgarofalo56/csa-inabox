@@ -877,7 +877,54 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
 @description('Provision the Weave ontology PostgreSQL + Apache AGE graph store to back object/link/action instance write-back. Default on — Palantir-class ontology write-back requires the graph store.')
 param weaveOntologyEnabled bool = true
 
-module postgresWeave 'postgres-weave.bicep' = if (weaveOntologyEnabled) {
+@description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary\'s .bicepparam — do not read it as "the service is unavailable there".')
+param postgresQuotaAvailable bool = true
+
+// 3449d — the DLZ half of the same gate the admin plane carries. Before this,
+// this module deployed the Weave PG server on `weaveOntologyEnabled` alone, so a
+// Gov single-sub / multi-sub / dlz-attach deploy would hit the identical
+// ParameterOutOfRange 'Version' should be in: [] that the admin-plane server hit
+// on the tenant topology (receipt: GitHub Actions run 32019775757,
+// deploy-fiab-gcch, 2026-08-17) — an EMPTY permitted-version set, which no
+// postgresVersion value can satisfy. The shipped Gov params are topology='tenant'
+// today, so this call site is not what that live leaf failed on; it is the same
+// defect one topology over, and fixing only the measured one would leave it
+// armed.
+//
+// LEVER, stated precisely because it differs by topology: main.bicep's
+// `postgresQuotaAvailable` is the only opt-out/override reaching THIS MODULE.
+// The per-capability `loomBackends.weavePostgres` key exists only on the
+// admin-plane derivation (admin-plane/main.bicep weavePgAllowed) because this
+// module is not handed the loomBackends bag.
+//
+// That does NOT mean the narrow lever is unavailable on single-sub / multi-sub.
+// An earlier revision of this comment said it was, on all three of single-sub /
+// multi-sub / dlz-attach. That was WRONG for the first two, and wrong in the
+// dangerous direction: a Gov operator reading it would conclude the only way to
+// get a Weave server is postgresQuotaAvailable=true, which per the blast-radius
+// table in params/gcc-high.bicepparam ALSO drags in the OSS Airflow host and its
+// anonymous apache/airflow Docker Hub pull — in a sovereign boundary. Measured
+// (main.bicep): `deployAdminPlane = effectiveTopology != 'dlz-attach'` (~L1114)
+// and the adminPlane module (~L1159) IS handed `loomBackends` (~L1577). So on
+// single-sub and multi-sub the admin plane is deployed and receives the bag, and
+// because main.bicep emits `loomWeavePgFqdn` empty when the quota gate is false,
+// `weavePgSuppliedByDlz` is false there — so
+//     observabilityConfig.backendOverrides = { weavePostgres: 'enabled' }
+// reaches `weavePgAllowed` and lights `weavePgLocalActive`, giving exactly ONE
+// Weave server. Note WHERE: the admin-plane module deploys it in the ADMIN RG,
+// not the DLZ RG this module would have used. Anything keying off the DLZ
+// resource group (including the psql-loom-weave-* lookup in
+// csa-loom-post-deploy-bootstrap.yml) will not find it there.
+//
+// The claim is true for ONE topology only: `dlz-attach`, where deployAdminPlane
+// is false, there is no admin plane to carry the override, and
+// `postgresQuotaAvailable` is genuinely the only lever — so re-enabling Weave
+// there also un-gates the Airflow and DuckLake/Unity hosts. That residual
+// asymmetry is named here rather than left for the next reader to discover;
+// closing it means plumbing loomBackends into this module, a separate change.
+var weavePgActive = weaveOntologyEnabled && postgresQuotaAvailable
+
+module postgresWeave 'postgres-weave.bicep' = if (weavePgActive) {
   name: 'dlz-postgres-weave'
   params: {
     location: location
@@ -954,9 +1001,13 @@ output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVect
 
 // Weave (Semantic Ontology) graph store outputs — wired to the Console env
 // (LOOM_WEAVE_PG_FQDN / LOOM_WEAVE_PG_DATABASE) by the admin-plane.
-output weavePgServerName string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgServerName : ''
-output weavePgFqdn string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgFqdn : ''
-output weavePgDatabase string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgDatabase : ''
+// Keyed on `weavePgActive`, NOT on weaveOntologyEnabled: the module's condition
+// is what decides whether `postgresWeave!` exists, so an output that tests a
+// LOOSER predicate would dereference a module that was never deployed the moment
+// postgresQuotaAvailable is false (3449d).
+output weavePgServerName string = weavePgActive ? postgresWeave!.outputs.weavePgServerName : ''
+output weavePgFqdn string = weavePgActive ? postgresWeave!.outputs.weavePgFqdn : ''
+output weavePgDatabase string = weavePgActive ? postgresWeave!.outputs.weavePgDatabase : ''
 
 // CSA Loom no-cuts-sweep — ADF wiring outputs
 output adfFactoryId string = adfOn ? adf!.outputs.factoryId : ''

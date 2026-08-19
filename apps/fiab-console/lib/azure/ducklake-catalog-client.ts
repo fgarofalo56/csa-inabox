@@ -18,8 +18,13 @@
  * deploy itself — `data-plane/ducklake-catalog-postgres.bicep` provisions a
  * private-endpoint-only Azure Database for PostgreSQL flexible server and the
  * Console binds the DSN as a **Key Vault secretRef** (never a plain env value) —
- * so it is unset only in a sovereign subscription that is quota-restricted from
- * provisioning flexible servers. When either var is missing
+ * so it is unset only when that module was skipped: the apps tier is off
+ * (`deployAppsEnabled=false`), an AKS boundary (the DuckDB tier that runs the
+ * ATTACH is Container-Apps-only), `postgresQuotaAvailable=false` (which GCC-High
+ * and IL5 both pin today — see the reason recorded next to the assignment in
+ * params/gcc-high.bicepparam; it is NOT a statement that the service is
+ * unavailable there), or you point it at your own server. When either var is
+ * missing
  * {@link listDucklakeTables} throws a typed 503 naming the exact missing var —
  * the editor renders a guided empty state with a Fix-it, never a fabricated
  * table list. N1's Iceberg REST Catalog and every other surface are unaffected
