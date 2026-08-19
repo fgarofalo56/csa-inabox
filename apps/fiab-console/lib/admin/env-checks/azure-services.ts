@@ -445,14 +445,14 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     id: 'svc-postgres-flex', category: 'azure-services', title: 'PostgreSQL Flexible Server (postgres items)', severity: 'recommended',
     required: ['LOOM_POSTGRES_AAD_USER'], warnOnMiss: true,
     remediation: 'Set LOOM_POSTGRES_AAD_USER (the Entra admin login) so the postgres-flexible-server editor connects with AAD token auth (postgres_flex_not_configured).',
-    provisionedBy: 'modules/landing-zone/postgres-flexible.bicep → main.bicep loomPostgresHost (main.bicep ~1393) → admin-plane/main.bicep apps[] env LOOM_POSTGRES_HOST',
+    provisionedBy: 'modules/deploy-planner/postgres.bicep — invoked by main.bicep as `dpPostgres` (useSingleDlz && postgresEnabled && postgresQuotaAvailable), whose deterministic FQDN main.bicep reconstructs into loomPostgresHost → admin-plane/main.bicep apps[] env LOOM_POSTGRES_HOST. NOTE modules/landing-zone/postgres-flexible.bicep, previously named here, has NO module invocation anywhere in the tree.',
     role: 'Entra admin (Console UAMI) on the flexible server',
   },
   {
     id: 'svc-pgvector', category: 'azure-services', title: 'pgvector (Postgres vector search)', severity: 'recommended',
     required: ['LOOM_PGVECTOR_HOST'], warnOnMiss: true,
-    remediation: 'Set LOOM_PGVECTOR_HOST to a Postgres Flexible Server with the pgvector extension to enable the Postgres vector backend (pgvector_not_configured). AI Search covers vector workloads without it. HONEST STATE (measured 2026-08-10, docs/fiab/gov-readiness-2026-08-10.md): NO bicep module in this repo emits LOOM_PGVECTOR_HOST, so this gate cannot currently be cleared by a deploy on ANY cloud — it is set by hand or not at all. The backing server IS deployed and the VECTOR extension IS allowlisted (modules/landing-zone/postgres-flexible.bicep), and the same FQDN is already derived for LOOM_POSTGRES_HOST (main.bicep ~1393), so the value is derivable at deploy time; the wiring is simply missing.',
-    provisionedBy: 'NOT WIRED BY ANY TEMPLATE TODAY. The backing resource is modules/landing-zone/postgres-flexible.bicep (VECTOR extension allowlisted); the deploy-time value would be the same FQDN main.bicep already derives for loomPostgresHost. Previously this field named modules/deploy-planner/postgres-flexible.bicep — a path that does not exist.',
+    remediation: 'Set LOOM_PGVECTOR_HOST to a Postgres Flexible Server with the pgvector extension to enable the Postgres vector backend (pgvector_not_configured). AI Search covers vector workloads without it. HONEST STATE (re-measured 2026-08-18): the earlier text here said NO bicep module emits LOOM_PGVECTOR_HOST. That is FALSE and was false when written — admin-plane/main.bicep emits it in apps[] env, riding the Weave AGE server (postgres-weave.bicep allowlists AGE,VECTOR, so one server serves both). So a Commercial deploy DOES fill this in. It is empty in GCC-High / IL5 because 3449d gates that server on postgresQuotaAvailable, which both Gov param files pin false — clearable with observabilityConfig.backendOverrides={weavePostgres:\'enabled\'} on the tenant topology, or postgresQuotaAvailable=true (read those param files first; they enumerate everything else that flag turns on).',
+    provisionedBy: 'modules/landing-zone/postgres-weave.bicep (AGE + VECTOR extensions allowlisted), invoked by admin-plane/main.bicep weavePg (tenant / multi-sub) or landing-zone/main.bicep postgresWeave (single-sub) → admin-plane/main.bicep apps[] env LOOM_PGVECTOR_HOST, which falls back to loomWeavePgFqdn when the local server is not deployed. Previously this field claimed NOTHING wired it, and named modules/deploy-planner/postgres-flexible.bicep — a path that does not exist.',
     role: 'Entra AAD login (Console UAMI) on the server',
   },
   {
@@ -629,8 +629,8 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // When you DO enable postgres (postgresEnabled=true), the deploy wires
     // LOOM_POSTGRES_HOST from the server FQDN (see #2755 follow-up).
     optIn: true,
-    remediation: 'Optional / opt-in. Deploy a Postgres Flexible Server (set postgresEnabled=true in the bicepparam) for lakebase-postgres items and a pgvector store; the deploy then wires LOOM_POSTGRES_HOST + LOOM_POSTGRES_AAD_USER. Vector search works without it via Azure AI Search.',
-    provisionedBy: 'modules/landing-zone/postgres-flexible.bicep (postgresEnabled=true; off by default — real standing cost) → apps[] env LOOM_POSTGRES_HOST / LOOM_POSTGRES_AAD_USER',
+    remediation: 'Optional / opt-in. Deploy a Postgres Flexible Server (set postgresEnabled=true in the bicepparam) for lakebase-postgres items and a pgvector store; the deploy then wires LOOM_POSTGRES_HOST + LOOM_POSTGRES_AAD_USER. Vector search works without it via Azure AI Search. In GCC-High / IL5 postgresEnabled is not sufficient on its own: 3449d also gates this server on postgresQuotaAvailable, which both Gov param files pin false (they record why next to the assignment).',
+    provisionedBy: 'modules/deploy-planner/postgres.bicep — invoked by main.bicep as `dpPostgres`, gated on useSingleDlz && postgresEnabled && postgresQuotaAvailable; main.bicep reconstructs its deterministic FQDN into loomPostgresHost → admin-plane apps[] env LOOM_POSTGRES_HOST / LOOM_POSTGRES_AAD_USER. Off by default (real standing cost). NOTE modules/landing-zone/postgres-flexible.bicep, previously named here, has NO module invocation anywhere in the tree (it sits in check-bicep-sync.mjs\'s ORPHAN_ALLOWLIST) — it does not provision this.',
     role: 'AAD administrator-created role for the Console UAMI on the server (azure_ad_user)',
   },
   {

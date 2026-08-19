@@ -215,6 +215,25 @@ jobs:
       - name: bicep-sync (orphan modules + env-sync core)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bicep-sync.mjs
+      # bicep-sync says the module is WIRED IN. This says the wiring consults the
+      # cloud-parity quota gate: three of the four flexibleServers consumers in
+      # admin-plane/main.bicep routed through postgresQuotaAvailable and the
+      # fourth (the Weave AGE store) did not, so a GCC-High deploy attempted a
+      # Postgres server on a path that never consults the gate its own bicepparam
+      # pins false, and that leaf died with an EMPTY permitted-version list —
+      # which no postgresVersion value can satisfy (receipt: Actions run
+      # 32019775757, deploy-fiab-gcch, 2026-08-17). WHY that list is empty is not
+      # asserted by this guard; each Gov bicepparam records its own reason.
+      # R2 also requires every CALLER to forward the param AND to forward a value
+      # that reaches it — a module gating on its own
+      # `param postgresQuotaAvailable bool = true` is defaulted back ON by a call
+      # site that omits the key, and equally by one that passes a literal `true`
+      # (story 3449d).
+      - name: postgres-quota-gate (every PG flexible server consults the Gov quota gate — 3449d)
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-postgres-quota-gate.mjs --self-test
+          node scripts/ci/check-postgres-quota-gate.mjs
       - name: deploy-script-reachability (every deploy-*-job.sh runs from CI — #2816)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-script-reachability.mjs
@@ -1321,6 +1340,29 @@ jobs:
         run: |
           node scripts/ci/check-msal-credential-hygiene.mjs --self-test
           node scripts/ci/check-msal-credential-hygiene.mjs
+      # #3429 — the Function-App sibling of check-image-producer-coverage.mjs.
+      # `deploy-copilot-function.yml` deploys func-csa-inabox-copilot-fg, the
+      # production docs-site chat backend, and NOTHING in the tree created it:
+      # the one bicep that named it declared it `existing` (a consumer with no
+      # producer), so the only way to rebuild it was a hand-run `az functionapp
+      # create` from DEPLOYMENT.md. Eight consecutive red runs with no recovery
+      # path. `existing` vs a real declaration is the whole distinction and a
+      # grep gets it backwards, which is why this parses rather than greps.
+      # Self-test first: it carries the mutant fixtures (an added lane with no
+      # producer, a consumed-only app, an EMPTY app-name, an unresolvable
+      # expression, a producer renamed away from its target, a zero-producer
+      # tree, a job-level env override, a producer relocated into gitignored
+      # temp/, and — the two the first version of this guard could not see — a
+      # target credited to a MORE GENERIC producer whose prefix merely leads its
+      # name, in both the prefix-target and literal-target directions) plus
+      # three controls that must PASS, one of which places a colliding generic
+      # producer beside the correct one so "it always fails" cannot masquerade
+      # as working.
+      - name: 'function-app-producer-coverage (every deployed Function App has a bicep producer, not just an `existing` reference — #3429)'
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-function-app-producer-coverage.mjs --self-test
+          node scripts/ci/check-function-app-producer-coverage.mjs
       # #3042 — the meta-guard for THIS file: every `run:` step above must
       # carry `if: ${{ !cancelled() }}`, or one failing guard hides the rest
       # behind benign-looking `skipped` steps again. Self-test first (mutant

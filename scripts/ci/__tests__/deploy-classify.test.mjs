@@ -276,3 +276,195 @@ test('D6: the capacity class is retryable in the taxonomy and quota is NOT — t
   assert.equal(isRetryableClass('quota'), false);
   assert.equal(TAXONOMY.classPrecedence.includes('capacity'), true);
 });
+
+// ── #3449: the three GCC-High ARM leaves that classified `unknown` ───────────
+//
+// deploy-fiab-gcch runs 31941086712 (2026-08-16) and 32019775757 (2026-08-17)
+// failed on the SAME three ARM leaves, and all three were `unknown`, so the
+// whole sovereign lane failed carrying no cause at all. These tests pin the
+// three signals added for them.
+//
+// THIS BLOCK MUST FAIL WHEN THE TABLE IS MUTATED — that is its only reason to
+// exist, so it checks four independent things and every failure message names
+// apps/fiab-console/lib/deploy/failure-taxonomy.json:
+//
+//   1. POPULATION. Re-read from disk rather than trusting the loaded TAXONOMY:
+//      an empty or truncated `signals` list must be a FAILURE, never a quiet
+//      pass. A test that measures nothing when the table is emptied is the
+//      repo's dominant defect class.
+//   2. MATCHER SET, exactly. deepEqual, not "includes" — a floor like
+//      `includes(needle)` is satisfied by the good entry while a bad entry
+//      ADDED alongside it stays invisible. Every blind spot found in sprint 1
+//      came from an additive mutation, so additive mutations must fail here.
+//   3. BEHAVIOUR. Each verbatim leaf classifies to its own signal, per leaf,
+//      with evidence that literally occurs in that leaf.
+//   4. DISCRIMINATION. Near misses stay `unknown`. This is what catches an
+//      over-broad entry added anywhere in the table: a signal keyed on the bare
+//      code `badrequest` or `parameteroutofrange` would turn these green-to-red.
+//
+// CLOUD PARITY: the taxonomy is one boundary-agnostic table — no signal carries
+// a cloud condition — so these three are matched identically in Commercial,
+// GCC, GCC-High and IL5. Where the three CONDITIONS occur is a separate
+// question: they were observed only in GCC-High (usgovvirginia), and the DNS
+// one has a recorded mirror-image Commercial occurrence (#2775, admin-plane/
+// network.bicep). Classifying them does NOT make any lane green — it converts
+// "nothing is known" into three named causes. deploy-fiab-gcch still fails.
+
+const TAXONOMY_REL_3449 = 'apps/fiab-console/lib/deploy/failure-taxonomy.json';
+
+/** The real drilled leaves, verbatim from both runs, trimmed to the read fields. */
+const GCCH_3449 = [
+  {
+    signalId: 'config.adx-cluster-stopped',
+    matchers: { allOf: ['clusternotvalidforprincipals'], anyOf: ["in state 'stopped'"] },
+    leaf: {
+      code: 'ClusterNotValidForPrincipals',
+      message: "[BadRequest] Cluster is in state 'Stopped', cannot retrieve list of principals",
+      resourceType: 'Microsoft.Kusto/clusters/principalAssignments',
+      resourceName: 'adx-csa-loom-fmezxj/console-uami-alldatabasesadmin',
+    },
+    remediationMatches: /az kusto cluster start/,
+  },
+  {
+    signalId: 'config.dns-resolver-ip-allocation-immutable',
+    matchers: { allOf: undefined, anyOf: ['ip allocation method cannot be changed after creation'] },
+    leaf: {
+      code: 'BadRequest',
+      message:
+        'IP allocation method cannot be changed after creation. inboundEndpointResourceId=/subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/dnsResolvers/dnspr-loom-usgovvirginia/inboundEndpoints/inbound, ipAllocationMethod=Dynamic, existingIpAllocationMethod=Static',
+      resourceType: 'Microsoft.Resources/deployments',
+      resourceName: 'admin-plane',
+    },
+    remediationMatches: /immutable/i,
+  },
+  {
+    signalId: 'config.version-allowed-set-empty',
+    matchers: { allOf: ['parameteroutofrange'], anyOf: ["the value of the 'version' should be in: []"] },
+    leaf: {
+      code: 'ParameterOutOfRange',
+      message:
+        "The value of the 'Version' should be in: []. Verify that the specified parameter value is correct.",
+      resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers',
+      resourceName: 'psql-loom-weave-default-dcmt6cqoezlgs',
+    },
+    remediationMatches: /list-skus/,
+  },
+];
+
+test('#3449 population — the taxonomy on disk is non-empty and carries all three signals', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  assert.ok(
+    Array.isArray(onDisk.signals) && onDisk.signals.length > 0,
+    `${TAXONOMY_REL_3449} has an empty or missing "signals" list — an empty population means the ` +
+      'table was gutted (or this test drifted off the schema), never that the repo is clean.',
+  );
+  // A floor, so a table truncated to a handful of entries cannot pass either.
+  assert.ok(
+    onDisk.signals.length >= 36,
+    `${TAXONOMY_REL_3449} declares ${onDisk.signals.length} signals; 36 were present when the #3449 ` +
+      'signals landed. A shrinking table is a deletion to justify, not a pass.',
+  );
+  for (const { signalId } of GCCH_3449) {
+    assert.ok(
+      onDisk.signals.some((s) => s.id === signalId),
+      `${TAXONOMY_REL_3449} no longer declares signal "${signalId}" — the GCC-High leaf it names ` +
+        '(deploy-fiab-gcch runs 31941086712 / 32019775757) would fall back to unknown.',
+    );
+  }
+});
+
+test('#3449 matcher sets are EXACTLY the observed strings — additive mutation fails here too', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  for (const { signalId, matchers } of GCCH_3449) {
+    const sig = onDisk.signals.find((s) => s.id === signalId);
+    assert.ok(sig, `${TAXONOMY_REL_3449} is missing signal "${signalId}"`);
+    assert.deepEqual(
+      sig.anyOf,
+      matchers.anyOf,
+      `${TAXONOMY_REL_3449}: the anyOf of "${signalId}" changed. Only strings OBSERVED in a real ` +
+        'run belong here, and adding one alongside the observed entry is exactly the mutation this ' +
+        'assertion exists to catch — update this test deliberately, with the run id, or revert.',
+    );
+    assert.deepEqual(
+      sig.allOf,
+      matchers.allOf,
+      `${TAXONOMY_REL_3449}: the allOf of "${signalId}" changed. The allOf is the PIN that keeps ` +
+        'this signal from claiming a condition it never established; loosening it silently is the ' +
+        'defect.',
+    );
+    assert.equal(sig.class, 'config', `${TAXONOMY_REL_3449}: "${signalId}" changed class`);
+    assert.ok(
+      /31941086712|32019775757/.test(sig.observed ?? ''),
+      `${TAXONOMY_REL_3449}: "${signalId}" must cite the run it was observed on — provenance is the ` +
+        'only thing separating an observed signal from a guessed one.',
+    );
+  }
+});
+
+test('#3449 each verbatim leaf classifies to its own signal, with evidence taken from that leaf', () => {
+  const diagnoses = classifyLeaves(GCCH_3449.map((c) => c.leaf));
+  assert.equal(diagnoses.length, 3);
+  diagnoses.forEach((d, i) => {
+    const want = GCCH_3449[i];
+    assert.equal(
+      d.diagnosis.signalId,
+      want.signalId,
+      `${TAXONOMY_REL_3449}: leaf ${want.leaf.code} classified "${d.diagnosis.signalId ?? 'unknown'}" ` +
+        `instead of "${want.signalId}"`,
+    );
+    assert.equal(d.diagnosis.class, 'config');
+    assert.equal(d.diagnosis.retryable, false, 'none of the three is retryable — the estate must change');
+    assert.ok(d.diagnosis.evidence.length > 0, `${want.signalId} matched with no evidence`);
+    const leafText = `${want.leaf.code}: ${want.leaf.message}`.toLowerCase();
+    for (const e of d.diagnosis.evidence) {
+      assert.ok(
+        leafText.includes(e.signal),
+        `${TAXONOMY_REL_3449}: "${want.signalId}" quoted "${e.signal}" as evidence, but that string ` +
+          'does not occur in the leaf it matched — evidence must be a substring of the input (R7).',
+      );
+    }
+    assert.match(d.diagnosis.remediation ?? '', want.remediationMatches);
+    const msg = render(d.diagnosis, 'az deployment sub create (gcch derived)');
+    assert.doesNotMatch(msg, /could not classify/i);
+    assert.match(msg, /Remediation:/);
+  });
+});
+
+test('#3449 discrimination — near misses stay unknown, so no signal over-claims', () => {
+  // Synthesised inputs, deliberately NOT in the shared corpus (whose inputs are
+  // observed strings). Every expectation here is NEGATIVE: the taxonomy must
+  // decline to name a cause it has not established.
+  const nearMisses = [
+    // The bare ARM code of leaf 2. `BadRequest` carries no cause on its own, and
+    // the leaf-1 message contains "[BadRequest]" too — a signal keyed on the
+    // code would have labelled a stopped ADX cluster a DNS problem.
+    'BadRequest: the request could not be processed',
+    // ClusterNotValidForPrincipals for a state that is NOT Stopped: "start the
+    // cluster" would be a remediation for a condition never established.
+    'ClusterNotValidForPrincipals: [BadRequest] Cluster is in state \'Starting\', cannot retrieve list of principals',
+    // The same ARM code with a NON-empty allowed set: that one really is "pick a
+    // valid value", which is a different remediation from the empty-set case.
+    "ParameterOutOfRange: The value of the 'StorageSizeGB' should be in: [32, 64, 128, 256, 512].",
+  ];
+  for (const input of nearMisses) {
+    const d = classify(input);
+    assert.equal(
+      d.class,
+      'unknown',
+      `${TAXONOMY_REL_3449}: "${input.slice(0, 60)}…" classified as ${d.class} (${d.signalId}). ` +
+        'Something in the table is over-broad — most likely a signal keyed on a bare ARM code.',
+    );
+    assert.equal(d.signalId, null);
+    assert.equal(d.remediation, null, 'an unknown must carry no remediation');
+  }
+});
+
+test('#3449 the three leaves TOGETHER still fail closed and name every cause', () => {
+  // The real shape of both runs: three independent leaves, none retryable.
+  const dx = classifyLeaves(GCCH_3449.map((c) => c.leaf));
+  assert.equal(dx.filter((d) => d.diagnosis.class === 'unknown').length, 0);
+  assert.equal(dx.filter((d) => d.diagnosis.retryable).length, 0, 'no leaf may become retryable');
+  const worst = worstLeafDiagnosis(dx);
+  assert.equal(worst.class, 'config');
+  assert.notEqual(worst.exitCode, 0, 'a classified failure still exits non-zero');
+});

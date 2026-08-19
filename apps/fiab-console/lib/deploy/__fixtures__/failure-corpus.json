@@ -418,6 +418,36 @@
         "signalId": "config.azd-not-logged-in",
         "retryable": false
       }
+    },
+    {
+      "name": "config — ADX principal assignment against a STOPPED cluster, verbatim leaf",
+      "source": "deploy-fiab-gcch runs 31941086712 (2026-08-16) and 32019775757 (2026-08-17), usgovvirginia — leaf 1 of the three that both runs reported `unknown`",
+      "input": "ClusterNotValidForPrincipals: [BadRequest] Cluster is in state 'Stopped', cannot retrieve list of principals [Microsoft.Kusto/clusters/principalAssignments 'adx-csa-loom-fmezxj/console-uami-alldatabasesadmin']",
+      "expect": {
+        "class": "config",
+        "signalId": "config.adx-cluster-stopped",
+        "retryable": false
+      }
+    },
+    {
+      "name": "config — DNS private resolver inbound endpoint, immutable IP allocation method, verbatim leaf",
+      "source": "deploy-fiab-gcch runs 31941086712 and 32019775757, usgovvirginia — leaf 2; the mirror image of the Commercial #2775 occurrence recorded in admin-plane/network.bicep",
+      "input": "BadRequest: IP allocation method cannot be changed after creation. inboundEndpointResourceId=/subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/dnsResolvers/dnspr-loom-usgovvirginia/inboundEndpoints/inbound, ipAllocationMethod=Dynamic, existingIpAllocationMethod=Static [Microsoft.Resources/deployments 'admin-plane']",
+      "expect": {
+        "class": "config",
+        "signalId": "config.dns-resolver-ip-allocation-immutable",
+        "retryable": false
+      }
+    },
+    {
+      "name": "config — PostgreSQL flexible server 'Version' refused with an EMPTY allowed set, verbatim leaf",
+      "source": "deploy-fiab-gcch runs 31941086712 and 32019775757, usgovvirginia — leaf 3, on psql-loom-weave-default-dcmt6cqoezlgs",
+      "input": "ParameterOutOfRange: The value of the 'Version' should be in: []. Verify that the specified parameter value is correct. [Microsoft.DBforPostgreSQL/flexibleServers 'psql-loom-weave-default-dcmt6cqoezlgs']",
+      "expect": {
+        "class": "config",
+        "signalId": "config.version-allowed-set-empty",
+        "retryable": false
+      }
     }
   ]
 }

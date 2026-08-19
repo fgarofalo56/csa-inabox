@@ -1096,35 +1096,11 @@ param appImageTags object = {
   unity: 'v0.1'
 }
 
-@description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, EVERY Postgres-backed host is skipped so the core app-tier still deploys, and each dependent editor honest-gates until the operator requests a quota increase and redeploys: the OSS Airflow host (airflowPostgresAllowed), the DuckLake catalog + Loom Unity stores (postgresStoresAllowed), and BOTH Weave/pgvector servers — the admin-plane one and the DLZ one (#3754; before that fix the Weave server ignored this flag and one ARM leaf failed the whole GCC-High subscription deployment). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high / il5 paths for Gov.')
+@description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. When false, every Postgres-backed component is SKIPPED so the rest of the estate still deploys and each affected editor honest-gates. WHY a given boundary sets it false is recorded in that boundary\'s .bicepparam next to the assignment — read it there. Do NOT read this flag as "the region/subscription lacks the service": both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government, and pin it false as a deliberate posture hold. Not a Fabric dependency.')
 param postgresQuotaAvailable bool = true
 
 @description('Static private IP the DNS Private Resolver INBOUND endpoint holds; empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so no literal is correct on every estate: a Static literal broke Commercial (#2775) and the Dynamic literal that replaced it has broken every GCC-High deploy since (#3754). The deploy lane DISCOVERS the live value (scripts/ci/resolve-dns-inbound-allocation.mjs) and passes it on the command line; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam — that only moves the guess.')
 param dnsResolverInboundStaticIp string = ''
-
-// ── The DLZ half of the Weave Postgres quota gate (#3754 review) ──────────────
-// The admin-plane Weave server was gated on postgresStoresAllowed in this change;
-// this is its N+1 SIBLING, found by enumerating all six
-// Microsoft.DBforPostgreSQL/flexibleServers declarations in the template rather
-// than reasoning about the one that failed. landing-zone/main.bicep deploys the
-// SAME postgres-weave.bicep on `weaveOntologyEnabled` alone (default true), with
-// no quota gate at all.
-//
-// NOT reached by the scheduled GCC-High run — gcc-high.bicepparam pins
-// topology='tenant', so deployLandingZones is false. But deploy-fiab-gcch offers
-// `topology: single-sub | dlz-attach` as dispatch inputs and passes
-// `${CSA_LOOM_TOPOLOGY:+--parameters topology=…}`, which OVERRIDES the param
-// file — so a run_mode=full + topology=single-sub dispatch hits the identical
-// `ParameterOutOfRange: The value of the 'Version' should be in: []` leaf one
-// file over, and the deploy this PR repairs fails again for the same reason in a
-// different module. Gating it here rather than in landing-zone/main.bicep keeps
-// that module's signature unchanged: all three DLZ call sites already pass
-// `weaveOntologyEnabled`, so the value they pass is the right place to fold the
-// quota in, and the FQDN/database/graph derivations below MUST use the same var
-// or the Console would be handed the coordinates of a server nobody deployed.
-//
-// Commercial/GCC default postgresQuotaAvailable=true ⇒ unchanged there.
-var weavePgDlzActive = weaveOntologyEnabled && postgresQuotaAvailable
 
 // =====================================================================
 // Resource group for Admin Plane
@@ -1482,7 +1458,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // graph name (loom_ontology) matches the post-deploy bootstrap create_graph.
     // Multi-sub can't be wired from a single admin-plane — operators run
     // scripts/csa-loom/patch-navigator-env.sh (same as the Cosmos endpoints).
-    loomWeavePgFqdn: (useSingleDlz && weavePgDlzActive) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
+    //
+    // 3449d — `postgresQuotaAvailable` is part of the predicate because this is a
+    // RECONSTRUCTED name, not a module output: it asserts "a server with this
+    // FQDN exists". The landing zone now skips postgresWeave when the quota gate
+    // is false, so without this term the admin plane would hand the Console the
+    // hostname of a server that was never created — and, worse,
+    // `weavePgSuppliedByDlz = !empty(loomWeavePgFqdn)` would then suppress the
+    // admin-plane's own server too. The Console must see EMPTY here so its
+    // registered svc-weave-ontology gate fires instead of dialling a dead host.
+    loomWeavePgFqdn: (useSingleDlz && weaveOntologyEnabled && postgresQuotaAvailable) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
     // Lakebase Postgres FQDN — reconstructs the deterministic name of
     // modules/deploy-planner/postgres.bicep (psql-loom-<uniqueString(dlzRg)>,
     // the ONLY postgres module the single-DLZ path deploys) + the sovereign
@@ -1490,9 +1475,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // not deployed → the console's LOOM_POSTGRES_HOST stays unset and
     // svc-postgres reads opt-in (#2755). Avoids a module-output cycle (adminPlane
     // deploys before dpPostgres, which needs adminPlane's console principal).
-    loomPostgresHost: (useSingleDlz && postgresEnabled) ? '${take('psql-loom-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
-    loomWeavePgDatabase: (useSingleDlz && weavePgDlzActive) ? 'loom-weave' : ''
-    loomWeaveGraph: (useSingleDlz && weavePgDlzActive) ? 'loom_ontology' : ''
+    loomPostgresHost: (useSingleDlz && postgresEnabled && postgresQuotaAvailable) ? '${take('psql-loom-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
+    loomWeavePgDatabase: (useSingleDlz && weaveOntologyEnabled && postgresQuotaAvailable) ? 'loom-weave' : ''
+    loomWeaveGraph: (useSingleDlz && weaveOntologyEnabled && postgresQuotaAvailable) ? 'loom_ontology' : ''
     // DAB preview runtime (loom-dab-preview) — default-on. SQL target defaults to
     // the DLZ Synapse serverless SQL endpoint (deterministic workspace name, same
     // pattern as loomSynapseWorkspace below); the DAB engine boots healthy on an
@@ -1836,7 +1821,12 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     cosmosCmkKeyUri: drConfig.?cosmosCmkKeyUri ?? ''
     cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId ?? ''
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
-    weaveOntologyEnabled: weavePgDlzActive
+    weaveOntologyEnabled: weaveOntologyEnabled
+    // 3449d — the Weave AGE store is a Microsoft.DBforPostgreSQL/flexibleServers
+    // deploy, so the landing zone must see the same quota gate the admin plane
+    // consults. Without this forward the module keeps its `= true` default and
+    // the DLZ path re-arms the exact failure the admin-plane fix removed.
+    postgresQuotaAvailable: postgresQuotaAvailable
     // RTI (Real-Time Intelligence) opt-out flags + existing-namespace reuse.
     // Single-sub: the Eventstream/Data Explorer navigators bind to this DLZ's
     // namespace, so reuse-an-existing skips provisioning here AND the admin-plane
@@ -1941,7 +1931,10 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     cosmosCmkKeyUri: drConfig.?cosmosCmkKeyUri ?? ''
     cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId ?? ''
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
-    weaveOntologyEnabled: weavePgDlzActive
+    weaveOntologyEnabled: weaveOntologyEnabled
+    // 3449d — see the single-sub call site above: the quota gate must reach the
+    // landing zone or its `= true` default re-arms the flexibleServers failure.
+    postgresQuotaAvailable: postgresQuotaAvailable
     // RTI opt-out flags. Multi-sub: each DLZ provisions its OWN Event Hubs
     // namespace + Stream Analytics job (existingEventHubNamespace is the hub-
     // navigator binding, not a per-DLZ skip), so only the enable flags forward.
@@ -2182,7 +2175,10 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     cosmosCmkKeyUri: drConfig.?cosmosCmkKeyUri ?? ''
     cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId ?? ''
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
-    weaveOntologyEnabled: weavePgDlzActive
+    weaveOntologyEnabled: weaveOntologyEnabled
+    // 3449d — see the single-sub call site above: the quota gate must reach the
+    // landing zone or its `= true` default re-arms the flexibleServers failure.
+    postgresQuotaAvailable: postgresQuotaAvailable
     // AAS opt-out honored on the attached DLZ. Azure Analysis Services is NOT
     // available in every sovereign region (e.g. usgovvirginia — only usgovtexas/
     // usgovarizona), so the DLZ AAS must respect the top-level aasEnabled flag
@@ -2387,7 +2383,26 @@ module dlzAttachS3GatewayLakeRbac 'modules/data-plane/s3-gateway-lake-rbac.bicep
 
 var dpConsolePrincipalId = hub.consolePrincipalId
 
-module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (useSingleDlz && postgresEnabled) {
+// 3449d — `postgresQuotaAvailable` is in the predicate for the same reason it
+// gates every other flexibleServers consumer: `postgresEnabled` says the
+// OPERATOR wants a Lakebase Postgres, it does not say the SUBSCRIPTION can
+// create one. In a boundary whose bicepparam pins the quota gate false, opting
+// in here WOULD produce the same ParameterOutOfRange 'Version' should be in: []
+// hard-failure the Weave server produced — an empty permitted-version set that
+// no postgresVersion value satisfies.
+//
+// "WOULD", not "did": `postgresEnabled` defaults false (see its param above) and
+// NO shipped .bicepparam sets it, so no Gov deploy has ever opted in and that
+// event has not been observed. The observed one is the Weave leaf —
+// psql-loom-weave-default-*, GitHub Actions run 32019775757 (deploy-fiab-gcch,
+// 2026-08-17). Stating an unobserved event in the past tense is the R7 shape
+// this repo has already paid for.
+//
+// Skipping instead leaves LOOM_POSTGRES_HOST empty, which svc-postgres already
+// reads as its honest gate (#2755). Commercial is unaffected:
+// postgresQuotaAvailable defaults true and no shipped Commercial bicepparam sets
+// it false.
+module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (useSingleDlz && postgresEnabled && postgresQuotaAvailable) {
   name: 'dp-postgres'
   scope: singleDlzRg
   params: {

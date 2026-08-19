@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "17234886331205399820"
+      "templateHash": "15426621788508523274"
     }
   },
   "definitions": {
@@ -1987,7 +1987,7 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, EVERY Postgres-backed host is skipped so the core app-tier still deploys, and each dependent editor honest-gates until the operator requests a quota increase and redeploys: the OSS Airflow host (airflowPostgresAllowed), the DuckLake catalog + Loom Unity stores (postgresStoresAllowed), and BOTH Weave/pgvector servers — the admin-plane one and the DLZ one (#3754; before that fix the Weave server ignored this flag and one ARM leaf failed the whole GCC-High subscription deployment). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high / il5 paths for Gov."
+        "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. When false, every Postgres-backed component is SKIPPED so the rest of the estate still deploys and each affected editor honest-gates. WHY a given boundary sets it false is recorded in that boundary's .bicepparam next to the assignment — read it there. Do NOT read this flag as \"the region/subscription lacks the service\": both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government, and pin it false as a deliberate posture hold. Not a Fabric dependency."
       }
     },
     "dnsResolverInboundStaticIp": {
@@ -2077,7 +2077,6 @@
     "redisSkuCapacity": "[if(variables('redisIsPremium'), 1, 0)]",
     "redisBackend": "[if(equals(parameters('boundary'), 'Commercial'), 'managed', 'classic')]",
     "effShirAdminPassword": "[if(not(empty(parameters('shirAdminPassword'))), parameters('shirAdminPassword'), format('{0}{1}!7xQ', toUpper(substring(uniqueString(subscription().subscriptionId, 'loom-shir'), 0, 9)), substring(uniqueString(deployment().name, 'loom-shir-lower'), 0, 9)))]",
-    "weavePgDlzActive": "[and(parameters('weaveOntologyEnabled'), parameters('postgresQuotaAvailable'))]",
     "effectiveTopology": "[if(empty(parameters('topology')), parameters('deploymentMode'), parameters('topology'))]",
     "deployAdminPlane": "[not(equals(variables('effectiveTopology'), 'dlz-attach'))]",
     "deployLandingZones": "[not(equals(variables('effectiveTopology'), 'tenant'))]",
@@ -2386,10 +2385,10 @@
           "loomCosmosGremlinEndpoint": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', format('wss://{0}.{1}:443/', take(format('cosmos-loom-gremlin-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 44), variables('gremlinHostSuffix'))), createObject('value', ''))]",
           "loomCosmosGremlinDatabase": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', 'loom-graph'), createObject('value', ''))]",
           "loomCosmosGremlinGraph": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', 'default'), createObject('value', ''))]",
-          "loomWeavePgFqdn": "[if(and(variables('useSingleDlz'), variables('weavePgDlzActive')), createObject('value', format('{0}.{1}', take(format('psql-loom-weave-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 63), variables('pgHostSuffix'))), createObject('value', ''))]",
-          "loomPostgresHost": "[if(and(variables('useSingleDlz'), parameters('postgresEnabled')), createObject('value', format('{0}.{1}', take(format('psql-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 63), variables('pgHostSuffix'))), createObject('value', ''))]",
-          "loomWeavePgDatabase": "[if(and(variables('useSingleDlz'), variables('weavePgDlzActive')), createObject('value', 'loom-weave'), createObject('value', ''))]",
-          "loomWeaveGraph": "[if(and(variables('useSingleDlz'), variables('weavePgDlzActive')), createObject('value', 'loom_ontology'), createObject('value', ''))]",
+          "loomWeavePgFqdn": "[if(and(and(variables('useSingleDlz'), parameters('weaveOntologyEnabled')), parameters('postgresQuotaAvailable')), createObject('value', format('{0}.{1}', take(format('psql-loom-weave-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 63), variables('pgHostSuffix'))), createObject('value', ''))]",
+          "loomPostgresHost": "[if(and(and(variables('useSingleDlz'), parameters('postgresEnabled')), parameters('postgresQuotaAvailable')), createObject('value', format('{0}.{1}', take(format('psql-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 63), variables('pgHostSuffix'))), createObject('value', ''))]",
+          "loomWeavePgDatabase": "[if(and(and(variables('useSingleDlz'), parameters('weaveOntologyEnabled')), parameters('postgresQuotaAvailable')), createObject('value', 'loom-weave'), createObject('value', ''))]",
+          "loomWeaveGraph": "[if(and(and(variables('useSingleDlz'), parameters('weaveOntologyEnabled')), parameters('postgresQuotaAvailable')), createObject('value', 'loom_ontology'), createObject('value', ''))]",
           "dabRuntimeEnabled": {
             "value": "[parameters('dabRuntimeEnabled')]"
           },
@@ -2565,7 +2564,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7754569195882662629"
+              "templateHash": "2999580219018374575"
             }
           },
           "definitions": {
@@ -3668,7 +3667,7 @@
               "type": "bool",
               "defaultValue": true,
               "metadata": {
-                "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers (\"Subscriptions are restricted from provisioning in location ...\"). When false, EVERY Postgres-backed host here is SKIPPED so the core app-tier still deploys, and each dependent editor honest-gates until the operator requests a quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true: the OSS Airflow host (airflow.bicep, via airflowPostgresAllowed), the DuckLake catalog + Loom Unity stores (via postgresStoresAllowed), and the Weave/pgvector server (weavePgLocalActive — added #3754, which is when this flag stopped being ignored by the one consumer that could fail the whole subscription deployment). NOT a Fabric dependency — an Azure regional/quota gate."
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same name, same meaning). When false, every Postgres-backed component in this module is SKIPPED so the core app-tier still deploys — the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT, the Weave ontology editor on LOOM_WEAVE_PG_FQDN, and Loom Unity falls back to its EmptyDir H2 store. WHY a given boundary sets it false is recorded in that boundary's .bicepparam next to the assignment — read it there rather than assuming a quota restriction; both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government and pin it false as a deliberate posture hold. If a subscription genuinely IS quota-restricted, https://aka.ms/postgres-request-quota-increase is the request path. NOT a Fabric dependency."
               }
             },
             "dnsResolverInboundStaticIp": {
@@ -5079,7 +5078,9 @@
             "directLakeSvcActive": "[and(and(variables('directLakeSvcEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "weaveOntologyBackendEnabled": "[not(equals(coalesce(tryGet(parameters('loomBackends'), 'weaveOntology'), 'enabled'), 'disabled'))]",
             "weavePgSuppliedByDlz": "[not(empty(parameters('loomWeavePgFqdn')))]",
-            "weavePgLocalActive": "[and(and(variables('weaveOntologyBackendEnabled'), not(variables('weavePgSuppliedByDlz'))), variables('postgresStoresAllowed'))]",
+            "weavePgOverride": "[toLower(string(coalesce(tryGet(parameters('loomBackends'), 'weavePostgres'), '')))]",
+            "weavePgAllowed": "[if(equals(variables('weavePgOverride'), 'enabled'), true(), if(equals(variables('weavePgOverride'), 'disabled'), false(), parameters('postgresQuotaAvailable')))]",
+            "weavePgLocalActive": "[and(and(variables('weaveOntologyBackendEnabled'), not(variables('weavePgSuppliedByDlz'))), variables('weavePgAllowed'))]",
             "mapsTileServerEnabled": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
             "mapsTileServerActive": "[and(and(variables('mapsTileServerEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "airflowHostEnabled": true,
@@ -29936,7 +29937,10 @@
             "value": "[parameters('cosmosGraphVectorEnabled')]"
           },
           "weaveOntologyEnabled": {
-            "value": "[variables('weavePgDlzActive')]"
+            "value": "[parameters('weaveOntologyEnabled')]"
+          },
+          "postgresQuotaAvailable": {
+            "value": "[parameters('postgresQuotaAvailable')]"
           },
           "loomEventHubEnabled": {
             "value": "[variables('provisionEventHubs')]"
@@ -29965,7 +29969,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "2536884885762286764"
+              "templateHash": "10661877972815013237"
             }
           },
           "functions": [
@@ -30465,13 +30469,21 @@
               "metadata": {
                 "description": "Provision the Weave ontology PostgreSQL + Apache AGE graph store to back object/link/action instance write-back. Default on — Palantir-class ontology write-back requires the graph store."
               }
+            },
+            "postgresQuotaAvailable": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary's .bicepparam — do not read it as \"the service is unavailable there\"."
+              }
             }
           },
           "variables": {
             "dlzUcSupported": "[or(equals(parameters('boundary'), 'Commercial'), equals(parameters('boundary'), 'GCC'))]",
             "provisionEventHub": "[and(parameters('loomEventHubEnabled'), empty(parameters('existingEventHubNamespaceName')))]",
             "adfOn": "[and(and(parameters('adfEnabled'), parameters('loomDataFactoryEnabled')), not(empty(parameters('consolePrincipalId'))))]",
-            "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]"
+            "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]",
+            "weavePgActive": "[and(parameters('weaveOntologyEnabled'), parameters('postgresQuotaAvailable'))]"
           },
           "resources": {
             "network": {
@@ -38483,7 +38495,7 @@
               ]
             },
             "postgresWeave": {
-              "condition": "[parameters('weaveOntologyEnabled')]",
+              "condition": "[variables('weavePgActive')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-postgres-weave",
@@ -38916,15 +38928,15 @@
             },
             "weavePgServerName": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
             },
             "weavePgFqdn": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
             },
             "weavePgDatabase": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
             },
             "adfFactoryId": {
               "type": "string",
@@ -39290,7 +39302,10 @@
             "value": "[parameters('cosmosGraphVectorEnabled')]"
           },
           "weaveOntologyEnabled": {
-            "value": "[variables('weavePgDlzActive')]"
+            "value": "[parameters('weaveOntologyEnabled')]"
+          },
+          "postgresQuotaAvailable": {
+            "value": "[parameters('postgresQuotaAvailable')]"
           },
           "loomEventHubEnabled": {
             "value": "[variables('provisionEventHubs')]"
@@ -39310,7 +39325,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "2536884885762286764"
+              "templateHash": "10661877972815013237"
             }
           },
           "functions": [
@@ -39810,13 +39825,21 @@
               "metadata": {
                 "description": "Provision the Weave ontology PostgreSQL + Apache AGE graph store to back object/link/action instance write-back. Default on — Palantir-class ontology write-back requires the graph store."
               }
+            },
+            "postgresQuotaAvailable": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary's .bicepparam — do not read it as \"the service is unavailable there\"."
+              }
             }
           },
           "variables": {
             "dlzUcSupported": "[or(equals(parameters('boundary'), 'Commercial'), equals(parameters('boundary'), 'GCC'))]",
             "provisionEventHub": "[and(parameters('loomEventHubEnabled'), empty(parameters('existingEventHubNamespaceName')))]",
             "adfOn": "[and(and(parameters('adfEnabled'), parameters('loomDataFactoryEnabled')), not(empty(parameters('consolePrincipalId'))))]",
-            "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]"
+            "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]",
+            "weavePgActive": "[and(parameters('weaveOntologyEnabled'), parameters('postgresQuotaAvailable'))]"
           },
           "resources": {
             "network": {
@@ -47828,7 +47851,7 @@
               ]
             },
             "postgresWeave": {
-              "condition": "[parameters('weaveOntologyEnabled')]",
+              "condition": "[variables('weavePgActive')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-postgres-weave",
@@ -48261,15 +48284,15 @@
             },
             "weavePgServerName": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
             },
             "weavePgFqdn": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
             },
             "weavePgDatabase": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
             },
             "adfFactoryId": {
               "type": "string",
@@ -48913,7 +48936,10 @@
             "value": "[parameters('cosmosGraphVectorEnabled')]"
           },
           "weaveOntologyEnabled": {
-            "value": "[variables('weavePgDlzActive')]"
+            "value": "[parameters('weaveOntologyEnabled')]"
+          },
+          "postgresQuotaAvailable": {
+            "value": "[parameters('postgresQuotaAvailable')]"
           },
           "deployAas": {
             "value": "[parameters('aasEnabled')]"
@@ -48942,7 +48968,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "2536884885762286764"
+              "templateHash": "10661877972815013237"
             }
           },
           "functions": [
@@ -49442,13 +49468,21 @@
               "metadata": {
                 "description": "Provision the Weave ontology PostgreSQL + Apache AGE graph store to back object/link/action instance write-back. Default on — Palantir-class ontology write-back requires the graph store."
               }
+            },
+            "postgresQuotaAvailable": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same param name, same meaning). Default true so every existing caller is byte-unchanged; the Gov bicepparams pin it false, which is why the Weave AGE store below must consult it rather than deploy unconditionally. WHY a boundary pins it false is recorded in that boundary's .bicepparam — do not read it as \"the service is unavailable there\"."
+              }
             }
           },
           "variables": {
             "dlzUcSupported": "[or(equals(parameters('boundary'), 'Commercial'), equals(parameters('boundary'), 'GCC'))]",
             "provisionEventHub": "[and(parameters('loomEventHubEnabled'), empty(parameters('existingEventHubNamespaceName')))]",
             "adfOn": "[and(and(parameters('adfEnabled'), parameters('loomDataFactoryEnabled')), not(empty(parameters('consolePrincipalId'))))]",
-            "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]"
+            "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]",
+            "weavePgActive": "[and(parameters('weaveOntologyEnabled'), parameters('postgresQuotaAvailable'))]"
           },
           "resources": {
             "network": {
@@ -57460,7 +57494,7 @@
               ]
             },
             "postgresWeave": {
-              "condition": "[parameters('weaveOntologyEnabled')]",
+              "condition": "[variables('weavePgActive')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-postgres-weave",
@@ -57893,15 +57927,15 @@
             },
             "weavePgServerName": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
             },
             "weavePgFqdn": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
             },
             "weavePgDatabase": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
+              "value": "[if(variables('weavePgActive'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
             },
             "adfFactoryId": {
               "type": "string",
@@ -59033,7 +59067,7 @@
       ]
     },
     "dpPostgres": {
-      "condition": "[and(variables('useSingleDlz'), parameters('postgresEnabled'))]",
+      "condition": "[and(and(variables('useSingleDlz'), parameters('postgresEnabled')), parameters('postgresQuotaAvailable'))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "dp-postgres",

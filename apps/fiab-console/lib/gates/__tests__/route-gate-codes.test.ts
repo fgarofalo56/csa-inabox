@@ -37,6 +37,11 @@ const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 /** Routes whose every emitted `code` must be registry-resolvable. */
 const GATE_CODE_ROUTES = [
   'app/api/databricks/unity-catalog/system-tables/route.ts',
+  // #3549 — the bind routes emit a seed-incomplete code when auto-bind created
+  // the pipeline but could not author its graph. Added here so the code cannot
+  // become an unresolvable literal the way #2624's two did.
+  'app/api/items/adf-pipeline/[id]/bind/route.ts',
+  'app/api/items/synapse-pipeline/[id]/bind/route.ts',
 ];
 
 /** A gate id OR a legacy code claimed by exactly one gate. */
