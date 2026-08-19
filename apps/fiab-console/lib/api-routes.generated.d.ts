@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1681 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1682 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -45,6 +45,7 @@ export type StaticApiRoute =
   | '/api/admin/agent-quality'
   | '/api/admin/agent-quality/eval-alert'
   | '/api/admin/audit-logs'
+  | '/api/admin/auto-bind/sweep'
   | '/api/admin/autopilot'
   | '/api/admin/autopilot/apply'
   | '/api/admin/autopilot/run'
