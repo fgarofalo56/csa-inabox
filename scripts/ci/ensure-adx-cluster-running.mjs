@@ -60,8 +60,90 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { definiteAbsenceCode } from './_arm-absence.mjs';
 
 export const KUSTO_API_VERSION = '2024-04-13';
+
+/**
+ * PURE. What did the cluster ENUMERATION establish?
+ *
+ * THE BLOCKER THIS CLOSES (#3754 review). This decision used to live inline in
+ * the I/O shell as a bare `if (!listed.ok) fail(…)`, which classified a MISSING
+ * RESOURCE GROUP as an unreadable control plane. Two consequences, both real:
+ *
+ *   1. It hard-failed every GREENFIELD apply on this lane. `main.bicep` CREATES
+ *      the admin resource group, and this preflight runs immediately BEFORE the
+ *      provision step — so on a fresh sovereign subscription, after this lane's
+ *      own Teardown with keep_resources:false, or on the never-run IL5 boundary,
+ *      the RG does not exist yet and the deploy died before it could create it.
+ *      That breaks the greenfield half of deploy-integrity.md R4 on the only
+ *      lane that applies main.bicep to GCC-High.
+ *   2. Its message told the operator to "confirm the deploy service principal
+ *      holds Reader" — a cause the code had NOT established, which is R7 and
+ *      exactly the defect the DNS sibling was written to avoid. Two standards in
+ *      one change.
+ *
+ * The exit code alone cannot carry the distinction. MEASURED on live ARM
+ * (Commercial, 2026-08-18): a missing RG exits 3 with `(ResourceGroupNotFound)`
+ * AND prints a well-formed `[]` on stdout, while a real RG holding no clusters
+ * exits 0 with `[]`. Trusting stdout reads absence as "no clusters"; trusting
+ * the exit code reads it as "unreadable". Only the ARM error code separates
+ * them — see _arm-absence.mjs for both raw transcripts.
+ *
+ * @param {{ok: boolean, stdout: string, stderr: string}} attempt
+ * @returns {{decision: 'listed'|'greenfield'|'refuse', ids: string[]|null, reason: string}}
+ */
+export function classifyClusterListRead(attempt) {
+  if (!attempt?.ok) {
+    const hit = definiteAbsenceCode(String(attempt?.stderr ?? ''));
+    if (hit) {
+      return {
+        decision: 'greenfield',
+        ids: [],
+        reason:
+          `az reported ${hit}, a definite absence — the admin resource group does not exist yet, so there is ` +
+          'no cluster to start. main.bicep creates both the RG and the cluster, and a freshly created cluster ' +
+          'is Running.',
+      };
+    }
+    return {
+      decision: 'refuse',
+      ids: null,
+      reason:
+        'the enumeration did NOT complete, so whether this estate has an ADX cluster — and whether it is ' +
+        'stopped — is UNKNOWN, not absent. Refusing to treat an unreadable control plane as "nothing to start" ' +
+        'and walk into the ClusterNotValidForPrincipals failure this step exists to prevent.',
+    };
+  }
+
+  let ids;
+  try {
+    ids = JSON.parse(attempt.stdout);
+  } catch {
+    return {
+      decision: 'refuse',
+      ids: null,
+      reason: 'az exited 0 enumerating clusters but its output was not JSON, so nothing was established.',
+    };
+  }
+  if (!Array.isArray(ids)) {
+    return {
+      decision: 'refuse',
+      ids: null,
+      reason: 'az exited 0 enumerating clusters but its output was not a JSON array, so nothing was established.',
+    };
+  }
+  if (ids.length === 0) {
+    return {
+      decision: 'greenfield',
+      ids: [],
+      reason:
+        'the resource group exists and holds no Microsoft.Kusto/clusters — nothing to start. On a greenfield ' +
+        'deploy the template CREATES the cluster, and a freshly created cluster is Running.',
+    };
+  }
+  return { decision: 'listed', ids, reason: `${ids.length} ADX cluster(s) to check.` };
+}
 
 /** Poll budget for a cluster to reach Running. ADX start is minutes, not seconds. */
 export const DEFAULT_TIMEOUT_SECONDS = 1800;
@@ -187,6 +269,16 @@ function main() {
     );
   }
   const budgetSeconds = Number(args['timeout-seconds'] ?? DEFAULT_TIMEOUT_SECONDS);
+  // A non-numeric --timeout-seconds used to produce NaN, and `elapsed >= NaN` is
+  // ALWAYS false — so the poll below would never terminate on its own, bounded
+  // only by the job's `timeout-minutes`. A budget that cannot be exceeded is a
+  // budget that is not enforced.
+  if (!Number.isFinite(budgetSeconds) || budgetSeconds <= 0) {
+    fail(
+      `ensure-adx-cluster-running: --timeout-seconds must be a positive number; got ` +
+        `'${args['timeout-seconds']}'. Refusing to poll on a budget that can never be exceeded.`,
+    );
+  }
 
   const listed = az([
     'resource', 'list',
@@ -196,32 +288,28 @@ function main() {
     '--query', '[].id',
     '-o', 'json',
   ]);
-  if (!listed.ok) {
+  const enumeration = classifyClusterListRead(listed);
+
+  if (enumeration.decision === 'refuse') {
     fail(
-      `Could NOT enumerate Microsoft.Kusto/clusters in ${args.rg}, so whether this estate has an ADX cluster — ` +
-        'and whether it is stopped — is UNKNOWN. Refusing to treat an unreadable control plane as "no cluster to ' +
-        'start" and walk into the ClusterNotValidForPrincipals failure this step exists to prevent (#3754). ' +
-        `REMEDIATION: confirm the deploy service principal holds Reader on ${args.rg} and re-run.`,
+      `Could NOT enumerate Microsoft.Kusto/clusters in ${args.rg} — ${enumeration.reason} ` +
+        'REMEDIATION: the raw az stderr below is the only established cause. If it names an authorization ' +
+        `failure, the deploy service principal needs Reader on ${args.rg}.`,
       listed.stderr,
     );
   }
 
-  let ids;
-  try {
-    ids = JSON.parse(listed.stdout);
-  } catch {
-    fail(`az exited 0 listing clusters in ${args.rg} but its output was not JSON, so nothing was established.`);
-  }
-
-  if (!Array.isArray(ids) || ids.length === 0) {
-    console.log(
-      `[adx-preflight] no Microsoft.Kusto/clusters in ${args.rg} — nothing to start. ` +
-        'On a greenfield deploy the template CREATES the cluster, and a freshly created cluster is Running.',
-    );
+  if (enumeration.decision === 'greenfield') {
+    console.log(`[adx-preflight] ${enumeration.reason}`);
     return;
   }
 
-  for (const id of ids) {
+  // SCOPE, stated rather than assumed: this starts every Microsoft.Kusto/clusters
+  // in the admin RG, not only the one the template writes principal assignments
+  // on. Today the admin plane deploys exactly one, so the two sets are identical;
+  // if a second is ever added here it would also be started (and billed). Each
+  // cluster it acts on is named in the log below, so the scope is never silent.
+  for (const id of enumeration.ids) {
     const name = id.split('/').pop();
     const first = readState(id);
     if (!first.ok) {

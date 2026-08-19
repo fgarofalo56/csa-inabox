@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "14067950312013746897"
+      "templateHash": "17234886331205399820"
     }
   },
   "definitions": {
@@ -1987,7 +1987,7 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov."
+        "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, EVERY Postgres-backed host is skipped so the core app-tier still deploys, and each dependent editor honest-gates until the operator requests a quota increase and redeploys: the OSS Airflow host (airflowPostgresAllowed), the DuckLake catalog + Loom Unity stores (postgresStoresAllowed), and BOTH Weave/pgvector servers — the admin-plane one and the DLZ one (#3754; before that fix the Weave server ignored this flag and one ARM leaf failed the whole GCC-High subscription deployment). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high / il5 paths for Gov."
       }
     },
     "dnsResolverInboundStaticIp": {
@@ -2077,6 +2077,7 @@
     "redisSkuCapacity": "[if(variables('redisIsPremium'), 1, 0)]",
     "redisBackend": "[if(equals(parameters('boundary'), 'Commercial'), 'managed', 'classic')]",
     "effShirAdminPassword": "[if(not(empty(parameters('shirAdminPassword'))), parameters('shirAdminPassword'), format('{0}{1}!7xQ', toUpper(substring(uniqueString(subscription().subscriptionId, 'loom-shir'), 0, 9)), substring(uniqueString(deployment().name, 'loom-shir-lower'), 0, 9)))]",
+    "weavePgDlzActive": "[and(parameters('weaveOntologyEnabled'), parameters('postgresQuotaAvailable'))]",
     "effectiveTopology": "[if(empty(parameters('topology')), parameters('deploymentMode'), parameters('topology'))]",
     "deployAdminPlane": "[not(equals(variables('effectiveTopology'), 'dlz-attach'))]",
     "deployLandingZones": "[not(equals(variables('effectiveTopology'), 'tenant'))]",
@@ -2385,10 +2386,10 @@
           "loomCosmosGremlinEndpoint": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', format('wss://{0}.{1}:443/', take(format('cosmos-loom-gremlin-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 44), variables('gremlinHostSuffix'))), createObject('value', ''))]",
           "loomCosmosGremlinDatabase": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', 'loom-graph'), createObject('value', ''))]",
           "loomCosmosGremlinGraph": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', 'default'), createObject('value', ''))]",
-          "loomWeavePgFqdn": "[if(and(variables('useSingleDlz'), parameters('weaveOntologyEnabled')), createObject('value', format('{0}.{1}', take(format('psql-loom-weave-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 63), variables('pgHostSuffix'))), createObject('value', ''))]",
+          "loomWeavePgFqdn": "[if(and(variables('useSingleDlz'), variables('weavePgDlzActive')), createObject('value', format('{0}.{1}', take(format('psql-loom-weave-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 63), variables('pgHostSuffix'))), createObject('value', ''))]",
           "loomPostgresHost": "[if(and(variables('useSingleDlz'), parameters('postgresEnabled')), createObject('value', format('{0}.{1}', take(format('psql-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 63), variables('pgHostSuffix'))), createObject('value', ''))]",
-          "loomWeavePgDatabase": "[if(and(variables('useSingleDlz'), parameters('weaveOntologyEnabled')), createObject('value', 'loom-weave'), createObject('value', ''))]",
-          "loomWeaveGraph": "[if(and(variables('useSingleDlz'), parameters('weaveOntologyEnabled')), createObject('value', 'loom_ontology'), createObject('value', ''))]",
+          "loomWeavePgDatabase": "[if(and(variables('useSingleDlz'), variables('weavePgDlzActive')), createObject('value', 'loom-weave'), createObject('value', ''))]",
+          "loomWeaveGraph": "[if(and(variables('useSingleDlz'), variables('weavePgDlzActive')), createObject('value', 'loom_ontology'), createObject('value', ''))]",
           "dabRuntimeEnabled": {
             "value": "[parameters('dabRuntimeEnabled')]"
           },
@@ -2564,7 +2565,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11533051796949261616"
+              "templateHash": "7754569195882662629"
             }
           },
           "definitions": {
@@ -3667,7 +3668,7 @@
               "type": "bool",
               "defaultValue": true,
               "metadata": {
-                "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers (\"Subscriptions are restricted from provisioning in location ...\"). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate."
+                "description": "Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers (\"Subscriptions are restricted from provisioning in location ...\"). When false, EVERY Postgres-backed host here is SKIPPED so the core app-tier still deploys, and each dependent editor honest-gates until the operator requests a quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true: the OSS Airflow host (airflow.bicep, via airflowPostgresAllowed), the DuckLake catalog + Loom Unity stores (via postgresStoresAllowed), and the Weave/pgvector server (weavePgLocalActive — added #3754, which is when this flag stopped being ignored by the one consumer that could fail the whole subscription deployment). NOT a Fabric dependency — an Azure regional/quota gate."
               }
             },
             "dnsResolverInboundStaticIp": {
@@ -29935,7 +29936,7 @@
             "value": "[parameters('cosmosGraphVectorEnabled')]"
           },
           "weaveOntologyEnabled": {
-            "value": "[parameters('weaveOntologyEnabled')]"
+            "value": "[variables('weavePgDlzActive')]"
           },
           "loomEventHubEnabled": {
             "value": "[variables('provisionEventHubs')]"
@@ -39289,7 +39290,7 @@
             "value": "[parameters('cosmosGraphVectorEnabled')]"
           },
           "weaveOntologyEnabled": {
-            "value": "[parameters('weaveOntologyEnabled')]"
+            "value": "[variables('weavePgDlzActive')]"
           },
           "loomEventHubEnabled": {
             "value": "[variables('provisionEventHubs')]"
@@ -48912,7 +48913,7 @@
             "value": "[parameters('cosmosGraphVectorEnabled')]"
           },
           "weaveOntologyEnabled": {
-            "value": "[parameters('weaveOntologyEnabled')]"
+            "value": "[variables('weavePgDlzActive')]"
           },
           "deployAas": {
             "value": "[parameters('aasEnabled')]"

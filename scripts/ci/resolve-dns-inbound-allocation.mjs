@@ -64,6 +64,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { definiteAbsenceCode } from './_arm-absence.mjs';
 
 /** What a greenfield estate gets: no static address ⇒ dynamic allocation.
  *  Must equal the `dnsResolverInboundStaticIp` default in
@@ -71,19 +72,6 @@ import { appendFileSync } from 'node:fs';
  *  silently propose a change to an immutable property on greenfield. Asserted
  *  by scripts/ci/__tests__/estate-preflight.test.mjs. */
 export const GREENFIELD_DEFAULT = '';
-
-/**
- * Signals that mean the resource genuinely is not there — as opposed to "I was
- * not allowed to look" or "the call did not complete". Matched case-insensitively
- * against az's stderr. Kept deliberately narrow: every string here is an ARM
- * error CODE, not prose, so a reworded message cannot widen the absence class.
- */
-const ABSENCE_CODES = [
-  'ResourceNotFound',
-  'ResourceGroupNotFound',
-  'ParentResourceNotFound',
-  'SubscriptionNotFound',
-];
 
 /**
  * PURE. Decide what an `az resource show` attempt established.
@@ -95,7 +83,7 @@ const ABSENCE_CODES = [
 export function classifyDnsInboundRead(attempt) {
   const stderr = String(attempt?.stderr ?? '');
   if (!attempt?.ok) {
-    const hit = ABSENCE_CODES.find((code) => stderr.toLowerCase().includes(code.toLowerCase()));
+    const hit = definiteAbsenceCode(stderr);
     if (hit) {
       return {
         decision: 'greenfield',

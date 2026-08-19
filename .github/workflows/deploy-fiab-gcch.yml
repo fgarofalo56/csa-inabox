@@ -645,6 +645,12 @@ jobs:
       #
       # It runs on the same trigger as the apply, so a whatif-only DRY RUN — a
       # run that by definition applies nothing — never mutates the estate.
+      #
+      # deploy-fiab-commercial carries the IDENTICAL latent failure with no such
+      # preflight (adxEnabled=true + the same unconditional enableAutoStop), and
+      # is deliberately NOT changed here: it is the only working infra-deploy
+      # path in the repo and destabilising it to pre-empt a latent fault would
+      # trade one P0 for a worse one. Tracked in #3786.
       - name: ADX preflight — a stopped cluster cannot take its principal assignments
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:

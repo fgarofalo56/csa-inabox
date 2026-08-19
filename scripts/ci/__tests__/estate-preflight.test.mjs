@@ -19,26 +19,37 @@
  *      non-Running state as "start it and hope", or to report success once the
  *      start call returns. Both are pinned against.
  *
- * MUTATION-PROVEN (measured 2026-08-18, 23 tests, 23 pass / 0 skip at baseline):
+ *   3. THE ONE THIS SUITE ORIGINALLY MISSED, found in review. The ADX preflight
+ *      classified a MISSING ADMIN RESOURCE GROUP as an unreadable control plane,
+ *      so it hard-failed every GREENFIELD apply — `main.bicep` creates that RG
+ *      and the preflight runs immediately before it — and blamed the service
+ *      principal's Reader role for a cause it had not established (R4 + R7).
  *
- *   A. widen ABSENCE_CODES to also swallow 'AuthorizationFailed' (i.e. treat an
- *      RBAC denial as greenfield — the exact R7 collapse)
- *        → 1 RED: "an RBAC denial is UNKNOWN, never greenfield"
- *   B. derive an address for a Static endpoint that reports none, instead of
- *      refusing
- *        → 1 RED: "a Static endpoint that reports NO address REFUSES rather
- *                  than deriving one"
- *   C. make classifyClusterState's default branch return {action:'start'}
- *      instead of refusing
- *        → 1 RED: "an unrecognised state REFUSES rather than guessing"
- *   D. make evaluatePoll return ok:true on budget exhaustion
- *        → 1 RED: "an exhausted budget is a FAILURE, not a pass"
- *   E. make network.bicep stop reading the parameter (back to a hard-coded
- *      literal) — the "resolver runs, nothing consumes it" shape
- *        → 1 RED: "CONTROL: the bicep resource keys BOTH branches off the SAME
- *                  parameter"
+ *      WHY IT WAS MISSED, which is the instructive part: bug 1's script put this
+ *      exact decision in a PURE, EXPORTED, unit-tested function, and bug 2's
+ *      script left the equivalent decision in its untested I/O shell. Two
+ *      standards in one change. The rule now lives ONCE, in _arm-absence.mjs,
+ *      and both scripts import it — so the drift that caused this cannot recur
+ *      silently, and mutation G below proves the suite notices if it tries.
  *
- * Every file restored byte-identical afterwards (`git diff --stat` empty).
+ * MUTATION-PROVEN (measured 2026-08-18, 32 tests, 32 pass / 0 skip at baseline;
+ * every file restored byte-identical afterwards):
+ *
+ *   F. THE ORIGINAL BLOCKER — make a failed enumeration always refuse, so a
+ *      missing admin RG reads as an unreadable control plane again
+ *        → 2 RED: "a MISSING admin resource group is greenfield, not an
+ *                  unreadable control plane", "a missing SUBSCRIPTION is
+ *                  greenfield too"
+ *   G. ADX stops importing the shared absence rule (the two scripts drift back
+ *      to the two standards that caused F)                        → 3 RED
+ *   H. widen the SHARED ABSENCE_CODES to swallow 'AuthorizationFailed'
+ *        → 2 RED, one per script — which is the point of sharing it
+ *   I. network.bicep renames the resolver the preflight reads (a 404 would
+ *      then read as greenfield and silently reintroduce #3754)     → 1 RED
+ *   J. derive an address for a Static endpoint that reports none   → 1 RED
+ *   K. unrecognised ADX state → 'start' instead of 'refuse'        → 1 RED
+ *   L. evaluatePoll returns ok:true on budget exhaustion           → 1 RED
+ *   M. network.bicep goes back to a hard-coded literal             → 1 RED
  *
  * RECORDED BECAUSE IT NEARLY WENT UNNOTICED: an earlier attempt at a mutation
  * here — neutering the method-is-missing guard with `if (false)` — left the
@@ -63,6 +74,7 @@ import {
 } from '../resolve-dns-inbound-allocation.mjs';
 import {
   classifyClusterState,
+  classifyClusterListRead,
   evaluatePoll,
   DEFAULT_TIMEOUT_SECONDS,
 } from '../ensure-adx-cluster-running.mjs';
@@ -171,7 +183,66 @@ test('the endpoint id names the hub resolver convention network.bicep uses', () 
   );
 });
 
-// ── 2. ADX cluster state ────────────────────────────────────────────────────
+// ── 2. ADX cluster ENUMERATION — the greenfield blocker ─────────────────────
+//
+// Verbatim from live ARM (Commercial, 2026-08-18), because the exit code alone
+// does not separate these two:
+//   missing RG  -> exit 3, stdout "[]",  stderr "(ResourceGroupNotFound) …"
+//   real RG     -> exit 0, stdout ["/subscriptions/…/clusters/adx-csa-loom-z52x3p"]
+
+test('a MISSING admin resource group is greenfield, not an unreadable control plane', () => {
+  // The blocker: main.bicep CREATES the admin RG and this preflight runs
+  // immediately before it, so on a fresh sovereign subscription — or after this
+  // lane's own Teardown, or on the never-run IL5 boundary — the RG is absent by
+  // construction. Refusing here killed every greenfield apply (R4) and blamed
+  // the service principal's Reader role for it (R7).
+  const v = classifyClusterListRead({
+    ok: false,
+    stdout: '[]',
+    stderr: "ERROR: (ResourceGroupNotFound) Resource group 'rg-csa-loom-admin-usgovvirginia' could not be found.",
+  });
+  assert.equal(v.decision, 'greenfield');
+  assert.deepEqual(v.ids, []);
+});
+
+test('a missing SUBSCRIPTION is greenfield too', () => {
+  const v = classifyClusterListRead({ ok: false, stdout: '', stderr: '(SubscriptionNotFound) not found' });
+  assert.equal(v.decision, 'greenfield');
+});
+
+test('an RBAC denial on the enumeration REFUSES — unreadable is not empty', () => {
+  const v = classifyClusterListRead({
+    ok: false,
+    stdout: '[]',
+    stderr: "(AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Kusto/clusters/read'",
+  });
+  assert.equal(v.decision, 'refuse');
+  assert.equal(v.ids, null);
+});
+
+test('a throttle on the enumeration REFUSES', () => {
+  const v = classifyClusterListRead({ ok: false, stdout: '', stderr: '(TooManyRequests) Rate limit exceeded' });
+  assert.equal(v.decision, 'refuse');
+});
+
+test('a REAL resource group holding no clusters is greenfield, not a refusal', () => {
+  const v = classifyClusterListRead({ ok: true, stdout: '[]', stderr: '' });
+  assert.equal(v.decision, 'greenfield');
+});
+
+test('a real cluster list is passed through for state checking', () => {
+  const id = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Kusto/clusters/adx-csa-loom-fmezxj';
+  const v = classifyClusterListRead({ ok: true, stdout: JSON.stringify([id]), stderr: '' });
+  assert.equal(v.decision, 'listed');
+  assert.deepEqual(v.ids, [id]);
+});
+
+test('exit 0 with a non-array / unparseable enumeration REFUSES', () => {
+  assert.equal(classifyClusterListRead({ ok: true, stdout: 'Welcome to Azure CLI', stderr: '' }).decision, 'refuse');
+  assert.equal(classifyClusterListRead({ ok: true, stdout: '{"a":1}', stderr: '' }).decision, 'refuse');
+});
+
+// ── 3. ADX cluster state ────────────────────────────────────────────────────
 
 test("the measured 'Stopped' state starts the cluster", () => {
   const v = classifyClusterState('Stopped');
@@ -215,7 +286,38 @@ test('a cluster that goes Unavailable mid-poll ends the poll as a failure immedi
   assert.deepEqual([v.done, v.ok], [true, false]);
 });
 
-// ── 3. CONTROLS — these must stay GREEN under every mutation above ──────────
+// ── 4. CONTROLS — these must stay GREEN under every mutation above ──────────
+
+test('CONTROL: both preflights share ONE definition of "definitely absent"', () => {
+  // The blocker above existed because the two scripts answered the same
+  // question by two different standards. Importing the shared rule is what
+  // makes that impossible; if either stops importing it, they can drift again.
+  for (const f of ['resolve-dns-inbound-allocation.mjs', 'ensure-adx-cluster-running.mjs']) {
+    const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci', f), 'utf8');
+    assert.match(src, /from '\.\/_arm-absence\.mjs'/, `${f} must use the shared absence rule`);
+  }
+});
+
+test('CONTROL: the resolver name the preflight reads matches the one bicep DEPLOYS', () => {
+  // NIT 4 — greenfield and "I looked in the wrong place" are indistinguishable
+  // to ARM: both are a 404. If network.bicep ever renames the resolver, the
+  // preflight would 404 on a Static estate, classify it greenfield, emit '',
+  // and silently reintroduce #3754. The id convention is duplicated by
+  // necessity (bicep cannot export it to a node script), so it is pinned.
+  const network = fs.readFileSync(
+    path.join(REPO_ROOT, 'platform/fiab/bicep/modules/admin-plane/network.bicep'),
+    'utf8',
+  );
+  assert.match(
+    network,
+    /resource dnsResolver 'Microsoft\.Network\/dnsResolvers@[^']+' = \{\s*\n\s*name: 'dnspr-loom-\$\{location\}'/,
+    "network.bicep must still name the resolver 'dnspr-loom-${location}'",
+  );
+  assert.match(
+    inboundEndpointId({ subscription: 's', rg: 'rg', location: 'usgovvirginia' }),
+    /\/dnsResolvers\/dnspr-loom-usgovvirginia\/inboundEndpoints\/inbound$/,
+  );
+});
 
 test('CONTROL: the greenfield default equals the bicep parameter default it stands in for', () => {
   // A drift here would silently propose a change to an IMMUTABLE property on
