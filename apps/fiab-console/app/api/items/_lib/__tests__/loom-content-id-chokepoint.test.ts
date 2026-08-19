@@ -51,6 +51,11 @@ function param(spec: any, name: string) {
 
 vi.mock('@/lib/auth/workspace-access', () => ({
   resolveWorkspaceAccessByOid: (...a: any[]) => h.access(...(a as [string, string])),
+  // #3697 — item-crud builds its access options through this helper now. These
+  // specs assert the `loom:` id chokepoint, not the admin path, so the stub
+  // returns the same "no ambient session" shape the real helper yields
+  // off-request.
+  ambientAccessOptsFor: async () => ({ callerTid: undefined }),
 }));
 vi.mock('@/lib/auth/workspace-list-access', () => ({ authorizeWorkspaceList: vi.fn(async () => ({ canWrite: true })) }));
 vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeWorkspace: vi.fn(async () => true) }));

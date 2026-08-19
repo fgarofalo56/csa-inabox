@@ -31,6 +31,7 @@ import {
   shapeDaHistory, canSendDaQuestion,
   safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql, buildAtelierWhere,
 } from '../_family-utils';
+import { validateAgainstSignature } from '@/lib/azure/udf-invoke-contract';
 
 // ============================================================
 // Atelier (Workshop app) real-CRUD SQL builders
@@ -143,6 +144,88 @@ describe('parseUdfFunctions', () => {
 
   it('returns [] for source with no decorated functions', () => {
     expect(parseUdfFunctions('def x(): pass')).toEqual([]);
+  });
+
+  // ── PR #3692 review, BLOCKER 4 — a comma is not a parameter boundary ──────
+  //
+  // The signature was split on a naive `,`, so any comma INSIDE a type
+  // annotation or a default value broke the parse. That is not cosmetic: the
+  // invoke route feeds this to validateAgainstSignature and returns 400 on the
+  // result, so `Dict[str, int] = {}` turned a call that previously ran fine
+  // into "compute requires opts, which was not supplied" — a false statement
+  // about a parameter that plainly declares a default (deploy-integrity.md R7).
+
+  it('keeps a comma-bearing type annotation in one piece (Dict[str, int])', () => {
+    const src = '@udf.function()\ndef compute(user_id: str, opts: Dict[str, int] = {}, weight: float = 1.0) -> dict:\n    return {}';
+    expect(parseUdfFunctions(src)).toEqual([
+      { name: 'compute', returns: 'dict', params: [
+        { name: 'user_id', type: 'str', default: undefined },
+        { name: 'opts', type: 'Dict[str, int]', default: '{}' },
+        { name: 'weight', type: 'float', default: '1.0' },
+      ] },
+    ]);
+  });
+
+  it('handles Tuple/Union annotations and a paren-bearing default', () => {
+    const src = '@udf.function()\ndef f(a: str, size: Tuple[int, int] = (1, 2), v: Union[int, str] = 0) -> dict:\n    return {}';
+    expect(parseUdfFunctions(src)).toEqual([
+      { name: 'f', returns: 'dict', params: [
+        { name: 'a', type: 'str', default: undefined },
+        { name: 'size', type: 'Tuple[int, int]', default: '(1, 2)' },
+        { name: 'v', type: 'Union[int, str]', default: '0' },
+      ] },
+    ]);
+  });
+
+  it('keeps a comma-bearing list/dict default in one piece', () => {
+    const src = '@udf.function()\ndef h(a: str, items: list = [1, 2, 3], m: dict = {"x": 1, "y": 2}) -> dict:\n    return {}';
+    const fn = parseUdfFunctions(src)[0];
+    expect(fn.params).toEqual([
+      { name: 'a', type: 'str', default: undefined },
+      { name: 'items', type: 'list', default: '[1, 2, 3]' },
+      { name: 'm', type: 'dict', default: '{"x": 1, "y": 2}' },
+    ]);
+  });
+
+  it('does not split on a comma inside a string default', () => {
+    const src = '@udf.function()\ndef g(sep: str = "a, b", n: int = 1) -> str:\n    return sep';
+    expect(parseUdfFunctions(src)[0].params).toEqual([
+      { name: 'sep', type: 'str', default: '"a, b"' },
+      { name: 'n', type: 'int', default: '1' },
+    ]);
+  });
+
+  it('parses a signature wrapped across several lines', () => {
+    const src = '@udf.function()\ndef wrapped(\n    user_id: str,\n    opts: Dict[str, int] = {},\n) -> dict:\n    return {}';
+    expect(parseUdfFunctions(src)[0].params).toEqual([
+      { name: 'user_id', type: 'str', default: undefined },
+      { name: 'opts', type: 'Dict[str, int]', default: '{}' },
+    ]);
+  });
+
+  it('drops *args/**kwargs, which the invoke route documents as unvalidated', () => {
+    const src = '@udf.function()\ndef k(a: int, *args, **kwargs) -> int:\n    return a';
+    expect(parseUdfFunctions(src)[0].params).toEqual([{ name: 'a', type: 'int', default: undefined }]);
+  });
+});
+
+// A comma-bearing annotation must not make the invoke route reject a call that
+// supplies exactly what the signature asks for. This is the end-to-end shape of
+// BLOCKER 4: parser -> validateAgainstSignature -> HTTP 400.
+describe('parseUdfFunctions + validateAgainstSignature (the #3692 regression)', () => {
+  it('does not 400 a caller that omits a parameter which DOES declare a default', () => {
+    const src = '@udf.function()\ndef compute(user_id: str, opts: Dict[str, int] = {}, weight: float = 1.0) -> dict:\n    return {}';
+    const fn = parseUdfFunctions(src).find((f) => f.name === 'compute');
+    // Head: "compute requires opts, which was not supplied." + "declares no
+    // default for opts" — both false, and a 400 for a previously-working call.
+    expect(validateAgainstSignature({ user_id: 'u1' }, fn)).toBeUndefined();
+  });
+
+  it('still rejects a genuinely missing required parameter alongside one', () => {
+    const src = '@udf.function()\ndef compute(user_id: str, opts: Dict[str, int] = {}) -> dict:\n    return {}';
+    const fn = parseUdfFunctions(src).find((f) => f.name === 'compute');
+    const out = validateAgainstSignature({ opts: {} }, fn)!;
+    expect(out.invalidParameters).toEqual(['user_id']);
   });
 });
 

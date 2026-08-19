@@ -21,7 +21,6 @@
     "full-app-deploy-commercial.yml": 5,
     "gov-apply-env.yml": 1,
     "gov-build-images.yml": 1,
-    "gov-console-roll.yml": 1,
     "gov-dataverse.yml": 1,
     "gov-provision-dbt.yml": 1,
     "gov-provision-dbx-sql-invnet.yml": 2,

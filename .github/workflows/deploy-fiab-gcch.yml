@@ -772,6 +772,41 @@ jobs:
             echo "::notice::smoke-test target (public ingress): $SMOKE_URL"
           fi
 
+      # ── ACR COMPLIANCE TAGS — APPLIED HERE, NOT BY THE TEMPLATE (#3714) ────
+      # CLOUD PARITY: identical to the step in deploy-fiab-commercial.yml. The
+      # admin-plane ACR carries the firewall-lease mutex as out-of-band ARM tags
+      # (`loomAcrFw*`), so the template cannot own its tag dictionary:
+      #   #3676  `tags: complianceTags` PUT-replaced the dict and erased the live
+      #          lease mid-apply, denying an in-flight `az acr build`.
+      #   #3714  a declarative `Microsoft.Resources/tags` resource read its OWN
+      #          id and ARM rejected the whole template with "Circular dependency
+      #          detected", breaking every `az deployment sub create`.
+      # `az tag update --operation Merge` adds the keys server-side and touches
+      # nothing else. This lane's tag set (Environment=GCC-High, DISA_IL=IL4,
+      # Data_Classification=CUI, M365_Boundary=GCC-High, …) comes from
+      # gcc-high.bicepparam, so it cannot drift from what the deployment used.
+      - name: Apply ACR compliance tags (merge-patch, out-of-band — #3714)
+        if: steps.provision.conclusion == 'success'
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR_ERR="$RUNNER_TEMP/acr-tag-resolve.err"
+          : > "$ACR_ERR"
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2> "$ACR_ERR" | tr -d '\r')
+          ACR_RC=$?
+          if [ "$ACR_RC" -ne 0 ]; then
+            echo "::error::Could not LIST registries in $RG (az exited $ACR_RC), so whether this estate has an ACR to tag is UNKNOWN. Raw stderr:"
+            sed -n '1,20p' "$ACR_ERR" >&2
+            exit 1
+          fi
+          if [ -z "$ACR" ]; then
+            echo "::error::Provision succeeded but no 'acrloom*' registry exists in $RG. The admin-plane ACR is not optional."
+            exit 1
+          fi
+          bash scripts/csa-loom/apply-acr-compliance-tags.sh \
+            --acr "$ACR" \
+            --params-file platform/fiab/bicep/params/gcc-high.bicepparam
+
       # Front Door -> ACA env Private Link approval (#3203). CLOUD PARITY: the
       # sovereign lanes previously passed an EMPTY scriptIdentityId so the ARM
       # deploymentScript never ran, and the documented substitute was the
