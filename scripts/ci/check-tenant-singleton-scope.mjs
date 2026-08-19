@@ -113,7 +113,7 @@ const KNOWN_SPLIT = new Map([
   [
     'tenantSettingsContainer :: <S>',
     {
-      issue: '#3793',
+      issue: '#3794',
       why:
         'The tenant-settings singleton is WRITTEN by /api/admin/tenant-settings under ' +
         'the caller oid and READ by /api/admin/chargeback under tenantScopeId(), so the ' +
@@ -131,7 +131,15 @@ const KNOWN_SPLIT = new Map([
   ],
 ]);
 
-/** A placeholder issue reference makes the exemption unaccountable — reject it. */
+/**
+ * A placeholder issue reference makes the exemption unaccountable — reject it.
+ *
+ * THIS CHECKS THE FORM, NOT THE REFERENT, and the difference is not academic:
+ * the first revision of this entry cited `#3793`, which is a real but UNRELATED
+ * issue, and this check would have accepted it. It catches
+ * `ISSUE-TENANT-SETTINGS-SCOPE`; it cannot catch a well-formed wrong number.
+ * Whoever reviews an exemption still has to open the issue and read it.
+ */
 function assertKnownSplitIssues() {
   const bad = [];
   for (const [key, v] of KNOWN_SPLIT) {
