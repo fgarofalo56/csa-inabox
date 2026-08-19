@@ -14,10 +14,13 @@
  * The self-audit run is best-effort: if it throws/times out we still return the
  * gate-derived graph (probes empty), so the surface degrades honestly instead
  * of erroring. Admin-scoped to the same capability as the gate registry.
+ *
+ * Route-toolkit: withCapability('admin.env-config', 'Admin') (R1/R3) — the
+ * hand-rolled getSession() + enforceCapability prologue is now structural, so
+ * there is no `if (gate) return gate;` line that can be deleted.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { withCapability } from '@/lib/api/route-toolkit';
 import { GATES, allGateStatuses } from '@/lib/gates/registry';
 import { buildReadiness, GATE_PROBE_MAP, type ProbeLite } from '@/lib/admin/readiness';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
@@ -45,30 +48,38 @@ async function collectProbesUncached(): Promise<{ probes: ProbeLite[]; probeErro
     const report = await runSelfAudit(new Date().toISOString());
     const probes: ProbeLite[] = report.results
       .filter((r) => wanted.has(r.id))
-      .map((r) => ({ id: r.id, status: r.status, detail: r.detail, remediation: r.remediation }));
+      .map((r) => ({ id: r.id, status: r.status, detail: r.detail, remediation: r.remediation, inconclusive: r.inconclusive }));
     return { probes };
   } catch (e: any) {
     return { probes: [], probeError: e?.message || String(e) };
   }
 }
 
-async function collectProbes(): Promise<{ probes: ProbeLite[]; probeError?: string; stale?: boolean }> {
+/**
+ * `refresh` (wired to `?refresh=1`) BYPASSES the 30 s probe cache and re-runs
+ * every live probe.
+ *
+ * Without it a transient probe failure is served for its full TTL — and, with
+ * `serveStaleOnError`, potentially longer. That is exactly how #3729 was
+ * "reproduced twice": the operator loaded /admin/readiness, saw the ARM probe
+ * blocked, clicked Refresh, and got the SAME cached result back. Two readings
+ * of one measurement read as independent confirmation of a defect that had
+ * already stopped happening.
+ */
+async function collectProbes(refresh: boolean): Promise<{ probes: ProbeLite[]; probeError?: string; stale?: boolean }> {
   const { value, meta } = await getOrComputeCached(
     'admin-readiness-probes',
     'readiness-v1',
     collectProbesUncached,
-    { ttlMs: 30_000, backend: 'result-cache', staleWhileRevalidate: true, serveStaleOnError: true },
+    { ttlMs: 30_000, backend: 'result-cache', staleWhileRevalidate: true, serveStaleOnError: true, bypass: refresh },
   );
   return { ...value, stale: meta.stale };
 }
 
-export async function GET() {
-  const session = getSession();
-  const gate = await enforceCapability(session, 'admin.env-config', 'Admin');
-  if (gate) return gate;
-
+export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
+  const refresh = ['1', 'true'].includes((req.nextUrl.searchParams.get('refresh') || '').toLowerCase());
   const statuses = allGateStatuses();
-  const { probes, probeError, stale } = await collectProbes();
+  const { probes, probeError, stale } = await collectProbes(refresh);
   const report = buildReadiness(
     { gates: GATES, statuses, probes },
     { generatedAt: new Date().toISOString(), cloud: detectLoomCloud() },
@@ -82,5 +93,7 @@ export async function GET() {
     // true when the probes were served from an expired cache while a background
     // refresh runs — lets the surface show "health as of Ns ago" honestly.
     probesStale: stale ?? false,
+    /** true when this response re-ran every probe instead of reading the cache. */
+    probesRefreshed: refresh,
   });
-}
+});

@@ -87,6 +87,21 @@ export interface CheckResult {
   detail: string;
   /** Exact action to resolve a warn/fail. */
   remediation?: string;
+  /**
+   * True when the check could NOT establish its finding — a timeout, a
+   * throttle, a 5xx, an unrecognised transport error. This is a THIRD outcome,
+   * distinct from a proven positive (`pass`) and a proven negative (`fail`):
+   * "I do not know" (deploy-integrity.md R7 — an error must not state as fact
+   * something it did not establish).
+   *
+   * Carried on a `warn` result. Readiness maps `warn + inconclusive` to the
+   * `unknown` capability state so an unfinished check can never hard-block a
+   * workload, and the UI says "could not establish" rather than inventing a
+   * cause. #3729: a 6 s ARM probe timeout was reported as "the Console cannot
+   * reach the ARM endpoint and the UAMI token is not being issued", blocking
+   * the whole Core platform workload on a fact nobody had observed.
+   */
+  inconclusive?: boolean;
   /** Set when the healer can apply a safe runtime fix (admin-approved). */
   fixId?: string;
   /** True when the only resolution is a redeploy / RBAC grant (not runtime). */
