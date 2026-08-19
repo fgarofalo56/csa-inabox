@@ -33,13 +33,25 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 /**
  * The role set auto-granted to the Console UAMI when a DLZ is attached/repaired.
- * Every GUID is a built-in Azure role (global across all sovereign clouds). All
- * are applied at the DLZ **resource-group** scope (least-privilege).
+ * Every GUID is a built-in Azure role (global across all sovereign clouds — the
+ * same id in Commercial, GCC, GCC-High and DoD). All are applied at the DLZ
+ * **resource-group** scope (least-privilege).
+ *
+ * These ids are load-bearing: {@link grantRgScopedRoles} interpolates `guid`
+ * into the ARM `roleDefinitionId` and ARM resolves the grant by ID, never by
+ * name. A wrong id is a wrong grant in every cloud at once — rejected outright
+ * if it names no role definition, and silently the WRONG role if it happens to
+ * name another one. Verified against
+ * learn.microsoft.com/azure/role-based-access-control/built-in-roles and kept
+ * honest by `scripts/ci/check-role-guid-consistency.mjs`, which checks the
+ * (role name, GUID) pairs it can read — this object-literal shape among them —
+ * against the documented id, and counts the lines it cannot read rather than
+ * passing over them (#3608).
  */
 export const RG_SCOPED_LZ_ROLES: Array<{ name: string; guid: string; why: string }> = [
   {
     name: 'Contributor',
-    guid: 'b24988ac-6180-42a0-bb6f-b91a8f3d3d0e',
+    guid: 'b24988ac-6180-42a0-ab88-20f7382dd24c',
     why: 'Run RG-scoped deployments + create/manage every resource in the DLZ RG.',
   },
   {

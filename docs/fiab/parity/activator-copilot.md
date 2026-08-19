@@ -61,7 +61,7 @@ Zero ❌. The one ⚠️ is an honest Azure infra-gate (env var), not a Fabric g
 
 ## RBAC / bicep (already deployed — no new infra in this PR)
 
-- **Monitoring Contributor** (`749f88ad-0bdc-4e1b-a8b6-bfb96b995e05`) on the
+- **Monitoring Contributor** (`749f88d5-cbae-40b8-bcfc-e573ddc772fa`) on the
   alert RG — `platform/fiab/bicep/modules/admin-plane/monitoring.bicep:184` —
   covers `scheduledQueryRules` + `actionGroups` write/read.
 - **Log Analytics Reader** (`73c42c96-874c-492b-b04d-ab87d138a893`) on the LAW —

@@ -77,7 +77,7 @@ Zero ❌, zero stub banners. One honest infra-gate (row 1) per `no-vaporware.md`
 ## RBAC / bicep (already in place — no change in this PR)
 
 `platform/fiab/bicep/modules/admin-plane/monitoring.bicep` grants the Console UAMI
-**Monitoring Contributor** (`749f88ad-0bdc-4e1b-a8b6-bfb96b995e05`) on the alert RG —
+**Monitoring Contributor** (`749f88d5-cbae-40b8-bcfc-e573ddc772fa`) on the alert RG —
 covers `scheduledQueryRules/write|delete` + `actionGroups/write`. Env vars
 `LOOM_ALERT_RG`, `LOOM_ALERT_LOCATION`, and `LOOM_LOG_ANALYTICS_RESOURCE_ID` are wired
 in `admin-plane/main.bicep` (lines ~1409, 1556, 1560).

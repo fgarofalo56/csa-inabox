@@ -298,6 +298,36 @@ jobs:
       - name: role-assignment-determinism (a re-run is a real no-op — #3039)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-role-assignment-determinism.mjs
+      # role-assignment-determinism says the grant can be RE-APPLIED without
+      # colliding. This says the grant names a role that EXISTS. lz-rbac.ts
+      # carried `{ name: 'Contributor', guid: 'b24988ac-6180-42a0-bb6f-…' }` for
+      # the module's whole life — the first three groups of the real Contributor
+      # id, the last two wrong — so every automatic ARM Contributor grant on a
+      # DLZ attach was rejected. Its unit test asserted the GUID *shape*, which a
+      # wrong GUID passes, so the suite stayed green throughout.
+      #
+      # Keyed on the MISMATCH, never on that bad string: wherever it can read a
+      # role NAME bound to a GUID, the GUID must equal the documented id for that
+      # name, so adopting the fix leaves the rule live instead of silencing it.
+      #
+      # SCOPE, stated precisely because the first cut of this comment did not
+      # (R7). It reads eight shapes — object literal (multi-line and one-line),
+      # declaration / bicep param, env assignment, trailing-comment label,
+      # name-keyed map, array member, and inline roleDefinitions id (compact and
+      # wrapped). It does NOT read markdown or anything under docs/. Every OTHER
+      # line carrying a role-shaped id is COUNTED and printed as an unread
+      # blind spot rather than passed over, so the gap is visible in the output
+      # instead of implied away by the summary.
+      #
+      # Refuses to pass on an empty population; runs per-shape embedded controls
+      # AND repo-anchored shape samples pinned verbatim to real files, so a
+      # matcher that drifts — or a shape that was never implemented — fails
+      # loudly rather than reporting a clean tree. Built-in role ids are
+      # identical in every cloud, so this is boundary-independent: Commercial,
+      # GCC, GCC-High and DoD alike. #3608.
+      - name: role-guid-consistency (a role name and its GUID agree — #3608)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-role-guid-consistency.mjs
       # role-assignment-determinism says the grant can be RE-applied. This says
       # the module can FIND the thing it is granting on. A `resource … existing`
       # with no `scope:` resolves in the resource group the deployment is running
