@@ -91,7 +91,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     if (!item) return err('Item not found', 404, 'not_found');
 
     // Only workspace owners/contributors may change the data-access mode.
-    const { role } = await resolveWorkspaceRole(item.workspaceId, session.claims.oid, session.claims.upn);
+    const { role } = await resolveWorkspaceRole(item.workspaceId, session);
     if (!canEditWorkspaceConfig(role)) {
       return err('You need workspace admin or contributor access to change the data-access mode.', 403, 'forbidden');
     }

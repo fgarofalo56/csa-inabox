@@ -13,7 +13,7 @@
  *      The Azure-native path works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
@@ -95,7 +95,11 @@ export async function POST(req: NextRequest) {
   // domain so workspace creation works day-one. An explicit unknown domain is
   // still rejected below.
   const domain = (typeof body?.domain === 'string' ? body.domain.trim() : '') || DEFAULT_DOMAIN_ID;
-  if (!(await domainExists(s.claims.oid, domain))) {
+  // Tenant scope, NOT the caller's oid (#3753) — see the identical check in
+  // app/api/workspaces/route.ts. Keyed by oid this validated against a PRIVATE,
+  // auto-seeded copy of the registry, so only the five STARTER domain ids were
+  // ever accepted and every real tenant domain was rejected as "not registered".
+  if (!(await domainExists(tenantScopeId(s), domain))) {
     return NextResponse.json(
       { ok: false, error: `Unknown domain '${domain}' — it is not registered in this tenant.`, code: 'unknown_domain' },
       { status: 400 },

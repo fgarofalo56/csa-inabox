@@ -54,7 +54,6 @@
     "apps/fiab-console/app/api/workspaces/[id]/task-flows/route.ts": 1,
     "apps/fiab-console/app/api/workspaces/bulk-delete/route.ts": 2,
     "apps/fiab-console/lib/auth/workspace-access.ts": 1,
-    "apps/fiab-console/lib/auth/workspace-role.ts": 1,
     "apps/fiab-console/lib/azure/feature-store-item.ts": 1,
     "apps/fiab-console/lib/azure/fine-tuning-item.ts": 1,
     "apps/fiab-console/lib/azure/kusto-client.ts": 1,

@@ -24,8 +24,9 @@
  * dependency — this is pure Cosmos + Entra/Graph.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { tenantScopeId } from '@/lib/auth/session';
+import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 import {
   resolveDomainTier,
   canAssignWorkspaceToDomain,
@@ -34,18 +35,18 @@ import {
 } from '@/lib/auth/domain-role';
 import { resolveEffectiveRole } from '@/lib/azure/workspace-roles-client';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-interface DomainsDoc {
-  items: Array<DomainTierDomain & { id: string; name?: string }>;
-}
-
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
+  // TWO SCOPES (#3753). `tenantId` keys the `workspaces` container, which is
+  // partitioned on the CREATOR's oid — `lib/auth/session.ts` states outright that
+  // `tenantScopeId()` is NOT valid there, so it stays the raw oid. `domainScope`
+  // keys the per-TENANT domains document, which #3282 moved onto `tenantScopeId()`.
   const tenantId = s.claims.oid;
+  const domainScope = tenantScopeId(s);
   const body = await req.json().catch(() => ({}));
   const domainId = (body?.domainId || '').toString().trim();
   const workspaceIds: string[] = Array.isArray(body?.workspaceIds)
@@ -58,11 +59,20 @@ export async function POST(req: NextRequest) {
   try {
     // Validate the domain exists in the tenant's domain doc + load its full
     // shape for tier resolution.
-    const tsC = await tenantSettingsContainer();
+    //
+    // #3753 — this read used to be keyed by the caller's raw `claims.oid`, so
+    // the D2 authorization below resolved the caller's tier against a PRIVATE,
+    // auto-seeded copy of the domain list. Seeded starter domains carry no
+    // adminGroupId/contributorGroupId, so `resolveDomainTier` could only ever
+    // return null for a non-tenant-admin: the tier model was inert here. It now
+    // reads the tenant's authoritative document via the guarded chokepoint, so
+    // a genuine domain-admin/contributor resolves — every grant still coming
+    // from an Entra group id named on the tenant's own domain doc and matched
+    // against the caller's own session claims.
     let domain: (DomainTierDomain & { id: string; name?: string }) | undefined;
     try {
-      const { resource } = await tsC.item(`domains:${tenantId}`, tenantId).read<DomainsDoc>();
-      domain = resource?.items?.find((d) => d.id === domainId);
+      // `LoadedDomain` IS `DomainTierDomain & { id; name? }` — no cast needed.
+      domain = (await loadTenantDomains(domainScope)).find((d) => d.id === domainId);
     } catch (e: any) { if (e?.code !== 404) throw e; }
     if (!domain) return NextResponse.json({ ok: false, error: `domain '${domainId}' not found` }, { status: 404 });
 
@@ -156,4 +166,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

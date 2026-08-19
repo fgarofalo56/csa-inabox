@@ -69,7 +69,7 @@ async function callerIsOwningDomainAdmin(
 export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session: s, params }) => {
   const { id } = params;
   try {
-    const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
+    const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
     // Tenant admins (admin-plane "Workspace access") and DOMAIN ADMINS of the
     // owning domain may read any workspace's roster even with no per-workspace role.
@@ -94,7 +94,7 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
 export const POST = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
   const { id } = params;
   try {
-    const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
+    const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
     if (role !== 'admin' && !isTenantAdmin(s) && !(await callerIsOwningDomainAdmin(s, workspace))) {
       return NextResponse.json(

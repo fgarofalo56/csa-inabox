@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { listAccessibleWorkspaces } from '@/lib/auth/workspace-access';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
@@ -86,7 +86,13 @@ export async function POST(req: NextRequest) {
   // app install, which requires a workspace). An explicitly-provided unknown
   // domain is still rejected.
   const domainId = (typeof domain === 'string' ? domain.trim() : '') || DEFAULT_DOMAIN_ID;
-  if (!(await domainExists(session.claims.oid, domainId))) {
+  // Tenant scope, NOT the caller's oid (#3753). The domains registry is
+  // per-TENANT and #3282 keyed it with tenantScopeId(); validating against the
+  // caller's oid resolved a PRIVATE, auto-seeded copy, so this check only ever
+  // accepted the five STARTER domain ids and rejected every domain the tenant
+  // actually created through /api/admin/domains — with the misleading message
+  // "it is not registered in this tenant" about a domain that IS registered.
+  if (!(await domainExists(tenantScopeId(session), domainId))) {
     return err(`Unknown domain '${domainId}' — it is not registered in this tenant.`, 400, 'unknown_domain');
   }
 

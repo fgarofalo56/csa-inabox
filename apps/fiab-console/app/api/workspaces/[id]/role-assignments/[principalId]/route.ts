@@ -9,25 +9,20 @@
  * Authz: workspace owner / Admin only. See no-vaporware.md / no-fabric-dependency.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { removeWorkspaceRole } from '@/lib/azure/workspace-roles-client';
 import { apiServerError } from '@/lib/api/respond';
 import { revokeAssignmentLedger } from '@/lib/access/assignment-ledger';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function DELETE(
-  _req: NextRequest,
-  props: { params: Promise<{ id: string; principalId: string }> },
-) {
-  const { id, principalId } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string; principalId: string }>(async (_req: NextRequest, { session: s, params }) => {
+  const { id, principalId } = params;
   try {
-    const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
+    const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
     if (role !== 'admin' && !isTenantAdmin(s)) {
       return NextResponse.json(
@@ -45,4 +40,4 @@ export async function DELETE(
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

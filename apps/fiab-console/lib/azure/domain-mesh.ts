@@ -87,9 +87,15 @@ export interface DomainMeshResult {
 // Cosmos probes (best-effort — never throw)
 // ---------------------------------------------------------------------------
 
-/** workspaceId → domain id, plus a per-domain direct workspace count. */
+/**
+ * workspaceId → domain id, plus a per-domain direct workspace count.
+ *
+ * `ownerOid` is the CREATOR's Entra oid, not a tenant scope: the `workspaces`
+ * container is partitioned on `/tenantId` and `Workspace.tenantId` holds the
+ * creator's oid. See the note on {@link getDomainMesh}.
+ */
 async function readWorkspaceTags(
-  tenantId: string,
+  ownerOid: string,
 ): Promise<{ configured: boolean; wsToDomain: Map<string, string>; total: number; hint?: string }> {
   try {
     const c = await workspacesContainer();
@@ -97,9 +103,9 @@ async function readWorkspaceTags(
       .query<{ id: string; domain?: string }>(
         {
           query: 'SELECT c.id, c.domain FROM c WHERE c.tenantId = @t',
-          parameters: [{ name: '@t', value: tenantId }],
+          parameters: [{ name: '@t', value: ownerOid }],
         },
-        { partitionKey: tenantId },
+        { partitionKey: ownerOid },
       )
       .fetchAll();
     const wsToDomain = new Map<string, string>();
@@ -170,13 +176,32 @@ function depthOf(items: DomainItem[], id: string): number {
  * Compute the federated mesh footprint for every Loom domain in the tenant.
  * Reads only (never mutates). Each surface degrades to an honest gate when its
  * back-end is unconfigured.
+ *
+ * TWO SCOPES, DELIBERATELY SEPARATE (#3753). They are different partition keys
+ * over different containers and collapsing them is the bug this signature exists
+ * to prevent:
+ *
+ *   • `tenantScope` — `tenantScopeId(session)` (= `tid || oid`). Keys the
+ *     per-TENANT domains document in `tenant-settings`. #3282 moved
+ *     `/api/admin/domains` onto this scope; anything still reading that document
+ *     with a raw `claims.oid` gets a PRIVATE copy, auto-seeded with the starter
+ *     set, and silently disagrees with the authoritative list.
+ *   • `ownerOid` — `session.claims.oid`. Keys the `workspaces` container, which
+ *     is partitioned on `/tenantId` where `Workspace.tenantId` stores the
+ *     CREATOR's oid (see `lib/auth/workspace-access.ts`). `tenantScopeId()` is
+ *     explicitly NOT valid here — `lib/auth/session.ts` says so at the
+ *     definition — so passing the tenant scope returns ZERO rows.
  */
-export async function getDomainMesh(tenantId: string, who: string): Promise<DomainMeshResult> {
-  const doc = await loadOrSeedDomains(tenantId, who);
+export async function getDomainMesh(
+  tenantScope: string,
+  ownerOid: string,
+  who: string,
+): Promise<DomainMeshResult> {
+  const doc = await loadOrSeedDomains(tenantScope, who);
   const items = doc.items;
 
   const [wsTags, itemCounts, unity] = await Promise.all([
-    readWorkspaceTags(tenantId),
+    readWorkspaceTags(ownerOid),
     readItemCounts(),
     unityLinkStatus(Array.from(new Set(items.map((d) => unityName(rootAncestorId(items, d.id)))))),
   ]);

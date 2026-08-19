@@ -15,26 +15,24 @@
  * whichever target IS configured. No Fabric dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { apiServerError } from '@/lib/api/respond';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { runDomainSync, saveDomainSyncStatus, loadDomainSyncStatus } from '@/lib/azure/domain-sync';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Tenant scope id — the tid claim (multi-tenant) or the caller oid fallback. */
-function tenantScope(claims: { tid?: string; oid: string }): string {
-  return claims.tid || claims.oid;
-}
+// #3753 — this route used to carry its OWN copy of the tenant-scope helper
+// (`function tenantScope(claims) { return claims.tid || claims.oid; }`). The
+// copy was semantically correct, but a second implementation of the tenant
+// scope is how the scope drifts: `tenantScopeId()` is the canonical one and is
+// what every guard and every sibling reader keys the domains document with.
+// Deleted in favour of the shared helper.
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const GET = withTenantAdmin(async (_req, { session: s }) => {
 
-  const tenantId = tenantScope(s.claims);
+  const tenantId = tenantScopeId(s);
   try {
     const last = await loadDomainSyncStatus(tenantId);
     if (last) return NextResponse.json({ ok: true, result: last, fromCache: true });
@@ -44,15 +42,11 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e, 'Domain sync failed');
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const POST = withTenantAdmin(async (req: NextRequest, { session: s }) => {
 
-  const tenantId = tenantScope(s.claims);
+  const tenantId = tenantScopeId(s);
   const body = await req.json().catch(() => ({}));
   const apply = body?.apply === true;
 
@@ -64,4 +58,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e, 'Domain sync failed');
   }
-}
+});

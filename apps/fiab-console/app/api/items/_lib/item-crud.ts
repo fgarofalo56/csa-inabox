@@ -10,7 +10,8 @@ import type { SessionPayload } from '@/lib/auth/session';
 import { resolveWorkspaceAccessByOid, ambientAccessOptsFor, type WorkspaceAccessOpts } from '@/lib/auth/workspace-access';
 import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
-import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import {
   upsertDataProductDoc, deleteDataProductDoc, docForDataProduct,
@@ -72,17 +73,63 @@ export function jerr(error: string, status = 500, code?: string) {
 }
 
 /**
+ * The scope the per-TENANT domains document is keyed by, for a helper that was
+ * handed only an `oid` (#3753).
+ *
+ * #3282 moved that document onto `tenantScopeId()` (= `tid || oid`). Every
+ * caller in this file carries only an oid, so keying the read with it resolved
+ * a PRIVATE, auto-seeded copy — which is why a data-product's domain NAME has
+ * been silently unresolvable since #3282, with every mirrored doc falling back
+ * to the raw domain id.
+ *
+ * Rather than thread a new argument through ~345 routes' worth of call sites,
+ * the scope is recovered from the AMBIENT request session under the SAME
+ * principal match `accessOptsFor` / `ambientAccessOptsFor` already use in this
+ * file: the session is consulted ONLY when its `oid` equals the `oid` we were
+ * handed. Imports are dynamic to keep this module's static dependency graph
+ * unchanged.
+ *
+ * RETURNS null RATHER THAN FALLING BACK TO THE oid, and that is the point.
+ * An earlier revision of this fix returned `oid` when there was no ambient
+ * session for the principal (off-request: jobs, scripts, tests). That looked
+ * conservative — "degrade to the previous behavior" — but the previous behavior
+ * IS the defect: it reads a partition that has held nothing since #3282, so the
+ * fallback could only ever produce a wrong-partition read whose result is
+ * discarded anyway. It also left this module addressing the domains document
+ * with BOTH scopes, i.e. a residual instance of the very class this PR exists to
+ * remove, and it made the call site unreadable to
+ * `scripts/ci/check-tenant-singleton-scope.mjs` — so a revert of this fix was
+ * indistinguishable from the fix. Declining to guess is both more honest and
+ * more checkable: the caller falls back to the raw domain id, exactly as it
+ * already does whenever the domain is absent from the map.
+ */
+async function domainScopeFor(oid: string): Promise<string | null> {
+  try {
+    const { getSession, tenantScopeId } = await import('@/lib/auth/session');
+    const s = getSession();
+    if (!s || s.claims.oid !== oid) return null;
+    return tenantScopeId(s);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Resolve a domain id → its display name from the tenant's domains doc
- * (Cosmos tenant-settings, id="domains:<tenantId>"). Best-effort: returns
+ * (Cosmos tenant-settings, id="domains:<tenantScope>"). Best-effort: returns
  * undefined when the domain map or the id is absent so the marketplace doc
  * falls back to the raw id. Never throws.
+ *
+ * Read-only and best-effort: it cannot widen access, it only decides which
+ * partition a display name is looked up in. See {@link domainScopeFor}.
  */
 async function resolveDomainName(tenantId: string, domainId?: string): Promise<string | undefined> {
   if (!domainId) return undefined;
+  const scope = await domainScopeFor(tenantId);
+  if (!scope) return undefined; // unknown tenant scope — do NOT guess a partition
   try {
-    const c = await tenantSettingsContainer();
-    const { resource } = await c.item(`domains:${tenantId}`, tenantId).read<{ items?: Array<{ id: string; name: string }> }>();
-    const hit = (resource?.items || []).find((d) => d.id === domainId);
+    const domains = await loadTenantDomains(scope);
+    const hit = domains.find((d) => d.id === domainId);
     return hit?.name;
   } catch {
     return undefined;

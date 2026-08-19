@@ -1091,6 +1091,20 @@ jobs:
       - name: 'domain-store-tenant-scope (tenant doc keyed by the caller, not the tenant)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-domain-store-tenant-scope.mjs
+      # The guard above is keyed to two FUNCTION NAMES, so the five routes that
+      # built `domains:<scope>` INLINE were never in its population — which is how
+      # the same class recurred twice more after #3282 fixed it (#3747 mesh panel,
+      # #3751 workspace access, plus two workspace-create routes and the admin
+      # overview tile found by this guard's own sweep). This one is keyed to the
+      # DOCUMENT: any Cosmos doc whose id derives from its own partition key must
+      # be addressed with ONE scope. It resolves through local const chains,
+      # single-return helper inlining, and inter-procedural parameter flow, so
+      # hoisting into a variable or hiding the read three frames down does not
+      # defeat it — all three are mutation-proven in the #3753 PR. UNJUDGED sites
+      # are counted against a pinned ceiling and printed, never counted as clean.
+      - name: 'tenant-singleton-scope (one tenant doc, two partition schemes — #3753)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-tenant-singleton-scope.mjs
       # dlp-panel swallowed its read error, then a `finally` PROMOTED the failed
       # read to loaded — taking the spinner down and asserting "no restrict-access
       # actions have been recorded yet" as fact. The finally is what makes it
