@@ -360,7 +360,7 @@ describe('readiness — an inconclusive probe is "unknown", never "blocked"', ()
     expect(report.workloads.find((w) => w.id === 'core-platform')!.state).toBe('blocked');
   });
 
-  it('the exported profile names it as not-established rather than blocked', () => {
+  it('the exported profile files it under "Not established", NOT under Blocked', () => {
     const probes: ProbeLite[] = [{
       id: probeId, status: 'warn', inconclusive: true,
       detail: 'Could not establish whether ARM is readable.',
@@ -370,9 +370,37 @@ describe('readiness — an inconclusive probe is "unknown", never "blocked"', ()
       { gates: GATES, statuses: statusesWith(GATES.map((g) => g.id)), probes },
       { generatedAt: '2026-08-19T00:00:00.000Z' },
     );
+    // It IS enumerated (the export lists every non-ready capability) …
+    const b = profile.blockers.find((x) => x.id === CRITICAL_PROBED)!;
+    expect(b).toBeTruthy();
+    // … and it carries the state that says which kind of non-ready it is.
+    expect(b.state).toBe('unknown');
+
     const md = renderProfileMarkdown(profile);
-    expect(md).toContain('not established');
     expect(md).toContain('| Workload | Status | Score | Ready | Partial | Blocked | Not established |');
-    expect(profile.blockers.some((b) => b.id === CRITICAL_PROBED)).toBe(true);
+    expect(md).toContain('## Not established — the live check did not complete');
+    expect(md).toContain('NOT found broken');
+    // The ONLY non-ready capability here is the inconclusive one, so the
+    // Blocked heading must not appear at all — an auditor reading this export
+    // must not see a timeout filed as an outage.
+    expect(md).not.toContain('## Blocked / partial dependencies');
+    // And it appears AFTER the Not-established heading, i.e. inside that section.
+    expect(md.indexOf(`(\`${CRITICAL_PROBED}\`)`)).toBeGreaterThan(md.indexOf('## Not established'));
+  });
+
+  it('a real blocker and an inconclusive one are filed in DIFFERENT sections', () => {
+    const probes: ProbeLite[] = [
+      { id: probeId, status: 'warn', inconclusive: true, detail: 'did not complete', remediation: 'Re-check.' },
+      { id: GATE_PROBE_MAP['svc-adx'], status: 'fail', detail: 'ARM refused the read (403)', remediation: 'grant AllDatabasesViewer' },
+    ];
+    const profile = buildTenantProfile(
+      { gates: GATES, statuses: statusesWith(GATES.map((g) => g.id)), probes },
+      { generatedAt: '2026-08-19T00:00:00.000Z' },
+    );
+    const md = renderProfileMarkdown(profile);
+    expect(md).toContain('## Blocked / partial dependencies + remediation');
+    expect(md).toContain('## Not established — the live check did not complete');
+    expect(md.indexOf('(`svc-adx`)')).toBeLessThan(md.indexOf('## Not established'));
+    expect(md.indexOf(`(\`${CRITICAL_PROBED}\`)`)).toBeGreaterThan(md.indexOf('## Not established'));
   });
 });

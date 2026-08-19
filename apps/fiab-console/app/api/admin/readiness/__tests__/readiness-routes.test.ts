@@ -22,7 +22,12 @@ vi.mock('@/lib/auth/feature-gate', () => ({
   enforceCapability: (...a: any[]) => enforceCapability(...a),
 }));
 
-vi.mock('@/lib/azure/cloud-endpoints', () => ({
+// Only `detectLoomCloud` is pinned; everything else comes from the REAL module.
+// Both routes now compose `withCapability` (route-toolkit R1/R3), whose
+// dependency chain reaches other cloud-endpoints resolvers (armScope, …) — a
+// bare object mock silently removed them and every case died at import.
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/azure/cloud-endpoints')>()),
   detectLoomCloud: () => 'AzureCloud',
 }));
 

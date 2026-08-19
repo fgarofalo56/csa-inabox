@@ -615,7 +615,10 @@ export default function AdminReadinessPage() {
             </Caption1>
             <div className={s.spacer} />
             <Tooltip content="Re-runs every live probe (bypasses the 30s probe cache)" relationship="description">
-              <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} onClick={() => void reload(true)}>Re-check now</Button>
+              {/* `disabled` matters now that this actually re-probes: each click
+                  bypasses the 30s cache and fans out every live probe, so an
+                  impatient double-click would multiply the load it is measuring. */}
+              <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} disabled={loading} onClick={() => void reload(true)}>Re-check now</Button>
             </Tooltip>
             <Button size="small" appearance="secondary" icon={<ArrowDownload16Regular />} disabled={downloading} onClick={() => download('md')}>Export report</Button>
             <Button size="small" appearance="secondary" icon={<ArrowDownload16Regular />} disabled={downloading} onClick={() => download('json')}>Export JSON</Button>

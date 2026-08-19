@@ -14,10 +14,13 @@
  * The self-audit run is best-effort: if it throws/times out we still return the
  * gate-derived graph (probes empty), so the surface degrades honestly instead
  * of erroring. Admin-scoped to the same capability as the gate registry.
+ *
+ * Route-toolkit: withCapability('admin.env-config', 'Admin') (R1/R3) — the
+ * hand-rolled getSession() + enforceCapability prologue is now structural, so
+ * there is no `if (gate) return gate;` line that can be deleted.
  */
-import { NextResponse, type NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { NextResponse } from 'next/server';
+import { withCapability } from '@/lib/api/route-toolkit';
 import { GATES, allGateStatuses } from '@/lib/gates/registry';
 import { buildReadiness, GATE_PROBE_MAP, type ProbeLite } from '@/lib/admin/readiness';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
@@ -73,11 +76,7 @@ async function collectProbes(refresh: boolean): Promise<{ probes: ProbeLite[]; p
   return { ...value, stale: meta.stale };
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  const gate = await enforceCapability(session, 'admin.env-config', 'Admin');
-  if (gate) return gate;
-
+export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
   const refresh = ['1', 'true'].includes((req.nextUrl.searchParams.get('refresh') || '').toLowerCase());
   const statuses = allGateStatuses();
   const { probes, probeError, stale } = await collectProbes(refresh);
@@ -97,4 +96,4 @@ export async function GET(req: NextRequest) {
     /** true when this response re-ran every probe instead of reading the cache. */
     probesRefreshed: refresh,
   });
-}
+});

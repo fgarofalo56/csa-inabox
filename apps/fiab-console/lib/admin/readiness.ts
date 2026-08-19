@@ -107,6 +107,18 @@ export interface CapabilityNode {
 export interface WorkloadBlocker {
   id: string;
   title: string;
+  /**
+   * The capability's readiness state.
+   *
+   * Carried explicitly because `blockers` enumerates every NON-READY
+   * capability, and those are not all the same thing: `blocked` is a proven
+   * unmet prerequisite, `partial` is degraded-but-observed, `unknown` is a
+   * live check that never completed, and `opt-in` is a feature deliberately
+   * not deployed. Without this field the exported profile filed all four under
+   * one "Blocked" heading — so a report handed to an auditor during a slow ARM
+   * window read as an outage (#3729).
+   */
+  state: ReadinessState;
   missing: string[];
   remediation: string;
   role?: string;
@@ -480,6 +492,7 @@ export function scoreWorkload(def: WorkloadDef, allNodes: CapabilityNode[]): Wor
     .map((n) => ({
       id: n.id,
       title: n.title,
+      state: n.state,
       missing: n.missing,
       remediation: n.remediation,
       role: n.role,
@@ -552,6 +565,7 @@ export function buildTenantProfile(
     .map((n) => ({
       id: n.id,
       title: n.title,
+      state: n.state,
       missing: n.missing,
       remediation: n.remediation,
       role: n.role,
@@ -608,22 +622,42 @@ export function renderProfileMarkdown(profile: TenantProfile): string {
   }
   L.push('');
 
-  if (profile.blockers.length) {
+  /** Render one blocker's detail block. */
+  const renderBlocker = (b: WorkloadBlocker) => {
+    L.push(`### ${b.title} (\`${b.id}\`)`);
+    if (b.missing.length) L.push(`- Missing: ${b.missing.map((m) => `\`${m}\``).join(', ')}`);
+    if (b.role) L.push(`- Required role: ${b.role}`);
+    if (b.provisionedBy) L.push(`- Provisioned by: \`${b.provisionedBy}\``);
+    if (b.remediation) L.push(`- Remediation: ${b.remediation}`);
+    L.push('');
+  };
+
+  // A capability whose live check DID NOT COMPLETE is not a blocker and must
+  // not be filed as one. Before #3729 every non-ready capability landed under a
+  // single "Blocked" heading, so an export taken during a slow ARM window read
+  // to its reader as an outage while the summary above it said "not
+  // established". The exported artifact now draws the same distinction the
+  // screen does.
+  const unestablished = profile.blockers.filter((b) => b.state === 'unknown');
+  const realBlockers = profile.blockers.filter((b) => b.state !== 'unknown');
+
+  if (realBlockers.length) {
     L.push('## Blocked / partial dependencies + remediation');
     L.push('');
-    for (const b of profile.blockers) {
-      L.push(`### ${b.title} (\`${b.id}\`)`);
-      if (b.missing.length) L.push(`- Missing: ${b.missing.map((m) => `\`${m}\``).join(', ')}`);
-      if (b.role) L.push(`- Required role: ${b.role}`);
-      if (b.provisionedBy) L.push(`- Provisioned by: \`${b.provisionedBy}\``);
-      if (b.remediation) L.push(`- Remediation: ${b.remediation}`);
-      L.push('');
-    }
-  } else {
+    for (const b of realBlockers) renderBlocker(b);
+  } else if (!unestablished.length) {
     L.push('## Blocked / partial dependencies');
     L.push('');
     L.push('All capabilities are ready. 🎉');
     L.push('');
+  }
+
+  if (unestablished.length) {
+    L.push('## Not established — the live check did not complete');
+    L.push('');
+    L.push('These capabilities were NOT found broken. Their live probe did not finish, so nothing was observed either way; re-run the readiness check to re-probe them.');
+    L.push('');
+    for (const b of unestablished) renderBlocker(b);
   }
 
   return L.join('\n');

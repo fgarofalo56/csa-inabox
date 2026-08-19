@@ -86,8 +86,6 @@
     "apps/fiab-console/app/api/admin/policy-code/reconcile/route.ts": 1,
     "apps/fiab-console/app/api/admin/protection-policies/[id]/route.ts": 1,
     "apps/fiab-console/app/api/admin/protection-policies/route.ts": 1,
-    "apps/fiab-console/app/api/admin/readiness/export/route.ts": 1,
-    "apps/fiab-console/app/api/admin/readiness/route.ts": 1,
     "apps/fiab-console/app/api/admin/refresh-summary/route.ts": 1,
     "apps/fiab-console/app/api/admin/reindex-items/route.ts": 1,
     "apps/fiab-console/app/api/admin/runtime-flags/[id]/route.ts": 1,
