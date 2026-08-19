@@ -42,6 +42,33 @@ sdk/** text eol=lf
 # WHICH scripts a Linux runner executes, and they cost nothing.
 *.sh text eol=lf
 
+# #3730 — the same "pin it afterwards vs make it impossible" lesson, for a
+# different failure: a source file going BINARY.
+#
+# scripts/ci/_estate-registry.mjs was committed carrying a literal 0x00 and 0x1F
+# where an escape sequence was intended (the escapes were eaten by the tool that
+# wrote them, inside — with some irony — a comment warning that escapes get
+# eaten). Node did not care: NUL is a legal SourceCharacter inside a comment, so
+# `node --check` exited 0 and every test passed. Git DID care, and auto-detected
+# the file as binary:
+#
+#     $ gh pr diff 3732 | grep -A3 "_estate-registry.mjs"
+#     Binary files /dev/null and b/scripts/ci/_estate-registry.mjs differ
+#     $ rg -n "GIT_OBJECT_ID" .
+#     (no matches — the file was invisible to ripgrep too)
+#
+# So a 300-line module holding both cloud endpoint URLs, the build-marker
+# parser and the git-object-id validator did not appear in the pull request at
+# all. Anyone reviewing through `gh pr diff` or the GitHub web diff reviewed the
+# change without ever seeing its core. That is a review-integrity failure, not a
+# runtime one, and it is invisible precisely because everything still works.
+#
+# Marking these as `text` makes git diff them as text whatever bytes they carry,
+# so the next stray control character shows up as a reviewable line instead of
+# removing the file from the diff.
+*.mjs text
+*.cjs text
+
 
 # #2603 — the ACR firewall lease + its regression test are executed by `bash` on
 # Linux GitHub runners and are also invoked from the deploy-*-job.sh scripts. A

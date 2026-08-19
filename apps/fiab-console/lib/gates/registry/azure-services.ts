@@ -19,7 +19,14 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_SYNAPSE_WORKSPACE: L.synapse },
-    legacyCodes: ['synapse_not_configured', 'not_configured:LOOM_SYNAPSE_WORKSPACE'],
+    // `synapse_pipeline_seed_incomplete` (#3549) — the Synapse twin of the ADF
+    // code below; this gate's role ("Synapse Administrator (UAMI) on the
+    // workspace") is the remediation for a refused pipeline-definition write.
+    legacyCodes: [
+      'synapse_not_configured',
+      'not_configured:LOOM_SYNAPSE_WORKSPACE',
+      'synapse_pipeline_seed_incomplete',
+    ],
   },
   'svc-adx': {
     surfaces: [
@@ -104,7 +111,15 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_ADF_FACTORY: L.adf },
-    legacyCodes: ['adf_not_configured', 'not_configured:LOOM_ADF_FACTORY'],
+    // `adf_pipeline_seed_incomplete` (#3549): auto-bind CREATED the pipeline but
+    // the estate refused the write that authors its activity graph, so the item
+    // is bound to a real-but-EMPTY pipeline. This gate is the right home for it
+    // because its declared `role` — "Data Factory Contributor (UAMI) on the
+    // factory" — IS the remediation. Registered so the code resolves for
+    // /admin/gates and the Copilot gate tool instead of naming nothing (the
+    // #2624 failure mode). The editor additionally self-heals: `isEmpty` +
+    // re-seed repairs the binding on the next open once the role is granted.
+    legacyCodes: ['adf_not_configured', 'not_configured:LOOM_ADF_FACTORY', 'adf_pipeline_seed_incomplete'],
   },
   'svc-posture-refresh': {
     surfaces: [{ path: '/governance', label: 'Govern tab (posture pre-warm)' }],

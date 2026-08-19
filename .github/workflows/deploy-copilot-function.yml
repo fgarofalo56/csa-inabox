@@ -13,10 +13,34 @@
 #   AZURE_CLIENT_ID           — limitlessdata_deploy client/app ID
 #   AZURE_CLIENT_SECRET       — current secret for the SP
 #   AZURE_TENANT_ID           — limitlessdata.ai tenant
-#   AZURE_SUBSCRIPTION_ID     — FedCiv ATU FFL - DLZ
+#   AZURE_SUBSCRIPTION_ID     — MUST address the subscription that holds
+#                               func-csa-inabox-copilot-fg and rg-dlz-aiml-stack-dev.
+#
+# ── #3429: THE SECRET IS POINTED AT THE WRONG SUBSCRIPTION ──────────────────
+#
+# This line used to read "AZURE_SUBSCRIPTION_ID — FedCiv ATU FFL - DLZ" as a
+# statement of fact. It is not one, and the gap between it and reality is the
+# entire outage. Measured on run 31775523187 (2026-08-14), the preflight below
+# reported:
+#
+#     resource group rg-dlz-aiml-stack-dev does NOT exist in subscription
+#     'FedCiv ATU FFL - DMLZ'
+#
+# DMLZ is not DLZ. One letter, eight consecutive red runs (2026-07-02 ..
+# 2026-08-14), and six weeks in which every merge to this Function App was inert
+# — including the security fix in 7139417f (validate URLs by parsed host, not
+# substring) and the operator-identifier scrub. Both remain MERGED, NOT DEPLOYED.
+#
+# NO AGENT CAN FIX THIS. Repointing a repository secret is an operator action.
+# Until AZURE_SUBSCRIPTION_ID addresses the estate that holds the app, this lane
+# fails at the preflight by design — see the `wrong-subscription` branch, which
+# deliberately provisions NOTHING rather than building a second estate in the
+# wrong subscription. That has happened to this app once already: it was
+# originally created in a personal subscription (DEPLOYMENT.md, "What was wrong
+# before this PR").
 #
 # Follow-up: migrate to OIDC federated credential to drop the long-lived
-# client secret. Tracked under SEC-COPILOT in Archon.
+# client secret. Tracked under SEC-COPILOT.
 name: Deploy Copilot Function
 
 on:
@@ -25,6 +49,26 @@ on:
     paths:
       - "azure-functions/copilot-chat/**"
       - ".github/workflows/deploy-copilot-function.yml"
+      # #3429 — the bicep producer this lane applies. Being here means a change
+      # to the module RE-RUNS this lane. It does NOT mean the change reaches the
+      # estate, and the first version of this comment claimed it did.
+      #
+      # The apply step is gated `if: verdict == 'absent-here'`. Where the app
+      # already exists the preflight returns `found` and the module is not
+      # applied — so a shape change (a new app setting, a role grant, the plan
+      # SKU) merges, re-triggers this lane, redeploys the code, and is still not
+      # on the estate. That is deploy-integrity.md R2/R3 and it is NOT closed by
+      # this trigger; the "Report what this run did NOT apply" step below states
+      # it in the run log rather than leaving a green check to imply otherwise.
+      #
+      # The gate itself is deliberate, not an oversight. The module declares
+      # `siteConfig.appSettings` in full, and a full re-apply over a live app
+      # DROPS every setting it does not name — including WEBSITE_RUN_FROM_PACKAGE,
+      # which Azure/functions-action sets on every deploy and which the running
+      # app needs to start. Re-applying blind would break production to fix
+      # drift; that is the bicep-re-render-drops-out-of-band-state hazard. The
+      # reconciliation path is the explicit one printed by that step.
+      - "platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep"
   workflow_dispatch:
 
 permissions:
@@ -88,7 +132,8 @@ jobs:
             }
 
       - name: Preflight — resolve the Function App and say what was ACTUALLY established
-        # #3429. For seven consecutive runs (2026-07-02 .. 2026-08-11) this lane
+        id: preflight
+        # #3429. For eight consecutive runs (2026-07-02 .. 2026-08-14) this lane
         # died in Azure/functions-action with:
         #
         #     Resource func-csa-inabox-copilot-fg of type Microsoft.Web/Sites
@@ -105,14 +150,53 @@ jobs:
         # resolve the app OURSELVES first and narrow the cause to one of four
         # states before the action gets a chance to guess.
         #
-        # Everything below is an ARM CONTROL-plane read. No data plane, no VNet,
-        # no secret values are printed — only names.
+        # The liveness clause used to be a HARD-CODED sentence: every branch
+        # printed "The app IS live: …/api/health answers 200" whether or not this
+        # run had asked — there is no curl anywhere in that block, the only one
+        # being in the later smoke step. A message that asserts a present-tense
+        # fact it never measured is the R7 defect, not a shortcut. It is measured
+        # now, and the branches quote the status code they actually got.
+        #
+        # It was introduced by 1b555a02 (2026-08-14) and is fixed here three days
+        # later — MEASURED, because the first draft of this very comment claimed
+        # it had "gone unnoticed for six weeks", which was an unmeasured duration
+        # asserted as fact inside the comment explaining R7:
+        #
+        #     $ git show 1b555a02~1:.github/workflows/deploy-copilot-function.yml \
+        #         | grep -c "The app IS live"     -> 0
+        #     $ git show 1b555a02:.github/workflows/deploy-copilot-function.yml \
+        #         | grep -c "The app IS live"     -> 2
+        #
+        # Six weeks is the length of the RED WINDOW (2026-07-02 .. 2026-08-14, 43
+        # days) described at the top of this file. It is not the age of this
+        # sentence, and reusing the number for both is how a true figure becomes
+        # a false claim.
+        #
+        # Everything below is an ARM CONTROL-plane read plus one unauthenticated
+        # public GET. No data plane, no VNet, no secret values are printed — only
+        # names and an HTTP status code.
         run: |
           set -uo pipefail
           # NOTE on -e: GitHub runs `run:` under `bash -e` and `set -uo pipefail`
           # does NOT clear it, so every capture uses the `if ! VAR=$(...)` form,
           # which errexit does not abort on.
+
+          # Measure liveness ONCE, up front, so no branch below has to assert it.
+          # curl's stderr is FOLDED IN rather than sent to /dev/null: a discarded
+          # error is how "I could not reach the registry" became "the tag does
+          # not exist" in the incident deploy-integrity.md R7 was written for.
+          # On success the capture is just the status code; on failure it carries
+          # curl's own words, which the message then quotes instead of guessing.
+          PROBE_URL="https://${FUNCTION_APP_NAME}.azurewebsites.net/api/health"
+          if PROBE_OUT=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$PROBE_URL" 2>&1); then
+            LIVENESS="the public endpoint ${PROBE_URL} answered HTTP ${PROBE_OUT} when this run asked"
+          else
+            PROBE_RC=$?
+            LIVENESS="the public endpoint ${PROBE_URL} could NOT be reached by this run (curl exit ${PROBE_RC}: ${PROBE_OUT}) — which establishes only that the probe failed, NOT that the app is absent"
+          fi
+
           if ! SUB_NAME=$(az account show --query name -o tsv 2>&1); then
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
             echo "::error::preflight: could not read the active subscription, so NOTHING about the Function App has been established. az said: ${SUB_NAME}"
             exit 1
           fi
@@ -120,6 +204,7 @@ jobs:
           echo "Authenticated to subscription: ${SUB_NAME}"
 
           if APP_STATE=$(az functionapp show --name "$FUNCTION_APP_NAME" --resource-group "$FUNCTION_APP_RG" --query state -o tsv 2>&1); then
+            echo "verdict=found" >> "$GITHUB_OUTPUT"
             echo "::notice::preflight OK — ${FUNCTION_APP_NAME} found in ${FUNCTION_APP_RG} (state: $(printf '%s' "$APP_STATE" | tr -d '\r'))."
             exit 0
           fi
@@ -128,28 +213,280 @@ jobs:
           # It was not readable at the expected address. Establish WHY, and do
           # not claim absence we have not proven.
           if ! RG_EXISTS=$(az group exists --name "$FUNCTION_APP_RG" -o tsv 2>&1); then
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
             echo "::error::preflight: ${FUNCTION_APP_NAME} was not readable in ${FUNCTION_APP_RG}, AND the resource group could not be checked either — so whether it exists is UNKNOWN, not disproven. Grant the deploy principal at least Reader on the subscription. az said: ${RG_EXISTS}. Original read error: ${SHOW_ERR}"
             exit 1
           fi
           RG_EXISTS=$(printf '%s' "$RG_EXISTS" | tr -d '\r')
 
           # Is it visible ANYWHERE in this subscription under a different group?
-          ELSEWHERE=""
-          if HITS=$(az resource list --name "$FUNCTION_APP_NAME" --resource-type Microsoft.Web/sites --query "[].resourceGroup" -o tsv 2>/dev/null); then
-            ELSEWHERE=$(printf '%s' "$HITS" | tr -d '\r' | tr '\n' ' ')
+          #
+          # This capture used to end `2>/dev/null`, which discarded the failure
+          # and fell through to ELSEWHERE="" — i.e. "not found anywhere". That
+          # swallow was benign when its only consequence was choosing an error
+          # string; it is not benign now, because the branch below it decides
+          # whether the next step WRITES. "I could not look" must not become
+          # "it is not there" on the path to a provisioning decision
+          # (deploy-integrity.md R7, and the forbidden-constructs list that names
+          # `2>/dev/null` explicitly). It fails closed instead.
+          if ! HITS=$(az resource list --name "$FUNCTION_APP_NAME" --resource-type Microsoft.Web/sites --query "[].resourceGroup" -o tsv 2>&1); then
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
+            echo "::error::preflight: ${FUNCTION_APP_NAME} was not readable in ${FUNCTION_APP_RG}, and the subscription-wide lookup that would say whether it lives in a DIFFERENT resource group FAILED — so its location is UNKNOWN, not established. Provisioning on that basis could build a second copy beside a live one. Grant the deploy principal Reader on the subscription. az said: ${HITS}. Original read error: ${SHOW_ERR}"
+            exit 1
           fi
+          ELSEWHERE=$(printf '%s' "$HITS" | tr -d '\r' | tr '\n' ' ')
 
           if [[ -n "$ELSEWHERE" ]]; then
+            echo "verdict=wrong-resource-group" >> "$GITHUB_OUTPUT"
             echo "::error::preflight: ${FUNCTION_APP_NAME} EXISTS in subscription '${SUB_NAME}' but in resource group(s) [${ELSEWHERE}], not the configured ${FUNCTION_APP_RG}. Fix: set FUNCTION_APP_RG in this workflow to the correct group."
             exit 1
           fi
 
           if [[ "$RG_EXISTS" == "true" ]]; then
-            echo "::error::preflight: resource group ${FUNCTION_APP_RG} EXISTS in subscription '${SUB_NAME}', and ${FUNCTION_APP_NAME} is not readable inside it. Two causes remain and this run cannot separate them: (a) the app is genuinely not in this subscription, or (b) the deploy principal lacks read access to it — the SP needs Website Contributor on the app (granted 2026-05-06 per this file's header; verify it survived). The app IS live regardless: https://${FUNCTION_APP_NAME}.azurewebsites.net/api/health answers 200. Check which subscription actually holds it before changing anything. Original read error: ${SHOW_ERR}"
-          else
-            echo "::error::preflight: resource group ${FUNCTION_APP_RG} does NOT exist in subscription '${SUB_NAME}', so this lane is pointed at the wrong subscription — the AZURE_SUBSCRIPTION_ID secret does not address the estate that holds ${FUNCTION_APP_NAME}. The app IS live: https://${FUNCTION_APP_NAME}.azurewebsites.net/api/health answers 200. Repoint the secret rather than re-creating the app. Original read error: ${SHOW_ERR}"
+            # The app is absent FROM THIS RESOURCE GROUP, which this run did
+            # establish: the group is readable and the app is not in it. Whether
+            # it exists in some OTHER subscription this run still cannot say —
+            # so it does not say it. The provisioning step below is what resolves
+            # the remaining ambiguity, and it resolves it by ASKING ARM rather
+            # than by guessing (auto-bind-by-default.md §5).
+            echo "verdict=absent-here" >> "$GITHUB_OUTPUT"
+            echo "::warning::preflight: resource group ${FUNCTION_APP_RG} EXISTS in subscription '${SUB_NAME}' and ${FUNCTION_APP_NAME} is not in it. Provisioning it from bicep. ${LIVENESS}. Original read error: ${SHOW_ERR}"
+            exit 0
           fi
+
+          echo "verdict=wrong-subscription" >> "$GITHUB_OUTPUT"
+          echo "::error::preflight: resource group ${FUNCTION_APP_RG} does NOT exist in subscription '${SUB_NAME}', so this lane is pointed at the wrong subscription — the AZURE_SUBSCRIPTION_ID secret does not address the estate that holds ${FUNCTION_APP_NAME}. NOTHING is provisioned in this state, deliberately: creating the app here would build a second estate beside the real one, which is how this app ended up in a personal subscription once already (DEPLOYMENT.md, 'What was wrong before this PR'). ${LIVENESS}. Repoint the secret rather than re-creating the app. Original read error: ${SHOW_ERR}"
           exit 1
+
+      - name: Provision the Function App from bicep (auto-bind — the platform builds it, not you)
+        # #3429 fix item 3. Until this step, NOTHING in the tree created
+        # func-csa-inabox-copilot-fg. The only bicep that named it declared it
+        # `existing` (azure-functions/copilot-chat/deploy/main.bicep:64), i.e. a
+        # consumer with no producer, and the only documented way to (re)build it
+        # was the hand-run `az functionapp create` block in DEPLOYMENT.md — a
+        # workstation with `az` write access. That is the
+        # auto-bind-by-default.md §5 violation ("infra prerequisites are
+        # DEPLOYED, not requested") and it is why the eight red runs had no
+        # recovery path.
+        #
+        # It runs ONLY on verdict `absent-here`: the resource group is readable
+        # and the app is not in it. On `wrong-subscription` the preflight has
+        # already exited 1 and this step never runs — deliberately. Provisioning
+        # into a subscription that does not hold the estate is how this app was
+        # once built in a personal subscription (DEPLOYMENT.md, "What was wrong
+        # before this PR"), and deploy-integrity.md R5 forbids resolving a
+        # brownfield ambiguity by silently duplicating.
+        #
+        # Every input below is DISCOVERED from the estate (R5: discover, offer,
+        # never assume) and every failure is classified with the exact role and
+        # scope needed (R6). Nothing here is retried blindly and nothing reports
+        # success it did not re-read.
+        if: steps.preflight.outputs.verdict == 'absent-here'
+        env:
+          # Single source of truth, same convention as FUNCTION_APP_RG above.
+          # `aimldatastore` is REUSED rather than created because the estate's
+          # policy blocks new shared-key storage accounts (DEPLOYMENT.md,
+          # "Recreate from scratch": `ST=aimldatastore  # reuse: shared-key
+          # policy blocks new storage accounts`). A from-scratch estate where it
+          # is absent gets a fresh one — that branch is chosen by MEASURING, not
+          # by assuming.
+          FUNCTION_APP_STORAGE: aimldatastore
+          FUNCTION_APP_INSIGHTS: appi-csa-inabox-copilot-fg
+          # The account azure-functions/copilot-chat/deploy/main.bicep creates
+          # (its `cosmosAccountName` default). Named here rather than derived
+          # from FUNCTION_APP_NAME so the two files can be grepped against each
+          # other instead of agreeing by coincidence.
+          COPILOT_COSMOS_ACCOUNT: cosmos-csa-inabox-copilot-fg
+          BICEP_PATH: platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep
+        run: |
+          set -uo pipefail
+          # Same `bash -e` note as the preflight: every capture uses `if ! VAR=$(...)`.
+
+          if [[ ! -f "$BICEP_PATH" ]]; then
+            echo "::error::provision: ${BICEP_PATH} is missing from the checkout. The producer this step exists to apply is not here; refusing to fall back to a hand-run path."
+            exit 1
+          fi
+
+          # Every EXISTENCE test below is a LIST, never a SHOW. That is
+          # deliberate: a `show` that exits non-zero cannot tell "the resource is
+          # absent" from "I am not allowed to look" (or "the CLI extension that
+          # implements this command is not installed"), and collapsing those into
+          # "absent" is precisely the R7 defect that turned a registry permission
+          # denial into "the tag does not exist". A `list` succeeds-and-returns-
+          # empty for genuine absence and FAILS for a permission problem, so the
+          # exit code carries the distinction.
+          #
+          # `show` IS used, three times, and only ever as a PROPERTY FETCH on an
+          # identity a preceding `list` already established (the App Insights
+          # connection string, the two Cognitive Services endpoints). Those fail
+          # CLOSED — a non-zero exit aborts the step rather than being read as a
+          # value. The rule is about which question the exit code is answering,
+          # not about the verb.
+          #
+          # Every capture folds stderr in, so the message quotes az rather than
+          # guessing at it.
+
+          # ── discover: storage account ────────────────────────────────────
+          if ! STORAGE_HIT=$(az storage account list --resource-group "$FUNCTION_APP_RG" --query "[?name=='${FUNCTION_APP_STORAGE}'].name | [0]" -o tsv 2>&1); then
+            echo "::error::provision: could not list storage accounts in ${FUNCTION_APP_RG}, so whether ${FUNCTION_APP_STORAGE} exists is UNKNOWN — not absent. Creating one on that assumption could collide with a live account. Grant the deploy principal Reader on ${FUNCTION_APP_RG}. az said: ${STORAGE_HIT}"
+            exit 1
+          fi
+          STORAGE_HIT=$(printf '%s' "$STORAGE_HIT" | tr -d '\r')
+          if [[ -n "$STORAGE_HIT" ]]; then
+            CREATE_STORAGE=false
+            echo "discovered: storage account ${FUNCTION_APP_STORAGE} already exists in ${FUNCTION_APP_RG} — reusing it."
+          else
+            CREATE_STORAGE=true
+            echo "discovered: storage account ${FUNCTION_APP_STORAGE} is not present in ${FUNCTION_APP_RG} — it will be created."
+          fi
+
+          # ── discover: Application Insights ───────────────────────────────
+          #
+          # This was `az monitor app-insights component show` used as an
+          # EXISTENCE test, whose failure branch set CREATE_AI=true and announced
+          # "a workspace-based component will be created". That is the exact R7
+          # collapse the comment above forbids, sitting twenty lines under it, and
+          # it had a second trigger the permission story does not cover: that
+          # command lives in the `application-insights` CLI EXTENSION ("This
+          # command is from the following extension: application-insights"), which
+          # this workflow never installs. A missing extension, a Reader gap and a
+          # genuinely absent component all exited non-zero and all read as
+          # "absent" — and the consequence is a WRITE, not an exit: createAppInsights=true
+          # PUTs a component of this exact name pointed at a brand-new Log
+          # Analytics workspace, re-binding a live one.
+          #
+          # `az resource list` is core CLI (no extension), is a LIST, and fails on
+          # a permission problem instead of returning empty.
+          CREATE_AI=true
+          AI_CONN=""
+          if ! AI_ID=$(az resource list --resource-group "$FUNCTION_APP_RG" --resource-type Microsoft.Insights/components --name "$FUNCTION_APP_INSIGHTS" --query "[0].id" -o tsv 2>&1); then
+            echo "::error::provision: could not list Application Insights components in ${FUNCTION_APP_RG}, so whether ${FUNCTION_APP_INSIGHTS} exists is UNKNOWN — not absent. Creating one on that assumption would re-point a live component at a new workspace. Grant the deploy principal Reader on ${FUNCTION_APP_RG}. az said: ${AI_ID}"
+            exit 1
+          fi
+          AI_ID=$(printf '%s' "$AI_ID" | tr -d '\r')
+          if [[ -z "$AI_ID" ]]; then
+            # ESTABLISHED absence: the list succeeded and returned nothing.
+            echo "discovered: no Application Insights component named ${FUNCTION_APP_INSIGHTS} in ${FUNCTION_APP_RG} — a workspace-based one will be created."
+          else
+            # Property fetch on an id the list established. Fails CLOSED.
+            if ! AI_CONN=$(az resource show --ids "$AI_ID" --api-version 2020-02-02 --query properties.ConnectionString -o tsv 2>&1); then
+              echo "::error::provision: Application Insights ${FUNCTION_APP_INSIGHTS} EXISTS (${AI_ID}) but its connection string could not be read. Refusing to fall through to 'create one' — that would re-point a live component at a new workspace. az said: ${AI_CONN}"
+              exit 1
+            fi
+            AI_CONN=$(printf '%s' "$AI_CONN" | tr -d '\r')
+            if [[ -z "$AI_CONN" ]]; then
+              echo "::error::provision: Application Insights ${FUNCTION_APP_INSIGHTS} EXISTS (${AI_ID}) but returned an EMPTY connection string. That is UNKNOWN, not 'telemetry off', and it is not a state this step will paper over by creating a second component."
+              exit 1
+            fi
+            CREATE_AI=false
+            # The connection string carries an instrumentation key. Mask it
+            # before it can reach a log line.
+            echo "::add-mask::${AI_CONN}"
+            echo "discovered: Application Insights ${FUNCTION_APP_INSIGHTS} exists — reusing it (value masked)."
+          fi
+
+          # ── discover: Azure OpenAI account (REQUIRED — the app cannot chat
+          #    without it, and function_app.py reads AZURE_OPENAI_ENDPOINT with
+          #    os.environ[...] which raises KeyError when it is unset) ────────
+          if ! AOAI_NAME=$(az cognitiveservices account list --resource-group "$FUNCTION_APP_RG" --query "[?kind=='OpenAI' || kind=='AIServices'] | [0].name" -o tsv 2>&1); then
+            echo "::error::provision: could not list Cognitive Services accounts in ${FUNCTION_APP_RG}, so the Azure OpenAI endpoint is UNKNOWN — not absent. Grant the deploy principal Reader on ${FUNCTION_APP_RG}. az said: ${AOAI_NAME}"
+            exit 1
+          fi
+          AOAI_NAME=$(printf '%s' "$AOAI_NAME" | tr -d '\r')
+          if [[ -z "$AOAI_NAME" ]]; then
+            echo "::error::provision: no Microsoft.CognitiveServices account of kind OpenAI or AIServices exists in ${FUNCTION_APP_RG}. The chat backend has no model to call, and this step will NOT invent an endpoint. Deploy one into ${FUNCTION_APP_RG} (the estate's is documented in azure-functions/copilot-chat/DEPLOYMENT.md 'Backend dependencies'), then re-run."
+            exit 1
+          fi
+          if ! AOAI_ENDPOINT=$(az cognitiveservices account show --name "$AOAI_NAME" --resource-group "$FUNCTION_APP_RG" --query properties.endpoint -o tsv 2>&1); then
+            echo "::error::provision: found Cognitive Services account ${AOAI_NAME} but could not read its endpoint. az said: ${AOAI_ENDPOINT}"
+            exit 1
+          fi
+          AOAI_ENDPOINT=$(printf '%s' "$AOAI_ENDPOINT" | tr -d '\r')
+          echo "discovered: Azure OpenAI account ${AOAI_NAME} at ${AOAI_ENDPOINT}"
+
+          # ── discover: Content Safety (OPTIONAL, and absent by design in DoD
+          #    — cloud-parity.md: the capability degrades to the documented
+          #    honest-gate in content_safety.py, it does not fail the deploy) ──
+          CS_NAME=""
+          CS_ENDPOINT=""
+          if ! CS_NAME=$(az cognitiveservices account list --resource-group "$FUNCTION_APP_RG" --query "[?kind=='ContentSafety'] | [0].name" -o tsv 2>&1); then
+            echo "::error::provision: could not list Cognitive Services accounts while looking for Content Safety, so its presence is UNKNOWN. Leaving CONTENT_SAFETY_ENDPOINT unset here would silently downgrade moderation on an estate that may well have it — refusing to guess. az said: ${CS_NAME}"
+            exit 1
+          fi
+          CS_NAME=$(printf '%s' "$CS_NAME" | tr -d '\r')
+          if [[ -n "$CS_NAME" ]]; then
+            if ! CS_ENDPOINT=$(az cognitiveservices account show --name "$CS_NAME" --resource-group "$FUNCTION_APP_RG" --query properties.endpoint -o tsv 2>&1); then
+              echo "::error::provision: Content Safety account ${CS_NAME} is listed but its endpoint could not be read. az said: ${CS_ENDPOINT}"
+              exit 1
+            fi
+            CS_ENDPOINT=$(printf '%s' "$CS_ENDPOINT" | tr -d '\r')
+            echo "discovered: Content Safety account ${CS_NAME} at ${CS_ENDPOINT}"
+          else
+            echo "discovered: no Content Safety account in ${FUNCTION_APP_RG}. CONTENT_SAFETY_ENDPOINT stays unset and content_safety.py honest-gates — the documented, supported state (and the only available one in the DoD regions)."
+          fi
+
+          # ── discover: Cosmos analytics endpoint (OPTIONAL — storage.py no-ops
+          #    the analytics writes when it is unset and the chat path stays
+          #    healthy; the account itself is owned by
+          #    azure-functions/copilot-chat/deploy/main.bicep, not by us) ──────
+          if ! COSMOS_ENDPOINT=$(az cosmosdb list --resource-group "$FUNCTION_APP_RG" --query "[?name=='${COPILOT_COSMOS_ACCOUNT}'].documentEndpoint | [0]" -o tsv 2>&1); then
+            echo "::error::provision: could not list Cosmos accounts in ${FUNCTION_APP_RG}, so whether the analytics account exists is UNKNOWN. Wiring COSMOS_ENDPOINT to empty on that basis would silently disable the analytics pipeline. az said: ${COSMOS_ENDPOINT}"
+            exit 1
+          fi
+          COSMOS_ENDPOINT=$(printf '%s' "$COSMOS_ENDPOINT" | tr -d '\r')
+          if [[ -n "$COSMOS_ENDPOINT" ]]; then
+            echo "discovered: Cosmos analytics endpoint ${COSMOS_ENDPOINT}"
+          else
+            echo "discovered: no Cosmos account named ${COPILOT_COSMOS_ACCOUNT} in ${FUNCTION_APP_RG}. COSMOS_ENDPOINT stays unset; apply azure-functions/copilot-chat/deploy/main.bicep and re-run this lane to wire it."
+          fi
+
+          # ── apply ────────────────────────────────────────────────────────
+          DEPLOY_NAME="copilot-fn-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "Applying ${BICEP_PATH} as deployment ${DEPLOY_NAME} in ${FUNCTION_APP_RG} ..."
+          if ! DEPLOY_OUT=$(az deployment group create \
+              --resource-group "$FUNCTION_APP_RG" \
+              --name "$DEPLOY_NAME" \
+              --template-file "$BICEP_PATH" \
+              --parameters \
+                functionAppName="$FUNCTION_APP_NAME" \
+                storageAccountName="$FUNCTION_APP_STORAGE" \
+                createStorageAccount="$CREATE_STORAGE" \
+                createAppInsights="$CREATE_AI" \
+                appInsightsName="$FUNCTION_APP_INSIGHTS" \
+                appInsightsConnectionString="$AI_CONN" \
+                azureOpenAiEndpoint="$AOAI_ENDPOINT" \
+                azureOpenAiAccountName="$AOAI_NAME" \
+                contentSafetyEndpoint="$CS_ENDPOINT" \
+                contentSafetyAccountName="$CS_NAME" \
+                cosmosEndpoint="$COSMOS_ENDPOINT" \
+              --output none 2>&1); then
+            # R6: classify. The remediation names the exact role AND scope, and
+            # ARM's own text is quoted rather than paraphrased — this step does
+            # not assert a cause it did not read.
+            echo "::error::provision: the bicep deployment FAILED. ARM said: ${DEPLOY_OUT}"
+            case "$DEPLOY_OUT" in
+              *AuthorizationFailed*|*does\ not\ have\ authorization*)
+                echo "::error::provision: classified as PERMISSION. The deploy principal holds Website Contributor on the app (per this file's header), which is enough to PUBLISH CODE and not enough to CREATE the app, its Y1 plan, its storage or its role assignments. Grant it Contributor on /subscriptions/<sub>/resourceGroups/${FUNCTION_APP_RG}, plus Role Based Access Control Administrator on the same scope for the two Cognitive Services grants the module makes."
+                ;;
+              *AlreadyExists*|*NameNotAvailable*|*is\ not\ available*)
+                echo "::error::provision: classified as GLOBAL NAME CONFLICT. ${FUNCTION_APP_NAME} is taken in the *.azurewebsites.net namespace by a site this subscription cannot see, which — combined with the preflight establishing it is not in ${FUNCTION_APP_RG} — means it lives in a DIFFERENT subscription or tenant. This is the AZURE_SUBSCRIPTION_ID mismatch, not a missing app. Repoint the secret; do NOT rename the app."
+                ;;
+              *QuotaExceeded*|*SubscriptionIsOverQuotaForSku*)
+                echo "::error::provision: classified as QUOTA. The subscription cannot take another Dynamic (Y1) plan in this region. Raise the quota or pick another region; nothing here is retryable."
+                ;;
+              *)
+                echo "::error::provision: classified as CONFIGURATION-OR-DEFECT. The ARM text above is the whole of what this run established; it is not being narrowed further because doing so would be a guess."
+                ;;
+            esac
+            exit 1
+          fi
+
+          # R6: never report success on an unverified outcome. Re-READ the app.
+          if ! NEW_STATE=$(az functionapp show --name "$FUNCTION_APP_NAME" --resource-group "$FUNCTION_APP_RG" --query state -o tsv 2>&1); then
+            echo "::error::provision: the deployment reported success but ${FUNCTION_APP_NAME} is STILL not readable in ${FUNCTION_APP_RG}. Treating that as a failure rather than trusting the first answer. az said: ${NEW_STATE}"
+            exit 1
+          fi
+          echo "::notice::provision OK — ${FUNCTION_APP_NAME} now exists in ${FUNCTION_APP_RG} (state: $(printf '%s' "$NEW_STATE" | tr -d '\r')). The code deploy follows."
 
       - name: Deploy to Azure Functions
         uses: Azure/functions-action@c9cc8ee93d1285e2a17312cc8357dc1775955272 # v1
@@ -175,6 +512,35 @@ jobs:
               COPILOT_MS_LEARN_MCP_URL=https://learn.microsoft.com/api/mcp \
             --output none
           echo "MS Learn fallback enabled on $FUNCTION_APP_NAME"
+
+      - name: Report what this run did NOT apply (deploy-integrity R2/R3)
+        # Placed AFTER the code deploy so its own claim is one this run
+        # established: at this point code HAS been published and app settings
+        # HAVE been synced, so "code yes, infrastructure no" is a measured
+        # statement rather than a prediction. (The first draft of this step sat
+        # before the deploy and still said "code was deployed" — the same
+        # asserting-what-you-have-not-established error the preflight above
+        # exists to fix, reintroduced in the fix for it.)
+        #
+        # The provision step is gated on verdict `absent-here`. On a live estate
+        # the verdict is `found`, so NOTHING in this run applies
+        # copilot-chat-function.bicep — while the `paths:` trigger means a change
+        # to that module DOES start this run. Without this step the result is a
+        # green check on a run that carried an infrastructure change it never
+        # applied, which is strictly worse than not running at all: before, the
+        # gap was visible as "no run"; after, it hides behind a tick.
+        # deploy-integrity.md R3 — drift is surfaced, not left silent.
+        #
+        # It does NOT claim the module and the estate differ, because this run
+        # never compared them. Saying "the estate is out of date" here would be
+        # the same R7 error in the other direction.
+        if: steps.preflight.outputs.verdict == 'found'
+        env:
+          BICEP_PATH: platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep
+        run: |
+          set -uo pipefail
+          echo "::warning::${FUNCTION_APP_NAME} already existed, so this run applied NO infrastructure: ${BICEP_PATH} was NOT deployed. Code was published and app settings were synced; the app's SHAPE — the full app-setting list, the plan SKU, the two Cognitive Services role assignments, COSMOS_ENDPOINT — is whatever the last apply left it. Whether that MATCHES the module is UNKNOWN: this run did not compare them."
+          echo "::warning::If this push changed ${BICEP_PATH}, that change is merged and NOT deployed. Reconciling is a deliberate, documented step — see azure-functions/copilot-chat/DEPLOYMENT.md, 'Reconciling an existing app'. It is not automatic because the module declares siteConfig.appSettings in FULL, and a re-apply drops every setting it does not name, including WEBSITE_RUN_FROM_PACKAGE which Azure/functions-action sets and the running host needs to start."
 
       - name: Smoke test the deployed endpoint
         # Hits /api/health with a valid request token. Doesn't call the OpenAI

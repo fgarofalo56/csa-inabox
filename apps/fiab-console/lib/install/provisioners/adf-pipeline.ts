@@ -31,9 +31,11 @@ import {
   listPipelineRuns,
   upsertLinkedService,
   upsertDataset,
+  getLinkedService,
+  getDataset,
 } from '@/lib/azure/adf-client';
 import type { Provisioner, ProvisionResult } from './types';
-import { upsertAndRunDevPipeline, type DevPipelineAdapter } from './_seed-dev-pipeline';
+import { upsertAndRunDevPipeline, nullOn404, type DevPipelineAdapter } from './_seed-dev-pipeline';
 import { safePipelineName } from '@/lib/azure/backing-name';
 
 /**
@@ -69,6 +71,16 @@ const adapter: DevPipelineAdapter = {
   },
   async upsertDataset(name, properties) {
     await upsertDataset(name, { name, properties } as any);
+  },
+  // The reads that make the two writes above safe (#3549 review, BLOCKER 1):
+  // an ADF PUT is create-OR-UPDATE, so without a prior existence check the
+  // stubber replaces whatever already holds the name. `nullOn404` maps ONLY a
+  // definite 404 to "absent"; anything else propagates as "could not tell".
+  async getLinkedService(name) {
+    return nullOn404(() => getLinkedService(name));
+  },
+  async getDataset(name) {
+    return nullOn404(() => getDataset(name));
   },
 };
 
