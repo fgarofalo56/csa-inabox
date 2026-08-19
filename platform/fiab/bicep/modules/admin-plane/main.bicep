@@ -1422,6 +1422,9 @@ var risingwaveRootPasswordSecretUri = '${keyvault.outputs.keyVaultUri}secrets/${
 @description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same name, same meaning). When false, every Postgres-backed component in this module is SKIPPED so the core app-tier still deploys — the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT, the Weave ontology editor on LOOM_WEAVE_PG_FQDN, and Loom Unity falls back to its EmptyDir H2 store. WHY a given boundary sets it false is recorded in that boundary\'s .bicepparam next to the assignment — read it there rather than assuming a quota restriction; both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government and pin it false as a deliberate posture hold. If a subscription genuinely IS quota-restricted, https://aka.ms/postgres-request-quota-increase is the request path. NOT a Fabric dependency.')
 param postgresQuotaAvailable bool = true
 
+@description('Static private IP the DNS Private Resolver INBOUND endpoint holds (network.bicep); empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so a literal that matches one estate fails every other one. It has already broken Commercial as Static (#2775) and GCC-High as Dynamic (#3754). The deploy lane DISCOVERS the live value with scripts/ci/resolve-dns-inbound-allocation.mjs and passes it here; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam.')
+param dnsResolverInboundStaticIp string = ''
+
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
 param loomVersion string = '0.45.0'
 
@@ -2711,6 +2714,11 @@ module network 'network.bicep' = {
     // firewalls"). Reuse that signal so the network module references the EXISTING
     // policy instead of re-PUTing it — no extra top-level param needed.
     firewallPolicyReconcile: skipRoleGrants
+    // #3754 — IMMUTABLE, so it is DISCOVERED by the lane and passed through here
+    // rather than decided by a literal that can only ever be right on one estate.
+    // See the block on the resource in network.bicep for the two deploys this
+    // literal has already broken, one per direction.
+    dnsResolverInboundStaticIp: dnsResolverInboundStaticIp
   }
 }
 

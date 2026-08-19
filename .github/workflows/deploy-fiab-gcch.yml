@@ -424,6 +424,57 @@ jobs:
       - name: Adopt the estate's live internal trust token (never re-mint it)
         run: bash scripts/csa-loom/resolve-internal-token.sh --export > /dev/null
 
+      # ── IMMUTABLE-PROPERTY DISCOVERY (#3754) ──────────────────────────────
+      # `Microsoft.Network/dnsResolvers/inboundEndpoints` treats
+      # `privateIpAllocationMethod` as IMMUTABLE: ARM rejects a deployment that
+      # names a method differing from the live one, and that rejection kills the
+      # whole nested `network` template — taking every unrelated change in the
+      # same `az deployment sub create` with it.
+      #
+      # network.bicep has now been broken by a hard-coded literal in BOTH
+      # directions. `Static` broke Commercial (#2775, live endpoint was Dynamic);
+      # #2881 flipped it to `Dynamic` to fix Commercial, and that flip is what has
+      # failed every run of THIS lane since — run 32126019475 reported
+      #   `ipAllocationMethod=Dynamic, existingIpAllocationMethod=Static`
+      # on dnspr-loom-usgovvirginia. Both literals were measured; each was correct
+      # for one estate and wrong for the other. Per deploy-integrity.md R5.3 the
+      # value is now DISCOVERED from the live resource rather than assumed, and an
+      # unreadable control plane REFUSES instead of defaulting (R7 — "I could not
+      # read it" must never render as "it is not there").
+      #
+      # RUNS BEFORE THE WHAT-IF ON PURPOSE. The immutability check is a PREFLIGHT
+      # error, so it can fail the preview as well as the apply; and this lane's
+      # stated principle is that the preview an operator approves and the apply
+      # that follows describe the same deployment. One resolved value feeds both.
+      #
+      # dlz-attach stamps a landing zone into a DIFFERENT subscription and skips
+      # the admin plane entirely, so there is no hub resolver to converge on; the
+      # step no-ops and `${LOOM_DNS_INBOUND_STATIC_IP:+…}` below then omits the
+      # parameter, leaving bicep's own default — which is exactly today's
+      # behaviour for that topology. That branch is taken in BASH, from the
+      # resolved CSA_LOOM_TOPOLOGY env, never from `inputs.` in an `if:` — a
+      # `schedule` event carries no inputs, and deciding a run-shape question by
+      # reading one is precisely the defect #2881 removed from this family of
+      # workflows.
+      - name: Resolve the hub DNS resolver's IMMUTABLE IP allocation method
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane, so there is no hub DNS resolver inbound endpoint to converge on."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the live DNS resolver inbound endpoint cannot be located. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret (or the target_subscription input on dlz-attach); both are empty."
+            exit 1
+          fi
+          node scripts/ci/resolve-dns-inbound-allocation.mjs \
+            --subscription "$DEPLOY_SUB" \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
+            --location "$AZURE_LOCATION"
+
       # #3161 round 2 — THE PREVIEW MUST RESOLVE THE SAME TAGS AS THE APPLY.
       # `whatif-only` is this lane's DEFAULT run_mode, so this step's output IS
       # the artifact an operator reads before approving a full run. It resolved
@@ -445,6 +496,7 @@ jobs:
             --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
             ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
+            ${LOOM_DNS_INBOUND_STATIC_IP:+--parameters dnsResolverInboundStaticIp="$LOOM_DNS_INBOUND_STATIC_IP"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
       - name: Deploy-verification evidence receipt (§7)
@@ -567,6 +619,57 @@ jobs:
           fi
           node scripts/ci/assert-no-silent-image-tag-revert.mjs \
             --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
+      # ── ADX MUST BE RUNNING BEFORE THE APPLY (#3754) ──────────────────────
+      # admin-plane/adx-cluster.bicep declares two
+      # `Microsoft.Kusto/clusters/principalAssignments` children (the Console
+      # UAMI's AllDatabasesAdmin and the Activator's AllDatabasesViewer). Those
+      # are ADX DATA-plane roles, so the Kusto RP must reach the engine to write
+      # them — and on a stopped cluster it cannot. Run 32126019475 and every run
+      # since died on exactly that leaf:
+      #
+      #   ClusterNotValidForPrincipals on 'adx-csa-loom-fmezxj/console-uami-alldatabasesadmin':
+      #   [BadRequest] Cluster is in state 'Stopped', cannot retrieve list of principals
+      #
+      # WHY START IT RATHER THAN SKIP THE GRANTS. Skipping would turn a loud
+      # failure into a silent one — a green deploy with a Console UAMI holding no
+      # ADX rights, and every Eventhouse / KQL surface in the boundary failing
+      # later with a permission error nobody could trace back here.
+      # auto-bind-by-default.md §5 and deploy-integrity.md R6 both say the
+      # platform performs a remediation it is capable of; starting a cluster it
+      # already owns is squarely that. gcc-high.bicepparam sets `adxEnabled =
+      # true`, so a stopped cluster is ALSO a live capability gap in this
+      # boundary, independent of the deploy. `enableAutoStop: true` on the
+      # cluster caps the cost: Azure stops it again once it idles.
+      #
+      # It runs on the same trigger as the apply, so a whatif-only DRY RUN — a
+      # run that by definition applies nothing — never mutates the estate.
+      #
+      # deploy-fiab-commercial carries the IDENTICAL latent failure with no such
+      # preflight (adxEnabled=true + the same unconditional enableAutoStop), and
+      # is deliberately NOT changed here: it is the only working infra-deploy
+      # path in the repo and destabilising it to pre-empt a latent fault would
+      # trade one P0 for a worse one. Tracked in #3786.
+      - name: ADX preflight — a stopped cluster cannot take its principal assignments
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys no admin plane, so it declares no principal
+          # assignments on the hub cluster and has nothing to start.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret; it is empty."
+            exit 1
+          fi
+          node scripts/ci/ensure-adx-cluster-running.mjs \
+            --subscription "$DEPLOY_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       - name: Provision (with full Gov dispatch)
@@ -701,6 +804,7 @@ jobs:
             --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
             ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
+            ${LOOM_DNS_INBOUND_STATIC_IP:+--parameters dnsResolverInboundStaticIp="$LOOM_DNS_INBOUND_STATIC_IP"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
           # ── The smoke test's target: RESOLVED, never assumed (#3137) ────────
