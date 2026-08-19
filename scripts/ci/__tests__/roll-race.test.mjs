@@ -93,6 +93,7 @@ import {
   pinsFromEnv,
   resolveRunningImageTags,
   selectLastConsoleRoll,
+  selectRevisionOverwrite,
 } from '../reconcile-policy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -117,6 +118,34 @@ const estateAt = (consoleTag) => [
   { name: 'loom-console', image: `acr1.azurecr.io/loom-console:${consoleTag}` },
   { name: 'loom-mcp', image: 'acr1.azurecr.io/loom-mcp:0.80.0' },
   { name: 'loom-unity', image: 'acr1.azurecr.io/loom-unity:0.80.0' },
+];
+
+// ---------------------------------------------------------------------------
+// THE 2026-08-19 MISS — the run where this gate EXISTED, RAN, and passed.
+//
+// Every value below was read off the live Commercial estate and the two runs,
+// not invented: `az containerapp revision list -n loom-console -g
+// rg-csa-loom-admin-centralus`, deploy run 32225183031 and roll run
+// 32225337320. The re-pin measured at 06:57:53Z; the gate queried at 07:14:52Z
+// and printed "0 run(s) completed in that window" while revision 0000782 sat
+// in the history between two revisions carrying the tag the deploy applied.
+// ---------------------------------------------------------------------------
+
+/** What the scheduled deploy re-applied on 2026-08-19. */
+const AUG19_APPLIED = '83e7cab61e8c978de3352b21b05551e4bb85d7a6';
+/** What roll 32225337320 shipped, and what was overwritten. */
+const AUG19_ROLLED = '150d2937336415545a771fe12f0d7b2fba2093d8';
+/** The moment the re-pin step recorded, verbatim from the run's env block. */
+const AUG19_MEASURED_AT = '2026-08-19T06:57:53Z';
+
+/**
+ * `az containerapp revision list` projection, verbatim from the live estate.
+ * 0000781 predates the measurement; 0000782 is the roll; 0000783 is the apply.
+ */
+const AUG19_REVISIONS = [
+  { name: 'loom-console--0000781', createdTime: '2026-08-19T05:46:46+00:00', image: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}` },
+  { name: 'loom-console--0000782', createdTime: '2026-08-19T07:04:56+00:00', image: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_ROLLED}` },
+  { name: 'loom-console--0000783', createdTime: '2026-08-19T07:10:19+00:00', image: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}` },
 ];
 
 // ---------------------------------------------------------------------------
@@ -253,7 +282,7 @@ test('a roll run that concluded SUCCESS with its roll job SKIPPED is NOT the las
     },
   ]);
   assert.equal(sel.status, 'none');
-  assert.match(sel.reason, /none with a successful roll job/);
+  assert.match(sel.reason, /none of them had a successful roll job/);
 });
 
 test('THE INCIDENT: the estate on the deploy-applied tag while a roll shipped a newer one is a REGRESSION', () => {
@@ -278,8 +307,181 @@ test('THE INCIDENT: the estate on the deploy-applied tag while a roll shipped a 
   assert.match(v.reason, /THIS DEPLOY applied/, 'and must say the deploy is the one that did it');
 });
 
-test('the estate ON the last roll SHA passes', () => {
-  const sel = selectLastConsoleRoll([
+// ---------------------------------------------------------------------------
+// I-ESTATE — the revision history, which is the source that was available and
+// unconsulted on the run this gate missed (#3676 reopened, 2026-08-19).
+// ---------------------------------------------------------------------------
+
+test('THE 2026-08-19 MISS: the estate\'s own revision history shows the overwrite the Actions API did not', () => {
+  const sel = selectRevisionOverwrite(AUG19_REVISIONS, {
+    measuredAt: AUG19_MEASURED_AT,
+    appliedTag: AUG19_APPLIED,
+  });
+  assert.equal(
+    sel.status, 'overwritten',
+    'this is the literal live revision list at 07:14:52Z on 2026-08-19. Anything but `overwritten` here is a gate ' +
+      'that cannot fail on the incident it was written for.',
+  );
+  assert.equal(sel.overwrittenTag, AUG19_ROLLED, 'the roll-forward target is read OFF THE ESTATE, not inferred');
+  assert.match(sel.reason, /loom-console--0000782/, 'the reason must name the revision that was overwritten');
+  assert.match(sel.reason, /loom-console--0000783/, 'and the revision that replaced it');
+});
+
+test('MUTATION CONTROL: with the revision evidence withheld, the very same state passes — which is what shipped', () => {
+  // The Actions API population as this gate ACTUALLY received it at 07:14:52Z:
+  // empty. Replaying the gate's own query today returns roll 32225337320, so
+  // this fixture reproduces the miss, not a hypothetical.
+  const rollSelection = selectLastConsoleRoll([]);
+  const withoutRevisions = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection,
+  });
+  assert.equal(
+    withoutRevisions.verdict, 'ok',
+    'CONTROL: the pre-fix gate reported OK across the revert. If this ever stops being `ok`, the assertion below ' +
+      'no longer proves the revision read is what moves the verdict.',
+  );
+
+  const withRevisions = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection,
+    revisionSelection: selectRevisionOverwrite(AUG19_REVISIONS, {
+      measuredAt: AUG19_MEASURED_AT,
+      appliedTag: AUG19_APPLIED,
+    }),
+  });
+  assert.equal(
+    withRevisions.verdict, 'regression',
+    'and WITH it, the same inputs go red. The revision read is the difference, not a coincidence of fixtures.',
+  );
+  assert.equal(withRevisions.rollForwardTo, AUG19_ROLLED);
+  assert.match(withRevisions.reason, /ITS OWN REVISION HISTORY RECORDS IT/);
+});
+
+test('a roll that lands AFTER our apply leaves the estate AHEAD, not behind — no false red', () => {
+  const sel = selectRevisionOverwrite([
+    { name: 'r1', createdTime: '2026-08-19T07:00:00Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
+    { name: 'r2', createdTime: '2026-08-19T07:20:00Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'ahead', 'the last writer was not this apply, so this apply did not leave anything behind');
+  assert.match(sel.reason, /did not leave the estate behind/);
+});
+
+test('a transient revert that a later roll already repaired is AHEAD, not a red', () => {
+  // roll -> our apply clobbers it -> the roll lane rolls again. The estate is
+  // correct NOW; reddening here would be a gate crying wolf about a healed state.
+  const sel = selectRevisionOverwrite([
+    { name: 'r1', createdTime: '2026-08-19T07:04:56Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+    { name: 'r2', createdTime: '2026-08-19T07:10:19Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
+    { name: 'r3', createdTime: '2026-08-19T07:22:00Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'ahead');
+});
+
+test('a window with nothing but our own tag is `none` — an idempotent apply is not a revert', () => {
+  const sel = selectRevisionOverwrite([
+    { name: 'r0', createdTime: '2026-08-19T05:46:46Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+    { name: 'r1', createdTime: '2026-08-19T07:10:19Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'none', 'r0 is BEFORE the measurement, so it is outside the window by construction');
+});
+
+test('no revision created in the window at all is `none`, and says why', () => {
+  const sel = selectRevisionOverwrite(AUG19_REVISIONS.slice(0, 1), {
+    measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED,
+  });
+  assert.equal(sel.status, 'none');
+  assert.match(sel.reason, /no loom-console revision was created at or after/);
+});
+
+test('the window bound is INCLUSIVE — a revision in the measurement second is not silently outside', () => {
+  const sel = selectRevisionOverwrite([
+    { name: 'r1', createdTime: AUG19_MEASURED_AT, image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+    { name: 'r2', createdTime: '2026-08-19T07:10:19Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'overwritten', 'measured_at has second resolution; an exclusive bound would hide this');
+  assert.equal(sel.overwrittenTag, AUG19_ROLLED);
+});
+
+test('an UNREADABLE revision history is UNKNOWN, never "nothing happened"', () => {
+  const sel = selectRevisionOverwrite(null, { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /could not look/);
+});
+
+test('a revision list that is not an array is UNKNOWN, not an empty history', () => {
+  const sel = selectRevisionOverwrite({ error: 'nope' }, { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /changed shape/);
+});
+
+test('an unbounded window (no measured-at) is UNKNOWN — it proves nothing either way', () => {
+  const sel = selectRevisionOverwrite(AUG19_REVISIONS, { measuredAt: '', appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /cannot be bounded/);
+});
+
+test('a revision that cannot be PLACED in time is UNKNOWN, never "outside the window"', () => {
+  const sel = selectRevisionOverwrite([
+    { name: 'r1', createdTime: null, image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /cannot be placed inside or outside/);
+});
+
+test('a DIGEST-PINNED revision inside the window is UNKNOWN — a digest does not name a commit', () => {
+  const sel = selectRevisionOverwrite([
+    { name: 'r1', createdTime: '2026-08-19T07:04:56Z', image: 'acr1.azurecr.io/loom-console@sha256:abc123' },
+    { name: 'r2', createdTime: '2026-08-19T07:10:19Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /digest-pinned/);
+});
+
+test('revision UNKNOWN fails the whole verdict closed, even when the Actions API is happy', () => {
+  const v = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection: selectLastConsoleRoll([]),
+    revisionSelection: selectRevisionOverwrite(null, { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED }),
+  });
+  assert.equal(v.verdict, 'unknown', 'an Actions-API "nothing to see" must not launder an unreadable estate');
+});
+
+test('the revision read is STRICTLY ADDITIVE — it cannot turn an Actions-API regression green', () => {
+  const rollSelection = selectLastConsoleRoll([
+    {
+      id: 1, workflow: 'loom-roll-and-validate.yml', title: `roll ${ROLLED} (build-triggered)`,
+      completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
+    },
+  ]);
+  // The revision source sees a clean window (it was told a different applied
+  // tag than the estate is running), yet the Actions comparison still fails.
+  const v = decideEstateRegression({
+    appliedTag: STALE,
+    estateTag: STALE,
+    rollSelection,
+    revisionSelection: { status: 'none', reason: 'nothing in this window.' },
+  });
+  assert.equal(v.verdict, 'regression', 'the pre-existing comparison must keep its teeth');
+});
+
+test('R7: the Actions-API "none" verdict no longer asserts a fact about the ESTATE', () => {
+  const sel = selectLastConsoleRoll([]);
+  assert.equal(sel.status, 'none');
+  assert.match(
+    sel.reason, /Actions API listed/,
+    'the claim must be scoped to what was actually read — a listing — not to what the estate did',
+  );
+  assert.doesNotMatch(
+    sel.reason, /nothing this deploy wrote could have overwritten a newer image\.$/,
+    'the old wording asserted an estate-wide fact from an API listing, and that sentence was FALSE on 2026-08-19',
+  );
+});
+
+test('the estate ON the last roll SHA passes', () => {  const sel = selectLastConsoleRoll([
     {
       id: 1, workflow: 'loom-roll-and-validate.yml', title: `roll ${ROLLED} (build-triggered)`,
       completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
@@ -396,19 +598,24 @@ test('the CLI prints a rollback target ONLY for an attributable regression', () 
     id: 8, workflow: 'loom-roll-and-validate.yml', title: `roll ${ROLLED} (build-triggered)`,
     completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
   }];
+  // A window the REVISION source reads as clean, so this test still exercises
+  // the Actions-API attribution path it was written for rather than the new one.
+  const revs = [
+    { name: 'r1', createdTime: '2026-08-17T07:19:48Z', image: `acr.azurecr.io/loom-console:${STALE}` },
+  ];
   const regression = runCli(
-    ['assert-estate-not-behind-roll', '--applied-tag', STALE,
-      '--estate-image', `acr.azurecr.io/loom-console:${STALE}`, '--rolls', 'r.json'],
-    { files: { 'r.json': rolls } },
+    ['assert-estate-not-behind-roll', '--applied-tag', STALE, '--measured-at', '2026-08-17T07:03:40Z',
+      '--estate-image', `acr.azurecr.io/loom-console:${STALE}`, '--rolls', 'r.json', '--revisions', 'v.json'],
+    { files: { 'r.json': rolls, 'v.json': revs } },
   );
   assert.equal(regression.code, 1);
   assert.match(regression.logs, new RegExp(`image_tag=${ROLLED}`),
     'an attributable regression names the exact SHA to roll forward to');
 
   const drifted = runCli(
-    ['assert-estate-not-behind-roll', '--applied-tag', STALE,
-      '--estate-image', `acr.azurecr.io/loom-console:${'c'.repeat(40)}`, '--rolls', 'r.json'],
-    { files: { 'r.json': rolls } },
+    ['assert-estate-not-behind-roll', '--applied-tag', STALE, '--measured-at', '2026-08-17T07:03:40Z',
+      '--estate-image', `acr.azurecr.io/loom-console:${'c'.repeat(40)}`, '--rolls', 'r.json', '--revisions', 'v.json'],
+    { files: { 'r.json': rolls, 'v.json': revs } },
   );
   assert.equal(drifted.code, 1, 'drift still fails closed');
   assert.match(drifted.logs, /ESTATE DRIFT/);
@@ -529,8 +736,10 @@ test('CLI assert-estate-not-behind-roll: the incident exits 1 with an actionable
     [
       'assert-estate-not-behind-roll',
       '--applied-tag', STALE,
+      '--measured-at', '2026-08-17T07:03:40Z',
       '--estate-image', `acrloom.azurecr.io/loom-console:${STALE}`,
       '--rolls', 'rolls.json',
+      '--revisions', 'revs.json',
     ],
     {
       files: {
@@ -539,6 +748,10 @@ test('CLI assert-estate-not-behind-roll: the incident exits 1 with an actionable
           title: `roll ${ROLLED} (build-triggered)`,
           completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
         }],
+        'revs.json': [
+          { name: 'loom-console--0000755', createdTime: '2026-08-17T07:10:56Z', image: `acrloom.azurecr.io/loom-console:${ROLLED}` },
+          { name: 'loom-console--0000756', createdTime: '2026-08-17T07:19:48Z', image: `acrloom.azurecr.io/loom-console:${STALE}` },
+        ],
       },
     },
   );
@@ -548,13 +761,31 @@ test('CLI assert-estate-not-behind-roll: the incident exits 1 with an actionable
   assert.match(r.logs, /loom-roll-and-validate\.yml with image_tag/);
 });
 
+test('CLI assert-estate-not-behind-roll: neither revision flag is a USAGE error (2), never a silent pass', () => {
+  // Omitting them would silently restore the Actions-API-only comparison that
+  // reported OK across the 2026-08-19 revert. It must not be a default.
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', STALE,
+      '--estate-image', `acrloom.azurecr.io/loom-console:${STALE}`,
+      '--rolls', 'rolls.json',
+    ],
+    { files: { 'rolls.json': [] } },
+  );
+  assert.equal(r.code, 2, 'a missing evidence source is a usage error, not an assumption');
+  assert.match(r.logs, /exactly one of --revisions/);
+});
+
 test('CLI assert-estate-not-behind-roll: a digest-pinned console is UNKNOWN (exit 1), not OK', () => {
   const r = runCli(
     [
       'assert-estate-not-behind-roll',
       '--applied-tag', STALE,
+      '--measured-at', '2026-08-17T07:03:40Z',
       '--estate-image', 'acrloom.azurecr.io/loom-console@sha256:' + 'b'.repeat(64),
       '--rolls', 'rolls.json',
+      '--revisions-error', 'not reached',
     ],
     { files: { 'rolls.json': [] } },
   );
@@ -567,8 +798,10 @@ test('CLI assert-estate-not-behind-roll: the healthy path exits 0 and states wha
     [
       'assert-estate-not-behind-roll',
       '--applied-tag', ROLLED,
+      '--measured-at', '2026-08-17T07:03:40Z',
       '--estate-image', `acrloom.azurecr.io/loom-console:${ROLLED}`,
       '--rolls', 'rolls.json',
+      '--revisions', 'revs.json',
     ],
     {
       files: {
@@ -576,6 +809,9 @@ test('CLI assert-estate-not-behind-roll: the healthy path exits 0 and states wha
           id: 1, workflow: 'loom-roll-and-validate.yml', title: `roll ${ROLLED} (build-triggered)`,
           completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
         }],
+        'revs.json': [
+          { name: 'loom-console--0000755', createdTime: '2026-08-17T07:10:56Z', image: `acrloom.azurecr.io/loom-console:${ROLLED}` },
+        ],
       },
     },
   );
@@ -585,15 +821,43 @@ test('CLI assert-estate-not-behind-roll: the healthy path exits 0 and states wha
 });
 
 test('CLI assert-estate-not-behind-roll: --rolls-error fails closed (exit 1)', () => {
-  const r = runCli([
-    'assert-estate-not-behind-roll',
-    '--applied-tag', ROLLED,
-    '--estate-image', `acrloom.azurecr.io/loom-console:${ROLLED}`,
-    '--rolls-error', 'HTTP 403',
-  ]);
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', ROLLED,
+      '--measured-at', '2026-08-17T07:03:40Z',
+      '--estate-image', `acrloom.azurecr.io/loom-console:${ROLLED}`,
+      '--rolls-error', 'HTTP 403',
+      '--revisions', 'revs.json',
+    ],
+    {
+      files: {
+        'revs.json': [
+          { name: 'loom-console--0000755', createdTime: '2026-08-17T07:10:56Z', image: `acrloom.azurecr.io/loom-console:${ROLLED}` },
+        ],
+      },
+    },
+  );
   assert.equal(r.code, 1);
   assert.match(r.logs, /UNKNOWN, which fails closed/);
   assert.match(r.logs, /HTTP 403/);
+});
+
+test('CLI assert-estate-not-behind-roll: --revisions-error fails closed even when the Actions API is clean', () => {
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', ROLLED,
+      '--measured-at', '2026-08-17T07:03:40Z',
+      '--estate-image', `acrloom.azurecr.io/loom-console:${ROLLED}`,
+      '--rolls', 'rolls.json',
+      '--revisions-error', 'az containerapp revision list exited 1: AuthorizationFailed',
+    ],
+    { files: { 'rolls.json': [] } },
+  );
+  assert.equal(r.code, 1, 'an unreadable estate history must not be laundered by a quiet Actions API');
+  assert.match(r.logs, /UNKNOWN, which fails closed/);
+  assert.match(r.logs, /AuthorizationFailed/, 'the refusal must quote the control plane, not invent a cause (R7)');
 });
 
 // ---------------------------------------------------------------------------
@@ -675,6 +939,14 @@ const GH_STUB = [
 const AZ_STUB = [
   '#!/usr/bin/env bash',
   'set -uo pipefail',
+  // `az containerapp revision list` MUST be matched before the bare `list`
+  // branch below: its $2 is `revision`, not `list`, so order is not actually
+  // load-bearing here — but keeping it first documents that they are two
+  // different reads (running image vs. the timestamped history) rather than one.
+  'if [ "$1" = "containerapp" ] && [ "$2" = "revision" ] && [ "$3" = "list" ]; then',
+  '  if [ -n "${AZ_REV_ERR:-}" ]; then printf "%s\\n" "$AZ_REV_ERR" >&2; exit 1; fi',
+  '  cat "$AZ_REV_FILE"; exit 0',
+  'fi',
   'if [ "$1" = "containerapp" ] && [ "$2" = "list" ]; then',
   '  if [ -n "${AZ_LIST_ERR:-}" ]; then printf "%s\\n" "$AZ_LIST_ERR" >&2; exit 1; fi',
   '  cat "$AZ_LIST_FILE"; exit 0',
@@ -686,7 +958,7 @@ const AZ_STUB = [
   'echo "unstubbed az: $*" >&2; exit 99',
 ].join('\n');
 
-function runStep(namePrefix, { env = {}, fixtures = {}, azList = null } = {}) {
+function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null } = {}) {
   const yaml = readNorm(DEPLOY_WORKFLOW);
   const body = runBodyOf(yaml, namePrefix);
   const declared = envKeysOf(yaml, namePrefix);
@@ -713,6 +985,8 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null } = {}) {
     }
     const azListFile = join(dir, 'az-list.json');
     if (azList) writeFileSync(azListFile, JSON.stringify(azList));
+    const azRevFile = join(dir, 'az-revisions.json');
+    writeFileSync(azRevFile, JSON.stringify(azRevisions ?? []));
 
     const script = join(dir, 'step.sh');
     writeFileSync(script, body, 'utf8');
@@ -736,6 +1010,7 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null } = {}) {
         GITHUB_OUTPUT: ghOutFile,
         GH_FIXTURES: fixDir,
         AZ_LIST_FILE: azListFile,
+        AZ_REV_FILE: azRevFile,
       },
     });
     return {
@@ -826,8 +1101,95 @@ test('SHELL: a from-scratch estate (no hub) passes without asking az anything', 
 /** Actions API payloads, in the shape gh really returns. */
 const rollRunsPayload = (runs) => ({ workflow_runs: runs });
 
+/**
+ * A revision history the REVISION source reads as clean, so the tests below
+ * keep exercising the Actions-API attribution path they were written for.
+ * The 2026-08-19 shape gets its own test rather than being smeared into these.
+ */
+const cleanRevisions = (tag) => [
+  { name: 'loom-console--0000756', createdTime: '2026-08-17T07:19:48Z', image: `acrloom.azurecr.io/loom-console:${tag}` },
+];
+
+test('SHELL: THE 2026-08-19 MISS end to end — the revision history reddens what the Actions API missed', { skip: shellSkip }, () => {
+  // Every input is the live shape: the Actions API returns an EMPTY listing
+  // (which is what it did at 07:14:52Z) and the revision history carries the
+  // round trip. The old step body had no second witness and went green here.
+  const r = runStep(ESTATE_STEP, {
+    azRevisions: AUG19_REVISIONS,
+    env: {
+      GH_TOKEN: 'x',
+      DEPLOY_SUB: '',
+      APPLIED_TAG: AUG19_APPLIED,
+      MEASURED_AT: AUG19_MEASURED_AT,
+      AZURE_LOCATION: 'centralus',
+      GITHUB_REPOSITORY: 'acme/csa-inabox',
+      AZ_SHOW_IMAGE: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}`,
+    },
+    fixtures: {
+      'roll-runs.json': rollRunsPayload([]),
+      'full-runs.json': rollRunsPayload([]),
+    },
+  });
+  assert.equal(
+    r.status, 1,
+    `the step must go RED on the exact state that shipped green on 2026-08-19; got ${r.status}:\n${r.out}`,
+  );
+  assert.match(r.out, /ESTATE REGRESSION \(#3676\)/);
+  assert.match(r.out, /ITS OWN REVISION HISTORY RECORDS IT/);
+  assert.match(r.out, new RegExp(`image_tag=${AUG19_ROLLED}`), 'and must name the SHA read off the estate');
+  assert.match(r.out, /loom-console--0000782/);
+});
+
+test('SHELL: MUTATION CONTROL — feed the same step an EMPTY revision list and it goes green again', { skip: shellSkip }, () => {
+  // The needle is the revision history, not the fixtures around it. With the
+  // estate's own witness removed, the identical Actions-API payload, applied
+  // tag and running image produce exit 0 — which is precisely what CI recorded.
+  const r = runStep(ESTATE_STEP, {
+    azRevisions: [],
+    env: {
+      GH_TOKEN: 'x',
+      DEPLOY_SUB: '',
+      APPLIED_TAG: AUG19_APPLIED,
+      MEASURED_AT: AUG19_MEASURED_AT,
+      AZURE_LOCATION: 'centralus',
+      GITHUB_REPOSITORY: 'acme/csa-inabox',
+      AZ_SHOW_IMAGE: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}`,
+    },
+    fixtures: {
+      'roll-runs.json': rollRunsPayload([]),
+      'full-runs.json': rollRunsPayload([]),
+    },
+  });
+  assert.equal(r.status, 0, `CONTROL: without the revision evidence the state is indistinguishable:\n${r.out}`);
+  assert.match(r.out, /estate-vs-roll: OK/);
+});
+
+test('SHELL: an unreadable revision history fails CLOSED even when everything else is clean', { skip: shellSkip }, () => {
+  const r = runStep(ESTATE_STEP, {
+    azRevisions: [],
+    env: {
+      GH_TOKEN: 'x',
+      DEPLOY_SUB: '',
+      APPLIED_TAG: ROLLED,
+      MEASURED_AT: '2026-08-17T07:03:40Z',
+      AZURE_LOCATION: 'centralus',
+      GITHUB_REPOSITORY: 'acme/csa-inabox',
+      AZ_SHOW_IMAGE: `acrloom.azurecr.io/loom-console:${ROLLED}`,
+      AZ_REV_ERR: 'ERROR: (AuthorizationFailed) The client does not have authorization to perform action',
+    },
+    fixtures: {
+      'roll-runs.json': rollRunsPayload([]),
+      'full-runs.json': rollRunsPayload([]),
+    },
+  });
+  assert.equal(r.status, 1, `an unreadable estate history is UNKNOWN, not a pass:\n${r.out}`);
+  assert.match(r.out, /UNKNOWN, which fails closed/);
+  assert.match(r.out, /AuthorizationFailed/, 'the refusal must quote the control plane, not invent a cause (R7)');
+});
+
 test('SHELL: THE INCIDENT end to end — stale image + a newer shipped roll exits 1', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
+    azRevisions: cleanRevisions(STALE),
     env: {
       GH_TOKEN: 'x',
       DEPLOY_SUB: '',
@@ -856,6 +1218,7 @@ test('SHELL: a roll that concluded success with its roll job SKIPPED does not cl
   // Run 32006479915's real shape. If the step read the RUN conclusion instead
   // of the JOB conclusion this would report the estate as correct.
   const r = runStep(ESTATE_STEP, {
+    azRevisions: cleanRevisions(STALE),
     env: {
       GH_TOKEN: 'x',
       DEPLOY_SUB: '',
@@ -882,6 +1245,7 @@ test('SHELL: a roll that concluded success with its roll job SKIPPED does not cl
 
 test('SHELL: the healthy path exits 0', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
+    azRevisions: cleanRevisions(ROLLED),
     env: {
       GH_TOKEN: 'x',
       DEPLOY_SUB: '',
@@ -905,6 +1269,7 @@ test('SHELL: the healthy path exits 0', { skip: shellSkip }, () => {
 
 test('SHELL: an unreadable Actions API fails CLOSED rather than passing quietly', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
+    azRevisions: cleanRevisions(ROLLED),
     env: {
       GH_TOKEN: 'x',
       DEPLOY_SUB: '',
@@ -924,6 +1289,7 @@ test('SHELL: an unreadable Actions API fails CLOSED rather than passing quietly'
 
 test('SHELL: an unreadable container app fails CLOSED', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
+    azRevisions: cleanRevisions(ROLLED),
     env: {
       GH_TOKEN: 'x',
       DEPLOY_SUB: '',
@@ -1392,6 +1758,54 @@ test('CONTRACT: the deploy takes a CLAIM-ONLY lease before the apply and release
   const releaseIf = yaml.slice(release, release + 400);
   assert.match(releaseIf, /if: always\(\)/,
     'a FAILED apply has written the registry too — the mutex must not outlive the writer');
+});
+
+test('CONTRACT: the estate gate reads the REVISION HISTORY, and every CLI call carries it (#3676)', () => {
+  const yaml = readNorm(DEPLOY_WORKFLOW);
+  const body = stepBodyByName(yaml, 'Estate must not be BEHIND the last successful roll (#3676)');
+  assert.ok(body, 'estate gate step not found by exact name');
+
+  assert.match(
+    body, /az containerapp revision list -n loom-console/,
+    'without this read the gate is back to asking the Actions API alone — the configuration that reported OK ' +
+      'while revisions 0000782 -> 0000783 recorded the revert on 2026-08-19',
+  );
+  assert.match(body, /--query "\[\]\.\{name:name, createdTime:properties\.createdTime, image:properties\.template\.containers\[0\]\.image\}"/,
+    'the projection must carry name + createdTime + image; a window cannot be built without the timestamp');
+
+  // Every reachable invocation must hand the CLI one of the two revision flags
+  // — literally, or via the REV_ARGS array the two live call sites expand. The
+  // CLI makes their absence a usage error, but a call site that omits them
+  // would then fail for a reason nobody reads as "the gate lost its witness".
+  const calls = body.split('node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll').slice(1);
+  assert.equal(calls.length, 3, `expected 3 CLI call sites (no-tag, unreadable-estate, healthy); found ${calls.length}`);
+  for (const [i, c] of calls.entries()) {
+    // The argument list is the run of backslash-continued lines that follows.
+    const args = c.split('\n').reduce((acc, l) => (acc.done ? acc : (acc.lines.push(l), acc.done = !l.trimEnd().endsWith('\\'), acc)), { lines: [], done: false }).lines.join('\n');
+    assert.ok(
+      /--revisions[ "]/.test(args) || /--revisions-error/.test(args) || /\$\{REV_ARGS\[@\]\}/.test(args),
+      `CLI call site ${i} passes no revision evidence; its args were:\n${args}`,
+    );
+    assert.match(args, /--measured-at/, `CLI call site ${i} passes no --measured-at, so its window is unbounded`);
+  }
+  assert.equal(
+    (body.match(/\$\{REV_ARGS\[@\]\}/g) || []).length, 2,
+    'the two call sites that reach az must expand REV_ARGS; the third short-circuits before any az call and ' +
+      'passes --revisions-error inline',
+  );
+
+  assert.match(body, /REV_RC=\$\?/, 'the revision read must capture its own exit code rather than infer one');
+  assert.match(body, /2> "\$REV_ERR"/, 'stderr goes to a file; merging it would splice az warnings into the JSON');
+  for (const re of [/continue-on-error/, /\|\|\s*true/, /2>\s*\/dev\/null/]) {
+    assert.ok(!re.test(body), `the estate gate discards a result (${re}) — a gate that cannot fail is not a gate`);
+  }
+
+  // The window bound comes from the re-pin step, so the two must stay wired.
+  const repin = stepBodyByName(yaml, 'Re-pin appImageTags to the RUNNING images (narrows the roll race — #3676)');
+  assert.match(repin, /measured_at=\$MEASURED_AT/,
+    'the re-pin publishes the window start; without it the estate gate has an unbounded window and refuses');
+  assert.match(yaml, /MEASURED_AT: \$\{\{ steps\.repin\.outputs\.measured_at \}\}/,
+    'and the estate gate must consume that exact output');
 });
 
 test('CONTRACT: the build lane carries ACR_LEASE_STATE across the acquire/release JOB boundary', () => {

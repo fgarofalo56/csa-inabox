@@ -95,6 +95,34 @@
  *             I-FRESH narrows the window, it does not close it (a roll can land
  *             while ARM is mid-apply), so something has to NOTICE.
  *
+ * …AND THE WAY I-BEHIND FAILED TO NOTICE (#3676 REOPENED, 2026-08-19)
+ * -------------------------------------------------------------------
+ * I-BEHIND shipped, ran on the very next revert, and reported OK.
+ *
+ *   06:57:53  [repin] measured + pinned console 83e7cab6…
+ *   07:04:56  revision 0000782 — loom-console:150d2937…   <- roll 32225337320
+ *   07:10:19  revision 0000783 — loom-console:83e7cab6…   <- the apply, stale
+ *   07:11:02  roll 32225337320 completes, SUCCESS
+ *   07:14:52  [estate-vs-roll] "0 run(s) completed in that window"  -> OK
+ *   07:14:18  deploy-fiab-commercial: SUCCESS
+ *
+ * The decision logic was correct; its POPULATION was empty. The gate built that
+ * population from the GitHub Actions API, and at 07:14:52 that API's filtered
+ * listing did not contain a run that had completed at 07:11:02. Replaying the
+ * gate's exact query today returns that run and drives the same code straight
+ * to `regression`, so nothing about the comparison needed fixing.
+ *
+ * WHY the API omitted it is NOT established and is not asserted anywhere in
+ * this file. What IS established is the design error: the gate asked a
+ * third-party, eventually-consistent index a question about OUR estate, while
+ * the estate held a timestamped, lag-free answer the whole time.
+ *
+ *   I-ESTATE  The window is read from the Container App's OWN revision history
+ *             (selectRevisionOverwrite), which needs no token, no Actions API
+ *             and no consistency window. A revision exists the moment ARM
+ *             creates it. It is consulted FIRST and is strictly additive — it
+ *             can turn an OK into a regression, never a regression into an OK.
+ *
  * FAIL-CLOSED, AND NOT THE SAME WAY THE OLD BASH FAILED
  * -----------------------------------------------------
  * `deployAppsEnabled` starts at the SAFE value ('false', from
@@ -837,9 +865,11 @@ export function selectLastConsoleRoll(runs) {
     return {
       status: 'none',
       reason:
-        `no console-rolling run shipped an image after this deploy measured the tags it applied (${runs.length} ` +
-        'run(s) completed in that window, none with a successful roll job), so nothing this deploy wrote could ' +
-        'have overwritten a newer image.',
+        `the Actions API listed ${runs.length} completed console-rolling run(s) in that window and none of them ` +
+        'had a successful roll job, so THE ACTIONS API shows nothing this deploy could have overwritten. That is ' +
+        'a statement about the API listing, NOT about the estate: on 2026-08-19 this same clause read "0 run(s)" ' +
+        'and went green while roll 32225337320 — completed 3m50s earlier — had in fact been overwritten. The ' +
+        'estate itself is read by the revision-history check, which does not depend on this listing.',
     };
   }
   /** When the image write actually landed, as closely as this data allows. */
@@ -880,6 +910,185 @@ export function selectLastConsoleRoll(runs) {
 }
 
 /**
+ * Did THIS apply overwrite a newer image that landed inside its own window —
+ * according to the ESTATE, not according to GitHub?
+ *
+ * ── WHY THIS EXISTS, WHEN selectLastConsoleRoll ALREADY DID THIS (#3676) ────
+ *
+ * On 2026-08-19 the post-apply gate ran, reported OK, and the estate had gone
+ * backwards while it did. Measured from the Container App itself:
+ *
+ *   0000781  2026-08-19T05:46:46Z  loom-console:83e7cab6…
+ *   0000782  2026-08-19T07:04:56Z  loom-console:150d2937…   <- the roll
+ *   0000783  2026-08-19T07:10:19Z  loom-console:83e7cab6…   <- the apply, stale
+ *
+ * The gate's own verdict at 07:14:52Z was:
+ *
+ *   "0 run(s) completed in that window, none with a successful roll job"
+ *
+ * Roll run 32225337320 had completed at 07:11:02Z — 3m50s earlier — with its
+ * `Roll image + validate live URL` job `success`. Replaying the gate's exact
+ * query (`/actions/workflows/loom-roll-and-validate.yml/runs?status=completed
+ * &per_page=30`, then the same jq `select(.completedAt > $since)`) returns that
+ * run as the single candidate, which drives decideEstateRegression() straight
+ * to `regression`. So the DECISION logic was right and the POPULATION was
+ * empty. Why the Actions API omitted a run that had completed 3m50s earlier is
+ * NOT established here and is deliberately not asserted.
+ *
+ * What IS established is the design defect: the gate asked a third-party,
+ * eventually-consistent index a question about OUR estate, and the estate held
+ * the answer the whole time, timestamped, one `az containerapp revision list`
+ * away. This function is that read. It needs no token, no Actions API, and no
+ * consistency window — a revision exists the moment ARM creates it.
+ *
+ * ── THE RULE ────────────────────────────────────────────────────────────────
+ *
+ * Take every revision created at or after the moment this deploy MEASURED the
+ * tags it was going to write (the same `measured_at` the re-pin step records),
+ * oldest first. Then:
+ *
+ *   last revision's tag != the tag we applied
+ *       -> the last writer of this field was NOT this apply. Whatever else
+ *          happened, this apply did not leave the estate behind. 'ahead'.
+ *   last revision's tag == the tag we applied, and an EARLIER revision in the
+ *   window carries a different tag
+ *       -> another writer moved the estate to that tag inside our window and
+ *          our apply put it back. 'overwritten' — this is the incident, and the
+ *          roll-forward target is read off the estate rather than inferred.
+ *   otherwise
+ *       -> 'none'. Nothing in this window contradicts what we applied.
+ *
+ * UNKNOWN IS NOT 'none'. An unreadable list, an unparseable createdTime, or a
+ * revision in the window whose image carries no comparable tag (a digest pin)
+ * all resolve to 'unknown', which the caller fails closed on. Spending "I could
+ * not look" as "nothing happened" is the collapse that produced this issue's
+ * green run and the one deploy-integrity R7 forbids.
+ *
+ * WINDOW BOUND IS INCLUSIVE (`>=`). `measured_at` has second resolution and is
+ * recorded BEFORE the read it timestamps, so a revision created in that same
+ * second is genuinely ambiguous. Over-inclusion costs one extra comparison;
+ * under-inclusion hides the incident.
+ *
+ * @param {Array<{name?:string, createdTime?:string, image?:string}>|null} revisions
+ *        `az containerapp revision list` projection. null/undefined = the query
+ *        FAILED, which is deliberately NOT an empty history.
+ * @param {{measuredAt?:string, appliedTag?:string}} opts
+ * @returns {{status:'none'|'ahead'|'overwritten'|'unknown', reason:string,
+ *            overwrittenTag?:string, window?:Array<{name:string,createdTime:string,tag:string}>}}
+ */
+export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag = '' } = {}) {
+  const applied = String(appliedTag || '').trim();
+  if (revisions === null || revisions === undefined) {
+    return {
+      status: 'unknown',
+      reason:
+        "the Container App's revision history could not be read, so it is UNKNOWN whether another writer moved " +
+        "the estate inside this apply's window and this apply put it back. \"I could not look\" is not \"nothing happened\".",
+    };
+  }
+  if (!Array.isArray(revisions)) {
+    return {
+      status: 'unknown',
+      reason:
+        'the revision history did not arrive as a JSON array, so the az projection has changed shape and no ' +
+        'window can be built from it. Refusing to read a pass out of an unrecognised payload.',
+    };
+  }
+  const since = Date.parse(String(measuredAt || ''));
+  if (!Number.isFinite(since)) {
+    return {
+      status: 'unknown',
+      reason:
+        `the moment this deploy measured the tags it would apply is not established (measured-at ` +
+        `${JSON.stringify(String(measuredAt || ''))}), so the window in which a competing write could have landed ` +
+        'cannot be bounded, and an unbounded window proves nothing either way.',
+    };
+  }
+
+  const inWindow = [];
+  for (const r of revisions) {
+    const created = Date.parse(String(r?.createdTime ?? ''));
+    if (!Number.isFinite(created)) {
+      return {
+        status: 'unknown',
+        reason:
+          `revision ${JSON.stringify(String(r?.name ?? ''))} carries no readable createdTime ` +
+          `(${JSON.stringify(String(r?.createdTime ?? ''))}), so it cannot be placed inside or outside this ` +
+          "apply's window. An unplaceable revision is UNKNOWN, never \"outside\".",
+      };
+    }
+    if (created >= since) inWindow.push({ raw: r, createdMs: created });
+  }
+
+  if (!inWindow.length) {
+    return {
+      status: 'none',
+      reason:
+        `no loom-console revision was created at or after ${measuredAt}, so nothing wrote this field during the ` +
+        'apply — neither this deploy nor anyone else — and there is nothing that could have been overwritten.',
+    };
+  }
+
+  inWindow.sort((a, b) => a.createdMs - b.createdMs || String(a.raw?.name ?? '').localeCompare(String(b.raw?.name ?? '')));
+
+  /** @type {Array<{name:string, createdTime:string, tag:string}>} */
+  const tagged = [];
+  for (const { raw } of inWindow) {
+    const image = String(raw?.image ?? '');
+    const ref = parseImageRef(image);
+    const tag = ref && ref.tag ? ref.tag : null;
+    if (!tag) {
+      return {
+        status: 'unknown',
+        reason:
+          `revision ${JSON.stringify(String(raw?.name ?? ''))} was created at ${String(raw?.createdTime ?? '')} — ` +
+          `inside this apply's window — running ${JSON.stringify(image)}, which carries no tag this gate can ` +
+          `compare ${ref && ref.digest ? '(it is digest-pinned, and a digest does not name a commit)' : '(unparseable)'}. ` +
+          'Whether it was a NEWER image this apply overwrote is therefore UNKNOWN.',
+      };
+    }
+    tagged.push({ name: String(raw?.name ?? ''), createdTime: String(raw?.createdTime ?? ''), tag });
+  }
+
+  const render = (rs) => rs.map((r) => `${r.name}@${r.createdTime}=${r.tag}`).join(', ');
+  const newest = tagged[tagged.length - 1];
+
+  if (!applied || newest.tag !== applied) {
+    return {
+      status: 'ahead',
+      window: tagged,
+      reason:
+        `the LAST revision created since ${measuredAt} (${newest.name}, ${newest.createdTime}) runs ` +
+        `loom-console:${newest.tag}, which is not the tag this deploy applied` +
+        `${applied ? ` ('${applied}')` : ' (this deploy applied none)'} — so the last writer of this field was not ` +
+        `this apply and this apply did not leave the estate behind. Window: ${render(tagged)}.`,
+    };
+  }
+
+  const overwritten = tagged.slice(0, -1).reverse().find((r) => r.tag !== applied);
+  if (!overwritten) {
+    return {
+      status: 'none',
+      window: tagged,
+      reason:
+        `every loom-console revision created since ${measuredAt} runs the tag this deploy applied ` +
+        `('${applied}'), so no other writer's image was overwritten. Window: ${render(tagged)}.`,
+    };
+  }
+
+  return {
+    status: 'overwritten',
+    overwrittenTag: overwritten.tag,
+    window: tagged,
+    reason:
+      `revision ${overwritten.name} was created at ${overwritten.createdTime} running ` +
+      `loom-console:${overwritten.tag} — after this deploy measured the tags it would write (${measuredAt}) — and ` +
+      `revision ${newest.name} then replaced it at ${newest.createdTime} with '${newest.tag}', the tag THIS DEPLOY ` +
+      `applied. Window: ${render(tagged)}.`,
+  };
+}
+
+/**
  * Did this deploy leave the estate BEHIND the last thing that rolled it?
  *
  * THREE FAILING VERDICTS, NOT ONE, AND THE DIFFERENCE IS THE REMEDIATION.
@@ -902,9 +1111,17 @@ export function selectLastConsoleRoll(runs) {
  * @param {string|null} a.estateTag the console tag running NOW (null = unreadable)
  * @param {string} [a.estateReadError]
  * @param {ReturnType<typeof selectLastConsoleRoll>} a.rollSelection
+ * @param {ReturnType<typeof selectRevisionOverwrite>} [a.revisionSelection]
+ *        The ESTATE's own account of the window, which does not depend on the
+ *        Actions API. Consulted BEFORE rollSelection because it is the source
+ *        that was available and unconsulted on the run this gate missed, and
+ *        because its remediation SHA is read off the estate rather than
+ *        inferred from a run title. It is STRICTLY ADDITIVE: it can turn an
+ *        'ok' into a 'regression' or an 'unknown', and can never turn a failing
+ *        Actions-API verdict green.
  * @returns {{verdict:'ok'|'regression'|'drifted'|'unknown', reason:string}}
  */
-export function decideEstateRegression({ appliedTag = '', estateTag = null, estateReadError = '', rollSelection = null } = {}) {
+export function decideEstateRegression({ appliedTag = '', estateTag = null, estateReadError = '', rollSelection = null, revisionSelection = null } = {}) {
   const applied = String(appliedTag || '').trim();
   if (!applied) {
     return {
@@ -923,6 +1140,29 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
         (estateReadError ? `. Detail: ${String(estateReadError).slice(0, 400)}` : '.'),
     };
   }
+  // ── THE ESTATE'S OWN ACCOUNT FIRST (#3676, 2026-08-19) ────────────────────
+  // This is consulted BEFORE the Actions API because on the run that produced
+  // this issue's reopening the Actions API listing was empty and the revision
+  // history was not. It can only ADD a failure: `ahead` and `none` fall through
+  // to the comparison below unchanged, so no Actions-API red can be turned
+  // green here.
+  if (revisionSelection && revisionSelection.status === 'overwritten') {
+    return {
+      verdict: 'regression',
+      reason:
+        'THE ESTATE WENT BACKWARDS, AND ITS OWN REVISION HISTORY RECORDS IT. ' +
+        `${revisionSelection.reason} loom-console is now running '${estateTag}'. This run overwrote that image. ` +
+        'Every merge in that window is inert on the live estate until it is rolled again (deploy-integrity R2/R3).',
+      rollForwardTo: revisionSelection.overwrittenTag,
+    };
+  }
+  if (revisionSelection && revisionSelection.status === 'unknown') {
+    return {
+      verdict: 'unknown',
+      reason: `estate is running loom-console:${estateTag}, but ${revisionSelection.reason}`,
+    };
+  }
+
   if (!rollSelection || rollSelection.status === 'unknown') {
     return {
       verdict: 'unknown',
@@ -930,7 +1170,12 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
     };
   }
   if (rollSelection.status === 'none') {
-    return { verdict: 'ok', reason: `estate is running loom-console:${estateTag}; ${rollSelection.reason}` };
+    return {
+      verdict: 'ok',
+      reason:
+        `estate is running loom-console:${estateTag}; ${rollSelection.reason}` +
+        `${revisionSelection ? ` And the estate's own revision history agrees: ${revisionSelection.reason}` : ''}`,
+    };
   }
   const { sha, workflow, id, completedAt } = rollSelection.roll;
   if (String(estateTag).trim() === sha) {
@@ -979,8 +1224,10 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
 //        (--containers <file> | --read-error <text>)
 //   node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll
 //        --applied-tag <tag>
+//        --measured-at <rfc3339>
 //        (--estate-image <ref> | --read-error <text>)
 //        (--rolls <file>       | --rolls-error <text>)
+//        (--revisions <file>   | --revisions-error <text>)
 //
 // Exit 0 = proceed / ok, 1 = refuse / regression / unknown, 2 = usage error.
 
@@ -1078,12 +1325,24 @@ export function cliMain(argv, io) {
     const estateReadError = cliArg(argv, 'read-error');
     const rollsFile = cliArg(argv, 'rolls');
     const rollsError = cliArg(argv, 'rolls-error');
+    const revisionsFile = cliArg(argv, 'revisions');
+    const revisionsError = cliArg(argv, 'revisions-error');
+    const measuredAt = cliArg(argv, 'measured-at');
     if (!estateImage && !cliHas(argv, 'read-error')) {
       log('::error::reconcile-policy assert-estate-not-behind-roll: exactly one of --estate-image <ref> or --read-error <text> is required.');
       return 2;
     }
     if (!rollsFile && !cliHas(argv, 'rolls-error')) {
       log('::error::reconcile-policy assert-estate-not-behind-roll: exactly one of --rolls <file> or --rolls-error <text> is required.');
+      return 2;
+    }
+    // The revision history is the source that was available and unread on the
+    // 2026-08-19 miss. A caller that supplies NEITHER flag is not "a caller
+    // without revision evidence" — it is a caller that would silently fall back
+    // to the exact Actions-API-only comparison that went green on a revert. So
+    // it is a usage error, loudly, rather than a default.
+    if (!revisionsFile && !cliHas(argv, 'revisions-error')) {
+      log('::error::reconcile-policy assert-estate-not-behind-roll: exactly one of --revisions <file> or --revisions-error <text> is required. Neither was supplied, and defaulting to "no revision evidence" would restore the Actions-API-only comparison that reported OK across the #3676 revert.');
       return 2;
     }
 
@@ -1119,11 +1378,31 @@ export function cliMain(argv, io) {
       else if (runs !== undefined) rollSelection = selectLastConsoleRoll(null);
     }
 
+    let revisionSelection;
+    if (!revisionsFile) {
+      revisionSelection = selectRevisionOverwrite(null, { measuredAt, appliedTag });
+      if (revisionsError) {
+        revisionSelection = { ...revisionSelection, reason: `${revisionSelection.reason} Detail: ${revisionsError.slice(0, 400)}` };
+      }
+    } else {
+      let revs;
+      let parseDetail = '';
+      try {
+        revs = readJson(revisionsFile);
+      } catch (e) {
+        parseDetail = ` Detail: --revisions ${revisionsFile} could not be parsed (${String(e?.message || e).slice(0, 200)}).`;
+        revs = null;
+      }
+      revisionSelection = selectRevisionOverwrite(revs, { measuredAt, appliedTag });
+      if (parseDetail) revisionSelection = { ...revisionSelection, reason: `${revisionSelection.reason}${parseDetail}` };
+    }
+
     return finishRegression(log, decideEstateRegression({
       appliedTag,
       estateTag,
       estateReadError,
       rollSelection,
+      revisionSelection,
     }));
   }
 
