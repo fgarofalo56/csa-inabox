@@ -40,6 +40,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CLOUD_ESTATES, parseBuildMarker } from './_estate-registry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
 
@@ -384,12 +385,20 @@ export const WATCHED = [
   // measurable at all, so "the sovereign estates are fine" and "nothing is
   // looking at the sovereign estates" produced the identical output.
   //
-  // WHY THIS IS THE LOUDEST GAP IN THE TABLE, not merely the widest. ESTATES
-  // below can probe Commercial's /build-marker.txt and says out loud that it
-  // cannot see Gov (private ingress, no public marker). So for a sovereign
-  // boundary these rows are not one signal among several — they are the ONLY
-  // automated statement that merged bicep has reached the estate. Absent them,
-  // GCC-High drift has no representation anywhere in CI.
+  // WHY THIS IS THE LOUDEST GAP IN THE TABLE, not merely the widest. When these
+  // rows were written, ESTATES below probed Commercial's /build-marker.txt and
+  // said out loud that it could not see Gov (private ingress, no public
+  // marker), so for a sovereign boundary these rows were the ONLY automated
+  // statement that merged bicep had reached the estate.
+  //
+  // THAT PARENTHESIS WAS FALSE, and #3730 is what it cost. The Gov console's
+  // marker answers 200 unauthenticated; the estate was 251 commits and seven
+  // days behind while this file asserted it was unmeasurable. ESTATES now
+  // carries BOTH clouds, so these rows are no longer the only sovereign signal
+  // — they are the "did the lane run" half, and the estate probe is the "did it
+  // land" half. Keep both: a lane can succeed having deployed nothing (that is
+  // R1's silently-broken case), and an estate can be current because someone
+  // rolled it by hand. Neither implies the other.
   //
   // THE DEFERRAL RATIONALE THAT CAME WITH THIS WORK DOES NOT SURVIVE THE TREE.
   // It said adding these entries "makes loom-guardrails permanently red on every
@@ -425,7 +434,7 @@ export const WATCHED = [
   //     either. One rule, three lanes.
   {
     workflow: 'deploy-fiab-gcch.yml',
-    why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC-High (Azure Government) estate — every env var, role grant and module the sovereign Console depends on reaches production through this path and no other. Databricks Unity Catalog has no Gov endpoint, so this is also the lane that adopts and re-points the loom-unity catalog that IS the sovereign catalog story (cloud-parity.md). Stale, failing or disabled here means merged bicep is inert in the boundary that can least afford it — and because the Gov console has no publicly reachable /build-marker.txt, this row is the ONLY signal in CI that says so.',
+    why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC-High (Azure Government) estate — every env var, role grant and module the sovereign Console depends on reaches production through this path and no other. Databricks Unity Catalog has no Gov endpoint, so this is also the lane that adopts and re-points the loom-unity catalog that IS the sovereign catalog story (cloud-parity.md). Stale, failing or disabled here means merged bicep is inert in the boundary that can least afford it. This row is the "did the deploy lane RUN" half of the sovereign signal; the ESTATES probe of the Gov console\'s live /build-marker.txt is the "did it LAND" half (#3730). Neither implies the other: a lane can succeed having deployed nothing, and an estate can be current because someone rolled it by hand.',
     paths: [
       '.github/workflows/deploy-fiab-gcch.yml',
       'platform/fiab/bicep/main.bicep',
@@ -651,50 +660,44 @@ export const WATCHED = [
  * deliberately-unauthenticated artifact — which is what makes this check
  * possible with no credentials, no `az`, and no Azure login on the lane.
  *
- * GOV IS NOT LISTED, AND THAT IS REPORTED, NOT SILENT. The Gov console has no
- * publicly-reachable marker (private ingress), so this check cannot see it.
- * main() prints that omission explicitly: an estate we cannot measure must
- * never read as an estate that is current — the "UNKNOWN reported as a result"
- * trap this repo has been burned by three times.
+ * BOTH CLOUDS ARE NOW MEASURED, AND THE NOTE THAT SAID OTHERWISE WAS WRONG.
+ * Until #3730 this list held ONE entry and carried this sentence:
+ *
+ *     "GOV IS NOT LISTED, AND THAT IS REPORTED, NOT SILENT. The Gov console has
+ *      no publicly-reachable marker (private ingress), so this check cannot see
+ *      it."
+ *
+ * The premise is false. Measured 2026-08-18, unauthenticated, from a
+ * workstation with no Gov access at all:
+ *
+ *     $ curl -s https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us/build-marker.txt
+ *     loom-build-marker sha=28de89fb stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD
+ *
+ * That estate was 251 commits and seven days behind main, and this file's own
+ * disclaimer is a large part of why nobody had looked: the omission was
+ * disclosed, which made it read as a considered limit rather than an untested
+ * assumption. Disclosing an unmeasured thing does not measure it, and a
+ * disclosure nobody re-checks ages into a false statement
+ * (`stale_audit_items_propagate`). Both entries now live in the shared registry
+ * scripts/ci/_estate-registry.mjs, alongside the parser that handles the two
+ * clouds' differing marker shapes (40-hex vs 8-hex sha).
+ *
+ * THERE IS NO COMMIT-COUNT TOLERANCE on either entry, and the first cut of the
+ * Commercial one having had one is the point: it shipped `maxCommitsBehind: 20`
+ * while the live estate was 13 behind, so the control written because "nothing
+ * surfaces 'the estate is N commits behind'" classified the actual estate `ok`.
+ * See the registry for the full rationale and for the per-cloud roll-in-flight
+ * windows.
+ *
+ * The DEDICATED cross-cloud alarm is scripts/ci/check-cross-cloud-drift.mjs —
+ * a lane whose red means only "an estate is not running main", because this
+ * one's fifteen deploy-lane rows keep it red for unrelated reasons and a signal
+ * buried in a permanently-red report is a signal nobody reads.
+ *
+ * Re-exported (rather than `export ... from`) because main() below reads this
+ * binding directly, and a bare re-export creates no local one.
  */
-export const ESTATES = [
-  {
-    name: 'Commercial',
-    markerUrl: process.env.LOOM_ESTATE_MARKER_URL
-      || 'https://csa-loom.limitlessdata.ai/build-marker.txt',
-    // THERE IS NO COMMIT-COUNT TOLERANCE, and the first cut of this entry having
-    // one is the point. It shipped `maxCommitsBehind: 20` while the live estate
-    // was 13 behind — so the control written because "nothing surfaces 'the
-    // estate is N commits behind'" classified the actual estate `ok`, and the
-    // exit-1 came entirely from the WATCHED rows. A signal that cannot fire on
-    // the condition it was written for is not a signal. A 20-commit band also
-    // lets an estate sit two thirds of the way to a fortnight's divergence and
-    // read green — the exact state that went unnoticed for two weeks. Per the
-    // deploy-integrity rule (#3004, R3), drift is a defect with an owner,
-    // not a tolerance band.
-    //
-    // BEHIND AT ALL IS THE CONDITION. The only tolerance is a small TIME window
-    // for a roll that is legitimately in flight, measured against the OLDEST
-    // commit the estate is missing — "how long has merged code been undeployed"
-    // — never against a count.
-    //
-    // WHY NOT "AGE OF THE RUNNING BUILD": a healthy estate that rolled three
-    // hours ago and takes a merge one minute ago is behind by 1 with a
-    // three-hour-old build. Grading on build age would fire on every merge into
-    // a healthy estate; grading on the missing commit's age says "one minute"
-    // and correctly waits.
-    //
-    // WHY 90 MINUTES — measured from this repo's own merge→estate cycle on
-    // 2026-08-05: build-fiab-images-acr-tasks successes ran 7–38 min,
-    // loom-roll-and-validate successes 8–18 min ⇒ ~56 min observed worst case.
-    // 90 is ~1.6× headroom and nothing more.
-    behindGraceMinutes: 90,
-    // Independent second bound, kept from the first cut: an image older than
-    // this means the image-build lane has produced nothing for a week, which is
-    // a dead roll path even on a quiet branch where commitsBehind stays low.
-    maxAgeDays: 7,
-  },
-];
+export const ESTATES = CLOUD_ESTATES;
 
 /**
  * Marker a deploy workflow puts in its `run-name` when dispatched with
@@ -898,7 +901,7 @@ export function classifyWorkflowState(state) {
  *          behindGraceMinutes:number, maxAgeDays:number}} a
  */
 export function classifyEstate({
-  name, liveSha, commitsBehind, ageDays, ancestor, error,
+  name, liveSha, commitsBehind, ageDays, ancestor, aheadOfRef, error,
   behindSince, behindForMinutes,
   behindGraceMinutes, maxAgeDays,
 }) {
@@ -910,10 +913,36 @@ export function classifyEstate({
     };
   }
   if (ancestor === false) {
+    // WHY THIS BRANCH NO LONGER ENUMERATES CAUSES (deploy-integrity R7, #3730).
+    // It used to read: "it was built from a branch, a revert, or a force-pushed
+    // history". The code knows only that `git merge-base --is-ancestor <sha>
+    // <ref>` returned non-zero — it verified NONE of those three, and the cause
+    // that actually fires most often was missing from the list entirely.
+    //
+    // Measured during review: the Commercial estate reported `[divergent] … a
+    // branch, a revert, or a force-pushed history` while running origin/main's
+    // EXACT TIP. The truth was that the ref it was compared against had not been
+    // fetched yet, i.e. the estate was AHEAD. A false accusation, produced by a
+    // control whose entire thesis is that errors must be true.
+    //
+    // `aheadOfRef` is the answer to the other direction of the same cheap
+    // question, so the two are now distinguished; when the caller does not
+    // supply it the message states only what was established and stops.
+    if (aheadOfRef === true) {
+      return {
+        name, state: 'ahead', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
+        behindSince: null, behindForMinutes: null,
+        detail: `the running build ${liveSha.slice(0, 8)} is AHEAD of the compared ref — it contains commits the ref does not. `
+          + 'That is either a roll from a commit that has not reached the ref being compared (a fetch behind, benign), '
+          + 'or code deployed that was never merged. Both are worth knowing; neither is "running main".',
+      };
+    }
     return {
       name, state: 'divergent', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
       behindSince: null, behindForMinutes: null,
-      detail: `the running build ${liveSha.slice(0, 8)} is NOT an ancestor of main — it was built from a branch, a revert, or a force-pushed history`,
+      detail: `the running build ${liveSha.slice(0, 8)} is not an ancestor of the compared ref`
+        + (aheadOfRef === false ? ', and the ref is not an ancestor of it — the two histories have genuinely diverged' : '')
+        + '. A commit distance between unrelated histories would be arithmetic on two timelines, so none is reported.',
     };
   }
   if (commitsBehind === null || commitsBehind === undefined) {
@@ -1014,8 +1043,14 @@ async function probeEstate(estate) {
       return classifyEstate({ ...estate, error: `marker fetch HTTP ${res.status}` });
     }
     const txt = await res.text();
-    liveSha = txt.match(/sha=([0-9a-f]{7,40})/i)?.[1] || null;
-    if (!liveSha) return classifyEstate({ ...estate, error: 'marker carried no sha= field' });
+    // The SHARED parser (scripts/ci/_estate-registry.mjs), not an inline regex.
+    // The two clouds serve different marker shapes — a 40-hex Commercial sha and
+    // an 8-hex Gov one — and a rejection here carries a reason naming what was
+    // actually served, so an ingress error page answering 200 reports as an
+    // ingress error page rather than as a nondescript missing field.
+    const marker = parseBuildMarker(txt);
+    if (marker.error) return classifyEstate({ ...estate, error: marker.error });
+    liveSha = marker.sha;
   } catch (e) {
     return classifyEstate({ ...estate, error: `marker unreachable — ${String(e?.message || e).slice(0, 120)}` });
   }
@@ -1185,8 +1220,13 @@ async function main() {
     console.log(`  ${verdict}  ${e.name.padEnd(12)} ${e.liveSha ? e.liveSha.slice(0, 8) : '????????'}  [${e.state}] ${e.detail}`);
   }
   // An estate we cannot see must never read as an estate that is current.
-  console.log('  note: Azure Government is NOT measured here — its console has no publicly');
-  console.log('        reachable /build-marker.txt. Its drift is UNKNOWN, not zero.');
+  // Until #3730 these two lines asserted that Azure Government had no publicly
+  // reachable marker and was therefore unmeasurable. It does, and it was not —
+  // it was merely unmeasured, 251 commits behind, for seven days. Both clouds
+  // are now in ESTATES and both are probed above; the dedicated single-purpose
+  // alarm is .github/workflows/cross-cloud-drift-alarm.yml.
+  console.log('  note: every estate above was PROBED. An estate that could not be read reports');
+  console.log('        [unknown] and fails — its drift is UNKNOWN, never zero.');
 
   console.log('[deploy-staleness] watched deploy paths:');
   for (const r of rows) {

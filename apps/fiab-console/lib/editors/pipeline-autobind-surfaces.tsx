@@ -24,11 +24,28 @@
  *   Rebind        user asked to re-map        → explicit, never the default
  *   Unavailable   a genuine estate gate       → the reason + Try again, with
  *                                               the picker beneath as the Fix-it
+ *
+ * …plus one that belongs to the BOUND branch rather than the unbound one:
+ *
+ *   SeedIncomplete the object EXISTS and is bound but its authored content
+ *                  could not be written — an empty pipeline that must never be
+ *                  presented as complete (#3549).
  */
 import {
-  Button, Caption1, MessageBar, MessageBarBody, MessageBarTitle, Spinner, tokens,
+  Badge, Body1, Button, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Spinner, Subtitle2, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync20Regular, Link20Regular } from '@fluentui/react-icons';
+import { PipelineDesigner } from '@/lib/components/pipeline/pipeline-designer';
+import { extractActivities } from '@/lib/components/pipeline/pipeline-dag-view';
+import { paramsFromSpec, varsFromSpec, type PipelineSpec } from '@/lib/components/pipeline/types';
+
+const useStyles = makeStyles({
+  // Full width, mirroring the bound-state canvas, so the authored graph is
+  // readable rather than squeezed into a form column.
+  graph: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0, maxWidth: '100%' },
+  graphHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+});
 
 /**
  * The `autoBind` block the bind GET returns (`lib/azure/auto-bind →
@@ -43,6 +60,15 @@ export interface AutoBindWire {
   sourceName?: string;
   sanitized?: boolean;
   nameDrift?: boolean;
+  /** True when the item's authored content was written into the backing object. */
+  seeded?: boolean;
+  /**
+   * Set when authored content EXISTED but could not be written. The pipeline is
+   * real and bound but EMPTY, so the editor must not present it as complete.
+   * These two fields were missing from this interface while the server was
+   * already sending them, which is how the honest-failure channel stayed dead.
+   */
+  seedError?: string;
   reason?: string;
   missing?: string;
   retryable?: boolean;
@@ -160,6 +186,175 @@ export function AutoBindUnavailable({ reason, onRetry }: {
         <div style={actionRow}>
           <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={onRetry}>
             Try again
+          </Button>
+        </div>
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
+/**
+ * The BOUND-BUT-UNSEEDED gate (#3549 review, BLOCKER 1).
+ *
+ * Auto-bind created a REAL, published pipeline for this item but could not
+ * author the item's activity graph into it — an RBAC refusal, or a linked
+ * service (typically Databricks) this estate cannot satisfy. The item IS bound
+ * and the object DOES exist; only its contents are missing.
+ *
+ * That combination is precisely what made #3549 invisible for so long: the
+ * editor opened on a canvas, reported "0 activities", left **Trigger now**
+ * enabled, and warned about nothing. Running it succeeded and did nothing.
+ *
+ * So this surface is rendered in the BOUND branch — the branch a seedError item
+ * actually takes. The unbound branch's starter-graph block never sees it. It
+ * carries an inline **Retry seeding** Fix-it per `ux-baseline.md` G2 rather
+ * than a bare complaint, because a re-run genuinely resolves the common cases
+ * (a role granted since, a transient control-plane refusal).
+ *
+ * ---------------------------------------------------------------------------
+ * SEQUENCING — what `onRetry` MUST do (#3549 review, SHOULD-FIX 4)
+ * ---------------------------------------------------------------------------
+ * `onRetry` has to re-run auto-bind AND re-read the pipeline document, in that
+ * order. It shipped doing only the first (`() => void loadBinding()`), which
+ * looks right and is not:
+ *
+ *   - `loadBinding` is what makes the SERVER re-seed — the bind GET calls
+ *     `autoBindOnOpen`, which repairs an empty backing pipeline — and it
+ *     refreshes `autoBind`, so the gate correctly disappears.
+ *   - but the spec the CANVAS renders comes from `loadPipeline`, and the effect
+ *     that calls it is keyed on `[bound, …]`. `bound` does not change across a
+ *     successful reseed (same pipeline, same name), so React bails and the
+ *     canvas keeps rendering the pre-seed `activities: []`.
+ *
+ * Net effect of getting it wrong: the gate vanishes and Run/Debug re-enable
+ * over a canvas that still reads "0 activities" — the Fix-it appearing to work
+ * while leaving its own surface stale, which is a smaller copy of the #3549
+ * defect it exists to close. `loadPipeline` must also be AWAITED after
+ * `loadBinding`, or it reads the pipeline as it was BEFORE the reseed.
+ */
+/**
+ * The item's AUTHORED activity graph, rendered read-only at full width.
+ *
+ * Shared by the two states that need to show a graph the live pipeline does not
+ * have, because the difference between them is copy, not structure:
+ *
+ *   'unbound'  a bundle-installed item not yet bound to anything — "here is what
+ *              you are about to push live".
+ *   'unseeded' BOUND to a real pipeline that is EMPTY because the seed failed
+ *              (#3549) — "this is NOT what the factory is running".
+ *
+ * Read-only in both: the live canvas is the authoring surface.
+ */
+export function AuthoredGraphPanel({ containerLabel, preview, variant }: {
+  containerLabel: string;
+  preview: { properties?: { activities?: unknown[] } } | null;
+  variant: 'unbound' | 'unseeded';
+}) {
+  const s = useStyles();
+  const activities: unknown[] = Array.isArray(preview?.properties?.activities)
+    ? preview!.properties!.activities!
+    : [];
+  if (activities.length === 0) return null;
+  const unseeded = variant === 'unseeded';
+  return (
+    <div className={s.graph}>
+      <div className={s.graphHead}>
+        <Subtitle2>{unseeded ? 'Authored graph — not yet published' : 'Starter graph from this app'}</Subtitle2>
+        <Badge appearance="outline">
+          {activities.length} activit{activities.length === 1 ? 'y' : 'ies'}
+        </Badge>
+        <Badge appearance="filled" color={unseeded ? 'warning' : 'informative'}>
+          {unseeded ? 'Not live · read-only' : 'Preview · read-only'}
+        </Badge>
+      </div>
+      <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+        {unseeded
+          ? (<>This is the activity graph this item carries. It is NOT what the {containerLabel} is
+              currently running — the bound pipeline is empty. Use <strong>Retry seeding</strong> above
+              once the reason is resolved.</>)
+          : (<>This pipeline was installed from an app with a fully built-out activity graph (every
+              activity, dependency, and parameter). Bind it to a real {containerLabel} pipeline above
+              to push this graph live and enable Save / Run / Validate / Triggers.</>)}
+      </Body1>
+      <PipelineDesigner
+        activities={extractActivities(JSON.stringify(preview)) as never}
+        parameters={paramsFromSpec(preview as PipelineSpec)}
+        variables={varsFromSpec(preview as PipelineSpec)}
+        onActivitiesChange={() => { /* read-only */ }}
+      />
+    </div>
+  );
+}
+
+export function PipelineSeedIncomplete({ containerLabel, reason, preview, onRetry }: {
+  containerLabel: string;
+  /** The item's authored pipeline document (the bind GET's `preview`). */
+  preview: { properties?: { activities?: unknown[] } } | null;
+  reason?: string;
+  onRetry: () => void;
+}) {
+  const activities: unknown[] = Array.isArray(preview?.properties?.activities)
+    ? preview!.properties!.activities!
+    : [];
+  return (
+    <>
+      <MessageBar intent="warning" layout="multiline" data-testid="pipeline-seed-incomplete">
+        <MessageBarBody>
+          <MessageBarTitle>This pipeline is live but EMPTY — its activities were not published</MessageBarTitle>
+          Loom created the {containerLabel} pipeline for this item and bound it, but could not write
+          the {activities.length > 0 ? `${activities.length} activit${activities.length === 1 ? 'y' : 'ies'}` : 'activities'}
+          {' '}this item already carries into it. The pipeline below is real and running-capable, so a
+          run would SUCCEED and do nothing — Run and Debug are disabled until the graph is published.
+          The authored graph is shown underneath so you can see exactly what is missing.
+          {reason && (<><br /><Caption1>{reason}</Caption1></>)}
+          <div style={actionRow}>
+            <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={onRetry}>
+              Retry seeding
+            </Button>
+          </div>
+        </MessageBarBody>
+      </MessageBar>
+      <AuthoredGraphPanel containerLabel={containerLabel} preview={preview} variant="unseeded" />
+    </>
+  );
+}
+
+/**
+ * BOUND, but the backend has nothing published under that name yet (#2895).
+ *
+ * An expected, recoverable state rather than a backend failure — the item was
+ * bound before the pipeline was ever pushed, or the pipeline was deleted out
+ * from under it — so it is a guided WARNING with two inline Fix-its
+ * (`ux-baseline.md` G2), never a red bar carrying a stringified response body.
+ * The canvas below it still renders and is authorable: **Save** creates the
+ * pipeline under this name.
+ *
+ * Lives here rather than in `pipeline-editor-core.tsx` for the same reason as
+ * its five siblings above — it is one of the states an item passes through
+ * while the platform binds its backing pipeline, it is purely presentational,
+ * and the core is at the monolith-creep ceiling.
+ */
+export function PipelineMissingGate({ containerLabel, bound, onRebind, onRetry }: {
+  containerLabel: string;
+  /** The name the item is bound to — the name that has nothing behind it. */
+  bound: string | null;
+  onRebind: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <MessageBar intent="warning" layout="multiline" data-testid="pipeline-missing-gate">
+      <MessageBarBody>
+        <MessageBarTitle>Nothing published under this name yet</MessageBarTitle>
+        This item is bound to a pipeline named <strong>{bound}</strong>, but the{' '}
+        {containerLabel} doesn&apos;t have one by that name yet — it was never
+        published, or it was deleted. Build the pipeline on the canvas below and{' '}
+        <strong>Save</strong> to create it, or rebind this item to a different pipeline.
+        <div style={actionRow}>
+          <Button size="small" appearance="primary" icon={<Link20Regular />} onClick={onRebind}>
+            Rebind or create
+          </Button>
+          <Button size="small" appearance="secondary" icon={<ArrowSync20Regular />} onClick={onRetry}>
+            Retry
           </Button>
         </div>
       </MessageBarBody>

@@ -89,7 +89,119 @@ curl -s -X POST \
 
 ## Recreate from scratch
 
-If the resource needs to be rebuilt entirely:
+**Use the Bicep. The shell block below is kept only as provenance.**
+
+`platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep` is the
+producer for this Function App: the app itself, its Linux Consumption (Y1)
+plan, its storage account (reused or created), optional workspace-based
+Application Insights, the full hardening block, every app setting, and the
+two Cognitive Services role assignments that let it call Azure OpenAI and
+Content Safety with its managed identity instead of a key.
+
+`.github/workflows/deploy-copilot-function.yml` applies it automatically when
+its preflight establishes that the app is missing from `rg-dlz-aiml-stack-dev`
+— you do not run anything. That is `auto-bind-by-default.md` §5: the platform
+deploys its own prerequisites. Every input (storage account, App Insights,
+Azure OpenAI account, Content Safety account, Cosmos endpoint) is **discovered**
+from the resource group at deploy time rather than assumed, per
+`deploy-integrity.md` R5.
+
+To apply it by hand anyway — e.g. into a brand-new estate before the workflow
+has ever run there:
+
+```bash
+az deployment group create \
+  -g rg-dlz-aiml-stack-dev \
+  -f platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep \
+  --parameters \
+    functionAppName=func-csa-inabox-copilot-fg \
+    storageAccountName=aimldatastore \
+    createStorageAccount=false \
+    azureOpenAiEndpoint=https://<aoai-account>.cognitiveservices.<suffix>/ \
+    azureOpenAiAccountName=<aoai-account>
+```
+
+Order for a genuinely empty estate: this module first (it creates the app and
+its identity), then `azure-functions/copilot-chat/deploy/main.bicep` (Cosmos +
+the data-plane role for that identity), then this module again with
+`cosmosEndpoint=` set so `COSMOS_ENDPOINT` is wired. That third step is an
+operator step — see the next section for why CI does not run it, and what a
+re-apply actually costs.
+
+## Reconciling an existing app
+
+**The deploy lane does not re-apply the Bicep to an app that already exists.**
+`deploy-copilot-function.yml` gates its provisioning step on the preflight
+verdict `absent-here`. Once `func-csa-inabox-copilot-fg` is present the verdict
+is `found`, the step is skipped, and the run deploys **code only**. The lane
+says so explicitly in its log on every such run, so a green check is never read
+as "the module was applied" (`deploy-integrity.md` R2/R3).
+
+The practical consequence: **a merged change to
+`platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep` is merged, not
+deployed.** New app settings, a changed plan SKU, `COSMOS_ENDPOINT`, and the two
+Cognitive Services role assignments do not reach a live app on their own.
+
+**Why it is not automatic.** The module declares `siteConfig.appSettings` in
+FULL. ARM applies that list declaratively, so a re-apply **removes every setting
+the template does not name** — and two categories are set out-of-band:
+
+| Set out-of-band by | Settings |
+|---|---|
+| `Azure/functions-action` on every code deploy | `WEBSITE_RUN_FROM_PACKAGE` |
+| the workflow's own app-settings step | `COPILOT_MS_LEARN_ENABLED`, `COPILOT_MS_LEARN_MCP_URL` |
+
+`WEBSITE_RUN_FROM_PACKAGE` is what the Functions host reads to find the deployed
+package. Dropping it stops the app. An automatic re-apply would therefore take
+production down in order to reconcile configuration — the
+bicep-re-render-drops-out-of-band-state hazard.
+
+**How to reconcile deliberately.** Capture the live settings first, apply, then
+put back anything the template does not declare:
+
+```bash
+RG=rg-dlz-aiml-stack-dev
+APP=func-csa-inabox-copilot-fg
+
+# 1. Record what is live NOW (this is the rollback reference).
+az functionapp config appsettings list -n "$APP" -g "$RG" -o json > /tmp/appsettings.before.json
+
+# 2. Apply the module (same parameters as the from-scratch block above,
+#    plus cosmosEndpoint= once main.bicep has run).
+az deployment group create -g "$RG" \
+  -f platform/fiab/bicep/modules/copilot/copilot-chat-function.bicep \
+  --parameters functionAppName="$APP" storageAccountName=aimldatastore \
+    createStorageAccount=false createAppInsights=false \
+    appInsightsConnectionString="<from appi-csa-inabox-copilot-fg>" \
+    azureOpenAiEndpoint=https://<aoai-account>.cognitiveservices.<suffix>/ \
+    azureOpenAiAccountName=<aoai-account>
+
+# 3. Restore the out-of-band settings the template does not declare, then
+#    re-deploy the code so WEBSITE_RUN_FROM_PACKAGE is re-established.
+az functionapp config appsettings set -n "$APP" -g "$RG" --settings \
+  COPILOT_MS_LEARN_ENABLED=true \
+  COPILOT_MS_LEARN_MCP_URL=https://learn.microsoft.com/api/mcp
+
+# 4. Re-run deploy-copilot-function.yml (workflow_dispatch) to republish the
+#    package, and confirm /api/health answers 200 before calling it done.
+```
+
+Making this safe enough to run unattended — a reconcile that preserves
+out-of-band settings so the binding is genuinely self-healing per
+`auto-bind-by-default.md` §3 — is tracked under #3429 and is **not** claimed
+here as done.
+
+**`AZURE_OPENAI_KEY` is deliberately not templated.** `_make_openai_client()` is
+MI-first / key-fallback, so leaving the setting unset takes the managed-identity
+path — which is SEC-COPILOT H-3, and which the module's role assignment is what
+makes work.
+
+<details>
+<summary>Provenance: the original hand-run block (superseded — do not use)</summary>
+
+This is what actually created the live app in 2026-05, and the only way to
+rebuild it for six weeks. It is recorded because the Bicep above was written
+from it; it is not a supported path.
 
 ```bash
 DLZ=<YOUR_SUBSCRIPTION_ID>
@@ -128,6 +240,8 @@ az functionapp config appsettings set --subscription $DLZ -g $RG -n $FUNC --sett
 cd azure-functions/copilot-chat
 func azure functionapp publish $FUNC --python --build remote
 ```
+
+</details>
 
 ## Analytics pipeline (added 2026-05-06)
 
