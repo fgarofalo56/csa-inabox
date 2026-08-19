@@ -47,6 +47,25 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 let MARKER: { sha?: string; stamp?: string } = {};
 /** Every URL passed to fetch, in order. */
 let FETCHED: string[] = [];
+/**
+ * Run history per workflow filename. Default (`{}`) means every lane answers
+ * with an empty history, which is what the SSRF tests above want — they care
+ * about which URL was requested, not what came back.
+ */
+let ROLL_RUNS: Record<string, unknown[]> = {};
+/**
+ * Job lists per run id, for the step-2b lookback.
+ *
+ * Three deliberate shapes, because the route must survive all three:
+ *   { jobs: [...] }  a normal answer;
+ *   'HTTP_500'       a non-ok response — an unreadable job list;
+ *   'MALFORMED'      a 200 carrying a JSON ARRAY, the shape GitHub returns for
+ *                    other endpoints and the one that used to reach
+ *                    `undefined.find(...)`.
+ * A run id absent from this map is a test that expected no jobs call at all;
+ * it answers MALFORMED so that an unexpected call is loud rather than benign.
+ */
+let JOBS: Record<string, unknown> = {};
 
 vi.mock('@/lib/updates/current-version', () => ({
   readBuildMarker: () => MARKER,
@@ -111,6 +130,8 @@ function isGitHubApi(u: string): boolean {
 beforeEach(() => {
   MARKER = {};
   FETCHED = [];
+  ROLL_RUNS = {};
+  JOBS = {};
   // The stub answers BY PARSED PATHNAME, the way the network stack does — not
   // by substring on the raw URL, and not with one payload for every request.
   // Both shortcuts are the same modelling error and both were made here:
@@ -143,8 +164,28 @@ beforeEach(() => {
     if (/^\/repos\/[^/]+\/[^/]+\/compare\/[^/]+$/.test(p)) {
       return body({ status: 'identical', ahead_by: 0, behind_by: 0, commits: [] });
     }
-    if (/^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/[^/]+\/runs$/.test(p)) {
-      return body({ workflow_runs: [] });
+    const runs = /^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/([^/]+)\/runs$/.exec(p);
+    if (runs) {
+      return body({ workflow_runs: ROLL_RUNS[runs[1]] ?? [] });
+    }
+    // Step 2b's job lookback. Keyed by run id so a test can give the newest run
+    // a SKIPPED roll job and an older one a successful roll job — the shape of
+    // the 2026-08-17 run that concluded success having rolled nothing.
+    const jobs = /^\/repos\/[^/]+\/[^/]+\/actions\/runs\/([^/]+)\/jobs$/.exec(p);
+    if (jobs) {
+      const fixture = JOBS[jobs[1]];
+      if (fixture === 'HTTP_500') {
+        return {
+          ok: false, status: 500, headers: { get: () => null },
+          json: async () => ({}), text: async () => '',
+        } as unknown as Response;
+      }
+      // A 200 whose body is an ARRAY, not { jobs: [...] }. `jobs.data` is
+      // truthy and `jobs.data.jobs` is undefined, so a truthiness guard lets
+      // `.find` run on undefined and throw — uncaught, that is a 500 for the
+      // whole readiness panel rather than one unknown verdict.
+      if (fixture === undefined || fixture === 'MALFORMED') return body([{ id: 1 }]);
+      return body(fixture);
     }
     if (/^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/[^/]+$/.test(p)) {
       return body({ state: 'active' });
@@ -385,5 +426,163 @@ describe('deploy-status — the build marker cannot choose the endpoint (#776)',
     expect(JSON.stringify(body)).toContain('no build fingerprint');
     expect(JSON.stringify(body)).not.toContain('does not carry a git object id');
     expect(compareCalls()).toEqual([PEER_COMPARE]);
+  });
+});
+
+/**
+ * Step 2b — which roll actually shipped, and did something put the estate back?
+ * (#3676)
+ *
+ * The unit tests in lib/admin cover the classifiers. What only the ROUTE can be
+ * asked is the part that costs money and can be wrong in the expensive
+ * direction: WHEN it spends an upstream call, WHICH run it settles on when the
+ * newest one lied, and whether a bad answer from GitHub degrades or detonates.
+ *
+ * The call budget is not decoration. This route already issues ~12 requests
+ * against an unauthenticated ceiling of 60/hour per egress IP; a lookback that
+ * fired on every healthy load would spend three more on every refresh and turn
+ * the whole page UNKNOWN — a strictly worse outcome than the question it was
+ * added to answer. So "zero calls when healthy" is asserted as a hard number,
+ * not left to the unit test's opinion of `rollNeedsJobCheck`.
+ */
+describe('the roll-regression lookback (step 2b)', () => {
+  /** What roll 32225337320 shipped at 07:04:56Z on 2026-08-19. */
+  const SHA_NEW = '150d2937aa1b4c5d6e7f8091a2b3c4d5e6f70819';
+  /** What the scheduled reconcile put BACK at 07:10:19Z. */
+  const SHA_OLD = '83e7cab6bb2c5d6e7f8091a2b3c4d5e6f7081920';
+  const ROLL_LANE = 'loom-roll-and-validate.yml';
+  const ROLL_JOB = 'Roll image + validate live URL';
+
+  /** A run of the Commercial roll lane, titled the way the workflow titles it. */
+  const rollRun = (id: number, sha: string, finishedAt: string) => ({
+    id,
+    name: `roll ${sha} (build-triggered)`,
+    conclusion: 'success',
+    updated_at: finishedAt,
+    created_at: finishedAt,
+    html_url: `https://github.com/x/y/actions/runs/${id}`,
+  });
+
+  /** The jobs calls actually issued, which is the quantity under test. */
+  const jobsCalls = (): string[] =>
+    FETCHED.filter((u) => isGitHubApi(u) && /\/actions\/runs\/[^/]+\/jobs/.test(new URL(u).pathname));
+
+  it('spends ZERO upstream calls when the newest roll names what the estate runs', async () => {
+    MARKER = { sha: SHA_NEW, stamp: '2026-08-19T07:04:56Z' };
+    ROLL_RUNS[ROLL_LANE] = [
+      rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z'),
+      // An older roll naming a different sha, finished BEFORE this image was
+      // built — it cannot have overtaken us, so it must not provoke a call.
+      rollRun(32220000000, SHA_OLD, '2026-08-19T05:59:00Z'),
+    ];
+    const body = await run();
+    expect(jobsCalls()).toEqual([]);
+    expect(body.rollRegression.state).toBe('current');
+    expect(body.rollRegression.rolledSha).toBe(SHA_NEW);
+  });
+
+  it('settles on the OLDER roll when the newest one succeeded without rolling', async () => {
+    // The 2026-08-17 shape: the gate job succeeded, `Roll image + validate live
+    // URL` was SKIPPED because no image had built, and the RUN still reported
+    // success. Reading the run conclusion would name SHA_NEW as what shipped,
+    // see the estate running SHA_OLD, and convict a healthy estate of running a
+    // reverted image. Asking the JOB finds the roll that actually shipped.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [
+      rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z'),
+      rollRun(32220000000, SHA_OLD, '2026-08-19T05:59:00Z'),
+    ];
+    JOBS['32225337320'] = { jobs: [
+      { name: 'Should this roll proceed?', conclusion: 'success' },
+      { name: ROLL_JOB, conclusion: 'skipped' },
+    ] };
+    JOBS['32220000000'] = { jobs: [{ name: ROLL_JOB, conclusion: 'success' }] };
+
+    const body = await run();
+    expect(jobsCalls().length).toBe(2);
+    // The run it names is the one that shipped, not the one that merely ran.
+    expect(body.rollRegression.rolledSha).toBe(SHA_OLD);
+    expect(body.rollRegression.rollRunUrl).toContain('32220000000');
+    expect(body.rollRegression.state).toBe('current');
+    expect(body.rollRegression.severity).not.toBe('error');
+  });
+
+  it('an unreadable job list is UNKNOWN — never a green verdict, never a regression', async () => {
+    // deploy-integrity R7: "we could not establish whether the roll was
+    // overwritten" is a different sentence from "nothing overwrote it", and it
+    // is equally not "something did". Both wrong answers are excluded here.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z')];
+    JOBS['32225337320'] = 'HTTP_500';
+
+    const body = await run();
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.state).not.toBe('current');
+    expect(body.rollRegression.state).not.toBe('regressed');
+    expect(body.rollRegression.severity).toBe('warning');
+    expect(body.rollRegression.detail).toContain('could not read the jobs');
+    // The reason names the cause it actually established (HTTP 500), not one it
+    // inferred — the R7 failure that sent two investigations the wrong way.
+    expect(body.rollRegression.detail).toContain('500');
+  });
+
+  it('a MALFORMED 200 degrades the verdict instead of 500-ing the whole panel', async () => {
+    // `jobs.data` truthy + `jobs.data.jobs` undefined ⇒ `.find` throws, and
+    // nothing between here and the handler catches it, so the entire deploy
+    // panel would vanish from /admin/readiness over one odd body from GitHub.
+    // The route must return 200 with an honest unknown.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z')];
+    JOBS['32225337320'] = 'MALFORMED';
+
+    const res = await (GET as any)({} as never, {} as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // The rest of the report still rendered — this is one degraded verdict, not
+    // an outage.
+    expect(body.estate).toBeTruthy();
+    expect(body.paths.length).toBeGreaterThan(0);
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.detail).toContain('no job list returned');
+  });
+
+  it('stops after ROLL_JOB_LOOKBACK runs and says so, rather than guessing from a fourth', async () => {
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [
+      rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z'),
+      rollRun(32225337321, SHA_NEW, '2026-08-19T06:50:00Z'),
+      rollRun(32225337322, SHA_NEW, '2026-08-19T06:40:00Z'),
+      // The fourth WOULD settle it — and must not be reached. Naming a roll
+      // from outside the window as "the last effective roll" is a guess wearing
+      // a verdict's clothes.
+      rollRun(32225337323, SHA_OLD, '2026-08-19T06:30:00Z'),
+    ];
+    for (const id of ['32225337320', '32225337321', '32225337322']) {
+      JOBS[id] = { jobs: [{ name: ROLL_JOB, conclusion: 'skipped' }] };
+    }
+    JOBS['32225337323'] = { jobs: [{ name: ROLL_JOB, conclusion: 'success' }] };
+
+    const body = await run();
+    expect(jobsCalls().length).toBe(3);
+    expect(jobsCalls().some((u) => u.includes('32225337323'))).toBe(false);
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.detail).toContain('none of the last 3');
+    expect(body.rollRegression.rolledSha).toBeNull();
+  });
+
+  it('the run ids it asks about come from the run LIST, not from the build marker', async () => {
+    // Same property the SSRF suite above protects for the compare call: no
+    // marker-derived byte selects an endpoint. Step 2b added a new URL shape
+    // with an interpolated id, so it is asserted here rather than assumed.
+    MARKER = { sha: '../../../../user/repos?x=', stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z')];
+    JOBS['32225337320'] = { jobs: [{ name: ROLL_JOB, conclusion: 'success' }] };
+
+    await run();
+    expect(jobsCalls().length).toBe(1);
+    for (const u of jobsCalls()) {
+      expect(u).not.toContain('user/repos');
+      expect(new URL(u).pathname).toMatch(/^\/repos\/[^/]+\/[^/]+\/actions\/runs\/32225337320\/jobs$/);
+    }
   });
 });

@@ -30,11 +30,19 @@
  *     red in both directions.
  */
 import { describe, it, expect } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   classifyDeployPath,
   classifyEstateDrift,
+  classifyRollRegression,
   deployPathsForCloud,
   oldestUnappliedAt,
+  rollCandidates,
+  rollNeedsJobCheck,
+  rollShaFromRun,
+  rollSourceForCloud,
   summarizeDeployStatus,
   worstSeverity,
   DEPLOY_PATHS,
@@ -42,6 +50,8 @@ import {
   FAILING_STREAK,
   MAX_DAYS_SINCE_SUCCESS,
   type DeployPathHealth,
+  type RollCandidate,
+  type RollRunLite,
   type RunLite,
 } from '@/lib/admin/deploy-status';
 
@@ -362,6 +372,27 @@ describe('the watched-lane table itself', () => {
     expect(wf.has('full-app-deploy-commercial.yml')).toBe(true); // app images + roll
   });
 
+  it('covers the ROLL lanes — the writer that lost the race was unwatched (#3676)', () => {
+    // Until #3676 this table held four lanes and neither roller was among them,
+    // which is how the 2026-08-19 revert happened with every listed lane green:
+    // the lane that actually moves the running console was not being looked at.
+    const wf = new Set(DEPLOY_PATHS.map((p) => p.workflow));
+    expect(wf.has('loom-roll-and-validate.yml')).toBe(true);
+    expect(wf.has('gov-console-roll.yml')).toBe(true);
+  });
+
+  it('the roll lane exists in BOTH boundaries — Commercial-only would be the cloud-parity defect', () => {
+    // cloud-parity.md: a control that watches Commercial and not Gov leaves the
+    // boundary with NO continuous deploy as the one nobody can see.
+    expect(deployPathsForCloud('Commercial').map((p) => p.workflow)).toContain('loom-roll-and-validate.yml');
+    for (const c of ['GCC-High', 'DoD', 'GCC']) {
+      expect(deployPathsForCloud(c).map((p) => p.workflow)).toContain('gov-console-roll.yml');
+    }
+    // ...and neither boundary is shown the other's roller.
+    expect(deployPathsForCloud('Commercial').map((p) => p.workflow)).not.toContain('gov-console-roll.yml');
+    expect(deployPathsForCloud('GCC-High').map((p) => p.workflow)).not.toContain('loom-roll-and-validate.yml');
+  });
+
   it('every lane carries a title and a consequence, so the banner can explain itself', () => {
     expect(DEPLOY_PATHS.length).toBeGreaterThan(0);
     for (const p of DEPLOY_PATHS) {
@@ -391,4 +422,521 @@ describe('the watched-lane table itself', () => {
       expect(deployPathsForCloud(c).map((p) => p.workflow)).toContain('build-fiab-images-acr-tasks.yml');
     }
   });
+});
+
+/**
+ * classifyRollRegression — "did something take the estate BACKWARDS?" (#3676)
+ *
+ * THE FIXTURES ARE THE INCIDENT, not invented shapes. The shas and revision
+ * timestamps below were read off the live Commercial estate's revision history
+ * and are recorded verbatim in deploy-fiab-commercial.yml (the I-BEHIND block):
+ *
+ *   0000781  2026-08-19T05:46:46Z  loom-console:83e7cab6
+ *   0000782  2026-08-19T07:04:56Z  loom-console:150d2937   <- roll 32225337320
+ *   0000783  2026-08-19T07:10:19Z  loom-console:83e7cab6   <- reconcile put it BACK
+ *   0000784  2026-08-19T08:23:31Z  loom-console:82ee5050
+ *
+ * The one DERIVED value is each image's build stamp: the estate publishes it in
+ * build-marker.txt, and what is known from the revision history is only that
+ * 83e7cab6's image existed by 05:46:46. BUILD_83E7 is therefore any instant
+ * before that, chosen — the ORDERING is the measured fact, not the minute.
+ *
+ * Each CONTROL case dies under an obvious mutation:
+ *   - drop the timestamp ordering and always call a mismatch regressed → the
+ *     AHEAD case goes red (and every ordinary merge would flash the estate red).
+ *   - compare shas with === instead of a prefix → the abbreviated-tag case goes
+ *     red, i.e. every healthy estate reads as reverted.
+ *   - let an unmeasurable ordering fall through to 'ok' → the unknown case goes
+ *     red; it asserts warning, because an unknown is never a green.
+ *   - drop the regression from summarizeDeployStatus's severity fold → the
+ *     roll-up test goes red while every individual verdict still passes.
+ */
+describe('classifyRollRegression — a roll that was overwritten (#3676)', () => {
+  const SHA_83E7 = '83e7cab6f0a14d2b9c7e5518aa30c41d7b6e2f90'; // full, as build-marker publishes it
+  const ROLLED = '150d2937';        // as the image TAG carries it
+  const ROLL_AT = '2026-08-19T07:04:56Z';
+  const BUILD_83E7 = '2026-08-19T05:32:11Z'; // before revision 781 ran it
+  const BUILD_82EE = '2026-08-19T08:15:02Z'; // after the roll — revision 784
+  const LANE = 'loom-roll-and-validate.yml';
+
+  const regression = (over: Record<string, unknown> = {}) => classifyRollRegression({
+    estateSha: SHA_83E7,
+    estateStamp: BUILD_83E7,
+    rolledSha: ROLLED,
+    rolledAt: ROLL_AT,
+    rollWorkflow: LANE,
+    ...over,
+  });
+
+  it('THE INCIDENT: a successful roll shipped 150d2937 and the estate is serving an OLDER image', () => {
+    const r = regression();
+    expect(r.state).toBe('regressed');
+    expect(r.severity).toBe('error');
+    // The headline must name the sha that was LOST — that is the actionable fact.
+    expect(r.headline).toContain('150d2937');
+    expect(r.headline).toMatch(/BACKWARDS/);
+    // And the detail must say this is not something a future roll fixes.
+    expect(r.detail).toContain('83e7cab6');
+    expect(r.detail).toMatch(/#3676/);
+  });
+
+  it('CONTROL: one revision earlier — running exactly what the roll shipped — is CURRENT', () => {
+    // Revision 0000782. Same comparison, same code path, opposite verdict. Without
+    // this the incident test would pass against a function that always says
+    // "regressed".
+    const r = regression({ estateSha: '150d2937abc0000000000000000000000000beef', estateStamp: '2026-08-19T06:58:00Z' });
+    expect(r.state).toBe('current');
+    expect(r.severity).toBe('ok');
+  });
+
+  it('an image built AFTER the roll is AHEAD, not a revert — no false red on an ordinary merge', () => {
+    // Revision 0000784. Between a roll and this read, a later merge legitimately
+    // moves the estate forward. Calling that a regression would fire on every
+    // healthy merge, and a guard that cries wolf is a guard that gets switched off.
+    const r = regression({ estateSha: '82ee5050d1c24b83af90116e2c7d55a03e18b4c7', estateStamp: BUILD_82EE });
+    expect(r.state).toBe('ahead');
+    expect(r.severity).toBe('ok');
+  });
+
+  it('a full 40-char estate sha MATCHES the 8-char image tag it was built from', () => {
+    // build-marker.txt publishes 40 chars; the image tag carries 8. Comparing
+    // them with === reports every healthy estate as reverted.
+    const r = classifyRollRegression({
+      estateSha: '150d2937abc0000000000000000000000000beef',
+      estateStamp: '2026-08-19T06:58:00Z',
+      rolledSha: '150d2937',
+      rolledAt: ROLL_AT,
+    });
+    expect(r.state).toBe('current');
+  });
+
+  it('a sha too short to be evidence is NOT a match', () => {
+    const r = classifyRollRegression({
+      estateSha: '150d', estateStamp: BUILD_83E7, rolledSha: '150d', rolledAt: ROLL_AT,
+    });
+    expect(r.state).not.toBe('current');
+    expect(r.severity).not.toBe('ok');
+  });
+
+  it('no roll to compare against is UNKNOWN, never "nothing was overwritten"', () => {
+    const r = regression({ rolledSha: null, rolledAt: null });
+    expect(r.state).toBe('unknown');
+    expect(r.severity).toBe('warning');
+    expect(r.detail).toMatch(/UNKNOWN/);
+  });
+
+  it('a failed roll lookup FAILS CLOSED — an error is not an all-clear', () => {
+    const r = regression({ error: 'Actions API 403' });
+    expect(r.state).toBe('unknown');
+    expect(r.severity).toBe('warning');
+    expect(r.detail).toContain('403');
+  });
+
+  it('an unidentified running image is UNKNOWN, not current', () => {
+    const r = regression({ estateSha: null });
+    expect(r.state).toBe('unknown');
+    expect(r.severity).toBe('warning');
+  });
+
+  it('shas that DIFFER with no usable ordering is UNKNOWN — not ok, and not a hard red', () => {
+    // The honest middle. It is a real disagreement whose DIRECTION was not
+    // established, so it is neither hidden nor asserted as a revert.
+    const r = regression({ estateStamp: null });
+    expect(r.state).toBe('unknown');
+    expect(r.severity).toBe('warning');
+    expect(r.detail).toMatch(/WHICH IS NEWER could not be established/);
+  });
+
+  it('carries the roll run link so the verdict is checkable, not just assertable', () => {
+    const url = 'https://github.com/fgarofalo56/csa-inabox/actions/runs/32225337320';
+    expect(regression({ rollRunUrl: url }).rollRunUrl).toBe(url);
+  });
+});
+
+describe('summarizeDeployStatus folds the roll regression in', () => {
+  const okEstate = classifyEstateDrift({
+    buildSha: SHA, repo: REPO, compare: { status: 'identical', ahead_by: 0, behind_by: 0 },
+  });
+  const reverted = classifyRollRegression({
+    estateSha: '83e7cab6f0a14d2b9c7e5518aa30c41d7b6e2f90',
+    estateStamp: '2026-08-19T05:32:11Z',
+    rolledSha: '150d2937',
+    rolledAt: '2026-08-19T07:04:56Z',
+    rollWorkflow: 'loom-roll-and-validate.yml',
+  });
+
+  it('a regression turns an otherwise-green report red', () => {
+    const healthy = path({ runs: runs('success') });
+    const r = summarizeDeployStatus(okEstate, [healthy], { generatedAt: 'x', repo: REPO }, reverted);
+    expect(r.severity).toBe('error');
+    expect(r.headline).toMatch(/BACKWARDS/);
+  });
+
+  it('a regression OUTRANKS a behind estate and a broken lane in the headline', () => {
+    // Behind and broken both mean work has not ARRIVED. A regression means work
+    // arrived, was validated, and was removed — and the next successful run will
+    // not fix it, because the last successful run is what did it.
+    const behind = classifyEstateDrift({ buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(400, 5_000) });
+    const broken = path({ runs: runs('failure', 'failure', 'failure') });
+    const r = summarizeDeployStatus(behind, [broken], { generatedAt: 'x', repo: REPO }, reverted);
+    expect(r.headline).toBe(reverted.headline);
+    expect(r.headline).not.toContain('400 commits behind');
+  });
+
+  it('CONTROL: a CURRENT roll leaves the headline exactly where it was', () => {
+    // Proves the branch above is the regression firing, not the argument merely
+    // being present.
+    const current = classifyRollRegression({
+      estateSha: '150d2937abc0000000000000000000000000beef',
+      estateStamp: '2026-08-19T06:58:00Z',
+      rolledSha: '150d2937', rolledAt: '2026-08-19T07:04:56Z',
+    });
+    const healthy = path({ runs: runs('success') });
+    const r = summarizeDeployStatus(okEstate, [healthy], { generatedAt: 'x', repo: REPO }, current);
+    expect(r.severity).toBe('ok');
+    expect(r.headline).toBe(okEstate.headline);
+  });
+
+  it('an OMITTED regression is absent from the report — not reported as "no regression"', () => {
+    // Absent must read as "not measured". A caller that could not establish it
+    // must not be able to launder that into a green field.
+    const healthy = path({ runs: runs('success') });
+    const r = summarizeDeployStatus(okEstate, [healthy], { generatedAt: 'x', repo: REPO });
+    expect(r.rollRegression).toBeUndefined();
+    expect(r.severity).toBe('ok');
+  });
+
+  it('an UNKNOWN regression prevents an ok roll-up', () => {
+    const unknown = classifyRollRegression({ estateSha: SHA, rolledSha: null });
+    const healthy = path({ runs: runs('success') });
+    const r = summarizeDeployStatus(okEstate, [healthy], { generatedAt: 'x', repo: REPO }, unknown);
+    expect(r.severity).toBe('warning');
+    expect(r.headline).toBe(unknown.headline);
+  });
+});
+
+/**
+ * The roll-source resolver (#3676) — "which lane writes this estate, and what
+ * did it actually ship?"
+ *
+ * These four functions are the pure half of the route's regression check. The
+ * route's job is to fetch; theirs is to decide what the fetched rows mean, and
+ * every wrong answer here becomes a wrong verdict on /admin/readiness with no
+ * second surface to catch it.
+ *
+ * Each CONTROL case names the mutation it dies under:
+ *   - `.find((p) => p.roll)` back in place of the `length === 1` rule → an
+ *     unrecognised cloud gets Commercial's roller; that test asserts null.
+ *   - `shaFrom: 'headSha'` on the Commercial lane → the #2963 test goes red
+ *     (head_sha is the branch HEAD at trigger time, not the rolled sha).
+ *   - drop the GIT_OBJECT_ID guard → 'roll latest (manual dispatch)' returns
+ *     the string 'latest' and every dispatch-rolled estate reads as reverted.
+ *   - drop the `conclusion === 'success'` filter → a FAILED roll becomes the
+ *     candidate that defines "what the estate was last rolled to".
+ *   - sort on `created_at` instead of `updated_at` → the out-of-order pair
+ *     swaps and the wrong run is named as newest.
+ *   - delete the `.slice(1).some(...)` clause in rollNeedsJobCheck → the
+ *     overtaken-by-an-older-roll case returns false and a real regression
+ *     short-circuits to "current".
+ */
+describe('rollSourceForCloud', () => {
+  it('names the Commercial roller for Commercial', () => {
+    expect(rollSourceForCloud('Commercial')?.workflow).toBe('loom-roll-and-validate.yml');
+  });
+
+  it('names the Gov roller for each Gov ring', () => {
+    for (const cloud of ['GCC-High', 'DoD', 'GCC']) {
+      expect(rollSourceForCloud(cloud)?.workflow, cloud).toBe('gov-console-roll.yml');
+    }
+  });
+
+  it('CONTROL: an UNRECOGNISED cloud gets NO roll source', () => {
+    // deployPathsForCloud deliberately returns every lane here, which is right
+    // for a list and fabricated for a verdict: picking the first would compare
+    // an unknown estate's build marker against Commercial's roll history.
+    expect(rollSourceForCloud('Mars')).toBeNull();
+    expect(rollSourceForCloud(undefined)).toBeNull();
+    expect(rollSourceForCloud(null)).toBeNull();
+    expect(rollSourceForCloud('')).toBeNull();
+  });
+
+  it('CONTROL: no cloud has TWO roll lanes — the ambiguity this rule guards', () => {
+    // If this ever fails, the fix is to decide which lane is authoritative for
+    // that cloud, not to relax the rule above.
+    for (const cloud of [...new Set(DEPLOY_PATHS.flatMap((p) => p.clouds || []))]) {
+      expect(deployPathsForCloud(cloud).filter((p) => p.roll).length, cloud).toBe(1);
+    }
+  });
+
+  it('every roll lane carries a title pattern that captures group 1', () => {
+    // shaFrom:'title' is useless without one, and a pattern with no capture
+    // group silently yields undefined → null → permanent UNKNOWN.
+    for (const p of DEPLOY_PATHS.filter((d) => d.roll)) {
+      expect(p.roll!.titlePattern, p.workflow).toBeInstanceOf(RegExp);
+      expect(p.roll!.jobName.length, p.workflow).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('rollShaFromRun', () => {
+  const commercial = rollSourceForCloud('Commercial')!;
+  const gov = rollSourceForCloud('GCC-High')!;
+
+  it('reads the sha out of the Commercial run title', () => {
+    expect(rollShaFromRun(commercial, { name: 'roll 150d2937 (build-triggered)' })).toBe('150d2937');
+    expect(rollShaFromRun(commercial, { name: `roll ${SHA} (manual dispatch)` })).toBe(SHA);
+  });
+
+  it('falls back to display_title when the API omits name', () => {
+    expect(rollShaFromRun(commercial, { display_title: 'roll 83e7cab6 (build-triggered)' })).toBe('83e7cab6');
+  });
+
+  it('CONTROL: the Commercial lane IGNORES head_sha (#2963)', () => {
+    // loom-roll-and-validate's head_sha is the default-branch HEAD at trigger
+    // time, NOT the image it rolls. Reading it would name whatever landed on
+    // main while the roll was queued as "what is deployed".
+    const run = { name: 'roll 150d2937 (build-triggered)', head_sha: SHA };
+    expect(rollShaFromRun(commercial, run)).toBe('150d2937');
+    expect(rollShaFromRun(commercial, run)).not.toBe(SHA);
+  });
+
+  it('CONTROL: a FLOATING tag yields null, never the string', () => {
+    // 'latest' can never equal a 40-char estate sha, so returning it would
+    // report every dispatch-rolled estate as reverted.
+    expect(rollShaFromRun(commercial, { name: 'roll latest (manual dispatch)' })).toBeNull();
+    expect(rollShaFromRun(commercial, { name: 'roll v0.1 (manual dispatch)' })).toBeNull();
+    expect(rollShaFromRun(commercial, { name: 'roll main (manual dispatch)' })).toBeNull();
+    // Below git's own abbreviation floor: a "match" on 6 chars is not evidence.
+    expect(rollShaFromRun(commercial, { name: 'roll 150d29 (build-triggered)' })).toBeNull();
+  });
+
+  it('a title that does not match the workflow run-name yields null', () => {
+    expect(rollShaFromRun(commercial, { name: 'roll 150d2937' })).toBeNull();
+    expect(rollShaFromRun(commercial, { name: 'Roll image + validate live URL' })).toBeNull();
+    expect(rollShaFromRun(commercial, {})).toBeNull();
+  });
+
+  it('the Gov lane reads head_sha, because it builds from its own checkout', () => {
+    expect(rollShaFromRun(gov, { head_sha: SHA, name: 'roll 150d2937 (build-triggered)' })).toBe(SHA);
+    expect(rollShaFromRun(gov, { head_sha: '', name: `gov-console-roll ${SHA} (merge-triggered)` })).toBeNull();
+  });
+
+  it('a lane with no roll block yields null', () => {
+    const notARoller = DEPLOY_PATHS.find((p) => !p.roll)!;
+    expect(rollShaFromRun(notARoller, { name: 'roll 150d2937 (build-triggered)', head_sha: SHA })).toBeNull();
+  });
+});
+
+describe('rollCandidates', () => {
+  const def = rollSourceForCloud('Commercial')!;
+  const roll = (sha: string, over: Partial<RollRunLite> = {}): RollRunLite => ({
+    conclusion: 'success',
+    name: `roll ${sha} (build-triggered)`,
+    updated_at: minsAgo(10),
+    ...over,
+  });
+
+  it('CONTROL: a FAILED roll is not a candidate', () => {
+    // A run that failed did not write what it intended; treating it as the last
+    // roll would name a sha that never reached the estate.
+    const c = rollCandidates(def, [
+      roll('aaaaaaaa', { conclusion: 'failure' }),
+      roll('bbbbbbbb', { conclusion: 'cancelled' }),
+      roll('cccccccc', { conclusion: null }),
+      roll('dddddddd'),
+    ]);
+    expect(c.map((x) => x.sha)).toEqual(['dddddddd']);
+  });
+
+  it('a run whose sha cannot be established is dropped, not guessed at', () => {
+    const c = rollCandidates(def, [roll('x', { name: 'roll latest (manual dispatch)' }), roll('eeeeeeee')]);
+    expect(c.map((x) => x.sha)).toEqual(['eeeeeeee']);
+  });
+
+  it('CONTROL: orders by updated_at — when the roll FINISHED writing', () => {
+    // Array order and created_at both disagree with updated_at here on purpose.
+    const c = rollCandidates(def, [
+      roll('aaaaaaaa', { created_at: minsAgo(5), updated_at: minsAgo(90) }),
+      roll('bbbbbbbb', { created_at: minsAgo(80), updated_at: minsAgo(3) }),
+    ]);
+    expect(c.map((x) => x.sha)).toEqual(['bbbbbbbb', 'aaaaaaaa']);
+  });
+
+  it('falls back to created_at, and records an unmeasurable finish as null', () => {
+    const c = rollCandidates(def, [roll('aaaaaaaa', { updated_at: null, created_at: minsAgo(7) })]);
+    expect(c[0].finishedMs).toBe(Date.parse(minsAgo(7)));
+    const none = rollCandidates(def, [roll('bbbbbbbb', { updated_at: null, created_at: undefined })]);
+    expect(none[0].finishedMs).toBeNull();
+  });
+
+  it('no rows, or a lane that does not roll, yields nothing to ask about', () => {
+    expect(rollCandidates(def, null)).toEqual([]);
+    expect(rollCandidates(def, [])).toEqual([]);
+    expect(rollCandidates(DEPLOY_PATHS.find((p) => !p.roll)!, [roll('aaaaaaaa')])).toEqual([]);
+  });
+});
+
+describe('rollNeedsJobCheck', () => {
+  /** A candidate that finished `mins` ago. */
+  const cand = (sha: string, mins: number | null): RollCandidate => ({
+    run: {},
+    sha,
+    finishedMs: mins === null ? null : NOW - mins * 60_000,
+  });
+  const ESTATE = '150d2937abc0000000000000000000000000beef';
+  const BUILT = new Date(NOW - 30 * 60_000).toISOString();
+
+  it('nothing to ask about when there are no candidates', () => {
+    expect(rollNeedsJobCheck({ candidates: [], estateSha: ESTATE, estateStamp: BUILT })).toBe(false);
+  });
+
+  it('the CHEAP path: newest candidate is what the estate runs, nothing overtook it', () => {
+    // The overwhelmingly common case, and the reason this function exists —
+    // it must cost ZERO extra API calls or the rate budget is gone.
+    const c = [cand('150d2937', 20), cand('83e7cab6', 200)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: BUILT })).toBe(false);
+  });
+
+  it('asks when the newest roll named something else', () => {
+    const c = [cand('83e7cab6', 20), cand('150d2937', 200)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: BUILT })).toBe(true);
+  });
+
+  it('asks when the estate sha is unknown', () => {
+    const c = [cand('150d2937', 20)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: null, estateStamp: BUILT })).toBe(true);
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: '', estateStamp: BUILT })).toBe(true);
+  });
+
+  it('asks when the estate build stamp cannot be read', () => {
+    // Without it the ordering in (2) is unmeasurable, and unmeasurable is not ok.
+    const c = [cand('150d2937', 20), cand('83e7cab6', 5)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: null })).toBe(true);
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: 'not a date' })).toBe(true);
+  });
+
+  it('CONDITION (2): an OLDER roll that finished after this image was built forces the check', () => {
+    // The hole this closes. The newest run names exactly what the estate is
+    // running — so the cheap evidence says "current" — but a second run named a
+    // DIFFERENT sha and finished after this image was built. If that newest run
+    // skipped its roll job, the estate is behind a roll that really shipped and
+    // the whole verdict would have short-circuited to healthy.
+    const c = [cand('150d2937', 20), cand('83e7cab6', 25)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: BUILT })).toBe(true);
+  });
+
+  it('CONTROL for (2): the same shape, but the older roll predates the build', () => {
+    // Identical to the case above except the older roll finished BEFORE this
+    // image was built, so it cannot have overtaken it. Delete the `.slice(1)`
+    // clause and the pair collapses: this one stays false and the one above
+    // flips to false with it.
+    const c = [cand('150d2937', 20), cand('83e7cab6', 45)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: BUILT })).toBe(false);
+  });
+
+  it('CONDITION (2): an older roll with an unmeasurable finish also forces the check', () => {
+    const c = [cand('150d2937', 20), cand('83e7cab6', null)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: BUILT })).toBe(true);
+  });
+
+  it('an older roll naming the SAME sha does not force the check', () => {
+    // A re-roll of the same image is not an overtake — there is nothing newer
+    // for the estate to be behind.
+    const c = [cand('150d2937', 20), cand('150d2937', 5)];
+    expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: BUILT })).toBe(false);
+  });
+
+  it('matches an abbreviated roll tag against the full estate sha', () => {
+    // The estate publishes 40 chars; the image tag is the 8-char short sha.
+    expect(rollNeedsJobCheck({
+      candidates: [cand(ESTATE, 20)], estateSha: '150d2937', estateStamp: BUILT,
+    })).toBe(false);
+  });
+});
+
+/**
+ * CONTRACT: the console's roll parser vs the workflows it parses.
+ *
+ * `titlePattern` and `jobName` are strings in THIS repo that describe strings in
+ * ANOTHER file — `.github/workflows/*.yml`. Nothing in TypeScript connects them,
+ * so a rename on the workflow side breaks the parser silently and in the worst
+ * possible direction: `rollShaFromRun` starts returning null forever, every
+ * verdict becomes UNKNOWN, and no test goes red because the console's own units
+ * still agree with themselves. This is the same failure shape as a guard keyed
+ * to a pattern the code no longer emits.
+ *
+ * So these read the workflow files and assert the two sides still agree. They
+ * THROW rather than skip when a file is missing: a contract test that quietly
+ * finds nothing to check is a guard with zero population.
+ */
+describe('roll parser matches the workflows it parses', () => {
+  /** Repo root, found by walking up from THIS file — independent of cwd. */
+  const repoRoot = (() => {
+    let dir = dirname(fileURLToPath(import.meta.url));
+    for (let i = 0; i < 10; i++) {
+      if (existsSync(join(dir, '.github', 'workflows'))) return dir;
+      dir = dirname(dir);
+    }
+    throw new Error(`could not locate the repository root from ${import.meta.url}`);
+  })();
+
+  /** The `run-name: >-` folded block, joined exactly as YAML folds it. */
+  const runNameOf = (yaml: string): string => {
+    const lines = yaml.split(/\r?\n/);
+    const i = lines.findIndex((l) => /^run-name:\s*>-\s*$/.test(l));
+    if (i < 0) throw new Error('no folded `run-name: >-` block — the run title is what this parser reads');
+    const block: string[] = [];
+    for (const l of lines.slice(i + 1)) {
+      if (!/^\s+\S/.test(l)) break;
+      block.push(l.trim());
+    }
+    if (block.length === 0) throw new Error('the `run-name: >-` block is empty');
+    return block.join(' ');
+  };
+
+  for (const def of DEPLOY_PATHS.filter((p) => p.roll)) {
+    describe(def.workflow, () => {
+      const file = join(repoRoot, '.github', 'workflows', def.workflow);
+      const yaml = existsSync(file)
+        ? readFileSync(file, 'utf8')
+        : (() => { throw new Error(`${def.workflow} is named in DEPLOY_PATHS but does not exist at ${file}`); })();
+      const runName = runNameOf(yaml);
+      const exprs = [...runName.matchAll(/\$\{\{(.*?)\}\}/g)].map((m) => m[1]);
+
+      it('the run title still has the shape the parser assumes: <sha expr> … <trigger expr>', () => {
+        expect(exprs.length, runName).toBe(2);
+      });
+
+      it("the parser's trigger words are the workflow's OWN trigger words", () => {
+        // `… && 'A' || 'B'` — rename either side in the workflow and the
+        // console's alternation stops matching every run it produces.
+        const ternary = /&&\s*'([^']+)'\s*\|\|\s*'([^']+)'/.exec(exprs[exprs.length - 1]);
+        expect(ternary, `no \`&& 'a' || 'b'\` trigger ternary in: ${exprs[exprs.length - 1]}`).not.toBeNull();
+        for (const word of [ternary![1], ternary![2]]) {
+          expect(def.roll!.titlePattern!.source, word).toContain(word);
+        }
+      });
+
+      it('the pattern matches a real rendered title on BOTH trigger branches, capturing the sha', () => {
+        const ternary = /&&\s*'([^']+)'\s*\|\|\s*'([^']+)'/.exec(exprs[exprs.length - 1])!;
+        for (const word of [ternary[1], ternary[2]]) {
+          let seen = 0;
+          const title = runName.replace(/\$\{\{.*?\}\}/g, () => (seen++ === 0 ? '150d2937' : word));
+          expect(def.roll!.titlePattern!.exec(title)?.[1], title).toBe('150d2937');
+          // And the whole way through rollShaFromRun, not just the regex.
+          expect(rollShaFromRun(def, { name: title }), title).toBe(
+            def.roll!.shaFrom === 'title' ? '150d2937' : null,
+          );
+        }
+      });
+
+      it(`the workflow still declares a job named "${def.roll!.jobName}"`, () => {
+        // The job whose conclusion decides whether this run rolled anything.
+        // Renaming it turns every job check into "job not found" → no candidate
+        // is ever confirmed → the whole verdict degrades to UNKNOWN.
+        const declared = [...yaml.matchAll(/^\s{4}name:\s*(.+?)\s*$/gm)].map((m) => m[1].replace(/^['"]|['"]$/g, ''));
+        expect(declared, `job names declared in ${def.workflow}`).toContain(def.roll!.jobName);
+      });
+    });
+  }
 });
