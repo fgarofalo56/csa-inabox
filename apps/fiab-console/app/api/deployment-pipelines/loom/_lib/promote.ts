@@ -14,11 +14,12 @@
  *   2. apply that stage's deployment rules (data-source / parameter overrides)
  *      to the base ProvisionTarget;
  *   3. promote the (rebound) definition into the target workspace — updating the
- *      paired item or creating a new one;
+ *      paired item or creating a new one, and WRITING the definition onto that
+ *      item BEFORE step 4 (see the note at the write: a provisioner that
+ *      verifies its own content must not be shown the previous promotion's);
  *   4. re-run the SAME real provisioner the install path uses against the
  *      patched target, so the model/report/etc. is materialized in Test/Prod;
- *   5. persist the rebound definition + provision receipt and write a history
- *      record (the receipt).
+ *   5. persist the provision receipt and write a history record.
  *
  * Cosmos + the Azure-native provisioner backends only — no Fabric / Power BI.
  */
@@ -194,7 +195,33 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
       steps.push(`[${src.displayName}] created target item ${targetItemId} in ${targetStageId}.`);
     }
 
-    // 3) re-run the real provisioner against the patched (rule-applied) target with the rebound content.
+    // 3) PERSIST THE PROMOTED DEFINITION BEFORE PROVISIONING.
+    //
+    // #3549/#3551 — ORDERING IS LOAD-BEARING. This write used to happen only
+    // AFTER the provisioner ran (it was step 4). For a target item that already
+    // existed, that meant the provisioner saw the target's PREVIOUS content —
+    // whatever the last promotion left there, or nothing at all for an item
+    // created outside this path. A provisioner that verifies its content landed
+    // on the item (semantic-model's read-back) therefore compared the SOURCE
+    // stage's shape against the TARGET's stale document and reported
+    // `remediation`, flipping `anyFailed` and recording the stage as
+    // failed/partial — while the write below then landed the correct content,
+    // so the promotion had actually SUCCEEDED and a re-run came back green.
+    //
+    // Writing the definition first makes the item the provisioner inspects the
+    // item the promotion is actually creating, which is what every provisioner
+    // has always assumed. The provision receipt is a SEPARATE, later write
+    // (step 5) because it is a genuinely later fact.
+    const promotedState: Record<string, unknown> = {
+      ...(src.state || {}),
+      ...(content !== rawContent ? { content } : {}),
+      deployedFrom: src.id,
+      deployedFromStage: sourceStageId,
+      deployedAt: new Date().toISOString(),
+    };
+    await updateOwnedItem(targetItemId, src.itemType, tenantId, { state: promotedState });
+
+    // 4) re-run the real provisioner against the patched (rule-applied) target with the rebound content.
     let result: ProvisionResult | undefined;
     const provisioner = PROVISIONERS[src.itemType];
     if (provisioner) {
@@ -219,17 +246,14 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
       anyCreated = true;
     }
 
-    // 4) persist the rebound definition + provision receipt onto the target item.
-    await updateOwnedItem(targetItemId, src.itemType, tenantId, {
-      state: {
-        ...(src.state || {}),
-        ...(content !== rawContent ? { content } : {}),
-        deployedFrom: src.id,
-        deployedFromStage: sourceStageId,
-        deployedAt: new Date().toISOString(),
-        ...(result ? { provisionResult: result } : {}),
-      },
-    });
+    // 5) record the provision receipt onto the target item. Only when a
+    // provisioner ran — for a Cosmos-only type step 3 already IS the promotion
+    // and a second identical write would add nothing but a version-history row.
+    if (result) {
+      await updateOwnedItem(targetItemId, src.itemType, tenantId, {
+        state: { ...promotedState, provisionResult: result },
+      });
+    }
     deployedItemIds.push(targetItemId);
   }
 

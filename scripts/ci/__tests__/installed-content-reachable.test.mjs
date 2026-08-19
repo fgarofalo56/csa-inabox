@@ -204,10 +204,33 @@ test('FAIL: a content-consuming provisioner with NO reachability mechanism', () 
 });
 
 test('PASS: the provisioner persists the content itself', () => {
-  const { rows } = judgeItemTypes(io({ provisioner: 'const c = input.content; const i = await itemsContainer();' }));
+  const { rows } = judgeItemTypes(io({
+    provisioner: 'const c = input.content; const items = await itemsContainer();'
+      + ' await items.item(id, ws).replace({ ...cur, state: { ...cur.state, content: c } });',
+  }));
   const row = rows.find((r) => r.itemType === 'thing');
   assert.equal(row.verdict, 'ok');
   assert.ok(row.mech.includes('persists'));
+});
+
+test('FAIL: a MENTION of itemsContainer() is not a write', () => {
+  // Independent review of #3549 proved the original `itemsContainer(` spelling
+  // could be satisfied by an unused helper, flipping the guard to OK over an
+  // item type that was still genuinely unreachable — the "presence, not
+  // enforcement" shape. The credit must track the write, not the import.
+  const { rows } = judgeItemTypes(io({
+    provisioner: 'const c = input.content;\n'
+      + 'async function _peek(id) { const c2 = await itemsContainer(); return c2; }\n'
+      + 'return { status: "created" };',
+  }));
+  assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'unreachable');
+});
+
+test('PASS: updateOwnedItem / createOwnedItem also count as a write', () => {
+  for (const verb of ['await updateOwnedItem(id, t, oid, { state })', 'await createOwnedItem(s, t, { state })']) {
+    const { rows } = judgeItemTypes(io({ provisioner: `const c = input.content; ${verb};` }));
+    assert.equal(rows.find((r) => r.itemType === 'thing').verdict, 'ok', verb);
+  }
 });
 
 test('PASS: the item type is covered by the auto-bind seed registry', () => {

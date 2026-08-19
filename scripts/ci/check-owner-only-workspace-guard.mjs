@@ -65,6 +65,31 @@ const SELF = 'apps/fiab-console/lib/auth/workspace-guard.ts';
  * modify a baselined file without migrating it. Keep SHORT.
  */
 const TOUCH_EXEMPT = new Map([
+  // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
+  // the bundle definition onto a name-matched EXISTING item that carries none.
+  // It reads and replaces THAT ITEM through the already-resolved `items`
+  // container and `workspaceId`; it adds no workspace-ownership decision, and the
+  // baselined occurrence (the install's own workspace check) is untouched.
+  // Migrating this route's workspace gate to `authorizeWorkspace` WIDENS who may
+  // install an app into a workspace — a deliberate access change that belongs in
+  // its own PR, not inside a content-reachability fix.
+  ['apps/fiab-console/app/api/apps/[id]/install/route.ts',
+   '#3549/#3551: Phase-1 content backfill only; migrating the install workspace gate WIDENS who may install — separate PR'],
+  // #3549/#3551 split `loadContentBackedItem` into `readContentBackedItem`
+  // (three outcomes) + a compatible wrapper, so a caller can tell "no such owned
+  // item" from "the Cosmos read FAILED". Without that distinction a transient
+  // 429/403 while opening a LOOM-NATIVE model read as "no Loom item here" and
+  // fell through to Power BI, rendering "Select a Power BI workspace" over an
+  // item that has nothing to do with Power BI (no-fabric-dependency.md, reached
+  // through UNKNOWN-reported-as-NEGATIVE).
+  //
+  // The baselined occurrence is the `resource.tenantId !== tenantId` check, which
+  // MOVED but is otherwise byte-identical — the ratchet still counts it, and the
+  // total is unchanged at 69. It is deliberately still owner-only: this helper
+  // backs ~40 bundle-content read sites, and `authorizeWorkspace` would newly
+  // admit tenant admins and shared-ACL members to every one of them.
+  ['apps/fiab-console/app/api/items/_lib/pbi-content-fallback.ts',
+   '#3549/#3551: ownership check moved verbatim, count unchanged; widening it would newly admit admins/ACL to ~40 read sites — separate PR'],
   // #3549/#3551 touched this file for ONE pure function, `specFromItem`, which
   // performs no I/O and takes no authorization decision: it reads the MLV
   // definition out of an ALREADY-LOADED item, and the change adds the

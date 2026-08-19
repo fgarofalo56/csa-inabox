@@ -263,6 +263,33 @@ async function runInstallJob(
       const key = `${ref.type}::${displayName.toLowerCase()}`;
       if (existsKey.has(key)) {
         const match = (existing as any[]).find(e => e.itemType === ref.type && (e.displayName || '').toLowerCase() === displayName.toLowerCase());
+        // #3549/#3551 — BACKFILL the bundle definition onto a name-matched item
+        // that has none.
+        //
+        // The dedup path pushes `status:'existed'` and used to write NOTHING,
+        // while still handing `bundle.content` to the provisioner via the `||`
+        // below. So an item that pre-dated the bundle (or was created empty by
+        // hand under the same name) was provisioned FROM content that was never
+        // on it — and, once the provisioners started verifying their own
+        // content, would report a remediation on every re-install, because
+        // re-running the install was the one thing that could not fix it.
+        //
+        // Only fills an ABSENT `state.content`: an item the user has since
+        // edited keeps its own definition, so a re-install can never silently
+        // revert authored work. Best-effort — a failed backfill leaves the
+        // pre-existing behaviour exactly as it was.
+        if (match?.id && !match?.state?.content && bundle?.content) {
+          try {
+            const { resource: cur } = await items.item(match.id, workspaceId).read<any>();
+            if (cur && !cur.state?.content) {
+              await items.item(cur.id, cur.workspaceId).replace({
+                ...cur,
+                state: { ...(cur.state || {}), content: bundle.content, sourceApp: app.id },
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          } catch { /* best-effort backfill — never sinks the install */ }
+        }
         installed.push({ itemType: ref.type, id: match?.id, displayName, status: 'existed', content: match?.state?.content || bundle?.content });
       } else {
         const r = await createOwnedItem(s, ref.type, { workspaceId, displayName, description, state, folderId });

@@ -32,6 +32,8 @@
  * "no tables yet" — and it holds no matter what the bundle is re-authored to say.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const TENANT = 'tenant-oid-1';
 const WORKSPACE = 'ws-uat-1';
@@ -99,8 +101,15 @@ const APP_ID = 'app-azure-realtime-analytics';
 /**
  * Phase 1 of the install, transcribed from
  * `app/api/apps/[id]/install/route.ts` — the `state` object it hands to
- * `createOwnedItem`. Kept in this shape deliberately: if the route stops
- * stamping `content`, this trace is what notices.
+ * `createOwnedItem`.
+ *
+ * THIS IS A TRANSCRIPTION, NOT THE ROUTE. The route assembles this inline
+ * inside `runInstallJob`, which is not exported and cannot be driven without a
+ * Cosmos job document, a session and an app doc. So this function alone would
+ * NOT notice the route dropping its `content` stamp — an earlier revision of
+ * this docstring claimed it would, which was the same unverified assertion this
+ * PR exists to close. The claim is made true by the SOURCE PIN below instead,
+ * which is honest about being a source pin rather than a behavioural one.
  */
 function installPhase1(bundle: { displayName: string; content: unknown }) {
   const state: Record<string, unknown> = {
@@ -122,6 +131,28 @@ beforeEach(() => {
 });
 
 describe('#3549/#3551 install → provision → editor, end to end on one Cosmos document', () => {
+  it('the install route still STAMPS state.content (source pin for the transcription above)', () => {
+    // The whole trace below rests on the route writing `content` at item
+    // creation. `runInstallJob` is not exported and needs a Cosmos job doc, a
+    // session and an app doc to drive, so this is pinned at the SOURCE — a
+    // weaker check than behaviour, stated as such rather than implied.
+    // Comments are stripped first so the prose in this repo's heavily-commented
+    // routes cannot satisfy the assertion (the exact "presence not enforcement"
+    // shape #3549's own guard had to be hardened against).
+    const src = readFileSync(
+      resolve(__dirname, '..', '..', '..', 'app', 'api', 'apps', '[id]', 'install', 'route.ts'),
+      'utf8',
+    );
+    const code = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+
+    expect(code).toMatch(/\.\.\.\(\s*bundle\?\.content\s*\?\s*\{\s*content:\s*bundle\.content\s*\}/);
+    // …and the dedup path backfills it onto a name-matched item that has none,
+    // which is what makes the provisioner's remediation text true.
+    expect(code).toMatch(/content:\s*bundle\.content,\s*sourceApp:\s*app\.id/);
+  });
+
   it('the receipt counts and the editor counts are THE SAME numbers', async () => {
     const bundle = await resolveBundleItem(APP_ID, 'semantic-model');
     expect(bundle, `${APP_ID} must still ship a semantic-model item`).toBeTruthy();

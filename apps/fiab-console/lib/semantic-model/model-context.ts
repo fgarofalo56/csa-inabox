@@ -16,7 +16,7 @@ import {
   type PbiTable, type PbiRelationship,
 } from '@/lib/azure/powerbi-client';
 import {
-  isLoomContentId, cosmosIdFromLoomId, loadContentBackedItem, semanticModelDetailFromContent,
+  isLoomContentId, cosmosIdFromLoomId, readContentBackedItem, semanticModelDetailFromContent,
 } from '@/app/api/items/_lib/pbi-content-fallback';
 import {
   type SmModelState, type SmStoredRelationship,
@@ -136,13 +136,28 @@ function pbiRelToCanvas(rels: PbiRelationship[]): ModelRelationship[] {
 
 /**
  * Build the model context from a Cosmos-backed item's `state.content`.
- * Returns null when the item does not exist, is not owned by the caller, or
- * carries no `SemanticModelContent` — in which case the caller falls through
- * to the live Power BI path exactly as before.
+ *
+ * Three outcomes, deliberately not two:
+ *   • a context      — the item resolved and carries a semantic model;
+ *   • `null`         — no such owned item, or it has no model content. The
+ *                      caller may legitimately try Power BI next;
+ *   • `{ readFailed }` — the Cosmos read THREW. The caller must NOT treat that
+ *                      as "no Loom item here" (#3549/#3551): doing so sends a
+ *                      Loom-native model to the live Power BI branch, which with
+ *                      no workspace bound renders "Select a Power BI workspace"
+ *                      over an item that has nothing to do with Power BI — a
+ *                      Fabric-flavoured gate on the Azure-native default path
+ *                      (no-fabric-dependency.md), produced by reporting an
+ *                      UNKNOWN as a NEGATIVE.
  */
-async function contextFromContentItem(cosmosItemId: string, tenantId: string): Promise<ModelContext | null> {
-  const item = await loadContentBackedItem(cosmosItemId, 'semantic-model', tenantId);
-  if (!item) return null;
+async function contextFromContentItem(
+  cosmosItemId: string,
+  tenantId: string,
+): Promise<ModelContext | { readFailed: string } | null> {
+  const res = await readContentBackedItem(cosmosItemId, 'semantic-model', tenantId);
+  if (res.outcome === 'read-failed') return { readFailed: res.error };
+  if (res.outcome === 'not-found') return null;
+  const item = res.item;
   const built = semanticModelDetailFromContent(item);
   if (!built) return null;
   const tables: ModelTable[] = (built.tables || []).map((t: any) => ({
@@ -187,10 +202,24 @@ export async function loadModelContext(id: string, workspaceId: string | null, t
   // counts it to report `created`. It was never READ.
   //
   // Resolving by the bare id is safe and cannot capture a Power BI dataset:
-  // `loadContentBackedItem` matches on `c.itemType = 'semantic-model'` AND
+  // `readContentBackedItem` matches on `c.itemType = 'semantic-model'` AND
   // verifies parent-workspace ownership, and a PBI dataset GUID is not a Loom
   // item id. When nothing resolves we fall through to the live path unchanged.
   const contentCtx = await contextFromContentItem(cosmosIdFromLoomId(id), tenantId);
+  if (contentCtx && 'readFailed' in contentCtx) {
+    // R7 — say what we could not establish, and do NOT fall through to Power BI
+    // and blame a missing workspace for a Cosmos failure.
+    return {
+      modelName: 'Semantic model',
+      tables: [], baseRels: [], measures: [],
+      liveDataset: false,
+      notice:
+        'Could not read this model\'s definition from Loom storage, so its tables and measures are not shown. '
+        + `This is a storage read failure, not an empty model: ${contentCtx.readFailed}. Retry in a moment; if it `
+        + 'persists, check the Console managed identity\'s Cosmos data-plane role. (No Power BI / Fabric workspace '
+        + 'is required for this model.)',
+    };
+  }
   if (contentCtx) return contentCtx;
   if (isLoomContentId(id)) {
     // A `loom:` id that resolved no content is still Loom-native by construction

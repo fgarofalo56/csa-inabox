@@ -505,8 +505,27 @@ async function provisionViaPowerBi(input: any, steps: string[]): Promise<Provisi
 async function provisionLoomNative(input: any, steps: string[]): Promise<ProvisionResult> {
   const content = input.content as any;
   const tables: any[] = Array.isArray(content?.tables) ? content.tables : [];
-  const measures = tables.reduce((n, t) => n + (Array.isArray(t?.measures) ? t.measures.length : 0), 0)
-    + (Array.isArray(content?.measures) ? content.measures.length : 0);
+  // COUNT WHAT THE EDITOR WILL RENDER, not what the bundle might carry.
+  //
+  // This used to add `sum(tables[].measures.length)` to `content.measures.length`.
+  // `SemanticModelContent` declares no per-table `measures` field and
+  // `semanticModelDetailFromContent` — the single projection every read path
+  // uses — builds measures ONLY from `content.measures`, so that first term was
+  // always 0 in practice and silently wrong in principle: a bundle authored with
+  // inline table measures would have been reported on the receipt and then NOT
+  // rendered, which is the very divergence this fix exists to remove. Counting
+  // exactly the editor's source keeps the receipt and the surface in step, and
+  // the read-back predicate below asserts BOTH numbers rather than the tables
+  // alone.
+  const inlineTableMeasures = tables.reduce((n, t) => n + (Array.isArray(t?.measures) ? t.measures.length : 0), 0);
+  const measures = Array.isArray(content?.measures) ? content.measures.length : 0;
+  if (inlineTableMeasures > 0) {
+    steps.push(
+      `Note: ${inlineTableMeasures} measure(s) are declared inline on tables[].measures, which the Loom-native `
+      + 'model projection does not read (measures come from content.measures). They are NOT counted here and '
+      + 'will NOT appear in the editor — move them to content.measures in the bundle.',
+    );
+  }
   if (tables.length === 0) {
     return {
       status: 'remediation',
@@ -524,13 +543,14 @@ async function provisionLoomNative(input: any, steps: string[]): Promise<Provisi
   steps.push(`Loom-native tabular model: ${tables.length} table(s), ${measures} measure(s), backed by ${backing}. Measures evaluate live over the warehouse via SQL — no Power BI / Fabric workspace required.`);
 
   // Confirm the editor can actually READ the model this receipt is about to
-  // claim. The predicate asserts the SAME table count the receipt reports, so a
-  // content bag that lost its tables between item creation and here cannot pass
-  // a truthiness check and be reported as installed.
+  // claim. The predicate asserts BOTH numbers the receipt reports, so neither a
+  // content bag that lost its tables nor one that lost its measures can pass a
+  // truthiness check and be reported as installed.
   const readback = await confirmContentReadable(
     { cosmosItemId: input.cosmosItemId, workspaceId: input.workspaceId },
     'semantic-model',
-    (c) => Array.isArray(c?.tables) && c.tables.length === tables.length,
+    (c) => Array.isArray(c?.tables) && c.tables.length === tables.length
+      && (Array.isArray(c?.measures) ? c.measures.length : 0) === measures,
     steps,
   );
   if (!readback.ok) {
@@ -541,10 +561,18 @@ async function provisionLoomNative(input: any, steps: string[]): Promise<Provisi
     );
     return resolveInfraResidual(
       readback.cause ?? readback.error,
-      'Re-run the app install for this item once the Cosmos item is readable — the install is idempotent and ' +
-      're-stamps the same model definition. If it keeps failing, confirm the Console managed identity holds ' +
-      '"Cosmos DB Built-in Data Contributor" on the Loom Cosmos account and that the items container is reachable ' +
-      'from the Container App subnet. (No Microsoft Fabric or Power BI workspace is involved.)',
+      // R7 — this says only what is true on EVERY path that reaches it. An
+      // earlier draft said "re-run the app install; it is idempotent and
+      // re-stamps the same model definition", which was false twice over: the
+      // install's dedup path pushes a name-matched item as `existed`, and the
+      // deployment-pipeline promote path involves no app install at all.
+      'The model definition must be readable on the workspace item before the editor can render it. '
+      + 'If this item was installed from an app, re-running that install now backfills the definition onto an '
+      + 'item that has none. Otherwise author the tables via the semantic-model editor (or '
+      + 'PUT /api/items/semantic-model/<id>/content). If the underlying error is a permission or connectivity '
+      + 'failure, confirm the Console managed identity holds "Cosmos DB Built-in Data Contributor" on the Loom '
+      + 'Cosmos account and that the items container is reachable from the Container App subnet. '
+      + '(No Microsoft Fabric or Power BI workspace is involved.)',
       {
         reason: `The semantic model's ${tables.length} table(s) were validated but could not be confirmed on the workspace item.`,
         link: loomDocUrl('fiab/operations/app-install-provisioning'),

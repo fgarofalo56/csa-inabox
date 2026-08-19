@@ -130,7 +130,13 @@ describe('#3549/#3551 — the receipt may not claim content the item cannot serv
     const res = await semanticModelProvisioner(input() as any);
 
     expect(res.status).toBe('remediation');
-    expect(res.gate?.remediation).toMatch(/idempotent/i);
+    // R7 — the remediation must not assert a fix that is untrue on some paths.
+    // "Re-run the app install; it re-stamps the definition" was false for an
+    // item reached through the install's DEDUP path and for the
+    // deployment-pipeline promote path, which involves no install at all.
+    expect(res.gate?.remediation).not.toMatch(/is idempotent/i);
+    expect(res.gate?.remediation).toMatch(/If this item was installed from an app/i);
+    expect(res.gate?.remediation).toMatch(/Otherwise author the tables/i);
     expect(res.gate?.remediation).toMatch(/Cosmos DB Built-in Data Contributor/);
     // And it must not blame Fabric / Power BI for an Azure-native defect.
     expect(res.gate?.remediation).toMatch(/No Microsoft Fabric or Power BI workspace is involved/i);

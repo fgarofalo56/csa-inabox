@@ -90,12 +90,35 @@ export async function listContentBackedItems(
   }
 }
 
-/** Load one tenant-owned item by id, verifying parent-workspace ownership. */
-export async function loadContentBackedItem(
+/**
+ * Load one tenant-owned item by id, verifying parent-workspace ownership, and
+ * DISTINGUISH "there is no such item" from "the read failed".
+ *
+ * #3549/#3551 — WHY THE DISTINCTION MATTERS NOW. `loadContentBackedItem` below
+ * collapses both into `null`, which was harmless while its only caller used the
+ * result to decide whether to ALSO try Power BI. It stopped being harmless when
+ * `loadModelContext` started resolving a bare Cosmos id through it: a transient
+ * Cosmos 429/403 while opening a LOOM-NATIVE model then reads as "no Loom item
+ * here", falls through to the live Power BI branch, and — with no workspace
+ * bound — renders "Select a Power BI workspace to load live tables" over a model
+ * that has nothing to do with Power BI. That is `no-fabric-dependency.md` (a
+ * Fabric-flavoured gate on the Azure-native default path) reached through the
+ * UNKNOWN-reported-as-NEGATIVE shape.
+ *
+ * `outcome` is `'not-found'` only when the query genuinely resolved no owned
+ * item; a throw is `'read-failed'` and carries the error so the caller can say
+ * what it does not know instead of asserting emptiness.
+ */
+export type ContentBackedItemResult =
+  | { outcome: 'ok'; item: WorkspaceItem }
+  | { outcome: 'not-found' }
+  | { outcome: 'read-failed'; error: string; cause: unknown };
+
+export async function readContentBackedItem(
   cosmosItemId: string,
   itemType: string,
   tenantId: string,
-): Promise<WorkspaceItem | null> {
+): Promise<ContentBackedItemResult> {
   try {
     const items = await itemsContainer();
     const { resources } = await items.items
@@ -108,14 +131,33 @@ export async function loadContentBackedItem(
       })
       .fetchAll();
     const item = resources[0];
-    if (!item) return null;
+    if (!item) return { outcome: 'not-found' };
     const ws = await workspacesContainer();
     const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return item;
-  } catch {
-    return null;
+    // A workspace the caller does not own is NOT-FOUND on purpose: surfacing
+    // "read failed" there would leak that the id exists in another tenant.
+    if (!resource || resource.tenantId !== tenantId) return { outcome: 'not-found' };
+    return { outcome: 'ok', item };
+  } catch (e: any) {
+    return { outcome: 'read-failed', error: e?.message || String(e), cause: e };
   }
+}
+
+/**
+ * Load one tenant-owned item by id, verifying parent-workspace ownership.
+ *
+ * Collapses {@link readContentBackedItem}'s three outcomes onto `null`. Kept as
+ * the compatible shape for the ~dozen list/detail callers that only ask "is
+ * there a Loom item to serve"; a caller that must not mistake a failed read for
+ * an absent item should use `readContentBackedItem` directly.
+ */
+export async function loadContentBackedItem(
+  cosmosItemId: string,
+  itemType: string,
+  tenantId: string,
+): Promise<WorkspaceItem | null> {
+  const res = await readContentBackedItem(cosmosItemId, itemType, tenantId);
+  return res.outcome === 'ok' ? res.item : null;
 }
 
 function contentOf<T>(item: WorkspaceItem, kind: string): T | null {

@@ -187,6 +187,27 @@ const DIRECT_CONTENT_READ =
   /state\s*\??\s*\.\s*content|loadContentBackedItem\s*\(|\w+FromContent\s*\(|\w+ContentFromItem\s*\(|contentOf\s*</;
 
 /**
+ * A provisioner PERSISTS when it performs a Cosmos WRITE.
+ *
+ * WHY NOT `itemsContainer(`. That was the first spelling and it is satisfied by
+ * a MENTION rather than a write — this repo's documented "presence, not
+ * enforcement" shape. Independent review proved it: with a real defect present,
+ * injecting an unused, never-called helper
+ *
+ *     async function _peek(id) { const c = await itemsContainer(); return c; }
+ *
+ * flipped the guard to OK while the item type was still genuinely unreachable.
+ * Requiring a write VERB means the credit tracks the thing that makes the
+ * content readable, not the import that might.
+ *
+ * `.replace(` / `.upsert(` / `.create(` are the container-item writes; the
+ * `updateOwnedItem` / `createOwnedItem` helpers are the shared write chokepoints
+ * in `app/api/items/_lib/item-crud.ts`.
+ */
+const PERSISTS_WRITE =
+  /\.\s*(?:replace|upsert|create)\s*(?:<[^>]*>)?\s*\(|\b(?:updateOwnedItem|createOwnedItem)\s*\(/;
+
+/**
  * Local functions in this file whose own body performs a direct content read.
  * Calls to them count as content resolution — otherwise every route that wraps
  * its read in a one-line local helper (`loomDetail`, `loomNativeDetail`,
@@ -307,7 +328,7 @@ export function judgeItemTypes(io) {
       continue;
     }
     const mech = [];
-    if (/itemsContainer\s*\(/.test(src)) mech.push('persists');
+    if (PERSISTS_WRITE.test(src)) mech.push('persists');
     if (seeded.has(itemType)) mech.push('seeds-backing');
 
     const dirs = [
@@ -707,8 +728,47 @@ function runControls(failures) {
   const thing = rows.find((r) => r.itemType === 'thing');
   if (!thing || thing.verdict !== 'unreachable' || unjudged.length !== 0) {
     failures.push(
-      `CONTROL D BROKEN: a synthetic content-consuming provisioner with NO reachability mechanism was judged `
+      'CONTROL D BROKEN: a synthetic content-consuming provisioner with NO reachability mechanism was judged '
       + `${JSON.stringify(thing)} (unjudged=${unjudged.length}) — expected 'unreachable'.`,
+    );
+  }
+
+  // A MENTION of the Cosmos container is not a write. Independent review of
+  // #3549 proved the earlier `itemsContainer(` spelling could be satisfied by an
+  // unused helper, flipping the guard to OK over a genuinely unreachable item
+  // type — this repo's "presence, not enforcement" shape. Planted verbatim.
+  const mentionIo = {
+    ...fakeIo,
+    read: (p) => (p.endsWith('thing.ts')
+      ? 'const c = input.content;\n'
+        + 'async function _peek(id) { const c2 = await itemsContainer(); return c2; }\n'
+        + 'return { status: "created" };'
+      : fakeIo.read(p)),
+  };
+  const mentionRow = judgeItemTypes(mentionIo).rows.find((r) => r.itemType === 'thing');
+  if (!mentionRow || mentionRow.verdict !== 'unreachable') {
+    failures.push(
+      'CONTROL J BROKEN: an unused helper that merely CALLS itemsContainer() was credited as persisting — judged '
+      + `${JSON.stringify(mentionRow)}, expected 'unreachable'. The persists mechanism must require a write verb `
+      + '(.replace/.upsert/.create/updateOwnedItem/createOwnedItem), not the container accessor.',
+    );
+  }
+
+  // …and a REAL write must still be credited, so the tightening did not simply
+  // delete the mechanism.
+  const writeIo = {
+    ...fakeIo,
+    read: (p) => (p.endsWith('thing.ts')
+      ? 'const c = input.content;\n'
+        + 'const items = await itemsContainer();\n'
+        + 'await items.item(id, ws).replace({ ...cur, state: { ...cur.state, content: c } });'
+      : fakeIo.read(p)),
+  };
+  const writeRow = judgeItemTypes(writeIo).rows.find((r) => r.itemType === 'thing');
+  if (!writeRow || writeRow.verdict !== 'ok' || !writeRow.mech.includes('persists')) {
+    failures.push(
+      `CONTROL K BROKEN: a genuine Cosmos write was NOT credited as persisting — judged ${JSON.stringify(writeRow)}. `
+      + 'Tightening the mechanism must not remove it.',
     );
   }
 }
@@ -825,7 +885,7 @@ function main() {
     + `${notJudged.length} further registered item type(s) read no bundle content and are NOT judged `
     + `[${notJudged.map((r) => r.itemType).join(', ') || 'none'}]; 0 unjudged. `
     + `RULE 2 — ${sites.length} \`loom:\`-gated content branch(es) JUDGED across ${files.length} scanned files, `
-    + `0 unreachable, 0 unresolvable. 9 embedded controls intact.)`,
+    + `0 unreachable, 0 unresolvable. 11 embedded controls intact.)`,
   );
 }
 

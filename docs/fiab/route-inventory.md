@@ -2409,7 +2409,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-176 function(s) across 80 module(s) reach an owner / workspace-ACL
+177 function(s) across 80 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2429,7 +2429,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/_lib/model-store.ts` | `readModelState`, `writeModelState` |
 | `apps/fiab-console/app/api/items/_lib/ontology-binding.ts` | `GET`, `POST`, `makeOntologyBindRoute` |
 | `apps/fiab-console/app/api/items/_lib/palantir-crud.ts` | `GET`, `PATCH`, `POST`, `listOntologies`, `loadOntologySurface`, `makeCollectionRoute`, `makeItemRoute` |
-| `apps/fiab-console/app/api/items/_lib/pbi-content-fallback.ts` | `listContentBackedItems`, `loadContentBackedItem` |
+| `apps/fiab-console/app/api/items/_lib/pbi-content-fallback.ts` | `listContentBackedItems`, `loadContentBackedItem`, `readContentBackedItem` |
 | `apps/fiab-console/app/api/items/_lib/semantic-model-checkpoints.ts` | `captureCheckpoint`, `listCheckpoints`, `restoreCheckpoint` |
 | `apps/fiab-console/app/api/items/_lib/sql-server-scope.ts` | `loadOwnedSqlItem`, `withBoundSqlServer`, `withOwnedSqlItem` |
 | `apps/fiab-console/app/api/items/_lib/synapse-item-scope.ts` | `guardSynapseItemRequest` |
