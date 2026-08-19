@@ -71,9 +71,10 @@ import {
 import {
   keepaliveLivySession,
   killLivySession,
-  listLivySessions,
+  listLivySessionsResult,
   defaultSparkPool,
   type LivyKind,
+  type LivySession,
 } from '@/lib/azure/synapse-livy-client';
 
 /** Summarize a session's Livy errorInfo (detailed=true) — '' when none. */
@@ -1036,13 +1037,22 @@ function isPoolOwnedName(name: string | null | undefined): boolean {
  * session, a session younger than the grace since first seen untracked, an
  * in-use (heartbeated) session, or a non-idle (busy / starting / …) session.
  * Best-effort — a list/kill failure degrades to a no-op (never breaks the sweep).
+ *
+ * The census MUST be read through `listLivySessionsResult`, not the array-only
+ * `listLivySessions`, because the tracker GC at the bottom treats "absent from
+ * the list" as "gone from the pool". See the truncation guard there.
  */
 export async function reapStaleSessions(poolName: string, storeDocSessionIds: Set<number> = new Set()): Promise<number> {
   const cfg = sparkPoolConfig();
   if (!cfg.reapEnabled) return 0;
-  let live: Awaited<ReturnType<typeof listLivySessions>>;
+  let live: LivySession[];
+  // Non-null when a paging ceiling cut the census short — i.e. the list below
+  // is a SUBSET of the pool's sessions, not all of them.
+  let censusTruncatedBy: string | null;
   try {
-    live = await listLivySessions(poolName);
+    const census = await listLivySessionsResult(poolName);
+    live = census.sessions;
+    censusTruncatedBy = census.truncatedBy;
   } catch {
     return 0; // honest no-op — can't enumerate, don't guess
   }
@@ -1092,6 +1102,30 @@ export async function reapStaleSessions(poolName: string, storeDocSessionIds: Se
   }
 
   // GC trackers for sessions no longer present on the pool.
+  //
+  // ONLY SAFE ON A COMPLETE CENSUS. This block reads "absent from `liveIds`" as
+  // "gone from the pool". On a TRUNCATED census a still-live session is simply
+  // one we did not page far enough to see, and deleting its
+  // `firstSeenUntracked` stamp restarts its grace window — so on every sweep it
+  // is re-recorded as a first sighting, Guard 4 defers, and a genuinely leaked
+  // session is NEVER reaped. That is the #1796 pool jam re-introduced silently.
+  //
+  // This became REACHABLE with the Livy page-size clamp (#3568): the old
+  // `pageSize: 100` was over the endpoint's documented max of 20, so the census
+  // 400'd and the `catch` above made the whole reaper a silent no-op. Correcting
+  // the page size is what lets the walk actually run — and therefore what lets
+  // it hit a ceiling. Skipping the GC costs only some stale map entries (they
+  // are re-GC'd on the next complete census); getting it wrong costs the reap.
+  if (censusTruncatedBy) {
+    console.warn(
+      `[spark-pool] reapStaleSessions(${poolName}): Livy census was truncated by ` +
+        `${censusTruncatedBy} — skipping tracker GC this sweep. Sessions absent from a ` +
+        `partial census are NOT known to be gone, and forgetting their grace window ` +
+        `would keep a leaked session alive forever. Reaping itself still ran over the ` +
+        `${live.length} session(s) that were enumerated.`,
+    );
+    return killed;
+  }
   for (const key of store.firstSeenUntracked.keys()) {
     const idPart = Number(key.slice(poolName.length + 1));
     if (key.startsWith(`${poolName}#`) && !liveIds.has(idPart)) store.firstSeenUntracked.delete(key);

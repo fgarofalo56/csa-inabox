@@ -345,10 +345,94 @@ export interface UdfParam { name: string; type?: string; default?: string }
 export interface UdfFunction { name: string; params: UdfParam[]; returns?: string }
 
 /**
+ * Advance past a Python string literal starting at `i` (which must be a quote).
+ * Handles triple quotes and backslash escapes. Returns the index just after it.
+ */
+function skipPyString(src: string, i: number): number {
+  const triple = src.slice(i, i + 3);
+  const q = (triple === '"""' || triple === "'''") ? triple : src[i];
+  let k = i + q.length;
+  while (k < src.length) {
+    if (src[k] === '\\' && q.length === 1) { k += 2; continue; }
+    if (src.startsWith(q, k)) return k + q.length;
+    k++;
+  }
+  return src.length;
+}
+
+/**
+ * Index of the bracket closing the one at `start`, honouring nesting, string
+ * literals and `#` comments. -1 when unbalanced.
+ */
+function matchBracket(src: string, start: number): number {
+  let depth = 0;
+  let i = start;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '"' || c === "'") { i = skipPyString(src, i); continue; }
+    if (c === '#') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '(' || c === '[' || c === '{') { depth++; i++; continue; }
+    if (c === ')' || c === ']' || c === '}') {
+      depth--;
+      if (depth === 0) return i;
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** Split on commas that are NOT inside brackets or string literals. */
+function splitTopLevel(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let last = 0;
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '"' || c === "'") { i = skipPyString(s, i); continue; }
+    if (c === '#') { while (i < s.length && s[i] !== '\n') i++; continue; }
+    if (c === '(' || c === '[' || c === '{') { depth++; i++; continue; }
+    if (c === ')' || c === ']' || c === '}') { depth--; i++; continue; }
+    if (c === ',' && depth === 0) { parts.push(s.slice(last, i)); last = i + 1; i++; continue; }
+    i++;
+  }
+  parts.push(s.slice(last));
+  return parts;
+}
+
+/** Index of the first `ch` that is not inside brackets or a string literal. */
+function indexOfTopLevel(s: string, ch: string): number {
+  let depth = 0;
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '"' || c === "'") { i = skipPyString(s, i); continue; }
+    if (c === '#') { while (i < s.length && s[i] !== '\n') i++; continue; }
+    if (c === '(' || c === '[' || c === '{') { depth++; i++; continue; }
+    if (c === ')' || c === ']' || c === '}') { depth--; i++; continue; }
+    if (c === ch && depth === 0) return i;
+    i++;
+  }
+  return -1;
+}
+
+/**
  * Parse the function_app.py source for functions decorated with
  * `@udf.function()`. Returns the function name, its typed parameters
  * (name/type/default), and return annotation. Helper (undecorated) functions
  * are excluded, matching the Fabric Functions explorer behaviour.
+ *
+ * The signature is scanned with BRACKET AWARENESS, not split on `,` (PR #3692
+ * review, BLOCKER 4). A naive comma split cut `Dict[str, int]` in half, leaving
+ * `opts` typed `Dict[str` with its `= {}` default discarded — and the invoke
+ * route then answered a perfectly valid call with HTTP 400 "compute requires
+ * opts, which was not supplied" plus "declares no default for opts", neither of
+ * which was true (deploy-integrity.md R7). `Tuple[a, b]`, `Union[a, b]`, any
+ * comma-bearing default, and a paren-bearing default such as `= (1, 2)` — which
+ * previously made the whole function VANISH from the explorer, because the
+ * signature scan stopped at the first `)` — are all handled.
  */
 export function parseUdfFunctions(src: string): UdfFunction[] {
   const out: UdfFunction[] = [];
@@ -358,23 +442,39 @@ export function parseUdfFunctions(src: string): UdfFunction[] {
     // Find the def line (may be the next non-decorator line).
     let j = i + 1;
     while (j < lines.length && /^\s*@/.test(lines[j])) j++;
-    // Accumulate the def signature across wrapped lines until the closing ):
-    let sig = '';
-    for (; j < lines.length; j++) {
-      sig += lines[j];
-      if (sig.includes(')')) break;
-      sig += ' ';
-    }
-    const m = sig.match(/def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->\s*([^:]+))?:/);
-    if (!m) continue;
+    // Scan the raw text from the def onward, so the signature may wrap freely.
+    const rest = lines.slice(j).join('\n');
+    const dm = rest.match(/^\s*def\s+([A-Za-z_]\w*)\s*\(/);
+    if (!dm) continue;
+    const openIdx = dm[0].length - 1;
+    const closeIdx = matchBracket(rest, openIdx);
+    if (closeIdx < 0) continue;
+
     const params: UdfParam[] = [];
-    for (const rawP of m[2].split(',')) {
+    for (const rawP of splitTopLevel(rest.slice(openIdx + 1, closeIdx))) {
       const p = rawP.trim();
-      if (!p || p === 'self') continue;
-      const pm = p.match(/^([A-Za-z_]\w*)\s*(?::\s*([^=]+?))?\s*(?:=\s*(.+))?$/);
-      if (pm) params.push({ name: pm[1], type: pm[2]?.trim(), default: pm[3]?.trim() });
+      // `self`, `*args`/`**kwargs`, and the bare `*` / `/` markers carry no
+      // named parameter. The invoke route documents *args/**kwargs as
+      // deliberately unvalidated.
+      if (!p || p === 'self' || p === '/' || p.startsWith('*')) continue;
+      const eq = indexOfTopLevel(p, '=');
+      const namePart = eq < 0 ? p : p.slice(0, eq);
+      const dflt = eq < 0 ? undefined : (p.slice(eq + 1).trim() || undefined);
+      const colon = indexOfTopLevel(namePart, ':');
+      const name = (colon < 0 ? namePart : namePart.slice(0, colon)).trim();
+      const type = colon < 0 ? undefined : (namePart.slice(colon + 1).trim() || undefined);
+      if (!/^[A-Za-z_]\w*$/.test(name)) continue;
+      params.push({ name, type, default: dflt });
     }
-    out.push({ name: m[1], params, returns: m[3]?.trim() });
+
+    // The return annotation sits between the closing paren and the def's colon.
+    const after = rest.slice(closeIdx + 1);
+    const colonIdx = indexOfTopLevel(after, ':');
+    const returns = colonIdx < 0
+      ? undefined
+      : (after.slice(0, colonIdx).replace(/^\s*->\s*/, '').trim() || undefined);
+
+    out.push({ name: dm[1], params, returns });
   }
   return out;
 }

@@ -375,6 +375,34 @@ jobs:
       - name: deploy-template-sync (the compiled ARM template that SHIPS must match its bicep — #2945)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-template-sync.mjs
+      # ARM SELF-REFERENCE (#3714). #3691 declared a
+      # `Microsoft.Resources/tags` resource whose scope expression WAS its own
+      # resource id, so ARM refused the whole template — "Circular dependency
+      # detected on resource: …/registries/<acr>/providers/Microsoft.Resources/
+      # tags/default" — and EVERY Commercial `az deployment sub create` failed
+      # for as long as it sat on main. It never completed one successful deploy.
+      #
+      # THE REASON THIS IS A STATIC CHECK AND NOT A PREFLIGHT STEP. Measured
+      # 2026-08-18 on the exact template: `az bicep build` exit 0,
+      # `az deployment sub what-if` Succeeded (run 32115429033), and
+      # `az deployment sub validate` Succeeded with "error": null — while
+      # `az deployment sub create` died on it. The module reaches ARM inside the
+      # `admin-plane` nested deployment, which carries
+      # `expressionEvaluationOptions: {scope: 'inner'}`, and ARM does not expand
+      # an inner-scoped nested template during preflight. So the deploy lane's
+      # what-if step was ALREADY GREEN on the broken template: adding another
+      # ARM preflight here would have been a gate that cannot fail. Isolating
+      # the same shape into a standalone template and running
+      # `az deployment group validate` DOES report it — which is what proves the
+      # blindness is the nesting, not the check.
+      #
+      # Compiles only; no Azure API call, no credentials. Carries embedded
+      # positive AND negative controls because its population in a healthy repo
+      # is zero, and a zero-population guard that returns green has demonstrated
+      # nothing (see check-arm-self-referential-resource.mjs for both fixtures).
+      - name: arm-self-ref (no ARM resource may reference its own id — #3714)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-arm-self-referential-resource.mjs
       # INTERNAL-TOKEN SINGLE WRITER (#3056). `LOOM_INTERNAL_TOKEN` had TWO
       # writers and no owner, and it broke the estate three times in two days.
       # bicep derived it from `loomGeneratedSecretSeed`, whose ARM default

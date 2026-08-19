@@ -25,23 +25,33 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { armBase, armScope, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE, walkPagedList } from './paging-budget';
+import { getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
+import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, type PagingTruncation } from './paging-budget';
 import {
   loomResourceGroupScopes,
   loomSubscriptionScope,
   type ResourceGroupScope,
 } from './loom-subscriptions';
+// ARM transport substrate — credential chain, ARM verbs and the TTL memo. Split
+// out to ./monitor-arm so the write-path siblings can share one credential and
+// one cache; MonitorError / MonitorNotConfiguredError / clearMonitorCache are
+// re-exported below because ~80 call sites import them from HERE.
+import {
+  MonitorError,
+  MonitorNotConfiguredError,
+  token,
+  armGet,
+  armPagedList,
+  armPut,
+  armPost,
+  armPatch,
+  armDelete,
+  cached,
+  clearMonitorCache,
+} from './monitor-arm';
 
-// Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
-const ARM = armBase();
-const ARM_SCOPE = armScope();
+export { MonitorError, MonitorNotConfiguredError, clearMonitorCache };
+
 // LA QUERY HOST (the REST endpoint) vs LA TOKEN SCOPE (the AAD audience) are
 // DISTINCT: the Commercial query host is `api.loganalytics.azure.com` but the
 // AAD resource principal is `https://api.loganalytics.io`. Deriving the scope
@@ -76,33 +86,6 @@ const ACTIVITY_TTL_MS = Number(process.env.LOOM_MONITOR_ACTIVITY_TTL_MS) || 45_0
 const ACTIVITY_LOG_TTL_MS = Number(process.env.LOOM_MONITOR_ACTIVITY_LOG_TTL_MS) || 45_000;
 const ALERTS_TTL_MS = Number(process.env.LOOM_MONITOR_ALERTS_TTL_MS) || 45_000;
 const DIAG_TTL_MS = Number(process.env.LOOM_MONITOR_DIAG_TTL_MS) || 60_000;
-
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new AcaManagedIdentityCredential(),
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
-
-export class MonitorError extends Error {
-  status: number;
-  body?: unknown;
-  constructor(message: string, status: number, body?: unknown) {
-    super(message);
-    this.name = 'MonitorError';
-    this.status = status;
-    this.body = body;
-  }
-}
-
-export class MonitorNotConfiguredError extends Error {
-  constructor(public missing: string[]) {
-    super(`Monitor not configured. Missing env: ${missing.join(', ')}`);
-    this.name = 'MonitorNotConfiguredError';
-  }
-}
 
 /**
  * The three-way split every telemetry-backed route MUST make (no-vaporware.md):
@@ -211,161 +194,6 @@ export function logAnalyticsWorkspaceId(): string | null {
   const v = process.env.LOOM_LOG_ANALYTICS_WORKSPACE_ID;
   return v && v.trim() ? v.trim() : null;
 }
-
-// ----------------------------------------------------------------------------
-// token + fetch helpers
-// ----------------------------------------------------------------------------
-
-async function token(scope: string): Promise<string> {
-  const t = await credential.getToken(scope);
-  if (!t?.token) throw new MonitorError(`Failed to acquire token for ${scope}`, 401);
-  return t.token;
-}
-
-async function armGet(path: string, timeoutMs?: number): Promise<any> {
-  const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetchWithTimeout(url, {
-    headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
-    cache: 'no-store',
-  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
-  if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM GET failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
-  }
-  return json;
-}
-
-/**
- * Walk an ARM `nextLink` list BOUNDED by the shared paging budget (page cap +
- * wall clock, #2557/#2582). Every hand-rolled `guard < N` in this module capped
- * PAGES only — N pages x the 30s per-request ceiling is minutes of unbounded
- * await on a request path. A deadline inside a page fetch truncates (rows kept)
- * instead of throwing a `MonitorError` a caller would show as "no data".
- */
-async function armPagedList<T = any>(
-  label: string,
-  firstPath: string,
-  maxPages: number,
-): Promise<T[]> {
-  return walkPagedList<T>(label, (next, timeoutMs) => armGet(next ?? firstPath, timeoutMs), { maxPages });
-}
-
-async function armPut(path: string, body: unknown): Promise<any> {
-  const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetchWithTimeout(url, {
-    method: 'PUT',
-    headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    cache: 'no-store',
-  });
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
-  if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM PUT failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
-  }
-  return json;
-}
-
-async function armPost(path: string, body: unknown, timeoutMs?: number): Promise<{ status: number; json: any; operationLocation?: string }> {
-  const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    cache: 'no-store',
-  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
-  if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM POST failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
-  }
-  const operationLocation =
-    res.headers.get('azure-asyncoperation') || res.headers.get('location') || undefined;
-  return { status: res.status, json, operationLocation };
-}
-
-async function armPatch(path: string, body: unknown): Promise<any> {
-  const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetchWithTimeout(url, {
-    method: 'PATCH',
-    headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    cache: 'no-store',
-  });
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
-  if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM PATCH failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
-  }
-  return json;
-}
-
-async function armDelete(path: string): Promise<void> {
-  const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetchWithTimeout(url, {
-    method: 'DELETE',
-    headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
-    cache: 'no-store',
-  });
-  // 200 (deleted) and 204 (deleted, no body) are success; 404 = already gone.
-  if (!res.ok && res.status !== 404) {
-    const text = await res.text();
-    let json: any = null;
-    try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
-    const msg = (json?.error?.message || text || `ARM DELETE failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
-  }
-}
-
-// ----------------------------------------------------------------------------
-// TTL cache — server-side memo for the heavy Monitor read paths
-// ----------------------------------------------------------------------------
-//
-// The Monitor surface re-runs the same expensive Azure reads on every tab
-// revisit and every Refresh click: the resource inventory (one ARM list per
-// Loom RG), the resource-health crawl, and the activity-feed KQL. None of
-// those change second-to-second, so a short module-level TTL memo serves
-// tab-revisits and Refresh-spam from process memory instead of re-hitting
-// Azure — without changing first-paint semantics. In-flight de-duplication
-// (we cache the Promise, not the resolved value) means N concurrent callers
-// share ONE Azure round-trip. Pure in-process Map — no new dependency, no env
-// requirement, no Fabric. Failures are evicted so the next call retries Azure.
-
-interface CacheEntry<T> { at: number; val: Promise<T>; }
-const _monitorCache = new Map<string, CacheEntry<unknown>>();
-
-function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  const hit = _monitorCache.get(key) as CacheEntry<T> | undefined;
-  if (hit && now - hit.at < ttlMs) return hit.val;
-  const entry: CacheEntry<T> = {
-    at: now,
-    val: fn().catch((e) => {
-      // Don't cache failures — evict (only if still ours) so the next call retries.
-      if (_monitorCache.get(key) === (entry as CacheEntry<unknown>)) _monitorCache.delete(key);
-      throw e;
-    }),
-  };
-  _monitorCache.set(key, entry as CacheEntry<unknown>);
-  return entry.val;
-}
-
-/** Drop all memoized Monitor reads (test hook / explicit hard-refresh path). */
-export function clearMonitorCache(): void { _monitorCache.clear(); }
 
 // ----------------------------------------------------------------------------
 // 1) Resource inventory — ARM list resources across the Loom RGs
@@ -1734,6 +1562,13 @@ export interface ScheduledQueryRuleInput {
   /** Whether the rule evaluates. Default true; set false to "stop" the rule. */
   enabled?: boolean;
   /**
+   * ARM resource tags to stamp on the rule. Loom uses these to record WHICH Loom
+   * item owns the rule (`loom-item-id`), so a later read can join a live rule
+   * back to its item on an identity rather than on a derived, user-controlled
+   * name. This is a full PUT, so the tags supplied here are the rule's tags.
+   */
+  tags?: Record<string, string>;
+  /**
    * Skip create-time KQL validation. Default TRUE for Loom-created rules: a
    * bundled alert's query often targets a table that doesn't exist on a fresh
    * estate yet (e.g. AppEvents_CL before any data lands), and Azure Monitor
@@ -1761,6 +1596,7 @@ export async function upsertScheduledQueryRule(input: ScheduledQueryRuleInput): 
     `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules/${encodeURIComponent(input.name)}?api-version=${SCHEDULED_QUERY_RULES_API}`;
   const body = {
     location,
+    ...(input.tags && Object.keys(input.tags).length ? { tags: input.tags } : {}),
     properties: {
       displayName: input.name,
       description: input.description || 'Created by CSA Loom Activator',
@@ -1808,6 +1644,62 @@ export interface ScheduledQueryRule {
   windowSize?: string;
   actionGroupIds?: string[];
   resourceGroup?: string;
+  /** ARM resource tags — carries `loom-item-id` on rules Loom authored. */
+  tags?: Record<string, string>;
+}
+
+/**
+ * List scheduled query alert rules in the alert resource group, REPORTING
+ * whether the listing is whole.
+ *
+ * ARM returns this collection paged. A caller that only DISPLAYS the rules can
+ * live with page 1; a caller that PERSISTS a conclusion drawn from the list (—
+ * "these are all of item X's rules") cannot: a truncated page turns into a
+ * partial record that is then treated as complete. So the truncation is returned
+ * rather than swallowed, and the caller decides (deploy-integrity.md R6/R7 —
+ * never report a conclusion the code did not establish).
+ */
+export async function listScheduledQueryRulesPaged(): Promise<{
+  rules: ScheduledQueryRule[];
+  truncatedBy: PagingTruncation | null;
+  pagesFetched: number;
+}> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  const first =
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules?api-version=${SCHEDULED_QUERY_RULES_API}`;
+  const walked = await walkPagedListResult<any>(
+    `scheduledQueryRules ${rg}`,
+    (next, timeoutMs) => armGet(next ?? first, timeoutMs),
+  );
+  return {
+    rules: walked.rows.map((r) => mapScheduledQueryRule(r, rg)),
+    truncatedBy: walked.truncatedBy,
+    pagesFetched: walked.pagesFetched,
+  };
+}
+
+function mapScheduledQueryRule(r: any, fallbackRg: string): ScheduledQueryRule {
+  const p = r?.properties || {};
+  const crit = (p.criteria?.allOf || [])[0] || {};
+  return {
+    id: r.id,
+    name: r.name,
+    enabled: p.enabled !== false,
+    severity: p.severity,
+    description: p.description,
+    displayName: p.displayName,
+    scopes: p.scopes,
+    query: crit.query,
+    operator: crit.operator,
+    threshold: crit.threshold,
+    evaluationFrequency: p.evaluationFrequency,
+    windowSize: p.windowSize,
+    actionGroupIds: p.actions?.actionGroups,
+    resourceGroup: rgFromId(r.id || '') || fallbackRg,
+    ...(r.tags && typeof r.tags === 'object' ? { tags: r.tags as Record<string, string> } : {}),
+  };
 }
 
 /**
@@ -1816,34 +1708,12 @@ export interface ScheduledQueryRule {
  * the Loom alerts editor creates on the Government path — the parity for a
  * Databricks SQL alert when Databricks is not authorized (GCC-High / IL5 / DoD).
  *   GET .../resourceGroups/{rg}/providers/Microsoft.Insights/scheduledQueryRules
+ *
+ * Rows only. Callers that must distinguish "this is the whole list" from "this
+ * is what fit in the budget" use {@link listScheduledQueryRulesPaged}.
  */
 export async function listScheduledQueryRules(): Promise<ScheduledQueryRule[]> {
-  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
-  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
-  const rg = alertResourceGroup();
-  const j = await armGet(
-    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules?api-version=${SCHEDULED_QUERY_RULES_API}`,
-  );
-  return (j?.value || []).map((r: any): ScheduledQueryRule => {
-    const p = r?.properties || {};
-    const crit = (p.criteria?.allOf || [])[0] || {};
-    return {
-      id: r.id,
-      name: r.name,
-      enabled: p.enabled !== false,
-      severity: p.severity,
-      description: p.description,
-      displayName: p.displayName,
-      scopes: p.scopes,
-      query: crit.query,
-      operator: crit.operator,
-      threshold: crit.threshold,
-      evaluationFrequency: p.evaluationFrequency,
-      windowSize: p.windowSize,
-      actionGroupIds: p.actions?.actionGroups,
-      resourceGroup: rgFromId(r.id || '') || rg,
-    };
-  });
+  return (await listScheduledQueryRulesPaged()).rules;
 }
 
 /**
