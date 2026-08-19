@@ -591,3 +591,6 @@ jobs:
             echo "> tenant Conditional Access until a TENANT ADMIN scopes a CA exclusion for it. Nothing in this repo can"
             echo "> automate that. See docs/fiab/runbooks/synthetic-journeys.md."
           } >> "$GITHUB_STEP_SUMMARY"
+
+# probe (#3783): touched ONLY to prove the vitest infra-suite lane fires on a
+# workflow-only PR. Not for merge.
