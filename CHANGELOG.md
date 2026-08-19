@@ -25,6 +25,27 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.99.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.12...csa-inabox-v0.99.0) (2026-08-19)
+
+
+### Features
+
+* **ci:** make cross-cloud estate drift visible — Gov ran 251 commits behind while every signal read green ([#3730](https://github.com/fgarofalo56/csa-inabox/issues/3730)) ([#3732](https://github.com/fgarofalo56/csa-inabox/issues/3732)) ([39903ed](https://github.com/fgarofalo56/csa-inabox/commit/39903edede4df6870cea7c8c5d5d1a71852d4654))
+
+
+### Bug Fixes
+
+* **auto-bind:** the first bind manufactured an EMPTY twin of content the item already held ([#3549](https://github.com/fgarofalo56/csa-inabox/issues/3549)) ([#3696](https://github.com/fgarofalo56/csa-inabox/issues/3696)) ([b6bfe34](https://github.com/fgarofalo56/csa-inabox/commit/b6bfe3461b81abcadfbb59db9e8054be687ab484))
+* **ci:** gates-2641 pinned two facts [#3745](https://github.com/fgarofalo56/csa-inabox/issues/3745) correctly removed, so main went red ([#3781](https://github.com/fgarofalo56/csa-inabox/issues/3781)) ([#3782](https://github.com/fgarofalo56/csa-inabox/issues/3782)) ([90d1adb](https://github.com/fgarofalo56/csa-inabox/commit/90d1adb8e91869e1e2e4b1bc4d6f728e7fc065a6))
+* **gov:** give Azure Government the continuous-deploy chain Commercial has — every Gov lane was dispatch-only ([#3730](https://github.com/fgarofalo56/csa-inabox/issues/3730)) ([#3745](https://github.com/fgarofalo56/csa-inabox/issues/3745)) ([049349a](https://github.com/fgarofalo56/csa-inabox/commit/049349a94e3e2078d2269487f122bc032f3d693c))
+
+
+### Documentation
+
+* **prp:** Fabric + Databricks 2026 parity program ("Rival") -- match then beat both platforms on MAC and MAG ([#3780](https://github.com/fgarofalo56/csa-inabox/issues/3780)) ([cf78c6c](https://github.com/fgarofalo56/csa-inabox/commit/cf78c6c89904a7186657dd8635353b3046e9c140))
+* **prp:** program master "Fix & Rival" -- one driver for the 2026-08-18 remediation + parity PRPs ([#3785](https://github.com/fgarofalo56/csa-inabox/issues/3785)) ([203c982](https://github.com/fgarofalo56/csa-inabox/commit/203c982082cc99f5252a98c82e7fbed253199817))
+* **prp:** scope the V&V sweep remediation backlog into an execution-ready PRP ([#3758](https://github.com/fgarofalo56/csa-inabox/issues/3758)) ([42e24f6](https://github.com/fgarofalo56/csa-inabox/commit/42e24f6cadd3a83c52ed1a628d14e63c2374f684))
+
 ## [0.98.12](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.98.11...csa-inabox-v0.98.12) (2026-08-18)
 
 
