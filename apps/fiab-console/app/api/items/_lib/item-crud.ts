@@ -86,19 +86,31 @@ export function jerr(error: string, status = 500, code?: string) {
  * the scope is recovered from the AMBIENT request session under the SAME
  * principal match `accessOptsFor` / `ambientAccessOptsFor` already use in this
  * file: the session is consulted ONLY when its `oid` equals the `oid` we were
- * handed, so a helper running for a different principal — or off-request (jobs,
- * scripts, tests, where `getSession()` throws) — degrades to the oid, i.e.
- * exactly the previous behavior. Imports are dynamic to keep this module's
- * static dependency graph unchanged.
+ * handed. Imports are dynamic to keep this module's static dependency graph
+ * unchanged.
+ *
+ * RETURNS null RATHER THAN FALLING BACK TO THE oid, and that is the point.
+ * An earlier revision of this fix returned `oid` when there was no ambient
+ * session for the principal (off-request: jobs, scripts, tests). That looked
+ * conservative — "degrade to the previous behavior" — but the previous behavior
+ * IS the defect: it reads a partition that has held nothing since #3282, so the
+ * fallback could only ever produce a wrong-partition read whose result is
+ * discarded anyway. It also left this module addressing the domains document
+ * with BOTH scopes, i.e. a residual instance of the very class this PR exists to
+ * remove, and it made the call site unreadable to
+ * `scripts/ci/check-tenant-singleton-scope.mjs` — so a revert of this fix was
+ * indistinguishable from the fix. Declining to guess is both more honest and
+ * more checkable: the caller falls back to the raw domain id, exactly as it
+ * already does whenever the domain is absent from the map.
  */
-async function domainScopeFor(oid: string): Promise<string> {
+async function domainScopeFor(oid: string): Promise<string | null> {
   try {
     const { getSession, tenantScopeId } = await import('@/lib/auth/session');
     const s = getSession();
-    if (!s || s.claims.oid !== oid) return oid;
+    if (!s || s.claims.oid !== oid) return null;
     return tenantScopeId(s);
   } catch {
-    return oid;
+    return null;
   }
 }
 
@@ -113,8 +125,10 @@ async function domainScopeFor(oid: string): Promise<string> {
  */
 async function resolveDomainName(tenantId: string, domainId?: string): Promise<string | undefined> {
   if (!domainId) return undefined;
+  const scope = await domainScopeFor(tenantId);
+  if (!scope) return undefined; // unknown tenant scope — do NOT guess a partition
   try {
-    const domains = await loadTenantDomains(await domainScopeFor(tenantId));
+    const domains = await loadTenantDomains(scope);
     const hit = domains.find((d) => d.id === domainId);
     return hit?.name;
   } catch {

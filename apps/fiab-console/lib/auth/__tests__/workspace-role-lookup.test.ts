@@ -122,4 +122,34 @@ describe('resolveWorkspaceRole — lookup is not authorization (#3751)', () => {
     expect(workspace).toBeNull();
     expect(role).toBeNull();
   });
+
+  // THE LIMIT OF THE BOUNDARY, PINNED DELIBERATELY (#3753 review).
+  //
+  // The tid check is `callerTid && docTid && docTid !== callerTid`, so it is
+  // INERT for a LEGACY workspace doc written before the `tid` field existed: a
+  // caller from a different Entra tenant resolves it (workspace non-null, role
+  // null). This is identical to `resolveWorkspaceAccessByOid`'s step 4, which
+  // has shipped with the same limit since #2703 — tightening it here would
+  // newly 404 every legacy workspace for its own legitimate tenant, which is the
+  // #3751 defect again in the opposite direction.
+  //
+  // What contains it today is that `msal.ts` builds a SINGLE-TENANT authority,
+  // so a foreign `tid` is not reachable on the default configuration. That is a
+  // deployment property, not a property of this function, so it is asserted here
+  // rather than assumed: if the boundary is ever expected to reject legacy docs,
+  // this spec must be updated CONSCIOUSLY and the routes' post-lookup ladder
+  // (`role || isTenantAdmin || callerIsOwningDomainAdmin`) re-reviewed with it —
+  // `callerIsOwningDomainAdmin` matches the workspace's `domain` STRING against
+  // the caller's own domain list, and `default` exists in every tenant.
+  it('does NOT reject a LEGACY doc with no tid — the boundary is inert there (documented limit)', async () => {
+    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
+    readWorkspaceById.mockResolvedValue(legacy);
+    const { workspace, role } = await resolveWorkspaceRole(
+      WS_ID,
+      session(ADMIN_OID, ADMIN_UPN, FOREIGN_TID),
+    );
+    expect(workspace).not.toBeNull();
+    // Crucially it still grants NO role — being resolvable is not being able to act.
+    expect(role).toBeNull();
+  });
 });

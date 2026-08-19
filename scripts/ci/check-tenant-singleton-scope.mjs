@@ -43,22 +43,38 @@
  * RESOLUTION LADDER — this guard must survive indirection, because indirection
  * is exactly what defeated its predecessor. A partition-key expression is
  * resolved through, in order:
- *   1. local `const`/`let` chains (≤10 hops) — beats hoisting into a variable;
+ *   1. local `const`/`let` chains (≤12 hops), INCLUDING object destructuring
+ *      (`const { oid } = s.claims`) — beats hoisting into a variable, which is
+ *      repo convention (`lib/audit/audit-scope.ts`, `lib/auth/item-access.ts`);
  *   2. single-`return` helper inlining — beats `domainsDocId(t)` returning
  *      `` `domains:${t}` ``, which is how the domains doc id is really built;
+ *   2b. RETURN-VALUE flow through a multi-statement local helper — beats a
+ *      helper with a guard clause (`domainScopeFor`), where step 2 gives up;
  *   3. INTER-PROCEDURAL parameter flow — when the key is a parameter of the
  *      enclosing function, the guard classifies it by the union of what every
  *      call site of that function passes, recursively (≤4 hops). This is what
  *      catches #3747: the mesh route's `s.claims.oid` reached the document three
  *      frames down, through `getDomainMesh` into `loadOrSeedDomains`.
  *
- * UNJUDGED IS NOT CLEAN. A site whose scope class cannot be determined is
- * counted as UNJUDGED, listed in the output, and compared against a pinned
- * ceiling (`MAX_UNJUDGED`). If the un-judgeable population GROWS, this guard
- * FAILS — so a refactor cannot quietly move sites out of its reach and leave it
- * reporting zero findings over a shrinking population. Every summary line
- * states judged and unjudged counts; there is no output in which "0 findings"
+ * UNJUDGED IS NOT CLEAN, AND NEITHER IS PARTIALLY READ. Two distinct blind
+ * spots are counted, listed on every run, and pressed against one pinned ceiling
+ * (`MAX_BLINDNESS`):
+ *   • UNJUDGED     — a partition key the ladder could not take to ground.
+ *   • PARTIALLY READ — a key that WAS classified, but from a conduit some of
+ *     whose call sites could not be read. An absence ("no caller-oid caller was
+ *     seen") is only as good as the read behind it.
+ * An earlier revision tracked only the first, and only on one branch, so an
+ * unreadable call site feeding a resolved conduit was counted NOWHERE. Every
+ * summary line states both counts; there is no output in which "0 findings"
  * appears without its denominator.
+ *
+ * WHAT THIS GUARD DOES NOT SEE (stated so it is not mistaken for coverage):
+ *   • WRITE paths. It matches `<handle>.item(id, pk)` only, so a singleton
+ *     written via `c.items.upsert({ id: `domains:${oid}`, tenantId: oid })`
+ *     never enters the population. The read-side rule still catches the
+ *     resulting disagreement at the first reader, but not at the writer.
+ *   • Containers reached by any binding form other than
+ *     `const x = [(]await xContainer()` — e.g. a handle passed in as a parameter.
  *
  * SELF-DEFENCE. Fails if the population collapses (no documents, or no site
  * classified `scope` at all) — a matcher that has drifted off the code must not
@@ -74,35 +90,84 @@ const CONSOLE_DIRS = ['apps/fiab-console/app', 'apps/fiab-console/lib'];
 /**
  * Documents that are KNOWN to be split and are NOT fixable by a read-path
  * change — re-keying them strands the existing document, which is the migration
- * hazard #3282 called out. Each entry MUST name a tracked issue. These are
- * reported LOUDLY as known splits and counted separately; they are never folded
- * into the clean count.
+ * hazard #3282 called out.
  *
- * key: `<containerAccessor> :: <doc-id template>`
+ * AN EXEMPTION IS A PINNED SITE LIST, NEVER A WHOLE DOCUMENT GROUP (#3753
+ * review). An earlier revision exempted the group by key alone, so a brand-new
+ * `tsC.item(session.claims.oid, session.claims.oid)` could be added to
+ * `admin/overview` and the run still printed "Zero undeclared splits" — only an
+ * internal tally moved. A document this PR itself reports as a LIVE unfixed
+ * split could therefore accumulate arbitrarily many new caller-oid readers with
+ * the build green, which is the accumulating-baseline failure
+ * `check-owner-only-workspace-guard` avoids by pinning its 68 sites.
+ *
+ * So each entry names the EXACT caller-oid sites it covers. A site not in the
+ * list is an undeclared split and FAILS, even inside an exempted document.
+ *
+ * `issue` MUST name a tracked issue — a placeholder is rejected at load time by
+ * {@link assertKnownSplitIssues}, because "each entry must name a tracked issue"
+ * enforced only by a comment is exactly the kind of rule this repo has watched
+ * go quiet.
  */
 const KNOWN_SPLIT = new Map([
   [
     'tenantSettingsContainer :: <S>',
-    'ISSUE-TENANT-SETTINGS-SCOPE — the tenant-settings singleton is WRITTEN by ' +
-      '/api/admin/tenant-settings under the caller oid and READ by ' +
-      '/api/admin/chargeback under tenantScopeId(), so the "Per-domain chargeback ' +
-      'tagging" toggle an admin saves is never the one chargeback reads. ' +
-      'Unlike the domains doc this cannot be fixed read-side: loadOrSeed() SEEDS ' +
-      'defaults, so re-keying silently resets every saved toggle. Needs a ' +
-      'migration, not a drive-by. Found by this guard, filed from #3753.',
+    {
+      issue: '#3793',
+      why:
+        'The tenant-settings singleton is WRITTEN by /api/admin/tenant-settings under ' +
+        'the caller oid and READ by /api/admin/chargeback under tenantScopeId(), so the ' +
+        '"Per-domain chargeback tagging" toggle an admin saves is never the one ' +
+        'chargeback reads. Unlike the domains doc this cannot be fixed read-side: ' +
+        'loadOrSeed() SEEDS defaults, so re-keying silently resets every saved toggle. ' +
+        'Needs a migration, not a drive-by. Found by this guard, filed from #3753.',
+      /** The caller-oid sites this exemption covers. Anything else FAILS. */
+      sites: [
+        'apps/fiab-console/app/api/admin/tenant-settings/route.ts',
+        'apps/fiab-console/app/api/copilot/complete/route.ts',
+        'apps/fiab-console/lib/apps/runtime-flag.ts',
+      ],
+    },
   ],
 ]);
 
+/** A placeholder issue reference makes the exemption unaccountable — reject it. */
+function assertKnownSplitIssues() {
+  const bad = [];
+  for (const [key, v] of KNOWN_SPLIT) {
+    if (!/^#\d+$/.test(String(v.issue || ''))) bad.push(`${key} — issue "${v.issue}" is not a #NNNN reference`);
+  }
+  if (bad.length) {
+    console.error(
+      '::error::tenant-singleton-scope: a KNOWN_SPLIT entry does not name a tracked issue. An exemption whose ' +
+        'justification cannot be looked up is an exemption nobody will ever revisit.',
+    );
+    for (const b of bad) console.error(`::error::  ${b}`);
+    process.exit(1);
+  }
+}
+assertKnownSplitIssues();
+
 /**
- * Ceiling on sites whose scope class could not be determined at all.
+ * Ceiling on this rule's own BLINDNESS: unclassifiable partition keys PLUS call
+ * sites of a classified conduit that the parameter walk could not read.
  *
- * Pinned just above the real count (15 at the time of writing) rather than at a
- * comfortable round number, so this is a RATCHET on the guard's own blindness:
- * a refactor that moves five more sites behind an unresolvable indirection
- * fails the build instead of quietly shrinking the population this rule can
- * actually see. Raise it deliberately, in a PR that says why.
+ * Pinned at the measured value, not a round number with headroom — this is a
+ * shrink-only RATCHET, the same mechanic `check-owner-only-workspace-guard`
+ * uses, not a budget to spend. A refactor that moves five more call sites behind
+ * an unresolvable indirection fails the build instead of quietly shrinking the
+ * population this rule can actually see.
+ *
+ * IT IS DELIBERATELY HIGH, AND THAT IS THE HONEST NUMBER. An earlier revision
+ * reported 15 — but only because `classify()` was handing out a DECIDED-SAFE
+ * verdict to any expression that merely lacked an identity token, so an
+ * unresolved helper call (`domainScopeFor(tenantId)`) and a member expression
+ * (`ctx.scope`) were counted as clean rather than as unread. Tightening that to
+ * "positively established as a non-identity key, or else unread" moved 120
+ * expressions out of the safe bucket and into this count. The rule did not get
+ * blinder; the previous number was wrong.
  */
-const MAX_UNJUDGED = 20;
+const MAX_BLINDNESS = 134;
 
 const CALLER_OID = /\bclaims\s*\.\s*oid\b/;
 const TENANT_SCOPE = /\btenantScopeId\s*\(/;
@@ -178,17 +243,50 @@ function argsOf(text, openIdx) {
   return out;
 }
 
-/** Ladder steps 1 + 2: local binding chains and single-`return` helper inlining. */
+/**
+ * Ladder steps 1 + 2: local binding chains and single-`return` helper inlining.
+ *
+ * DESTRUCTURING IS PART OF STEP 1, not a nicety. `const { oid } = s.claims;`
+ * then `f(oid)` is existing repo convention (`lib/audit/audit-scope.ts`,
+ * `lib/auth/item-access.ts` — the latter an authorization module), and an
+ * earlier revision of this guard resolved only `const X = <expr>`. A planted
+ * destructuring of the #3747 regression therefore produced output BYTE-IDENTICAL
+ * to the clean tree: not flagged, and not even counted as unjudged. Both the
+ * shorthand `{ oid }` and the renaming `{ oid: scope }` forms are followed.
+ */
 function resolveLocal(text, expr, seen = new Set()) {
   let e = String(expr).trim();
-  for (let hop = 0; hop < 10; hop++) {
+  for (let hop = 0; hop < 12; hop++) {
     if (/^[A-Za-z_$][\w$]*$/.test(e)) {
       if (seen.has(e)) return e;
       seen.add(e);
       const m = new RegExp(`(?:const|let|var)\\s+${e}\\s*(?::[^=\\n]+)?=\\s*([^;\\n]+)`).exec(text);
-      if (!m) return e;
-      e = m[1].trim().replace(/^await\s+/, '');
-      continue;
+      if (m) {
+        e = m[1].trim().replace(/^await\s+/, '');
+        continue;
+      }
+      // Object destructuring: `const { oid } = X` / `const { oid: scope } = X`.
+      const d = new RegExp(
+        `(?:const|let|var)\\s*\\{([^}]*)\\}\\s*(?::[^=\\n]+)?=\\s*([^;\\n]+)`,
+        'g',
+      );
+      let dm;
+      let bound = null;
+      while ((dm = d.exec(text))) {
+        for (const raw of dm[1].split(',')) {
+          const part = raw.trim();
+          if (!part) continue;
+          const [srcRaw, aliasRaw] = part.split(':').map((x) => x.trim());
+          const src = srcRaw.replace(/=.*$/, '').trim();
+          const alias = (aliasRaw || src).replace(/=.*$/, '').trim();
+          if (alias === e) bound = { src, from: dm[2].trim().replace(/^await\s+/, '') };
+        }
+      }
+      if (bound) {
+        e = `${bound.from}.${bound.src}`;
+        continue;
+      }
+      return e;
     }
     const call = /^([A-Za-z_$][\w$]*)\s*\(/.exec(e);
     if (call) {
@@ -244,6 +342,31 @@ function functionsOf(text) {
       start: m.index,
     });
   }
+  // OBJECT-LITERAL AND CLASS METHODS — `async getGroup(id) {` (#3753 review).
+  // Without these, a partition key that is a METHOD parameter has no enclosing
+  // function the walk can attribute it to, so every one of its call sites lands
+  // in the unreadable bucket. `lib/scim/store.ts` and `lib/azure/domains-client.ts`
+  // are written this way, and they alone accounted for most of the blindness.
+  const RESERVED = new Set([
+    'if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'do', 'else',
+    'try', 'with', 'typeof', 'await', 'new', 'delete', 'void', 'yield', 'import',
+  ]);
+  const methodRe = /(?:^|\n)[ \t]+(?:(?:public|private|protected|static)\s+)*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
+  while ((m = methodRe.exec(text))) {
+    if (RESERVED.has(m[1])) continue;
+    const open = m.index + m[0].length - 1;
+    // A method declaration's `)` is followed by `{` (optionally via a return type).
+    const after = text.slice(open);
+    const close = after.indexOf(')');
+    if (close === -1) continue;
+    if (!/^\s*(?::[^{;]*)?\{/.test(after.slice(close + 1))) continue;
+    out.push({
+      name: m[1],
+      exported: true, // reachable through the object/class it belongs to
+      params: argsOf(text, open).map((p) => p.replace(/[:=].*$/s, '').trim().replace(/^\.\.\./, '')),
+      start: m.index,
+    });
+  }
   return out.sort((a, b) => a.start - b.start);
 }
 
@@ -256,10 +379,109 @@ const enclosing = (fns, pos) => {
   return best;
 };
 
+/** The `{ … }` body text of the declaration starting at `declStart`. */
+function bodyOf(text, declStart) {
+  const open = text.indexOf('{', declStart);
+  if (open === -1) return '';
+  let depth = 0;
+  let str = null;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (str) {
+      if (ch === str && text[i - 1] !== '\\') str = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { str = ch; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(open, i + 1);
+    }
+  }
+  return text.slice(open);
+}
+
+/**
+ * Ladder step 2b — RETURN-VALUE flow through a MULTI-statement local function.
+ *
+ * Step 2 inlines only a `function f(x) { return <expr>; }` one-liner. A helper
+ * with a guard clause defeats it, and that is not hypothetical: `item-crud.ts`'s
+ * `domainScopeFor` is exactly that shape, so `loadTenantDomains(await
+ * domainScopeFor(tenantId))` was unreadable — meaning a REVERT of the very fix
+ * #3753 made there produced output identical to the fixed tree. A rule that
+ * cannot see its own PR being undone is the #3282 failure it exists to end.
+ *
+ * Every `return` in the callee is classified; a returned PARAMETER is mapped to
+ * the actual argument at this call site and re-resolved (recursing into
+ * parameter flow when that argument is itself a parameter). `null`/`undefined`
+ * returns are ignored — declining to produce a key is not a key.
+ */
+function classifyLocalCall(file, expr, sitePos, depth, seen) {
+  const empty = { classes: new Set(), unresolved: 1, witness: new Map() };
+  if (depth > 4) return empty;
+  const e = String(expr).trim().replace(/^await\s+/, '');
+  const m = /^([A-Za-z_$][\w$]*)\s*\(/.exec(e);
+  if (!m) return empty;
+  const fn = m[1];
+  const key = `call:${file}::${fn}`;
+  if (seen.has(key)) return { classes: new Set(), unresolved: 0, witness: new Map() };
+  seen.add(key);
+
+  const text = SRC.get(file);
+  const decl = (FNS.get(file) || []).find((f) => f.name === fn);
+  if (!text || !decl) return empty;
+
+  const body = bodyOf(text, decl.start);
+  const returns = [...body.matchAll(/\breturn\s+([^;\n]+)/g)].map((r) => r[1].trim());
+  if (returns.length === 0) return empty;
+
+  const args = argsOf(e, e.indexOf('('));
+  const classes = new Set();
+  const witness = new Map();
+  let unresolved = 0;
+  for (const raw of returns) {
+    if (/^(?:null|undefined)\b/.test(raw)) continue; // no key produced
+    let r = resolveLocal(text, raw);
+    const pi = decl.params.indexOf(r);
+    if (pi >= 0 && args[pi] !== undefined) r = resolveLocal(text, args[pi]);
+    const c = classify(r);
+    if (c) {
+      classes.add(c);
+      if (!witness.has(c)) witness.set(c, `${file}:${text.slice(0, decl.start).split('\n').length}`);
+      continue;
+    }
+    if (/^[A-Za-z_$][\w$]*$/.test(r)) {
+      // The callee returned one of ITS parameters and the actual argument is
+      // itself a parameter of the function containing THIS CALL SITE. Resolve
+      // from the call site's position — using the callee's own position instead
+      // (an earlier revision did) walks back into the callee's parameter list,
+      // finds nothing, and silently drops the chain.
+      const enc = enclosing(FNS.get(file) || [], sitePos);
+      const j = enc ? enc.params.indexOf(r) : -1;
+      if (enc && j >= 0) {
+        const sub = classifyParam(file, enc.name, j, depth + 1, seen);
+        for (const x of sub.classes) {
+          classes.add(x);
+          if (!witness.has(x)) witness.set(x, sub.witness.get(x) || `${file}`);
+        }
+        unresolved += sub.unresolved;
+        continue;
+      }
+    }
+    unresolved++;
+  }
+  return { classes, unresolved, witness };
+}
+
 /** Local handle variable -> the `xxxContainer()` accessor it was awaited from. */
 function containerBindings(text) {
   const map = new Map();
-  const re = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+([A-Za-z_$][\w$]*Container)\s*\(/g;
+  // The optional `(` and type annotation matter: `const c = (await xContainer())
+  // as unknown as T;` is already in the tree (access-governance/repartition), and
+  // without them that handle is not recognised as a container at all — so every
+  // `.item()` on it silently leaves the population (#3753 review, nit 7).
+  const re =
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*\(?\s*await\s+([A-Za-z_$][\w$]*Container)\s*\(/g;
   let m;
   while ((m = re.exec(text))) map.set(m[1], m[2]);
   return map;
@@ -268,29 +490,42 @@ function containerBindings(text) {
 /**
  * 'scope' | 'oid' | 'other' | null for a fully-resolved expression.
  *
- * 'other' means DECIDED, not ignored: the expression resolved all the way to a
- * concrete non-identifier form (`params.id`, a string literal, a `crypto`
- * call, `sessionId` off a request body …) that carries no identity token at
- * all. Those are per-resource singletons — a Copilot session keyed by its own
- * session id, an MCP server keyed by its server id — and they cannot be a
- * caller/tenant disagreement in either direction.
+ * 'other' means DECIDED-SAFE, and it is deliberately NARROW. An earlier revision
+ * decided 'other' for anything that merely lacked an identity token, which made
+ * the guard affirmatively judge two unresolvable shapes SAFE:
  *
- * `null` is reserved for genuinely UNJUDGED: an expression that stopped at a
- * bare identifier the resolver could not follow. Keeping those two apart is the
- * whole point — collapsing 'other' into 'unjudged' inflates the un-judgeable
- * count until the ceiling is meaningless, and collapsing 'unjudged' into
- * 'other' is how a rule reports "no findings" over a population it never read.
+ *     const ctx = { scope: s.claims.oid };  c.item(id, ctx.scope)   // member expr
+ *     c.item(id, domainScopeFor(tenantId))                          // helper call
+ *
+ * Both produced output byte-identical to a clean tree — not flagged, and not
+ * even counted as unjudged. The second is worse than hypothetical: it is the
+ * exact shape of a site THIS guard's own PR fixed, so a revert of that fix would
+ * have gone unnoticed. That is the #3282 failure mode (a rule that cannot see
+ * its own regression) reproduced inside the rule written to end it.
+ *
+ * So 'other' is now granted ONLY to expressions whose value is positively
+ * established as a non-identity key: a plain literal, a generated id, or a value
+ * rooted in the REQUEST (a route param / body / query field). Anything the
+ * ladder could not take to ground — a bare identifier, a member expression, an
+ * un-inlined call — is `null`, i.e. UNJUDGED: counted, printed, and pressed
+ * against the ceiling.
  */
+const REQUEST_ROOTED = /^(?:await\s+)?(?:params|body|json|searchParams|req|request|ctx)\b[.[]/;
+const LITERAL_OR_GENERATED =
+  /^(?:['"`]|crypto\s*\.|Date\s*\.|`[^`]*`$|String\s*\(|Number\s*\()/;
+
 function classify(expr) {
-  const e = String(expr);
+  const e = String(expr).trim();
   if (TENANT_SCOPE.test(e) || ENV_TID.test(e) || INLINE_TID_FALLBACK.test(e)) return 'scope';
   if (CALLER_OID.test(e)) return 'oid';
-  // Still a bare identifier => the resolver gave up; caller may try param flow.
-  if (/^[A-Za-z_$][\w$]*$/.test(e.trim())) return null;
-  // Resolved to something concrete. Any residual identity token keeps it
-  // unjudged rather than silently clearing it.
-  if (/\b(?:oid|tid|claims|tenantScope|principalId|userId)\b/i.test(e)) return null;
-  return 'other';
+  // Any residual identity token keeps it unjudged rather than silently clearing.
+  if (/\b(?:oid|tid|claims|tenantScope|principalId|userId|scope)\b/i.test(e)) return null;
+  // Positively-established non-identity keys.
+  if (REQUEST_ROOTED.test(e) || LITERAL_OR_GENERATED.test(e)) return 'other';
+  if (/^process\s*\.\s*env\s*\./.test(e)) return 'other';
+  // A bare identifier the ladder could not follow, a member expression, or an
+  // un-inlined call: NOT decided. The caller may still try parameter flow.
+  return null;
 }
 
 /**
@@ -426,6 +661,25 @@ function classifyParam(declFile, fnName, paramIdx, depth, seen) {
           continue;
         }
       }
+      // Ladder step 2b — the argument is a call to a local helper with a guard
+      // clause (`await domainScopeFor(tenantId)`), which step 2's single-`return`
+      // inlining cannot flatten. Classify by the helper's RETURNS.
+      if (/^(?:await\s+)?[A-Za-z_$][\w$]*\s*\(/.test(a)) {
+        // A FRESH `seen` for the return-flow walk. The outer set is keyed by
+        // (file, fn, paramIdx) and is already populated with the conduit chain
+        // we arrived through; reusing it makes the callee's own chain look
+        // already-visited and silently returns "no classes", which downgrades a
+        // real finding to an unreadable site. Depth still bounds the recursion.
+        const sub = classifyLocalCall(cf, a, m.index, depth + 1, new Set());
+        if (sub.classes.size > 0 || sub.unresolved === 0) {
+          for (const x of sub.classes) {
+            classes.add(x);
+            if (!witness.has(x)) witness.set(x, sub.witness.get(x) || at);
+          }
+          unresolved += sub.unresolved;
+          continue;
+        }
+      }
       unresolved++;
     }
   }
@@ -439,6 +693,16 @@ function classifyParam(declFile, fnName, paramIdx, depth, seen) {
 const docs = new Map();
 let judged = 0;
 let unjudged = 0;
+/**
+ * Call sites of a resolved conduit that the parameter-flow walk could NOT read
+ * (#3753 review). These are not sites in the sweep's own population — they are
+ * holes in the evidence BEHIND a site that did get classified. Counted and
+ * printed separately, and pressed against the same ceiling, so an absence
+ * ("no caller-oid caller was seen") can never rest on a read that silently
+ * skipped callers.
+ */
+let partialReads = 0;
+const partialSites = [];
 
 for (const [rel, text] of SRC) {
   const binds = containerBindings(text);
@@ -475,12 +739,38 @@ for (const [rel, text] of SRC) {
         const r = classifyParam(rel, enc.name, j, 0, new Set());
         row.via = `${enc.name}#${j}`;
         row.witness = r.witness;
-        // Only scope-vs-oid is a disagreement; 'other' never makes a split.
+        // WHAT THE PARAMETER UNION MEANS (#3753 review).
+        //
+        // `oid` / `both` are CONCLUSIONS — a caller-oid call site was actually
+        // observed, so an additionally-unreadable sibling cannot un-find it.
+        //
+        // `scope` / `other` are ABSENCES — "no caller-oid site was seen" — which
+        // is only as good as the read behind it. An earlier revision consulted
+        // `r.unresolved` on the `'other'` branch ALONE, so a conduit with one
+        // resolved tenant-scoped caller and one UNREADABLE caller was recorded as
+        // fully tenant-scoped and the unreadable caller was counted NOWHERE:
+        // neither judged nor unjudged. That made this file's own headline promise
+        // — "UNJUDGED IS NOT CLEAN … there is no output in which '0 findings'
+        // appears without its denominator" — false at the inter-procedural layer,
+        // i.e. the layer that exists because #3747's caller oid sat three frames
+        // from the document.
+        //
+        // The fix COUNTS the unread callers; it does not discard the positive
+        // evidence. Dropping the whole site to unjudged was tried and is WORSE:
+        // the disagreement rule needs a tenant-scoped anchor to have something to
+        // disagree WITH, so erasing every partially-read `scope` site would have
+        // stopped the guard detecting the #3747 regression it already catches.
+        // Both facts are true and both are reported: a tenant-scoped caller was
+        // observed, AND n sibling callers could not be read.
         const hasScope = r.classes.has('scope');
         const hasOid = r.classes.has('oid');
+        if (r.unresolved > 0) {
+          partialReads += r.unresolved;
+          partialSites.push({ file: rel, line: row.line, via: row.via, n: r.unresolved, key });
+        }
         if (hasScope && hasOid) cls = 'both';
-        else if (hasScope) cls = 'scope';
         else if (hasOid) cls = 'oid';
+        else if (hasScope) cls = 'scope';
         else if (r.classes.has('other') && r.unresolved === 0) cls = 'other';
       }
     }
@@ -513,7 +803,18 @@ const findings = [];
 const knownSplits = [];
 for (const [key, b] of [...docs].sort()) {
   if (!(b.scope.length && b.oid.length)) continue;
-  (KNOWN_SPLIT.has(key) ? knownSplits : findings).push([key, b]);
+  const exempt = KNOWN_SPLIT.get(key);
+  if (!exempt) {
+    findings.push([key, b]);
+    continue;
+  }
+  // An exemption covers ONLY its pinned sites. A caller-oid reader that is not
+  // on the list is an undeclared split even inside an exempted document — which
+  // is what stops a live, unfixed split from quietly accumulating new readers.
+  const allowed = new Set(exempt.sites);
+  const undeclared = b.oid.filter((r) => !allowed.has(r.file));
+  if (undeclared.length > 0) findings.push([key, { ...b, oid: undeclared, unlisted: true }]);
+  knownSplits.push([key, b, exempt]);
 }
 
 // --- self-defence: a matcher that drifted off the code must not pass ---------
@@ -544,24 +845,32 @@ if (scopeSites === 0) {
   process.exit(1);
 }
 
-for (const [key, b] of knownSplits) {
-  console.log(`::warning::tenant-singleton-scope: KNOWN SPLIT (not clean) ${key} — ${KNOWN_SPLIT.get(key)}`);
+for (const [key, b, exempt] of knownSplits) {
+  console.log(`::warning::tenant-singleton-scope: KNOWN SPLIT (not clean) ${key} — ${exempt.issue}: ${exempt.why}`);
   for (const r of b.oid) {
     const w = r.witness?.get('oid');
-    console.log(`    caller-oid keyed: ${r.file}:${r.line}${w ? ` (supplied at ${w})` : ''}`);
+    const pinned = exempt.sites.includes(r.file) ? 'pinned' : 'NOT PINNED';
+    console.log(`    caller-oid keyed [${pinned}]: ${r.file}:${r.line}${w ? ` (supplied at ${w})` : ''}`);
   }
 }
 
-if (unjudged > MAX_UNJUDGED) {
+const blindness = unjudged + partialReads;
+if (blindness > MAX_BLINDNESS) {
   console.error(
-    `::error::tenant-singleton-scope: ${unjudged} partition-key expression(s) could not be classified, above the ` +
-      `pinned ceiling of ${MAX_UNJUDGED}. Sites this rule cannot read are sites it cannot police, so a GROWING ` +
-      'un-judgeable population is itself the failure — it is how a rule ends up reporting "no findings" over a ' +
+    `::error::tenant-singleton-scope: ${blindness} expression(s) this rule could not read (${unjudged} unclassifiable ` +
+      `partition keys + ${partialReads} unreadable call site(s) behind a classified conduit), above the pinned ` +
+      `ceiling of ${MAX_BLINDNESS}. Sites this rule cannot read are sites it cannot police, so a GROWING ` +
+      'un-readable population is itself the failure — it is how a rule ends up reporting "no findings" over a ' +
       'population it no longer covers. Either restore the resolvability (thread the scope explicitly instead of ' +
       'through an unresolvable indirection) or raise the ceiling deliberately, in a PR that says why.',
   );
   for (const [key, b] of [...docs].sort()) {
     for (const r of b.unknown) console.error(`::error file=${r.file},line=${r.line}::UNJUDGED ${key} — pk=${r.pk}`);
+  }
+  for (const p of partialSites) {
+    console.error(
+      `::error file=${p.file},line=${p.line}::PARTIALLY READ ${p.key} — ${p.n} call site(s) of ${p.via} unreadable`,
+    );
   }
   process.exit(1);
 }
@@ -597,19 +906,27 @@ if (findings.length > 0) {
   process.exit(1);
 }
 
-// The un-judgeable population is printed on EVERY run, pass or fail. A count in
-// a summary line is easy to stop reading; the list is what lets a reviewer check
-// that these really are per-resource keys and not findings hiding in the gap.
+// Everything this rule could NOT read is printed on EVERY run, pass or fail. A
+// count in a summary line is easy to stop reading; the list is what lets a
+// reviewer check that these really are per-resource keys and not findings
+// hiding in the gap.
 for (const [key, b] of [...docs].sort()) {
   for (const r of b.unknown) {
     console.log(`::notice file=${r.file},line=${r.line}::UNJUDGED (not clean, not a finding) ${key} — pk=${r.pk}`);
   }
+}
+for (const p of partialSites) {
+  console.log(
+    `::notice file=${p.file},line=${p.line}::PARTIALLY READ (not clean) ${p.key} — ` +
+      `${p.n} call site(s) of ${p.via} unreadable; the classification below rests on the callers that WERE read`,
+  );
 }
 
 console.log(
   `tenant-singleton-scope OK — ${docs.size} tenant-singleton document group(s) across ${files.length} tracked ` +
     `file(s). Partition keys: ${judged} judged (${scopeSites} tenant-scoped, ` +
     `${[...docs.values()].reduce((n, b) => n + b.oid.length, 0)} caller-oid, ${otherSites} per-resource) + ` +
-    `${unjudged} UNJUDGED (ceiling ${MAX_UNJUDGED}) = ${judged + unjudged} total. ` +
-    `${knownSplits.length} known-split document(s) carried with a tracked reason. Zero undeclared splits.`,
+    `${unjudged} UNJUDGED = ${judged + unjudged} total; plus ${partialReads} unreadable call site(s) behind ` +
+    `classified conduits. Blindness ${blindness}/${MAX_BLINDNESS}. ` +
+    `${knownSplits.length} known-split document(s) carried with a pinned site list. Zero undeclared splits.`,
 );
