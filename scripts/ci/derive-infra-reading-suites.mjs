@@ -114,7 +114,18 @@ const SENTINEL = 'lib/deploy/__tests__/gates-2641-deploy-chain.test.ts';
 /** Floor well below the measured 38, to catch a rule that half-breaks. */
 const MIN_SUITES = 12;
 
-const escape = (dir) => dir.replace(/\./g, '\\.');
+/**
+ * Escape EVERY regex metacharacter, not just `.`.
+ *
+ * Today's `OUTSIDE` entries are all `[a-z.]`, so a dot-only escape happened to
+ * be correct — but it is correct by coincidence of the input, not by
+ * construction. Adding a directory containing `+`, `(`, or `\` would silently
+ * turn the literal into a pattern and change which suites the deriver selects,
+ * and a deriver that selects fewer suites reports green having run less (#3783,
+ * the defect this file exists to fix). CodeQL flagged the backslash case
+ * specifically (js/incomplete-sanitization, high).
+ */
+const escape = (dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function vitestSuites() {
   const tracked = execFileSync('git', ['ls-files', `${CONSOLE_DIR}/`], {
