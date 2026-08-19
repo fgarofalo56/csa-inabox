@@ -48,7 +48,7 @@ async function collectProbes(): Promise<ProbeLite[]> {
     const report = await runSelfAudit(new Date().toISOString());
     return report.results
       .filter((r) => wanted.has(r.id))
-      .map((r) => ({ id: r.id, status: r.status, detail: r.detail, remediation: r.remediation }));
+      .map((r) => ({ id: r.id, status: r.status, detail: r.detail, remediation: r.remediation, inconclusive: r.inconclusive }));
   } catch {
     return [];
   }

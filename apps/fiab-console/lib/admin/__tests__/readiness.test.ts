@@ -282,3 +282,97 @@ describe('buildTenantProfile + renderProfileMarkdown — H3', () => {
     expect(md).toContain('All capabilities are ready');
   });
 });
+
+/**
+ * #3729 — a probe that did not COMPLETE proves nothing, and must never be
+ * scored as a proven failure.
+ *
+ * On the live Commercial console the `subscription` capability (severity
+ * critical, probe `probe-arm-reader`) reported Blocked with a connectivity
+ * diagnosis. Measured: ARM was reachable and the probe returned `pass` — the
+ * Blocked verdict was the probe's own 6 s timeout, and because the capability
+ * is critical it took the whole Core platform workload no-go. `unknown` is the
+ * third outcome that was missing.
+ */
+describe('readiness — an inconclusive probe is "unknown", never "blocked"', () => {
+  const CRITICAL_PROBED = 'subscription';
+  const probeId = GATE_PROBE_MAP[CRITICAL_PROBED];
+
+  /** Every gate configured; the ARM probe did not finish. */
+  function inconclusiveRun() {
+    const probes: ProbeLite[] = [{
+      id: probeId,
+      status: 'warn',
+      inconclusive: true,
+      detail: 'Could not establish whether ARM is readable — the check did not complete.',
+      remediation: 'No operator action is known to be required. Re-check to re-probe.',
+    }];
+    return buildReadiness({ gates: GATES, statuses: statusesWith(GATES.map((g) => g.id)), probes });
+  }
+
+  it('the capability is unknown — not blocked, not partial, not ready', () => {
+    const n = inconclusiveRun().capabilities.find((c) => c.id === CRITICAL_PROBED)!;
+    expect(n.severity).toBe('critical');
+    expect(n.gateStatus).toBe('configured');
+    expect(n.state).toBe('unknown');
+    expect(n.verified).toBe('live-probe');
+    expect(n.probe?.inconclusive).toBe(true);
+    // The surface must repeat the probe's honest wording, not the gate's
+    // "set LOOM_SUBSCRIPTION_ID …" remediation for values that ARE set.
+    expect(n.missing).toEqual([]);
+    expect(n.remediation).toMatch(/No operator action is known to be required/);
+  });
+
+  it('its workload does NOT go no-go on a check that never completed', () => {
+    const report = inconclusiveRun();
+    const core = report.workloads.find((w) => w.id === 'core-platform')!;
+    expect(core.capabilityIds).toContain(CRITICAL_PROBED);
+    expect(core.state).not.toBe('blocked');
+    expect(core.summary.blocked).toBe(0);
+    expect(core.summary.unknown).toBe(1);
+  });
+
+  it('is counted separately in the summary and does not zero the score', () => {
+    const report = inconclusiveRun();
+    expect(report.summary.capabilities.unknown).toBe(1);
+    expect(report.summary.capabilities.blocked).toBe(0);
+    // Neither credited (would hide an outage) nor condemned (would let a
+    // transient timeout move the operator's headline number).
+    const allReady = buildReadiness({ gates: GATES, statuses: statusesWith(GATES.map((g) => g.id)), probes: [] });
+    expect(report.summary.score).toBeLessThan(allReady.summary.score);
+    expect(report.summary.score).toBeGreaterThan(0);
+  });
+
+  it('a warn WITHOUT the inconclusive flag is still partial (a completed, degraded check)', () => {
+    const probes: ProbeLite[] = [{ id: probeId, status: 'warn', detail: 'degraded but observed', remediation: 'grant the role' }];
+    const report = buildReadiness({ gates: GATES, statuses: statusesWith(GATES.map((g) => g.id)), probes });
+    const n = report.capabilities.find((c) => c.id === CRITICAL_PROBED)!;
+    expect(n.state).toBe('partial');
+    expect(report.summary.capabilities.unknown).toBe(0);
+  });
+
+  it('a FAILING probe still blocks — an established negative is still a negative', () => {
+    const probes: ProbeLite[] = [{ id: probeId, status: 'fail', detail: 'ARM refused the read (403)', remediation: 'grant Reader' }];
+    const report = buildReadiness({ gates: GATES, statuses: statusesWith(GATES.map((g) => g.id)), probes });
+    const n = report.capabilities.find((c) => c.id === CRITICAL_PROBED)!;
+    expect(n.state).toBe('blocked');
+    expect(n.remediation).toBe('grant Reader');
+    expect(report.workloads.find((w) => w.id === 'core-platform')!.state).toBe('blocked');
+  });
+
+  it('the exported profile names it as not-established rather than blocked', () => {
+    const probes: ProbeLite[] = [{
+      id: probeId, status: 'warn', inconclusive: true,
+      detail: 'Could not establish whether ARM is readable.',
+      remediation: 'Re-check to re-probe.',
+    }];
+    const profile = buildTenantProfile(
+      { gates: GATES, statuses: statusesWith(GATES.map((g) => g.id)), probes },
+      { generatedAt: '2026-08-19T00:00:00.000Z' },
+    );
+    const md = renderProfileMarkdown(profile);
+    expect(md).toContain('not established');
+    expect(md).toContain('| Workload | Status | Score | Ready | Partial | Blocked | Not established |');
+    expect(profile.blockers.some((b) => b.id === CRITICAL_PROBED)).toBe(true);
+  });
+});

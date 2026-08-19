@@ -22,6 +22,7 @@ import {
 import {
   ArrowSync16Regular, ArrowDownload16Regular, Wrench16Regular,
   CheckmarkCircle20Filled, Warning20Filled, DismissCircle20Filled, Circle20Regular,
+  QuestionCircle20Regular,
   Flash16Regular, DatabaseLink20Regular, Key16Regular, Flowchart16Regular,
   Server16Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
@@ -239,10 +240,10 @@ function DeployStatusBanner() {
 // ── state visuals ────────────────────────────────────────────────────────────
 
 const STATE_COLOR: Record<ReadinessState, 'success' | 'warning' | 'danger' | 'informative'> = {
-  ready: 'success', partial: 'warning', blocked: 'danger', 'opt-in': 'informative',
+  ready: 'success', partial: 'warning', blocked: 'danger', 'opt-in': 'informative', unknown: 'informative',
 };
 const STATE_LABEL: Record<ReadinessState, string> = {
-  ready: 'Ready', partial: 'Partial', blocked: 'Blocked', 'opt-in': 'Opt-in',
+  ready: 'Ready', partial: 'Partial', blocked: 'Blocked', 'opt-in': 'Opt-in', unknown: 'Not established',
 };
 
 function StateIcon({ state }: { state: ReadinessState }) {
@@ -250,6 +251,9 @@ function StateIcon({ state }: { state: ReadinessState }) {
   if (state === 'partial') return <Warning20Filled style={{ color: tokens.colorPaletteYellowForeground1 }} />;
   // Opt-in: an additive feature deliberately not deployed — neutral, not an error.
   if (state === 'opt-in') return <Circle20Regular style={{ color: tokens.colorNeutralForeground3 }} />;
+  // Not established: the live probe did not finish, so nothing is known either
+  // way. Neutral by design — a non-observation must never read as a failure.
+  if (state === 'unknown') return <QuestionCircle20Regular style={{ color: tokens.colorNeutralForeground3 }} />;
   return <DismissCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />;
 }
 
@@ -258,6 +262,7 @@ const ACCENT: Record<ReadinessState, string> = {
   partial: tokens.colorPaletteYellowBackground3,
   blocked: tokens.colorPaletteRedBackground3,
   'opt-in': tokens.colorNeutralStroke1,
+  unknown: tokens.colorNeutralStroke1,
 };
 
 const useStyles = makeStyles({
@@ -437,11 +442,22 @@ export default function AdminReadinessPage() {
   const [fixGateId, setFixGateId] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
 
-  const reload = useCallback(async () => {
+  /**
+   * `refresh` re-runs every live probe instead of reading the 30 s probe cache.
+   *
+   * The Refresh button used to hit the route with no cache-buster, so clicking
+   * it inside the TTL replayed the SAME probe results. #3729 was "reproduced
+   * twice" that way: one measurement, read twice, presented as confirmation.
+   */
+  const reload = useCallback(async (refresh = false) => {
     setLoading(true);
     setError(null);
     try {
-      const r = await clientFetch('/api/admin/readiness', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
+      const r = await clientFetch(
+        `/api/admin/readiness${refresh ? '?refresh=1' : ''}`,
+        undefined,
+        CROSS_SUB_FETCH_TIMEOUT_MS,
+      );
       const j = await r.json().catch(() => null);
       if (j?.ok) {
         setReport(j as ReadinessReport);
@@ -489,15 +505,21 @@ export default function AdminReadinessPage() {
     [groups, workloadFilter],
   );
 
-  // Default selection: first blocked capability, else the first capability.
+  // Default selection: first blocked capability, else the first whose live check
+  // did not complete, else the first capability.
   useEffect(() => {
     if (!report || selectedId) return;
-    const blocked = report.capabilities.find((n) => n.state === 'blocked');
-    setSelectedId(blocked?.id || report.capabilities[0]?.id || null);
+    const first = report.capabilities.find((n) => n.state === 'blocked')
+      || report.capabilities.find((n) => n.state === 'unknown');
+    setSelectedId(first?.id || report.capabilities[0]?.id || null);
   }, [report, selectedId]);
 
   const selected = selectedId ? nodeById.get(selectedId) : undefined;
   const fixGate = fixGateId ? getGate(fixGateId) : undefined;
+  // The live capability node behind the Fix-it — so the dialog can tell an
+  // "env values are missing" gate (its form IS the fix) apart from a gate whose
+  // env is complete and whose only blocker is a live probe (#3729).
+  const fixNode = fixGateId ? nodeById.get(fixGateId) : undefined;
 
   const download = useCallback(async (format: 'json' | 'md') => {
     setDownloading(true);
@@ -559,7 +581,7 @@ export default function AdminReadinessPage() {
           icon={<DatabaseLink20Regular />}
           title="No readiness data"
           body="The readiness evaluation returned nothing. Refresh to re-run the gate + probe evaluation."
-          primaryAction={{ label: 'Refresh', onClick: reload }}
+          primaryAction={{ label: 'Refresh', onClick: () => void reload(true) }}
         />
       ) : (
         <>
@@ -581,12 +603,20 @@ export default function AdminReadinessPage() {
               <DismissCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />
               <Subtitle2>{report.summary.capabilities.blocked}</Subtitle2><Caption1>blocked</Caption1>
             </div>
+            {report.summary.capabilities.unknown > 0 && (
+              <div className={s.countRow}>
+                <QuestionCircle20Regular style={{ color: tokens.colorNeutralForeground3 }} />
+                <Subtitle2>{report.summary.capabilities.unknown}</Subtitle2><Caption1>not established</Caption1>
+              </div>
+            )}
             <Caption1>
               {report.summary.workloads.ready}/{report.summary.workloads.total} workloads ready
               {report.summary.configOnly ? ` · ${report.summary.configOnly} config-only` : ''}
             </Caption1>
             <div className={s.spacer} />
-            <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} onClick={reload}>Refresh</Button>
+            <Tooltip content="Re-runs every live probe (bypasses the 30s probe cache)" relationship="description">
+              <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} onClick={() => void reload(true)}>Re-check now</Button>
+            </Tooltip>
             <Button size="small" appearance="secondary" icon={<ArrowDownload16Regular />} disabled={downloading} onClick={() => download('md')}>Export report</Button>
             <Button size="small" appearance="secondary" icon={<ArrowDownload16Regular />} disabled={downloading} onClick={() => download('json')}>Export JSON</Button>
           </div>
@@ -665,8 +695,11 @@ export default function AdminReadinessPage() {
         <GateFixitDialog
           gate={fixGate}
           open={!!fixGateId}
+          probe={fixNode?.probe ?? null}
+          capabilityState={fixNode?.state}
           onClose={() => setFixGateId(null)}
-          onResolved={() => { setFixGateId(null); void reload(); }}
+          onRecheck={() => void reload(true)}
+          onResolved={() => { setFixGateId(null); void reload(true); }}
         />
       )}
     </AdminShell>
@@ -756,7 +789,17 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
         </MessageBar>
       )}
 
-      {node.state !== 'ready' && node.state !== 'opt-in' && (
+      {node.state === 'unknown' && (
+        <MessageBar intent="info" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Not established — the live check did not complete</MessageBarTitle>
+            Nothing was observed either way: this is NOT a finding that the backend is broken,
+            and NOT a claim that it works. {node.remediation}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {node.state !== 'ready' && node.state !== 'opt-in' && node.state !== 'unknown' && (
         <MessageBar intent={node.state === 'blocked' ? 'error' : 'warning'} layout="multiline">
           <MessageBarBody>
             <MessageBarTitle>{node.state === 'blocked' ? 'Unmet prerequisites' : 'Degraded'}</MessageBarTitle>
@@ -765,9 +808,11 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
         </MessageBar>
       )}
 
-      {(node.state === 'blocked' || node.state === 'partial') && (
+      {(node.state === 'blocked' || node.state === 'partial' || node.state === 'unknown') && (
         <div>
-          <Button appearance="primary" size="small" icon={<Wrench16Regular />} onClick={onFix}>Fix it</Button>
+          <Button appearance="primary" size="small" icon={<Wrench16Regular />} onClick={onFix}>
+            {node.state === 'unknown' ? 'Re-check' : 'Fix it'}
+          </Button>
         </div>
       )}
 
@@ -824,8 +869,12 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
         <Caption1 className={styles.depLabel}><Flash16Regular /> Live probe</Caption1>
         {node.probe ? (
           <Body1>
-            <Badge appearance="tint" color={node.probe.status === 'pass' ? 'success' : node.probe.status === 'warn' ? 'warning' : 'danger'} size="small">
-              {node.probe.status}
+            <Badge
+              appearance="tint"
+              color={node.probe.status === 'pass' ? 'success' : node.probe.inconclusive ? 'informative' : node.probe.status === 'warn' ? 'warning' : 'danger'}
+              size="small"
+            >
+              {node.probe.status === 'pass' ? 'pass' : node.probe.inconclusive ? 'did not complete' : node.probe.status}
             </Badge>{' '}{node.probe.detail}
           </Body1>
         ) : (
