@@ -463,6 +463,33 @@ export const WATCHED = [
       // the estate.
       'scripts/ci/assert-acr-image-tags.sh',
       'scripts/csa-loom/preflight-image-tags.sh',
+      // #3754 — the two ESTATE preflights, listed for exactly the reason the two
+      // above are: they are gates that decide whether the apply proceeds at all.
+      // One additionally decides a parameter VALUE that reaches the estate —
+      // `dnsResolverInboundStaticIp`, on a property ARM treats as IMMUTABLE, so a
+      // change to how it classifies a read changes what is deployed, not merely
+      // whether. The other MUTATES the estate (it starts a stopped ADX cluster)
+      // before the apply.
+      //
+      // HAND-LISTED BECAUSE THE COVERAGE GUARD CANNOT SEE THEM. Measured with the
+      // repo's own extractDeploySources() over this workflow: 8 sources detected,
+      // neither of these among them. Its shapes are `.sh`, `-f/--template-file`,
+      // `--file <dockerfile>`, an `az acr build` context line, and `--definition
+      // "@path"` — `node <path>.mjs` is not one of them, so
+      // check-deploy-paths-coverage passes VACUOUSLY here rather than catching
+      // the omission. Without these two lines, someone could widen
+      // ABSENCE_CODES so an RBAC denial reads as greenfield, merge it, and the
+      // watchdog would report no GCC-High drift. Teaching the extractor the
+      // `node <path>.mjs` shape is the general fix and is tracked in #3787 —
+      // it would newly require 24 sources across the watched deploy workflows to
+      // be declared, which is its own change, not a rider on this one.
+      'scripts/ci/resolve-dns-inbound-allocation.mjs',
+      'scripts/ci/ensure-adx-cluster-running.mjs',
+      // The shared rule BOTH of the above import to tell "definitely absent"
+      // from "I could not read it". Editing it changes both preflights at once,
+      // which is the point of sharing it — and the reason it has to be watched
+      // alongside them rather than trusted to ride along.
+      'scripts/ci/_arm-absence.mjs',
       // #3203 — Front Door answers 504 while the ACA private-endpoint connection
       // is Pending, so this decides whether the deployed sovereign estate is
       // reachable at all.

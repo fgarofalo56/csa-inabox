@@ -1099,6 +1099,9 @@ param appImageTags object = {
 @description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. When false, every Postgres-backed component is SKIPPED so the rest of the estate still deploys and each affected editor honest-gates. WHY a given boundary sets it false is recorded in that boundary\'s .bicepparam next to the assignment — read it there. Do NOT read this flag as "the region/subscription lacks the service": both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government, and pin it false as a deliberate posture hold. Not a Fabric dependency.')
 param postgresQuotaAvailable bool = true
 
+@description('Static private IP the DNS Private Resolver INBOUND endpoint holds; empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so no literal is correct on every estate: a Static literal broke Commercial (#2775) and the Dynamic literal that replaced it has broken every GCC-High deploy since (#3754). The deploy lane DISCOVERS the live value (scripts/ci/resolve-dns-inbound-allocation.mjs) and passes it on the command line; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam — that only moves the guess.')
+param dnsResolverInboundStaticIp string = ''
+
 // =====================================================================
 // Resource group for Admin Plane
 // =====================================================================
@@ -1537,6 +1540,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomVersion: loomVersion
     appImageTags: appImageTags
     postgresQuotaAvailable: postgresQuotaAvailable
+    // #3754 — discovered by the lane, never assumed. See the param declaration.
+    dnsResolverInboundStaticIp: dnsResolverInboundStaticIp
     // Standalone AML workspace coords for the AML control-plane navigator.
     loomAmlWorkspace: loomAmlWorkspace
     loomAmlResourceGroup: loomAmlResourceGroup
