@@ -114,6 +114,10 @@ validate-python: ## Validate Python code only
 
 validate-dbt: ## Validate dbt models only
 	pwsh -File dev-loop/gates/validate-dbt.ps1
+
+validate-deployment: ## Validate deployment templates only (az what-if)
+	pwsh -File dev-loop/gates/validate-deployment.ps1
+
 # --- Deployment ---
 
 deploy-dev: ## Deploy to dev environment (what-if)

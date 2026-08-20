@@ -18,7 +18,7 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$MatrixPath = (Join-Path $PSScriptRoot "rbac-matrix.json"),
+    [string]$MatrixPath,
 
     [string[]]$Personas,
 
@@ -31,6 +31,21 @@ param(
     #   "rg/databricks" = "/subscriptions/xxx/resourceGroups/rg-databricks"
     # }
 )
+
+# Resolved in the BODY, not in the param default: under Windows PowerShell 5.1
+# $PSScriptRoot is empty inside a param default when the script carries
+# [CmdletBinding()] AND is invoked with `powershell.exe -File`, so the old
+# default died at parameter binding with "Join-Path : Cannot bind argument to
+# parameter 'Path' because it is an empty string", producing no output at all.
+# Measured on 5.1.26100.9168 vs pwsh 7.6.5 across four invocation modes: only
+# that one combination breaks. `&`, dot-sourcing, -Command, every pwsh 7 mode,
+# and a bare param() without [CmdletBinding()] all populate it correctly - so
+# running this script as `.\apply-rbac.ps1` from a 5.1 prompt was always fine,
+# and `powershell.exe -File apply-rbac.ps1` was the mode that failed.
+# Resolving in the BODY works in all of them. See #3811.
+if (-not $MatrixPath) {
+    $MatrixPath = Join-Path $PSScriptRoot "rbac-matrix.json"
+}
 
 $ErrorActionPreference = 'Stop'
 
