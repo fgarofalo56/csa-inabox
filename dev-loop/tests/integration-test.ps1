@@ -7,13 +7,26 @@
     1. Pick a task from Archon
     2. Execute validation gates
     3. Report results
-    This is a dry-run test — it validates the dev loop machinery without deploying.
+    This is a dry-run test - it validates the dev loop machinery without deploying.
 #>
 
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    [string]$RepoRoot
 )
+
+# Resolved in the BODY, not in the param default: under Windows PowerShell 5.1
+# $PSScriptRoot is empty inside a param default when the script carries
+# [CmdletBinding()] AND is invoked with `powershell.exe -File`, so the old
+# default died at parameter binding with "Cannot bind argument to parameter
+# 'Path' because it is an empty string", producing no output at all.
+# Measured on 5.1.26100.9168 vs pwsh 7.6.5 across four invocation modes: only
+# that one combination breaks. `&`, dot-sourcing, -Command, every pwsh 7 mode,
+# and a bare param() without [CmdletBinding()] all populate it correctly.
+# Resolving in the BODY works in all of them. See #3811.
+if (-not $RepoRoot) {
+    $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+}
 
 $ErrorActionPreference = 'Continue'
 
@@ -60,10 +73,19 @@ Test-Assertion "config.yaml exists" {
     Test-Path (Join-Path $PSScriptRoot "..\config.yaml")
 }
 
-Test-Assertion "config.yaml is valid YAML" {
+Test-Assertion "config.yaml has loop: and validation_gates: blocks" {
     $configPath = Join-Path $PSScriptRoot "..\config.yaml"
     $content = Get-Content $configPath -Raw
-    $content -match "^loop:" -and $content -match "validation_gates:"
+    # (?m) is required and was missing. PowerShell's -match has no Multiline
+    # option by default, so `^loop:` anchored at the start of the whole STRING -
+    # and config.yaml opens with a comment line, so this assertion returned
+    # False on every run since it was written. Measured against origin/main's
+    # committed config.yaml as well as the working tree: False on both.
+    #
+    # It is the mirror image of the three gate assertions below, which could
+    # never fail: this one could never pass. Same file, same root cause -
+    # nobody read the result. See #3811.
+    $content -match "(?m)^loop:" -and $content -match "(?m)^validation_gates:"
 }
 
 Test-Assertion "All gate scripts exist" {
@@ -83,20 +105,47 @@ Test-Assertion "All gate scripts exist" {
 # ---------------------------------------------------------------------------
 Write-Host "`n--- Validation Gate Tests ---" -ForegroundColor White
 
-Test-Assertion "Bicep validation gate runs" {
-    $output = & (Join-Path $PSScriptRoot "..\gates\validate-bicep.ps1") -RepoRoot $RepoRoot 2>&1
-    # Should exit 0 (pass) or produce output (even if no bicep found)
-    $true
+# These three assertions used to invoke a gate, capture its output into a
+# variable nothing read, and `return $true` unconditionally - so they passed
+# whatever the gate did, including not running at all. That is a test that
+# cannot fail, and it went from harmless to actively misleading when the gates
+# gained exit code 2: on a default clone (no bicep, no dbt) validate-bicep and
+# validate-dbt now report NOT VERIFIED, and these tests kept printing [PASS]
+# over the top of it. See #3811.
+#
+# The assertion is now on the exit code. 0/1/2 are the gate's declared codes;
+# anything else - notably 1 from a parameter-binding failure that produced no
+# output, or $null from a gate script that could not be invoked - fails.
+# $LASTEXITCODE is reset to $null before each call for the same reason
+# validate-all.ps1 does it: it is not written when the call itself fails, and
+# would otherwise retain the PREVIOUS gate's value.
+function Test-GateExitCode {
+    param([string]$GateScript)
+
+    $script:LASTEXITCODE = $null
+    & (Join-Path $PSScriptRoot "..\gates\$GateScript") -RepoRoot $RepoRoot 2>&1 | Out-Null
+    $code = $LASTEXITCODE
+    if ($null -eq $code) {
+        Write-Host " (gate did not set an exit code)" -NoNewline -ForegroundColor Yellow
+        return $false
+    }
+    if ($code -notin 0, 1, 2) {
+        Write-Host " (unexpected exit code $code)" -NoNewline -ForegroundColor Yellow
+        return $false
+    }
+    return $true
 }
 
-Test-Assertion "Python validation gate runs" {
-    $output = & (Join-Path $PSScriptRoot "..\gates\validate-python.ps1") -RepoRoot $RepoRoot 2>&1
-    $true
+Test-Assertion "Bicep validation gate exits 0, 1 or 2" {
+    Test-GateExitCode "validate-bicep.ps1"
 }
 
-Test-Assertion "dbt validation gate runs" {
-    $output = & (Join-Path $PSScriptRoot "..\gates\validate-dbt.ps1") -RepoRoot $RepoRoot 2>&1
-    $true
+Test-Assertion "Python validation gate exits 0, 1 or 2" {
+    Test-GateExitCode "validate-python.ps1"
+}
+
+Test-Assertion "dbt validation gate exits 0, 1 or 2" {
+    Test-GateExitCode "validate-dbt.ps1"
 }
 
 # ---------------------------------------------------------------------------
