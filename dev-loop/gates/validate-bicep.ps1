@@ -14,13 +14,47 @@
           or a failure. See #3811.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    [string]$RepoRoot
 )
+
+# Resolved in the BODY, not in the param default: under Windows PowerShell 5.1
+# $PSScriptRoot is empty inside a param default when the script carries
+# [CmdletBinding()] AND is invoked with `powershell.exe -File`, so the old
+# default died at parameter binding with "Cannot bind argument to parameter
+# 'Path' because it is an empty string", producing no output at all.
+# Measured on 5.1.26100.9168 vs pwsh 7.6.5 across four invocation modes: only
+# that one combination breaks. `&`, dot-sourcing, -Command, every pwsh 7 mode,
+# and a bare param() without [CmdletBinding()] all populate it correctly.
+# Resolving in the BODY works in all of them. See #3811.
+if (-not $RepoRoot) {
+    $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+}
 
 $ErrorActionPreference = 'Continue'
 $errors = @()
+
+# -WhatIf is HONOURED, not merely tolerated. apps/copilot/tools/readonly.py:551-559
+# builds `-File <gate>.ps1 -WhatIf` for every gate on its dry-run allowlist, and
+# no gate declared SupportsShouldProcess - so parameter binding failed and the
+# tool returned RC=1 with EMPTY stdout on every host, for all five gates.
+# Measured before this change:
+#   [validate-bicep -WhatIf] RC=1 :: A parameter cannot be found that matches
+#                                    parameter name 'WhatIf'.
+# The $PSScriptRoot fix elsewhere in this file could not help that consumer:
+# the script never reached its body. See #3811.
+#
+# A dry run measures NOTHING, so it exits 2 (COULD NOT RUN) rather than 0.
+# A -WhatIf returning 0 would be quotable as a pass over an empty run, which is
+# the exact defect this gate family exists to remove.
+if ($WhatIfPreference) {
+    Write-Host "=== Bicep Validation Gate (-WhatIf) ===" -ForegroundColor Cyan
+    Write-Host "  Would compile every *.bicep under: $RepoRoot"
+    Write-Host "  (excluding node_modules, .venv, dbt-env and .claude/worktrees)"
+    Write-Host "  Nothing was compiled and nothing was measured. This is NOT a pass." -ForegroundColor Yellow
+    exit 2
+}
 
 Write-Host "=== Bicep Validation Gate ===" -ForegroundColor Cyan
 Write-Host "Repo root: $RepoRoot"
