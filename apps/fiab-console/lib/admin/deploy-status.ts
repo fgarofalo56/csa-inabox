@@ -89,6 +89,36 @@ export interface EstateDrift {
   compareUrl: string | null;
 }
 
+/** How the estate relates to the last roll that actually shipped an image. */
+export type RollRegressionState = 'current' | 'regressed' | 'ahead' | 'unknown';
+
+/**
+ * Did something OVERWRITE a successful roll with an older image? (#3676)
+ *
+ * Distinct from `EstateDrift` on purpose. Drift asks "is the estate behind
+ * main", and its answer for a reverted estate is "behind by N" — true, but
+ * indistinguishable from the ordinary, harmless case of a roll that simply has
+ * not happened yet. A REGRESSION is a different fact: a roll ran, succeeded,
+ * and shipped a tag, and the estate is no longer running it. Something took the
+ * estate BACKWARDS after a validated fix had landed on it.
+ */
+export interface RollRegression {
+  /** The sha the estate's console is serving (build-marker.txt). */
+  estateSha: string | null;
+  /** The sha the last EFFECTIVE roll shipped — see classifyRollRegression. */
+  rolledSha: string | null;
+  /** When that roll finished. */
+  rolledAt: string | null;
+  /** The workflow whose roll is being compared against. */
+  rollWorkflow: string | null;
+  state: RollRegressionState;
+  severity: DeploySeverity;
+  headline: string;
+  detail: string;
+  /** The roll run an operator can open to see what shipped. */
+  rollRunUrl: string | null;
+}
+
 export interface DeployPathHealth {
   workflow: string;
   title: string;
@@ -113,9 +143,26 @@ export interface DeployStatusReport {
   repo: string;
   estate: EstateDrift;
   paths: DeployPathHealth[];
-  /** Worst severity across the estate and every watched path. */
+  /** Worst severity across the estate, every watched path, and the fleet. */
   severity: DeploySeverity;
   headline: string;
+  /**
+   * WHICH VERDICT THE HEADLINE CAME FROM — the field `deployBannerBody` reads to
+   * decide what sentence belongs underneath it.
+   *
+   * It exists because the alternative was `reg.headline === report.headline`,
+   * i.e. deciding ownership by comparing two strings. That coupling is invisible
+   * and one-directional: the estate branch of `summarizeDeployStatus` already
+   * APPENDS to its headline ("… — and 2 deploy path(s) are failing"), so the day
+   * anyone decorates the regression headline the same way, the body silently
+   * reverts to the drift line — the exact defect this pair was written to fix —
+   * with no test going red. An owner tag cannot drift out of step with itself.
+   *
+   * Optional only for payload compatibility: a report deserialized from the
+   * pre-#3676 cache has no such field, and `deployBannerBody` must still answer
+   * for it. Every report this module PRODUCES sets it.
+   */
+  headlineOwner?: 'roll-regression' | 'estate' | 'paths' | 'fleet';
   /**
    * EVERY live estate, this cloud and its peers, each compared against main.
    * (#3730 — `estate` above can only ever describe the console answering the
@@ -134,6 +181,16 @@ export interface DeployStatusReport {
   estates?: unknown[];
   /** The fleet's own one-line verdict, kept separate from `headline`. */
   fleetHeadline?: string;
+  /**
+   * Whether a successful roll was OVERWRITTEN by an older image (#3676).
+   *
+   * Optional on the same reasoning as `estates`: the shape is additive, and a
+   * caller that could not measure it omits it rather than supplying a green
+   * verdict it did not establish. Consumers MUST read absent as "not reported",
+   * never as "no regression" — those are different claims and only one of them
+   * was made.
+   */
+  rollRegression?: RollRegression;
 }
 
 /**
@@ -182,6 +239,17 @@ export const MAX_DAYS_SINCE_SUCCESS = 21;
 
 const DAY_MS = 86_400_000;
 
+/**
+ * A git object id — the shape an image tag must have before it can be compared
+ * to a commit sha at all.
+ *
+ * The lower bound is 7 because that is git's own abbreviation floor, and the
+ * upper is 40 because a full sha is the longest legal form. Anything outside
+ * that is a floating tag ('latest', 'v0.1', a branch name), which is precisely
+ * the input that must NOT be compared — see `rollShaFromRun`.
+ */
+const GIT_OBJECT_ID = /^[0-9a-f]{7,40}$/i;
+
 /** Conclusions that extend a failure streak. */
 const FAILED = new Set(['failure', 'timed_out', 'startup_failure']);
 
@@ -190,6 +258,69 @@ export interface RunLite {
   conclusion: string | null;
   status?: string | null;
   created_at?: string;
+}
+
+/**
+ * A run of a ROLL lane, narrowed to what "what did this actually ship" needs.
+ *
+ * `updated_at` rather than `created_at` orders these, because it is the closest
+ * thing to "when this run stopped writing" that a run LISTING carries — but be
+ * precise about what it is NOT. It is when the whole RUN finished, and a roll
+ * lane does a great deal AFTER the `az containerapp update` that moves the
+ * estate. MEASURED FROM THE ACTIONS API, for the incident run itself
+ * (loom-roll-and-validate 32225337320, 2026-08-19):
+ *
+ *   step "Roll Container App to new image"     07:04:42Z -> 07:05:14Z
+ *   step "Wait for revision health"                      -> 07:06:09Z
+ *   step "Purge Front Door"                              -> 07:06:47Z
+ *   step "Validate live URL"                             -> 07:06:51Z
+ *   step "Gate — in-VNet UAT"                            -> 07:10:58Z
+ *   job  "Roll image + validate live URL"      completed_at 07:11:01Z
+ *   run  updated_at                                         07:11:02Z
+ *
+ * The estate's revision 0000782 was written at 07:04:56Z — inside the ROLL
+ * STEP's window and nowhere near either of the last two stamps. Every delta,
+ * computed rather than eyeballed:
+ *
+ *   write -> roll step end   0m18s
+ *   write -> job end         6m05s
+ *   write -> run end         6m06s
+ *   roll step end -> job     5m47s   <- the window this change closes
+ *   job -> run               0m01s   <- what moving run->job bought
+ *
+ * On gov-console-roll (run 32260846293) even that one second is zero: the lane
+ * has a single job, so its completion IS the run's, both 14:14:43Z. Structural
+ * rather than luck — a run cannot outlast its last job by more than teardown.
+ *
+ * AN EARLIER REVISION OF THIS COMMENT CLAIMED 4m45s, "(update 07:10:44, run
+ * completed 07:15:30)". Neither stamp appears in any run, job or step record of
+ * 32225337320, nor of the reconcile run 32225183031, and the gap it described
+ * was between the wrong two things. It is recorded here rather than silently
+ * corrected because asserting a number nothing established is the same R7 defect
+ * this surface exists to catch. THE SAME FIGURE IS STILL CARRIED BY
+ * scripts/ci/reconcile-policy.mjs (`selectLastConsoleRoll`'s ordering note, and
+ * again in the overlap-window doc) — a file outside this change, so it is
+ * reported here rather than quietly papered over.
+ *
+ * So the division of labour is: this stamp ORDERS candidates, because it is all
+ * that is known before any job has been fetched, and the route REPLACES it with
+ * the roll STEP's own `completed_at` once it has paid to read the jobs payload
+ * (see `rollWroteAt` in app/api/admin/deploy-status/route.ts). The STEP, not the
+ * job, because the step is the one that brackets the estate write; the job's
+ * completion sits on the far side of health-wait, Front Door purge, live-URL
+ * validation and the in-VNet UAT gate. The residual, stated rather than hidden:
+ * if two roll runs finish close together and their run order disagrees with
+ * their step order, the candidate ORDER here can still name the wrong newest —
+ * closing that would cost a jobs call for every candidate in the lookback window
+ * even when the first one already answered.
+ */
+export interface RollRunLite extends RunLite {
+  id?: number;
+  name?: string | null;
+  display_title?: string | null;
+  head_sha?: string | null;
+  updated_at?: string | null;
+  html_url?: string | null;
 }
 
 /**
@@ -206,6 +337,65 @@ export interface DeployPathDef {
   title: string;
   why: string;
   clouds?: string[];
+  /**
+   * Set ONLY on a lane that actually writes a console image onto the estate.
+   *
+   * Its presence is what makes a lane a roll source, so "which workflow rolls
+   * this cloud" is stated exactly once — here — rather than in a second table
+   * that can drift out of step with this one. (This repo has already shipped
+   * one pair of keys whose name and target disagreed.)
+   *
+   * `jobName` is matched against the run's JOB names, never the run conclusion,
+   * because A ROLL RUN CAN CONCLUDE SUCCESS HAVING ROLLED NOTHING — measured
+   * 2026-08-17 on run 32006479915, where `Should this roll proceed?` succeeded,
+   * `Roll image + validate live URL` was SKIPPED because the console image had
+   * not built, and the run reported `success`. Reading the run conclusion would
+   * name that run's sha as "what the estate was last rolled to" when nothing of
+   * the sort was deployed — and then report a healthy estate as regressed.
+   *
+   * `shaFrom` says where the shipped sha lives:
+   *   'title'    loom-roll-and-validate's `run-name`. Its `head_sha` is the
+   *              default-branch HEAD at trigger time, NOT the sha it rolls
+   *              (#2963), so the title is the only honest source.
+   *   'headSha'  gov-console-roll builds from its own checkout, so the run's
+   *              head_sha IS the image it pushes and rolls.
+   *
+   * `titlePattern` must capture the sha in group 1. A title that does not match
+   * yields null, which the caller treats as UNKNOWN — a dispatch may legitimately
+   * name a floating tag ('latest', a prefix), and the sha it resolved to lives
+   * only inside that run. Comparing a floating name to a commit sha would be a
+   * fabricated verdict.
+   *
+   * `stepName` is the step INSIDE that job which performs the
+   * `az containerapp update` — i.e. the one whose completion brackets the moment
+   * the estate changed. It is what dates the verdict, and it costs nothing extra:
+   * the Actions jobs payload the route already fetches carries `.steps[]`.
+   *
+   * WHY THE STEP AND NOT THE JOB. Measured on run 32225337320 (see RollRunLite):
+   * the roll step ended 07:05:14Z, and the JOB did not end until 07:11:01Z —
+   * 5m47s later, after the revision-health wait, the Front Door purge, the
+   * live-URL check and a four-minute in-VNet UAT gate. Dating the roll from the
+   * job puts `rolledAt` 6m05s after the write, and an image built inside that
+   * window — genuinely NEWER than the roll — compares as older and reads
+   * `regressed`. That false red is the thing this field removes.
+   *
+   * It cannot buy a false GREEN in exchange: an image whose build stamp is later
+   * than the write must have been rolled after the write (nothing can deploy an
+   * image before it is built), so `ahead` is the true verdict in exactly the
+   * cases this moves.
+   *
+   * Required, not optional, so a new roll lane cannot be added without saying
+   * which of its steps is the writer. The step is verified to still exist by a
+   * contract test in lib/admin/__tests__/deploy-status.test.ts; if it is renamed
+   * out from under us the route falls back to the job's completion — the older,
+   * coarser behaviour — rather than losing the verdict, and CI goes red.
+   */
+  roll?: {
+    jobName: string;
+    stepName: string;
+    shaFrom: 'title' | 'headSha';
+    titlePattern?: RegExp;
+  };
 }
 
 export const DEPLOY_PATHS: DeployPathDef[] = [
@@ -232,7 +422,193 @@ export const DEPLOY_PATHS: DeployPathDef[] = [
     title: 'Console image build (on every merge)',
     why: 'Builds the loom-console image this page is being served from. While it is red, nothing new can be rolled — the estate freezes at the last image that built, which is exactly how a console silently falls weeks behind main.',
   },
+  {
+    workflow: 'loom-roll-and-validate.yml',
+    title: 'Console roll (build → this estate)',
+    why: 'The lane that actually moves the running console onto a freshly built image on every merge. It was absent from this list until #3676, which is how the 2026-08-19 revert went unseen: the roller nobody watched was the writer that lost the race with the scheduled reconcile, and the estate went BACKWARDS onto an older image while every other lane here stayed green.',
+    clouds: ['Commercial'],
+    roll: {
+      jobName: 'Roll image + validate live URL',
+      // The `az containerapp update` itself — .github/workflows/
+      // loom-roll-and-validate.yml, `- name: Roll Container App to new image`.
+      stepName: 'Roll Container App to new image',
+      shaFrom: 'title',
+      // .github/workflows/loom-roll-and-validate.yml run-name:
+      //   roll ${{ …head_sha || inputs.image_tag }} (build-triggered | manual dispatch)
+      titlePattern: /^roll\s+(\S+)\s+\((?:build-triggered|manual dispatch)\)$/,
+    },
+  },
+  {
+    workflow: 'gov-console-roll.yml',
+    title: 'Console roll (build → this estate)',
+    why: 'The Gov ring that rolls the console onto a built image. Since #3745 it is PUSH-TRIGGERED on main — path-filtered to apps/fiab-console/** plus this lane\'s own scripts — so Government now has the continuous-deploy chain Commercial has, and a gap since the last success is NOT automatically fine here: it means either no console change has merged in that window, or this lane has stopped rolling. A FAILING run is a defect either way. Read it that way deliberately: until 2026-08-18 nothing rolled Gov but a human running this workflow by hand, and that is exactly how the Gov console came to sit 251 commits behind main on an image stamped a week earlier while every Commercial signal read green.',
+    clouds: ['GCC-High', 'DoD', 'GCC'],
+    roll: {
+      jobName: 'Build + roll Gov console',
+      // Gov collapses build and roll into one job, so the write lives in
+      // `- name: Roll loom-console + health-gate`. It brackets the write more
+      // loosely than Commercial's step does (the health gate is inside it), but
+      // it is never worse than the job: measured on run 32260846293 the step
+      // ended 14:14:40Z and the job 14:14:43Z, three seconds apart, because a
+      // single-job run's completion is the run's own.
+      stepName: 'Roll loom-console + health-gate',
+      shaFrom: 'headSha',
+      // .github/workflows/gov-console-roll.yml run-name:
+      //   gov-console-roll ${{ github.sha }} (merge-triggered | manual dispatch)
+      titlePattern: /^gov-console-roll\s+(\S+)\s+\((?:merge-triggered|manual dispatch)\)$/,
+    },
+  },
 ];
+
+/**
+ * The roll lane for `cloud`, or null when none of its lanes writes an image.
+ *
+ * Deliberately derived from DEPLOY_PATHS rather than from a second list: the
+ * lane a cloud rolls from and the lane this page watches are the SAME fact, and
+ * two places holding one fact is how they end up disagreeing.
+ *
+ * Answers ONLY when the answer is unambiguous — exactly one roll lane applies.
+ * Zero or several yields null, i.e. UNKNOWN, and that is deliberate in both
+ * directions:
+ *
+ *   - An UNRECOGNISED cloud gets every lane back from deployPathsForCloud(),
+ *     which is the right call for a LIST ("showing a lane that does not apply is
+ *     a smaller error than hiding one that is broken") and the wrong one here.
+ *     Naming a roll lane is a claim about which workflow writes THIS estate; if
+ *     we do not know what estate this is, picking the first would compare a
+ *     local or unknown build marker against Commercial's roll history and
+ *     manufacture a regression out of nothing.
+ *   - If a cloud ever gains a SECOND writer, that ambiguity is a real problem to
+ *     resolve here, not something to paper over by silently picking one.
+ */
+export function rollSourceForCloud(cloud: string | undefined | null): DeployPathDef | null {
+  const rolls = deployPathsForCloud(cloud).filter((p) => p.roll);
+  return rolls.length === 1 ? rolls[0] : null;
+}
+
+/**
+ * The sha a roll run actually shipped, or null when it cannot be established.
+ *
+ * NULL IS A REAL ANSWER, not a failure to try. A manual dispatch may name a
+ * floating tag ('latest', a prefix, a branch name); the commit it resolved to
+ * exists only inside that run's logs. Returning the floating string here would
+ * hand the comparator a value that can never match a 40-char estate sha, and it
+ * would report every dispatch-rolled estate as reverted. Null routes to UNKNOWN,
+ * which is the honest verdict for "a roll happened and I cannot say to what".
+ */
+export function rollShaFromRun(
+  def: DeployPathDef,
+  run: RollRunLite,
+): string | null {
+  if (!def.roll) return null;
+  if (def.roll.shaFrom === 'headSha') {
+    const head = String(run.head_sha ?? '').trim();
+    return GIT_OBJECT_ID.test(head) ? head : null;
+  }
+  const title = String(run.name ?? run.display_title ?? '').trim();
+  const m = def.roll.titlePattern?.exec(title);
+  const tag = m?.[1];
+  // A tag that is not a git object id is a floating name — see the doc above.
+  return tag && GIT_OBJECT_ID.test(tag) ? tag : null;
+}
+
+/** A roll run that concluded successfully AND names a sha we can compare. */
+export interface RollCandidate {
+  run: RollRunLite;
+  sha: string;
+  /** When the run finished. Null when the API did not carry a stamp. */
+  finishedMs: number | null;
+}
+
+/**
+ * Roll runs worth asking about, newest finish first.
+ *
+ * A run only becomes a candidate if it CONCLUDED SUCCESS and names a sha. Both
+ * filters drop runs that cannot answer the question rather than guessing at
+ * them: an in-flight run has not written anything yet, a failed one did not
+ * write what it intended, and a floating-tag dispatch names something that is
+ * not a commit.
+ *
+ * Note what this deliberately does NOT establish: that a candidate's roll STEP
+ * ran. A run concluding success proves only that no job failed — on run
+ * 32006479915 (2026-08-17) the gate job succeeded, the roll job was SKIPPED
+ * because the image had not built, and the run reported success having deployed
+ * nothing. That question costs an extra API call per run and is answered
+ * separately, only when the cheap evidence is inconclusive.
+ *
+ * ORDERING IS ON THE RUN STAMP, WHICH IS NOT THE WRITE TIME — see RollRunLite.
+ * It is the only stamp a run LISTING carries, so it is what orders candidates;
+ * the route swaps in the roll job's own `completed_at` for the verdict once it
+ * has paid to read it. An UNMEASURABLE finish sorts LAST (`?? 0`), never first:
+ * a run with no stamp has not shown it is the newest, and letting it lead would
+ * hand "what the estate was last rolled to" to the candidate with the least
+ * evidence behind it.
+ */
+export function rollCandidates(def: DeployPathDef, runs: RollRunLite[] | null): RollCandidate[] {
+  if (!def.roll || !runs) return [];
+  return runs
+    .filter((r) => r.conclusion === 'success')
+    .map((run) => {
+      const sha = rollShaFromRun(def, run);
+      const ms = Date.parse(String(run.updated_at ?? run.created_at ?? ''));
+      return sha ? { run, sha, finishedMs: Number.isNaN(ms) ? null : ms } : null;
+    })
+    .filter((c): c is RollCandidate => c !== null)
+    .sort((a, b) => (b.finishedMs ?? 0) - (a.finishedMs ?? 0));
+}
+
+/**
+ * Must we spend API calls asking WHICH candidate actually shipped?
+ *
+ * WHY THIS EXISTS AND IS NOT JUST "ALWAYS ASK". Confirming a run's roll job ran
+ * costs one more upstream call per run, and this route already issues up to a
+ * dozen against an unauthenticated budget of 60/hour per egress IP. Paying that
+ * on every refresh of a healthy estate — the overwhelmingly common case — would
+ * exhaust the budget and turn the whole page UNKNOWN, which is a strictly worse
+ * outcome than the question it was meant to answer.
+ *
+ * FALSE is returned only when the cheap evidence is already conclusive:
+ *
+ *   1. the newest candidate names exactly what the estate is running, AND
+ *   2. no OLDER candidate names a different sha and finished AFTER this image
+ *      was built.
+ *
+ * (2) is the part that is easy to leave out and wrong to. Without it, a newest
+ * run that named the reverted sha and then skipped would let a genuine
+ * regression short-circuit to "current" — the estate would be running what SOME
+ * roll named while sitting behind a later roll that actually shipped. With it,
+ * any older roll that could have overtaken this image forces the real check.
+ *
+ * An unmeasurable ordering (no build stamp, no run stamp) returns TRUE: when we
+ * cannot show the cheap evidence is conclusive, we do not assume it is.
+ *
+ * THE TIE IS STRICT AND THAT IS THE LESS CONSERVATIVE DIRECTION, so it is said
+ * out loud rather than left for a later reader to discover. `finishedMs === builtMs`
+ * — an older roll that finished at the same instant this image was stamped — does
+ * NOT force the job check. It is a tie between two clocks at second granularity,
+ * and resolving it the other way would spend a call on every such coincidence.
+ * It is pinned by a test ("the tie … does NOT force the check") precisely because
+ * an unpinned boundary is one someone flips later without noticing which way it
+ * used to point.
+ */
+export function rollNeedsJobCheck(input: {
+  candidates: RollCandidate[];
+  estateSha?: string | null;
+  estateStamp?: string | null;
+}): boolean {
+  const { candidates } = input;
+  if (candidates.length === 0) return false; // nothing to ask about
+  const estateSha = input.estateSha || null;
+  if (!estateSha) return true;
+  if (!shaMatches(estateSha, candidates[0].sha)) return true;
+
+  const builtMs = input.estateStamp ? Date.parse(input.estateStamp) : NaN;
+  if (Number.isNaN(builtMs)) return true;
+
+  return candidates.slice(1).some(
+    (c) => !shaMatches(estateSha, c.sha) && (c.finishedMs === null || c.finishedMs > builtMs),
+  );
+}
 
 /** The lanes that apply to `cloud`; an unrecognised cloud gets them all. */
 export function deployPathsForCloud(cloud: string | undefined | null): DeployPathDef[] {
@@ -408,6 +784,173 @@ export function classifyEstateDrift(input: {
 }
 
 /**
+ * Do two shas refer to the same commit when one of them may be abbreviated?
+ *
+ * The estate publishes a full 40-char sha in build-marker.txt; the roll ships an
+ * image whose TAG is the 8-char short sha (`loom-console:150d2937`). Comparing
+ * them with `===` reports every healthy estate as regressed, so the comparison
+ * is on the shorter length — with a 7-char floor, below which a "match" is not
+ * evidence of anything and the answer is no.
+ */
+function shaMatches(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  const n = Math.min(a.length, b.length);
+  if (n < 7) return false;
+  return a.slice(0, n).toLowerCase() === b.slice(0, n).toLowerCase();
+}
+
+/**
+ * Did something take this estate BACKWARDS off a successful roll? (#3676) PURE.
+ *
+ * WHY THIS EXISTS WHEN classifyEstateDrift ALREADY REPORTS "BEHIND". Because on
+ * 2026-08-19 drift reported the incident correctly and it still went unnoticed.
+ * The estate's revision history:
+ *
+ *   0000781  05:46:46Z  loom-console:83e7cab6
+ *   0000782  07:04:56Z  loom-console:150d2937   <- roll 32225337320 shipped this
+ *   0000783  07:10:19Z  loom-console:83e7cab6   <- the reconcile put it BACK
+ *
+ * Both shas are commits on main, so drift-vs-main saw revision 783 and said
+ * "behind by N" — indistinguishable from the ordinary, harmless case of an
+ * estate whose roll simply has not happened yet. The fact that matters is not
+ * expressible in that vocabulary: a roll RAN, SUCCEEDED, shipped 150d2937, and
+ * five minutes later the estate was not running it. A validated fix was undone.
+ * "Behind" is a lane that has not caught up; a REGRESSION is a lane that went
+ * the wrong way, and only one of those is an incident.
+ *
+ * CONTRACT ON `rolledSha`: it must be what the last EFFECTIVE roll shipped — a
+ * roll run can conclude SUCCESS having rolled NOTHING (every job skipped), and
+ * such a run's tag would be a phantom to compare against. Filtering those out is
+ * the caller's job, exactly as reconcile-policy.mjs does it: ask the JOBS, not
+ * the run.
+ *
+ * THE VERDICTS:
+ *   no roll to compare against  → UNKNOWN, warning. Nothing is asserted.
+ *   estate sha unidentified     → UNKNOWN, warning.
+ *   estate IS the rolled sha    → CURRENT, ok.
+ *   differs, estate image built
+ *     AFTER the roll finished   → AHEAD, ok. A newer writer moved it forward;
+ *                                 that is the roll lane working, not a revert.
+ *                                 This branch is the whole reason the ordering
+ *                                 is checked at all — without it every merge
+ *                                 that lands between a roll and this read would
+ *                                 flash red.
+ *   differs, estate image built
+ *     BEFORE the roll finished  → REGRESSED, error. The estate is running an
+ *                                 image OLDER than one a successful roll had
+ *                                 already put on it.
+ *   differs, ordering UNMEASURABLE → UNKNOWN, warning. Two shas that differ with
+ *                                 no usable timestamps is a real disagreement
+ *                                 whose DIRECTION is unknown; calling it green
+ *                                 would hide a revert and calling it red would
+ *                                 cry wolf on a normal roll, so it says what it
+ *                                 actually knows. It is never 'ok'.
+ */
+export function classifyRollRegression(input: {
+  /** The sha the estate's console is serving (build-marker.txt). */
+  estateSha?: string | null;
+  /** When THAT image was built (build-marker.txt stamp). */
+  estateStamp?: string | null;
+  /** What the last effective roll shipped — see the contract above. */
+  rolledSha?: string | null;
+  /** When that roll completed. */
+  rolledAt?: string | null;
+  rollWorkflow?: string | null;
+  rollRunUrl?: string | null;
+  error?: string | null;
+}): RollRegression {
+  const estateSha = input.estateSha || null;
+  const rolledSha = input.rolledSha || null;
+  const rolledAt = input.rolledAt || null;
+  const base = {
+    estateSha,
+    rolledSha,
+    rolledAt,
+    rollWorkflow: input.rollWorkflow || null,
+    rollRunUrl: input.rollRunUrl || null,
+  };
+  const shortEstate = estateSha ? estateSha.slice(0, 8) : null;
+  const shortRolled = rolledSha ? rolledSha.slice(0, 8) : null;
+  const lane = base.rollWorkflow ? `${base.rollWorkflow} ` : '';
+
+  if (input.error || !rolledSha) {
+    return {
+      ...base,
+      state: 'unknown',
+      severity: 'warning',
+      headline: 'Cannot tell whether a roll has been overwritten',
+      detail: `The last effective ${lane}roll could not be identified — `
+        + `${input.error || 'no successful roll that actually shipped an image was found'}. `
+        + 'This is UNKNOWN, not "nothing was overwritten": with no roll to compare against, an estate that '
+        + 'was reverted onto an older image looks exactly like one that was never rolled.',
+    };
+  }
+  if (!estateSha) {
+    return {
+      ...base,
+      state: 'unknown',
+      severity: 'warning',
+      headline: 'Cannot tell whether a roll has been overwritten',
+      detail: `The last roll shipped ${shortRolled}, but this image carries no build fingerprint `
+        + '(public/build-marker.txt has no sha), so what is actually running cannot be compared to it.',
+    };
+  }
+  if (shaMatches(estateSha, rolledSha)) {
+    return {
+      ...base,
+      state: 'current',
+      severity: 'ok',
+      headline: 'This estate is running what the last roll shipped',
+      detail: `The last effective ${lane}roll shipped ${shortRolled}${rolledAt ? ` at ${rolledAt}` : ''}, `
+        + 'and that is the image serving this page. Nothing has overwritten it.',
+    };
+  }
+
+  const builtMs = input.estateStamp ? Date.parse(input.estateStamp) : NaN;
+  const rolledMs = rolledAt ? Date.parse(rolledAt) : NaN;
+  if (Number.isNaN(builtMs) || Number.isNaN(rolledMs)) {
+    return {
+      ...base,
+      state: 'unknown',
+      severity: 'warning',
+      headline: `This estate is not running the sha the last roll shipped (${shortRolled})`,
+      detail: `The last effective ${lane}roll shipped ${shortRolled}; this estate is serving ${shortEstate}. `
+        + 'WHICH IS NEWER could not be established — '
+        + `${Number.isNaN(builtMs) ? 'the running image carries no build timestamp' : 'the roll carried no completion timestamp'}. `
+        + 'So this is either a newer image that landed after that roll (harmless) or an OLDER one that overwrote it '
+        + '(#3676), and it is reported as unknown rather than guessed in either direction.',
+    };
+  }
+  // STRICT `>`, so an exact tie falls THROUGH to `regressed` below. Stated
+  // because a boundary nobody names is a boundary that gets flipped: an image
+  // stamped at the same second the roll completed is not evidence the image
+  // came AFTER it, and between a false green and a false red on a tie this
+  // surface takes the red — it is the one that gets looked at. Pinned by a test
+  // ("a build stamped at the EXACT instant the roll completed …").
+  if (builtMs > rolledMs) {
+    return {
+      ...base,
+      state: 'ahead',
+      severity: 'ok',
+      headline: 'This estate is running an image newer than the last roll',
+      detail: `The last effective ${lane}roll shipped ${shortRolled} at ${rolledAt}; this estate is serving `
+        + `${shortEstate}, built afterwards. A later writer moved it FORWARD — that is the deploy path working.`,
+    };
+  }
+  return {
+    ...base,
+    state: 'regressed',
+    severity: 'error',
+    headline: `This estate was rolled BACKWARDS off ${shortRolled}`,
+    detail: `A successful ${lane}roll put ${shortRolled} on this estate at ${rolledAt}, and it is now serving `
+      + `${shortEstate} — an image built BEFORE that roll. Something overwrote a validated deploy with an older `
+      + 'one, so every fix between those two images is inert here despite having merged, passed CI, and been '
+      + 'rolled once already. This is the #3676 race, and it is not something waiting for a roll: the roll '
+      + 'already happened and was undone.',
+  };
+}
+
+/**
  * Deploy-lane verdict. PURE.
  *
  * WHAT THIS ADDS OVER "when did it last succeed". A lane that succeeded
@@ -574,39 +1117,150 @@ export function worstSeverity(severities: DeploySeverity[]): DeploySeverity {
 }
 
 /**
- * Roll the estate verdict + every lane verdict into the single line the banner
- * shows. PURE.
+ * Roll the estate verdict, every lane verdict, the roll regression AND the fleet
+ * into the single line the banner shows. PURE.
  *
  * The headline names the WORST fact, because a banner that averages is a banner
  * that gets ignored — and being ignored is the failure mode this whole control
  * exists to prevent.
+ *
+ * A ROLL REGRESSION OUTRANKS EVERYTHING, including a broken lane and a behind
+ * estate. Those two say work has not ARRIVED; a regression says work arrived,
+ * was validated, and was then REMOVED — and unlike the others it will not fix
+ * itself on the next successful run, because the last successful run is what
+ * undid it. `rollRegression` is optional so a caller that cannot measure it
+ * omits it entirely rather than passing a fabricated healthy verdict.
+ *
+ * THE FLEET IS DECIDED HERE, NOT BY THE CALLER, and that is the point of the
+ * fifth parameter. The route used to apply the peer-cloud override itself,
+ * AFTER this function had returned:
+ *
+ *   headline: fleet.severity === 'error' && base.severity !== 'error'
+ *     ? fleet.headline : base.headline
+ *
+ * — so there were THREE owners of the headline and only two of them went through
+ * the function `deployBannerBody` reads ownership from. A healthy Commercial
+ * estate with a stale Gov peer (`rollRegression:'current'`, `base.severity:'ok'`,
+ * `fleet.severity:'error'`) therefore rendered "Azure Government is 251 commits
+ * behind main" over the body "Running build … — no commits behind main": the
+ * identical headline/body mismatch this pair exists to prevent, still live for
+ * the #3730 case. One function decides, so there is one answer.
+ *
+ * `fleet` is optional on the same reasoning as `rollRegression`: a caller that
+ * did not measure the peer clouds omits it rather than passing a green verdict
+ * for estates it never read.
  */
 export function summarizeDeployStatus(
   estate: EstateDrift,
   paths: DeployPathHealth[],
   meta: { generatedAt: string; repo: string },
+  rollRegression?: RollRegression | null,
+  fleet?: { severity: DeploySeverity; headline: string } | null,
 ): DeployStatusReport {
-  const severity = worstSeverity([estate.severity, ...paths.map((p) => p.severity)]);
+  const localSeverity = worstSeverity([
+    estate.severity,
+    ...paths.map((p) => p.severity),
+    ...(rollRegression ? [rollRegression.severity] : []),
+  ]);
+  const severity = worstSeverity([localSeverity, ...(fleet ? [fleet.severity] : [])]);
   const broken = paths.filter((p) => p.severity === 'error');
   const degraded = paths.filter((p) => p.severity === 'warning');
 
   let headline: string;
-  if (estate.severity === 'error') {
+  let headlineOwner: NonNullable<DeployStatusReport['headlineOwner']>;
+  if (rollRegression?.severity === 'error') {
+    headline = rollRegression.headline;
+    headlineOwner = 'roll-regression';
+  } else if (estate.severity === 'error') {
     headline = broken.length
       ? `${estate.headline} — and ${broken.length} deploy path(s) are failing or switched off`
       : estate.headline;
+    headlineOwner = 'estate';
   } else if (broken.length) {
     const first = broken[0];
     headline = broken.length === 1
       ? `Deploy path broken: ${first.title}`
       : `${broken.length} deploy paths are failing or switched off, including ${first.title}`;
+    headlineOwner = 'paths';
   } else if (estate.severity === 'warning') {
     headline = estate.headline;
+    headlineOwner = 'estate';
   } else if (degraded.length) {
     headline = `${degraded.length} deploy path(s) need attention`;
+    headlineOwner = 'paths';
+  } else if (rollRegression?.severity === 'warning') {
+    headline = rollRegression.headline;
+    headlineOwner = 'roll-regression';
   } else {
     headline = estate.headline;
+    headlineOwner = 'estate';
   }
 
-  return { generatedAt: meta.generatedAt, repo: meta.repo, estate, paths, severity, headline };
+  // A PEER CLOUD BEING BROKEN OUTRANKS "THIS ESTATE IS FINE" — the operator
+  // reading this page is responsible for both, and #3730 is precisely the case
+  // where every local signal was green. It does NOT outrank a local error: a
+  // regression or a broken lane here is not made less urgent by Gov also being
+  // behind, and swapping the line would hide it. Byte-identical to the condition
+  // the route applied before this moved (`fleet.severity === 'error' &&
+  // base.severity !== 'error'`) — what changed is that the OWNER is recorded.
+  if (fleet && fleet.severity === 'error' && localSeverity !== 'error') {
+    headline = fleet.headline;
+    headlineOwner = 'fleet';
+  }
+
+  const report: DeployStatusReport = {
+    generatedAt: meta.generatedAt, repo: meta.repo, estate, paths, severity, headline, headlineOwner,
+  };
+  if (rollRegression) report.rollRegression = rollRegression;
+  return report;
+}
+
+/**
+ * Which sentence belongs UNDER the banner headline, and which run link with it.
+ * PURE.
+ *
+ * WHY THIS IS A FUNCTION AND NOT TWO LINES OF JSX. The banner rendered
+ * `headline` from `summarizeDeployStatus` and the body from `estate.detail`,
+ * unconditionally — two different verdicts stitched together. Observed from one
+ * real response: the title read "This estate was rolled BACKWARDS off 150d2937"
+ * over the body "Running build 83e7cab6 (built …) — no commits behind main."
+ * The regression's own `detail`, `rolledSha`, `rolledAt` and `rollRunUrl` never
+ * reached the DOM at all, so the sentence under the loudest headline this
+ * surface can print was a DIFFERENT question's answer, and it read as
+ * reassurance — the #3676 incident explained away by its own dashboard.
+ *
+ * THE RULE: whoever owns the headline owns the body. `summarizeDeployStatus`
+ * decides that — a regression outranks everything local, and a broken PEER cloud
+ * outranks a healthy local estate — and it now RECORDS the decision in
+ * `headlineOwner` rather than leaving it to be re-derived here.
+ *
+ * IT USED TO BE RE-DERIVED, BY STRING EQUALITY: `reg.headline ===
+ * report.headline`. Two things were wrong with that. It missed a THIRD owner
+ * entirely — the route applied the fleet override after this function had run,
+ * so a healthy Commercial estate with a stale Gov peer printed "Azure Government
+ * is 251 commits behind main" over "Running build … — no commits behind main",
+ * the same mismatch one cloud over. And it coupled the body to the exact BYTES
+ * of a headline that a sibling branch already decorates ("… — and 2 deploy
+ * path(s) are failing"): the day anyone decorates the regression headline the
+ * same way, the body silently reverts to the drift line with nothing going red.
+ *
+ * The string comparison survives ONLY as a fallback for a payload deserialized
+ * from a cache written before `headlineOwner` existed — never as the primary
+ * path, and never for a report this module produced.
+ *
+ * Nothing is lost when the regression takes the body: the estate's own drift
+ * detail is still rendered per-estate in the fleet table below the banner.
+ */
+export function deployBannerBody(report: {
+  headline: string;
+  headlineOwner?: DeployStatusReport['headlineOwner'];
+  estate: Pick<EstateDrift, 'detail'>;
+  rollRegression?: RollRegression | null;
+}): { detail: string; rollRunUrl: string | null; ownedByRollRegression: boolean } {
+  const reg = report.rollRegression ?? null;
+  const owns = reg !== null && (report.headlineOwner
+    ? report.headlineOwner === 'roll-regression'
+    : reg.headline === report.headline);
+  if (!owns) return { detail: report.estate.detail, rollRunUrl: null, ownedByRollRegression: false };
+  return { detail: reg!.detail, rollRunUrl: reg!.rollRunUrl ?? null, ownedByRollRegression: true };
 }

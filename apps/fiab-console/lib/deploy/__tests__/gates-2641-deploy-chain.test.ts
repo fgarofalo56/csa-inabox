@@ -282,6 +282,98 @@ describe('the Gov image lane pushes the tag the templates PULL', () => {
   });
 });
 
+describe('the Gov image lane still runs on a SCHEDULE (#3730/#3745)', () => {
+  /**
+   * WHY THIS IS HERE AT ALL.
+   *
+   * `gov-build-images` is the only thing that moves the `:v0.1` tag every Gov
+   * .bicepparam resolves. Before #3730 nothing but a human dispatch could start
+   * it, and the measured consequence was `deploy-gov` reporting SUCCESS on
+   * 2026-08-16 while the live Gov console still served an image built on
+   * 2026-08-11. #3730/#3745 gave the lane a nightly `schedule:`. NOTHING
+   * asserted that the trigger survives.
+   *
+   * Deleting three lines from `on:` returns Gov to dispatch-only and every check
+   * in this repo stays green — the same shape as the issue this block is being
+   * added under (#3783): not a gate that is missing, a state nothing watches.
+   *
+   * The three tests below are ONE property in three parts. A `schedule:` that
+   * fires and builds nothing is not better than no `schedule:` — it is worse,
+   * because it also produces a green run every morning.
+   *
+   * `.gitattributes` does not pin `.github/workflows/**`, so every regex here
+   * must survive CRLF on a Windows checkout and LF on the runner (see `ghStep`).
+   */
+  const GOV = '.github/workflows/gov-build-images.yml';
+
+  it('keeps the `schedule:` trigger, with a well-formed cron', () => {
+    const wf = read(GOV);
+
+    // Anchored at the `on:` mapping's own indent. This file discusses the
+    // schedule at length in comments, and every one of those lines starts with
+    // `  #` — so the word cannot satisfy this. The TRIGGER has to.
+    expect(
+      wf,
+      'gov-build-images lost its schedule: trigger — the Gov lane is back to dispatch-only (#3730)',
+    ).toMatch(/^ {2}schedule:/m);
+
+    const cron = wf.match(/^ {4}- cron: *'([^']+)'/m);
+    expect(cron, 'the schedule: block carries no `- cron:` entry').not.toBeNull();
+
+    // The HOUR is deliberately NOT pinned. 07:37 UTC was chosen from measured
+    // merge traffic (see the trigger's own comment) and a re-measurement should
+    // be free. What must hold is that the expression is a well-formed 5-field
+    // cron: GitHub silently declines to schedule a malformed one, so an emptied
+    // or mangled value fails HERE rather than by never firing at 07:37.
+    expect(
+      cron![1].trim().split(/\s+/),
+      `'${cron![1]}' is not a 5-field cron expression`,
+    ).toHaveLength(5);
+  });
+
+  it('carries the workflow-level `env:` defaults a schedule event needs', () => {
+    const wf = read(GOV);
+    const start = wf.search(/^env:/m);
+    const end = wf.search(/^jobs:/m);
+    expect(start, 'no workflow-level env: block').toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const env = wf.slice(start, end);
+
+    // `inputs` EXISTS on a schedule event but carries NOTHING, and a
+    // `workflow_dispatch` `default:` does not apply to any other trigger — the
+    // trap that froze deploy-fiab-commercial's nightly reconcile for weeks.
+    // Without this defaults table the nightly run resolves an empty app list,
+    // the build matrix is `[]`, `build` is skipped, and the workflow concludes
+    // SUCCESS having produced no image.
+    expect(env).toMatch(/BOUNDARY: \$\{\{ inputs\.boundary \|\| '[^']+' \}\}/);
+    expect(env).toMatch(/APPS_IN: \$\{\{ inputs\.apps \|\| '[^']+' \}\}/);
+    expect(env).toMatch(/TAG_IN: \$\{\{ inputs\.tag \|\| '[^']+' \}\}/);
+  });
+
+  it('refuses to conclude success having resolved zero apps', () => {
+    const wf = read(GOV);
+    // `ghStep` keys on `- name:`; this step is spelled `- id: r` then `name:`,
+    // so slice it by hand rather than asserting against the whole 590-line file.
+    const marker = 'name: Resolve coordinates';
+    const at = wf.indexOf(marker);
+    expect(at, 'the Resolve coordinates step is GONE from the Gov build lane').toBeGreaterThan(-1);
+    const rest = wf.slice(at + marker.length);
+    const next = rest.search(/\n {6}- (?:name|id): /);
+    const resolve = next < 0 ? rest : rest.slice(0, next);
+
+    // An empty matrix does not error on its own: `build` is simply skipped and
+    // the run goes green having produced nothing — deploy-integrity R1 verbatim,
+    // and the single most likely way the schedule path goes quietly wrong.
+    expect(resolve, 'the empty-matrix guard is gone — a scheduled run could build zero images and still pass')
+      .toMatch(/if \[ "\$MATRIX" = "\[\]" \] \|\| \[ -z "\$MATRIX" \]; then[\s\S]*?exit 1/);
+
+    // ...and it must stay fail-closed. A valve here would restore the exact
+    // silent-success this guard exists to prevent.
+    expect(resolve).not.toMatch(/\|\| true/);
+    expect(resolve).not.toMatch(/^ {8}continue-on-error:/m);
+  });
+});
+
 describe('honest text — the one thing a deploy cannot do', () => {
   it('names the Conditional Access exclusion in the gate a human actually reads', () => {
     const reg = read('apps/fiab-console/lib/gates/registry/observability.ts');
