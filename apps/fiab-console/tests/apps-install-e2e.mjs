@@ -9,17 +9,44 @@
  * Run: SESSION_SECRET=<from-KV> node tests/apps-install-e2e.mjs
  */
 import crypto from 'node:crypto';
+import { requireAutomationOid } from '../e2e/auth/mint-cookie.mjs';
 
 const BASE = process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net';
 const SECRET = process.env.SESSION_SECRET;
 if (!SECRET) { console.error('SESSION_SECRET required'); process.exit(2); }
+
+// Automation identity - FAIL CLOSED, never a placeholder (#3804).
+//
+// This used to fall back to the all-zeros GUID. That is a syntactically valid
+// oid, so every guard expecting a well-formed one passed, and the harness went
+// on to mint a REAL session and perform REAL writes as a principal that can
+// never sign in. On 2026-07-12 that left 24 `tut-app-*` workspaces owned by the
+// zero GUID; `workspaces` is partitioned by /tenantId == the creator's oid, so
+// they landed in a partition no operator can enumerate, and 24 of 32 semantic
+// models have rendered empty editors ever since (#3801). Nothing failed at the
+// time - the installs returned success and the provisioners reported `created`.
+//
+// A KNOWN synthetic automation oid is a documented, tolerated cost with an
+// operator-side cleanup path (scripts/csa-loom/purge-test-workspaces.sh). The
+// zero-GUID fallback is different in kind: its debris is attributable to
+// nothing, so recovery by owner is impossible in principle.
+const OID = process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID;
+try {
+  // Empty AND placeholder, at the shared chokepoint. The thrown message names
+  // both env vars and the consequence; keeping the check there (rather than
+  // inline here) means a newly-discovered sentinel is added in exactly one place.
+  requireAutomationOid({ oid: OID });
+} catch (err) {
+  console.error(err.message);
+  process.exit(2);
+}
 
 // mint cookie
 const KEY = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(SECRET, 'utf-8'),
   Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
 const PAYLOAD = {
   claims: {
-    oid: process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000000',
+    oid: OID,
     name: process.env.LOOM_AUTOMATION_NAME || 'Loom UAT',
     email: 'uat@example.invalid',
     upn: 'uat@example.invalid',

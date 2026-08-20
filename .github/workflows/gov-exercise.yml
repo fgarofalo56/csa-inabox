@@ -77,6 +77,12 @@ jobs:
           E=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json)
           AOID=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_OID',''))")
           AGRP=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_GROUP_ID',''))")
+          # The identity fails closed, symmetric with the secret above (#3804).
+          # This lane WRITES: `workspaces` is partitioned by the creator's oid, so
+          # a placeholder oid does not just lose admin — it deposits every item it
+          # creates in a partition no principal can sign in to and enumerate.
+          # That is exactly how the 24 orphans in #3801 survived five weeks.
+          [ -n "$AOID" ] || { echo "::error::LOOM_TENANT_ADMIN_OID is empty on $APP, so no admin session can be minted and anything this lane wrote would land in an unreachable Cosmos partition. Re-run the gov deploy lane to render the admin binding (auto-bind-by-default.md §5)."; exit 1; }
           echo "AOID=$AOID" >> "$GITHUB_ENV"; echo "AGRP=$AGRP" >> "$GITHUB_ENV"
 
       - name: Run exercise (fast probes, then spark)
@@ -84,7 +90,17 @@ jobs:
           set -euo pipefail
           node - <<'EOF'
           const crypto=require('node:crypto'), fs=require('node:fs');
-          const S=process.env.SS, B=process.env.BASE, OID=process.env.AOID||'00000000-0000-0000-0000-000000000000', GRP=process.env.AGRP||'';
+          const S=process.env.SS, B=process.env.BASE, GRP=process.env.AGRP||'';
+          // Second line of defence behind the resolve-step guard (#3804): never
+          // mint on an absent or placeholder oid, whatever put it there.
+          // NORMALIZE FIRST (#3805): AOID reaches this heredoc through
+          // $GITHUB_ENV, and GitHub trims nothing — a trailing space or CR on the
+          // container app's LOOM_TENANT_ADMIN_OID made the RAW-string test miss
+          // every padded placeholder ("…0001 " was ACCEPTED while "…0001" was
+          // refused). The normalized value is what gets sealed, so the claim and
+          // the thing that was checked are the same string.
+          const OID=String(process.env.AOID||'').replace(/\r/g,'').trim();
+          if(!OID||/^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(OID)){console.log('::error::AOID is absent or a placeholder ('+(OID||'<empty>')+'). Refusing to mint — this lane writes, and a placeholder oid partitions those writes where nothing can reach them.');process.exit(1);}
           const K=Buffer.from(crypto.hkdfSync('sha256',Buffer.from(S,'utf-8'),Buffer.alloc(32),Buffer.from('loom-session-v1'),32));
           const claims={oid:OID,name:'gov-exercise',email:'exercise@automation.inv',upn:'gov-exercise@automation'};
           if(GRP) claims.groups=GRP.split(',').map(s=>s.trim()).filter(Boolean);

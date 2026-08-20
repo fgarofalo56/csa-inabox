@@ -84,6 +84,7 @@ import {
   buildStorageState,
   mintLoomSessionCookie,
   decodeLoomSessionCookie,
+  requireAutomationOid,
   requireSessionSecret,
 } from '../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
 
@@ -580,15 +581,19 @@ async function main() {
 
   // Identity claims baked into the minted session (audit-visible).
   const claims = {
-    oid: process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000001',
+    oid: process.env.LOOM_AUTOMATION_OID,
     name: process.env.LOOM_AUTOMATION_NAME || 'Loom Receipt [automation]',
     upn: process.env.LOOM_AUTOMATION_UPN || 'loom-receipt@automation.local',
     email: process.env.LOOM_AUTOMATION_UPN || 'loom-receipt@automation.local',
   };
 
-  // Fail fast + clearly if the secret is missing (both modes need it).
+  // Fail fast + clearly if the secret OR the identity is missing (both modes
+  // need both). The identity check is not cosmetic: this driver performs REAL
+  // writes and Cosmos partitions on the creator oid, so a placeholder produces
+  // a receipt attributable to a principal that cannot sign in (#3804).
   try {
     requireSessionSecret();
+    requireAutomationOid(claims);
   } catch (err) {
     console.error(err.message);
     process.exit(1);

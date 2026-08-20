@@ -144,6 +144,13 @@ jobs:
           for V in "${WS_SUB:-}" "${WS_RG:-}" "${AOID:-}" "${AGRP:-}"; do
             [ -n "$V" ] && echo "::add-mask::$V" || true
           done
+          # The identity fails closed, symmetric with the session-secret check
+          # above (#3804). This lane mints an admin session and WRITES workspace
+          # identity state; `workspaces` is partitioned by the creator's oid, so
+          # a placeholder does not merely lose admin — it writes where nothing
+          # can read back (the #3801 mechanism). AOID itself is masked above and
+          # is never echoed here.
+          [ -n "${AOID:-}" ] || { echo "::error::LOOM_TENANT_ADMIN_OID is empty on the gov console, so no admin session can be minted. Re-run gov-apply-env.yml (or the gov deploy lane) to render the admin binding (auto-bind-by-default.md §5)."; exit 1; }
 
       - name: Write the lane helper (minted admin session + receipt)
         run: |
@@ -167,8 +174,22 @@ jobs:
             const key = Buffer.from(
               crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32),
             );
+            // The identity fails closed, symmetric with the secret two lines up
+            // (#3804). This lane WRITES workspace-identity state and Cosmos
+            // partitions `workspaces` on the creator oid, so a placeholder does
+            // not merely lose admin — it writes where nothing can read back
+            // (the #3801 mechanism). AOID is masked, so this names the variable.
+            //
+            // NORMALIZED BEFORE THE TEST (#3805): the raw-string form of this
+            // check ACCEPTED "…0001 " / "…0001\r" while refusing "…0001", and a
+            // trailing space on a repo variable or an `az -o tsv` CR is exactly
+            // how one arrives. The normalized value is also what gets sealed.
+            const oid = String(process.env.AOID || '').replace(/\r/g, '').trim();
+            if (!oid || /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(oid)) {
+              throw new Error('AOID is absent or a placeholder — refusing to mint a session that cannot be attributed to a real principal.');
+            }
             const claims = {
-              oid: process.env.AOID || '00000000-0000-0000-0000-000000000000',
+              oid,
               name: 'gov-workspace-identity',
               email: 'workspace-identity@automation.inv',
               upn: 'gov-workspace-identity@automation',

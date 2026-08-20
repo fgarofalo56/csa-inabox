@@ -77,20 +77,19 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { BASE, signIn, captureFailures, recordVerdict } from './_lib/uat';
+import { BASE, signIn, captureFailures, recordVerdict, AUTOMATION_OID } from './_lib/uat';
 
 const SURFACE = 'page:/catalog/unity#grants-effective';
 const OUT_DIR = path.join('temp', 'uat-uc-effective', process.env.LOOM_UAT_RUN_TAG || 'local');
 
 /**
- * The queried principal that matches the minted session's own account. The mint
- * helper (e2e/_lib/uat.ts:mintSession) keys the session on
- * `UAT_OID || LOOM_AUTOMATION_OID || <zero-guid>`, and the route's self-check
- * (uc-principal-probe.ts:isSelfPrincipal) matches on oid, so this is `self` by
- * construction regardless of estate config.
+ * The queried principal that matches the minted session's own account. Imported
+ * from the mint helper rather than re-derived: `uat.ts` throws when neither
+ * UAT_OID nor LOOM_AUTOMATION_OID is set (#3804), so a third fallback term here
+ * would be unreachable — and before that change it silently made this spec
+ * assert `self` against the zero GUID, a principal that cannot sign in.
  */
-const SELF_PRINCIPAL =
-  process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000000';
+const SELF_PRINCIPAL = AUTOMATION_OID;
 
 /** A principal guaranteed NOT to be the session (not its oid / upn / email). */
 const THIRD_PARTY = `uc-eff-notself-${Date.now()}@third-party.invalid`;
