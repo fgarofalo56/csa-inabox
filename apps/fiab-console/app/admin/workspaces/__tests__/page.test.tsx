@@ -7,7 +7,9 @@
  *   - the destructive affordances are HIDDEN when the server says the caller
  *     cannot bulk-delete (the probe fails closed);
  *   - select-all covers the FILTERED rows only, never rows hidden by search;
- *   - the confirm dialog defaults to the non-destructive "keep" choice;
+ *   - the confirm dialog defaults to the non-destructive "keep" choice, and
+ *     RE-ARMS that default on every open (the radio must not stay destructive
+ *     across a cancel + a different selection);
  *   - confirming calls bulkDeleteWorkspaces with the selected ids and the
  *     cascade flag the radio actually selected;
  *   - only server-CONFIRMED deletions leave the table.
@@ -220,6 +222,45 @@ describe('/admin/workspaces — bulk select + delete', () => {
 
     await waitFor(() => expect(bulkDeleteWorkspaces).toHaveBeenCalledTimes(1));
     expect(bulkDeleteWorkspaces).toHaveBeenCalledWith(['ws-b'], { cascade: true });
+  });
+
+  it('re-arms the safe "keep" default after the destructive radio was chosen and cancelled', async () => {
+    renderPage();
+    await ready();
+    await waitFor(() => expect(screen.getByLabelText('Select Alpha workspace')).toBeInTheDocument());
+
+    // Open on Alpha and arm the destructive option, then back out.
+    fireEvent.click(screen.getByLabelText('Select Alpha workspace'));
+    await waitFor(() => expect(selectedCount()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: /Delete selected \(1\)/ }));
+    await screen.findByRole('dialog');
+    fireEvent.click(within(confirmDialog()).getByLabelText(/Delete everything/));
+    expect(within(confirmDialog()).getByLabelText(/Delete everything/)).toBeChecked();
+
+    // Cancel — the Fluent DialogTrigger button closes without deleting.
+    const cancel = Array.from(document.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Cancel',
+    );
+    fireEvent.click(cancel!);
+    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+
+    // Change the selection and reopen. The radio must NOT still be armed
+    // against a set it was never chosen for.
+    fireEvent.click(screen.getByLabelText('Select Alpha workspace'));
+    fireEvent.click(screen.getByLabelText('Select Beta workspace'));
+    fireEvent.click(screen.getByLabelText('Select Gamma workspace'));
+    await waitFor(() => expect(selectedCount()).toBe(2));
+    fireEvent.click(screen.getByRole('button', { name: /Delete selected \(2\)/ }));
+    await screen.findByRole('dialog');
+
+    const dlg = within(confirmDialog());
+    expect(dlg.getByLabelText(/Keep underlying data/)).toBeChecked();
+    expect(dlg.getByLabelText(/Delete everything/)).not.toBeChecked();
+    // And the choice reaches the server as the safe one.
+    bulkDeleteWorkspaces.mockResolvedValue({ ok: true, deleted: [], failed: [] });
+    fireEvent.click(await confirmButton(2));
+    await waitFor(() => expect(bulkDeleteWorkspaces).toHaveBeenCalledTimes(1));
+    expect(bulkDeleteWorkspaces).toHaveBeenCalledWith(['ws-b', 'ws-c'], { cascade: false });
   });
 
   it('removes only server-CONFIRMED deletions and reports the failures', async () => {

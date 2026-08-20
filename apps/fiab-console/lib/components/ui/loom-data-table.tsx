@@ -449,6 +449,23 @@ const NAME_RE = /(^|_|\b)(name|title|displayname|label)(\b|_|$)/i;
 const DATE_RE = /(date|time|created|modified|updated|timestamp|lastrun|expires|expiry|when)/i;
 const SELECT_CARDINALITY_CAP = 40;
 
+/**
+ * The `selectVisibleIds` value for a table with no `selection` prop — a single
+ * frozen module-scope array, NOT a fresh `[]` per render.
+ *
+ * `selectVisibleIds` is a dep of the `fluentColumns` memo, and `filteredRows`
+ * returns the `rows` prop by identity when no column filter is active. A fresh
+ * `[]` therefore broke that memo for EVERY consumer of this primitive that does
+ * not opt into selection — measured 2026-08-20, 155 non-test call sites across
+ * 85 files and exactly ONE of them (/admin/workspaces) passes `selection` — on
+ * any render where `rows` changed identity (an inline `.filter()`/`.map()`) or
+ * a built-in column filter took a keystroke. Measured with a
+ * `createTableColumn` counter and no `selection` prop: 6 rebuilds across 3
+ * re-renders and 6 across 3 filter keystrokes with a fresh `[]`; 0 and 0 with
+ * this constant. Pinned by loom-data-table-memo.test.tsx.
+ */
+const NO_SELECTION_IDS: string[] = [];
+
 function looksDate(v: string): boolean {
   if (!v) return false;
   if (/^\d{4}-\d{2}-\d{2}/.test(v)) return true; // ISO-ish
@@ -650,7 +667,7 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
   // filters, NOT `windowRows` (the painted slice). On a virtualized 1,400-row
   // table "select all" must mean all 1,400 matches, not the ~30 on screen.
   const selectVisibleIds = React.useMemo(
-    () => (selection ? filteredRows.map((r) => getRowIdRef.current(r)) : []),
+    () => (selection ? filteredRows.map((r) => getRowIdRef.current(r)) : NO_SELECTION_IDS),
     [selection, filteredRows],
   );
   const selectedCount = React.useMemo(
@@ -716,8 +733,15 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
             <div className={styles.selectCell}>
               <Checkbox
                 checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
-                // Fluent renders the header cell inside a sortable/clickable
-                // header; stop the event so toggling all never also re-sorts.
+                // Defensive only, and deliberately kept. In THIS Fluent version
+                // (react-table 9.19.15) the select column is not sortable —
+                // `createTableColumn` defaults `compare` to a zero-arity fn and
+                // `isColumnSortable` tests `compare.length > 0` — so its header
+                // cell's onClick short-circuits before `toggleColumnSort` and
+                // renders an inert div rather than an ARIA button. Measured:
+                // aria-sort is [null,"none","none"] before AND after a
+                // select-all click. The guard costs nothing and keeps the
+                // toggle isolated if a future column ever gains a comparator.
                 onClick={(e) => e.stopPropagation()}
                 onChange={() => selection.onToggleAll(selectVisibleIds)}
                 aria-label={allVisibleSelected ? 'Deselect all rows' : 'Select all rows'}
@@ -733,6 +757,13 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
                   // Without this a row click handler (open pane / navigate)
                   // fires on every selection — the checkbox lives INSIDE the row.
                   onClick={(e) => e.stopPropagation()}
+                  // The keyboard twin of the guard above, and NOT redundant with
+                  // it: the row's own onKeyDown activates on Enter and Space, and
+                  // a keydown from the checkbox bubbles straight into it. Without
+                  // this, selecting a row with the keyboard ALSO fired onRowClick
+                  // (measured: 1 call on Space, 1 on Enter) — on /admin/workspaces
+                  // that opened the settings pane on every keyboard selection.
+                  onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }}
                   onChange={() => selection.onToggleRow(id)}
                   aria-label={selection.ariaLabel ? selection.ariaLabel(row) : 'Select row'}
                 />

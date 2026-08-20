@@ -217,6 +217,40 @@ describe('LoomDataTable — multi-select', () => {
     expect(onRowClick).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * The KEYBOARD twin of the test above, and the one that was missing: the row's
+   * own `onKeyDown` activates on Enter and Space, and a keydown originating in
+   * the checkbox bubbles straight into it. Guarding only `onClick` left a
+   * keyboard user opening the row's pane on every selection — measured on the
+   * unguarded build as 1 onRowClick call on Space and another on Enter.
+   */
+  it('does NOT fire onRowClick when a checkbox is activated by KEYBOARD', () => {
+    const onRowClick = vi.fn();
+    wrap(
+      <LoomDataTable
+        columns={COLUMNS} rows={ROWS} getRowId={(r) => r.id}
+        onRowClick={onRowClick}
+        selection={sel({ ariaLabel: (r) => `Select ${r.name}` })}
+      />,
+    );
+    const box = screen.getByLabelText('Select Alpha');
+
+    // Space is how a checkbox is toggled; in a real browser it would ALSO tick
+    // the box, so an unguarded keydown selects the row AND opens the pane.
+    fireEvent.keyDown(box, { key: ' ' });
+    expect(onRowClick).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onRowClick).not.toHaveBeenCalled();
+
+    // Control: the row's own keyboard activation is untouched — without this the
+    // assertions above would pass on a table whose rows ignore the keyboard.
+    fireEvent.keyDown(screen.getByText('Alpha'), { key: 'Enter' });
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByText('Alpha'), { key: ' ' });
+    expect(onRowClick).toHaveBeenCalledTimes(2);
+  });
+
   it('marks selected rows with aria-selected', () => {
     wrap(
       <LoomDataTable

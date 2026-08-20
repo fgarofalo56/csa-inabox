@@ -9,7 +9,7 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Button, Text, Checkbox,
+  Spinner, Badge, Caption1, Body1, Button, Text,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions, DialogTrigger,
   RadioGroup, Radio,
@@ -373,7 +373,11 @@ export default function AdminWorkspacesPage() {
               appearance="primary"
               icon={<Delete20Regular />}
               disabled={selected.size === 0 || deleting}
-              onClick={() => { setDeleteError(null); setConfirmOpen(true); }}
+              // Re-arm the SAFE default on every open. Without this the radio is
+              // sticky across dialog opens: choose "Delete everything", Cancel,
+              // pick a different set, reopen — and the destructive option is
+              // still armed against workspaces it was never chosen for.
+              onClick={() => { setDeleteError(null); setBulkDataChoice('keep'); setConfirmOpen(true); }}
             >
               {`Delete selected (${selected.size})`}
             </Button>
