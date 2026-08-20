@@ -214,7 +214,7 @@ jobs:
         #   neither                 nothing this suite covers changed -> green.
         #
         # The middle state is #3783. The filter used to be keyed to where a test
-        # FILE LIVES (`^apps/fiab-console/`), but ~41 suites under that path are
+        # FILE LIVES (`^apps/fiab-console/`), but ~42 suites under that path are
         # infra gates that readFileSync a workflow, a bicep module, or a
         # scripts/ci fixture — or IMPORT a `scripts/`/`azure-functions/` module
         # that does. A PR touching only .github/workflows/** changes
@@ -374,15 +374,17 @@ jobs:
         #
         #   Sharding exists up there to keep a fork under the ~16 GB runner
         #   (1302 files at 3072/fork). MEASURED here at 38 suites: 66s wall /
-        #   45.87s vitest / 798 tests, single pass. The derived set is now 41
-        #   (the import signal recovers three suites the fs-call rule missed);
-        #   those three were measured at ~21s combined during review, so the
-        #   lane is nowhere near memory or time pressure. The 41-suite total has
-        #   NOT been re-measured end to end — stated so the numbers above are
-        #   not read as covering it.
+        #   45.87s vitest / 798 tests, single pass. The derived set is now 42:
+        #   the import signal recovers three suites the fs-call rule missed
+        #   (~21s combined, measured during review), and fixing the deriver's
+        #   INCLUDE globs recovered one more — `lib/__tests__/
+        #   api-route-typing.test.ts`, which vitest ran but the deriver could
+        #   not see. So the lane is nowhere near memory or time pressure. The
+        #   42-suite total has NOT been re-measured end to end — stated so the
+        #   numbers above are not read as covering it.
         #
         #   The coverage floor is a WHOLE-SUITE ratchet. Enforcing it against a
-        #   41-file subset compares a small numerator to a whole-suite
+        #   42-file subset compares a small numerator to a whole-suite
         #   denominator and fails every time, for a reason that says nothing
         #   about the diff — the same trap documented on the per-shard
         #   thresholds above. This lane gates CORRECTNESS of the infra
