@@ -19,6 +19,13 @@
  *               truncatedBy? }
  *   401 : no session.  403 : caller is not a tenant admin.
  *
+ * Both gates come from the route toolkit (`withTenantAdmin` on POST,
+ * `withSession` on GET) rather than a hand-rolled `getSession()` prologue —
+ * byte-compatible envelopes, one implementation of the check. GET is
+ * deliberately session-only, not admin-only: the UI needs `isAdmin:false` back
+ * to decide whether to render the button at all, and a 403 there would tell it
+ * nothing it could use.
+ *
  * DRY-RUN IS THE DEFAULT (`dryRun !== false`), matching admin/lineage/reconcile:
  * a pass that writes to Azure must be asked for in so many words.
  *
@@ -41,10 +48,10 @@
  * the same `sweepAutoBind()` directly rather than this route.
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin, isTenantAdmin } from '@/lib/auth/feature-gate';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { sweepAutoBind, sweepableItemTypes } from '@/lib/azure/auto-bind-sweep';
-import { apiOk, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiServerError } from '@/lib/api/respond';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,18 +64,11 @@ const SWEEP_DEADLINE_MS = 100_000;
  * GET — lightweight probe for the admin UI: is the caller an admin, and which
  * item types would a sweep cover. Session-only, no network, safe for non-admins.
  */
-export async function GET() {
-  const s = getSession();
-  if (!s) return apiUnauthorized();
+export const GET = withSession(async (_req, { session: s }) => {
   return apiOk({ isAdmin: isTenantAdmin(s), itemTypes: sweepableItemTypes() });
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return apiUnauthorized();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-
+export const POST = withTenantAdmin(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   // Default DRY-RUN: writing to Azure must be explicitly requested.
   const dryRun = body?.dryRun !== false;
@@ -90,4 +90,4 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return apiServerError(e);
   }
-}
+});

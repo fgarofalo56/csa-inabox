@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1681 |
+| Total routes | 1682 |
 | Public (no session) | 58 |
 | Session-only | 647 |
 | Owner-scoped | 675 |
-| Admin | 301 |
+| Admin | 302 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -198,6 +198,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/agent-quality/eval-alert/route.ts` | GET POST DELETE | admin | ● | ARM, Azure Monitor |
 | `admin/agent-quality/route.ts` | GET | admin | ● | AI Foundry, Cosmos |
 | `admin/audit-logs/route.ts` | GET | admin |  | Azure Cache for Redis, Cosmos, Log Analytics, Purview |
+| `admin/auto-bind/sweep/route.ts` | GET POST | admin |  | ADF, Cosmos |
 | `admin/autopilot/apply/route.ts` | POST | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
 | `admin/autopilot/route.ts` | GET PUT | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
 | `admin/autopilot/run/route.ts` | POST | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
@@ -2515,7 +2516,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-439 module(s) ORIGINATE a backend label — the derivation read an
+440 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2899,6 +2900,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/arm-deployments-client.ts` | ARM |
 | `apps/fiab-console/lib/azure/attach-integration.ts` | Azure Monitor |
 | `apps/fiab-console/lib/azure/auto-bind-providers.ts` | ADF |
+| `apps/fiab-console/lib/azure/auto-bind-sweep.ts` | Cosmos |
 | `apps/fiab-console/lib/azure/azure-sql-client.ts` | Azure Maintenance, Azure RBAC, Azure SQL |
 | `apps/fiab-console/lib/azure/batch-client.ts` | Batch |
 | `apps/fiab-console/lib/azure/budgets-client.ts` | Cost Management |
