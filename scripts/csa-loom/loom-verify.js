@@ -7,7 +7,11 @@ const url=(process.env.LOOM_URL||'').replace(/\/+$/,'');
 // minted a cookie with NO oid claim (JSON.stringify drops undefined), every
 // endpoint 401'd, and the harness reported those as endpoint failures — a red
 // verdict for entirely the wrong reason.
-const oid=process.env.LOOM_AUTOMATION_OID;
+// NORMALIZED BEFORE THE TEST (#3805), matching the chokepoint: a repo variable
+// or an `az -o tsv` read carries the padding GitHub never trims, and the raw
+// form of this test ACCEPTED "…0001 " while refusing "…0001". The normalized
+// value is what is sealed into the claim below.
+const oid=String(process.env.LOOM_AUTOMATION_OID||'').replace(/\r/g,'').trim();
 if(!oid){console.error('[loom-verify] LOOM_AUTOMATION_OID is required - this harness mints a REAL session against a live estate, so it must run as a real principal. Refusing to mint without an oid (#3804).');process.exit(2);}
 if(/^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(oid)){console.error('[loom-verify] LOOM_AUTOMATION_OID is a placeholder ('+oid+') and was refused. Set it to a real automation identity (#3801/#3804).');process.exit(2);}
 const claims={oid,name:process.env.LOOM_AUTOMATION_NAME||'verify',upn:process.env.LOOM_AUTOMATION_UPN||'verify@auto'};

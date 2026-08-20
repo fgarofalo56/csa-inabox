@@ -97,7 +97,30 @@ const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
  * @returns {string} the validated oid.
  */
 export function requireAutomationOid(claims) {
-  const oid = claims && claims.oid;
+  // NORMALIZE BEFORE TESTING, and hand the normalized value back (#3805 review).
+  //
+  // The first cut of this guard tested the RAW string, so every padded form of a
+  // placeholder walked straight through it. Measured at this chokepoint:
+  //
+  //     "…0001"    -> refused        "…0001\r"  -> ACCEPTED
+  //     "…0001 "   -> ACCEPTED       " …0001"   -> ACCEPTED
+  //
+  // That is not a theoretical input. `LOOM_AUTOMATION_OID` reaches this function
+  // from a GitHub repo variable (GitHub does NOT trim variable values), from an
+  // `az … -o tsv` / `gh … --json` read (both carry CR on this repo's own record),
+  // and from a Git Bash `export` where a trailing space is invisible. Each of
+  // those mints a session whose sealed claim is `"…0001 "` — a FOURTH distinct
+  // unreachable Cosmos partition on top of the three the guard already names,
+  // and one that also fails `oid === LOOM_TENANT_ADMIN_OID`, so the run silently
+  // drops to non-admin and reports 403s as endpoint defects.
+  //
+  // `|| ''` rather than `?? ''` on purpose: `??` would let a falsy NON-null oid
+  // (`0`, `false`) become the string "0"/"false" and pass the emptiness test that
+  // the pre-normalization code failed closed on. Normalization must not widen
+  // what is accepted.
+  const oid = String((claims && claims.oid) || '')
+    .replace(/\r/g, '')
+    .trim();
   if (!oid) {
     throw new Error(
       '[mint-cookie] claims.oid is required and was not set.\n' +
@@ -106,7 +129,7 @@ export function requireAutomationOid(claims) {
         '  automation identity for this estate. Refusing to mint without one (#3804).',
     );
   }
-  if (PLACEHOLDER_OID.test(String(oid))) {
+  if (PLACEHOLDER_OID.test(oid)) {
     throw new Error(
       `[mint-cookie] claims.oid is a placeholder (${oid}) and was refused.\n` +
         '  Writes under a placeholder land in a Cosmos partition no principal can sign in to\n' +
@@ -114,7 +137,7 @@ export function requireAutomationOid(claims) {
         '  Set UAT_OID or LOOM_AUTOMATION_OID to a real automation identity.',
     );
   }
-  return String(oid);
+  return oid;
 }
 
 /**
@@ -131,9 +154,15 @@ export function requireAutomationOid(claims) {
  */
 export function mintLoomSessionCookie(claims, ttlSecs = 28_800, sessionSecret) {
   const secret = requireSessionSecret(sessionSecret);
-  requireAutomationOid(claims);
+  // SEAL THE VALIDATED VALUE, not the raw claim (#3805 review). Calling the
+  // guard for its throw alone and then encrypting `claims` verbatim is a half
+  // fix: the normalized string is what was checked, so the normalized string is
+  // what must go into the cookie. Otherwise `"…-abc "` passes the guard and the
+  // session still asserts an oid with a trailing space — which is a different
+  // Cosmos partition key and a different `===` comparand than the one validated.
+  const sealed = { ...claims, oid: requireAutomationOid(claims) };
   const key = deriveKey(secret);
-  const payload = { claims, exp: Math.floor(Date.now() / 1000) + ttlSecs };
+  const payload = { claims: sealed, exp: Math.floor(Date.now() / 1000) + ttlSecs };
   const iv = crypto.randomBytes(IV_LEN);
   const cipher = crypto.createCipheriv(ALG, key, iv);
   const plain = Buffer.from(JSON.stringify(payload), 'utf-8');

@@ -90,9 +90,16 @@ jobs:
           set -euo pipefail
           node - <<'EOF'
           const crypto=require('node:crypto'), fs=require('node:fs');
-          const S=process.env.SS, B=process.env.BASE, OID=process.env.AOID||'', GRP=process.env.AGRP||'';
+          const S=process.env.SS, B=process.env.BASE, GRP=process.env.AGRP||'';
           // Second line of defence behind the resolve-step guard (#3804): never
           // mint on an absent or placeholder oid, whatever put it there.
+          // NORMALIZE FIRST (#3805): AOID reaches this heredoc through
+          // $GITHUB_ENV, and GitHub trims nothing — a trailing space or CR on the
+          // container app's LOOM_TENANT_ADMIN_OID made the RAW-string test miss
+          // every padded placeholder ("…0001 " was ACCEPTED while "…0001" was
+          // refused). The normalized value is what gets sealed, so the claim and
+          // the thing that was checked are the same string.
+          const OID=String(process.env.AOID||'').replace(/\r/g,'').trim();
           if(!OID||/^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(OID)){console.log('::error::AOID is absent or a placeholder ('+(OID||'<empty>')+'). Refusing to mint — this lane writes, and a placeholder oid partitions those writes where nothing can reach them.');process.exit(1);}
           const K=Buffer.from(crypto.hkdfSync('sha256',Buffer.from(S,'utf-8'),Buffer.alloc(32),Buffer.from('loom-session-v1'),32));
           const claims={oid:OID,name:'gov-exercise',email:'exercise@automation.inv',upn:'gov-exercise@automation'};

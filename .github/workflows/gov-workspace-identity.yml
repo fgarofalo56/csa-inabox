@@ -174,12 +174,17 @@ jobs:
             const key = Buffer.from(
               crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32),
             );
-            const oid = process.env.AOID || '';
             // The identity fails closed, symmetric with the secret two lines up
             // (#3804). This lane WRITES workspace-identity state and Cosmos
             // partitions `workspaces` on the creator oid, so a placeholder does
             // not merely lose admin — it writes where nothing can read back
             // (the #3801 mechanism). AOID is masked, so this names the variable.
+            //
+            // NORMALIZED BEFORE THE TEST (#3805): the raw-string form of this
+            // check ACCEPTED "…0001 " / "…0001\r" while refusing "…0001", and a
+            // trailing space on a repo variable or an `az -o tsv` CR is exactly
+            // how one arrives. The normalized value is also what gets sealed.
+            const oid = String(process.env.AOID || '').replace(/\r/g, '').trim();
             if (!oid || /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(oid)) {
               throw new Error('AOID is absent or a placeholder — refusing to mint a session that cannot be attributed to a real principal.');
             }

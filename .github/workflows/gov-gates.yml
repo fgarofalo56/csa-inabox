@@ -98,9 +98,13 @@ jobs:
           set -euo pipefail
           node - <<'EOF'
           const crypto=require('node:crypto'), fs=require('node:fs');
-          const S=process.env.SS, B=process.env.BASE, OID=process.env.AOID||'', GRP=process.env.AGRP||'';
+          const S=process.env.SS, B=process.env.BASE, GRP=process.env.AGRP||'';
           // Second line of defence behind the resolve-step guard (#3804): never
           // mint on an absent or placeholder oid, whatever put it there.
+          // NORMALIZE FIRST (#3805): the RAW-string test missed every padded
+          // placeholder, and neither GitHub nor $GITHUB_ENV trims a value. The
+          // normalized string is both what is tested and what is sealed.
+          const OID=String(process.env.AOID||'').replace(/\r/g,'').trim();
           if(!OID||/^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(OID)){console.log('::error::AOID is absent or a placeholder ('+(OID||'<empty>')+'). Refusing to mint — a placeholder oid yields a non-admin session and a 403 the score step would swallow.');process.exit(1);}
           const K=Buffer.from(crypto.hkdfSync('sha256',Buffer.from(S,'utf-8'),Buffer.alloc(32),Buffer.from('loom-session-v1'),32));
           const claims={oid:OID,name:'gov-gates',email:'gates@automation.inv',upn:'gov-gates@automation'};

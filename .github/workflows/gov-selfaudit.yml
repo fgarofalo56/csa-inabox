@@ -109,8 +109,12 @@ jobs:
           node - <<'EOF'
           const crypto = require('node:crypto');
           const S = process.env.SS, B = process.env.BASE;
-          const OID = process.env.AOID || '';
           // Second line of defence behind the resolve-step guard (#3804).
+          // NORMALIZE FIRST (#3805): the RAW-string test missed every padded
+          // placeholder ("…0001 " ACCEPTED, "…0001" refused), and nothing between
+          // the container app and this heredoc trims the value. The normalized
+          // string is what is tested AND what is sealed into the claim.
+          const OID = String(process.env.AOID || '').replace(/\r/g, '').trim();
           if (!OID || /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(OID)) {
             console.log('::error::AOID is absent or a placeholder (' + (OID || '<empty>') + '). Refusing to mint — a placeholder oid yields a non-admin session and a 403 this audit would report as an inconclusive pass.');
             process.exit(1);

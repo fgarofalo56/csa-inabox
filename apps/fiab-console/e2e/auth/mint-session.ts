@@ -70,7 +70,23 @@ const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
  * @returns the validated oid.
  */
 export function requireAutomationOid(claims: { oid?: string | null }): string {
-  const oid = claims && claims.oid;
+  // NORMALIZE BEFORE TESTING, and hand the normalized value back (#3805 review).
+  // Kept byte-identical to the expression in mint-cookie.mjs — the drift guard in
+  // e2e/auth/__tests__/require-automation-oid.test.mjs compares the two files and
+  // fails if they diverge.
+  //
+  // Testing the RAW string let every padded placeholder through: "…0001\r",
+  // "…0001 " and " …0001" were all ACCEPTED while the bare form was refused.
+  // GitHub does not trim repo-variable values and `az -o tsv` carries CR, so the
+  // padded form is the realistic one — and it seals a claim that matches neither
+  // a real principal nor `LOOM_TENANT_ADMIN_OID`, i.e. an unreachable partition
+  // AND a silent drop to non-admin.
+  //
+  // `|| ''` rather than `?? ''` on purpose: normalization must not widen what is
+  // accepted, and `??` would turn a falsy non-null oid into a passing string.
+  const oid = String((claims && claims.oid) || '')
+    .replace(/\r/g, '')
+    .trim();
   if (!oid) {
     throw new Error(
       '[mint-session] claims.oid is required and was not set.\n' +
@@ -79,7 +95,7 @@ export function requireAutomationOid(claims: { oid?: string | null }): string {
       '  automation identity for this estate. Refusing to mint without one (#3804).',
     );
   }
-  if (PLACEHOLDER_OID.test(String(oid))) {
+  if (PLACEHOLDER_OID.test(oid)) {
     throw new Error(
       `[mint-session] claims.oid is a placeholder (${oid}) and was refused.\n` +
       '  Writes under a placeholder land in a Cosmos partition no principal can sign in to\n' +
@@ -87,7 +103,7 @@ export function requireAutomationOid(claims: { oid?: string | null }): string {
       '  Set LOOM_AUTOMATION_OID (or UAT_OID) to a real automation identity.',
     );
   }
-  return String(oid);
+  return oid;
 }
 
 /** Derive the AES-256 key from SESSION_SECRET — identical to lib/auth/session.ts */
@@ -130,11 +146,14 @@ export function mintLoomSessionCookie(
   // Guard the identity here, not only at each call site — this is the single
   // chokepoint every TS caller (mintStorageState, global-setup, the specs)
   // funnels through, mirroring requireAutomationOid in mint-cookie.mjs (#3804).
-  requireAutomationOid(claims);
+  //
+  // SEAL THE VALIDATED VALUE (#3805 review). Calling the guard for its throw and
+  // then encrypting `claims` verbatim would validate one string and ship another.
+  const sealed: UserClaims = { ...claims, oid: requireAutomationOid(claims) };
 
   const key = deriveKey(secret);
   const payload: SessionPayload = {
-    claims,
+    claims: sealed,
     exp: Math.floor(Date.now() / 1000) + ttlSecs,
   };
 
