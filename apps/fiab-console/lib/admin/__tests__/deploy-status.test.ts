@@ -37,6 +37,7 @@ import {
   classifyDeployPath,
   classifyEstateDrift,
   classifyRollRegression,
+  deployBannerBody,
   deployPathsForCloud,
   oldestUnappliedAt,
   rollCandidates,
@@ -551,6 +552,25 @@ describe('classifyRollRegression — a roll that was overwritten (#3676)', () =>
     const url = 'https://github.com/fgarofalo56/csa-inabox/actions/runs/32225337320';
     expect(regression({ rollRunUrl: url }).rollRunUrl).toBe(url);
   });
+
+  it('BOUNDARY: a build stamped at the EXACT instant the roll completed is REGRESSED, not ahead', () => {
+    // The tie was unpinned: `builtMs > rolledMs` mutated to `>=` survived the
+    // whole suite green, and the two verdicts on either side of that boundary
+    // are "the deploy path is working" and "a validated deploy was undone".
+    //
+    // Equality is not evidence the image came AFTER the roll — the two stamps
+    // come from different writers at second granularity — so it falls to the
+    // loud side. Between a false green and a false red on a coin-flip, the red
+    // is the one an operator actually looks at.
+    const r = regression({ estateStamp: ROLL_AT });
+    expect(r.state).toBe('regressed');
+    expect(r.severity).toBe('error');
+    // …and one millisecond the other way is the control, so this test cannot be
+    // passing because the function always says regressed.
+    const after = regression({ estateStamp: new Date(Date.parse(ROLL_AT) + 1).toISOString() });
+    expect(after.state).toBe('ahead');
+    expect(after.severity).toBe('ok');
+  });
 });
 
 describe('summarizeDeployStatus folds the roll regression in', () => {
@@ -612,6 +632,89 @@ describe('summarizeDeployStatus folds the roll regression in', () => {
     const r = summarizeDeployStatus(okEstate, [healthy], { generatedAt: 'x', repo: REPO }, unknown);
     expect(r.severity).toBe('warning');
     expect(r.headline).toBe(unknown.headline);
+  });
+});
+
+/**
+ * deployBannerBody — the sentence UNDER the headline must be the same verdict's.
+ *
+ * THE OBSERVED DEFECT, from one real /api/admin/deploy-status response: the
+ * banner printed MessageBarTitle "This estate was rolled BACKWARDS off 150d2937"
+ * and, directly beneath it, "Running build 83e7cab6 (built …) — no commits
+ * behind main." The regression's detail, rolledSha, rolledAt and rollRunUrl were
+ * computed, serialized, and never rendered. So the loudest headline this surface
+ * can print was explained away underneath by a DIFFERENT question's answer, and
+ * the incident read as reassurance.
+ *
+ * Mutations these die under:
+ *   - go back to `status.estate.detail` unconditionally → the regression case
+ *     returns the drift sentence and its assertions go red;
+ *   - always return the regression detail when one is present → the CONTROL
+ *     (a current roll under a behind-estate headline) goes red.
+ */
+describe('deployBannerBody — whoever owns the headline owns the body', () => {
+  const behind = classifyEstateDrift({ buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(5, 5_000) });
+  const reverted = classifyRollRegression({
+    estateSha: '83e7cab6f0a14d2b9c7e5518aa30c41d7b6e2f90',
+    estateStamp: '2026-08-19T05:32:11Z',
+    rolledSha: '150d2937',
+    rolledAt: '2026-08-19T07:04:56Z',
+    rollWorkflow: 'loom-roll-and-validate.yml',
+    rollRunUrl: 'https://github.com/fgarofalo56/csa-inabox/actions/runs/32225337320',
+  });
+
+  it('THE DEFECT: under a REGRESSION headline the body is the regression, not the drift line', () => {
+    const report = summarizeDeployStatus(behind, [], { generatedAt: 'x', repo: REPO }, reverted);
+    const body = deployBannerBody(report);
+    expect(report.headline).toMatch(/BACKWARDS/); // precondition, not the assertion
+    expect(body.detail).toBe(reverted.detail);
+    expect(body.detail).toMatch(/#3676/);
+    // The exact sentence that used to sit under that headline.
+    expect(body.detail).not.toBe(behind.detail);
+    expect(body.ownedByRollRegression).toBe(true);
+    // …and the run link finally reaches the surface, so the claim is checkable.
+    expect(body.rollRunUrl).toBe(reverted.rollRunUrl);
+  });
+
+  it('CONTROL: when the ESTATE owns the headline the body is the estate detail', () => {
+    // Without this the fix could be "always show the regression", which would
+    // hide the drift sentence on every ordinary behind-estate load.
+    const current = classifyRollRegression({
+      estateSha: '150d2937abc0000000000000000000000000beef',
+      estateStamp: '2026-08-19T06:58:00Z',
+      rolledSha: '150d2937', rolledAt: '2026-08-19T07:04:56Z',
+      rollRunUrl: 'https://github.com/x/y/actions/runs/1',
+    });
+    const report = summarizeDeployStatus(behind, [], { generatedAt: 'x', repo: REPO }, current);
+    const body = deployBannerBody(report);
+    expect(report.headline).toBe(behind.headline);
+    expect(body.detail).toBe(behind.detail);
+    expect(body.ownedByRollRegression).toBe(false);
+    // No roll link under someone else's verdict — it would read as the subject
+    // of the sentence above it.
+    expect(body.rollRunUrl).toBeNull();
+  });
+
+  it('an OMITTED regression leaves the body exactly where it was', () => {
+    const report = summarizeDeployStatus(behind, [], { generatedAt: 'x', repo: REPO });
+    const body = deployBannerBody(report);
+    expect(body.detail).toBe(behind.detail);
+    expect(body.ownedByRollRegression).toBe(false);
+  });
+
+  it('an UNKNOWN regression that took the headline also takes the body', () => {
+    // The unknown verdict owns the headline when nothing worse exists, and the
+    // same rule has to hold there: "cannot tell whether a roll was overwritten"
+    // over "no commits behind main" is the same mismatch, one severity down.
+    const ok = classifyEstateDrift({
+      buildSha: SHA, repo: REPO, compare: { status: 'identical', ahead_by: 0, behind_by: 0 },
+    });
+    const unknown = classifyRollRegression({ estateSha: SHA, rolledSha: null });
+    const report = summarizeDeployStatus(ok, [], { generatedAt: 'x', repo: REPO }, unknown);
+    const body = deployBannerBody(report);
+    expect(report.headline).toBe(unknown.headline);
+    expect(body.detail).toBe(unknown.detail);
+    expect(body.ownedByRollRegression).toBe(true);
   });
 });
 
@@ -769,6 +872,29 @@ describe('rollCandidates', () => {
     expect(none[0].finishedMs).toBeNull();
   });
 
+  it('CONTROL: an UNMEASURABLE finish sorts LAST, never first', () => {
+    // `?? 0` in the comparator is doing this, and mutating it to `?? Infinity`
+    // survived the whole suite green — because every ordering case above uses
+    // two DATED runs, where the fallback is never reached. A stamp-less run
+    // sorting first would make it `candidates[0]`, i.e. the run whose sha
+    // defines "what the estate was last rolled to", chosen on the strength of
+    // having no evidence at all. It also flips rollNeedsJobCheck's cheap path,
+    // which reads candidates[0].
+    const c = rollCandidates(def, [
+      roll('aaaaaaaa', { updated_at: null, created_at: undefined }),
+      roll('bbbbbbbb', { updated_at: minsAgo(90) }),
+    ]);
+    expect(c.map((x) => x.sha)).toEqual(['bbbbbbbb', 'aaaaaaaa']);
+    expect(c[0].finishedMs).not.toBeNull();
+    // Even against a run that finished long ago — an unstamped row must not
+    // outrank a dated one merely by being unstamped.
+    const older = rollCandidates(def, [
+      roll('cccccccc', { updated_at: null, created_at: undefined }),
+      roll('dddddddd', { updated_at: new Date(NOW - 400 * 86_400_000).toISOString() }),
+    ]);
+    expect(older.map((x) => x.sha)).toEqual(['dddddddd', 'cccccccc']);
+  });
+
   it('no rows, or a lane that does not roll, yields nothing to ask about', () => {
     expect(rollCandidates(def, null)).toEqual([]);
     expect(rollCandidates(def, [])).toEqual([]);
@@ -846,6 +972,21 @@ describe('rollNeedsJobCheck', () => {
     expect(rollNeedsJobCheck({ candidates: c, estateSha: ESTATE, estateStamp: BUILT })).toBe(false);
   });
 
+  it('BOUNDARY: an older roll finishing at the EXACT build instant does NOT force the check', () => {
+    // The tie was unpinned — `c.finishedMs > builtMs` mutated to `>=` survived
+    // the whole suite green — and this is the LESS conservative of the two
+    // directions, so it is the one worth nailing down: equal means the job
+    // check is NOT paid for, and if someone later wants the other behaviour
+    // they have to change this assertion deliberately rather than discover it.
+    const tie = [cand('150d2937', 20), cand('83e7cab6', 30)]; // BUILT is exactly 30m ago
+    expect(rollNeedsJobCheck({ candidates: tie, estateSha: ESTATE, estateStamp: BUILT })).toBe(false);
+    // One minute the other side of the boundary DOES force it — without this
+    // control the assertion above would also pass against a function that
+    // never asks.
+    const after = [cand('150d2937', 20), cand('83e7cab6', 29)];
+    expect(rollNeedsJobCheck({ candidates: after, estateSha: ESTATE, estateStamp: BUILT })).toBe(true);
+  });
+
   it('matches an abbreviated roll tag against the full estate sha', () => {
     // The estate publishes 40 chars; the image tag is the 8-char short sha.
     expect(rollNeedsJobCheck({
@@ -894,6 +1035,32 @@ describe('roll parser matches the workflows it parses', () => {
     return block.join(' ');
   };
 
+  /**
+   * The event names in a workflow's top-level `on:` block.
+   *
+   * Read from the file rather than assumed, because the whole point of these
+   * tests is that a string in THIS repo describes a file in ANOTHER, and the
+   * only way that stays true is to go and look. Comments and blank lines inside
+   * the block are indented or empty, so they do not terminate it; the first
+   * column-0 line does.
+   */
+  const triggersOf = (yaml: string): string[] => {
+    const lines = yaml.split(/\r?\n/);
+    const i = lines.findIndex((l) => /^on:\s*$/.test(l));
+    if (i < 0) throw new Error('no top-level `on:` block — a workflow with no triggers cannot deploy anything');
+    const events: string[] = [];
+    for (const l of lines.slice(i + 1)) {
+      if (/^\S/.test(l)) break;
+      const m = /^ {2}([a-z_]+):/.exec(l);
+      if (m) events.push(m[1]);
+    }
+    if (events.length === 0) throw new Error('the `on:` block declares no events');
+    return events;
+  };
+
+  /** Events that fire WITHOUT a human — i.e. the lane deploys continuously. */
+  const AUTOMATIC = new Set(['push', 'workflow_run', 'schedule', 'pull_request', 'release']);
+
   for (const def of DEPLOY_PATHS.filter((p) => p.roll)) {
     describe(def.workflow, () => {
       const file = join(repoRoot, '.github', 'workflows', def.workflow);
@@ -905,6 +1072,42 @@ describe('roll parser matches the workflows it parses', () => {
 
       it('the run title still has the shape the parser assumes: <sha expr> … <trigger expr>', () => {
         expect(exprs.length, runName).toBe(2);
+      });
+
+      it('the lane\'s `why` does not contradict the workflow\'s OWN triggers', () => {
+        // THE DEFECT THIS EXISTS FOR. gov-console-roll.yml gained
+        // `push: branches: [main]` in #3745 (049349a9), and the Gov lane's
+        // `why` — the sentence rendered to the operator on /admin/readiness —
+        // went on saying the lane is "DISPATCH-ONLY … so a long gap since its
+        // last success is the normal state and not a bug in itself". Measured
+        // at the same SHA: 13 of the last 20 Gov roll runs were `push`, with
+        // six consecutive merge-triggered successes on 2026-08-19. So the
+        // banner was telling the operator to ignore precisely the failure this
+        // surface exists to catch, on the boundary that already spent 251
+        // commits behind main because nobody could see this lane.
+        //
+        // Two independent teeth, because a guard keyed to one phrase is a guard
+        // that survives a reword.
+        const events = triggersOf(yaml);
+        const automatic = events.filter((e) => AUTOMATIC.has(e));
+        expect(events.length, `${def.workflow} on: ${events.join(', ')}`).toBeGreaterThan(0);
+
+        const claimsNoAutoDeploy = /dispatch[- ]only|no continuous deploy|normal state|not a bug in itself/i
+          .test(def.why);
+        const namesItsAutomation = /push|merge|automatic/i.test(def.why);
+
+        if (automatic.length > 0) {
+          expect(claimsNoAutoDeploy, `${def.workflow} fires automatically on ${automatic.join(', ')}, so its `
+            + `\`why\` may not tell the operator a gap is normal: ${def.why}`).toBe(false);
+          expect(namesItsAutomation, `${def.workflow} fires automatically on ${automatic.join(', ')}, so its `
+            + `\`why\` must say what moves it: ${def.why}`).toBe(true);
+        } else {
+          // The mirror case, so this is a contract and not a one-way ratchet: a
+          // lane that genuinely only a human can start must SAY so, or the
+          // operator reads an ordinary quiet lane as a broken one.
+          expect(claimsNoAutoDeploy, `${def.workflow} has only ${events.join(', ')}, so its \`why\` must say `
+            + `a human has to start it: ${def.why}`).toBe(true);
+        }
       });
 
       it("the parser's trigger words are the workflow's OWN trigger words", () => {

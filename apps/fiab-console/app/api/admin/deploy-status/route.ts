@@ -341,10 +341,20 @@ async function resolveRollRegression(
     });
   }
 
-  const settle = (c: (typeof candidates)[number]) => classifyRollRegression({
+  const settle = (c: (typeof candidates)[number], jobCompletedAt?: string | null) => classifyRollRegression({
     ...common,
     rolledSha: c.sha,
-    rolledAt: c.run.updated_at ?? c.run.created_at ?? null,
+    // THE JOB'S COMPLETION, NOT THE RUN'S, WHEN WE HAVE PAID TO READ IT. The
+    // run's `updated_at` is when the whole run finished, which for a roll lane
+    // trails the `az containerapp update` that actually moved the estate — on
+    // the 2026-08-19 incident night by 4m45s (update 07:10:44, run completed
+    // 07:15:30). That stamp feeds `rolledAt`, which the classifier compares
+    // against the running image's build stamp, so using the late one biases
+    // toward a FALSE RED for any image built inside that window and shows the
+    // operator a roll time up to five minutes after the fact.
+    // scripts/ci/reconcile-policy.mjs (`selectLastConsoleRoll`) already orders
+    // on the job's completion for this exact reason and records the numbers.
+    rolledAt: jobCompletedAt || c.run.updated_at || c.run.created_at || null,
     rollRunUrl: c.run.html_url ?? null,
   });
 
@@ -353,10 +363,28 @@ async function resolveRollRegression(
   }
 
   const looked = candidates.slice(0, ROLL_JOB_LOOKBACK);
+  // COUNTED SEPARATELY, because the exit message below states a fact about
+  // these runs and may only state one it established. A candidate carrying no
+  // run id is never ASKED — there is no endpoint to ask — so it cannot be
+  // reported as one that "did not run its roll job". That is precisely the R7
+  // shape the `A failure to READ the jobs is not evidence` comment inside this
+  // loop forbids, committed by the loop that hosts it.
+  let checked = 0;
+  let unchecked = 0;
   for (const c of looked) {
-    if (!c.run.id) continue;
-    const jobs = await ghJson<{ jobs: { name?: string; conclusion?: string | null }[] }>(
-      `/repos/${REPO}/actions/runs/${c.run.id}/jobs?per_page=50`,
+    if (!c.run.id) { unchecked += 1; continue; }
+    checked += 1;
+    const jobs = await ghJson<{ total_count?: number; jobs: { name?: string; conclusion?: string | null; completed_at?: string | null }[] }>(
+      // per_page=100, GitHub's maximum, and the same bound the sibling
+      // implementation of this identical question already uses
+      // (.github/workflows/deploy-fiab-commercial.yml:1943). It was 50, which is
+      // a page this route could actually run off the end of: the roll lane's
+      // jobs are one gate + one roll today, but a matrix or a widened lane puts
+      // the roll job on page 2, and a page-1 miss used to look exactly like
+      // "this run did not roll" — settling on an older run and reporting
+      // `current` from a page that was never read. `total_count` is now checked
+      // as well, because a bound alone cannot prove the list was complete.
+      `/repos/${REPO}/actions/runs/${c.run.id}/jobs?per_page=100`,
     );
     // A failure to READ the jobs is not evidence the roll did not happen. Fail
     // closed on the whole verdict rather than skipping to an older run, which
@@ -378,14 +406,43 @@ async function resolveRollRegression(
       });
     }
     const rollJob = jobs.data.jobs.find((j) => (j.name ?? '').trim() === def.roll!.jobName);
-    if (rollJob?.conclusion === 'success') return settle(c);
+    if (rollJob?.conclusion === 'success') return settle(c, rollJob.completed_at ?? null);
+    // NOT FOUND ON THIS PAGE IS NOT "NOT PRESENT". If GitHub says the run has
+    // more jobs than it returned, the roll job's absence from what we read is
+    // an unread page, not an answer — and falling through to an older candidate
+    // on it would name the wrong roll as the effective one and report a green
+    // verdict off a page nobody looked at. Fail closed on the whole verdict,
+    // the same way an unreadable list does. A job that WAS found needs no such
+    // guard: truncation cannot unfind it.
+    const total = typeof jobs.data.total_count === 'number' ? jobs.data.total_count : null;
+    if (!rollJob && total !== null && jobs.data.jobs.length < total) {
+      return classifyRollRegression({
+        ...common,
+        error: `${def.workflow} run ${c.run.id} reports ${total} job(s) and only ${jobs.data.jobs.length} were `
+          + `returned, so whether its "${def.roll!.jobName}" job ran was NOT established — reading a truncated `
+          + 'page as "this run rolled nothing" would settle on an older roll from evidence that was never read',
+      });
+    }
   }
 
+  // Say only what was ESTABLISHED. `checked` runs were asked and answered "no";
+  // `unchecked` ones were never asked at all, and lumping them into the first
+  // number would assert a fact about a run this code never queried.
+  if (checked === 0) {
+    return classifyRollRegression({
+      ...common,
+      error: `none of the last ${looked.length} successful ${def.workflow} run(s) could be CHECKED — the Actions `
+        + 'listing carried no run id for any of them, so whether they rolled an image is unknown, not "they did not"',
+    });
+  }
   return classifyRollRegression({
     ...common,
-    error: `none of the last ${looked.length} successful ${def.workflow} run(s) actually ran `
-      + `its "${def.roll!.jobName}" job, so the last roll that truly shipped an image is older than `
-      + 'this window and was not identified',
+    error: `none of the last ${checked} successful ${def.workflow} run(s) that could be checked actually ran `
+      + `its "${def.roll!.jobName}" job`
+      + (unchecked
+        ? `, and a further ${unchecked} carried no run id so could not be checked at all`
+        : '')
+      + ', so the last roll that truly shipped an image is older than this window and was not identified',
   });
 }
 

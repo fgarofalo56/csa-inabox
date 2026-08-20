@@ -171,6 +171,13 @@ beforeEach(() => {
     // Step 2b's job lookback. Keyed by run id so a test can give the newest run
     // a SKIPPED roll job and an older one a successful roll job — the shape of
     // the 2026-08-17 run that concluded success having rolled nothing.
+    //
+    // THE STUB PAGINATES, because the route's `per_page` is a real bound and a
+    // stub that ignores it cannot see the route run off the end of a page. It
+    // answers the way the endpoint does: `total_count` is the run's WHOLE job
+    // count, `jobs` is at most `per_page` of them. A fixture may set an explicit
+    // `total_count` larger than the rows it supplies, which is the truncation
+    // case without needing a hundred filler rows.
     const jobs = /^\/repos\/[^/]+\/[^/]+\/actions\/runs\/([^/]+)\/jobs$/.exec(p);
     if (jobs) {
       const fixture = JOBS[jobs[1]];
@@ -185,7 +192,20 @@ beforeEach(() => {
       // `.find` run on undefined and throw — uncaught, that is a 500 for the
       // whole readiness panel rather than one unknown verdict.
       if (fixture === undefined || fixture === 'MALFORMED') return body([{ id: 1 }]);
-      return body(fixture);
+      // A 200 whose `jobs` is present but is an OBJECT, not an array. This is
+      // the ONLY shape that can tell `Array.isArray(jobs.data?.jobs)` apart from
+      // a plain truthiness check — under MALFORMED above, `data.jobs` is
+      // `undefined` and both guards degrade identically, so the suite could not
+      // see the difference and the mutation `!Array.isArray(x)` -> `!x` survived
+      // it. Here truthiness passes and `.find` is not a function, which throws
+      // uncaught and 500s the whole readiness panel.
+      if (fixture === 'JOBS_NOT_AN_ARRAY') return body({ total_count: 1, jobs: { 0: { name: 'x' } } });
+      const f = fixture as { jobs: unknown[]; total_count?: number };
+      const perPage = Number(new URL(u).searchParams.get('per_page') || 30);
+      return body({
+        total_count: f.total_count ?? f.jobs.length,
+        jobs: f.jobs.slice(0, perPage),
+      });
     }
     if (/^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/[^/]+$/.test(p)) {
       return body({ state: 'active' });
@@ -546,6 +566,26 @@ describe('the roll-regression lookback (step 2b)', () => {
     expect(body.rollRegression.detail).toContain('no job list returned');
   });
 
+  it('a 200 whose `jobs` is an OBJECT, not an array, also degrades instead of 500-ing', async () => {
+    // The `Array.isArray` guard's own mutation proof, and it was MISSING: the
+    // MALFORMED case above sends a bare JSON array, so `data.jobs` is undefined
+    // and `!Array.isArray(x)` and `!x` behave identically — mutating the guard
+    // to truthiness passed the whole suite. Only a body where `jobs` EXISTS but
+    // is not an array separates them: truthiness lets `.find` run on an object,
+    // which is a TypeError, uncaught, and therefore a 500 that takes the entire
+    // deploy panel off /admin/readiness over one odd body from GitHub.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z')];
+    JOBS['32225337320'] = 'JOBS_NOT_AN_ARRAY';
+
+    const res = await (GET as any)({} as never, {} as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.paths.length).toBeGreaterThan(0);
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.detail).toContain('no job list returned');
+  });
+
   it('stops after ROLL_JOB_LOOKBACK runs and says so, rather than guessing from a fourth', async () => {
     MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
     ROLL_RUNS[ROLL_LANE] = [
@@ -584,5 +624,140 @@ describe('the roll-regression lookback (step 2b)', () => {
       expect(u).not.toContain('user/repos');
       expect(new URL(u).pathname).toMatch(/^\/repos\/[^/]+\/[^/]+\/actions\/runs\/32225337320\/jobs$/);
     }
+  });
+
+  it('a candidate with NO run id is reported as UNCHECKED, never as one that did not roll', async () => {
+    // deploy-integrity R7, committed by the loop whose own comment forbids it.
+    // `if (!c.run.id) continue` skipped a candidate WITHOUT querying it, and the
+    // exit message then stated as fact that "none of the last N successful
+    // run(s) ACTUALLY RAN its 'Roll image + validate live URL' job". For a run
+    // that was never asked, that sentence asserts something this code did not
+    // establish — the same shape as the roll that reported "the tag does not
+    // exist" when the truth was "I could not reach the registry".
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    const noId = rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z') as Record<string, unknown>;
+    delete noId.id;
+    ROLL_RUNS[ROLL_LANE] = [noId];
+
+    const body = await run();
+    // Nothing was asked, so nothing may be claimed…
+    expect(jobsCalls()).toEqual([]);
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.detail).toMatch(/could be CHECKED|could not be checked/);
+    expect(body.rollRegression.detail).not.toContain('actually ran');
+    // …and it is emphatically not settled on either. A mutation that replaces
+    // the skip with `return settle(c)` names SHA_NEW as what shipped and
+    // convicts the estate of a regression it was never shown to be in.
+    expect(body.rollRegression.state).not.toBe('regressed');
+    expect(body.rollRegression.rolledSha).toBeNull();
+  });
+
+  it('an id-less candidate is counted apart from the ones that WERE checked', async () => {
+    // The mixed case: one run answered "no, I did not roll", one was never
+    // asked. The message has to keep those two apart or it launders an unknown
+    // into a measurement.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    const noId = rollRun(32225337321, SHA_NEW, '2026-08-19T06:50:00Z') as Record<string, unknown>;
+    delete noId.id;
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z'), noId];
+    JOBS['32225337320'] = { jobs: [{ name: ROLL_JOB, conclusion: 'skipped' }] };
+
+    const body = await run();
+    expect(jobsCalls().length).toBe(1);
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.detail).toContain('none of the last 1');
+    expect(body.rollRegression.detail).toContain('a further 1 carried no run id');
+  });
+
+  it('reads the WHOLE job list, not the first page of it', async () => {
+    // per_page was 50 with no total_count check, so a green verdict could come
+    // off a page that was never read: 50 non-roll jobs returned out of 60, the
+    // route concludes "this run did not roll", settles on an older run, and
+    // reports current/ok. Nothing pinned the bound — mutating it to per_page=1
+    // survived 100/100 green — so it is pinned here BEHAVIOURALLY: the roll job
+    // is the 60th of 60, and only a request that actually asks for the whole
+    // list finds it. The stub paginates, so a narrower bound returns a
+    // truncated page and this verdict changes.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [
+      rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z'),
+      rollRun(32220000000, SHA_OLD, '2026-08-19T05:59:00Z'),
+    ];
+    const filler = Array.from({ length: 59 }, (_, i) => ({ name: `matrix job ${i}`, conclusion: 'success' }));
+    JOBS['32225337320'] = {
+      jobs: [...filler, { name: ROLL_JOB, conclusion: 'success', completed_at: '2026-08-19T07:00:11Z' }],
+    };
+
+    const body = await run();
+    expect(jobsCalls().length).toBe(1);
+    expect(jobsCalls()[0]).toContain('per_page=100');
+    // It found the roll job on the page it asked for, so the newest run IS the
+    // effective roll and the estate is behind it.
+    expect(body.rollRegression.state).toBe('regressed');
+    expect(body.rollRegression.rolledSha).toBe(SHA_NEW);
+  });
+
+  it('a TRUNCATED job page is UNKNOWN — never a fall-through to an older roll', async () => {
+    // The demonstrated failure, exactly: page 1 carries 50 non-roll jobs out of
+    // a total_count of 60. Pre-fix the route read that as "this run did not
+    // roll", settled on the older run naming what the estate happens to be
+    // running, and returned state:'current', severity:'ok' — a green verdict
+    // drawn from a page it never read. "I did not see it" is not "it is not
+    // there" (deploy-integrity R7).
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [
+      rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z'),
+      rollRun(32220000000, SHA_OLD, '2026-08-19T05:59:00Z'),
+    ];
+    JOBS['32225337320'] = {
+      total_count: 60,
+      jobs: Array.from({ length: 50 }, (_, i) => ({ name: `matrix job ${i}`, conclusion: 'success' })),
+    };
+    JOBS['32220000000'] = { jobs: [{ name: ROLL_JOB, conclusion: 'success' }] };
+
+    const body = await run();
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.severity).toBe('warning');
+    expect(body.rollRegression.state).not.toBe('current');
+    expect(body.rollRegression.detail).toContain('NOT established');
+    expect(body.rollRegression.detail).toContain('60');
+    // And it stopped there — consulting the older run at all is the mistake.
+    expect(jobsCalls().length).toBe(1);
+    expect(jobsCalls().some((x) => x.includes('32220000000'))).toBe(false);
+  });
+
+  it('dates the roll from the JOB, not from the run — the 4m45s that makes a false red', async () => {
+    // Measured on the incident night and already recorded in
+    // scripts/ci/reconcile-policy.mjs: the `az containerapp update` landed at
+    // 07:10:44 and the RUN did not complete until 07:15:30. `updated_at` is the
+    // second number, so an image built at 07:12 — genuinely AFTER the roll —
+    // compares as older than it and the estate reads REGRESSED when the deploy
+    // path was simply working. The job's own completed_at is the write time and
+    // the route already has it in hand at this point.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T07:12:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:15:30Z')];
+    JOBS['32225337320'] = {
+      jobs: [{ name: ROLL_JOB, conclusion: 'success', completed_at: '2026-08-19T07:10:44Z' }],
+    };
+
+    const body = await run();
+    expect(body.rollRegression.rolledAt).toBe('2026-08-19T07:10:44Z');
+    expect(body.rollRegression.rolledAt).not.toBe('2026-08-19T07:15:30Z');
+    // The verdict, not just the field: this is the deploy path working.
+    expect(body.rollRegression.state).toBe('ahead');
+    expect(body.rollRegression.severity).toBe('ok');
+    expect(body.rollRegression.state).not.toBe('regressed');
+  });
+
+  it('falls back to the run stamp when the job carries no completion time', async () => {
+    // The job time is preferred, not required — a jobs payload without
+    // completed_at must still produce a dated verdict rather than an UNKNOWN.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z')];
+    JOBS['32225337320'] = { jobs: [{ name: ROLL_JOB, conclusion: 'success' }] };
+
+    const body = await run();
+    expect(body.rollRegression.rolledAt).toBe('2026-08-19T07:04:56Z');
+    expect(body.rollRegression.state).toBe('regressed');
   });
 });

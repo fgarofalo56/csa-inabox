@@ -246,8 +246,24 @@ export interface RunLite {
 /**
  * A run of a ROLL lane, narrowed to what "what did this actually ship" needs.
  *
- * `updated_at` rather than `created_at` orders these, because the question is
- * when the roll FINISHED writing to the estate, not when it was queued.
+ * `updated_at` rather than `created_at` orders these, because it is the closest
+ * thing to "when this run stopped writing" that a run LISTING carries — but be
+ * precise about what it is NOT. It is when the whole RUN finished, and for a
+ * roll lane that trails the `az containerapp update` that actually moved the
+ * estate: on the 2026-08-19 incident night by 4m45s (update 07:10:44, run
+ * completed 07:15:30). The measurement is recorded in
+ * scripts/ci/reconcile-policy.mjs (`selectLastConsoleRoll`), which orders on the
+ * JOB's completion for exactly this reason, and this comment used to assert the
+ * opposite of it — two files stating contradictory facts about the same field.
+ *
+ * So the division of labour is: this stamp ORDERS candidates, because it is all
+ * that is known before any job has been fetched, and the route REPLACES it with
+ * the roll job's own `completed_at` once it has read it (see `settle` in
+ * app/api/admin/deploy-status/route.ts). The residual, stated rather than
+ * hidden: if two roll runs finish close together and their run order disagrees
+ * with their job order, the candidate ORDER here can still name the wrong
+ * newest — closing that would cost a jobs call for every candidate in the
+ * lookback window even when the first one already answered.
  */
 export interface RollRunLite extends RunLite {
   id?: number;
@@ -348,7 +364,7 @@ export const DEPLOY_PATHS: DeployPathDef[] = [
   {
     workflow: 'gov-console-roll.yml',
     title: 'Console roll (build → this estate)',
-    why: 'The Gov ring that rolls the console onto a built image. It is DISPATCH-ONLY — Gov has no continuous deploy at all — so a long gap since its last success is the normal state and not a bug in itself. It is listed because the alternative is that the one lane that can move Government forward is the one lane nobody can see.',
+    why: 'The Gov ring that rolls the console onto a built image. Since #3745 it is PUSH-TRIGGERED on main — path-filtered to apps/fiab-console/** plus this lane\'s own scripts — so Government now has the continuous-deploy chain Commercial has, and a gap since the last success is NOT automatically fine here: it means either no console change has merged in that window, or this lane has stopped rolling. A FAILING run is a defect either way. Read it that way deliberately: until 2026-08-18 nothing rolled Gov but a human running this workflow by hand, and that is exactly how the Gov console came to sit 251 commits behind main on an image stamped a week earlier while every Commercial signal read green.',
     clouds: ['GCC-High', 'DoD', 'GCC'],
     roll: {
       jobName: 'Build + roll Gov console',
@@ -435,6 +451,14 @@ export interface RollCandidate {
  * because the image had not built, and the run reported success having deployed
  * nothing. That question costs an extra API call per run and is answered
  * separately, only when the cheap evidence is inconclusive.
+ *
+ * ORDERING IS ON THE RUN STAMP, WHICH IS NOT THE WRITE TIME — see RollRunLite.
+ * It is the only stamp a run LISTING carries, so it is what orders candidates;
+ * the route swaps in the roll job's own `completed_at` for the verdict once it
+ * has paid to read it. An UNMEASURABLE finish sorts LAST (`?? 0`), never first:
+ * a run with no stamp has not shown it is the newest, and letting it lead would
+ * hand "what the estate was last rolled to" to the candidate with the least
+ * evidence behind it.
  */
 export function rollCandidates(def: DeployPathDef, runs: RollRunLite[] | null): RollCandidate[] {
   if (!def.roll || !runs) return [];
@@ -473,6 +497,15 @@ export function rollCandidates(def: DeployPathDef, runs: RollRunLite[] | null): 
  *
  * An unmeasurable ordering (no build stamp, no run stamp) returns TRUE: when we
  * cannot show the cheap evidence is conclusive, we do not assume it is.
+ *
+ * THE TIE IS STRICT AND THAT IS THE LESS CONSERVATIVE DIRECTION, so it is said
+ * out loud rather than left for a later reader to discover. `finishedMs === builtMs`
+ * — an older roll that finished at the same instant this image was stamped — does
+ * NOT force the job check. It is a tie between two clocks at second granularity,
+ * and resolving it the other way would spend a call on every such coincidence.
+ * It is pinned by a test ("the tie … does NOT force the check") precisely because
+ * an unpinned boundary is one someone flips later without noticing which way it
+ * used to point.
  */
 export function rollNeedsJobCheck(input: {
   candidates: RollCandidate[];
@@ -804,6 +837,12 @@ export function classifyRollRegression(input: {
         + '(#3676), and it is reported as unknown rather than guessed in either direction.',
     };
   }
+  // STRICT `>`, so an exact tie falls THROUGH to `regressed` below. Stated
+  // because a boundary nobody names is a boundary that gets flipped: an image
+  // stamped at the same second the roll completed is not evidence the image
+  // came AFTER it, and between a false green and a false red on a tie this
+  // surface takes the red — it is the one that gets looked at. Pinned by a test
+  // ("a build stamped at the EXACT instant the roll completed …").
   if (builtMs > rolledMs) {
     return {
       ...base,
@@ -1049,4 +1088,38 @@ export function summarizeDeployStatus(
   };
   if (rollRegression) report.rollRegression = rollRegression;
   return report;
+}
+
+/**
+ * Which sentence belongs UNDER the banner headline, and which run link with it.
+ * PURE.
+ *
+ * WHY THIS IS A FUNCTION AND NOT TWO LINES OF JSX. The banner rendered
+ * `headline` from `summarizeDeployStatus` and the body from `estate.detail`,
+ * unconditionally — two different verdicts stitched together. Observed from one
+ * real response: the title read "This estate was rolled BACKWARDS off 150d2937"
+ * over the body "Running build 83e7cab6 (built …) — no commits behind main."
+ * The regression's own `detail`, `rolledSha`, `rolledAt` and `rollRunUrl` never
+ * reached the DOM at all, so the sentence under the loudest headline this
+ * surface can print was a DIFFERENT question's answer, and it read as
+ * reassurance — the #3676 incident explained away by its own dashboard.
+ *
+ * THE RULE: whoever owns the headline owns the body. `summarizeDeployStatus`
+ * decides that (a regression outranks everything; the route may then hand the
+ * headline to the fleet), so ownership is read back off the RENDERED headline
+ * rather than re-derived from severities here. Re-deriving it in a second place
+ * is exactly how the two halves came apart to begin with.
+ *
+ * Nothing is lost when the regression takes the body: the estate's own drift
+ * detail is still rendered per-estate in the fleet table below the banner.
+ */
+export function deployBannerBody(report: {
+  headline: string;
+  estate: Pick<EstateDrift, 'detail'>;
+  rollRegression?: RollRegression | null;
+}): { detail: string; rollRunUrl: string | null; ownedByRollRegression: boolean } {
+  const reg = report.rollRegression ?? null;
+  const owns = reg !== null && reg.headline === report.headline;
+  if (!owns) return { detail: report.estate.detail, rollRunUrl: null, ownedByRollRegression: false };
+  return { detail: reg!.detail, rollRunUrl: reg!.rollRunUrl ?? null, ownedByRollRegression: true };
 }
