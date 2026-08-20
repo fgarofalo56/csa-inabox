@@ -143,9 +143,26 @@ export interface DeployStatusReport {
   repo: string;
   estate: EstateDrift;
   paths: DeployPathHealth[];
-  /** Worst severity across the estate and every watched path. */
+  /** Worst severity across the estate, every watched path, and the fleet. */
   severity: DeploySeverity;
   headline: string;
+  /**
+   * WHICH VERDICT THE HEADLINE CAME FROM — the field `deployBannerBody` reads to
+   * decide what sentence belongs underneath it.
+   *
+   * It exists because the alternative was `reg.headline === report.headline`,
+   * i.e. deciding ownership by comparing two strings. That coupling is invisible
+   * and one-directional: the estate branch of `summarizeDeployStatus` already
+   * APPENDS to its headline ("… — and 2 deploy path(s) are failing"), so the day
+   * anyone decorates the regression headline the same way, the body silently
+   * reverts to the drift line — the exact defect this pair was written to fix —
+   * with no test going red. An owner tag cannot drift out of step with itself.
+   *
+   * Optional only for payload compatibility: a report deserialized from the
+   * pre-#3676 cache has no such field, and `deployBannerBody` must still answer
+   * for it. Every report this module PRODUCES sets it.
+   */
+  headlineOwner?: 'roll-regression' | 'estate' | 'paths' | 'fleet';
   /**
    * EVERY live estate, this cloud and its peers, each compared against main.
    * (#3730 — `estate` above can only ever describe the console answering the
@@ -248,22 +265,54 @@ export interface RunLite {
  *
  * `updated_at` rather than `created_at` orders these, because it is the closest
  * thing to "when this run stopped writing" that a run LISTING carries — but be
- * precise about what it is NOT. It is when the whole RUN finished, and for a
- * roll lane that trails the `az containerapp update` that actually moved the
- * estate: on the 2026-08-19 incident night by 4m45s (update 07:10:44, run
- * completed 07:15:30). The measurement is recorded in
- * scripts/ci/reconcile-policy.mjs (`selectLastConsoleRoll`), which orders on the
- * JOB's completion for exactly this reason, and this comment used to assert the
- * opposite of it — two files stating contradictory facts about the same field.
+ * precise about what it is NOT. It is when the whole RUN finished, and a roll
+ * lane does a great deal AFTER the `az containerapp update` that moves the
+ * estate. MEASURED FROM THE ACTIONS API, for the incident run itself
+ * (loom-roll-and-validate 32225337320, 2026-08-19):
+ *
+ *   step "Roll Container App to new image"     07:04:42Z -> 07:05:14Z
+ *   step "Wait for revision health"                      -> 07:06:09Z
+ *   step "Purge Front Door"                              -> 07:06:47Z
+ *   step "Validate live URL"                             -> 07:06:51Z
+ *   step "Gate — in-VNet UAT"                            -> 07:10:58Z
+ *   job  "Roll image + validate live URL"      completed_at 07:11:01Z
+ *   run  updated_at                                         07:11:02Z
+ *
+ * The estate's revision 0000782 was written at 07:04:56Z — inside the ROLL
+ * STEP's window and nowhere near either of the last two stamps. Every delta,
+ * computed rather than eyeballed:
+ *
+ *   write -> roll step end   0m18s
+ *   write -> job end         6m05s
+ *   write -> run end         6m06s
+ *   roll step end -> job     5m47s   <- the window this change closes
+ *   job -> run               0m01s   <- what moving run->job bought
+ *
+ * On gov-console-roll (run 32260846293) even that one second is zero: the lane
+ * has a single job, so its completion IS the run's, both 14:14:43Z. Structural
+ * rather than luck — a run cannot outlast its last job by more than teardown.
+ *
+ * AN EARLIER REVISION OF THIS COMMENT CLAIMED 4m45s, "(update 07:10:44, run
+ * completed 07:15:30)". Neither stamp appears in any run, job or step record of
+ * 32225337320, nor of the reconcile run 32225183031, and the gap it described
+ * was between the wrong two things. It is recorded here rather than silently
+ * corrected because asserting a number nothing established is the same R7 defect
+ * this surface exists to catch. THE SAME FIGURE IS STILL CARRIED BY
+ * scripts/ci/reconcile-policy.mjs (`selectLastConsoleRoll`'s ordering note, and
+ * again in the overlap-window doc) — a file outside this change, so it is
+ * reported here rather than quietly papered over.
  *
  * So the division of labour is: this stamp ORDERS candidates, because it is all
  * that is known before any job has been fetched, and the route REPLACES it with
- * the roll job's own `completed_at` once it has read it (see `settle` in
- * app/api/admin/deploy-status/route.ts). The residual, stated rather than
- * hidden: if two roll runs finish close together and their run order disagrees
- * with their job order, the candidate ORDER here can still name the wrong
- * newest — closing that would cost a jobs call for every candidate in the
- * lookback window even when the first one already answered.
+ * the roll STEP's own `completed_at` once it has paid to read the jobs payload
+ * (see `rollWroteAt` in app/api/admin/deploy-status/route.ts). The STEP, not the
+ * job, because the step is the one that brackets the estate write; the job's
+ * completion sits on the far side of health-wait, Front Door purge, live-URL
+ * validation and the in-VNet UAT gate. The residual, stated rather than hidden:
+ * if two roll runs finish close together and their run order disagrees with
+ * their step order, the candidate ORDER here can still name the wrong newest —
+ * closing that would cost a jobs call for every candidate in the lookback window
+ * even when the first one already answered.
  */
 export interface RollRunLite extends RunLite {
   id?: number;
@@ -316,9 +365,34 @@ export interface DeployPathDef {
    * name a floating tag ('latest', a prefix), and the sha it resolved to lives
    * only inside that run. Comparing a floating name to a commit sha would be a
    * fabricated verdict.
+   *
+   * `stepName` is the step INSIDE that job which performs the
+   * `az containerapp update` — i.e. the one whose completion brackets the moment
+   * the estate changed. It is what dates the verdict, and it costs nothing extra:
+   * the Actions jobs payload the route already fetches carries `.steps[]`.
+   *
+   * WHY THE STEP AND NOT THE JOB. Measured on run 32225337320 (see RollRunLite):
+   * the roll step ended 07:05:14Z, and the JOB did not end until 07:11:01Z —
+   * 5m47s later, after the revision-health wait, the Front Door purge, the
+   * live-URL check and a four-minute in-VNet UAT gate. Dating the roll from the
+   * job puts `rolledAt` 6m05s after the write, and an image built inside that
+   * window — genuinely NEWER than the roll — compares as older and reads
+   * `regressed`. That false red is the thing this field removes.
+   *
+   * It cannot buy a false GREEN in exchange: an image whose build stamp is later
+   * than the write must have been rolled after the write (nothing can deploy an
+   * image before it is built), so `ahead` is the true verdict in exactly the
+   * cases this moves.
+   *
+   * Required, not optional, so a new roll lane cannot be added without saying
+   * which of its steps is the writer. The step is verified to still exist by a
+   * contract test in lib/admin/__tests__/deploy-status.test.ts; if it is renamed
+   * out from under us the route falls back to the job's completion — the older,
+   * coarser behaviour — rather than losing the verdict, and CI goes red.
    */
   roll?: {
     jobName: string;
+    stepName: string;
     shaFrom: 'title' | 'headSha';
     titlePattern?: RegExp;
   };
@@ -355,6 +429,9 @@ export const DEPLOY_PATHS: DeployPathDef[] = [
     clouds: ['Commercial'],
     roll: {
       jobName: 'Roll image + validate live URL',
+      // The `az containerapp update` itself — .github/workflows/
+      // loom-roll-and-validate.yml, `- name: Roll Container App to new image`.
+      stepName: 'Roll Container App to new image',
       shaFrom: 'title',
       // .github/workflows/loom-roll-and-validate.yml run-name:
       //   roll ${{ …head_sha || inputs.image_tag }} (build-triggered | manual dispatch)
@@ -368,6 +445,13 @@ export const DEPLOY_PATHS: DeployPathDef[] = [
     clouds: ['GCC-High', 'DoD', 'GCC'],
     roll: {
       jobName: 'Build + roll Gov console',
+      // Gov collapses build and roll into one job, so the write lives in
+      // `- name: Roll loom-console + health-gate`. It brackets the write more
+      // loosely than Commercial's step does (the health gate is inside it), but
+      // it is never worse than the job: measured on run 32260846293 the step
+      // ended 14:14:40Z and the job 14:14:43Z, three seconds apart, because a
+      // single-job run's completion is the run's own.
+      stepName: 'Roll loom-console + health-gate',
       shaFrom: 'headSha',
       // .github/workflows/gov-console-roll.yml run-name:
       //   gov-console-roll ${{ github.sha }} (merge-triggered | manual dispatch)
@@ -1033,8 +1117,8 @@ export function worstSeverity(severities: DeploySeverity[]): DeploySeverity {
 }
 
 /**
- * Roll the estate verdict + every lane verdict into the single line the banner
- * shows. PURE.
+ * Roll the estate verdict, every lane verdict, the roll regression AND the fleet
+ * into the single line the banner shows. PURE.
  *
  * The headline names the WORST fact, because a banner that averages is a banner
  * that gets ignored — and being ignored is the failure mode this whole control
@@ -1046,45 +1130,86 @@ export function worstSeverity(severities: DeploySeverity[]): DeploySeverity {
  * itself on the next successful run, because the last successful run is what
  * undid it. `rollRegression` is optional so a caller that cannot measure it
  * omits it entirely rather than passing a fabricated healthy verdict.
+ *
+ * THE FLEET IS DECIDED HERE, NOT BY THE CALLER, and that is the point of the
+ * fifth parameter. The route used to apply the peer-cloud override itself,
+ * AFTER this function had returned:
+ *
+ *   headline: fleet.severity === 'error' && base.severity !== 'error'
+ *     ? fleet.headline : base.headline
+ *
+ * — so there were THREE owners of the headline and only two of them went through
+ * the function `deployBannerBody` reads ownership from. A healthy Commercial
+ * estate with a stale Gov peer (`rollRegression:'current'`, `base.severity:'ok'`,
+ * `fleet.severity:'error'`) therefore rendered "Azure Government is 251 commits
+ * behind main" over the body "Running build … — no commits behind main": the
+ * identical headline/body mismatch this pair exists to prevent, still live for
+ * the #3730 case. One function decides, so there is one answer.
+ *
+ * `fleet` is optional on the same reasoning as `rollRegression`: a caller that
+ * did not measure the peer clouds omits it rather than passing a green verdict
+ * for estates it never read.
  */
 export function summarizeDeployStatus(
   estate: EstateDrift,
   paths: DeployPathHealth[],
   meta: { generatedAt: string; repo: string },
   rollRegression?: RollRegression | null,
+  fleet?: { severity: DeploySeverity; headline: string } | null,
 ): DeployStatusReport {
-  const severity = worstSeverity([
+  const localSeverity = worstSeverity([
     estate.severity,
     ...paths.map((p) => p.severity),
     ...(rollRegression ? [rollRegression.severity] : []),
   ]);
+  const severity = worstSeverity([localSeverity, ...(fleet ? [fleet.severity] : [])]);
   const broken = paths.filter((p) => p.severity === 'error');
   const degraded = paths.filter((p) => p.severity === 'warning');
 
   let headline: string;
+  let headlineOwner: NonNullable<DeployStatusReport['headlineOwner']>;
   if (rollRegression?.severity === 'error') {
     headline = rollRegression.headline;
+    headlineOwner = 'roll-regression';
   } else if (estate.severity === 'error') {
     headline = broken.length
       ? `${estate.headline} — and ${broken.length} deploy path(s) are failing or switched off`
       : estate.headline;
+    headlineOwner = 'estate';
   } else if (broken.length) {
     const first = broken[0];
     headline = broken.length === 1
       ? `Deploy path broken: ${first.title}`
       : `${broken.length} deploy paths are failing or switched off, including ${first.title}`;
+    headlineOwner = 'paths';
   } else if (estate.severity === 'warning') {
     headline = estate.headline;
+    headlineOwner = 'estate';
   } else if (degraded.length) {
     headline = `${degraded.length} deploy path(s) need attention`;
+    headlineOwner = 'paths';
   } else if (rollRegression?.severity === 'warning') {
     headline = rollRegression.headline;
+    headlineOwner = 'roll-regression';
   } else {
     headline = estate.headline;
+    headlineOwner = 'estate';
+  }
+
+  // A PEER CLOUD BEING BROKEN OUTRANKS "THIS ESTATE IS FINE" — the operator
+  // reading this page is responsible for both, and #3730 is precisely the case
+  // where every local signal was green. It does NOT outrank a local error: a
+  // regression or a broken lane here is not made less urgent by Gov also being
+  // behind, and swapping the line would hide it. Byte-identical to the condition
+  // the route applied before this moved (`fleet.severity === 'error' &&
+  // base.severity !== 'error'`) — what changed is that the OWNER is recorded.
+  if (fleet && fleet.severity === 'error' && localSeverity !== 'error') {
+    headline = fleet.headline;
+    headlineOwner = 'fleet';
   }
 
   const report: DeployStatusReport = {
-    generatedAt: meta.generatedAt, repo: meta.repo, estate, paths, severity, headline,
+    generatedAt: meta.generatedAt, repo: meta.repo, estate, paths, severity, headline, headlineOwner,
   };
   if (rollRegression) report.rollRegression = rollRegression;
   return report;
@@ -1105,21 +1230,37 @@ export function summarizeDeployStatus(
  * reassurance — the #3676 incident explained away by its own dashboard.
  *
  * THE RULE: whoever owns the headline owns the body. `summarizeDeployStatus`
- * decides that (a regression outranks everything; the route may then hand the
- * headline to the fleet), so ownership is read back off the RENDERED headline
- * rather than re-derived from severities here. Re-deriving it in a second place
- * is exactly how the two halves came apart to begin with.
+ * decides that — a regression outranks everything local, and a broken PEER cloud
+ * outranks a healthy local estate — and it now RECORDS the decision in
+ * `headlineOwner` rather than leaving it to be re-derived here.
+ *
+ * IT USED TO BE RE-DERIVED, BY STRING EQUALITY: `reg.headline ===
+ * report.headline`. Two things were wrong with that. It missed a THIRD owner
+ * entirely — the route applied the fleet override after this function had run,
+ * so a healthy Commercial estate with a stale Gov peer printed "Azure Government
+ * is 251 commits behind main" over "Running build … — no commits behind main",
+ * the same mismatch one cloud over. And it coupled the body to the exact BYTES
+ * of a headline that a sibling branch already decorates ("… — and 2 deploy
+ * path(s) are failing"): the day anyone decorates the regression headline the
+ * same way, the body silently reverts to the drift line with nothing going red.
+ *
+ * The string comparison survives ONLY as a fallback for a payload deserialized
+ * from a cache written before `headlineOwner` existed — never as the primary
+ * path, and never for a report this module produced.
  *
  * Nothing is lost when the regression takes the body: the estate's own drift
  * detail is still rendered per-estate in the fleet table below the banner.
  */
 export function deployBannerBody(report: {
   headline: string;
+  headlineOwner?: DeployStatusReport['headlineOwner'];
   estate: Pick<EstateDrift, 'detail'>;
   rollRegression?: RollRegression | null;
 }): { detail: string; rollRunUrl: string | null; ownedByRollRegression: boolean } {
   const reg = report.rollRegression ?? null;
-  const owns = reg !== null && reg.headline === report.headline;
+  const owns = reg !== null && (report.headlineOwner
+    ? report.headlineOwner === 'roll-regression'
+    : reg.headline === report.headline);
   if (!owns) return { detail: report.estate.detail, rollRunUrl: null, ownedByRollRegression: false };
   return { detail: reg!.detail, rollRunUrl: reg!.rollRunUrl ?? null, ownedByRollRegression: true };
 }

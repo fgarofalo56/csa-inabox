@@ -716,6 +716,87 @@ describe('deployBannerBody — whoever owns the headline owns the body', () => {
     expect(body.detail).toBe(unknown.detail);
     expect(body.ownedByRollRegression).toBe(true);
   });
+
+  it('THE #3730 CASE: a stale PEER cloud takes the headline and does NOT get the regression body', () => {
+    // THE THIRD OWNER. The route used to apply this override itself, after
+    // summarizeDeployStatus had returned, so `deployBannerBody` — which decided
+    // ownership by comparing the regression's headline to the report's — could
+    // not see it. Healthy Commercial + healthy lanes + a CURRENT roll + a stale
+    // Gov peer rendered "Azure Government is 251 commits behind main" over
+    // "Running build … — no commits behind main". That is untrue of Gov and
+    // irrelevant to Commercial: the identical mismatch #3676 fixed one cloud over.
+    const ok = classifyEstateDrift({
+      buildSha: SHA, repo: REPO, compare: { status: 'identical', ahead_by: 0, behind_by: 0 },
+    });
+    const current = classifyRollRegression({
+      estateSha: SHA, estateStamp: '2026-08-19T06:58:00Z',
+      rolledSha: SHA, rolledAt: '2026-08-19T07:05:14Z',
+      rollRunUrl: 'https://github.com/x/y/actions/runs/1',
+    });
+    const fleet = { severity: 'error' as const, headline: 'Azure Government is 251 commits behind main' };
+    const report = summarizeDeployStatus(ok, [], { generatedAt: 'x', repo: REPO }, current, fleet);
+
+    expect(report.headline).toBe(fleet.headline);
+    expect(report.headlineOwner).toBe('fleet');
+    expect(report.severity).toBe('error'); // the peer's error is not averaged away
+    const body = deployBannerBody(report);
+    // The body belongs to the estate line, NOT to the roll regression — which
+    // would have read as an explanation of the Gov headline above it.
+    expect(body.ownedByRollRegression).toBe(false);
+    expect(body.detail).toBe(ok.detail);
+    expect(body.rollRunUrl).toBeNull();
+  });
+
+  it('a LOCAL error still outranks a stale peer — the fleet does not bury a regression', () => {
+    // The mirror, so the override is not a one-way ratchet: Gov being behind
+    // does not make a Commercial revert less urgent, and swapping the line
+    // would hide the loudest thing this banner can say.
+    const ok = classifyEstateDrift({
+      buildSha: SHA, repo: REPO, compare: { status: 'identical', ahead_by: 0, behind_by: 0 },
+    });
+    const fleet = { severity: 'error' as const, headline: 'Azure Government is 251 commits behind main' };
+    const report = summarizeDeployStatus(ok, [], { generatedAt: 'x', repo: REPO }, reverted, fleet);
+
+    expect(report.headline).toBe(reverted.headline);
+    expect(report.headlineOwner).toBe('roll-regression');
+    const body = deployBannerBody(report);
+    expect(body.ownedByRollRegression).toBe(true);
+    expect(body.detail).toBe(reverted.detail);
+  });
+
+  it('ownership survives a DECORATED headline — it is a tag, not a string comparison', () => {
+    // The coupling that used to decide this: `reg.headline === report.headline`.
+    // The estate branch already appends to its own headline ("… — and 2 deploy
+    // path(s) are failing"), so the day anyone decorates the regression headline
+    // the same way, the body silently reverts to the drift line and no test goes
+    // red. Asserted directly rather than left to a future author to discover.
+    const decorated = { ...reverted, headline: `${reverted.headline} — and 1 deploy path is failing` };
+    const body = deployBannerBody({
+      headline: decorated.headline,
+      headlineOwner: 'roll-regression',
+      estate: behind,
+      rollRegression: decorated,
+    });
+    expect(body.detail).toBe(decorated.detail);
+    expect(body.ownedByRollRegression).toBe(true);
+
+    // CONTROL — the pre-tag fallback is what a cache payload written before this
+    // field existed still gets, and on THAT path the decorated headline is
+    // exactly the case that fails. Kept so the fallback's limits are stated, not
+    // implied: it is a compatibility shim, never the primary path.
+    const legacy = deployBannerBody({
+      headline: decorated.headline,
+      estate: behind,
+      rollRegression: decorated,
+    });
+    expect(legacy.ownedByRollRegression).toBe(true); // headline still matches itself here
+    const legacyMismatch = deployBannerBody({
+      headline: `${reverted.headline} — and 1 deploy path is failing`,
+      estate: behind,
+      rollRegression: reverted,
+    });
+    expect(legacyMismatch.ownedByRollRegression).toBe(false); // the silent revert
+  });
 });
 
 /**
@@ -1061,6 +1142,142 @@ describe('roll parser matches the workflows it parses', () => {
   /** Events that fire WITHOUT a human — i.e. the lane deploys continuously. */
   const AUTOMATIC = new Set(['push', 'workflow_run', 'schedule', 'pull_request', 'release']);
 
+  /**
+   * The vocabulary that ASSERTS a given automatic trigger, keyed by the event
+   * name the WORKFLOW declares.
+   *
+   * Keyed off the file rather than being one flat "does it say push/merge/
+   * automatic anywhere" list, because that flat list was the hole: it asked
+   * whether a WORD appears, and a word appears just as readily inside its own
+   * denial. An event with no entry here is a deliberate hard failure below —
+   * a trigger this table has never heard of is exactly the drift these contract
+   * tests exist to catch, and silently passing it would be a guard with zero
+   * population on the one case that matters.
+   */
+  const ASSERTS_TRIGGER: Record<string, RegExp> = {
+    push: /\bpush(es|ed)?\b|\bmerges?\b|\bmerged\b/i,
+    workflow_run: /\bmerges?\b|\bmerged\b|\bbuilds?\b|\bbuilt\b|\bworkflow[_ ]run\b/i,
+    schedule: /\bschedul\w*\b|\bnightly\b|\bcron\b/i,
+    pull_request: /\bpull request\b|\bPR\b/,
+    release: /\breleases?\b|\breleased\b/i,
+  };
+
+  /**
+   * Phrases that tell the operator a gap in this lane is nothing to worry about.
+   *
+   * DELIBERATELY NOT EXTENDED WITH "by hand" / "only a human". Both appear in
+   * the Gov lane's CURRENT, correct `why` — "until 2026-08-18 nothing rolled Gov
+   * but a human running this workflow by hand" — as recorded HISTORY, and a
+   * phrase list cannot tell a past-tense account from a present-tense claim.
+   * Banning them would fail the true text and reward deleting the history that
+   * explains why this lane is watched at all. The negation-aware tooth below is
+   * what catches those rewordings, and it catches them without reading tense.
+   */
+  const CLAIMS_NO_AUTO_DEPLOY =
+    /dispatch[- ]only|no continuous deploy|normal state|not a bug in itself|does not (run|fire|trigger) on\b|is not (push|merge|schedule|build)[- ]triggered\b/i;
+
+  /**
+   * Words that flip the clause containing them from a claim into its denial.
+   *
+   * Bare "only" is deliberately absent: "the only lane that rolls on merge" is a
+   * true assertion of automation, and a guard that fails a correct sentence gets
+   * the guard weakened rather than the sentence fixed. The compound form
+   * (`dispatch-only`) is caught by CLAIMS_NO_AUTO_DEPLOY above.
+   */
+  const NEGATOR =
+    /\b(no|not|never|none|nothing|nobody|neither|nor|without|cannot|can't|isn't|wasn't|aren't|doesn't|didn't|won't|stopped|ceased)\b|\b\S+-only\b/i;
+
+  /**
+   * `why` split into clauses, so a negation binds only what it governs.
+   *
+   * Sentence, colon, semicolon, comma, bracket and dash boundaries — the dash
+   * cases matter most, because "It does not run on push - only a human … " is
+   * precisely the shape that defeated the whole-string test.
+   */
+  const clausesOf = (why: string): string[] =>
+    why.split(/[.;:,()]|—|–|\s-{1,2}\s/).map((s) => s.trim()).filter(Boolean);
+
+  /**
+   * Does `why` name `word` in a clause that ASSERTS it rather than denies it?
+   *
+   * THE DEFECT THIS REPLACES, stated so it is not reintroduced: the old tooth
+   * was `/push|merge|automatic/i.test(def.why)`, a bare substring test that a
+   * negation satisfies. This `why` passed the entire suite, 116/116, RC=0:
+   *
+   *   "The Gov ring that rolls the console onto a built image. It does not run
+   *    on push - only a human dispatching this workflow by hand moves Government
+   *    forward - so a quiet lane here is expected and is not in itself a defect."
+   *
+   * `claimsNoAutoDeploy` was false (no listed phrase) and `namesItsAutomation`
+   * was TRUE — because "push" occurs inside "does not run on push". The banner
+   * would have rendered the exact false claim the original defect was about, in
+   * the exact direction that re-arms #3730, with CI green. Same shape as this
+   * repo's `Does not close #N` -> closes-#N parser, which also ignored negation.
+   * It is pinned as a fixture below, not just described here.
+   */
+  const assertsUnnegated = (why: string, word: RegExp): boolean =>
+    clausesOf(why).some((c) => word.test(c) && !NEGATOR.test(c));
+
+  /**
+   * The whole verdict for one `why` against one workflow's declared events, so
+   * the real lanes and the adversarial fixtures below go through IDENTICAL code.
+   * A fixture that exercises a re-implementation of the check proves nothing
+   * about the check.
+   */
+  const whyVerdict = (why: string, events: string[]) => {
+    const automatic = events.filter((e) => AUTOMATIC.has(e));
+    const unknown = automatic.filter((e) => !(e in ASSERTS_TRIGGER));
+    const missing = automatic.filter((e) => !assertsUnnegated(why, ASSERTS_TRIGGER[e]));
+    return {
+      automatic,
+      unknown,
+      missing,
+      claimsNoAutoDeploy: CLAIMS_NO_AUTO_DEPLOY.test(why),
+      namesItsAutomation: automatic.length > 0 && unknown.length === 0 && missing.length === 0,
+    };
+  };
+
+  it('the `why` contract rejects a reworded-but-still-false claim (the negation hole)', () => {
+    // The fixture table is the teeth. Each string below is a plausible rewording
+    // of the Gov lane's `why` that is FALSE of a push-triggered lane, and every
+    // one of them passed the previous whole-string test.
+    const PUSH_LANE = ['push', 'workflow_dispatch'];
+    const FALSE_OF_AN_AUTOMATIC_LANE = [
+      // The measured survivor: "push" inside "does not run on push".
+      'The Gov ring that rolls the console onto a built image. It does not run on push - only a human '
+        + 'dispatching this workflow by hand moves Government forward - so a quiet lane here is expected and is '
+        + 'not in itself a defect.',
+      // The same trick with the other word, and without the phrase list's help.
+      'The Gov ring that rolls the console. Nothing about a merge starts it; a person has to.',
+      // Negation by "without", no listed phrase anywhere.
+      'The Gov ring that rolls the console without any push trigger at all, so silence here means nobody has '
+        + 'run it lately.',
+      // Says nothing about what moves it — the mirror failure, a `why` that is
+      // not false so much as empty. An operator cannot read a gap correctly
+      // from it either.
+      'The Gov ring that rolls the console onto a built image.',
+    ];
+    for (const why of FALSE_OF_AN_AUTOMATIC_LANE) {
+      const v = whyVerdict(why, PUSH_LANE);
+      expect(v.automatic, why).toEqual(['push']); // population guard
+      expect(v.namesItsAutomation, `this \`why\` must NOT read as naming its automation: ${why}`).toBe(false);
+    }
+
+    // CONTROL, so the fixtures above are not passing because the predicate is
+    // simply always false: the real Gov text, and a minimal true rewording, both
+    // satisfy it.
+    const TRUE_OF_AN_AUTOMATIC_LANE = [
+      DEPLOY_PATHS.find((p) => p.workflow === 'gov-console-roll.yml')!.why,
+      'The Gov ring that rolls the console. It runs on every push to main, so a gap means either nothing '
+        + 'merged or this lane stopped rolling.',
+    ];
+    for (const why of TRUE_OF_AN_AUTOMATIC_LANE) {
+      const v = whyVerdict(why, PUSH_LANE);
+      expect(v.namesItsAutomation, `this \`why\` DOES name its automation: ${why}`).toBe(true);
+      expect(v.claimsNoAutoDeploy, `this \`why\` does not tell the operator to ignore a gap: ${why}`).toBe(false);
+    }
+  });
+
   for (const def of DEPLOY_PATHS.filter((p) => p.roll)) {
     describe(def.workflow, () => {
       const file = join(repoRoot, '.github', 'workflows', def.workflow);
@@ -1087,25 +1304,30 @@ describe('roll parser matches the workflows it parses', () => {
         // commits behind main because nobody could see this lane.
         //
         // Two independent teeth, because a guard keyed to one phrase is a guard
-        // that survives a reword.
+        // that survives a reword. The SECOND tooth is negation-aware and its
+        // vocabulary comes from the workflow's own `on:` block — the first cut
+        // of it was `/push|merge|automatic/i.test(def.why)`, which a denial
+        // satisfies as readily as an assertion. See `assertsUnnegated`.
         const events = triggersOf(yaml);
-        const automatic = events.filter((e) => AUTOMATIC.has(e));
+        const v = whyVerdict(def.why, events);
         expect(events.length, `${def.workflow} on: ${events.join(', ')}`).toBeGreaterThan(0);
+        // An automatic trigger this table cannot check is a hard failure, not a
+        // pass: a guard that silently has nothing to say about a new event is
+        // how the previous one came to be green on a false sentence.
+        expect(v.unknown, `${def.workflow} declares automatic trigger(s) with no entry in ASSERTS_TRIGGER — `
+          + 'add one rather than letting the contract go unchecked').toEqual([]);
 
-        const claimsNoAutoDeploy = /dispatch[- ]only|no continuous deploy|normal state|not a bug in itself/i
-          .test(def.why);
-        const namesItsAutomation = /push|merge|automatic/i.test(def.why);
-
-        if (automatic.length > 0) {
-          expect(claimsNoAutoDeploy, `${def.workflow} fires automatically on ${automatic.join(', ')}, so its `
+        if (v.automatic.length > 0) {
+          expect(v.claimsNoAutoDeploy, `${def.workflow} fires automatically on ${v.automatic.join(', ')}, so its `
             + `\`why\` may not tell the operator a gap is normal: ${def.why}`).toBe(false);
-          expect(namesItsAutomation, `${def.workflow} fires automatically on ${automatic.join(', ')}, so its `
-            + `\`why\` must say what moves it: ${def.why}`).toBe(true);
+          expect(v.namesItsAutomation, `${def.workflow} fires automatically on ${v.automatic.join(', ')}, so its `
+            + `\`why\` must name ${v.missing.join(', ') || 'each of them'} in a clause that ASSERTS it — a mention `
+            + `inside its own denial does not count: ${def.why}`).toBe(true);
         } else {
           // The mirror case, so this is a contract and not a one-way ratchet: a
           // lane that genuinely only a human can start must SAY so, or the
           // operator reads an ordinary quiet lane as a broken one.
-          expect(claimsNoAutoDeploy, `${def.workflow} has only ${events.join(', ')}, so its \`why\` must say `
+          expect(v.claimsNoAutoDeploy, `${def.workflow} has only ${events.join(', ')}, so its \`why\` must say `
             + `a human has to start it: ${def.why}`).toBe(true);
         }
       });
@@ -1139,6 +1361,19 @@ describe('roll parser matches the workflows it parses', () => {
         // is ever confirmed → the whole verdict degrades to UNKNOWN.
         const declared = [...yaml.matchAll(/^\s{4}name:\s*(.+?)\s*$/gm)].map((m) => m[1].replace(/^['"]|['"]$/g, ''));
         expect(declared, `job names declared in ${def.workflow}`).toContain(def.roll!.jobName);
+      });
+
+      it(`the workflow still declares a STEP named "${def.roll!.stepName}"`, () => {
+        // The step whose completion DATES the roll. A rename here does not lose
+        // the verdict — the route falls back to the job's completion — but it
+        // silently reopens the 5m47s false-red window measured on run
+        // 32225337320 (roll step 07:05:14Z, job 07:11:01Z), and a window that
+        // reopens with nothing going red is how this file's other contracts came
+        // to need writing.
+        const declared = [...yaml.matchAll(/^\s{6,}- name:\s*(.+?)\s*$/gm)]
+          .map((m) => m[1].replace(/^['"]|['"]$/g, ''));
+        expect(declared.length, `step names declared in ${def.workflow}`).toBeGreaterThan(0);
+        expect(declared, `step names declared in ${def.workflow}`).toContain(def.roll!.stepName);
       });
     });
   }

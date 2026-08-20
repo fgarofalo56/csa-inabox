@@ -200,6 +200,18 @@ beforeEach(() => {
       // it. Here truthiness passes and `.find` is not a function, which throws
       // uncaught and 500s the whole readiness panel.
       if (fixture === 'JOBS_NOT_AN_ARRAY') return body({ total_count: 1, jobs: { 0: { name: 'x' } } });
+      // A 200 with a well-formed `jobs` array and NO `total_count` at all.
+      // Separated from every other fixture because it is the only one that can
+      // tell `total !== null && len < total` apart from `total === null ||
+      // len < total`: with a total present both read alike, and the truncation
+      // guard's absent-total branch fell straight through to an older candidate
+      // and returned a GREEN verdict off a page whose completeness was never
+      // established. Note this body carries a NON-roll job, so the fall-through
+      // is reachable — a body with the roll job in it would settle before the
+      // guard is consulted at all.
+      if (fixture === 'NO_TOTAL_COUNT') {
+        return body({ jobs: [{ name: 'Should this roll proceed?', conclusion: 'success' }] });
+      }
       const f = fixture as { jobs: unknown[]; total_count?: number };
       const perPage = Number(new URL(u).searchParams.get('per_page') || 30);
       return body({
@@ -472,6 +484,8 @@ describe('the roll-regression lookback (step 2b)', () => {
   const SHA_OLD = '83e7cab6bb2c5d6e7f8091a2b3c4d5e6f7081920';
   const ROLL_LANE = 'loom-roll-and-validate.yml';
   const ROLL_JOB = 'Roll image + validate live URL';
+  /** The step INSIDE that job that runs `az containerapp update`. */
+  const ROLL_STEP = 'Roll Container App to new image';
 
   /** A run of the Commercial roll lane, titled the way the workflow titles it. */
   const rollRun = (id: number, sha: string, finishedAt: string) => ({
@@ -726,30 +740,150 @@ describe('the roll-regression lookback (step 2b)', () => {
     expect(jobsCalls().some((x) => x.includes('32220000000'))).toBe(false);
   });
 
-  it('dates the roll from the JOB, not from the run — the 4m45s that makes a false red', async () => {
-    // Measured on the incident night and already recorded in
-    // scripts/ci/reconcile-policy.mjs: the `az containerapp update` landed at
-    // 07:10:44 and the RUN did not complete until 07:15:30. `updated_at` is the
-    // second number, so an image built at 07:12 — genuinely AFTER the roll —
-    // compares as older than it and the estate reads REGRESSED when the deploy
-    // path was simply working. The job's own completed_at is the write time and
-    // the route already has it in hand at this point.
-    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T07:12:00Z' };
-    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:15:30Z')];
+  it('a job page with NO total_count is UNKNOWN too — an absent total is not proof of completeness', async () => {
+    // THE SAME DEFECT, ONE BRANCH OVER. The truncation guard read
+    // `total !== null && jobs.length < total`, so a 200 that carried `jobs` but
+    // no `total_count` made `total` null, made the guard INERT, and fell through
+    // to an older candidate — state:'current', severity:'ok', off a page whose
+    // completeness was never established. Measured against this exact fixture
+    // before the fix: `expected 'current' to be 'unknown'`.
+    //
+    // "GitHub always sends total_count" is not the standard this file holds
+    // itself to six lines earlier, where `Array.isArray` is justified against
+    // "a 200 carrying an unexpected shape (the rate-limit body, an error object,
+    // the array GET /user/repos returns)". A body with `jobs` and no
+    // `total_count` is a MORE likely malformation than `jobs` being an object,
+    // and it is the only one of the family that failed to a false green rather
+    // than to an honest unknown.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [
+      rollRun(32225337320, SHA_NEW, '2026-08-19T07:04:56Z'),
+      rollRun(32220000000, SHA_OLD, '2026-08-19T05:59:00Z'),
+    ];
+    JOBS['32225337320'] = 'NO_TOTAL_COUNT';
+    // The older run WOULD settle it as `current` — that fall-through is the bug.
+    JOBS['32220000000'] = { jobs: [{ name: ROLL_JOB, conclusion: 'success' }] };
+
+    const body = await run();
+    expect(body.rollRegression.state).toBe('unknown');
+    expect(body.rollRegression.state).not.toBe('current');
+    expect(body.rollRegression.severity).toBe('warning');
+    expect(body.rollRegression.detail).toContain('NOT established');
+    expect(body.rollRegression.detail).toContain('no total_count');
+    // Stopped at the run it could not vouch for; never reached the older one.
+    expect(jobsCalls().length).toBe(1);
+    expect(jobsCalls().some((x) => x.includes('32220000000'))).toBe(false);
+  });
+
+  it('dates the roll from the roll STEP, not the job or the run — the 5m47s that makes a false red', async () => {
+    // EVERY NUMBER BELOW IS READ FROM THE ACTIONS API for the incident run this
+    // whole verdict was written for, loom-roll-and-validate 32225337320:
+    //
+    //   step "Roll Container App to new image"  07:04:42Z -> 07:05:14Z
+    //   step "Wait for revision health"                   -> 07:06:09Z
+    //   step "Purge Front Door"                           -> 07:06:47Z
+    //   step "Validate live URL"                          -> 07:06:51Z
+    //   step "Gate — in-VNet UAT"                         -> 07:10:58Z
+    //   job  "Roll image + validate live URL"   completed_at 07:11:01Z
+    //   run  updated_at                                      07:11:02Z
+    //   estate revision 0000782 written         07:04:56Z  (inside the step)
+    //
+    // THE NAME AND BODY OF THIS TEST USED TO ASSERT 4m45s, "update 07:10:44, run
+    // completed 07:15:30". Neither stamp exists in any run, job or step record of
+    // that run, and the change it justified — run -> JOB — buys one second
+    // (07:11:02 -> 07:11:01) on Commercial and zero on Gov, where run 32260846293
+    // has a single job whose completion IS the run's (both 14:14:43Z). So the
+    // fixture below is built from the real shape: an image stamped 07:08:00 is
+    // genuinely NEWER than the 07:04:56 estate write, and only the STEP's stamp
+    // gets that right. Dated from the job it reads `regressed` — the false red.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T07:08:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:11:02Z')];
     JOBS['32225337320'] = {
-      jobs: [{ name: ROLL_JOB, conclusion: 'success', completed_at: '2026-08-19T07:10:44Z' }],
+      jobs: [{
+        name: ROLL_JOB,
+        conclusion: 'success',
+        completed_at: '2026-08-19T07:11:01Z',
+        steps: [
+          { name: 'Gate — the image must EXIST in ACR (unskippable)', conclusion: 'success', completed_at: '2026-08-19T06:55:43Z' },
+          { name: ROLL_STEP, conclusion: 'success', completed_at: '2026-08-19T07:05:14Z' },
+          { name: 'Wait for revision health', conclusion: 'success', completed_at: '2026-08-19T07:06:09Z' },
+          { name: 'Gate — in-VNet UAT (loom-uat Container App Job)', conclusion: 'success', completed_at: '2026-08-19T07:10:58Z' },
+        ],
+      }],
     };
 
     const body = await run();
-    expect(body.rollRegression.rolledAt).toBe('2026-08-19T07:10:44Z');
-    expect(body.rollRegression.rolledAt).not.toBe('2026-08-19T07:15:30Z');
+    expect(body.rollRegression.rolledAt).toBe('2026-08-19T07:05:14Z');
+    expect(body.rollRegression.rolledAt).not.toBe('2026-08-19T07:11:01Z'); // the job
+    expect(body.rollRegression.rolledAt).not.toBe('2026-08-19T07:11:02Z'); // the run
     // The verdict, not just the field: this is the deploy path working.
     expect(body.rollRegression.state).toBe('ahead');
     expect(body.rollRegression.severity).toBe('ok');
     expect(body.rollRegression.state).not.toBe('regressed');
   });
 
-  it('falls back to the run stamp when the job carries no completion time', async () => {
+  it('CONTROL — the same fixture dated from the JOB is the false red', async () => {
+    // Without this the test above could be passing because the fixture is
+    // harmless rather than because the step is being read. Identical inputs, one
+    // difference: no `steps[]`, so the route falls back to the job's completion —
+    // the behaviour that shipped before — and the SAME estate image now reads
+    // `regressed`. That is the 5m47s window measured on 32225337320 (roll step
+    // 07:05:14Z -> job 07:11:01Z), and it is what makes the step selection
+    // load-bearing rather than cosmetic.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T07:08:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:11:02Z')];
+    JOBS['32225337320'] = {
+      jobs: [{ name: ROLL_JOB, conclusion: 'success', completed_at: '2026-08-19T07:11:01Z' }],
+    };
+
+    const body = await run();
+    expect(body.rollRegression.rolledAt).toBe('2026-08-19T07:11:01Z');
+    expect(body.rollRegression.state).toBe('regressed');
+  });
+
+  it('a SKIPPED roll step does not date the roll — a step that declined to run wrote nothing', async () => {
+    // `steps[].completed_at` is populated for skipped steps too, and it is the
+    // instant the step declined rather than a write. Taking it would move
+    // `rolledAt` arbitrarily early and manufacture `ahead` verdicts. The job's
+    // completion is the honest fallback here.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T07:08:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:11:02Z')];
+    JOBS['32225337320'] = {
+      jobs: [{
+        name: ROLL_JOB,
+        conclusion: 'success',
+        completed_at: '2026-08-19T07:11:01Z',
+        steps: [{ name: ROLL_STEP, conclusion: 'skipped', completed_at: '2026-08-19T06:59:27Z' }],
+      }],
+    };
+
+    const body = await run();
+    expect(body.rollRegression.rolledAt).toBe('2026-08-19T07:11:01Z');
+    expect(body.rollRegression.rolledAt).not.toBe('2026-08-19T06:59:27Z');
+  });
+
+  it('a RENAMED roll step degrades to the job stamp, never to UNKNOWN', async () => {
+    // The contract test in lib/admin/__tests__ is what CATCHES a rename; this is
+    // what happens meanwhile. Losing the verdict entirely over a step name would
+    // be a worse failure than the coarser stamp that shipped before it.
+    MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
+    ROLL_RUNS[ROLL_LANE] = [rollRun(32225337320, SHA_NEW, '2026-08-19T07:11:02Z')];
+    JOBS['32225337320'] = {
+      jobs: [{
+        name: ROLL_JOB,
+        conclusion: 'success',
+        completed_at: '2026-08-19T07:11:01Z',
+        steps: [{ name: 'Roll the Container App (renamed)', conclusion: 'success', completed_at: '2026-08-19T07:05:14Z' }],
+      }],
+    };
+
+    const body = await run();
+    expect(body.rollRegression.rolledAt).toBe('2026-08-19T07:11:01Z');
+    expect(body.rollRegression.state).toBe('regressed');
+    expect(body.rollRegression.state).not.toBe('unknown');
+  });
+
+  it('falls back to the run stamp when neither the step nor the job carries a completion time', async () => {
     // The job time is preferred, not required — a jobs payload without
     // completed_at must still produce a dated verdict rather than an UNKNOWN.
     MARKER = { sha: SHA_OLD, stamp: '2026-08-19T06:00:00Z' };
