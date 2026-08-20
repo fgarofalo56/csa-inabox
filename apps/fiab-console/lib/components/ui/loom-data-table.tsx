@@ -13,6 +13,8 @@
  *     row hover, subtle row separators (not heavy table grid lines)
  *   • Empty-state + loading (Spinner) states
  *   • optional onRowClick
+ *   • optional multi-select   (opt-in `selection` prop — leading checkbox column
+ *                              + tri-state select-all header)
  *
  * Typed, generic API — replaces the app's ad-hoc `<table>`/`<Table>` usages.
  *
@@ -44,6 +46,7 @@ import {
   Skeleton,
   SkeletonItem,
   Input,
+  Checkbox,
   Dropdown,
   Option,
   Text,
@@ -130,6 +133,32 @@ export interface LoomRowMenuItem<T> {
   divider?: boolean;
 }
 
+/**
+ * Opt-in multi-select. When supplied, a leading checkbox column is prepended:
+ * a tri-state select-all in the header, one checkbox per row in the body.
+ *
+ * The table owns NO selection state — it renders what `selectedIds` says and
+ * reports intent through the callbacks, so the page stays the single source of
+ * truth (and can persist / act on a selection that outlives a re-sort).
+ *
+ * `onToggleAll` is deliberately scoped to the rows the user can currently SEE
+ * (post-filter, post-search). Selecting rows hidden behind a filter is the
+ * classic bulk-action footgun — the count says 40, the filter shows 3.
+ */
+export interface LoomSelection<T> {
+  /** Currently-selected row ids. */
+  selectedIds: Set<string>;
+  /** Toggle one row by id. */
+  onToggleRow: (id: string) => void;
+  /**
+   * Toggle every currently-visible row. Called with the visible ids so the page
+   * never has to re-derive the table's own filter/sort pipeline.
+   */
+  onToggleAll: (visibleIds: string[]) => void;
+  /** Per-row checkbox aria-label. Defaults to `Select row`. */
+  ariaLabel?: (row: T) => string;
+}
+
 export interface LoomDataTableProps<T> {
   columns: LoomColumn<T>[];
   rows: T[];
@@ -156,6 +185,11 @@ export interface LoomDataTableProps<T> {
   empty?: React.ReactNode;
   /** Row click handler — rows become keyboard-activatable when set. */
   onRowClick?: (row: T) => void;
+  /**
+   * Opt-in multi-select (leading checkbox column + tri-state select-all).
+   * Defaults off, so every existing consumer renders exactly as before.
+   */
+  selection?: LoomSelection<T>;
   /** Disable the per-column filter row entirely. Default false. */
   noFilters?: boolean;
   /** Optional aria-label for the grid. */
@@ -290,6 +324,20 @@ const useStyles = makeStyles({
   },
   clickableRow: {
     cursor: 'pointer',
+  },
+  // Selected row tint. Merged AFTER bodyRow so it wins the background, and it
+  // keeps its own :hover so a selected row still responds to the pointer.
+  selectedRow: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Selected,
+    },
+  },
+  // Checkbox cell/header: the control is unlabelled (it carries an aria-label
+  // instead), so just centre it in its narrow fixed column.
+  selectCell: {
+    display: 'flex',
+    alignItems: 'center',
   },
   // filter row: a tinted band of inputs directly under the header
   filterRow: {
@@ -484,6 +532,7 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     loading = false,
     empty = 'No items to show.',
     onRowClick,
+    selection,
     noFilters = false,
     ariaLabel,
     skeleton = false,
@@ -587,6 +636,29 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
 
   // Stable columnId for the auto-appended hover-actions column.
   const ACTIONS_COL = '__loom_row_actions__';
+  // Stable columnId for the auto-PREPENDED multi-select checkbox column.
+  const SELECT_COL = '__loom_select__';
+
+  // Consumers pass `getRowId` as an inline arrow, so its identity changes every
+  // render. Mirror it into a ref (same idiom as sortSnapRef above) and keep it
+  // OUT of the memo deps — otherwise every column definition in every one of
+  // this primitive's consumers would be rebuilt on every render.
+  const getRowIdRef = React.useRef(getRowId);
+  getRowIdRef.current = getRowId;
+
+  // Selection is computed over `filteredRows` — every row matching the current
+  // filters, NOT `windowRows` (the painted slice). On a virtualized 1,400-row
+  // table "select all" must mean all 1,400 matches, not the ~30 on screen.
+  const selectVisibleIds = React.useMemo(
+    () => (selection ? filteredRows.map((r) => getRowIdRef.current(r)) : []),
+    [selection, filteredRows],
+  );
+  const selectedCount = React.useMemo(
+    () => (selection ? selectVisibleIds.reduce((n, id) => (selection.selectedIds.has(id) ? n + 1 : n), 0) : 0),
+    [selection, selectVisibleIds],
+  );
+  const allVisibleSelected = selectVisibleIds.length > 0 && selectedCount === selectVisibleIds.length;
+  const someVisibleSelected = selectedCount > 0 && !allVisibleSelected;
 
   const fluentColumns: TableColumnDefinition<T>[] = React.useMemo(() => {
     const cols = columns.map((col) => {
@@ -635,9 +707,47 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         }),
       );
     }
+    // Leading multi-select checkbox column (opt-in).
+    if (selection) {
+      cols.unshift(
+        createTableColumn<T>({
+          columnId: SELECT_COL,
+          renderHeaderCell: () => (
+            <div className={styles.selectCell}>
+              <Checkbox
+                checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
+                // Fluent renders the header cell inside a sortable/clickable
+                // header; stop the event so toggling all never also re-sorts.
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => selection.onToggleAll(selectVisibleIds)}
+                aria-label={allVisibleSelected ? 'Deselect all rows' : 'Select all rows'}
+              />
+            </div>
+          ),
+          renderCell: (row) => {
+            const id = getRowIdRef.current(row);
+            return (
+              <div className={styles.selectCell}>
+                <Checkbox
+                  checked={selection.selectedIds.has(id)}
+                  // Without this a row click handler (open pane / navigate)
+                  // fires on every selection — the checkbox lives INSIDE the row.
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => selection.onToggleRow(id)}
+                  aria-label={selection.ariaLabel ? selection.ariaLabel(row) : 'Select row'}
+                />
+              </div>
+            );
+          },
+        }),
+      );
+    }
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columns, sortableKeys, rowActions, styles.rowActions]);
+  }, [
+    columns, sortableKeys, rowActions, styles.rowActions, styles.selectCell,
+    selection, selectVisibleIds, allVisibleSelected, someVisibleSelected,
+  ]);
 
   // resizable column sizing options from declared widths
   const columnSizingOptions: TableColumnSizingOptions = React.useMemo(() => {
@@ -655,9 +765,14 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
       const w = Math.min(220, 44 + maxActions * 34);
       out[ACTIONS_COL] = { minWidth: w, idealWidth: w, defaultWidth: w };
     }
+    if (selection) {
+      // Fixed narrow gutter — just the checkbox. Not user-resizable in practice
+      // because min == ideal == default.
+      out[SELECT_COL] = { minWidth: 44, idealWidth: 44, defaultWidth: 44 };
+    }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columns, rowActions, rows]);
+  }, [columns, rowActions, rows, selection]);
 
   // ── Opt-in row windowing (U10) ────────────────────────────────────────────
   // Above the shared cutoff, only the rows near the viewport are handed to the
@@ -827,6 +942,8 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         focusMode="cell"
         aria-label={ariaLabel ?? 'Data table'}
         aria-rowcount={virtualize ? sortedRows.length + 1 : undefined}
+        // Pairs with the per-row aria-selected the checkbox column sets.
+        aria-multiselectable={selection ? true : undefined}
         className={mergeClasses(styles.grid, density === 'compact' && styles.compactGrid)}
         onSortChange={(_e, newSort) => {
           setSortSnap({
@@ -875,7 +992,9 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
               className={mergeClasses(
                 styles.bodyRow,
                 onRowClick ? styles.clickableRow : undefined,
+                selection?.selectedIds.has(getRowId(item)) ? styles.selectedRow : undefined,
               )}
+              aria-selected={selection ? selection.selectedIds.has(getRowId(item)) : undefined}
               onClick={onRowClick ? () => onRowClick(item) : undefined}
               onContextMenu={
                 rowMenu
