@@ -79,15 +79,33 @@ jobs:
           [ -n "$SS" ] || { echo "::error::session-secret unreadable"; exit 1; }
           echo "::add-mask::$SS"; echo "SS=$SS" >> "$GITHUB_ENV"
           E=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json)
-          echo "AOID=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_OID',''))")" >> "$GITHUB_ENV"
-          echo "AGRP=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_GROUP_ID',''))")" >> "$GITHUB_ENV"
+          AOID=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_OID',''))")
+          AGRP=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_GROUP_ID',''))")
+          # The identity fails closed, symmetric with the secret above (#3804).
+          # An unset admin oid used to fall back to the zero GUID. That does NOT
+          # escalate — isTenantAdmin's oid arm is `bootstrapOid && oid ===
+          # bootstrapOid`, so an unset bootstrapOid matches nothing. It does
+          # something quieter: it mints a VALID NON-ADMIN session, every
+          # /api/admin/* call 403s, and the score step below hits `!g.ok` and
+          # `return`s — exiting 0 with no score printed. A green run that
+          # measured nothing.
+          [ -n "$AOID" ] || { echo "::error::LOOM_TENANT_ADMIN_OID is empty on $APP, so no admin session can be minted and the gate score would be meaningless. Re-run the gov deploy lane to render the admin binding (auto-bind-by-default.md §5) rather than hand-editing the container app."; exit 1; }
+          echo "AOID=$AOID" >> "$GITHUB_ENV"
+          echo "AGRP=$AGRP" >> "$GITHUB_ENV"
 
       - name: GET gates + print score
         run: |
           set -euo pipefail
           node - <<'EOF'
           const crypto=require('node:crypto'), fs=require('node:fs');
-          const S=process.env.SS, B=process.env.BASE, OID=process.env.AOID||'00000000-0000-0000-0000-000000000000', GRP=process.env.AGRP||'';
+          const S=process.env.SS, B=process.env.BASE, GRP=process.env.AGRP||'';
+          // Second line of defence behind the resolve-step guard (#3804): never
+          // mint on an absent or placeholder oid, whatever put it there.
+          // NORMALIZE FIRST (#3805): the RAW-string test missed every padded
+          // placeholder, and neither GitHub nor $GITHUB_ENV trims a value. The
+          // normalized string is both what is tested and what is sealed.
+          const OID=String(process.env.AOID||'').replace(/\r/g,'').trim();
+          if(!OID||/^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(OID)){console.log('::error::AOID is absent or a placeholder ('+(OID||'<empty>')+'). Refusing to mint — a placeholder oid yields a non-admin session and a 403 the score step would swallow.');process.exit(1);}
           const K=Buffer.from(crypto.hkdfSync('sha256',Buffer.from(S,'utf-8'),Buffer.alloc(32),Buffer.from('loom-session-v1'),32));
           const claims={oid:OID,name:'gov-gates',email:'gates@automation.inv',upn:'gov-gates@automation'};
           if(GRP) claims.groups=GRP.split(',').map(s=>s.trim()).filter(Boolean);
@@ -97,8 +115,10 @@ jobs:
           (async()=>{
             const r=await fetch(B+'/api/admin/gates',{headers:{cookie}});
             const t=await r.text(); fs.writeFileSync('gates.json',t);
-            let g; try{g=JSON.parse(t);}catch{console.log(t.slice(0,400));return;}
-            if(!g.ok){console.log('not ok:',t.slice(0,400));return;}
+            // Both of these used to `return` — the step then exited 0 having
+            // printed no score at all. A gate that cannot fail (#3804).
+            let g; try{g=JSON.parse(t);}catch{console.log('::error::/api/admin/gates returned non-JSON (HTTP '+r.status+'): '+t.slice(0,400));process.exit(1);}
+            if(!g.ok){console.log('::error::/api/admin/gates not ok (HTTP '+r.status+'): '+t.slice(0,400));process.exit(1);}
             console.log(`GATE SCORE: ${g.configured}/${g.count} configured, ${g.blocked} blocked (cloud=${g.cloud})`);
             const bl=(g.gates||[]).filter(x=>x.status!=='configured');
             for(const sev of ['critical','recommended','optional']){

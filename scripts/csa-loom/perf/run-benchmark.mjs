@@ -35,6 +35,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { TOP_SURFACES, pageTtiMetricId, FABRIC_BARS, summarize } from './perf-metrics.mjs';
+import { requireAutomationOid } from '../../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
 
 const BASE = (process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net').replace(/\/+$/, '');
 const SECRET = process.env.SESSION_SECRET;
@@ -53,13 +54,34 @@ const OUT = argVal('--out', path.join('test-results', 'perf', `run-${Date.now()}
 const POLL_TIMEOUT_MS = Number(process.env.PERF_POLL_TIMEOUT_MS) || 300_000;
 
 // ── Mint the session cookie (identical to the UAT harness) ───────────────────
+// FAIL CLOSED on identity (#3804). A fallback oid does not merely mislabel the
+// run: `workspaces` is partitioned by /tenantId == the creator's oid, so a
+// benchmark under an oid that owns nothing measures every route against an EMPTY
+// partition and reports excellent latencies for doing no work. The numbers would
+// be fast, reproducible, and meaningless.
+//
+// Empty AND placeholder are both decided at the shared chokepoint. A local
+// `if (!PERF_OID)` catches only the first, and the placeholder is the worse
+// case here: `…0001` is non-empty and well-formed, so it would pass, own
+// nothing, and publish a full set of green p50/p95/p99 numbers measured against
+// an empty partition — a benchmark that cannot fail is worse than no benchmark.
+const PERF_OID = process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID;
+try {
+  requireAutomationOid({ oid: PERF_OID });
+} catch (err) {
+  console.error(`[run-benchmark] ${err.message}\n`
+    + '  Set UAT_OID (or LOOM_AUTOMATION_OID) to the tenant-admin identity for this estate —\n'
+    + '  the benchmark reads through a minted session, and an oid that owns no data yields\n'
+    + '  timings against an empty partition (#3804).');
+  process.exit(2);
+}
 const KEY = Buffer.from(
   crypto.hkdfSync('sha256', Buffer.from(SECRET, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32),
 );
 function mintCookie() {
   const payload = {
     claims: {
-      oid: process.env.UAT_OID || '00000000-0000-0000-0000-000000000000',
+      oid: PERF_OID,
       name: process.env.UAT_NAME || 'Loom Perf',
       email: process.env.UAT_EMAIL || 'perf@example.invalid',
       upn: process.env.UAT_UPN || 'perf@example.invalid',
@@ -208,8 +230,32 @@ async function runServerSide() {
     );
   }
 
+  // Never report success on an unverified outcome (deploy-integrity R7,
+  // no-vaporware). Measured 2026-08-19 against a closed port: all 10 page
+  // probes errored, the engine run threw, and this harness STILL exited 0
+  // having written a run document of nothing but `—`. That is the same defect
+  // as the fail-open oid guarded above, reached by a different route — both
+  // publish a green result for work that never happened.
+  //
+  // This is deliberately NOT a latency gate. A gated engine backend is an
+  // honest "not provisioned here" row and stays exit 0; so does a slow run.
+  // The only new failure is having measured NOTHING AT ALL.
+  const pageMeasured = pageRows.filter((r) => !r.error && r.n > 0).length;
+  const engineMeasured = (engine.docs || []).filter((d) => !d.gated).length;
   const runFailed = engine.status && engine.status.status === 'failed';
-  process.exit(runFailed ? 1 : 0);
+  if (runFailed) process.exit(1);
+  if (pageMeasured === 0 && engineMeasured === 0) {
+    console.error(
+      `\n[run-benchmark] NO METRIC WAS MEASURED — ${pageRows.length} page probes and the`
+      + ' server-side engine run all failed.\n'
+      + `  Base URL: ${BASE}\n`
+      + '  This is a failed benchmark, not a fast one. Common causes: the console is not\n'
+      + '  reachable from here, LOOM_URL points at the wrong estate, or the minted session\n'
+      + '  was rejected (check SESSION_SECRET matches this estate\'s session-secret).',
+    );
+    process.exit(1);
+  }
+  process.exit(0);
 })().catch((e) => {
   console.error(e);
   process.exit(1);

@@ -44,6 +44,93 @@ const TAG_LEN = 16;
 const HKDF_INFO = 'loom-session-v1';
 const COOKIE_NAME = 'loom_session';
 
+/**
+ * A placeholder/sentinel oid — all-zero except the final nibble. The TS mirror
+ * of the same constant in mint-cookie.mjs; both exist because this module
+ * deliberately imports nothing (see the header note on next/headers).
+ */
+const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
+
+/**
+ * An Entra object id is a single GUID. Anything else is not one. The TS mirror
+ * of `GUID_RE` in mint-cookie.mjs (itself byte-identical to the one in
+ * scripts/ci/resolve-automation-oid.mjs); the drift guard pins all of it.
+ */
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Refuse to mint under an absent, malformed, or placeholder oid.
+ *
+ * A minted session performs REAL writes, and Cosmos partitions `workspaces` on
+ * the creator oid — so a placeholder writes into a partition no principal can
+ * sign in and enumerate. That debris reports success and is invisible
+ * afterwards (#3801/#3804).
+ *
+ * The parameter is deliberately typed `oid?: string | null` rather than
+ * `Pick<UserClaims, 'oid'>`. This function's whole purpose is the absent case,
+ * and a required `oid: string` declares that case impossible — which forces a
+ * caller holding `string | undefined` (every `process.env` read) to write
+ * `as string` on the very value being validated. A cast that silences the
+ * checker at the guard is how a fail-open gets reintroduced (#3804).
+ *
+ * @param claims - the claims about to be sealed into the cookie.
+ * @returns the validated oid.
+ */
+export function requireAutomationOid(claims: { oid?: string | null }): string {
+  // NORMALIZE BEFORE TESTING, and hand the normalized value back (#3805 review).
+  // Kept byte-identical to the expression in mint-cookie.mjs — the drift guard in
+  // e2e/auth/__tests__/require-automation-oid.test.mjs compares the two files and
+  // fails if they diverge.
+  //
+  // Testing the RAW string let every padded placeholder through: "…0001\r",
+  // "…0001 " and " …0001" were all ACCEPTED while the bare form was refused.
+  // GitHub does not trim repo-variable values and `az -o tsv` carries CR, so the
+  // padded form is the realistic one — and it seals a claim that matches neither
+  // a real principal nor `LOOM_TENANT_ADMIN_OID`, i.e. an unreachable partition
+  // AND a silent drop to non-admin.
+  //
+  // `|| ''` rather than `?? ''` on purpose: normalization must not widen what is
+  // accepted, and `??` would turn a falsy non-null oid into a passing string.
+  const oid = String((claims && claims.oid) || '')
+    .replace(/\r/g, '')
+    .trim();
+  if (!oid) {
+    throw new Error(
+      '[mint-session] claims.oid is required and was not set.\n' +
+      '  A minted session performs REAL writes and Cosmos partitions on the creator oid,\n' +
+      '  so it must run as a real principal. Set LOOM_AUTOMATION_OID (or UAT_OID) to the\n' +
+      '  automation identity for this estate. Refusing to mint without one (#3804).',
+    );
+  }
+  if (oid.includes(',')) {
+    throw new Error(
+      `[mint-session] claims.oid is a comma-separated list (${oid}) and was refused.\n` +
+      '  feature-gate.ts compares session.claims.oid === LOOM_TENANT_ADMIN_OID with strict\n' +
+      '  equality, so "a,b" matches neither a nor b — the run mints, drops to non-admin, and\n' +
+      '  reports the resulting 403s as endpoint defects.\n' +
+      '  Set LOOM_AUTOMATION_OID (or UAT_OID) to a single object id.',
+    );
+  }
+  if (!GUID_RE.test(oid)) {
+    throw new Error(
+      `[mint-session] claims.oid is not a GUID (${oid}) and was refused.\n` +
+      '  It names no Entra object, so the session it would mint asserts an identity that\n' +
+      '  cannot sign in — the same unreachable-partition debris a placeholder produces\n' +
+      '  (#3801/#3804), reached by a different route.\n' +
+      '  Set LOOM_AUTOMATION_OID (or UAT_OID) to a real automation identity.',
+    );
+  }
+  if (PLACEHOLDER_OID.test(oid)) {
+    throw new Error(
+      `[mint-session] claims.oid is a placeholder (${oid}) and was refused.\n` +
+      '  Writes under a placeholder land in a Cosmos partition no principal can sign in to\n' +
+      '  and enumerate — invisible debris that reports success (#3801/#3804).\n' +
+      '  Set LOOM_AUTOMATION_OID (or UAT_OID) to a real automation identity.',
+    );
+  }
+  return oid;
+}
+
 /** Derive the AES-256 key from SESSION_SECRET — identical to lib/auth/session.ts */
 function deriveKey(sessionSecret: string): Buffer {
   const ab = crypto.hkdfSync(
@@ -81,10 +168,17 @@ export function mintLoomSessionCookie(
       'and set it via ::add-mask:: before this step.',
     );
   }
+  // Guard the identity here, not only at each call site — this is the single
+  // chokepoint every TS caller (mintStorageState, global-setup, the specs)
+  // funnels through, mirroring requireAutomationOid in mint-cookie.mjs (#3804).
+  //
+  // SEAL THE VALIDATED VALUE (#3805 review). Calling the guard for its throw and
+  // then encrypting `claims` verbatim would validate one string and ship another.
+  const sealed: UserClaims = { ...claims, oid: requireAutomationOid(claims) };
 
   const key = deriveKey(secret);
   const payload: SessionPayload = {
-    claims,
+    claims: sealed,
     exp: Math.floor(Date.now() / 1000) + ttlSecs,
   };
 

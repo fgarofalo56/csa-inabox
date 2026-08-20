@@ -32,6 +32,26 @@ export default defineConfig({
     },
   },
   test: {
+    // ── PINNED, DO NOT FLIP (#3783) ───────────────────────────────────────
+    // `vitest (node 20)` is a REQUIRED check AND the roll gate:
+    // `loom-roll-and-validate` refuses to roll a SHA whose vitest did not
+    // conclude success. #3783 was that check reporting green having executed
+    // ZERO tests, so an untested SHA reached the live estate.
+    //
+    // vitest's default for this is already `false`, so today's behaviour is
+    // correct — but it was UNPINNED, which means the entire no-green-on-zero
+    // property rested on an upstream default nothing in this repo asserted.
+    // Measured in review (2026-08-20): `vitest run --passWithNoTests <no-match>`
+    // prints "No test files found, exiting with code 0" and exits 0.
+    //
+    // The realistic way that flips is not malice: `--passWithNoTests` is the
+    // standard cure for "this shard/filter matched no files", and whoever
+    // reaches for it next would silently reopen #3783. Pinning it here makes
+    // that an explicit edit to a line that says why, rather than a flag added
+    // to a CI step. The infra-suite lane in fiab-console-ci.yml additionally
+    // asserts the EXECUTED file count against the DERIVED count, because this
+    // flag only catches ZERO files — not "ran 1 of the 41 it claimed".
+    passWithNoTests: false,
     // API / logic tests run on node; component + editor render tests (*.test.tsx)
     // run on jsdom. vitest.setup.ts (jest-dom matchers + next/navigation, monaco,
     // ResizeObserver/matchMedia stubs) is now wired so render() actually mounts —

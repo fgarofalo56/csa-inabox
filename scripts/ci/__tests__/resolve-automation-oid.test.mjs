@@ -72,6 +72,58 @@ test('empty / undefined are their own class, not "invalid"', () => {
   assert.equal(validateCandidate('   ').code, 'empty');
 });
 
+// ─────────────────────────── placeholder oids (#3804) ────────────────────────
+// These are GUID-SHAPED, so GUID_RE admits them. That is exactly how they
+// reached production: every earlier check asked "is it a GUID?" and none asked
+// "does it name anybody?".
+
+test('a placeholder oid is REJECTED even though it is a well-formed GUID', () => {
+  for (const sentinel of [
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000001',
+    '00000000-0000-0000-0000-00000000000e',
+    '00000000-0000-0000-0000-00000000000E',
+  ]) {
+    assert.match(sentinel, GUID_RE, `${sentinel} is GUID-shaped — that is the point`);
+    const v = validateCandidate(sentinel);
+    assert.equal(v.ok, false, `${sentinel} must not validate`);
+    assert.equal(v.code, 'placeholder');
+  }
+});
+
+test('a REAL oid that merely begins with zeros is still accepted', () => {
+  // Negative control: if this ever fails the placeholder regex has gone broad
+  // and is refusing legitimate identities. Eleven zeros then '1a' is 12 hex
+  // digits, so the final group is NOT all-zero-but-one.
+  const real = '00000000-0000-0000-0000-00000000001a';
+  const v = validateCandidate(real);
+  assert.equal(v.ok, true);
+  assert.equal(v.value, real);
+});
+
+test('a placeholder on the console is refused WITHOUT claiming the read failed', () => {
+  const verdict = decide({
+    derived: { status: 'resolved', value: '00000000-0000-0000-0000-000000000001' },
+  });
+  assert.equal(verdict.ok, false);
+  // R7: the read DID complete. The refusal must not assert otherwise.
+  assert.doesNotMatch(verdict.error, /did not complete/);
+  assert.match(verdict.error, /placeholder/i);
+  assert.match(verdict.error, /read successfully|WAS read/);
+});
+
+test('an explicitly-supplied placeholder is refused, not honoured as an override', () => {
+  // The override branch runs BEFORE the derived branch, so it needs its own
+  // proof — an operator pasting a sentinel into the repo variable was the
+  // reachable path here (the bicep default is '' and never a sentinel).
+  const verdict = decide({
+    explicit: '00000000-0000-0000-0000-000000000001',
+    derived: { status: 'resolved', value: OID_A },
+  });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error, /placeholder/i);
+});
+
 // ───────────────────────────── az classification ────────────────────────────
 
 test('az failures classify into transient / denied / notfound / unknown', () => {

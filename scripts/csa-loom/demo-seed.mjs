@@ -5,19 +5,49 @@
  * capabilities demo (workspaces + installed apps + representative items).
  *
  * Owned by LOOM_TENANT_ADMIN_OID (passed as UAT_OID) so the signed-in admin can
- * open everything — unlike the transient tut-* capture workspaces (owned by the
- * default automation oid). Idempotent-ish: it names workspaces deterministically
- * and skips creating a workspace whose name already exists.
+ * open everything — unlike the transient tut-* capture workspaces, which on the
+ * 2026-07-12 run were owned by the ZERO GUID (not, as this comment previously
+ * claimed, by "the default automation oid" — there was no automation oid; the
+ * identity fallback had fired). Idempotent-ish: it names workspaces
+ * deterministically and skips creating a workspace whose name already exists.
  *
  * Env: SESSION_SECRET (KV loom-session-secret), LOOM_URL, UAT_OID (admin oid),
  *      UAT_NAME. No creds handled beyond the HMAC session mint (same as the UAT).
  */
 import crypto from 'node:crypto';
+import { requireAutomationOid } from '../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
 
 const SECRET = process.env.SESSION_SECRET;
 if (!SECRET) { console.error('SESSION_SECRET required'); process.exit(1); }
 const BASE = (process.env.LOOM_URL || 'https://csa-loom.limitlessdata.ai').replace(/\/$/, '');
-const OID = process.env.UAT_OID || '00000000-0000-0000-0000-000000000000';
+// FAIL CLOSED on identity, exactly as the line above does on the secret (#3804).
+// This script's entire stated purpose is to seed a demo estate the signed-in
+// admin can open. A fallback oid silently defeats that purpose: `workspaces` is
+// partitioned by /tenantId == the creator's oid, so the whole demo would land in
+// a partition no operator can enumerate — a seeded estate that reports success
+// and is invisible. That is what happened to the 24 `tut-app-*` workspaces
+// behind the empty semantic-model editors in #3801.
+//
+// Empty AND placeholder are both decided at the shared chokepoint. A local
+// `if (!OID)` would only catch the first: `00000000-0000-0000-0000-000000000001`
+// is non-empty and a well-formed GUID, so it satisfies every shape test a naive
+// guard performs while landing the whole demo in the unreachable partition above.
+//
+// Note this script reads UAT_OID only — not the LOOM_AUTOMATION_OID alias the
+// UAT harnesses accept. That is deliberate and unchanged here: demo-seed is
+// invoked by an operator seeding an estate under a NAMED tenant admin, not by
+// CI under the automation identity, and silently accepting the CI oid would
+// seed the demo into a partition the operator cannot open — the same failure
+// this guard exists to prevent, one level up.
+const OID = process.env.UAT_OID;
+try {
+  requireAutomationOid({ oid: OID });
+} catch (err) {
+  console.error(`[demo-seed] ${err.message}\n`
+    + '  Set UAT_OID to the tenant admin oid (LOOM_TENANT_ADMIN_OID) — demo-seed performs REAL\n'
+    + '  writes and the demo estate is only reachable by its owner (#3804).');
+  process.exit(1);
+}
 const NAME = process.env.UAT_NAME || 'CSA Loom Admin';
 
 function mintSession() {

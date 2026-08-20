@@ -6,9 +6,44 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { BrowserContext, Page, expect, request as playwrightRequest } from '@playwright/test';
+import { requireAutomationOid } from '../auth/mint-session';
 
 const SECRET = process.env.SESSION_SECRET!;
 if (!SECRET) throw new Error('SESSION_SECRET env required — pull from kv-loom-m56yejezt7bjo/loom-session-secret');
+
+/**
+ * Automation identity — FAIL CLOSED, never a placeholder (#3804).
+ *
+ * This used to fall back to `00000000-0000-0000-0000-000000000000` when neither
+ * var was set. That is a syntactically valid GUID, so every guard expecting a
+ * well-formed oid passed, and the harness went on to mint a real session and
+ * drive real writes as a principal that can never sign in.
+ *
+ * On 2026-07-12 that produced 24 `tut-app-*` workspaces owned by the zero GUID.
+ * `workspaces` is partitioned by /tenantId == the creator's oid, so they landed
+ * in a partition no operator can enumerate — and every item inside them became
+ * unreadable through any surface that verifies parent-workspace ownership. It
+ * surfaced five weeks later as 24 of 32 semantic models rendering empty editors
+ * (#3801). Nothing failed at the time: the installs returned success and the
+ * provisioners reported `created` with content counts.
+ *
+ * A KNOWN synthetic automation oid is a documented, tolerated cost with an
+ * operator-side cleanup path (scripts/csa-loom/purge-test-workspaces.sh). The
+ * zero-GUID fallback is different in kind: the debris it creates is attributable
+ * to nothing, so recovery by owner is impossible in principle.
+ *
+ * An unset identity is an operator error. Refusing to start is strictly better
+ * than producing plausible-looking data under a principal that does not exist.
+ *
+ * The check itself lives in mint-session.ts so that empty AND placeholder are
+ * decided in one place: an oid of `00000000-0000-0000-0000-000000000001` passes
+ * a non-empty test and every GUID-shape test, so a local `if (!oid)` here would
+ * still be fail-open. Taking the guard's return value also types this export as
+ * `string` rather than `string | undefined` for every consumer.
+ */
+export const AUTOMATION_OID: string = requireAutomationOid({
+  oid: process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID,
+});
 
 /**
  * UAT target base URL (rel-T30). Resolution order:
@@ -29,7 +64,7 @@ export function mintSession(): string {
     Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
   const payload = {
     claims: {
-      oid:   process.env.UAT_OID   || process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000000',
+      oid:   AUTOMATION_OID,
       name:  process.env.UAT_NAME  || process.env.LOOM_AUTOMATION_NAME || 'Loom UAT',
       email: process.env.UAT_EMAIL || 'uat@example.invalid',
       upn:   process.env.UAT_UPN   || 'uat@example.invalid',

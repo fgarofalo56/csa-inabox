@@ -9,11 +9,14 @@
  * pattern: https://playwright.dev/docs/auth#basic-shared-account-in-all-tests
  *
  * Required env vars:
- *   SESSION_SECRET   — the HKDF input key (pulled from KV in CI, never hardcoded)
- *   LOOM_URL         — console base URL (e.g. https://loom-console.b02.azurefd.net)
+ *   SESSION_SECRET      — the HKDF input key (pulled from KV in CI, never hardcoded)
+ *   LOOM_URL            — console base URL (e.g. https://loom-console.b02.azurefd.net)
+ *   LOOM_AUTOMATION_OID — object ID of the automation identity. REQUIRED as of
+ *                         #3804: the suite writes for real and Cosmos partitions
+ *                         on the creator oid, so there is no safe default.
+ *                         (LOOM_AUTOMATION_TENANT_OID is accepted as an alias.)
  *
  * Optional env vars (automation identity claims):
- *   LOOM_AUTOMATION_OID   — object ID of the automation identity
  *   LOOM_AUTOMATION_UPN   — UPN / email for the minted session
  *   LOOM_AUTOMATION_NAME  — display name in the minted session
  *   LOOM_AUTOMATION_EMAIL — email claim (optional; falls back to UPN)
@@ -53,12 +56,24 @@ setup('mint loom_session cookie', async () => {
   }
 
   // ---- automation identity claims -----------------------------------------
-  // Prefer explicit LOOM_AUTOMATION_* vars; fall back to sensible defaults that
-  // clearly identify the automation identity in audit logs.
+  // No fallback oid. This setup mints the storageState the ENTIRE Playwright
+  // suite runs under, and every write it makes is partitioned in Cosmos on the
+  // creator oid. A sentinel here produced green specs whose writes landed in a
+  // partition no principal could sign in and enumerate — the mechanism behind
+  // the orphans in #3801. Fail closed instead (#3804); mintLoomSessionCookie
+  // enforces the same rule at the chokepoint.
   const oid =
     process.env.LOOM_AUTOMATION_OID ||
-    process.env.LOOM_AUTOMATION_TENANT_OID ||
-    '00000000-0000-0000-0000-000000000001'; // sentinel OID — not a real user
+    process.env.LOOM_AUTOMATION_TENANT_OID;
+
+  if (!oid) {
+    throw new Error(
+      '[global-setup] LOOM_AUTOMATION_OID (or LOOM_AUTOMATION_TENANT_OID) is required.\n' +
+      '  The suite mints a REAL session and performs REAL writes, so it must run as a\n' +
+      '  real principal. Refusing to substitute a sentinel oid (#3804).\n' +
+      '  In CI: set it to the automation identity for this estate.',
+    );
+  }
 
   const upn =
     process.env.LOOM_AUTOMATION_UPN ||

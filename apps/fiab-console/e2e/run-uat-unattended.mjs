@@ -26,9 +26,12 @@
  * Required env vars:
  *   SESSION_SECRET          — console session-signing secret (from ARM literal)
  *   LOOM_URL                — console base URL (e.g. https://loom-console.b02.azurefd.net)
+ *   LOOM_AUTOMATION_OID     — object ID baked into the minted session. No default:
+ *                             this run performs REAL writes and Cosmos partitions
+ *                             them on the creator oid, so a sentinel deposits the
+ *                             whole run in a partition nobody can enumerate (#3804).
  *
  * Optional env vars:
- *   LOOM_AUTOMATION_OID     — object ID baked into the minted session (default: sentinel)
  *   LOOM_AUTOMATION_UPN     — UPN for the minted session
  *   LOOM_AUTOMATION_NAME    — display name for the minted session
  *   UAT_PROJECT             — playwright --project value (default: uat)
@@ -50,6 +53,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+// The one exception to the no-TS-imports note below: mint-cookie.mjs is the
+// plain-JS twin of mint-session.ts, built precisely so .mjs entrypoints can
+// share code without pulling the TypeScript tree. Importing the identity guard
+// from it satisfies that constraint rather than bending it (#3804).
+import { requireAutomationOid } from './auth/mint-cookie.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -401,7 +409,24 @@ async function main() {
     process.exit(1);
   }
 
-  const oid = process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000001';
+  // The identity fails closed, symmetric with LOOM_URL directly above (#3804).
+  // This suite CREATES workspaces and items; `workspaces` is partitioned by the
+  // creator's oid, so the old `…0001` fallback deposited a full UAT run in a
+  // partition no principal can sign in to and enumerate — and the run reported
+  // success. That is the mechanism behind the 24 orphans in #3801, which the
+  // cleanup script could not see because it defaulted to a DIFFERENT fake oid.
+  //
+  // Both the empty and the placeholder case are decided at the shared chokepoint
+  // in auth/mint-cookie.mjs. A local `if (!oid)` would only cover the first: the
+  // fallback this replaced was `…0001`, which is non-empty and a well-formed
+  // GUID, so it satisfies every shape test a naive guard performs.
+  const oid = process.env.LOOM_AUTOMATION_OID;
+  try {
+    requireAutomationOid({ oid });
+  } catch (err) {
+    console.error(`[run-uat-unattended] ${err.message}`);
+    process.exit(1);
+  }
   const upn = process.env.LOOM_AUTOMATION_UPN || 'loom-uat@automation.local';
   const name = process.env.LOOM_AUTOMATION_NAME || 'Loom UAT [automation]';
   const claims = { oid, name, upn, email: upn };

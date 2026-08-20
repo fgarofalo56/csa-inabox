@@ -24,6 +24,11 @@
 
 import crypto from 'node:crypto';
 
+// Only the identity guard is borrowed from the shared minter — this script keeps
+// its own crypto (below) deliberately. `requireAutomationOid` is the single
+// definition of "an oid this platform will mint as" (#3804).
+import { requireAutomationOid } from '../../apps/fiab-console/e2e/auth/mint-cookie.mjs';
+
 // ── config ───────────────────────────────────────────────────────────────────
 const BASE_URL = (process.env.LOOM_URL || '').replace(/\/+$/, '');
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -42,6 +47,10 @@ function fatal(msg) {
 if (!BASE_URL) fatal('LOOM_URL is required (the console base URL).');
 if (!SESSION_SECRET) fatal('SESSION_SECRET is required (fetch it from the loom Key Vault, secret "session-secret").');
 if (!OID) fatal('LOOM_AUTOMATION_OID is required and must be a tenant-admin principal (LOOM_TENANT_ADMIN_OID or a member of LOOM_TENANT_ADMIN_GROUP_ID).');
+// The empty case above has always failed closed; this catches the one it let
+// through — an explicitly-supplied placeholder GUID (#3804). This script POSTs
+// exercise runs, and Cosmos partitions what they create on the creator oid.
+try { requireAutomationOid({ oid: OID }); } catch (err) { fatal(err.message); }
 
 // ── mint the loom_session cookie (matches lib/auth/session.ts exactly) ───────
 function mintCookie(ttlSecs = 3600) {
