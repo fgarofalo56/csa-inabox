@@ -71,7 +71,20 @@ export function requireSessionSecret(explicit) {
 const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
 
 /**
- * Resolve the automation identity, throwing when it is absent or a placeholder.
+ * An Entra object id is a single GUID. Anything else is not one.
+ *
+ * Byte-identical to `GUID_RE` in scripts/ci/resolve-automation-oid.mjs, and the
+ * drift guard in e2e/auth/__tests__/require-automation-oid.test.mjs pins it here
+ * and in mint-session.ts. Until #3805 review this chokepoint validated NO shape
+ * at all, so `"hello"`, `"1"`, `"<unset>"` and the literal string
+ * `"LOOM_AUTOMATION_OID"` were all accepted and sealed — while the module beside
+ * it rejected exactly those, on the same reasoning, in the same PR.
+ */
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Resolve the automation identity, throwing when it is absent, malformed, or a
+ * placeholder.
  *
  * WHY THIS IS FAIL-CLOSED, symmetric with requireSessionSecret (#3804).
  *
@@ -91,7 +104,9 @@ const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
  * A KNOWN synthetic automation oid is a documented, tolerated cost with an
  * operator-side cleanup path (scripts/csa-loom/purge-test-workspaces.sh). A
  * placeholder is different in kind: its debris is attributable to nothing, so
- * recovery by owner is impossible in principle.
+ * recovery by owner is impossible in principle. A MALFORMED oid — `"hello"`,
+ * `"<unset>"`, a comma-list — is the same kind of debris again: it names no
+ * Entra object either, so it gets the same refusal (#3805 review).
  *
  * @param {object} claims - the claims about to be baked into a session.
  * @returns {string} the validated oid.
@@ -127,6 +142,24 @@ export function requireAutomationOid(claims) {
         '  A minted session performs REAL writes and Cosmos partitions on the creator oid,\n' +
         '  so it must run as a real principal. Set UAT_OID or LOOM_AUTOMATION_OID to the\n' +
         '  automation identity for this estate. Refusing to mint without one (#3804).',
+    );
+  }
+  if (oid.includes(',')) {
+    throw new Error(
+      `[mint-cookie] claims.oid is a comma-separated list (${oid}) and was refused.\n` +
+        '  feature-gate.ts compares session.claims.oid === LOOM_TENANT_ADMIN_OID with strict\n' +
+        '  equality, so "a,b" matches neither a nor b — the run mints, drops to non-admin, and\n' +
+        '  reports the resulting 403s as endpoint defects.\n' +
+        '  Set UAT_OID or LOOM_AUTOMATION_OID to a single object id.',
+    );
+  }
+  if (!GUID_RE.test(oid)) {
+    throw new Error(
+      `[mint-cookie] claims.oid is not a GUID (${oid}) and was refused.\n` +
+        '  It names no Entra object, so the session it would mint asserts an identity that\n' +
+        '  cannot sign in — the same unreachable-partition debris a placeholder produces\n' +
+        '  (#3801/#3804), reached by a different route.\n' +
+        '  Set UAT_OID or LOOM_AUTOMATION_OID to a real automation identity.',
     );
   }
   if (PLACEHOLDER_OID.test(oid)) {

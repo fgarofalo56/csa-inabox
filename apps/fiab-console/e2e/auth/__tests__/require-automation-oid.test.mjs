@@ -32,7 +32,16 @@
  *      encrypting the raw claim would validate one string and ship another.
  *   4. The refusal happens BEFORE any cookie material exists — asserted by
  *      counting real crypto calls, not by trusting the throw.
- *   5. The TypeScript twin cannot drift away from the .mjs implementation.
+ *   5. A MALFORMED oid is refused too. The chokepoint validated no SHAPE at all
+ *      until the #3805 review: `"hello"`, `"1"`, `"<unset>"`, the literal string
+ *      `"LOOM_AUTOMATION_OID"` and a comma-list were every one of them accepted
+ *      and sealed, while `validateCandidate` in scripts/ci/resolve-automation-oid.mjs
+ *      — the module beside it, in the same PR — rejected exactly those with a
+ *      written rationale. Malformed debris is unreachable for the same reason
+ *      placeholder debris is.
+ *   6. The TypeScript twin cannot drift away from the .mjs implementation —
+ *      including ASYMMETRICALLY, which is the drift assertions' whole job (see
+ *      the note above them).
  *
  * No credential appears here: the HKDF input is generated per-run with
  * `crypto.randomBytes`, and every object id is obviously synthetic.
@@ -56,6 +65,8 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MINT_COOKIE_MJS = path.join(HERE, '..', 'mint-cookie.mjs');
 const MINT_SESSION_TS = path.join(HERE, '..', 'mint-session.ts');
+/** The sibling module whose shape rule this chokepoint must agree with. */
+const RESOLVER_MJS = path.join(HERE, '..', '..', '..', '..', '..', 'scripts', 'ci', 'resolve-automation-oid.mjs');
 
 /** Obviously synthetic — the value never leaves this process. */
 const REAL_OID = '11111111-2222-3333-4444-555555555555';
@@ -161,6 +172,86 @@ test('NEGATIVE CONTROL: a real oid that merely LOOKS placeholder-ish is accepted
 
 test('an ordinary object id is accepted and returned unchanged', () => {
   assert.equal(requireAutomationOid({ oid: REAL_OID }), REAL_OID);
+});
+
+// ─────────────────────────── malformed identity ──────────────────────────────
+//
+// Until the #3805 review this chokepoint validated NO shape whatsoever. Every
+// value below was ACCEPTED and sealed into a real cookie, while
+// `validateCandidate` in scripts/ci/resolve-automation-oid.mjs — a module in the
+// same PR, twenty lines of reasoning about why — rejected exactly these.
+//
+// The comma-list is the sharpest case: feature-gate.ts compares
+// `session.claims.oid === LOOM_TENANT_ADMIN_OID` with strict equality, so "a,b"
+// matches NEITHER a nor b. The run mints cleanly, silently drops to non-admin,
+// and every admin-gated probe 403s — which then gets reported as an endpoint
+// defect. A malformed oid is the same unreachable-partition debris a placeholder
+// produces, reached by a different route.
+
+/** Values a `-z`/non-empty test admits and an Entra directory has never seen. */
+const MALFORMED = [
+  'hello',
+  'a,b',
+  'not-a-guid-at-all',
+  '1',
+  '<unset>',
+  'LOOM_AUTOMATION_OID',          // the NAME of the variable, not its value
+  '${{ vars.LOOM_AUTOMATION_OID }}', // an unexpanded expression
+  `${PLACEHOLDERS[1]},${REAL_OID}`, // the comma-list validateCandidate names
+  `${REAL_OID}x`,                 // one character too long
+  REAL_OID.replace(/-/g, ''),     // GUID digits, no dashes
+];
+
+test('a MALFORMED oid is refused — it names no Entra object', () => {
+  for (const oid of MALFORMED) {
+    assert.throws(
+      () => requireAutomationOid({ oid }),
+      /is not a GUID|is a comma-separated list/,
+      `${JSON.stringify(oid)} must be refused — it is not an object id`,
+    );
+  }
+});
+
+test('a COMMA-LIST is refused by name, with the strict-equality reason', () => {
+  // Pinned separately from the generic shape refusal because the two failures
+  // need different remediations: "that is not an oid" vs "that is two oids".
+  const err = assertThrown(() => requireAutomationOid({ oid: `${PLACEHOLDERS[1]},${REAL_OID}` }));
+  assert.match(err.message, /comma-separated list/);
+  assert.match(err.message, /strict\s+equality/);
+});
+
+test('the malformed refusal ECHOES the value and names the variable to set', () => {
+  const err = assertThrown(() => requireAutomationOid({ oid: '<unset>' }));
+  assert.ok(err.message.includes('<unset>'), 'the refusal must name the offending value');
+  assert.match(err.message, /UAT_OID|LOOM_AUTOMATION_OID/);
+});
+
+test('PAIRED CONTROL: no legitimate GUID is refused by the shape check', () => {
+  // Without this the test above would pass on a guard that rejects everything.
+  // Case, the negative control, and padding all have to survive.
+  const legitimate = [
+    REAL_OID,
+    REAL_OID.toUpperCase(),
+    NOT_A_PLACEHOLDER,
+    'A1B2C3D4-E5F6-4a7b-8c9d-0e1f2a3b4c5d',
+    'deadbeef-dead-beef-dead-beefdeadbeef',
+  ];
+  for (const oid of legitimate) {
+    assert.equal(requireAutomationOid({ oid }), oid, `${oid} must be accepted`);
+  }
+  assert.equal(requireAutomationOid({ oid: ` ${REAL_OID}\r\n` }), REAL_OID);
+});
+
+test('a malformed oid throws before ANY key is derived or cipher created', () => {
+  const s = secret();
+  for (const oid of ['hello', `${PLACEHOLDERS[1]},${REAL_OID}`]) {
+    const r = countingCrypto(() =>
+      mintLoomSessionCookie({ oid, name: 'uat', upn: 'uat@automation' }, 60, s),
+    );
+    assert.ok(r.threw, `${JSON.stringify(oid)} must be refused`);
+    assert.equal(r.hkdf, 0, 'no key material may be derived for an unidentified principal');
+    assert.equal(r.cipher, 0, `${JSON.stringify(oid)} produced cookie material`);
+  }
 });
 
 // ──────────────────── BLOCKER 2: padding must not bypass ─────────────────────
@@ -340,6 +431,27 @@ test('the identity refusal is NOT the secret refusal wearing a different hat', (
 // node version, so what is enforced here is that it stays IDENTICAL to the copy
 // that IS executed above. Every behaviour proven for the .mjs is inherited by
 // the .ts only for as long as these assertions hold.
+//
+// WHICH GAP THESE CLOSE, stated precisely (an earlier disclosure had it backwards).
+//
+//   CONSISTENT-BUT-WRONG (both files edited the same way) is NOT the gap. It is
+//   caught, because the .mjs is actually EXECUTED: broadening `0{11}` to `0{10}`
+//   in BOTH files takes the suite to RC=1 with 6 failures — five behavioural
+//   (placeholders stop being refused) plus the population control embedded in
+//   the placeholder-regex drift test, which exercises the literal it extracted.
+//
+//   The gap is ASYMMETRIC drift — a .ts-only edit. Nothing in this file executes
+//   mint-session.ts, so the ONLY thing that can notice is a source assertion
+//   here, and it notices exactly what it names. That is why these pin the
+//   BRANCHES as well as the regexes, the normalization and the seal: measured at
+//   the #3805 review, `if (!oid)` -> `if (false)` and
+//   `if (PLACEHOLDER_OID.test(oid))` -> `if (false)` in mint-session.ts ALONE
+//   left the suite at 21/21, RC=0 — both enforcement branches of live code
+//   (global-setup.ts -> mintStorageState, _lib/uat.ts, tests/e2e/_shared.ts)
+//   deleted with no verdict moving anywhere.
+//
+//   A source assertion pins the SHAPE it names and nothing else. Anything about
+//   mint-session.ts these needles do not mention is unpinned.
 
 /**
  * Both files are read with CR stripped. `.gitattributes` does not pin these
@@ -354,6 +466,10 @@ const tsSrc = fs.readFileSync(MINT_SESSION_TS, 'utf8').replace(/\r/g, '');
 /** Every `/^0{8}-…/` literal in a file. */
 const placeholderLiterals = (src) =>
   src.match(/\/\^0\{8\}[^/\n]*\/[gimsuy]*/g) ?? [];
+
+/** Every `/^[0-9a-fA-F]{8}-…/` literal in a file. */
+const guidLiterals = (src) =>
+  src.match(/\/\^\[0-9a-fA-F\]\{8\}[^/\n]*\/[gimsuy]*/g) ?? [];
 
 /** The normalization expression, whitespace-collapsed. */
 const normalizeExpr = (src) => {
@@ -396,6 +512,47 @@ test('DRIFT: both guards still return a value (a void guard silently un-fixes 2b
   for (const [name, src] of [['mint-cookie.mjs', mjsSrc], ['mint-session.ts', tsSrc]]) {
     assert.match(src, /\n {2}return oid;\n\}/, `${name} must return the normalized oid`);
   }
+});
+
+test('DRIFT: both files still BRANCH on absence, malformation and the placeholder regex', () => {
+  // The four assertions above pin the regex LITERAL, the normalization
+  // EXPRESSION, the SEAL, and "it returns a value" — none of which is the
+  // enforcement. Deleting the `if`s leaves every one of those needles intact,
+  // which is exactly what happened: two one-file mutations of mint-session.ts
+  // passed 21/21, RC=0, in the isolated suite AND in the full guardrails runner.
+  for (const [name, src] of [['mint-cookie.mjs', mjsSrc], ['mint-session.ts', tsSrc]]) {
+    assert.match(src, /\n {2}if \(!oid\) \{\n/, `${name} no longer refuses an absent oid`);
+    assert.match(src, /\n {2}if \(oid\.includes\(','\)\) \{\n/, `${name} no longer refuses a comma-list`);
+    assert.match(src, /\n {2}if \(!GUID_RE\.test\(oid\)\) \{\n/, `${name} no longer tests the GUID shape`);
+    assert.match(
+      src,
+      /\n {2}if \(PLACEHOLDER_OID\.test\(oid\)\) \{\n/,
+      `${name} no longer tests the placeholder regex`,
+    );
+  }
+});
+
+test('DRIFT: both files carry exactly one GUID-shape regex, and it is the same one', () => {
+  const a = guidLiterals(mjsSrc);
+  const b = guidLiterals(tsSrc);
+  assert.equal(a.length, 1, `mint-cookie.mjs must carry exactly one GUID regex, found ${a.length}`);
+  assert.equal(b.length, 1, `mint-session.ts must carry exactly one GUID regex, found ${b.length}`);
+  assert.equal(b[0], a[0], 'the twin GUID regexes have diverged');
+  // Population control: exercise the literal that was actually found, so an
+  // assertion comparing two identically-broken regexes cannot pass silently.
+  const live = new RegExp(a[0].slice(1, a[0].lastIndexOf('/')), a[0].slice(a[0].lastIndexOf('/') + 1));
+  assert.ok(live.test(REAL_OID), 'the shared GUID regex must accept an ordinary object id');
+  assert.ok(live.test(NOT_A_PLACEHOLDER), 'the shared GUID regex must accept the negative control');
+  for (const bad of ['hello', 'a,b', '1', `${REAL_OID}x`]) {
+    assert.ok(!live.test(bad), `the shared GUID regex must reject ${JSON.stringify(bad)}`);
+  }
+  // And it is the SAME rule scripts/ci/resolve-automation-oid.mjs applies. Two
+  // copies of a shape rule that disagree is `csa_loom_guard_adoption_gap`, and
+  // that module rejecting `"a,b"` while the chokepoint sealed it is how this
+  // asymmetry was found in the first place.
+  const resolver = guidLiterals(fs.readFileSync(RESOLVER_MJS, 'utf8').replace(/\r/g, ''));
+  assert.equal(resolver.length, 1, `resolve-automation-oid.mjs must carry exactly one GUID regex, found ${resolver.length}`);
+  assert.equal(resolver[0], a[0], 'the CI resolver and the mint chokepoint disagree on what a GUID is');
 });
 
 // ─────────────────────────────── helpers ─────────────────────────────────────

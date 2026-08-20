@@ -52,7 +52,14 @@ const COOKIE_NAME = 'loom_session';
 const PLACEHOLDER_OID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i;
 
 /**
- * Refuse to mint under an absent or placeholder oid.
+ * An Entra object id is a single GUID. Anything else is not one. The TS mirror
+ * of `GUID_RE` in mint-cookie.mjs (itself byte-identical to the one in
+ * scripts/ci/resolve-automation-oid.mjs); the drift guard pins all of it.
+ */
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Refuse to mint under an absent, malformed, or placeholder oid.
  *
  * A minted session performs REAL writes, and Cosmos partitions `workspaces` on
  * the creator oid — so a placeholder writes into a partition no principal can
@@ -93,6 +100,24 @@ export function requireAutomationOid(claims: { oid?: string | null }): string {
       '  A minted session performs REAL writes and Cosmos partitions on the creator oid,\n' +
       '  so it must run as a real principal. Set LOOM_AUTOMATION_OID (or UAT_OID) to the\n' +
       '  automation identity for this estate. Refusing to mint without one (#3804).',
+    );
+  }
+  if (oid.includes(',')) {
+    throw new Error(
+      `[mint-session] claims.oid is a comma-separated list (${oid}) and was refused.\n` +
+      '  feature-gate.ts compares session.claims.oid === LOOM_TENANT_ADMIN_OID with strict\n' +
+      '  equality, so "a,b" matches neither a nor b — the run mints, drops to non-admin, and\n' +
+      '  reports the resulting 403s as endpoint defects.\n' +
+      '  Set LOOM_AUTOMATION_OID (or UAT_OID) to a single object id.',
+    );
+  }
+  if (!GUID_RE.test(oid)) {
+    throw new Error(
+      `[mint-session] claims.oid is not a GUID (${oid}) and was refused.\n` +
+      '  It names no Entra object, so the session it would mint asserts an identity that\n' +
+      '  cannot sign in — the same unreachable-partition debris a placeholder produces\n' +
+      '  (#3801/#3804), reached by a different route.\n' +
+      '  Set LOOM_AUTOMATION_OID (or UAT_OID) to a real automation identity.',
     );
   }
   if (PLACEHOLDER_OID.test(oid)) {

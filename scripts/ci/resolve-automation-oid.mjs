@@ -112,6 +112,11 @@ export const idHint = (id) => (id && id.length > 8 ? `${id.slice(0, 8)}…` : St
  * that mints fine and 403s on every admin route.
  */
 export function validateCandidate(raw) {
+  // `?? ''` is safe HERE, and only here, because GUID_RE runs below: a falsy
+  // non-null candidate (0, false) becomes "0"/"false" and is then rejected for
+  // its shape. Do NOT copy this line to a site with no shape check — the mint
+  // chokepoint (apps/fiab-console/e2e/auth/mint-cookie.mjs) deliberately uses
+  // `|| ''` for exactly that reason, and its own comment says so.
   const v = String(raw ?? '').replace(/\r/g, '').trim();
   if (!v) return { ok: false, code: 'empty', why: 'no value' };
   if (v.includes(',')) {
