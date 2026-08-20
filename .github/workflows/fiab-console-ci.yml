@@ -9,12 +9,19 @@
 #   Dockerfile runs (`pnpm build` == `next build`, node 20, pnpm 9, 4 GB heap),
 #   so module-resolution / bundling failures are caught at PR time instead.
 #
-#   next.config sets typescript.ignoreBuildErrors + eslint.ignoreDuringBuilds, so
-#   this mirrors deploy exactly: it does NOT fail on pure type/lint nits, but it
-#   DOES fail on anything that would break the real production build (unresolved
-#   imports, bad JSX, server/client boundary violations, etc.).
+#   What `pnpm build` does and does not fail on, as of next.config.mjs today:
+#   `typescript.ignoreBuildErrors` is FALSE, with `tsconfigPath` pinned to
+#   ./tsconfig.build.json — so the build DOES fail on type errors in app code
+#   (that tsconfig excludes only test/e2e/spec files, which Vitest owns and
+#   which must not gate a production build). `eslint.ignoreDuringBuilds` is
+#   still true, so lint nits do NOT fail `pnpm build` — they are caught by the
+#   separate `pnpm lint` step below, which is a real gate in its own right.
+#   This comment previously said ignoreBuildErrors was set and that the job
+#   therefore skipped type errors; that stopped being true and it understated
+#   the gate. Re-check it against next.config.mjs before trusting it. See #3811.
 #
-# Path-filtered to apps/fiab-console/** so it only runs when the console changes.
+# NOT path-filtered at the `on:` level — see the REQUIRED-CHECK note below for
+# why, and the internal change-detection step for how the heavy work is skipped.
 name: CSA Loom Console Build
 
 # NOTE: this job is a REQUIRED status check. It must therefore run (and report)
