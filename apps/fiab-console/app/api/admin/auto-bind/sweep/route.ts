@@ -26,6 +26,15 @@
  * to decide whether to render the button at all, and a 403 there would tell it
  * nothing it could use.
  *
+ * ADMIN IS NOT TENANT SCOPE. `withTenantAdmin` proves the caller administers A
+ * tenant; it says nothing about WHOSE items the sweep may touch. So the session
+ * is threaded into `sweepAutoBind`, which filters every row through
+ * `resolveWorkspaceAccessByOid` with this caller's `tid`. Without it the scan is
+ * cross-partition and therefore cross-tenant: `{}` from one tenant's admin would
+ * report another tenant's item ids and display names, and `{"dryRun":false}`
+ * would rewrite their ADF objects. Dropping `session` from the call below is a
+ * COMPILE ERROR, not a silent regression — see `SweepOptions`.
+ *
  * DRY-RUN IS THE DEFAULT (`dryRun !== false`), matching admin/lineage/reconcile:
  * a pass that writes to Azure must be asked for in so many words.
  *
@@ -37,6 +46,13 @@
  * strictly cheapens the next: a repaired item's record carries `seeded:true`,
  * which the sweep's first guard answers with zero control-plane calls. So
  * repeated calls converge — they do not re-do work.
+ *
+ * That cheapening depends on a COSMOS WRITE, not on the in-memory merge
+ * `autoBindOnOpen` also performs: the next request is a different process and
+ * re-reads the document. `persistAutoBindPatch` swallows a failed write by
+ * design, so each row now reports `persisted`, and a row with `persisted:false`
+ * is the signal that convergence is NOT happening — without it a sweep that
+ * re-seeds the same items forever looks identical to one that is working.
  *
  * ## Why an admin route and not the internal scheduler
  *
@@ -68,7 +84,7 @@ export const GET = withSession(async (_req, { session: s }) => {
   return apiOk({ isAdmin: isTenantAdmin(s), itemTypes: sweepableItemTypes() });
 });
 
-export const POST = withTenantAdmin(async (req: NextRequest) => {
+export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   const body = await req.json().catch(() => ({}));
   // Default DRY-RUN: writing to Azure must be explicitly requested.
   const dryRun = body?.dryRun !== false;
@@ -80,6 +96,9 @@ export const POST = withTenantAdmin(async (req: NextRequest) => {
 
   try {
     const result = await sweepAutoBind({
+      // The caller. Every row is filtered against THIS session's workspace
+      // access before it is reported or written to — see the module docblock.
+      session,
       dryRun,
       workspaceId,
       itemTypes,

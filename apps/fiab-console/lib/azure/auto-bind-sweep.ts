@@ -42,9 +42,33 @@
  * call site would reach it", and #3694 tracks the wiring that would change that.
  * This sweep IS such a call site, which is worth saying on #3694 — but adding
  * three data-plane emptiness probes is that issue's work, not this one's.
+ *
+ * ## The scan is TENANT-SCOPED, and that is not optional
+ *
+ * The Cosmos enumeration below is cross-partition by design — sweeping a backlog
+ * means not knowing which workspace holds it. Cross-partition is therefore
+ * cross-TENANT unless something scopes it, and nothing in the query can: the
+ * `items` container is partitioned by `workspaceId`, and the tenant a workspace
+ * belongs to is recorded on the WORKSPACE doc, not the item. So every row the
+ * page returns is filtered through `resolveWorkspaceAccessByOid` with the
+ * caller's `tid` — the same per-row chokepoint `listAllOwnedItems` uses, for the
+ * same reason (#2703).
+ *
+ * That filter runs in `sweepAutoBind`, BEFORE classification, so it covers both
+ * the dry-run report and the live mutation path with one gate. Putting it in
+ * `loadSweepItems` would have left the `loadItems` test seam as a way around it.
+ *
+ * `session` is REQUIRED on {@link SweepOptions} for the same reason
+ * `WorkspaceAccessOpts` is required on the resolver: a boundary that a caller
+ * can switch off by omitting an argument reads as enforced and is not. A future
+ * scheduler (the ACA Job the route's docblock describes) has to supply a caller
+ * identity too — "there was nobody to attribute it to" is not a licence to
+ * enumerate and rewrite every tenant's items.
  */
 import type { SqlParameter } from '@azure/cosmos';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import type { SessionPayload } from '@/lib/auth/session';
+import { resolveWorkspaceAccessByOid, type WorkspaceAccessOpts } from '@/lib/auth/workspace-access';
 import {
   autoBindContextFromItem,
   autoBindOnOpen,
@@ -99,6 +123,24 @@ export interface SweepRow {
   disposition: SweepDisposition;
   /** Why this row got that disposition. Always populated. */
   reason: string;
+  /**
+   * LIVE only — did the engine's provenance write LAND in Cosmos on this pass?
+   *
+   * Undefined on a dry-run row and on any live row the engine was never handed
+   * (those cost no write, so there is nothing to report). Present and `false`
+   * means the repair happened in Azure but the `state.autoBind` stamp did not
+   * persist, and `persistAutoBindPatch` swallows that by design
+   * (`auto-bind.ts` — "a failed provenance write must never break the editor
+   * open that triggered it").
+   *
+   * That swallow is right for an editor open and WRONG for a sweep, because the
+   * route's "each pass strictly cheapens the next" claim is a claim about what
+   * the NEXT pass re-reads from Cosmos. If the stamp never lands, every sweep
+   * re-seeds the same items and reports `repaired` forever with the count never
+   * falling and nothing saying why. Surfacing it is what makes that observable
+   * instead of silent.
+   */
+  persisted?: boolean;
 }
 
 export interface SweepResult {
@@ -106,6 +148,14 @@ export interface SweepResult {
   dryRun: boolean;
   /** Items examined. */
   scanned: number;
+  /**
+   * Rows the Cosmos page returned that the caller cannot see — dropped by the
+   * workspace-access boundary before classification. A COUNT only: naming them
+   * would be the cross-tenant disclosure the filter exists to prevent. Reported
+   * rather than silently discarded so `scanned` is never read as "everything the
+   * query found".
+   */
+  excludedByAccess: number;
   /** Count per disposition — the summary a support engineer reads first. */
   byDisposition: Record<string, number>;
   rows: SweepRow[];
@@ -121,7 +171,14 @@ export interface SweepResult {
 export interface SweepOptions {
   /** Write when false. Callers must opt IN to mutation; see the route. */
   dryRun: boolean;
-  /** Restrict to one workspace. Omitted → every workspace the container holds. */
+  /**
+   * The CALLER. Required, and deliberately not optional: every row the scan
+   * returns is filtered through `resolveWorkspaceAccessByOid` with this
+   * session's `oid` + `tid`, and a boundary a caller can disable by leaving an
+   * argument out is the exact shape of #2703. See the module docblock.
+   */
+  session: SessionPayload;
+  /** Restrict to one workspace. Omitted → every workspace the CALLER can see. */
   workspaceId?: string;
   /** Restrict to specific item types. Omitted → every type a provider claims. */
   itemTypes?: readonly string[];
@@ -183,6 +240,12 @@ function carriesContentObject(state: Record<string, unknown> | undefined): boole
  * The Cosmos client is imported DYNAMICALLY, matching `persistAutoBindPatch` in
  * the sibling module: a caller that injects `loadItems` (every unit test, and
  * any future caller with its own enumeration) then never loads it at all.
+ *
+ * NOT tenant-scoped, and cannot be: the `items` container is partitioned by
+ * `workspaceId` and carries no tenant field, so the boundary lives one level up
+ * in `sweepAutoBind` where each row is resolved against the caller's access.
+ * Nothing here — and nothing a `loadItems` seam returns — reaches classification
+ * or mutation without passing that filter.
  */
 async function loadSweepItems(o: {
   itemTypes: string[];
@@ -207,12 +270,67 @@ async function loadSweepItems(o: {
   return resources;
 }
 
+/**
+ * Build the access options for the CALLER from their own session.
+ *
+ * Mirrors `item-crud`'s private `accessOptsFor` field for field, including the
+ * empty-`groups` care: an empty array is truthy and would send
+ * `resolveEffectiveRole` down its "group set already known" fast path, silently
+ * skipping the Graph membership probe (#3175 — the claim is never populated
+ * live today, so this is latent rather than active).
+ *
+ * There is no ambient-session branch here because there is no principal
+ * mismatch to guard against: the `oid` IS `session.claims.oid`. `isTenantAdmin`
+ * is imported dynamically so this module keeps its static graph free of a
+ * feature-gate (and therefore Cosmos) edge, matching `ambientAccessOptsFor`.
+ */
+async function accessOptsForCaller(session: SessionPayload): Promise<WorkspaceAccessOpts> {
+  const { isTenantAdmin } = await import('@/lib/auth/feature-gate');
+  return {
+    callerTid: session.claims.tid,
+    groups: session.claims.groups?.length ? session.claims.groups : undefined,
+    tenantAdmin: isTenantAdmin(session),
+  };
+}
+
+/**
+ * Drop every row of a Cosmos page the caller cannot see.
+ *
+ * One resolve per DISTINCT workspace (cached), which is what keeps this cheap on
+ * a page of 200 items spread over a handful of workspaces — the same shape, and
+ * the same cache, as `listAllOwnedItems`.
+ *
+ * The tenant-admin bypass inside the resolver (step 6) is what lets an admin
+ * sweep workspaces they neither own nor are a member of; the tid comparison runs
+ * BEFORE it, so that bypass stays scoped to the admin's own tenant.
+ */
+async function scopeToCallerAccess(
+  page: readonly WorkspaceItem[],
+  session: SessionPayload,
+): Promise<{ visible: WorkspaceItem[]; excluded: number }> {
+  if (page.length === 0) return { visible: [], excluded: 0 };
+  const oid = session.claims.oid;
+  const opts = await accessOptsForCaller(session);
+  const cache = new Map<string, boolean>();
+  const visible: WorkspaceItem[] = [];
+  for (const it of page) {
+    let ok = cache.get(it.workspaceId);
+    if (ok === undefined) {
+      ok = (await resolveWorkspaceAccessByOid(oid, it.workspaceId, opts)) !== null;
+      cache.set(it.workspaceId, ok);
+    }
+    if (ok) visible.push(it);
+  }
+  return { visible, excluded: page.length - visible.length };
+}
+
 function row(
   item: WorkspaceItem,
   provider: string | null,
   backingName: string | null,
   disposition: SweepDisposition,
   reason: string,
+  persisted?: boolean,
 ): SweepRow {
   return {
     itemId: item.id,
@@ -223,6 +341,7 @@ function row(
     backingName,
     disposition,
     reason,
+    ...(persisted === undefined ? {} : { persisted }),
   };
 }
 
@@ -315,7 +434,7 @@ async function repairOne(
     return preview;
   }
 
-  const { outcome } = await autoBindOnOpen(item, undefined, { providers });
+  const { outcome, persisted } = await autoBindOnOpen(item, undefined, { providers });
 
   // `has-content` is handed over for its SIDE EFFECT, not for a verdict. The
   // engine's refusal stamps `seeded:true` ("stops every later open paying for
@@ -323,21 +442,27 @@ async function repairOne(
   // cheaper than the last. But the verdict stays the one WE measured: the
   // engine reports that refusal as `seeded:true`, and reading that back as
   // `repaired` would credit the sweep with a write it did not make.
-  if (!actionable) return preview;
+  //
+  // `persisted` rides along even here — ESPECIALLY here. The cheapening is a
+  // property of the Cosmos document the next pass re-reads, not of the
+  // in-memory item this one mutated, so a row that reports the refusal without
+  // reporting whether the stamp landed is asserting convergence it did not
+  // establish.
+  if (!actionable) return { ...preview, persisted };
 
   if (outcome.status === 'unsupported') {
-    return row(item, preview.provider, null, 'unsupported', 'The engine resolved no provider for this item.');
+    return row(item, preview.provider, null, 'unsupported', 'The engine resolved no provider for this item.', persisted);
   }
   if (outcome.status === 'unavailable') {
-    return row(item, outcome.provider, null, 'unavailable', outcome.reason);
+    return row(item, outcome.provider, null, 'unavailable', outcome.reason, persisted);
   }
   if (outcome.status === 'retry') {
-    return row(item, outcome.provider, null, 'retry', outcome.reason);
+    return row(item, outcome.provider, null, 'retry', outcome.reason, persisted);
   }
 
   const r = outcome.record;
   if (r.seedError) {
-    return row(item, r.provider, r.backingName, 'seed-failed', r.seedError);
+    return row(item, r.provider, r.backingName, 'seed-failed', r.seedError, persisted);
   }
 
   // The reason is always the ENGINE's own `seedDetail`, never a sentence of
@@ -348,23 +473,34 @@ async function repairOne(
   const created = r.via === 'created' || r.via === 'recreated';
   if (r.seeded === true) {
     return row(item, r.provider, r.backingName, created ? 'created' : 'repaired',
-      r.seedDetail || (created ? 'Backing object created and seeded.' : 'Authored content written into the empty backing object.'));
+      r.seedDetail || (created ? 'Backing object created and seeded.' : 'Authored content written into the empty backing object.'),
+      persisted);
   }
   return row(item, r.provider, r.backingName, 'no-authored-content',
     r.seedDetail
     || (created
       ? 'The engine created the backing object and found no authored content of a kind this provider seeds.'
       : 'The engine found no authored content of a kind this provider seeds — for a blank item this is the '
-        + 'CORRECT state, not a defect.'));
+        + 'CORRECT state, not a defect.'),
+    persisted);
 }
 
 /**
- * Sweep every auto-bindable item, repairing empty backing objects.
+ * Sweep every auto-bindable item THE CALLER CAN SEE, repairing empty backing
+ * objects.
  *
  * Sequential by design. A healthy item costs zero control-plane calls (guard 1),
  * so the expensive rows are exactly the broken ones, and serializing them keeps
  * a large estate from throttling the ADF control plane — the failure mode that
  * would turn a repair pass into a self-inflicted outage.
+ *
+ * KNOWN LIMIT, stated rather than discovered later: the row cap applies to the
+ * Cosmos page, and the access filter runs after it. On an estate holding many
+ * tenants, a caller's own items can therefore be crowded out of page 1 by rows
+ * they cannot see — the sweep returns `truncated:true` with a small `scanned`
+ * and a large `excludedByAccess`, which is honest but does not converge by
+ * re-running (there is no continuation token yet). Scoping with `workspaceId`
+ * side-steps it entirely.
  */
 export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   const providers = opts.providers ?? AUTO_BIND_PROVIDERS;
@@ -382,16 +518,23 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   let truncatedBy: SweepResult['truncatedBy'];
 
   if (itemTypes.length === 0) {
-    return { dryRun: opts.dryRun, scanned: 0, byDisposition: {}, rows, truncated: false };
+    return { dryRun: opts.dryRun, scanned: 0, excludedByAccess: 0, byDisposition: {}, rows, truncated: false };
   }
 
   // Ask for one more than the cap so a full page is distinguishable from an
   // exactly-full estate. Reporting a truncated scan as complete is the whole
   // class of defect this repo keeps re-learning.
   const load = opts.loadItems ?? loadSweepItems;
-  const items = await load({ itemTypes, workspaceId: opts.workspaceId, limit: limit + 1 });
-  const scanList = items.slice(0, limit);
-  if (items.length > limit) {
+  const page = await load({ itemTypes, workspaceId: opts.workspaceId, limit: limit + 1 });
+
+  // THE TENANT BOUNDARY. Applied to the page BEFORE anything classifies,
+  // reports or mutates it, so dry-run and live are gated by one filter and the
+  // `loadItems` seam is not a way around it. Truncation is still judged on the
+  // RAW page: the query really did fill it, and saying otherwise because rows
+  // were filtered out afterwards would report a partial scan as complete.
+  const { visible, excluded } = await scopeToCallerAccess(page, opts.session);
+  const scanList = visible.slice(0, limit);
+  if (page.length > limit) {
     truncated = true;
     truncatedBy = 'limit';
   }
@@ -414,5 +557,5 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   const byDisposition: Record<string, number> = {};
   for (const r of rows) byDisposition[r.disposition] = (byDisposition[r.disposition] || 0) + 1;
 
-  return { dryRun: opts.dryRun, scanned: rows.length, byDisposition, rows, truncated, truncatedBy };
+  return { dryRun: opts.dryRun, scanned: rows.length, excludedByAccess: excluded, byDisposition, rows, truncated, truncatedBy };
 }

@@ -1,0 +1,223 @@
+/**
+ * BFF contract tests for /api/admin/auto-bind/sweep — the bulk auto-bind repair.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS FILE EXISTS
+ * ---------------------------------------------------------------------------
+ * It did not, until review found that out. `grep -rln "auto-bind/sweep"`
+ * returned exactly three files — the route, the generated client route map, and
+ * the lib spec — so nothing exercised the route's own decisions: the dry-run
+ * default, body parsing, the auth gates, or the caller identity it hands the
+ * sweep. This is the only production caller of `sweepAutoBind` and the only
+ * thing standing between an admin and an unrequested bulk write to ADF.
+ *
+ * `sweepAutoBind` is mocked, deliberately: what is under test here is the
+ * ROUTE's contract, and the engine has its own 39-spec suite next door. The
+ * mock is what makes "the route asked for a dry-run" observable at all.
+ *
+ * Shaped after `app/api/admin/lineage/reconcile/__tests__/route.test.ts`, whose
+ * dry-run default this route's docblock cites as precedent — including its
+ * `requireTenantAdmin` gate, so the 401/403 envelopes are pinned the same way.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+let sessionVal: any = null;
+let adminDenied: any = null;
+let isAdminVal = true;
+
+vi.mock('@/lib/auth/session', () => ({ getSession: () => sessionVal }));
+vi.mock('@/lib/auth/feature-gate', async () => {
+  const { NextResponse } = await import('next/server');
+  return {
+    isTenantAdmin: () => isAdminVal,
+    requireTenantAdmin: () =>
+      adminDenied ? NextResponse.json({ ok: false, error: 'forbidden', code: 'admin_only' }, { status: 403 }) : null,
+  };
+});
+
+const sweepMock = vi.fn();
+vi.mock('@/lib/azure/auto-bind-sweep', () => ({
+  sweepAutoBind: (...a: any[]) => sweepMock(...a),
+  sweepableItemTypes: () => ['data-pipeline', 'eventstream'],
+}));
+
+import { GET, POST } from '../route';
+
+const CALLER_OID = 'oid-admin';
+const CALLER_TID = 'tid-alpha';
+const SESSION = { claims: { oid: CALLER_OID, tid: CALLER_TID }, exp: 4_102_444_800 };
+
+/** The route context Next hands an app-router handler. */
+const CTX = { params: Promise.resolve({}) } as any;
+
+/** A request whose body parses to `body`. */
+const req = (body?: any) => ({ json: async () => body ?? {} }) as any;
+/** A request with an UNPARSEABLE body — the `.catch(() => ({}))` path. */
+const badReq = () => ({ json: async () => { throw new SyntaxError('Unexpected token < in JSON at position 0'); } }) as any;
+
+const RESULT = {
+  dryRun: true,
+  scanned: 2,
+  excludedByAccess: 0,
+  byDisposition: { 'would-repair': 1, 'already-healthy': 1 },
+  rows: [],
+  truncated: false,
+};
+
+beforeEach(() => {
+  sessionVal = SESSION;
+  adminDenied = null;
+  isAdminVal = true;
+  sweepMock.mockReset().mockResolvedValue(RESULT);
+});
+
+describe('POST /api/admin/auto-bind/sweep — the gates', () => {
+  it('401 when unauthenticated, and never reaches the sweep', async () => {
+    sessionVal = null;
+    const res = await POST(req({ dryRun: false }), CTX);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ ok: false, error: 'unauthenticated' });
+    // The load-bearing half: a bulk ADF write must not have been attempted.
+    expect(sweepMock).not.toHaveBeenCalled();
+  });
+
+  it('403 when the caller is signed in but is NOT a tenant admin', async () => {
+    adminDenied = true;
+    const res = await POST(req({ dryRun: false }), CTX);
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('admin_only');
+    expect(sweepMock).not.toHaveBeenCalled();
+  });
+
+  it('200 for an admin — the control that the two rejections above discriminate', async () => {
+    const res = await POST(req({}), CTX);
+    expect(res.status).toBe(200);
+    expect(sweepMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/admin/auto-bind/sweep — dry-run is the default', () => {
+  it('no dryRun → defaults to true', async () => {
+    const res = await POST(req({}), CTX);
+    expect(res.status).toBe(200);
+    expect(sweepMock.mock.calls[0][0]).toMatchObject({ dryRun: true });
+  });
+
+  it('an UNPARSEABLE body still defaults to a dry-run rather than 500-ing', async () => {
+    const res = await POST(badReq(), CTX);
+    expect(res.status).toBe(200);
+    expect(sweepMock.mock.calls[0][0]).toMatchObject({ dryRun: true });
+  });
+
+  it('an explicit dryRun:true is a dry-run', async () => {
+    await POST(req({ dryRun: true }), CTX);
+    expect(sweepMock.mock.calls[0][0]).toMatchObject({ dryRun: true });
+  });
+
+  it('ONLY the literal `false` opts into writing', async () => {
+    await POST(req({ dryRun: false }), CTX);
+    expect(sweepMock.mock.calls[0][0]).toMatchObject({ dryRun: false });
+  });
+
+  it('a TRUTHY-STRING "false" does not — a coerced body cannot start a write', async () => {
+    // `!== false` is deliberate: `Boolean("false")` is true, so a client that
+    // sends form-encoded or query-string values must not be able to trip the
+    // mutation path by accident.
+    await POST(req({ dryRun: 'false' }), CTX);
+    expect(sweepMock.mock.calls[0][0]).toMatchObject({ dryRun: true });
+  });
+
+  it('null / 0 / undefined are all dry-runs', async () => {
+    for (const dryRun of [null, 0, undefined]) {
+      sweepMock.mockClear();
+      await POST(req({ dryRun }), CTX);
+      expect(sweepMock.mock.calls[0][0]).toMatchObject({ dryRun: true });
+    }
+  });
+});
+
+describe('POST /api/admin/auto-bind/sweep — the caller is threaded through', () => {
+  it('hands the sweep THIS session, so the tenant boundary can run', async () => {
+    await POST(req({ dryRun: false }), CTX);
+    // Without this the scan is cross-partition and therefore cross-tenant: the
+    // rows returned, and the ADF objects rewritten, would be whatever the
+    // container happened to hold. `withTenantAdmin` proves the caller
+    // administers A tenant; it says nothing about WHOSE items may be touched.
+    expect(sweepMock.mock.calls[0][0].session).toBe(sessionVal);
+    expect(sweepMock.mock.calls[0][0].session.claims.tid).toBe(CALLER_TID);
+  });
+});
+
+describe('POST /api/admin/auto-bind/sweep — body parsing', () => {
+  it('forwards workspaceId, itemTypes and limit, plus its own deadline', async () => {
+    await POST(req({ workspaceId: 'ws-7', itemTypes: ['data-pipeline'], limit: 25 }), CTX);
+    expect(sweepMock.mock.calls[0][0]).toMatchObject({
+      workspaceId: 'ws-7',
+      itemTypes: ['data-pipeline'],
+      limit: 25,
+      // Smaller than `maxDuration`, so a large backlog returns a partial result
+      // instead of being killed by the host with nothing to show.
+      deadlineMs: 100_000,
+    });
+  });
+
+  it('drops non-string members of itemTypes rather than passing them on', async () => {
+    await POST(req({ itemTypes: ['data-pipeline', 42, null, { x: 1 }] }), CTX);
+    expect(sweepMock.mock.calls[0][0].itemTypes).toEqual(['data-pipeline']);
+  });
+
+  it('ignores a non-string workspaceId and a non-finite limit', async () => {
+    await POST(req({ workspaceId: { id: 'ws-7' }, limit: 'lots' }), CTX);
+    const opts = sweepMock.mock.calls[0][0];
+    expect(opts.workspaceId).toBeUndefined();
+    expect(opts.limit).toBeUndefined();
+  });
+
+  it('ignores a non-array itemTypes', async () => {
+    await POST(req({ itemTypes: 'data-pipeline' }), CTX);
+    expect(sweepMock.mock.calls[0][0].itemTypes).toBeUndefined();
+  });
+});
+
+describe('POST /api/admin/auto-bind/sweep — the envelope', () => {
+  it('returns the sweep result under ok:true', async () => {
+    const res = await POST(req({}), CTX);
+    expect(await res.json()).toEqual({ ok: true, ...RESULT });
+  });
+
+  it('a thrown sweep becomes a generic 500, not a leaked stack', async () => {
+    sweepMock.mockRejectedValue(new Error('ADF said 403 for factory adf-prod'));
+    const res = await POST(req({ dryRun: false }), CTX);
+    expect(res.status).toBe(500);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(JSON.stringify(j)).not.toContain('adf-prod');
+  });
+});
+
+describe('GET /api/admin/auto-bind/sweep', () => {
+  it('answers the admin probe + the sweepable types for a signed-in caller', async () => {
+    const res = await GET(req(), CTX);
+    expect(await res.json()).toEqual({
+      ok: true,
+      isAdmin: true,
+      itemTypes: ['data-pipeline', 'eventstream'],
+    });
+  });
+
+  it('is session-only, so a NON-admin gets isAdmin:false rather than a 403', async () => {
+    // Deliberate: the UI needs the answer to decide whether to render the
+    // button. A 403 here would tell it nothing it could use.
+    isAdminVal = false;
+    adminDenied = true;
+    const res = await GET(req(), CTX);
+    expect(res.status).toBe(200);
+    expect((await res.json()).isAdmin).toBe(false);
+  });
+
+  it('401 when unauthenticated', async () => {
+    sessionVal = null;
+    const res = await GET(req(), CTX);
+    expect(res.status).toBe(401);
+  });
+});
