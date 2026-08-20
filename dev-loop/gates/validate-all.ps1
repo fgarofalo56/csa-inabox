@@ -85,6 +85,29 @@ foreach ($r in $results) {
     Write-Host "  $($r.Gate): $status" -ForegroundColor $color
 }
 
+# A gate suite that ran NOTHING must not report a pass. $allPassed is
+# initialised $true and is only ever moved by a gate that actually ran and
+# failed, so an empty $results reaches the success branch below by default:
+# "I measured nothing" and "everything passed" would otherwise print the same
+# words and return the same exit code.
+#
+# That case is not rare. It is EVERY console-only, docs-only, workflow-only or
+# script-only change, because dev-loop/gates has no TypeScript leg at all -
+# there is no validate-typescript.ps1, and nothing here mentions the console.
+# See #3811.
+#
+# Exit stays 0 deliberately. Exiting 1 would be a second false statement
+# ("Some gates failed" is equally untrue) and would break docs-only loops.
+# What changes is that the OUTPUT can no longer be quoted as a pass.
+if ($results.Count -eq 0) {
+    Write-Host "  (none)" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "NOT VERIFIED - 0 gates ran for this change." -ForegroundColor Yellow
+    Write-Host "  This is NOT a pass. Nothing in this diff is covered by a gate in dev-loop/gates/." -ForegroundColor Yellow
+    Write-Host "  Console changes are gated by fiab-console-ci (next build + vitest), not by this script." -ForegroundColor Yellow
+    exit 0
+}
+
 Write-Host ""
 if ($allPassed) {
     Write-Host "All gates passed!" -ForegroundColor Green
