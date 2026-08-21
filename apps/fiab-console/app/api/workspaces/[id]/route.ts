@@ -15,6 +15,23 @@ import {
   type WorkspaceAccess,
   type WorkspaceAccessDiagnostics,
 } from '@/lib/auth/workspace-access';
+import { workspaceDenialResponse } from '@/lib/auth/workspace-denial';
+// WHY THAT IMPORT EXISTS. `workspaceDenialResponse` renders a resolver REFUSAL
+// (as opposed to a plain absence of access) honestly. A 404 "Workspace not
+// found" would be false on both counts: the workspace WAS read, and the caller's
+// admin rights are real. Per `deploy-integrity.md` R7 the response states only
+// what was established — the tenancy is unconfirmed — and names the exact
+// remediation. 409 (not 403) because the blocker is a state of the data, not of
+// the caller's permissions.
+//
+// #3825 — that renderer used to be a local function in THIS file. It MOVED,
+// unchanged, to `lib/auth/workspace-denial.ts` because the same refusal is now
+// reachable from every `authorizeWorkspace` / `authorizeItemWorkspace` /
+// `resolveAdminWorkspace` call site (the tenant-admin short-circuit those guards
+// used to take is gone). One definition, so the remediation string cannot drift
+// between surfaces. This note is a line comment, and deliberately: as a `/** */`
+// block it outlived the function it documented and floated down onto
+// `export async function GET`, where it read as GET's own documentation.
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { logSafe } from '@/lib/util/log-safe';
@@ -36,7 +53,7 @@ function err(error: string, status: number, code?: string) {
  * #3823 — this is the surface a tenant admin lands on from /admin/workspaces,
  * so it is the one that must not render the tightened admin-open bypass as a
  * bare 404. `diag.denial` carries the resolver's reason when it refused a grant
- * because the workspace's tenancy could not be CONFIRMED; `denialResponse`
+ * because the workspace's tenancy could not be CONFIRMED; `workspaceDenialResponse`
  * below turns that into a 409 that says so, with the backfill remediation.
  */
 async function loadWorkspaceAccess(id: string): Promise<{
@@ -63,32 +80,13 @@ async function loadWorkspaceAccess(id: string): Promise<{
   return { access, session, diag };
 }
 
-/**
- * Render a resolver REFUSAL (as opposed to a plain absence of access) honestly.
- *
- * A 404 "Workspace not found" would be false here on both counts: the workspace
- * WAS read, and the caller's admin rights are real. Per `deploy-integrity.md` R7
- * the response states only what was established — the tenancy is unconfirmed —
- * and names the exact remediation. 409 (not 403) because the blocker is a state
- * of the data, not of the caller's permissions.
- */
-function denialResponse(diag: WorkspaceAccessDiagnostics) {
-  const d = diag.denial;
-  if (!d) return null;
-  return apiError(d.reason, 409, {
-    code: d.code,
-    remediation: d.remediation,
-    workspaceId: d.workspaceId,
-  });
-}
-
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const { access, session, diag } = await loadWorkspaceAccess(params.id);
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
     // Any role (including Viewer/Contributor) may READ the workspace.
-    if (!access) return denialResponse(diag) ?? err('Workspace not found', 404, 'not_found');
+    if (!access) return workspaceDenialResponse(diag) ?? err('Workspace not found', 404, 'not_found');
     const ws = access.workspace;
     // OneLake path: derived from LOOM_ONELAKE_BASE env + workspace name.
     // Read-only; consumers use this to surface the abfss:// URL in the
@@ -111,7 +109,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
   try {
-    if (!access) return denialResponse(diag) ?? err('Workspace not found', 404, 'not_found');
+    if (!access) return workspaceDenialResponse(diag) ?? err('Workspace not found', 404, 'not_found');
     // Mutations require a write-capable role (Owner/Admin/Member).
     if (!access.canWrite) return err('You have read-only access to this workspace.', 403, 'read_only_role');
     const ws = access.workspace;
@@ -147,7 +145,7 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
   // flag) is catalog-only — Azure resources are retained.
   const cascade = req.nextUrl.searchParams.get('cascade') === 'true';
   try {
-    if (!access) return denialResponse(diag) ?? err('Workspace not found', 404, 'not_found');
+    if (!access) return workspaceDenialResponse(diag) ?? err('Workspace not found', 404, 'not_found');
     // Deleting a whole workspace stays OWNER/Admin-scoped — a Member can
     // write items but must not be able to destroy the shared workspace.
     if (access.via !== 'owner' && access.role !== 'Admin') {

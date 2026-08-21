@@ -19,6 +19,26 @@
  * caller can read `workspace.domain` for the card badge) or null when the caller
  * has no access at all, in which case the route returns 404 (we never leak the
  * existence of a workspace the caller can't see).
+ *
+ * #3825 — THIS IS A WORKSPACE AUTHORIZER, AND IT WAS NOT COVERED BY THE GUARD
+ * THAT SAYS SO. Recorded here rather than quietly fixed: until 2026-08-21
+ * `scripts/ci/check-tid-boundary-chokepoint.mjs` held a hand-written table of
+ * TWO authorizers, both in `workspace-guard.ts`, and this file was in neither —
+ * even though `workspace-guard.ts`'s own docblock names it. An independent
+ * review inserted the literal #3825 defect here
+ *
+ *     if (isTenantAdmin(session)) return { role: 'Admin', canWrite: true };
+ *
+ * and the guard exited 0 on 177 files / 2250 tests. Two seams did it: the table
+ * never opened this file, and the guard modelled an ALLOW as `return null` —
+ * which is the convention in `workspace-guard.ts` and the exact INVERSE of the
+ * one here, where a non-null value IS the grant. The authorizer set is now
+ * DERIVED from `lib/auth/**` and both ALLOW conventions are modelled, so the
+ * single line below is checked as an authorizer whatever this file is called.
+ *
+ * The delegation must therefore stay UNCONDITIONAL: no fast path, no admin
+ * short-circuit, and `tenantAdmin` passed DOWN as an argument rather than acted
+ * on here. That is what the code does today; the guard is what keeps it true.
  */
 import type { SessionPayload } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';

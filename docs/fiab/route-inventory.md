@@ -359,30 +359,30 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/webhooks/[id]/route.ts` | GET PATCH DELETE | admin |  | Azure Monitor, Cosmos |
 | `admin/webhooks/[id]/test/route.ts` | POST | admin |  | Cosmos |
 | `admin/webhooks/route.ts` | GET POST | admin |  | Azure Monitor, Cosmos |
-| `admin/workspaces/[id]/cmk/route.ts` | GET POST DELETE | admin | ● | ARM, Azure RBAC, Azure Storage, Cosmos, Key Vault |
+| `admin/workspaces/[id]/cmk/route.ts` | GET POST DELETE | admin | ● | ARM, Azure RBAC, Azure Storage, Cosmos, Key Vault, Microsoft Graph |
 | `admin/workspaces/[id]/connections/[connId]/route.ts` | DELETE | admin |  | Cosmos, Microsoft Graph |
 | `admin/workspaces/[id]/connections/adls-accounts/route.ts` | GET | admin |  | ARM, Azure Storage, Cosmos, Microsoft Graph |
 | `admin/workspaces/[id]/connections/log-analytics-workspaces/route.ts` | GET | admin |  | ARM, Cosmos, Log Analytics, Microsoft Graph |
 | `admin/workspaces/[id]/connections/route.ts` | GET POST | admin |  | ADLS, ARM, Azure RBAC, Azure Storage, Cosmos, Log Analytics, Managed Identity, Microsoft Graph |
 | `admin/workspaces/[id]/folders/route.ts` | GET POST PATCH DELETE | admin |  | Cosmos |
 | `admin/workspaces/[id]/git/branch-out/route.ts` | POST | admin |  | ADF, ADLS, ADX, AI Search, ARM, Azure DevOps, Azure RBAC, Azure SQL, Azure Storage, Compute, Cosmos, Event Hubs, Fabric, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `admin/workspaces/[id]/git/meta/route.ts` | GET | admin |  | Azure DevOps, Cosmos, Key Vault |
-| `admin/workspaces/[id]/git/route.ts` | GET POST DELETE | admin |  | Azure DevOps, Cosmos, Key Vault |
-| `admin/workspaces/[id]/git/status/route.ts` | GET | admin |  | Azure DevOps, Cosmos, Key Vault |
-| `admin/workspaces/[id]/git/sync/route.ts` | POST | admin |  | Azure DevOps, Cosmos, Key Vault |
-| `admin/workspaces/[id]/identity/route.ts` | GET POST | admin |  | ADX, ARM, Azure Cache for Redis, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Managed Identity, Resource Graph |
+| `admin/workspaces/[id]/git/meta/route.ts` | GET | admin |  | Azure DevOps, Cosmos, Key Vault, Microsoft Graph |
+| `admin/workspaces/[id]/git/route.ts` | GET POST DELETE | admin |  | Azure DevOps, Cosmos, Key Vault, Microsoft Graph |
+| `admin/workspaces/[id]/git/status/route.ts` | GET | admin |  | Azure DevOps, Cosmos, Key Vault, Microsoft Graph |
+| `admin/workspaces/[id]/git/sync/route.ts` | POST | admin |  | Azure DevOps, Cosmos, Key Vault, Microsoft Graph |
+| `admin/workspaces/[id]/identity/route.ts` | GET POST | admin |  | ADX, ARM, Azure Cache for Redis, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Managed Identity, Microsoft Graph, Resource Graph |
 | `admin/workspaces/[id]/m365/route.ts` | POST | admin |  | AI Search, Cosmos, Microsoft Graph |
-| `admin/workspaces/[id]/networking/inbound/route.ts` | GET POST | admin |  | ARM, Azure Networking, Cosmos |
-| `admin/workspaces/[id]/networking/ip-rules/route.ts` | GET POST DELETE | admin |  | ARM, Azure Networking, Cosmos |
-| `admin/workspaces/[id]/networking/outbound/route.ts` | GET POST DELETE | admin |  | ARM, Azure Networking, Cosmos |
-| `admin/workspaces/[id]/networking/trusted-resources/route.ts` | GET POST DELETE | admin | ● | ARM, Azure Storage, Cosmos, Managed Identity |
-| `admin/workspaces/[id]/networking/trusted/route.ts` | GET POST DELETE | admin |  | ARM, Azure Networking, Cosmos |
-| `admin/workspaces/[id]/route.ts` | GET PATCH DELETE | admin |  | AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Fabric, Managed Identity |
+| `admin/workspaces/[id]/networking/inbound/route.ts` | GET POST | admin |  | ARM, Azure Networking, Cosmos, Microsoft Graph |
+| `admin/workspaces/[id]/networking/ip-rules/route.ts` | GET POST DELETE | admin |  | ARM, Azure Networking, Cosmos, Microsoft Graph |
+| `admin/workspaces/[id]/networking/outbound/route.ts` | GET POST DELETE | admin |  | ARM, Azure Networking, Cosmos, Microsoft Graph |
+| `admin/workspaces/[id]/networking/trusted-resources/route.ts` | GET POST DELETE | admin | ● | ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
+| `admin/workspaces/[id]/networking/trusted/route.ts` | GET POST DELETE | admin |  | ARM, Azure Networking, Cosmos, Microsoft Graph |
+| `admin/workspaces/[id]/route.ts` | GET PATCH DELETE | admin |  | AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph |
 | `admin/workspaces/[id]/spark/environment/route.ts` | GET POST | admin | ● | Azure Monitor, Cosmos, Databricks, Microsoft Graph |
 | `admin/workspaces/[id]/spark/jobs/route.ts` | GET POST | admin | ● | Cosmos, Databricks, Microsoft Graph |
 | `admin/workspaces/[id]/spark/pools/route.ts` | GET POST DELETE | admin | ● | Cosmos, Databricks, Microsoft Graph |
 | `admin/workspaces/[id]/spark/runtime/route.ts` | GET POST | admin | ● | Azure Monitor, Cosmos, Microsoft Graph |
-| `admin/workspaces/[id]/storage-metrics/route.ts` | GET | admin | ● | ARM, Azure Storage, Cosmos |
+| `admin/workspaces/[id]/storage-metrics/route.ts` | GET | admin | ● | ARM, Azure Storage, Cosmos, Microsoft Graph |
 | `admin/workspaces/[id]/task-flows/[flowId]/route.ts` | GET PUT DELETE | admin |  | Cosmos |
 | `admin/workspaces/[id]/task-flows/route.ts` | GET POST | admin |  | Cosmos |
 | `admin/workspaces/route.ts` | GET POST | admin |  | ADLS, ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph |
@@ -2394,7 +2394,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `workspaces/[id]/import/route.ts` | POST | admin |  | AI Search, Azure Cache for Redis, Azure Monitor, Cosmos, Microsoft Graph |
 | `workspaces/[id]/items/[itemId]/route.ts` | PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Purview |
 | `workspaces/[id]/items/route.ts` | GET POST | admin |  | ADF, AI Search, Cosmos, Microsoft Graph |
-| `workspaces/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
+| `workspaces/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `workspaces/[id]/powerbi-mapping/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Microsoft Graph |
 | `workspaces/[id]/role-assignments/[principalId]/route.ts` | DELETE | admin |  | ARM, Azure RBAC, Cosmos, Fabric |
 | `workspaces/[id]/role-assignments/route.ts` | GET POST | admin |  | ARM, Azure RBAC, Cosmos, Fabric, Microsoft Graph |
