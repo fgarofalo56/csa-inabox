@@ -132,6 +132,21 @@ describe('graphUserInGroup — a 2xx must IDENTIFY the principal (#3834)', () =>
     expect(said).toContain('[graph-membership] UNKNOWN (not a measured negative)');
   });
 
+  // An ambiguous 2xx FALLS THROUGH to the paged walk rather than answering. A
+  // 204, or a `$select` quirk that omits `id`, is a GENUINE member, and denying
+  // them would be a fail-closed bug of its own. The walk settles it.
+  it('an ambiguous 2xx falls through to enumeration, which can still find the member', async () => {
+    fetchWithTimeout
+      .mockResolvedValueOnce(res(204, 'NOT-JSON')) // no body to identify anyone
+      .mockResolvedValueOnce(res(200, { value: [{ id: USER }] }));
+    expect(await resolveEffectiveRole(USER, WS)).toBe('Admin');
+  });
+
+  it('a WAF answering the SAME non-JSON body to both calls still resolves UNKNOWN', async () => {
+    fetchWithTimeout.mockResolvedValue(res(200, 'NOT-JSON'));
+    expect(await resolveEffectiveRole(USER, WS)).toBeNull();
+  });
+
   it('a 404 is still a MEASURED negative — the honest case is unchanged', async () => {
     fetchWithTimeout.mockResolvedValue(res(404, { error: {} }));
     expect(await resolveEffectiveRole(USER, WS)).toBeNull();

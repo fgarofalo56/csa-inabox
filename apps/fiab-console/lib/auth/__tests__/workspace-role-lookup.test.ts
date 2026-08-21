@@ -288,3 +288,47 @@ describe('resolveWorkspaceRole — the tid boundary is DELEGATED and FAILS CLOSE
     expect(role).toBe('admin');
   });
 });
+
+describe('the DELEGATED path\'s step-4 residual — pinned, not asserted away', () => {
+  // WHY THIS SPEC EXISTS. The fail-closed positive match above governs the
+  // SECOND (workspace-permissions) path only. On the FIRST path the boundary is
+  // `resolveWorkspaceAccessByOid` step 4, which is still TRUTHINESS-GUARDED — so
+  // a legacy `tid`-less doc plus any `workspace-roles` ACL row resolves, this
+  // function returns the document, and `role-assignments/route.ts` then grants a
+  // TENANT ADMIN full member management on a workspace whose tenancy was never
+  // established.
+  //
+  // It is pinned rather than fixed because closing it means tightening step 4
+  // itself, which is the resolver's decision and reaches ~270 call sites. An
+  // UNTESTED residual is one nobody notices widening; this is the spec that
+  // fails if it does.
+  it('a tid-less doc + an ACL row still resolves the document (step 4 decides nothing)', async () => {
+    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
+    world.doc = legacy;
+    world.aclRole = 'Viewer';
+    world.tenantAdmin = true;
+    const { workspace, role } = await resolveWorkspaceRole(
+      WS_ID,
+      session(MEMBER_OID, MEMBER_UPN, FOREIGN_TID),
+    );
+    // The RESIDUAL, stated as what the code does today.
+    expect(workspace).not.toBeNull();
+    // It still grants NO per-workspace role of its own — the exposure is the
+    // ROUTE's `role || isTenantAdmin(s)` ladder acting on this document.
+    expect(role).toBeNull();
+  });
+
+  it('…but with NO ACL row the same caller is refused — the residual needs a real grant', async () => {
+    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
+    world.doc = legacy;
+    world.aclRole = null;
+    world.tenantAdmin = true;
+    const { workspace } = await resolveWorkspaceRole(
+      WS_ID,
+      session(MEMBER_OID, MEMBER_UPN, FOREIGN_TID),
+    );
+    // This is what #3840 closed: before it, the bare `readWorkspaceById` result
+    // was enough and no grant was needed at all.
+    expect(workspace).toBeNull();
+  });
+});

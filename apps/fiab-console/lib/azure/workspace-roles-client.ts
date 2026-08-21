@@ -597,10 +597,18 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
           `not identify the requested principal (${body === NOT_JSON ? 'body was not JSON' : returnedId ? 'a DIFFERENT id was returned' : 'no `id` field'}) — ` +
           'something in front of Graph may be answering instead of Graph',
       );
-      return 'unknown';
+      // FALL THROUGH to the paged enumeration rather than answering here. An
+      // ambiguous 2xx is not only the proxy/WAF case: a 204, or a `$select`
+      // quirk that returns the object without `id`, is a GENUINE member, and
+      // returning `unknown` immediately would deny them. The walk below settles
+      // it — and for the WAF case it answers `unknown` too (that responder
+      // returns the same non-JSON body to the enumeration), so the property this
+      // check exists for is preserved either way.
+    } else if (res.status === 404) {
+      return 'not-member';
     }
-    if (res.status === 404) return 'not-member';
-    // On 4xx/5xx other than 404 fall back to paged enumeration once.
+    // On 4xx/5xx other than 404, and on an ambiguous 2xx, fall back to paged
+    // enumeration once.
   } catch (e: unknown) {
     // COULD NOT ASK — transport failure. Naming the host makes a
     // wrong-national-cloud call (the #3381 defect) diagnosable from one log

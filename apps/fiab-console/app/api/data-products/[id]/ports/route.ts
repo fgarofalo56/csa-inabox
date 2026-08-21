@@ -38,6 +38,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
+import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { readPorts, portsSummary, type Port } from '@/lib/dataproducts/ports';
@@ -107,14 +108,15 @@ async function workspaceTid(workspaceId: string | undefined): Promise<string | n
       .fetchAll();
     return resources[0]?.tid ?? null;
   } catch {
-    // KNOWN FOLLOW-UP, not a silent choice: this collapses "no tid recorded"
-    // (legacy doc — permissive by design, see callerMayDiscover) into "lookup
-    // FAILED" (should deny). A Cosmos outage therefore makes the tenant test
-    // pass rather than fail closed. The correct shape is a tri-state —
-    // tid | null-not-recorded | error-deny — and it wants the same treatment at
-    // workspace-guard.ts:141, where `(await workspaceIdOfItem(...)) || ''` puts
-    // an item row with a BLANK workspaceId on the permissive branch too. Both
-    // are tracked; neither is introduced here.
+    // #3843 — THIS NO LONGER LANDS ON A PERMISSIVE BRANCH. It still collapses
+    // "no tid recorded" (legacy doc) into "lookup FAILED", and that conflation
+    // is still worth a tri-state — tid | null-not-recorded | error-deny — but
+    // `callerMayDiscover` now asks `sameTenantConfirmed`, for which BOTH values
+    // are a refusal. A Cosmos outage therefore fails closed here rather than
+    // making the tenant test pass. The sibling case at workspace-guard.ts:141 —
+    // `(await workspaceIdOfItem(...)) || ''` putting an item row with a BLANK
+    // workspaceId on the permissive branch — is unrelated to this file and
+    // still tracked.
     return null;
   }
 }
@@ -128,23 +130,53 @@ async function workspaceTid(workspaceId: string | undefined): Promise<string | n
  *      so it needs no separate tenant test. Draft products are visible here, to
  *      the people building them.
  *   2. Otherwise the product must ACTUALLY BE discoverable (published or
- *      deprecated) AND belong to the caller's own Entra tenant.
+ *      deprecated) AND be POSITIVELY CONFIRMED to be in the caller's own Entra
+ *      tenant.
  *
- * KNOWN RESIDUAL, stated rather than implied away: step 2's tenant test can only
- * run on workspace docs that RECORD a `tid`. That field is written on create and
- * backfilled by scripts/csa-loom/backfill-workspace-tid.mjs; on a legacy doc that
- * predates it the tenant is UNKNOWN, and this returns true rather than denying —
- * because failing closed there would hide every legacy in-tenant product from
- * ordinary catalog readers, which is a regression, not a fix. Run the backfill to
- * close it. What is NOT residual: an unpublished product is now invisible to
- * non-members regardless of tid, and that was the bulk of the exposure.
+ * #3843 — STEP 2 USED TO BE A TRUTHINESS-GUARDED COMPARISON, AND THAT WAS THE
+ * ONLY TENANT BOUNDARY LEFT ON THIS PATH. It read
+ *
+ *     if (ownerTid && session.claims.tid && ownerTid !== session.claims.tid) return false;
+ *
+ * which decides NOTHING whenever either side is absent and then falls through to
+ * `return true`. Step 1 does not cover for it: by the time step 2 runs,
+ * `authorizeWorkspace` has already REFUSED, so this line was the last thing
+ * standing between an arbitrary caller and the ports model.
+ *
+ * BOTH absences are live, documented, supported states, and the previous version
+ * of this comment disclosed only one of them:
+ *   - the RECORD side — a workspace doc created before rel-T11 carries no `tid`
+ *     (`lib/types/workspace.ts`); and
+ *   - the CALLER side — `UserClaims.tid` is optional by design (`lib/auth/msal.ts`,
+ *     `lib/auth/session.ts`), and `lib/auth/pat.ts` mints personal access tokens
+ *     with no `createdByTid`. With `session.claims.tid` absent the old condition
+ *     was false for EVERY published product in EVERY tenant.
+ * A third path reached the same permissive branch: `workspaceTid` collapses a
+ * Cosmos failure into `null` (see there), so an outage also produced a
+ * fall-through.
+ *
+ * WHAT THAT LEAKED, in this file's own terms rather than a reassuring summary:
+ * the ports model, whose `ref` is an infrastructure ADDRESS — an `abfss://` path,
+ * a Synapse `schema.table`, an ADX database (see the two disclosures listed
+ * above). Cross-tenant infrastructure-address disclosure, not "a catalog read".
+ *
+ * It now uses `sameTenantConfirmed` — the one implementation of this comparison
+ * (`lib/auth/tenant-boundary.ts`) — which is a POSITIVE match: an absent tid on
+ * either side, and a failed lookup, all refuse.
+ *
+ * THE TRADE, STATED PLAINLY. A published product in a LEGACY workspace whose
+ * `tid` was never stamped is no longer discoverable by non-members. That is a
+ * real narrowing and it is the same one every other consolidated site takes; the
+ * remediation is `scripts/csa-loom/backfill-workspace-tid.mjs`, which stamps the
+ * tenant onto legacy records. Members, owners and tenant admins of the owning
+ * workspace are unaffected — they are admitted by step 1 and never reach step 2.
  */
 async function callerMayDiscover(session: SessionPayload, item: WorkspaceItem): Promise<boolean> {
   const denied = await authorizeWorkspace(session, item.workspaceId, { allowReadRoles: true });
   if (!denied) return true;
   if (!DISCOVERABLE.has(resolveLifecycleState(item.state as Record<string, unknown>))) return false;
   const ownerTid = await workspaceTid(item.workspaceId);
-  if (ownerTid && session.claims.tid && ownerTid !== session.claims.tid) return false;
+  if (!sameTenantConfirmed(session.claims.tid, ownerTid)) return false;
   return true;
 }
 

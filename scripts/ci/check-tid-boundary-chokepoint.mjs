@@ -2728,71 +2728,170 @@ for (const file of files) {
 // was classified a NON_AUTHORIZER by an exemption whose own text called it "a
 // finding, not a clearance").
 //
-// WHAT IT KEYS ON. An equality/inequality operator one of whose operands is a
-// TENANT id. "Tenant id" is TIERED, and the tiers are not a style choice — they
-// are what the measured population forced:
+// WHAT IT KEYS ON. An equality/inequality operator one of whose OPERANDS names a
+// TENANT id. The operand is extracted by BRACKET-BALANCED SCANNING outward from
+// the operator, not by a regex anchored at it, and then every identifier, member
+// name and bracket-quoted key INSIDE that operand is classified.
 //
-//   STRONG  a MEMBER expression ending in `.tid` / `.<x>Tid` (`wsDoc.tid`,
-//           `s.claims.tid`, `doc.tid`), or a bare identifier ending in a
-//           CAPITAL-T `Tid` (`callerTid`, `docTid`, `ownerTid`, `wsTid`).
-//           Counts on its own — one of these on either side is a hit.
+// THAT IS ROUND 2 OF THIS SECTION, AND IT IS MEASURED. The first version used
+// `/([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*$/` on the left and its mirror on
+// the right, so the operand had to END (or START) at a bare identifier path.
+// Four ordinary spellings were therefore INVISIBLE — control first, one new file
+// under `lib/`:
+//
+//     doc.tid !== callerTid                                     (control) RC=1
+//     String(doc.tid).toLowerCase() !== String(callerTid).toLowerCase()  RC=0
+//     (doc.tid ?? '') !== (callerTid ?? '')                               RC=0
+//     (doc as any)['tid'] !== (claims as any)['tid']                      RC=0
+//     doc.tid?.trim() !== callerTid?.trim()                               RC=0
+//
+// Two of those are the LIKELY spellings, not exotic ones. `tenant-boundary.ts`
+// normalises with exactly `.trim().toLowerCase()`, so a developer inlining "the
+// same thing the canonical module does" writes the invisible form by default.
+// And `(a ?? '') !== (b ?? '')` is WORSE than the shape this section was written
+// to delete: with both tids absent it evaluates `'' !== ''`, i.e. it POSITIVELY
+// manufactures a same-tenant answer, where the truthiness shape at least needed
+// a grant below it.
+//
+// The escape also defeated the per-expression contract INSIDE the chokepoint:
+// keeping `workspace-access.ts:358`'s pinned text byte-identical and adding
+// `|| (callerTid ?? '') === (wsDoc.tid ?? '')` restored the #3823 cross-tenant
+// admin grant verbatim at RC=0. (`workspace-access-admin-tid.test.ts` would have
+// caught that one — but outside `lib/auth` there is no such spec, which is
+// exactly the population this section exists for.)
+//
+// TIERS. A tenant operand is STRONG or WEAK, and the tiers are not a style
+// choice — they are what the measured population forced:
+//
+//   STRONG  a MEMBER name (`x.tid`, `x?.tid`, `x['tid']`, `s.claims.tid`) or an
+//           identifier ending in a CAPITAL-T `Tid` (`callerTid`, `docTid`,
+//           `ownerTid`) ANYWHERE inside the operand. Counts on its own.
 //   WEAK    a bare lowercase `tid`. Counts ONLY opposite a STRONG operand.
 //
 // WHY THE WEAK TIER IS NOT STRONG. `tid` is an overloaded local in this console
-// and the census proves it: `lib/editors/ai-red-team-editor.tsx:143` compares a
+// and the census proves it: `lib/editors/ai-red-team-editor.tsx` compares a
 // TECHNIQUE id (`cur.filter((t) => t !== tid)`) and
-// `lib/editors/copilot-studio-editors.tsx:853` a TOPIC id
-// (`if (selectedId === tid)`). Neither is a tenancy decision and neither ever
-// could be — they are client components. Pinning them would put two permanent
-// non-security entries in a security allowlist and turn an unrelated UI edit into
-// a red tenant-boundary build, which is how a check gets weakened later. The weak
-// tier drops both while keeping every real comparison the census found, including
-// `item-access.ts`'s `wsDoc.tid !== tid`, whose OTHER side is strong.
+// `lib/editors/copilot-studio-editors.tsx` a TOPIC id (`if (selectedId === tid)`).
+// Neither is a tenancy decision and neither could be — they are client
+// components. Pinning them would put two permanent non-security entries in a
+// security allowlist and turn an unrelated UI edit into a red tenant-boundary
+// build, which is how a check gets weakened later.
 //
 // `tenantId` IS DELIBERATELY NOT A TENANT ID HERE: in the `workspaces` container
 // that field holds the CREATOR'S ENTRA OID, not a tenant, and
 // `resource.tenantId === session.claims.oid` is the legitimate owner point-read
-// that appears throughout the console. Keying on it would bury this check in
-// false accusations, which is how a guard stops being read.
+// that appears throughout the console.
 //
-// EVERY HIT MUST BE PINNED, WITH A REASON, and the pin is the EXPRESSION TEXT —
-// so adding a second comparison to an already-pinned file is a red build too, not
-// just adding one to a new file. A pinned expression that no longer appears is
-// also a red build (the stale-exemption rule the rest of this file uses): the
-// comparison was deleted or the scanner stopped seeing it, and those need
-// different responses.
+// EVERY HIT MUST BE PINNED, WITH A REASON, and the pin is the EXPRESSION TEXT.
+// Adding one to a new file, ADDING A SECOND TO AN ALREADY-PINNED FILE, and
+// DELETING a pinned one are each a red build.
 //
 // KNOWN LIMITS, stated rather than implied:
-//   - THE WEAK TIER LEAVES ONE NAMABLE EVASION, and it is named rather than
-//     rounded off: `if (docTenant !== tid)` — a bare lowercase `tid` opposite an
-//     operand whose name says nothing about tenancy — is NOT caught. Inside
-//     `lib/auth/**` section 8 is the structural backstop (an authorizer must
-//     delegate whatever it calls its variables); outside it, the specs are.
-//   - it is SYNTACTIC in general. A comparison spelled `[a.tid, b.tid].every(…)`,
-//     one that goes through two locals named after neither
-//     (`const a = doc.tid, b = s.claims.tid; if (a !== b)`), or one performed in a
-//     Cosmos WHERE clause inside a template literal (string literals are MASKED
-//     before any scan, which is what makes the M9/N21 negative controls pass) is
-//     invisible here.
+//   - IT IS NAME-BASED. Two anonymous locals defeat it —
+//     `const a = doc.tid, b = s.claims.tid; if (a !== b)` — and so does a bare
+//     lowercase `tid` opposite an operand whose name says nothing about tenancy
+//     (`if (docTenant !== tid)`). Inside `lib/auth/**` section 8 is the
+//     structural backstop (an authorizer must delegate whatever it calls its
+//     variables); outside it, the specs are.
+//   - A comparison performed in a Cosmos WHERE clause inside a TEMPLATE LITERAL
+//     is invisible: string literals are MASKED before any scan, which is what
+//     makes the M9/N21 negative controls pass.
+//   - The operand span stops at the first depth-zero whitespace, so a comparison
+//     written with spaces at depth zero (`x as string !== y`) is truncated. That
+//     direction only ever SHORTENS an operand, so it can hide a name — measured
+//     as not occurring in this tree, but it is a limit, not zero.
+//   - Operand token extraction reads the RAW source of the span (masked source
+//     blanks a string literal's interior, which would hide `['tid']`). A tid-ish
+//     name inside a string literal in an operand therefore counts. That is the
+//     over-matching direction, not the under-matching one.
 //   - it scans `apps/fiab-console/{app,lib}` only — the same `files` population
 //     sections 5-6 and 8h use. `walk()` skips `__tests__` and `*.test.ts`, so a
 //     spec may write the shape freely, which is what lets the specs assert on it.
-const TID_OPERAND = /([A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*)\s*$/;
-const TID_OPERAND_AFTER = /^\s*([A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*)/;
+
+/** Terminates an operand at bracket depth zero. `?.` is handled before this. */
+const OPERAND_STOP = /[\s;,=<>+\-*\/%&|^!~:?]/;
+const QUOTES = new Set(["'", '"', '`']);
+
+/** `[start, end)` of the operand ENDING just before `at`, bracket-balanced. */
+function leftOperandSpan(masked, at) {
+  let i = at - 1;
+  while (i >= 0 && /\s/.test(masked[i])) i -= 1;
+  const end = i + 1;
+  let depth = 0;
+  for (; i >= 0; i -= 1) {
+    const c = masked[i];
+    // A STRING LITERAL is part of the operand, not a boundary — `mask` blanks its
+    // interior (so no quote can hide inside) but keeps both delimiters, which is
+    // what makes this walk safe.
+    if (QUOTES.has(c)) {
+      i -= 1;
+      while (i >= 0 && masked[i] !== c) i -= 1;
+      continue;
+    }
+    if (c === ')' || c === ']' || c === '}') { depth += 1; continue; }
+    if (c === '(' || c === '[' || c === '{') {
+      if (depth === 0) break;
+      depth -= 1;
+      continue;
+    }
+    if (depth > 0) continue;
+    if (c === '.') continue;
+    if (c === '?' && masked[i + 1] === '.') continue; // optional chaining
+    if (OPERAND_STOP.test(c)) break;
+  }
+  return [i + 1, end];
+}
+
+/** `[start, end)` of the operand STARTING at `from`, bracket-balanced. */
+function rightOperandSpan(masked, from) {
+  let i = from;
+  while (i < masked.length && /\s/.test(masked[i])) i += 1;
+  const start = i;
+  let depth = 0;
+  for (; i < masked.length; i += 1) {
+    const c = masked[i];
+    if (QUOTES.has(c)) {
+      i += 1;
+      while (i < masked.length && masked[i] !== c) i += 1;
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') { depth += 1; continue; }
+    if (c === ')' || c === ']' || c === '}') {
+      if (depth === 0) break;
+      depth -= 1;
+      continue;
+    }
+    if (depth > 0) continue;
+    if (c === '.') continue;
+    if (c === '?' && masked[i + 1] === '.') continue; // optional chaining
+    if (OPERAND_STOP.test(c)) break;
+  }
+  return [start, i];
+}
+
+/** `tid` (any case) or `<something>Tid`. Never `tenantId` — that is a creator oid. */
+function isTidName(name) {
+  return /^tid$/i.test(name) || /[a-z0-9_$]Tid$/.test(name);
+}
 
 /**
- * `'strong'` | `'weak'` | `null` — see the tier note above. `tenantId` is neither
- * (it is a creator oid in this codebase's `workspaces` container).
+ * `'strong'` | `'weak'` | `null` for a whole operand — see the tier note above.
+ * Every member name (`.tid`, `?.tid`), bracket-quoted key (`['tid']`) and bare
+ * identifier inside the operand is classified, so wrapping the tid in a call, a
+ * paren or a `??` fallback no longer hides it.
  */
-function tenantOperandTier(path) {
-  const segs = (path || '').split('.').map((s) => s.trim()).filter(Boolean);
-  if (segs.length === 0) return null;
-  const last = segs[segs.length - 1];
-  const isTidish = /^tid$/i.test(last) || /[a-z0-9_$]Tid$/.test(last);
-  if (!isTidish) return null;
-  if (segs.length > 1) return 'strong';        // a member expression: `x.tid`
-  if (/[a-z0-9_$]Tid$/.test(last)) return 'strong'; // `callerTid`, `ownerTid`
-  return 'weak';                                // a bare, overloaded `tid`
+function tenantTierOfOperand(raw) {
+  const re = /(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)|\[\s*['"]([^'"\]]+)['"]\s*\]|([A-Za-z_$][\w$]*)/g;
+  let tier = null;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const member = m[1] ?? m[2];
+    const name = member ?? m[3];
+    if (!name || !isTidName(name)) continue;
+    if (member !== undefined || /[a-z0-9_$]Tid$/.test(name)) return 'strong';
+    tier = tier ?? 'weak';
+  }
+  return tier;
 }
 
 /**
@@ -2810,10 +2909,24 @@ const TID_COMPARISON_PINS = new Map([
     {
       reason:
         'THE ONE IMPLEMENTATION. `classifyTenantMatch` is the comparison every other site ' +
-        'delegates to; `normalizeTid` is its input guard. It takes two strings — no session, ' +
-        'no oid, no document, no workspace id — precisely so it cannot become a place that ' +
-        'decides access. Deleting these is deleting the boundary itself.',
-      exprs: ['callerNormTid === null', 'resourceNormTid === null', 'callerNormTid === resourceNormTid'],
+        'delegates to; `normalizeTid` is its input guard; `sameTenantConfirmed` and ' +
+        '`tenantUnconfirmedCause` are the two readings of its result that this module ' +
+        'publishes. It takes two strings — no session, no oid, no document, no workspace id — ' +
+        'precisely so it cannot become a place that decides access. Deleting these is ' +
+        'deleting the boundary itself. NOTE WHAT IS NOT PINNED AND WHY: a CALL to ' +
+        '`sameTenantConfirmed(a, b)` carries no operator and so is invisible to this section — ' +
+        'that is the blessed form. Any COMPARISON, including one against ' +
+        '`classifyTenantMatch(...)`, needs an entry, which is what keeps the lenient reading ' +
+        "(`… !== 'different-tenant'`) from being written anywhere without a review.",
+      exprs: [
+        'callerNormTid === null',
+        'resourceNormTid === null',
+        'callerNormTid === resourceNormTid',
+        "classifyTenantMatch(callerTid, resourceTid) === 'same-tenant'",
+        "classifyTenantMatch(callerTid, resourceTid) !== 'unconfirmed'",
+        'normalizeTid(callerTid) === null',
+        'normalizeTid(resourceTid) === null',
+      ],
     },
   ],
   [
@@ -2839,29 +2952,16 @@ const TID_COMPARISON_PINS = new Map([
       reason:
         'the ITEM-LEVEL grant path (the F6 "Grant people access" share) — a second grant ' +
         'reached only after the workspace resolver has DENIED, so it carries its own tenant ' +
-        'boundary. It is ALSO pinned by POSITION in POST_DELEGATION_PINS above (`region`), ' +
-        'which is what makes DELETING it a red build; this entry is what makes ADDING a ' +
-        'second comparison to that file one.',
+        'boundary. THAT BOUNDARY IS THE LENIENT ONE, and saying so is the point of this ' +
+        'clause: it is truthiness-guarded (`if (wsDoc?.tid && …)`) and it sits under an outer ' +
+        '`if (tid)`, so a caller whose session carries NO tid never reads the workspace ' +
+        'document at all and the item grant stands alone. #3840 and #3843 tightened its ' +
+        'structural twins to a POSITIVE match; this one was left as-is because it is reached ' +
+        'only behind an explicit per-item share and changing it is the item-access owner\'s ' +
+        'call — a residual, not a clearance. It is ALSO pinned by POSITION in ' +
+        'POST_DELEGATION_PINS above (`region`), which is what makes DELETING it a red build; ' +
+        'this entry is what makes ADDING a second comparison to that file one.',
       exprs: ['wsDoc.tid !== tid'],
-    },
-  ],
-  [
-    'app/api/data-products/[id]/ports/route.ts',
-    {
-      reason:
-        'A FINDING, RECORDED — NOT A CLEARANCE, and not a file this change owns. ' +
-        '`callerMayDiscover` carries the truthiness-guarded shape verbatim ' +
-        '(`if (ownerTid && session.claims.tid && ownerTid !== session.claims.tid) return false`), ' +
-        'i.e. a FIFTH private copy of the decision #3823/#3825/#3840/#3843 were each filed ' +
-        'against. What makes it different from those four, and the only reason it is pinned ' +
-        'rather than fixed here: the file DISCLOSES the fall-through in its own docblock ' +
-        '("KNOWN RESIDUAL, stated rather than implied away"), and it gates DISCOVERY of an ' +
-        'already-published data product for a caller the workspace guard has already refused ' +
-        '— a catalog read, not a grant of access to anything. The pin exists so the ' +
-        'expression cannot change, or multiply, without this being re-read; consolidating it ' +
-        'onto `sameTenantConfirmed` is the follow-up (#3843 family), and it needs the owner ' +
-        'of that route to decide whether hiding legacy in-tenant products is acceptable.',
-      exprs: ['ownerTid !== session.claims.tid'],
     },
   ],
 ]);
@@ -2876,14 +2976,15 @@ for (const file of files) {
   const eq = /!==|===|!=|==/g;
   let m;
   while ((m = eq.exec(masked)) !== null) {
-    const before = masked.slice(Math.max(0, m.index - 120), m.index);
-    const after = masked.slice(m.index + m[0].length, m.index + m[0].length + 120);
-    const l = TID_OPERAND.exec(before);
-    const r = TID_OPERAND_AFTER.exec(after);
-    const left = l ? norm(l[1]) : '';
-    const right = r ? norm(r[1]) : '';
-    const lt = tenantOperandTier(left);
-    const rt = tenantOperandTier(right);
+    // Operands are read from the RAW source over spans located on the MASKED
+    // source: masked blanks a string literal's interior, which would hide the
+    // bracket-index form `doc['tid']` entirely.
+    const [ls, le] = leftOperandSpan(masked, m.index);
+    const [rs, re2] = rightOperandSpan(masked, m.index + m[0].length);
+    const left = norm(src.slice(ls, le));
+    const right = norm(src.slice(rs, re2));
+    const lt = tenantTierOfOperand(left);
+    const rt = tenantTierOfOperand(right);
     // A hit needs at least one STRONG operand; a bare lowercase `tid` counts
     // only opposite one (see the tier note above — measured against the two
     // editor false positives, a technique id and a topic id).
@@ -2919,17 +3020,54 @@ for (const file of files) {
     }
   }
 }
+/**
+ * Does this module IMPORT the shared comparison? A pinned expression that has
+ * disappeared from a file which now imports `tenant-boundary` is the INTENDED
+ * end state — the site consolidated — not a deleted boundary.
+ *
+ * SHOULD-FIX 3. Without this arm the stale-pin rule made the correct fix a RED
+ * build and then told the author not to fix it: applying exactly the
+ * consolidation a pin's own reason named as the follow-up produced
+ * "…which no longer appears … Do not delete the entry to make the build green."
+ * A guard that blocks the end state it asks for is a guard people route around.
+ *
+ * IT KEYS ON THE IMPORT, NOT ON THE NAME, and that is deliberate: mentioning
+ * `sameTenantConfirmed` anywhere would let a boundary be deleted next to an
+ * unrelated call. `tenant-boundary.ts` does not import itself, so gutting the
+ * canonical comparison stays a hard failure (measured — see the mutation list).
+ */
+function importsTenantBoundary(masked) {
+  return /from\s+['"](?:@\/lib\/auth\/tenant-boundary|\.{1,2}(?:\/[\w.-]+)*\/?tenant-boundary)['"]/.test(
+    masked,
+  );
+}
+
 for (const [rel, pin] of TID_COMPARISON_PINS) {
   for (const e of pin.exprs) {
-    if (!tidPinsUsed.has(`${rel}|${norm(e)}`)) {
-      fail(
-        `TID_COMPARISON_PINS entry \`${rel}\` pins \`${norm(e)}\`, which no longer appears. ` +
-          'Either the comparison was REMOVED — in which case removing the boundary is the ' +
-          'change to re-review, not the pin — or this scanner stopped seeing it, which is ' +
-          'the failure mode the pin exists to catch. Do not delete the entry to make the ' +
-          'build green.',
-      );
+    if (tidPinsUsed.has(`${rel}|${norm(e)}`)) continue;
+    const file = `${CONSOLE_ROOT}/${rel}`;
+    let consolidated = false;
+    try {
+      consolidated = importsTenantBoundary(mask(readFileSync(file, 'utf8')));
+    } catch {
+      consolidated = false; // the file is gone — that is not a consolidation
     }
+    if (consolidated) {
+      console.log(
+        `[tid-boundary-chokepoint] NOTE — \`${rel}\` no longer carries \`${norm(e)}\` and now ` +
+          'imports the shared comparison (`lib/auth/tenant-boundary.ts`). That is the intended ' +
+          'end state; DELETE its TID_COMPARISON_PINS entry in the same commit and say so in the ' +
+          'PR body.',
+      );
+      continue;
+    }
+    fail(
+      `TID_COMPARISON_PINS entry \`${rel}\` pins \`${norm(e)}\`, which no longer appears, and ` +
+        'that file does NOT import `lib/auth/tenant-boundary`. So the comparison was REMOVED ' +
+        'rather than consolidated — removing the boundary is the change to re-review, not the ' +
+        'pin — or this scanner stopped seeing it, which is the failure mode the pin exists to ' +
+        'catch. Do not delete the entry to make the build green.',
+    );
   }
 }
 

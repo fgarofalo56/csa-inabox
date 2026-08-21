@@ -130,6 +130,15 @@ async function resolveVisibleWorkspaces(
       .query<{ id: string; domain?: string; tid?: string }>({
         // Scoped IN THE QUERY: a document belonging to another tenant — or one
         // whose tenancy was never stamped — is not returned at all.
+        //
+        // Cosmos `=` is EXACT and case-sensitive while `sameTenantConfirmed`
+        // trims and lower-cases (Entra ids are GUIDs, whose equality is not
+        // case-sensitive). So a doc whose `tid` differs from the claim only in
+        // case is dropped HERE and then re-resolved one-by-one by
+        // `resolveStragglers` — correct, but on the one path whose docblock
+        // cites a 20s client budget. Entra emits lowercase GUIDs on both sides,
+        // so this is a latency note rather than an observed cost; if it ever
+        // shows up, normalise `tid` on write rather than loosening the predicate.
         query: 'SELECT c.id, c.domain, c.tid FROM c WHERE c.tid = @tid',
         parameters: [{ name: '@tid', value: callerTid }],
       })

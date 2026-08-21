@@ -84,9 +84,28 @@
  *      this comparison — `lib/auth/tenant-boundary.ts`), which is STRICTER than
  *      the resolver's step 4: an absent `tid` on either side is a refusal, not a
  *      fall-through. And being visible still requires an EXPLICIT grant — the
- *      creator, or a permissions row. A caller with neither gets `null`, so the
- *      routes' tenant-admin / domain-admin ladder never sees a document whose
- *      tenancy Loom could not confirm.
+ *      creator, or a permissions row.
+ *
+ * THE RESIDUAL ON THE DELEGATED PATH, NAMED RATHER THAN ASSERTED AWAY. An earlier
+ * draft of this header said "a caller with neither gets `null`, so the routes'
+ * ladder never sees a document whose tenancy Loom could not confirm." That is
+ * FALSE, and it is false in exactly the way this whole change exists to stop —
+ * a header that overstates its invariant. Point 3 governs the SECOND path only.
+ * On the FIRST (delegated) path the boundary is `resolveWorkspaceAccessByOid`
+ * step 4, which is still truthiness-guarded: a legacy `tid`-less workspace doc
+ * plus ANY `workspace-roles` row for the caller resolves at step 5 as
+ * `via: 'acl'`, this function returns `{ workspace: <doc>, role: null }` (no
+ * `workspace-permissions` row, not the creator), and `role-assignments/route.ts`
+ * then grants a TENANT ADMIN full member add/remove on a workspace whose tenancy
+ * was never established. Same at `role-assignments/[principalId]/route.ts`.
+ *
+ * That is strictly NARROWER than what shipped before #3840 — it now additionally
+ * requires the caller to hold a real ACL grant on that workspace, where
+ * previously the bare `readWorkspaceById` result was enough — so it is a
+ * residual, not a regression. Closing it means tightening step 4 itself, which
+ * is the resolver's call to make and affects all ~270 of its call sites. It is
+ * pinned by a spec (`__tests__/workspace-role-lookup.test.ts`, "the DELEGATED
+ * path's step-4 residual") so it cannot widen unnoticed.
  *
  * THE TRADE, STATED PLAINLY (it is a real behaviour change, not a no-op). On a
  * LEGACY workspace document with no `tid`, a tenant admin who neither owns it
