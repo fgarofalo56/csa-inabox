@@ -65,7 +65,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { redact } from './_azure-redact.mjs';
+import { redact, redactedLine, unredactedByDesign } from './_azure-redact.mjs';
 
 export const STATUS = Object.freeze({
   FOUND: 'found',
@@ -371,6 +371,30 @@ export function renderLeaves(result) {
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
+/**
+ * THE STDOUT AND STDERR BOUNDARIES (#3829 round 5).
+ *
+ * renderLeaves() above is a redaction boundary for the string it BUILDS. It is
+ * not a boundary for this file's process — the CLI also writes four usage
+ * refusals to stderr, two of which interpolate operator-supplied argv
+ * (`unknown argument: ${a}` and `--scope must be sub|group (got ${args.scope})`),
+ * and every one of them lands in a public Actions run log if a workflow ever
+ * calls this script. Rounds 1-4 of #3829 each bounded one surface and left its
+ * neighbour bare; these two exist so that this file has no bare neighbour left.
+ *
+ * Exported and PURE so a pass-through mutation is visible in a DIRECT test:
+ * renderLeaves() redacts as well, so an end-to-end assertion on the default
+ * stdout path cannot say which of the two did the work
+ * (csa_loom_mutation_that_does_not_move_the_verdict).
+ */
+export function formatStdout(text) {
+  return redactedLine(text);
+}
+
+export function formatStderr(text) {
+  return redactedLine(text);
+}
+
 export function parseArgs(argv) {
   const out = {
     name: null,
@@ -398,24 +422,41 @@ function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (e) {
-    process.stderr.write(`deploy-arm-errors: ${e.message}\n`);
+    process.stderr.write(formatStderr(`deploy-arm-errors: ${e.message}\n`));
     process.exit(EXIT.USAGE);
   }
   if (!args.name) {
-    process.stderr.write('deploy-arm-errors: --name <deploymentName> is required.\n');
+    process.stderr.write(formatStderr('deploy-arm-errors: --name <deploymentName> is required.\n'));
     process.exit(EXIT.USAGE);
   }
   if (args.scope !== 'sub' && args.scope !== 'group') {
-    process.stderr.write(`deploy-arm-errors: --scope must be sub|group (got ${args.scope}).\n`);
+    process.stderr.write(formatStderr(`deploy-arm-errors: --scope must be sub|group (got ${args.scope}).\n`));
     process.exit(EXIT.USAGE);
   }
   if (args.scope === 'group' && !args.resourceGroup) {
-    process.stderr.write('deploy-arm-errors: --scope group requires --resource-group.\n');
+    process.stderr.write(formatStderr('deploy-arm-errors: --scope group requires --resource-group.\n'));
     process.exit(EXIT.USAGE);
   }
 
   const result = collectArmLeafErrors(args);
-  process.stdout.write(args.json ? `${JSON.stringify(result, null, 2)}\n` : `${renderLeaves(result)}\n`);
+  if (args.json) {
+    // DISCLOSED EXCEPTION, and the ONLY unredacted publication in this file.
+    // `--json` emits the raw `result`, which carries the full ARM ids — the
+    // subscription id, the resource id, and the object id in a
+    // `flexibleServers/administrators` leaf name. That is deliberate: it exists
+    // so an operator debugging their OWN subscription keeps the ids that the
+    // remediations in docs/fiab/runbooks/deploy-failure.md actually need, and
+    // the runbook says in as many words to treat its output as local-only.
+    //
+    // It is safe ONLY while no CI surface invokes it, because a workflow's
+    // stdout is public on this public repo — so that is not left as a sentence
+    // in a header. `RATCHET — no workflow invokes deploy-arm-errors.mjs with
+    // --json` in the suite fails the day one does, and named rather than
+    // commented so the structural test counts this exception as ONE.
+    process.stdout.write(unredactedByDesign(`${JSON.stringify(result, null, 2)}\n`));
+  } else {
+    process.stdout.write(formatStdout(`${renderLeaves(result)}\n`));
+  }
   process.exit(
     result.status === STATUS.FOUND
       ? EXIT.FOUND

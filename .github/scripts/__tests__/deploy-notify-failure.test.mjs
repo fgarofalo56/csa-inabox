@@ -23,8 +23,18 @@ import {
   notifyFailure,
   shouldFile,
   formatStdout,
+  formatStderr,
   FAILURE_LABEL,
 } from '../deploy-notify-failure.mjs';
+import {
+  streamWrites,
+  stripComments,
+  unboundedWrites,
+  callCount,
+  forbiddenPublishers,
+  inheritedStreamSpawns,
+  CONTROL_SOURCE_CRLF,
+} from '../../../scripts/ci/__tests__/_publication-surfaces.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SCRIPT = path.join(REPO_ROOT, '.github', 'scripts', 'deploy-notify-failure.mjs');
@@ -639,13 +649,157 @@ test('MUTATION-VISIBLE — formatStdout() is the ONLY way this file reaches stdo
   // String() first: a non-string must not become a silently EMPTY log line.
   assert.equal(formatStdout(42), '42');
   assert.equal(formatStdout(undefined), 'undefined');
-  // …and STRUCTURAL: no `process.stdout.write` may take an argument that has not
-  // been through the boundary. A future line that reintroduces per-variable
-  // redaction — or none — is caught here even if no test exercises it.
-  const src = fs.readFileSync(SCRIPT, 'utf8');
-  const writes = [...src.matchAll(/process\.stdout\.write\(([^\n]*)/g)].map((m) => m[1].trim());
-  assert.equal(writes.length, 1, `expected exactly ONE process.stdout.write (inside emit()), found ${writes.length}: ${JSON.stringify(writes)}`);
-  assert.match(writes[0], /^formatStdout\(/, 'a stdout write bypasses the redaction boundary');
+});
+
+// ── EVERY SURFACE, NOT THE ONE THIS ROUND HAPPENED TO NOTICE (#3829 round 5) ──
+//
+// Round 4's structural assertion was this, and it is the right SHAPE:
+//
+//   const writes = [...src.matchAll(/process\.stdout\.write\(([^\n]*)/g)]…
+//   assert.equal(writes.length, 1, …);
+//   assert.match(writes[0], /^formatStdout\(/, …);
+//
+// It is also stdout-ONLY, so it could not see the three unbounded
+// `process.stderr.write` calls sitting in the same file — which is round 2's
+// finding (stderr publishes) recurring one file over, guarded by a regex that
+// could not have detected it even in principle. Generalised below: the
+// enumeration is mechanical, it covers BOTH streams plus the shapes that reach a
+// stream without going through one (`console.*`, a step summary), and it is the
+// same enumerator all three scripts in this lane are held to.
+
+const SCRIPT_SRC = fs.readFileSync(SCRIPT, 'utf8');
+
+/** The named functions a write in THIS file may hand its argument to. */
+const NOTIFY_BOUNDARIES = ['formatStdout', 'formatStderr'];
+
+test('MUTATION-VISIBLE — formatStderr() is the ONLY way this file reaches stderr', () => {
+  // Direct, for the reason formatStdout() is tested directly: main().catch()'s
+  // message reaches stderr through this and nothing else, so a pass-through
+  // mutation must be visible without inferring it from an end-to-end run.
+  assert.equal(formatStderr(`x${SYNTHETIC_OID}`), 'x<guid>', 'the stderr boundary does not redact');
+  assert.doesNotMatch(formatStderr(`blocked on psql-loom-weave-default-abc123/${SYNTHETIC_OID}`), GUID_RE);
+  assert.match(formatStderr(`psql-loom-weave-default-abc123/${SYNTHETIC_OID}`), /psql-loom-weave-default-abc123\/<guid>/);
+  // String() first — a refusal that printed nothing is worse than the refusal.
+  assert.equal(formatStderr(42), '42');
+  assert.equal(formatStderr(undefined), 'undefined');
+});
+
+test('STRUCTURAL — EVERY write to a public stream crosses a named boundary', () => {
+  const writes = streamWrites(SCRIPT_SRC);
+
+  // Non-degenerate #1: the enumerator found the writes at all. Zero would mean
+  // the matcher drifted, not that the file stopped publishing
+  // (guard_with_zero_population_needs_embedded_control).
+  assert.ok(writes.length >= 2, `expected >=2 stream writes, found ${writes.length} — the enumerator drifted`);
+  // Non-degenerate #2: BOTH streams are in the population. An enumeration that
+  // saw only stdout is exactly the round-4 defect this test replaces.
+  assert.ok(writes.some((w) => w.stream === 'stdout'), 'no stdout write found — the enumerator is stdout-blind');
+  assert.ok(writes.some((w) => w.stream === 'stderr'), 'no stderr write found — the enumerator is stderr-blind');
+
+  assert.deepEqual(
+    unboundedWrites(SCRIPT_SRC, NOTIFY_BOUNDARIES).map((w) => `${w.line}: ${w.arg.split('\n')[0]}`),
+    [],
+    'a write to a PUBLIC stream bypasses the redaction boundary (#3829)',
+  );
+
+  // ZERO disclosed exceptions in this file, and that is an assertion rather than
+  // an omission: deploy-retry.mjs legitimately publishes a child's bytes raw,
+  // this file has no child and therefore no reason to. If one appears, it has to
+  // be argued here.
+  assert.equal(
+    callCount(SCRIPT_SRC, 'unredactedByDesign'),
+    0,
+    'a disclosed-exception marker appeared in a file that has no stream to be verbatim about',
+  );
+
+  // The surfaces that reach a stream WITHOUT `process.<stream>.write` — the
+  // blind side every structural assertion in this lane has had so far.
+  assert.deepEqual(forbiddenPublishers(SCRIPT_SRC), [], 'a publication shape with no boundary to attach to');
+
+  // …including the one no write-based assertion can see at all: a spawn with
+  // `stdio: [_,'inherit',_]` hands a child THIS process's public log. There is
+  // no spawn in this file today, and adding one would be a new surface, not a
+  // detail — so the zero is asserted rather than assumed.
+  assert.deepEqual(
+    inheritedStreamSpawns(SCRIPT_SRC),
+    [],
+    'a spawn in this file publishes through an INHERITED stream, which no boundary here can cover',
+  );
+  // Non-degenerate: the enumerator can see the shape whose absence is asserted.
+  assert.deepEqual(inheritedStreamSpawns("x({ stdio: ['ignore', 'inherit', 'pipe'] })")[0].inherits, ['stdout']);
+  assert.equal(inheritedStreamSpawns("x({ stdio: ['inherit', 'pipe', 'pipe'] })").length, 0, 'an inherited STDIN is not a publication surface');
+});
+
+test('SELF-DEFENCE — the surface enumerator can actually detect an unbounded write', () => {
+  // The assertion above passes on a clean tree, which is also what it would do
+  // if it had stopped looking. Prove it against the verbatim violation shapes,
+  // in a CRLF source — the line ending these files carry in a Windows working
+  // tree — so a `\n`-anchored regression is caught here rather than by being
+  // silently green (csa_loom_crlf_makes_mutation_needles_silently_noop).
+  const found = unboundedWrites(CONTROL_SOURCE_CRLF, [...NOTIFY_BOUNDARIES, 'unredactedByDesign']);
+  assert.equal(found.length, 2, `expected the control's 2 violations, found ${found.length}`);
+  assert.ok(
+    found.some((w) => w.arg.startsWith('`deploy:')),
+    'a bare template-literal write was not detected',
+  );
+  assert.ok(
+    found.some((w) => w.arg.startsWith('redact(')),
+    'a PER-SITE redact() was not detected — one boundary per surface is the rule; a per-field call is the defect',
+  );
+  // …and the three legitimate shapes in the same control are NOT flagged, or the
+  // guard would be unusable and would be silenced rather than obeyed.
+  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, 5, 'the control source lost a write to CRLF handling');
+
+  // The comment stripper is load-bearing here: this file's own header documents
+  // its write sites in prose, and counting those would inflate every number.
+  const occurrences = (s, needle) => s.split(needle).length - 1;
+  assert.ok(
+    occurrences(SCRIPT_SRC, 'process.stdout.write(formatStdout(') >= 2,
+    'the header no longer documents the boundary in prose — this control has lost its population',
+  );
+  assert.equal(
+    occurrences(stripComments(SCRIPT_SRC), 'process.stdout.write(formatStdout('),
+    1,
+    'the stripper left header prose in the executable source — every count above is inflated',
+  );
+  // …and it does NOT strip real code. Both directions, or it is not a control.
+  assert.match(stripComments(SCRIPT_SRC), /process\.stdout\.write\(formatStdout\(text\)\)/, 'the stripper ate real code');
+  // A `//` inside a STRING must not blank the rest of its line — this file
+  // carries 'https://github.com' and 'https://api.github.com'.
+  assert.match(stripComments(SCRIPT_SRC), /'https:\/\/api\.github\.com'/, 'the stripper treated a URL as a comment');
+});
+
+test('ACCEPTANCE — a GUID in an API error reaches STDERR redacted, over a real transport', async () => {
+  // The filed path's stderr had no assertion at all before round 5: the one
+  // `assert.doesNotMatch(r.stderr, …)` in this file sits on the NOT-filed test,
+  // where stderr is empty and the assertion is therefore vacuous. This drives a
+  // real child against a real HTTP transport and makes stderr genuinely carry
+  // the id — main().catch() is the likeliest live carrier in the file, because
+  // the search failure embeds 200 bytes of the API's own response.
+  const { server, base } = await stubApi(() => ({
+    message: `Bad credentials for psql-loom-weave-default-abc123/${SYNTHETIC_OID}`,
+  }));
+  try {
+    const r = await runCli(['--workflow', 'deploy-fiab-commercial', '--result', 'failure'], {
+      GITHUB_REPOSITORY: 'fgarofalo56/csa-inabox',
+      GH_TOKEN: 'ghs_aDifferentSyntheticTokenLiteral',
+      GITHUB_API_URL: base,
+      GITHUB_RUN_ID: '99',
+      GITHUB_SHA: 'abc1234',
+    });
+    // A notifier that cannot notify must FAIL the step, not swallow.
+    assert.equal(r.code, 1, `the notifier must exit non-zero when it cannot file; stderr=${r.stderr}`);
+    // Non-degenerate: stderr really carries the diagnostic, so "no GUID" is not
+    // satisfied by an empty stream.
+    assert.match(r.stderr, /cannot tell whether a notice issue exists/, 'the error path did not run');
+    assert.match(r.stderr, /Bad credentials for psql-loom-weave-default-abc123/, 'the API response was not echoed at all');
+    // The guard.
+    assert.doesNotMatch(r.stderr, GUID_RE, 'a GUID reached the PUBLIC Actions run log on stderr (#3829 round 5)');
+    // REDACTED IN PLACE, not dropped — the diagnostic must survive.
+    assert.match(r.stderr, /psql-loom-weave-default-abc123\/<guid>/, 'the id was removed rather than redacted');
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
 });
 
 

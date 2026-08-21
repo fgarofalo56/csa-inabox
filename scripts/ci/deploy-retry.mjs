@@ -37,29 +37,51 @@
  *      rendered from the taxonomy diagnosis, whose `evidence[]` carries the
  *      literal strings matched. `unknown` says it could not classify.
  *   6. REDACTION IS AT THE PUBLICATION BOUNDARIES, not at each field (#3829).
- *      This script writes to THREE surfaces, and on a PUBLIC repo all three are
- *      publicly readable:
- *        (a) STDOUT — the GitHub Actions annotation log. redact() once, in
- *            ghAnnotate(), covering every level (error/warning/notice alike).
- *        (b) deploy-failure.json — redact() once over the whole serialized
+ *      This script writes to FIVE surfaces, and on a PUBLIC repo all five are
+ *      publicly readable. The annotation and the raw run log are DIFFERENT
+ *      surfaces — guarding the annotation does not cover a raw byte landing in
+ *      the log — so each gets its own named boundary:
+ *
+ *        (a) STDOUT, as ANNOTATIONS — `::error::` / `::warning::` /
+ *            `::notice::`. Boundary: formatAnnotation(), level-blind.
+ *        (b) STDOUT, as the CHILD'S OWN BYTES streamed live. DISCLOSED
+ *            EXCEPTION — unredactedByDesign(), see below.
+ *        (c) STDERR — the Actions RUN LOG. Boundary: formatStderr(), reached
+ *            through emitErr(). Round 1 missed this surface entirely, on the
+ *            reasoning that the captured stderr FILE stays on the runner. True
+ *            of the file; false of the stream. Round 2 then fixed it FIELD BY
+ *            FIELD — `redact(l.leaf.resourceName)` on a line that interpolated
+ *            `l.leaf.code` and the signal id raw beside it — which is the same
+ *            defect one field over. There is one boundary now.
+ *        (d) deploy-failure.json — redact() once over the whole serialized
  *            artifact, so every field present and future is covered by
  *            construction. .github/scripts/deploy-notify-failure.mjs posts it
  *            into an issue and redacts again at ITS boundary.
- *        (c) STDERR — the Actions RUN LOG. This one was missed in the first cut
- *            of #3829, on the reasoning that the captured stderr FILE stays on
- *            the runner. True of the file; false of the stream. Every line this
- *            script COMPOSES around a leaf is now redacted at its composition
- *            site — the per-leaf classification block here, and renderLeaves()
- *            in deploy-arm-errors.mjs. What stays verbatim, deliberately, is the
- *            child command's OWN stderr echoed back: that is what the operator
- *            would have seen under `stdio: inherit`, and rewriting it would make
- *            the wrapper's log disagree with the command's (R7).
+ *        (e) THE REMEDIATION CHILD'S INHERITED STDOUT — `stdio: [_,'inherit',_]`
+ *            hands that process THIS one's stdout fd, so its bytes reach the
+ *            same public log with NO `process.stdout.write` in this file at all.
+ *            No write-based enumeration can see it; round 4's assertion was
+ *            blind to it by construction. Disclosed at the site, and pinned by
+ *            `STRUCTURAL — the inherited-stream surface is ENUMERATED`.
+ *
+ *      THE DISCLOSED EXCEPTION, stated as an exception and COUNTED. What stays
+ *      verbatim is the child command's OWN output — its stdout streamed live at
+ *      runTee(), its stderr echoed per attempt and in full on final failure, and
+ *      the stdout tail printed when stderr came back empty. That is what the
+ *      operator would have seen under `stdio: inherit`, and rewriting it would
+ *      make the wrapper's log disagree with the command's (R7). If `az` itself
+ *      prints an id, that id reaches the public run log with or without this
+ *      harness. Those four sites go through unredactedByDesign() — a named
+ *      function, not a comment, so the structural test in
+ *      scripts/ci/__tests__/deploy-retry.test.mjs can COUNT them and a fifth
+ *      cannot appear silently.
+ *
  *      It was the per-FIELD approach that leaked in the first place:
  *      `leaf.message` and `evidence.line` were redacted, `whyStopped`
  *      (= decision.reason, which embeds a leaf `resourceName` =
  *      `<server>/<objectId>`) was not, and a raw Entra object id reached issue
- *      #3817's body. redact() is idempotent, so per-site calls that remain are
- *      harmless defence in depth.
+ *      #3817's body. redact() is idempotent, so per-site calls that remain on
+ *      the ARTIFACT path are harmless defence in depth.
  *
  * USAGE
  *   node scripts/ci/deploy-retry.mjs \
@@ -118,7 +140,7 @@ import {
   classExitCode,
 } from './deploy-classify.mjs';
 import { collectArmLeafErrors, renderLeaves, STATUS as ARM_STATUS } from './deploy-arm-errors.mjs';
-import { redact } from './_azure-redact.mjs';
+import { redact, redactedLine, unredactedByDesign } from './_azure-redact.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -519,7 +541,11 @@ function runTee(cmd, argv) {
     };
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
-      process.stdout.write(chunk); // live progress, unchanged from `inherit`
+      // DISCLOSED EXCEPTION (b). The child's own bytes, streamed live — this is
+      // exactly what `stdio: inherit` would have produced, and rewriting it
+      // would make the wrapper's log disagree with the command's (R7). Named
+      // rather than commented so the structural test counts it.
+      process.stdout.write(unredactedByDesign(chunk));
       out += chunk;
       if (out.length > STDOUT_TAIL_CAP) out = out.slice(out.length - STDOUT_TAIL_CAP);
     });
@@ -566,14 +592,42 @@ function runTee(cmd, argv) {
  * @returns {string} the exact line written to stdout, newline included.
  */
 export function formatAnnotation(level, message) {
-  const safe = redact(String(message));
+  const safe = redactedLine(message);
   // One line, GitHub-annotation form. Newlines are escaped so a multi-line
   // remediation still renders as ONE annotation rather than being truncated.
   return `::${level}::${safe.replace(/\r?\n/g, '%0A')}\n`;
 }
 
+/**
+ * THE STDERR BOUNDARY (#3829 round 5). The Actions RUN LOG, which is a DIFFERENT
+ * surface from the annotation log above — an `::error::` is parsed out and
+ * surfaced, a raw stderr line just lands in the log — and equally public.
+ *
+ * Round 2 covered this stream FIELD BY FIELD: `redact()` was applied to
+ * `l.leaf.resourceName` on the per-leaf classification line while `l.leaf.code`
+ * and the signal id sat raw on the same statement, and the usage refusals, the
+ * drill-down banner and the "stderr was EMPTY" block had nothing at all. That is
+ * the identical shape the annotation boundary exists to delete, on the other
+ * stream. Every non-exception stderr write now goes through emitErr() -> here,
+ * so a line added tomorrow is covered without opting in.
+ *
+ * Exported and PURE for the reason formatAnnotation() is: several redactors sit
+ * on these paths, so only a DIRECT test can tell which one is doing the work
+ * (csa_loom_mutation_that_does_not_move_the_verdict).
+ *
+ * @param {unknown} text
+ * @returns {string} the exact bytes written to stderr
+ */
+export function formatStderr(text) {
+  return redactedLine(text);
+}
+
 function ghAnnotate(level, message) {
   process.stdout.write(formatAnnotation(level, message));
+}
+
+function emitErr(text) {
+  process.stderr.write(formatStderr(text));
 }
 
 async function main() {
@@ -581,15 +635,15 @@ async function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (e) {
-    process.stderr.write(`deploy-retry: ${e.message}\n`);
+    emitErr(`deploy-retry: ${e.message}\n`);
     process.exit(USAGE_EXIT);
   }
   if (args.cmd.length === 0) {
-    process.stderr.write('deploy-retry: no command given. Usage: deploy-retry.mjs [opts] -- <cmd> [args…]\n');
+    emitErr('deploy-retry: no command given. Usage: deploy-retry.mjs [opts] -- <cmd> [args…]\n');
     process.exit(USAGE_EXIT);
   }
   if (!Number.isFinite(args.maxAttempts) || args.maxAttempts < 1) {
-    process.stderr.write(`deploy-retry: --max-attempts must be >= 1 (got ${args.maxAttempts})\n`);
+    emitErr(`deploy-retry: --max-attempts must be >= 1 (got ${args.maxAttempts})\n`);
     process.exit(USAGE_EXIT);
   }
 
@@ -597,7 +651,7 @@ async function main() {
   try {
     wallClockMs = parseDuration(args.wallClock);
   } catch (e) {
-    process.stderr.write(`deploy-retry: --wall-clock ${e.message}\n`);
+    emitErr(`deploy-retry: --wall-clock ${e.message}\n`);
     process.exit(USAGE_EXIT);
   }
 
@@ -625,7 +679,10 @@ async function main() {
     // a real failure with no stderr; record it rather than classifying "".
     if (res.error) lastStderr = `${lastStderr}\n${res.error.message}`;
     lastStatus = res.status === null ? 1 : res.status;
-    if (lastStderr) process.stderr.write(lastStderr.endsWith('\n') ? lastStderr : `${lastStderr}\n`);
+    // DISCLOSED EXCEPTION (b): the child's OWN stderr, echoed back verbatim.
+    if (lastStderr) {
+      process.stderr.write(unredactedByDesign(lastStderr.endsWith('\n') ? lastStderr : `${lastStderr}\n`));
+    }
 
     if (lastStatus === 0 && !res.error) {
       // HAPPY PATH: exactly one invocation when the first succeeds, zero sleeps,
@@ -639,8 +696,8 @@ async function main() {
     // Only `found` reaches classify() — see armDrilldown()'s header.
     const drill = armDrilldown(args);
     if (drill) {
-      process.stderr.write(`\n───── deploy-retry: ARM drill-down ─────\n${drill.rendered}\n`);
-      process.stderr.write('────────────────────────────────────────\n');
+      emitErr(`\n───── deploy-retry: ARM drill-down ─────\n${drill.rendered}\n`);
+      emitErr('────────────────────────────────────────\n');
       if (drill.result.status !== ARM_STATUS.FOUND) {
         ghAnnotate(
           'warning',
@@ -681,14 +738,16 @@ async function main() {
       }
     }
     if (leafDiagnoses.length > 0) {
-      process.stderr.write('deploy-retry: per-leaf classification:\n');
+      emitErr('deploy-retry: per-leaf classification:\n');
       for (const l of leafDiagnoses) {
-        // redact() on resourceName (#3829 round 2). This line is COMPOSED here
-        // and written to process.stderr — which on a PUBLIC repo is the Actions
-        // run log, a publication surface. `resourceName` is `<server>/<objectId>`
-        // for the flexibleServers/administrators leaf that opened #3829.
-        process.stderr.write(
-          `  ${l.leaf.code ?? 'NoCode'}${l.leaf.resourceName ? ` on '${redact(l.leaf.resourceName)}'` : ''} → ` +
+        // NO per-site redact() here any more (#3829 round 5). Round 2 added one
+        // on `l.leaf.resourceName` and left `l.leaf.code` and the signal id raw
+        // on the same statement — the field-by-field shape this fix exists to
+        // delete, surviving inside the fix. The whole line crosses formatStderr()
+        // instead, so every interpolation on it is covered, including the ones a
+        // future edit adds.
+        emitErr(
+          `  ${l.leaf.code ?? 'NoCode'}${l.leaf.resourceName ? ` on '${l.leaf.resourceName}'` : ''} → ` +
             `${l.diagnosis.class}${l.diagnosis.retryable ? ' (retryable)' : ''} [${l.diagnosis.signalId ?? 'no signal'}]\n`,
         );
       }
@@ -714,6 +773,29 @@ async function main() {
       if (plan?.argv) {
         remediated = true;
         ghAnnotate('notice', `deploy-retry: performing remediation — ${plan.why}`);
+        // A FIFTH PUBLICATION SURFACE, and the one no write-based enumerator can
+        // see (#3829 round 5). `stdio: [_, 'inherit', _]` hands the child THIS
+        // process's stdout file descriptor, so every byte the remediation prints
+        // lands in the same public Actions run log with no `process.stdout.write`
+        // anywhere in this file. Round 4's `process\.stdout\.write` regex was
+        // blind to it by construction.
+        //
+        // It stays `inherit` on purpose — the same R7 parity argument as the
+        // child-output carve-out: a remediation's live progress is the operator's
+        // only view of a destructive action, and buffering it to redact it would
+        // hide it until the action was over.
+        //
+        // The consequence, stated rather than implied: the boundary for those
+        // bytes belongs to the CHILD, not to this file. Today the child is
+        // scripts/csa-loom/converge-role-assignment.mjs (or `az provider
+        // register`), and its own stdout is redacted PER SITE rather than at a
+        // boundary — measured, `run()`'s `log()` is unbounded and its
+        // parse-error branch interpolates `e.message` raw. That is a residual in
+        // THAT file, named here so it is a tracked gap rather than an unstated
+        // assumption, and pinned by `STRUCTURAL — the inherited-stream surface is
+        // ENUMERATED` in this script's suite so a second one cannot appear
+        // silently. The child's stderr is `pipe`d and reaches the log only
+        // through ghAnnotate() below, which redacts.
         const rem = spawnSync(plan.argv[0], plan.argv.slice(1), {
           stdio: ['inherit', 'inherit', 'pipe'],
           encoding: 'utf8',
@@ -822,38 +904,41 @@ async function main() {
       // The RAW stderr FILE written above is deliberately NOT redacted, and the
       // reason is narrow: it stays on the runner, is never uploaded, and is only
       // referenced by path. That is a statement about the FILE. It is NOT true of
-      // the stderr STREAM — every process.stderr.write() below lands in the
-      // Actions run log, which is public on a public repo. So the stream is
-      // treated as a publisher too: every line this script COMPOSES around a leaf
-      // is redacted at its composition site (the per-leaf block above, and
-      // renderLeaves() in deploy-arm-errors.mjs). What deliberately remains
-      // verbatim on the stream is the child command's OWN stderr, echoed
-      // unchanged — see the "full captured stderr" block below for why.
+      // the stderr STREAM — every process.stderr.write() lands in the Actions run
+      // log, which is public on a public repo. So the stream is treated as a
+      // publisher too, and since round 5 it has ONE boundary rather than a
+      // per-composition-site habit: emitErr() -> formatStderr(). The only bytes
+      // that reach it unredacted are the child command's own, through the counted
+      // unredactedByDesign() sites — see rule 6 (b) in this file's header.
       if (args.artifact) {
         fs.writeFileSync(args.artifact, `${redact(JSON.stringify(artifact, null, 2))}\n`, 'utf8');
       }
 
       // FULL stderr on final failure — never truncated, never suppressed, and
-      // never redacted. This is the child's OWN output, byte for byte: exactly
-      // what the operator would have seen had the command run under
-      // `stdio: inherit` with no wrapper at all. Rewriting it would make the
-      // wrapper's log differ from the command's, which is how an investigation
-      // gets sent somewhere the evidence does not support (R7). The residual is
-      // stated rather than hidden: if `az` itself prints an id, that id reaches
-      // the public run log — with or without this harness.
-      process.stderr.write('\n───── deploy-retry: full captured stderr ─────\n');
-      process.stderr.write(lastStderr.endsWith('\n') ? lastStderr : `${lastStderr}\n`);
-      process.stderr.write('─────────────────────────────────────────────\n');
+      // never redacted. DISCLOSED EXCEPTION (b): this is the child's OWN output,
+      // byte for byte, exactly what the operator would have seen had the command
+      // run under `stdio: inherit` with no wrapper at all. Rewriting it would
+      // make the wrapper's log differ from the command's, which is how an
+      // investigation gets sent somewhere the evidence does not support (R7).
+      // The residual is stated rather than hidden: if `az` itself prints an id,
+      // that id reaches the public run log — with or without this harness. The
+      // FRAMING lines around it are ours, so they go through the boundary.
+      emitErr('\n───── deploy-retry: full captured stderr ─────\n');
+      process.stderr.write(unredactedByDesign(lastStderr.endsWith('\n') ? lastStderr : `${lastStderr}\n`));
+      emitErr('─────────────────────────────────────────────\n');
       // An EMPTY block above is itself a finding: it means the command reported
       // its failure somewhere else. Say so and show the stdout tail, rather than
       // leaving the operator with an empty box and an unknown class.
       if (!lastStderr.trim() && lastStdout.trim()) {
         const tail = lastStdout.split(/\r?\n/).filter(Boolean).slice(-40).join('\n');
-        process.stderr.write(
-          'deploy-retry: stderr was EMPTY — this command reports failures on STDOUT. Last 40 lines:\n',
-        );
-        process.stderr.write(`───── deploy-retry: stdout tail ─────\n${tail}\n`);
-        process.stderr.write('─────────────────────────────────────\n');
+        emitErr('deploy-retry: stderr was EMPTY — this command reports failures on STDOUT. Last 40 lines:\n');
+        emitErr('───── deploy-retry: stdout tail ─────\n');
+        // DISCLOSED EXCEPTION (b) again, and for the same reason: these bytes
+        // already reached this log unredacted from runTee()'s live stream, so
+        // rewriting the replay would make the two copies of the SAME output
+        // disagree — which is worse than either alone.
+        process.stderr.write(unredactedByDesign(`${tail}\n`));
+        emitErr('─────────────────────────────────────\n');
       }
       // Every leaf is repeated in the annotation: a deployment can fail for more
       // than one reason at once (run 31069329802 failed for two) and the
@@ -890,12 +975,11 @@ if (isMain) {
   // every deploy path, so an unhandled rejection has to fail closed like any
   // other failure it reports.
   main().catch((e) => {
-    // redact() here for the same reason formatAnnotation() has it: stderr is as
-    // public as stdout in an Actions log, and this handler is outside the
-    // surfaces #3829 enumerated. A stack is the most plausible carrier of a path
-    // or an id, so it does not get to be the one unredacted write.
-    process.stderr.write(redact(`deploy-retry: internal error — ${e?.stack || e}
-`));
+    // The internal-error path is a stderr write like any other, so it crosses
+    // the same boundary rather than calling redact() at the site. A stack is the
+    // most plausible carrier of a path or an id in this file, so it does not get
+    // to be the one unredacted write.
+    emitErr(`deploy-retry: internal error — ${e?.stack || e}\n`);
     process.exit(1);
   });
 }

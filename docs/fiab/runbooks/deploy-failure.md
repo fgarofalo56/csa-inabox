@@ -34,9 +34,11 @@ It walks the failed operations recursively (following nested
 `Microsoft.Resources/deployments` targets) and prints every leaf `code: message`
 with the resource it belongs to. It has three outcomes and only one is a pass:
 `found`, `none` (ARM answered and nothing failed), and `unreadable` (ARM did not
-answer — nothing is asserted). `deploy-fiab-commercial.yml` now runs it
-automatically on failure and feeds the leaves to the classifier, so a live run's
-annotation names the cause instead of reporting "could not classify" (#3039).
+answer — nothing is asserted). No workflow invokes this script directly; six
+deploy workflows reach the same walk through `scripts/ci/deploy-retry.mjs
+--arm-deployment`, which runs it on failure and feeds the leaves to the
+classifier, so a live run's annotation names the cause instead of reporting
+"could not classify" (#3039).
 
 !!! warning "`--json` output is UNREDACTED — do not paste it into an issue (#3829)"
     The default (human-readable) render above is redacted: subscription and
@@ -53,12 +55,38 @@ annotation names the cause instead of reporting "could not classify" (#3039).
     issue, attach the default render, or the `deploy-failure.json` artifact,
     which is redacted at its own boundary.
 
-    Everything the lane publishes **for** you is redacted too, at the boundary
-    it leaves through: the auto-filed notice issue's title and body
-    (`deploy-notify-failure.mjs`), and the Actions run log and `::notice::` /
-    `::error::` annotations — which is why a workflow or resource name can read
-    back as `deploy-fiab-<guid>`. That is the redactor substituting in place,
-    not a corrupted name.
+!!! danger "What the lane redacts for you, and the ONE thing it does not (#3829)"
+    Everything the deploy lane **composes** is redacted at the boundary it leaves
+    through, and there is exactly one boundary per surface:
+
+    | surface | boundary |
+    |---|---|
+    | the auto-filed notice issue's **title** and **body** | `deploy-notify-failure.mjs` — `notifyFailure()` |
+    | that script's stdout / stderr | `formatStdout()` / `formatStderr()` |
+    | `::error::` / `::warning::` / `::notice::` annotations | `deploy-retry.mjs` — `formatAnnotation()` |
+    | `deploy-retry.mjs`'s own run-log lines | `formatStderr()` |
+    | the `deploy-failure.json` artifact | one `redact()` over the whole serialization |
+    | `deploy-arm-errors.mjs`'s default render, and its usage errors | `renderLeaves()`, `formatStdout()` / `formatStderr()` |
+
+    So a workflow or resource name can read back as `deploy-fiab-<guid>` or
+    `uami-loom-directlake<guid>`. That is the redactor substituting in place, not
+    a corrupted name.
+
+    **The exception, stated plainly: the deployed command's OWN output is NOT
+    redacted.** `deploy-retry.mjs` streams the child's stdout live and echoes its
+    stderr back verbatim — that is deliberate, because rewriting a command's own
+    output would make the wrapper's log disagree with the command's and send an
+    investigation somewhere the evidence does not support (R7). **If `az` itself
+    prints a subscription, tenant or object id, that id is in the public run log**
+    — with or without this harness, exactly as it would be under a bare
+    `az deployment sub create`. Treat a failed deploy's raw run log the same way
+    you treat `--json`: read it, do not paste it.
+
+    Two narrower residuals in the redactor itself, disclosed rather than implied
+    away (`scripts/ci/_azure-redact.mjs` carries the measurements): an **undashed
+    32-hex** run is left alone on purpose, because ARM prints the blocking
+    role-assignment id that way and the #3439 auto-converger reads it back; and a
+    GUID **immediately followed by a hex character** (`<guid>abc`) is not matched.
 
 By hand, the same walk is:
 
@@ -196,8 +224,10 @@ If the error doesn't match the table above:
 - Open GitHub issue with label `csa-loom` + `csa-bug`. Attach the **redacted**
   evidence: the default (non-`--json`) `deploy-arm-errors.mjs` render, or the
   `deploy-failure.json` artifact. **Do not paste raw `az deployment operation
-  … -o json` or `--json` output** — this repo is public and that output carries
-  subscription, tenant and Entra object ids (#3829)
+  … -o json` or `--json` output, and do not paste the run log's "full captured
+  stderr" block** — this repo is public, that output is the command's own and is
+  therefore unredacted, and it carries subscription, tenant and Entra object
+  ids (#3829)
 - An unclassifiable failure is also a gap in the taxonomy — say so in the issue
   so the class gets added
 - Internal Microsoft: `#csa-loom-build` Teams channel

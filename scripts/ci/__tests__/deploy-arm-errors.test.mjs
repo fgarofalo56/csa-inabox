@@ -14,7 +14,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import {
   STATUS,
@@ -27,11 +29,23 @@ import {
   collectArmLeafErrors,
   renderLeaves,
   parseArgs,
+  formatStdout,
+  formatStderr,
 } from '../deploy-arm-errors.mjs';
 import { classify } from '../deploy-classify.mjs';
+import {
+  streamWrites,
+  stripComments,
+  unboundedWrites,
+  callCount,
+  forbiddenPublishers,
+  inheritedStreamSpawns,
+  CONTROL_SOURCE_CRLF,
+} from './_publication-surfaces.mjs';
 
 const FIXTURES = path.resolve(import.meta.dirname, '..', '__fixtures__', 'arm-ops-31069329802');
 const ROOT_DEPLOYMENT = 'csa-loom-ci-31069329802';
+const SCRIPT = path.resolve(import.meta.dirname, '..', 'deploy-arm-errors.mjs');
 
 /**
  * Replays the captured `az` output. Any call the fixtures do not cover is a
@@ -343,4 +357,175 @@ test('RATCHET — no workflow invokes deploy-arm-errors.mjs with --json (its out
   const good = 'node scripts/ci/deploy-arm-errors.mjs --name d --scope sub';
   re.lastIndex = 0;
   assert.doesNotMatch(re.exec(good)[1], /--json\b/, 'the matcher fires on a clean invocation');
+});
+
+// ── THIS FILE'S OWN PUBLICATION SURFACES (#3829 round 5) ─────────────────────
+//
+// renderLeaves() is a redaction boundary for the STRING IT BUILDS. It was never
+// a boundary for this PROCESS: the CLI also writes four usage refusals to
+// stderr, two of which interpolate operator-supplied argv, and it writes stdout
+// twice — the redacted render and the deliberately-raw `--json`. Rounds 1-4 of
+// #3829 bounded one surface at a time and each asserted the enumeration was
+// complete; this section holds the whole file to the same mechanical rule the
+// other two scripts in the lane are held to.
+
+const ARM_SRC = fs.readFileSync(SCRIPT, 'utf8');
+
+/** Two redaction boundaries and ONE disclosed-exception marker. */
+const ARM_BOUNDARIES = ['formatStdout', 'formatStderr', 'unredactedByDesign'];
+
+/** `--json`, and nothing else. Pinned so a second cannot appear silently. */
+const ARM_DISCLOSED_EXCEPTIONS = 1;
+
+test('MUTATION-VISIBLE — formatStdout()/formatStderr() are this file\'s boundaries', () => {
+  // DIRECT, because renderLeaves() redacts as well: an end-to-end assertion on
+  // the default stdout path cannot say which of the two did the work, and would
+  // stay green with this boundary deleted
+  // (csa_loom_mutation_that_does_not_move_the_verdict).
+  const poisoned = `deploy-arm-errors: --scope must be sub|group (got ${SYNTHETIC_OID})`;
+  assert.match(poisoned, GUID_RE, 'the input must carry a GUID or this proves nothing');
+  assert.doesNotMatch(formatStderr(poisoned), GUID_RE, 'the stderr boundary published a GUID');
+  assert.match(formatStderr(poisoned), /\(got <guid>\)/, 'redacted in place, not dropped');
+  assert.doesNotMatch(formatStdout(`x${SYNTHETIC_OID}`), GUID_RE, 'the stdout boundary published a GUID');
+  assert.equal(formatStdout(`x${SYNTHETIC_OID}`), 'x<guid>');
+  // String() first — a refusal that printed nothing is worse than the refusal.
+  assert.equal(formatStderr(42), '42');
+  assert.equal(formatStdout(undefined), 'undefined');
+});
+
+test('STRUCTURAL — EVERY write to a public stream crosses a boundary or a COUNTED exception', () => {
+  const writes = streamWrites(ARM_SRC);
+
+  assert.ok(writes.length >= 6, `expected >=6 stream writes, found ${writes.length} — the enumerator drifted`);
+  assert.ok(writes.some((w) => w.stream === 'stdout'), 'no stdout write found — the enumerator is stdout-blind');
+  assert.ok(writes.some((w) => w.stream === 'stderr'), 'no stderr write found — the enumerator is stderr-blind');
+
+  assert.deepEqual(
+    unboundedWrites(ARM_SRC, ARM_BOUNDARIES).map((w) => `${w.line}: ${w.arg.split('\n')[0]}`),
+    [],
+    'a write to a PUBLIC stream bypasses both the redaction boundary and the disclosed-exception marker (#3829)',
+  );
+  assert.equal(
+    callCount(ARM_SRC, 'unredactedByDesign'),
+    ARM_DISCLOSED_EXCEPTIONS,
+    'the number of UNREDACTED publications changed — `--json` is the only one, and it is only safe because the ' +
+      'RATCHET above proves no workflow invokes it',
+  );
+  assert.deepEqual(forbiddenPublishers(ARM_SRC), [], 'a publication shape with no boundary to attach to');
+
+  // THE SURFACE NO WRITE-BASED ASSERTION CAN SEE. This file spawns `az`, and a
+  // single character — `['ignore','pipe','pipe']` becoming `['ignore','inherit',
+  // 'pipe']` — would hand az's raw output straight to the public run log with no
+  // `process.stdout.write` in this file at all. az prints subscription ids,
+  // resource ids and object ids; azRunner() exists precisely to CAPTURE them.
+  assert.deepEqual(
+    inheritedStreamSpawns(ARM_SRC),
+    [],
+    'a spawn in this file publishes through an INHERITED stream — az output would reach the public log unredacted',
+  );
+  // Non-degenerate: the enumerator really can see the violation it is asserting
+  // the absence of, and does not fire on an inherited STDIN.
+  assert.deepEqual(inheritedStreamSpawns("x({ stdio: ['ignore', 'inherit', 'pipe'] })")[0].inherits, ['stdout']);
+  assert.equal(inheritedStreamSpawns("x({ stdio: ['inherit', 'pipe', 'pipe'] })").length, 0);
+});
+
+test('SELF-DEFENCE — the surface enumerator can actually detect an unbounded write', () => {
+  const found = unboundedWrites(CONTROL_SOURCE_CRLF, ARM_BOUNDARIES);
+  assert.equal(found.length, 2, `expected the control's 2 violations, found ${found.length}`);
+  assert.ok(found.some((w) => w.arg.startsWith('`deploy:')), 'a bare template-literal write was not detected');
+  assert.ok(
+    found.some((w) => w.arg.startsWith('redact(')),
+    'a PER-SITE redact() was not detected — one boundary per surface is the rule; a per-field call is the defect',
+  );
+  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, 5, 'the control source lost a write to CRLF handling');
+  // The stripper keeps real code and drops prose — both directions.
+  assert.match(stripComments(ARM_SRC), /process\.stdout\.write\(formatStdout\(/, 'the stripper ate real code');
+  assert.doesNotMatch(stripComments(ARM_SRC), /DISCLOSED EXCEPTION, and the ONLY unredacted publication/, 'the stripper left prose');
+  assert.match(ARM_SRC, /DISCLOSED EXCEPTION, and the ONLY unredacted publication/, 'the disclosure was removed from the source');
+});
+
+// ── THE CLI, END TO END — both stdout branches and a poisoned usage refusal ───
+
+function scratchDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'loom-arm-test-'));
+}
+
+/** A fake `az` that prints one failed operation carrying the synthetic id. */
+function fakeAz(dir) {
+  const ops = [
+    {
+      operationId: 'DEADBEEF',
+      properties: {
+        provisioningState: 'Failed',
+        statusCode: 'Conflict',
+        targetResource: {
+          id: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x/providers/Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+          resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+          resourceName: `psql-loom-weave-default-abc123/${SYNTHETIC_OID}`,
+        },
+        statusMessage: {
+          error: { code: 'Conflict', message: 'the administrator could not be written', details: null },
+        },
+      },
+    },
+  ];
+  const payload = path.join(dir, 'az-ops.json');
+  fs.writeFileSync(payload, JSON.stringify(ops), 'utf8');
+  if (process.platform === 'win32') {
+    const p = path.join(dir, 'fake-az.cmd');
+    fs.writeFileSync(p, `@echo off\r\ntype "${payload}"\r\n`, 'utf8');
+    return p;
+  }
+  const p = path.join(dir, 'fake-az.sh');
+  fs.writeFileSync(p, `#!/bin/sh\ncat '${payload}'\n`, 'utf8');
+  fs.chmodSync(p, 0o755);
+  return p;
+}
+
+function runCli(args, extraEnv = {}) {
+  // NODE_TEST_CONTEXT is STRIPPED: a child that only redacts when it can see it
+  // is being tested is the purest gate that cannot fail, and that exact mutation
+  // survived a whole suite in round 4 of this fix.
+  const env = { ...process.env, ...extraEnv };
+  delete env.NODE_TEST_CONTEXT;
+  return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env });
+}
+
+test('ACCEPTANCE — the CLI\'s DEFAULT render publishes no id, and `--json` deliberately does', () => {
+  const dir = scratchDir();
+  const az = fakeAz(dir);
+
+  const plain = runCli(['--name', 'csa-loom-ci-1', '--scope', 'sub'], { LOOM_AZ_BIN: az });
+  assert.equal(plain.status, EXIT.FOUND, `the drill-down must have found a leaf; stderr=${plain.stderr}`);
+  // Non-degenerate: the render really carried the leaf, so "no GUID" is not the
+  // answer an empty stdout would also give.
+  assert.match(plain.stdout, /psql-loom-weave-default-abc123/, 'the leaf never reached stdout');
+  assert.doesNotMatch(plain.stdout, GUID_RE, 'the DEFAULT render published an object id to a public log (#3829)');
+  assert.match(plain.stdout, /psql-loom-weave-default-abc123\/<guid>/, 'redacted in place, not dropped');
+  assert.equal(plain.stderr, '', 'the happy path must not write to stderr at all');
+
+  // THE DISCLOSED EXCEPTION, pinned in the direction it is claimed: `--json` IS
+  // raw. If this goes green-to-red because someone redacted it, that breaks the
+  // documented operator contract in docs/fiab/runbooks/deploy-failure.md and
+  // needs its own argument — the same "pin the carve-out, do not broaden the
+  // universal" rule the child-output carve-out in deploy-retry.mjs follows.
+  const raw = runCli(['--name', 'csa-loom-ci-1', '--scope', 'sub', '--json'], { LOOM_AZ_BIN: az });
+  assert.equal(raw.status, EXIT.FOUND);
+  assert.match(raw.stdout, GUID_RE, '`--json` stopped emitting raw ids; the runbook and the RATCHET above assume it does');
+});
+
+test('ACCEPTANCE — a usage refusal redacts the argv it echoes back', () => {
+  // `--scope must be sub|group (got …)` and `unknown argument: …` both
+  // interpolate operator-supplied argv straight onto stderr, which is the public
+  // Actions run log. Neither had a boundary before round 5.
+  const badScope = runCli(['--name', 'd', '--scope', SYNTHETIC_OID]);
+  assert.equal(badScope.status, EXIT.USAGE);
+  assert.match(badScope.stderr, /--scope must be sub\|group/, 'the refusal did not run');
+  assert.doesNotMatch(badScope.stderr, GUID_RE, 'a usage refusal published argv unredacted (#3829 round 5)');
+  assert.match(badScope.stderr, /\(got <guid>\)/, 'redacted in place, not dropped');
+
+  const badFlag = runCli([`--${SYNTHETIC_OID}`, 'x']);
+  assert.equal(badFlag.status, EXIT.USAGE);
+  assert.match(badFlag.stderr, /unknown argument/, 'the refusal did not run');
+  assert.doesNotMatch(badFlag.stderr, GUID_RE, 'an unknown-argument refusal published argv unredacted (#3829 round 5)');
 });

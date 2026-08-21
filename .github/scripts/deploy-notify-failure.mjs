@@ -104,26 +104,49 @@
  *     "11111111-2222-3333-4444-555555555555", category: unknown)
  *
  *   Redacting one interpolation and leaving the one beside it raw IS the
- *   field-by-field defect this whole change exists to delete. So there is no
- *   per-variable redaction left on the STDOUT path: formatStdout() below is the
- *   single boundary every byte of stdout crosses — this file writes to stdout in
- *   exactly one place, inside emit(), and that call goes through formatStdout()
- *   — exactly as formatAnnotation() is for scripts/ci/deploy-retry.mjs, and the
- *   raw values are interpolated freely because nothing downstream of the boundary
- *   can publish them unredacted. The issue path has the same shape:
- *   buildIssueBody() redacts the assembled body once at its return, and
- *   notifyFailure() redacts the title and the body once more at the poster.
+ *   field-by-field defect this whole change exists to delete.
  *
- *   ONE per-site redact() call remains, DELIBERATELY, and it is on neither of
- *   those paths: main().catch() at the bottom of this file writes `e.message` to
- *   STDERR, which is published in this repo's Actions logs and sits outside every
- *   boundary named above. There is no boundary function to route it through — it
- *   is the last statement before the process exits — so it redacts at the site,
- *   with its reason stated there. That is the complete list: five redact() call
- *   sites, four of them boundary calls (buildIssueBody's return; the poster's
- *   title and body; formatStdout) and that one disclosed exception. An earlier
- *   draft of this paragraph said "no per-variable redaction left in this file",
- *   unqualified, which the handler below falsifies — do not restore it.
+ * ROUND 5 — THE ENUMERATION, NOT THE NEXT INSTANCE (#3829)
+ *
+ *   Read as a sequence, rounds 1-4 are one defect four times: a publication
+ *   surface is given a boundary, its NEIGHBOUR is left uncovered, and the fix
+ *   asserts the enumeration is complete. Round 2 was specifically the discovery
+ *   that stderr publishes. Round 4 put a boundary on stdout in this file and
+ *   left stderr — in this same file — unbounded, which is round 2's defect one
+ *   file over. Patching that one row would have surfaced the next.
+ *
+ *   So this file now has exactly TWO ways to reach a stream, and both are
+ *   boundaries:
+ *
+ *     stdout   emit()     -> process.stdout.write(formatStdout(…))
+ *     stderr   emitErr()  -> process.stderr.write(formatStderr(…))
+ *
+ *   and TWO ways to reach the GitHub API, both redacted at the poster:
+ *   notifyFailure() redacts the TITLE and the BODY once each, immediately
+ *   before the payload leaves the process, covering the create path and the
+ *   comment path together. buildIssueBody() redacts the assembled body once
+ *   more at its return — idempotent, so it is defence in depth rather than a
+ *   second rule to keep in sync.
+ *
+ *   THE ANNOTATION IS NOT A SEPARATE SURFACE HERE, AND THAT IS WORTH SAYING
+ *   because it is a separate surface in general: `::notice::` is a marker
+ *   inside the stdout byte stream, so in this file it is covered by the stdout
+ *   boundary. In deploy-retry.mjs the annotation and the raw run log ARE
+ *   distinct, because that script also streams a child's bytes.
+ *
+ *   THERE IS NO PER-VARIABLE REDACTION LEFT IN THIS FILE, and unlike the round-4
+ *   draft of that sentence it is now true rather than nearly true: main().catch()
+ *   used to redact at the site because there was no boundary to route it
+ *   through; it goes through emitErr() now, so the exception is gone rather than
+ *   merely disclosed. The complete list is six redact()-family call sites, all
+ *   six boundaries: buildIssueBody's return, the poster's title, the poster's
+ *   body, formatStdout, formatStderr, and nothing else. Callers interpolate RAW
+ *   values on purpose — nothing downstream of a boundary can publish them
+ *   unredacted, and a field added tomorrow is covered by construction rather
+ *   than by remembering. That property is enforced STRUCTURALLY by
+ *   `MUTATION-VISIBLE — every write to a public stream crosses a boundary` in
+ *   the suite, which enumerates every stream write in this file and fails if any
+ *   argument does not begin with a boundary call.
  *
  * USAGE (from a workflow `if: failure()` step)
  *   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -139,7 +162,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { classifyOutcome } from '../../scripts/ci/run-outcome.mjs';
-import { redact } from '../../scripts/ci/_azure-redact.mjs';
+import { redact, redactedLine } from '../../scripts/ci/_azure-redact.mjs';
 
 /** The only label guaranteed to exist in this repo; creating one we do not have would fail the notify. */
 export const FAILURE_LABEL = 'deploy-validation';
@@ -374,19 +397,43 @@ function hasArg(name, argv) {
  * assertion alone could not tell this boundary from redact()'s other callers
  * (csa_loom_mutation_that_does_not_move_the_verdict).
  *
- * String() first, for the reason formatAnnotation() does it: redact() returns ''
- * for a non-string, and a log line that silently vanished would be a worse
- * failure than the one it was reporting.
- *
  * @param {unknown} text
  * @returns {string} the exact bytes written to stdout
  */
 export function formatStdout(text) {
-  return redact(String(text));
+  return redactedLine(text);
+}
+
+/**
+ * THE STDERR BOUNDARY (#3829 round 5). Same rule, the other stream.
+ *
+ * Round 4 gave stdout a boundary and a structural assertion, and left stderr in
+ * THIS SAME FILE with neither — which is round 2's finding (stderr is a
+ * publisher) reappearing one file over. On a PUBLIC repo the Actions run log is
+ * as readable as an issue body, and every `process.stderr.write` below lands in
+ * it: the two usage refusals, whose text is operator-supplied by way of the
+ * missing-argument message, and main().catch()'s `e.message`, which is the most
+ * plausible carrier of a path or an id in the whole file — an API error here
+ * embeds the request URL and up to 300 bytes of the response.
+ *
+ * There is no "the last statement before exit has nowhere to route to" exception
+ * any more, because this IS somewhere to route to. Exported and PURE for the
+ * same reason formatStdout() is: with redact() sitting on several paths, only a
+ * DIRECT test can tell which redactor is doing the work.
+ *
+ * @param {unknown} text
+ * @returns {string} the exact bytes written to stderr
+ */
+export function formatStderr(text) {
+  return redactedLine(text);
 }
 
 function emit(text) {
   process.stdout.write(formatStdout(text));
+}
+
+function emitErr(text) {
+  process.stderr.write(formatStderr(text));
 }
 
 async function main() {
@@ -397,21 +444,23 @@ async function main() {
   const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
 
   if (!workflow || !repo || !token) {
-    process.stderr.write(
+    emitErr(
       'deploy-notify-failure: need --workflow, GITHUB_REPOSITORY and GH_TOKEN. Refusing to run — ' +
         'a notifier that quietly does nothing is worse than none.\n',
     );
     process.exit(2);
   }
 
-  // THE RUN LOG IS A PUBLISHED SURFACE TOO (#3829 round 3/4). notifyFailure()
+  // BOTH STREAMS ARE PUBLISHED SURFACES (#3829 rounds 3-5). notifyFailure()
   // covers what reaches the GitHub API; it does not cover what this function
-  // PRINTS, and this repo's Actions logs are public. Both stdout writes below go
-  // through emit() → formatStdout(), the single boundary — so `workflow`,
-  // `result`, `decision.why` and anything a future line adds are redacted by
-  // construction rather than one remembered call at a time. Round 3 redacted
-  // `workflow` here per-variable and left `result` raw on the same statement;
-  // that per-variable local is gone.
+  // PRINTS, and this repo's Actions logs are public. Every stdout write goes
+  // through emit() -> formatStdout() and every stderr write through emitErr() ->
+  // formatStderr(), the two single boundaries — so `workflow`, `result`,
+  // `decision.why`, an API error's URL and response body, and anything a future
+  // line adds are redacted by construction rather than one remembered call at a
+  // time. Round 3 redacted `workflow` here per-variable and left `result` raw on
+  // the same statement; round 4 bounded stdout and left stderr bare. Both of
+  // those per-variable locals are gone.
 
   // #3368 — the outcome must be SUPPLIED, not assumed. An invocation with no
   // --result cannot tell a failure from a cancellation, and this script's whole
@@ -419,7 +468,7 @@ async function main() {
   // default, because a default is how six callers get it right and the seventh
   // silently does not.
   if (!hasArg('result', argv)) {
-    process.stderr.write(
+    emitErr(
       'deploy-notify-failure: --result is REQUIRED (pass "${{ job.status }}" or the specific ' +
         'needs.<job>.result that failed). Without it this script cannot tell a genuine failure from a ' +
         'cancellation, and it filed a false P0 that way once already (#3356 / #3368). Refusing to file.\n',
@@ -468,12 +517,16 @@ const isMain =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 if (isMain) {
   main().catch((e) => {
-    // stderr is a published surface in this repo's Actions logs too, and this
-    // handler sits OUTSIDE the four surfaces #3829 enumerated. No live carrier
-    // is known — a probe of the most plausible one (a fetch failure) showed V8
-    // truncates the message too short to carry an id — but "no carrier today" is
-    // the argument that was wrong twice already in this file. Redact anyway.
-    process.stderr.write(redact(`deploy-notify-failure: ${e.message}\n`));
+    // STDERR IS A PUBLISHED SURFACE, and this handler is the likeliest carrier
+    // in the file: ghRequest() throws with the request URL and up to 300 bytes
+    // of the API's response embedded in the message, and notifyFailure() throws
+    // with 200 bytes of a malformed search result. Round 4 redacted here at the
+    // SITE and called it the file's one disclosed exception, on the reasoning
+    // that the last statement before exit has no boundary to route through.
+    // emitErr() is that boundary, so the exception is closed rather than
+    // disclosed — which is the point of round 5: an exception nobody can see is
+    // how the next field gets added without one.
+    emitErr(`deploy-notify-failure: ${e.message}\n`);
     process.exit(1);
   });
 }

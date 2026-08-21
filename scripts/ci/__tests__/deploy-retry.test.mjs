@@ -32,10 +32,20 @@ import {
   parseArgs,
   redact,
   formatAnnotation,
+  formatStderr,
   armDrilldown,
   USAGE_EXIT,
 } from '../deploy-retry.mjs';
 import { classify, classifyLeaves, TAXONOMY } from '../deploy-classify.mjs';
+import {
+  streamWrites,
+  stripComments,
+  unboundedWrites,
+  callCount,
+  forbiddenPublishers,
+  inheritedStreamSpawns,
+  CONTROL_SOURCE_CRLF,
+} from './_publication-surfaces.mjs';
 
 const SCRIPT = path.resolve(import.meta.dirname, '..', 'deploy-retry.mjs');
 
@@ -709,6 +719,213 @@ test('formatAnnotation keeps its other contracts: one line, and never blank', ()
   assert.match(formatAnnotation('error', { toString: () => 'an object message' }), /an object message/);
 });
 
+// ── THE RUN LOG IS A DIFFERENT SURFACE FROM THE ANNOTATION (#3829 round 5) ────
+//
+// Guarding `::error::` does NOT cover a raw byte landing in the log. Round 2
+// covered the stderr STREAM field by field — `redact(l.leaf.resourceName)` on a
+// line whose neighbouring interpolations (`l.leaf.code`, the signal id) sat raw —
+// and the usage refusals, the drill-down banner and the "stderr was EMPTY" block
+// had no redaction at all. formatStderr() is that surface's boundary, and the
+// per-site call on the per-leaf line has been REMOVED so that this boundary is
+// the only redactor on that path and a pass-through mutation is visible end to
+// end as well as here.
+
+test('MUTATION-VISIBLE — formatStderr() is the boundary for the RUN LOG', () => {
+  const poisoned = `deploy-retry: blocked on '${SYNTHETIC_SERVER}/${SYNTHETIC_OID}'`;
+  assert.match(poisoned, GUID_RE, 'the input must carry a GUID or this proves nothing');
+  const out = formatStderr(poisoned);
+  assert.doesNotMatch(out, GUID_RE, 'the stderr boundary published a GUID (#3829 round 5)');
+  assert.ok(out.includes(REDACTED_LEAF_NAME), 'redacted in place — the line lost its subject entirely');
+  // String() first, for the reason formatAnnotation() does it: a refusal that
+  // printed nothing would be a worse failure than the one it was reporting.
+  assert.equal(formatStderr(42), '42');
+  assert.equal(formatStderr(undefined), 'undefined');
+});
+
+const RETRY_SRC = fs.readFileSync(SCRIPT, 'utf8');
+
+/**
+ * The named functions a write in deploy-retry.mjs may hand its argument to: two
+ * redaction boundaries and ONE disclosed-exception marker.
+ */
+const RETRY_BOUNDARIES = ['formatAnnotation', 'formatStderr', 'unredactedByDesign'];
+
+/**
+ * How many DISCLOSED EXCEPTIONS this file is allowed. Pinned, so a fifth cannot
+ * appear without moving a number a reviewer reads:
+ *
+ *   1. runTee()      the child's stdout, streamed live
+ *   2. per attempt   the child's stderr, echoed back
+ *   3. final failure the child's stderr, echoed in full
+ *   4. final failure the child's stdout TAIL, when its stderr came back empty
+ *
+ * All four are the same argument — `stdio: inherit` parity, R7: rewriting a
+ * command's own output makes the wrapper's log disagree with the command's.
+ */
+const RETRY_DISCLOSED_EXCEPTIONS = 4;
+
+test('STRUCTURAL — EVERY write to a public stream crosses a boundary or a COUNTED exception', () => {
+  const writes = streamWrites(RETRY_SRC);
+
+  // Non-degenerate: the enumerator found writes on BOTH streams. Zero, or one
+  // stream, would mean the matcher drifted rather than that the file stopped
+  // publishing (guard_with_zero_population_needs_embedded_control).
+  assert.ok(writes.length >= 6, `expected >=6 stream writes, found ${writes.length} — the enumerator drifted`);
+  assert.ok(writes.some((w) => w.stream === 'stdout'), 'no stdout write found — the enumerator is stdout-blind');
+  assert.ok(writes.some((w) => w.stream === 'stderr'), 'no stderr write found — the enumerator is stderr-blind');
+
+  assert.deepEqual(
+    unboundedWrites(RETRY_SRC, RETRY_BOUNDARIES).map((w) => `${w.line}: ${w.arg.split('\n')[0]}`),
+    [],
+    'a write to a PUBLIC stream bypasses both the redaction boundary and the disclosed-exception marker (#3829)',
+  );
+
+  assert.equal(
+    callCount(RETRY_SRC, 'unredactedByDesign'),
+    RETRY_DISCLOSED_EXCEPTIONS,
+    'the number of UNREDACTED publications changed — every one is a deliberate carve-out and must be argued, ' +
+      'not inherited (see rule 6 (b) in deploy-retry.mjs)',
+  );
+
+  // The surfaces that reach a stream WITHOUT `process.<stream>.write`.
+  assert.deepEqual(forbiddenPublishers(RETRY_SRC), [], 'a publication shape with no boundary to attach to');
+});
+
+test('SELF-DEFENCE — the surface enumerator can actually detect an unbounded write', () => {
+  const found = unboundedWrites(CONTROL_SOURCE_CRLF, RETRY_BOUNDARIES.concat('formatStdout'));
+  assert.equal(found.length, 2, `expected the control's 2 violations, found ${found.length}`);
+  assert.ok(found.some((w) => w.arg.startsWith('`deploy:')), 'a bare template-literal write was not detected');
+  assert.ok(
+    found.some((w) => w.arg.startsWith('redact(')),
+    'a PER-SITE redact() was not detected — one boundary per surface is the rule; a per-field call is the defect',
+  );
+  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, 5, 'the control source lost a write to CRLF handling');
+
+  // The comment stripper is load-bearing: this file's header documents its write
+  // sites in prose, so counting comments would inflate every number above.
+  const occurrences = (s, needle) => s.split(needle).length - 1;
+  assert.ok(
+    occurrences(RETRY_SRC, 'process.stderr.write()') + occurrences(RETRY_SRC, 'unredactedByDesign()') >= 1,
+    'the header no longer names its own write sites — this control has lost its population',
+  );
+  assert.equal(
+    occurrences(stripComments(RETRY_SRC), 'process.stderr.write()'),
+    0,
+    'the stripper left header prose in the executable source — every count above is inflated',
+  );
+  // …and it does NOT strip real code. Both directions, or it is not a control.
+  assert.match(stripComments(RETRY_SRC), /process\.stdout\.write\(formatAnnotation\(level, message\)\)/, 'the stripper ate real code');
+});
+
+test('STRUCTURAL — the inherited-stream surface is ENUMERATED, not invisible', () => {
+  // THE SURFACE NO WRITE-BASED ASSERTION CAN SEE. `stdio: [_,'inherit',_]` hands
+  // the child THIS process's stdout fd: its bytes reach the same public run log
+  // with no `process.stdout.write` in this file at all. Round 4's
+  // `process\.stdout\.write` regex was blind to it by construction, and so is
+  // streamWrites() — which is exactly why it gets its own enumeration rather
+  // than being assumed covered by the one above.
+  const inherited = inheritedStreamSpawns(RETRY_SRC);
+  assert.equal(
+    inherited.length,
+    1,
+    'the set of spawns that publish through an INHERITED stream changed. Each one hands a child this ' +
+      "process's public log with no boundary in this file; see rule 6 (e). Adding one is a decision, not a detail: " +
+      `found ${JSON.stringify(inherited)}`,
+  );
+  assert.deepEqual(inherited[0].inherits, ['stdout'], 'the remediation child now also inherits STDERR — a second surface');
+
+  // Non-degenerate, from the other direction: runTee()'s `['inherit','pipe','pipe']`
+  // must NOT be counted. Slot 0 is stdin and is not a publication surface, and a
+  // matcher that flagged it would be noise the next author silences.
+  assert.match(RETRY_SRC, /stdio: \['inherit', 'pipe', 'pipe'\]/, 'runTee no longer inherits stdin — this control lost its subject');
+  assert.equal(
+    inheritedStreamSpawns("spawn(c, a, { stdio: ['inherit', 'pipe', 'pipe'] });").length,
+    0,
+    'an inherited STDIN was counted as a publication surface',
+  );
+  // …and the shapes that ARE surfaces are detected, each on its own slot.
+  assert.deepEqual(inheritedStreamSpawns("x({ stdio: ['ignore', 'inherit', 'pipe'] })")[0].inherits, ['stdout']);
+  assert.deepEqual(inheritedStreamSpawns("x({ stdio: ['ignore', 'pipe', 'inherit'] })")[0].inherits, ['stderr']);
+  assert.deepEqual(inheritedStreamSpawns('x({ stdio: ["ignore", "inherit", "inherit"] })')[0].inherits, ['stdout', 'stderr']);
+
+  // The disclosure is really IN the source, not only here. A residual named in a
+  // test nobody reads is the same unstated assumption round 3 shipped.
+  assert.match(RETRY_SRC, /A FIFTH PUBLICATION SURFACE/, 'the inherited-stream disclosure was removed from deploy-retry.mjs');
+  assert.match(RETRY_SRC, /converge-role-assignment\.mjs/, 'the disclosure no longer names WHOSE boundary those bytes are');
+});
+
+test('R7 — the redactor\'s stated count of UNREDACTED publications equals the measured one', () => {
+  // The specific defect this PR committed four times is a COUNT stated as
+  // established and never measured: "the four surfaces #3829 enumerated", "no
+  // per-variable redaction left in this file", "what it still does NOT match" —
+  // each true of what its author had looked at and false of the file. So the one
+  // number round 5 adds to a header is measured here rather than asserted there.
+  const redactSrc = fs.readFileSync(path.resolve(import.meta.dirname, '..', '_azure-redact.mjs'), 'utf8');
+  const WORDS = { ZERO: 0, ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7, EIGHT: 8 };
+  const declared = /THE ([A-Z]+) USES TODAY/.exec(redactSrc);
+  assert.ok(declared, '_azure-redact.mjs no longer states how many unredacted publications exist');
+  assert.ok(declared[1] in WORDS, `unparseable count "${declared[1]}" in _azure-redact.mjs`);
+
+  const files = [
+    path.resolve(import.meta.dirname, '..', 'deploy-retry.mjs'),
+    path.resolve(import.meta.dirname, '..', 'deploy-arm-errors.mjs'),
+    path.resolve(import.meta.dirname, '..', '..', '..', '.github', 'scripts', 'deploy-notify-failure.mjs'),
+  ];
+  // Non-degenerate: every file this sums really exists, or the total is a zero
+  // that would agree with almost any claim.
+  for (const f of files) assert.ok(fs.existsSync(f), `${f} is missing — the sum below would be silently short`);
+  const measured = files.reduce((n, f) => n + callCount(fs.readFileSync(f, 'utf8'), 'unredactedByDesign'), 0);
+
+  assert.equal(
+    measured,
+    WORDS[declared[1]],
+    `_azure-redact.mjs says ${declared[1]} unredacted publications; the three deploy scripts contain ${measured}`,
+  );
+});
+
+test('DISCLOSED EXCEPTION — the CHILD\'s own bytes reach the run log verbatim, and the ARTIFACT still does not', () => {
+  // The carve-out is real and it is pinned in BOTH directions, because a future
+  // reader is equally likely to "fix" it as to widen it. Redacting the child's
+  // own output would break the `stdio: inherit` parity R7 requires — the
+  // wrapper's log would disagree with the command's — so this asserts that the
+  // id DOES reach stderr, and that the boundaries around it still hold.
+  const dir = scratchDir();
+  const counter = path.join(dir, 'n');
+  fs.writeFileSync(counter, '');
+  const artifact = path.join(dir, 'deploy-failure.json');
+  // A quota denial (never retried, so exactly one attempt) whose own stderr
+  // carries the synthetic id ON THE SIGNAL LINE — the shape `az` itself would
+  // produce, and the only shape that reaches the artifact, since the taxonomy
+  // keeps the MATCHED line as evidence rather than the whole stream.
+  const childStderr =
+    'ERROR: QuotaExceeded: standardDDSv5Family Cores, Location: centralus, Current Limit: 200, ' +
+    `Current Usage: 196 — requested by principal ${SYNTHETIC_OID} on ${SYNTHETIC_SERVER}\n`;
+
+  const r = runRetry(
+    ['--class-allow', 'transient', '--max-attempts', '1', '--backoff', '0', '--jitter', '0', '--artifact', artifact],
+    alwaysFails(counter, childStderr),
+  );
+  assert.notEqual(r.status, 0, 'a quota denial must still be RED');
+
+  // THE DISCLOSURE, asserted rather than described: the child's own bytes are
+  // echoed unchanged, so the id is in the public run log. If this ever goes red
+  // because someone routed the echo through formatStderr(), that is a BEHAVIOUR
+  // change to the parity contract and needs its own argument — not a silent fix.
+  assert.match(r.stderr, GUID_RE, 'the child-output carve-out changed; see rule 6 (b) in deploy-retry.mjs');
+  assert.match(r.stderr, /full captured stderr/, 'the final stderr block did not run');
+
+  // …and the carve-out is BOUNDED. Everything this script composes ITSELF is
+  // still redacted, and the artifact a PUBLIC issue is built from is clean.
+  // (`established[].line` also carries a per-site redact() as defence in depth,
+  // so this pins the OUTPUT rather than which of the two redactors did it — the
+  // `--step` test above is the one that isolates the artifact boundary.)
+  const raw = fs.readFileSync(artifact, 'utf8');
+  assert.match(raw, /"established"/, 'the artifact captured no evidence, so "no GUID" would be vacuous');
+  assert.match(raw, /principal <guid>/, 'the child stderr reached the artifact but was not redacted in place');
+  assert.doesNotMatch(raw, GUID_RE, 'a GUID reached the deploy-failure.json a PUBLIC issue is built from');
+  assert.doesNotMatch(r.stdout, GUID_RE, 'a GUID reached an Actions ANNOTATION — the annotation boundary leaked');
+});
+
 // ── redact(): the residuals, measured rather than assumed ────────────────────
 //
 // Round 1 stated the residual as "a GUID glued to word chars on BOTH sides
@@ -739,9 +956,9 @@ test('redact() strips a GUID glued to word characters on EITHER side (#3829 roun
 
 test('redact() does NOT invent matches in legitimate text (no false positives)', () => {
   // Widening the boundary is only safe if the things it newly matches are still
-  // GUIDs. The guard is negative lookaround on HEX, so the only inputs it can
-  // newly touch are full 8-4-4-4-12 tokens adjacent to a NON-hex character.
-  // Everything below must survive byte-for-byte.
+  // GUIDs. The remaining guard is a negative LOOKAHEAD on hex, so the only
+  // inputs it can newly touch are full 8-4-4-4-12 tokens NOT followed by a hex
+  // character. Everything below must survive byte-for-byte.
   const legitimate = [
     'commit f172a1c0dc3e4b5a9f8e7d6c5b4a39281706f5e4 — a 40-hex git sha',
     'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
@@ -750,48 +967,80 @@ test('redact() does NOT invent matches in legitimate text (no false positives)',
     'rg-csa-loom-admin-centralus / psql-loom-ducklake-k6mvh5sm6z7do',
     'ERROR: (SomeCodeNobodyHasEverSeen) the widget frobnicator declined',
     'The ID of the existing role assignment is 11112222333344445555666677778888.',
-    // NOTE — these last two are RESIDUAL 2, not merely "not a false positive".
-    // They are hex-adjacent GUIDs and they SURVIVE; see the test above and the
-    // disclosure in _azure-redact.mjs. Kept here because a 14-hex first group is
-    // genuinely not a GUID token, but do not read this corpus as evidence that
-    // hex-adjacency is safe — it is the documented cost of the lookarounds.
-    'abcdef11111111-2222-3333-4444-555555555555 (a longer hex run, not a GUID token)',
+    // NOTE — this last one is RESIDUAL 2, not merely "not a false positive". It
+    // is a hex-adjacent GUID and it SURVIVES; see the test below and the
+    // disclosure in _azure-redact.mjs. Do not read this corpus as evidence that
+    // trailing hex-adjacency is safe — it is the documented cost of the
+    // surviving lookahead.
     '11111111-2222-3333-4444-555555555555abc (trailing hex, not a GUID token)',
   ];
   for (const s of legitimate) {
     assert.equal(redact(s), s, `redact() rewrote legitimate text: ${JSON.stringify(s)}`);
   }
+
+  // THE ROW THAT LEFT THIS CORPUS, AND WHY (#3829 round 5). Round 2 added
+  //
+  //   'abcdef11111111-2222-3333-4444-555555555555 (a longer hex run, not a GUID token)'
+  //
+  // and round 4's header then cited it as the cost of narrowing — a fixture this
+  // branch introduced, used as the obstacle it could not move. Measured:
+  //
+  //   git show 608a36af:scripts/ci/__tests__/deploy-retry.test.mjs \
+  //     | grep -c abcdef11111111   -> 0   RC=1     (absent from the merge base)
+  //   git show <head>:… | grep -c abcdef11111111   -> 1   RC=0
+  //
+  // Dropping the LOOKBEHIND costs exactly this row and closes three residual-2
+  // cases including `uami-loom-directlake<guid>`, a REAL Loom-shaped name. A
+  // 14-hex first group now reads back as `abcdef<guid>`: over-redacting a
+  // diagnostic is recoverable, publishing an object id into a public repo's
+  // permanent history is not. Asserted in its new direction rather than deleted,
+  // so the trade stays visible.
+  assert.equal(
+    redact(`abcdef${SYNTHETIC_OID}`),
+    'abcdef<guid>',
+    'the round-5 narrowing regressed — a 9+-hex first group is no longer redacted',
+  );
 });
 
-test('RESIDUAL 2 — a GUID directly adjacent to a HEX character survives, and that is DISCLOSED (#3829 round 4)', () => {
-  // Not an accident and not a silent gap: it is the exact cost of the hex
-  // lookarounds that closed the `\b` residual in round 2. Round 3's header said
-  // "what it still does NOT match, deliberately: an undashed 32-hex run" — as
-  // though that were the whole list. It was not, and stating an unmeasured
-  // enumeration as complete is the R7 defect this test exists to prevent
-  // recurring. Pinned so the module header and the behaviour cannot drift apart:
-  // if someone narrows the lookaround later, this test goes red and they MUST
-  // update the disclosure rather than leave a stale claim behind.
+test('RESIDUAL 2 — a GUID followed by a HEX character survives, and that is DISCLOSED (#3829 round 5)', () => {
+  // Not an accident and not a silent gap: it is the exact cost of the negative
+  // LOOKAHEAD that closed the `\b` residual in round 2 and was kept in round 5.
+  // Round 3's header said "what it still does NOT match, deliberately: an
+  // undashed 32-hex run" — as though that were the whole list. It was not, and
+  // stating an unmeasured enumeration as complete is the R7 defect this test
+  // exists to prevent recurring. Pinned so the module header and the behaviour
+  // cannot drift apart: if someone narrows the lookahead later, this test goes
+  // red and they MUST update the disclosure rather than leave a stale claim.
   const survives = [
-    ['single hex letter prefix', `f${SYNTHETIC_OID}`],
-    ['hex-word prefix', `abcdef${SYNTHETIC_OID}`],
     ['hex suffix', `${SYNTHETIC_OID}f`],
     ['hex-word suffix', `${SYNTHETIC_OID}abc`],
-    // The one that argues loudest for narrowing: a real Loom-shaped name whose
-    // last character happens to be hex, concatenated with NO separator.
-    ['Loom-shaped name ending in a hex letter', `uami-loom-directlake${SYNTHETIC_OID}`],
   ];
   for (const [why, input] of survives) {
     assert.match(input, GUID_RE, `${why}: the fixture must carry a GUID or this proves nothing`);
     assert.equal(redact(input), input, `${why}: behaviour changed — UPDATE THE DISCLOSURE in _azure-redact.mjs`);
   }
 
+  // THE THREE ROUND-5 CLOSED, pinned in their new direction. These were LEAKS
+  // under the lookbehind and are the reason it was dropped; if the lookbehind
+  // ever comes back this goes red rather than quietly re-opening a live hole.
+  for (const [why, input, expected] of [
+    ['single hex letter prefix', `f${SYNTHETIC_OID}`, 'f<guid>'],
+    ['hex-word prefix', `abcdef${SYNTHETIC_OID}`, 'abcdef<guid>'],
+    // The one that argued loudest for narrowing: a real Loom-shaped name whose
+    // last character happens to be hex, concatenated with NO separator.
+    ['Loom-shaped name ending in a hex letter', `uami-loom-directlake${SYNTHETIC_OID}`, 'uami-loom-directlake<guid>'],
+  ]) {
+    assert.match(input, GUID_RE, `${why}: the fixture must carry a GUID or this proves nothing`);
+    assert.equal(redact(input), expected, `${why}: the round-5 narrowing regressed — this shape leaks again`);
+  }
+
   // CONTROL, in the direction that matters most: a NON-hex neighbour is still
-  // redacted. Without this the test above would also pass on a redact() that had
-  // stopped working entirely.
+  // redacted. Without this the assertions above would also pass on a redact()
+  // that had stopped working entirely.
   for (const [why, input] of [
     ['non-hex letter prefix', `x${SYNTHETIC_OID}`],
     ['underscore prefix', `admin_${SYNTHETIC_OID}`],
+    ['underscore BOTH sides', `_${SYNTHETIC_OID}_`],
     ['dash prefix', `uami-loom-directlake-${SYNTHETIC_OID}`],
     ['slash prefix', `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`],
   ]) {
