@@ -1,0 +1,147 @@
+# commit-message-parses — a commit whose BODY the changelog parser cannot read is
+# dropped from the changelog ENTIRELY, silently, while the release run reports success.
+#
+# release-please builds its changelog with `@conventional-commits/parser`, which reads the
+# whole commit message, subject and body together. When the body contains a fragment it
+# cannot tokenise the parser throws, release-please catches the throw, skips that commit,
+# and carries on. The run is green. The release is cut. The work is simply absent.
+#
+# Measured on this repo's history: 15 commits with a VALID conventional subject — 5 of
+# them `fix(security):` — have been silently missing from every changelog and every set of
+# GitHub release notes since 2026-06-11.
+#
+# WHY IT RUNS ON EVERYTHING
+# This has no `paths:` filter on purpose. The subject of the check is the commit MESSAGE,
+# which can be malformed on a PR that touches any file, or no code at all.
+#
+# WHY IT IS NOT IN loom-guardrails.yml
+# It is the only check in the repo that installs an npm dependency. A registry flake
+# should cost this one check, not the whole guardrail suite.
+#
+# WHY THE VERSION IS PINNED TO 0.4.1
+# Not a guess. `release-please` depends on `@conventional-commits/parser` DIRECTLY at
+# "^0.4.1", and only 0.4.0 and 0.4.1 have ever been published — so that range resolves to
+# 0.4.1. It was then independently confirmed to reproduce two real hosted release-please
+# failures to the exact line and column.
+#
+# KNOWN LIMIT, stated rather than papered over: release-please-action bundles its own copy
+# of the parser, so if a future release bundles a DIFFERENT version, this pin would be
+# testing a grammar release-please no longer runs. The guard's embedded controls cannot
+# detect that on their own — they would still agree with the version installed here. The
+# version assertion below pins exactly what was measured; if it ever has to change, the
+# control coordinates in the guard must be re-measured against the new version first.
+name: commit-message-parses
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: changelog parser can read every commit message
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth: 0 — the check needs BASE..HEAD to resolve, and a shallow clone
+      # would leave the base SHA unreachable and the guard scanning nothing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      # --no-save --no-package-lock so nothing in the tree is dirtied. Measured, not assumed:
+      # with no package.json anywhere in the tree, npm picks its install root by walking UP
+      # to the nearest ancestor holding a package.json or a node_modules. On a fresh checkout
+      # that is the repo root — which is exactly the chain Node walks up from scripts/ci/ when
+      # the guard imports the parser, so the install always lands where the guard resolves.
+      # npm does still write node_modules/.package-lock.json, which --no-package-lock does NOT
+      # suppress; that sits inside the gitignored **/node_modules/, and no top-level
+      # package.json or package-lock.json is written, so the working tree stays clean.
+      - name: Install the parser release-please actually uses
+        run: |
+          set +e
+          npm install --no-save --no-package-lock @conventional-commits/parser@0.4.1
+          RC=$?
+          set -e
+          echo "npm install RC=$RC"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::could not install @conventional-commits/parser@0.4.1, so this guard"\
+                 "cannot judge anything. Failing rather than reporting a clean scan it did not perform."
+            exit "$RC"
+          fi
+
+      # The guard's embedded controls assert exact throw coordinates measured against
+      # 0.4.1. If a different version were installed those controls would happily agree
+      # with the WRONG grammar, so the version itself is asserted here, not assumed.
+      #
+      # Resolution is anchored at the GUARD'S OWN PATH rather than a hard-coded
+      # ./node_modules/... string. That is deliberate: npm chooses its install root by
+      # walking up, so a hard-coded path can point somewhere the install did not land, and
+      # this step would then report "could not read the version" when the truth is "it is
+      # installed, just not there" — an error asserting something it never established.
+      # Anchoring at the guard makes this measure the exact module the guard will import.
+      - name: Assert the installed parser is the version the controls were measured against
+        run: |
+          set +e
+          INSTALLED=$(node -e '
+            const { createRequire } = require("node:module");
+            const { resolve } = require("node:path");
+            const req = createRequire(resolve("scripts/ci/check-commit-message-parses.mjs"));
+            process.stdout.write(req("@conventional-commits/parser/package.json").version);
+          ')
+          RC=$?
+          set -e
+          echo "installed parser version=${INSTALLED:-<unresolved>} RC=$RC"
+          if [ "$RC" -ne 0 ] || [ -z "$INSTALLED" ]; then
+            echo "::error::could not read the installed parser version. Refusing to run controls"\
+                 "against a grammar this workflow cannot identify."
+            exit 1
+          fi
+          if [ "$INSTALLED" != "0.4.1" ]; then
+            echo "::error::parser version drift: installed $INSTALLED, but every control coordinate"\
+                 "in scripts/ci/check-commit-message-parses.mjs was measured against 0.4.1. Re-measure"\
+                 "those coordinates against $INSTALLED before changing this pin — the controls agree"\
+                 "with whatever version is installed, so they cannot catch this themselves."
+            exit 1
+          fi
+
+      # Controls before verdict. Separating this from the scan makes the failed-run signal
+      # unambiguous: this step red means the PARSER's behaviour moved, the next step red
+      # means THIS PR carries a commit message that will be dropped.
+      - name: Self-test — the guard's embedded controls agree with this parser
+        run: |
+          set +e
+          node scripts/ci/check-commit-message-parses.mjs --self-test
+          RC=$?
+          set -e
+          echo "self-test RC=$RC"
+          exit "$RC"
+
+      # base.sha is the base branch tip when the event fired, so base..head is exactly the
+      # PR's own commits: anything already on main is reachable from base.sha and excluded.
+      # Both SHAs resolve because refs/pull/N/merge has them as ancestors and fetch-depth
+      # is 0.
+      #
+      # Skipped on workflow_dispatch, which carries no pull_request payload and so has no
+      # range to scan. A dispatch therefore runs the install + version + control steps and
+      # stops — an on-demand "is this guard still healthy" check. It is never the path a
+      # PR takes, so no PR can reach a green verdict without this step running.
+      - name: Check every changelog-bound commit message on this branch parses
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "range: ${BASE_SHA}..${HEAD_SHA}"
+          set +e
+          node scripts/ci/check-commit-message-parses.mjs
+          RC=$?
+          set -e
+          echo "check-commit-message-parses RC=$RC"
+          exit "$RC"
