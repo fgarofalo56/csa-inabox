@@ -26,6 +26,17 @@
  * cleanup of same-tenant UAT debris — this endpoint's whole purpose — still
  * works.
  *
+ * TWO AXES ARE COVERED EXHAUSTIVELY RATHER THAN BY SAMPLE, because three review
+ * rounds died to a bypass narrowed onto an axis the fixtures happened not to
+ * span:
+ *   - POSITION — every non-empty subset of foreign positions for sizes 1..4
+ *     (the batch-shape matrix);
+ *   - SIZE — every batch size in [1, MAX_BATCH], the entire domain the delete
+ *     loop can ever see, with the interval's far end pinned from the outside
+ *     (the batch-size sweep). Rounds 2 and 3 each answered a size-narrowed
+ *     bypass by moving a ceiling; the frontier moved with it both times.
+ * Both are crossed with cascade off/on, and both assert DOCUMENT SURVIVAL.
+ *
  * EDGE THIS SUITE CANNOT SEE, disclosed rather than left to be discovered:
  * `vi.resetModules()` in afterEach plus the per-call dynamic `import()` in
  * `post()` hands every test a FRESH module, so process-lifetime module state
@@ -132,6 +143,19 @@ const FOREIGN_TID = 'tid-fabrikam';
 const HOME_OWNER = 'alice-oid';
 /** Owner oid for the foreign-tenant workspaces — a principal in FOREIGN_TID. */
 const FOREIGN_OWNER = 'mallory-oid';
+/**
+ * A pre-rel-T11 workspace id — GUID-SHAPED, like every other fixture here.
+ *
+ * ROUND 3 DISCLOSED THIS AS A RESIDUAL AND DECLINED TO FIX IT, on a stated cost
+ * of "61 lines". Round-4 review measured the fix at +12/-11 (this constant plus
+ * eleven literal swaps) and reproduced the hole on the shipped bytes: a bypass
+ * narrowed to `id.length === 36 && id.split('-').length === 5 && !doc.tid`
+ * passed the whole suite, because the round-3 GUID sweep reached only the
+ * matrix fixtures — every doc of which carries a `tid` — while the only
+ * tid-LESS fixtures kept short labels like `wsLegacy`. Neither half saw it.
+ * Synthetic value, never an estate GUID (this repo is public).
+ */
+const LEGACY_GUID = '00000000-0000-4000-8000-0000000000ab';
 
 function seedWorkspace(id: string, ownerOid: string, extra: Record<string, unknown> = {}) {
   const doc = {
@@ -250,6 +274,15 @@ describe('#3833 — a tenant admin cannot bulk-delete across the tenant boundary
  * that consults the resolver and ignores the answer — the evasion that defeated
  * the strongest instrument in the sibling PR — satisfies any "was it called"
  * check and cannot satisfy this one.
+ *
+ * AND THIS MATRIX DID EXACTLY WHAT THE PARAGRAPH ABOVE WARNS ABOUT. Parameterising
+ * to MAX_SHAPE_SIZE = 4 closed sizes 1..4 and left the next one open: round-4
+ * review measured a bypass gated `ids.length >= 5` passing the entire suite,
+ * RC=0, 81/81. The frontier had moved one step, which is not the same as closing
+ * an axis. The BATCH-SIZE SWEEP below is the actual closure — read it as the
+ * continuation of this block, not as a competing one. This matrix keeps its job:
+ * it is the exhaustive POSITION cover (every subset), which the sweep does not
+ * attempt; the sweep is the exhaustive SIZE cover, which this cannot reach.
  */
 
 /** Batch sizes 1..this are covered exhaustively (2**n - 1 shapes each). */
@@ -342,6 +375,166 @@ describe('#3833 property 1b — the boundary holds at every BATCH SHAPE, not jus
   }
 });
 
+/**
+ * BATCH-SIZE SWEEP — the size axis closed by EXHAUSTING IT, not by moving its
+ * ceiling.
+ *
+ * WHY A CEILING BUMP IS NOT A FIX. Round 2 rejected this PR for a bypass gated
+ * `ids.length >= 3`. Round 3 answered by parameterising the matrix to
+ * MAX_SHAPE_SIZE = 4 — and round 4 found the identical evasion one step along at
+ * `>= 5`, passing the full suite RC=0 / 81 of 81. `MAX_SHAPE_SIZE 4 -> 5` would
+ * put it at 6. The matrix cannot go further either way: it costs 2**n - 1 shapes
+ * per size, so exhausting positions and sizes together is combinatorially out of
+ * reach. Three rounds of moving the frontier is the evidence that the frontier
+ * is the wrong instrument.
+ *
+ * WHAT ACTUALLY CLOSES IT: THE SIZE AXIS IS FINITE, SO IT CAN BE EXHAUSTED.
+ * `route.ts` de-dupes, then refuses `ids.length > MAX_BATCH` with a 400 BEFORE
+ * the delete loop is entered, and refuses an empty list with a 400 as well. So
+ * every batch that can EVER reach the loop has a size in [1, MAX_BATCH]. This
+ * block walks EVERY ONE of those sizes, crossed with cascade off/on, and the
+ * companion spec below pins both ends of the interval — MAX_BATCH is processed,
+ * MAX_BATCH + 1 never reaches the loop. Together there is no size at which a
+ * size-keyed predicate can hide: not `>= N`, not `=== N`, not `% k`, not a
+ * range, not "only the biggest batch anyone actually sends".
+ *
+ * FOREIGN IDS ARE SCATTERED, NOT CLUSTERED, and the scatter offset MOVES with
+ * the batch size (see {@link sweepForeignPositions}), so this also denies an
+ * evasion keyed on INDEX POSITION at sizes the matrix cannot reach — "the first
+ * id", "the last id", "index 7". Deterministic: no Math.random(), so a failure
+ * reproduces byte-for-byte.
+ *
+ * SAME ASSERTION AS THE MATRIX: document survival. A consult-then-discard bypass
+ * leaves `deleted`, `failed` and the teardown count all exactly as expected and
+ * is visible ONLY in `stillExists`.
+ */
+
+/**
+ * `MAX_BATCH` in `app/api/workspaces/bulk-delete/route.ts`. Not imported — the
+ * route does not export it — so it is PINNED instead by the companion spec
+ * below, which asserts this many ids are processed and one more is refused. If
+ * someone raises the route's constant, that spec fails and forces this one to be
+ * raised with it; the sweep can therefore never silently stop short of the real
+ * domain.
+ */
+const ROUTE_MAX_BATCH = 500;
+
+/** Sizes per `it()`. Purely a failure-reporting granularity knob. */
+const SWEEP_CHUNK = 50;
+
+/**
+ * Which positions of a size-`n` batch are foreign.
+ *
+ * The residue MOVES with the batch size, so no fixed index is foreign in every
+ * batch or home in every batch — an evasion keyed on a position, or on "the
+ * first/last id", has no index that works across the sweep. Every batch of 3 or
+ * more carries at least one foreign id and at least one home id, so both halves
+ * of every assertion always have teeth.
+ */
+const sweepForeignPositions = (size: number): number[] => {
+  const foreign: number[] = [];
+  for (let i = 0; i < size; i++) if ((i + size) % 3 === 0) foreign.push(i);
+  return foreign;
+};
+
+describe('#3833 property 1c — the boundary holds at EVERY admissible batch size', () => {
+  it('the sweep spans the whole domain, and scatters foreign ids through the interior', () => {
+    // The generator is under test before anything relies on it — a scatter that
+    // silently degenerated to "index 0 only" would look like coverage and be
+    // none, which is precisely the failure mode of the last three rounds.
+    // A literal pin at one size, so the shape is legible and not just asserted:
+    expect(sweepForeignPositions(32)).toEqual([1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31]);
+
+    const everForeign = new Set<number>();
+    const everHome = new Set<number>();
+    const headOnly: number[] = [];
+    const noInterior: number[] = [];
+    const allForeign: number[] = [];
+    for (let size = 1; size <= ROUTE_MAX_BATCH; size++) {
+      const foreign = sweepForeignPositions(size);
+      const set = new Set(foreign);
+      for (let i = 0; i < size; i++) (set.has(i) ? everForeign : everHome).add(i);
+      if (foreign.length === size) allForeign.push(size);
+      if (size >= 3 && foreign.length === 1 && foreign[0] === 0) headOnly.push(size);
+      if (size >= 5 && !foreign.some((i) => i > 0 && i < size - 1)) noInterior.push(size);
+    }
+    // No batch is entirely foreign — every size still proves home ids DELETE,
+    // so the sweep cannot pass by refusing everything.
+    expect(allForeign).toEqual([]);
+    // From 5 ids up, at least one foreign id sits strictly inside the batch:
+    // an "only the head"/"only the tail" bypass is not sufficient to pass.
+    expect(noInterior).toEqual([]);
+    // Size 3 is the one degenerate shape (foreign = [0] alone). Named rather
+    // than hidden — sizes 1-4 are covered exhaustively by the matrix above, so
+    // it costs nothing here.
+    expect(headOnly).toEqual([3]);
+    // Every index position that CAN be both is both. The top two indices exist
+    // in fewer than three batches, so all three residues are not available to
+    // them — stated, not glossed, and irrelevant because the matrix + the rest
+    // of the sweep already deny a position-keyed narrowing.
+    for (let i = 0; i <= ROUTE_MAX_BATCH - 3; i++) {
+      expect({ i, foreign: everForeign.has(i), home: everHome.has(i) })
+        .toEqual({ i, foreign: true, home: true });
+    }
+  });
+
+  for (const cascade of [false, true]) {
+    for (let lo = 1; lo <= ROUTE_MAX_BATCH; lo += SWEEP_CHUNK) {
+      const hi = Math.min(lo + SWEEP_CHUNK - 1, ROUTE_MAX_BATCH);
+      it(`sizes ${lo}–${hi} (cascade=${cascade}) — every FOREIGN doc survives, every HOME doc is deleted`, async () => {
+        for (let size = lo; size <= hi; size++) {
+          // Ids repeat across sizes, so the store MUST be cleared between them
+          // or a stale doc from the previous size would answer `stillExists`.
+          for (const c of Object.values(containers)) (c as any)._store.clear();
+          teardownMock.mockClear();
+
+          const { ids, foreignIds, homeIds } = seedShape(size, sweepForeignPositions(size));
+          const r = await post({ ids, ...(cascade ? { cascade: true } : {}) });
+          const j = await r.json();
+
+          // `size` rides along in every assertion so a failure names the size it
+          // failed at — the sweep is 500 iterations inside 10 `it()` blocks.
+          expect({ size, deleted: j.deleted }).toEqual({ size, deleted: homeIds });
+          expect({ size, failed: j.failed }).toEqual({
+            size,
+            failed: foreignIds.map((id) => ({ id, error: 'not_found' })),
+          });
+
+          // THE CONSEQUENCE. Everything above is response bytes, which a
+          // consult-then-discard bypass reproduces exactly. Only this sees it.
+          expect({ size, destroyed: foreignIds.filter((id) => !stillExists(id, FOREIGN_OWNER)) })
+            .toEqual({ size, destroyed: [] });
+          expect({ size, undeleted: homeIds.filter((id) => stillExists(id, HOME_OWNER)) })
+            .toEqual({ size, undeleted: [] });
+          expect({ size, teardowns: teardownMock.mock.calls.length })
+            .toEqual({ size, teardowns: cascade ? homeIds.length : 0 });
+        }
+      });
+    }
+  }
+
+  it(`accepts a full ${ROUTE_MAX_BATCH}-id batch and refuses ${ROUTE_MAX_BATCH + 1} BEFORE deleting anything`, async () => {
+    // THIS IS WHAT MAKES THE SWEEP EXHAUSTIVE RATHER THAN MERELY LARGE. The
+    // sweep stops at MAX_BATCH because the ROUTE stops there; this pins that
+    // claim from the outside instead of trusting it. It also pins the constant:
+    // raise MAX_BATCH in the route and this spec fails, which is the mechanism
+    // that keeps ROUTE_MAX_BATCH above honest.
+    const over = seedShape(ROUTE_MAX_BATCH + 1, sweepForeignPositions(ROUTE_MAX_BATCH + 1));
+    const seeded = containers.workspaces._store.size;
+    expect(seeded).toBe(ROUTE_MAX_BATCH + 1);
+
+    const r = await post({ ids: over.ids });
+    expect(r.status).toBe(400);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.error).toContain(`max ${ROUTE_MAX_BATCH} per request`);
+    // Nothing was destroyed — not the foreign docs, and not the home ones
+    // either. The delete loop was never entered at all.
+    expect(containers.workspaces._store.size).toBe(seeded);
+    expect(teardownMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('#3833 property 3 — a foreign id is INDISTINGUISHABLE from a nonexistent id', () => {
   it('emits byte-identical per-id output for a cross-tenant id and an id that does not exist', async () => {
     // route-toolkit.ts states the precedent (404-not-403): an id must not be
@@ -370,15 +563,15 @@ describe('#3833 property 3 — a foreign id is INDISTINGUISHABLE from a nonexist
 
 describe('#3833 property 4 — a tid-less workspace doc is refused HONESTLY and distinguishably', () => {
   it('reports tenant_unconfirmed (not forbidden, not not_found) with the backfill remediation, and keeps the doc', async () => {
-    seedWorkspace('wsLegacy', 'alice-oid', { name: 'Legacy Sales' }); // no tid
+    seedWorkspace(LEGACY_GUID, 'alice-oid', { name: 'Legacy Sales' }); // no tid
 
-    const r = await post({ ids: ['wsLegacy'] });
+    const r = await post({ ids: [LEGACY_GUID] });
     const j = await r.json();
 
     expect(j.deleted).toEqual([]);
     expect(j.failed).toHaveLength(1);
     const f = j.failed[0];
-    expect(f.id).toBe('wsLegacy');
+    expect(f.id).toBe(LEGACY_GUID);
     expect(f.error).toBe('tenant_unconfirmed');
     // Distinguishable from BOTH neighbouring codes — the UI must be able to say
     // something true about why, which 'forbidden' would not permit.
@@ -390,18 +583,18 @@ describe('#3833 property 4 — a tid-less workspace doc is refused HONESTLY and 
     expect(f.reason).not.toMatch(/not found/i);
     expect(f.remediation).toContain('scripts/csa-loom/backfill-workspace-tid.mjs');
     // And the doc is still there — a refusal, not a delete.
-    expect(stillExists('wsLegacy', 'alice-oid')).toBe(true);
+    expect(stillExists(LEGACY_GUID, 'alice-oid')).toBe(true);
   });
 
   it('does not reach Azure teardown for a tid-less doc even on cascade', async () => {
-    seedWorkspace('wsLegacy', 'alice-oid', { name: 'Legacy Sales' });
+    seedWorkspace(LEGACY_GUID, 'alice-oid', { name: 'Legacy Sales' });
 
-    const r = await post({ ids: ['wsLegacy'], cascade: true });
+    const r = await post({ ids: [LEGACY_GUID], cascade: true });
     const j = await r.json();
 
     expect(j.deleted).toEqual([]);
     expect(j.failed[0].error).toBe('tenant_unconfirmed');
-    expect(stillExists('wsLegacy', 'alice-oid')).toBe(true);
+    expect(stillExists(LEGACY_GUID, 'alice-oid')).toBe(true);
     expect(teardownMock).not.toHaveBeenCalled();
   });
 
@@ -437,14 +630,14 @@ describe('#3833 property 4 — a tid-less workspace doc is refused HONESTLY and 
   it('never leaks tenant_unconfirmed to a NON-admin — they get the plain not_found', async () => {
     // The denial is only recorded for a tenant-admin refusal. A non-admin must
     // not learn that a tid-less workspace with this id exists anywhere.
-    seedWorkspace('wsLegacy', 'alice-oid', { name: 'Legacy Sales' });
+    seedWorkspace(LEGACY_GUID, 'alice-oid', { name: 'Legacy Sales' });
     isTenantAdminMock.mockReturnValue(false);
 
-    const r = await post({ ids: ['wsLegacy'] });
+    const r = await post({ ids: [LEGACY_GUID] });
     const j = await r.json();
 
-    expect(j.failed).toEqual([{ id: 'wsLegacy', error: 'not_found' }]);
-    expect(stillExists('wsLegacy', 'alice-oid')).toBe(true);
+    expect(j.failed).toEqual([{ id: LEGACY_GUID, error: 'not_found' }]);
+    expect(stillExists(LEGACY_GUID, 'alice-oid')).toBe(true);
   });
 });
 
@@ -540,6 +733,78 @@ describe('#3833 property 2 — authorization is evaluated for ADMINS too (no `!a
 
     expect(j.failed).toEqual([{ id: 'wsShared', error: 'forbidden' }]);
     expect(stillExists('wsShared', 'alice-oid')).toBe(true);
+  });
+});
+
+/**
+ * #3833 property 6 — THE BEHAVIOURAL WIDENING THIS PR CARRIES, PINNED.
+ *
+ * The old route had exactly one authorization branch:
+ *
+ *     let ws = await loadWorkspace(id, tenantId);            // caller's partition
+ *     if (!ws && admin) ws = await loadWorkspaceAdmin(id);   // ADMIN ONLY
+ *     if (!admin && ws.createdBy && ws.createdBy !== oid) { … forbidden }
+ *
+ * A NON-admin therefore only ever saw their OWN partition, so they could
+ * bulk-delete only workspaces they owned. An explicit workspace-level `Admin`
+ * grant on someone else's workspace bought them nothing here — it reported
+ * `not_found`.
+ *
+ * Routing through the shared resolver replaces that with the rule
+ * `DELETE /api/workspaces/[id]` already applies — `app/api/workspaces/[id]/route.ts:153`,
+ * `access.via !== 'owner' && access.role !== 'Admin'` — and on this one axis that
+ * rule is WIDER: a caller who is NOT a tenant admin but holds a workspace-level
+ * `Admin` ACL on a workspace they do not own can now bulk-delete it.
+ *
+ * That is the intended consequence of deleting the private path rather than
+ * patching it: the whole point is that bulk-delete and the per-workspace DELETE
+ * decide access identically, and the per-workspace route has permitted this
+ * since rel-T11. It is pinned here because rounds 1-3 shipped it UNTESTED and
+ * UNMENTIONED — an undisclosed widening is the part that outlives the merge
+ * (deploy-integrity.md R7: state what is established, including about your own
+ * change). The tenant boundary still sits in front of it, because the resolver
+ * applies the tid check (step 4) BEFORE the ACL lookup (step 5).
+ */
+describe('#3833 property 6 — a workspace-level Admin ACL can bulk-delete (widening, disclosed)', () => {
+  /** A non-tenant-admin caller in the HOME tenant who owns nothing here. */
+  const asAclAdmin = () => {
+    getSessionMock.mockReturnValue({
+      claims: { oid: 'bob-oid', upn: 'bob@contoso.com', tid: HOME_TID },
+      exp: Date.now() / 1000 + 3600,
+    } as any);
+    isTenantAdminMock.mockReturnValue(false); // NOT a tenant admin
+    resolveEffectiveRoleMock.mockResolvedValue('Admin' as any); // explicit ACL grant
+  };
+
+  it('a NON-tenant-admin with workspace role Admin DELETES a workspace they do not own, in their own tenant', async () => {
+    seedWorkspace('wsShared', HOME_OWNER, { name: 'Shared Space', tid: HOME_TID });
+    asAclAdmin();
+
+    const r = await post({ ids: ['wsShared'] });
+    const j = await r.json();
+
+    expect(j.ok).toBe(true);
+    expect(j.failed).toEqual([]);
+    expect(j.deleted).toEqual(['wsShared']);
+    // The widening, as a consequence and not just a status code.
+    expect(stillExists('wsShared', HOME_OWNER)).toBe(false);
+  });
+
+  it('the SAME ACL across the TENANT BOUNDARY is still refused, and the doc survives', async () => {
+    // The widening is scoped by the resolver's step-4 tid check, which runs
+    // BEFORE the ACL lookup — so an Admin-role row cannot be used to reach out
+    // of the caller's tenant. cascade on, so the destructive half is covered.
+    seedWorkspace('wsX', FOREIGN_OWNER, { name: 'Fabrikam Finance', tid: FOREIGN_TID });
+    asAclAdmin();
+
+    const r = await post({ ids: ['wsX'], cascade: true });
+    const j = await r.json();
+
+    expect(j.ok).toBe(false);
+    expect(j.deleted).toEqual([]);
+    expect(j.failed).toEqual([{ id: 'wsX', error: 'not_found' }]);
+    expect(stillExists('wsX', FOREIGN_OWNER)).toBe(true);
+    expect(teardownMock).not.toHaveBeenCalled();
   });
 });
 
