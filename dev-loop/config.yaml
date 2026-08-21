@@ -32,6 +32,17 @@ validation_gates:
     required: false           # Only for infra changes
     timeout_seconds: 600
 
+  # Typecheck-only leg for the console. The trigger is the console directory and
+  # NOT "*.ts"/"*.tsx" on purpose: the gate compiles the fiab-console project, so
+  # a broader trigger would fire it for TypeScript it does not check - the
+  # trigger-population-exceeds-check-population defect recorded in #3506.
+  # next build, eslint and vitest remain with fiab-console-ci. See #3811.
+  typescript:
+    script: "gates/validate-typescript.ps1"
+    triggers: ["apps/fiab-console/**"]
+    required: true
+    timeout_seconds: 600
+
   all:
     script: "gates/validate-all.ps1"
     always_run: true

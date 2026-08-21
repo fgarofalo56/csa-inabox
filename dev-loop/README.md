@@ -61,7 +61,27 @@ Located in `dev-loop/gates/`:
 | Python Lint | `validate-python.ps1` | Any `.py` file changed |
 | dbt Compile | `validate-dbt.ps1` | Any dbt model changed |
 | Deployment | `validate-deployment.ps1` | Infrastructure changes |
+| TypeScript | `validate-typescript.ps1` | Any `apps/fiab-console/**` file changed |
 | All Gates | `validate-all.ps1` | Always (orchestrator) |
+| Self-test | `gate-selftest.ps1` | On demand (`make validate-gates`) |
+
+`validate-typescript.ps1` is a **typecheck only** (`tsc --noEmit`). `next build`,
+eslint and vitest stay with the `fiab-console-ci` workflow, which remains the
+full console gate.
+
+`validate-all.ps1` exit codes are a contract:
+
+| Code | Meaning |
+|------|---------|
+| 0 | At least one gate measured something and nothing failed |
+| 1 | A gate ran and found a problem |
+| 2 | `-WhatIf`: nothing invoked, nothing measured |
+| 3 | **NOT VERIFIED** — nothing was measured (no gate covers this diff, or every selected gate could not run). Non-zero on purpose |
+| 4 | The orchestrator's own verdict control failed |
+
+Exit 3 exists because `make validate` used to print `All gates passed!` and
+return 0 on a change where zero gates ran (#3811). `make validate-gates` runs
+the self-test that proves the verdict still moves with its input.
 
 ---
 
