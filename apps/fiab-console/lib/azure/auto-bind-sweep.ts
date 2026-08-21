@@ -64,11 +64,53 @@
  * scheduler (the ACA Job the route's docblock describes) has to supply a caller
  * identity too — "there was nobody to attribute it to" is not a licence to
  * enumerate and rewrite every tenant's items.
+ *
+ * ## A LIVE pass additionally requires `canWrite`
+ *
+ * `resolveWorkspaceAccessByOid` returns a ROLE, not a yes/no, and
+ * `workspace-access.ts` states the contract in as many words: "Callers that gate
+ * mutations MUST check `canWrite`." The sweep is a mutation path — a live pass
+ * creates ADF objects, writes authored content into them, and stamps provenance
+ * onto the item document — so a non-null access is NOT sufficient for it.
+ *
+ * The reachable case is a downgrading grant: a tenant admin who has been
+ * deliberately given `Viewer` (or `Contributor`) on someone else's workspace.
+ * Step 5 of the resolver returns `via:'acl'` with `canWrite:false` BEFORE the
+ * tenant-admin bypass in step 6 can manufacture `Admin`, so the explicit
+ * read-only grant is the caller's real authority there — and the sweep used to
+ * write through it anyway (measured: `role:'Viewer', canWrite:false` →
+ * `disposition:'created'`, the ADF object created and seeded, the Cosmos doc
+ * stamped).
+ *
+ * So {@link scopeToCallerAccess} takes the mode: DRY-RUN keeps the read bar
+ * (reporting what *would* be repaired is a read, and an operator holding Viewer
+ * is entitled to that report), LIVE requires `canWrite`. Rows refused only for
+ * want of write access are counted separately as `excludedByWriteAccess`, so a
+ * live pass that returns fewer rows than the dry-run before it says WHY rather
+ * than silently shrinking.
+ *
+ * ## The scan is CURSORED, so re-running actually advances
+ *
+ * `truncated` used to be a dead end. `loadSweepItems` had no `ORDER BY`, no
+ * continuation and no "already swept" predicate, so every pass re-read the same
+ * `TOP n` prefix: measured over 5 items at `limit:2`, three live passes returned
+ * `id-1,id-2` every time (pass 1 `created`, passes 2-3 `already-healthy`) and
+ * `id-3..id-5` were never reached — while both docblocks told the operator to
+ * keep re-running. Cheaper is not the same as further.
+ *
+ * The scan is now ordered by `c.id` and takes an exclusive `cursor`
+ * (`c.id > @cursor`), and a truncated result carries `nextCursor`. The cursor is
+ * derived from the RAW page, never from the visible rows: a page whose entire
+ * tail belongs to other tenants would otherwise leave the cursor un-advanced and
+ * loop forever. Because it advances past rows the access filter dropped, it also
+ * closes the crowding-out limitation this file used to disclose — a caller whose
+ * own items sit behind a wall of other tenants' rows now reaches them by
+ * re-running, instead of needing `workspaceId` to side-step the page cap.
  */
 import type { SqlParameter } from '@azure/cosmos';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import type { SessionPayload } from '@/lib/auth/session';
-import { resolveWorkspaceAccessByOid, type WorkspaceAccessOpts } from '@/lib/auth/workspace-access';
+import { resolveWorkspaceAccessByOid, type WorkspaceAccess, type WorkspaceAccessOpts } from '@/lib/auth/workspace-access';
 import {
   autoBindContextFromItem,
   autoBindOnOpen,
@@ -156,16 +198,42 @@ export interface SweepResult {
    * query found".
    */
   excludedByAccess: number;
+  /**
+   * LIVE only — rows the caller CAN see but may not WRITE (a workspace where
+   * their highest role is read-only, e.g. an explicit `Viewer` grant). Always 0
+   * on a dry-run, which deliberately keeps the read bar.
+   *
+   * Separate from `excludedByAccess` because the two mean different things and
+   * have different fixes: that one is "not yours", this one is "yours, but you
+   * hold read-only there — re-run with `dryRun:true` to see what a writer would
+   * repair, or get a write role". Folding them together would make a live pass
+   * that returns fewer rows than its dry-run look like a tenant-boundary drop.
+   */
+  excludedByWriteAccess: number;
   /** Count per disposition — the summary a support engineer reads first. */
   byDisposition: Record<string, number>;
   rows: SweepRow[];
   /**
    * True when the scan stopped early (row cap or deadline) — so a caller can
-   * never read a partial scan as a complete one. Re-run to continue.
+   * never read a partial scan as a complete one. Re-run with {@link nextCursor}.
    */
   truncated: boolean;
   /** Set when truncated, naming which bound stopped it. */
   truncatedBy?: 'limit' | 'deadline';
+  /**
+   * Where the NEXT pass should resume — pass it back as {@link SweepOptions.cursor}.
+   * Present only when `truncated`.
+   *
+   * It is the id of the last row of the RAW Cosmos page this pass finished with,
+   * NOT the last row it reported. Those differ whenever the access filter drops
+   * rows, and using the reported one would re-read the dropped tail forever (a
+   * page belonging entirely to other tenants would never advance at all).
+   *
+   * Absent on a `deadline` truncation that got through nothing at all: there is
+   * no progress to record, and the correct next call is the SAME cursor with a
+   * fresh budget.
+   */
+  nextCursor?: string;
 }
 
 export interface SweepOptions {
@@ -185,6 +253,12 @@ export interface SweepOptions {
   /** Max items to examine. Default 200, hard cap 1000. */
   limit?: number;
   /**
+   * Resume point — the `nextCursor` of the previous (truncated) pass. Exclusive:
+   * the scan returns rows whose `id` sorts strictly AFTER this value. Omitted →
+   * start at the beginning.
+   */
+  cursor?: string;
+  /**
    * Wall-clock budget in ms, default 120_000. A caller with its own budget
    * (an HTTP route has `maxDuration`) MUST pass its own — this module cannot
    * know what its caller can afford, and a sweep killed mid-flight by the host
@@ -194,7 +268,7 @@ export interface SweepOptions {
   /** Test seam — the engine's own. Injected fakes exercise the REAL algorithm. */
   providers?: readonly AutoBindProvider[];
   /** Test seam — supply items instead of querying Cosmos. */
-  loadItems?: (o: { itemTypes: string[]; workspaceId?: string; limit: number }) => Promise<WorkspaceItem[]>;
+  loadItems?: (o: { itemTypes: string[]; workspaceId?: string; limit: number; cursor?: string }) => Promise<WorkspaceItem[]>;
   /** Test seam — monotonic clock for the deadline. */
   now?: () => number;
 }
@@ -241,6 +315,16 @@ function carriesContentObject(state: Record<string, unknown> | undefined): boole
  * the sibling module: a caller that injects `loadItems` (every unit test, and
  * any future caller with its own enumeration) then never loads it at all.
  *
+ * ORDERED AND CURSORED. `ORDER BY c.id` plus the exclusive `c.id > @cursor`
+ * predicate is what makes `truncated` actionable: without a total order a
+ * `TOP n` cross-partition query may return any n rows, and without the
+ * predicate it returns the SAME n every time — which is exactly what the sweep
+ * did (measured: three passes at `limit:2` over five items all returned
+ * `id-1,id-2`; `id-3..id-5` were unreachable). `c.id` is the ordering key
+ * because it is the one property every item carries, is unique, and is indexed
+ * by the default policy — so no composite index is required for this
+ * single-property sort.
+ *
  * NOT tenant-scoped, and cannot be: the `items` container is partitioned by
  * `workspaceId` and carries no tenant field, so the boundary lives one level up
  * in `sweepAutoBind` where each row is resolved against the caller's access.
@@ -251,6 +335,7 @@ async function loadSweepItems(o: {
   itemTypes: string[];
   workspaceId?: string;
   limit: number;
+  cursor?: string;
 }): Promise<WorkspaceItem[]> {
   const { itemsContainer } = await import('@/lib/azure/cosmos-client');
   const container = await itemsContainer();
@@ -260,10 +345,14 @@ async function loadSweepItems(o: {
     where.push('c.workspaceId = @ws');
     parameters.push({ name: '@ws', value: o.workspaceId });
   }
+  if (o.cursor) {
+    where.push('c.id > @cursor');
+    parameters.push({ name: '@cursor', value: o.cursor });
+  }
   const { resources } = await container.items
     .query<WorkspaceItem>({
       query: `SELECT TOP @limit c.id, c.workspaceId, c.itemType, c.displayName, c.state
-              FROM c WHERE ${where.join(' AND ')}`,
+              FROM c WHERE ${where.join(' AND ')} ORDER BY c.id`,
       parameters: [...parameters, { name: '@limit', value: o.limit }],
     })
     .fetchAll();
@@ -294,34 +383,67 @@ async function accessOptsForCaller(session: SessionPayload): Promise<WorkspaceAc
 }
 
 /**
- * Drop every row of a Cosmos page the caller cannot see.
+ * What the access boundary decided about ONE row of the raw Cosmos page.
+ *
+ * Kept in RAW page order (including the rows that were dropped) because two
+ * things downstream need the order and not just the survivors: the cursor, which
+ * must advance past dropped rows or never advance at all, and the two exclusion
+ * counts, which must cover exactly the rows this pass actually consumed.
+ */
+interface AccessDecision {
+  item: WorkspaceItem;
+  /** May this pass classify (and, in live mode, mutate) the row? */
+  allowed: boolean;
+  /** LIVE only — the caller CAN see this workspace but holds no write role. */
+  refusedForWrite: boolean;
+}
+
+/**
+ * Decide, for every row of a Cosmos page, whether the caller may act on it.
  *
  * One resolve per DISTINCT workspace (cached), which is what keeps this cheap on
  * a page of 200 items spread over a handful of workspaces — the same shape, and
  * the same cache, as `listAllOwnedItems`.
  *
  * The tenant-admin bypass inside the resolver (step 6) is what lets an admin
- * sweep workspaces they neither own nor are a member of; the tid comparison runs
- * BEFORE it, so that bypass stays scoped to the admin's own tenant.
+ * sweep workspaces they neither own nor are a member of; since #3824 that bypass
+ * requires a POSITIVE tid match, so a workspace whose tenancy Loom cannot
+ * confirm resolves to `null` here and is excluded. This filter agrees with that
+ * refusal rather than masking it — it is a SECOND, independent check, never a
+ * substitute for the resolver's own.
+ *
+ * `requireWrite` is the live-mode bar. `resolveWorkspaceAccessByOid` returns a
+ * ROLE, and `workspace-access.ts` is explicit that "callers that gate mutations
+ * MUST check `canWrite`" — a sweep that writes to ADF and stamps Cosmos is such
+ * a caller. A tenant admin deliberately granted `Viewer` on someone's workspace
+ * resolves at step 5 (`via:'acl'`, `canWrite:false`) BEFORE the admin bypass can
+ * upgrade them, so that read-only grant is their real authority and a live pass
+ * must honour it.
  */
 async function scopeToCallerAccess(
   page: readonly WorkspaceItem[],
   session: SessionPayload,
-): Promise<{ visible: WorkspaceItem[]; excluded: number }> {
-  if (page.length === 0) return { visible: [], excluded: 0 };
+  requireWrite: boolean,
+): Promise<AccessDecision[]> {
+  if (page.length === 0) return [];
   const oid = session.claims.oid;
   const opts = await accessOptsForCaller(session);
-  const cache = new Map<string, boolean>();
-  const visible: WorkspaceItem[] = [];
+  const cache = new Map<string, WorkspaceAccess | null>();
+  const decisions: AccessDecision[] = [];
   for (const it of page) {
-    let ok = cache.get(it.workspaceId);
-    if (ok === undefined) {
-      ok = (await resolveWorkspaceAccessByOid(oid, it.workspaceId, opts)) !== null;
-      cache.set(it.workspaceId, ok);
+    let access = cache.get(it.workspaceId);
+    if (access === undefined) {
+      access = await resolveWorkspaceAccessByOid(oid, it.workspaceId, opts);
+      cache.set(it.workspaceId, access);
     }
-    if (ok) visible.push(it);
+    const writable = access !== null && access.canWrite;
+    decisions.push({
+      item: it,
+      allowed: access !== null && (!requireWrite || writable),
+      refusedForWrite: access !== null && requireWrite && !writable,
+    });
   }
-  return { visible, excluded: page.length - visible.length };
+  return decisions;
 }
 
 function row(
@@ -494,13 +616,20 @@ async function repairOne(
  * a large estate from throttling the ADF control plane — the failure mode that
  * would turn a repair pass into a self-inflicted outage.
  *
- * KNOWN LIMIT, stated rather than discovered later: the row cap applies to the
- * Cosmos page, and the access filter runs after it. On an estate holding many
- * tenants, a caller's own items can therefore be crowded out of page 1 by rows
- * they cannot see — the sweep returns `truncated:true` with a small `scanned`
- * and a large `excludedByAccess`, which is honest but does not converge by
- * re-running (there is no continuation token yet). Scoping with `workspaceId`
- * side-steps it entirely.
+ * PAGING. The scan owns a WINDOW of `limit` raw rows per pass and asks Cosmos
+ * for one more, purely to learn whether another window exists. A truncated
+ * result carries `nextCursor` — the id of the last raw row the window finished
+ * with — and passing it back resumes strictly after it. That is what makes the
+ * "re-run until `truncated` is false" instruction TRUE; before the cursor
+ * existed every pass re-read the same prefix and the tail beyond `limit` was
+ * unreachable no matter how many times it was run.
+ *
+ * The cursor comes from the raw window, not from the reported rows, so it
+ * advances past rows the access filter dropped. A page belonging entirely to
+ * other tenants therefore still moves the scan forward — and the crowding-out
+ * problem this file used to disclose (a caller's own items pushed off page 1 by
+ * rows they cannot see, with no way to reach them short of scoping by
+ * `workspaceId`) is closed by the same mechanism.
  */
 export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   const providers = opts.providers ?? AUTO_BIND_PROVIDERS;
@@ -518,44 +647,78 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   let truncatedBy: SweepResult['truncatedBy'];
 
   if (itemTypes.length === 0) {
-    return { dryRun: opts.dryRun, scanned: 0, excludedByAccess: 0, byDisposition: {}, rows, truncated: false };
+    return {
+      dryRun: opts.dryRun, scanned: 0, excludedByAccess: 0, excludedByWriteAccess: 0,
+      byDisposition: {}, rows, truncated: false,
+    };
   }
 
   // Ask for one more than the cap so a full page is distinguishable from an
   // exactly-full estate. Reporting a truncated scan as complete is the whole
   // class of defect this repo keeps re-learning.
   const load = opts.loadItems ?? loadSweepItems;
-  const page = await load({ itemTypes, workspaceId: opts.workspaceId, limit: limit + 1 });
+  const page = await load({ itemTypes, workspaceId: opts.workspaceId, limit: limit + 1, cursor: opts.cursor });
 
-  // THE TENANT BOUNDARY. Applied to the page BEFORE anything classifies,
-  // reports or mutates it, so dry-run and live are gated by one filter and the
-  // `loadItems` seam is not a way around it. Truncation is still judged on the
-  // RAW page: the query really did fill it, and saying otherwise because rows
-  // were filtered out afterwards would report a partial scan as complete.
-  const { visible, excluded } = await scopeToCallerAccess(page, opts.session);
-  const scanList = visible.slice(0, limit);
+  // The rows this pass OWNS. The (limit+1)th row, if it came back, is a
+  // lookahead and nothing else — it is neither classified nor stepped over, so
+  // the next pass starts on it rather than skipping it.
+  const pageWindow = page.slice(0, limit);
   if (page.length > limit) {
     truncated = true;
     truncatedBy = 'limit';
   }
 
-  for (const item of scanList) {
+  // THE TENANT BOUNDARY. Applied to the window BEFORE anything classifies,
+  // reports or mutates it, so dry-run and live are gated by one filter and the
+  // `loadItems` seam is not a way around it. In live mode it additionally
+  // requires `canWrite`. Truncation is still judged on the RAW page: the query
+  // really did fill it, and saying otherwise because rows were filtered out
+  // afterwards would report a partial scan as complete.
+  const decisions = await scopeToCallerAccess(pageWindow, opts.session, !opts.dryRun);
+
+  let excludedByAccess = 0;
+  let excludedByWriteAccess = 0;
+  // The last RAW row this pass finished with. Advanced for dropped rows too —
+  // that is precisely what stops a page full of other tenants' items from
+  // pinning the cursor in place forever.
+  let advancedTo: string | undefined = opts.cursor;
+
+  for (const d of decisions) {
+    if (!d.allowed) {
+      if (d.refusedForWrite) excludedByWriteAccess += 1;
+      else excludedByAccess += 1;
+      advancedTo = d.item.id;
+      continue;
+    }
+    // Checked only before work that can cost a round trip; stepping over a
+    // dropped row is free and must not be able to strand the cursor.
     if (now() >= deadline) {
       truncated = true;
       truncatedBy = 'deadline';
       break;
     }
     try {
-      rows.push(opts.dryRun ? await previewOne(item, providers) : await repairOne(item, providers));
+      rows.push(opts.dryRun ? await previewOne(d.item, providers) : await repairOne(d.item, providers));
     } catch (e) {
       // One item's failure must never abort the sweep — the backlog is exactly
       // the population most likely to throw.
-      rows.push(row(item, null, null, 'failed', e instanceof Error ? e.message : String(e)));
+      rows.push(row(d.item, null, null, 'failed', e instanceof Error ? e.message : String(e)));
     }
+    advancedTo = d.item.id;
   }
 
   const byDisposition: Record<string, number> = {};
   for (const r of rows) byDisposition[r.disposition] = (byDisposition[r.disposition] || 0) + 1;
 
-  return { dryRun: opts.dryRun, scanned: rows.length, excludedByAccess: excluded, byDisposition, rows, truncated, truncatedBy };
+  return {
+    dryRun: opts.dryRun,
+    scanned: rows.length,
+    excludedByAccess,
+    excludedByWriteAccess,
+    byDisposition,
+    rows,
+    truncated,
+    truncatedBy,
+    ...(truncated && advancedTo !== undefined ? { nextCursor: advancedTo } : {}),
+  };
 }

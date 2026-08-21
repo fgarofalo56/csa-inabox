@@ -59,6 +59,7 @@ const RESULT = {
   dryRun: true,
   scanned: 2,
   excludedByAccess: 0,
+  excludedByWriteAccess: 0,
   byDisposition: { 'would-repair': 1, 'already-healthy': 1 },
   rows: [],
   truncated: false,
@@ -176,6 +177,53 @@ describe('POST /api/admin/auto-bind/sweep — body parsing', () => {
   it('ignores a non-array itemTypes', async () => {
     await POST(req({ itemTypes: 'data-pipeline' }), CTX);
     expect(sweepMock.mock.calls[0][0].itemTypes).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CURSOR — the route half of "re-run until `truncated` is false"
+//
+// That instruction was FALSE until the cursor existed: the scan had no ORDER BY
+// and no resume predicate, so every pass re-read the same TOP-n prefix (measured
+// over five items at limit:2, three passes all returned id-1,id-2 and id-3..5
+// were never reached). The route is where an operator's `nextCursor` has to get
+// back into the sweep, so the round trip is pinned here rather than assumed.
+// ---------------------------------------------------------------------------
+describe('POST /api/admin/auto-bind/sweep — the resume cursor', () => {
+  it('forwards a string cursor to the sweep', async () => {
+    await POST(req({ cursor: 'id-42' }), CTX);
+    expect(sweepMock.mock.calls[0][0].cursor).toBe('id-42');
+  });
+
+  it('omits it when absent', async () => {
+    await POST(req({}), CTX);
+    expect(sweepMock.mock.calls[0][0].cursor).toBeUndefined();
+  });
+
+  it('ignores a non-string or empty cursor rather than passing it on', async () => {
+    for (const cursor of [42, null, '', { id: 'x' }, ['id-1']]) {
+      sweepMock.mockClear();
+      await POST(req({ cursor }), CTX);
+      expect(sweepMock.mock.calls[0][0].cursor).toBeUndefined();
+    }
+  });
+
+  it('returns nextCursor so the caller can actually continue', async () => {
+    sweepMock.mockResolvedValue({ ...RESULT, truncated: true, truncatedBy: 'limit', nextCursor: 'id-2' });
+    const res = await POST(req({}), CTX);
+    const body = await res.json();
+    expect(body.truncated).toBe(true);
+    expect(body.nextCursor).toBe('id-2');
+  });
+
+  it('a full round trip: the nextCursor of pass 1 is the cursor of pass 2', async () => {
+    sweepMock.mockResolvedValue({ ...RESULT, truncated: true, nextCursor: 'id-2' });
+    const first = await (await POST(req({ dryRun: false }), CTX)).json();
+
+    sweepMock.mockClear();
+    await POST(req({ dryRun: false, cursor: first.nextCursor }), CTX);
+
+    expect(sweepMock.mock.calls[0][0].cursor).toBe('id-2');
   });
 });
 

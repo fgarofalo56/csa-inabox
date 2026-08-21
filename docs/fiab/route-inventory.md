@@ -198,7 +198,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/agent-quality/eval-alert/route.ts` | GET POST DELETE | admin | ● | ARM, Azure Monitor |
 | `admin/agent-quality/route.ts` | GET | admin | ● | AI Foundry, Cosmos |
 | `admin/audit-logs/route.ts` | GET | admin |  | Azure Cache for Redis, Cosmos, Log Analytics, Purview |
-| `admin/auto-bind/sweep/route.ts` | GET POST | admin |  | ADF, Cosmos |
+| `admin/auto-bind/sweep/route.ts` | GET POST | admin |  | ADF, Cosmos, Microsoft Graph |
 | `admin/autopilot/apply/route.ts` | POST | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
 | `admin/autopilot/route.ts` | GET PUT | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
 | `admin/autopilot/run/route.ts` | POST | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |

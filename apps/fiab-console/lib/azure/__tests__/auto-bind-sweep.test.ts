@@ -22,38 +22,53 @@
  * sweep can tell it apart from its neighbours.
  *
  * ---------------------------------------------------------------------------
- * MUTATION PROOF — measured, not asserted (temp/mutate.sh, 2026-08-20)
+ * MUTATION PROOF — measured, not asserted (temp/mutate.py + mutate.sh)
  * ---------------------------------------------------------------------------
- * Each mutation was applied byte-exactly (the applier REFUSES unless the needle
- * appears exactly once — a CRLF mismatch otherwise no-ops the edit and every
- * mutation then "survives" for the wrong reason), the spec run, the file
- * restored, and the restored sha256 re-printed. Baseline 39/39 + 19/19 green;
- * all sixteen below were CAUGHT.
+ * Each mutation is applied byte-exactly (the applier REFUSES unless the needle
+ * appears exactly once AND the file's sha256 moves — every file here is 100%
+ * CRLF, and a CRLF mismatch otherwise no-ops the edit so the mutation "survives"
+ * for the wrong reason), the two suites are run, the file restored, and the
+ * restored sha re-printed and compared.
  *
- * The five the 2026-08-20 review filed, and what pinned each BEFORE it:
+ * The RC is captured on the line after the command, never inferred from a
+ * pipeline, and the EXECUTED test count is read back on every run: a mutation
+ * that merely makes the file unparseable also exits non-zero, and scoring that
+ * as "caught" would be a gate that measures nothing.
  *
- *   B2a `scopeToCallerAccess` deleted                      → 4 RED  (was 0)
- *   B2b `callerTid: session.claims.tid` → `undefined`      → 4 RED  (was 0)
- *   B2c filter applied AFTER classification, not before    → 4 RED  (was 0)
- *   B3  `record?.seeded === true` → `record`               → 2 RED  (was 0)
- *   B4a `persisted` asserted true instead of measured      → 1 RED  (was 0)
- *   B4b `persisted` dropped from the row                   → 2 RED  (was 0)
- *   B5a route: `!== false` → `=== true`                    → 4 RED  (was 0 — no route spec existed)
- *   B5b route: stops threading the session into the sweep  → 1 RED  (was 0)
- *   B5c route: `withTenantAdmin` → `withSession`           → 1 RED  (was 0)
+ * ── 2026-08-20, on the rebased tree (#3824 merged). Baseline 53 + 24 = 77
+ *    green; all twelve CAUGHT, all twelve at 77 executed.
  *
- * "was 0" is measured, not inferred: B3 and the `persisted` probe were both
- * applied to the PRE-FIX tree and the suite stayed 26/26 green.
+ * The two the 2026-08-20 review left open, and the specs that now pin them:
  *
- * The six the original commit claimed, RE-PROVED on the rebuilt harness — the
- * fake Cosmos now actually persists, which could have blinded them:
+ *   N1  live mode stops requiring `canWrite`          → 2 RED (was 0)
+ *   N2  the write bar is wired but never armed        → 2 RED (was 0)
+ *   N3  the `c.id > @cursor` predicate is dropped     → 1 RED (was 0)
+ *   N4  `ORDER BY c.id` is dropped                    → 2 RED (was 0)
+ *   N5  cursor taken from reported rows, not the raw
+ *       window (so a foreign page pins it forever)    → 1 RED (was 0)
+ *   N6  the route stops forwarding `cursor`           → 2 RED (was 0)
  *
- *   a) `has-content` returns the ENGINE's verdict            → 4 RED
- *   b) `has-content` short-circuits BEFORE the engine        → 2 RED
- *   c) fetch `limit` instead of `limit + 1`                  → 3 RED
- *   d) one item's throw aborts the sweep                     → 1 RED
- *   e) hand-list `sweepableItemTypes`                        → 3 RED
- *   f) dry-run calls `repairOne`                             → 8 RED
+ * "was 0" is measured, not inferred: both defects were REPRODUCED on this tree
+ * before the fix (see the two describe blocks below, which quote the raw
+ * output), and the whole 58-spec suite was green over both.
+ *
+ * The earlier set, RE-PROVED after the paging restructure — which moved the
+ * access filter from a page-filter to a per-row decision and could have blinded
+ * them:
+ *
+ *   B2a `scopeToCallerAccess` deleted                 → 9 RED
+ *   B2b `callerTid: session.claims.tid` → `undefined` → 1 RED
+ *   B2c classification runs BEFORE the row is dropped → 6 RED
+ *   B3  `record?.seeded === true` → `record`          → 2 RED
+ *   Bc  fetch `limit` instead of `limit + 1`          → 6 RED
+ *   B5a route: `!== false` → `=== true`               → 4 RED
+ *
+ * Previously measured on the same suite and unchanged by this revision:
+ *   B4a/B4b `persisted` asserted-not-measured / dropped; B5b route stops
+ *   threading the session; B5c `withTenantAdmin` → `withSession`; the six the
+ *   original commit claimed (engine verdict on `has-content`, the short-circuit
+ *   before the engine, one item's throw aborting the sweep, a hand-listed
+ *   `sweepableItemTypes`, dry-run calling `repairOne`).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -134,6 +149,7 @@ import { authoredContent } from '@/lib/azure/auto-bind-seed';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import type { SessionPayload } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { resolveEffectiveRole } from '@/lib/azure/workspace-roles-client';
 
 /** The caller every sweep in this file runs as. */
 const CALLER_OID = 'oid-sweep-caller';
@@ -406,6 +422,170 @@ describe('a workspace in another Entra tenant is out of scope', () => {
     // One resolve per DISTINCT workspace, not per row — the cache is what keeps
     // a 200-row page from costing 200 workspace lookups.
     expect(only(result.rows).disposition).toBe('would-repair');
+  });
+
+  // -------------------------------------------------------------------------
+  // #3824 — THE RESOLVER'S OWN REFUSAL, NOT MASKED BY THIS FILTER
+  //
+  // The sweep's filter is now the SECOND check, not the only one. #3824 tightened
+  // the tenant-admin bypass (step 6) from "no contradiction" to a POSITIVE tid
+  // match, so a workspace whose `tid` is absent — a documented, supported state
+  // for any doc created before rel-T11 — is refused by the resolver itself.
+  //
+  // What is pinned here is AGREEMENT: the sweep must inherit that refusal rather
+  // than paper over it. Before #3824 this fixture was swept and mutated, because
+  // step 4's boundary is truthiness-guarded on both sides and decided nothing
+  // when either tid was missing. The two controls below are one field apart from
+  // it, which is what stops this passing on a sweep that returns nothing at all.
+  // -------------------------------------------------------------------------
+  it('a workspace with NO recorded tid is refused by the resolver, and the sweep agrees', async () => {
+    wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, name: 'Legacy, unstamped' });
+
+    const result = await sweep([theirItem()], { dryRun: false });
+
+    expect(result.rows).toEqual([]);
+    expect(result.excludedByAccess).toBe(1);
+    // Not a write-access refusal — the caller has NO access here at all.
+    expect(result.excludedByWriteAccess).toBe(0);
+    expect(plane.createCalls).toEqual([]);
+    expect(plane.seedCalls).toEqual([]);
+    expect(readAutoBindRecord(docStore.get(`${FOREIGN_WS}::id-theirs`)!.state)).toBeNull();
+  });
+
+  it('and a caller with no tid CLAIM is refused on the same workspace', async () => {
+    // The other documented absence: a session minted before rel-T11, or a PAT
+    // issued without `createdByTid`. The workspace here IS stamped.
+    theirWorkspace(CALLER_TID);
+    const tidless = { claims: { oid: CALLER_OID }, exp: 4_102_444_800 } as SessionPayload;
+
+    const result = await sweepAutoBind({
+      dryRun: false,
+      session: tidless,
+      providers: [seedingProvider()],
+      loadItems: async () => [theirItem()],
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.excludedByAccess).toBe(1);
+    expect(plane.createCalls).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// A LIVE PASS REQUIRES `canWrite`, NOT MERELY ACCESS
+//
+// `resolveWorkspaceAccessByOid` returns a ROLE, and `workspace-access.ts` says
+// so in as many words: "Callers that gate mutations MUST check `canWrite`."
+// `item-crud.ts` does (`if (!opts.allowReadRoles && !access.canWrite) return
+// null`). The sweep did not — it asked only `!== null` — and a sweep is a
+// mutation path: it creates ADF objects, writes authored content into them, and
+// stamps provenance onto the item document.
+//
+// THE REACHABLE CASE IS A DOWNGRADING GRANT. Step 5 of the resolver (the ACL
+// lookup) returns BEFORE the tenant-admin bypass in step 6, so a tenant admin
+// who has been deliberately given `Viewer` on someone's workspace resolves
+// `role:'Viewer', via:'acl', canWrite:false` — and the sweep wrote through it
+// anyway. Measured on the pre-fix tree, with the admin bypass ON:
+//   resolvedAccess={"role":"Viewer","via":"acl","canWrite":false}
+//   -> rows=[{"disposition":"created"}] createCalls=["SharedPipe"]
+//      seedCalls=["SharedPipe"] cosmosDocStamped={"via":"created","seeded":true}
+//
+// Dry-run deliberately keeps the READ bar: reporting what a writer would repair
+// is a read, and a Viewer is entitled to it. So the pair below is the whole
+// finding — same fixture, same role, opposite verdict, decided by `dryRun`.
+// ===========================================================================
+describe('a read-only role cannot start a write', () => {
+  const SHARED_WS = 'ws-shared';
+  const OTHER_OWNER = 'oid-someone-else';
+  let priorAdminOid: string | undefined;
+
+  /** Someone else's workspace, in the CALLER's tenant, shared with the caller. */
+  const sharedWorkspace = () =>
+    wsStore.set(SHARED_WS, { id: SHARED_WS, tenantId: OTHER_OWNER, tid: CALLER_TID, name: 'Shared' });
+
+  /** No backing object exists, so a live sweep WOULD create and seed one. */
+  const sharedItem = () =>
+    item({ displayName: 'SharedPipe', id: 'id-shared', workspaceId: SHARED_WS, state: gatedInstallState() });
+
+  beforeEach(() => {
+    // The live shape: this route is admin-gated, so the admin bypass is ON.
+    // With it on, `canWrite` is the ONLY thing between a read-only grant and a
+    // bulk rewrite of someone else's ADF objects.
+    priorAdminOid = process.env.LOOM_TENANT_ADMIN_OID;
+    process.env.LOOM_TENANT_ADMIN_OID = CALLER_OID;
+    sharedWorkspace();
+  });
+  afterEach(() => {
+    if (priorAdminOid === undefined) delete process.env.LOOM_TENANT_ADMIN_OID;
+    else process.env.LOOM_TENANT_ADMIN_OID = priorAdminOid;
+  });
+
+  it('DRY-RUN still REPORTS a Viewer-ACL workspace — the report is a read', async () => {
+    vi.mocked(resolveEffectiveRole).mockResolvedValue('Viewer');
+
+    const result = await sweep([sharedItem()]);
+
+    expect(only(result.rows).disposition).toBe('missing');
+    expect(only(result.rows).workspaceId).toBe(SHARED_WS);
+    expect(result.excludedByAccess).toBe(0);
+    expect(result.excludedByWriteAccess).toBe(0);
+  });
+
+  it('LIVE REFUSES the same row — nothing created, seeded or stamped', async () => {
+    vi.mocked(resolveEffectiveRole).mockResolvedValue('Viewer');
+
+    const result = await sweep([sharedItem()], { dryRun: false });
+
+    expect(result.rows).toEqual([]);
+    expect(result.scanned).toBe(0);
+    // Counted as a WRITE refusal, not a tenant drop — different cause, different
+    // fix, and folding them together would make this look like a boundary hit.
+    expect(result.excludedByWriteAccess).toBe(1);
+    expect(result.excludedByAccess).toBe(0);
+    // The concrete harm the pre-fix tree caused, item by item.
+    expect(plane.createCalls).toEqual([]);
+    expect(plane.seedCalls).toEqual([]);
+    expect(plane.objects.has('SharedPipe')).toBe(false);
+    expect(readAutoBindRecord(docStore.get(`${SHARED_WS}::id-shared`)!.state)).toBeNull();
+  });
+
+  it('but a WRITE role on the very same workspace IS mutated — the control', async () => {
+    // One field apart from the refusal above. Without it, both specs would also
+    // pass on a sweep that refuses everything, or one whose provider never
+    // matched — the failure mode a boundary test cannot afford.
+    vi.mocked(resolveEffectiveRole).mockResolvedValue('Member');
+
+    const result = await sweep([sharedItem()], { dryRun: false });
+
+    expect(result.rows.map((r) => r.disposition)).toEqual(['created']);
+    expect(result.excludedByWriteAccess).toBe(0);
+    expect(plane.createCalls).toEqual(['SharedPipe']);
+    expect(plane.objects.get('SharedPipe')!.activities).toHaveLength(3);
+    expect(readAutoBindRecord(docStore.get(`${SHARED_WS}::id-shared`)!.state)?.seeded).toBe(true);
+  });
+
+  it('`Contributor` is read-only in this role model, and is refused too', async () => {
+    // WRITE_ROLES is Owner/Admin/Member — `Contributor` maps to a READ role here
+    // despite the Azure-RBAC-sounding name, so it is worth pinning explicitly
+    // rather than leaving to the reader's assumption.
+    vi.mocked(resolveEffectiveRole).mockResolvedValue('Contributor');
+
+    const result = await sweep([sharedItem()], { dryRun: false });
+
+    expect(result.excludedByWriteAccess).toBe(1);
+    expect(plane.createCalls).toEqual([]);
+  });
+
+  it('an OWNED workspace is unaffected — the owner fast-path writes as before', async () => {
+    // Guards against a fix that gates the common case too: `ws-1` is owned by
+    // the caller, resolves `via:'owner'` with canWrite:true, and never consults
+    // the ACL at all.
+    plane.objects.set('Ours-ETL', { activities: [] });
+
+    const result = await sweep([item({ displayName: 'Ours-ETL', state: gatedInstallState() })], { dryRun: false });
+
+    expect(only(result.rows).disposition).toBe('repaired');
+    expect(result.excludedByWriteAccess).toBe(0);
   });
 });
 
@@ -867,6 +1047,186 @@ describe('truncation honesty', () => {
     await run(5000);
     await run(0);
     expect(asked).toEqual([1001, 2]); // MAX_LIMIT + 1, then min 1 + 1
+  });
+});
+
+// ===========================================================================
+// RE-RUNNING ACTUALLY ADVANCES
+//
+// Both docblocks told the operator to re-run until `truncated` is false, and
+// that instruction was FALSE. `loadSweepItems` had no `ORDER BY`, no resume
+// predicate and nothing excluding already-swept items, so every pass re-read
+// the same `TOP n` prefix. Measured on the pre-fix tree, 5 items at `limit:2`,
+// three LIVE passes:
+//
+//   PASS1 items=["id-1","id-2"] dispositions=["created","created"]
+//   PASS2 items=["id-1","id-2"] dispositions=["already-healthy","already-healthy"]
+//   PASS3 items=["id-1","id-2"] dispositions=["already-healthy","already-healthy"]
+//   NEVER_REACHED=["id-3","id-4","id-5"]
+//
+// Every pass really WAS cheaper than the last — which is exactly why the claim
+// survived review the first time. Cheaper is not further. Any estate above
+// MAX_LIMIT could never be swept whole.
+// ===========================================================================
+describe('the cursor', () => {
+  /** A fake Cosmos page: ordered by id, resumed strictly after `cursor`. */
+  const paged = (all: WorkspaceItem[]) =>
+    async (o: { limit: number; cursor?: string }) =>
+      [...all]
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .filter((i) => (o.cursor ? i.id > o.cursor : true))
+        .slice(0, o.limit)
+        .map(clone);
+
+  const five = () => [1, 2, 3, 4, 5].map((n) =>
+    item({ displayName: `P${n}`, id: `id-${n}`, state: gatedInstallState() }));
+
+  it('carries pass 2 onto the rows pass 1 could not reach', async () => {
+    const items = five();
+    register(items);
+    const loadItems = paged(items);
+
+    const p1 = await sweepAutoBind({ dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems });
+    expect(p1.rows.map((r) => r.itemId)).toEqual(['id-1', 'id-2']);
+    expect(p1.truncated).toBe(true);
+    expect(p1.truncatedBy).toBe('limit');
+    expect(p1.nextCursor).toBe('id-2');
+
+    const p2 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems, cursor: p1.nextCursor,
+    });
+
+    // THE ASSERTION THE WHOLE FINDING TURNS ON. Pre-fix this was id-1,id-2.
+    expect(p2.rows.map((r) => r.itemId)).toEqual(['id-3', 'id-4']);
+    expect(p2.nextCursor).toBe('id-4');
+  });
+
+  it('walks the WHOLE estate in bounded passes and then stops', async () => {
+    const items = five();
+    register(items);
+    const loadItems = paged(items);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let passes = 0;
+    for (;;) {
+      const r = await sweepAutoBind({
+        dryRun: false, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems, cursor,
+      });
+      passes += 1;
+      seen.push(...r.rows.map((x) => x.itemId));
+      if (!r.truncated) break;
+      cursor = r.nextCursor;
+      if (passes > 10) throw new Error('the cursor did not converge');
+    }
+
+    expect(seen).toEqual(['id-1', 'id-2', 'id-3', 'id-4', 'id-5']);
+    expect(passes).toBe(3); // 2 + 2 + 1, the last one not truncated
+    // …and every one of them was actually repaired, not merely enumerated.
+    expect(plane.createCalls.sort()).toEqual(['P1', 'P2', 'P3', 'P4', 'P5']);
+  });
+
+  it('advances past rows the ACCESS FILTER dropped, so a foreign page cannot pin it', async () => {
+    // The interaction the old KNOWN LIMIT disclosed: the row cap applies to the
+    // Cosmos page and the filter runs after it, so a caller's own items can be
+    // crowded off page 1. Deriving the cursor from the RAW window (not from the
+    // reported rows) is what closes it — a page belonging ENTIRELY to another
+    // tenant still moves the scan forward instead of looping on itself.
+    process.env.LOOM_TENANT_ADMIN_OID = CALLER_OID;
+    try {
+      wsStore.set('ws-theirs', { id: 'ws-theirs', tenantId: 'oid-other', tid: FOREIGN_TID, name: 'Theirs' });
+      const theirs = [1, 2].map((n) =>
+        item({ displayName: `T${n}`, id: `id-a${n}`, workspaceId: 'ws-theirs', state: gatedInstallState() }));
+      const ours = item({ displayName: 'Ours', id: 'id-b1', state: gatedInstallState() });
+      const all = [...theirs, ours];
+      register([ours]);
+      const loadItems = paged(all);
+
+      const p1 = await sweepAutoBind({ dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems });
+      expect(p1.rows).toEqual([]);
+      expect(p1.excludedByAccess).toBe(2);
+      expect(p1.truncated).toBe(true);
+      // Pre-cursor this was a dead end: nothing to resume from, so `id-b1` was
+      // unreachable without scoping the sweep by workspaceId.
+      expect(p1.nextCursor).toBe('id-a2');
+
+      const p2 = await sweepAutoBind({
+        dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems, cursor: p1.nextCursor,
+      });
+
+      expect(p2.rows.map((r) => r.itemId)).toEqual(['id-b1']);
+      expect(p2.truncated).toBe(false);
+    } finally {
+      delete process.env.LOOM_TENANT_ADMIN_OID;
+    }
+  });
+
+  it('resumes from the last row PROCESSED when the deadline cuts a pass short', async () => {
+    const items = five();
+    register(items);
+    const loadItems = paged(items);
+    // [deadline base, item-1 check, item-2 check]
+    const ticks = [0, 0, 9_999];
+    let i = 0;
+
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 4, loadItems,
+      deadlineMs: 500, now: () => ticks[Math.min(i++, ticks.length - 1)],
+    });
+
+    expect(p1.truncatedBy).toBe('deadline');
+    expect(p1.rows.map((r) => r.itemId)).toEqual(['id-1']);
+    // NOT the end of the window (`id-4`) — the rows after the cut were never
+    // looked at, and skipping them would lose them permanently.
+    expect(p1.nextCursor).toBe('id-1');
+
+    const p2 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 4, loadItems, cursor: p1.nextCursor,
+    });
+    expect(p2.rows.map((r) => r.itemId)).toEqual(['id-2', 'id-3', 'id-4', 'id-5']);
+  });
+
+  it('omits nextCursor entirely on a complete pass', async () => {
+    const result = await sweep([item({ displayName: 'a' }), item({ displayName: 'b' })], { limit: 2 });
+    expect(result.truncated).toBe(false);
+    expect(result.nextCursor).toBeUndefined();
+    expect('nextCursor' in result).toBe(false);
+  });
+
+  it('is threaded into the Cosmos query as an EXCLUSIVE, parameterized predicate', async () => {
+    let spec: { query: string; parameters: { name: string; value: unknown }[] } | undefined;
+    vi.mocked(itemsContainer).mockResolvedValue({
+      items: {
+        query: (s: typeof spec) => { spec = s; return { fetchAll: async () => ({ resources: [] }) }; },
+      },
+    } as never);
+
+    await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 5, cursor: 'id-42',
+    });
+
+    expect(spec!.query).toContain('c.id > @cursor');
+    // Without a total order the predicate is meaningless — a TOP-n
+    // cross-partition query may return any n rows that satisfy it.
+    expect(spec!.query).toContain('ORDER BY c.id');
+    expect(spec!.parameters).toContainEqual({ name: '@cursor', value: 'id-42' });
+  });
+
+  it('omits the resume predicate on the FIRST pass', async () => {
+    let spec: { query: string; parameters: { name: string; value: unknown }[] } | undefined;
+    vi.mocked(itemsContainer).mockResolvedValue({
+      items: {
+        query: (s: typeof spec) => { spec = s; return { fetchAll: async () => ({ resources: [] }) }; },
+      },
+    } as never);
+
+    await sweepAutoBind({ dryRun: true, session: SESSION, providers: [seedingProvider()] });
+
+    expect(spec!.query).not.toContain('@cursor');
+    // The ORDER BY is unconditional — it is what makes pass 1's prefix stable
+    // enough for pass 2's cursor to mean anything.
+    expect(spec!.query).toContain('ORDER BY c.id');
+    expect(spec!.parameters.map((p) => p.name)).toEqual(['@types', '@limit']);
   });
 });
 

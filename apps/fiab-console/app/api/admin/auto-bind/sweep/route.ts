@@ -14,9 +14,9 @@
  *
  * Contract:
  *   Request : { dryRun?: boolean, workspaceId?: string, itemTypes?: string[],
- *               limit?: number }
- *   Response: { ok, dryRun, scanned, byDisposition, rows[], truncated,
- *               truncatedBy? }
+ *               limit?: number, cursor?: string }
+ *   Response: { ok, dryRun, scanned, excludedByAccess, excludedByWriteAccess,
+ *               byDisposition, rows[], truncated, truncatedBy?, nextCursor? }
  *   401 : no session.  403 : caller is not a tenant admin.
  *
  * Both gates come from the route toolkit (`withTenantAdmin` on POST,
@@ -35,17 +35,36 @@
  * would rewrite their ADF objects. Dropping `session` from the call below is a
  * COMPILE ERROR, not a silent regression — see `SweepOptions`.
  *
+ * ADMIN IS NOT WRITE ACCESS EITHER. A live pass additionally requires
+ * `canWrite` per workspace, because the tenant-admin bypass in the resolver
+ * runs AFTER the ACL lookup — so an admin holding an explicit read-only grant
+ * (`Viewer`) on someone's workspace resolves read-only, and that is their real
+ * authority there. Those rows are reported as `excludedByWriteAccess` and are
+ * still visible on a dry-run.
+ *
  * DRY-RUN IS THE DEFAULT (`dryRun !== false`), matching admin/lineage/reconcile:
  * a pass that writes to Azure must be asked for in so many words.
  *
- * ## Re-run until `truncated` is false
+ * ## Re-run with `nextCursor` until `truncated` is false
  *
  * The deadline below is deliberately smaller than `maxDuration`, so a large
  * backlog returns a PARTIAL result rather than being killed by the host with
- * nothing to show. That is safe because the sweep is idempotent AND each pass
- * strictly cheapens the next: a repaired item's record carries `seeded:true`,
- * which the sweep's first guard answers with zero control-plane calls. So
- * repeated calls converge — they do not re-do work.
+ * nothing to show. A truncated response carries `nextCursor`; send it back as
+ * `cursor` and the next pass resumes strictly AFTER the last row this one
+ * finished with.
+ *
+ * THE CURSOR IS WHAT MAKES THAT TRUE. Until #3808's review it was not: the scan
+ * had no `ORDER BY` and no resume predicate, so every pass re-read the same
+ * `TOP n` prefix. Measured over five items at `limit:2`, three live passes all
+ * returned `id-1,id-2` — pass 1 `created`, passes 2 and 3 `already-healthy` —
+ * and `id-3..id-5` were never reached. Each pass really was cheaper than the
+ * last, which is what made the claim look right; cheaper is not further, and any
+ * estate larger than the cap could never be fully swept while the operator was
+ * being told to keep re-running.
+ *
+ * Idempotency is the OTHER half and was always real: a repaired item's record
+ * carries `seeded:true`, which the sweep's first guard answers with zero
+ * control-plane calls, so re-sweeping ground already covered is nearly free.
  *
  * That cheapening depends on a COSMOS WRITE, not on the in-memory merge
  * `autoBindOnOpen` also performs: the next request is a different process and
@@ -93,6 +112,10 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
     ? body.itemTypes.filter((t: unknown): t is string => typeof t === 'string')
     : undefined;
   const limit = Number.isFinite(body?.limit) ? Number(body.limit) : undefined;
+  // The resume point from a previous truncated pass. Validated as a non-empty
+  // string: it goes into a PARAMETERIZED predicate (`c.id > @cursor`), so this
+  // is a shape check, not an injection guard.
+  const cursor = typeof body?.cursor === 'string' && body.cursor ? body.cursor : undefined;
 
   try {
     const result = await sweepAutoBind({
@@ -103,6 +126,7 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       workspaceId,
       itemTypes,
       limit,
+      cursor,
       deadlineMs: SWEEP_DEADLINE_MS,
     });
     return apiOk({ ...result });
