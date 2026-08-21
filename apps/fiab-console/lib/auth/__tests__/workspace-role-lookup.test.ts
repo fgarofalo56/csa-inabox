@@ -1,25 +1,34 @@
 /**
  * #3751 / #3753 — `resolveWorkspaceRole` must FIND a workspace it does not own,
  * without GRANTING anything it did not already grant.
+ * #3840 — …and the tenant decision it makes on the way is the RESOLVER's, not
+ * its own.
  *
- * THE BUG. The function took a `tenantId` parameter that every call site filled
- * with `session.claims.oid`, and point-read `workspacesContainer().item(
- * workspaceId, tenantId)`. The `workspaces` container is partitioned on
- * `/tenantId`, which stores the CREATOR's oid — so that read answered "did YOU
- * create this workspace?" and 404'd for everyone else. `/admin/permissions` →
- * Workspace access reported "workspace not found" for any workspace the acting
- * admin had not personally created (reproduced 2/2 on a 108-workspace tenant),
- * even though `listAllWorkspacesAdmin()` lists all 108 in the picker.
+ * THE ORIGINAL BUG (#3751). The function took a `tenantId` parameter that every
+ * call site filled with `session.claims.oid`, and point-read
+ * `workspacesContainer().item(workspaceId, tenantId)`. The `workspaces`
+ * container is partitioned on `/tenantId`, which stores the CREATOR's oid — so
+ * that read answered "did YOU create this workspace?" and 404'd for everyone
+ * else. `/admin/permissions` → Workspace access reported "workspace not found"
+ * for any workspace the acting admin had not personally created (reproduced 2/2
+ * on a 108-workspace tenant).
  *
- * THE FIX IS A LOOKUP FIX, NOT A GRANT. These specs pin both halves, because a
- * careless version of this change fails OPEN:
- *   1. a non-creator now RESOLVES the workspace — so the route can run the
- *      authorization ladder it already has (workspace role → tenant admin →
- *      owning-domain admin) instead of dying on a false 404;
- *   2. a non-creator with no permissions row still resolves `role: null`. Being
- *      able to SEE the workspace is not being able to ACT on it;
- *   3. the cross-partition lookup is bounded by the Entra tenant boundary — a
- *      workspace stamped with a different `tid` is not found at all.
+ * THE SECOND BUG (#3840), which the #3753 fix left behind. The replacement was a
+ * cross-partition `readWorkspaceById()` followed by a PRIVATE tid comparison:
+ *
+ *     if (callerTid && docTid && docTid !== callerTid) return null;
+ *
+ * The spec that shipped with it pinned the fall-through as a "documented limit"
+ * and argued it was contained by `msal.ts` building a single-tenant authority.
+ * That is a DEPLOYMENT property, not a property of this function — and what sits
+ * above it is every caller's `role || isTenantAdmin(s) || owningDomainAdmin`
+ * ladder. So a legacy `tid`-less workspace document was returned to a tenant
+ * admin from ANY tenant, who then got full member management on it.
+ *
+ * HOW THESE SPECS ARE BUILT, and why it matters: they mock COSMOS and Graph, not
+ * the resolver. `resolveWorkspaceAccessByOid` runs for real, so "the tenant
+ * decision is delegated" is exercised rather than asserted against a stand-in
+ * that could model the code instead of the contract.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -28,6 +37,8 @@ const CREATOR_OID = 'oid-creator';
 const CREATOR_UPN = 'creator@contoso.com';
 const ADMIN_OID = 'oid-tenant-admin';
 const ADMIN_UPN = 'admin@contoso.com';
+const MEMBER_UPN = 'member@contoso.com';
+const MEMBER_OID = 'oid-member';
 const HOME_TID = 'tid-contoso';
 const FOREIGN_TID = 'tid-fabrikam';
 
@@ -40,42 +51,93 @@ const WS_DOC = {
   name: 'Not mine',
 };
 
-const readWorkspaceById = vi.fn();
+/** Mutable fixture state — the containers below read from it. */
+const world: {
+  doc: Record<string, unknown> | null;
+  permissionRow: { role: string } | null;
+  aclRole: string | null;
+  tenantAdmin: boolean;
+} = { doc: null, permissionRow: null, aclRole: null, tenantAdmin: false };
+
 const permsPointRead = vi.fn();
 
-vi.mock('@/lib/auth/workspace-access', () => ({
-  readWorkspaceById: (...a: any[]) => readWorkspaceById(...a),
-}));
-vi.mock('../../azure/cosmos-client', () => ({
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  // Partition point-read on (id, oid) — the resolver's OWNER fast path. Only a
+  // document whose `tenantId` IS that oid lives in that partition, so anything
+  // else must 404 exactly as Cosmos would.
+  workspacesContainer: async () => ({
+    item: (id: string, pk: string) => ({
+      read: async () => {
+        const d = world.doc;
+        if (!d || d.id !== id || d.tenantId !== pk) {
+          const e: any = new Error('not found');
+          e.code = 404;
+          throw e;
+        }
+        return { resource: d };
+      },
+    }),
+    items: {
+      query: (spec: any) => ({
+        fetchAll: async () => {
+          const wanted = (spec.parameters ?? []).find((p: any) => p.name === '@id')?.value;
+          const d = world.doc;
+          return { resources: d && d.id === wanted ? [d] : [] };
+        },
+      }),
+    },
+  }),
+  workspaceRolesContainer: async () => ({
+    items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
+  }),
   workspacePermissionsContainer: async () => ({
     item: (id: string, pk: string) => ({ read: () => permsPointRead(id, pk) }),
   }),
 }));
 
+// The `workspace-roles` ACL (step 5 of the resolver).
+vi.mock('@/lib/azure/workspace-roles-client', () => ({
+  resolveEffectiveRole: vi.fn(async () => world.aclRole),
+}));
+
+vi.mock('@/lib/auth/feature-gate', () => ({
+  isTenantAdmin: vi.fn(() => world.tenantAdmin),
+}));
+
+// No ambient request session: `ambientCallerTid` must not be able to invent a
+// tid the test did not supply, which is what makes the "caller has no tid" case
+// mean what it says.
+vi.mock('@/lib/auth/session', () => ({ getSession: () => null }));
+
 import { resolveWorkspaceRole } from '../workspace-role';
 
 const session = (oid: string, upn: string, tid?: string) =>
-  ({ claims: { oid, upn, tid } }) as any;
+  ({ claims: { oid, upn, tid, groups: [] } }) as any;
 
 beforeEach(() => {
-  readWorkspaceById.mockReset();
-  permsPointRead.mockReset();
-  readWorkspaceById.mockResolvedValue(WS_DOC);
+  vi.clearAllMocks();
+  world.doc = { ...WS_DOC };
+  world.permissionRow = null;
+  world.aclRole = null;
+  world.tenantAdmin = false;
   const notFound: any = new Error('not found');
   notFound.code = 404;
-  permsPointRead.mockRejectedValue(notFound);
+  permsPointRead.mockImplementation(async () => {
+    if (world.permissionRow) return { resource: world.permissionRow };
+    throw notFound;
+  });
 });
 
 describe('resolveWorkspaceRole — lookup is not authorization (#3751)', () => {
-  it('FINDS a workspace the caller did not create (the #3751 404)', async () => {
+  it('FINDS a workspace the caller did not create, for a same-tenant admin', async () => {
+    world.tenantAdmin = true;
     const { workspace } = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
     expect(workspace).not.toBeNull();
     expect(workspace.id).toBe(WS_ID);
-    // Resolved by ID — never by the caller's own partition.
-    expect(readWorkspaceById).toHaveBeenCalledWith(WS_ID);
   });
 
   it('does NOT grant a role to a non-creator with no permissions row', async () => {
+    world.tenantAdmin = true;
     const { workspace, role } = await resolveWorkspaceRole(
       WS_ID,
       session(ADMIN_OID, ADMIN_UPN, HOME_TID),
@@ -94,62 +156,135 @@ describe('resolveWorkspaceRole — lookup is not authorization (#3751)', () => {
     expect(role).toBe('admin');
   });
 
-  it('honors an explicit permissions row for a non-creator', async () => {
-    permsPointRead.mockResolvedValue({ resource: { role: 'contributor' } });
-    const { role } = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
+  it('honors an explicit permissions row for a non-creator (the SECOND ACL)', async () => {
+    world.permissionRow = { role: 'contributor' };
+    const { workspace, role } = await resolveWorkspaceRole(
+      WS_ID,
+      session(MEMBER_OID, MEMBER_UPN, HOME_TID),
+    );
+    expect(workspace).not.toBeNull();
     expect(role).toBe('contributor');
     // Keyed `<workspaceId>:<upn>` in the workspace's own partition.
-    expect(permsPointRead).toHaveBeenCalledWith(`${WS_ID}:${ADMIN_UPN}`, WS_ID);
+    expect(permsPointRead).toHaveBeenCalledWith(`${WS_ID}:${MEMBER_UPN}`, WS_ID);
   });
 
-  // THE FAIL-OPEN GUARD. The cross-partition lookup can see other tenants'
-  // workspaces; without this boundary the #3751 fix would be a cross-tenant read.
-  it('REFUSES a workspace stamped with a different Entra tid', async () => {
-    readWorkspaceById.mockResolvedValue({ ...WS_DOC, tid: FOREIGN_TID });
+  it('honors a workspace-roles ACL grant (the resolver\'s own step 5)', async () => {
+    world.aclRole = 'Member';
+    const { workspace } = await resolveWorkspaceRole(WS_ID, session(MEMBER_OID, MEMBER_UPN, HOME_TID));
+    expect(workspace).not.toBeNull();
+  });
+
+  it('returns null (not a throw) when the workspace genuinely does not exist', async () => {
+    world.doc = null;
+    world.tenantAdmin = true;
+    const { workspace, role } = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
+    expect(workspace).toBeNull();
+    expect(role).toBeNull();
+  });
+});
+
+describe('resolveWorkspaceRole — the tid boundary is DELEGATED and FAILS CLOSED (#3840)', () => {
+  it('SAME tid: a tenant admin resolves the workspace', async () => {
+    world.tenantAdmin = true;
+    const { workspace } = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
+    expect(workspace).not.toBeNull();
+  });
+
+  it('DIFFERENT tid: refused, and before any role resolution is attempted', async () => {
+    world.tenantAdmin = true;
+    world.doc = { ...WS_DOC, tid: FOREIGN_TID };
     const { workspace, role } = await resolveWorkspaceRole(
       WS_ID,
       session(ADMIN_OID, ADMIN_UPN, HOME_TID),
     );
     expect(workspace).toBeNull();
     expect(role).toBeNull();
-    // Fails closed BEFORE any role resolution is attempted.
     expect(permsPointRead).not.toHaveBeenCalled();
   });
 
-  it('returns null (not a throw) when the workspace genuinely does not exist', async () => {
-    readWorkspaceById.mockResolvedValue(null);
-    const { workspace, role } = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
+  // THE #3840 FIX, AND THE SPEC IT REPLACES. The previous version of this file
+  // asserted the OPPOSITE — "does NOT reject a LEGACY doc with no tid — the
+  // boundary is inert there (documented limit)" — and that inertness IS the
+  // defect: `resolveWorkspaceRole` hands the document to a route whose next line
+  // is `|| isTenantAdmin(s)`. Inverting it is the behaviour change, stated
+  // rather than implied.
+  it('DOC TID MISSING: a tenant admin is REFUSED (was: granted, the #3840 hole)', async () => {
+    world.tenantAdmin = true;
+    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
+    world.doc = legacy;
+    const { workspace, role } = await resolveWorkspaceRole(
+      WS_ID,
+      session(ADMIN_OID, ADMIN_UPN, HOME_TID),
+    );
     expect(workspace).toBeNull();
     expect(role).toBeNull();
   });
 
-  // THE LIMIT OF THE BOUNDARY, PINNED DELIBERATELY (#3753 review).
-  //
-  // The tid check is `callerTid && docTid && docTid !== callerTid`, so it is
-  // INERT for a LEGACY workspace doc written before the `tid` field existed: a
-  // caller from a different Entra tenant resolves it (workspace non-null, role
-  // null). This is identical to `resolveWorkspaceAccessByOid`'s step 4, which
-  // has shipped with the same limit since #2703 — tightening it here would
-  // newly 404 every legacy workspace for its own legitimate tenant, which is the
-  // #3751 defect again in the opposite direction.
-  //
-  // What contains it today is that `msal.ts` builds a SINGLE-TENANT authority,
-  // so a foreign `tid` is not reachable on the default configuration. That is a
-  // deployment property, not a property of this function, so it is asserted here
-  // rather than assumed: if the boundary is ever expected to reject legacy docs,
-  // this spec must be updated CONSCIOUSLY and the routes' post-lookup ladder
-  // (`role || isTenantAdmin || callerIsOwningDomainAdmin`) re-reviewed with it —
-  // `callerIsOwningDomainAdmin` matches the workspace's `domain` STRING against
-  // the caller's own domain list, and `default` exists in every tenant.
-  it('does NOT reject a LEGACY doc with no tid — the boundary is inert there (documented limit)', async () => {
-    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
-    readWorkspaceById.mockResolvedValue(legacy);
+  it('CALLER TID MISSING: a tenant admin is REFUSED', async () => {
+    world.tenantAdmin = true;
     const { workspace, role } = await resolveWorkspaceRole(
       WS_ID,
-      session(ADMIN_OID, ADMIN_UPN, FOREIGN_TID),
+      session(ADMIN_OID, ADMIN_UPN, undefined),
+    );
+    expect(workspace).toBeNull();
+    expect(role).toBeNull();
+  });
+
+  it('BOTH TIDS MISSING: still refused — two unknowns are not a match', async () => {
+    world.tenantAdmin = true;
+    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
+    world.doc = legacy;
+    const { workspace } = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, undefined));
+    expect(workspace).toBeNull();
+  });
+
+  // TENANT ADMIN IS NOT A BYPASS. The same caller, the same document, the only
+  // difference being the admin flag: it must not turn an unconfirmed tenancy
+  // into access. This is the pair that makes the claim falsifiable — a spec that
+  // only ran the admin case could not tell "refused because unconfirmed" from
+  // "refused because non-admin".
+  it('the ADMIN FLAG alone never rescues an unconfirmed tenancy', async () => {
+    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
+    world.doc = legacy;
+
+    world.tenantAdmin = false;
+    const asUser = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
+    world.tenantAdmin = true;
+    const asAdmin = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
+
+    expect(asUser.workspace).toBeNull();
+    expect(asAdmin.workspace).toBeNull();
+    // CONTROL: with the tenancy CONFIRMED, the admin flag does still admit —
+    // so the refusals above are the boundary, not a dead code path.
+    world.doc = { ...WS_DOC };
+    const confirmed = await resolveWorkspaceRole(WS_ID, session(ADMIN_OID, ADMIN_UPN, HOME_TID));
+    expect(confirmed.workspace).not.toBeNull();
+  });
+
+  it('a cross-tenant admin cannot reach a FOREIGN workspace even with a permissions row', async () => {
+    world.tenantAdmin = true;
+    world.doc = { ...WS_DOC, tid: FOREIGN_TID };
+    world.permissionRow = { role: 'admin' };
+    const { workspace, role } = await resolveWorkspaceRole(
+      WS_ID,
+      session(ADMIN_OID, ADMIN_UPN, HOME_TID),
+    );
+    expect(workspace).toBeNull();
+    expect(role).toBeNull();
+  });
+
+  // THE OWNER PATH IS DELIBERATELY UNAFFECTED. The resolver's owner fast-path is
+  // a point-read scoped to the caller's OWN partition, so no other tenant's
+  // document can come back from it and there is no tenancy to confirm. A legacy
+  // workspace must not become unreachable to the person who created it.
+  it('the CREATOR still resolves on a legacy tid-less doc, with no tid claim at all', async () => {
+    const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
+    world.doc = legacy;
+    const { workspace, role } = await resolveWorkspaceRole(
+      WS_ID,
+      session(CREATOR_OID, CREATOR_UPN, undefined),
     );
     expect(workspace).not.toBeNull();
-    // Crucially it still grants NO role — being resolvable is not being able to act.
-    expect(role).toBeNull();
+    expect(role).toBe('admin');
   });
 });

@@ -34,29 +34,78 @@
  * tenant. This is the #2941/#2942/#2947 owner-only-point-read class, reached
  * through a shared helper rather than an inline read.
  *
- * WHAT CHANGED, AND WHAT DELIBERATELY DID NOT. Only the LOOKUP is fixed: the
- * workspace is now resolved by its own id when the caller is not its creator.
- * Role resolution is byte-identical — `createdBy` still means owner/`admin`,
- * and every other role still comes from a `workspace-permissions` row. A
- * non-member therefore still resolves `role: null`; what changes is that the
- * caller now gets a real `workspace` object, so the ROUTE can apply the
- * authorization ladder it already has (workspace role → tenant admin → owning
- * domain admin) instead of dying on a false 404. No caller gains a role it did
- * not already hold.
+ * ---------------------------------------------------------------------------
+ * #3840 — THE TENANT DECISION IS NO LONGER THIS MODULE'S TO MAKE
+ * ---------------------------------------------------------------------------
+ * The #3753 fix left a PRIVATE copy of the cross-tenant boundary here: a
+ * `readWorkspaceById()` followed by
  *
- * TENANT BOUNDARY (non-optional, by construction). The cross-partition lookup
- * can see workspaces belonging to OTHER Entra tenants, so it is followed by the
- * same boundary `resolveWorkspaceAccessByOid` applies: when the caller's `tid`
- * is known AND the workspace records its owning `tid`, they must match. This
- * function now takes the SESSION rather than a bare `oid`, so that boundary
- * cannot be switched off by a call site omitting an argument — the #2703
- * lesson, enforced by `tsc` rather than by review. Legacy workspace docs predate
- * the `tid` field; for those the owner check and the explicit permissions row
- * remain the boundary, exactly as they are for the pre-existing
- * `resolveWorkspaceAccessByOid` path.
+ *     const callerTid = session.claims.tid;
+ *     const docTid = (doc as { tid?: string }).tid;
+ *     if (callerTid && docTid && docTid !== callerTid) return null;
+ *
+ * — the fourth copy of the decision that caused #3823 and #3825, and the same
+ * truthiness-guarded shape both of those were filed against. It decides NOTHING
+ * when either tid is absent, and BOTH absences are supported states (a
+ * pre-rel-T11 workspace doc carries no `tid`; `UserClaims.tid` is optional by
+ * design). The spec that shipped with #3753 recorded exactly that as a
+ * "documented limit" and argued it was contained by `msal.ts` building a
+ * single-tenant authority — a DEPLOYMENT property, not a property of this
+ * function, and not one that survives a multi-tenant authority, a PAT minted
+ * without `createdByTid`, or a session minted before rel-T11.
+ *
+ * What made it load-bearing rather than theoretical is what sits ABOVE it: every
+ * caller runs the ladder `role || isTenantAdmin(s) || callerIsOwningDomainAdmin`
+ * (role-assignments GET/POST/DELETE, agent-config GET/PUT, item access-mode). So
+ * a `tid`-less workspace document reached this function, fell straight through
+ * the comparison, was returned, and the ROUTE then granted full member
+ * management on it to any tenant admin — with no tenant ever established. That
+ * is #3823's hole with the admin grant moved one frame up the stack.
+ *
+ * WHAT IT DOES NOW, and why it is shaped this way:
+ *
+ *   1. IT DELEGATES. `resolveWorkspaceAccessByOid` is the canonical answer to
+ *      "may this caller touch this workspace" (#3825), and it is asked FIRST,
+ *      with `tenantAdmin` passed down so its repaired step 6 — which grants only
+ *      on a POSITIVE tenant match — is the thing that decides the admin case.
+ *      No comparison is written here.
+ *
+ *   2. IT KEEPS THE SECOND ACL, because this module owns one the resolver cannot
+ *      see. `workspace-permissions` (PK `/workspaceId`, id `<wsId>:<upn>`) is a
+ *      SEPARATE container from the `workspace-roles` ACL the resolver reads, it
+ *      is actively written by `/api/workspaces/[id]/permissions`, and a member
+ *      added there holds no `workspace-roles` row. Delegating and stopping would
+ *      have silently 404'd every one of them — the #3751 defect again, from the
+ *      other side. So a refusal from the resolver falls through to that explicit
+ *      grant, exactly as `item-access.ts` falls through to the item-level share.
+ *
+ *   3. THAT SECOND PATH FAILS CLOSED. It is admitted only on a POSITIVELY
+ *      CONFIRMED tenant match (`sameTenantConfirmed`, the one implementation of
+ *      this comparison — `lib/auth/tenant-boundary.ts`), which is STRICTER than
+ *      the resolver's step 4: an absent `tid` on either side is a refusal, not a
+ *      fall-through. And being visible still requires an EXPLICIT grant — the
+ *      creator, or a permissions row. A caller with neither gets `null`, so the
+ *      routes' tenant-admin / domain-admin ladder never sees a document whose
+ *      tenancy Loom could not confirm.
+ *
+ * THE TRADE, STATED PLAINLY (it is a real behaviour change, not a no-op). On a
+ * LEGACY workspace document with no `tid`, a tenant admin who neither owns it
+ * nor holds a role on it is now REFUSED where they previously succeeded — and
+ * so is a `workspace-permissions` member. The remediation is the same one
+ * `workspace-guard.ts` names: `scripts/csa-loom/backfill-workspace-tid.mjs`
+ * stamps the tenant onto legacy records. Owner access is untouched (the
+ * resolver's owner fast-path is partition-scoped to the caller and needs no
+ * `tid` at all), and so is any `workspace-roles` share.
+ *
+ * Pinned by `scripts/ci/check-tid-boundary-chokepoint.mjs`: section 8 checks
+ * this function's delegation and pins the second grant path in
+ * POST_DELEGATION_PINS, and section 10 fails the build on a private tenant
+ * comparison reappearing anywhere in the console.
  */
 import { workspacePermissionsContainer } from '../azure/cosmos-client';
-import { readWorkspaceById } from './workspace-access';
+import { readWorkspaceById, resolveWorkspaceAccessByOid } from './workspace-access';
+import { sameTenantConfirmed } from './tenant-boundary';
+import { isTenantAdmin } from './feature-gate';
 import type { SessionPayload } from './session';
 
 export type WorkspaceRole = 'admin' | 'contributor' | 'viewer';
@@ -68,59 +117,77 @@ export interface WorkspaceRoleResult {
   role: WorkspaceRole | null;
 }
 
+const ROLE_NAMES: WorkspaceRole[] = ['admin', 'contributor', 'viewer'];
+
 /**
- * Locate `workspaceId` for `session`: a bounded, single-id cross-partition
- * lookup, gated on the Entra tenant boundary.
+ * The caller's EXPLICIT role on an already-resolved workspace document: the
+ * creator is the implicit `admin`, otherwise a `workspace-permissions` row.
  *
- * There is DELIBERATELY no owner point-read fast path here (#3753). Adding one
- * back would re-introduce `workspacesContainer().item(workspaceId, callerOid)`
- * — the exact shape `scripts/ci/check-owner-only-workspace-guard.mjs` ratchets,
- * and the shape that made this helper answer "did you CREATE it" instead of
- * "does it exist". `readWorkspaceById` resolves the doc in whichever partition
- * owns it, INCLUDING the caller's own, so the creator path is unchanged in
- * outcome. Ownership is then decided from the returned document, not from which
- * partition the read happened to hit.
+ * Byte-identical in outcome to what `resolveWorkspaceRole` used to inline —
+ * `createdBy` still means owner/`admin`, and every other role still comes from a
+ * row. It is factored out only so the two resolution paths below cannot drift.
+ * It decides NOTHING about tenancy and reads no tenant field; both callers have
+ * already established the tenant, one by delegation and one by a positive match.
  */
-async function findWorkspace(workspaceId: string, session: SessionPayload): Promise<any | null> {
-  const doc = await readWorkspaceById(workspaceId);
-  if (!doc) return null;
+async function explicitRole(
+  workspace: any,
+  workspaceId: string,
+  session: SessionPayload,
+): Promise<WorkspaceRole | null> {
+  const me = (session.claims.upn || session.claims.email || '').toLowerCase();
+  if (me && (workspace?.createdBy || '').toLowerCase() === me) return 'admin';
+  if (!me) return null;
 
-  // Entra tenant boundary. Both sides must agree when both are known. Legacy
-  // docs predate `tid`; for those, `createdBy` + the explicit permissions row
-  // remain the boundary — identical to `resolveWorkspaceAccessByOid`.
-  const callerTid = session.claims.tid;
-  const docTid = (doc as { tid?: string }).tid;
-  if (callerTid && docTid && docTid !== callerTid) return null;
-
-  return doc;
+  const perms = await workspacePermissionsContainer();
+  try {
+    const { resource } = await perms.item(`${workspaceId}:${me}`, workspaceId).read<any>();
+    if (resource?.role && ROLE_NAMES.includes(resource.role)) return resource.role as WorkspaceRole;
+  } catch (e: any) {
+    if (e?.code !== 404) throw e;
+  }
+  return null;
 }
 
 /**
  * Resolve the caller's `role` on `workspaceId`. `session` supplies both the
  * identity the role is resolved for and the tenant boundary for the lookup.
+ *
+ * Returns `{ workspace: null, role: null }` for every refusal — "not found",
+ * "not your tenant" and "tenancy unconfirmed" are deliberately indistinguishable
+ * to the caller, because these routes already render a 404 for all three and
+ * distinguishing them here would leak the existence of workspaces in other
+ * tenants. The honest cause IS available to the operator: the resolver logs its
+ * `tenant_unconfirmed` refusal server-side (`workspace-access.ts`).
  */
 export async function resolveWorkspaceRole(
   workspaceId: string,
   session: SessionPayload,
 ): Promise<WorkspaceRoleResult> {
-  const workspace = await findWorkspace(workspaceId, session);
-  if (!workspace) return { workspace: null, role: null };
+  // 1) THE CANONICAL DECISION. Owner fast-path → `workspace-roles` ACL → tid
+  //    boundary → admin-open (which grants only on a POSITIVE tenant match).
+  //    `tenantAdmin` is COMPUTED here and DECIDED there — never acted on here.
+  const access = await resolveWorkspaceAccessByOid(
+    session.claims.oid,
+    workspaceId,
+    {
+      callerTid: session.claims.tid,
+      groups: session.claims.groups,
+      tenantAdmin: isTenantAdmin(session),
+    },
+  );
+  if (access) return { workspace: access.workspace, role: await explicitRole(access.workspace, workspaceId, session) };
 
-  const me = (session.claims.upn || session.claims.email || '').toLowerCase();
-  if (me && (workspace.createdBy || '').toLowerCase() === me) {
-    return { workspace, role: 'admin' };
-  }
-
-  const perms = await workspacePermissionsContainer();
-  try {
-    const { resource } = await perms.item(`${workspaceId}:${me}`, workspaceId).read<any>();
-    if (resource?.role && ['admin', 'contributor', 'viewer'].includes(resource.role)) {
-      return { workspace, role: resource.role as WorkspaceRole };
-    }
-  } catch (e: any) {
-    if (e?.code !== 404) throw e;
-  }
-  return { workspace, role: null };
+  // 2) SECOND GRANT PATH — this module's own `workspace-permissions` ACL, which
+  //    the resolver cannot see (different container). Reached only after the
+  //    resolver has REFUSED, so it can never be the delegated verdict; it is a
+  //    second, explicit grant carrying its own tenant boundary, and that boundary
+  //    is a POSITIVE match. An absent `tid` on either side refuses here.
+  const doc = await readWorkspaceById(workspaceId);
+  if (!doc) return { workspace: null, role: null };
+  if (!sameTenantConfirmed(session.claims.tid, (doc as { tid?: string }).tid)) return { workspace: null, role: null };
+  const role = await explicitRole(doc, workspaceId, session);
+  if (!role) return { workspace: null, role: null };
+  return { workspace: doc, role };
 }
 
 /** True when the role may EDIT workspace config (owner/contributor). */
