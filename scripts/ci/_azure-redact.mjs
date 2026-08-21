@@ -76,12 +76,26 @@
  *   the lookbehind does not protect git shas or sha256 digests, which is what it
  *   reads as though it does. The only false positive it actually prevents is a
  *   token whose FIRST group is 9+ hex (`deadbeefc-1234-…`), and it pays for that
- *   with residual 2. That trade is deliberately kept rather than narrowed: every
- *   candidate narrowing needs a magic threshold on the length of the preceding
- *   hex run, and each one either re-breaks the false-positive corpus in
- *   scripts/ci/__tests__/deploy-retry.test.mjs (which pins
- *   `abcdef11111111-2222-…` — a genuine 14-hex first group — as text that must
- *   survive byte-for-byte) or is tuned to that fixture rather than to a rule.
+ *   with residual 2. That trade is kept HERE for SCOPE, not because narrowing is
+ *   impossible — an earlier draft of this paragraph claimed "every candidate
+ *   narrowing needs a magic threshold on the length of the preceding hex run",
+ *   and that universal is false. Measured against this exact pattern, with every
+ *   fixture read as DATA out of scripts/ci/__tests__/deploy-retry.test.mjs:
+ *   DELETING the lookbehind introduces no threshold of any kind, and it closes
+ *   3 of the 5 residual-2 cases pinned there — `f<guid>`, `abcdef<guid>` and
+ *   `uami-loom-directlake<guid>`. The 2 it leaves (`<guid>f`, `<guid>abc`) are
+ *   the LOOKAHEAD's cost and are untouched by it. Its price is exactly 1 of the
+ *   9 false-positive corpus rows: `abcdef11111111-2222-…`, a 14-hex first group.
+ *
+ *   That row is NOT independent evidence against narrowing, because the change
+ *   that wrote this paragraph also added it — it is absent from the merge base
+ *   608a36af and present here. Citing a fixture you introduced as the obstacle
+ *   you cannot move is circular. So the honest statement is the narrow one:
+ *   narrowing has a measured benefit (3 of 5) and a measured cost (one corpus
+ *   row, which would have to be re-argued as a genuine non-GUID or dropped), and
+ *   it is a BEHAVIOUR change to a redactor rather than a comment fix — so it is
+ *   left to its own change with its own review rather than settled in passing.
+ *
  *   Both residuals are pinned by their own named tests, so neither can drift
  *   back into being an unstated assumption.
  */

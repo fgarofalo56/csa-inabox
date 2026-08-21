@@ -105,10 +105,25 @@
  *
  *   Redacting one interpolation and leaving the one beside it raw IS the
  *   field-by-field defect this whole change exists to delete. So there is no
- *   per-variable redaction left in this file: formatStdout() below is the single
- *   boundary every byte of stdout crosses, exactly as formatAnnotation() is for
- *   scripts/ci/deploy-retry.mjs, and the raw values are interpolated freely
- *   because nothing downstream of the boundary can publish them unredacted.
+ *   per-variable redaction left on the STDOUT path: formatStdout() below is the
+ *   single boundary every byte of stdout crosses — this file writes to stdout in
+ *   exactly one place, inside emit(), and that call goes through formatStdout()
+ *   — exactly as formatAnnotation() is for scripts/ci/deploy-retry.mjs, and the
+ *   raw values are interpolated freely because nothing downstream of the boundary
+ *   can publish them unredacted. The issue path has the same shape:
+ *   buildIssueBody() redacts the assembled body once at its return, and
+ *   notifyFailure() redacts the title and the body once more at the poster.
+ *
+ *   ONE per-site redact() call remains, DELIBERATELY, and it is on neither of
+ *   those paths: main().catch() at the bottom of this file writes `e.message` to
+ *   STDERR, which is published in this repo's Actions logs and sits outside every
+ *   boundary named above. There is no boundary function to route it through — it
+ *   is the last statement before the process exits — so it redacts at the site,
+ *   with its reason stated there. That is the complete list: five redact() call
+ *   sites, four of them boundary calls (buildIssueBody's return; the poster's
+ *   title and body; formatStdout) and that one disclosed exception. An earlier
+ *   draft of this paragraph said "no per-variable redaction left in this file",
+ *   unqualified, which the handler below falsifies — do not restore it.
  *
  * USAGE (from a workflow `if: failure()` step)
  *   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
