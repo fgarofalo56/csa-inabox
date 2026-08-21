@@ -52,6 +52,7 @@ import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
 import { listAccessibleWorkspaces } from '@/lib/auth/workspace-access';
 import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -184,9 +185,7 @@ async function resolveStragglers(
 const b64urlEncode = (s: string) => Buffer.from(s, 'utf-8').toString('base64url');
 const b64urlDecode = (s: string) => Buffer.from(s, 'base64url').toString('utf-8');
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
   const sp = new URL(req.url).searchParams;
   // Accept either repeated `?type=A&type=B` (legacy callers) OR a single
   // comma-separated `?types=A,B`. The comma-separated form is preferred
@@ -287,4 +286,4 @@ export async function GET(req: NextRequest) {
   }
   owned.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
   return NextResponse.json({ ok: true, items: owned, ...(continuation ? { continuation } : {}) });
-}
+});

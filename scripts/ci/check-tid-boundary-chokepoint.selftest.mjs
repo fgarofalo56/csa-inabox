@@ -32,6 +32,24 @@
  * verifies byte-for-byte that the tree is back. Run it from the repo root:
  *
  *     node scripts/ci/check-tid-boundary-chokepoint.selftest.mjs
+ *
+ * WHY IN PLACE, AND WHAT THAT COSTS. Section 10 scans `apps/fiab-console/{app,lib}`
+ * by path relative to the repo root, and the pins are keyed on those paths — so
+ * the subject cannot be a copy without copying the console. The mutation window
+ * is therefore real, and it is bounded three ways: a `finally`, SIGINT/SIGTERM/
+ * uncaughtException handlers that restore before exiting, and a byte-for-byte
+ * verification afterwards that FAILS LOUDLY if the tree is not back. Nothing
+ * survives SIGKILL; if that happens, `git checkout --` the two files named at the
+ * top of this file.
+ *
+ * IT IS DELIBERATELY NOT A `node:test` SUITE. `check-node-test-suites.mjs`
+ * discovers `__tests__/*.test.mjs` and runs suites CONCURRENTLY in separate
+ * processes, where an in-place mutation window can be observed by a concurrent
+ * working-tree check. Measured: this file is absent from that runner's 124-suite
+ * discovery list. It is invoked as its OWN step in
+ * `.github/workflows/loom-guardrails.yml`, next to the guard it tests — which is
+ * also what `check-ci-guard-reachability.mjs` requires, since a control no
+ * workflow runs proves nothing (that gate caught this file on its first push).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -84,6 +102,36 @@ function measureConsolidation(guardSrc, siteSrc) {
 
 const guardBefore = read(GUARD);
 const siteBefore = read(SITE);
+
+/**
+ * Restore on the way out, however we leave. `finally` covers a thrown error; a
+ * SIGINT/SIGTERM (a cancelled CI job, a Ctrl-C) would otherwise leave two
+ * TRACKED files mutated on disk, which is the hazard that makes in-place
+ * mutation worth guarding rather than assuming.
+ */
+let restored = false;
+function restoreTree() {
+  if (restored) return;
+  restored = true;
+  try {
+    writeFileSync(GUARD, guardBefore);
+    writeFileSync(SITE, siteBefore);
+  } catch (e) {
+    console.error(`[selftest] RESTORE THREW — run: git checkout -- ${GUARD} ${SITE}`, e);
+  }
+}
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    restoreTree();
+    console.error(`[selftest] ${sig} — tracked files restored; exiting.`);
+    process.exit(130);
+  });
+}
+process.on('uncaughtException', (e) => {
+  restoreTree();
+  console.error('[selftest] uncaught exception — tracked files restored.', e);
+  process.exit(1);
+});
 
 for (const [label, hay, needle] of [
   ['site import anchor', siteBefore, IMPORT_ANCHOR],
