@@ -448,6 +448,16 @@
         "signalId": "config.version-allowed-set-empty",
         "retryable": false
       }
+    },
+    {
+      "name": "transient — PostgreSQL flexible server not Entra-operable, verbatim leaf",
+      "source": "deploy-fiab-commercial run 32341450273, 2026-08-20T06:52Z (schedule, sha 043c1aa3), centralus — the leaf that classified unknown and took the whole scheduled deploy down on attempt 1 (#3817)",
+      "input": "AadAuthOperationCannotBePerformedWhenServerIsNotAccessible: Server 'psql-loom-weave-default-k6mvh5sm6z7do' is not in an accessible state to perform a Microsoft Entra authentication principal operation. Make sure that the server is in an accessible before executing any Microsoft Entra authentication principal operation. [Microsoft.DBforPostgreSQL/flexibleServers/administrators 'psql-loom-weave-default-k6mvh5sm6z7do/<console-uami-object-id>']",
+      "expect": {
+        "class": "transient",
+        "signalId": "transient.postgres-entra-admin-server-not-accessible",
+        "retryable": true
+      }
     }
   ]
 }

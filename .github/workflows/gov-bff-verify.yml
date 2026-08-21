@@ -50,6 +50,26 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     steps:
+      # This job ran WITHOUT a checkout until 2026-08-21. Every step used `az`
+      # or node `fetch`, so nothing needed the repo on disk — until "Resolve
+      # automation identity" was added by 416e64a4 (#3395) on 2026-08-13 and
+      # invoked `scripts/ci/resolve-automation-oid.mjs` from an empty
+      # workspace. It has failed on `Cannot find module` for 18 consecutive
+      # runs since 049349a9 (#3745) gave Gov its workflow_run trigger, i.e.
+      # every Gov roll since 2026-08-18. Last green: 2026-07-24, before that
+      # step existed. Not a required context, so nothing surfaced it.
+      #
+      # NOTE: actionlint CANNOT catch this class — `main` lints clean with the
+      # checkout missing. Only the run log shows it.
+      #
+      # DO NOT add `ref:` here. This job runs on `workflow_run` and holds Gov
+      # secrets; `ref: ${{ github.event.workflow_run.head_sha }}` would make it
+      # execute checked-out code from an arbitrary triggering commit alongside
+      # those secrets. The default ref (the base branch) is the safe one, and
+      # the 5 sibling workflows that invoke this same script all rely on it.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2
         with:
