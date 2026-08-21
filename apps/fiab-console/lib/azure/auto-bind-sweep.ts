@@ -61,9 +61,47 @@
  * `session` is REQUIRED on {@link SweepOptions} for the same reason
  * `WorkspaceAccessOpts` is required on the resolver: a boundary that a caller
  * can switch off by omitting an argument reads as enforced and is not. A future
- * scheduler (the ACA Job the route's docblock describes) has to supply a caller
- * identity too — "there was nobody to attribute it to" is not a licence to
- * enumerate and rewrite every tenant's items.
+ * scheduler (the ACA Job the route's docblock describes, tracked in #3832) has
+ * to supply a caller identity too — "there was nobody to attribute it to" is
+ * not a licence to enumerate and rewrite every tenant's items.
+ *
+ * ## A CALLER-CHOSEN SCOPE is resolved BEFORE the query, and refused as NOT-FOUND
+ *
+ * The per-row filter above drops rows and reports how many it dropped, and
+ * {@link SweepResult.excludedByAccess} defends that count on the grounds that
+ * naming the rows would be the disclosure the filter prevents. THAT REASONING
+ * HOLDS ONLY WHILE THE COUNT IS INCIDENTAL — a by-product of whatever page
+ * happened to load. When the CALLER picks the scope it is not incidental; it is
+ * an answer to a question they asked. Measured on the pre-fix tree, as a tenant
+ * admin in one Entra tenant against a workspace in another holding five items:
+ *
+ *     POST { workspaceId: '<a guid from another tenant>', itemTypes: ['…'] }
+ *     -> {"dryRun":true,"scanned":0,"excludedByAccess":5,
+ *         "excludedByWriteAccess":0,"byDisposition":{},"rows":[],
+ *         "truncated":false}
+ *     …and the loader was called with that workspaceId, so the foreign id
+ *     reached the parameterized Cosmos predicate.
+ *
+ * `excludedByAccess` was therefore a CARDINALITY ORACLE: it said the workspace
+ * exists and how many sweepable items it holds, narrowable one item type at a
+ * time. Ids and names never appeared — and did not need to. Same class as
+ * #3823/#3824, and reintroduced by the very field added to make the filter
+ * honest.
+ *
+ * The repo already states the answer verbatim in `lib/api/route-toolkit.ts:113`
+ * — 404 not 403, "so an id can't be probed for existence across tenants". So
+ * when `opts.workspaceId` is supplied it is resolved through the SAME
+ * `resolveWorkspaceAccessByOid` BEFORE any query is issued, and a `null`
+ * resolution throws {@link SweepScopeError}, which the route answers 404. No
+ * count, no scan envelope, and a message identical for "does not exist" and
+ * "exists in a tenant you cannot see".
+ *
+ * This is a SECOND check, never a replacement: the per-row filter still runs
+ * over every row of every page, so a scope the caller can reach is not a licence
+ * to act on rows within it that they cannot. With NO `workspaceId` the behaviour
+ * is deliberately unchanged — the tenant-wide sweep's count is genuinely
+ * incidental, it is the honest signal that `scanned` is not "everything the
+ * query found", and it stays.
  *
  * ## A LIVE pass additionally requires `canWrite`
  *
@@ -231,6 +269,23 @@ export interface SweepResult {
    * would be the cross-tenant disclosure the filter exists to prevent. Reported
    * rather than silently discarded so `scanned` is never read as "everything the
    * query found".
+   *
+   * THAT DEFENCE IS CONDITIONAL, AND THE CONDITION IS ENFORCED ELSEWHERE. A
+   * count is safe because it is INCIDENTAL — a by-product of whatever page
+   * happened to load, which the caller did not choose. It stops being safe the
+   * moment the caller chooses the scope, because then the count is an answer:
+   * pre-fix, `{workspaceId:'<a foreign guid>'}` came back `excludedByAccess:5,
+   * rows:[]`, which says the workspace exists and holds five sweepable items,
+   * narrowable per `itemTypes`. The rows were never named and never needed to be
+   * — the number was the disclosure.
+   *
+   * So the invariant this field relies on is upheld by {@link sweepAutoBind}:
+   * a supplied {@link SweepOptions.workspaceId} is resolved against the caller's
+   * access BEFORE the query and a refusal throws {@link SweepScopeError} (404,
+   * no envelope), so no value of this field is ever an answer about a scope the
+   * caller cannot reach. Read the two together — this comment is not
+   * self-supporting, and asserting it as though it were is what let the oracle
+   * in.
    */
   excludedByAccess: number;
   /**
@@ -268,9 +323,18 @@ export interface SweepResult {
    * therefore why it is sealed. See the module docblock; returning it verbatim
    * was a cross-tenant identifier leak.
    *
-   * Absent on a `deadline` truncation that got through nothing at all: there is
-   * no progress to record, and the correct next call is the SAME cursor with a
-   * fresh budget.
+   * Absent only on a FIRST pass — one the caller sent no `cursor` with — that a
+   * `deadline` truncation cut before it processed anything: there is genuinely
+   * no position to record, and the correct next call is the same (cursor-less)
+   * request with a fresh budget.
+   *
+   * On a RESUMED pass that got through nothing it is PRESENT, and encodes the
+   * position the caller sent: `advancedTo` is initialised to the unsealed
+   * cursor, so the same point is re-sealed and handed back rather than dropped.
+   * That is deliberate — the alternative loses the operator's place and makes
+   * the next call re-scan (and, live, re-write) ground already covered. The
+   * token is a fresh ciphertext each time (a random IV per seal), so it will not
+   * be byte-equal to the one that was sent; only the position it encodes is.
    */
   nextCursor?: string;
 }
@@ -285,7 +349,16 @@ export interface SweepOptions {
    * argument out is the exact shape of #2703. See the module docblock.
    */
   session: SessionPayload;
-  /** Restrict to one workspace. Omitted → every workspace the CALLER can see. */
+  /**
+   * Restrict to one workspace. Omitted → every workspace the CALLER can see.
+   *
+   * CALLER-CHOSEN, therefore RESOLVED FIRST. When supplied, the caller's access
+   * to THIS workspace is resolved before any query runs and a `null` resolution
+   * throws {@link SweepScopeError} — because a scoped result's
+   * {@link SweepResult.excludedByAccess} would otherwise answer "does this
+   * workspace exist, and how much does it hold?" for any id the caller cares to
+   * name. See the module docblock.
+   */
   workspaceId?: string;
   /** Restrict to specific item types. Omitted → every type a provider claims. */
   itemTypes?: readonly string[];
@@ -348,6 +421,60 @@ export class SweepCursorError extends Error {
 }
 
 /**
+ * A caller-CHOSEN sweep scope the caller cannot reach.
+ *
+ * Thrown when {@link SweepOptions.workspaceId} is supplied and
+ * `resolveWorkspaceAccessByOid` returns null for it — the workspace does not
+ * exist, is in another Entra tenant, or is one the caller holds no role on. The
+ * three are DELIBERATELY INDISTINGUISHABLE, in the class, the status code and
+ * the message.
+ *
+ * WHY 404 AND NOT 403. `lib/api/route-toolkit.ts:113` states the repo's rule in
+ * as many words — answer not-found "so an id can't be probed for existence
+ * across tenants". A 403 concedes the workspace exists; so, more quietly, does
+ * a 200 carrying `excludedByAccess:5`. Both are the same disclosure, and the
+ * second one is the shape that shipped: the count told a tenant admin who knew
+ * a workspace guid in another tenant that it existed and how many sweepable
+ * items it held, narrowable by `itemTypes`.
+ *
+ * Typed, like {@link SweepCursorError}, so the route can map it to its own
+ * status with `apiHonestError` rather than genericizing it into a 500 — and so
+ * the branch is `instanceof`-checkable rather than string-matched.
+ *
+ * The message is honest under `deploy-integrity.md` R7 BECAUSE it is a
+ * disjunction: it never asserts the workspace is missing (this code did not
+ * establish that) and never asserts it belongs to someone else (nor that). It
+ * states exactly what was established — the caller cannot reach it — and says
+ * plainly that Loom does not distinguish the causes, so the silence is
+ * disclosed rather than pretended.
+ *
+ * The resolver's own richer refusal (`WorkspaceAccessDenial`, e.g. the #3823
+ * `tenant_unconfirmed` case) is deliberately NOT surfaced here: it would
+ * confirm the workspace was read, which is the fact being withheld. It is still
+ * logged server-side by the resolver, so it is not lost — only not told to the
+ * caller.
+ */
+export class SweepScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SweepScopeError';
+  }
+}
+
+/**
+ * The refusal a caller sees for a scope they cannot reach.
+ *
+ * A CONSTANT, not a template. Any per-case variation — naming the workspace,
+ * distinguishing "absent" from "forbidden", counting anything — reopens the
+ * oracle through the error path instead of the success path.
+ */
+const SCOPE_REFUSAL =
+  'That workspace is not in scope for this sweep — it does not exist in this deployment, or your '
+  + 'account has no access to it. Loom deliberately does not say which, so a workspace id cannot be '
+  + 'probed for existence across tenants. Re-run with no `workspaceId` to sweep every workspace you '
+  + 'can see, or check the id on the workspaces list.';
+
+/**
  * Seal a raw Cosmos id into the opaque token that leaves the process.
  *
  * `encryptAtRest` is `lib/auth/session`'s existing AES-256-GCM helper — the one
@@ -384,6 +511,25 @@ export async function unsealSweepCursor(token: string, session: SessionPayload):
   const { decryptAtRest } = await import('@/lib/auth/session');
   const plain = decryptAtRest(token);
   if (plain === null) {
+    // R7 — SAY ONLY WHAT WAS ESTABLISHED. `decryptAtRest` returns null for TWO
+    // causes, not one: a failed GCM tag, and `getAtRestKey()` throwing because
+    // SESSION_SECRET is absent or empty (its own `catch` flattens that into the
+    // same null). A single message naming only the first asserted a fact about
+    // the TOKEN in a case where the token was never even compared — the key was
+    // not derivable, so nothing about it was checked at all.
+    //
+    // Unreachable through the route today (`withSession` 401s before this runs,
+    // and resolving a session already needs SESSION_SECRET), but reachable for
+    // the ACA-Job caller the route's docblock proposes (#3832), which has no
+    // cookie to 401 on — and that caller is precisely the one with nobody
+    // watching to notice the message was wrong.
+    if (!process.env.SESSION_SECRET) {
+      throw new SweepCursorError(
+        'The resume cursor could not be authenticated because this process has no SESSION_SECRET '
+        + 'configured — the key that seals a cursor was never derivable here, so nothing about the '
+        + 'token itself was established. Set SESSION_SECRET on this deployment (it is the same secret '
+        + 'the session cookie already requires) and re-run the sweep.');
+    }
     throw new SweepCursorError(
       'The resume cursor could not be authenticated — it was altered, truncated, or issued by a different '
       + 'deployment. Re-run the sweep with no cursor to start a fresh pass from the beginning.');
@@ -774,6 +920,38 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   const rawCursor = opts.cursor === undefined
     ? undefined
     : await unsealSweepCursor(opts.cursor, opts.session);
+
+  // SECOND, and still before any item query, any provider work and any count:
+  // a CALLER-CHOSEN scope is resolved against the caller's own access to it.
+  //
+  // The per-row filter further down is the enforcement point for what may be
+  // reported or written, and it stays — but it runs AFTER the query, so with a
+  // caller-supplied `workspaceId` it produced a scoped `excludedByAccess`, and
+  // that number answers "does this workspace exist, and how many sweepable
+  // items does it hold?" for any guid the caller cares to name. Measured
+  // pre-fix: 5 items in another tenant's workspace came back as
+  // `excludedByAccess:5, rows:[]`, and the foreign id reached the Cosmos
+  // predicate. `route-toolkit.ts:113` states the repo's answer verbatim — 404
+  // not 403, "so an id can't be probed for existence across tenants".
+  //
+  // Note this runs even when `loadItems` is injected, for the same reason
+  // `scopeToCallerAccess` lives here rather than in `loadSweepItems`: a test
+  // seam must not be a way around a boundary.
+  //
+  // Deliberately NOT gated on `dryRun`. Existence is disclosed by a read, so a
+  // dry-run leaks exactly as much as a live pass does.
+  if (opts.workspaceId !== undefined) {
+    const scope = await resolveWorkspaceAccessByOid(
+      opts.session.claims.oid,
+      opts.workspaceId,
+      await accessOptsForCaller(opts.session),
+    );
+    // No `canWrite` check here on purpose: this gate is about DISCLOSURE, and a
+    // caller who can read the workspace already knows it exists. Whether they
+    // may WRITE to rows inside it is still decided per row by
+    // `scopeToCallerAccess`, and reported as `excludedByWriteAccess`.
+    if (scope === null) throw new SweepScopeError(SCOPE_REFUSAL);
+  }
 
   const providers = opts.providers ?? AUTO_BIND_PROVIDERS;
   const now = opts.now ?? (() => Date.now());

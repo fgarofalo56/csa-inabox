@@ -80,6 +80,49 @@
  *   expected '{…,"truncated":true,"truncatedBy":"limit","nextCursor":"id-a2"}'
  *            not to contain 'id-a2'
  *
+ * ── 2026-08-21 ROUND 5 — the CALLER-CHOSEN scope, and the cursor-resumed page.
+ *    Round 2 sealed the cursor; the count next to it was still an oracle when
+ *    the caller picked the scope. Baseline 72 + 29 = 101 green; all nine below
+ *    CAUGHT, all nine at 101 executed, every restore sha256-verified against
+ *    the pre-mutation bytes.
+ *
+ * A FLAKE WAS FOUND AND FIXED IN THE PROOF ITSELF, which is worth recording
+ * because it is the same class as everything else in this ledger. The round-2
+ * tamper technique — flip the last base64url character — does NOT reliably
+ * corrupt anything: base64url packs 3 bytes per 4 characters, so at a byte
+ * length of 2 (mod 3) the final character's low bits are padding and the
+ * decoded bytes come back identical. Measured: 4 of 64 possible final
+ * characters for a 65-byte token, ~6% of runs, and the IV is random per seal so
+ * every run re-rolls. The round-2 spec escaped it only because its fixture id
+ * is one character longer (66 bytes, 0 of 64). Both now corrupt a byte inside
+ * the GCM tag via {@link tamper}, and a 200-iteration control asserts the
+ * corruption is real rather than assuming it.
+ *
+ *   R5a  the `workspaceId` pre-resolve deleted (the defect itself)  → 4 RED
+ *   R5b  the refusal downgraded to an empty RESULT instead of a
+ *        throw — i.e. "return a zero count" rather than not-found   → 4 RED
+ *   R5c  the pre-resolve gated on `!opts.dryRun`, so a read-only
+ *        probe still answers the cardinality question               → 4 RED
+ *   R5d  the refusal message made per-case (names the workspace),
+ *        reopening the probe through the ERROR path                 → 2 RED
+ *   R5e  the route answers 403 instead of 404                       → 2 RED
+ *   R5f  `scopeToCallerAccess` bypassed ONLY when a cursor was
+ *        supplied — the reviewer's needle, which passed 85/85       → 1 RED
+ *   R5g  `advancedTo` no longer initialised to `rawCursor`, so a
+ *        deadline-cut RESUMED pass loses the operator's place       → 1 RED
+ *   R5h  the SESSION_SECRET probe collapsed, so an unconfigured
+ *        deployment is told its token was "altered, truncated"      → 1 RED
+ *   R5i  `scopeToCallerAccess` neutered outright (round-2 B2a,
+ *        re-proved on this tree so R5f's needle site is known live) → 12 RED
+ *
+ * R5f is the one worth reading twice. The shipped filter was ALREADY correct
+ * and unconditional; the suite simply could not see it, because every fixture
+ * that resumes puts the CALLER'S OWN rows on page 2 (`crowdedPage()` resumes
+ * onto `['id-b1']`, ours; the `describe('the cursor')` fixture is `id-1..id-5`,
+ * all ours). The one page on which the filter could stop running silently was
+ * the one page no spec ever put a foreign row on — the same blind spot NEW1
+ * had, one page further along.
+ *
  * The earlier set, RE-PROVED after the paging restructure — which moved the
  * access filter from a page-filter to a per-row decision and could have blinded
  * them:
@@ -170,7 +213,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 // fast-path, so the shared-access path is off unless a test arms it.
 vi.mock('@/lib/azure/workspace-roles-client', () => ({ resolveEffectiveRole: vi.fn() }));
 
-import { sweepAutoBind, sweepableItemTypes, unsealSweepCursor, SweepCursorError, type SweepRow } from '@/lib/azure/auto-bind-sweep';
+import { sweepAutoBind, sweepableItemTypes, unsealSweepCursor, SweepCursorError, SweepScopeError, type SweepRow } from '@/lib/azure/auto-bind-sweep';
 import { readAutoBindRecord, type AutoBindProvider } from '@/lib/azure/auto-bind';
 import { AUTO_BIND_PROVIDERS } from '@/lib/azure/auto-bind-providers';
 import { authoredContent } from '@/lib/azure/auto-bind-seed';
@@ -202,6 +245,35 @@ process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'auto-bind-sweep-spec
 const unseal = (token: string | undefined, session: SessionPayload = SESSION) => {
   expect(token).toBeDefined();
   return unsealSweepCursor(token!, session);
+};
+
+/**
+ * Corrupt a sealed token so the GCM tag MUST reject it.
+ *
+ * Flips a bit inside the authentication tag of the DECODED bytes, rather than
+ * editing the base64url TEXT — because editing the text does not reliably
+ * corrupt anything. base64url packs 3 bytes into 4 characters, so when the byte
+ * length is 2 (mod 3) the FINAL character carries only 4 significant bits and
+ * its low 2 bits are pure padding: flipping it can leave the decoded bytes
+ * byte-identical, in which case the "tampered" token unseals perfectly and the
+ * spec passes having tested nothing.
+ *
+ * Not hypothetical — measured during the round-5 mutation proof, where it made
+ * a spec fail ~6% of runs for a reason unrelated to the code under test. For a
+ * 65-byte token (37-byte plaintext -> 87 chars) FOUR of the 64 possible final
+ * characters make a last-character flip a no-op; for a 66-byte one (88 chars,
+ * the shape the round-2 spec happens to produce) ZERO do. So the older spec was
+ * correct only by the coincidence that its fixture id is one character longer,
+ * and would have become a 1-in-16 flake the moment anyone renamed it. Both use
+ * this helper now.
+ *
+ * Byte 20 is inside the 16-byte tag (iv 0..11, tag 12..27), so every call is a
+ * genuine corruption of a byte the tag check must notice.
+ */
+const tamper = (token: string): string => {
+  const raw = Buffer.from(token, 'base64url');
+  raw[20] ^= 0xff;
+  return raw.toString('base64url');
 };
 
 
@@ -327,6 +399,18 @@ function register(items: readonly WorkspaceItem[]) {
 
 /** Every doc in the fake store, as FRESH objects — what a later pass re-reads. */
 const reread = async (): Promise<WorkspaceItem[]> => [...docStore.values()].map(clone);
+
+/**
+ * A workspace the CALLER owns, with no items in it.
+ *
+ * Needed wherever a spec supplies `workspaceId` without registering items:
+ * a caller-chosen scope is resolved through `resolveWorkspaceAccessByOid`
+ * BEFORE the query, so an id that is in no store resolves to null and the sweep
+ * refuses it — which is the point of that check, and would silently turn an
+ * unrelated spec into an assertion about the refusal path.
+ */
+const ourWorkspace = (id: string) =>
+  wsStore.set(id, { id, tenantId: CALLER_OID, tid: CALLER_TID, name: id });
 
 /** Run the sweep over a fixed item list, bypassing the Cosmos ENUMERATION. */
 function sweep(items: WorkspaceItem[], o: Partial<Parameters<typeof sweepAutoBind>[0]> = {}) {
@@ -542,9 +626,9 @@ describe('a workspace in another Entra tenant is out of scope', () => {
       dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
     });
 
-    // Flip one character of the sealed blob — the GCM tag must catch it.
-    const token = p1.nextCursor!;
-    const tampered = token.slice(0, -1) + (token.endsWith('A') ? 'B' : 'A');
+    // Corrupt a byte inside the GCM tag — the tag check must catch it. NOT a
+    // last-character edit: see {@link tamper} for why that silently no-ops.
+    const tampered = tamper(p1.nextCursor!);
 
     const calls: unknown[] = [];
     await expect(sweepAutoBind({
@@ -557,6 +641,31 @@ describe('a workspace in another Entra tenant is out of scope', () => {
     // unfiltered, cursor-less query and silently re-scan (in live mode,
     // re-write) the whole estate. Nothing was queried at all.
     expect(calls).toEqual([]);
+  });
+
+  it('and the TAMPER itself is real every time — the control on the control', async () => {
+    // The spec above is only as good as its corruption, and the obvious
+    // corruption is not good: editing the last base64url character leaves the
+    // decoded bytes UNCHANGED whenever the byte length is 2 (mod 3), because
+    // that character's low bits are padding. Measured during the round-5
+    // mutation proof — 4 of the 64 possible final characters, ~6% of runs, a
+    // token that unseals perfectly and a spec that passes having tested nothing.
+    //
+    // The IV is random per seal, so this is a fresh dice roll on every run and
+    // could not be pinned by a single example. 200 freshly-sealed tokens is.
+    theirWorkspace(FOREIGN_TID);
+    const loadItems = crowdedPage();
+
+    for (let i = 0; i < 200; i += 1) {
+      const p = await sweepAutoBind({
+        dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+      });
+      const token = p.nextCursor!;
+      const bad = tamper(token);
+      // The property that actually failed: different TEXT is not enough.
+      expect(Buffer.from(bad, 'base64url').equals(Buffer.from(token, 'base64url'))).toBe(false);
+      await expect(unsealSweepCursor(bad, SESSION)).rejects.toThrow(SweepCursorError);
+    }
   });
 
   it('a cursor minted in ANOTHER tenant is refused, though it decrypts perfectly', async () => {
@@ -670,6 +779,255 @@ describe('a workspace in another Entra tenant is out of scope', () => {
     expect(result.rows).toEqual([]);
     expect(result.excludedByAccess).toBe(1);
     expect(plane.createCalls).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // …AND ON A CURSOR-RESUMED PAGE (#3808 review round 5)
+  //
+  // The shipped filter is UNCONDITIONAL — `scopeToCallerAccess` runs on every
+  // page — and the suite could not see it. A mutation that bypasses the filter
+  // ONLY when a cursor was supplied passed all 85 specs, because every fixture
+  // that resumes puts the CALLER'S OWN rows on page 2: `crowdedPage()` above
+  // resumes onto `['id-b1']` (ours), and the whole `describe('the cursor')`
+  // fixture is `id-1..id-5`, all ours. So the ONE page where the filter could
+  // silently stop running was the one page no spec ever put a foreign row on.
+  //
+  // Same failure shape as the truncation gap round 2 found: a property the
+  // suite read as covered, over an input it never constructed.
+  //
+  // Ordering is the whole fixture. The caller owns `id-1`/`id-2`; `id-3` lives
+  // in `ws-theirs`; `limit:2` therefore lands the foreign row strictly AFTER
+  // the cursor, which is the only arrangement that can discriminate.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Three ordered rows, the third owned by `lateWorkspaceId`, paged the way
+   * Cosmos pages: `ORDER BY c.id`, resumed strictly after `cursor`.
+   */
+  const pageWithLateRow = (lateWorkspaceId: string) => {
+    const ours = [1, 2].map((n) =>
+      item({ displayName: `Ours-${n}`, id: `id-${n}`, state: gatedInstallState() }));
+    const late = item({
+      displayName: 'Late-ETL', id: 'id-3', workspaceId: lateWorkspaceId, state: gatedInstallState(),
+    });
+    register(ours);
+    const all = [...ours, late];
+    return async (o: { limit: number; cursor?: string }) =>
+      [...all].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .filter((i) => (o.cursor ? i.id > o.cursor : true))
+        .slice(0, o.limit).map(clone);
+  };
+
+  /** Sweep page 1, assert it landed on the caller's own rows, return the cursor. */
+  const firstPage = async (loadItems: ReturnType<typeof pageWithLateRow>) => {
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+    });
+    // If this ever stops holding, the fixture no longer puts the foreign row on
+    // page 2 and the spec below is asserting about page 1 all over again.
+    expect(p1.rows.map((r) => r.itemId)).toEqual(['id-1', 'id-2']);
+    expect(p1.truncated).toBe(true);
+    expect(p1.nextCursor).toBeDefined();
+    return p1.nextCursor;
+  };
+
+  it('is excluded on a CURSOR-RESUMED page too, not only on the first one', async () => {
+    theirWorkspace(FOREIGN_TID);
+    const loadItems = pageWithLateRow(FOREIGN_WS);
+
+    const p2 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+      cursor: await firstPage(loadItems),
+    });
+
+    expect(p2.rows).toEqual([]);
+    // The load-bearing count: it proves the row WAS on page 2 and WAS dropped.
+    // Without it, `rows: []` would also be satisfied by a cursor that resumed
+    // onto nothing at all.
+    expect(p2.excludedByAccess).toBe(1);
+    // …and page 2 names it no more than page 1 would have.
+    const body = JSON.stringify(p2);
+    expect(body).not.toContain('id-3');
+    expect(body).not.toContain('Late-ETL');
+    expect(body).not.toContain(FOREIGN_WS);
+  });
+
+  it('but the same LATE row IS swept when it is in the caller\'s tenant — the control', async () => {
+    // One field apart from the spec above (`ws-1` instead of `ws-theirs`), so
+    // neither can be satisfied by a resumed pass that returns nothing at all.
+    const loadItems = pageWithLateRow('ws-1');
+
+    const p2 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+      cursor: await firstPage(loadItems),
+    });
+
+    expect(p2.rows.map((r) => r.itemId)).toEqual(['id-3']);
+    expect(p2.excludedByAccess).toBe(0);
+  });
+});
+
+// ===========================================================================
+// A CALLER-CHOSEN SCOPE IS RESOLVED BEFORE THE QUERY (#3808 review round 5)
+//
+// `excludedByAccess` is documented as safe because it is a COUNT and naming the
+// rows would be the disclosure the filter prevents. That reasoning holds only
+// while the count is INCIDENTAL to whatever page happened to load. When the
+// CALLER picks the scope it is not incidental — it is an answer to a question
+// the caller asked.
+//
+// Measured on the pre-fix tree, as a tenant admin in `tid-alpha`, against a
+// workspace in `tid-beta` holding five items:
+//
+//   POST { workspaceId: 'ws-theirs', itemTypes: ['fake-item'] }
+//   -> { "dryRun":true, "scanned":0, "excludedByAccess":5, "rows":[] }
+//   …and `loadItems` was called with workspaceId='ws-theirs', so the foreign id
+//   reached the Cosmos predicate.
+//
+// `excludedByAccess` is then a cardinality oracle: it says the workspace EXISTS
+// and how many sweepable items it holds, narrowable per `itemTypes`. Same class
+// as #3823/#3824, and the repo already states the answer verbatim in
+// `lib/api/route-toolkit.ts:113` — 404 not 403, "so an id can't be probed for
+// existence across tenants".
+//
+// So a supplied `workspaceId` is resolved through the SAME resolver first, and
+// a refusal is a not-found with no count at all. The tenant-wide sweep (no
+// `workspaceId`) is deliberately unchanged — see the last spec in this block.
+// ===========================================================================
+describe('a caller-chosen workspaceId', () => {
+  const FOREIGN_WS = 'ws-theirs';
+  const OTHER_OWNER = 'oid-someone-else';
+  let priorAdminOid: string | undefined;
+
+  beforeEach(() => {
+    // The live shape: this route is admin-gated. With the bypass ON, the tid
+    // comparison is the only thing between the caller and every workspace in
+    // the container — which is exactly the position the oracle exploited.
+    priorAdminOid = process.env.LOOM_TENANT_ADMIN_OID;
+    process.env.LOOM_TENANT_ADMIN_OID = CALLER_OID;
+  });
+  afterEach(() => {
+    if (priorAdminOid === undefined) delete process.env.LOOM_TENANT_ADMIN_OID;
+    else process.env.LOOM_TENANT_ADMIN_OID = priorAdminOid;
+  });
+
+  /** `n` items in `ws`, so a surviving count would be a cardinality answer. */
+  const itemsIn = (ws: string, n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      item({ displayName: `Theirs-${i + 1}`, id: `id-t${i + 1}`, workspaceId: ws, state: gatedInstallState() }));
+
+  /** Run a scoped sweep, recording whether the loader was reached at all. */
+  const scopedSweep = async (workspaceId: string, rows: WorkspaceItem[], dryRun = true) => {
+    const asked: Array<{ workspaceId?: string }> = [];
+    const run = sweepAutoBind({
+      dryRun, session: SESSION, providers: [seedingProvider()], workspaceId,
+      loadItems: async (o) => { asked.push(o); return rows; },
+    });
+    return { run, asked };
+  };
+
+  it('in ANOTHER tenant is refused outright — no count, and the query is never issued', async () => {
+    wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
+    const { run, asked } = await scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 5));
+
+    await expect(run).rejects.toThrow(SweepScopeError);
+
+    // THE WHOLE FINDING. Pre-fix this resolved to
+    // `{excludedByAccess: 5, rows: []}` and `asked` held the foreign id.
+    expect(asked).toEqual([]);
+  });
+
+  it('carries NO cardinality — 5 items and 1 item are indistinguishable', async () => {
+    // The oracle was never the rows; it was the COUNT. Two foreign workspaces
+    // differing only in how much they hold must produce the same answer.
+    wsStore.set('ws-big', { id: 'ws-big', tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Big' });
+    wsStore.set('ws-small', { id: 'ws-small', tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Small' });
+
+    const big = await scopedSweep('ws-big', itemsIn('ws-big', 5));
+    const small = await scopedSweep('ws-small', itemsIn('ws-small', 1));
+
+    const bigErr = await big.run.then(() => null, (e: Error) => e);
+    const smallErr = await small.run.then(() => null, (e: Error) => e);
+
+    expect(bigErr).toBeInstanceOf(SweepScopeError);
+    expect(smallErr!.message).toBe(bigErr!.message);
+    // …and neither message names a count, an id, or a display name.
+    expect(bigErr!.message).not.toMatch(/\b[15]\b/);
+    expect(bigErr!.message).not.toContain('ws-big');
+    expect(bigErr!.message).not.toContain('Theirs-1');
+  });
+
+  it('that does not EXIST is indistinguishable from one that does — 404, not 403', async () => {
+    // `route-toolkit.ts:113` states the rule the repo already follows: answer
+    // not-found so an id cannot be probed for existence across tenants. If the
+    // two answers ever diverge, the probe is back.
+    wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
+
+    const exists = await scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 3));
+    const absent = await scopedSweep('ws-never-created', []);
+
+    const existsErr = await exists.run.then(() => null, (e: Error) => e);
+    const absentErr = await absent.run.then(() => null, (e: Error) => e);
+
+    expect(existsErr).toBeInstanceOf(SweepScopeError);
+    expect(absentErr).toBeInstanceOf(SweepScopeError);
+    expect(absentErr!.message).toBe(existsErr!.message);
+  });
+
+  it('is refused on the LIVE path too, before anything can be written', async () => {
+    wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
+    const { run, asked } = await scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 2), false);
+
+    await expect(run).rejects.toThrow(SweepScopeError);
+
+    expect(asked).toEqual([]);
+    expect(plane.createCalls).toEqual([]);
+    expect(plane.seedCalls).toEqual([]);
+  });
+
+  it('in the caller\'s OWN tenant sweeps normally — the control', async () => {
+    // One field apart from the refusals above. Without it every spec here would
+    // also pass on a sweep that refuses every `workspaceId` ever supplied,
+    // which would break the scope filter rather than secure it.
+    wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: CALLER_TID, name: 'Theirs, same tenant' });
+    const rows = itemsIn(FOREIGN_WS, 2);
+    register(rows);
+
+    const { run, asked } = await scopedSweep(FOREIGN_WS, rows);
+    const result = await run;
+
+    expect(result.rows.map((r) => r.itemId)).toEqual(['id-t1', 'id-t2']);
+    expect(result.excludedByAccess).toBe(0);
+    // The scope really did reach the query — the refusal is about ACCESS, not
+    // about dropping the parameter.
+    expect(asked).toEqual([{ itemTypes: ['fake-item'], workspaceId: FOREIGN_WS, limit: 201, cursor: undefined }]);
+  });
+
+  it('and a workspace the caller OWNS is unaffected', async () => {
+    // `ws-1` resolves `via:'owner'` on the resolver's fast path, so the common
+    // single-operator case never touches the ACL or the admin bypass at all.
+    plane.objects.set('Ours-ETL', { activities: [] });
+
+    const result = await sweep([item({ displayName: 'Ours-ETL', state: gatedInstallState() })], { workspaceId: 'ws-1' });
+
+    expect(only(result.rows).disposition).toBe('would-repair');
+  });
+
+  it('the TENANT-WIDE sweep still reports its incidental count — no workspaceId, no refusal', async () => {
+    // The count is only an oracle when the CALLER picked the scope. With no
+    // `workspaceId` it is incidental to whatever page loaded, it is the honest
+    // signal that `scanned` is not "everything the query found", and it stays.
+    // A fix that also silenced this one would have broken the disclosure the
+    // access filter exists to make.
+    wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
+
+    const result = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()],
+      loadItems: async () => itemsIn(FOREIGN_WS, 3),
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.excludedByAccess).toBe(3);
   });
 });
 
@@ -1402,6 +1760,89 @@ describe('the cursor', () => {
     expect('nextCursor' in result).toBe(false);
   });
 
+  it('re-seals the SAME position when a deadline cuts a RESUMED pass before any row', async () => {
+    // #3808 review round 5 (N2). The docblock said `nextCursor` is "absent on a
+    // deadline truncation that got through nothing at all". That is true only of
+    // a FIRST pass: `advancedTo` is initialised to the unsealed cursor, so a
+    // resumed pass re-seals its own position and hands it back. The behaviour is
+    // right — losing it would strand the operator on a token they must remember
+    // — and the sentence was wrong, so the sentence now describes THIS.
+    const items = five();
+    register(items);
+    const loadItems = paged(items);
+
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+    });
+    expect(await unseal(p1.nextCursor)).toBe('id-2');
+
+    // [deadline base, first row check] — expired before any row is classified.
+    const ticks = [0, 9_999];
+    let i = 0;
+    const p2 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+      cursor: p1.nextCursor, deadlineMs: 500, now: () => ticks[Math.min(i++, ticks.length - 1)],
+    });
+
+    expect(p2.rows).toEqual([]);
+    expect(p2.truncatedBy).toBe('deadline');
+    // NOT absent. A pass that got through nothing still knows where it started,
+    // and dropping that would make the next call a full re-scan of ground the
+    // operator already covered.
+    expect(p2.nextCursor).toBeDefined();
+    expect(await unseal(p2.nextCursor)).toBe('id-2');
+  });
+
+  // -------------------------------------------------------------------------
+  // THE REFUSAL MESSAGES MUST BE TRUE (deploy-integrity R7)
+  //
+  // `decryptAtRest` returns null for TWO causes, not one: a failed GCM tag, and
+  // `getAtRestKey()` throwing because SESSION_SECRET is absent or empty (its
+  // own `catch` swallows that into the same null). The single message named
+  // only the first — "altered, truncated, or issued by a different deployment"
+  // — asserting a cause the code never established. Unreachable through the
+  // route today (`getSession` 401s first), but reachable for the ACA-Job caller
+  // the docblock proposes (#3832), which has no session cookie to 401 on.
+  // -------------------------------------------------------------------------
+  const withoutSessionSecret = async (fn: () => Promise<void>) => {
+    const prior = process.env.SESSION_SECRET;
+    delete process.env.SESSION_SECRET;
+    try { await fn(); } finally {
+      if (prior === undefined) delete process.env.SESSION_SECRET;
+      else process.env.SESSION_SECRET = prior;
+    }
+  };
+
+  it('says SESSION_SECRET is missing rather than blaming the token for it', async () => {
+    await withoutSessionSecret(async () => {
+      const err = await unsealSweepCursor('any-token-at-all', SESSION).then(() => null, (e: Error) => e);
+
+      expect(err).toBeInstanceOf(SweepCursorError);
+      expect(err!.message).toContain('SESSION_SECRET');
+      // The false claim this replaces. Nothing about the token was established
+      // — the key was never derivable, so it was never even compared.
+      expect(err!.message).not.toContain('altered, truncated');
+    });
+  });
+
+  it('and still blames the TOKEN when the secret IS configured — the control', async () => {
+    // One variable apart. Without this the spec above would also pass on a
+    // module that had collapsed both branches onto the SESSION_SECRET wording,
+    // which would be the same R7 defect pointing the other way.
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 1,
+      loadItems: async () => [item({ displayName: 'x', id: 'id-1' }), item({ displayName: 'y', id: 'id-2' })],
+    });
+    const token = p1.nextCursor!;
+    const tampered = tamper(token);
+
+    const err = await unsealSweepCursor(tampered, SESSION).then(() => null, (e: Error) => e);
+
+    expect(err).toBeInstanceOf(SweepCursorError);
+    expect(err!.message).toContain('altered, truncated');
+    expect(err!.message).not.toContain('SESSION_SECRET');
+  });
+
   it('is threaded into the Cosmos query as an EXCLUSIVE, parameterized predicate', async () => {
     let spec: { query: string; parameters: { name: string; value: unknown }[] } | undefined;
     vi.mocked(itemsContainer).mockResolvedValue({
@@ -1541,6 +1982,11 @@ describe('scope', () => {
   });
 
   it('passes the workspace filter through to the loader', async () => {
+    // A supplied `workspaceId` is now resolved against the caller's access
+    // BEFORE the query (see `describe('a caller-chosen workspaceId')`), so the
+    // scope has to be a workspace the caller can actually reach — otherwise
+    // this would be asserting about a sweep that never got as far as the loader.
+    ourWorkspace('ws-42');
     let seen: string | undefined = 'unset';
     await sweep([], { workspaceId: 'ws-42', loadItems: async (o) => { seen = o.workspaceId; return []; } });
     expect(seen).toBe('ws-42');
@@ -1559,6 +2005,9 @@ describe('loadSweepItems', () => {
       },
     } as never);
 
+    // Reachable by the caller: a scoped sweep resolves the workspace before it
+    // ever builds this query, so an unregistered id would never reach Cosmos.
+    ourWorkspace('ws-7');
     await sweepAutoBind({
       dryRun: true,
       session: SESSION,

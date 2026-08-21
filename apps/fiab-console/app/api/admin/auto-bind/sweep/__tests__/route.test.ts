@@ -46,7 +46,7 @@ vi.mock('@/lib/azure/auto-bind-sweep', async (importOriginal) => ({
   sweepableItemTypes: () => ['data-pipeline', 'eventstream'],
 }));
 
-import { SweepCursorError } from '@/lib/azure/auto-bind-sweep';
+import { SweepCursorError, SweepScopeError } from '@/lib/azure/auto-bind-sweep';
 
 import { GET, POST } from '../route';
 
@@ -284,6 +284,64 @@ describe('POST /api/admin/auto-bind/sweep — the envelope', () => {
     const j = await res.json();
     expect(j.ok).toBe(false);
     expect(JSON.stringify(j)).not.toContain('adf-prod');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A REFUSED SCOPE IS 404, NOT A COUNT (#3808 review round 5)
+//
+// `excludedByAccess` is documented as a COUNT ONLY because naming the rows
+// would be the cross-tenant disclosure the filter prevents. That holds while
+// the count is incidental to whatever page loaded; when the CALLER picks the
+// scope it is an answer to a question they asked — an admin in tenant A who
+// knows a workspace GUID in tenant B learned that it exists and how many
+// sweepable items it holds, narrowable per `itemTypes`.
+//
+// `sweepAutoBind` now resolves a supplied `workspaceId` through the access
+// resolver BEFORE any query and throws `SweepScopeError`. The ROUTE half is the
+// status code: 404, the same 404-not-403 `lib/api/route-toolkit.ts:113` states
+// verbatim — "so an id can't be probed for existence across tenants".
+// ---------------------------------------------------------------------------
+describe('POST /api/admin/auto-bind/sweep — a refused workspace scope', () => {
+  const SCOPE_MSG =
+    'That workspace is not in scope for this sweep — it does not exist in this deployment, or your '
+    + 'account has no access to it.';
+
+  it('answers 404 with the honest message, and no scan envelope at all', async () => {
+    sweepMock.mockRejectedValue(new SweepScopeError(SCOPE_MSG));
+
+    const res = await POST(req({ workspaceId: 'ws-someone-elses' }), CTX);
+
+    expect(res.status).toBe(404);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.error).toContain('not in scope');
+    // The load-bearing half. A 200 carrying `excludedByAccess` IS the oracle —
+    // the count is the disclosure, not the rows.
+    expect(j.excludedByAccess).toBeUndefined();
+    expect(j.scanned).toBeUndefined();
+    expect(j.rows).toBeUndefined();
+  });
+
+  it('is 404 and not 403 — a 403 would confirm the workspace exists', async () => {
+    sweepMock.mockRejectedValue(new SweepScopeError(SCOPE_MSG));
+    const res = await POST(req({ workspaceId: 'ws-someone-elses' }), CTX);
+    expect(res.status).not.toBe(403);
+    expect(res.status).toBe(404);
+  });
+
+  it('and the other two classes keep their own codes — the discriminating control', async () => {
+    // Without this, "404 on a scope error" could be satisfied by a route that
+    // answered 404 for everything, losing both the honest 400 and the
+    // stack-suppressing 500.
+    sweepMock.mockRejectedValue(new SweepCursorError('The resume cursor could not be authenticated.'));
+    expect((await POST(req({ cursor: 'forged' }), CTX)).status).toBe(400);
+
+    sweepMock.mockRejectedValue(new Error('ADF said 403 for factory adf-prod'));
+    expect((await POST(req({ workspaceId: 'ws-7' }), CTX)).status).toBe(500);
+
+    sweepMock.mockResolvedValue(RESULT);
+    expect((await POST(req({ workspaceId: 'ws-7' }), CTX)).status).toBe(200);
   });
 });
 

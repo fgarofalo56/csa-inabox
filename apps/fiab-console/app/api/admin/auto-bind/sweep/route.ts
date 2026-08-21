@@ -20,6 +20,9 @@
  *   401 : no session.  403 : caller is not a tenant admin.
  *   400 : the supplied `cursor` could not be unsealed (tampered, malformed, or
  *         minted in another tenant) — fails closed, never a silent restart.
+ *   404 : the supplied `workspaceId` is not in scope for this caller — it does
+ *         not exist, or it is one they cannot see. NOT 403, and not a 200
+ *         carrying a count: see `SweepScopeError`.
  *
  * Both gates come from the route toolkit (`withTenantAdmin` on POST,
  * `withSession` on GET) rather than a hand-rolled `getSession()` prologue —
@@ -36,6 +39,15 @@
  * report another tenant's item ids and display names, and `{"dryRun":false}`
  * would rewrite their ADF objects. Dropping `session` from the call below is a
  * COMPILE ERROR, not a silent regression — see `SweepOptions`.
+ *
+ * AND `workspaceId` IS CALLER-CHOSEN INPUT, not merely a filter. A scoped pass
+ * used to return `excludedByAccess:5, rows:[]` for a workspace in another
+ * tenant, which says it exists and how many sweepable items it holds,
+ * narrowable per `itemTypes` — the count was the disclosure, so never naming
+ * the rows did not help. `sweepAutoBind` now resolves the scope through the
+ * same resolver BEFORE querying and throws `SweepScopeError`; the route's part
+ * is answering 404 rather than 403, the same 404-not-403 `route-toolkit.ts:113`
+ * uses "so an id can't be probed for existence across tenants".
  *
  * ADMIN IS NOT WRITE ACCESS EITHER. A live pass additionally requires
  * `canWrite` per workspace, because the tenant-admin bypass in the resolver
@@ -90,13 +102,24 @@
  * `/api/internal/*` requires `LOOM_INTERNAL_TOKEN`, and the Gov console has
  * never held one — a token-triggered repair would be Commercial-only, which
  * `cloud-parity.md` makes an incomplete feature rather than a phased one. A
- * cookie/MSAL admin gate works in every boundary today. Scheduling this (an ACA
- * Job, so no human has to remember) is the natural follow-up, and it can call
- * the same `sweepAutoBind()` directly rather than this route.
+ * cookie/MSAL admin gate works in every boundary today.
+ *
+ * ## NOTHING CALLS THIS YET — #3832
+ *
+ * `grep -rln "auto-bind/sweep"` returns this file, its spec, and two GENERATED
+ * route maps. No admin surface renders a button for it, no workflow dispatches
+ * it, and nothing schedules it, so the capability is reachable only by someone
+ * who already knows the path. Scheduling it (an ACA Job, so no human has to
+ * remember) is the natural follow-up and can call `sweepAutoBind()` directly
+ * rather than coming back through HTTP — tracked in #3832, per
+ * `no-vaporware.md`'s requirement that a deferred item carry a ticket rather
+ * than a sentence. Until that lands, the repair this route performs is
+ * available but unrun, and saying otherwise would be the vaporware claim the
+ * rule exists to stop.
  */
 import { NextRequest } from 'next/server';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { SweepCursorError, sweepAutoBind, sweepableItemTypes } from '@/lib/azure/auto-bind-sweep';
+import { SweepCursorError, SweepScopeError, sweepAutoBind, sweepableItemTypes } from '@/lib/azure/auto-bind-sweep';
 import { apiHonestError, apiOk, apiServerError } from '@/lib/api/respond';
 import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
 
@@ -151,6 +174,13 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
     // a tampered cursor into a full re-scan — and in live mode a full re-write —
     // that the operator never asked for.
     if (e instanceof SweepCursorError) return apiHonestError(e, 400);
+    // A scope the caller cannot reach answers NOT-FOUND, never 403 and never a
+    // 200 carrying `excludedByAccess`. Both of those confirm the workspace
+    // exists; the count does it more quietly and was the shape that shipped.
+    // Same 404-not-403 rule as `route-toolkit.ts:113`, "so an id can't be probed
+    // for existence across tenants". The message is a constant, so it cannot
+    // vary by cause and reopen the probe through the error path.
+    if (e instanceof SweepScopeError) return apiHonestError(e, 404);
     return apiServerError(e);
   }
 });
