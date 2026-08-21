@@ -30,6 +30,12 @@
  *        token; and the two legitimate ALLOWs that precede a delegation are
  *        pinned by POSITION (their whole prologue text), not by their condition
  *        string. See section 8 for the mechanism and its measured limits.
+ *     9. (round 5) THE DERIVATION ITSELF IS ASSERTED. Six named authorizers must
+ *        still appear in the derived `checked:` set (section 8i,
+ *        `REQUIRED_AUTHORIZERS`). Every finding of the round-5 review showed up
+ *        first as that list quietly getting shorter while the guard printed OK,
+ *        and no amount of checking matters over a population that silently
+ *        shrank.
  *
  * WHY 8 EXISTS — THIS GUARD WAS MEASURED BLIND TO #3825, AND THAT IS RECORDED
  * RATHER THAN QUIETLY FIXED. Checks 1-7 verify that every call site SUPPLIES the
@@ -199,11 +205,83 @@
  * The clean tree is exit 0 before and after, and M1/M3/M9/M11/M12/M14/M15/N1/N10/
  * N12/N21 keep the exit codes recorded above them.
  *
- * STILL NOT COVERED, so it is not read as covered: the opt-out named through a
- * STRING (`const K = 'skipTidBoundary'; return { [K]: true, … }`) is invisible to
- * section 6, because string literals are masked before any scan — the same
- * masking that makes M9/N21 negative controls pass. The specs are the backstop
- * for that shape, not this file.
+ * ROUND 5 (2026-08-21). A third independent review returned FOUR blockers and
+ * three should-fixes, and — as in round 4 — every one was a defect in THIS FILE
+ * rather than in the code it guards. THEY ALL HAD ONE SYMPTOM: the derived
+ * `checked:` list quietly got SHORTER and the guard still printed OK. Nothing in
+ * the guard noticed, which is why the most important thing this round adds is not
+ * any of the four fixes but section 8i, a standing assertion that the six known
+ * authorizers are still being checked. `S#a` is the control that was already
+ * caught; `S#b` is the one that was not.
+ *
+ *   S1a an env-oid grant as the first line of `authorizeWorkspace`
+ *                                                     before 1   after 1
+ *   S1b THE SAME LINE, with one ORDINARY line above it:
+ *       `if (/^https?:\/\//i.test(workspaceId)) return NextResponse.json(…);`
+ *       — a line that already exists verbatim at `lib/azure/arm-client.ts:40`.
+ *       `mask` had no regex-literal case, so `\/\/` read as a `//` COMMENT and
+ *       the rest of the line was blanked, taking its `)` with it; round 4's
+ *       `matchingClose` counts `(`, `[` and `{` in ONE counter, so it returned
+ *       -1, `callableSpan` returned null and `authorizeWorkspace` VANISHED —
+ *       "13 verdict-returning export(s) — 5 checked", the name simply absent
+ *                                                     before 0   after 1
+ *   S1c CONTROL — that regex line ALONE, no bypass    before 0   after 0
+ *   S2  NOT A MUTATION, A FALSE DISCLOSURE: 8h claimed "17835 declarations
+ *       before, 21050 after, with ZERO true drops". Re-measured by SET DIFF:
+ *       17958/17943 before and 137 drops, not 2. Restated on 8h, with a
+ *       committed tool that reproduces every number
+ *                                                     (see scripts/ci/measure-tid-guard-decl-sets.mjs)
+ *   S3a `export async function f(…): Promise<NextResponse | null>` with an
+ *       env-oid grant                                 before 1   after 1
+ *   S3b THE BYTE-IDENTICAL BODY with the return-type ANNOTATION DELETED. The
+ *       derivation dropped any candidate whose `expandReturnType` failed
+ *       `VERDICT_RETURN`, and an unannotated declaration yields `''` — dropped
+ *       BEFORE all four independent triggers ran, exactly the mistake round 4
+ *       fixed for the declaration FORM (R3b) left on the return TYPE
+ *                                                     before 0   after 1
+ *   S3c the same in `workspace-list-access.ts`, whose ALLOW is NON-null
+ *                                                     before 0   after 1
+ *   S4a `async function f(…) {…}` + `export default f;`
+ *                                                     before 0   after 1
+ *   S4b `const f = async (…) => {…}` + `export default f;` — the docblock said
+ *       "exported is the union of BOTH spellings"; there were three
+ *                                                     before 0   after 1
+ *   S5a `export async function canListWorkspace(…): Promise<boolean>` with an
+ *       env-oid `return true`, DELEGATING below it. A boolean verdict is an
+ *       ordinary authorizer shape and was a TOTAL, undisclosed blind spot —
+ *       the return type is now a TIER, never a filter
+ *                                                     before 0   after 1
+ *   S5b the same NOT delegating at all                before 0   after 1
+ *   S6  `export const authorizeWorkspacePicker = withAudit(async (…) => {…})`
+ *       — branch 2 required the arrow directly after `=`
+ *                                                     before 0   after 1
+ *   S7  the report printed an affirmative `skipTidBoundary users: 0` it could
+ *       not establish. The count line now says what it counted. The SHAPE
+ *       (`const K = 'skipTid' + 'Boundary'; { [K]: true }`) is still exit 0
+ *       and still disclosed — see below            before 0   after 0 (disclosed)
+ *   S8  NOT A MUTATION, A FALSE SENTENCE: 8h said "Inside `lib/auth/**`
+ *       sections 8a-8e catch that variant structurally". S1b, S3b, S4a/b and
+ *       S6 are ALL inside `lib/auth`, ALL re-derive admin from an env-var oid
+ *       without the token, and ALL exited 0. Corrected on 8h.
+ *
+ * AND THE REGRESSION BATTERY THAT PROVES THE REST DID NOT MOVE. The 20-case
+ * battery (5 expected-0, 15 expected-1) was run against the round-4 guard and the
+ * round-5 guard on the same tree: round 4 scores 12/20, round 5 scores 20/20, and
+ * the 12 round 4 already caught — CLEAN, M9, N21, S1c, S7, M11, M12, R1b, R2, N1,
+ * N12, S1a — are unchanged. A fix that only moves the cases it was written for is
+ * the one to distrust.
+ *
+ * STILL NOT COVERED, so it is not read as covered:
+ *   - the opt-out named through a STRING (`const K = 'skipTid' + 'Boundary';
+ *     return { [K]: true, … }`) is invisible to section 6, because string
+ *     literals are masked before any scan — the same masking that makes M9/N21
+ *     negative controls pass. MEASURED at exit 0. The count line no longer
+ *     asserts otherwise. The specs are the backstop for that shape, not this file.
+ *   - a TIER-2 authorizer (a readable, non-verdict return type — see 8a) that
+ *     grants AFTER its delegation with a value that MENTIONS the verdict. 8d
+ *     reasons about the verdict by name in the CONDITION, not in the value.
+ *   - a wrapped arrow bound to a LOCAL rather than a module-level const, and the
+ *     rest of the declaration-finder limits recorded on 8h.
  *
  * Usage: node scripts/ci/check-tid-boundary-chokepoint.mjs
  */
@@ -264,6 +342,68 @@ const VERDICT_RETURN =
 const WORKSPACE_PARAM = /\bworkspace(Id|_id)?\b|\bitem(Id|Type|_id)?\b/i;
 
 /**
+ * THE DERIVED SET MUST STILL CONTAIN THESE. A standing assertion, and the single
+ * most load-bearing thing in section 8.
+ *
+ * ROUND 5 EXISTS BECAUSE THE DERIVATION CAN GO BLIND WITHOUT SAYING SO. Every
+ * finding in the round-5 review manifested the SAME way — the `checked:` list
+ * quietly got shorter and the guard still printed OK:
+ *
+ *   - blocker 1: one ordinary line (`if (/^https?:\/\//i.test(workspaceId)) …`,
+ *     which already exists verbatim at `lib/azure/arm-client.ts:40`) deleted
+ *     `authorizeWorkspace` from the derivation. 6 checked -> 5, exit 0, with a
+ *     live cross-tenant env-oid grant sitting in it.
+ *   - blocker 3: deleting a return-type ANNOTATION dropped the candidate before
+ *     any trigger ran.
+ *   - blocker 4: `export default f;` was not read as an export at all.
+ *
+ * Each of those has now been fixed at its mechanism. This map is the check that
+ * does not depend on having anticipated the mechanism: if any of these six stops
+ * being CHECKED — whatever the reason, a masking bug, a parser regression, a
+ * rename, a new keyword — the build goes RED and names it. A guard whose subject
+ * can silently leave its own population is not watching
+ * (`csa_loom_mutation_that_does_not_move_the_verdict`).
+ *
+ * REMOVING AN ENTRY IS A SECURITY REVIEW, not a maintenance chore: it asserts the
+ * function genuinely no longer exists, not that the guard stopped seeing it.
+ */
+const REQUIRED_AUTHORIZERS = new Map([
+  [
+    'lib/auth/workspace-guard.ts:authorizeWorkspace',
+    'the primary workspace authorizer — the function #3825 was filed against ' +
+      '(`if (isTenantAdmin(session)) return null;` ahead of any Cosmos read).',
+  ],
+  [
+    'lib/auth/workspace-guard.ts:authorizeItemWorkspace',
+    "the item-scoped authorizer; it carries one of the two pinned pre-delegation " +
+      'ALLOWs (PROLOGUE_PINS), which is unverifiable if it is not being checked.',
+  ],
+  [
+    'lib/auth/workspace-guard.ts:requireWorkspace',
+    'the one-call route guard most API handlers use; it delegates to ' +
+      '`authorizeWorkspace` and is the shape a route-level bypass would be written in.',
+  ],
+  [
+    'lib/auth/workspace-guard.ts:resolveAdminWorkspace',
+    'the admin-plane resolver — the second #3825 defect (`loadWorkspaceAdmin`, an ' +
+      'unfiltered cross-partition `SELECT *`). It carries the other PROLOGUE_PINS ' +
+      'entry and the only isTenantAdmin narrowing gate 8e admits.',
+  ],
+  [
+    'lib/auth/workspace-list-access.ts:authorizeWorkspaceList',
+    'the LIST authorizer (N10) — a third workspace authorizer the round-2 table never ' +
+      'named, which took the literal #3825 bypass at exit 0. It ALLOWs with a NON-NULL ' +
+      'value, so it is also the module that proves both ALLOW conventions are modelled.',
+  ],
+  [
+    'lib/auth/item-access.ts:resolveItemAccessByOid',
+    'the item-access resolver, and the only holder of a POST_DELEGATION_PINS entry — ' +
+      'the item-grant path whose own tid comparison R4 showed could be DELETED with the ' +
+      'pin byte-identical.',
+  ],
+]);
+
+/**
  * Derived candidates that are NOT authorizers, each with the reason a reviewer
  * can check against the file. A candidate absent from this map MUST delegate and
  * MUST justify every ALLOW against the delegated verdict — so a NEW function is
@@ -320,6 +460,104 @@ const NON_AUTHORIZERS = new Map([
     'gates an org-wide CAPABILITY (`capabilityId` + a role tier), not a workspace or an ' +
       'item. Nothing it returns carries a workspace document, so there is no tenant ' +
       'boundary for it to skip.',
+  ],
+
+  // ── TIER 2 (round 5) — a readable, non-verdict return type. These became
+  //    candidates when the return type stopped being a pre-trigger FILTER (see
+  //    8a). None of them is a workspace authorizer; each reason is about THAT
+  //    function, so an entry cannot quietly clear a sibling.
+  [
+    'lib/auth/feature-gate.ts:isTenantAdmin',
+    'THE DEFINITION OF THE FLAG ITSELF — it compares the session against ' +
+      '`LOOM_TENANT_ADMIN_GROUP_ID` / `LOOM_TENANT_ADMIN_OID` and returns that comparison. ' +
+      'It takes no workspace and reads no document, so there is no tenant to compare one ' +
+      'against. Sections 8e and 8h govern where its RESULT may be used; this entry says ' +
+      'only that computing it is not an access decision about a workspace.',
+  ],
+  [
+    'lib/auth/feature-gate.ts:checkCapability',
+    'the org-wide CAPABILITY check (`capabilityId` + a required `FeatureRole`) that ' +
+      '`enforceCapability` wraps. Same reasoning as that entry: its `GateResult` carries no ' +
+      'workspace document, so it has no tenant boundary to skip.',
+  ],
+  [
+    'lib/auth/feature-catalog.ts:capabilityIdForItemType',
+    'a pure STRING MAPPING — `itemType` -> `editor.<itemType>`, validated against the static ' +
+      'capability catalog. It takes no session and no workspace and reads nothing; it is a ' +
+      'candidate only because `itemType` matches the tier-2 signature net.',
+  ],
+  [
+    'lib/auth/domain-role.ts:isTenantAdminTier',
+    'a one-line re-export of `isTenantAdmin(session)` into the DOMAIN tier vocabulary. Same ' +
+      'reasoning as that entry, and it likewise takes no workspace.',
+  ],
+  [
+    'lib/auth/domain-role.ts:resolveDomainTier',
+    'resolves the caller\'s tier WITHIN ONE DOMAIN (tenant-admin / domain-admin / ' +
+      'domain-contributor / null) from Entra group membership. A domain is not a workspace ' +
+      'and carries no `tid` to compare — the workspace-level decision still runs afterwards ' +
+      'through `resolveWorkspaceAccessByOid`. Its own boundary is the domain document.',
+  ],
+  [
+    'lib/auth/domain-role.ts:canAssignWorkspaceToDomain',
+    'decides whether the caller may ATTACH a workspace to a domain, given a tier and a ' +
+      '`callerIsWorkspaceAdmin` flag its CALLER computed. It never resolves workspace access ' +
+      'itself — the flag it consumes is the delegated verdict, produced upstream.',
+  ],
+  [
+    'lib/auth/domain-role.ts:administeredDomainIds',
+    'returns the DOMAIN ids the caller administers, for filtering domain pickers. It maps ' +
+      'over domain documents via `resolveDomainTier`; no workspace document is read and none ' +
+      'is returned.',
+  ],
+  [
+    'lib/auth/domain-role.ts:canAccessDlzPanes',
+    'gates the ORG-WIDE DLZ panes (scale / cost / monitor) on being a tenant admin or the ' +
+      'admin of at least one domain. The subject is the DLZ surface, not a workspace, so ' +
+      'there is no workspace tenant for it to compare.',
+  ],
+  [
+    'lib/auth/pat.ts:isPatSession',
+    'a one-line predicate on the session shape (`!!session?.pat`) — is this request a ' +
+      'personal access token rather than a human sign-in. No workspace, no document, no ' +
+      'access decision.',
+  ],
+  [
+    'lib/auth/pat.ts:patCannotMint',
+    'the token-minting refusal: a PAT may never create or revoke tokens. It calls ' +
+      '`isPatSession` and nothing else; the subject is the TOKEN endpoint, not a workspace.',
+  ],
+  [
+    'lib/auth/pat.ts:patCanAdmin',
+    'whether a PAT session may reach an ADMIN surface — `scope === "admin"` AND its creator ' +
+      'is still a tenant admin. Org-wide, like `requireTenantAdmin`: no workspace is in play, ' +
+      'and the workspace decision still runs separately when one is.',
+  ],
+  [
+    'lib/auth/workspace-access.ts:multiUserAclEnabled',
+    'the ACL KILL SWITCH — it reads `LOOM_MULTIUSER_ACL` and returns a boolean. It takes no ' +
+      'arguments at all, so it can decide nothing about any particular workspace. The ' +
+      'resolver consults it INSIDE the chokepoint, after the tid comparison.',
+  ],
+  [
+    'lib/auth/workspace-access.ts:roleCanWrite',
+    'a pure lookup of `AccessRole` in the static `WRITE_ROLES` set — "does this role name ' +
+      'mean write". It takes a role, not a session and not a workspace, so the access ' +
+      'decision that PRODUCED the role has already happened in the resolver.',
+  ],
+  [
+    'lib/auth/workspace-role.ts:canEditWorkspaceConfig',
+    'a pure predicate on an already-resolved `WorkspaceRole` (`admin` or `contributor`). Like ' +
+      '`roleCanWrite` it consumes a verdict rather than making one; it takes no session and ' +
+      'reads no document. Note this file also holds `resolveWorkspaceRole`, whose separate ' +
+      'entry above records it as a FINDING rather than a clearance.',
+  ],
+  [
+    'lib/auth/item-access.ts:itemGrantConfersWrite',
+    'a pure predicate on an item grant\'s `permissionTypes` array — does it contain "Edit". ' +
+      'It takes no session, no oid and no tid, and the grant it inspects was produced by ' +
+      '`resolveItemGrant` inside `resolveItemAccessByOid`, whose own tenant boundary is ' +
+      'pinned in POST_DELEGATION_PINS.',
   ],
 ]);
 
@@ -439,10 +677,86 @@ const norm = (s) => s.replace(/\s+/g, ' ').trim();
 
 // ── source masking ──────────────────────────────────────────────────────────
 /**
- * Blank out line comments, block comments and string/template literals,
- * preserving byte offsets (so index comparisons below stay meaningful) and
- * newlines (so line numbers stay right). A doc comment that says
+ * The keywords after which a `/` can only begin a REGEX LITERAL, never a
+ * division.
+ */
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'case',
+  'do', 'else', 'yield', 'await', 'throw',
+]);
+
+/**
+ * The punctuation after which a `/` begins a REGEX LITERAL. This is an
+ * ALLOWLIST, and it is deliberately tighter than the textbook heuristic, because
+ * this codebase is 4103 files of TSX and the textbook version is wrong there.
+ *
+ * MEASURED, and the reason the allowlist exists: an earlier round-5 draft used
+ * "anything that is not a value" — the usual rule — and `</div>` then read as a
+ * regex opening after `<`, ran to the next `/` on the same line and blanked the
+ * JSX between them. It DROPPED 188 declarations relative to round 4, i.e. it
+ * introduced a bigger version of the very defect it was written to remove. `<`,
+ * `>`, `{` and `}` are all excluded for that reason: `<Foo {...p} />` and
+ * `</div></span>` are common and a division after any of them is not.
+ *
+ * The one exception is an ARROW: `=> /re/.test(x)` is ordinary, and `>` is only
+ * admitted when the character before it is `=`.
+ *
+ * Excluding a case here costs a MISS (the regex body is left unmasked, which is
+ * round 4's behaviour and no worse), never a false blanking. That asymmetry is
+ * why the list errs tight.
+ */
+const REGEX_PRECEDING_PUNCT = new Set(
+  ['(', ',', '=', ':', '[', '!', '&', '|', '?', ';', '+', '-', '*', '%', '^', '~'],
+);
+
+/**
+ * Does the `/` at `at` begin a REGEX LITERAL, or is it a division operator (or
+ * JSX)? Decided from the last significant character BEFORE it, read out of the
+ * ALREADY-MASKED prefix — so a `/` inside a comment or a string cannot be
+ * mistaken for the preceding token.
+ */
+function startsRegexLiteral(out, at) {
+  let k = at - 1;
+  while (k >= 0 && /\s/.test(out[k])) k -= 1;
+  if (k < 0) return true; // start of file
+  const p = out[k];
+  if (p === '>') {
+    let j = k - 1;
+    while (j >= 0 && /\s/.test(out[j])) j -= 1;
+    return j >= 0 && out[j] === '='; // an arrow `=>`, never a JSX tag close
+  }
+  if (/[\w$]/.test(p)) {
+    let s = k;
+    while (s >= 0 && /[\w$]/.test(out[s])) s -= 1;
+    const word = out.slice(s + 1, k + 1).join('');
+    if (/^\d/.test(word)) return false; // a numeric literal -> division
+    return REGEX_PRECEDING_KEYWORDS.has(word);
+  }
+  return REGEX_PRECEDING_PUNCT.has(p);
+}
+
+/**
+ * Blank out line comments, block comments, string/template literals AND THE BODY
+ * OF REGEX LITERALS, preserving byte offsets (so index comparisons below stay
+ * meaningful) and newlines (so line numbers stay right). A doc comment that says
  * "skipTidBoundary" must not look like a call site.
+ *
+ * REGEX LITERALS ARE ROUND 5, and they were a hole in every check downstream, not
+ * a cosmetic one. `mask` had no regex case, so the `\/\/` inside
+ *
+ *     if (/^https?:\/\//i.test(workspaceId)) return NextResponse.json(…);
+ *
+ * — a line that already exists verbatim at `lib/azure/arm-client.ts:40` — read as
+ * a `//` LINE COMMENT and the rest of the line was blanked, taking its closing
+ * parens with it. MEASURED: adding an env-oid cross-tenant grant to
+ * `authorizeWorkspace` exits 1; adding that ONE ORDINARY LINE above it exited 0,
+ * and `authorizeWorkspace` was simply ABSENT from the derived `checked:` list.
+ * The same mechanism accounts for 136 of the 137 declarations round 4's finder
+ * change silently DROPPED while its net total went up (see 8h).
+ *
+ * A regex's DELIMITERS are kept and its interior blanked, exactly as for a string
+ * — so `/[{]/`, `/'/` and `/\)/ ` can no longer unbalance a brace counter, open a
+ * phantom string, or eat a closing paren.
  */
 function mask(src) {
   const out = src.split('');
@@ -453,10 +767,13 @@ function mask(src) {
   while (i < src.length) {
     const two = src.slice(i, i + 2);
     if (two === '//') {
+      // Always a comment: an EMPTY regex literal is not legal JS (it is spelled
+      // `/(?:)/`), so `//` can never open one.
       const end = src.indexOf('\n', i);
       blank(i, end === -1 ? src.length : end);
       i = end === -1 ? src.length : end;
     } else if (two === '/*') {
+      // Likewise always a comment: `*` is a quantifier with nothing to repeat.
       const end = src.indexOf('*/', i + 2);
       const stop = end === -1 ? src.length : end + 2;
       blank(i, stop);
@@ -471,6 +788,21 @@ function mask(src) {
       }
       blank(i + 1, j);
       i = j + 1;
+    } else if (src[i] === '/' && startsRegexLiteral(out, i)) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = -1;
+      for (; j < src.length; j += 1) {
+        const c = src[j];
+        if (c === '\\') { j += 1; continue; }
+        if (c === '\n') break;               // unterminated -> not a regex after all
+        if (inClass) { if (c === ']') inClass = false; continue; }
+        if (c === '[') { inClass = true; continue; }
+        if (c === '/') { closed = j; break; }
+      }
+      if (closed === -1) { i += 1; continue; } // division, or a syntax error
+      blank(i + 1, closed);
+      i = closed + 1;                          // the flags are ordinary word chars
     } else {
       i += 1;
     }
@@ -1021,9 +1353,15 @@ function returnTypeFromAnnotation(masked, annotation) {
   return (arrow ? arrow[1] : t).trim();
 }
 
+/** Keywords that can appear in an `export default <expr>` and are not names. */
+const DEFAULT_EXPORT_NON_NAMES = new Set([
+  'async', 'function', 'await', 'new', 'typeof', 'void', 'as', 'satisfies',
+  'class', 'extends', 'null', 'undefined', 'true', 'false', 'this', 'super',
+]);
+
 /**
- * The LOCAL names a module exports through a separate `export { … }` list, as
- * opposed to an `export` keyword sitting on the declaration.
+ * The LOCAL names a module exports SOMEWHERE OTHER THAN ON THE DECLARATION — a
+ * separate `export { … }` list, or an `export default <expr>;` that names them.
  *
  * Keying on the adjacent keyword alone was measured to miss
  * `const f = async (…) => {…}; export { f };` — the declaration and its export
@@ -1032,6 +1370,23 @@ function returnTypeFromAnnotation(masked, annotation) {
  * only survived the review's list has survived a list. Both the local name and an
  * `as` alias are recorded; a name that matches no local declaration (a re-export
  * `export { x } from './y'`) simply never matches one.
+ *
+ * ROUND 5 — `export default <ident>;` IS A THIRD SPELLING, and the round-4
+ * docblock's claim that "exported is the union of BOTH spellings" was therefore
+ * an R7 defect in this file: it stated a completeness the code did not have.
+ * MEASURED, the same env-oid grant in `lib/auth`:
+ *
+ *     export async function f(…)                            exit 1
+ *     export const f = async (…) => {…}                (R3b) exit 1
+ *     const f = …; export { f };                       (R6)  exit 1
+ *     async function f(…) {…}      + export default f;       exit 0
+ *     const f = async (…) => {…}   + export default f;       exit 0
+ *
+ * — including inside `workspace-guard.ts` itself. EVERY identifier named in the
+ * default-export expression is recorded, not only a bare one, so
+ * `export default withAudit(f);` and `export default { GET, POST };` also count.
+ * That is deliberately generous: a name recorded here only ever ADDS a candidate,
+ * and only if it also matches a local callable declaration.
  */
 function exportedNames(masked) {
   const names = new Set();
@@ -1045,6 +1400,27 @@ function exportedNames(masked) {
       if (local) names.add(local[1]);
       const alias = /\bas\s+([A-Za-z_$][\w$]*)\s*$/.exec(t);
       if (alias) names.add(alias[1]);
+    }
+  }
+  // `export default <expr>;` — every identifier in the exported expression. A
+  // `default` that carries its own declaration (`export default function f(){}`,
+  // `export default async (…) => {}`) is NOT this shape: branch 1 / branch 2 of
+  // `callableDeclarations` already see the `export` keyword sitting on it, and
+  // the keyword scan below stops the head-word from being recorded as a name.
+  const dRe = /export\s+default\s+/g;
+  while ((m = dRe.exec(masked)) !== null) {
+    let d = 0;
+    let end = masked.length;
+    for (let i = m.index + m[0].length; i < masked.length; i += 1) {
+      const c = masked[i];
+      if (c === '(' || c === '[' || c === '{') d += 1;
+      else if (c === ')' || c === ']' || c === '}') { if (d === 0) { end = i; break; } d -= 1; }
+      else if (c === ';' && d === 0) { end = i; break; }
+    }
+    const expr = masked.slice(m.index + m[0].length, end);
+    if (/^\s*(?:async\s+)?function\b/.test(expr) || /=>/.test(expr)) continue; // its own declaration
+    for (const id of expr.match(/[A-Za-z_$][\w$]*/g) ?? []) {
+      if (!DEFAULT_EXPORT_NON_NAMES.has(id)) names.add(id);
     }
   }
   return names;
@@ -1061,6 +1437,72 @@ const NOT_A_METHOD_NAME = new Set([
   'function', 'const', 'let', 'var', 'class', 'interface', 'type', 'enum',
   'import', 'export', 'default', 'extends', 'implements', 'as', 'is', 'satisfies',
 ]);
+
+/**
+ * The FIRST callable nested inside an initializer that is not itself a callable —
+ * i.e. the arrow in `const f = withAudit(async (…) => {…})`.
+ *
+ * ROUND 5. Branch 2 of {@link callableDeclarations} required the head to sit
+ * directly after the `=`, and an independent review measured the cost:
+ * `export const authorizeWorkspacePicker = withAudit(async (…) => {…})` carrying
+ * an env-oid cross-tenant grant exited 0, undisclosed. A wrapper is an ordinary
+ * way to write a route authorizer (audit, rate-limit, telemetry), so "it was not
+ * directly after the `=`" is exactly the kind of shape-naming this section keeps
+ * being defeated by.
+ *
+ * SCOPED TO MODULE-LEVEL DECLARATIONS, and that bound is measured rather than
+ * stylistic. Applied at every brace depth it turned `const rows = useMemo(() =>
+ * …, [])` and every `.map(x => …)` bound to a local into a "declaration" named
+ * after the local: the census went 21933 -> 34357 rows, and 79 keys that round 4
+ * had went missing (13 more than the module-level version drops) because `push`
+ * dedupes by body position and the enclosing const claimed it first. That is the
+ * same total-up / coverage-down shape this round exists to remove, so it was
+ * rejected. An authorizer is a module-level export; a `useMemo` inside a
+ * component is not. Bounded to depth 0 the census is 22653 rows / 22310 unique.
+ *
+ * WHAT THE BOUNDED VERSION COSTS AGAINST ROUND 4, in full: 66 keys, and every one
+ * is a round-4 artefact rather than a loss. 56 of them are literally named
+ * `async` — round 4's METHOD pattern matched the `async` in
+ * `export const POST = withWorkspaceOwner(TYPE, async (req) => {…})` as an
+ * identifier and recorded the arrow under that name; branch 2b now claims the
+ * same body first under the REAL exported name, so
+ * `app/api/transform/[id]/run/route.ts :: async` is now `:: POST`. That is 56
+ * exported route handlers going from mis-named to named. The other 10 are the
+ * regex-masking false positives listed on 8h.
+ *
+ * Heads are tried only where one can syntactically begin — after a `(` or a `,`
+ * of a CALL (the `,` matters: `withWorkspaceOwner(TYPE, async (…) => {…})` is the
+ * live shape in this repo) — and only inside this initializer, bounded by the `;`
+ * at depth zero and by {@link WRAPPED_HEAD_BUDGET} attempts so a pathological
+ * line cannot make this quadratic. Returns null when nothing parses, which leaves
+ * the declaration exactly where round 4 left it.
+ *
+ * STILL OPEN, so it is not read as closed: a wrapped arrow bound to a LOCAL
+ * inside another function, and a wrapper whose callable argument sits past the
+ * budget.
+ */
+const WRAPPED_HEAD_BUDGET = 24;
+function wrappedCallable(masked, declAt, from) {
+  let d = 0;
+  let end = masked.length;
+  for (let i = from; i < masked.length; i += 1) {
+    const c = masked[i];
+    if (c === '(' || c === '[' || c === '{') d += 1;
+    else if (c === ')' || c === ']' || c === '}') { if (d === 0) { end = i; break; } d -= 1; }
+    else if (c === ';' && d === 0) { end = i; break; }
+  }
+  let tried = 0;
+  for (let i = from; i < end && tried < WRAPPED_HEAD_BUDGET; i += 1) {
+    if (masked[i] !== '(' && masked[i] !== ',') continue;
+    let k = i + 1;
+    while (k < end && /\s/.test(masked[k])) k += 1;
+    if (k >= end) break;
+    tried += 1;
+    const span = callableSpan(masked, declAt, k, true);
+    if (span && span.bodyEnd <= end + 1) return span;
+  }
+  return null;
+}
 
 /**
  * Every function-valued DECLARATION in a module: `function f`, `const f = () =>`,
@@ -1086,9 +1528,12 @@ const NOT_A_METHOD_NAME = new Set([
 function callableDeclarations(masked, exportedOnly) {
   const out = [];
   const seen = new Set();
-  // "Exported" is the union of BOTH spellings — the keyword on the declaration
-  // and a separate `export { … }` list — so a declaration cannot escape 8a by
-  // moving its export one line down.
+  // "Exported" is the union of ALL THREE spellings — the keyword on the
+  // declaration, a separate `export { … }` list, and an `export default <expr>;`
+  // that names the local — so a declaration cannot escape 8a by moving its export
+  // one line down. Round 4's version of this comment said "BOTH spellings"; there
+  // were three, and `export default f;` was measured at exit 0 with a live
+  // env-oid grant, in `lib/auth` and in `workspace-guard.ts` itself.
   const listed = exportedOnly ? exportedNames(masked) : null;
   const isExported = (kw, name) => !exportedOnly || Boolean(kw) || listed.has(name);
   const push = (name, span, declaredType) => {
@@ -1120,10 +1565,29 @@ function callableDeclarations(masked, exportedOnly) {
   //    newline-free so a pathological line cannot make this backtrack.
   const cRe =
     /(^|[^\w$.])(export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::((?:[^=;\n]|=>){0,200}))?=(?!>)\s*/g;
+  // Brace depth at each match, maintained by a single forward scan — the matches
+  // arrive in increasing index order, so this stays O(module length). Depth is
+  // what bounds the wrapper branch below to MODULE-LEVEL declarations.
+  let scanAt = 0;
+  let braceDepth = 0;
   while ((m = cRe.exec(masked)) !== null) {
     if (!isExported(m[2], m[3])) continue;
     const declAt = m.index + m[1].length;
-    push(m[3], callableSpan(masked, declAt, m.index + m[0].length, true), m[4] ?? null);
+    for (; scanAt < declAt; scanAt += 1) {
+      if (masked[scanAt] === '{') braceDepth += 1;
+      else if (masked[scanAt] === '}') braceDepth -= 1;
+    }
+    const headAt = m.index + m[0].length;
+    const direct = callableSpan(masked, declAt, headAt, true);
+    // 2b) ROUND 5 — `const NAME = wrap(async (…) => {…})`, an arrow handed to a
+    //     WRAPPER / HOF. This branch required the callable head to sit DIRECTLY
+    //     after the `=`, so `export const authorizeWorkspacePicker =
+    //     withAudit(async (…) => {…})` with a live env-oid grant in it exited 0 —
+    //     the same "the declaration FORM was the filter" defect round 4 removed
+    //     one spelling at a time. Only reached when the direct parse FAILED and
+    //     only at module level (see {@link wrappedCallable} for why), so nothing
+    //     that already parsed changes shape.
+    push(m[3], direct ?? (braceDepth === 0 ? wrappedCallable(masked, declAt, headAt) : null), m[4] ?? null);
   }
   // 3) Object-literal and class METHODS — `async authorize(…): T { … }`. Only
   //    heads that open a line or follow `{` / `,` / `;` / `}` are considered, the
@@ -1179,12 +1643,33 @@ function expandReturnType(masked, retType) {
 }
 
 // ── boolean condition model ────────────────────────────────────────────────
+/**
+ * The index of the bracket that closes the one at `from`, counting ONLY that
+ * bracket's own kind.
+ *
+ * ROUND 5 — THIS USED TO COUNT `(`, `[` AND `{` IN ONE COUNTER, and that made a
+ * single unbalanced paren delete a whole function from the derivation. `mask`
+ * had no regex-literal case, so `/^https?:\/\//` read as a `//` comment and the
+ * rest of that line was blanked, taking its `)` with it; the one counter then hit
+ * -1, `matchingClose` returned -1, `callableSpan` returned null, and
+ * `authorizeWorkspace` VANISHED from section 8 with the guard still printing OK.
+ * `functionSpan` (step 3) has always balanced BRACES ONLY and was unaffected by
+ * the same line — the proven-correct behaviour this now matches.
+ *
+ * Counting per kind is also strictly more robust than mixed counting in general:
+ * mixed counting is only ever correct when brackets nest perfectly, which is
+ * exactly the property mangled source does not have.
+ */
+const CLOSER_OF = { '(': ')', '[': ']', '{': '}' };
 function matchingClose(s, from) {
+  const open = s[from];
+  const close = CLOSER_OF[open];
+  if (!close) return -1;
   let d = 0;
   for (let i = from; i < s.length; i++) {
     const c = s[i];
-    if (c === '(' || c === '[' || c === '{') d += 1;
-    else if (c === ')' || c === ']' || c === '}') { d -= 1; if (d === 0) return i; }
+    if (c === open) d += 1;
+    else if (c === close) { d -= 1; if (d === 0) return i; }
   }
   return -1;
 }
@@ -1455,6 +1940,16 @@ function valueBranches(expr) {
  * `x.member` (`return access.workspace`) is deliberately NOT the verdict either:
  * it is an ALLOW whose reachability 8d then proves against the path condition,
  * which is where that proof belongs.
+ *
+ * `allowIsNull` IS THREE-VALUED, and the third value is round 5. This console
+ * carries BOTH ALLOW conventions — `workspace-guard.ts` ALLOWs with `null` while
+ * `workspace-list-access.ts` ALLOWs with a non-null value — and which one a
+ * function uses is read off its declared return type. When there is no return
+ * type to read (see {@link allowIsNullFor}) the guard does not know, so it must
+ * not pick: `null` counts as an ALLOW as well, which is the strict direction.
+ * Defaulting the unknown case to `false` would have re-opened blocker 3 one level
+ * down — the unannotated authorizer would be DERIVED and then its `return null`
+ * bypass classified 'deny', so nothing would look at it.
  */
 function classifyValue(value, binding, delegate, allowIsNull) {
   const t = value.trim();
@@ -1463,8 +1958,24 @@ function classifyValue(value, binding, delegate, allowIsNull) {
   if (delegate && new RegExp(`^(?:await\\s+)?${delegate}\\s*\\(`).test(t)) return 'verdict';
   if (/\b(?:NextResponse|workspaceDenialResponse)\b/.test(t)) return 'deny';
   if (/^\{/.test(t) && /(?:^\{|[,{])\s*resp\s*[:,}]/.test(t)) return 'deny';
-  if (/^(?:null|undefined)$/.test(t)) return allowIsNull ? 'allow' : 'deny';
+  // A literal `false` is a REFUSAL under every convention in this codebase, and
+  // saying so is what makes the TIER-2 (boolean-verdict) population checkable
+  // without a false accusation on `if (!access) return false;`.
+  if (/^false$/.test(t)) return 'deny';
+  if (/^(?:null|undefined)$/.test(t)) return allowIsNull === false ? 'deny' : 'allow';
   return 'allow';
+}
+
+/**
+ * Which value means ALLOW for a callable whose EXPANDED return type is `t`:
+ * `true` (a `NextResponse | null` refusal-carrier, so `null` is the grant),
+ * `false` (an access object, so `null` is the refusal), or `null` — UNKNOWN,
+ * because there is no annotation to read. See {@link classifyValue} for what the
+ * unknown case costs and why it is the safe direction.
+ */
+function allowIsNullFor(t) {
+  if (!(t || '').trim()) return null;
+  return /\bNextResponse\b/.test(t);
 }
 
 // ── 8a: derive the authorizer set ──────────────────────────────────────────
@@ -1492,6 +2003,55 @@ function isWorkspaceAuthzModule(rel, masked) {
  * must not name a workspace/item id in its signature. Each trigger alone would
  * have caught N6a/N6c/N10; the point of four is that none of them is the one
  * thing an author has to remember.
+ *
+ * ROUND 5 — THE RETURN TYPE IS NO LONGER A PRE-TRIGGER FILTER AT ALL. It used to
+ * read `if (!VERDICT_RETURN.test(expanded)) continue;`, which ran BEFORE all four
+ * triggers, so the candidate was dropped on a property the author picks freely —
+ * structurally the identical mistake round 4 removed for the declaration FORM
+ * (R3b). It was measured twice, from both sides of the test:
+ *
+ *   - NO ANNOTATION AT ALL yields `''`, which fails the test. Byte-identical
+ *     env-oid bodies in `workspace-guard.ts`:
+ *         export async function authorizeWorkspaceQuick(…): Promise<NextResponse|null>  exit 1
+ *         the same with `: Promise<NextResponse | null>` DELETED                        exit 0
+ *     and the same pair in `workspace-list-access.ts`. Not an exotic spelling:
+ *     `.eslintrc.json` extends only `next/core-web-vitals` and sets neither
+ *     `explicit-module-boundary-types` nor `explicit-function-return-type`, and
+ *     this console carries 2999 unannotated exported function declarations
+ *     against 7719 annotated.
+ *   - A NON-VERDICT ANNOTATION does the same:
+ *     `export async function canListWorkspace(…): Promise<boolean>` with an
+ *     env-oid `return true` exited 0, and a boolean verdict is an ordinary
+ *     authorizer shape, not an exotic one.
+ *
+ * SO THE RETURN TYPE NOW SELECTS A TIER, NEVER A DROP:
+ *
+ *   tier 1 `verdict`  — the annotation matches VERDICT_RETURN, or there is no
+ *                       readable annotation. Fully checked: delegation, prologue
+ *                       pins (8b), verdict-binding soundness (8c) and the ALLOW
+ *                       implication test (8d).
+ *   tier 2 `other`    — a readable annotation that is not a verdict type, most
+ *                       often `boolean`. Checked for DELEGATION, for PROLOGUE
+ *                       ALLOWs and for binding soundness — which is where every
+ *                       measured bypass in rounds 3-5 actually sat — but 8d's
+ *                       post-delegation implication test is applied only to the
+ *                       ALLOWs whose value never MENTIONS the delegated verdict.
+ *                       STATED AS A LIMIT, not as coverage: for a boolean
+ *                       authorizer the returned expression IS the verdict in
+ *                       another form (`return access !== null`), and this guard's
+ *                       condition model reasons about the verdict by name in the
+ *                       CONDITION, not in the value. Judging those would either
+ *                       accuse correct code or, if the value were folded into the
+ *                       path condition, re-open R1b (`return access && null`).
+ *                       So the residual is named: a tier-2 authorizer that grants
+ *                       AFTER the delegation with a value that mentions the
+ *                       verdict is NOT proved here. The specs are the backstop.
+ *
+ * COST, measured rather than assumed (`temp/probe-triggers.mjs` shape): on this
+ * tree the change adds 15 candidates in `lib/auth`, all tier 2, every one of them
+ * classified in NON_AUTHORIZERS below with a reason checkable against its file.
+ * The three unannotated exports (`pat.ts::parseToken`, `pat.ts::parseAuthHeader`,
+ * `pdp/authorize.ts::constructor`) fire no trigger and so add nothing.
  */
 const candidates = [];
 for (const file of authzFiles) {
@@ -1501,14 +2061,16 @@ for (const file of authzFiles) {
   const namesAdminFlag = ISADMIN.test(masked);
   for (const fn of exportedFunctions(masked)) {
     const expanded = expandReturnType(masked, fn.returnType);
-    if (!VERDICT_RETURN.test(expanded)) continue;
+    const readable = expanded.trim().length > 0;
+    const tier = !readable || VERDICT_RETURN.test(expanded) ? 'verdict' : 'other';
     const trigger =
       (inAuthzModule && 'module') ||
       (namesAdminFlag && /\bSessionPayload\b/.test(fn.params) && 'admin-flag') ||
       (WORKSPACE_PARAM.test(fn.params) && 'signature') ||
       null;
     if (!trigger) continue;
-    candidates.push({ file, rel, masked, fn, expanded, trigger });
+    const label = readable ? (tier === 'verdict' ? trigger : `${trigger}:other-return`) : `${trigger}:no-return-type`;
+    candidates.push({ file, rel, masked, fn, expanded, tier, trigger: label });
   }
 }
 
@@ -1543,14 +2105,16 @@ const usedNonAuthorizers = new Set();
 const usedProloguePins = new Set();
 const usedPostPins = new Set();
 const authorizerNames = [];
+const checkedKeys = new Set();
 
 for (const c of candidates) {
   const key = `${c.rel}:${c.fn.name}`;
   if (NON_AUTHORIZERS.has(key)) { usedNonAuthorizers.add(key); continue; }
   authorizerNames.push(`${c.fn.name}[${c.trigger}]`);
+  checkedKeys.add(key);
 
   const body = c.fn.body;
-  const allowIsNull = /\bNextResponse\b/.test(c.expanded);
+  const allowIsNull = allowIsNullFor(c.expanded);
 
   // Which chokepoint does it delegate to? (Never itself.)
   let delegate = null;
@@ -1695,6 +2259,22 @@ for (const c of candidates) {
   //      no. This is the check that does not care what the bypass calls itself.
   const pins = POST_DELEGATION_PINS.get(key) ?? [];
   for (const a of bindingSound ? postAllows : []) {
+    // TIER 2 (a readable, non-verdict return type — see 8a): the returned VALUE
+    // is the verdict in another form, e.g. `return access !== null` for a
+    // `Promise<boolean>` authorizer. This guard reasons about the verdict by name
+    // in the CONDITION, not in the value, so judging those would either accuse
+    // correct code or — if the value were folded into the path condition —
+    // re-open R1b, where `return access && null` is always falsy and therefore
+    // always an ALLOW. A tier-2 ALLOW whose value NEVER MENTIONS the verdict is
+    // still judged, because such a grant cannot follow from a verdict it does not
+    // read. The rest is a stated limit, not coverage.
+    if (
+      c.tier === 'other' &&
+      binding !== null &&
+      new RegExp(`\\b${binding.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(a.br.value)
+    ) {
+      continue;
+    }
     if (binding === null) {
       fail(
         `${c.rel}: ${c.fn.name} ALLOWs after calling ${delegate}() without binding its ` +
@@ -1814,7 +2394,7 @@ for (const file of authzFiles) {
       return at > open && at < open + r.cond.length + 1;
     });
     if (gate && owner) {
-      const allowIsNull = /\bNextResponse\b/.test(expandReturnType(masked, owner.returnType));
+      const allowIsNull = allowIsNullFor(expandReturnType(masked, owner.returnType));
       let delegate = null;
       let bind = null;
       for (const n of CHOKEPOINTS) {
@@ -1926,32 +2506,96 @@ if (!rawBody) {
 //         exited 0 with the byte-identical `export async function` at exit 1. The
 //         finder now covers `function` declarations, `const`/`let`/`var` arrows
 //         (block AND concise bodies), `= async function`, object-literal and class
-//         METHODS, and an anonymous `export default function`. Measured over this
-//         tree: 17835 declarations before, 21050 after, with ZERO true drops (the
-//         two apparent ones are a head-finder mis-span it now gets right and a
-//         `function wrapping <code>` in JSX PROSE it now correctly refuses).
-//         What is STILL outside it: a callable reached only through a computed
-//         property (`obj['authorize'] = …`), a type annotation that spans a
-//         newline, and a `{ a: string }` object RETURN TYPE, whose brace is taken
-//         for the body brace — the last of these makes the "body" a type literal
-//         and the assertions over it vacuous, so it is a blind spot, not a false
-//         accusation.
-//       - it keys on the `isTenantAdmin(` TOKEN, so a bypass that re-derives the
+//         METHODS, an anonymous `export default function`, and (round 5) a
+//         declaration exported by a later `export default <ident>;`.
+//
+//         ROUND 5 RETRACTS THE NUMBERS ROUND 4 PUT HERE. That sentence read
+//         "17835 declarations before, 21050 after, with ZERO true drops". The
+//         "after" reproduces; NOTHING ELSE IN IT DOES. Re-measured by running each
+//         version's OWN `declaredFunctions` over its OWN `files` population and
+//         diffing the SETS keyed `(file, name)` — never the net totals, which is
+//         the whole mistake. REPRODUCE IT:
+//
+//             node scripts/ci/measure-tid-guard-decl-sets.mjs \
+//                  8c3c4222 821de681 WORKTREE
+//
+//             8c3c4222 (round 3)  files 4103  rows 17958  unique 17943
+//             821de681 (round 4)  files 4103  rows 21050  unique 20693
+//             WORKTREE (round 5)  files 4103  rows 22653  unique 22310
+//             IN round3 AND NOT IN round4: 137   (round 4 claimed 2, "zero true")
+//             IN round3 AND NOT IN round5:   1
+//             IN round4 AND NOT IN round5:  66
+//
+//         So the "before" was 17958 rows / 17943 unique, not 17835, and 137
+//         declarations went MISSING while the net total went UP by 3092. Real
+//         losses included `lib/azure/arm-client.ts :: armUrl`,
+//         `lib/api/query-cache-headers.ts :: etagMatches`,
+//         `app/api/storage/_lib/validate.ts :: isSafePrefix` and
+//         `app/api/items/dbt-job/[id]/run/route.ts :: POST`. That is the shape
+//         `csa_loom_route_toolkit_ratchet_perkey_is_the_teeth` exists to flag: a
+//         total that moves the reassuring way over coverage that moved the other
+//         way. An exemption or a disclosure that states as fact something it never
+//         established is the R7 defect one level up, inside the guard.
+//
+//         WHAT IS TRUE NOW, each line reproducible from the command above:
+//           * 136 of those 137 are recovered (137 - 1). They were all ONE
+//             mechanism, the missing regex-literal case in `mask`.
+//           * exactly ONE round3 declaration is still not found:
+//             `lib/editors/phase3/eventhouse-editor.tsx :: wrapping`, which is the
+//             words "stored function wrapping <code>external_table()</code>" in
+//             JSX PROSE. Refusing it is correct.
+//           * the 66 round4 -> round5 drops are NOT losses, and each is named so
+//             the claim is checkable. 56 of them are literally called `async`:
+//             round 4's method pattern read the `async` in
+//             `export const POST = withWorkspaceOwner(TYPE, async (req) => {…})`
+//             as an identifier, and branch 2b now claims that body under the REAL
+//             exported name — `app/api/transform/[id]/run/route.ts :: async`
+//             became `:: POST`, 56 route handlers over. The other 10 are round-4
+//             FALSE POSITIVES of the regex mechanism read from the other side: a
+//             `const x = (…).replace(/^https?:\/\//, '')`-shaped VARIABLE whose
+//             mangled line looked like a callable head — `COUNT_BIG`, `MAX`
+//             (dataflow/profile/route.ts), `account` x2 (lakehouse-shortcut,
+//             spark-environment libraries), `dir` (git-integration-client),
+//             `webhookReceivers` (monitor-client), `isSqlDb`
+//             (pe-subresource-groups), `NVARCHAR` (rls-compiler), `host`
+//             (shortcut-client), `ON` (unity-catalog compiler). None is a
+//             function; four are SQL text inside a template literal.
+//
+//         What is STILL outside the finder, stated as a limit and not as zero: a
+//         callable reached only through a computed property
+//         (`obj['authorize'] = …`), a type annotation that spans a newline, a
+//         wrapped arrow bound to a LOCAL inside another function (the MODULE-LEVEL
+//         one is now seen — see `wrappedCallable`), and a `{ a: string }` object
+//         RETURN TYPE, whose brace is taken for the body brace — the last of these
+//         makes the "body" a type literal and the assertions over it vacuous, so
+//         it is a blind spot, not a false accusation.
+//       - IT KEYS ON THE `isTenantAdmin(` TOKEN, so a bypass that re-derives the
 //         admin verdict without naming it — measured example
 //         `if (session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID) return null;`
-//         — is INVISIBLE here. Inside `lib/auth/**` sections 8a-8e catch that
-//         variant structurally. Everywhere ELSE in the repo THE SPECS ARE THE
-//         BACKSTOP, not this scan. Do not read a green 8h as "no bypass"; read it
-//         as "no bypass of the shapes 8h can see".
+//         — is INVISIBLE here.
+//
+//         ROUND 5 CORRECTS THE SENTENCE THAT FOLLOWED. It read "Inside
+//         `lib/auth/**` sections 8a-8e catch that variant structurally", full stop,
+//         and that was not true as written: blockers 1, 3 and 4 of the round-5
+//         review, and should-fix 6, were ALL inside `lib/auth`, ALL re-derived the
+//         admin verdict from an env-var oid without the token, and ALL exited 0.
+//         What is true, and was verified by measuring it: 8e catches the
+//         `isTenantAdmin`-NAMING variant regardless of return type (exit 1), and
+//         8a-8e catch the env-oid variant ONLY WHEN THE DERIVATION ACTUALLY SEES
+//         THE FUNCTION — which is precisely what those blockers broke and what
+//         section 8i now turns into a red build. Everywhere ELSE in the repo THE
+//         SPECS ARE THE BACKSTOP, not this scan. Do not read a green 8h as "no
+//         bypass"; read it as "no bypass of the shapes 8h can see".
 //       - the signature filter is what let N6c through inside `lib/auth`; that
 //         file set no longer depends on it (8a derives by module, not by
 //         parameter name). Out here the filter stays, and this limit with it:
-//         MEASURED on this tree, 14 named functions carry the
-//         admin-flag-grants-alone shape and 13 of them are NOT workspace-scoped
-//         by signature, so 8h never opens them. The 14th is
-//         `resolveAdminWorkspace`, which 8a-8e own. A route-level authorizer that
-//         calls its parameter `id` is therefore outside 8h, exactly as N6c was
-//         outside the old section 8.
+//         MEASURED on this tree, 15 functions carry the admin-flag-grants-alone
+//         shape and 14 of them are NOT workspace-scoped by signature, so 8h never
+//         opens them. The 15th is `resolveAdminWorkspace`, which 8a-8e own. A
+//         route-level authorizer that calls its parameter `id` is therefore
+//         outside 8h, exactly as N6c was outside the old section 8. (The count was
+//         14 in round 4 and moved to 15 because an UNANNOTATED `return null` is no
+//         longer assumed to be a refusal — see `allowIsNullFor`.)
 const ADMIN_GRANT_SCOPE = /\bworkspace(Id|_id)?\b/i;
 let adminShapeFunctions = 0;
 let adminShapeWorkspaceScoped = 0;
@@ -1967,7 +2611,7 @@ for (const file of files) {
       const regions = braceRegions(fn.body);
       const pc = pathCondition(fn.body, ifs, regions, r.index);
       if (!ISADMIN.test(pc.text)) return false;
-      const allowIsNull = /\bNextResponse\b/.test(expandReturnType(masked, fn.returnType));
+      const allowIsNull = allowIsNullFor(expandReturnType(masked, fn.returnType));
       return valueBranches(r.expr).some(
         (br) => classifyValue(br.value, null, null, allowIsNull) === 'allow',
       );
@@ -1991,6 +2635,30 @@ for (const file of files) {
         "the workspace's tenant — route the decision through resolveWorkspaceAccessByOid.",
     );
   }
+}
+
+// ── 8i: THE DERIVED SET STILL CONTAINS THE KNOWN AUTHORIZERS ────────────────
+//
+// Not "did the derivation find things", but "did it find THESE". A count is no
+// help here: blocker 1 moved the total from 14 to 13 and the checked set from 6
+// to 5, and nothing anywhere said which one left. This names it.
+//
+// Ordered BEFORE the stale-exemption reports so that when the derivation does go
+// blind, the first line of the failure is the authorizer that vanished rather
+// than the pins that consequently matched nothing.
+const missingRequired = [...REQUIRED_AUTHORIZERS.keys()].filter((k) => !checkedKeys.has(k));
+for (const k of missingRequired) {
+  const derived = candidates.some((c) => `${c.rel}:${c.fn.name}` === k);
+  fail(
+    `REQUIRED AUTHORIZER \`${k}\` IS NOT BEING CHECKED. ${REQUIRED_AUTHORIZERS.get(k)}` +
+      `\n        derived as a candidate: ${derived ? 'YES — but then classified a NON_AUTHORIZER' : 'NO — section 8a never saw it'}` +
+      `\n        checked this run:       ${[...checkedKeys].sort().join(', ') || '(none)'}` +
+      '\n        This is the failure mode section 8 is most vulnerable to and least likely ' +
+      'to announce: the derivation goes blind and the guard still prints OK over a live ' +
+      'bypass. If the function was genuinely renamed or removed, update REQUIRED_AUTHORIZERS ' +
+      'in this guard as part of that change and say so in the PR. If it still exists, the ' +
+      'DERIVATION is broken — fix that, do not delete the entry.',
+  );
 }
 
 // ── stale exemptions ────────────────────────────────────────────────────────
@@ -2021,11 +2689,26 @@ for (const [k, arr] of POST_DELEGATION_PINS) {
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
+// EVERY COUNT BELOW IS QUALIFIED BY WHAT PRODUCED IT. Round 4 printed
+// `skipTidBoundary users: 0` over a live `{ skipTidBoundary: true }` in
+// `ambientAccessOptsFor` (R5) — a bare zero the guard had not established. The
+// range exemption fixed THAT instance; the affirmative PHRASING was still wrong,
+// because a key reached through a computed string
+// (`const K = 'skipTid' + 'Boundary'; return { [K]: true }`) is invisible to a
+// scan that runs on MASKED source, and masking string literals is what makes the
+// M9/N21 negative controls pass. MEASURED: that spelling exits 0 today with the
+// count line reading zero. So the line now says what it counted — literal
+// mentions — and never asserts the absence of the thing it cannot see. The specs
+// are the backstop for the computed-key shape, not this file.
 console.log(`[tid-boundary-chokepoint] guarded call sites: ${callSites}  ` +
-            `(skipTidBoundary users: ${skipUsers.length}, allowlisted: ${used.size})`);
+            `(files naming skipTidBoundary LITERALLY: ${skipUsers.length}, allowlisted: ${used.size}` +
+            '; a computed-string key is NOT counted — see the note above this line)');
+const tier1 = candidates.filter((c) => c.tier === 'verdict').length;
 console.log(`[tid-boundary-chokepoint] authorizers DERIVED from ${AUTHZ_DIR}: ` +
-            `${candidates.length} verdict-returning export(s) — ${authorizerNames.length} checked ` +
-            `for delegation + ALLOW implication, ${usedNonAuthorizers.size} classified ` +
+            `${candidates.length} candidate export(s) (${tier1} verdict-typed or unannotated, ` +
+            `${candidates.length - tier1} other-typed — the return type selects a TIER, it no ` +
+            `longer filters) — ${authorizerNames.length} checked for delegation + ALLOW ` +
+            `implication, ${usedNonAuthorizers.size} classified ` +
             `non-authorizer(s); pins in use: ${usedProloguePins.size} prologue, ` +
             `${usedPostPins.size} post-delegation (#3825)`);
 console.log(`[tid-boundary-chokepoint]   checked: ${authorizerNames.join(', ')}`);
