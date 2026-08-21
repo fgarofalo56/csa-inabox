@@ -53,6 +53,7 @@ ALLOWED_DRY_RUN_GATES: frozenset[str] = frozenset(
         "validate-python",
         "validate-dbt",
         "validate-deployment",
+        "validate-typescript",
     }
 )
 
@@ -452,6 +453,7 @@ GateName = Literal[
     "validate-python",
     "validate-dbt",
     "validate-deployment",
+    "validate-typescript",
 ]
 
 
