@@ -25,7 +25,10 @@
  *        session, so it CAN enforce the boundary.
  *     8. (#3825) THE GUARDS IN `lib/auth/workspace-guard.ts` DELEGATE THE
  *        TENANT-ADMIN DECISION TO THE RESOLVER RATHER THAN TAKING IT. They may
- *        COMPUTE `isTenantAdmin` and PASS IT DOWN; they may not ACT on it.
+ *        COMPUTE `isTenantAdmin` and PASS IT DOWN; they may not ACT on it. Both
+ *        authorizers are named (`authorizeWorkspace` AND the 85-importer entry
+ *        point `authorizeItemWorkspace`), the shape match is STRUCTURAL rather
+ *        than literal, and every ALLOW must be the DELEGATED verdict (8e).
  *
  * WHY 8 EXISTS — THIS GUARD WAS MEASURED BLIND TO #3825, AND THAT IS RECORDED
  * RATHER THAN QUIETLY FIXED. Checks 1-7 verify that every call site SUPPLIES the
@@ -78,6 +81,26 @@
  *   M13 (#3825) `authorizeWorkspace` drops `tenantAdmin:` from opts  exit 1
  *   M14 (#3825) `resolveAdminWorkspace` restores `loadWorkspaceAdmin` exit 1
  *   M15 (#3825) `resolveAdminWorkspace` loses its isTenantAdmin gate exit 1
+ *   M16 an itemType-scoped admin ALLOW in `authorizeItemWorkspace`   exit 1
+ *   M17 the same, a different itemType and a `||` instead of `&&`    exit 1
+ *   M18 an admin ALLOW conditioned on the METHOD, not the itemType   exit 1
+ *   M19 an ALLOW that never names isTenantAdmin (an env-var oid)     exit 1
+ *
+ * M16-M19 are round 2 of the review of #3830, and they are the reason section 8
+ * changed shape. M16 is the reviewer's needle verbatim:
+ *
+ *     if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;
+ *
+ * one line at the top of `authorizeItemWorkspace`. On the PR head it passed THE
+ * ENTIRE STACK — this guard exit 0, the 27-test #3825 spec green, the 259-test
+ * wide suite green — while a live probe showed `itemType=lakehouse` ALLOWED
+ * across tenants on the hardest fixture (both tids present and different) with
+ * `semantic-model` and `data-pipeline` still DENIED. Two independent seams let
+ * it through: 8a was scoped to the symbol `authorizeWorkspace`, and 8d's regex
+ * demanded `if (` immediately followed by `isTenantAdmin(`, so any conjunct in
+ * front of the flag defeated it. M19 is the variant that names no flag at all;
+ * 8e catches it inside this module, and OUTSIDE it the specs are the backstop —
+ * see the KNOWN LIMITS note on 8d, which says so rather than implying coverage.
  *
  * M7 and M10 exit 0 on the first draft of this file, which only matched
  * `name(`. That is why every MENTION of a guarded symbol is now classified, and
@@ -110,6 +133,25 @@ const GUARDED_CALLS = [
  */
 const SKIP_ALLOWLIST = new Map([
   // ['lib/some/off-request-job.ts', 'reason a reviewer can verify against the file'],
+]);
+
+/** A mention of the tenant-admin flag. Declared here because the helpers use it. */
+const ISADMIN = /\bisTenantAdmin\s*\(/;
+
+/**
+ * The pre-delegation ALLOWs in `workspace-guard.ts` that are NOT bypasses,
+ * pinned as `<function>:<condition>` with the condition's whitespace collapsed,
+ * so a CHANGED condition is a review rather than a silent widening. Section 8e
+ * refuses every other allow that is not justified by the delegated verdict.
+ */
+const PRE_DELEGATION_ALLOWLIST = new Map([
+  [
+    'authorizeItemWorkspace:!workspaceId',
+    "the route id names NO item of that type anywhere in the estate, so there is no other " +
+      'tenant’s resource to authorize. The lookup is a cross-partition query, not an ' +
+      'owner-scoped one, so an item belonging to a DIFFERENT tenant is still found and ' +
+      'still reaches the delegation below.',
+  ],
 ]);
 
 const failures = [];
@@ -268,6 +310,74 @@ function callArgSpan(masked, name) {
     }
   }
   return null;
+}
+
+/**
+ * The condition text of the `if (…)` whose CONSEQUENT is the statement starting
+ * at `at`, or null when that statement runs unconditionally. Walks backwards
+ * over whitespace and an optional block brace, balance-matches the condition
+ * parens, and requires the token in front of them to be `if` (which also
+ * accepts `else if`). Operates on already-masked source.
+ *
+ * WHY NOT A REGEX. Section 8d used to key on
+ * `/if\s*\(\s*isTenantAdmin\s*\([^)]*\)\s*\)\s*return\s+null\s*;/`, which
+ * demands `if (` IMMEDIATELY followed by `isTenantAdmin(` — so ANY conjunct in
+ * front of the flag defeats it. Measured 2026-08-21: one line at the top of
+ * `authorizeItemWorkspace` reading
+ * `if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;`
+ * was a live cross-tenant ALLOW for that item type and the guard still exited 0.
+ * Matching the STRUCTURE (a condition, whatever its shape, that mentions the
+ * flag and whose consequent is an ALLOW) has no such seam.
+ */
+function conditionGoverning(masked, at) {
+  let i = at - 1;
+  while (i >= 0 && /\s/.test(masked[i])) i -= 1;
+  if (i >= 0 && masked[i] === '{') {
+    i -= 1;
+    while (i >= 0 && /\s/.test(masked[i])) i -= 1;
+  }
+  if (i < 0 || masked[i] !== ')') return null;
+  let depth = 0;
+  let open = -1;
+  for (let k = i; k >= 0; k -= 1) {
+    if (masked[k] === ')') depth += 1;
+    else if (masked[k] === '(') {
+      depth -= 1;
+      if (depth === 0) { open = k; break; }
+    }
+  }
+  if (open === -1) return null;
+  if (!/\bif\s*$/.test(masked.slice(Math.max(0, open - 16), open))) return null;
+  return masked.slice(open + 1, i);
+}
+
+/**
+ * Every ALLOW in `masked`, as `{ index, cond }`. `return null` IS the allow
+ * verdict of every guard in `workspace-guard.ts` (null == authorized), so this
+ * enumerates the shape a bypass has to take whatever it chooses to name.
+ * `cond` is null for an unconditional allow.
+ */
+function allowSites(masked) {
+  const out = [];
+  const re = /\breturn\s+null\b/g;
+  let m;
+  while ((m = re.exec(masked)) !== null) {
+    out.push({ index: m.index, cond: conditionGoverning(masked, m.index) });
+  }
+  return out;
+}
+
+/** True when some ALLOW in `masked` is governed by a condition naming the admin flag. */
+function grantsOnAdminFlag(masked) {
+  return allowSites(masked).some((s) => s.cond !== null && ISADMIN.test(s.cond));
+}
+
+/** The identifier a `const x = await NAME(` delegation binds its verdict to. */
+function delegationBinding(masked, name) {
+  const m = new RegExp(
+    `(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*await\\s+${name}\\s*\\(`,
+  ).exec(masked);
+  return m ? m[1] : null;
 }
 
 /** Every index at which `re` matches, on already-masked source. */
@@ -461,42 +571,120 @@ if (listAllSig === null) {
 // `authorizeWorkspace` was: `if (isTenantAdmin(session)) return null;` ahead of
 // every read. The rule here is one sentence: A GUARD MAY COMPUTE THE ADMIN FLAG
 // AND PASS IT DOWN; IT MAY NOT ACT ON IT.
-const ISADMIN = /\bisTenantAdmin\s*\(/;
 const guardSrc = readFileSync(GUARD_FILE, 'utf8');
 const guard = mask(guardSrc);
 
-// 8a. `authorizeWorkspace` — every isTenantAdmin mention must be INSIDE the
-//     resolver call's arguments. One outside it is an admin verdict taken here.
-const awBody = functionBody(guard, 'authorizeWorkspace');
-if (!awBody) {
-  fail(`${GUARD_FILE}: authorizeWorkspace not found — the guard is pointed at the wrong symbol.`);
-} else {
-  const span = callArgSpan(awBody, 'resolveWorkspaceAccessByOid');
+// 8a/8e. Every AUTHORIZER in this module, and what it must delegate to. Each
+//     entry gets two checks:
+//
+//       8a — every `isTenantAdmin` mention must sit INSIDE the delegation call's
+//            argument span. One outside it is an admin verdict taken here.
+//       8e — every ALLOW (`return null`) must be justified by the delegated
+//            verdict, i.e. its condition names the identifier the delegation
+//            result is bound to — or it is pinned in PRE_DELEGATION_ALLOWLIST.
+//
+// WHY `authorizeItemWorkspace` IS HERE, recorded rather than quietly added.
+// Until 2026-08-21 8a named only `authorizeWorkspace`, and 8d's regex demanded
+// `if (` immediately followed by `isTenantAdmin(`. A reviewer inserted ONE line
+// at the top of `authorizeItemWorkspace` — the entry point 85 files import —
+//
+//     if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;
+//
+// and the ENTIRE verification stack passed it: this guard exit 0, the 27-test
+// #3825 spec green, the 259-test wide suite green. Probed live it was a real
+// cross-tenant ALLOW — `itemType=lakehouse` ALLOWED on a fixture where both tids
+// are present and different, while `semantic-model` and `data-pipeline` were
+// DENIED. Same shape as the #3808 cursor-scoped bypass that passed 85/85: a
+// guard keyed to the unsafe LITERAL, not the unsafe BEHAVIOUR. 8a now names
+// every authorizer, 8d matches the structure instead of the literal, and 8e
+// catches the variant that never says `isTenantAdmin` at all.
+const AUTHORIZERS = [
+  ['authorizeWorkspace', 'resolveWorkspaceAccessByOid'],
+  // No resolver call of its own — it resolves the workspace FROM THE ITEM and
+  // then delegates the whole decision to `authorizeWorkspace`.
+  ['authorizeItemWorkspace', 'authorizeWorkspace'],
+];
+const usedPreDelegation = new Set();
+
+for (const [fn, delegate] of AUTHORIZERS) {
+  const body = functionBody(guard, fn);
+  if (!body) {
+    fail(`${GUARD_FILE}: ${fn} not found — the guard is pointed at the wrong symbol.`);
+    continue;
+  }
+  const span = callArgSpan(body, delegate);
   if (!span) {
     fail(
-      `${GUARD_FILE}: authorizeWorkspace does not call resolveWorkspaceAccessByOid. ` +
+      `${GUARD_FILE}: ${fn} does not call ${delegate}. ` +
         'It is then deciding workspace access on its own, which is #3825.',
     );
-  } else {
-    const args = awBody.slice(span[0], span[1]);
-    if (!/tenantAdmin\s*:/.test(args)) {
+    continue;
+  }
+  if (delegate === 'resolveWorkspaceAccessByOid' && !/tenantAdmin\s*:/.test(body.slice(span[0], span[1]))) {
+    fail(
+      `${GUARD_FILE}: ${fn} does not pass \`tenantAdmin\` to the resolver. ` +
+        'The repaired boundary (step 6) then never runs for an admin, so the admin-open ' +
+        'path is either dead or decided somewhere else.',
+    );
+  }
+  for (const at of indicesOf(body, ISADMIN)) {
+    if (at < span[0] || at >= span[1]) {
       fail(
-        `${GUARD_FILE}: authorizeWorkspace does not pass \`tenantAdmin\` to the resolver. ` +
-          'The repaired boundary (step 6) then never runs for an admin, so the admin-open ' +
-          'path is either dead or decided somewhere else.',
+        `${GUARD_FILE}: ${fn} ACTS on isTenantAdmin outside the ${delegate} call. ` +
+          'That is the #3825 short-circuit: a tenant admin is answered with no workspace ' +
+          'document read and therefore no tenant compared. Compute the flag and pass it ' +
+          `to ${delegate}; let the delegation decide.`,
       );
     }
-    for (const at of indicesOf(awBody, ISADMIN)) {
-      if (at < span[0] || at >= span[1]) {
-        fail(
-          `${GUARD_FILE}: authorizeWorkspace ACTS on isTenantAdmin outside the resolver call. ` +
-            'That is the #3825 short-circuit: a tenant admin is answered with no workspace ' +
-            'document read and therefore no tenant compared. Compute the flag and pass it ' +
-            'to resolveWorkspaceAccessByOid; let the resolver decide.',
-        );
-      }
-    }
   }
+
+  // 8e — an ALLOW must be the DELEGATED verdict, not this function's own. This
+  //      is the check that does not depend on the bypass naming `isTenantAdmin`:
+  //      `if (session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID) return null;`
+  //      is invisible to 8a and 8d and is caught here.
+  const binding = delegationBinding(body, delegate);
+  if (!binding) {
+    fail(
+      `${GUARD_FILE}: ${fn} does not bind the result of ${delegate}() to a variable, so ` +
+        'this guard cannot tell an ALLOW that reflects the delegated verdict from one ' +
+        'that overrides it. Keep the `const x = await ' + `${delegate}(…)` + '` shape.',
+    );
+    continue;
+  }
+  const namesVerdict = new RegExp(`\\b${binding}\\b`);
+  for (const site of allowSites(body)) {
+    // Line relative to the function's opening brace — the guard works on a body
+    // slice, so a file line number would be a guess. Conditions are quoted from
+    // the MASKED source, so a string literal inside one appears blank.
+    const line = body.slice(0, site.index).split('\n').length;
+    if (site.cond === null) {
+      fail(
+        `${GUARD_FILE}: ${fn} (body line ${line}) contains an UNCONDITIONAL \`return null\` — ` +
+          'an ALLOW that no verdict justifies (#3825).',
+      );
+      continue;
+    }
+    const cond = site.cond.replace(/\s+/g, ' ').trim();
+    const key = `${fn}:${cond}`;
+    if (PRE_DELEGATION_ALLOWLIST.has(key)) { usedPreDelegation.add(key); continue; }
+    if (site.index > span[1] && namesVerdict.test(cond)) continue;
+    fail(
+      `${GUARD_FILE}: ${fn} (body line ${line}) ALLOWs on \`if (${cond}) return null\`, which ` +
+        `neither reads the delegated verdict \`${binding}\` nor is pinned in ` +
+        'PRE_DELEGATION_ALLOWLIST. An authorizer may only allow because ' +
+        `${delegate}() allowed — an ALLOW decided here bypasses the tenant boundary ` +
+        'whatever it calls itself (#3825).',
+    );
+  }
+}
+
+const staleAllows = [...PRE_DELEGATION_ALLOWLIST.keys()].filter((k) => !usedPreDelegation.has(k));
+for (const k of staleAllows) {
+  fail(
+    `${GUARD_FILE}: PRE_DELEGATION_ALLOWLIST entry \`${k}\` matches no ALLOW in the module. ` +
+      'The condition it pins was changed or removed — re-review it rather than leaving a ' +
+      'stale exemption that would re-admit a DIFFERENT condition later.',
+  );
 }
 
 // 8b. `resolveAdminWorkspace` — the isTenantAdmin GATE stays (without it a
@@ -559,11 +747,30 @@ if (/\bloadWorkspaceAdmin\b/.test(guard)) {
 //     item-scoped sibling of the same class, reported separately rather than
 //     smuggled into a tenant-boundary guard behind an excuse.
 //
-//     KNOWN LIMIT, stated rather than implied: this walks `function NAME(…)`
-//     declarations only. The same shape inside an arrow-function const is not
-//     seen. 8a-8c cover the module that actually matters; this is the net for
+//     THE MATCH IS STRUCTURAL, NOT LITERAL (2026-08-21). This used to be the
+//     regex `/if\s*\(\s*isTenantAdmin\s*\([^)]*\)\s*\)\s*return\s+null\s*;/`,
+//     which requires `if (` IMMEDIATELY followed by `isTenantAdmin(` — so
+//     `if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;`
+//     slid straight through it, and did, live. `grantsOnAdminFlag` instead
+//     brace-matches EVERY `return null` back to the condition governing it and
+//     asks whether that condition mentions the flag ANYWHERE in it. A conjunct,
+//     a negation, a ternary operand or a de Morgan rewrite all still match.
+//
+//     KNOWN LIMITS, stated rather than implied:
+//       - this walks `function NAME(…)` declarations only; the same shape inside
+//         an arrow-function const is not seen;
+//       - it keys on the `isTenantAdmin(` TOKEN, so a bypass that re-derives the
+//         admin verdict without naming it — measured example
+//         `if (session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID) return null;`
+//         — is INVISIBLE here. Inside `workspace-guard.ts` section 8e catches
+//         that variant structurally. Everywhere ELSE in the repo THE SPECS ARE
+//         THE BACKSTOP, not this regex: that mutation left this scan at exit 0
+//         and turned 6 tests in
+//         `lib/auth/__tests__/workspace-guard-admin-bypass.test.ts` RED. Do not
+//         read a green 8d as "no bypass"; read it as "no bypass of the shapes
+//         8d can see".
+//     8a-8c and 8e cover the module that actually matters; this is the net for
 //     the next one.
-const ADMIN_GRANTS_ALONE = /if\s*\(\s*isTenantAdmin\s*\([^)]*\)\s*\)\s*return\s+null\s*;/;
 const WORKSPACE_PARAM = /\bworkspace(Id|_id)?\b/i;
 let adminShapeScanned = 0;
 for (const file of files) {
@@ -571,7 +778,7 @@ for (const file of files) {
   const src = readFileSync(file, 'utf8');
   if (!ISADMIN.test(src)) continue;
   const masked = mask(src);
-  if (!ADMIN_GRANTS_ALONE.test(masked)) continue;
+  if (!grantsOnAdminFlag(masked)) continue;
   for (const m of masked.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*[(<]/g)) {
     const fnName = m[1];
     const sig = signature(masked, fnName);
@@ -579,7 +786,7 @@ for (const file of files) {
     if (sig === null || body === null) continue;
     adminShapeScanned += 1;
     if (!WORKSPACE_PARAM.test(sig)) continue; // not a workspace-scoped decision
-    if (!ADMIN_GRANTS_ALONE.test(body)) continue;
+    if (!grantsOnAdminFlag(body)) continue;
     const line = masked.slice(0, m.index).split('\n').length;
     fail(
       `${rel}:${line}: ${fnName}() grants access on isTenantAdmin ALONE in a ` +

@@ -165,6 +165,22 @@ async function workspaceIdOfItem(itemId: string, itemType: string): Promise<stri
  * caller's own oid. That case is unreachable for any id that names a real item —
  * the lookup is a cross-partition query, not an owner-scoped one, so an item
  * belonging to a DIFFERENT tenant is still found and still refused.
+ *
+ * THAT `return null` IS THE ONLY ALLOW THIS FUNCTION IS PERMITTED TO DECIDE, and
+ * it is pinned by its exact condition (`!workspaceId`) in
+ * `scripts/ci/check-tid-boundary-chokepoint.mjs`'s PRE_DELEGATION_ALLOWLIST.
+ * Every other `return null` here must read `denied` — the verdict
+ * `authorizeWorkspace` returned. This is not defensive prose: on 2026-08-21 an
+ * independent review inserted ONE line at the top of this function —
+ *
+ *     if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;
+ *
+ * — and it passed the ENTIRE verification stack (guard exit 0, the 27-test
+ * #3825 spec green, the 259-test wide suite green) while granting a real
+ * cross-tenant ALLOW for that one item type. This is the 85-importer entry
+ * point, and a bypass scoped to one `itemType` is invisible to a spec suite that
+ * exercises a different one. Section 8a/8d/8e now key on the SHAPE (an ALLOW
+ * this function decides itself) rather than on the literal `if (isTenantAdmin(`.
  */
 export async function authorizeItemWorkspace(
   session: SessionPayload,
@@ -330,14 +346,46 @@ export async function requireWorkspace(
  *
  * ONE SIDE EFFECT WORTH KNOWING, and the route inventory records it: because the
  * resolver's step 5 is `resolveEffectiveRole`, these admin-plane routes can now
- * transitively reach MICROSOFT GRAPH where before they touched Cosmos only. It
- * is bounded and already fail-safe — Graph is consulted only when the workspace
- * carries GROUP role assignments AND the session supplied no `groups` claim, and
- * `resolveEffectiveRole` catches a token failure and treats an unreachable
- * directory as `'unknown'` (fail-closed) rather than throwing. `authorizeWorkspace`
- * and `authorizeWorkspaceList` have always had this edge; `resolveAdminWorkspace`
- * now shares it, which is the cost of there being one implementation.
- * Regenerate `docs/fiab/route-inventory.md` when this changes.
+ * transitively reach MICROSOFT GRAPH where before they touched Cosmos only.
+ * `authorizeWorkspace` and `authorizeWorkspaceList` have always had this edge;
+ * `resolveAdminWorkspace` now shares it, which is the cost of there being one
+ * implementation. Regenerate `docs/fiab/route-inventory.md` when this changes.
+ *
+ * WHAT THAT EDGE IS AND IS NOT — stated to the precision it was MEASURED (R7).
+ * Graph is consulted only when the workspace carries GROUP role assignments AND
+ * the session supplied no `groups` claim (per #3175 that claim is frequently
+ * absent, so this path is genuinely reachable).
+ *
+ *   FAIL-CLOSED, measured: a Graph token failure, a transport failure, a
+ *   timeout, a 429, a 5xx, and a truncated membership walk all resolve to
+ *   `'unknown'`, which contributes no role — so the caller is refused, not
+ *   admitted.
+ *
+ *   NOT FAIL-CLOSED — two residuals, both in `lib/azure/workspace-roles-client.ts`
+ *   and therefore outside this file, tracked as **#3834**:
+ *     - `graphUserInGroup` reads a BARE `res.ok` as membership without inspecting
+ *       the body, so any 2xx from something sitting in front of Graph (a proxy,
+ *       a WAF, a captive portal, a wrong-national-cloud host — the #3381
+ *       condition) GRANTS the group's role and silently defeats the
+ *       `tenant_unconfirmed` refusal this function exists to produce;
+ *     - a malformed enumeration page throws an unhandled `TypeError` straight
+ *       out of this function instead of answering.
+ *   Neither is a regression of this change — before it, a tenant admin was
+ *   ALLOWED unconditionally, so every measured mode is at least as tight as it
+ *   was. The earlier wording here ("bounded and already fail-safe") was true of
+ *   token failure and unreachability and READ as covering all failures. It did
+ *   not, and an unqualified claim of a property the code does not have is the
+ *   thing `deploy-integrity.md` R7 forbids.
+ *
+ * BOUNDED PER REQUEST, NOT IN AGGREGATE. Nothing on this path caches
+ * (`cache: 'no-store'`, no memo layer), so every request pays it in full. A
+ * single membership probe is capped at 30s and its paged fallback at a
+ * `PagingBudget` of 15s / 50 pages — but `resolveEffectiveRole` walks the GROUP
+ * assignments SEQUENTIALLY with no walk-wide ceiling, so the worst case is
+ * `N_groups x ~45s` against a route `maxDuration` of 60. A 429 makes that worse
+ * rather than better: a non-404 4xx falls THROUGH into the enumeration (which
+ * throttles too), doubling the Graph calls, and no `Retry-After` is honoured —
+ * so these 13 routes amplify a throttle instead of backing off. Also #3834.
  *
  * Callers that must additionally restrict to admins ONLY (e.g. the networking
  * gate, or a destructive admin DELETE) check `isTenantAdmin(session)` themselves
