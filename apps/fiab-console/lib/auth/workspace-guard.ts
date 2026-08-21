@@ -328,6 +328,17 @@ export async function requireWorkspace(
  * reported as `'admin'` for any non-owner verdict, preserving the
  * `via === 'owner'` distinction the 13 call sites branch on.
  *
+ * ONE SIDE EFFECT WORTH KNOWING, and the route inventory records it: because the
+ * resolver's step 5 is `resolveEffectiveRole`, these admin-plane routes can now
+ * transitively reach MICROSOFT GRAPH where before they touched Cosmos only. It
+ * is bounded and already fail-safe — Graph is consulted only when the workspace
+ * carries GROUP role assignments AND the session supplied no `groups` claim, and
+ * `resolveEffectiveRole` catches a token failure and treats an unreachable
+ * directory as `'unknown'` (fail-closed) rather than throwing. `authorizeWorkspace`
+ * and `authorizeWorkspaceList` have always had this edge; `resolveAdminWorkspace`
+ * now shares it, which is the cost of there being one implementation.
+ * Regenerate `docs/fiab/route-inventory.md` when this changes.
+ *
  * Callers that must additionally restrict to admins ONLY (e.g. the networking
  * gate, or a destructive admin DELETE) check `isTenantAdmin(session)` themselves
  * after this resolves — `via` is returned so they can distinguish owner vs admin
