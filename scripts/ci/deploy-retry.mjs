@@ -890,8 +890,12 @@ if (isMain) {
   // every deploy path, so an unhandled rejection has to fail closed like any
   // other failure it reports.
   main().catch((e) => {
-    process.stderr.write(`deploy-retry: internal error — ${e?.stack || e}
-`);
+    // redact() here for the same reason formatAnnotation() has it: stderr is as
+    // public as stdout in an Actions log, and this handler is outside the
+    // surfaces #3829 enumerated. A stack is the most plausible carrier of a path
+    // or an id, so it does not get to be the one unredacted write.
+    process.stderr.write(redact(`deploy-retry: internal error — ${e?.stack || e}
+`));
     process.exit(1);
   });
 }

@@ -72,8 +72,25 @@ function failsThenSucceeds(counterFile, stderr, failTimes) {
   ];
 }
 
+/**
+ * The env every spawned child gets. NODE_TEST_CONTEXT is STRIPPED (#3829 round
+ * 4): these children stand in for real CI invocations, and inheriting the
+ * test-runner marker let `if (!process.env.NODE_TEST_CONTEXT) return text;`
+ * inside redact() survive the entire suite — a redactor that only redacts while
+ * it can see it is being tested is the purest gate-that-cannot-fail.
+ * scripts/ci/__tests__/node-test-suites.test.mjs deletes it for the same reason.
+ */
+function childEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  delete env.NODE_TEST_CONTEXT;
+  return env;
+}
+
 function runRetry(extraArgs, cmd) {
-  return spawnSync(process.execPath, [SCRIPT, ...extraArgs, '--', ...cmd], { encoding: 'utf8' });
+  return spawnSync(process.execPath, [SCRIPT, ...extraArgs, '--', ...cmd], {
+    encoding: 'utf8',
+    env: childEnv(),
+  });
 }
 
 const TRANSIENT = 'ERROR: (ContainerAppOperationInProgress) There is an active provisioning operation.\n';
@@ -520,10 +537,55 @@ function runWithFakeAz(ops, extraArgs = []) {
       '--',
       ...alwaysFails(counter, MYSTERY),
     ],
-    { encoding: 'utf8', env: { ...process.env, LOOM_AZ_BIN: az } },
+    { encoding: 'utf8', env: childEnv({ LOOM_AZ_BIN: az }) },
   );
   return { r, artifact, raw: fs.readFileSync(artifact, 'utf8') };
 }
+
+test('ACCEPTANCE — the ARTIFACT is redacted on a path that never sets LOOM_AZ_BIN (#3829 round 4)', () => {
+  // EVERY other GUID-carrying artifact assertion in this file reaches the
+  // artifact through runWithFakeAz(), which sets LOOM_AZ_BIN. That made
+  //
+  //     const safe = process.env.LOOM_AZ_BIN ? redact(json) : json;
+  //
+  // invisible: a redaction that only applies when a test harness is driving it.
+  // This test takes the OTHER route to the same write — no --arm-deployment, so
+  // no ARM drill-down, so `az` is never resolved and LOOM_AZ_BIN is never set.
+  //
+  // THE POISONED FIELD IS `--step`, AND THAT CHOICE IS THE WHOLE TEST. The first
+  // cut poisoned the child's stderr, which lands in `established[].line` — and
+  // that field carries its own per-site `redact(e.line)`, so TWO redactors sat
+  // on the path and the mutation above stayed GREEN at 50/50. Measured, not
+  // assumed (csa_loom_mutation_that_does_not_move_the_verdict). `step` is
+  // operator-supplied text written to the artifact with NO per-site call, so it
+  // is covered by the whole-artifact boundary and by nothing else.
+  const dir = scratchDir();
+  const counter = path.join(dir, 'n');
+  fs.writeFileSync(counter, '');
+  const artifact = path.join(dir, 'deploy-failure.json');
+  const poisonedStep = `az deployment sub create as ${SYNTHETIC_OID}`;
+
+  // Non-degenerate: the INPUT must carry a GUID, or "no GUID in the artifact"
+  // is satisfied by an artifact that never contained one.
+  assert.match(poisonedStep, GUID_RE, 'the fixture does not carry a GUID');
+  assert.equal(process.env.LOOM_AZ_BIN, undefined, 'this test must run with LOOM_AZ_BIN UNSET');
+
+  const r = runRetry(
+    ['--class-allow', 'transient', '--max-attempts', '1', '--backoff', '0', '--jitter', '0',
+      '--step', poisonedStep, '--artifact', artifact],
+    alwaysFails(counter, QUOTA),
+  );
+  assert.notEqual(r.status, 0, `a quota failure must not be retried into success; stderr=${r.stderr}`);
+  assert.ok(fs.existsSync(artifact), 'the artifact was not written, so this test proves nothing');
+
+  const raw = fs.readFileSync(artifact, 'utf8');
+  // The artifact really did capture the poisoned field — otherwise vacuous.
+  assert.match(raw, /"step":/, 'the artifact has no step field to carry the poison');
+  assert.match(raw, /az deployment sub create as/, 'the artifact did not capture the poisoned step');
+  assert.doesNotMatch(raw, GUID_RE, 'a GUID reached the deploy-failure.json a PUBLIC issue is built from');
+  assert.match(raw, /az deployment sub create as <guid>/, 'redacted in place, not dropped');
+  assert.doesNotThrow(() => JSON.parse(raw), 'the redaction broke the JSON');
+});
 
 test('POSITIVE CONTROL — the GUID assertion FIRES on the pre-fix leaf composition', () => {
   // A redaction assertion whose fixture contains no GUID passes forever while
@@ -688,12 +750,59 @@ test('redact() does NOT invent matches in legitimate text (no false positives)',
     'rg-csa-loom-admin-centralus / psql-loom-ducklake-k6mvh5sm6z7do',
     'ERROR: (SomeCodeNobodyHasEverSeen) the widget frobnicator declined',
     'The ID of the existing role assignment is 11112222333344445555666677778888.',
+    // NOTE — these last two are RESIDUAL 2, not merely "not a false positive".
+    // They are hex-adjacent GUIDs and they SURVIVE; see the test above and the
+    // disclosure in _azure-redact.mjs. Kept here because a 14-hex first group is
+    // genuinely not a GUID token, but do not read this corpus as evidence that
+    // hex-adjacency is safe — it is the documented cost of the lookarounds.
     'abcdef11111111-2222-3333-4444-555555555555 (a longer hex run, not a GUID token)',
     '11111111-2222-3333-4444-555555555555abc (trailing hex, not a GUID token)',
   ];
   for (const s of legitimate) {
     assert.equal(redact(s), s, `redact() rewrote legitimate text: ${JSON.stringify(s)}`);
   }
+});
+
+test('RESIDUAL 2 — a GUID directly adjacent to a HEX character survives, and that is DISCLOSED (#3829 round 4)', () => {
+  // Not an accident and not a silent gap: it is the exact cost of the hex
+  // lookarounds that closed the `\b` residual in round 2. Round 3's header said
+  // "what it still does NOT match, deliberately: an undashed 32-hex run" — as
+  // though that were the whole list. It was not, and stating an unmeasured
+  // enumeration as complete is the R7 defect this test exists to prevent
+  // recurring. Pinned so the module header and the behaviour cannot drift apart:
+  // if someone narrows the lookaround later, this test goes red and they MUST
+  // update the disclosure rather than leave a stale claim behind.
+  const survives = [
+    ['single hex letter prefix', `f${SYNTHETIC_OID}`],
+    ['hex-word prefix', `abcdef${SYNTHETIC_OID}`],
+    ['hex suffix', `${SYNTHETIC_OID}f`],
+    ['hex-word suffix', `${SYNTHETIC_OID}abc`],
+    // The one that argues loudest for narrowing: a real Loom-shaped name whose
+    // last character happens to be hex, concatenated with NO separator.
+    ['Loom-shaped name ending in a hex letter', `uami-loom-directlake${SYNTHETIC_OID}`],
+  ];
+  for (const [why, input] of survives) {
+    assert.match(input, GUID_RE, `${why}: the fixture must carry a GUID or this proves nothing`);
+    assert.equal(redact(input), input, `${why}: behaviour changed — UPDATE THE DISCLOSURE in _azure-redact.mjs`);
+  }
+
+  // CONTROL, in the direction that matters most: a NON-hex neighbour is still
+  // redacted. Without this the test above would also pass on a redact() that had
+  // stopped working entirely.
+  for (const [why, input] of [
+    ['non-hex letter prefix', `x${SYNTHETIC_OID}`],
+    ['underscore prefix', `admin_${SYNTHETIC_OID}`],
+    ['dash prefix', `uami-loom-directlake-${SYNTHETIC_OID}`],
+    ['slash prefix', `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`],
+  ]) {
+    assert.doesNotMatch(redact(input), GUID_RE, `${why}: the redaction regressed`);
+  }
+
+  // …and the disclosure is really IN the module, not only in this test. A
+  // residual named in a test nobody reads is the same unstated assumption.
+  const header = fs.readFileSync(path.resolve(import.meta.dirname, '..', '_azure-redact.mjs'), 'utf8');
+  assert.match(header, /adjacent to a HEX character/i, '_azure-redact.mjs no longer discloses residual 2');
+  assert.match(header, /undashed 32-hex/i, '_azure-redact.mjs no longer discloses residual 1');
 });
 
 test('redact() leaves the UNDASHED 32-hex role-assignment id alone — #3439 depends on it', () => {

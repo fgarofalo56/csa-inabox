@@ -22,6 +22,7 @@ import {
   buildIssueBody,
   notifyFailure,
   shouldFile,
+  formatStdout,
   FAILURE_LABEL,
 } from '../deploy-notify-failure.mjs';
 
@@ -310,17 +311,24 @@ test('POSITIVE CONTROL — the pre-fix TITLE really did carry a GUID', () => {
 });
 
 test('ACCEPTANCE — the TITLE is redacted at the poster, on create AND on the search', async () => {
-  const { request, calls } = recorder([
-    [/^GET /, () => []],
-    [/^POST .*\/issues$/, (b) => ({ number: 4243, ...b })],
-  ]);
-  const r = await notifyFailure({ repo: 'o/r', workflow: GLUED_GUID, body: 'x', request });
-  assert.equal(r.created, true);
+  // Both repos, for the reason the hand-built-body test spells out: `repo ===
+  // 'o/r' ? redact(title) : title` survived 31/31 while every fixture in this
+  // file used the stand-in. The title has no second redactor anywhere on its
+  // path — buildIssueTitle() is unredacted by design — so this is the only place
+  // that key can be caught.
+  for (const repo of ['o/r', 'fgarofalo56/csa-inabox']) {
+    const { request, calls } = recorder([
+      [/^GET /, () => []],
+      [/^POST .*\/issues$/, (b) => ({ number: 4243, ...b })],
+    ]);
+    const r = await notifyFailure({ repo, workflow: GLUED_GUID, body: 'x', request });
+    assert.equal(r.created, true);
 
-  const create = calls.find((c) => c.method === 'POST' && c.url.endsWith('/issues'));
-  assert.doesNotMatch(create.body.title, GUID_RE, 'a GUID reached a PUBLIC issue TITLE (#3829)');
-  // REDACTED, not dropped: the title must still identify the workflow.
-  assert.equal(create.body.title, 'deploy: deploy_<guid> is failing');
+    const create = calls.find((c) => c.method === 'POST' && c.url.endsWith('/issues'));
+    assert.doesNotMatch(create.body.title, GUID_RE, `${repo}: a GUID reached a PUBLIC issue TITLE (#3829)`);
+    // REDACTED, not dropped: the title must still identify the workflow.
+    assert.equal(create.body.title, 'deploy: deploy_<guid> is failing');
+  }
 });
 
 test('the notice is FOUND by its redacted title — redaction must not open a duplicate every run', async () => {
@@ -348,6 +356,16 @@ test('ACCEPTANCE — a HAND-BUILT body is redacted at the poster, for every REAL
   // of the five live callers do not even carry that prefix. So the population is
   // read MECHANICALLY out of the workflows and every member is exercised: a
   // name-keyed bypass now has nowhere to hide, whatever key it picks.
+  //
+  // THE REPO IS VARIED HERE, AND ONLY HERE IT COUNTS (#3829 round 4). Every
+  // fixture in this file passed `repo: 'o/r'`, so `repo === 'o/r' ? redact(body)
+  // : body` — a bypass that leaks on the only repo that actually exists — passed
+  // 31/31. Varying it in the CLI test does NOT catch that, measured: the CLI
+  // path builds its body with buildIssueBody(), which redacts at its own return,
+  // so two redactors sit on that path and the mutation stays green
+  // (csa_loom_mutation_that_does_not_move_the_verdict). THIS test hands
+  // notifyFailure() a hand-built string, so the poster boundary is the only
+  // redactor on the path and the repo key is discriminating.
   const handBuilt = `HAND-BUILT BODY psql-loom-weave-default-abc123/${SYNTHETIC_OID}`;
   assert.match(handBuilt, GUID_RE, 'the INPUT must carry a GUID or this test proves nothing');
 
@@ -357,26 +375,29 @@ test('ACCEPTANCE — a HAND-BUILT body is redacted at the poster, for every REAL
   // uniform, so a prefix-keyed exemption cannot cover it.
   assert.ok(callers.some((w) => !w.startsWith('deploy-')), 'the caller population must not be prefix-uniform');
 
-  for (const workflow of callers) {
-    // Path 1 — create.
-    const create = recorder([
-      [/^GET /, () => []],
-      [/^POST .*\/issues$/, (b) => ({ number: 1, ...b })],
-    ]);
-    await notifyFailure({ repo: 'o/r', workflow, body: handBuilt, request: create.request });
-    const posted = create.calls.find((c) => c.method === 'POST').body.body;
-    assert.doesNotMatch(posted, GUID_RE, `${workflow}: a hand-built body reached a PUBLIC issue unredacted (#3829)`);
-    assert.match(posted, /psql-loom-weave-default-abc123\/<guid>/, `${workflow}: redacted in place, not dropped`);
+  const repos = ['o/r', 'fgarofalo56/csa-inabox'];
+  for (const repo of repos) {
+    for (const workflow of callers) {
+      // Path 1 — create.
+      const create = recorder([
+        [/^GET /, () => []],
+        [/^POST .*\/issues$/, (b) => ({ number: 1, ...b })],
+      ]);
+      await notifyFailure({ repo, workflow, body: handBuilt, request: create.request });
+      const posted = create.calls.find((c) => c.method === 'POST').body.body;
+      assert.doesNotMatch(posted, GUID_RE, `${repo} ${workflow}: a hand-built body reached a PUBLIC issue unredacted (#3829)`);
+      assert.match(posted, /psql-loom-weave-default-abc123\/<guid>/, `${repo} ${workflow}: redacted in place, not dropped`);
 
-    // Path 2 — comment on an existing notice. Both writes go through the boundary.
-    const comment = recorder([
-      [/^GET /, () => [{ number: 5, title: buildIssueTitle(workflow) }]],
-      [/^POST .*\/comments$/, () => ({ id: 1 })],
-    ]);
-    await notifyFailure({ repo: 'o/r', workflow, body: handBuilt, request: comment.request });
-    const commented = comment.calls.find((c) => c.url.includes('/comments')).body.body;
-    assert.doesNotMatch(commented, GUID_RE, `${workflow}: the COMMENT path bypassed the redaction (#3829)`);
-    assert.match(commented, /psql-loom-weave-default-abc123\/<guid>/);
+      // Path 2 — comment on an existing notice. Both writes go through the boundary.
+      const comment = recorder([
+        [/^GET /, () => [{ number: 5, title: buildIssueTitle(workflow) }]],
+        [/^POST .*\/comments$/, () => ({ id: 1 })],
+      ]);
+      await notifyFailure({ repo, workflow, body: handBuilt, request: comment.request });
+      const commented = comment.calls.find((c) => c.url.includes('/comments')).body.body;
+      assert.doesNotMatch(commented, GUID_RE, `${repo} ${workflow}: the COMMENT path bypassed the redaction (#3829)`);
+      assert.match(commented, /psql-loom-weave-default-abc123\/<guid>/);
+    }
   }
 });
 
@@ -456,9 +477,21 @@ test('the poster redaction covers a GUID glued on EITHER side, not only a delimi
 // unit test of the exported functions can reach.
 
 function runCli(args, env) {
+  // NODE_TEST_CONTEXT is STRIPPED, deliberately (#3829 round 4). These children
+  // stand in for a real CI invocation, and inheriting the test-runner marker let
+  // a mutation as blunt as
+  //
+  //     if (!process.env.NODE_TEST_CONTEXT) return text;   // inside redact()
+  //
+  // survive the whole suite: every path that could have caught it ran with the
+  // variable set. A child that only redacts when it can see it is being tested
+  // is the purest form of a gate that cannot fail. Same reason
+  // scripts/ci/__tests__/node-test-suites.test.mjs deletes it.
+  const childEnv = { ...process.env, ...env };
+  delete childEnv.NODE_TEST_CONTEXT;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SCRIPT, ...args], {
-      env: { ...process.env, ...env },
+      env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -519,8 +552,13 @@ test('ACCEPTANCE — the FILED-issue log line redacts the workflow name too, ove
   });
   try {
     const r = await runCli(['--workflow', POISONED_WORKFLOW, '--result', 'failure'], {
-      GITHUB_REPOSITORY: 'o/r',
-      GH_TOKEN: 'not-a-real-token',
+      // The REAL repo, not 'o/r' (#3829 round 4). Every poster fixture in this
+      // file used the same two-char stand-in, so `repo === 'o/r' ? redact(body)
+      // : body` — a bypass that would leak on the only repo that actually
+      // matters — passed 31/31. The token literal is varied for the same reason:
+      // `token === 'not-a-real-token' ? … : …` was equally invisible.
+      GITHUB_REPOSITORY: 'fgarofalo56/csa-inabox',
+      GH_TOKEN: 'ghs_aDifferentSyntheticTokenLiteral',
       GITHUB_API_URL: base,
       GITHUB_RUN_ID: '99',
       GITHUB_SHA: 'abc1234',
@@ -545,7 +583,72 @@ test('ACCEPTANCE — the FILED-issue log line redacts the workflow name too, ove
   }
 });
 
-// ── CANCELLED IS NOT FAILED (#3368) ──────────────────────────────────────────
+// ── ONE BOUNDARY, NOT ONE VARIABLE (#3829 round 4) ───────────────────────────
+//
+// Round 3 redacted `${workflow}` on the not-filed `::notice::` line and left
+// `${result}` — the very next interpolation on the SAME statement — raw. It
+// reaches that line twice: once directly, and once inside `decision.why`, which
+// shouldFile() builds by embedding the observed value. Measured at round-3 head:
+//
+//   $ node deploy-notify-failure.mjs --workflow deploy-fiab-commercial \
+//       --result 11111111-2222-3333-4444-555555555555
+//   ::notice::… ("11111111-2222-3333-4444-555555555555") … (observed result:
+//   "11111111-2222-3333-4444-555555555555", category: unknown)   ← 2 GUIDs
+//
+// Latent — all five live callers pass `${{ job.status }}` or a literal — but
+// that is verbatim the standard round 3 applied to `workflow` in this same file,
+// and "the field added next forgets to opt in" is the entire thesis of #3829.
+// The per-variable local is gone; formatStdout() is the single boundary.
+
+const POISONED_RESULT = SYNTHETIC_OID;
+
+test('POSITIVE CONTROL — the --result value really is GUID-shaped, and reaches BOTH interpolations', () => {
+  // Without this, "no GUID in stdout" is satisfiable by a CLI that prints
+  // nothing — and the `decision.why` half is invisible unless the classifier
+  // really does echo the observed value back.
+  assert.match(POISONED_RESULT, GUID_RE, 'the CLI input must carry a GUID or the next test is vacuous');
+  const why = shouldFile(POISONED_RESULT).why;
+  assert.match(why, GUID_RE, 'shouldFile() must embed the observed result, or only one of the two sites is under test');
+});
+
+test('ACCEPTANCE — a GUID in --result reaches NO public surface (#3829 round 4)', async () => {
+  const r = await runCli(['--workflow', 'deploy-fiab-commercial', '--result', POISONED_RESULT], {
+    GITHUB_REPOSITORY: 'fgarofalo56/csa-inabox',
+    GH_TOKEN: 'ghs_aDifferentSyntheticTokenLiteral',
+  });
+  assert.equal(r.code, 0, `an unrecognised outcome must not turn the run red; stderr=${r.stderr}`);
+  // Non-degenerate: the annotation really was emitted, and it is the one meant.
+  assert.match(r.stdout, /^::notice::deploy-notify-failure: no issue filed for /, 'the annotation was not emitted at all');
+  assert.doesNotMatch(r.stdout, GUID_RE, 'a GUID in --result reached a PUBLIC ::notice:: annotation (#3829 round 4)');
+  assert.doesNotMatch(r.stderr, GUID_RE, 'a GUID in --result reached stderr, which is equally public');
+  // REDACTED IN PLACE, at BOTH sites — not dropped, and not merely absent
+  // because the line was truncated. The verdict must be unchanged.
+  assert.match(r.stdout, /\("<guid>"\)/, 'the decision.why copy of the observed result was not redacted in place');
+  assert.match(r.stdout, /observed result: "<guid>", category: unknown/, 'the direct copy was not redacted in place');
+  assert.match(r.stdout, /no issue filed for deploy-fiab-commercial —/, 'the verdict or the workflow name changed');
+});
+
+test('MUTATION-VISIBLE — formatStdout() is the ONLY way this file reaches stdout', () => {
+  // The two assertions above are end-to-end, and an end-to-end assertion cannot
+  // say WHICH redactor did the work when several sit on the path. Pin the
+  // boundary directly — pure and exported precisely so a pass-through mutation
+  // (`return String(text)`) is visible here rather than only inferable
+  // (csa_loom_mutation_that_does_not_move_the_verdict).
+  assert.equal(formatStdout(`x${SYNTHETIC_OID}`), 'x<guid>', 'the boundary does not redact');
+  assert.doesNotMatch(formatStdout(`observed result: "${SYNTHETIC_OID}"`), GUID_RE);
+  // String() first: a non-string must not become a silently EMPTY log line.
+  assert.equal(formatStdout(42), '42');
+  assert.equal(formatStdout(undefined), 'undefined');
+  // …and STRUCTURAL: no `process.stdout.write` may take an argument that has not
+  // been through the boundary. A future line that reintroduces per-variable
+  // redaction — or none — is caught here even if no test exercises it.
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  const writes = [...src.matchAll(/process\.stdout\.write\(([^\n]*)/g)].map((m) => m[1].trim());
+  assert.equal(writes.length, 1, `expected exactly ONE process.stdout.write (inside emit()), found ${writes.length}: ${JSON.stringify(writes)}`);
+  assert.match(writes[0], /^formatStdout\(/, 'a stdout write bypasses the redaction boundary');
+});
+
+
 //
 // The issue's acceptance criterion is explicit that a one-directional test is
 // half a guard: "feed the filer a `cancelled` conclusion and assert NO issue is

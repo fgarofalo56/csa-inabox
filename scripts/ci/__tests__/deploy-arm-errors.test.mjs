@@ -295,3 +295,52 @@ test('parseArgs rejects an unknown flag rather than ignoring it', () => {
 test('the three outcomes have three distinct exit codes', () => {
   assert.equal(new Set([EXIT.FOUND, EXIT.NONE, EXIT.UNREADABLE, EXIT.USAGE]).size, 4);
 });
+
+// ── --json IS OPERATOR-LOCAL, AND THAT IS NOW MECHANICAL (#3829 round 4) ─────
+//
+// The default render redacts; `--json` emits the raw `result`, which carries the
+// unredacted ARM leaf (measured: default 0 GUIDs, --json 1 GUID). That is
+// deliberate — an operator debugging their own subscription needs the real id —
+// and it is safe ONLY while no CI surface invokes it, because a workflow's stdout
+// is public on this public repo.
+//
+// "Documented local-only" is an assumption until something checks it. This is
+// the check: it turns a sentence in a header into a condition that fails the
+// suite the moment a workflow starts publishing the raw form.
+
+test('RATCHET — no workflow invokes deploy-arm-errors.mjs with --json (its output is unredacted)', () => {
+  const dir = path.resolve(import.meta.dirname, '..', '..', '..', '.github', 'workflows');
+  const offenders = [];
+  let scanned = 0;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith('.yml') && !f.endsWith('.yaml')) continue;
+    scanned += 1;
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    // Each invocation plus its continuation lines — a `\`-wrapped `--json` on the
+    // next line is the shape a line-at-a-time matcher would miss
+    // (csa_loom_guard_blind_continuation_lines_scripts).
+    const re = /deploy-arm-errors\.mjs([\s\S]*?)(?=\n\s*\n|\n\s{0,8}-\s|\n\s{0,6}[a-z-]+:\s|$)/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      if (/--json\b/.test(m[1])) offenders.push(`${f}: ${m[0].split('\n')[0].trim()}`);
+    }
+  }
+  // Fail closed on a broken scan: zero files read would mean the path drifted,
+  // not that the repo is clean (guard_with_zero_population_needs_embedded_control).
+  assert.ok(scanned >= 20, `expected to scan >=20 workflow files, scanned ${scanned} — the path drifted`);
+  assert.deepEqual(
+    offenders,
+    [],
+    'a workflow publishes deploy-arm-errors --json, whose output is UNREDACTED, to a public Actions log',
+  );
+
+  // EMBEDDED CONTROL — the population is zero today (no workflow calls this
+  // script at all), so prove the matcher can actually see the violation it
+  // guards, including across a continuation line.
+  const bad = 'node scripts/ci/deploy-arm-errors.mjs \\\n  --name d --scope sub \\\n  --json';
+  const re = /deploy-arm-errors\.mjs([\s\S]*?)(?=\n\s*\n|\n\s{0,8}-\s|\n\s{0,6}[a-z-]+:\s|$)/g;
+  assert.match(re.exec(bad)[1], /--json\b/, 'the matcher cannot detect a --json invocation it is meant to catch');
+  const good = 'node scripts/ci/deploy-arm-errors.mjs --name d --scope sub';
+  re.lastIndex = 0;
+  assert.doesNotMatch(re.exec(good)[1], /--json\b/, 'the matcher fires on a clean invocation');
+});

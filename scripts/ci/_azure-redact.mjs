@@ -46,12 +46,44 @@
  *   digests, timestamps, ARM type names) in
  *   scripts/ci/__tests__/deploy-retry.test.mjs.
  *
- *   What it still does NOT match, deliberately: an undashed 32-hex run. ARM
- *   prints the blocking role-assignment id that way ("existing role assignment
- *   is 0a2b…"), and deploy-retry.mjs's planRemediation() reads it back out of
- *   the message to converge the grant automatically (#3439). Redacting it would
- *   disable a working auto-remediation to hide a value that is a resource NAME,
- *   not a principal id. Stated, not hidden, and pinned by its own test.
+ *   THE RESIDUALS, ENUMERATED IN FULL (#3829 round 4). Round 3 listed ONE of
+ *   these and said "what it still does NOT match" as though the list were
+ *   complete. It was not, which makes the sentence itself an R7 violation — a
+ *   claim stated as established that was never measured. Both residuals, both
+ *   measured against this exact regex:
+ *
+ *     1. AN UNDASHED 32-HEX RUN. ARM prints the blocking role-assignment id that
+ *        way ("existing role assignment is 0a2b…"), and deploy-retry.mjs's
+ *        planRemediation() reads it back out of the message to converge the
+ *        grant automatically (#3439). Redacting it would disable a working
+ *        auto-remediation to hide a value that is a resource NAME, not a
+ *        principal id.
+ *
+ *     2. A GUID DIRECTLY ADJACENT TO A HEX CHARACTER, either side — which is
+ *        what the lookarounds above are, so this is the guard's cost, not a bug
+ *        in it. Measured:
+ *
+ *          clean  x<guid>  <guid>x  _<guid>  admin_<guid>   (round 2 fixed these)
+ *          LEAK   f<guid>  abcdef<guid>  <guid>f  <guid>abc
+ *          LEAK   uami-loom-directlake<guid>
+ *
+ *        Note the shape of the last one: a name ending in a hex letter (a–f)
+ *        concatenated to an id with NO separator still leaks. That is a real
+ *        Loom-shaped name, so this residual is disclosed rather than dismissed.
+ *
+ *   AND THE HONEST ACCOUNTING OF WHAT THE LOOKAROUND BUYS. A dashed 8-4-4-4-12
+ *   token cannot be a slice out of a PURE hex run — the dashes preclude it — so
+ *   the lookbehind does not protect git shas or sha256 digests, which is what it
+ *   reads as though it does. The only false positive it actually prevents is a
+ *   token whose FIRST group is 9+ hex (`deadbeefc-1234-…`), and it pays for that
+ *   with residual 2. That trade is deliberately kept rather than narrowed: every
+ *   candidate narrowing needs a magic threshold on the length of the preceding
+ *   hex run, and each one either re-breaks the false-positive corpus in
+ *   scripts/ci/__tests__/deploy-retry.test.mjs (which pins
+ *   `abcdef11111111-2222-…` — a genuine 14-hex first group — as text that must
+ *   survive byte-for-byte) or is tuned to that fixture rather than to a rule.
+ *   Both residuals are pinned by their own named tests, so neither can drift
+ *   back into being an unstated assumption.
  */
 const GUID = String.raw`(?<![0-9a-fA-F])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9a-fA-F])`;
 
@@ -61,8 +93,24 @@ const GUID = String.raw`(?<![0-9a-fA-F])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F
  * the deploy lane redact at three stacked boundaries (composition site,
  * serialized artifact, issue poster) without mangling the diagnostic.
  *
+ * THE CONTRACT IS "NEVER RETURNS A NON-STRING", NOT "PROTECTS YOU FROM ONE"
+ * (#3829 round 4). This used to read `'' for a non-string, so a caller cannot
+ * publish [object …]` — which both consumers falsify, because both call
+ * `String()` FIRST (formatAnnotation(), formatStdout(), notifyFailure()). Under
+ * those callers `notifyFailure({body:{msg:'…'}})` posts the literal
+ * `[object Object]` and `body: undefined` posts `undefined`. That is the
+ * intended behaviour — a visibly-wrong notice beats a silently-empty one — but
+ * the docstring claimed a guarantee this function does not provide, and a
+ * comment that contradicts its own callers is how the next reader gets it wrong.
+ *
+ * So: STRINGIFICATION IS THE CALLER'S DECISION. This function guarantees only
+ * that its return value is a string and carries no id it knows how to match; it
+ * makes no promise about what a non-string turns into, because it never sees
+ * one. Callers that publish MUST String() first — not for redaction, but so a
+ * malformed input degrades to visible garbage rather than to a blank line.
+ *
  * @param {unknown} text
- * @returns {string} '' for a non-string, so a caller cannot publish `[object …]`
+ * @returns {string} '' for a non-string — a floor, not a safety net (see above)
  */
 export function redact(text) {
   if (typeof text !== 'string') return '';
