@@ -32,6 +32,36 @@ validation_gates:
     required: false           # Only for infra changes
     timeout_seconds: 600
 
+  # Typecheck-only leg for the console. The triggers below MIRROR
+  # tsconfig.build.json's include/exclude, because that is the population the
+  # gate actually compiles: it excludes every test, spec, __tests__, e2e and
+  # uat file. A trigger wider than the check population makes the gate report a
+  # measured PASS over a file it never examined - #3506's shape, measured here
+  # at 78 of the last 141 console changes. Console TESTS are NOT covered by
+  # `make validate`; next build, eslint and vitest stay with fiab-console-ci.
+  # See #3811.
+  typescript:
+    script: "gates/validate-typescript.ps1"
+    triggers: ["apps/fiab-console/**/*.ts", "apps/fiab-console/**/*.tsx"]
+    excludes:
+      - "**/*.test.ts"
+      - "**/*.test.tsx"
+      - "**/*.spec.ts"
+      - "**/*.spec.tsx"
+      - "**/__tests__/**"
+      - "apps/fiab-console/e2e/**"
+      - "**/*.uat.ts"
+      - "**/*.uat.tsx"
+      - "apps/fiab-console/vitest.config.ts"
+      - "apps/fiab-console/vitest.setup.ts"
+      - "apps/fiab-console/playwright.config.ts"
+      # NOT gitignored (.gitignore:25 covers only portal/react-webapp/out/), so
+      # unlike node_modules/.next/dist/temp this one is reachable by change
+      # detection. Zero population today; a `next export` would give it one.
+      - "apps/fiab-console/out/**"
+    required: true
+    timeout_seconds: 600
+
   all:
     script: "gates/validate-all.ps1"
     always_run: true
