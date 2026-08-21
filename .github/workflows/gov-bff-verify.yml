@@ -50,6 +50,16 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     steps:
+      # This job ran WITHOUT a checkout until 2026-08-21. Every step was `az` or
+      # `curl`, so nothing needed the repo — until "Resolve automation identity"
+      # was added and invoked `scripts/ci/resolve-automation-oid.mjs` from an
+      # empty workspace. It has failed on `Cannot find module` for 18
+      # consecutive runs since 049349a9 (#3745) gave Gov its workflow_run
+      # trigger, i.e. every Gov roll since 2026-08-18. Last green: 2026-07-24,
+      # before that step existed. Not a required context, so nothing surfaced it.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2
         with:
