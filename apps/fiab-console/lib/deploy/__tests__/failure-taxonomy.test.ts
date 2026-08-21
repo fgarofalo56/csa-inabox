@@ -237,3 +237,59 @@ describe('the table itself', () => {
     }
   });
 });
+
+describe('#3817 — a transient PostgreSQL Entra-admin window (run 32341450273)', () => {
+  // The console-facing half. The Node suite pins the table and the matcher; this
+  // pins what the OPERATOR is shown, which CI never renders.
+  const REAL_LEAF =
+    "AadAuthOperationCannotBePerformedWhenServerIsNotAccessible: Server " +
+    "'psql-loom-weave-default-k6mvh5sm6z7do' is not in an accessible state to perform a " +
+    'Microsoft Entra authentication principal operation. Make sure that the server is in an ' +
+    'accessible before executing any Microsoft Entra authentication principal operation.';
+
+  it('classifies the real leaf as transient and retryable', () => {
+    const d = classifyDeployFailure(REAL_LEAF);
+    expect(d.class).toBe('transient');
+    expect(d.signalId).toBe('transient.postgres-entra-admin-server-not-accessible');
+    expect(d.retryable).toBe(true);
+    // Bounded, always: retryable is never unbounded (R6).
+    expect(d.defaultMaxAttempts).toBeGreaterThan(0);
+    expect(d.exitCode).not.toBe(0);
+  });
+
+  it('is a failure the PLATFORM absorbs, not one the operator is told to fix', () => {
+    // auto-bind-by-default §5: the platform retries a window rather than printing
+    // "wait a bit and re-run the deploy" at a human.
+    expect(isPlatformRemediable(classifyDeployFailure(REAL_LEAF))).toBe(true);
+  });
+
+  it('the rendered message states only what was established (R7)', () => {
+    const msg = renderDiagnosis(classifyDeployFailure(REAL_LEAF), { step: 'provision' });
+    expect(msg).not.toMatch(/could not classify/i);
+    // Every quoted signal must literally occur in the input.
+    const d = classifyDeployFailure(REAL_LEAF);
+    for (const e of d.evidence) {
+      expect(REAL_LEAF.toLowerCase()).toContain(e.signal);
+    }
+    // It must NOT assert a server state — nothing here read one.
+    expect(msg).not.toMatch(/the server is (healthy|fine|ready|up)\b/i);
+    expect(msg).toMatch(/az postgres flexible-server show/);
+  });
+
+  it('does NOT make the taxonomy retryable anywhere new', () => {
+    // Adding a retryable SIGNAL must never add a retryable CLASS. If this drifts,
+    // the exhaustive assertion above ("only genuinely transient classes are
+    // retryable") is the one that has to be argued for again.
+    const retryable = allFailureClasses().filter((c) => isRetryableClass(c));
+    expect(retryable.sort()).toEqual(['capacity', 'eventual-consistency', 'transient']);
+  });
+
+  it('a fatal Entra failure is still fatal', () => {
+    const denied = classifyDeployFailure(
+      "ERROR: (AuthorizationFailed) The client does not have authorization to perform action " +
+        "'Microsoft.DBforPostgreSQL/flexibleServers/administrators/write' over scope",
+    );
+    expect(denied.class).toBe('permission');
+    expect(denied.retryable).toBe(false);
+  });
+});
