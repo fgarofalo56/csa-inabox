@@ -399,10 +399,14 @@ describe('#3833 property 1b — the boundary holds at every BATCH SHAPE, not jus
  * range, not "only the biggest batch anyone actually sends".
  *
  * FOREIGN IDS ARE SCATTERED, NOT CLUSTERED, and the scatter offset MOVES with
- * the batch size (see {@link sweepForeignPositions}), so this also denies an
- * evasion keyed on INDEX POSITION at sizes the matrix cannot reach — "the first
- * id", "the last id", "index 7". Deterministic: no Math.random(), so a failure
- * reproduces byte-for-byte.
+ * the batch size AND with the cascade flag (see {@link sweepForeignPositions}),
+ * so this also denies an evasion keyed on INDEX POSITION at sizes the matrix
+ * cannot reach — "the first id", "the last id", "index 7". The size-only offset
+ * this block shipped with did NOT hold that claim at the top of the interval,
+ * and round-4 review proved it by measurement rather than argument; the cascade
+ * term is the repair. Its exact reach — and the one narrowing it still cannot
+ * see — is stated on the generator below, not glossed here. Deterministic: no
+ * Math.random(), so a failure reproduces byte-for-byte.
  *
  * SAME ASSERTION AS THE MATRIX: document survival. A consult-then-discard bypass
  * leaves `deleted`, `failed` and the teardown count all exactly as expected and
@@ -423,17 +427,57 @@ const ROUTE_MAX_BATCH = 500;
 const SWEEP_CHUNK = 50;
 
 /**
- * Which positions of a size-`n` batch are foreign.
+ * Which positions of a size-`n` batch are foreign, under the cascade flag the
+ * cell is running with.
  *
- * The residue MOVES with the batch size, so no fixed index is foreign in every
- * batch or home in every batch — an evasion keyed on a position, or on "the
- * first/last id", has no index that works across the sweep. Every batch of 3 or
- * more carries at least one foreign id and at least one home id, so both halves
- * of every assertion always have teeth.
+ * THE RESIDUE MOVES WITH THE BATCH SIZE **AND** WITH CASCADE, and that second
+ * term is not decoration — it is the repair for a measured hole. Round-4 review
+ * defeated the size-only residue `(i + size) % 3 === 0` with a consult-then-
+ * discard bypass keyed to batch INDEX 498: RC=0, 95 of 95 green, with the same
+ * bypass at index 250 correctly failing 10 specs. Index 498 exists only in
+ * batches of 499 and 500, and under that residue it was HOME in every one of
+ * those cells; index 499 exists only in a batch of 500 and was FOREIGN in both
+ * of its. The top two positions each carried exactly one role and never the
+ * other, so a narrowing keyed to either was invisible to every assertion here.
+ *
+ * `(cascade ? 1 : 0)` hands each of them the missing role at zero runtime cost —
+ * same loop, same iteration count, one more term in the modulo. Index 498 becomes
+ * foreign at (size 500, cascade ON) and index 499 becomes home at (size 500,
+ * cascade ON), so every index in `[0, ROUTE_MAX_BATCH)` now holds BOTH roles
+ * somewhere in the sweep. The self-check below verifies that over the WHOLE
+ * interval; its old bound stopped three short of the end, which is exactly the
+ * population where the residue degenerated.
+ *
+ * WHAT THIS DOES NOT CLOSE — MEASURED, not reasoned (deploy-integrity R7).
+ * The closure is tight, not roomy. Index 499 has exactly TWO cells in the whole
+ * suite, (500, cascade off) and (500, cascade on), so its two roles are
+ * necessarily split across the cascade axis; index 498 has four, and gains its
+ * foreign role in exactly one of them. So a narrowing keyed JOINTLY on index AND
+ * cascade at the top of the interval still has a blind cell, and re-running the
+ * same consult-then-discard bypass with the extra conjunct confirms it on the
+ * shipped bytes rather than on paper:
+ *
+ *     __mutIdx === 498 && cascade === false   ->  RC=0, 95/95   STILL BLIND
+ *     __mutIdx === 499 && cascade === true    ->  RC=0, 95/95   STILL BLIND
+ *     __mutIdx === 498                        ->  RC=1, 1 failed
+ *     __mutIdx === 499  (as a refusal)        ->  RC=1, 1 failed
+ *
+ * Index 498 is never foreign with cascade OFF (both of its batches, 499 and 500,
+ * land on non-zero residues there) and index 499 is never foreign with cascade
+ * ON (its single batch, 500, is moved to home by the offset). No per-(size,
+ * cascade) residue can fix that — at a fixed cascade value there is no third
+ * batch left for those indices to take the other role in — so closing it needs
+ * an axis this sweep does not have. It is a strictly narrower evasion than the
+ * one measured above, and it is recorded here as OPEN rather than implied shut.
+ *
+ * Every batch of 3 or more still carries at least one foreign id and at least
+ * one home id under BOTH cascade values, so both halves of every assertion
+ * always have teeth.
  */
-const sweepForeignPositions = (size: number): number[] => {
+const sweepForeignPositions = (size: number, cascade: boolean): number[] => {
   const foreign: number[] = [];
-  for (let i = 0; i < size; i++) if ((i + size) % 3 === 0) foreign.push(i);
+  const offset = cascade ? 1 : 0;
+  for (let i = 0; i < size; i++) if ((i + size + offset) % 3 === 0) foreign.push(i);
   return foreign;
 };
 
@@ -441,22 +485,32 @@ describe('#3833 property 1c — the boundary holds at EVERY admissible batch siz
   it('the sweep spans the whole domain, and scatters foreign ids through the interior', () => {
     // The generator is under test before anything relies on it — a scatter that
     // silently degenerated to "index 0 only" would look like coverage and be
-    // none, which is precisely the failure mode of the last three rounds.
-    // A literal pin at one size, so the shape is legible and not just asserted:
-    expect(sweepForeignPositions(32)).toEqual([1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31]);
+    // none, which is precisely the failure mode of the last four rounds.
+    // Literal pins at one size, ONE PER CASCADE VALUE, so the shape is legible
+    // and the offset term cannot be dropped without a named failure here:
+    expect(sweepForeignPositions(32, false)).toEqual([1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31]);
+    expect(sweepForeignPositions(32, true)).toEqual([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]);
 
     const everForeign = new Set<number>();
     const everHome = new Set<number>();
-    const headOnly: number[] = [];
-    const noInterior: number[] = [];
-    const allForeign: number[] = [];
-    for (let size = 1; size <= ROUTE_MAX_BATCH; size++) {
-      const foreign = sweepForeignPositions(size);
-      const set = new Set(foreign);
-      for (let i = 0; i < size; i++) (set.has(i) ? everForeign : everHome).add(i);
-      if (foreign.length === size) allForeign.push(size);
-      if (size >= 3 && foreign.length === 1 && foreign[0] === 0) headOnly.push(size);
-      if (size >= 5 && !foreign.some((i) => i > 0 && i < size - 1)) noInterior.push(size);
+    const singleEnd: string[] = [];
+    const noInterior: string[] = [];
+    const allForeign: string[] = [];
+    // BOTH CASCADE VALUES, because both are run below and — since round 4 — the
+    // two halves of the top indices' coverage sit on opposite sides of this
+    // axis. Cells are labelled `size/cascade` so a failure names the cell.
+    for (const cascade of [false, true]) {
+      for (let size = 1; size <= ROUTE_MAX_BATCH; size++) {
+        const foreign = sweepForeignPositions(size, cascade);
+        const set = new Set(foreign);
+        for (let i = 0; i < size; i++) (set.has(i) ? everForeign : everHome).add(i);
+        const cell = `${size}/${cascade}`;
+        if (foreign.length === size) allForeign.push(cell);
+        if (size >= 3 && foreign.length === 1 && (foreign[0] === 0 || foreign[0] === size - 1)) {
+          singleEnd.push(cell);
+        }
+        if (size >= 5 && !foreign.some((i) => i > 0 && i < size - 1)) noInterior.push(cell);
+      }
     }
     // No batch is entirely foreign — every size still proves home ids DELETE,
     // so the sweep cannot pass by refusing everything.
@@ -464,15 +518,30 @@ describe('#3833 property 1c — the boundary holds at EVERY admissible batch siz
     // From 5 ids up, at least one foreign id sits strictly inside the batch:
     // an "only the head"/"only the tail" bypass is not sufficient to pass.
     expect(noInterior).toEqual([]);
-    // Size 3 is the one degenerate shape (foreign = [0] alone). Named rather
-    // than hidden — sizes 1-4 are covered exhaustively by the matrix above, so
-    // it costs nothing here.
-    expect(headOnly).toEqual([3]);
-    // Every index position that CAN be both is both. The top two indices exist
-    // in fewer than three batches, so all three residues are not available to
-    // them — stated, not glossed, and irrelevant because the matrix + the rest
-    // of the sweep already deny a position-keyed narrowing.
-    for (let i = 0; i <= ROUTE_MAX_BATCH - 3; i++) {
+    // Size 3 is the one degenerate shape, and the cascade term gives it a mirror
+    // image rather than removing it: foreign = [0] alone with cascade off, [2]
+    // alone with cascade on. Named rather than hidden — sizes 1-4 are covered
+    // exhaustively by the matrix above, so it costs nothing here.
+    expect(singleEnd).toEqual(['3/false', '3/true']);
+    // EVERY index in the domain holds BOTH roles, to the last one.
+    //
+    // THIS LOOP USED TO STOP AT `ROUTE_MAX_BATCH - 3`, and the sentence attached
+    // to it claimed the shortfall was "irrelevant because the matrix + the rest
+    // of the sweep already deny a position-keyed narrowing". That was FALSE, and
+    // round-4 review falsified it by measurement: a consult-then-discard bypass
+    // keyed to index 498 passed the entire suite. The bound excluded 498 and 499
+    // — the only two indices where the size-only residue degenerated — so the
+    // self-check was scoped precisely around the failing population, which is
+    // the narrow-bypass shape this file exists to deny.
+    //
+    // What is true NOW, and why: `sweepForeignPositions` offsets by cascade, so
+    // index 498 is foreign at (500, on) and index 499 is home at (500, on) while
+    // both hold the opposite role elsewhere. Nothing is skipped, so the residue
+    // has to carry the property rather than the loop's reach hiding a gap. The
+    // one narrowing this still cannot see — a JOINT index-and-cascade key at the
+    // top two indices — is stated on the generator above, not here and not as
+    // "already denied" (deploy-integrity R7).
+    for (let i = 0; i < ROUTE_MAX_BATCH; i++) {
       expect({ i, foreign: everForeign.has(i), home: everHome.has(i) })
         .toEqual({ i, foreign: true, home: true });
     }
@@ -488,7 +557,11 @@ describe('#3833 property 1c — the boundary holds at EVERY admissible batch siz
           for (const c of Object.values(containers)) (c as any)._store.clear();
           teardownMock.mockClear();
 
-          const { ids, foreignIds, homeIds } = seedShape(size, sweepForeignPositions(size));
+          // `cascade` is threaded into the scatter, NOT passed as a literal:
+          // the offset is what gives indices 498/499 both roles, and a literal
+          // here would collapse the two halves back onto one residue and
+          // reopen the round-4 index-498 bypass while looking identical.
+          const { ids, foreignIds, homeIds } = seedShape(size, sweepForeignPositions(size, cascade));
           const r = await post({ ids, ...(cascade ? { cascade: true } : {}) });
           const j = await r.json();
 
@@ -519,7 +592,9 @@ describe('#3833 property 1c — the boundary holds at EVERY admissible batch siz
     // claim from the outside instead of trusting it. It also pins the constant:
     // raise MAX_BATCH in the route and this spec fails, which is the mechanism
     // that keeps ROUTE_MAX_BATCH above honest.
-    const over = seedShape(ROUTE_MAX_BATCH + 1, sweepForeignPositions(ROUTE_MAX_BATCH + 1));
+    // `false` matches the POST below, which sends no `cascade` — the scatter has
+    // to describe the batch this spec actually posts.
+    const over = seedShape(ROUTE_MAX_BATCH + 1, sweepForeignPositions(ROUTE_MAX_BATCH + 1, false));
     const seeded = containers.workspaces._store.size;
     expect(seeded).toBe(ROUTE_MAX_BATCH + 1);
 
