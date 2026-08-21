@@ -75,10 +75,34 @@ if (-not (Get-Command bicep -ErrorAction SilentlyContinue)) {
 # .gitignore: every agent worktree carries a full copy of the repo, so without
 # this the walk found 50545 .bicep files against 351 tracked ones (~144x) and
 # the gate became a multi-hour operation over abandoned branches. See #3811.
+#
+# temp/ is excluded for the mirror-image reason: it is gitignored scratch space
+# that currently holds 353 stale .bicep copies against 351 tracked ones, so a
+# broken template in an abandoned experiment would red `make validate` for an
+# unrelated change. The gate judges the tree, not the scratchpad.
 $bicepFiles = Get-ChildItem -Path $RepoRoot -Filter "*.bicep" -Recurse -File |
-    Where-Object { $_.FullName -notmatch 'node_modules|\.venv|dbt-env|\.claude[\\/]worktrees' }
+    Where-Object { $_.FullName -notmatch 'node_modules|\.venv|dbt-env|\.claude[\\/]worktrees|[\\/]temp[\\/]' }
 
 Write-Host "Found $($bicepFiles.Count) Bicep files"
+
+# Zero files is COULD NOT RUN, not a pass.
+#
+# The worktree exclusion above is correct but it made this gate silently
+# vacuous in the one place every agent in this repo actually works: inside
+# .claude/worktrees, $RepoRoot IS an excluded path, so the walk returned 0 files
+# and the gate exited 0 - printing "Found 0 Bicep files / [PASS]" on a diff
+# containing a broken .bicep, and letting validate-all report
+# "All gates passed! (1 gate(s) measured.)". A gate that measured nothing must
+# not be counted as a measurement; validate-dbt.ps1 made the same call for the
+# same reason. See #3811.
+if ($bicepFiles.Count -eq 0) {
+    Write-Host "No Bicep files found under $RepoRoot - CANNOT VALIDATE." -ForegroundColor Yellow
+    Write-Host "  Nothing was compiled, so this is NOT a pass." -ForegroundColor Yellow
+    Write-Host "  If you are inside .claude/worktrees, that path is excluded from the walk:" -ForegroundColor Yellow
+    Write-Host "  run this gate with -RepoRoot pointing at the main checkout to validate templates." -ForegroundColor Yellow
+    Write-Host "  Reporting NOT VERIFIED, not a pass." -ForegroundColor Yellow
+    exit 2
+}
 
 foreach ($file in $bicepFiles) {
     $relativePath = $file.FullName.Replace($RepoRoot, '').TrimStart('\', '/')

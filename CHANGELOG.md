@@ -25,6 +25,28 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.100.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.99.1...csa-inabox-v0.100.0) (2026-08-21)
+
+
+### Features
+
+* **admin/workspaces:** bulk select + delete, via an opt-in selection prop on LoomDataTable ([#3816](https://github.com/fgarofalo56/csa-inabox/issues/3816)) ([88623a7](https://github.com/fgarofalo56/csa-inabox/commit/88623a7c149fa59ace6645537bbffcb522f87493))
+
+
+### Bug Fixes
+
+* **ci:** gov-bff-verify printed evidence that could not contain its own match ([#3854](https://github.com/fgarofalo56/csa-inabox/issues/3854)) ([7aaf84d](https://github.com/fgarofalo56/csa-inabox/commit/7aaf84db76754cf74edaf08425e3db03314a9d1a)), closes [#3842](https://github.com/fgarofalo56/csa-inabox/issues/3842)
+* **ci:** vitest (node 20) reported green having run ZERO tests on workflow/bicep-only PRs ([#3783](https://github.com/fgarofalo56/csa-inabox/issues/3783)) ([#3806](https://github.com/fgarofalo56/csa-inabox/issues/3806)) ([a8f17e6](https://github.com/fgarofalo56/csa-inabox/commit/a8f17e62c1a0b57e55618b25d9244895ad02fbda))
+* **console:** /admin/readiness could not see a roll being OVERWRITTEN — the 2026-08-19 revert kept every lane green ([#3810](https://github.com/fgarofalo56/csa-inabox/issues/3810)) ([980153a](https://github.com/fgarofalo56/csa-inabox/commit/980153a345c476edc16faf0c3d6fde96405d79b3))
+* **deploy:** a transient Postgres Entra-admin window classified unknown and took the scheduled deploy down on attempt 1 ([#3827](https://github.com/fgarofalo56/csa-inabox/issues/3827)) ([0d66cdb](https://github.com/fgarofalo56/csa-inabox/commit/0d66cdb87eada29d9c9498f09a4b5cbbf6ce25fc)), closes [#3817](https://github.com/fgarofalo56/csa-inabox/issues/3817)
+* **gates:** "could not run" reported as [PASS] in three gates and the orchestrator ([#3811](https://github.com/fgarofalo56/csa-inabox/issues/3811)) ([#3813](https://github.com/fgarofalo56/csa-inabox/issues/3813)) ([6e87124](https://github.com/fgarofalo56/csa-inabox/commit/6e871249955bdc68a8dfa1dea9da5246df92bacf))
+* **gates:** a healthy az session read as "no session", a FAIL downgraded to SKIP, and a gate that never returned ([#3811](https://github.com/fgarofalo56/csa-inabox/issues/3811)) ([#3814](https://github.com/fgarofalo56/csa-inabox/issues/3814)) ([14616df](https://github.com/fgarofalo56/csa-inabox/commit/14616df2fa8b61fc768cd61981da565ef83030dd))
+* **gates:** make validate reported "All gates passed!" having run ZERO gates ([#3812](https://github.com/fgarofalo56/csa-inabox/issues/3812)) ([43e218d](https://github.com/fgarofalo56/csa-inabox/commit/43e218d35497f3b5ba8941749e7a32f184528d78)), closes [#3811](https://github.com/fgarofalo56/csa-inabox/issues/3811)
+* **gov:** gov-bff-verify never checked out the repo — 18 consecutive failures since Gov got continuous deploy ([#3828](https://github.com/fgarofalo56/csa-inabox/issues/3828)) ([608a36a](https://github.com/fgarofalo56/csa-inabox/commit/608a36afbdc0fe5fead065daf2c9df47f247a230))
+* **security:** bulk-delete DESTROYED workspaces across the tenant boundary ([#3833](https://github.com/fgarofalo56/csa-inabox/issues/3833) member 1) ([#3836](https://github.com/fgarofalo56/csa-inabox/issues/3836)) ([3be6906](https://github.com/fgarofalo56/csa-inabox/commit/3be6906f6d0c9b229ad2c4e3ac7e9fabcfde28ab))
+* **security:** every session-minting harness fell back to a placeholder oid when the real identity was absent ([#3804](https://github.com/fgarofalo56/csa-inabox/issues/3804)) ([#3805](https://github.com/fgarofalo56/csa-inabox/issues/3805)) ([c5168af](https://github.com/fgarofalo56/csa-inabox/commit/c5168af90295b93bc181d40c1d9af36f7e3b5e5a))
+* **security:** the tenant-admin bypass granted on an UNCONFIRMED tenant, not a matching one ([#3824](https://github.com/fgarofalo56/csa-inabox/issues/3824)) ([d4acf06](https://github.com/fgarofalo56/csa-inabox/commit/d4acf06180b2f2fc64276bceb0c7cd66d9b8d210))
+
 ## [0.99.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.99.0...csa-inabox-v0.99.1) (2026-08-19)
 
 
