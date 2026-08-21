@@ -1304,6 +1304,20 @@ describe('a caller-chosen workspaceId', () => {
   interface ExtraShape {
     label: string;
     shape: () => Promise<ScopedShape>;
+    /**
+     * The `ScopedShape` keys `shape()` actually returns.
+     *
+     * DECLARED, not derived, so it is an independent statement of what the row
+     * is for. #3808 round 8: `shape` was pinned by nothing — every one of the
+     * seven payloads could be hollowed to `({})` and the suite stayed at 120
+     * passed / 0 RED. Worse, hollowing a row while re-applying the exact source
+     * gate that row exists to catch reopened round 7's own closures at 0 RED
+     * (`&& opts.deadlineMs === undefined`, `&& opts.session.claims.tid !==
+     * undefined`, `&& opts.workspaceId.startsWith('ws-')`). The sibling
+     * `control` was already behaviourally pinned — deleting it reddens 1 —
+     * which is what made the asymmetry visible.
+     */
+    inputs: readonly (keyof ScopedShape)[];
     /** The scope the caller names. Defaults to {@link FOREIGN_WS}. */
     wsId?: string;
     /** How the control's workspace is stamped. Defaults to the admin bypass. */
@@ -1315,25 +1329,29 @@ describe('a caller-chosen workspaceId', () => {
     {
       label: 'a REAL nextCursor from a prior legitimate pass',
       shape: async () => ({ cursor: await honestCursor() }),
+      inputs: ['cursor'],
     },
-    { label: 'a single itemType', shape: async () => ({ itemTypes: ['fake-item'] }) },
-    { label: 'limit at MAX_LIMIT', shape: async () => ({ limit: MAX_LIMIT }) },
+    { label: 'a single itemType', shape: async () => ({ itemTypes: ['fake-item'] }), inputs: ['itemTypes'] },
+    { label: 'limit at MAX_LIMIT', shape: async () => ({ limit: MAX_LIMIT }), inputs: ['limit'] },
     {
       // THE PRODUCTION SHAPE. `route.ts:167` passes this on every live sweep,
       // so a gate conditioned on its ABSENCE is off in production and on in
       // every spec that predates this row.
       label: 'the route deadline that EVERY live sweep carries',
       shape: async () => ({ deadlineMs: ROUTE_DEADLINE_MS }),
+      inputs: ['deadlineMs'],
     },
     {
       label: 'an injected monotonic clock',
       // Constant, so `now() >= deadline` is never reached and the control half
       // cannot truncate — the axis under test is the PRESENCE of the seam.
       shape: async () => ({ now: () => 1_700_000_000_000 }),
+      inputs: ['now'],
     },
     {
       label: 'a caller carrying NO tid claim',
       shape: async () => ({ session: TIDLESS_SESSION }),
+      inputs: ['session'],
       control: VIA_OWNER_FASTPATH,
     },
     {
@@ -1342,6 +1360,7 @@ describe('a caller-chosen workspaceId', () => {
       // string to stop it being one.
       label: 'a workspace id that does not start ws-',
       shape: async () => ({}),
+      inputs: [],
       wsId: 'tenant-b-analytics',
     },
   ];
@@ -1361,7 +1380,7 @@ describe('a caller-chosen workspaceId', () => {
    */
   const GENERATED: string[] = [];
 
-  for (const { label, shape, wsId, control } of EXTRA_SHAPES) {
+  for (const { label, shape, wsId, control, inputs } of EXTRA_SHAPES) {
     GENERATED.push(label);
     const scope = wsId ?? FOREIGN_WS;
     const reachable = control ?? VIA_ADMIN_BYPASS;
@@ -1369,6 +1388,13 @@ describe('a caller-chosen workspaceId', () => {
     it(`in ANOTHER tenant is refused with ${label} too — no count, no query`, async () => {
       wsStore.set(scope, { id: scope, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
       const extra = await shape();
+
+      // #3808 round 8. The row named an input and nothing checked it produced
+      // one. Hollowed to `({})` this spec still passed — it asserts a refusal,
+      // and a refusal of the DEFAULT shape is what the un-parameterised spec
+      // above already proves. Pin the payload to the declaration so the row
+      // cannot quietly stop being the shape its label claims.
+      expect(Object.getOwnPropertyNames(extra).sort()).toEqual([...inputs].sort());
 
       const { settled, asked } = scopedSweep(scope, itemsIn(scope, 5), extra);
       const { result, error } = await settled;
@@ -1408,7 +1434,7 @@ describe('a caller-chosen workspaceId', () => {
     // population control is a guard whose subject can be emptied silently,
     // which is the same defect class the specs it generates exist to catch.
     //
-    // Asserted three ways, because each catches a different edit:
+    // Asserted five ways, because each catches a different edit:
     //   • the exact roster  — a row swapped, renamed, or quietly dropped
     //   • iterated === declared — a `.slice(…)` / filter in the `for` header
     //   • the literal count — a row appended without extending this control
@@ -1423,6 +1449,23 @@ describe('a caller-chosen workspaceId', () => {
     ]);
     expect(GENERATED).toEqual(EXTRA_SHAPES.map((s) => s.label));
     expect(EXTRA_SHAPES.length).toBe(7);
+    //   • the declared inputs — a row hollowed to `({})`, or a hollow "fixed"
+    //     by editing that row's own `inputs` down to match it
+    //   • the declared scopes — the one row that does NOT use FOREIGN_WS is the
+    //     only thing stopping `opts.workspaceId.startsWith('ws-')` being a
+    //     constant across the matrix, and dropping `wsId` reddened nothing
+    expect(EXTRA_SHAPES.map((s) => s.inputs.join('+'))).toEqual([
+      'cursor',
+      'itemTypes',
+      'limit',
+      'deadlineMs',
+      'now',
+      'session',
+      '',
+    ]);
+    expect(EXTRA_SHAPES.map((s) => s.wsId ?? FOREIGN_WS)).toEqual(
+      Array(6).fill(FOREIGN_WS).concat(['tenant-b-analytics']),
+    );
   });
 
   it('is refused with NO injected loadItems or providers — the SEAM is not what is guarded', async () => {
