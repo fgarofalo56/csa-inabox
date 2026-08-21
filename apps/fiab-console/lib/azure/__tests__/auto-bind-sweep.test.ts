@@ -916,22 +916,38 @@ describe('a caller-chosen workspaceId', () => {
     Array.from({ length: n }, (_, i) =>
       item({ displayName: `Theirs-${i + 1}`, id: `id-t${i + 1}`, workspaceId: ws, state: gatedInstallState() }));
 
-  /** Run a scoped sweep, recording whether the loader was reached at all. */
-  const scopedSweep = async (workspaceId: string, rows: WorkspaceItem[], dryRun = true) => {
+  /**
+   * Run a scoped sweep, recording whether the loader was reached at all.
+   *
+   * Returns a SETTLED-result promise, not a raw one. The rejection handler is
+   * attached in the SAME synchronous turn the promise is created, because a
+   * rejected promise that sits unhandled across a macrotask boundary surfaces
+   * as an unhandled-rejection failure — a flake with nothing to do with the
+   * property under test. The specs below hold two of these open at once, which
+   * is exactly the shape that makes that reachable.
+   */
+  const scopedSweep = (workspaceId: string, rows: WorkspaceItem[], dryRun = true) => {
     const asked: Array<{ workspaceId?: string }> = [];
-    const run = sweepAutoBind({
+    const settled = sweepAutoBind({
       dryRun, session: SESSION, providers: [seedingProvider()], workspaceId,
       loadItems: async (o) => { asked.push(o); return rows; },
-    });
-    return { run, asked };
+    }).then(
+      (result) => ({ result, error: null as Error | null }),
+      (error: Error) => ({ result: null as Awaited<ReturnType<typeof sweepAutoBind>> | null, error }),
+    );
+    return { settled, asked };
   };
 
   it('in ANOTHER tenant is refused outright — no count, and the query is never issued', async () => {
     wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
-    const { run, asked } = await scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 5));
+    const { settled, asked } = scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 5));
 
-    await expect(run).rejects.toThrow(SweepScopeError);
+    const { result, error } = await settled;
 
+    expect(error).toBeInstanceOf(SweepScopeError);
+    // No envelope at all — not a zero count, which would still be an answer
+    // about a scope the caller chose.
+    expect(result).toBeNull();
     // THE WHOLE FINDING. Pre-fix this resolved to
     // `{excludedByAccess: 5, rows: []}` and `asked` held the foreign id.
     expect(asked).toEqual([]);
@@ -943,18 +959,15 @@ describe('a caller-chosen workspaceId', () => {
     wsStore.set('ws-big', { id: 'ws-big', tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Big' });
     wsStore.set('ws-small', { id: 'ws-small', tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Small' });
 
-    const big = await scopedSweep('ws-big', itemsIn('ws-big', 5));
-    const small = await scopedSweep('ws-small', itemsIn('ws-small', 1));
+    const big = await scopedSweep('ws-big', itemsIn('ws-big', 5)).settled;
+    const small = await scopedSweep('ws-small', itemsIn('ws-small', 1)).settled;
 
-    const bigErr = await big.run.then(() => null, (e: Error) => e);
-    const smallErr = await small.run.then(() => null, (e: Error) => e);
-
-    expect(bigErr).toBeInstanceOf(SweepScopeError);
-    expect(smallErr!.message).toBe(bigErr!.message);
+    expect(big.error).toBeInstanceOf(SweepScopeError);
+    expect(small.error!.message).toBe(big.error!.message);
     // …and neither message names a count, an id, or a display name.
-    expect(bigErr!.message).not.toMatch(/\b[15]\b/);
-    expect(bigErr!.message).not.toContain('ws-big');
-    expect(bigErr!.message).not.toContain('Theirs-1');
+    expect(big.error!.message).not.toMatch(/\b[15]\b/);
+    expect(big.error!.message).not.toContain('ws-big');
+    expect(big.error!.message).not.toContain('Theirs-1');
   });
 
   it('that does not EXIST is indistinguishable from one that does — 404, not 403', async () => {
@@ -963,23 +976,21 @@ describe('a caller-chosen workspaceId', () => {
     // two answers ever diverge, the probe is back.
     wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
 
-    const exists = await scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 3));
-    const absent = await scopedSweep('ws-never-created', []);
+    const exists = await scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 3)).settled;
+    const absent = await scopedSweep('ws-never-created', []).settled;
 
-    const existsErr = await exists.run.then(() => null, (e: Error) => e);
-    const absentErr = await absent.run.then(() => null, (e: Error) => e);
-
-    expect(existsErr).toBeInstanceOf(SweepScopeError);
-    expect(absentErr).toBeInstanceOf(SweepScopeError);
-    expect(absentErr!.message).toBe(existsErr!.message);
+    expect(exists.error).toBeInstanceOf(SweepScopeError);
+    expect(absent.error).toBeInstanceOf(SweepScopeError);
+    expect(absent.error!.message).toBe(exists.error!.message);
   });
 
   it('is refused on the LIVE path too, before anything can be written', async () => {
     wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
-    const { run, asked } = await scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 2), false);
+    const { settled, asked } = scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 2), false);
 
-    await expect(run).rejects.toThrow(SweepScopeError);
+    const { error } = await settled;
 
+    expect(error).toBeInstanceOf(SweepScopeError);
     expect(asked).toEqual([]);
     expect(plane.createCalls).toEqual([]);
     expect(plane.seedCalls).toEqual([]);
@@ -993,11 +1004,12 @@ describe('a caller-chosen workspaceId', () => {
     const rows = itemsIn(FOREIGN_WS, 2);
     register(rows);
 
-    const { run, asked } = await scopedSweep(FOREIGN_WS, rows);
-    const result = await run;
+    const { settled, asked } = scopedSweep(FOREIGN_WS, rows);
+    const { result, error } = await settled;
 
-    expect(result.rows.map((r) => r.itemId)).toEqual(['id-t1', 'id-t2']);
-    expect(result.excludedByAccess).toBe(0);
+    expect(error).toBeNull();
+    expect(result!.rows.map((r) => r.itemId)).toEqual(['id-t1', 'id-t2']);
+    expect(result!.excludedByAccess).toBe(0);
     // The scope really did reach the query — the refusal is about ACCESS, not
     // about dropping the parameter.
     expect(asked).toEqual([{ itemTypes: ['fake-item'], workspaceId: FOREIGN_WS, limit: 201, cursor: undefined }]);
