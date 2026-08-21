@@ -2405,7 +2405,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `workspaces/[id]/task-flows/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `workspaces/[id]/time-branches/[branchId]/route.ts` | DELETE | admin |  | Cosmos, Microsoft Graph |
 | `workspaces/[id]/time-branches/route.ts` | GET POST | admin |  | Cosmos, Microsoft Graph |
-| `workspaces/bulk-delete/route.ts` | GET POST | admin |  | ADF, ADLS, ADX, AI Search, AML, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Managed Identity, PostgreSQL, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `workspaces/bulk-delete/route.ts` | GET POST | admin |  | ADF, ADLS, ADX, AI Search, AML, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `workspaces/route.ts` | GET POST | owner-scoped |  | ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Purview, Resource Graph |
 
 ## Authorization resolvers (derived)
