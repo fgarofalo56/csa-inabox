@@ -1,0 +1,293 @@
+# commit-message-parses — a commit whose BODY the changelog parser cannot read is
+# dropped from the changelog ENTIRELY, silently, while the release run reports success.
+#
+# release-please builds its changelog with `@conventional-commits/parser`, which reads the
+# whole commit message, subject and body together. When the body contains a fragment it
+# cannot tokenise the parser throws, release-please catches the throw, skips that commit,
+# and carries on. The run is green. The release is cut. The work is simply absent.
+#
+# Measured on this repo's history: 15 commits with a VALID conventional subject — 5 of
+# them `fix(security):` — have been silently missing from every changelog and every set of
+# GitHub release notes since 2026-06-11.
+#
+# WHY IT RUNS ON EVERYTHING
+# This has no `paths:` filter on purpose. The subject of the check is the commit MESSAGE,
+# which can be malformed on a PR that touches any file, or no code at all.
+#
+# WHY IT IS NOT IN loom-guardrails.yml
+# It is the only check in the repo that installs an npm dependency. A registry flake
+# should cost this one check, not the whole guardrail suite.
+#
+# WHY THE VERSION IS PINNED TO 0.4.1
+# Not a guess. `release-please` depends on `@conventional-commits/parser` DIRECTLY at
+# "^0.4.1". Measured, `npm view @conventional-commits/parser versions --json` returns
+# ["0.2.0","0.3.0","0.4.0","0.4.1"] — four published versions, of which only 0.4.1
+# satisfies "^0.4.1" (which means >=0.4.1 <0.5.0), so that range resolves to 0.4.1 and
+# will keep resolving there until a 0.4.x above it ships. It was then independently
+# confirmed to reproduce two real hosted release-please failures to the exact line and
+# column.
+#
+# KNOWN LIMIT, stated rather than papered over: release-please-action bundles its own copy
+# of the parser, so if a future release bundles a DIFFERENT version, this pin would be
+# testing a grammar release-please no longer runs. The guard's embedded controls cannot
+# detect that on their own — they would still agree with the version installed here. The
+# version assertion below pins exactly what was measured; if it ever has to change, the
+# control coordinates in the guard must be re-measured against the new version first.
+name: commit-message-parses
+
+# WHY THIS ALSO RUNS ON PUSH TO MAIN
+# The pull_request run judges the BRANCH commits. release-please does not read those. This
+# repo squash-merges, so what reaches main is a single new commit whose body GitHub composed
+# from the branch messages and whoever edited the merge box — and THAT body is what the
+# parser is handed. A PR can therefore pass the branch scan and still land a squash body the
+# parser cannot read, which is the exact failure this guard exists to catch.
+#
+# The push run cannot block anything; by the time it fires the commit is already on main.
+# It is a DETECTION signal, and that is worth having on its own: the 15 commits this guard
+# was written for went missing for two months with nothing anywhere saying so. A red run on
+# main names the commit while the release is still uncut and the changelog still fixable.
+# It is transient by construction — the next push carries a different range, so one bad
+# commit reddens exactly one run rather than parking main red.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # The three shapes of this run are NOT interchangeable and must not share a check name.
+    # A workflow_dispatch has no pull_request payload, so it skips the range scan and goes
+    # green having judged no commits at all. Under one shared name that green is
+    # indistinguishable from a real PR verdict — and if this context were ever registered as
+    # required, a dispatch-produced green would satisfy it. Naming the dispatch shape
+    # differently makes that structurally impossible: the required context can only ever be
+    # produced by the pull_request path, which is the only path that scans a PR range.
+    #
+    # The push shape is split off for the same reason in the other direction: it judges what
+    # LANDED on main, which is a different question and a different range, and its green must
+    # not be mistakable for a PR having been checked.
+    #
+    # The fold points below sit BETWEEN tokens, never inside a quoted literal. The
+    # pull_request arm of this expression is the exact string that would be registered as a
+    # required context, so a reflow that moved a fold into the middle of it would silently
+    # rename the check and quietly un-require it.
+    name: >-
+      ${{ github.event_name == 'pull_request'
+      && 'changelog parser can read every commit message'
+      || github.event_name == 'push'
+      && 'changelog parser can read what landed on main'
+      || 'guard health only — no PR range scanned (dispatch)' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth: 0 — the check needs BASE..HEAD to resolve, and a shallow clone
+      # would leave the base SHA unreachable and the guard scanning nothing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      # --no-save --no-package-lock so nothing in the tree is dirtied. Measured, not assumed:
+      # with no package.json anywhere in the tree, npm picks its install root by walking UP
+      # to the nearest ancestor holding a package.json or a node_modules. On a fresh checkout
+      # that is the repo root — which is exactly the chain Node walks up from scripts/ci/ when
+      # the guard imports the parser, so the install always lands where the guard resolves.
+      # npm does still write node_modules/.package-lock.json, which --no-package-lock does NOT
+      # suppress; that sits inside the gitignored **/node_modules/, and no top-level
+      # package.json or package-lock.json is written, so the working tree stays clean.
+      - name: Install the parser release-please actually uses
+        run: |
+          set +e
+          npm install --no-save --no-package-lock @conventional-commits/parser@0.4.1
+          RC=$?
+          set -e
+          echo "npm install RC=$RC"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::could not install @conventional-commits/parser@0.4.1, so this guard"\
+                 "cannot judge anything. Failing rather than reporting a clean scan it did not perform."
+            exit "$RC"
+          fi
+
+      # The guard's embedded controls assert exact throw coordinates measured against
+      # 0.4.1. If a different version were installed those controls would happily agree
+      # with the WRONG grammar, so the version itself is asserted here, not assumed.
+      #
+      # Resolution is anchored at the GUARD'S OWN PATH rather than a hard-coded
+      # ./node_modules/... string. That is deliberate: npm chooses its install root by
+      # walking up, so a hard-coded path can point somewhere the install did not land, and
+      # this step would then report "could not read the version" when the truth is "it is
+      # installed, just not there" — an error asserting something it never established.
+      # Anchoring at the guard makes this measure the exact module the guard will import.
+      - name: Assert the installed parser is the version the controls were measured against
+        run: |
+          set +e
+          INSTALLED=$(node -e '
+            const { createRequire } = require("node:module");
+            const { resolve } = require("node:path");
+            const req = createRequire(resolve("scripts/ci/check-commit-message-parses.mjs"));
+            process.stdout.write(req("@conventional-commits/parser/package.json").version);
+          ')
+          RC=$?
+          set -e
+          echo "installed parser version=${INSTALLED:-<unresolved>} RC=$RC"
+          if [ "$RC" -ne 0 ] || [ -z "$INSTALLED" ]; then
+            echo "::error::could not read the installed parser version. Refusing to run controls"\
+                 "against a grammar this workflow cannot identify."
+            exit 1
+          fi
+          if [ "$INSTALLED" != "0.4.1" ]; then
+            echo "::error::parser version drift: installed $INSTALLED, but every control coordinate"\
+                 "in scripts/ci/check-commit-message-parses.mjs was measured against 0.4.1. Re-measure"\
+                 "those coordinates against $INSTALLED before changing this pin — the controls agree"\
+                 "with whatever version is installed, so they cannot catch this themselves."
+            exit 1
+          fi
+
+      # Controls before verdict. Separating this from the scan makes the failed-run signal
+      # unambiguous: this step red means the PARSER's behaviour moved, the next step red
+      # means THIS PR carries a commit message that will be dropped.
+      - name: Self-test — the guard's embedded controls agree with this parser
+        run: |
+          set +e
+          node scripts/ci/check-commit-message-parses.mjs --self-test
+          RC=$?
+          set -e
+          echo "self-test RC=$RC"
+          exit "$RC"
+
+      # The guard's own unit suite, and a DIFFERENT question from --self-test above. That step
+      # asks "does the parser still behave the way the controls were measured against?" This
+      # one asks "does the guard's own plumbing still work?" — the record splitter, the
+      # degenerate-range refusal, the control-population floors, the CLI's error contract, and
+      # two mutation proofs that neuter a guard rail and assert the verdict MOVES.
+      #
+      # The mutation proofs are the load-bearing ones. A guard whose rails can be quietly
+      # removed while it keeps reporting green is precisely the defect class this whole file
+      # exists to close, so this guard's own rails are themselves under test.
+      #
+      # Measured, not assumed: the suite also runs in loom-guardrails.yml, whose runner globs
+      # `node --test scripts/ci/__tests__/*.test.mjs`, and the parser is NOT installed in that
+      # lane. Verified by hiding node_modules/@conventional-commits and re-running: 12 tests,
+      # 9 pass, 3 skip with an audible reason, exit 0. Both mutation proofs and the
+      # degenerate-range refusal are among the nine, so the suite is non-vacuous there too.
+      - name: Unit-test the guard itself
+        run: |
+          set +e
+          node --test scripts/ci/__tests__/commit-message-parses.test.mjs
+          RC=$?
+          set -e
+          echo "guard unit tests RC=$RC"
+          exit "$RC"
+
+      # RANGE RESOLUTION, per event. The two scanned shapes ask different questions over
+      # different ranges, and neither is the other's fallback.
+      #
+      # pull_request — base.sha is the base branch tip when the event fired, so base..head is
+      # exactly the PR's own commits: anything already on main is reachable from base.sha and
+      # excluded. Both SHAs resolve because refs/pull/N/merge has them as ancestors and
+      # fetch-depth is 0.
+      #
+      # push — before..after is what this push added to main. `before` is NOT always usable:
+      # it is the all-zero sha on a ref's first push, and it is unreachable after a
+      # force-push. So it is PROBED rather than trusted, with `after^` as the fallback. The
+      # probe's exit status is consumed and the reason for any fallback is printed, because a
+      # silent narrowing would make a one-commit scan look like a clean full-range one.
+      - name: Resolve the range to scan
+        id: range
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT" = "pull_request" ]; then
+            BASE="$PR_BASE"
+            HEAD="$PR_HEAD"
+          else
+            HEAD="$PUSH_AFTER"
+            BASE="$PUSH_BEFORE"
+            WHY=""
+            if [ -z "$BASE" ]; then
+              WHY="github.event.before was empty"
+            elif [ "$BASE" = "$ZERO" ]; then
+              WHY="github.event.before is the all-zero sha, i.e. the first push of this ref"
+            else
+              set +e
+              git cat-file -e "${BASE}^{commit}"
+              PROBE=$?
+              set -e
+              if [ "$PROBE" -ne 0 ]; then
+                WHY="github.event.before ${BASE} is unreachable here, cat-file RC=${PROBE}, so probably a force-push"
+              fi
+            fi
+            if [ -n "$WHY" ]; then
+              echo "::notice::narrowing to the single landed commit because ${WHY}"
+              BASE="${HEAD}^"
+            fi
+          fi
+          # Fail closed. An unresolvable base would otherwise reach the guard, which does
+          # refuse a degenerate range — but it would refuse it citing the wrong cause, and an
+          # error asserting something it never established is its own defect.
+          set +e
+          git rev-parse --verify --quiet "${BASE}^{commit}" > /dev/null
+          BRC=$?
+          set -e
+          if [ "$BRC" -ne 0 ]; then
+            echo "::error::could not resolve a base commit for ${EVENT}; tried '${BASE}' and rev-parse"\
+                 "returned RC=${BRC}. Refusing to report a clean scan over a range this step could"\
+                 "not establish."
+            exit 1
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "resolved ${EVENT} range: ${BASE}..${HEAD}"
+
+      # Skipped only on workflow_dispatch, which carries neither a pull_request payload nor a
+      # push range and so has nothing to scan. A dispatch therefore runs the install, version,
+      # control and unit-test steps and stops — an on-demand "is this guard still healthy"
+      # check, which is why the job name above renames itself on that path.
+      #
+      # WHAT THIS STEP DOES NOT YET GUARANTEE, stated rather than implied. An earlier
+      # revision of this comment claimed "no PR can reach a green verdict without this step
+      # running". That is false, and measurably so: on 2026-08-21 main carried 14 required
+      # status contexts and `commit-message-parses` was not among them (`guardrails` was,
+      # which is the control proving the query returns a real, non-empty list). So a PR can
+      # merge with this workflow queued, failed, or never triggered at all.
+      #
+      #   gh api repos/:owner/:repo/branches/main/protection \
+      #     --jq '.required_status_checks.contexts[]' | grep -i commit-message
+      #
+      # Note the contexts live in CLASSIC branch protection, not in the ruleset — querying the
+      # ruleset returns zero required checks and reads as "nothing missing".
+      #
+      # The asymmetry is worth stating precisely, because half of this file IS enforced: the
+      # unit-test step above also runs inside `guardrails`, which is required, because that
+      # workflow globs `scripts/ci/__tests__/*.test.mjs`. So the guard's own rails are
+      # protected on every PR; the SCAN below — the part that judges commit messages — is not.
+      # Registering this context is a branch-protection change and belongs to the operator,
+      # not to this file. Until then the PR run is advisory, and the push run is detection
+      # after the fact rather than prevention.
+      - name: Check every changelog-bound commit message parses
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          BASE_SHA: ${{ steps.range.outputs.base }}
+          HEAD_SHA: ${{ steps.range.outputs.head }}
+        run: |
+          echo "range: ${BASE_SHA}..${HEAD_SHA}"
+          set +e
+          node scripts/ci/check-commit-message-parses.mjs
+          RC=$?
+          set -e
+          echo "check-commit-message-parses RC=$RC"
+          exit "$RC"
