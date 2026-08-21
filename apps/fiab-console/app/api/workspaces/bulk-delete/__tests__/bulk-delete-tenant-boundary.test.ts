@@ -120,6 +120,10 @@ vi.mock('@/lib/auth/feature-gate', () => ({
 const HOME_TID = 'tid-contoso';
 /** A DIFFERENT Entra tenant. Nothing in it may ever be deleted from here. */
 const FOREIGN_TID = 'tid-fabrikam';
+/** Owner oid for the home-tenant workspaces in the batch-shape matrix. */
+const HOME_OWNER = 'alice-oid';
+/** Owner oid for the foreign-tenant workspaces — a principal in FOREIGN_TID. */
+const FOREIGN_OWNER = 'mallory-oid';
 
 function seedWorkspace(id: string, ownerOid: string, extra: Record<string, unknown> = {}) {
   const doc = {
@@ -213,6 +217,107 @@ describe('#3833 — a tenant admin cannot bulk-delete across the tenant boundary
     expect(j.failed).toEqual([{ id: 'wsX', error: 'not_found' }]);
     expect(stillExists('wsX', 'mallory-oid')).toBe(true);
   });
+});
+
+/**
+ * BATCH-SHAPE MATRIX — the axis a fixed set of hand-written cases cannot cover.
+ *
+ * ROUND-2 REVIEW FOUND THE SPECS ABOVE BLIND ABOVE TWO IDS. Every one of them
+ * posts one or two ids, so a bypass narrowed to `ids.length >= 3` — call the
+ * resolver, DISCARD its tenancy verdict, cross-partition read the doc, delete it
+ * — passed all of them and the whole suite stayed green (measured: 2 files /
+ * 27 tests / RC=0 with that mutation live). MIDDLE position was untested for the
+ * same reason: it is not expressible below three ids.
+ *
+ * ADDING "A 3-ID CASE" WOULD HAVE CLOSED EXACTLY THOSE TWO HOLES AND LEFT THE
+ * NEXT ONE OPEN. Five PRs in this program have died to a bypass narrowed onto an
+ * axis the fixtures hard-coded, so the batch SHAPE is a PARAMETER here, not one
+ * more fixed case: every size 1..MAX_SHAPE_SIZE crossed with every non-empty
+ * subset of positions that are foreign, crossed with cascade off/on. First,
+ * middle, last, several-at-once and all-foreign fall OUT of the generator
+ * instead of being enumerated by hand, and widening the covered range is a
+ * one-token change to MAX_SHAPE_SIZE.
+ *
+ * THE ASSERTION IS DOCUMENT SURVIVAL (`stillExists`), NOT A CALL COUNT. A bypass
+ * that consults the resolver and ignores the answer — the evasion that defeated
+ * the strongest instrument in the sibling PR — satisfies any "was it called"
+ * check and cannot satisfy this one.
+ */
+
+/** Batch sizes 1..this are covered exhaustively (2**n - 1 shapes each). */
+const MAX_SHAPE_SIZE = 4;
+
+/** Every non-empty set of foreign positions, for every batch size 1..max. */
+function foreignPositionShapes(max: number): { size: number; foreign: number[] }[] {
+  const shapes: { size: number; foreign: number[] }[] = [];
+  for (let size = 1; size <= max; size++) {
+    for (let mask = 1; mask < 1 << size; mask++) {
+      const foreign: number[] = [];
+      for (let i = 0; i < size; i++) if (mask & (1 << i)) foreign.push(i);
+      shapes.push({ size, foreign });
+    }
+  }
+  return shapes;
+}
+
+/** Seed one batch: `foreign` positions live in FOREIGN_TID, the rest in HOME_TID. */
+function seedShape(size: number, foreign: number[]) {
+  const isForeign = new Set(foreign);
+  const ids: string[] = [];
+  for (let i = 0; i < size; i++) {
+    const id = `wsPos${i}`;
+    ids.push(id);
+    if (isForeign.has(i)) seedWorkspace(id, FOREIGN_OWNER, { name: `Fabrikam ${i}`, tid: FOREIGN_TID });
+    else seedWorkspace(id, HOME_OWNER, { name: `Contoso ${i}`, tid: HOME_TID });
+  }
+  return {
+    ids,
+    foreignIds: ids.filter((_, i) => isForeign.has(i)),
+    homeIds: ids.filter((_, i) => !isForeign.has(i)),
+  };
+}
+
+describe('#3833 property 1b — the boundary holds at every BATCH SHAPE, not just 1–2 ids', () => {
+  const shapes = foreignPositionShapes(MAX_SHAPE_SIZE);
+
+  it('generates every foreign-position subset, including the ones below 3 ids cannot express', () => {
+    // The generator is itself under test — a matrix that silently produced two
+    // shapes would look like coverage and be none. sum(2**n - 1) for n=1..N.
+    expect(shapes).toHaveLength(2 ** (MAX_SHAPE_SIZE + 1) - MAX_SHAPE_SIZE - 2);
+    // MIDDLE position, the case that needs 3 ids to exist at all.
+    expect(shapes).toContainEqual({ size: 3, foreign: [1] });
+    // Interior-only foreign pair — neither end of the batch.
+    expect(shapes).toContainEqual({ size: 4, foreign: [1, 2] });
+    // Every id foreign: nothing may be deleted at all.
+    expect(shapes).toContainEqual({ size: 4, foreign: [0, 1, 2, 3] });
+  });
+
+  for (const cascade of [false, true]) {
+    for (const { size, foreign } of shapes) {
+      const isForeign = new Set(foreign);
+      const shape = Array.from({ length: size }, (_, i) => (isForeign.has(i) ? 'F' : 'H')).join('');
+      it(`${shape} (${size} ids, cascade=${cascade}) — deletes every HOME id and NO foreign one`, async () => {
+        const { ids, foreignIds, homeIds } = seedShape(size, foreign);
+
+        const r = await post({ ids, ...(cascade ? { cascade: true } : {}) });
+        const j = await r.json();
+
+        // Body: exactly the home ids, in batch order; every foreign id refused
+        // with the same opaque code a nonexistent id gets.
+        expect(j.deleted).toEqual(homeIds);
+        expect(j.failed).toEqual(foreignIds.map((id) => ({ id, error: 'not_found' })));
+        expect(j.ok).toBe(false); // every shape carries at least one foreign id
+
+        // THE CONSEQUENCE, PER ID. This is the assertion a consult-then-discard
+        // bypass cannot satisfy: the foreign documents are still in Cosmos.
+        for (const id of foreignIds) expect(stillExists(id, FOREIGN_OWNER)).toBe(true);
+        for (const id of homeIds) expect(stillExists(id, HOME_OWNER)).toBe(false);
+
+        // On cascade, Azure teardown ran once per HOME id and never for a foreign one.
+        expect(teardownMock).toHaveBeenCalledTimes(cascade ? homeIds.length : 0);
+      });
+    }
+  }
 });
 
 describe('#3833 property 3 — a foreign id is INDISTINGUISHABLE from a nonexistent id', () => {
