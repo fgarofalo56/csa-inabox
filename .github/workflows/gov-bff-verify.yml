@@ -224,6 +224,17 @@ jobs:
             ['/api/governance/catalog', 'purview governance catalog'],
             ['/api/admin/domains/purview-status', 'purview wiring status'],
           ];
+          // The gated verdict and the evidence printed for it now come from the
+          // SAME exec, so a failure can no longer show a window that does not
+          // contain the match it is reporting (#3842). This is structural rather
+          // than "print more": the evidence is sliced around hit.index, so the
+          // verdict and its proof cannot drift apart again no matter how long the
+          // body grows or where in it the gate marker lands.
+          const GATED = /"gate"\s*:\s*(true|\{)|not configured|Set LOOM_(UNITY_URL|PURVIEW_ACCOUNT)/i;
+          const around = (s, i, n) => {
+            const a = Math.max(0, i - n), b = Math.min(s.length, i + n);
+            return (a > 0 ? '...' : '') + s.slice(a, b).replace(/\n/g, ' ') + (b < s.length ? '...' : '');
+          };
           (async () => {
             let bad = 0;
             for (const [path, label] of probes) {
@@ -232,9 +243,9 @@ jobs:
                 const t = await r.text();
                 const head = t.slice(0, 260).replace(/\n/g, ' ');
                 console.log(`\n=== ${label} — GET ${path} -> ${r.status}\n${head}`);
-                const gated = /"gate"\s*:\s*(true|\{)|not configured|Set LOOM_(UNITY_URL|PURVIEW_ACCOUNT)/i.test(t);
+                const hit = GATED.exec(t);
                 if (r.status >= 500) { console.log(`::error::${label}: HTTP ${r.status}`); bad++; }
-                else if (gated) { console.log(`::error::${label}: still gated — ${head}`); bad++; }
+                else if (hit) { console.log(`::error::${label}: still gated — matched ${JSON.stringify(hit[0])} at offset ${hit.index} of ${t.length}: ${around(t, hit.index, 140)}`); bad++; }
                 else if (r.status === 401) { console.log(`::error::${label}: 401 — minted session rejected`); bad++; }
                 else console.log(`::notice::${label}: OK (${r.status})`);
               } catch (x) { console.log(`::error::${label}: ${x.message}`); bad++; }
