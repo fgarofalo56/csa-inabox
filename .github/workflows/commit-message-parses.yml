@@ -20,9 +20,12 @@
 #
 # WHY THE VERSION IS PINNED TO 0.4.1
 # Not a guess. `release-please` depends on `@conventional-commits/parser` DIRECTLY at
-# "^0.4.1", and only 0.4.0 and 0.4.1 have ever been published — so that range resolves to
-# 0.4.1. It was then independently confirmed to reproduce two real hosted release-please
-# failures to the exact line and column.
+# "^0.4.1". Measured, `npm view @conventional-commits/parser versions --json` returns
+# ["0.2.0","0.3.0","0.4.0","0.4.1"] — four published versions, of which only 0.4.1
+# satisfies "^0.4.1" (which means >=0.4.1 <0.5.0), so that range resolves to 0.4.1 and
+# will keep resolving there until a 0.4.x above it ships. It was then independently
+# confirmed to reproduce two real hosted release-please failures to the exact line and
+# column.
 #
 # KNOWN LIMIT, stated rather than papered over: release-please-action bundles its own copy
 # of the parser, so if a future release bundles a DIFFERENT version, this pin would be

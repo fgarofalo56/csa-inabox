@@ -497,7 +497,17 @@ function main(argv) {
   );
   console.error('');
   console.error('THE FIX (measured, not guessed): indent the offending line by two spaces.');
-  console.error(`  git rebase -i ${base}   # reword the commit(s) named above`);
+  // On the push-to-main path the offending commit is already PUBLISHED, so `git rebase -i`
+  // is the wrong instruction — following it rewrites shared history. The workflow runs on
+  // both `pull_request` and `push: [main]`; only the branch-scan path can still reword.
+  if (process.env.GITHUB_EVENT_NAME === 'push') {
+    console.error('  This commit is already on main, so it CANNOT be reworded — the changelog');
+    console.error('  entry for it is lost and the fix is forward-only. Add the missing entry by');
+    console.error('  hand after the next release cuts (see #3852), and indent the line in future');
+    console.error('  commit bodies so this does not recur.');
+  } else {
+    console.error(`  git rebase -i ${base}   # reword the commit(s) named above`);
+  }
   console.error('');
   console.error('  before |withAudit(async (req) => handler(req)) wraps the route.');
   console.error('  after  |  withAudit(async (req) => handler(req)) wraps the route.');
