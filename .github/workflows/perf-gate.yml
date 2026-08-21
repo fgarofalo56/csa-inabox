@@ -36,10 +36,20 @@ name: perf-gate
 #                         the minted session's oid must resolve as an admin.
 #
 #                         NOT CONVERTED BY #3373 — stated here rather than left to be
-#                         discovered. Every OTHER consumer of this value now DERIVES
-#                         it from the console's own LOOM_TENANT_ADMIN_OID via
-#                         scripts/ci/resolve-automation-oid.mjs, so no human supplies
-#                         it. This workflow cannot, for two measured reasons:
+#                         discovered. SIX workflows now DERIVE this value from the
+#                         console's own LOOM_TENANT_ADMIN_OID via
+#                         scripts/ci/resolve-automation-oid.mjs (csa-loom-exercise-
+#                         services, deploy-loom-uat, deploy-loom-verify, gov-bff-verify,
+#                         loom-parity-autopilot, loom-ui-verify) and four Gov lanes
+#                         derive the SAME producer value inline off their own console
+#                         (gov-exercise, gov-gates, gov-selfaudit, gov-workspace-identity).
+#                         This workflow does NEITHER — it is the one consumer where a
+#                         human still supplies the value. (An earlier revision of this
+#                         header said "every OTHER consumer derives it via
+#                         resolve-automation-oid.mjs"; that was too strong — the four Gov
+#                         lanes derive it without that script — and it is corrected here
+#                         rather than left standing, per deploy-integrity R7.)
+#                         It cannot be converted for two measured reasons:
 #                           - it reads a repo SECRET, not `vars.`, so it was never
 #                             part of the un-writable-variable defect; and
 #                           - it runs on ubuntu-latest with `permissions: contents:
@@ -139,10 +149,33 @@ jobs:
           URL="${LOOM_URL%/}"
 
           # 1) Mint an automation session cookie (mirror of scripts/csa-loom/loom-verify.js).
+          #
+          # The identity guard below is the SAME one, and it is here because the
+          # claim "mirror of loom-verify.js" has to stay true: #3805 gave that
+          # file normalize -> refuse -> seal-the-NORMALIZED-value, and this copy
+          # still built `claims` straight out of the raw env var with only the
+          # `-z` emptiness test above. A repo secret carries whatever padding was
+          # pasted into it — GitHub trims nothing — so `"…0001\r"` passed the
+          # `-z` test, passed nothing else, and got sealed as a Cosmos partition
+          # key no principal can enumerate (#3801/#3804). A run under it also
+          # fails `oid === LOOM_TENANT_ADMIN_OID` and silently drops to
+          # non-admin, which turns every admin-gated probe into a 403 this gate
+          # would report as an endpoint defect. The four refusals here are the
+          # same four, in the same order, as loom-verify.js — the tag and the
+          # quoting differ, the rules do not.
+          #
+          # Exit 2 fails the step (set -e applies to the assignment's command
+          # substitution): a poisoned identity is a configuration error, not one
+          # of this gate's documented honest no-ops.
           COOKIE="$(node -e '
             const crypto=require("crypto");
             const ss=process.env.SESSION_SECRET;
-            const claims={oid:process.env.LOOM_AUTOMATION_OID,name:"perf-gate",upn:process.env.LOOM_AUTOMATION_UPN||"automation@loom"};
+            const oid=String(process.env.LOOM_AUTOMATION_OID||"").replace(/\r/g,"").trim();
+            if(!oid){console.error("[perf-gate] LOOM_AUTOMATION_OID is required - this gate mints a REAL admin session against a deployed console, so it must run as a real principal. Refusing to mint without an oid (#3804).");process.exit(2);}
+            if(oid.includes(",")){console.error("[perf-gate] LOOM_AUTOMATION_OID is a comma-separated list ("+oid+") and was refused. feature-gate.ts compares with strict equality, so \"a,b\" matches neither a nor b (#3804).");process.exit(2);}
+            if(!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(oid)){console.error("[perf-gate] LOOM_AUTOMATION_OID is not a GUID ("+oid+") and was refused. It names no Entra object (#3804).");process.exit(2);}
+            if(/^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(oid)){console.error("[perf-gate] LOOM_AUTOMATION_OID is a placeholder ("+oid+") and was refused. Set it to a real automation identity (#3801/#3804).");process.exit(2);}
+            const claims={oid,name:"perf-gate",upn:process.env.LOOM_AUTOMATION_UPN||"automation@loom"};
             const exp=Math.floor(Date.now()/1000)+3600;
             const key=Buffer.from(crypto.hkdfSync("sha256",Buffer.from(ss,"utf-8"),Buffer.alloc(32),Buffer.from("loom-session-v1"),32));
             const iv=crypto.randomBytes(12);const c=crypto.createCipheriv("aes-256-gcm",key,iv);

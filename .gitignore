@@ -380,6 +380,11 @@ docs/fiab/audit/
 docs/fiab/parity-gap/
 docs/fiab/design/
 apps/fiab-console/test-results/
+# The perf harness (scripts/csa-loom/perf/run-benchmark.mjs) defaults its --out
+# to a REPO-ROOT test-results/perf/, which the console-scoped pattern above does
+# not cover. Left unignored, a `git add -A` after any benchmark run commits the
+# run documents.
+test-results/
 
 # Next.js build artifacts in apps/
 apps/*/.next/

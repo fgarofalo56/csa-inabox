@@ -76,6 +76,14 @@ jobs:
           AOID=$(echo "$ENVJSON" | python3 -c "import json,sys;e={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(e.get('LOOM_TENANT_ADMIN_OID',''))")
           AGRP=$(echo "$ENVJSON" | python3 -c "import json,sys;e={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(e.get('LOOM_TENANT_ADMIN_GROUP_ID',''))")
           echo "admin oid present: $([ -n "$AOID" ] && echo yes || echo NO); admin group present: $([ -n "$AGRP" ] && echo yes || echo NO)"
+          # …and now it acts on that observation instead of just printing it
+          # (#3804). This line printed "NO" and continued for months: the mint
+          # below fell back to the zero GUID, which yields a valid NON-admin
+          # session, every /api/admin/* call 403s, and the audit step reports
+          # "not ok" and exits 0 — a green run that audited nothing. Note this
+          # estate reports `admin group present: NO`, so the oid is the ONLY
+          # admin path here; losing it loses admin entirely.
+          [ -n "$AOID" ] || { echo "::error::LOOM_TENANT_ADMIN_OID is empty on the gov console, so no admin session can be minted and this self-audit would grade nothing. Re-run the gov deploy lane to render the admin binding (auto-bind-by-default.md §5)."; exit 1; }
           echo "AOID=$AOID" >> "$GITHUB_ENV"
           echo "AGRP=$AGRP" >> "$GITHUB_ENV"
 
@@ -101,7 +109,16 @@ jobs:
           node - <<'EOF'
           const crypto = require('node:crypto');
           const S = process.env.SS, B = process.env.BASE;
-          const OID = process.env.AOID || '00000000-0000-0000-0000-000000000000';
+          // Second line of defence behind the resolve-step guard (#3804).
+          // NORMALIZE FIRST (#3805): the RAW-string test missed every padded
+          // placeholder ("…0001 " ACCEPTED, "…0001" refused), and nothing between
+          // the container app and this heredoc trims the value. The normalized
+          // string is what is tested AND what is sealed into the claim.
+          const OID = String(process.env.AOID || '').replace(/\r/g, '').trim();
+          if (!OID || /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/i.test(OID)) {
+            console.log('::error::AOID is absent or a placeholder (' + (OID || '<empty>') + '). Refusing to mint — a placeholder oid yields a non-admin session and a 403 this audit would report as an inconclusive pass.');
+            process.exit(1);
+          }
           const GRP = process.env.AGRP || '';
           const K = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(S,'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
           const claims = { oid: OID, name: 'gov-selfaudit', email: 'selfaudit@automation.inv', upn: 'gov-selfaudit@automation' };

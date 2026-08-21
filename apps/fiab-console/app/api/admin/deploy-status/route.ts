@@ -37,12 +37,17 @@ import type { LoomCloud } from '@/lib/azure/cloud-boundary';
 import {
   classifyDeployPath,
   classifyEstateDrift,
+  classifyRollRegression,
   deployPathsForCloud,
+  rollCandidates,
+  rollNeedsJobCheck,
+  rollSourceForCloud,
   summarizeDeployStatus,
-  worstSeverity,
   type CompareResult,
+  type DeployPathDef,
   type DeployStatusReport,
-  type RunLite,
+  type RollRegression,
+  type RollRunLite,
 } from '@/lib/admin/deploy-status';
 import {
   LOOM_ESTATES,
@@ -276,6 +281,244 @@ async function computeFleet(
   }));
 }
 
+/**
+ * How many roll runs we will pay an API call to inspect before giving up.
+ *
+ * Each one costs a call, and the answer is almost always the first. Three
+ * covers a roll that skipped, a re-dispatch behind it that also skipped, and
+ * one more — past that the honest answer is that we could not identify the last
+ * effective roll, and NOT a guess drawn from the fourth-newest run.
+ */
+const ROLL_JOB_LOOKBACK = 3;
+
+/** One job of a roll run, narrowed to what dating the write needs. */
+interface RollJobLite {
+  name?: string;
+  conclusion?: string | null;
+  completed_at?: string | null;
+  steps?: { name?: string; conclusion?: string | null; completed_at?: string | null }[];
+}
+
+/**
+ * WHEN THIS RUN WROTE THE ESTATE, from the jobs payload already in hand.
+ *
+ * The roll STEP's completion, because that is the one that brackets the
+ * `az containerapp update`. MEASURED on loom-roll-and-validate run 32225337320
+ * (2026-08-19), the run this whole verdict was written for:
+ *
+ *   step "Roll Container App to new image"   07:04:42Z -> 07:05:14Z
+ *   job  "Roll image + validate live URL"    completed_at 07:11:01Z
+ *   run  updated_at                                       07:11:02Z
+ *   estate revision 0000782 written          07:04:56Z   (inside the step)
+ *
+ * The job's completion sits on the far side of "Wait for revision health"
+ * (->07:06:09Z), "Purge Front Door" (->07:06:47Z), "Validate live URL"
+ * (->07:06:51Z) and "Gate — in-VNet UAT" (->07:10:58Z) — 5m47s past the roll
+ * step, and 6m05s past the write. Dating the roll from it means an image built
+ * at, say, 07:08:00 — genuinely AFTER the estate write — compares as older than
+ * `rolledAt` and reads `regressed`. That is the false red this returns instead.
+ *
+ * NO FALSE GREEN IS BOUGHT IN EXCHANGE, which is the direction that would
+ * matter. Moving `rolledAt` earlier can only turn `regressed` into `ahead`, and
+ * `ahead` requires the running image to have been BUILT after the write — which
+ * means it must also have been rolled after the write, since nothing can deploy
+ * an image that does not exist yet. The 2026-08-19 incident is unaffected: the
+ * image put back was 83e7cab6, built long before 07:04, so it reads `regressed`
+ * against either stamp.
+ *
+ * FALLS BACK TO THE JOB, then (in `settle`) to the run. A renamed step degrades
+ * to the coarser answer that shipped before this, never to UNKNOWN — and the
+ * contract test in lib/admin/__tests__/deploy-status.test.ts turns red so the
+ * rename is fixed rather than absorbed. The step must have CONCLUDED SUCCESS to
+ * date anything: a skipped step wrote nothing, and its stamp is the moment it
+ * declined to run.
+ */
+function rollWroteAt(def: DeployPathDef, job: RollJobLite): string | null {
+  const step = Array.isArray(job.steps)
+    ? job.steps.find((s) => (s.name ?? '').trim() === def.roll!.stepName)
+    : undefined;
+  if (step?.conclusion === 'success' && step.completed_at) return step.completed_at;
+  return job.completed_at ?? null;
+}
+
+/**
+ * Which roll actually shipped, and is this estate still running it? (#3676)
+ *
+ * THE HARD PART IS NOT THE COMPARISON, IT IS WHICH RUN TO COMPARE AGAINST. A
+ * roll run can conclude SUCCESS having rolled NOTHING — measured 2026-08-17 on
+ * run 32006479915, where the gate job succeeded, `Roll image + validate live
+ * URL` was SKIPPED because the console image had not built, and the run reported
+ * `success`. Taking that run's sha as "what the estate was last rolled to" would
+ * convict a perfectly healthy estate of running the wrong image. So the JOB is
+ * asked, never the run conclusion.
+ *
+ * Asking costs a call each, so it is asked only when the free evidence cannot
+ * settle it — see `rollNeedsJobCheck`. On a healthy estate this function issues
+ * ZERO upstream requests.
+ *
+ * Every failure path here degrades to `error`, which the classifier renders as
+ * UNKNOWN + warning. None of them can produce a green verdict: "we could not
+ * establish whether the roll was overwritten" is a different sentence from
+ * "nothing overwrote it", and this repo has shipped the conflation of those two
+ * three times (deploy-integrity.md R7).
+ */
+async function resolveRollRegression(
+  def: DeployPathDef,
+  fetched: { rows: RollRunLite[] | null; error: string | null } | undefined,
+  build: { sha?: string; stamp?: string },
+): Promise<RollRegression> {
+  const common = { rollWorkflow: def.workflow, estateSha: build.sha ?? null, estateStamp: build.stamp ?? null };
+
+  if (!fetched || fetched.error || !fetched.rows) {
+    return classifyRollRegression({
+      ...common,
+      error: fetched?.error || `no run history was retrieved for ${def.workflow}`,
+    });
+  }
+
+  const candidates = rollCandidates(def, fetched.rows);
+  if (candidates.length === 0) {
+    // Distinguish "the lane has never succeeded" from "it succeeded but named
+    // something uncomparable" — they lead an operator to different places.
+    const anySuccess = fetched.rows.some((r) => r.conclusion === 'success');
+    return classifyRollRegression({
+      ...common,
+      error: anySuccess
+        ? `${def.workflow} has succeeded recently but none of those runs names a commit sha `
+          + '(a dispatch against a floating tag resolves its image only inside the run)'
+        : `${def.workflow} has no successful run in the last ${RUNS_PER_PAGE}`,
+    });
+  }
+
+  const settle = (c: (typeof candidates)[number], wroteAt?: string | null) => classifyRollRegression({
+    ...common,
+    rolledSha: c.sha,
+    // WHEN THE ESTATE WAS WRITTEN, NOT WHEN THE RUN STOPPED, once we have paid
+    // to read the jobs payload. `rolledAt` feeds the classifier's comparison
+    // against the running image's build stamp, so a stamp taken later than the
+    // write biases toward a FALSE RED for every image built in between.
+    // Measured on run 32225337320 (numbers and their provenance in
+    // `RollRunLite`): the roll STEP ended 07:05:14Z, the job at 07:11:01Z and
+    // the run at 07:11:02Z — so the step closes a 5m47s false-red window that
+    // the job does not, and run->job bought exactly one second. See
+    // `rollWroteAt`.
+    rolledAt: wroteAt || c.run.updated_at || c.run.created_at || null,
+    rollRunUrl: c.run.html_url ?? null,
+  });
+
+  if (!rollNeedsJobCheck({ candidates, estateSha: build.sha ?? null, estateStamp: build.stamp ?? null })) {
+    return settle(candidates[0]);
+  }
+
+  // NEWEST-FIRST BY THE RUN STAMP, WHICH IS NOT THE WRITE TIME. `rollCandidates`
+  // can only order on what a run LISTING carries, so if two rolls finish close
+  // together and their run order disagrees with their step order, this window
+  // can hold them in the wrong sequence — the residual is documented at
+  // `RollRunLite` and it is not free to close (a jobs call per candidate, on
+  // every load, even when the first one already answered). Repeated here because
+  // a caveat only readers of the definition ever see is a caveat this line does
+  // not carry.
+  const looked = candidates.slice(0, ROLL_JOB_LOOKBACK);
+  // COUNTED SEPARATELY, because the exit message below states a fact about
+  // these runs and may only state one it established. A candidate carrying no
+  // run id is never ASKED — there is no endpoint to ask — so it cannot be
+  // reported as one that "did not run its roll job". That is precisely the R7
+  // shape the `A failure to READ the jobs is not evidence` comment inside this
+  // loop forbids, committed by the loop that hosts it.
+  let checked = 0;
+  let unchecked = 0;
+  for (const c of looked) {
+    if (!c.run.id) { unchecked += 1; continue; }
+    checked += 1;
+    const jobs = await ghJson<{ total_count?: number; jobs: RollJobLite[] }>(
+      // per_page=100, GitHub's maximum, and the same bound the sibling
+      // implementation of this identical question already uses
+      // (.github/workflows/deploy-fiab-commercial.yml:1943). It was 50, which is
+      // a page this route could actually run off the end of: the roll lane's
+      // jobs are one gate + one roll today, but a matrix or a widened lane puts
+      // the roll job on page 2, and a page-1 miss used to look exactly like
+      // "this run did not roll" — settling on an older run and reporting
+      // `current` from a page that was never read. `total_count` is now checked
+      // as well, because a bound alone cannot prove the list was complete.
+      `/repos/${REPO}/actions/runs/${c.run.id}/jobs?per_page=100`,
+    );
+    // A failure to READ the jobs is not evidence the roll did not happen. Fail
+    // closed on the whole verdict rather than skipping to an older run, which
+    // would silently name the wrong roll as the effective one.
+    //
+    // `Array.isArray`, not truthiness, and the difference is not academic: a 200
+    // carrying an unexpected shape (the rate-limit body, an error object, the
+    // array GET /user/repos returns) leaves `jobs.data` truthy and
+    // `jobs.data.jobs` undefined, and `.find` on undefined THROWS. Nothing
+    // upstream of here catches it — `computeDeployStatus` is called bare inside
+    // the handler — so a malformed body from GitHub would 500 the route and take
+    // the entire deploy panel off /admin/readiness, not merely this one verdict.
+    // An unreadable job list is an UNKNOWN, which is precisely what this branch
+    // already says.
+    if (jobs.error || !Array.isArray(jobs.data?.jobs)) {
+      return classifyRollRegression({
+        ...common,
+        error: `could not read the jobs of ${def.workflow} run ${c.run.id} — ${jobs.error || 'no job list returned'}`,
+      });
+    }
+    const rollJob = jobs.data.jobs.find((j) => (j.name ?? '').trim() === def.roll!.jobName);
+    if (rollJob?.conclusion === 'success') return settle(c, rollWroteAt(def, rollJob));
+    // NOT FOUND ON THIS PAGE IS NOT "NOT PRESENT". If the page cannot be shown
+    // to be the WHOLE job list, the roll job's absence from what we read is an
+    // unread page, not an answer — and falling through to an older candidate on
+    // it would name the wrong roll as the effective one and report a green
+    // verdict off a page nobody looked at. Fail closed on the whole verdict, the
+    // same way an unreadable list does. A job that WAS found needs no such
+    // guard: truncation cannot unfind it.
+    //
+    // AN ABSENT `total_count` IS UNKNOWN, NOT PROOF OF COMPLETENESS, and the
+    // first cut of this guard got that backwards: it read
+    // `total !== null && jobs.length < total`, so a 200 carrying `jobs` and no
+    // `total_count` made `total` null, made the guard INERT, and fell straight
+    // through to an older candidate — the exact defect this block exists to
+    // close, moved one branch over. "GitHub always sends it" is not the standard
+    // the `Array.isArray` guard six lines up holds itself to, and its own
+    // justification lists shapes far stranger than this one. A `jobs` array with
+    // no declared total is also the ONLY member of that family that failed to a
+    // false GREEN rather than to an honest unknown, which is the direction that
+    // never gets re-checked.
+    const total = typeof jobs.data.total_count === 'number' ? jobs.data.total_count : null;
+    if (!rollJob && (total === null || jobs.data.jobs.length < total)) {
+      return classifyRollRegression({
+        ...common,
+        error: total === null
+          ? `${def.workflow} run ${c.run.id} returned ${jobs.data.jobs.length} job(s) with no total_count, so `
+            + `whether its "${def.roll!.jobName}" job ran was NOT established — a page that does not say how many `
+            + 'jobs the run has cannot be shown to be all of them, and reading it as "this run rolled nothing" '
+            + 'would settle on an older roll from evidence that was never read'
+          : `${def.workflow} run ${c.run.id} reports ${total} job(s) and only ${jobs.data.jobs.length} were `
+            + `returned, so whether its "${def.roll!.jobName}" job ran was NOT established — reading a truncated `
+            + 'page as "this run rolled nothing" would settle on an older roll from evidence that was never read',
+      });
+    }
+  }
+
+  // Say only what was ESTABLISHED. `checked` runs were asked and answered "no";
+  // `unchecked` ones were never asked at all, and lumping them into the first
+  // number would assert a fact about a run this code never queried.
+  if (checked === 0) {
+    return classifyRollRegression({
+      ...common,
+      error: `none of the last ${looked.length} successful ${def.workflow} run(s) could be CHECKED — the Actions `
+        + 'listing carried no run id for any of them, so whether they rolled an image is unknown, not "they did not"',
+    });
+  }
+  return classifyRollRegression({
+    ...common,
+    error: `none of the last ${checked} successful ${def.workflow} run(s) that could be checked actually ran `
+      + `its "${def.roll!.jobName}" job`
+      + (unchecked
+        ? `, and a further ${unchecked} carried no run id so could not be checked at all`
+        : '')
+      + ', so the last roll that truly shipped an image is older than this window and was not identified',
+  });
+}
+
 async function computeDeployStatus(): Promise<DeployStatusReport> {
   const build = readBuildMarker();
   const cloud = detectLoomCloud();
@@ -301,15 +544,22 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
   });
 
   // 2. Are the lanes that put code INTO this estate actually working?
+  //
+  //    The raw rows are kept, not just the verdict: step 2b asks a DIFFERENT
+  //    question of the same data ("what did the roll lane last ship?"), and
+  //    re-fetching the identical page to ask it would spend a second call out of
+  //    an unauthenticated budget of 60/hour for information already in hand.
   const defs = deployPathsForCloud(cloud);
+  const rowsByWorkflow = new Map<string, { rows: RollRunLite[] | null; error: string | null }>();
   const paths = await Promise.all(defs.map(async (def) => {
     const [wf, runs] = await Promise.all([
       ghJson<{ state: string }>(`/repos/${REPO}/actions/workflows/${def.workflow}`),
-      ghJson<{ workflow_runs: RunLite[] }>(
+      ghJson<{ workflow_runs: RollRunLite[] }>(
         `/repos/${REPO}/actions/workflows/${def.workflow}/runs?per_page=${RUNS_PER_PAGE}`,
       ),
     ]);
     const rows = runs.data?.workflow_runs ?? null;
+    rowsByWorkflow.set(def.workflow, { rows, error: runs.error || wf.error || null });
     return classifyDeployPath({
       def,
       repo: REPO,
@@ -322,6 +572,20 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
     });
   }));
 
+  // 2b. Has something OVERWRITTEN the last roll? (#3676)
+  //
+  //     A lane being green and the estate being current are different facts, and
+  //     on 2026-08-19 they came apart: roll 32225337320 shipped 150d2937 at
+  //     07:04:56Z and a scheduled reconcile put 83e7cab6 BACK at 07:10:19Z. Both
+  //     shas were commits on main, so step 1 could only report the revert as
+  //     ordinary lag — indistinguishable from an estate whose roll simply had not
+  //     happened yet — and every lane in step 2 stayed green because the roll
+  //     itself had succeeded. Nothing on this page said the word "backwards".
+  const rollDef = rollSourceForCloud(cloud);
+  const rollRegression = rollDef
+    ? await resolveRollRegression(rollDef, rowsByWorkflow.get(rollDef.workflow), build)
+    : undefined;
+
   // 3. And EVERY OTHER CLOUD (#3730). Steps 1 and 2 describe this console and
   //    the lanes that feed it; neither can see the sovereign estate, which is
   //    how Gov sat 251 commits behind with every Commercial signal green. The
@@ -330,18 +594,23 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
   const estates = await computeFleet(cloud, build, estate);
   const fleet = summarizeFleet(estates);
 
-  const base = summarizeDeployStatus(estate, paths, {
+  // ONE FUNCTION DECIDES THE HEADLINE, INCLUDING THE FLEET OVERRIDE. This used
+  // to apply the peer-cloud override HERE, after summarizeDeployStatus had
+  // returned — a third owner of the headline that never went through the
+  // function `deployBannerBody` reads ownership from. Healthy Commercial +
+  // healthy lanes + `rollRegression:'current'` + a stale Gov peer therefore
+  // rendered "Azure Government is 251 commits behind main" over the body
+  // "Running build … — no commits behind main": the identical headline/body
+  // mismatch #3676 fixed for the regression case, still live for #3730.
+  const report = summarizeDeployStatus(estate, paths, {
     generatedAt: new Date().toISOString(),
     repo: REPO,
-  });
+  }, rollRegression, fleet);
   return {
-    ...base,
+    ...report,
     estates,
-    // The banner headline names the worst fact across BOTH halves. A peer cloud
-    // being 251 commits behind outranks "this estate is fine", because the
-    // operator reading this page is responsible for both.
-    severity: worstSeverity([base.severity, fleet.severity]),
-    headline: fleet.severity === 'error' && base.severity !== 'error' ? fleet.headline : base.headline,
+    // The fleet's own line stays available in its own field, whether or not it
+    // won the banner.
     fleetHeadline: fleet.headline,
   };
 }
@@ -367,7 +636,18 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
  * handler cannot run unless the gate allowed it.
  */
 export const GET = withCapability('admin.env-config', 'Admin', async (_req, _ctx) => {
-  // Up to 9 upstream calls; unauthenticated GitHub allows 60/hour per egress IP.
+  // Upstream call budget, counted rather than guessed — unauthenticated GitHub
+  // allows 60/hour per egress IP, so this number decides whether a refreshing
+  // readiness page can rate-limit itself into a blank panel.
+  //
+  // On Commercial: 1 compare + 4 lanes x 2 (workflow state, run list) + 3 for
+  // the one peer estate (its build-marker, its /api/version, its compare) = 12.
+  // Four lanes because build-fiab-images-acr-tasks declares no `clouds` filter
+  // and so resolves for every estate. The roll-regression step adds ZERO on a
+  // healthy estate — it only reads a run's jobs when the newest roll's own sha
+  // disagrees with what is live — and at most ROLL_JOB_LOOKBACK (3) more when
+  // it does, for a worst case of 15.
+  //
   // A 10-minute TTL keeps a busy readiness page well inside that budget while
   // still turning the banner red within one refresh of a lane breaking.
   // serve-stale means a transient GitHub blip shows a slightly-old verdict

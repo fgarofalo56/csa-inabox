@@ -36,7 +36,7 @@ import {
   WORKLOADS,
   type CapabilityNode, type ReadinessReport, type ReadinessState, type WorkloadScore,
 } from '@/lib/admin/readiness';
-import type { DeployStatusReport } from '@/lib/admin/deploy-status';
+import { deployBannerBody, type DeployStatusReport } from '@/lib/admin/deploy-status';
 import type { FleetEstate } from '@/lib/admin/estate-fleet';
 
 // ── deploy status (2026-08-05) ───────────────────────────────────────────────
@@ -189,6 +189,12 @@ function DeployStatusBanner() {
 
   const problems = status.paths.filter((p) => p.severity !== 'ok');
   const estates = (status.estates as FleetEstate[] | undefined) ?? null;
+  // WHOEVER OWNS THE HEADLINE OWNS THE BODY. Rendering `estate.detail` under
+  // every headline put "no commits behind main" directly beneath "This estate
+  // was rolled BACKWARDS off 150d2937" — a different verdict's sentence reading
+  // as reassurance under the loudest thing this banner can say. The drift line
+  // is not lost: the fleet table below prints it per estate.
+  const body = deployBannerBody(status);
   return (
     <>
       <MessageBar
@@ -198,8 +204,11 @@ function DeployStatusBanner() {
       >
         <MessageBarBody>
           <MessageBarTitle>{status.headline}</MessageBarTitle>
-          {status.estate.detail}
-          {status.estate.compareUrl && status.estate.state === 'behind' && status.estate.commitsBehind ? (
+          {body.detail}
+          {body.rollRunUrl ? (
+            <> <a href={body.rollRunUrl} target="_blank" rel="noreferrer">Open the roll that shipped it</a>.</>
+          ) : null}
+          {!body.ownedByRollRegression && status.estate.compareUrl && status.estate.state === 'behind' && status.estate.commitsBehind ? (
             <> <a href={status.estate.compareUrl} target="_blank" rel="noreferrer">See the {status.estate.commitsBehind} commits</a>.</>
           ) : null}
           {problems.length > 0 && (
