@@ -233,10 +233,35 @@ describe('DELETE /api/admin/workspaces/[id] — admin-gated cascade', () => {
 
 // --------------------------------------------------------------------------
 // POST /api/workspaces/bulk-delete
+//
+// #3833 — THIS BLOCK USED TO PIN THE DEFECT. `resolves + deletes a workspace
+// the admin does not own` seeded a workspace with NO `tid` and used the shared
+// session fixture, which carries NO `tid` claim either — so NOTHING in the
+// fixture established which tenant either side was in, and the spec asserted
+// the admin deleted it anyway. That is the exact unconfirmed-tenancy state
+// #3823/#3824 closed on the read path, and on THIS route it reached
+// `deleteOne`: a tenant admin holding a foreign workspace GUID destroyed it.
+//
+// The fixture now carries MATCHING tids on both sides — what the live estate
+// writes going forward — so the spec proves the thing it was always meant to
+// prove (same-tenant admin cleanup of UAT debris works) instead of proving the
+// hole. The refusals it no longer covers (cross-tenant, tid-less, the
+// negative-space equivalence of a foreign id and a nonexistent one) have their
+// own suite: app/api/workspaces/bulk-delete/__tests__/bulk-delete-tenant-boundary.test.ts
 // --------------------------------------------------------------------------
+/** The Entra tenant the admin session and the seeded workspaces share. */
+const BULK_HOME_TID = 'tid-contoso';
+
 describe('POST /api/workspaces/bulk-delete — admin deletes foreign UAT debris', () => {
-  it('resolves + deletes a workspace the admin does not own', async () => {
-    seedWorkspace('wsF', 'alice-oid');
+  beforeEach(() => {
+    getSessionMock.mockReturnValue({
+      claims: { oid: 'admin-oid', upn: 'admin@contoso.com', tid: BULK_HOME_TID },
+      exp: Date.now() / 1000 + 3600,
+    } as any);
+  });
+
+  it('resolves + deletes a workspace the admin does not own, IN THEIR OWN CONFIRMED TENANT', async () => {
+    seedWorkspace('wsF', 'alice-oid', { tid: BULK_HOME_TID });
     const { POST } = await import('@/app/api/workspaces/bulk-delete/route');
     const r = await POST(req('/api/workspaces/bulk-delete', { ids: ['wsF'] }));
     const j = await r.json();
@@ -247,8 +272,19 @@ describe('POST /api/workspaces/bulk-delete — admin deletes foreign UAT debris'
     expect(containers.workspaces._store.has('alice-oid::wsF')).toBe(false);
   });
 
+  it('#3833 — REFUSES a workspace in ANOTHER tenant, and leaves it intact', async () => {
+    seedWorkspace('wsX', 'mallory-oid', { tid: 'tid-fabrikam' });
+    const { POST } = await import('@/app/api/workspaces/bulk-delete/route');
+    const r = await POST(req('/api/workspaces/bulk-delete', { ids: ['wsX'] }));
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.deleted).toHaveLength(0);
+    expect(j.failed[0]).toEqual({ id: 'wsX', error: 'not_found' });
+    expect(containers.workspaces._store.has('mallory-oid::wsX')).toBe(true);
+  });
+
   it('a NON-admin caller cannot resolve a foreign workspace → per-id not_found', async () => {
-    seedWorkspace('wsF', 'alice-oid');
+    seedWorkspace('wsF', 'alice-oid', { tid: BULK_HOME_TID });
     isTenantAdminMock.mockReturnValue(false);
     const { POST } = await import('@/app/api/workspaces/bulk-delete/route');
     const r = await POST(req('/api/workspaces/bulk-delete', { ids: ['wsF'] }));
