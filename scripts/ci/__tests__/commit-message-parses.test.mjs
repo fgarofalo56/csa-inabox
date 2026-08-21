@@ -222,11 +222,57 @@ test('expectedCount counts merges only when asked', () => {
   // `with_ >= without` both hold if expectedCount simply returned 0 every time, so the
   // old assertions could not distinguish a correct count from a broken one.
   const dir = mkdtempSync(path.join(os.tmpdir(), 'loom-cmp-count-'));
+  // `cwd` does NOT win against the GIT_* environment. With GIT_DIR set, every command
+  // below writes into THAT repo instead — building five commits and a `side` branch in
+  // the ambient checkout while the test still passes green. Git exports GIT_DIR into
+  // every hook (pre-commit, commit-msg, pre-push) and during `rebase --exec` / `bisect
+  // run`, and the global rules mandate a `core.hooksPath` guard for any repo with a
+  // remote, so this repo is one hook away from that. Same reasoning as the comment at
+  // the mutation proofs below: a test for a destructive defect must not be able to
+  // cause one. Prior art for the scrub: the BASE_SHA delete further down this file.
+  //
+  // The scrub is at PROCESS scope, not a per-call `env` object, and that distinction was
+  // measured rather than assumed. Handing the local `git()` helper a scrubbed env fixes
+  // only the half of the test that BUILDS history; `expectedCount` — the function under
+  // test — runs its own `execFileSync('git', …, { cwd })` with the ambient environment,
+  // so it kept reading the GIT_DIR repo. Observed under a decoy GIT_DIR: no pollution
+  // (good) but `fatal: Invalid revision range <temp-sha>..HEAD`, RC=1 — a failure with
+  // nothing to do with the code under test, which is the same defect the gpgsign comment
+  // below is about. Deleting from `process.env` covers both halves with one mechanism.
+  // Restored in `finally`; tests in a file run sequentially (no `concurrency` set here),
+  // so no sibling observes the gap.
+  const savedGitEnv = {};
+  for (const k of [
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_COMMON_DIR',
+  ]) {
+    if (k in process.env) savedGitEnv[k] = process.env[k];
+    delete process.env[k];
+  }
   const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' });
   try {
     git('init', '-q', '-b', 'main');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
+    // A contributor's GLOBAL config must not decide whether this test passes. Measured
+    // two-sided against a throwaway GIT_CONFIG_GLOBAL carrying `commit.gpgsign = true`
+    // and a gpg program that cannot sign: without the local override `git commit` exits
+    // 128 with "error: gpg failed to sign the data" / "fatal: failed to write commit
+    // object"; with it, RC=0 and the commit is created. execFileSync throws on that 128,
+    // so the required `guardrails` lane would report a failure that has nothing to do
+    // with the code under test — pointing the reader at git rather than at their own
+    // config. The precondition is gpgsign=true AND a gpg that cannot sign unattended
+    // (absent binary, no key, locked agent, no TTY for the passphrase); a contributor
+    // with a working key would not have seen it, which is what makes it a nasty
+    // intermittent rather than an obvious break. The old version only READ history, so
+    // it was immune; introducing `git commit` is what introduces the exposure.
+    // `core.hooksPath` is the same shape: a global one would run the ambient repo's
+    // hooks against this throwaway.
+    git('config', 'commit.gpgsign', 'false');
+    git('config', 'core.hooksPath', path.join(dir, '.no-hooks'));
     git('commit', '-q', '--allow-empty', '-m', 'base');
     const base = git('rev-parse', 'HEAD').trim();
 
@@ -247,6 +293,7 @@ test('expectedCount counts merges only when asked', () => {
     );
     assert.equal(expectedCount('HEAD', 'HEAD', { withMerges: true, cwd: dir }), 0);
   } finally {
+    for (const [k, v] of Object.entries(savedGitEnv)) process.env[k] = v;
     rmSync(dir, { recursive: true, force: true });
   }
 });

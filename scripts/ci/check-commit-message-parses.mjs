@@ -293,7 +293,9 @@ const SHA_RE = /^[0-9a-f]{40}$/;
  *
  * @param {string} base
  * @param {string} head
- * @param {{withMerges?: boolean}} [opts]
+ * @param {{withMerges?: boolean, cwd?: string}} [opts] `cwd` defaults to `process.cwd()`,
+ *   which is what every caller in this file relies on; it exists so a test can build a
+ *   known history in a throwaway repo instead of asserting against ambient git state.
  * @returns {number}
  */
 export function expectedCount(base, head, { withMerges = false, cwd = process.cwd() } = {}) {
@@ -496,16 +498,24 @@ function main(argv) {
       'released work since 2026-06-11.',
   );
   console.error('');
-  console.error('THE FIX (measured, not guessed): indent the offending line by two spaces.');
-  // On the push-to-main path the offending commit is already PUBLISHED, so `git rebase -i`
+  // On the push-to-main path the offending commits are already PUBLISHED, so `git rebase -i`
   // is the wrong instruction — following it rewrites shared history. The workflow runs on
   // both `pull_request` and `push: [main]`; only the branch-scan path can still reword.
+  //
+  // The push text must also not overstate the damage. This workflow's own header says the
+  // push run "names the commit while the release is still uncut and the changelog still
+  // fixable" — so at the moment this fires the entry is NOT yet lost. What is established
+  // is that release-please will drop it when the next release cuts. Saying "is lost" here
+  // contradicts the workflow 450 lines away and asserts something the run has not observed,
+  // which is the exact defect class this guard exists to catch.
   if (process.env.GITHUB_EVENT_NAME === 'push') {
-    console.error('  This commit is already on main, so it CANNOT be reworded — the changelog');
-    console.error('  entry for it is lost and the fix is forward-only. Add the missing entry by');
-    console.error('  hand after the next release cuts (see #3852), and indent the line in future');
-    console.error('  commit bodies so this does not recur.');
+    console.error('ALREADY ON MAIN — these commits cannot be reworded; rewriting published');
+    console.error('history is not the fix. The changelog entries are not lost YET: release-please');
+    console.error('drops them when the NEXT release cuts, so until then the changelog is still');
+    console.error('fixable by hand. Add them at that point (see #3852), and indent the offending');
+    console.error('line in future commit bodies so this does not recur:');
   } else {
+    console.error('THE FIX (measured, not guessed): indent the offending line by two spaces.');
     console.error(`  git rebase -i ${base}   # reword the commit(s) named above`);
   }
   console.error('');
