@@ -7,14 +7,16 @@
     Detects which files changed and only runs relevant gates.
 
     Exit codes - this is a CONTRACT, callers read it:
-      0 - at least one gate MEASURED something and nothing failed. May still be
-          reported as NOT FULLY VERIFIED when some gates could not run.
+      0 - everything REQUIRED that was selected got measured and nothing
+          failed. Optional gates (required: false in dev-loop/config.yaml) may
+          have been skipped; that is reported but does not fail the run.
       1 - a gate ran and found a problem.
       2 - -WhatIf. Nothing was invoked, so nothing was measured.
-      3 - NOT VERIFIED. Nothing was measured: either no gate covers this diff,
-          or every selected gate reported COULD NOT RUN. Non-zero on purpose -
-          a run that established nothing must not hand its caller a success.
-      4 - this script's own verdict control failed; its answer is meaningless.
+      3 - NOT VERIFIED. The run did not establish what it claims to: nothing was
+          measured, OR a gate declared `required: true` could not run, OR the
+          registry and this orchestrator disagree. Non-zero on purpose - a run
+          that established nothing must not hand its caller a success.
+      4 - this script's own in-process control failed; its answer is meaningless.
 
     Exit 3 is the fix for #3811, where an empty result set printed
     "All gates passed!" and returned 0.
@@ -98,8 +100,16 @@ function Invoke-Git {
     # reported "git did not answer" on a healthy repo and escalated every run to
     # RunAll. It failed in the safe direction, which is exactly why it would
     # have gone unnoticed - the suite still ran more, not less.
+    #
+    # `-C $RepoRoot` anchors git to the SAME root the gates are run against.
+    # Without it change detection was CWD-anchored while gate execution was
+    # -RepoRoot-anchored, and the two disagree from a subdirectory: `git diff
+    # --name-only` returns repo-relative paths ("sub/deep/new.py") while
+    # `ls-files --others` returns CWD-relative ones ("deep/new.py"), so the
+    # prefix triggers silently missed brand-new files - the exact case the
+    # merge-base rework was written to cover.
     $global:LASTEXITCODE = $null
-    $out = & git @GitArgs 2>&1
+    $out = & git -C $RepoRoot @GitArgs 2>&1
     return [pscustomobject]@{ ExitCode = $global:LASTEXITCODE; Output = @($out) }
 }
 
@@ -163,9 +173,22 @@ if ($RunAll) {
 Write-Host ""
 
 function ShouldRunGate {
-    param([string[]]$Patterns)
+    param(
+        [string[]]$Patterns,
+        [string[]]$ExcludePatterns = @()
+    )
     if ($RunAll) { return $true }
     foreach ($file in $changedFiles) {
+        # Excluded files cannot select the gate. This exists so a gate's TRIGGER
+        # population can be made to match its CHECK population exactly - a gate
+        # that fires for files it never examines will report a measured PASS
+        # over an unexamined change, which is #3506's shape and was measured
+        # here on the TypeScript leg.
+        $excluded = $false
+        foreach ($x in $ExcludePatterns) {
+            if ($file -like $x) { $excluded = $true; break }
+        }
+        if ($excluded) { continue }
         foreach ($pattern in $Patterns) {
             if ($file -like $pattern) { return $true }
         }
@@ -203,16 +226,30 @@ function GateStatus {
 #
 # The exit codes, and why each is what it is:
 #
-#   0  PASS         at least one gate MEASURED something and nothing failed.
+#   0  PASS         everything REQUIRED that was selected got measured, and
+#                   nothing failed. Optional gates may be missing.
 #   1  FAIL         a gate ran and found a problem. Outranks everything.
-#   3  NOT VERIFIED nothing was measured. Non-zero, because a caller that reads
-#                   the exit code - a Makefile, a hook, a CI step, an agent
-#                   writing "ran make validate, gates passed" - must not be
-#                   handed a success for a run that established nothing. It is
-#                   deliberately NOT 1: "some gates failed" would be a second
-#                   false statement, and the two conditions need different
-#                   words and different codes.
-#   4  BROKEN       this function's own control failed (see below).
+#   3  NOT VERIFIED the run did not establish what it claims to. Three ways in:
+#                     - nothing was measured at all;
+#                     - a REQUIRED gate could not run;
+#                     - the registry and this orchestrator disagree, so what
+#                       actually ran is not knowable.
+#                   Non-zero, because a caller that reads the exit code - a
+#                   Makefile, a hook, a CI step, an agent writing "ran make
+#                   validate, gates passed" - must not be handed a success for a
+#                   run that established nothing. It is deliberately NOT 1:
+#                   "some gates failed" would be a second false statement.
+#   4  BROKEN       the in-process control failed; this answer is meaningless.
+#
+# REQUIRED vs OPTIONAL is read from dev-loop/config.yaml's `required:` field,
+# which the registry already carried and which nothing consulted. It is what
+# lets a dev box without dbt stay green while a missing REQUIRED leg goes red.
+# An earlier version returned 0 for every partial state, which meant a machine
+# lacking the bicep CLI got a silent pass on a bicep-only diff; measured over
+# 300 first-parent commits, that partial state fires on 8.7% of changes in a
+# main checkout and 21% in an agent worktree. "Loud words, exit 0" is the same
+# defect as #3811 wearing different clothes - it just takes a reader who parses
+# English rather than a status code.
 #
 # NOT-VERIFIED KEYS ON "NOTHING WAS MEASURED", NOT ON "$results IS EMPTY".
 # Those are different populations, and the narrower one is trivially bypassed:
@@ -224,7 +261,8 @@ function GateStatus {
 function Get-SuiteVerdict {
     param(
         [object[]]$Results,
-        [bool]$DriftFound
+        [bool]$DriftFound,
+        [string[]]$RequiredGates = @()
     )
 
     $all      = @($Results)
@@ -232,49 +270,93 @@ function Get-SuiteVerdict {
     $measured = @($all | Where-Object { $_.Status -eq 'Fail' -or $_.Status -eq 'Pass' })
     $notRun   = @($all | Where-Object { $_.Status -ne 'Fail' -and $_.Status -ne 'Pass' })
 
+    # Gate names are matched case-insensitively: $results carries display names
+    # ("Bicep", "TypeScript") while config.yaml carries registry keys ("bicep",
+    # "typescript").
+    $requiredNotRun = @($notRun | Where-Object {
+        $name = "$($_.Gate)"
+        @($RequiredGates | Where-Object { $_ -and ($_ -ieq $name) }).Count -gt 0
+    })
+
     if ($failed.Count -gt 0) {
-        return [pscustomobject]@{ Code = 1; Verdict = 'Fail'; Measured = $measured.Count; NotRun = $notRun.Count }
+        return [pscustomobject]@{ Code = 1; Verdict = 'Fail'; Measured = $measured.Count; NotRun = $notRun.Count; RequiredNotRun = @($requiredNotRun | ForEach-Object { $_.Gate }) }
     }
     if ($measured.Count -eq 0) {
-        return [pscustomobject]@{ Code = 3; Verdict = 'NotVerified'; Measured = 0; NotRun = $notRun.Count }
+        return [pscustomobject]@{ Code = 3; Verdict = 'NotVerified'; Measured = 0; NotRun = $notRun.Count; RequiredNotRun = @($requiredNotRun | ForEach-Object { $_.Gate }) }
     }
-    if ($notRun.Count -gt 0 -or $DriftFound) {
-        return [pscustomobject]@{ Code = 0; Verdict = 'Partial'; Measured = $measured.Count; NotRun = $notRun.Count }
+    if ($requiredNotRun.Count -gt 0 -or $DriftFound) {
+        return [pscustomobject]@{ Code = 3; Verdict = 'RequiredMissing'; Measured = $measured.Count; NotRun = $notRun.Count; RequiredNotRun = @($requiredNotRun | ForEach-Object { $_.Gate }) }
     }
-    return [pscustomobject]@{ Code = 0; Verdict = 'Pass'; Measured = $measured.Count; NotRun = 0 }
+    if ($notRun.Count -gt 0) {
+        return [pscustomobject]@{ Code = 0; Verdict = 'Partial'; Measured = $measured.Count; NotRun = $notRun.Count; RequiredNotRun = @() }
+    }
+    return [pscustomobject]@{ Code = 0; Verdict = 'Pass'; Measured = $measured.Count; NotRun = 0; RequiredNotRun = @() }
 }
 
 # ---------------------------------------------------------------------------
 # IN-PROCESS CONTROL, run BEFORE the tree is judged.
 #
-# A verdict function is only worth anything if its answer MOVES with its input.
-# This asserts that it does, on synthetic inputs whose correct answer is known,
-# every single run - so the empty-set regression cannot be silently reintroduced
-# by a later edit. Five sibling guards under scripts/ci already run their
-# control in-process rather than leaving it in a test file nobody runs on the
-# path that matters; this follows them. See #3464 finding 4.
+# A verdict is only worth anything if its answer MOVES with its input. This
+# asserts that it does, on synthetic inputs whose correct answer is known, every
+# single run - so the empty-set regression cannot be silently reintroduced by a
+# later edit. Five sibling guards under scripts/ci already run their control
+# in-process rather than leaving it in a test file nobody runs on the path that
+# matters; this follows them. See #3464 finding 4.
+#
+# THE POPULATION IS BOTH FUNCTIONS, NOT JUST THE VERDICT. An earlier version of
+# this control drove Get-SuiteVerdict alone and was blind to the function that
+# decides what its input MEANS. Measured by an independent reviewer: mutating
+# GateStatus so 2 and $null map to 'Pass' - one word each, and the exact
+# historical defect where "could not run" counted as a pass - produced
+# `Bicep: [PASS]` / `All gates passed! (1 gate(s) measured.)` / RC=0 on a
+# bicep-only diff with bicep absent, while all nine verdict cases still passed
+# and gate-selftest.ps1 still reported 8/8 RC=0. A control that cannot see the
+# mutation restoring the bug it was written for is decoration. Both functions
+# are now in the population.
 #
 # If the control ever disagrees, the run aborts with exit 4 rather than
 # reporting on the repo, because at that point this script's verdict means
 # nothing regardless of what the gates said.
 # ---------------------------------------------------------------------------
-$controlCases = @(
-    @{ Name = 'empty set is NOT VERIFIED';            Results = @();                                                                Drift = $false; Code = 3 }
-    @{ Name = 'all-NotRun is NOT VERIFIED';           Results = @(@{Gate='a';Status='NotRun'}, @{Gate='b';Status='NotRun'});        Drift = $false; Code = 3 }
-    @{ Name = 'single pass is PASS';                  Results = @(@{Gate='a';Status='Pass'});                                        Drift = $false; Code = 0 }
-    @{ Name = 'single fail is FAIL';                  Results = @(@{Gate='a';Status='Fail'});                                        Drift = $false; Code = 1 }
-    @{ Name = 'fail outranks pass';                   Results = @(@{Gate='a';Status='Pass'}, @{Gate='b';Status='Fail'});             Drift = $false; Code = 1 }
-    @{ Name = 'fail outranks NotRun';                 Results = @(@{Gate='a';Status='NotRun'}, @{Gate='b';Status='Fail'});           Drift = $false; Code = 1 }
-    @{ Name = 'pass plus NotRun is partial, exit 0';  Results = @(@{Gate='a';Status='Pass'}, @{Gate='b';Status='NotRun'});           Drift = $false; Code = 0 }
-    @{ Name = 'drift over an all-pass suite exits 0'; Results = @(@{Gate='a';Status='Pass'});                                        Drift = $true;  Code = 0 }
-    @{ Name = 'drift cannot rescue an empty set';     Results = @();                                                                Drift = $true;  Code = 3 }
+$controlFailures = @()
+
+# --- GateStatus: exit code -> status. The mapping the verdict is computed FROM.
+$statusCases = @(
+    @{ Name = '$null (gate script not invocable) is NotRun'; Code = $null; Expect = 'NotRun' }
+    @{ Name = 'exit 2 (COULD NOT RUN) is NotRun';            Code = 2;     Expect = 'NotRun' }
+    @{ Name = 'exit 0 is Pass';                              Code = 0;     Expect = 'Pass'   }
+    @{ Name = 'exit 1 is Fail';                              Code = 1;     Expect = 'Fail'   }
+    @{ Name = 'exit 3 is Fail';                              Code = 3;     Expect = 'Fail'   }
+    @{ Name = 'exit 127 (command not found) is Fail';        Code = 127;   Expect = 'Fail'   }
 )
 
-$controlFailures = @()
+foreach ($case in $statusCases) {
+    $got = GateStatus $case.Code
+    if ($got -ne $case.Expect) {
+        $controlFailures += "GateStatus / $($case.Name): expected '$($case.Expect)', got '$got'"
+    }
+}
+
+# --- Get-SuiteVerdict: statuses -> exit code.
+$controlCases = @(
+    @{ Name = 'empty set is NOT VERIFIED';            Results = @();                                                          Req = @(); Drift = $false; Code = 3 }
+    @{ Name = 'all-NotRun is NOT VERIFIED';           Results = @(@{Gate='a';Status='NotRun'}, @{Gate='b';Status='NotRun'});  Req = @(); Drift = $false; Code = 3 }
+    @{ Name = 'single pass is PASS';                  Results = @(@{Gate='a';Status='Pass'});                                  Req = @(); Drift = $false; Code = 0 }
+    @{ Name = 'single fail is FAIL';                  Results = @(@{Gate='a';Status='Fail'});                                  Req = @(); Drift = $false; Code = 1 }
+    @{ Name = 'fail outranks pass';                   Results = @(@{Gate='a';Status='Pass'}, @{Gate='b';Status='Fail'});       Req = @(); Drift = $false; Code = 1 }
+    @{ Name = 'fail outranks NotRun';                 Results = @(@{Gate='a';Status='NotRun'}, @{Gate='b';Status='Fail'});     Req = @(); Drift = $false; Code = 1 }
+    @{ Name = 'OPTIONAL gate NotRun stays 0';         Results = @(@{Gate='a';Status='Pass'}, @{Gate='dbt';Status='NotRun'});   Req = @(); Drift = $false; Code = 0 }
+    @{ Name = 'REQUIRED gate NotRun is NOT VERIFIED'; Results = @(@{Gate='a';Status='Pass'}, @{Gate='bic';Status='NotRun'});   Req = @('bic'); Drift = $false; Code = 3 }
+    @{ Name = 'required gate that PASSED is fine';    Results = @(@{Gate='bic';Status='Pass'});                                Req = @('bic'); Drift = $false; Code = 0 }
+    @{ Name = 'a real FAIL outranks a required NotRun'; Results = @(@{Gate='bic';Status='NotRun'}, @{Gate='b';Status='Fail'}); Req = @('bic'); Drift = $false; Code = 1 }
+    @{ Name = 'drift is NOT VERIFIED, not a pass';    Results = @(@{Gate='a';Status='Pass'});                                  Req = @(); Drift = $true;  Code = 3 }
+    @{ Name = 'drift cannot rescue an empty set';     Results = @();                                                          Req = @(); Drift = $true;  Code = 3 }
+)
+
 foreach ($case in $controlCases) {
-    $got = Get-SuiteVerdict -Results $case.Results -DriftFound $case.Drift
+    $got = Get-SuiteVerdict -Results $case.Results -DriftFound $case.Drift -RequiredGates $case.Req
     if ($got.Code -ne $case.Code) {
-        $controlFailures += "$($case.Name): expected exit $($case.Code), got $($got.Code) ($($got.Verdict))"
+        $controlFailures += "Get-SuiteVerdict / $($case.Name): expected exit $($case.Code), got $($got.Code) ($($got.Verdict))"
     }
 }
 
@@ -365,19 +447,47 @@ if (ShouldRunGate @("deploy/bicep/*")) {
 # `make validate` returned having measured nothing while CLAUDE.md calls it "ALL
 # gates - this is the bar for done". See #3811.
 #
-# The trigger is deliberately `apps/fiab-console/*` and NOT `*.ts` / `*.tsx`.
-# validate-typescript.ps1 typechecks the CONSOLE project; a trigger on every
-# .ts file in the repo would fire this gate for TypeScript it does not compile,
-# which is the "gate triggered on a file it never checked" defect recorded in
-# #3506. A gate's trigger population must not exceed its check population.
+# THE TRIGGER IS SCOPED TO WHAT THE GATE ACTUALLY COMPILES.
+#
+# validate-typescript.ps1 compiles tsconfig.build.json, which EXCLUDES every
+# test file - `**/*.test.ts(x)`, `**/*.spec.ts(x)`, `**/__tests__/**`, `e2e/**`,
+# `**/*.uat.ts(x)`, and the vitest/playwright configs. The first version of this
+# gate triggered on `apps/fiab-console/*`, which is far wider. Measured by an
+# independent reviewer: `tsc --showConfig -p tsconfig.build.json` resolves 4107
+# files of which ZERO are tests, while 1559 `*.test.ts*` and 1563 `__tests__`
+# files exist in that tree; over the last 141 console-touching changes, 78 (55%)
+# changed only files this project does not compile. Every one of those would
+# have compiled 4107 unrelated files, exited 0, and let the orchestrator print
+# "All gates passed!" having typechecked none of the changed files. That is the
+# same narrow-bypass shape #3506 records, and it is worse than a gap because it
+# manufactures a positive.
+#
+# The excludes below MIRROR tsconfig.build.json. Widening one without the other
+# reopens the defect, so they are commented on both sides.
+#
+# Console TESTS are therefore NOT covered by `make validate` - stated here, in
+# the gate's own output, and in dev-loop/README.md rather than left implicit.
+# Pointing this gate at tsconfig.json instead was measured and rejected for now:
+# it yields 901 pre-existing type errors, ALL 901 in test files and none in
+# production code, which would red every console change over debt this gate did
+# not create. Tracked as a follow-up.
 $invokedGates += 'typescript'
-if (ShouldRunGate @("apps/fiab-console/*")) {
+$tsExcludes = @(
+    "*.test.ts", "*.test.tsx", "*.spec.ts", "*.spec.tsx",
+    "*__tests__*",
+    "apps/fiab-console/e2e/*",
+    "*.uat.ts", "*.uat.tsx",
+    "apps/fiab-console/vitest.config.ts",
+    "apps/fiab-console/vitest.setup.ts",
+    "apps/fiab-console/playwright.config.ts"
+)
+if (ShouldRunGate -Patterns @("apps/fiab-console/*.ts", "apps/fiab-console/*.tsx") -ExcludePatterns $tsExcludes) {
     Write-Host "Running: TypeScript validation..." -ForegroundColor White
     $LASTEXITCODE = $null   # see note on Gate 1
     & (Join-Path $gatesDir "validate-typescript.ps1") -RepoRoot $RepoRoot
     $results += @{ Gate = "TypeScript"; Status = (GateStatus $LASTEXITCODE) }
 } else {
-    Write-Host "Skipping: TypeScript (no apps/fiab-console files changed)" -ForegroundColor DarkGray
+    Write-Host "Skipping: TypeScript (no compiled apps/fiab-console TypeScript changed)" -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------------------
@@ -395,6 +505,7 @@ if (ShouldRunGate @("apps/fiab-console/*")) {
 # so. See #3811.
 # ---------------------------------------------------------------------------
 $driftFound = $false
+$requiredGates = @()
 $configPath = Join-Path (Split-Path -Parent $PSScriptRoot) "config.yaml"
 
 Write-Host ""
@@ -408,17 +519,33 @@ if (-not (Test-Path $configPath)) {
     # that matters. Gate names are the 2-space-indented keys directly under
     # `validation_gates:`; the block ends at the first line starting in column
     # 0. Nested keys (script:, triggers:, ...) sit at 4 spaces and cannot match.
+    #
+    # `required:` is parsed here too. The registry has always carried it and
+    # NOTHING read it - so a gate the registry called required could silently
+    # not run and the suite still exited 0. It is what now separates "your dev
+    # box has no dbt, fine" from "the bicep leg did not run, that is not a
+    # pass". See #3811.
     $declared = @()
     $inBlock = $false
+    $currentGate = $null
     foreach ($line in (Get-Content $configPath -Encoding UTF8)) {
         if ($line -match '^validation_gates:') { $inBlock = $true; continue }
         if (-not $inBlock) { continue }
         if ($line -match '^\S') { break }
-        if ($line -match '^  ([A-Za-z0-9_-]+):') { $declared += $Matches[1] }
+        if ($line -match '^  ([A-Za-z0-9_-]+):') {
+            $currentGate = $Matches[1]
+            $declared += $currentGate
+            continue
+        }
+        # `required: true` (YAML booleans are lowercase, but accept True/TRUE).
+        if ($currentGate -and ($line -match '^\s+required:\s*(\S+)')) {
+            if ($Matches[1] -match '^(true|True|TRUE|yes|Yes)$') { $requiredGates += $currentGate }
+        }
     }
 
     # `all` IS this script. It is the orchestrator, not one of the gates it runs.
     $declared = @($declared | Where-Object { $_ -ne 'all' })
+    $requiredGates = @($requiredGates | Where-Object { $_ -ne 'all' })
 
     if ($declared.Count -eq 0) {
         Write-Host "  No gates parsed out of config.yaml - drift NOT CHECKED." -ForegroundColor Yellow
@@ -459,18 +586,20 @@ Write-Host "  Validation Summary" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 foreach ($r in $results) {
+    $isRequired = @($requiredGates | Where-Object { $_ -and ($_ -ieq "$($r.Gate)") }).Count -gt 0
+    $tag = if ($isRequired) { "required" } else { "optional" }
     switch ($r.Status) {
         'Pass'  { $label = "[PASS]";         $color = "Green" }
         'Fail'  { $label = "[FAIL]";         $color = "Red" }
         default { $label = "[NOT VERIFIED]"; $color = "Yellow" }
     }
-    Write-Host "  $($r.Gate): $label" -ForegroundColor $color
+    Write-Host "  $($r.Gate) ($tag): $label" -ForegroundColor $color
 }
 if ($results.Count -eq 0) {
     Write-Host "  (none)" -ForegroundColor DarkGray
 }
 
-$verdict = Get-SuiteVerdict -Results $results -DriftFound $driftFound
+$verdict = Get-SuiteVerdict -Results $results -DriftFound $driftFound -RequiredGates $requiredGates
 Write-Host ""
 
 switch ($verdict.Verdict) {
@@ -500,21 +629,36 @@ switch ($verdict.Verdict) {
             Write-Host "  The gate registry also disagrees with this orchestrator - see the drift report above." -ForegroundColor Yellow
         }
     }
-    'Partial' {
-        # A gate that could not run is not a pass, and neither is a gate registry
-        # this script disagrees with. Reported loudly, but exit stays 0: at least
-        # one gate DID measure something and nothing failed, so "some gates
-        # failed" would be false. This is the one line left where the words are
-        # louder than the exit code, and it is deliberate - see #3811.
-        if ($verdict.NotRun -gt 0) {
-            Write-Host "NOT FULLY VERIFIED - $($verdict.NotRun) of $($results.Count) gate(s) could not run." -ForegroundColor Yellow
-            Write-Host "  $($verdict.Measured) gate(s) measured something and none failed." -ForegroundColor Yellow
-            Write-Host "  This is NOT a full pass. See the gate output above for what is missing." -ForegroundColor Yellow
+    'RequiredMissing' {
+        # Non-zero. A REQUIRED leg that could not run means the run did not
+        # establish what `make validate` claims to establish, and an exit code
+        # is what a Makefile, a hook, or an agent actually reads. Optional legs
+        # (dbt, deployment) do NOT reach here - a dev box without dbt stays
+        # green, which is the whole reason the registry carries `required:`.
+        if ($verdict.RequiredNotRun.Count -gt 0) {
+            Write-Host "NOT VERIFIED - a REQUIRED gate could not run. Exit 3." -ForegroundColor Yellow
+            Write-Host "  Required and not run: $($verdict.RequiredNotRun -join ', ')" -ForegroundColor Yellow
+            Write-Host "  $($verdict.Measured) gate(s) measured something and none failed, but the" -ForegroundColor Yellow
+            Write-Host "  legs above are declared required: true in dev-loop/config.yaml and were" -ForegroundColor Yellow
+            Write-Host "  NOT measured. See each gate's output for the toolchain it is missing." -ForegroundColor Yellow
+            $optionalNotRun = $verdict.NotRun - $verdict.RequiredNotRun.Count
+            if ($optionalNotRun -gt 0) {
+                Write-Host "  ($optionalNotRun optional gate(s) also did not run; those alone would not fail this run.)" -ForegroundColor DarkGray
+            }
         }
         if ($driftFound) {
-            Write-Host "NOT FULLY VERIFIED - the gate registry and this orchestrator disagree." -ForegroundColor Yellow
-            Write-Host "  See the drift report above. A declared gate that nothing invokes measures nothing." -ForegroundColor Yellow
+            Write-Host "NOT VERIFIED - the gate registry and this orchestrator disagree. Exit 3." -ForegroundColor Yellow
+            Write-Host "  See the drift report above. When the registry and the runner disagree," -ForegroundColor Yellow
+            Write-Host "  what actually ran is not knowable, so this run cannot be quoted as a pass." -ForegroundColor Yellow
         }
+    }
+    'Partial' {
+        # Every gate that did not run is OPTIONAL, so exit stays 0 - this is the
+        # dev-box case the `required:` field exists to keep green. It is still
+        # reported, because a partial run is not a full pass.
+        Write-Host "PASS (partial) - $($verdict.Measured) gate(s) measured, none failed." -ForegroundColor Green
+        Write-Host "  $($verdict.NotRun) OPTIONAL gate(s) could not run and were not counted." -ForegroundColor Yellow
+        Write-Host "  No required gate is missing, so this run exits 0. See above for what was skipped." -ForegroundColor Yellow
     }
     'Pass' {
         Write-Host "All gates passed! ($($verdict.Measured) gate(s) measured.)" -ForegroundColor Green

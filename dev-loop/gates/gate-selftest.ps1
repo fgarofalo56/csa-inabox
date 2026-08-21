@@ -39,6 +39,15 @@
       G  validate-all, a change under apps/fiab-console
          -> the TypeScript gate is SELECTED. A gate nothing ever triggers
             measures nothing however correct its internals are.
+      H  validate-all, a change to a console TEST file ONLY
+         -> the TypeScript gate is NOT selected and the suite is NOT green.
+            tsconfig.build.json does not compile tests, so firing for one would
+            report a measured PASS over an unexamined change.
+      I  validate-all -> validate-typescript, a BROKEN compiled console file
+         -> the suite exits 1. This is the PRODUCTION invocation path (`&`, a
+            child scope), which is not equivalent to C/D's separate process.
+      J  the same path, clean -> exit 0. Without J, I would also pass if the
+         gate failed unconditionally.
 
     A and B together are the load-bearing pair. If both return the same code,
     this script fails - because a verdict that does not move between "measured
@@ -227,6 +236,33 @@ try {
         } else {
             Add-Case 'G  a console change SELECTS the TypeScript gate' 'Fail' "the TypeScript gate was skipped for a change under apps/fiab-console; exit $($g.ExitCode)"
         }
+
+        # --- Case H: the trigger must NOT exceed what the gate compiles. ---
+        # tsconfig.build.json excludes every test file, so a test-only console
+        # change must NOT select the gate. If it does, the gate compiles 4107
+        # unrelated files, exits 0, and the suite reports a measured PASS over a
+        # change it never examined - measured at 78 of the last 141 console
+        # changes before the trigger was narrowed. The honest answer for a
+        # test-only diff is NOT VERIFIED, never green. See #3811 / #3506.
+        # Branch from MAIN, not from the previous branch: the diff is taken
+        # against the merge-base, so branching off `feature` would carry
+        # thing.ts along and the gate would fire for THAT, not for the test
+        # file - the case would pass for the wrong reason.
+        Invoke-SynthGit @('checkout', '-q', 'main')
+        Invoke-SynthGit @('checkout', '-q', '-b', 'console-tests-only')
+        New-Item -ItemType Directory -Path (Join-Path $synthRepo 'apps/fiab-console/lib') -Force | Out-Null
+        Set-Content -Path (Join-Path $synthRepo 'apps/fiab-console/lib/thing.test.ts') -Value 'const x: number = "s"; export default x;' -Encoding ASCII
+        Invoke-SynthGit @('add', '-A')
+        Invoke-SynthGit @('commit', '-q', '-m', 'touch only a console TEST file')
+
+        $h = Invoke-Child -ScriptPath $validateAll -Arguments @('-RepoRoot', $synthRepo) -WorkingDirectory $synthRepo
+        if ($h.Output -match 'Running: TypeScript validation') {
+            Add-Case 'H  a TEST-only console change does NOT select the gate' 'Fail' 'the gate fired for a file tsconfig.build.json does not compile - trigger exceeds check population'
+        } elseif ($h.ExitCode -eq 0) {
+            Add-Case 'H  a TEST-only console change does NOT select the gate' 'Fail' "gate correctly skipped, but the suite still exited 0 - a test-only change must not be green"
+        } else {
+            Add-Case 'H  a TEST-only console change does NOT select the gate' 'Pass' "skipped, and the suite exited $($h.ExitCode) rather than green"
+        }
     }
 
     # =======================================================================
@@ -249,6 +285,93 @@ try {
         Add-Case 'C/D validate-typescript verdict pair' 'NotRun' 'no TypeScript compiler resolvable; set LOOM_TSC_BIN or install the console deps in the MAIN checkout'
     } else {
         $env:LOOM_TSC_BIN = $compiler
+
+        # --- Cases I and J: the PRODUCTION invocation path, end to end. ---
+        #
+        # C-F invoke validate-typescript.ps1 as a separate PROCESS. validate-all
+        # invokes it with `&`, in a CHILD SCOPE of the same process, and those
+        # are not equivalent: a bare `$LASTEXITCODE = $null` shadows the
+        # automatic variable in a child scope but not at process top level. That
+        # difference made the gate report "tsc could not be invoked" on every
+        # real run while C and D passed - a green self-test over a gate that did
+        # not work through the only path anyone uses. These two cases run the
+        # gate the way the orchestrator does, against a synthetic console with a
+        # real tsconfig and a real compiler.
+        $consoleRepo = Join-Path $tempRoot 'synthetic-console'
+        New-Item -ItemType Directory -Path (Join-Path $consoleRepo 'apps/fiab-console/lib') -Force | Out-Null
+        # Written, not copied from the fixture: the fixture's include is
+        # ["*.ts"] (top-level only), which under lib/ resolves to NO inputs and
+        # makes tsc exit non-zero with TS18003. Case I would then have "passed"
+        # on an empty-project error rather than on the type error it claims to
+        # detect - which is what case J exists to catch, and did.
+        $consoleTsconfig = @(
+            '{',
+            '  "compilerOptions": {',
+            '    "target": "ES2022",',
+            '    "lib": ["ES2022"],',
+            '    "module": "esnext",',
+            '    "moduleResolution": "bundler",',
+            '    "strict": true,',
+            '    "noEmit": true,',
+            '    "incremental": false,',
+            '    "skipLibCheck": true,',
+            '    "types": []',
+            '  },',
+            '  "include": ["**/*.ts"],',
+            '  "exclude": ["node_modules", "**/*.test.ts", "**/__tests__/**"]',
+            '}'
+        )
+        Set-Content -Path (Join-Path $consoleRepo 'apps/fiab-console/tsconfig.build.json') -Value $consoleTsconfig -Encoding ASCII
+        Set-Content -Path (Join-Path $consoleRepo 'apps/fiab-console/lib/ok.ts') -Value 'export const ok: number = 1;' -Encoding ASCII
+
+        $consoleGitOk = $true
+        function Invoke-ConsoleGit {
+            param([string[]]$GitArgs)
+            $global:LASTEXITCODE = $null
+            & git -C $consoleRepo @GitArgs 2>&1 | Out-Null
+            if ($global:LASTEXITCODE -ne 0) { $script:consoleGitOk = $false }
+        }
+
+        Invoke-ConsoleGit @('init', '-b', 'main', '-q')
+        Invoke-ConsoleGit @('config', 'user.email', 'gate-selftest@localhost')
+        Invoke-ConsoleGit @('config', 'user.name', 'Gate Self Test')
+        Invoke-ConsoleGit @('config', 'commit.gpgsign', 'false')
+        Invoke-ConsoleGit @('add', '-A')
+        Invoke-ConsoleGit @('commit', '-q', '-m', 'seed console')
+
+        if (-not $consoleGitOk) {
+            Add-Case 'I/J validate-all -> TypeScript, production path' 'NotRun' 'could not build the synthetic console repo'
+        } else {
+            # I: a COMPILED console file with a type error must fail the suite.
+            Invoke-ConsoleGit @('checkout', '-q', '-b', 'break-compiled')
+            Set-Content -Path (Join-Path $consoleRepo 'apps/fiab-console/lib/broken.ts') -Value 'export const broken: number = "not a number";' -Encoding ASCII
+            Invoke-ConsoleGit @('add', '-A')
+            Invoke-ConsoleGit @('commit', '-q', '-m', 'break a compiled console file')
+
+            $i = Invoke-Child -ScriptPath $validateAll -Arguments @('-RepoRoot', $consoleRepo) -WorkingDirectory $consoleRepo
+            if ($i.ExitCode -eq 1 -and $i.Output -match 'TypeScript \(required\): \[FAIL\]') {
+                Add-Case 'I  broken compiled console file FAILS the suite (exit 1)' 'Pass' "exit $($i.ExitCode)"
+            } elseif ($i.Output -match 'could not be invoked') {
+                Add-Case 'I  broken compiled console file FAILS the suite (exit 1)' 'Fail' "the gate could not read tsc's exit code through the orchestrator's `& invocation - scope-shadowing regression. exit $($i.ExitCode)"
+            } else {
+                Add-Case 'I  broken compiled console file FAILS the suite (exit 1)' 'Fail' "expected exit 1 with TypeScript [FAIL], got exit $($i.ExitCode)"
+            }
+
+            # J: the same path, clean, must exit 0. Without this, case I would
+            # also pass if the gate failed unconditionally.
+            Invoke-ConsoleGit @('checkout', '-q', 'main')
+            Invoke-ConsoleGit @('checkout', '-q', '-b', 'add-clean')
+            Set-Content -Path (Join-Path $consoleRepo 'apps/fiab-console/lib/more.ts') -Value 'export const more: string = "fine";' -Encoding ASCII
+            Invoke-ConsoleGit @('add', '-A')
+            Invoke-ConsoleGit @('commit', '-q', '-m', 'add a clean compiled console file')
+
+            $j = Invoke-Child -ScriptPath $validateAll -Arguments @('-RepoRoot', $consoleRepo) -WorkingDirectory $consoleRepo
+            if ($j.ExitCode -eq 0 -and $j.Output -match 'TypeScript \(required\): \[PASS\]') {
+                Add-Case 'J  clean compiled console file PASSES the suite (exit 0)' 'Pass' "exit $($j.ExitCode)"
+            } else {
+                Add-Case 'J  clean compiled console file PASSES the suite (exit 0)' 'Fail' "expected exit 0 with TypeScript [PASS], got exit $($j.ExitCode)"
+            }
+        }
 
         # --- Case C: the committed fixture must compile clean. ---
         $c = Invoke-Child -ScriptPath $validateTs -Arguments @('-RepoRoot', $RepoRoot, '-ProjectDir', $fixture) -WorkingDirectory $RepoRoot

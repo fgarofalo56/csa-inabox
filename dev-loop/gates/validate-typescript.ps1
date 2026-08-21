@@ -23,6 +23,15 @@
     fiab-console-ci workflow, which remains the full console gate. A pass here
     means "the types compile", not "the console is verified".
 
+    CONSOLE TESTS ARE NOT COVERED. tsconfig.build.json excludes every
+    `**/*.test.ts(x)`, `**/*.spec.ts(x)`, `**/__tests__/**`, `e2e/**`,
+    `**/*.uat.ts(x)`, and the vitest/playwright configs - measured, that project
+    resolves 4107 files of which ZERO are tests, against 1559 `*.test.ts*` files
+    in the tree. validate-all.ps1's trigger for this gate mirrors those excludes
+    so it cannot fire for a file this project does not compile; if you widen one,
+    widen the other. Pointing this gate at tsconfig.json was measured and
+    deferred: 901 pre-existing type errors, ALL of them in test files. See #3811.
+
     THIS GATE NEVER INSTALLS ANYTHING. `pnpm install` inside a git worktree is
     destructive in this repo - the console's node_modules is a junction shared
     with the main checkout, and removing it there destroys the main checkout's
@@ -175,9 +184,18 @@ Write-Host "Running tsc --noEmit..."
 # from a cached .tsbuildinfo it did not verify, and non-incremental keeps the
 # run from writing build artifacts into the tree it is only meant to read.
 # --pretty false keeps the output greppable and free of ANSI escapes.
-$LASTEXITCODE = $null
+#
+# $global: on BOTH sides. A bare `$LASTEXITCODE = $null` shadows the automatic
+# variable with a SCOPE-LOCAL one whenever this script runs in a child scope -
+# which is exactly how validate-all.ps1 invokes it (`& gate.ps1`). `& node`
+# then writes the global while the read below finds the local $null, so the gate
+# reported "tsc could not be invoked - CANNOT VALIDATE" on every run through the
+# orchestrator while passing its own self-test, because the self-test launches
+# it as a separate PROCESS where no intervening scope exists. Measured, not
+# reasoned: the production path said NOT VERIFIED, the test path said Pass.
+$global:LASTEXITCODE = $null
 $tscOutput = & $nodeCmd.Source $tscEntry --noEmit --pretty false --incremental false --project $tsConfigPath 2>&1
-$tscExit = $LASTEXITCODE
+$tscExit = $global:LASTEXITCODE
 
 foreach ($line in $tscOutput) {
     Write-Host "  $line"
@@ -199,7 +217,8 @@ $errorCount = @($tscOutput | Where-Object { $_ -match 'error TS\d+' }).Count
 if ($tscExit -eq 0) {
     Write-Host ""
     Write-Host "=== TYPESCRIPT TYPECHECK PASSED ===" -ForegroundColor Green
-    Write-Host "  (typecheck only - next build, eslint and vitest are NOT covered here)" -ForegroundColor DarkGray
+    Write-Host "  Scope: $TsConfig only. NOT covered here: console tests" -ForegroundColor DarkGray
+    Write-Host "  (*.test/*.spec/__tests__/e2e/*.uat), next build, eslint, vitest." -ForegroundColor DarkGray
     exit 0
 }
 
