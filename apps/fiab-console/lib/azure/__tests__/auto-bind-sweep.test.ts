@@ -123,6 +123,72 @@
  * the one page no spec ever put a foreign row on — the same blind spot NEW1
  * had, one page further along.
  *
+ * ── 2026-08-21 ROUND 6 — the pre-resolve's INPUT SHAPES. Round 5 added the
+ *    `workspaceId` pre-resolve and proved it for exactly ONE request shape,
+ *    `{workspaceId}` alone: `scopedSweep` hard-coded every other input to its
+ *    default, so a gate conditioned on any other input was invisible. This is
+ *    round 4's B2 rediscovered on round 5's own fix — R5f forced cursor
+ *    coverage onto `scopeToCallerAccess`, and the same treatment was never
+ *    extended to the pre-resolve that landed beside it.
+ *
+ * Measured BEFORE this round, on the round-5 tree, baseline 72 + 29 = 101
+ * green. Each needle byte-exact, unique, sha256 asserted MOVED on apply and
+ * RETURNED on restore, each run at 101 executed:
+ *
+ *   M3  `… && rawCursor === undefined`                    → 0 RED SURVIVED
+ *   M2  `… && opts.itemTypes?.length !== 1`               → 0 RED SURVIVED
+ *   M4  `… && (opts.limit === undefined || limit < 500)`  → 0 RED SURVIVED
+ *   M6  `… && opts.loadItems !== undefined`               → 0 RED SURVIVED
+ *   M1  the refusal `throw` deleted outright              → 4 RED caught
+ *   M5  `… && opts.dryRun`                                → 1 RED caught
+ *
+ * M1 and M5 are the load-bearing pair in that table: the specs DID assert the
+ * outcome, and the `dryRun` axis WAS covered. The gap was never the assertions,
+ * only which inputs reached them.
+ *
+ * M6 is the worst of the four survivors and is this round's own find rather
+ * than the reviewer's. A gate keyed to `opts.loadItems` runs in the SUITE —
+ * every spec in that block injects the seam — and never on the live route,
+ * which injects neither seam. The module docblock already claimed that property
+ * in as many words ("a test seam must not be a way around a boundary") and
+ * nothing could see it, because no spec ever took the un-injected path against
+ * a workspace the caller cannot reach.
+ *
+ * AFTER, baseline 79 + 29 = 108 green (and 111 with the R7 specs below); every
+ * one of the four now RED, each caught by exactly the spec written for it:
+ *
+ *   M3 → 1 RED  `… refused with a REAL nextCursor from a prior legitimate pass`
+ *   M2 → 1 RED  `… refused with a single itemType`
+ *   M4 → 1 RED  `… refused with limit at MAX_LIMIT`
+ *   M6 → 1 RED  `… refused with NO injected loadItems or providers`
+ *   M1 → 8 RED  (was 4 — the new refusals strengthen it)
+ *   M5 → 1 RED  unchanged
+ *
+ * The cursor axis is the one that mattered most, and the fixture obtains its
+ * token THE HONEST WAY: a legitimate tenant-wide pass over the caller's own
+ * rows, then re-aimed at a foreign `workspaceId`. No forgery and no key access
+ * — the route hands a cursor back on request, which is why it is the only axis
+ * reachable without guessing.
+ *
+ * ── 2026-08-21 ROUND 6, R7 — the cursor's `tid` binding accepted a case its
+ *    docblock said it refused. `(parsed.tid ?? null) !== (session.claims.tid ??
+ *    null)` compares `null` to `null` and ACCEPTS, so a cursor minted by a
+ *    tid-less caller unseals for a different tid-less caller. The comment
+ *    claimed #3824's shape (`callerTid && wsDoc.tid && equal`), which rejects
+ *    both-absent. Measured on the round-5 tree:
+ *
+ *      {"noTidB_unsealedTo":"id-p2","noTidB_refusal":null,
+ *       "tidBearingCaller_refusal":"SweepCursorError"}
+ *
+ * The BEHAVIOUR is kept and the COMMENT was corrected, not the reverse —
+ * tightening would refuse every resume for a tid-less caller (a documented,
+ * supported state this file already pins twice) and would tell them the token
+ * came from "a different Entra tenant", which is not what happened. Three
+ * specs now pin the choice:
+ *
+ *   T1  tightened to `typeof parsed.tid === 'string' && …`  → 1 RED
+ *   T2  the tid comparison dropped (`if (false)`)           → 3 RED
+ *
  * The earlier set, RE-PROVED after the paging restructure — which moved the
  * access filter from a page-filter to a per-row decision and could have blinded
  * them:
@@ -688,6 +754,64 @@ describe('a workspace in another Entra tenant is out of scope', () => {
     })).rejects.toThrow(/different Entra tenant/);
   });
 
+  // -------------------------------------------------------------------------
+  // THE BOTH-ABSENT tid CASE — ACCEPTED, and pinned so it cannot drift (R7)
+  //
+  // The docblock above `unsealSweepCursor` used to claim this was #3824's shape
+  // (`callerTid && wsDoc.tid && equal`), which REFUSES both-absent. It is not:
+  // `(parsed.tid ?? null) !== (session.claims.tid ?? null)` compares `null` to
+  // `null` and accepts. Measured, on the round-5 tree:
+  //
+  //   {"noTidB_unsealedTo":"id-p2","noTidB_refusal":null,
+  //    "tidBearingCaller_refusal":"SweepCursorError"}
+  //
+  // The behaviour is KEPT and the comment was corrected to match, not the other
+  // way round. Tightening would refuse every resume for a tid-less caller — a
+  // documented, supported state two specs above already pin — and would tell
+  // them the cursor came from "a different Entra tenant", which is not what
+  // happened. The full reasoning is in the docblock; what these three specs do
+  // is make the choice explicit so a later "hardening" has to argue with a
+  // named test rather than silently break page 2 for that caller class.
+  //
+  // The two refusal controls are what keep the first from being a claim that
+  // the binding does nothing at all.
+  // -------------------------------------------------------------------------
+
+  /** A session with no `tid` claim: pre-rel-T11, or a PAT without `createdByTid`. */
+  const noTid = (oid: string) => ({ claims: { oid }, exp: 4_102_444_800 }) as SessionPayload;
+
+  /** Mint a real, truncated pass's cursor as `session`. */
+  const cursorAs = async (session: SessionPayload): Promise<string> => {
+    const p = await sweepAutoBind({
+      dryRun: true, session, providers: [seedingProvider()], limit: 2, loadItems: crowdedPage(),
+    });
+    expect(p.truncated).toBe(true);
+    expect(p.nextCursor).toBeDefined();
+    return p.nextCursor!;
+  };
+
+  it('minted by a tid-LESS caller is ACCEPTED by another tid-less caller — deliberate, not a match', async () => {
+    theirWorkspace(FOREIGN_TID);
+    const token = await cursorAs(noTid('oid-no-tid-a'));
+
+    // Different oid, different notional tenant, no tid on either side.
+    expect(await unsealSweepCursor(token, noTid('oid-no-tid-b'))).toBe('id-a2');
+  });
+
+  it('but a tid-BEARING caller refuses that same tid-less cursor — control', async () => {
+    theirWorkspace(FOREIGN_TID);
+    const token = await cursorAs(noTid('oid-no-tid-a'));
+
+    await expect(unsealSweepCursor(token, SESSION)).rejects.toThrow(SweepCursorError);
+  });
+
+  it('and a tid-less caller refuses a tid-BEARING cursor — the other direction', async () => {
+    theirWorkspace(FOREIGN_TID);
+    const token = await cursorAs(SESSION);
+
+    await expect(unsealSweepCursor(token, noTid('oid-no-tid-a'))).rejects.toThrow(SweepCursorError);
+  });
+
   it('the token is OPAQUE — the raw id is not recoverable without the key', async () => {
     theirWorkspace(FOREIGN_TID);
     const loadItems = crowdedPage();
@@ -917,6 +1041,20 @@ describe('a caller-chosen workspaceId', () => {
       item({ displayName: `Theirs-${i + 1}`, id: `id-t${i + 1}`, workspaceId: ws, state: gatedInstallState() }));
 
   /**
+   * The inputs a caller controls ALONGSIDE `workspaceId`.
+   *
+   * Round 5 hard-coded every one of these to its default, so the pre-resolve
+   * was proven for exactly ONE request shape and a gate conditioned on any
+   * other input was invisible. See {@link EXTRA_SHAPES}.
+   */
+  interface ScopedShape {
+    dryRun?: boolean;
+    cursor?: string;
+    itemTypes?: readonly string[];
+    limit?: number;
+  }
+
+  /**
    * Run a scoped sweep, recording whether the loader was reached at all.
    *
    * Returns a SETTLED-result promise, not a raw one. The rejection handler is
@@ -925,11 +1063,22 @@ describe('a caller-chosen workspaceId', () => {
    * as an unhandled-rejection failure — a flake with nothing to do with the
    * property under test. The specs below hold two of these open at once, which
    * is exactly the shape that makes that reachable.
+   *
+   * `cursor` / `itemTypes` / `limit` are passed straight through as `undefined`
+   * when unset, which is what the module already tests for (`opts.cursor ===
+   * undefined`, `opts.itemTypes?.length`, `opts.limit ?? DEFAULT_LIMIT`) — so an
+   * unset axis is indistinguishable from an omitted key.
    */
-  const scopedSweep = (workspaceId: string, rows: WorkspaceItem[], dryRun = true) => {
+  const scopedSweep = (workspaceId: string, rows: WorkspaceItem[], shape: ScopedShape = {}) => {
     const asked: Array<{ workspaceId?: string }> = [];
     const settled = sweepAutoBind({
-      dryRun, session: SESSION, providers: [seedingProvider()], workspaceId,
+      dryRun: shape.dryRun ?? true,
+      session: SESSION,
+      providers: [seedingProvider()],
+      workspaceId,
+      cursor: shape.cursor,
+      itemTypes: shape.itemTypes,
+      limit: shape.limit,
       loadItems: async (o) => { asked.push(o); return rows; },
     }).then(
       (result) => ({ result, error: null as Error | null }),
@@ -986,7 +1135,7 @@ describe('a caller-chosen workspaceId', () => {
 
   it('is refused on the LIVE path too, before anything can be written', async () => {
     wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
-    const { settled, asked } = scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 2), false);
+    const { settled, asked } = scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 2), { dryRun: false });
 
     const { error } = await settled;
 
@@ -1013,6 +1162,143 @@ describe('a caller-chosen workspaceId', () => {
     // The scope really did reach the query — the refusal is about ACCESS, not
     // about dropping the parameter.
     expect(asked).toEqual([{ itemTypes: ['fake-item'], workspaceId: FOREIGN_WS, limit: 201, cursor: undefined }]);
+  });
+
+  // -------------------------------------------------------------------------
+  // …AND FOR EVERY OTHER REQUEST SHAPE (#3808 review round 6)
+  //
+  // Everything above supplies `workspaceId` with each OTHER input left at its
+  // default, so the pre-resolve was proven for exactly one shape:
+  // `{workspaceId}` alone. Three gates conditioned on a different input each
+  // SURVIVED the whole suite — byte-exact, unique, all at 101 executed:
+  //
+  //   `… && rawCursor === undefined`                         → 0 RED
+  //   `… && opts.itemTypes?.length !== 1`                    → 0 RED
+  //   `… && (opts.limit === undefined || opts.limit < 500)`  → 0 RED
+  //
+  // …and each reopens round 4's defect verbatim. Under the first:
+  //
+  //   {"threw":null,"excludedByAccess":5,"scanned":0,
+  //    "foreignIdReachedQuery":["ws-probe-theirs"]}
+  //
+  // The outcome assertions were never the gap — deleting the throw outright is
+  // caught 4 RED. The gap was which INPUTS reached them. This is round 4's own
+  // finding rediscovered on round 5's fix: R5f forced cursor coverage onto
+  // `scopeToCallerAccess`, and the same treatment was never extended to the
+  // pre-resolve that landed beside it.
+  //
+  // `dryRun` is deliberately NOT in this table: it has its own dedicated spec
+  // above (which additionally asserts nothing was created or seeded), and a
+  // gate flipped to `&& opts.dryRun` is already caught 1 RED by it.
+  // -------------------------------------------------------------------------
+
+  /** `MAX_LIMIT` in the module under test. Not exported, so restated here. */
+  const MAX_LIMIT = 1000;
+
+  /**
+   * A REAL `nextCursor`, obtained THE HONEST WAY: a legitimate tenant-wide pass
+   * over the caller's OWN rows. No forgery, no key access, nothing the route
+   * would refuse — `POST {limit:1}` hands one back to anybody allowed to sweep
+   * at all.
+   *
+   * That is what makes the cursor the one axis here an attacker reaches without
+   * guessing, and why it is the one that must not be skipped: the token is
+   * opaque, so it cannot be MADE — but it is issued on request, so it does not
+   * need to be. Mint it, then re-aim it at a foreign `workspaceId`.
+   */
+  const honestCursor = async (): Promise<string> => {
+    const mine = [1, 2].map((n) =>
+      item({ displayName: `Mine-${n}`, id: `id-m${n}`, state: gatedInstallState() }));
+    register(mine);
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 1,
+      loadItems: async (o) =>
+        mine.filter((i) => (o.cursor ? i.id > o.cursor : true)).slice(0, o.limit).map(clone),
+    });
+    // If this ever stops truncating there is no cursor at all, and the shapes
+    // below would silently degrade to the bare one — the exact blind spot this
+    // block exists to close.
+    expect(p1.truncated).toBe(true);
+    expect(p1.nextCursor).toBeDefined();
+    return p1.nextCursor!;
+  };
+
+  /** One entry per input a caller controls besides `workspaceId` itself. */
+  const EXTRA_SHAPES: Array<{ label: string; shape: () => Promise<ScopedShape> }> = [
+    {
+      label: 'a REAL nextCursor from a prior legitimate pass',
+      shape: async () => ({ cursor: await honestCursor() }),
+    },
+    { label: 'a single itemType', shape: async () => ({ itemTypes: ['fake-item'] }) },
+    { label: 'limit at MAX_LIMIT', shape: async () => ({ limit: MAX_LIMIT }) },
+  ];
+
+  for (const { label, shape } of EXTRA_SHAPES) {
+    it(`in ANOTHER tenant is refused with ${label} too — no count, no query`, async () => {
+      wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
+      const extra = await shape();
+
+      const { settled, asked } = scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 5), extra);
+      const { result, error } = await settled;
+
+      expect(error).toBeInstanceOf(SweepScopeError);
+      // No envelope at all — not a zero count, which would still be an answer
+      // about a scope the caller chose.
+      expect(result).toBeNull();
+      // THE WHOLE FINDING, on this shape: the foreign id never reaches Cosmos.
+      expect(asked).toEqual([]);
+    });
+
+    it(`in the caller's OWN tenant still sweeps with ${label} — the control`, async () => {
+      // Two-sided, so neither direction can be satisfied by a gate that simply
+      // refuses (or admits) every request carrying this input. Without it, a
+      // mutation widening the gate to `|| opts.cursor !== undefined` would break
+      // every legitimate RESUMED sweep and no spec would notice.
+      wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: CALLER_TID, name: 'Theirs, same tenant' });
+      const rows = itemsIn(FOREIGN_WS, 2);
+      register(rows);
+      const extra = await shape();
+
+      const { settled, asked } = scopedSweep(FOREIGN_WS, rows, extra);
+      const { result, error } = await settled;
+
+      expect(error).toBeNull();
+      expect(result!.rows.map((r) => r.itemId)).toEqual(['id-t1', 'id-t2']);
+      expect(result!.excludedByAccess).toBe(0);
+      expect(asked.map((o) => o.workspaceId)).toEqual([FOREIGN_WS]);
+    });
+  }
+
+  it('is refused with NO injected loadItems or providers — the SEAM is not what is guarded', async () => {
+    // The axis the three above do not reach, and the worst of the set: every
+    // spec in this block injects `loadItems`, so a gate keyed to
+    // `opts.loadItems !== undefined` runs in the suite and NEVER on the live
+    // route, which injects neither seam. Measured on the round-5 tree, at 101
+    // executed: `… && opts.loadItems !== undefined` → 0 RED, SURVIVED.
+    //
+    // The module's own docblock already claims this property in as many words
+    // — "a test seam must not be a way around a boundary" — and nothing could
+    // see it, because no spec ever took the un-injected path with a workspace
+    // the caller cannot reach. `providers` is dropped for the same reason.
+    wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
+    // A zero-population registry would make `itemTypes` empty, the sweep would
+    // early-return before any query, and this spec would pass without testing
+    // anything. Assert the population rather than assume it.
+    expect(sweepableItemTypes().length).toBeGreaterThan(0);
+
+    const queries: unknown[] = [];
+    vi.mocked(itemsContainer).mockResolvedValue({
+      items: {
+        query: (s: unknown) => { queries.push(s); return { fetchAll: async () => ({ resources: [] }) }; },
+      },
+    } as never);
+
+    await expect(sweepAutoBind({ dryRun: true, session: SESSION, workspaceId: FOREIGN_WS }))
+      .rejects.toBeInstanceOf(SweepScopeError);
+
+    // The real enumeration was never issued, so the foreign id never reached
+    // the Cosmos predicate on the path that has no seam to blame.
+    expect(queries).toEqual([]);
   });
 
   it('and a workspace the caller OWNS is unaffected', async () => {

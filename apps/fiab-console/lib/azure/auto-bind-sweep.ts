@@ -502,10 +502,32 @@ async function sealCursor(rawId: string, session: SessionPayload): Promise<strin
  * reimplements the thing it is checking pins the reimplementation.
  *
  * Every rejection path throws {@link SweepCursorError}; none returns
- * `undefined`. The tenant check is a POSITIVE match on `tid` (the shape #3824
- * settled on for the admin bypass), including the both-absent case, so a token
- * minted by a caller in another tenant is refused even though it decrypts
- * perfectly — the key is estate-wide, not per-tenant.
+ * `undefined`. A token minted by a caller in ANOTHER tenant is refused even
+ * though it decrypts perfectly — the key is estate-wide, not per-tenant.
+ *
+ * THE BOTH-ABSENT CASE IS ACCEPTED, deliberately. `?? null` equality means a
+ * cursor minted by a caller carrying no `tid` claim unseals for any OTHER
+ * caller carrying no `tid` claim. That is NOT #3824's shape (`callerTid &&
+ * wsDoc.tid && equal`), which rejects both-absent; an earlier revision of this
+ * comment claimed it was, and measured, it never has been.
+ *
+ * Tightening to `typeof parsed.tid === 'string' && parsed.tid === …` would
+ * refuse EVERY resume for a tid-less caller — a documented, supported state on
+ * this estate (a session minted before rel-T11, or a PAT issued without
+ * `createdByTid`; the specs `and a caller with no tid CLAIM …` pin it). Such a
+ * caller could then never reach page 2 of any sweep, and would be told the
+ * cursor "was issued to a different Entra tenant", which is not what happened
+ * — an R7 untrue-message defect layered on a functional one.
+ *
+ * It is safe to accept because a cursor carries a POSITION, not an entitlement.
+ * Every row is still gated by `scopeToCallerAccess` on every page,
+ * unconditionally (round 5's R5f); a caller-chosen `workspaceId` is still
+ * pre-resolved before any query; and a tid-less caller gets no tenant-admin
+ * bypass at all, because #3823/#3824 fail closed on the absent claim. So the
+ * worst a shared tid-less cursor can do is make a sweep RESUME LATE and skip
+ * rows its holder was entitled to — a loss of completeness for whoever replays
+ * it, never a disclosure. The token is opaque either way, so the position it
+ * encodes tells its holder nothing about the estate it came from.
  */
 export async function unsealSweepCursor(token: string, session: SessionPayload): Promise<string> {
   const { decryptAtRest } = await import('@/lib/auth/session');
@@ -547,6 +569,9 @@ export async function unsealSweepCursor(token: string, session: SessionPayload):
       'The resume cursor is from an older, incompatible sweep format. Re-run the sweep with no cursor to '
       + 'start a fresh pass.');
   }
+  // `?? null` on BOTH sides, so absent-vs-absent compares equal and is
+  // ACCEPTED. Not an oversight — see the docblock: tightening this refuses
+  // every resume for a tid-less caller, which is a supported state here.
   if ((parsed.tid ?? null) !== (session.claims.tid ?? null)) {
     throw new SweepCursorError(
       'The resume cursor was issued to a different Entra tenant and will not be honoured. Re-run the sweep '
