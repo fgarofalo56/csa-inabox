@@ -106,6 +106,9 @@ const access = (role: AccessRole, canWrite: boolean) =>
   ({ workspace: { id: 'ws-1' }, role, via: role === 'Owner' ? 'owner' : 'acl', canWrite });
 const OWNER = access('Owner', true);
 const VIEWER = access('Viewer', false);
+/** What the REAL resolver returns for a tenant admin whose tenancy is confirmed
+ *  and who holds no ACL role — step 6, the admin-open bypass (#3823/#3825). */
+const ADMIN_OPEN = { workspace: { id: 'ws-1' }, role: 'Admin' as AccessRole, via: 'admin', canWrite: true };
 
 function makeItem(over: Partial<any> = {}) {
   return {
@@ -249,16 +252,38 @@ describe('B1 — the write ladder is the REAL one, and write-capable callers sti
     expect(replaced.some((d) => (d.state?.rules || []).length > 0)).toBe(true);
   });
 
-  it('a tenant admin is admitted by the real isTenantAdmin bypass, with no ACL role at all', async () => {
-    // The admin-open path must keep working: the probe is the canonical ladder,
-    // so an admin who is not an ACL member of the workspace still heals.
+  it('a tenant admin is admitted through the RESOLVER, with no ACL role at all', async () => {
+    // The admin-open path must keep working: an admin who is not an ACL member
+    // of the workspace still heals.
+    //
+    // #3825 — WHAT CHANGED HERE, AND WHY IT IS NOT A RELAXATION. This used to
+    // mock the resolver to `null` and still expect the heal, which was only
+    // possible because `authorizeWorkspace` opened with
+    // `if (isTenantAdmin(session)) return null;` — an ALLOW taken before any
+    // Cosmos read, so with no workspace document and therefore no tenant
+    // compared. The admin grant now comes FROM the resolver (step 6, which
+    // requires a POSITIVE `tid` match), so the fixture supplies what the real
+    // resolver returns for a confirmed tenant admin. The property under test is
+    // unchanged: no ACL role, still heals.
     process.env.LOOM_TENANT_ADMIN_OID = TENANT;
-    resolveWorkspaceAccessByOid.mockResolvedValue(null);
+    resolveWorkspaceAccessByOid.mockResolvedValue(ADMIN_OPEN);
 
     const j = await (await GET(req(), PARAMS)).json();
 
     expect(j.healed).toBe(true);
     expect(replaced.some((d) => (d.state?.rules || []).length > 0)).toBe(true);
+  });
+
+  it('and when the RESOLVER refuses that admin, the heal does NOT write (#3825)', async () => {
+    // The other half of the delegation: being a tenant admin is no longer
+    // sufficient on its own. If the resolver cannot confirm the workspace is in
+    // the admin's tenant it returns null, and nothing may be persisted.
+    process.env.LOOM_TENANT_ADMIN_OID = TENANT;
+    resolveWorkspaceAccessByOid.mockResolvedValue(null);
+
+    await GET(req(), PARAMS);
+
+    expect(replaced).toHaveLength(0);
   });
 });
 
