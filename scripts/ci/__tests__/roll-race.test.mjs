@@ -94,6 +94,7 @@ import {
   resolveRunningImageTags,
   selectLastConsoleRoll,
   selectRevisionOverwrite,
+  selectServingRevision,
 } from '../reconcile-policy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -139,13 +140,39 @@ const AUG19_ROLLED = '150d2937336415545a771fe12f0d7b2fba2093d8';
 const AUG19_MEASURED_AT = '2026-08-19T06:57:53Z';
 
 /**
- * `az containerapp revision list` projection, verbatim from the live estate.
+ * `az containerapp revision list` projection, verbatim from the live estate AS
+ * IT WAS PROJECTED THEN — no `trafficWeight`, because the gate did not ask for
+ * one until #3798. Kept in exactly that shape, and used ONLY by the test that
+ * asserts an unweighted payload now fails CLOSED. Every behavioural test below
+ * uses AUG19_REVISIONS_WEIGHTED, which is the same three revisions as the
+ * CURRENT projection returns them.
+ *
  * 0000781 predates the measurement; 0000782 is the roll; 0000783 is the apply.
  */
 const AUG19_REVISIONS = [
   { name: 'loom-console--0000781', createdTime: '2026-08-19T05:46:46+00:00', image: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}` },
   { name: 'loom-console--0000782', createdTime: '2026-08-19T07:04:56+00:00', image: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_ROLLED}` },
   { name: 'loom-console--0000783', createdTime: '2026-08-19T07:10:19+00:00', image: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}` },
+];
+
+/**
+ * The live projection shape: `trafficWeight` alongside name/createdTime/image.
+ *
+ * The weights are not invented either. Measured on the same Container App on
+ * 2026-08-21: 54 revisions, every one `active`, exactly ONE carrying weight 100
+ * and all 53 others 0, with ingress traffic `[{latestRevision:true,weight:100}]`
+ * — so "newest carries 100, the rest carry 0" is the shape this estate returns.
+ */
+const rev = (name, createdTime, tag, trafficWeight) => ({
+  name, createdTime, trafficWeight,
+  image: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${tag}`,
+});
+
+/** The 2026-08-19 incident list as the NEW projection returns it. */
+const AUG19_REVISIONS_WEIGHTED = [
+  rev('loom-console--0000781', '2026-08-19T05:46:46+00:00', AUG19_APPLIED, 0),
+  rev('loom-console--0000782', '2026-08-19T07:04:56+00:00', AUG19_ROLLED, 0),
+  rev('loom-console--0000783', '2026-08-19T07:10:19+00:00', AUG19_APPLIED, 100),
 ];
 
 // ---------------------------------------------------------------------------
@@ -313,13 +340,13 @@ test('THE INCIDENT: the estate on the deploy-applied tag while a roll shipped a 
 // ---------------------------------------------------------------------------
 
 test('THE 2026-08-19 MISS: the estate\'s own revision history shows the overwrite the Actions API did not', () => {
-  const sel = selectRevisionOverwrite(AUG19_REVISIONS, {
+  const sel = selectRevisionOverwrite(AUG19_REVISIONS_WEIGHTED, {
     measuredAt: AUG19_MEASURED_AT,
     appliedTag: AUG19_APPLIED,
   });
   assert.equal(
     sel.status, 'overwritten',
-    'this is the literal live revision list at 07:14:52Z on 2026-08-19. Anything but `overwritten` here is a gate ' +
+    'this is the live revision list at 07:14:52Z on 2026-08-19. Anything but `overwritten` here is a gate ' +
       'that cannot fail on the incident it was written for.',
   );
   assert.equal(sel.overwrittenTag, AUG19_ROLLED, 'the roll-forward target is read OFF THE ESTATE, not inferred');
@@ -347,7 +374,7 @@ test('MUTATION CONTROL: with the revision evidence withheld, the very same state
     appliedTag: AUG19_APPLIED,
     estateTag: AUG19_APPLIED,
     rollSelection,
-    revisionSelection: selectRevisionOverwrite(AUG19_REVISIONS, {
+    revisionSelection: selectRevisionOverwrite(AUG19_REVISIONS_WEIGHTED, {
       measuredAt: AUG19_MEASURED_AT,
       appliedTag: AUG19_APPLIED,
     }),
@@ -360,12 +387,12 @@ test('MUTATION CONTROL: with the revision evidence withheld, the very same state
   assert.match(withRevisions.reason, /ITS OWN REVISION HISTORY RECORDS IT/);
 });
 
-test('a roll that lands AFTER our apply leaves the estate AHEAD, not behind — no false red', () => {
+test('a roll that lands AFTER our apply AND TAKES TRAFFIC leaves the estate AHEAD — no false red', () => {
   const sel = selectRevisionOverwrite([
-    { name: 'r1', createdTime: '2026-08-19T07:00:00Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
-    { name: 'r2', createdTime: '2026-08-19T07:20:00Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+    rev('r1', '2026-08-19T07:00:00Z', AUG19_APPLIED, 0),
+    rev('r2', '2026-08-19T07:20:00Z', AUG19_ROLLED, 100),
   ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
-  assert.equal(sel.status, 'ahead', 'the last writer was not this apply, so this apply did not leave anything behind');
+  assert.equal(sel.status, 'ahead', 'the image being SERVED is not ours, so this apply left nothing behind');
   assert.match(sel.reason, /did not leave the estate behind/);
 });
 
@@ -373,23 +400,233 @@ test('a transient revert that a later roll already repaired is AHEAD, not a red'
   // roll -> our apply clobbers it -> the roll lane rolls again. The estate is
   // correct NOW; reddening here would be a gate crying wolf about a healed state.
   const sel = selectRevisionOverwrite([
-    { name: 'r1', createdTime: '2026-08-19T07:04:56Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
-    { name: 'r2', createdTime: '2026-08-19T07:10:19Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
-    { name: 'r3', createdTime: '2026-08-19T07:22:00Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
+    rev('r1', '2026-08-19T07:04:56Z', AUG19_ROLLED, 0),
+    rev('r2', '2026-08-19T07:10:19Z', AUG19_APPLIED, 0),
+    rev('r3', '2026-08-19T07:22:00Z', AUG19_ROLLED, 100),
   ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
   assert.equal(sel.status, 'ahead');
 });
 
+// ---------------------------------------------------------------------------
+// BEHAVIOURAL — WHAT IS SERVING, not what is NEWEST (#3798) — and WHO WROTE
+// LAST, which is what makes an attribution a fact rather than an accusation.
+//
+// The gate read "the newest revision in the window" as "the live image". That
+// is true on this estate TODAY — measured 2026-08-21: activeRevisionsMode
+// Multiple, 54 revisions, 53 at trafficWeight 0 and exactly one at 100, ingress
+// traffic [{latestRevision: true, weight: 100}] — but it is true because
+// app-deployments.bicep pins `latestRevision: true`, i.e. because the feature
+// that would break it (imperative traffic splitting from console-bluegreen-roll,
+// 0-for-4) does not currently work.
+// ---------------------------------------------------------------------------
+
+test('selectServingRevision reads the SERVING revision off the traffic split', () => {
+  const sel = selectServingRevision(AUG19_REVISIONS_WEIGHTED);
+  assert.equal(sel.status, 'found');
+  assert.equal(sel.tag, AUG19_APPLIED);
+  assert.equal(sel.name, 'loom-console--0000783');
+  assert.equal(sel.weight, 100);
+});
+
+test('selectServingRevision: a payload with NO weights is `unweighted` and SAYS the split was not read', () => {
+  const sel = selectServingRevision(AUG19_REVISIONS);
+  assert.equal(sel.status, 'unweighted', 'no weight anywhere is "I did not look", not "the newest one"');
+  assert.match(sel.reason, /NOT read/, 'the fallback must be disclosed, never silently assumed (R7)');
+});
+
+test('selectServingRevision: every weight ZERO is UNKNOWN — an app serving nothing is not "the newest"', () => {
+  const sel = selectServingRevision([
+    rev('r1', '2026-08-19T07:00:00Z', AUG19_APPLIED, 0),
+    rev('r2', '2026-08-19T07:10:00Z', AUG19_ROLLED, 0),
+  ]);
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /NO revision is taking/);
+});
+
+test('selectServingRevision: traffic split across two IMAGES is UNKNOWN, not a guess at one of them', () => {
+  const sel = selectServingRevision([
+    rev('r1', '2026-08-19T07:00:00Z', AUG19_APPLIED, 50),
+    rev('r2', '2026-08-19T07:10:00Z', AUG19_ROLLED, 50),
+  ]);
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /split across 2 different images/);
+});
+
+test('selectServingRevision: a DIGEST-PINNED serving revision is UNKNOWN — a digest does not name a commit', () => {
+  const sel = selectServingRevision([
+    { name: 'r1', trafficWeight: 100, image: 'acr1.azurecr.io/loom-console@sha256:abc' },
+  ]);
+  assert.equal(sel.status, 'unknown');
+  assert.match(sel.reason, /digest-pinned/);
+});
+
+test('selectServingRevision: two revisions of the SAME image splitting traffic is still one answer', () => {
+  const sel = selectServingRevision([
+    rev('r1', '2026-08-19T07:00:00Z', AUG19_ROLLED, 40),
+    rev('r2', '2026-08-19T07:10:00Z', AUG19_ROLLED, 60),
+  ]);
+  assert.equal(sel.status, 'found');
+  assert.equal(sel.tag, AUG19_ROLLED);
+  assert.equal(sel.weight, 60, 'the heaviest revision names it, and both carry the same image anyway');
+});
+
+test('THE #3798 FALSE GREEN: a NEWER revision at weight 0 while our tag serves 100 is a FAILING verdict, not `ahead`', () => {
+  // Blue-green starts working. The roll creates revision N+1 carrying the new
+  // tag at weight 0; the deploy's revision keeps 100% of the traffic. Recency
+  // says "the newest is not ours, so we left nothing behind" — about an estate
+  // serving the deploy's stale image. That green is the defect.
+  //
+  // It is NOT, however, an OVERWRITE by this apply: our revision came FIRST.
+  // Calling it `overwritten` would attribute to this run a write it did not
+  // make, and — with the auto-heal wired to that verdict — would dispatch a
+  // roll at an image console-bluegreen-roll.yml may still be health-gating at
+  // weight 0. So the honest verdict is `drifted`: red, loud, no direction.
+  const revisions = [
+    rev('loom-console--0000783', '2026-08-19T07:10:19+00:00', AUG19_APPLIED, 100),
+    rev('loom-console--0000784', '2026-08-19T07:20:00+00:00', AUG19_ROLLED, 0),
+  ];
+  const sel = selectRevisionOverwrite(revisions, {
+    measuredAt: AUG19_MEASURED_AT,
+    appliedTag: AUG19_APPLIED,
+  });
+  assert.equal(sel.status, 'drifted', `expected a failing, non-attributing verdict; got ${sel.status}: ${sel.reason}`);
+  assert.equal(sel.liveTag, AUG19_APPLIED, 'the live image comes from the split, not from recency');
+  assert.equal(sel.liveFrom, 'traffic');
+  assert.ok(!('overwrittenTag' in sel), 'a state this apply did not cause must name no roll-forward target');
+  assert.match(sel.reason, /NO DIRECTION IS BEING CLAIMED/);
+
+  const verdict = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_ROLLED, // the app template followed the later write
+    rollSelection: selectLastConsoleRoll([]),
+    revisionSelection: sel,
+  });
+  assert.equal(verdict.verdict, 'drifted', 'and the whole gate fails on it');
+  assert.ok(!verdict.rollForwardTo, 'with nothing for the auto-heal step to dispatch');
+});
+
+test('#3798 + blame: the SAME two revisions in the OTHER order are a regression, and DO name a target', () => {
+  // Identical images, identical weights — only the creation order differs. This
+  // is the discriminator: `overwritten` is claimed exactly when OUR revision
+  // came after the competing one, which is the one case attribution is a fact.
+  const sel = selectRevisionOverwrite([
+    rev('loom-console--0000783', '2026-08-19T07:10:19+00:00', AUG19_ROLLED, 0),
+    rev('loom-console--0000784', '2026-08-19T07:20:00+00:00', AUG19_APPLIED, 100),
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'overwritten');
+  assert.equal(sel.overwrittenTag, AUG19_ROLLED);
+  const verdict = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection: selectLastConsoleRoll([]),
+    revisionSelection: sel,
+  });
+  assert.equal(verdict.verdict, 'regression');
+  assert.equal(verdict.rollForwardTo, AUG19_ROLLED);
+});
+
+test('BLAME: our tag is live but we wrote NOTHING in this window -> drifted, never an accusation', () => {
+  // Traffic sits on a revision created before the measurement; the only thing
+  // in the window is somebody else's unserved write. This apply cannot have
+  // displaced it — it did not write at all.
+  const sel = selectRevisionOverwrite([
+    rev('loom-console--0000780', '2026-08-19T05:00:00+00:00', AUG19_APPLIED, 100),
+    rev('loom-console--0000784', '2026-08-19T07:20:00+00:00', AUG19_ROLLED, 0),
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'drifted');
+  assert.match(sel.reason, /NO revision carrying this deploy's tag was created in this window/);
+});
+
+test('MUTATION CONTROL for #3798: the SAME list with trafficWeight stripped fails CLOSED', () => {
+  const revisions = [
+    rev('loom-console--0000783', '2026-08-19T07:10:19+00:00', AUG19_APPLIED, 100),
+    rev('loom-console--0000784', '2026-08-19T07:20:00+00:00', AUG19_ROLLED, 0),
+  ].map(({ trafficWeight, ...r }) => r); // eslint-disable-line no-unused-vars
+  const sel = selectRevisionOverwrite(revisions, {
+    measuredAt: AUG19_MEASURED_AT,
+    appliedTag: AUG19_APPLIED,
+  });
+  assert.equal(
+    sel.status, 'unknown',
+    'CONTROL: without the weights "what is serving" is not established, and this gate does not read it off ' +
+      'recency instead. The pre-change binary returned `ahead` (RC=0) on this exact payload — that is the false ' +
+      'green — so the fallback is not a safe default, it IS the defect.',
+  );
+  assert.match(sel.reason, /carries a trafficWeight/);
+  assert.match(sel.reason, /NOT read off/);
+});
+
+test('#3798 does not change TODAY\'s verdicts: the incident is still `overwritten` with the weights present', () => {
+  const sel = selectRevisionOverwrite(AUG19_REVISIONS_WEIGHTED, {
+    measuredAt: AUG19_MEASURED_AT,
+    appliedTag: AUG19_APPLIED,
+  });
+  assert.equal(sel.status, 'overwritten');
+  assert.equal(sel.overwrittenTag, AUG19_ROLLED);
+  assert.equal(sel.liveFrom, 'traffic');
+});
+
+test('#3798 does not change TODAY\'s verdicts: a healthy roll after the apply is still `ahead`', () => {
+  const sel = selectRevisionOverwrite([
+    rev('r1', '2026-08-19T07:00:00Z', AUG19_APPLIED, 0),
+    rev('r2', '2026-08-19T07:20:00Z', AUG19_ROLLED, 100),
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'ahead');
+  assert.equal(sel.liveTag, AUG19_ROLLED);
+});
+
+test('#3798 does not change TODAY\'s verdicts: an idempotent apply is still `none`', () => {
+  const sel = selectRevisionOverwrite([
+    rev('r1', '2026-08-19T07:00:00Z', AUG19_APPLIED, 0),
+    rev('r2', '2026-08-19T07:20:00Z', AUG19_APPLIED, 100),
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'none');
+});
+
+test('a serving read that is UNKNOWN fails the WHOLE verdict closed, even with a clean Actions API', () => {
+  const sel = selectRevisionOverwrite([
+    rev('r1', '2026-08-19T07:00:00Z', AUG19_APPLIED, 50),
+    rev('r2', '2026-08-19T07:20:00Z', AUG19_ROLLED, 50),
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  assert.equal(sel.status, 'unknown');
+  const verdict = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection: selectLastConsoleRoll([]),
+    revisionSelection: sel,
+  });
+  assert.equal(verdict.verdict, 'unknown', 'an unestablished live image must never be spent as "nothing happened"');
+});
+
+test('R7: the verdict names the SERVING image when it disagrees with the app template', () => {
+  // `az containerapp show` returns the TEMPLATE image — the last write. Under a
+  // weight-0 write that is the other lane's tag while the estate serves ours,
+  // and a message naming only the template would assert the wrong live image.
+  const sel = selectRevisionOverwrite([
+    rev('loom-console--0000783', '2026-08-19T07:10:19+00:00', AUG19_APPLIED, 100),
+    rev('loom-console--0000784', '2026-08-19T07:20:00+00:00', AUG19_ROLLED, 0),
+  ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
+  const verdict = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_ROLLED, // the template moved; the traffic did not
+    rollSelection: selectLastConsoleRoll([]),
+    revisionSelection: sel,
+  });
+  assert.equal(verdict.verdict, 'drifted');
+  assert.match(verdict.reason, /is SERVING '/, 'it must say what is SERVING');
+  assert.match(verdict.reason, /template names '/, 'and disclose that the template says something else');
+});
+
 test('a window with nothing but our own tag is `none` — an idempotent apply is not a revert', () => {
   const sel = selectRevisionOverwrite([
-    { name: 'r0', createdTime: '2026-08-19T05:46:46Z', image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
-    { name: 'r1', createdTime: '2026-08-19T07:10:19Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
+    rev('r0', '2026-08-19T05:46:46Z', AUG19_ROLLED, 0),
+    rev('r1', '2026-08-19T07:10:19Z', AUG19_APPLIED, 100),
   ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
   assert.equal(sel.status, 'none', 'r0 is BEFORE the measurement, so it is outside the window by construction');
 });
 
 test('no revision created in the window at all is `none`, and says why', () => {
-  const sel = selectRevisionOverwrite(AUG19_REVISIONS.slice(0, 1), {
+  const sel = selectRevisionOverwrite(AUG19_REVISIONS_WEIGHTED.slice(0, 1), {
     measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED,
   });
   assert.equal(sel.status, 'none');
@@ -398,8 +635,8 @@ test('no revision created in the window at all is `none`, and says why', () => {
 
 test('the window bound is INCLUSIVE — a revision in the measurement second is not silently outside', () => {
   const sel = selectRevisionOverwrite([
-    { name: 'r1', createdTime: AUG19_MEASURED_AT, image: `acr1.azurecr.io/loom-console:${AUG19_ROLLED}` },
-    { name: 'r2', createdTime: '2026-08-19T07:10:19Z', image: `acr1.azurecr.io/loom-console:${AUG19_APPLIED}` },
+    rev('r1', AUG19_MEASURED_AT, AUG19_ROLLED, 0),
+    rev('r2', '2026-08-19T07:10:19Z', AUG19_APPLIED, 100),
   ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
   assert.equal(sel.status, 'overwritten', 'measured_at has second resolution; an exclusive bound would hide this');
   assert.equal(sel.overwrittenTag, AUG19_ROLLED);
@@ -415,6 +652,58 @@ test('a revision list that is not an array is UNKNOWN, not an empty history', ()
   const sel = selectRevisionOverwrite({ error: 'nope' }, { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
   assert.equal(sel.status, 'unknown');
   assert.match(sel.reason, /changed shape/);
+});
+
+test('NIT-3 FLIP: the incident payload with trafficWeight NULLED must not go green — it fails CLOSED', () => {
+  // The whole state is identical to THE 2026-08-19 MISS except that every
+  // `trafficWeight` is absent. The first draft of #3798 fell back to recency
+  // here and produced `ahead`, which the Actions-API `none` then rendered as a
+  // green OK — with nothing in the log saying a fallback had happened, because
+  // the OK message on that path never interpolates the revision reason. So the
+  // "disclosed fallback" was not disclosed, and the safeguard was the defect.
+  const sel = selectRevisionOverwrite(AUG19_REVISIONS, {
+    measuredAt: AUG19_MEASURED_AT,
+    appliedTag: AUG19_APPLIED,
+  });
+  assert.equal(sel.status, 'unknown', `an unweighted payload establishes no live image; got ${sel.status}`);
+
+  const verdict = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection: selectLastConsoleRoll([]), // the empty listing, as on the night
+    revisionSelection: sel,
+  });
+  assert.equal(
+    verdict.verdict, 'unknown',
+    'and a quiet Actions API must not turn that into OK — this is the exact flip that made the fallback unsafe',
+  );
+});
+
+test('NIT-3 FLIP, through the real CLI: unweighted revisions exit 1 and request no heal', () => {
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', AUG19_APPLIED,
+      '--measured-at', AUG19_MEASURED_AT,
+      '--estate-image', `acrloom.azurecr.io/loom-console:${AUG19_APPLIED}`,
+      '--rolls', 'rolls.json',
+      '--revisions', 'revs.json',
+      '--heal-request', 'heal.txt',
+    ],
+    { files: { 'rolls.json': [], 'revs.json': AUG19_REVISIONS } },
+  );
+  assert.equal(r.code, 1, 'the pre-fix code exited 0 on this exact input');
+  assert.match(r.logs, /UNKNOWN, which fails closed/);
+  assert.match(r.logs, /carries a trafficWeight/, 'and it names the missing field rather than failing vaguely');
+  assert.ok(!('heal.txt' in r.written));
+});
+
+test('CLI serving-tag: an UNWEIGHTED payload is not "the newest one" either — exit 1', () => {
+  const r = runCli(['serving-tag', '--revisions', 'revs.json', '--out', 'serving.txt'], {
+    files: { 'revs.json': AUG19_REVISIONS },
+  });
+  assert.equal(r.code, 1, 'both callers of selectServingRevision must fail closed on the same status');
+  assert.equal(r.written['serving.txt'], '');
 });
 
 test('an unbounded window (no measured-at) is UNKNOWN — it proves nothing either way', () => {
@@ -438,6 +727,63 @@ test('a DIGEST-PINNED revision inside the window is UNKNOWN — a digest does no
   ], { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED });
   assert.equal(sel.status, 'unknown');
   assert.match(sel.reason, /digest-pinned/);
+});
+
+// ---------------------------------------------------------------------------
+// BEHAVIOURAL — an unreadable SECOND source must not discard a definite FIRST
+// one (#3797). Both paths exit 1, so nothing unsafe ever shipped; what the
+// early return threw away was the operator's next action — the roll-forward
+// SHA — on the one run where a second, independent source HAD answered.
+// ---------------------------------------------------------------------------
+
+/** The real incident, seen through the Actions API alone. */
+const AUG19_ROLL_RUNS = [{
+  id: 32225337320,
+  workflow: 'loom-roll-and-validate.yml',
+  title: `roll ${AUG19_ROLLED} (build-triggered)`,
+  completedAt: '2026-08-19T07:11:02Z',
+  jobCompletedAt: '2026-08-19T07:10:44Z',
+  jobConclusion: 'success',
+}];
+
+test('#3797: a definite Actions-API regression SURVIVES an unreadable revision history, with its SHA', () => {
+  const v = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection: selectLastConsoleRoll(AUG19_ROLL_RUNS),
+    revisionSelection: selectRevisionOverwrite(null, { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED }),
+  });
+  assert.equal(v.verdict, 'regression', 'the regression was ESTABLISHED by a source that answered; losing it loses the remediation');
+  assert.equal(v.rollForwardTo, AUG19_ROLLED, 'and the roll-forward SHA must survive with it');
+  assert.match(v.reason, /THE ESTATE WENT BACKWARDS/);
+  assert.match(
+    v.reason, /could NOT be used on this run/,
+    'the failed revision read is NAMED, not dropped — absence of one source is stated (deploy-integrity R7)',
+  );
+});
+
+test('MUTATION CONTROL for #3797: the same unreadable history with a CLEAN Actions API stays UNKNOWN', () => {
+  const v = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: AUG19_APPLIED,
+    rollSelection: selectLastConsoleRoll([]),
+    revisionSelection: selectRevisionOverwrite(null, { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED }),
+  });
+  assert.equal(
+    v.verdict, 'unknown',
+    'CONTROL: only a definite REGRESSION may survive the unreadable read. If an `ok` could too, an unreadable ' +
+      'estate would be laundered green by a quiet Actions API — the exact collapse #3676 turns on.',
+  );
+});
+
+test('MUTATION CONTROL for #3797: a DRIFTED Actions verdict does not survive it either — no direction is claimed', () => {
+  const v = decideEstateRegression({
+    appliedTag: AUG19_APPLIED,
+    estateTag: 'ffffffffffffffffffffffffffffffffffffffff', // neither the roll nor ours
+    rollSelection: selectLastConsoleRoll(AUG19_ROLL_RUNS),
+    revisionSelection: selectRevisionOverwrite(null, { measuredAt: AUG19_MEASURED_AT, appliedTag: AUG19_APPLIED }),
+  });
+  assert.equal(v.verdict, 'unknown', 'drifted names no rollback target, so promoting it here would name one anyway');
 });
 
 test('revision UNKNOWN fails the whole verdict closed, even when the Actions API is happy', () => {
@@ -600,9 +946,7 @@ test('the CLI prints a rollback target ONLY for an attributable regression', () 
   }];
   // A window the REVISION source reads as clean, so this test still exercises
   // the Actions-API attribution path it was written for rather than the new one.
-  const revs = [
-    { name: 'r1', createdTime: '2026-08-17T07:19:48Z', image: `acr.azurecr.io/loom-console:${STALE}` },
-  ];
+  const revs = [rev('r1', '2026-08-17T07:19:48Z', STALE, 100)];
   const regression = runCli(
     ['assert-estate-not-behind-roll', '--applied-tag', STALE, '--measured-at', '2026-08-17T07:03:40Z',
       '--estate-image', `acr.azurecr.io/loom-console:${STALE}`, '--rolls', 'r.json', '--revisions', 'v.json'],
@@ -667,15 +1011,18 @@ function runCli(argv, { env = {}, files = {} } = {}) {
     const logs = [];
     const envLines = [];
     const outLines = [];
+    /** path -> contents, for the files the CLI writes rather than appends. */
+    const written = {};
     const resolved = argv.map((a) => (paths[a] ? paths[a] : a));
     const code = cliMain(resolved, {
       readFile: (p) => readFileSync(p, 'utf8'),
+      writeFile: (p, body) => { written[p] = body; },
       writeEnv: (l) => envLines.push(l),
       writeOutput: (l) => outLines.push(l),
       log: (s) => logs.push(s),
       env,
     });
-    return { code, logs: logs.join('\n'), envLines, outLines };
+    return { code, logs: logs.join('\n'), envLines, outLines, written };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -749,8 +1096,8 @@ test('CLI assert-estate-not-behind-roll: the incident exits 1 with an actionable
           completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
         }],
         'revs.json': [
-          { name: 'loom-console--0000755', createdTime: '2026-08-17T07:10:56Z', image: `acrloom.azurecr.io/loom-console:${ROLLED}` },
-          { name: 'loom-console--0000756', createdTime: '2026-08-17T07:19:48Z', image: `acrloom.azurecr.io/loom-console:${STALE}` },
+          rev('loom-console--0000755', '2026-08-17T07:10:56Z', ROLLED, 0),
+          rev('loom-console--0000756', '2026-08-17T07:19:48Z', STALE, 100),
         ],
       },
     },
@@ -810,7 +1157,7 @@ test('CLI assert-estate-not-behind-roll: the healthy path exits 0 and states wha
           completedAt: '2026-08-17T07:15:30Z', jobConclusion: 'success',
         }],
         'revs.json': [
-          { name: 'loom-console--0000755', createdTime: '2026-08-17T07:10:56Z', image: `acrloom.azurecr.io/loom-console:${ROLLED}` },
+          rev('loom-console--0000755', '2026-08-17T07:10:56Z', ROLLED, 100),
         ],
       },
     },
@@ -833,7 +1180,7 @@ test('CLI assert-estate-not-behind-roll: --rolls-error fails closed (exit 1)', (
     {
       files: {
         'revs.json': [
-          { name: 'loom-console--0000755', createdTime: '2026-08-17T07:10:56Z', image: `acrloom.azurecr.io/loom-console:${ROLLED}` },
+          rev('loom-console--0000755', '2026-08-17T07:10:56Z', ROLLED, 100),
         ],
       },
     },
@@ -858,6 +1205,167 @@ test('CLI assert-estate-not-behind-roll: --revisions-error fails closed even whe
   assert.equal(r.code, 1, 'an unreadable estate history must not be laundered by a quiet Actions API');
   assert.match(r.logs, /UNKNOWN, which fails closed/);
   assert.match(r.logs, /AuthorizationFailed/, 'the refusal must quote the control plane, not invent a cause (R7)');
+});
+
+test('CLI #3797: --revisions-error over the REAL regression still prints the roll-forward SHA', () => {
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', AUG19_APPLIED,
+      '--measured-at', AUG19_MEASURED_AT,
+      '--estate-image', `acrloom.azurecr.io/loom-console:${AUG19_APPLIED}`,
+      '--rolls', 'rolls.json',
+      '--revisions-error', 'az containerapp revision list exited 1: AuthorizationFailed',
+      '--heal-request', 'heal.txt',
+    ],
+    { files: { 'rolls.json': AUG19_ROLL_RUNS } },
+  );
+  assert.equal(r.code, 1, 'fail-closed is unchanged — this is about WHICH failure is reported');
+  assert.match(r.logs, /ESTATE REGRESSION \(#3676\)/);
+  assert.match(r.logs, new RegExp(`image_tag=${AUG19_ROLLED}`), 'the operator gets the roll-forward SHA, not "I could not look"');
+  assert.match(r.logs, /AuthorizationFailed/, 'and the source that FAILED is named in the same message');
+  assert.equal(r.written['heal.txt'], `${AUG19_ROLLED}\n`, 'a definite regression is healable even when one source was down');
+});
+
+// ---------------------------------------------------------------------------
+// BEHAVIOURAL — the auto-heal HAND-OFF (#3799). The request file is the only
+// thing that makes the next step act, so what writes it — and what does NOT —
+// is the whole safety property.
+// ---------------------------------------------------------------------------
+
+test('CLI #3799: a definite regression leaves the roll-forward SHA where the heal step reads it', () => {
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', AUG19_APPLIED,
+      '--measured-at', AUG19_MEASURED_AT,
+      '--estate-image', `acrloom.azurecr.io/loom-console:${AUG19_APPLIED}`,
+      '--rolls', 'rolls.json',
+      '--revisions', 'revs.json',
+      '--heal-request', 'heal.txt',
+    ],
+    { files: { 'rolls.json': [], 'revs.json': AUG19_REVISIONS_WEIGHTED } },
+  );
+  assert.equal(r.code, 1, 'auto-heal must never turn the detection green');
+  assert.equal(r.written['heal.txt'], `${AUG19_ROLLED}\n`);
+  assert.ok(r.outLines.includes(`roll_forward_to=${AUG19_ROLLED}`));
+  assert.ok(r.outLines.includes('verdict=regression'));
+});
+
+test('CLI #3799 MUTATION CONTROL: a HEALTHY run requests no heal at all', () => {
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', ROLLED,
+      '--measured-at', '2026-08-17T07:03:40Z',
+      '--estate-image', `acrloom.azurecr.io/loom-console:${ROLLED}`,
+      '--rolls', 'rolls.json',
+      '--revisions', 'revs.json',
+      '--heal-request', 'heal.txt',
+    ],
+    {
+      files: {
+        'rolls.json': [],
+        'revs.json': [rev('r1', '2026-08-17T07:10:00Z', ROLLED, 100)],
+      },
+    },
+  );
+  assert.equal(r.code, 0);
+  assert.ok(!('heal.txt' in r.written), 'nothing to heal, nothing written — the heal step must not fire on a green run');
+  assert.ok(r.outLines.includes('verdict=ok'));
+});
+
+test('CLI #3799: UNKNOWN and DRIFTED request nothing — only a definite verdict may dispatch', () => {
+  const unknown = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', AUG19_APPLIED,
+      '--measured-at', AUG19_MEASURED_AT,
+      '--estate-image', `acrloom.azurecr.io/loom-console:${AUG19_APPLIED}`,
+      '--rolls-error', 'gh: HTTP 403',
+      '--revisions-error', 'az: AuthorizationFailed',
+      '--heal-request', 'heal.txt',
+    ],
+  );
+  assert.equal(unknown.code, 1);
+  assert.ok(!('heal.txt' in unknown.written), 'an UNKNOWN establishes nothing, so it may not dispatch a roll');
+
+  const drifted = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', AUG19_APPLIED,
+      '--measured-at', AUG19_MEASURED_AT,
+      '--estate-image', 'acrloom.azurecr.io/loom-console:ffffffffffffffffffffffffffffffffffffffff',
+      '--rolls', 'rolls.json',
+      '--revisions', 'revs.json',
+      '--heal-request', 'heal.txt',
+    ],
+    {
+      files: {
+        'rolls.json': AUG19_ROLL_RUNS,
+        'revs.json': [rev('r1', '2026-08-19T07:20:00Z', 'ffffffffffffffffffffffffffffffffffffffff', 100)],
+      },
+    },
+  );
+  assert.equal(drifted.code, 1);
+  assert.ok(
+    !('heal.txt' in drifted.written),
+    'DRIFTED claims no direction on purpose — rolling to a guessed SHA could move a HEALTHY estate backwards, ' +
+      'which is the gate causing the defect it exists to catch',
+  );
+});
+
+test('CLI #3799: a non-SHA roll-forward target is REFUSED as a dispatch, loudly, not written anyway', () => {
+  // A floating tag can reach `overwrittenTag` from a revision list (an operator
+  // rolled `:latest`). It is a real overwrite and must still go red — but a roll
+  // dispatched at a name that is not a commit cannot be validated (#2963).
+  const r = runCli(
+    [
+      'assert-estate-not-behind-roll',
+      '--applied-tag', AUG19_APPLIED,
+      '--measured-at', AUG19_MEASURED_AT,
+      '--estate-image', `acrloom.azurecr.io/loom-console:${AUG19_APPLIED}`,
+      '--rolls', 'rolls.json',
+      '--revisions', 'revs.json',
+      '--heal-request', 'heal.txt',
+    ],
+    {
+      files: {
+        'rolls.json': [],
+        'revs.json': [
+          rev('r1', '2026-08-19T07:04:56Z', 'latest', 0),
+          rev('r2', '2026-08-19T07:10:19Z', AUG19_APPLIED, 100),
+        ],
+      },
+    },
+  );
+  assert.equal(r.code, 1, 'still a regression, still red');
+  assert.ok(!('heal.txt' in r.written), 'but not dispatchable');
+  assert.match(r.logs, /not a 40-hex commit SHA/);
+});
+
+test('CLI serving-tag: resolves what the estate SERVES, and writes an EMPTY file when it cannot', () => {
+  const ok = runCli(['serving-tag', '--revisions', 'revs.json', '--out', 'serving.txt'], {
+    files: { 'revs.json': AUG19_REVISIONS_WEIGHTED },
+  });
+  assert.equal(ok.code, 0);
+  assert.equal(ok.written['serving.txt'], `${AUG19_APPLIED}\n`);
+
+  const nope = runCli(['serving-tag', '--revisions', 'revs.json', '--out', 'serving.txt'], {
+    files: { 'revs.json': [rev('r1', '2026-08-19T07:00:00Z', AUG19_ROLLED, 0)] },
+  });
+  assert.equal(nope.code, 1, 'an unestablished serving image must not read as "recovered"');
+  assert.equal(
+    nope.written['serving.txt'], '',
+    'the file is always written, and written empty — a caller that ignores the exit code must not read a STALE ' +
+      'tag from the previous poll and call it recovery',
+  );
+});
+
+test('CLI serving-tag: a missing flag is a USAGE error (2), never a silent empty answer', () => {
+  const r = runCli(['serving-tag', '--revisions', 'revs.json'], { files: { 'revs.json': [] } });
+  assert.equal(r.code, 2);
+  assert.match(r.logs, /both --revisions <file> and --out <file> are required/);
 });
 
 // ---------------------------------------------------------------------------
@@ -921,6 +1429,14 @@ function envKeysOf(yaml, namePrefix) {
 const GH_STUB = [
   '#!/usr/bin/env bash',
   'set -uo pipefail',
+  // `gh workflow run` is the auto-heal dispatch (#3799). It is RECORDED rather
+  // than performed, so a test can assert exactly what would have been sent —
+  // and count it, because "one attempt, no loop" is a safety property.
+  'if [ "$1" = "workflow" ] && [ "$2" = "run" ]; then',
+  '  printf "%s\\n" "$*" >> "$GH_DISPATCH_LOG"',
+  '  if [ -n "${GH_DISPATCH_FAIL:-}" ]; then echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; fi',
+  '  exit 0',
+  'fi',
   '[ "$1" = "api" ] || { echo "unstubbed gh: $*" >&2; exit 99; }',
   'URL="$2"; JQ_EXPR=""',
   '[ "${3:-}" = "--jq" ] && JQ_EXPR="$4"',
@@ -943,9 +1459,17 @@ const AZ_STUB = [
   // branch below: its $2 is `revision`, not `list`, so order is not actually
   // load-bearing here — but keeping it first documents that they are two
   // different reads (running image vs. the timestamped history) rather than one.
+  //
+  // The call is COUNTED so a test can hand the auto-heal poll a stale estate
+  // first and a healed one afterwards — recovery is a state that CHANGES, and a
+  // stub that answers identically every time cannot tell "healed" from "never
+  // moved" (the two-point-sampling trap this whole gate exists because of).
   'if [ "$1" = "containerapp" ] && [ "$2" = "revision" ] && [ "$3" = "list" ]; then',
+  '  N=$(cat "$AZ_REV_COUNT"); N=$((N + 1)); printf "%s" "$N" > "$AZ_REV_COUNT"',
   '  if [ -n "${AZ_REV_ERR:-}" ]; then printf "%s\\n" "$AZ_REV_ERR" >&2; exit 1; fi',
-  '  cat "$AZ_REV_FILE"; exit 0',
+  '  FILE="$AZ_REV_FILE"',
+  '  if [ -n "${AZ_REV_FILE2:-}" ] && [ "$N" -ge "${AZ_REV_SWITCH_AT:-2}" ]; then FILE="$AZ_REV_FILE2"; fi',
+  '  cat "$FILE"; exit 0',
   'fi',
   'if [ "$1" = "containerapp" ] && [ "$2" = "list" ]; then',
   '  if [ -n "${AZ_LIST_ERR:-}" ]; then printf "%s\\n" "$AZ_LIST_ERR" >&2; exit 1; fi',
@@ -958,7 +1482,23 @@ const AZ_STUB = [
   'echo "unstubbed az: $*" >&2; exit 99',
 ].join('\n');
 
-function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null } = {}) {
+/**
+ * A workspace two steps can SHARE, so the gate's `$RUNNER_TEMP` hand-off to the
+ * auto-heal step is exercised end to end rather than assumed. Without this each
+ * runStep() gets its own temp dir and the request file the gate writes could
+ * never be the one the heal step reads — the harness would prove nothing about
+ * the wiring, which is the part that can silently break.
+ */
+function newStepCtx() {
+  const dir = mkdtempSync(join(tmpdir(), 'roll-race-ctx-'));
+  const binDir = join(dir, 'bin');
+  const fixDir = join(dir, 'fixtures');
+  const runnerTemp = join(dir, 'runner-temp');
+  for (const d of [binDir, fixDir, runnerTemp]) mkdirSync(d, { recursive: true });
+  return { dir, binDir, fixDir, runnerTemp, dispose: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null, azRevisions2 = null, ctx = null } = {}) {
   const yaml = readNorm(DEPLOY_WORKFLOW);
   const body = runBodyOf(yaml, namePrefix);
   const declared = envKeysOf(yaml, namePrefix);
@@ -970,12 +1510,9 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
     );
   }
 
-  const dir = mkdtempSync(join(tmpdir(), 'roll-race-step-'));
+  const own = ctx || newStepCtx();
+  const { dir, binDir, fixDir, runnerTemp } = own;
   try {
-    const binDir = join(dir, 'bin');
-    const fixDir = join(dir, 'fixtures');
-    const runnerTemp = join(dir, 'runner-temp');
-    for (const d of [binDir, fixDir, runnerTemp]) mkdirSync(d, { recursive: true });
     writeFileSync(join(binDir, 'gh'), GH_STUB);
     writeFileSync(join(binDir, 'az'), AZ_STUB);
     chmodSync(join(binDir, 'gh'), 0o755);
@@ -987,6 +1524,12 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
     if (azList) writeFileSync(azListFile, JSON.stringify(azList));
     const azRevFile = join(dir, 'az-revisions.json');
     writeFileSync(azRevFile, JSON.stringify(azRevisions ?? []));
+    const azRevFile2 = join(dir, 'az-revisions-2.json');
+    if (azRevisions2) writeFileSync(azRevFile2, JSON.stringify(azRevisions2));
+    const azRevCount = join(dir, 'az-revisions.count');
+    writeFileSync(azRevCount, '0');
+    const dispatchLog = join(dir, 'gh-dispatch.log');
+    writeFileSync(dispatchLog, '');
 
     const script = join(dir, 'step.sh');
     writeFileSync(script, body, 'utf8');
@@ -1009,8 +1552,11 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
         GITHUB_ENV: ghEnvFile,
         GITHUB_OUTPUT: ghOutFile,
         GH_FIXTURES: fixDir,
+        GH_DISPATCH_LOG: dispatchLog,
         AZ_LIST_FILE: azListFile,
         AZ_REV_FILE: azRevFile,
+        ...(azRevisions2 ? { AZ_REV_FILE2: azRevFile2 } : {}),
+        AZ_REV_COUNT: azRevCount,
       },
     });
     return {
@@ -1018,9 +1564,10 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
       out: `${res.stdout ?? ''}${res.stderr ?? ''}`,
       envFile: readFileSync(ghEnvFile, 'utf8'),
       outFile: readFileSync(ghOutFile, 'utf8'),
+      dispatches: readFileSync(dispatchLog, 'utf8').split('\n').filter(Boolean),
     };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    if (!ctx) own.dispose();
   }
 }
 
@@ -1105,17 +1652,18 @@ const rollRunsPayload = (runs) => ({ workflow_runs: runs });
  * A revision history the REVISION source reads as clean, so the tests below
  * keep exercising the Actions-API attribution path they were written for.
  * The 2026-08-19 shape gets its own test rather than being smeared into these.
+ * It carries `trafficWeight` because the live projection does — an unweighted
+ * payload is UNKNOWN now, which would make every one of these fail closed for
+ * the wrong reason.
  */
-const cleanRevisions = (tag) => [
-  { name: 'loom-console--0000756', createdTime: '2026-08-17T07:19:48Z', image: `acrloom.azurecr.io/loom-console:${tag}` },
-];
+const cleanRevisions = (tag) => [rev('loom-console--0000756', '2026-08-17T07:19:48Z', tag, 100)];
 
 test('SHELL: THE 2026-08-19 MISS end to end — the revision history reddens what the Actions API missed', { skip: shellSkip }, () => {
   // Every input is the live shape: the Actions API returns an EMPTY listing
   // (which is what it did at 07:14:52Z) and the revision history carries the
   // round trip. The old step body had no second witness and went green here.
   const r = runStep(ESTATE_STEP, {
-    azRevisions: AUG19_REVISIONS,
+    azRevisions: AUG19_REVISIONS_WEIGHTED,
     env: {
       GH_TOKEN: 'x',
       DEPLOY_SUB: '',
@@ -1324,6 +1872,253 @@ test('SHELL: a whatif run that applied no tag passes without touching the Action
   });
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /applied no loom-console image tag/);
+});
+
+// ---------------------------------------------------------------------------
+// SHELL — THE AUTO-HEAL (#3799). Detection was the previous change; this is the
+// part that puts the image back. Everything below runs the REAL step body with
+// a stubbed `gh workflow run` that RECORDS rather than dispatches, so "one
+// attempt", "only on a definite verdict" and "verified against the estate" are
+// measured properties rather than claims in a comment.
+// ---------------------------------------------------------------------------
+
+const HEAL_STEP = 'Roll the estate FORWARD to the image this apply overwrote';
+
+/** The env the heal step needs; the harness asserts the declared keys are here. */
+const healEnv = (over = {}) => ({
+  GH_TOKEN: 'x',
+  DEPLOY_SUB: '',
+  AZURE_LOCATION: 'centralus',
+  GITHUB_REPOSITORY: 'acme/csa-inabox',
+  GITHUB_REF_NAME: 'main',
+  LOOM_HEAL_POLLS: '3',
+  LOOM_HEAL_SLEEP_SECONDS: '0',
+  ...over,
+});
+
+test('SHELL #3799 END TO END: the gate writes the request, the heal step dispatches THAT sha and verifies recovery', { skip: shellSkip }, () => {
+  // ONE workspace across BOTH steps, because $RUNNER_TEMP is the hand-off. Two
+  // separate temp dirs would let the wiring be completely broken and still pass.
+  const ctx = newStepCtx();
+  try {
+    const gate = runStep(ESTATE_STEP, {
+      ctx,
+      azRevisions: AUG19_REVISIONS_WEIGHTED,
+      env: {
+        GH_TOKEN: 'x',
+        DEPLOY_SUB: '',
+        APPLIED_TAG: AUG19_APPLIED,
+        MEASURED_AT: AUG19_MEASURED_AT,
+        AZURE_LOCATION: 'centralus',
+        GITHUB_REPOSITORY: 'acme/csa-inabox',
+        AZ_SHOW_IMAGE: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}`,
+      },
+      fixtures: { 'roll-runs.json': rollRunsPayload([]), 'full-runs.json': rollRunsPayload([]) },
+    });
+    assert.equal(gate.status, 1, `the gate must detect the revert first:\n${gate.out}`);
+    assert.deepEqual(gate.dispatches, [], 'the GATE never dispatches — it detects; the heal step acts');
+
+    const heal = runStep(HEAL_STEP, {
+      ctx,
+      // Poll 1 still sees the reverted estate; poll 2 sees the roll landed.
+      azRevisions: AUG19_REVISIONS_WEIGHTED,
+      azRevisions2: [
+        ...AUG19_REVISIONS_WEIGHTED.map((r) => ({ ...r, trafficWeight: 0 })),
+        rev('loom-console--0000784', '2026-08-19T07:40:00+00:00', AUG19_ROLLED, 100),
+      ],
+      env: healEnv(),
+    });
+    assert.equal(heal.status, 0, `recovery was observed, so the heal step itself succeeded:\n${heal.out}`);
+    assert.equal(heal.dispatches.length, 1, `exactly ONE dispatch, no loop; got ${JSON.stringify(heal.dispatches)}`);
+    assert.match(heal.dispatches[0], /workflow run loom-roll-and-validate\.yml/);
+    assert.match(
+      heal.dispatches[0], new RegExp(`image_tag=${AUG19_ROLLED}`),
+      'it must roll forward to the image the apply OVERWROTE — read off the estate, not the tag we applied',
+    );
+    assert.match(heal.out, /AUTO-HEAL VERIFIED/);
+    assert.match(
+      heal.out, /deploy still reports FAILURE/,
+      'healing must not read as absolution — the run is red because the regression happened',
+    );
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL #3799 MUTATION CONTROL: with NO request file the heal step dispatches nothing and exits 0', { skip: shellSkip }, () => {
+  // The gate fails for four reasons and only one is actionable. This is what an
+  // UNKNOWN or a DRIFTED verdict leaves behind: an empty request.
+  const r = runStep(HEAL_STEP, { env: healEnv() });
+  assert.equal(r.status, 0, `no request is not a failure of the heal step:\n${r.out}`);
+  assert.deepEqual(
+    r.dispatches, [],
+    'CONTROL: if this ever dispatches, the "only a definite regression may dispatch" property is gone and the ' +
+      'gate could roll a healthy estate backwards on a DRIFTED verdict',
+  );
+  assert.match(r.out, /dispatches NOTHING/);
+});
+
+test('SHELL #3799: recovery that is never observed is reported NOT VERIFIED — and dispatched exactly once', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    const r = runStep(HEAL_STEP, {
+      ctx,
+      azRevisions: AUG19_REVISIONS_WEIGHTED, // never heals
+      env: healEnv(),
+    });
+    assert.equal(r.status, 1, `an unobserved recovery must not read as success:\n${r.out}`);
+    assert.equal(r.dispatches.length, 1, 'one attempt, then hand off — never a dispatch storm');
+    assert.match(r.out, /AUTO-HEAL NOT VERIFIED/);
+    assert.match(
+      r.out, /does not say the roll failed/,
+      'R7: not observing recovery inside a budget is not evidence the roll failed, and the message must not say ' +
+        'it is — a roll still gating on vitest/cosign/UAT looks exactly like this',
+    );
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL #3799: a dispatch that FAILS quotes gh and never claims the estate was healed', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    const r = runStep(HEAL_STEP, {
+      ctx,
+      azRevisions: AUG19_REVISIONS_WEIGHTED,
+      env: healEnv({ GH_DISPATCH_FAIL: '1' }),
+    });
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /the dispatch FAILED/);
+    assert.match(r.out, /Resource not accessible by integration/, 'it must quote gh, not invent a cause (R7)');
+    assert.match(r.out, /STILL running the overwritten image/);
+    assert.doesNotMatch(r.out, /AUTO-HEAL VERIFIED/);
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL #3799: it REFUSES to dispatch when the roll lane targets a different estate', { skip: shellSkip }, () => {
+  // loom-roll-and-validate.yml is hard-pinned to rg-csa-loom-admin-centralus;
+  // this deploy's region is ADOPTED from whatever hub exists. Dispatching it
+  // while reconciling another region would roll an estate this run never
+  // touched — a heal that damages a different estate is worse than no heal.
+  const ctx = newStepCtx();
+  try {
+    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    const r = runStep(HEAL_STEP, { ctx, env: healEnv({ AZURE_LOCATION: 'eastus2' }) });
+    assert.equal(r.status, 1, r.out);
+    assert.deepEqual(r.dispatches, [], 'nothing may be dispatched at an estate this run did not apply to');
+    assert.match(r.out, /rg-csa-loom-admin-eastus2/);
+    assert.match(r.out, /rg-csa-loom-admin-centralus/);
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL #3799: a request that is not a 40-hex SHA is refused before any dispatch', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), 'latest\n');
+    const r = runStep(HEAL_STEP, { ctx, env: healEnv() });
+    assert.equal(r.status, 1, r.out);
+    assert.deepEqual(r.dispatches, []);
+    assert.match(r.out, /not a 40-hex commit SHA/);
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL #3799: an unreadable revision history during the poll never reads as recovery', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    const r = runStep(HEAL_STEP, {
+      ctx,
+      env: healEnv({ AZ_REV_ERR: 'ERROR: (AuthorizationFailed) The client does not have authorization' }),
+    });
+    assert.equal(r.status, 1, `"I could not look" is not "it healed":\n${r.out}`);
+    assert.match(r.out, /establishes NOTHING about recovery/);
+    assert.match(r.out, /AuthorizationFailed/);
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('CONTRACT #3799: the heal step is wired to the gate, and to the file the gate writes', () => {
+  const yaml = readNorm(DEPLOY_WORKFLOW);
+  const gate = stepBodyByName(yaml, 'Estate must not be BEHIND the last successful roll (#3676)');
+  const heal = stepBodyByName(yaml, 'Roll the estate FORWARD to the image this apply overwrote (#3799)');
+  assert.ok(heal, 'the auto-heal step is gone — a detected revert would again sit there until something unrelated merges');
+
+  // ANCHORED, AND AGAINST THE STEP — NOT AGAINST THE FILE.
+  //
+  // The first version of this assertion matched the `if:` string anywhere in a
+  // 2332-line workflow and had no end anchor, so appending a condition to the
+  // step's own `if:` passed it. Measured: appending
+  // `&& inputs.run_mode == 'full'` — which is EMPTY on `schedule`, i.e. it
+  // silently kills auto-heal on exactly the nightly runs the 2026-08-19
+  // incident happened on — left the suite at 122/122 green. Every shell test
+  // executes the extracted `run:` body directly, so nothing else in this file
+  // ever observes the condition the runner evaluates.
+  assert.match(
+    heal, /^\s+if: always\(\) && steps\.estate_behind\.conclusion == 'failure'\s*$/m,
+    'the heal step must run on EXACTLY "the gate step failed" — no extra condition. Anything ANDed onto it can ' +
+      'scope the heal away from a trigger class (a `run_mode`/`inputs.*` term is empty on schedule) while every ' +
+      'other test in this file still passes.',
+  );
+  // Same literal path on both sides. `$RUNNER_TEMP/x` in one step and
+  // `$RUNNER_TEMP/y` in the other is a hand-off that silently never happens.
+  const path = /estate-heal-request\.txt/;
+  assert.match(gate, path, 'the gate must truncate + name the request file');
+  assert.match(heal, path, 'and the heal step must read the same one');
+  assert.match(gate, /--heal-request "\$HEAL_REQ"/, 'the CLI needs the path or it writes no request at all');
+  assert.equal(
+    (gate.match(/--heal-request "\$HEAL_REQ"/g) || []).length, 3,
+    'EVERY CLI call site must pass it: a regression can be reached from more than one of them, and a site that ' +
+      'omits it detects the revert and then silently declines to heal it',
+  );
+  assert.match(gate, /: > "\$HEAL_REQ"/, 'and it must be truncated first, so a request can only describe THIS run');
+
+  assert.match(heal, /gh workflow run loom-roll-and-validate\.yml/, 'it must dispatch the lane that owns the roll');
+  assert.match(heal, /image_tag="\$\{TARGET\}"/, 'with the recovered SHA');
+  assert.match(heal, /serving-tag/, 'and verify recovery through the same tested serving logic the gate used');
+  for (const re of [/continue-on-error/, /\|\|\s*true/, /2>\s*\/dev\/null/]) {
+    assert.ok(!re.test(heal), `the auto-heal step discards a result (${re}); a heal that cannot fail is not a heal`);
+  }
+  assert.match(heal, /DISPATCH_RC=\$\?/, 'the dispatch must capture its own exit code rather than infer one');
+  assert.match(heal, /2> "\$DISPATCH_ERR"/, 'and keep stderr, which is the only thing that says WHY it failed');
+  assert.ok(
+    !/gh run list|actions\/runs/.test(heal),
+    'recovery must be verified against the ESTATE, not the Actions API listing — that index is the source whose ' +
+      'lag produced the 2026-08-19 miss in the first place',
+  );
+  // THE KNOB MUST NOT BECOME THE BYPASS. LOOM_HEAL_POLLS / _SLEEP_SECONDS exist
+  // so the extracted-step tests run in milliseconds. If the workflow itself ever
+  // sets them, the verification budget becomes a value somebody can quietly edit
+  // to nothing — the narrow-bypass shape this repo keeps finding. Nothing in CI
+  // sets them, and this asserts that stays true.
+  assert.ok(
+    !/^\s*LOOM_HEAL_(POLLS|SLEEP_SECONDS):/m.test(yaml),
+    'the deploy workflow now SETS a heal-poll knob. Those defaults are the verification budget; pinning them in ' +
+      'the workflow makes the budget editable without touching this test.',
+  );
+});
+
+test('CONTRACT #3799: the estate the heal step would roll is DERIVED from the roll lane, not restated', () => {
+  const yaml = readNorm(DEPLOY_WORKFLOW);
+  const heal = stepBodyByName(yaml, 'Roll the estate FORWARD to the image this apply overwrote (#3799)');
+  assert.match(heal, /RG_NAME:/, 'it must read the roll lane\'s own RG_NAME');
+  assert.match(heal, /loom-roll-and-validate\.yml/);
+  // CONTROL: the derivation only works while the roll lane still declares it at
+  // two-space indent, so assert the shape the awk actually matches.
+  const rollYaml = readNorm(ROLL_WORKFLOW);
+  assert.match(
+    rollYaml, /^ {2}RG_NAME: rg-csa-loom-admin-centralus$/m,
+    'the roll lane no longer declares RG_NAME where the heal step reads it; the heal step would then refuse every ' +
+      'dispatch (safe, and useless) rather than roll the estate forward',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1770,8 +2565,11 @@ test('CONTRACT: the estate gate reads the REVISION HISTORY, and every CLI call c
     'without this read the gate is back to asking the Actions API alone — the configuration that reported OK ' +
       'while revisions 0000782 -> 0000783 recorded the revert on 2026-08-19',
   );
-  assert.match(body, /--query "\[\]\.\{name:name, createdTime:properties\.createdTime, image:properties\.template\.containers\[0\]\.image\}"/,
-    'the projection must carry name + createdTime + image; a window cannot be built without the timestamp');
+  assert.match(body, /--query "\[\]\.\{name:name, createdTime:properties\.createdTime, trafficWeight:properties\.trafficWeight, image:properties\.template\.containers\[0\]\.image\}"/,
+    'the projection must carry name + createdTime + trafficWeight + image. Without the timestamp there is no ' +
+      'window; without the WEIGHT (#3798) the gate reads "newest" as "serving" and a weight-0 roll reads as a ' +
+      'false green — and the code falls back to recency SILENTLY enough that only this assertion keeps the real ' +
+      'lane off that path.');
 
   // Every reachable invocation must hand the CLI one of the two revision flags
   // — literally, or via the REV_ARGS array the two live call sites expand. The
@@ -1910,8 +2708,13 @@ test('the deploy lane still runs the post-apply estate-vs-roll gate, and it cann
   const i = yaml.indexOf('- name: Estate must not be BEHIND the last successful roll');
   assert.notEqual(i, -1, 'the post-apply regression gate is gone — a backwards move would again produce no signal');
   const step = yaml.slice(i, i + 2500);
-  assert.match(step, /if: always\(\) && steps\.provision\.conclusion != 'skipped'/,
-    'the gate must run even when the apply FAILED: a failed apply can still have written the container app');
+  // ANCHORED — the same lesson as the heal step's `if:`. An unanchored match
+  // accepts `&& inputs.run_mode == 'full'` appended to it, which is empty on
+  // `schedule` and would switch the gate off on precisely the trigger the
+  // #3676 incidents happened on, with every other test still green.
+  assert.match(step, /^\s+if: always\(\) && steps\.provision\.conclusion != 'skipped'\s*$/m,
+    'the gate must run even when the apply FAILED (a failed apply can still have written the container app), and ' +
+      'on EXACTLY that condition — an extra ANDed term can scope it away from a whole trigger class');
   assert.ok(!/continue-on-error/.test(step), 'a gate whose result is discarded is not a gate');
   assert.match(step, /assert-estate-not-behind-roll/);
 });
@@ -1961,13 +2764,28 @@ test('neither new deploy step discards a result (no continue-on-error / || true 
   }
 });
 
-test('the deploy lane grants actions:read, or the gate fails closed on every run', () => {
+test('the gate keeps actions:read and the auto-heal gets actions:write on the JOB, not the whole workflow', () => {
   const yaml = readNorm(DEPLOY_WORKFLOW);
   const m = /^permissions:\n((?:[ \t]+\S.*\n|[ \t]*#.*\n)+)/m.exec(yaml);
   assert.ok(m, 'deploy-fiab-commercial.yml declares no top-level permissions block');
   assert.match(m[1], /^\s*actions:\s*read\s*$/m,
     'without actions:read the gh calls in the estate gate 403 and the gate reports UNKNOWN forever — a ' +
       'permanently red deploy lane reads as a broken deploy path (deploy-integrity R1)');
+
+  // The dispatch needs WRITE, and it is scoped to the one job that dispatches.
+  // A workflow-level `actions: write` would hand every other job in the file
+  // run-delete / artifact-delete / cancel for no reason.
+  const jobAt = yaml.indexOf('    name: Deploy + validate CSA Loom in Commercial');
+  assert.notEqual(jobAt, -1, 'the deploy-validate job was renamed; this assertion is looking at the wrong job');
+  const jobHead = yaml.slice(jobAt, jobAt + 1600);
+  const jobPerms = /\n {4}permissions:\n((?: {6}\S.*\n)+)/.exec(jobHead);
+  assert.ok(jobPerms, 'the deploy-validate job declares no permissions block, so it inherits the workflow-level ' +
+    'one — and the auto-heal dispatch (#3799) would 403 on the one run where the estate is already wrong');
+  assert.match(jobPerms[1], /^\s*actions:\s*write\s*$/m, 'the dispatch needs actions:write');
+  assert.match(jobPerms[1], /^\s*contents:\s*read\s*$/m,
+    'a job-level block REPLACES the workflow-level one, so the checkout still needs contents:read here');
+  assert.match(jobPerms[1], /^\s*issues:\s*write\s*$/m,
+    'and the failure-notify step still needs issues:write for the same reason');
 });
 
 // ---------------------------------------------------------------------------
