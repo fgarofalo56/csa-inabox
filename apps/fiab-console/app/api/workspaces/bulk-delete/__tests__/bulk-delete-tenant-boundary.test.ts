@@ -25,6 +25,14 @@
  * cover the four properties the fix must hold plus the control that admin
  * cleanup of same-tenant UAT debris — this endpoint's whole purpose — still
  * works.
+ *
+ * EDGE THIS SUITE CANNOT SEE, disclosed rather than left to be discovered:
+ * `vi.resetModules()` in afterEach plus the per-call dynamic `import()` in
+ * `post()` hands every test a FRESH module, so process-lifetime module state
+ * is invisible here. The route has none today (its only module scope is
+ * `const MAX_BATCH = 500`), but `export const runtime = 'nodejs'` means the
+ * module IS long-lived across requests — a memo/cache added to it later would
+ * be untestable by these specs and needs its own coverage.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -265,7 +273,15 @@ function seedShape(size: number, foreign: number[]) {
   const isForeign = new Set(foreign);
   const ids: string[] = [];
   for (let i = 0; i < size; i++) {
-    const id = `wsPos${i}`;
+    // GUID-SHAPED ON PURPOSE. Review measured a bypass narrowed onto the id
+    // SHAPE — `id.length === 36 && id.split('-').length === 5`, destroy the
+    // foreign doc, still report `not_found` — passing this suite 80/80, RC=0,
+    // solely because every fixture id was a short label. (Control: force that
+    // gate true and 59 tests fail, so the body was live the whole time.) The
+    // attack in the header IS "an admin holding a workspace GUID from another
+    // tenant", so the fixtures have to look like one. padStart holds the
+    // 8-4-4-4-12 shape for any MAX_SHAPE_SIZE, not just single digits.
+    const id = `${String(i).padStart(8, '0')}-0000-4000-8000-${String(i).padStart(12, '0')}`;
     ids.push(id);
     if (isForeign.has(i)) seedWorkspace(id, FOREIGN_OWNER, { name: `Fabrikam ${i}`, tid: FOREIGN_TID });
     else seedWorkspace(id, HOME_OWNER, { name: `Contoso ${i}`, tid: HOME_TID });
@@ -283,6 +299,12 @@ describe('#3833 property 1b — the boundary holds at every BATCH SHAPE, not jus
   it('generates every foreign-position subset, including the ones below 3 ids cannot express', () => {
     // The generator is itself under test — a matrix that silently produced two
     // shapes would look like coverage and be none. sum(2**n - 1) for n=1..N.
+    // The LITERAL first: the formula below is self-referential, so at
+    // MAX_SHAPE_SIZE = 0 it evaluates to 0 and `expect([]).toHaveLength(0)`
+    // PASSES — on its own it cannot catch a shrink of the matrix. This number
+    // is keyed to MAX_SHAPE_SIZE = 4; widening the range is now a deliberate
+    // TWO-line edit, which is the point.
+    expect(shapes).toHaveLength(26);
     expect(shapes).toHaveLength(2 ** (MAX_SHAPE_SIZE + 1) - MAX_SHAPE_SIZE - 2);
     // MIDDLE position, the case that needs 3 ids to exist at all.
     expect(shapes).toContainEqual({ size: 3, foreign: [1] });
@@ -381,6 +403,35 @@ describe('#3833 property 4 — a tid-less workspace doc is refused HONESTLY and 
     expect(j.failed[0].error).toBe('tenant_unconfirmed');
     expect(stillExists('wsLegacy', 'alice-oid')).toBe(true);
     expect(teardownMock).not.toHaveBeenCalled();
+  });
+
+  it('records the SAME refusal when the CALLER has no tid — over a fully tid-stamped FOREIGN workspace', async () => {
+    // The other, WIDER half of the same gate. Resolver step 4 is truthiness-
+    // guarded on BOTH sides, so with no `callerTid` it cannot fire and step 6
+    // records the denial instead — for a workspace that DOES carry a tid, in a
+    // tenant that is not the caller's. So when the CALLER is the unconfirmed
+    // side, the residual oracle covers every workspace in any tenant, not only
+    // tid-less ones. Inherited from #3824 and unmodified here; pinned so the
+    // disclosure in the PR body stays true (deploy-integrity R7).
+    seedWorkspace('wsX', 'mallory-oid', { name: 'Fabrikam Finance', tid: FOREIGN_TID });
+    getSessionMock.mockReturnValue({
+      claims: { oid: 'admin-oid', upn: 'admin@contoso.com' }, // no tid claim
+      exp: Date.now() / 1000 + 3600,
+    } as any);
+
+    const r = await post({ ids: ['wsX'] });
+    const j = await r.json();
+
+    expect(j.failed[0].error).toBe('tenant_unconfirmed');
+    // A REFUSAL, not a delete — the foreign doc survives.
+    expect(stillExists('wsX', 'mallory-oid')).toBe(true);
+
+    // ...while an id that exists nowhere still gets the opaque code, which is
+    // exactly what makes the pair distinguishable. Recorded as the residual,
+    // not asserted as desirable.
+    containers.workspaces._store.clear();
+    const rGhost = await post({ ids: ['wsGhost'] });
+    expect((await rGhost.json()).failed[0].error).toBe('not_found');
   });
 
   it('never leaks tenant_unconfirmed to a NON-admin — they get the plain not_found', async () => {
