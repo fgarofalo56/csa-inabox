@@ -385,9 +385,23 @@ if (ShouldRunGate @("*.bicep", "*.bicepparam", "deploy/bicep/*")) {
     # missing or renamed, $LASTEXITCODE is never written and retains the
     # PREVIOUS gate's value. A missing gate script inherited a stale 0 and
     # printed [PASS]. Measured, not assumed. See #3811.
-    $LASTEXITCODE = $null
+    #
+    # $global: ON BOTH SIDES, here and at the four sibling call sites below.
+    # A bare `$LASTEXITCODE = $null` creates a variable in whatever scope this
+    # script is running in; `& gate.ps1` then writes the GLOBAL one, and the
+    # read finds the local $null. Measured across invocation shapes: under
+    # `pwsh -File validate-all.ps1` (what Makefile, task-templates.json and
+    # readonly.py all use) the bare form reads back correctly, but under
+    # `& validate-all.ps1` from a parent .ps1 the identical probe returns
+    # EMPTY. So the bare form was LATENT, not live - and it failed SAFE, every
+    # gate collapsing to NotRun -> required-NotRun -> exit 3, which is exactly
+    # why it would have sat here unnoticed. This is the third appearance of the
+    # shape in this change's history (Invoke-Git, validate-typescript, here);
+    # gate-selftest.ps1 case K now drives the child-scope shape so there is no
+    # fourth.
+    $global:LASTEXITCODE = $null
     & (Join-Path $gatesDir "validate-bicep.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "Bicep"; Status = (GateStatus $LASTEXITCODE) }
+    $results += @{ Gate = "Bicep"; Status = (GateStatus $global:LASTEXITCODE) }
 } else {
     Write-Host "Skipping: Bicep (no .bicep files changed)" -ForegroundColor DarkGray
 }
@@ -396,9 +410,9 @@ if (ShouldRunGate @("*.bicep", "*.bicepparam", "deploy/bicep/*")) {
 $invokedGates += 'python'
 if (ShouldRunGate @("*.py", "scripts/*", "domains/*")) {
     Write-Host "Running: Python validation..." -ForegroundColor White
-    $LASTEXITCODE = $null   # see note on Gate 1
+    $global:LASTEXITCODE = $null   # $global: - see note on Gate 1
     & (Join-Path $gatesDir "validate-python.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "Python"; Status = (GateStatus $LASTEXITCODE) }
+    $results += @{ Gate = "Python"; Status = (GateStatus $global:LASTEXITCODE) }
 } else {
     Write-Host "Skipping: Python (no .py files changed)" -ForegroundColor DarkGray
 }
@@ -407,9 +421,9 @@ if (ShouldRunGate @("*.py", "scripts/*", "domains/*")) {
 $invokedGates += 'dbt'
 if (ShouldRunGate @("*.sql", "domains/*/dbt/*", "dbt_project.yml")) {
     Write-Host "Running: dbt validation..." -ForegroundColor White
-    $LASTEXITCODE = $null   # see note on Gate 1
+    $global:LASTEXITCODE = $null   # $global: - see note on Gate 1
     & (Join-Path $gatesDir "validate-dbt.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "dbt"; Status = (GateStatus $LASTEXITCODE) }
+    $results += @{ Gate = "dbt"; Status = (GateStatus $global:LASTEXITCODE) }
 } else {
     Write-Host "Skipping: dbt (no dbt files changed)" -ForegroundColor DarkGray
 }
@@ -432,9 +446,9 @@ if (ShouldRunGate @("*.sql", "domains/*/dbt/*", "dbt_project.yml")) {
 $invokedGates += 'deployment'
 if (ShouldRunGate @("deploy/bicep/*")) {
     Write-Host "Running: Deployment validation..." -ForegroundColor White
-    $LASTEXITCODE = $null   # see note on Gate 1
+    $global:LASTEXITCODE = $null   # $global: - see note on Gate 1
     & (Join-Path $gatesDir "validate-deployment.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "Deployment"; Status = (GateStatus $LASTEXITCODE) }
+    $results += @{ Gate = "Deployment"; Status = (GateStatus $global:LASTEXITCODE) }
 } else {
     Write-Host "Skipping: Deployment (no deploy/bicep files changed)" -ForegroundColor DarkGray
 }
@@ -462,8 +476,18 @@ if (ShouldRunGate @("deploy/bicep/*")) {
 # same narrow-bypass shape #3506 records, and it is worse than a gap because it
 # manufactures a positive.
 #
-# The excludes below MIRROR tsconfig.build.json. Widening one without the other
-# reopens the defect, so they are commented on both sides.
+# The excludes below mirror tsconfig.build.json's exclude list for every entry
+# change detection can actually surface. That list has 17 entries; 4 of them -
+# node_modules, .next, dist, temp - are gitignored, so neither `git diff` nor
+# `ls-files --others --exclude-standard` can ever emit a path under them and
+# they cannot select this gate. `out` is NOT gitignored (.gitignore:25 covers
+# only portal/react-webapp/out/), so it IS reachable and is listed below.
+# Measured with `git check-ignore`: out/ -> not ignored, the other four ->
+# ignored. Its population is zero today (directory absent, no tracked files),
+# but a `next export` recreates exactly the trigger-exceeds-check-population
+# shape this block exists to prevent, so it is excluded now rather than later.
+# Widening tsconfig.build.json's exclude without widening this list reopens the
+# defect; they are commented on both sides.
 #
 # Console TESTS are therefore NOT covered by `make validate` - stated here, in
 # the gate's own output, and in dev-loop/README.md rather than left implicit.
@@ -479,13 +503,14 @@ $tsExcludes = @(
     "*.uat.ts", "*.uat.tsx",
     "apps/fiab-console/vitest.config.ts",
     "apps/fiab-console/vitest.setup.ts",
-    "apps/fiab-console/playwright.config.ts"
+    "apps/fiab-console/playwright.config.ts",
+    "apps/fiab-console/out/*"
 )
 if (ShouldRunGate -Patterns @("apps/fiab-console/*.ts", "apps/fiab-console/*.tsx") -ExcludePatterns $tsExcludes) {
     Write-Host "Running: TypeScript validation..." -ForegroundColor White
-    $LASTEXITCODE = $null   # see note on Gate 1
+    $global:LASTEXITCODE = $null   # $global: - see note on Gate 1
     & (Join-Path $gatesDir "validate-typescript.ps1") -RepoRoot $RepoRoot
-    $results += @{ Gate = "TypeScript"; Status = (GateStatus $LASTEXITCODE) }
+    $results += @{ Gate = "TypeScript"; Status = (GateStatus $global:LASTEXITCODE) }
 } else {
     Write-Host "Skipping: TypeScript (no compiled apps/fiab-console TypeScript changed)" -ForegroundColor DarkGray
 }

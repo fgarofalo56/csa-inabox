@@ -48,6 +48,11 @@
             child scope), which is not equivalent to C/D's separate process.
       J  the same path, clean -> exit 0. Without J, I would also pass if the
          gate failed unconditionally.
+      K  validate-all invoked with `&` from a PARENT .ps1 -> still measures.
+         Every other case uses `pwsh -File`; the child-scope shape is where a
+         bare `$LASTEXITCODE = $null` shadows the automatic variable and
+         launders every gate into NotRun. It fails SAFE, so only a case that
+         expects a real FAIL can see it.
 
     A and B together are the load-bearing pair. If both return the same code,
     this script fails - because a verdict that does not move between "measured
@@ -370,6 +375,48 @@ try {
                 Add-Case 'J  clean compiled console file PASSES the suite (exit 0)' 'Pass' "exit $($j.ExitCode)"
             } else {
                 Add-Case 'J  clean compiled console file PASSES the suite (exit 0)' 'Fail' "expected exit 0 with TypeScript [PASS], got exit $($j.ExitCode)"
+            }
+
+            # --- Case K: validate-all invoked with `&` from a PARENT .ps1. ---
+            #
+            # Every other case launches validate-all as `pwsh -File`, which is
+            # the shape Makefile, task-templates.json and readonly.py use - and
+            # under that shape a bare `$LASTEXITCODE = $null` reads back
+            # correctly. Under `& validate-all.ps1` from a parent script it does
+            # NOT: the assignment creates a scope-local that shadows the
+            # automatic variable, every gate reads $null, and the whole suite
+            # collapses to NotRun -> required-NotRun -> exit 3. That failure is
+            # SAFE, which is precisely why it hides.
+            #
+            # The bug shape has now appeared three times in this change's
+            # history (Invoke-Git, validate-typescript's tsc read, and the five
+            # gate call sites). This case exists so there is no fourth: it drives
+            # the child-scope shape against a repo whose correct answer is a real
+            # FAIL, so laundering measurements into NotRun cannot pass it.
+            Invoke-ConsoleGit @('checkout', '-q', 'break-compiled')
+
+            $parentPs1 = Join-Path $tempRoot 'parent-invoker.ps1'
+            $parentLines = @(
+                '# Invokes a gate with the CALL OPERATOR, creating a child scope.',
+                'param([string]$GatePath, [string]$Repo)',
+                '& $GatePath -RepoRoot $Repo',
+                '$code = $LASTEXITCODE',
+                'if ($null -eq $code) { Write-Host "PARENT: child exit code was NULL"; exit 99 }',
+                'Write-Host "PARENT: child exit code $code"',
+                'exit $code'
+            )
+            Set-Content -Path $parentPs1 -Value $parentLines -Encoding ASCII
+
+            $k = Invoke-Child -ScriptPath $parentPs1 `
+                -Arguments @('-GatePath', $validateAll, '-Repo', $consoleRepo) `
+                -WorkingDirectory $consoleRepo
+
+            if ($k.ExitCode -eq 1 -and $k.Output -match 'TypeScript \(required\): \[FAIL\]') {
+                Add-Case 'K  child-scope (& parent.ps1) invocation still measures' 'Pass' "exit $($k.ExitCode)"
+            } elseif ($k.Output -match 'TypeScript \(required\): \[NOT VERIFIED\]') {
+                Add-Case 'K  child-scope (& parent.ps1) invocation still measures' 'Fail' "gates collapsed to NOT VERIFIED under `& invocation - a bare `$LASTEXITCODE assignment is shadowing the automatic variable. exit $($k.ExitCode)"
+            } else {
+                Add-Case 'K  child-scope (& parent.ps1) invocation still measures' 'Fail' "expected exit 1 with TypeScript [FAIL], got exit $($k.ExitCode)"
             }
         }
 

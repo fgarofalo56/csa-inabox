@@ -55,6 +55,10 @@ validation_gates:
       - "apps/fiab-console/vitest.config.ts"
       - "apps/fiab-console/vitest.setup.ts"
       - "apps/fiab-console/playwright.config.ts"
+      # NOT gitignored (.gitignore:25 covers only portal/react-webapp/out/), so
+      # unlike node_modules/.next/dist/temp this one is reachable by change
+      # detection. Zero population today; a `next export` would give it one.
+      - "apps/fiab-console/out/**"
     required: true
     timeout_seconds: 600
 
