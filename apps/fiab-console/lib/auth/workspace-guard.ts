@@ -16,10 +16,41 @@
  * existence of workspaces the caller can't see). Use `requireWorkspace` to fold
  * in the 401 unauthenticated check in one call.
  *
- * #3825 — THERE IS EXACTLY ONE IMPLEMENTATION OF "MAY THIS CALLER TOUCH THIS
- * WORKSPACE", AND IT IS `resolveWorkspaceAccessByOid`. Every guard in this
- * module delegates the decision to it. Do not re-add a tenant-admin
- * short-circuit here, in any form.
+ * #3825 — `resolveWorkspaceAccessByOid` IS THE CANONICAL IMPLEMENTATION OF "MAY
+ * THIS CALLER TOUCH THIS WORKSPACE", AND EVERY GUARD IN THIS MODULE DELEGATES THE
+ * DECISION TO IT. Do not re-add a tenant-admin short-circuit here, in any form.
+ *
+ * THAT IS NOT THE SAME AS "there is exactly one implementation", which is what
+ * this header used to claim and what an independent review counted wrong on
+ * 2026-08-21. Six places in the console still answer some form of the question;
+ * naming them is the point, because a header that overstates the invariant is
+ * worse than no header — the next reader stops looking.
+ *
+ *   1. `workspace-access.ts` `resolveWorkspaceAccessByOid` — CANONICAL. Owner
+ *      fast-path → workspace-roles ACL → `wsDoc.tid !== callerTid` → admin-open.
+ *      Everything in THIS module routes through it.
+ *   2. `workspace-access.ts` `listAccessibleWorkspaces` — the LIST shape, with its
+ *      own `doc.tid !== callerTid` filter in the same module. Same author, same
+ *      file, but a second copy of the comparison nonetheless.
+ *   3. `workspace-role.ts` `resolveWorkspaceRole` / `findWorkspace` — an older,
+ *      independent lookup carrying its OWN tid comparison rather than delegating.
+ *      Tracked as **#3840**; also the cause of #3751.
+ *   4. `item-access.ts` `resolveItemAccessByOid` — the ITEM-GRANT path is reached
+ *      only after the resolver has denied, so it is a second grant with its own
+ *      `wsDoc.tid !== tid` boundary. Pinned (condition, return AND the region
+ *      between them) in `check-tid-boundary-chokepoint.mjs`.
+ *   5. `resolveAdminWorkspace` below — the OWNER fast-path point-read
+ *      (`resource.tenantId === session.claims.oid`) decides before the resolver
+ *      runs. Sound because the read is partition-scoped to the caller, and pinned
+ *      by position so that stays true.
+ *   6. `authorizeItemWorkspace` below — `if (!workspaceId) return null` is an
+ *      ALLOW the resolver never sees. Sound only because the id names no item
+ *      anywhere in the estate; likewise pinned by position.
+ *
+ * 5 and 6 are pre-delegation ALLOWs inside this module and are held by
+ * PROLOGUE_PINS; 4 is held by POST_DELEGATION_PINS; 2 and 3 are outside the
+ * guard's model and are findings, not clearances. Consolidating 3 onto the
+ * canonical resolver is #3840.
  *
  * What that replaced: `authorizeWorkspace` opened with
  *
@@ -46,7 +77,8 @@
  * (`callerTid && wsDoc.tid && wsDoc.tid === callerTid`), which means loading the
  * workspace doc — i.e. most of the cost of simply calling the resolver, in
  * exchange for a second copy of the tenant decision that can drift from the
- * first. Four copies of this decision is how #3823 and #3825 both happened.
+ * first. Copies of this decision are how #3823 and #3825 both happened; the six
+ * that remain are enumerated above, each with what holds it.
  *
  * THE TRADE THIS MAKES, STATED PLAINLY. A tenant admin acting on a LEGACY
  * `tid`-less workspace doc (or holding a session minted without a `tid` claim)

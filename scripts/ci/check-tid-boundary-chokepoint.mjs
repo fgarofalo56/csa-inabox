@@ -128,6 +128,83 @@
  *       about the verdict BY NAME and the name had been re-bound. The
  *       verdict binding must now be a single immutable `const`          exit 1
  *
+ * ROUND 4 (2026-08-21). A second independent review returned five blockers, and
+ * EVERY ONE OF THEM WAS A DEFECT IN THIS FILE rather than in the code it guards —
+ * the shipped #3825 fix was sound and the live hole was closed, but the tripwire
+ * over it was not watching. Each is reproduced here as a mutation with its
+ * measured exit code BEFORE and AFTER the round-4 change. `R#a` is the control
+ * that was already caught; `R#b` is the one that was not.
+ *
+ *   R1a `if (opts.allowReadRoles === undefined) return null;`
+ *                                                     before 1   after 1
+ *   R1b the SAME line, returning `access && null` — always falsy, so
+ *       always ALLOW, and `allowReadRoles === undefined` is the DEFAULT:
+ *       a total cross-tenant bypass of every write-scoped call site.
+ *       `classifyValue` treated any value that MENTIONED the verdict as
+ *       BEING the verdict, so 8d's implication test never ran on it
+ *                                                     before 0   after 1
+ *   R2  an in-gate `return access !== undefined;` — TRUE exactly when the
+ *       delegate said no. 8e asked only whether the gate's region
+ *       contained an ALLOW, using that same classifier, so its
+ *       "narrowing gate" exemption was accidental rather than reasoned:
+ *       `resolveAdminWorkspace` passed because the guard could not SEE
+ *       the grant inside it. 8e now applies 8d's reachability test
+ *                                                     before 0   after 1
+ *   R3a an env-oid grant appended as `export async function`
+ *                                                     before 1   after 1
+ *   R3b the BYTE-IDENTICAL body as `export const f = async (…) => {…}`.
+ *       The declaration-form filter ran BEFORE 8a's four independent
+ *       triggers, so all four were dodged by a keyword
+ *                                                     before 0   after 1
+ *   R3c the same as a CONCISE arrow body (no `return` token at all)
+ *                                                     before 0   after 1
+ *   R3d the same behind a declared function TYPE (`const f: PickerFn =`),
+ *       so the arrow declares no return type of its own
+ *                                                     before 0   after 1
+ *   R3e the same as `export const f = async function (…) {…}`
+ *                                                     before 0   after 1
+ *   R3f the same as an object-literal METHOD           before 0   after 1
+ *   R3g the same as an anonymous `export default async function`
+ *                                                     before 0   after 1
+ *   R3h the 8h repo-wide variant: the admin-grants-alone shape in a
+ *       workspace-scoped ARROW outside `lib/auth`      before 0   after 1
+ *   R4  DELETING `item-access.ts`'s item-grant tid comparison outright.
+ *       Its POST_DELEGATION_PINS reason said "removing that boundary … is
+ *       a red build"; widening was caught, removing was not, because a
+ *       non-single-return `if` block contributes nothing to a path
+ *       condition and both pinned strings stayed byte-identical. That is
+ *       an R7 violation inside the guard. The pin now carries a `region`
+ *                                                     before 0   after 1
+ *   R5  `ambientAccessOptsFor` returns `{ skipTidBoundary: true, … }`,
+ *       switching the boundary off for the whole oid-only population
+ *       (item-crud, pipeline-binding, cosmos-items). Section 6 exempted
+ *       the entire chokepoint FILE, and the report then affirmatively
+ *       printed `skipTidBoundary users: 0` over a live one. The exemption
+ *       is now a RANGE — the type declaration and `effectiveCallerTid`
+ *                                                     before 0   after 1
+ *
+ * AND TWO THIS FILE'S AUTHOR INVENTED AGAINST THE ROUND-4 FIX, because a fix that
+ * has only survived the review's list has survived a list:
+ *
+ *   R6  the arrow declared UNEXPORTED and re-exported one line later by a
+ *       separate `export { … }`, so the `export` keyword 8a keyed on never
+ *       sits next to the declaration. It DEFEATED the round-4 fix as first
+ *       written (guard exit 0 with a live env-oid grant); "exported" is now
+ *       the union of both spellings   round-4-as-first-written 0   now 1
+ *   R7' a post-delegation grant inside a `??` fallback,
+ *       `return isTenantAdmin(s) ? (access ?? ({…})) : access;` — the
+ *       fallback fires exactly when `access` is null, i.e. exactly when the
+ *       delegate refused                              before 1   after 1
+ *
+ * The clean tree is exit 0 before and after, and M1/M3/M9/M11/M12/M14/M15/N1/N10/
+ * N12/N21 keep the exit codes recorded above them.
+ *
+ * STILL NOT COVERED, so it is not read as covered: the opt-out named through a
+ * STRING (`const K = 'skipTidBoundary'; return { [K]: true, … }`) is invisible to
+ * section 6, because string literals are masked before any scan — the same
+ * masking that makes M9/N21 negative controls pass. The specs are the backstop
+ * for that shape, not this file.
+ *
  * Usage: node scripts/ci/check-tid-boundary-chokepoint.mjs
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -305,10 +382,26 @@ const PROLOGUE_PINS = new Map([
 
 /**
  * POST-DELEGATION ALLOWS that are not the delegated verdict, pinned by their
- * exact governing PATH CONDITION and return text, with a reason. An authorizer
- * with a second, independent grant path (an item-level share, say) is legitimate
- * — but it must be enumerated here, and any change to the conditions that lead to
- * it re-opens the review.
+ * exact governing PATH CONDITION, their return text, AND — `region` — the whole
+ * masked span between the delegation call and the ALLOW, with a reason. An
+ * authorizer with a second, independent grant path (an item-level share, say) is
+ * legitimate — but it must be enumerated here, and any change to the conditions
+ * that lead to it, or to the checks that stand in front of it, re-opens the
+ * review.
+ *
+ * `region` IS ROUND 4, and it exists because the pin below asserted a boundary it
+ * did not check. Its reason read "removing that boundary … is a red build", and
+ * WIDENING the conditions was indeed a red build — but REMOVING the tid
+ * comparison outright was not: an `if` block whose consequent is more than a
+ * single return contributes nothing to a path condition, so deleting
+ * `item-access.ts` 175-178 left both `cond` and `ret` byte-identical and the
+ * guard exited 0. A guard whose exemption states as fact something it never
+ * established is the same defect `deploy-integrity.md` R7 names, one level up.
+ *
+ * The cost is the same one PROLOGUE_PINS accepts and states: ANY edit inside a
+ * pinned region fails this guard until it is re-pinned. The guard prints the
+ * observed region verbatim when it does not match, so re-pinning is a paste and
+ * a re-review, never a guess.
  */
 const POST_DELEGATION_PINS = new Map([
   [
@@ -317,12 +410,24 @@ const POST_DELEGATION_PINS = new Map([
       {
         cond: '!(!item) && !(wsAccess) && !(!multiUserAclEnabled()) && !(!grant.matched)',
         ret: "{ item, role: grant.canWrite ? '                ' : '          ', via: '          ', canWrite: grant.canWrite, }",
+        region:
+          "; if (wsAccess) { return { item, role: wsAccess.role, via: wsAccess.via === ' ' ? ' ' : ' ', " +
+          'canWrite: wsAccess.canWrite, }; } if (!multiUserAclEnabled()) return null; ' +
+          'const grant = await resolveItemGrant(itemId, oid, groups); if (!grant.matched) return null; ' +
+          'if (tid) { const wsDoc = await readWorkspaceById(item.workspaceId); ' +
+          'if (wsDoc?.tid && wsDoc.tid !== tid) return null; } ' +
+          "return { item, role: grant.canWrite ? ' ' : ' ', via: ' ', canWrite: grant.canWrite, };",
         reason:
           'the ITEM-LEVEL grant path (the F6 "Grant people access" share). It is reached ' +
           'only when the workspace resolver has already DENIED, so it cannot be the ' +
           'delegated verdict — it is a second grant with its own tenant boundary, the ' +
-          '`wsDoc.tid !== tid` refusal immediately above it. Pinned so that removing that ' +
-          'boundary, or widening the conditions that lead here, is a red build.',
+          '`wsDoc.tid !== tid` refusal immediately above it. WHAT IS ACTUALLY ENFORCED, so ' +
+          'the reason and the check agree: `cond` fails if the conditions that lead here are ' +
+          'widened, `ret` fails if the grant itself changes, and `region` — the span from the ' +
+          'end of the delegation call to the end of this return — fails if the tid ' +
+          'comparison, the kill switch, or the grant lookup between them is edited or ' +
+          'DELETED. Removing that boundary is therefore a red build in fact, not only in ' +
+          'this sentence.',
       },
     ],
   ],
@@ -500,12 +605,12 @@ function indicesOf(masked, re) {
 }
 
 /**
- * The text of a `type X = …;` declaration. Stops at the first semicolon at brace
- * depth ZERO — the members inside the union arms are semicolon-separated too, so
- * a naive indexOf(';') truncates the declaration after its first field and makes
- * the arm assertions below silently vacuous.
+ * `[start, end)` of a `type X = …;` declaration. Stops at the first semicolon at
+ * brace depth ZERO — the members inside the union arms are semicolon-separated
+ * too, so a naive indexOf(';') truncates the declaration after its first field
+ * and makes the arm assertions below silently vacuous.
  */
-function typeDeclaration(masked, name) {
+function typeDeclarationSpan(masked, name) {
   const decl = new RegExp(`type\\s+${name}\\s*=`).exec(masked);
   if (!decl) return null;
   let depth = 0;
@@ -513,9 +618,15 @@ function typeDeclaration(masked, name) {
     const c = masked[i];
     if (c === '{' || c === '(' || c === '[') depth += 1;
     else if (c === '}' || c === ')' || c === ']') depth -= 1;
-    else if (c === ';' && depth === 0) return masked.slice(decl.index, i);
+    else if (c === ';' && depth === 0) return [decl.index, i];
   }
-  return masked.slice(decl.index);
+  return [decl.index, masked.length];
+}
+
+/** The text of a `type X = …;` declaration. */
+function typeDeclaration(masked, name) {
+  const s = typeDeclarationSpan(masked, name);
+  return s ? masked.slice(s[0], s[1]) : null;
 }
 
 /**
@@ -609,6 +720,35 @@ if (!ambientBody) {
 }
 
 // ── 5..6: call sites ────────────────────────────────────────────────────────
+/**
+ * WHERE `skipTidBoundary` MAY BE NAMED INSIDE THE CHOKEPOINT MODULE ITSELF: the
+ * type that DECLARES the opt-out, and the one function that READS it. Nowhere
+ * else in that file — the module also BUILDS options for other callers.
+ *
+ * ROUND 4 — SECTION 6 USED TO EXEMPT THE WHOLE FILE (`file !== ACCESS_FILE`), and
+ * then the report affirmatively said there were none. Measured: making
+ * `ambientAccessOptsFor` return `{ skipTidBoundary: true, … }` produced
+ *
+ *     guarded call sites: 27  (skipTidBoundary users: 0, allowlisted: 0)
+ *     OK — the tenant boundary is required at every call site.        exit 0
+ *
+ * with a live opt-out in the file. That helper is not a private detail: it builds
+ * the options for the WHOLE oid-only population — `app/api/items/_lib/item-crud.ts`,
+ * `lib/azure/pipeline-binding.ts`, `app/api/cosmos-items/[type]/route.ts` — so one
+ * line there switches the cross-tenant boundary off for every one of them, and
+ * the guard printed a zero over it. A count that reads 0 with a live instance is
+ * worse than no count: it is the guard asserting something it never checked (R7).
+ */
+function accessFileExemptRanges(masked) {
+  const ranges = [];
+  const t = typeDeclarationSpan(masked, 'WorkspaceAccessOpts');
+  if (t) ranges.push(t);
+  const f = functionSpan(masked, 'effectiveCallerTid');
+  if (f) ranges.push([f.declAt, f.bodyEnd]);
+  return ranges;
+}
+
+const ACCESS_FILE_POSIX = ACCESS_FILE.replaceAll('\\', '/');
 const files = SCAN_DIRS.flatMap((d) => walk(d));
 let callSites = 0;
 const skipUsers = [];
@@ -651,12 +791,28 @@ for (const file of files) {
     }
   }
 
-  if (/\bskipTidBoundary\b/.test(masked) && file !== ACCESS_FILE.replaceAll('\\', '/')) {
+  // Every MENTION of the opt-out is located, and only the two places in the
+  // chokepoint module that must name it — the type declaration and the reader —
+  // are exempt. The exemption is a RANGE, not a filename.
+  const exempt = file === ACCESS_FILE_POSIX ? accessFileExemptRanges(masked) : [];
+  const skipHits = indicesOf(masked, /\bskipTidBoundary\b/).filter(
+    (i) => !exempt.some(([a, b]) => i >= a && i < b),
+  );
+  if (skipHits.length > 0) {
     skipUsers.push(rel);
     if (SKIP_ALLOWLIST.has(rel)) used.add(rel);
     else {
-      const line = masked.split('\n').findIndex((l) => l.includes('skipTidBoundary')) + 1;
-      fail(`${rel}:${line}: uses skipTidBoundary — the ONLY way to switch the cross-tenant boundary off. Add it to SKIP_ALLOWLIST in this guard WITH the reason, or pass \`callerTid\` instead.`);
+      const line = masked.slice(0, skipHits[0]).split('\n').length;
+      fail(
+        `${rel}:${line}: uses skipTidBoundary — the ONLY way to switch the cross-tenant ` +
+          'boundary off. Add it to SKIP_ALLOWLIST in this guard WITH the reason, or pass ' +
+          '`callerTid` instead.' +
+          (file === ACCESS_FILE_POSIX
+            ? ' Inside the chokepoint module only the `WorkspaceAccessOpts` declaration and ' +
+              '`effectiveCallerTid` may name it; everything else in this file — including the ' +
+              'helpers that BUILD options for other callers — is a call site like any other.'
+            : ''),
+      );
     }
   }
 }
@@ -717,29 +873,297 @@ if (listAllSig === null) {
 //   - the derivation is scoped to `lib/auth/**`. A workspace authorizer written
 //     somewhere else entirely is covered only by 8h's repo-wide shape scan, whose
 //     own limits are recorded on it.
+//   - ROUND 4: the derivation used to see `export function` DECLARATIONS only, so
+//     all four triggers above were dodged by writing the authorizer as
+//     `export const f = async (…) => {…}` — measured at exit 0 with the
+//     byte-identical `export async function` at exit 1. The declaration finder now
+//     covers arrows (block and concise bodies), `= function`, methods, an
+//     anonymous default export, and an arrow whose return type is declared on the
+//     const rather than the arrow. The residual shapes it still does not span are
+//     recorded on 8h, which shares the finder.
 
-/** Every exported `function` declaration in a module, with its return type. */
-function exportedFunctions(masked) {
-  const out = [];
-  const re = /export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*[(<]/g;
+/**
+ * The span of a CALLABLE whose head begins at `headAt` — the `function` keyword,
+ * or the parameter list of an arrow. Handles `async`, generics, the return-type
+ * annotation, a block body and an expression body. `declAt` is where the
+ * DECLARATION starts, so a reported line number points at the export.
+ *
+ * Returns the same shape `functionSpan` does, plus `exprBody`: the text of a
+ * concise arrow body (`=> expr`), which has no `return` token for
+ * `returnStatements` to find. Callers enumerate a callable's returns through
+ * {@link bodyReturns} so that form is not silently empty.
+ */
+function callableSpan(masked, declAt, headAt, allowArrow) {
+  let i = headAt;
+  const skipWs = () => { while (i < masked.length && /\s/.test(masked[i])) i += 1; };
+  const word = (w) => masked.startsWith(w, i) && !/[\w$]/.test(masked[i + w.length] ?? '');
+  skipWs();
+  if (word('async')) { i += 5; skipWs(); }
+  let sawFunctionKeyword = false;
+  if (word('function')) {
+    sawFunctionKeyword = true;
+    i += 8;
+    skipWs();
+    if (masked[i] === '*') { i += 1; skipWs(); }
+    const nm = /^[A-Za-z_$][\w$]*/.exec(masked.slice(i));
+    if (nm) { i += nm[0].length; skipWs(); }
+  }
+  if (masked[i] === '<') {           // generic parameter list
+    let ang = 0;
+    for (; i < masked.length; i += 1) {
+      if (masked[i] === '<') ang += 1;
+      else if (masked[i] === '>') { ang -= 1; if (ang === 0) { i += 1; break; } }
+    }
+    skipWs();
+  }
+  if (masked[i] !== '(') return null;
+  const paren = i;
+  let d = 0;
+  let afterParams = -1;
+  for (let k = paren; k < masked.length; k += 1) {
+    if (masked[k] === '(') d += 1;
+    else if (masked[k] === ')') { d -= 1; if (d === 0) { afterParams = k + 1; break; } }
+  }
+  if (afterParams === -1) return null;
+  const params = masked.slice(paren + 1, afterParams - 1);
+
+  // WHAT FOLLOWS THE PARAMETER LIST DECIDES THE FORM — a `=>` (arrow) or a `{`
+  // (a `function` declaration/expression, or a METHOD, which carries no keyword
+  // at all). Keying on the `function` KEYWORD instead was measured wrong: an
+  // object-literal method has none, so it fell into the arrow branch, found no
+  // `=>`, and returned null.
+  //
+  // `=>` IS ONLY CONSIDERED WHERE AN ARROW IS SYNTACTICALLY POSSIBLE — i.e. after
+  // a `const NAME =` and not after the `function` keyword. Also measured: with
+  // `=>` accepted everywhere, a RETURN TYPE that is itself a function type ate
+  // the parse. `function install(): () => void {` and
+  // `export function createConcurrencyLimiter(max: number): <T>(fn: () => Promise<T>) => Promise<T> {`
+  // both took the arrow branch, so their real bodies were never spanned — 17
+  // declarations the head finder saw would have been dropped, which is exactly
+  // the regression this whole section is meant to remove.
+  //
+  // A `;`, `,` or an unbalanced `)` first means this is NOT a callable
+  // declaration — a TypeScript overload signature, or an ordinary CALL that
+  // merely looks like a method head. That bound is what makes the method pattern
+  // safe to match at all: without it the scan runs on and adopts the next
+  // unrelated block as the "body".
+  const arrowOk = allowArrow && !sawFunctionKeyword;
+  let ang = 0;
+  let pd = 0;
+  let arrowAt = -1;
+  let open = -1;
+  for (let k = afterParams; k < masked.length; k += 1) {
+    const c = masked[k];
+    if (arrowOk && c === '=' && masked[k + 1] === '>' && ang === 0 && pd === 0) { arrowAt = k; break; }
+    if (c === '{' && ang === 0 && pd === 0) { open = k; break; }
+    if (c === '(' || c === '[' || c === '{') pd += 1;
+    else if (c === ')' || c === ']' || c === '}') { if (pd === 0) return null; pd -= 1; }
+    else if (c === '<') ang += 1;
+    else if (c === '>') { if (ang > 0) ang -= 1; }
+    else if ((c === ';' || c === ',') && ang === 0 && pd === 0) return null;
+  }
+
+  if (arrowAt === -1) {
+    if (open === -1) return null;
+    const end = matchingClose(masked, open);
+    if (end === -1) return null;
+    return {
+      declAt,
+      params,
+      returnType: masked.slice(afterParams, open).replace(/^\s*:\s*/, '').trim(),
+      bodyStart: open,
+      bodyEnd: end + 1,
+      body: masked.slice(open, end + 1),
+      exprBody: null,
+    };
+  }
+
+  const returnType = masked.slice(afterParams, arrowAt).replace(/^\s*:\s*/, '').trim();
+  let k = arrowAt + 2;
+  while (k < masked.length && /\s/.test(masked[k])) k += 1;
+  if (masked[k] === '{') {
+    const end = matchingClose(masked, k);
+    if (end === -1) return null;
+    return {
+      declAt, params, returnType,
+      bodyStart: k, bodyEnd: end + 1, body: masked.slice(k, end + 1), exprBody: null,
+    };
+  }
+  // Concise body — everything up to the `;` (or the closing bracket of whatever
+  // encloses the declaration) at depth zero.
+  let d2 = 0;
+  let end = masked.length;
+  for (let x = k; x < masked.length; x += 1) {
+    const c = masked[x];
+    if (c === '(' || c === '[' || c === '{') d2 += 1;
+    else if (c === ')' || c === ']' || c === '}') { if (d2 === 0) { end = x; break; } d2 -= 1; }
+    else if (c === ';' && d2 === 0) { end = x; break; }
+  }
+  return {
+    declAt, params, returnType,
+    bodyStart: k, bodyEnd: end, body: masked.slice(k, end), exprBody: masked.slice(k, end).trim(),
+  };
+}
+
+/**
+ * The return type of an arrow whose annotation lives on the CONST rather than on
+ * the arrow itself — `const f: PickerFn = async (…) => {…}` declares no return
+ * type at the arrow, so reading only the arrow yields `''`, `VERDICT_RETURN`
+ * fails on the empty string, and the candidate is dropped before any of 8a's
+ * triggers run. MEASURED: that exact shape exited 0 with a live env-oid grant in
+ * it. Resolves a bare alias to its declaration and takes the part after the
+ * function type's `=>`; falls back to the whole annotation, which
+ * `VERDICT_RETURN` then reads generously — the direction this guard prefers.
+ */
+function returnTypeFromAnnotation(masked, annotation) {
+  const t = expandReturnType(masked, (annotation || '').trim());
+  const arrow = /=>\s*([\s\S]+)$/.exec(t);
+  return (arrow ? arrow[1] : t).trim();
+}
+
+/**
+ * The LOCAL names a module exports through a separate `export { … }` list, as
+ * opposed to an `export` keyword sitting on the declaration.
+ *
+ * Keying on the adjacent keyword alone was measured to miss
+ * `const f = async (…) => {…}; export { f };` — the declaration and its export
+ * are simply in two places, and section 8a then never derived it as a candidate.
+ * Found by this file's own author against the round-4 fix, because a fix that has
+ * only survived the review's list has survived a list. Both the local name and an
+ * `as` alias are recorded; a name that matches no local declaration (a re-export
+ * `export { x } from './y'`) simply never matches one.
+ */
+function exportedNames(masked) {
+  const names = new Set();
+  const re = /export\s*\{([^}]*)\}/g;
   let m;
   while ((m = re.exec(masked)) !== null) {
-    const span = functionSpan(masked, m[1]);
-    if (span) out.push({ name: m[1], ...span });
+    for (const part of m[1].split(',')) {
+      const t = part.trim();
+      if (!t) continue;
+      const local = /^(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(t);
+      if (local) names.add(local[1]);
+      const alias = /\bas\s+([A-Za-z_$][\w$]*)\s*$/.exec(t);
+      if (alias) names.add(alias[1]);
+    }
   }
+  return names;
+}
+
+/**
+ * Tokens that look like a method head (`name(`) but open a STATEMENT. Without
+ * this the method pattern below would read `if (…) { … }` as a function called
+ * `if`. Every one of these is a keyword that can be followed by `(`.
+ */
+const NOT_A_METHOD_NAME = new Set([
+  'if', 'for', 'while', 'switch', 'catch', 'with', 'return', 'typeof', 'void',
+  'delete', 'await', 'yield', 'new', 'do', 'else', 'case', 'throw', 'in', 'of',
+  'function', 'const', 'let', 'var', 'class', 'interface', 'type', 'enum',
+  'import', 'export', 'default', 'extends', 'implements', 'as', 'is', 'satisfies',
+]);
+
+/**
+ * Every function-valued DECLARATION in a module: `function f`, `const f = () =>`,
+ * `const f = async function`, an object-literal / class METHOD, an anonymous
+ * `export default function`, and the `let` / `var` forms — with its parameter
+ * list, return-type annotation and body span. `exportedOnly` restricts it to the
+ * `export`ed ones (a method reached through an exported object counts, because
+ * the object is the export).
+ *
+ * THE DECLARATION FORM USED TO BE THE FILTER, AND THAT WAS A HOLE — measured, not
+ * anticipated. This read `/export\s+(?:async\s+)?function\s+/`, so an
+ * `export const authorizeWorkspacePicker = async (…) => { …env-oid grant… }`
+ * appended to `workspace-list-access.ts` exited 0 while the BYTE-IDENTICAL body
+ * written as `export async function` exited 1. Because the declaration-form
+ * filter ran FIRST, none of section 8a's four "independent triggers" — module,
+ * admin-flag, signature — ever got the chance to fire: the candidate was dropped
+ * before they were consulted, so all four were dodged by a keyword. SIX more
+ * spellings of the same body were then measured at exit 0 on the same tree: a
+ * concise arrow body, an arrow behind a declared function type,
+ * `= async function (…)`, an object-literal method, an anonymous
+ * `export default function`, and the 8h repo-wide variant of all of them.
+ */
+function callableDeclarations(masked, exportedOnly) {
+  const out = [];
+  const seen = new Set();
+  // "Exported" is the union of BOTH spellings — the keyword on the declaration
+  // and a separate `export { … }` list — so a declaration cannot escape 8a by
+  // moving its export one line down.
+  const listed = exportedOnly ? exportedNames(masked) : null;
+  const isExported = (kw, name) => !exportedOnly || Boolean(kw) || listed.has(name);
+  const push = (name, span, declaredType) => {
+    if (!span || seen.has(span.bodyStart)) return;
+    seen.add(span.bodyStart);
+    if (!span.returnType && declaredType) {
+      span.returnType = returnTypeFromAnnotation(masked, declaredType);
+    }
+    out.push({ name, ...span });
+  };
+  // 1) `function NAME(` / `async function NAME(`, and the anonymous
+  //    `export default (async )?function(`. Never an arrow.
+  const fnRe = /(^|[^\w$.])(export\s+(?:default\s+)?)?(?:async\s+)?function\s*(\*\s*)?([A-Za-z_$][\w$]*)?\s*[(<]/g;
+  let m;
+  while ((m = fnRe.exec(masked)) !== null) {
+    if (!m[4] && !/default/.test(m[2] ?? '')) continue; // an anonymous fn expression; branch 2 owns it
+    const name = m[4] ?? 'default';
+    if (!isExported(m[2], name)) continue;
+    const declAt = m.index + m[1].length;
+    push(name, callableSpan(masked, declAt, declAt + (m[2] ? m[2].length : 0), false), null);
+  }
+  // 2) `const NAME = (…) =>` / `const NAME: T = async function` and the let/var
+  //    forms — the ONE place an arrow is syntactically possible. The optional type
+  //    annotation is captured (not merely skipped) so a declared handler type can
+  //    supply the return type the arrow omits, and the `=>` alternative inside it
+  //    lets an INLINE function type annotation (`const f: (a: X) => Y = …`) reach
+  //    its `=` rather than stopping at the arrow's. The `=` is required not to be
+  //    an arrow's own (`=(?!>)`), and the annotation is length-bounded and
+  //    newline-free so a pathological line cannot make this backtrack.
+  const cRe =
+    /(^|[^\w$.])(export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::((?:[^=;\n]|=>){0,200}))?=(?!>)\s*/g;
+  while ((m = cRe.exec(masked)) !== null) {
+    if (!isExported(m[2], m[3])) continue;
+    const declAt = m.index + m[1].length;
+    push(m[3], callableSpan(masked, declAt, m.index + m[0].length, true), m[4] ?? null);
+  }
+  // 3) Object-literal and class METHODS — `async authorize(…): T { … }`. Only
+  //    heads that open a line or follow `{` / `,` / `;` / `}` are considered, the
+  //    JS statement keywords are excluded by name, and `callableSpan` refuses
+  //    anything whose parameter list is not followed by a body brace before the
+  //    next `;` / `)` / `,` — which is what keeps an ordinary CALL out. Never an
+  //    arrow. `exportedOnly` is not applied: a method's reachability is its
+  //    object's, and treating an un-exported-looking method as a candidate is the
+  //    strict direction.
+  const mRe =
+    /(^|[\n{,;}])(\s*)((?:(?:public|private|protected|static|readonly|get|set)\s+)*)(?:async\s+)?([A-Za-z_$][\w$]*)\s*(?=[(<])/g;
+  while ((m = mRe.exec(masked)) !== null) {
+    if (NOT_A_METHOD_NAME.has(m[4])) continue;
+    const declAt = m.index + m[1].length;
+    push(m[4], callableSpan(masked, declAt, m.index + m[0].length, false), null);
+  }
+  out.sort((a, b) => a.declAt - b.declAt);
   return out;
 }
 
-/** Every `function` declaration (exported or not), for the module-wide scans. */
+/** Every exported function-valued declaration in a module, with its return type. */
+function exportedFunctions(masked) {
+  return callableDeclarations(masked, true);
+}
+
+/** Every function-valued declaration (exported or not), for the module-wide scans. */
 function declaredFunctions(masked) {
-  const out = [];
-  const re = /\bfunction\s+([A-Za-z_$][\w$]*)\s*[(<]/g;
-  let m;
-  while ((m = re.exec(masked)) !== null) {
-    const span = functionSpan(masked, m[1]);
-    if (span) out.push({ name: m[1], ...span });
-  }
-  return out;
+  return callableDeclarations(masked, false);
+}
+
+/**
+ * The `return` statements of a CALLABLE. A concise arrow body (`=> expr`) has no
+ * `return` token, so `returnStatements` over it finds nothing and every ALLOW in
+ * it would read as absent; it is presented here as the single implicit return it
+ * is. Use this wherever a FUNCTION's returns are enumerated; `returnStatements`
+ * stays the primitive for a raw block of statements.
+ */
+function bodyReturns(fn) {
+  if (fn.exprBody) return [{ index: 0, end: fn.exprBody.length, expr: fn.exprBody }];
+  return returnStatements(fn.body);
 }
 
 /** `Promise<X>` -> `X`; a bare local type alias -> its declaration text. */
@@ -1006,12 +1430,37 @@ function valueBranches(expr) {
   return [{ value: t.replace(/\s+as\s+[\w$<>\[\]|&. ]+$/, '').trim(), cond: null }];
 }
 
-/** ALLOW / DENY / VERDICT for one returned value. */
+/**
+ * ALLOW / DENY / VERDICT for one returned value.
+ *
+ * THE VERDICT TEST IS IDENTITY, NOT MENTION, and that is the round-4 fix. This
+ * used to read `new RegExp(`\\b${binding}\\b`).test(t)` — "the returned
+ * expression NAMES the verdict, so it IS the verdict" — which is the same
+ * vacuous-satisfaction defect round 3 removed from the ALLOW CONDITIONS (N1: a
+ * disjunction mentions the verdict and discards it) left behind in the ALLOW
+ * VALUES. An independent review measured the A/B pair, identical but for the
+ * returned expression, inserted after the delegation in `authorizeWorkspace`:
+ *
+ *     if (opts.allowReadRoles === undefined) return null;            exit 1
+ *     if (opts.allowReadRoles === undefined) return access && null;  exit 0
+ *
+ * `access && null` is `null` when the delegate GRANTED and `access` — i.e.
+ * `null`/`undefined` — when it REFUSED. It is therefore always falsy, always an
+ * ALLOW, and since `allowReadRoles === undefined` is the DEFAULT it is a total
+ * cross-tenant bypass of every write-scoped call site. Classifying it 'verdict'
+ * made the loop `continue`, so 8d's implication test never ran on it at all.
+ *
+ * Only the bare binding — `return access;` — is the verdict. Anything BUILT from
+ * it is a value this guard has to reason about, not a value it may assume.
+ * `x.member` (`return access.workspace`) is deliberately NOT the verdict either:
+ * it is an ALLOW whose reachability 8d then proves against the path condition,
+ * which is where that proof belongs.
+ */
 function classifyValue(value, binding, delegate, allowIsNull) {
   const t = value.trim();
   if (!t) return 'deny';
-  if (binding && new RegExp(`\\b${binding}\\b`).test(t)) return 'verdict';
-  if (delegate && new RegExp(`\\b${delegate}\\s*\\(`).test(t)) return 'verdict';
+  if (binding && t === binding) return 'verdict';
+  if (delegate && new RegExp(`^(?:await\\s+)?${delegate}\\s*\\(`).test(t)) return 'verdict';
   if (/\b(?:NextResponse|workspaceDenialResponse)\b/.test(t)) return 'deny';
   if (/^\{/.test(t) && /(?:^\{|[,{])\s*resp\s*[:,}]/.test(t)) return 'deny';
   if (/^(?:null|undefined)$/.test(t)) return allowIsNull ? 'allow' : 'deny';
@@ -1147,7 +1596,7 @@ for (const c of candidates) {
 
   const ifs = ifRegions(body);
   const regions = braceRegions(body);
-  const returns = returnStatements(body);
+  const returns = bodyReturns(c.fn);
 
   const prologueAllows = [];
   const postAllows = [];
@@ -1158,7 +1607,10 @@ for (const c of candidates) {
       const pc = pathCondition(body, ifs, regions, r.index);
       const condText = br.cond ? (pc.text ? `${pc.text} && (${norm(br.cond)})` : norm(br.cond)) : pc.text;
       const rec = { r, br, condText, tree: condText ? boolTree(condText) : { opaque: '' } };
-      if (r.index < span[2]) prologueAllows.push(rec);
+      // A concise arrow body is ONE expression that necessarily contains the
+      // delegation, so its implicit return is post-delegation however the
+      // indices fall — calling it a prologue ALLOW would be an untrue message.
+      if (!c.fn.exprBody && r.index < span[2]) prologueAllows.push(rec);
       else postAllows.push(rec);
     }
   }
@@ -1254,7 +1706,44 @@ for (const c of candidates) {
     const reach = canBe(a.tree, binding, denyPin);
     if (reach.t === false) continue; // provably impossible while the delegate denied
     const hit = pins.find((p) => norm(p.cond) === a.condText && norm(p.ret) === norm(a.br.value));
-    if (hit) { usedPostPins.add(`${key}|${norm(hit.cond)}`); continue; }
+    if (hit) {
+      usedPostPins.add(`${key}|${norm(hit.cond)}`);
+      // 8d-R4 — THE PIN MUST COVER THE BOUNDARY ITS REASON CLAIMS TO PIN. A
+      // `cond` + `ret` pair is a pin on what the grant SAYS, not on the checks
+      // that stand between the delegation and it. Measured: deleting the
+      // item-grant path's whole tid comparison
+      //
+      //     if (tid) { const wsDoc = await readWorkspaceById(item.workspaceId);
+      //                if (wsDoc?.tid && wsDoc.tid !== tid) return null; }
+      //
+      // left both pinned strings BYTE-IDENTICAL and the guard exited 0 — because
+      // a non-single-return `if` block contributes nothing to a path condition.
+      // The pin's own reason said "removing that boundary … is a red build",
+      // which the guard did not establish: an R7 violation inside the guard.
+      // `region` closes it the way PROLOGUE_PINS does, by POSITION: the whole
+      // masked span from the end of the delegation call through the end of this
+      // ALLOW. Same trade, stated plainly — ANY edit in that span fails this
+      // guard until it is re-pinned, which is the point.
+      const observedRegion = norm(body.slice(span[1], a.r.end + 1));
+      if (!hit.region) {
+        fail(
+          `POST_DELEGATION_PINS entry \`${key}\` (cond \`${norm(hit.cond)}\`) carries no ` +
+            '`region`, so it pins only what the grant RETURNS and nothing about the checks ' +
+            'between the delegation and it. Add the region below verbatim:' +
+            `\n        region: ${observedRegion}`,
+        );
+      } else if (norm(hit.region) !== observedRegion) {
+        fail(
+          `${c.rel}: ${c.fn.name}'s pinned POST-DELEGATION region CHANGED. The pin covers ` +
+            'everything from the end of the delegation call through the end of the pinned ' +
+            'ALLOW, because pinning only the condition and the returned value let the tenant ' +
+            'boundary BETWEEN them be deleted outright with both strings byte-identical.' +
+            `\n        pinned:   ${norm(hit.region)}` +
+            `\n        observed: ${observedRegion}`,
+        );
+      }
+      continue;
+    }
     const line = body.slice(0, a.r.index).split('\n').length;
     fail(
       `${c.rel}: ${c.fn.name} (body line ${line}) can ALLOW while ${delegate}() DENIED.` +
@@ -1295,10 +1784,31 @@ for (const file of authzFiles) {
       .sort((a, b) => b.bodyStart - a.bodyStart)[0];
     const line = masked.slice(0, at).split('\n').length;
 
-    // A pure GATE is allowed: the mention sits in an `if` condition whose whole
-    // governed region contains no ALLOW of its own. That is
+    // A NARROWING GATE is allowed: the mention sits in an `if` condition, and
+    // every ALLOW inside the region that `if` governs is IMPLIED BY THE DELEGATED
+    // VERDICT — i.e. provably impossible while the delegate refused. That is
     // `resolveAdminWorkspace`'s "who may reach the admin plane" test, which must
     // stay (without it a shared-ACL member reaches /git, /cmk, /identity, …).
+    //
+    // ROUND 4 — THIS EXEMPTION USED TO BE ACCIDENTAL RATHER THAN REASONED, and
+    // that is recorded rather than quietly fixed. It asked only whether the
+    // governed region contained an ALLOW at all, using the same `classifyValue`
+    // that treated any value MENTIONING the verdict as BEING the verdict. So
+    // `resolveAdminWorkspace`'s gate passed not because its grant follows from
+    // the delegation but because the guard could not SEE the grant: the region's
+    // one ALLOW returns `{ session, ws: access.workspace, … }`, which names
+    // `access` and was classified 'verdict'. With that classifier repaired the
+    // presence test alone turns the clean tree RED at the real, sound gate —
+    // measured, `workspace-guard.ts:465` — while still admitting any grant whose
+    // VALUE mentions the binding and discards it, e.g. an in-gate
+    // `return access !== undefined;`, which is TRUE exactly when the resolver
+    // said no. The presence test therefore had both error directions at once.
+    //
+    // The reachability test is 8d's, applied to the governed region: same
+    // `pathCondition` + `canBe`, same deny-pinning derived from the delegate's own
+    // return type. An ALLOW the guard cannot tie to the verdict — no binding, no
+    // modelled deny-truthiness, or a condition it cannot model — counts as a
+    // grant, which is the strict direction.
     const gate = ifs.find((r) => {
       const open = masked.indexOf('(', r.condAt);
       return at > open && at < open + r.cond.length + 1;
@@ -1317,21 +1827,34 @@ for (const file of authzFiles) {
         ).exec(owner.body);
         bind = bm ? bm[1] : null;
       }
+      const gDenyPin = delegate ? denyPinFor(delegate).pin : null;
       const governed = masked.slice(gate.start, gate.end);
-      const anyAllow = returnStatements(governed).some((r) =>
-        valueBranches(r.expr).some((br) => classifyValue(br.value, bind, delegate, allowIsNull) === 'allow'),
+      const gIfs = ifRegions(governed);
+      const gRegions = braceRegions(governed);
+      const grants = returnStatements(governed).some((r) =>
+        valueBranches(r.expr).some((br) => {
+          if (classifyValue(br.value, bind, delegate, allowIsNull) !== 'allow') return false;
+          if (bind === null || gDenyPin === null) return true; // nothing to imply it FROM
+          const pc = pathCondition(governed, gIfs, gRegions, r.index);
+          const cond = br.cond
+            ? (pc.text ? `${pc.text} && (${norm(br.cond)})` : norm(br.cond))
+            : pc.text;
+          return canBe(cond ? boolTree(cond) : { opaque: '' }, bind, gDenyPin).t;
+        }),
       );
-      if (!anyAllow) continue; // a narrowing gate, never a grant
+      if (!grants) continue; // a narrowing gate, never a grant of its own
     }
 
     fail(
       `${rel}:${line}: isTenantAdmin is consulted OUTSIDE every delegation argument, in ` +
         `${owner ? `${owner.name}()` : 'module scope'}. The flag may be COMPUTED and PASSED ` +
-        'DOWN (`tenantAdmin: isTenantAdmin(session)`) or used as a pure narrowing GATE ' +
-        'whose branch grants nothing of its own — anything else turns the admin flag back ' +
-        'into an access decision taken above the tenant boundary, which is #3825. A helper ' +
-        'that returns it as a boolean counts (N4b): inline the call into the delegation ' +
-        'argument instead.',
+        'DOWN (`tenantAdmin: isTenantAdmin(session)`) or used as a NARROWING GATE — an `if` ' +
+        'every ALLOW inside which is IMPLIED by the delegated verdict, i.e. impossible while ' +
+        'the delegate refused. Anything else turns the admin flag back into an access ' +
+        'decision taken above the tenant boundary, which is #3825. A helper that returns it ' +
+        'as a boolean counts (N4b): inline the call into the delegation argument instead. ' +
+        'Mentioning the verdict in the granted VALUE does not make the grant follow from it ' +
+        '(`return access !== undefined` is true exactly when the delegate said no).',
     );
   }
 }
@@ -1396,8 +1919,23 @@ if (!rawBody) {
 //     smuggled into a tenant-boundary guard behind an excuse.
 //
 //     KNOWN LIMITS, stated rather than implied:
-//       - this walks `function NAME(…)` declarations only; the same shape inside
-//         an arrow-function const is not seen;
+//       - ROUND 4 CORRECTED A DISCLOSURE THAT NO LONGER DESCRIBES A LIMIT. This
+//         used to read "this walks `function NAME(…)` declarations only; the same
+//         shape inside an arrow-function const is not seen" — true when written,
+//         and the measured cost of it was that `export const f = async (…) => {…}`
+//         exited 0 with the byte-identical `export async function` at exit 1. The
+//         finder now covers `function` declarations, `const`/`let`/`var` arrows
+//         (block AND concise bodies), `= async function`, object-literal and class
+//         METHODS, and an anonymous `export default function`. Measured over this
+//         tree: 17835 declarations before, 21050 after, with ZERO true drops (the
+//         two apparent ones are a head-finder mis-span it now gets right and a
+//         `function wrapping <code>` in JSX PROSE it now correctly refuses).
+//         What is STILL outside it: a callable reached only through a computed
+//         property (`obj['authorize'] = …`), a type annotation that spans a
+//         newline, and a `{ a: string }` object RETURN TYPE, whose brace is taken
+//         for the body brace — the last of these makes the "body" a type literal
+//         and the assertions over it vacuous, so it is a blind spot, not a false
+//         accusation.
 //       - it keys on the `isTenantAdmin(` TOKEN, so a bypass that re-derives the
 //         admin verdict without naming it — measured example
 //         `if (session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID) return null;`
@@ -1424,7 +1962,7 @@ for (const file of files) {
   const masked = mask(src);
   for (const fn of declaredFunctions(masked)) {
     // Does THIS function grant on the admin flag? (Not "does this file".)
-    const grants = returnStatements(fn.body).some((r) => {
+    const grants = bodyReturns(fn).some((r) => {
       const ifs = ifRegions(fn.body);
       const regions = braceRegions(fn.body);
       const pc = pathCondition(fn.body, ifs, regions, r.index);
