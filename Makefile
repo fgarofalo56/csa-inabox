@@ -103,7 +103,14 @@ test-dbt: ## Compile and test dbt models
 
 # --- Validation ---
 
-validate: ## Run all validation gates
+# Exit codes from validate-all.ps1:
+#   0 = at least one gate measured something and nothing failed
+#   1 = a gate ran and found a problem
+#   3 = NOT VERIFIED: nothing was measured (no gate covers this diff, or every
+#       selected gate could not run). Non-zero on purpose - a run that
+#       established nothing must not hand `make` a success. See #3811.
+#   4 = validate-all's own verdict control failed; its answer means nothing
+validate: ## Run all validation gates (exit 3 = nothing measured, which is NOT a pass)
 	pwsh -File dev-loop/gates/validate-all.ps1
 
 validate-bicep: ## Validate Bicep templates only
@@ -117,6 +124,12 @@ validate-dbt: ## Validate dbt models only
 
 validate-deployment: ## Validate deployment templates only (az what-if)
 	pwsh -File dev-loop/gates/validate-deployment.ps1
+
+validate-typescript: ## Typecheck apps/fiab-console only (tsc --noEmit; NOT next build/eslint/vitest)
+	pwsh -File dev-loop/gates/validate-typescript.ps1
+
+validate-gates: ## Self-test the gate machinery: prove the verdicts move with their inputs
+	pwsh -File dev-loop/gates/gate-selftest.ps1
 
 # --- Deployment ---
 

@@ -61,7 +61,51 @@ Located in `dev-loop/gates/`:
 | Python Lint | `validate-python.ps1` | Any `.py` file changed |
 | dbt Compile | `validate-dbt.ps1` | Any dbt model changed |
 | Deployment | `validate-deployment.ps1` | Infrastructure changes |
+| TypeScript | `validate-typescript.ps1` | Console `.ts`/`.tsx` that `tsconfig.build.json` compiles |
 | All Gates | `validate-all.ps1` | Always (orchestrator) |
+| Self-test | `gate-selftest.ps1` | On demand (`make validate-gates`) |
+
+### What the TypeScript gate does NOT cover
+
+`validate-typescript.ps1` is a **typecheck only** (`tsc --noEmit` against
+`tsconfig.build.json`). Two gaps, stated rather than implied:
+
+- **Console tests are not covered by `make validate`.** `tsconfig.build.json`
+  excludes `**/*.test.ts(x)`, `**/*.spec.ts(x)`, `**/__tests__/**`, `e2e/**`,
+  `**/*.uat.ts(x)` and the vitest/playwright configs. Measured: that project
+  resolves 4107 files, **zero** of them tests, against 1559 `*.test.ts*` files in
+  the tree. The gate's trigger mirrors those excludes, so a test-only change
+  selects no gate and `make validate` reports **NOT VERIFIED (exit 3)** rather
+  than a green it did not earn. Pointing the gate at `tsconfig.json` was measured
+  and deferred: 901 pre-existing type errors, **all 901 in test files**.
+- `next build`, eslint and vitest stay with the `fiab-console-ci` workflow, which
+  remains the full console gate.
+
+### Required vs optional
+
+`validate-all.ps1` reads the `required:` field each gate already declares in
+`config.yaml`. A gate that could not run fails the suite **only if it is
+`required: true`** — so a machine without dbt or an Azure session stays green,
+while a missing required leg is reported non-zero.
+
+| Gate | `required` |
+|------|-----------|
+| bicep · python · typescript | `true` |
+| dbt · deployment | `false` |
+
+### Exit codes (a contract — callers read it)
+
+| Code | Meaning |
+|------|---------|
+| 0 | Everything required that was selected got measured; nothing failed |
+| 1 | A gate ran and found a problem |
+| 2 | `-WhatIf`: nothing invoked, nothing measured |
+| 3 | **NOT VERIFIED** — nothing was measured, **or** a `required: true` gate could not run, **or** the registry and the orchestrator disagree. Non-zero on purpose |
+| 4 | The orchestrator's own in-process control failed; its answer is meaningless |
+
+Exit 3 exists because `make validate` used to print `All gates passed!` and
+return 0 on a change where zero gates ran (#3811). `make validate-gates` runs
+the self-test that proves the verdicts still move with their inputs.
 
 ---
 
