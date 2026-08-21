@@ -2796,10 +2796,15 @@ for (const file of files) {
 //   - A comparison performed in a Cosmos WHERE clause inside a TEMPLATE LITERAL
 //     is invisible: string literals are MASKED before any scan, which is what
 //     makes the M9/N21 negative controls pass.
-//   - The operand span stops at the first depth-zero whitespace, so a comparison
-//     written with spaces at depth zero (`x as string !== y`) is truncated. That
-//     direction only ever SHORTENS an operand, so it can hide a name — measured
-//     as not occurring in this tree, but it is a limit, not zero.
+//   - The operand span stops at the first depth-zero OPERAND_STOP character —
+//     whitespace, an arithmetic or bitwise operator, `:`, `?`, `!`. That set is
+//     wider than "whitespace", which is what this clause used to say, and the
+//     difference was measurable: `doc.tid! !== expected` (an ordinary TypeScript
+//     non-null assertion on an optional field) ended the span at the `!` and
+//     erased the only strong operand — RC=0 one character away from RC=1. A
+//     postfix `!` is now CONSUMED (see `leftOperandSpan`), and so is a prefix one
+//     on the right. Anything else in that set still truncates, which only ever
+//     SHORTENS an operand — it can hide a name, so it is a limit, not zero.
 //   - Operand token extraction reads the RAW source of the span (masked source
 //     blanks a string literal's interior, which would hide `['tid']`). A tid-ish
 //     name inside a string literal in an operand therefore counts. That is the
@@ -2816,6 +2821,20 @@ const QUOTES = new Set(["'", '"', '`']);
 function leftOperandSpan(masked, at) {
   let i = at - 1;
   while (i >= 0 && /\s/.test(masked[i])) i -= 1;
+  // POSTFIX NON-NULL ASSERTION — `doc.tid! !== callerTid`. `!` is an
+  // OPERAND_STOP character, so without this the span ended at the `!` and the
+  // operand was EMPTY, erasing the only strong operand on that side. Measured,
+  // the same file one character apart:
+  //     doc.tid  !== expected    RC=1
+  //     doc.tid! !== expected    RC=0
+  // `doc.tid!` on an optional field is ordinary TypeScript, and unlike the
+  // two-anonymous-locals limit it needs only ONE side changed. The `!` is
+  // excluded from the span text, so `x.tid! !== y` and `x.tid !== y` normalise
+  // to the SAME pin key — they are the same comparison (the assertion is erased
+  // at compile time), so a pin should not churn on it.
+  // Only the FIRST significant character is consumed this way: a `!` met later
+  // in the walk is a PREFIX operator and still terminates the operand.
+  if (i >= 0 && masked[i] === '!') i -= 1;
   const end = i + 1;
   let depth = 0;
   for (; i >= 0; i -= 1) {
@@ -2845,6 +2864,11 @@ function leftOperandSpan(masked, at) {
 /** `[start, end)` of the operand STARTING at `from`, bracket-balanced. */
 function rightOperandSpan(masked, from) {
   let i = from;
+  while (i < masked.length && /\s/.test(masked[i])) i += 1;
+  // A leading PREFIX `!` (`x !== !doc.tid`) is not part of the operand's value
+  // but must not terminate it at length zero, which is what an OPERAND_STOP hit
+  // on the very first character would do.
+  while (i < masked.length && masked[i] === '!') i += 1;
   while (i < masked.length && /\s/.test(masked[i])) i += 1;
   const start = i;
   let depth = 0;
@@ -2917,7 +2941,15 @@ const TID_COMPARISON_PINS = new Map([
         '`sameTenantConfirmed(a, b)` carries no operator and so is invisible to this section — ' +
         'that is the blessed form. Any COMPARISON, including one against ' +
         '`classifyTenantMatch(...)`, needs an entry, which is what keeps the lenient reading ' +
-        "(`… !== 'different-tenant'`) from being written anywhere without a review.",
+        "(`… !== 'different-tenant'`) from being written anywhere without a review. " +
+        'WHAT THIS PIN HOLDS IS THE SHAPE OF THE BOUNDARY, NOT ITS SEMANTICS, and the ' +
+        'difference is measured rather than assumed: making `normalizeTid` return the string ' +
+        "`'unknown'` instead of `null` for an absent tid — a fail-open that makes both-absent " +
+        "read as `'same-tenant'` — leaves EVERY pinned expression here byte-identical and " +
+        'exits 0. `__tests__/tenant-boundary.test.ts` is what caught it (8 failed / 8 passed). ' +
+        'That is the same "the specs are the backstop" division this file states elsewhere; ' +
+        'read a green section 10 as "no unreviewed COPY of the comparison", never as "the ' +
+        'comparison is correct".',
       exprs: [
         'callerNormTid === null',
         'resourceNormTid === null',
@@ -3035,10 +3067,33 @@ for (const file of files) {
  * `sameTenantConfirmed` anywhere would let a boundary be deleted next to an
  * unrelated call. `tenant-boundary.ts` does not import itself, so gutting the
  * canonical comparison stays a hard failure (measured — see the mutation list).
+ *
+ * IT READS THE RAW SOURCE, RESTRICTED TO `importRanges(masked)`, AND THAT IS THE
+ * WHOLE POINT OF THE FUNCTION. The first version took only the MASKED source and
+ * tested the specifier against it — but `mask` blanks string-literal INTERIORS,
+ * so by the time the regex ran, `'./tenant-boundary'` was spaces and THE ARM
+ * COULD NEVER FIRE. Measured: applying exactly the consolidation this rule exists
+ * to bless (`item-access.ts` imports `sameTenantConfirmed` on line 39 and drops
+ * its comparison) produced RC=1 with "…and that file does NOT import
+ * `lib/auth/tenant-boundary`" — the guard asserting as fact something it never
+ * established, which is the R7 defect this file's own round-4 section condemns,
+ * and it left "the guard blocks the end state it asks for" fully in place. The
+ * companion claim "it keys on the IMPORT, not the name, so `tenant-boundary.ts`
+ * cannot clear itself" was true but VACUOUS: nothing could clear anything.
+ *
+ * Restricting to `importRanges` is what keeps the raw read honest — a
+ * commented-out or string-mentioned specifier is outside every import range, so
+ * it still cannot satisfy this. THE NEGATIVE CONTROL THAT PROVES THIS ARM FIRES
+ * IS `scripts/ci/check-tid-boundary-chokepoint.selftest.mjs`, and its absence is
+ * precisely what let the dead version ship: it consolidates a pinned site for
+ * real and asserts the NOTE, then reintroduces the dead arm and asserts the
+ * control NOTICES. Run it whenever this function changes.
  */
-function importsTenantBoundary(masked) {
-  return /from\s+['"](?:@\/lib\/auth\/tenant-boundary|\.{1,2}(?:\/[\w.-]+)*\/?tenant-boundary)['"]/.test(
-    masked,
+function importsTenantBoundary(masked, raw) {
+  return importRanges(masked).some(([a, b]) =>
+    /['"](?:@\/lib\/auth\/tenant-boundary|\.{1,2}(?:\/[\w.-]+)*\/?tenant-boundary)['"]/.test(
+      raw.slice(a, b),
+    ),
   );
 }
 
@@ -3048,7 +3103,8 @@ for (const [rel, pin] of TID_COMPARISON_PINS) {
     const file = `${CONSOLE_ROOT}/${rel}`;
     let consolidated = false;
     try {
-      consolidated = importsTenantBoundary(mask(readFileSync(file, 'utf8')));
+      const rawSrc = readFileSync(file, 'utf8');
+      consolidated = importsTenantBoundary(mask(rawSrc), rawSrc);
     } catch {
       consolidated = false; // the file is gone — that is not a consolidation
     }
