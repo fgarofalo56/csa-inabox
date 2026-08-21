@@ -41,7 +41,22 @@ permissions:
 
 jobs:
   check:
-    name: changelog parser can read every commit message
+    # The two shapes of this run are NOT interchangeable and must not share a check name.
+    # A workflow_dispatch has no pull_request payload, so it skips the range scan and goes
+    # green having judged no commits at all. Under one shared name that green is
+    # indistinguishable from a real PR verdict — and if this context were ever registered as
+    # required, a dispatch-produced green would satisfy it. Naming the dispatch shape
+    # differently makes that structurally impossible: the required context can only ever be
+    # produced by the pull_request path, which is the only path that scans anything.
+    #
+    # The fold points below sit BETWEEN tokens, never inside a quoted literal. The
+    # pull_request arm of this expression is the exact string that would be registered as a
+    # required context, so a reflow that moved a fold into the middle of it would silently
+    # rename the check and quietly un-require it.
+    name: >-
+      ${{ github.event_name == 'pull_request'
+      && 'changelog parser can read every commit message'
+      || 'guard health only — no PR range scanned (dispatch)' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -123,15 +138,59 @@ jobs:
           echo "self-test RC=$RC"
           exit "$RC"
 
+      # The guard's own unit suite, and a DIFFERENT question from --self-test above. That step
+      # asks "does the parser still behave the way the controls were measured against?" This
+      # one asks "does the guard's own plumbing still work?" — the record splitter, the
+      # degenerate-range refusal, the control-population floors, the CLI's error contract, and
+      # two mutation proofs that neuter a guard rail and assert the verdict MOVES.
+      #
+      # The mutation proofs are the load-bearing ones. A guard whose rails can be quietly
+      # removed while it keeps reporting green is precisely the defect class this whole file
+      # exists to close, so this guard's own rails are themselves under test.
+      #
+      # Measured, not assumed: the suite also runs in loom-guardrails.yml, whose runner globs
+      # `node --test scripts/ci/__tests__/*.test.mjs`, and the parser is NOT installed in that
+      # lane. Verified by hiding node_modules/@conventional-commits and re-running: 12 tests,
+      # 9 pass, 3 skip with an audible reason, exit 0. Both mutation proofs and the
+      # degenerate-range refusal are among the nine, so the suite is non-vacuous there too.
+      - name: Unit-test the guard itself
+        run: |
+          set +e
+          node --test scripts/ci/__tests__/commit-message-parses.test.mjs
+          RC=$?
+          set -e
+          echo "guard unit tests RC=$RC"
+          exit "$RC"
+
       # base.sha is the base branch tip when the event fired, so base..head is exactly the
       # PR's own commits: anything already on main is reachable from base.sha and excluded.
       # Both SHAs resolve because refs/pull/N/merge has them as ancestors and fetch-depth
       # is 0.
       #
       # Skipped on workflow_dispatch, which carries no pull_request payload and so has no
-      # range to scan. A dispatch therefore runs the install + version + control steps and
-      # stops — an on-demand "is this guard still healthy" check. It is never the path a
-      # PR takes, so no PR can reach a green verdict without this step running.
+      # range to scan. A dispatch therefore runs the install + version + control + unit-test
+      # steps and stops — an on-demand "is this guard still healthy" check, which is why the
+      # job name above renames itself on that path.
+      #
+      # WHAT THIS STEP DOES NOT YET GUARANTEE, stated rather than implied. An earlier
+      # revision of this comment claimed "no PR can reach a green verdict without this step
+      # running". That is false, and measurably so: on 2026-08-21 main carried 14 required
+      # status contexts and `commit-message-parses` was not among them (`guardrails` was,
+      # which is the control proving the query returns a real, non-empty list). So a PR can
+      # merge with this workflow queued, failed, or never triggered at all.
+      #
+      #   gh api repos/:owner/:repo/branches/main/protection \
+      #     --jq '.required_status_checks.contexts[]' | grep -i commit-message
+      #
+      # Note the contexts live in CLASSIC branch protection, not in the ruleset — querying the
+      # ruleset returns zero required checks and reads as "nothing missing".
+      #
+      # The asymmetry is worth stating precisely, because half of this file IS enforced: the
+      # unit-test step above also runs inside `guardrails`, which is required, because that
+      # workflow globs `scripts/ci/__tests__/*.test.mjs`. So the guard's own rails are
+      # protected on every PR; the SCAN below — the part that judges this PR's commit
+      # messages — is not. Registering this context is a branch-protection change and belongs
+      # to the operator, not to this file. Until then, this step is advisory.
       - name: Check every changelog-bound commit message on this branch parses
         if: github.event_name == 'pull_request'
         env:

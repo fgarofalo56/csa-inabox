@@ -65,24 +65,61 @@
  * mode it was written to prevent.
  */
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
-/** The real parser release-please uses. A missing dependency is a hard failure, never a
- * skip: a guard that quietly no-ops when its dependency is absent is worse than none. */
-let parser;
-try {
-  ({ parser } = await import('@conventional-commits/parser'));
-} catch (err) {
-  console.error(
-    '::error::check-commit-message-parses: @conventional-commits/parser is not installed, ' +
-      'so this guard cannot judge anything. It is reporting NOTHING about this PR rather ' +
-      'than a clean scan it did not perform. Install it before running: ' +
-      `npm install --no-save @conventional-commits/parser@0.4.1  (${err?.message ?? err})`,
-  );
-  process.exit(1);
+/**
+ * The real parser release-please uses. A missing dependency is a hard failure, never a
+ * skip: a guard that quietly no-ops when its dependency is absent is worse than none.
+ *
+ * Loaded LAZILY and SYNCHRONOUSLY rather than with a module-level `await import`. That is
+ * not a style preference — it is what makes this file testable without breaking a required
+ * CI context. `loom-guardrails.yml` runs `node --test scripts/ci/__tests__/*.test.mjs` over
+ * a GLOB, so any sibling test file is automatically picked up by that lane, and
+ * `guardrails` IS a required context. The parser is installed only by
+ * commit-message-parses.yml — there is no root package.json, so it is absent everywhere
+ * else. With a module-level failure, merely importing this file would kill the importing
+ * test file and turn a required context permanently red for every PR in the repo.
+ *
+ * Measured, not assumed: `node --test` on a file importing this module with the parser
+ * unresolvable reported `pass 0 / fail 1`.
+ *
+ * The fail-closed behaviour is UNCHANGED — the same annotation, the same exit 1. It just
+ * happens at first parse instead of at import. The package is CJS (`main: index.js`, no
+ * `exports` map, no `type: module`), so createRequire resolves it synchronously and
+ * nothing downstream has to become async.
+ */
+let parserFn = null;
+function getParser() {
+  if (parserFn) return parserFn;
+  try {
+    parserFn = createRequire(import.meta.url)('@conventional-commits/parser').parser;
+  } catch (err) {
+    console.error(
+      '::error::check-commit-message-parses: @conventional-commits/parser is not installed, ' +
+        'so this guard cannot judge anything. It is reporting NOTHING about this PR rather ' +
+        'than a clean scan it did not perform. Install it before running: ' +
+        `npm install --no-save @conventional-commits/parser@0.4.1  (${err?.message ?? err})`,
+    );
+    process.exit(1);
+  }
+  return parserFn;
+}
+
+/** Is the parser resolvable at all? Lets a caller distinguish "absent" from "rejects this
+ * text" without triggering the hard failure above. Used by the test suite so it can assert
+ * the fail-closed path deliberately rather than tripping over it. */
+export function parserIsAvailable() {
+  try {
+    createRequire(import.meta.url)('@conventional-commits/parser');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Does the parser accept this text? The single primitive both questions are asked with. */
 function parses(text) {
+  const parser = getParser();
   try {
     parser(text);
     return true;
@@ -93,6 +130,7 @@ function parses(text) {
 
 /** Where did it throw? Returns null when the text parses. */
 function locate(text) {
+  const parser = getParser();
   try {
     parser(text);
     return null;
@@ -187,32 +225,180 @@ export function runSelfTest() {
   return bad;
 }
 
+/**
+ * The control POPULATION is itself load-bearing, and nothing above measures it.
+ *
+ * The success line used to print `${SELF_TEST_CASES.length}/${SELF_TEST_CASES.length}` --
+ * numerator and denominator the same expression, so it reads N/N however many controls
+ * exist. Delete four of them and it prints a tidy `10/10 embedded controls agree` and
+ * still exits 0. The ratio was never a witness; RC=0 (runSelfTest returning empty) is.
+ * These floors are what stop the suite being hollowed out underneath that.
+ *
+ * THROW_FLOOR is separate on purpose. The must-throw controls are the load-bearing half --
+ * they are what pin the parser's exact coordinates -- and a total-only floor could be
+ * satisfied by padding the suite with trivial must-parse cases after gutting them.
+ *
+ * Both floors are the counts measured against @conventional-commits/parser@0.4.1. Lowering
+ * one is a deliberate act that belongs in a diff, which is the entire point.
+ */
+export const CONTROL_FLOOR = 14;
+export const THROW_FLOOR = 4;
+
+/**
+ * @param {typeof SELF_TEST_CASES} [cases]
+ * @returns {string[]} reasons the control population is inadequate; empty when it is fine
+ */
+export function checkControlPopulation(cases = SELF_TEST_CASES) {
+  const problems = [];
+  const mustThrow = cases.filter((c) => c.expect !== null).length;
+  if (cases.length < CONTROL_FLOOR) {
+    problems.push(`only ${cases.length} embedded control(s) remain, below the floor of ${CONTROL_FLOOR}`);
+  }
+  if (mustThrow < THROW_FLOOR) {
+    problems.push(
+      `only ${mustThrow} control(s) assert exact throw coordinates, below the floor of ${THROW_FLOOR}`,
+    );
+  }
+  return problems;
+}
+
 // ---------------------------------------------------------------------------
 // Repo scan
 // ---------------------------------------------------------------------------
 // Commit bodies contain blank lines, bullets and code, so no printable delimiter is
-// safe. Separate records with U+0001 and the sha from the message with NUL; neither
-// can occur in a git commit message. Written as escapes, never as literal control
-// bytes -- a literal one is invisible in review and an editor or line-ending pass can
-// silently eat it, which would make this guard scan one giant malformed record.
+// safe. Separate records with U+0001 and the sha from the message with NUL. Written as
+// escapes, never as literal control bytes -- a literal one is invisible in review and an
+// editor or line-ending pass can silently eat it, which would make this guard scan one
+// giant malformed record.
+//
+// Only ONE of these is genuinely impossible in the data. NUL cannot survive git's commit
+// path, so the sha/message split is safe. U+0001 CAN legally appear in a commit body --
+// nothing in git filters it -- and a body carrying one splits a single commit into two
+// records, shifting every message after it so the guard judges each body against the
+// wrong sha. That is not a worry papered over with a comment: it is exactly why the
+// record count is cross-checked against git's own count below rather than trusted.
 const RS = '\u0001';
 const FS = '\u0000';
 
-function commitsIn(base, head) {
-  const out = execFileSync(
-    'git',
-    ['log', '--no-merges', `--format=%H%x00%B${RS}`, `${base}..${head}`],
-    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
-  );
-  return out
+/** A full git object name. `.filter((c) => c.sha)` would be a TRUTHINESS test, which a
+ * garbage fragment passes; this is a sha test, which it does not. */
+const SHA_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * git's own count for the range -- the CONTROL the parse below is measured against.
+ *
+ * Deliberately a SECOND git invocation, with a different subcommand and a different
+ * output format. A cross-check derived from the same command's output would agree with
+ * whatever that output produced and would confirm only the method, never the answer.
+ *
+ * @param {string} base
+ * @param {string} head
+ * @param {{withMerges?: boolean}} [opts]
+ * @returns {number}
+ */
+export function expectedCount(base, head, { withMerges = false } = {}) {
+  const args = ['rev-list', '--count'];
+  if (!withMerges) args.push('--no-merges');
+  args.push(`${base}..${head}`);
+  const raw = execFileSync('git', args, { encoding: 'utf8' }).trim();
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(
+      `git rev-list --count returned ${JSON.stringify(raw)} for ${base}..${head}, which is not a ` +
+        'count. Refusing to cross-check against a number this guard cannot read.',
+    );
+  }
+  return n;
+}
+
+/**
+ * Split a `git log --format=%H%x00%B<RS>` payload into records. A PURE function of the
+ * text, so a test can hand it a payload carrying a stray U+0001 without having to build a
+ * repository that produces one.
+ *
+ * A record with no NUL is KEPT, with a null sha, rather than dropped. It is the
+ * fingerprint of a U+0001 inside a body, and discarding it here would hide the very
+ * discrepancy the count cross-check exists to catch.
+ *
+ * @param {string} out
+ * @returns {{sha: string|null, message: string}[]}
+ */
+export function parseLog(out) {
+  return String(out)
     .split(RS)
     .map((r) => r.trim())
     .filter(Boolean)
     .map((rec) => {
       const i = rec.indexOf(FS);
-      return { sha: rec.slice(0, i), message: rec.slice(i + 1) };
-    })
-    .filter((c) => c.sha);
+      return i === -1
+        ? { sha: null, message: rec }
+        : { sha: rec.slice(0, i), message: rec.slice(i + 1) };
+    });
+}
+
+/**
+ * The branch's non-merge commits -- or a throw. Never a partial answer.
+ *
+ * THROWS rather than calling process.exit, so the function can be asserted in-process by
+ * a test. main() catches and emits the same ::error:: annotation and the same exit 1, so
+ * CI behaviour is unchanged; only testability moves.
+ *
+ * @param {string} base
+ * @param {string} head
+ * @returns {{sha: string, message: string}[]}
+ */
+export function commitsIn(base, head) {
+  const out = execFileSync(
+    'git',
+    ['log', '--no-merges', `--format=%H%x00%B${RS}`, `${base}..${head}`],
+    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+  );
+  const records = parseLog(out);
+  const nonMerge = expectedCount(base, head);
+
+  if (records.length !== nonMerge) {
+    throw new Error(
+      `parsed ${records.length} record(s) out of git log, but git rev-list counts ${nonMerge} ` +
+        `non-merge commit(s) in ${base}..${head}. The likeliest cause is a U+0001 inside a commit ` +
+        'body splitting one record in two, which shifts every message after it and makes this ' +
+        'guard judge each body against the wrong sha. Reporting NOTHING rather than a verdict on ' +
+        'a payload it cannot account for.',
+    );
+  }
+
+  // A zero range cannot be judged by that agreement alone. When BASE_SHA/HEAD_SHA are
+  // wrong -- an unfetched base, a typo, a force-push that orphaned the ref -- git's count
+  // is ALSO 0, so the check above agrees with itself and the guard reports a clean scan of
+  // nothing. Counting WITH merges separates the two cases, because a real branch whose
+  // commits happen to all be merges still has commits in it.
+  if (nonMerge === 0) {
+    const total = expectedCount(base, head, { withMerges: true });
+    if (total === 0) {
+      throw new Error(
+        `${base}..${head} contains no commits at all, not even merges. That is a degenerate ` +
+          'range rather than a clean branch -- a wrong or unfetched base SHA produces exactly ' +
+          'this shape. Refusing to report a clean scan of nothing.',
+      );
+    }
+    console.log(
+      `::notice::check-commit-message-parses: ${base}..${head} holds ${total} commit(s), every ` +
+        'one a merge. GitHub drops merge commits from the squash composition, so none of them ' +
+        'reaches the changelog and there is nothing here to judge.',
+    );
+    return [];
+  }
+
+  const malformed = records.filter((c) => !SHA_RE.test(c.sha ?? ''));
+  if (malformed.length > 0) {
+    throw new Error(
+      `${malformed.length} of ${records.length} record(s) do not begin with a 40-character git ` +
+        'object name, so the sha/message split did not land where it should have. Refusing to ' +
+        'judge messages this guard cannot attribute to a commit. First offender begins: ' +
+        JSON.stringify(String(malformed[0].message).slice(0, 120)),
+    );
+  }
+
+  return /** @type {{sha: string, message: string}[]} */ (records);
 }
 
 function main(argv) {
@@ -231,8 +417,24 @@ function main(argv) {
     );
     process.exit(1);
   }
+  // The controls agreeing says nothing about how MANY of them there are. Assert the
+  // population separately, because the line printed below cannot.
+  const thin = checkControlPopulation();
+  if (thin.length > 0) {
+    for (const p of thin) console.error(`::error::control population: ${p}`);
+    console.error(
+      '::error::check-commit-message-parses: controls have been deleted rather than re-measured. ' +
+        'A shrunken suite still agrees with itself and still exits 0, which is why the population ' +
+        'is asserted here instead of inferred from the summary line. Restore the controls, or ' +
+        're-measure them against the installed parser and lower the floor deliberately in a diff.',
+    );
+    process.exit(1);
+  }
+  const mustThrow = SELF_TEST_CASES.filter((c) => c.expect !== null).length;
   console.log(
-    `check-commit-message-parses: ${SELF_TEST_CASES.length}/${SELF_TEST_CASES.length} embedded controls agree.`,
+    `check-commit-message-parses: all ${SELF_TEST_CASES.length} embedded controls agree ` +
+      `(floor ${CONTROL_FLOOR}), ${mustThrow} of them asserting exact throw coordinates ` +
+      `(floor ${THROW_FLOOR}).`,
   );
   if (argv.includes('--self-test')) return;
 
@@ -247,7 +449,16 @@ function main(argv) {
     process.exit(1);
   }
 
-  const commits = commitsIn(base, head);
+  // commitsIn throws so a test can assert its refusals in-process. The CI-visible
+  // behaviour is deliberately unchanged: the same ::error:: annotation, the same exit 1
+  // it used to produce inline.
+  let commits;
+  try {
+    commits = commitsIn(base, head);
+  } catch (err) {
+    console.error(`::error::check-commit-message-parses: ${err?.message ?? err}`);
+    process.exit(1);
+  }
   const bound = [];
   const failures = [];
   for (const c of commits) {
