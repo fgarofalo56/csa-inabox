@@ -468,3 +468,182 @@ test('#3449 the three leaves TOGETHER still fail closed and name every cause', (
   assert.equal(worst.class, 'config');
   assert.notEqual(worst.exitCode, 0, 'a classified failure still exits non-zero');
 });
+
+// ── #3817: the PostgreSQL Entra-admin leaf that took a SCHEDULED deploy down ──
+//
+// deploy-fiab-commercial run 32341450273 (2026-08-20T06:52Z, schedule trigger,
+// sha 043c1aa3) failed on ONE ARM leaf, and that leaf classified `unknown` — so
+// decideRetryForLeaves failed closed on attempt 1 and the run exited 17. The
+// classifier did the honest thing (that is R7 working, and it is not the bug).
+// The bug is the OTHER half of R6: a GENUINELY TRANSIENT window took the whole
+// scheduled Commercial deploy down on a single attempt, because nothing in the
+// table named it.
+//
+// MEASURED AFTER THE RUN (Azure Resource Graph, 2026-08-20): that same server
+// exists in rg-csa-loom-admin-centralus and reports state 'Ready'. The condition
+// was therefore a WINDOW in which the server was not Entra-operable — not a
+// dead, stopped, or missing resource — which is what makes it `transient` and
+// not `config`. What PUT the server mid-operation during a scheduled reconcile
+// is NOT established, is asserted nowhere in the entry, and is still open on
+// #3817.
+//
+// WHY THIS BLOCK HAS TO BE ABLE TO FAIL. A RETRYABLE entry is the dangerous
+// direction to get wrong: where an over-broad `config` entry merely mislabels, an
+// over-broad `transient` entry converts a hard failure into a SLOW hard failure —
+// it burns the whole retry budget and then reports "failed after N attempts",
+// which is the exact 2026-08-05 quota shape this taxonomy exists to prevent. So
+// the DISCRIMINATION test below is the load-bearing one: it pins that genuinely
+// fatal Entra/auth failures never reach this signal.
+
+const TAXONOMY_REL_3817 = 'apps/fiab-console/lib/deploy/failure-taxonomy.json';
+const SIGNAL_3817 = 'transient.postgres-entra-admin-server-not-accessible';
+
+/** The real drilled leaf, verbatim from run 32341450273 (object id redacted). */
+const LEAF_3817 = {
+  code: 'AadAuthOperationCannotBePerformedWhenServerIsNotAccessible',
+  message:
+    "Server 'psql-loom-weave-default-k6mvh5sm6z7do' is not in an accessible state to perform a " +
+    'Microsoft Entra authentication principal operation. Make sure that the server is in an ' +
+    'accessible before executing any Microsoft Entra authentication principal operation.',
+  resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+  resourceName: 'psql-loom-weave-default-k6mvh5sm6z7do/<console-uami-object-id>',
+};
+
+test('#3817 population — the taxonomy on disk still carries the signal', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  assert.ok(
+    Array.isArray(onDisk.signals) && onDisk.signals.length > 0,
+    `${TAXONOMY_REL_3817} has an empty or missing "signals" list — an empty population means the ` +
+      'table was gutted, never that the repo is clean.',
+  );
+  assert.ok(
+    onDisk.signals.length >= 37,
+    `${TAXONOMY_REL_3817} declares ${onDisk.signals.length} signals; 37 were present when the ` +
+      '#3817 signal landed. A shrinking table is a deletion to justify, not a pass.',
+  );
+  assert.ok(
+    onDisk.signals.some((s) => s.id === SIGNAL_3817),
+    `${TAXONOMY_REL_3817} no longer declares "${SIGNAL_3817}" — the leaf from run 32341450273 ` +
+      'would fall back to unknown and a transient window would again fail the deploy on attempt 1.',
+  );
+});
+
+test('#3817 matcher set is EXACTLY the observed strings — additive mutation fails here too', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  const sig = onDisk.signals.find((s) => s.id === SIGNAL_3817);
+  assert.ok(sig, `${TAXONOMY_REL_3817} is missing signal "${SIGNAL_3817}"`);
+  assert.deepEqual(
+    sig.anyOf,
+    [
+      'aadauthoperationcannotbeperformedwhenserverisnotaccessible',
+      'is not in an accessible state to perform a microsoft entra authentication principal operation',
+    ],
+    `${TAXONOMY_REL_3817}: the anyOf of "${SIGNAL_3817}" changed. Both entries are self-describing ` +
+      'and name the CONDITION, not a bare ARM code; widening either (to "not in an accessible ' +
+      'state", say, or to a bare auth code) would let this RETRYABLE signal swallow failures ' +
+      'retrying cannot fix. Update this test deliberately, with the run id, or revert.',
+  );
+  assert.equal(
+    sig.allOf,
+    undefined,
+    `${TAXONOMY_REL_3817}: "${SIGNAL_3817}" grew an allOf. Both anyOf strings are already specific ` +
+      'enough to pin the condition on their own; an allOf here would only reduce recall.',
+  );
+  assert.equal(sig.class, 'transient', `${TAXONOMY_REL_3817}: "${SIGNAL_3817}" changed class`);
+  assert.ok(
+    /32341450273/.test(sig.observed ?? ''),
+    `${TAXONOMY_REL_3817}: "${SIGNAL_3817}" must cite the run it was observed on — provenance is ` +
+      'the only thing separating an observed signal from a guessed one.',
+  );
+});
+
+test('#3817 the verbatim leaf classifies transient + retryable, with evidence taken from that leaf', () => {
+  const [d] = classifyLeaves([LEAF_3817]);
+  assert.equal(
+    d.diagnosis.signalId,
+    SIGNAL_3817,
+    `${TAXONOMY_REL_3817}: the leaf classified "${d.diagnosis.signalId ?? 'unknown'}"`,
+  );
+  assert.equal(d.diagnosis.class, 'transient');
+  assert.equal(d.diagnosis.retryable, true, 'the whole point of #3817 is that this leaf is retryable');
+  assert.equal(d.diagnosis.exitCode, TAXONOMY.classes.transient.exitCode);
+  assert.notEqual(d.diagnosis.exitCode, 0, 'a classified failure still exits non-zero');
+  assert.ok(d.diagnosis.evidence.length > 0, 'matched with no evidence');
+  const leafText = `${LEAF_3817.code}: ${LEAF_3817.message}`.toLowerCase();
+  for (const e of d.diagnosis.evidence) {
+    assert.ok(
+      leafText.includes(e.signal),
+      `${TAXONOMY_REL_3817}: quoted "${e.signal}" as evidence, but that string does not occur in ` +
+        'the leaf it matched — evidence must be a substring of the input (R7).',
+    );
+  }
+  const msg = render(d.diagnosis, 'az deployment sub create (commercial)');
+  assert.doesNotMatch(msg, /could not classify/i);
+  assert.match(msg, /Remediation:/);
+});
+
+test('#3817 discrimination — genuinely FATAL Entra/auth failures never reach this signal', () => {
+  // The load-bearing negative control. Without it an over-broad retryable entry
+  // looks exactly like a pass: the real error goes green and the damage (a
+  // permission denial retried until the budget dies) is invisible.
+  const mustNotBeTransient = [
+    // A real RBAC denial on the very same sub-resource this signal covers.
+    "ERROR: (AuthorizationFailed) The client does not have authorization to perform action " +
+      "'Microsoft.DBforPostgreSQL/flexibleServers/administrators/write' over scope",
+    // The MSAL shape behind a recorded production outage — never retryable.
+    'AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the request is ' +
+      'the client secret value, not the client secret ID.',
+    'ERROR: (InvalidAuthenticationTokenTenant) The access token is from the wrong issuer.',
+    // An Entra principal that is genuinely invalid: deterministic, not a window.
+    "ERROR: (InvalidPrincipalId) The principal id is not a valid Microsoft Entra principal.",
+    // The GENERIC half of this signal's own message, WITHOUT the Entra
+    // principal-operation clause. If someone widens the matcher to "not in an
+    // accessible state", this is what starts being retried.
+    "Server 'psql-loom-weave-default-k6mvh5sm6z7do' is not in an accessible state.",
+    // Entra words with no condition attached.
+    'Microsoft Entra authentication is enabled on this server.',
+  ];
+  for (const input of mustNotBeTransient) {
+    const d = classify(input);
+    assert.notEqual(
+      d.class,
+      'transient',
+      `${TAXONOMY_REL_3817}: "${input.slice(0, 60)}…" classified TRANSIENT (${d.signalId}). ` +
+        'Something is over-broad — a retryable match on a fatal failure burns the whole budget ' +
+        'and then reports "failed after N attempts" without naming the cause.',
+    );
+    assert.equal(
+      d.retryable,
+      false,
+      `${TAXONOMY_REL_3817}: "${input.slice(0, 60)}…" became RETRYABLE (${d.class}/${d.signalId}).`,
+    );
+  }
+});
+
+test('#3817 R7 — the remediation asserts no server state, and names how to establish one', () => {
+  // The taxonomy reads TEXT; it never queries the server. So the one thing this
+  // remediation must not do is tell the operator what state the server is in —
+  // the R7 incident this repo records is a message asserting "the tag does not
+  // exist" when the truth was "I could not reach the registry".
+  const [d] = classifyLeaves([LEAF_3817]);
+  const rem = d.diagnosis.remediation ?? '';
+  assert.ok(rem.length > 0, 'a classified signal must carry a remediation');
+  assert.match(
+    rem,
+    /does not establish/i,
+    'the remediation must say plainly that it read no server state',
+  );
+  assert.match(
+    rem,
+    /az postgres flexible-server show/,
+    'it must name the exact command that WOULD establish the state',
+  );
+  assert.match(
+    rem,
+    /stopped/i,
+    'it must name the case where this same code is NOT a transient window, so an exhausted ' +
+      'budget is not read as "the window just had not closed yet"',
+  );
+  // It must not claim the server is fine — that is precisely what it did not read.
+  assert.doesNotMatch(rem, /the server is (healthy|fine|ready|up)\b/i);
+});
