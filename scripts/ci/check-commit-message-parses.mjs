@@ -296,11 +296,11 @@ const SHA_RE = /^[0-9a-f]{40}$/;
  * @param {{withMerges?: boolean}} [opts]
  * @returns {number}
  */
-export function expectedCount(base, head, { withMerges = false } = {}) {
+export function expectedCount(base, head, { withMerges = false, cwd = process.cwd() } = {}) {
   const args = ['rev-list', '--count'];
   if (!withMerges) args.push('--no-merges');
   args.push(`${base}..${head}`);
-  const raw = execFileSync('git', args, { encoding: 'utf8' }).trim();
+  const raw = execFileSync('git', args, { encoding: 'utf8', cwd }).trim();
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0) {
     throw new Error(

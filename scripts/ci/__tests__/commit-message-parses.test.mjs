@@ -211,11 +211,44 @@ test('commitsIn returns attributable records for a real range', (t) => {
 });
 
 test('expectedCount counts merges only when asked', () => {
-  const without = expectedCount('HEAD~5', 'HEAD');
-  const with_ = expectedCount('HEAD~5', 'HEAD', { withMerges: true });
-  assert.ok(Number.isInteger(without) && without >= 0);
-  assert.ok(with_ >= without, 'including merges cannot lower the count');
-  assert.equal(expectedCount('HEAD', 'HEAD', { withMerges: true }), 0);
+  // Built here rather than read off ambient history. The previous version called
+  // expectedCount('HEAD~5','HEAD') against whatever repo the test happened to run in,
+  // which fails on the CI job that runs this suite: fiab-console-ci.yml:542 checks out
+  // with no `fetch-depth`, so the clone is depth 1 and `HEAD~5` does not resolve — git
+  // errors, execFileSync throws, and the failure has nothing to do with the code under
+  // test. Sibling jobs in that same workflow set `fetch-depth: 0`; this one does not.
+  //
+  // Asserting EXACT counts also fixes a second problem: `without >= 0` and
+  // `with_ >= without` both hold if expectedCount simply returned 0 every time, so the
+  // old assertions could not distinguish a correct count from a broken one.
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'loom-cmp-count-'));
+  const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' });
+  try {
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    git('commit', '-q', '--allow-empty', '-m', 'base');
+    const base = git('rev-parse', 'HEAD').trim();
+
+    git('checkout', '-q', '-b', 'side');
+    git('commit', '-q', '--allow-empty', '-m', 'side one');
+    git('commit', '-q', '--allow-empty', '-m', 'side two');
+
+    git('checkout', '-q', 'main');
+    git('commit', '-q', '--allow-empty', '-m', 'main one');
+    git('merge', '-q', '--no-ff', '-m', 'merge side', 'side');
+
+    // base..HEAD now holds: main one, side one, side two, and ONE merge commit.
+    assert.equal(expectedCount(base, 'HEAD', { cwd: dir }), 3, 'non-merge commits');
+    assert.equal(
+      expectedCount(base, 'HEAD', { withMerges: true, cwd: dir }),
+      4,
+      'including the merge adds exactly one',
+    );
+    assert.equal(expectedCount('HEAD', 'HEAD', { withMerges: true, cwd: dir }), 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
