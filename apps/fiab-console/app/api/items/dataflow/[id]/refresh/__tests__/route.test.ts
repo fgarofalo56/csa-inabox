@@ -102,6 +102,10 @@ describe('GHSA-hf73-rp4q-66pf — the guard runs first', () => {
     await refresh(req('?workspaceId=ws-1'), ctx());
     expect(resolveWorkspaceAccessByOid).toHaveBeenCalledWith(
       'oid-1', 'ws-1', expect.objectContaining({ callerTid: 'tid-1' }),
+      // #3825 — the guard now threads the WorkspaceAccessDiagnostics out-channel
+      // so a refused tenant-admin grant is rendered as an honest 409 rather than
+      // a bare 404. toHaveBeenCalledWith is exact on arity, hence this argument.
+      expect.any(Object),
     );
   });
 
