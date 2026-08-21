@@ -2411,7 +2411,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-179 function(s) across 80 module(s) reach an owner / workspace-ACL
+180 function(s) across 81 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2464,6 +2464,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/azure/agent-memory-client.ts` | `deleteThread`, `getThread` |
 | `apps/fiab-console/lib/azure/agent-mesh-run.ts` | `agentConfig` |
 | `apps/fiab-console/lib/azure/attached-services-store.ts` | `applyIntegrationResults`, `loadAttachedService` |
+| `apps/fiab-console/lib/azure/auto-bind-sweep.ts` | `sweepAutoBind` |
 | `apps/fiab-console/lib/azure/connection-auth.ts` | `resolvePgAuthDescribed`, `resolveSqlAuth`, `resolveSqlAuthDescribed` |
 | `apps/fiab-console/lib/azure/connections-store.ts` | `loadConnection` |
 | `apps/fiab-console/lib/azure/copilot-orchestrator.ts` | `buildDefaultRegistry`, `updateSessionMeta` |
