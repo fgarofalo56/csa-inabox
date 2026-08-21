@@ -167,20 +167,32 @@ async function workspaceIdOfItem(itemId: string, itemType: string): Promise<stri
  * belonging to a DIFFERENT tenant is still found and still refused.
  *
  * THAT `return null` IS THE ONLY ALLOW THIS FUNCTION IS PERMITTED TO DECIDE, and
- * it is pinned by its exact condition (`!workspaceId`) in
- * `scripts/ci/check-tid-boundary-chokepoint.mjs`'s PRE_DELEGATION_ALLOWLIST.
- * Every other `return null` here must read `denied` — the verdict
- * `authorizeWorkspace` returned. This is not defensive prose: on 2026-08-21 an
- * independent review inserted ONE line at the top of this function —
+ * `scripts/ci/check-tid-boundary-chokepoint.mjs` pins it BY POSITION: its entry
+ * in PROLOGUE_PINS carries the whole prologue text — both assignments to
+ * `workspaceId` and the ALLOW itself — so any edit above this line is a red
+ * build until it is re-reviewed. Pinning the CONDITION text was not enough, and
+ * that is measured, not anticipated: a review left `!workspaceId` byte-identical
+ * and forged its INPUT one line up
+ * (`workspaceId = opts.itemType === 'x' ? '' : (await workspaceIdOfItem(…)) || '';`),
+ * producing a live cross-tenant ALLOW that never read a document at all, and a
+ * SECOND `if (!workspaceId) return null;` elsewhere in the function inherited the
+ * same exemption because the allowlist key was `<fn>:<condition>`.
+ *
+ * Every OTHER allow here must be IMPOSSIBLE while `authorizeWorkspace` refused —
+ * the guard proves that by boolean implication over the path condition, not by
+ * checking that the condition mentions `denied`. Mentioning it is not reading it:
+ * on 2026-08-21 an independent review inserted ONE line at the top of this
+ * function —
  *
  *     if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;
  *
  * — and it passed the ENTIRE verification stack (guard exit 0, the 27-test
  * #3825 spec green, the 259-test wide suite green) while granting a real
- * cross-tenant ALLOW for that one item type. This is the 85-importer entry
+ * cross-tenant ALLOW for that one item type; the round-2 fix for it was then
+ * defeated by `if (!denied || opts.itemType === 'lakehouse') return null;`,
+ * which mentions the verdict and discards it. This is the 85-importer entry
  * point, and a bypass scoped to one `itemType` is invisible to a spec suite that
- * exercises a different one. Section 8a/8d/8e now key on the SHAPE (an ALLOW
- * this function decides itself) rather than on the literal `if (isTenantAdmin(`.
+ * exercises a different one.
  */
 export async function authorizeItemWorkspace(
   session: SessionPayload,
@@ -356,36 +368,61 @@ export async function requireWorkspace(
  * the session supplied no `groups` claim (per #3175 that claim is frequently
  * absent, so this path is genuinely reachable).
  *
- *   FAIL-CLOSED, measured: a Graph token failure, a transport failure, a
+ *   NEVER ADMITTED, measured per cause. The MECHANISM is not uniform, and the
+ *   earlier wording here — "a Graph token failure, a transport failure, a
  *   timeout, a 429, a 5xx, and a truncated membership walk all resolve to
- *   `'unknown'`, which contributes no role — so the caller is refused, not
- *   admitted.
+ *   `'unknown'`" — was wrong for two of those six. What the code actually does:
+ *     - a DIRECT-PROBE transport failure, the 30s per-request timeout, and a
+ *       truncated membership walk each answer `'unknown'`, which contributes no
+ *       role (`workspace-roles-client.ts` 548-558, 584, 602-ish);
+ *     - a 429/5xx on the direct probe falls THROUGH to paged enumeration, and a
+ *       non-ok enumeration page answers `'unknown'` likewise (585-591);
+ *     - a GRAPH TOKEN failure never reaches `graphUserInGroup` at all.
+ *       `resolveEffectiveRole` catches it and returns `pickHighestRole(inherited)`
+ *       (462-469), where `inherited` holds only the DIRECT (non-group)
+ *       assignments — so no group role is granted and the refusal still holds,
+ *       but it holds for a different reason than `'unknown'`;
+ *     - a TRANSPORT failure DURING the paged fallback does not answer at all.
+ *       The enumeration loop sits OUTSIDE `graphUserInGroup`'s try/catch and
+ *       `PagingBudget.runPage` rethrows everything that is not its own deadline
+ *       (`paging-budget.ts` 233-241), so it propagates out of this function as
+ *       an exception. Reachable on exactly the 429/5xx path named above.
+ *   In every one of those the caller is REFUSED or the request FAILS — never
+ *   admitted. THAT is the property being asserted here; the uniform `'unknown'`
+ *   mechanism the earlier sentence asserted is not one the code has, and per
+ *   `deploy-integrity.md` R7 a message must not state as fact something it did
+ *   not establish.
  *
- *   NOT FAIL-CLOSED — two residuals, both in `lib/azure/workspace-roles-client.ts`
+ *   NOT FAIL-CLOSED — residuals, all in `lib/azure/workspace-roles-client.ts`
  *   and therefore outside this file, tracked as **#3834**:
  *     - `graphUserInGroup` reads a BARE `res.ok` as membership without inspecting
  *       the body, so any 2xx from something sitting in front of Graph (a proxy,
  *       a WAF, a captive portal, a wrong-national-cloud host — the #3381
  *       condition) GRANTS the group's role and silently defeats the
  *       `tenant_unconfirmed` refusal this function exists to produce;
- *     - a malformed enumeration page throws an unhandled `TypeError` straight
- *       out of this function instead of answering.
- *   Neither is a regression of this change — before it, a tenant admin was
- *   ALLOWED unconditionally, so every measured mode is at least as tight as it
- *   was. The earlier wording here ("bounded and already fail-safe") was true of
- *   token failure and unreachability and READ as covering all failures. It did
- *   not, and an unqualified claim of a property the code does not have is the
- *   thing `deploy-integrity.md` R7 forbids.
+ *     - a malformed enumeration page throws out of this function instead of
+ *       answering: an unhandled `TypeError` when `@odata` `value` is not
+ *       iterable, and an unhandled `SyntaxError` from `res.json()` when the body
+ *       is not JSON at all — the SAME proxy/WAF/captive-portal condition as the
+ *       first residual, which is why it is listed with it rather than as a
+ *       theoretical case.
+ *   None is a regression of this change — before it, a tenant admin was ALLOWED
+ *   unconditionally, so every measured mode is at least as tight as it was.
  *
  * BOUNDED PER REQUEST, NOT IN AGGREGATE. Nothing on this path caches
  * (`cache: 'no-store'`, no memo layer), so every request pays it in full. A
  * single membership probe is capped at 30s and its paged fallback at a
  * `PagingBudget` of 15s / 50 pages — but `resolveEffectiveRole` walks the GROUP
  * assignments SEQUENTIALLY with no walk-wide ceiling, so the worst case is
- * `N_groups x ~45s` against a route `maxDuration` of 60. A 429 makes that worse
- * rather than better: a non-404 4xx falls THROUGH into the enumeration (which
- * throttles too), doubling the Graph calls, and no `Retry-After` is honoured —
- * so these 13 routes amplify a throttle instead of backing off. Also #3834.
+ * `N_groups x ~45s` WITH NO ROUTE CEILING ABOVE IT: not one of the 13 route
+ * files that call this function declares `export const maxDuration`, while 69
+ * other console routes do. The earlier wording here named "a route
+ * `maxDuration` of 60" — a bound the code does not establish, and it
+ * UNDERSTATED the exposure rather than overstating it, which is the direction
+ * `deploy-integrity.md` R7 exists to catch. A 429 makes that worse rather than
+ * better: a non-404 4xx falls THROUGH into the enumeration (which throttles
+ * too), doubling the Graph calls, and no `Retry-After` is honoured — so these
+ * 13 routes amplify a throttle instead of backing off. Also #3834.
  *
  * Callers that must additionally restrict to admins ONLY (e.g. the networking
  * gate, or a destructive admin DELETE) check `isTenantAdmin(session)` themselves

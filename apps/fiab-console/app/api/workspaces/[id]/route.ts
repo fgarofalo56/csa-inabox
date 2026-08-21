@@ -16,6 +16,22 @@ import {
   type WorkspaceAccessDiagnostics,
 } from '@/lib/auth/workspace-access';
 import { workspaceDenialResponse } from '@/lib/auth/workspace-denial';
+// WHY THAT IMPORT EXISTS. `workspaceDenialResponse` renders a resolver REFUSAL
+// (as opposed to a plain absence of access) honestly. A 404 "Workspace not
+// found" would be false on both counts: the workspace WAS read, and the caller's
+// admin rights are real. Per `deploy-integrity.md` R7 the response states only
+// what was established — the tenancy is unconfirmed — and names the exact
+// remediation. 409 (not 403) because the blocker is a state of the data, not of
+// the caller's permissions.
+//
+// #3825 — that renderer used to be a local function in THIS file. It MOVED,
+// unchanged, to `lib/auth/workspace-denial.ts` because the same refusal is now
+// reachable from every `authorizeWorkspace` / `authorizeItemWorkspace` /
+// `resolveAdminWorkspace` call site (the tenant-admin short-circuit those guards
+// used to take is gone). One definition, so the remediation string cannot drift
+// between surfaces. This note is a line comment, and deliberately: as a `/** */`
+// block it outlived the function it documented and floated down onto
+// `export async function GET`, where it read as GET's own documentation.
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { logSafe } from '@/lib/util/log-safe';
@@ -63,23 +79,6 @@ async function loadWorkspaceAccess(id: string): Promise<{
   );
   return { access, session, diag };
 }
-
-/**
- * Render a resolver REFUSAL (as opposed to a plain absence of access) honestly:
- * `workspaceDenialResponse` (lib/auth/workspace-denial.ts).
- *
- * A 404 "Workspace not found" would be false on both counts: the workspace WAS
- * read, and the caller's admin rights are real. Per `deploy-integrity.md` R7 the
- * response states only what was established — the tenancy is unconfirmed — and
- * names the exact remediation. 409 (not 403) because the blocker is a state of
- * the data, not of the caller's permissions.
- *
- * #3825 — that renderer used to be a local function here. It MOVED, unchanged,
- * because the same refusal is now reachable from every `authorizeWorkspace` /
- * `authorizeItemWorkspace` / `resolveAdminWorkspace` call site (the tenant-admin
- * short-circuit those guards used to take is gone). One definition, so the
- * remediation string cannot drift between surfaces.
- */
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;

@@ -74,6 +74,13 @@ const world = {
   ws: null as any,
   /** ACL role the (real) role resolver returns for the caller. */
   aclRole: null as string | null,
+  /**
+   * Item types for which `ITEM_ID` resolves to `WS_ID`. A LIST, not a constant,
+   * because the defect this file exists for was scoped to ONE item type and was
+   * therefore invisible to a suite that exercises a different one — see
+   * `the tenant verdict does not depend on itemType` below.
+   */
+  itemTypes: [] as string[],
 };
 
 const getSession = vi.fn();
@@ -123,7 +130,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
           const t = params.find((p) => p.name === '@t')?.value;
           return {
             resources:
-              id === ITEM_ID && t === ITEM_TYPE ? [{ workspaceId: WS_ID }] : [],
+              id === ITEM_ID && world.itemTypes.includes(t) ? [{ workspaceId: WS_ID }] : [],
           };
         },
       }),
@@ -158,6 +165,7 @@ import {
   requireWorkspace,
   resolveAdminWorkspace,
 } from '../workspace-guard';
+import { authorizeWorkspaceList } from '../workspace-list-access';
 import { isTenantAdmin } from '../feature-gate';
 
 /** A workspace owned by someone else, optionally carrying a recorded tid. */
@@ -196,6 +204,7 @@ beforeEach(() => {
   delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
   world.ws = foreignWs(FOREIGN_TENANT);
   world.aclRole = null;
+  world.itemTypes = [ITEM_TYPE];
   resolverConsulted = 0;
 });
 
@@ -455,5 +464,139 @@ describe('#3825 REGRESSION GUARDS — owner and ACL never depended on the tenant
     world.aclRole = 'Viewer';
     const s = actAs(ADMIN_OID, HOME_TENANT);
     expect(await authorizeWorkspace(s, WS_ID, { allowReadRoles: true })).toBeNull();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * `authorizeWorkspaceList` — THE THIRD AUTHORIZER, previously covered by
+ * NOTHING. Recorded rather than quietly added: on 2026-08-21 a review inserted
+ * the literal #3825 defect into `lib/auth/workspace-list-access.ts`
+ *
+ *     if (isTenantAdmin(session)) return { role: 'Admin', canWrite: true };
+ *
+ * and the entire stack stayed green — the CI guard held a two-entry table that
+ * did not name this function, and no spec anywhere called it. It backs the
+ * editor pickers, `/api/items`, `/api/items/by-type` and `/api/lakehouse/tables`,
+ * so a bypass here lists another tenant's items rather than opening one.
+ *
+ * ITS ALLOW IS THE INVERSE OF THE GUARDS ABOVE — a NON-NULL access object is the
+ * grant and `null` is the refusal. That inversion is exactly why the round-2
+ * guard, which modelled an ALLOW as `return null`, found nothing to look at.
+ */
+describe('#3825 authorizeWorkspaceList — the LIST authorizer delegates too', () => {
+  it('CONSULTS the shared resolver for a tenant admin (no short-circuit)', async () => {
+    const s = actAs(ADMIN_OID, HOME_TENANT);
+    await authorizeWorkspaceList(s, WS_ID);
+    expect(resolverConsulted).toBe(1);
+  });
+
+  it('DENIES a tenant admin when both tids are present and DIFFERENT (the attack)', async () => {
+    world.ws = foreignWs(FOREIGN_TENANT);
+    const s = actAs(ADMIN_OID, HOME_TENANT);
+    expect(await authorizeWorkspaceList(s, WS_ID)).toBeNull();
+    expect(resolverConsulted).toBe(1);
+  });
+
+  it('DENIES a tenant admin on a LEGACY tid-less workspace doc', async () => {
+    world.ws = foreignWs(undefined);
+    const s = actAs(ADMIN_OID, HOME_TENANT);
+    expect(await authorizeWorkspaceList(s, WS_ID)).toBeNull();
+  });
+
+  it('DENIES a tenant admin whose SESSION carries no tid', async () => {
+    world.ws = foreignWs(FOREIGN_TENANT);
+    const s = actAs(ADMIN_OID, undefined);
+    expect(await authorizeWorkspaceList(s, WS_ID)).toBeNull();
+  });
+
+  it('CONTROL-GRANT: still LISTS for a tenant admin when the tenancy is CONFIRMED', async () => {
+    world.ws = foreignWs(HOME_TENANT);
+    const s = actAs(ADMIN_OID, HOME_TENANT);
+    const access = await authorizeWorkspaceList(s, WS_ID);
+    expect(access).not.toBeNull();
+    expect(access!.role).toBe('Admin');
+  });
+
+  it('CONTROL: a NON-admin is refused on the identical fixture (the probe can fail)', async () => {
+    world.ws = foreignWs(HOME_TENANT);
+    const s = actAs(PLAIN_OID, HOME_TENANT);
+    expect(await authorizeWorkspaceList(s, WS_ID)).toBeNull();
+  });
+
+  it("REGRESSION: via:'acl' — a shared Viewer still LISTS with NO tid on either side", async () => {
+    world.ws = foreignWs(undefined);
+    world.aclRole = 'Viewer';
+    const s = actAs(PLAIN_OID, undefined);
+    const access = await authorizeWorkspaceList(s, WS_ID);
+    expect(access).not.toBeNull();
+    expect(access!.role).toBe('Viewer');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * THE ITEM-TYPE SWEEP. `authorizeItemWorkspace` is the 85-importer entry point,
+ * and the bypass that survived the whole verification stack on 2026-08-21 was
+ * scoped to ONE `itemType`:
+ *
+ *     if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;
+ *
+ * Every spec above drives it with `semantic-model`, so every one of them stayed
+ * green while `lakehouse` was a live cross-tenant ALLOW. A suite that exercises
+ * a single value of a discriminant cannot see a bypass keyed to another value —
+ * so this sweeps the discriminant, and its CONTROL proves the sweep can fail.
+ */
+describe('#3825 the tenant verdict does not depend on itemType', () => {
+  const TYPES = ['semantic-model', 'lakehouse', 'data-pipeline', 'warehouse', 'notebook', 'report'];
+
+  it('DENIES every item type on the hardest fixture (both tids present, DIFFERENT)', async () => {
+    world.itemTypes = TYPES;
+    world.ws = foreignWs(FOREIGN_TENANT);
+    for (const itemType of TYPES) {
+      const s = actAs(ADMIN_OID, HOME_TENANT);
+      const denied = await authorizeItemWorkspace(s, {
+        itemId: ITEM_ID, itemType, allowReadRoles: true, notFound: ROUTE_NOT_FOUND,
+      });
+      expect(denied, `itemType=${itemType} was ALLOWED across tenants`).not.toBeNull();
+      // …and it got there by ASKING, not by short-circuiting to a refusal.
+      expect(resolverConsulted, `itemType=${itemType} never consulted the resolver`).toBe(1);
+    }
+  });
+
+  it('CONTROL: every item type is ALLOWED once the tenancy is CONFIRMED', async () => {
+    world.itemTypes = TYPES;
+    world.ws = foreignWs(HOME_TENANT);
+    for (const itemType of TYPES) {
+      const s = actAs(ADMIN_OID, HOME_TENANT);
+      const denied = await authorizeItemWorkspace(s, {
+        itemId: ITEM_ID, itemType, allowReadRoles: true, notFound: ROUTE_NOT_FOUND,
+      });
+      expect(denied, `itemType=${itemType} was refused on a CONFIRMED tenancy`).toBeNull();
+    }
+  });
+
+  it('the ALLOW is the DELEGATED verdict: no itemType passes while the resolver refuses', async () => {
+    // The direct statement of the rule the CI guard proves structurally. A
+    // bypass ORed onto the verdict (`!denied || opts.itemType === 'x'`) fails
+    // here for the type it names, whatever it calls itself.
+    world.itemTypes = TYPES;
+    world.ws = foreignWs(FOREIGN_TENANT);
+    const verdicts = [] as Array<{ itemType: string; itemAllowed: boolean; wsAllowed: boolean }>;
+    for (const itemType of TYPES) {
+      const s = actAs(ADMIN_OID, HOME_TENANT);
+      const itemAllowed =
+        (await authorizeItemWorkspace(s, {
+          itemId: ITEM_ID, itemType, allowReadRoles: true, notFound: ROUTE_NOT_FOUND,
+        })) === null;
+      const s2 = actAs(ADMIN_OID, HOME_TENANT);
+      const wsAllowed = (await authorizeWorkspace(s2, WS_ID, { allowReadRoles: true })) === null;
+      verdicts.push({ itemType, itemAllowed, wsAllowed });
+    }
+    for (const v of verdicts) {
+      expect(v.itemAllowed, `itemType=${v.itemType} disagreed with authorizeWorkspace`).toBe(
+        v.wsAllowed,
+      );
+    }
   });
 });
