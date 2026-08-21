@@ -82,6 +82,17 @@
  *   matches), so buildIssueBody()'s own call and the per-site calls upstream in
  *   deploy-retry.mjs remain correct and are kept as defence in depth.
  *
+ *   Round 3 closed the two residuals that boundary did not cover. The API is not
+ *   the only surface this process publishes to: main() printed `${workflow}`
+ *   RAW into a `::notice::` annotation and into stdout, and both are public in
+ *   this repo's Actions logs — measured, a `--workflow` carrying a GUID emitted
+ *   it verbatim on the not-filed path. And redact() returns '' for a non-string,
+ *   so applying it bare to the `body` PARAMETER had converted a malformed body
+ *   from "the API rejects it and the step fails" into "an EMPTY P0 notice is
+ *   filed and the run exits 0" — a regression this fix itself introduced,
+ *   against notifyFailure()'s own stated contract below. Both are pinned by
+ *   tests that go red when reverted.
+ *
  * USAGE (from a workflow `if: failure()` step)
  *   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
  *   node .github/scripts/deploy-notify-failure.mjs \
@@ -192,12 +203,24 @@ export function buildIssueBody({ workflow, runId, runUrl, sha, failure }) {
  * redact() is idempotent, so buildIssueBody()'s own call remains correct and is
  * kept as defence in depth.
  *
+ * STRING() BEFORE REDACT(), FOR THE SAME REASON formatAnnotation() DOES IT.
+ * redact() returns '' for a non-string — deliberately, so a caller cannot
+ * publish `[object Object]` out of it. Applying it BARE to `body` turns a
+ * malformed body into an EMPTY P0 notice filed with exit 0, which is precisely
+ * the swallow the paragraph below forbids: before this redaction existed a
+ * non-string reached the API and threw, and the step failed as it should have.
+ * `body` is a PARAMETER — reason 2 above — so the shape is reachable by any
+ * future caller rather than hypothetical. String() first means a bad body
+ * degrades to a visibly-wrong notice instead of a silently-empty one, a message
+ * object with a real toString() survives intact, and the redaction still runs
+ * over whatever the stringification produced.
+ *
  * Returns `{ issueNumber, created }`. Throws on any API failure — a notifier
  * that cannot notify must fail the step, not swallow.
  */
 export async function notifyFailure({ repo, workflow, body, request }) {
   const title = redact(buildIssueTitle(workflow));
-  const safeBody = redact(body);
+  const safeBody = redact(String(body));
   const [owner, name] = repo.split('/');
 
   const found = await request('GET', `/repos/${owner}/${name}/issues?state=open&labels=${FAILURE_LABEL}&per_page=100`);
@@ -299,6 +322,16 @@ async function main() {
     process.exit(2);
   }
 
+  // THE RUN LOG IS A PUBLISHED SURFACE TOO (#3829 round 3). notifyFailure()
+  // covers what reaches the GitHub API; it does not cover what this function
+  // PRINTS. `workflow` reaches here from --workflow / GITHUB_WORKFLOW — the same
+  // input the TITLE is derived from, and "a workflow name containing a GUID
+  // would have put one in a public issue title" is this file's own stated reason
+  // for redacting that. It goes into a `::notice::` annotation and into stdout,
+  // both public in this repo's Actions logs. Redact ONCE here, and do not use
+  // the raw value on any surface below.
+  const wf = redact(String(workflow));
+
   // #3368 — the outcome must be SUPPLIED, not assumed. An invocation with no
   // --result cannot tell a failure from a cancellation, and this script's whole
   // job is to assert one of them. Missing is a hard usage error rather than a
@@ -320,7 +353,7 @@ async function main() {
     // a cancellation does not itself turn a run red, but say plainly what was
     // observed and what was therefore not done.
     process.stdout.write(
-      `::notice::deploy-notify-failure: no issue filed for ${workflow} — ${decision.why} ` +
+      `::notice::deploy-notify-failure: no issue filed for ${wf} — ${decision.why} ` +
         `(observed result: "${result || '<empty>'}", category: ${decision.category})\n`,
     );
     return;
@@ -348,7 +381,7 @@ async function main() {
     request: ghRequest(apiBase, token),
   });
   process.stdout.write(
-    `deploy-notify-failure: ${created ? 'opened' : 'updated'} #${issueNumber} for ${workflow}.\n`,
+    `deploy-notify-failure: ${created ? 'opened' : 'updated'} #${issueNumber} for ${wf}.\n`,
   );
 }
 

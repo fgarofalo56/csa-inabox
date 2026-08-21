@@ -14,8 +14,14 @@
  * SIZE-INDEPENDENT BY CONTRACT. There is no length cap and there must never be
  * one: a redactor that gives up above N bytes leaks exactly the inputs most
  * worth redacting (a full ARM operation dump), and every fixture in every
- * consuming suite is small enough that such a cap would go unnoticed. Pinned by
- * a >5 KB test in scripts/ci/__tests__/deploy-retry.test.mjs.
+ * consuming suite is small enough that such a cap would go unnoticed —
+ * `if (text.length > 20000) return text;` left all three suites GREEN at 90/90,
+ * and a 60-leaf renderLeaves() dump measures 24,419 bytes, so the gap is
+ * reachable rather than theoretical. Pinned in
+ * scripts/ci/__tests__/deploy-retry.test.mjs from both directions: behavioural
+ * (1 KB / 64 KB / 1 MB, asserting the redaction COUNT equals the injected count
+ * at each size) and structural (redact()'s source contains no length
+ * comparison, so a cap outside the sampled range is red too).
  */
 
 /**

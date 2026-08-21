@@ -53,6 +53,13 @@ annotation names the cause instead of reporting "could not classify" (#3039).
     issue, attach the default render, or the `deploy-failure.json` artifact,
     which is redacted at its own boundary.
 
+    Everything the lane publishes **for** you is redacted too, at the boundary
+    it leaves through: the auto-filed notice issue's title and body
+    (`deploy-notify-failure.mjs`), and the Actions run log and `::notice::` /
+    `::error::` annotations — which is why a workflow or resource name can read
+    back as `deploy-fiab-<guid>`. That is the redactor substituting in place,
+    not a corrupted name.
+
 By hand, the same walk is:
 
 ```bash

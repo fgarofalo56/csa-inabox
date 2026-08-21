@@ -12,7 +12,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -24,6 +26,10 @@ import {
 } from '../deploy-notify-failure.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const SCRIPT = path.join(REPO_ROOT, '.github', 'scripts', 'deploy-notify-failure.mjs');
+
+/** The synthetic id every redaction fixture in this file is poisoned with. */
+const SYNTHETIC_OID = '11111111-2222-3333-4444-555555555555';
 
 function recorder(handlers) {
   const calls = [];
@@ -331,32 +337,90 @@ test('the notice is FOUND by its redacted title — redaction must not open a du
   assert.equal(calls.filter((c) => c.url.endsWith('/issues')).length, 0, 'no duplicate issue');
 });
 
-test('ACCEPTANCE — a HAND-BUILT body is redacted at the poster too, on both post paths', async () => {
+test('ACCEPTANCE — a HAND-BUILT body is redacted at the poster, for every REAL caller name', async () => {
   // `body` is a parameter. Round 1 redacted inside buildIssueBody(), so any
   // caller that assembled its own string — the shape every future caller is one
   // refactor away from — posted it verbatim.
-  const handBuilt = `HAND-BUILT BODY psql-loom-weave-default-abc123/11111111-2222-3333-4444-555555555555`;
+  //
+  // The workflow name is NOT the contrived 'wf' this test used in round 2. A
+  // bypass keyed to the caller population — `String(workflow).startsWith('deploy-')`
+  // — left the suite fully green while every live caller took the bypass, and two
+  // of the five live callers do not even carry that prefix. So the population is
+  // read MECHANICALLY out of the workflows and every member is exercised: a
+  // name-keyed bypass now has nowhere to hide, whatever key it picks.
+  const handBuilt = `HAND-BUILT BODY psql-loom-weave-default-abc123/${SYNTHETIC_OID}`;
   assert.match(handBuilt, GUID_RE, 'the INPUT must carry a GUID or this test proves nothing');
 
-  // Path 1 — create.
-  const create = recorder([
-    [/^GET /, () => []],
-    [/^POST .*\/issues$/, (b) => ({ number: 1, ...b })],
-  ]);
-  await notifyFailure({ repo: 'o/r', workflow: 'wf', body: handBuilt, request: create.request });
-  const posted = create.calls.find((c) => c.method === 'POST').body.body;
-  assert.doesNotMatch(posted, GUID_RE, 'a hand-built body reached a PUBLIC issue unredacted (#3829)');
-  assert.match(posted, /psql-loom-weave-default-abc123\/<guid>/, 'redacted in place, not dropped');
+  const callers = callerWorkflowNames();
+  assert.ok(callers.length >= 5, `expected >=5 real caller names, found ${callers.length} — the matcher drifted`);
+  // Non-degenerate in the direction the bypass exploited: the population is not
+  // uniform, so a prefix-keyed exemption cannot cover it.
+  assert.ok(callers.some((w) => !w.startsWith('deploy-')), 'the caller population must not be prefix-uniform');
 
-  // Path 2 — comment on an existing notice. Both writes go through the boundary.
-  const comment = recorder([
-    [/^GET /, () => [{ number: 5, title: buildIssueTitle('wf') }]],
-    [/^POST .*\/comments$/, () => ({ id: 1 })],
-  ]);
-  await notifyFailure({ repo: 'o/r', workflow: 'wf', body: handBuilt, request: comment.request });
-  const commented = comment.calls.find((c) => c.url.includes('/comments')).body.body;
-  assert.doesNotMatch(commented, GUID_RE, 'the COMMENT path bypassed the redaction (#3829)');
-  assert.match(commented, /psql-loom-weave-default-abc123\/<guid>/);
+  for (const workflow of callers) {
+    // Path 1 — create.
+    const create = recorder([
+      [/^GET /, () => []],
+      [/^POST .*\/issues$/, (b) => ({ number: 1, ...b })],
+    ]);
+    await notifyFailure({ repo: 'o/r', workflow, body: handBuilt, request: create.request });
+    const posted = create.calls.find((c) => c.method === 'POST').body.body;
+    assert.doesNotMatch(posted, GUID_RE, `${workflow}: a hand-built body reached a PUBLIC issue unredacted (#3829)`);
+    assert.match(posted, /psql-loom-weave-default-abc123\/<guid>/, `${workflow}: redacted in place, not dropped`);
+
+    // Path 2 — comment on an existing notice. Both writes go through the boundary.
+    const comment = recorder([
+      [/^GET /, () => [{ number: 5, title: buildIssueTitle(workflow) }]],
+      [/^POST .*\/comments$/, () => ({ id: 1 })],
+    ]);
+    await notifyFailure({ repo: 'o/r', workflow, body: handBuilt, request: comment.request });
+    const commented = comment.calls.find((c) => c.url.includes('/comments')).body.body;
+    assert.doesNotMatch(commented, GUID_RE, `${workflow}: the COMMENT path bypassed the redaction (#3829)`);
+    assert.match(commented, /psql-loom-weave-default-abc123\/<guid>/);
+  }
+});
+
+test('MUTATION-VISIBLE — a NON-STRING body cannot become a SILENT EMPTY notice', async () => {
+  // redact() returns '' for a non-string, by design, so a caller cannot publish
+  // `[object Object]` out of it. Applied bare to `body` that is a REGRESSION,
+  // not a safety property: pre-#3829 an object body reached the API and threw,
+  // and the notifier failed the step as its own docstring promises. Bare
+  // redact(body) instead FILES AN EMPTY P0 NOTICE AND EXITS 0 — the exact
+  // swallow this file was written to remove. String() first, as the sibling
+  // formatAnnotation() already does.
+  async function postedFor(body) {
+    const { request, calls } = recorder([
+      [/^GET /, () => []],
+      [/^POST .*\/issues$/, (b) => ({ number: 1, ...b })],
+    ]);
+    await notifyFailure({ repo: 'o/r', workflow: 'deploy-fiab-commercial', body, request });
+    return calls.find((c) => c.method === 'POST').body.body;
+  }
+
+  // CONTROL — a plain string is still posted byte-for-byte. Without this, an
+  // implementation that stringified everything to a constant would also pass.
+  assert.equal(await postedFor('the deploy failed on step X'), 'the deploy failed on step X');
+
+  // The regression itself: none of these may post an EMPTY body.
+  for (const [why, body] of [
+    ['a plain object', { msg: 'the deploy failed' }],
+    ['undefined', undefined],
+    ['null', null],
+    ['a number', 42],
+  ]) {
+    const posted = await postedFor(body);
+    assert.notEqual(posted, '', `${why} filed an EMPTY P0 notice — a notifier that cannot notify must FAIL, not swallow`);
+    assert.ok(posted.length > 0, `${why} produced a zero-length notice body`);
+  }
+
+  // …and a message object with a real toString() survives INTACT, not as a husk.
+  assert.match(await postedFor({ toString: () => 'ARM refused the template' }), /ARM refused the template/);
+
+  // …and String() must not open a redaction hole: a non-string carrying a GUID
+  // is still redacted, because String() runs INSIDE redact()'s argument.
+  const poisoned = await postedFor({ toString: () => `blocked on psql-loom-weave-default-abc123/${SYNTHETIC_OID}` });
+  assert.doesNotMatch(poisoned, GUID_RE, 'String() bypassed the redaction for a non-string body (#3829 round 3)');
+  assert.match(poisoned, /psql-loom-weave-default-abc123\/<guid>/, 'redacted in place');
 });
 
 test('the poster redaction covers a GUID glued on EITHER side, not only a delimited one', () => {
@@ -374,6 +438,111 @@ test('the poster redaction covers a GUID glued on EITHER side, not only a delimi
   assert.doesNotMatch(body, GUID_RE, 'a word-char-glued GUID survived into a PUBLIC issue body (#3829 round 2)');
   assert.match(body, /admin_<guid>/, 'redacted in place');
   assert.match(body, /x<guid>/, 'redacted in place');
+});
+
+// ── THE RUN LOG IS A PUBLISHED SURFACE TOO (#3829 round 3) ───────────────────
+//
+// notifyFailure() covers what reaches the GitHub API. It does not cover what
+// main() PRINTS, and main() printed `${workflow}` raw into a `::notice::`
+// annotation and into stdout — both public in this repo's Actions logs, and the
+// #3829 justification for redacting the TITLE is verbatim "a workflow name
+// containing a GUID would have put one in a public issue title". Measured at
+// round-2 head, `--workflow deploy-fiab-<guid> --result cancelled` printed:
+//
+//   ::notice::deploy-notify-failure: no issue filed for deploy-fiab-11111111-… — …
+//
+// These are CLI tests — a real child process, real stdout, and for the filing
+// path a real HTTP transport — because the defect lives in main(), which no
+// unit test of the exported functions can reach.
+
+function runCli(args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SCRIPT, ...args], {
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+/** A stub GitHub API on 127.0.0.1, so the FILING path can be driven end to end. */
+async function stubApi(route) {
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => {
+      raw += c;
+    });
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(route(req.method, req.url, raw)));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { server, base: `http://127.0.0.1:${server.address().port}` };
+}
+
+const POISONED_WORKFLOW = `deploy-fiab-${SYNTHETIC_OID}`;
+
+test('POSITIVE CONTROL — the workflow name handed to the CLI really is GUID-shaped', () => {
+  // Without this, "no GUID in stdout" is satisfiable by a CLI that prints nothing.
+  assert.match(POISONED_WORKFLOW, GUID_RE, 'the CLI input must carry a GUID or the next two tests are vacuous');
+});
+
+test('ACCEPTANCE — the NOT-FILED annotation redacts the workflow name (#3829 round 3)', async () => {
+  const r = await runCli(['--workflow', POISONED_WORKFLOW, '--result', 'cancelled'], {
+    GITHUB_REPOSITORY: 'o/r',
+    GH_TOKEN: 'not-a-real-token',
+  });
+  assert.equal(r.code, 0, `a cancellation must not turn the run red; stderr=${r.stderr}`);
+  // Non-degenerate: the annotation really was emitted, and it is the one meant.
+  assert.match(r.stdout, /^::notice::deploy-notify-failure: no issue filed for /, 'the annotation was not emitted at all');
+  assert.doesNotMatch(r.stdout, GUID_RE, 'a GUID reached a PUBLIC ::notice:: annotation (#3829 round 3)');
+  // REDACTED, not dropped — the notice must still name which workflow it is about.
+  assert.match(r.stdout, /no issue filed for deploy-fiab-<guid> —/, 'the workflow name was removed rather than redacted');
+});
+
+test('ACCEPTANCE — the FILED-issue log line redacts the workflow name too, over a real transport', async () => {
+  const seen = [];
+  const { server, base } = await stubApi((method, url, raw) => {
+    seen.push({ method, url, raw });
+    if (method === 'GET') return [];
+    return { number: 4321 };
+  });
+  try {
+    const r = await runCli(['--workflow', POISONED_WORKFLOW, '--result', 'failure'], {
+      GITHUB_REPOSITORY: 'o/r',
+      GH_TOKEN: 'not-a-real-token',
+      GITHUB_API_URL: base,
+      GITHUB_RUN_ID: '99',
+      GITHUB_SHA: 'abc1234',
+    });
+    assert.equal(r.code, 0, `the filer must succeed against the stub; stderr=${r.stderr}`);
+    // Non-degenerate: it really filed, so the log line under test really ran.
+    assert.match(r.stdout, /opened #4321 for /, 'the CLI did not reach the filing log line');
+    assert.doesNotMatch(r.stdout, GUID_RE, 'a GUID reached the PUBLIC run log on the filing path (#3829 round 3)');
+    assert.match(r.stdout, /opened #4321 for deploy-fiab-<guid>\./, 'redacted in place, not dropped');
+
+    // …and the same run is an END-TO-END receipt for the poster boundary: the
+    // title and body that crossed a real HTTP transport carry no GUID either.
+    const created = seen.find((c) => c.method === 'POST');
+    assert.ok(created, 'no issue was POSTed');
+    const payload = JSON.parse(created.raw);
+    assert.doesNotMatch(payload.title, GUID_RE, 'a GUID reached the PUBLIC issue TITLE over the wire');
+    assert.doesNotMatch(payload.body, GUID_RE, 'a GUID reached the PUBLIC issue BODY over the wire');
+    assert.equal(payload.title, 'deploy: deploy-fiab-<guid> is failing');
+    assert.match(payload.body, /\*\*deploy-fiab-<guid>\*\* failed\./, 'the body must still name the workflow');
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
 });
 
 // ── CANCELLED IS NOT FAILED (#3368) ──────────────────────────────────────────
@@ -451,6 +620,20 @@ function notifyInvocations() {
     }
   }
   return hits;
+}
+
+/**
+ * The `--workflow` VALUES the real callers pass, read out of the workflows
+ * rather than guessed. Used to key the redaction tests to the population a
+ * name-shaped bypass would actually have to cover.
+ */
+function callerWorkflowNames() {
+  const names = new Set();
+  for (const h of notifyInvocations()) {
+    const m = /--workflow\s+([^\s\\]+)/.exec(h.invocation);
+    if (m) names.add(m[1]);
+  }
+  return [...names];
 }
 
 test('RATCHET — every deploy-notify-failure caller passes --result', () => {

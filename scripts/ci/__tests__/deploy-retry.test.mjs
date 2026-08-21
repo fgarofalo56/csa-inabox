@@ -731,22 +731,86 @@ test('redact() is IDEMPOTENT — the three layers cannot corrupt each other', ()
   }
 });
 
-test('redact() has NO size cap — a big input is redacted exactly like a small one', () => {
-  // Inserting `if (text.length > 1800) return text;` into redact() left BOTH
-  // consuming suites GREEN (39/39 and 22/22), because a typical issue body is
-  // ~386 chars and every fixture is small. A redactor that gives up above N
-  // bytes leaks precisely the inputs most worth redacting — a full ARM
-  // operation dump. Pin the property over >5 KB.
-  const filler = 'x'.repeat(600);
-  const big = Array.from({ length: 10 }, (_, i) => `${filler} leaf ${i} on ${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`).join('\n');
-  assert.ok(big.length > 5 * 1024, `the fixture must exceed 5 KB (got ${big.length})`);
-  // Non-degenerate: the input really carries GUIDs, at both ends of the buffer.
-  assert.match(big.slice(0, 1000), GUID_RE, 'the fixture must carry a GUID early');
-  assert.match(big.slice(-1000), GUID_RE, 'the fixture must carry a GUID late');
+// ── redact() IS SIZE-INDEPENDENT: the PROPERTY, not a sample ─────────────────
+//
+// Round 2 pinned this at ONE size (~6.1 KB). A point is not the property: with
+//
+//     if (text.length > 20000) return text;
+//
+// inserted into redact(), all three consuming suites stayed GREEN — 90/90,
+// retry RC=0, arm RC=0, notify RC=0. And the gap is REACHABLE, not theoretical.
+// Measured on real renderLeaves() output with the #3817 leaf shape:
+//
+//     leaves= 20  bytes=  8179   >20KB? false
+//     leaves= 40  bytes= 16299   >20KB? false
+//     leaves= 60  bytes= 24419   >20KB? true
+//     leaves=120  bytes= 48800   >20KB? true
+//
+// A 60-leaf ARM failure — exactly the "full ARM operation dump" _azure-redact's
+// header says a cap would leak — clears 20 KB. So the assertion is now the
+// property, from two directions: BEHAVIOURAL across three orders of magnitude
+// (any cap between ~1 KB and ~1 MB goes red), and STRUCTURAL (a cap of ANY
+// magnitude goes red, including one outside the sampled range).
 
-  const out = redact(big);
-  assert.doesNotMatch(out, GUID_RE, 'redact() stopped redacting above some size (#3829 round 2)');
-  assert.equal((out.match(/<guid>/g) ?? []).length, 10, 'every occurrence must be replaced, not just the first');
+/**
+ * `minBytes` of leaf-shaped text carrying exactly one GUID per line, with a GUID
+ * in both the first and the last line — so a head-only or truncating redactor is
+ * caught as well as a size cap.
+ */
+function poisonedText(minBytes) {
+  const line = (i) => `  ResourceDeploymentFailure: leaf ${i} on ${SYNTHETIC_SERVER}/${SYNTHETIC_OID} — ${'x'.repeat(160)}`;
+  const guids = Math.max(2, Math.ceil(minBytes / (line(0).length + 1)));
+  return { text: Array.from({ length: guids }, (_, i) => line(i)).join('\n'), guids };
+}
+
+test('redact() has NO size cap — the count of redactions equals the count injected, from 1 KB to 1 MB', () => {
+  for (const minBytes of [1024, 64 * 1024, 1024 * 1024]) {
+    const { text, guids } = poisonedText(minBytes);
+    const label = `${Math.round(text.length / 1024)} KB`;
+
+    // Non-degenerate, at BOTH ends of the buffer: a fixture whose GUIDs all sit
+    // in the first KB could not tell a size cap from a working redactor.
+    assert.ok(text.length >= minBytes, `${label}: fixture is smaller than requested (${text.length} < ${minBytes})`);
+    assert.match(text.slice(0, 300), GUID_RE, `${label}: the fixture must carry a GUID early`);
+    assert.match(text.slice(-300), GUID_RE, `${label}: the fixture must carry a GUID late`);
+
+    const out = redact(text);
+    assert.doesNotMatch(out, GUID_RE, `${label}: redact() stopped redacting above some size (#3829 round 3)`);
+    assert.equal(
+      (out.match(/<guid>/g) ?? []).length,
+      guids,
+      `${label}: expected ${guids} redactions, so a partial pass is not mistaken for a clean one`,
+    );
+    // REDACTED, not TRUNCATED — a redactor that returned only the head would
+    // also contain no GUID and would be a false pass. The output length is
+    // EXACTLY the input minus what the substitutions remove (36 → 6 per GUID),
+    // so nothing else was dropped either.
+    assert.match(out.slice(-300), /<guid>/, `${label}: the tail of the input did not survive`);
+    assert.equal(
+      out.length,
+      text.length - guids * (SYNTHETIC_OID.length - '<guid>'.length),
+      `${label}: the output is not the input with the ids substituted — something was dropped or truncated`,
+    );
+  }
+});
+
+test('SELF-DEFENCE — redact() contains no length comparison at all, at any magnitude', () => {
+  // The behavioural test above spans 1 KB–1 MB, which catches any cap a real
+  // implementation would pick — but not, say, a 4 MB one. This closes that,
+  // structurally: _azure-redact.mjs's header states the contract as "no length
+  // cap and there must never be one", so the source may not compare a length.
+  const src = redact.toString();
+  const CAP_RE = /\.length\s*[<>]=?/;
+
+  // The guard must be able to FIRE, or it is a zero-population assertion that
+  // protects nothing. Prove it against the verbatim mutation shape first.
+  const capped = "function redact(text) {\n  if (text.length > 20000) return text;\n  return text;\n}";
+  assert.match(capped, CAP_RE, 'the cap matcher must detect the mutation it exists to catch');
+  assert.equal(CAP_RE.test('function redact(text) { return text.replace(/x/g, "y"); }'), false, 'and must not fire on the clean shape');
+
+  // Non-degenerate: we are reading the REAL function, not an empty string.
+  assert.match(src, /replace/, 'redact.toString() did not return the implementation');
+  assert.doesNotMatch(src, CAP_RE, 'redact() compares a length — a size cap leaks the biggest inputs (#3829 round 3)');
 });
 
 
