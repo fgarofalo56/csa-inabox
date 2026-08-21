@@ -1046,12 +1046,29 @@ describe('a caller-chosen workspaceId', () => {
    * Round 5 hard-coded every one of these to its default, so the pre-resolve
    * was proven for exactly ONE request shape and a gate conditioned on any
    * other input was invisible. See {@link EXTRA_SHAPES}.
+   *
+   * This mirrors EVERY optional/injectable member of `SweepOptions`, which is
+   * the only bound that makes the matrix complete rather than merely long:
+   *
+   *   `dryRun`     — its own dedicated spec below (and it also asserts nothing
+   *                  was created or seeded), so it is not a row here.
+   *   `session`    — round 7. Held fixed at the tid-bearing `SESSION` on every
+   *                  other axis, which left `opts.session.claims.tid !==
+   *                  undefined` free to gate the pre-resolve.
+   *   `cursor` · `itemTypes` · `limit`   — round 6.
+   *   `deadlineMs` · `now`               — round 7.
+   *   `providers` · `loadItems`          — the two TEST SEAMS, covered from the
+   *                  other direction by the un-injected spec below, because a
+   *                  gate keyed to a seam runs in the suite and never live.
    */
   interface ScopedShape {
     dryRun?: boolean;
     cursor?: string;
     itemTypes?: readonly string[];
     limit?: number;
+    deadlineMs?: number;
+    now?: () => number;
+    session?: SessionPayload;
   }
 
   /**
@@ -1064,21 +1081,25 @@ describe('a caller-chosen workspaceId', () => {
    * property under test. The specs below hold two of these open at once, which
    * is exactly the shape that makes that reachable.
    *
-   * `cursor` / `itemTypes` / `limit` are passed straight through as `undefined`
-   * when unset, which is what the module already tests for (`opts.cursor ===
-   * undefined`, `opts.itemTypes?.length`, `opts.limit ?? DEFAULT_LIMIT`) — so an
-   * unset axis is indistinguishable from an omitted key.
+   * `cursor` / `itemTypes` / `limit` / `deadlineMs` / `now` / `session` are
+   * passed straight through as `undefined` when unset, which is what the module
+   * already tests for (`opts.cursor === undefined`, `opts.itemTypes?.length`,
+   * `opts.limit ?? DEFAULT_LIMIT`, `opts.deadlineMs ?? DEFAULT_DEADLINE_MS`,
+   * `opts.now ?? (() => Date.now())`) — so an unset axis is indistinguishable
+   * from an omitted key.
    */
   const scopedSweep = (workspaceId: string, rows: WorkspaceItem[], shape: ScopedShape = {}) => {
     const asked: Array<{ workspaceId?: string }> = [];
     const settled = sweepAutoBind({
       dryRun: shape.dryRun ?? true,
-      session: SESSION,
+      session: shape.session ?? SESSION,
       providers: [seedingProvider()],
       workspaceId,
       cursor: shape.cursor,
       itemTypes: shape.itemTypes,
       limit: shape.limit,
+      deadlineMs: shape.deadlineMs,
+      now: shape.now,
       loadItems: async (o) => { asked.push(o); return rows; },
     }).then(
       (result) => ({ result, error: null as Error | null }),
@@ -1190,10 +1211,39 @@ describe('a caller-chosen workspaceId', () => {
   // `dryRun` is deliberately NOT in this table: it has its own dedicated spec
   // above (which additionally asserts nothing was created or seeded), and a
   // gate flipped to `&& opts.dryRun` is already caught 1 RED by it.
+  //
+  // ROUND 7 extends the same finding to the inputs round 6 still left fixed,
+  // and one of them was the worse polarity of the two:
+  //
+  //   `… && opts.deadlineMs === undefined`        → 0 RED, 111/111 SURVIVED
+  //   `… && opts.now === undefined`               → 0 RED, 111/111 SURVIVED
+  //   `… && opts.session.claims.tid !== undefined`→ 0 RED, 111/111 SURVIVED
+  //
+  // `deadlineMs` is the one that matters most, because the polarity is inverted
+  // relative to round 6's `loadItems`. `route.ts:167` passes
+  // `deadlineMs: SWEEP_DEADLINE_MS` UNCONDITIONALLY and is the only production
+  // caller, while no refusal spec supplied it at all — so
+  // `opts.deadlineMs === undefined` was FALSE on 100% of live traffic and TRUE
+  // in 100% of the specs that could have caught it. A gate wearing that
+  // condition is disabled on the estate and green in CI: the unprotected side
+  // is production, not the suite. `now` is the same class with the benign
+  // polarity (the route passes none), and is covered here for the same reason.
+  //
+  // `session` is the third, and it is production-reachable for a different
+  // reason: `lib/auth/feature-gate.ts:66-72` grants `isTenantAdmin` on a
+  // `groups` match or a bare `LOOM_TENANT_ADMIN_OID` oid match, requiring NO
+  // `tid` at all. Every axis above holds `session` at the tid-bearing
+  // `SESSION`, and the one tid-less spec in this file (`…no tid CLAIM is
+  // refused on the same workspace`) supplies NO `workspaceId`, so it exercises
+  // the per-row filter and never the pre-resolve. No spec paired a tid-less
+  // caller with a caller-chosen scope — which is exactly the #3824 both-absent
+  // trap, one layer up.
   // -------------------------------------------------------------------------
 
   /** `MAX_LIMIT` in the module under test. Not exported, so restated here. */
   const MAX_LIMIT = 1000;
+  /** `SWEEP_DEADLINE_MS` in `route.ts` — the value EVERY live sweep carries. */
+  const ROUTE_DEADLINE_MS = 100_000;
 
   /**
    * A REAL `nextCursor`, obtained THE HONEST WAY: a legitimate tenant-wide pass
@@ -1223,22 +1273,104 @@ describe('a caller-chosen workspaceId', () => {
     return p1.nextCursor!;
   };
 
+  /**
+   * A caller with NO `tid` claim — a session minted before rel-T11, or a PAT
+   * issued without `createdByTid`. Still `LOOM_TENANT_ADMIN_OID`, because
+   * `isTenantAdmin` never consults `tid`; that is what makes this reachable.
+   */
+  const TIDLESS_SESSION = { claims: { oid: CALLER_OID }, exp: 4_102_444_800 } as SessionPayload;
+
+  /**
+   * How the CONTROL half of a shape's pair stamps the workspace so THIS
+   * shape's caller can legitimately reach it.
+   *
+   * The default is the admin-bypass path — a workspace someone else owns, in
+   * the caller's own tenant — which is what every round-6 control used. A
+   * tid-less caller cannot take that path at all (#3823 fails the bypass
+   * closed when either tid is absent), so its control uses the OWNER
+   * fast-path instead, which is tid-independent by construction
+   * (`workspace-access.ts:317`, `resource.tenantId === oid`).
+   *
+   * Without this the session axis could only ever be one-sided, and a
+   * one-sided axis is satisfied by a gate that refuses EVERY request carrying
+   * the input — the failure mode the controls exist to rule out.
+   */
+  type Stamp = (id: string) => WsDoc;
+  const VIA_ADMIN_BYPASS: Stamp = (id) =>
+    ({ id, tenantId: OTHER_OWNER, tid: CALLER_TID, name: 'Theirs, same tenant' });
+  const VIA_OWNER_FASTPATH: Stamp = (id) =>
+    ({ id, tenantId: CALLER_OID, tid: CALLER_TID, name: 'Ours, owned outright' });
+
+  interface ExtraShape {
+    label: string;
+    shape: () => Promise<ScopedShape>;
+    /** The scope the caller names. Defaults to {@link FOREIGN_WS}. */
+    wsId?: string;
+    /** How the control's workspace is stamped. Defaults to the admin bypass. */
+    control?: Stamp;
+  }
+
   /** One entry per input a caller controls besides `workspaceId` itself. */
-  const EXTRA_SHAPES: Array<{ label: string; shape: () => Promise<ScopedShape> }> = [
+  const EXTRA_SHAPES: ExtraShape[] = [
     {
       label: 'a REAL nextCursor from a prior legitimate pass',
       shape: async () => ({ cursor: await honestCursor() }),
     },
     { label: 'a single itemType', shape: async () => ({ itemTypes: ['fake-item'] }) },
     { label: 'limit at MAX_LIMIT', shape: async () => ({ limit: MAX_LIMIT }) },
+    {
+      // THE PRODUCTION SHAPE. `route.ts:167` passes this on every live sweep,
+      // so a gate conditioned on its ABSENCE is off in production and on in
+      // every spec that predates this row.
+      label: 'the route deadline that EVERY live sweep carries',
+      shape: async () => ({ deadlineMs: ROUTE_DEADLINE_MS }),
+    },
+    {
+      label: 'an injected monotonic clock',
+      // Constant, so `now() >= deadline` is never reached and the control half
+      // cannot truncate — the axis under test is the PRESENCE of the seam.
+      shape: async () => ({ now: () => 1_700_000_000_000 }),
+    },
+    {
+      label: 'a caller carrying NO tid claim',
+      shape: async () => ({ session: TIDLESS_SESSION }),
+      control: VIA_OWNER_FASTPATH,
+    },
+    {
+      // Every other fixture id in this block starts `ws-`, so a gate reading
+      // `opts.workspaceId.startsWith('ws-')` saw a constant. It costs one
+      // string to stop it being one.
+      label: 'a workspace id that does not start ws-',
+      shape: async () => ({}),
+      wsId: 'tenant-b-analytics',
+    },
   ];
 
-  for (const { label, shape } of EXTRA_SHAPES) {
+  /**
+   * The labels the loop below ACTUALLY generated a pair for.
+   *
+   * Recorded at collection time (a `describe` body runs before any `it` in it),
+   * and asserted against {@link EXTRA_SHAPES} by the population control.
+   *
+   * A bare `expect(EXTRA_SHAPES.length).toBe(N)` inside a generated spec would
+   * NOT close this: `EXTRA_SHAPES.slice(0, 0)` in the `for` header emits no
+   * specs at all, so the assertion never runs — and `.slice(0, 1)` leaves
+   * `EXTRA_SHAPES.length` at N while emitting one pair, so the assertion
+   * passes. The count has to be taken from the ITERATION, not from the array,
+   * and it has to be read by a spec that exists whether or not the loop ran.
+   */
+  const GENERATED: string[] = [];
+
+  for (const { label, shape, wsId, control } of EXTRA_SHAPES) {
+    GENERATED.push(label);
+    const scope = wsId ?? FOREIGN_WS;
+    const reachable = control ?? VIA_ADMIN_BYPASS;
+
     it(`in ANOTHER tenant is refused with ${label} too — no count, no query`, async () => {
-      wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
+      wsStore.set(scope, { id: scope, tenantId: OTHER_OWNER, tid: FOREIGN_TID, name: 'Theirs' });
       const extra = await shape();
 
-      const { settled, asked } = scopedSweep(FOREIGN_WS, itemsIn(FOREIGN_WS, 5), extra);
+      const { settled, asked } = scopedSweep(scope, itemsIn(scope, 5), extra);
       const { result, error } = await settled;
 
       expect(error).toBeInstanceOf(SweepScopeError);
@@ -1254,20 +1386,44 @@ describe('a caller-chosen workspaceId', () => {
       // refuses (or admits) every request carrying this input. Without it, a
       // mutation widening the gate to `|| opts.cursor !== undefined` would break
       // every legitimate RESUMED sweep and no spec would notice.
-      wsStore.set(FOREIGN_WS, { id: FOREIGN_WS, tenantId: OTHER_OWNER, tid: CALLER_TID, name: 'Theirs, same tenant' });
-      const rows = itemsIn(FOREIGN_WS, 2);
+      wsStore.set(scope, reachable(scope));
+      const rows = itemsIn(scope, 2);
       register(rows);
       const extra = await shape();
 
-      const { settled, asked } = scopedSweep(FOREIGN_WS, rows, extra);
+      const { settled, asked } = scopedSweep(scope, rows, extra);
       const { result, error } = await settled;
 
       expect(error).toBeNull();
       expect(result!.rows.map((r) => r.itemId)).toEqual(['id-t1', 'id-t2']);
       expect(result!.excludedByAccess).toBe(0);
-      expect(asked.map((o) => o.workspaceId)).toEqual([FOREIGN_WS]);
+      expect(asked.map((o) => o.workspaceId)).toEqual([scope]);
     });
   }
+
+  it('drives the pre-resolve from EVERY shape in the matrix — the population control', () => {
+    // #3808 round 7. `EXTRA_SHAPES.slice(0, 0)` in the `for` header above
+    // deleted six specs and the suite still reported RC=0 with every remaining
+    // test green — 111 became 105 and nothing said so. A matrix with no
+    // population control is a guard whose subject can be emptied silently,
+    // which is the same defect class the specs it generates exist to catch.
+    //
+    // Asserted three ways, because each catches a different edit:
+    //   • the exact roster  — a row swapped, renamed, or quietly dropped
+    //   • iterated === declared — a `.slice(…)` / filter in the `for` header
+    //   • the literal count — a row appended without extending this control
+    expect(GENERATED).toEqual([
+      'a REAL nextCursor from a prior legitimate pass',
+      'a single itemType',
+      'limit at MAX_LIMIT',
+      'the route deadline that EVERY live sweep carries',
+      'an injected monotonic clock',
+      'a caller carrying NO tid claim',
+      'a workspace id that does not start ws-',
+    ]);
+    expect(GENERATED).toEqual(EXTRA_SHAPES.map((s) => s.label));
+    expect(EXTRA_SHAPES.length).toBe(7);
+  });
 
   it('is refused with NO injected loadItems or providers — the SEAM is not what is guarded', async () => {
     // The axis the three above do not reach, and the worst of the set: every
