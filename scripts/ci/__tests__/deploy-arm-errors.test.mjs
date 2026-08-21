@@ -187,6 +187,65 @@ test('subscription ids never reach the rendered output', () => {
   assert.match(out, /<redacted>/);
 });
 
+// ── renderLeaves() IS A REDACTION BOUNDARY (#3829 round 2) ───────────────────
+//
+// deploy-retry.mjs writes this string straight to process.stderr, and on a
+// PUBLIC repo the Actions run log is a publication surface exactly as an issue
+// body is. Round 1 redacted `l.message` only, which left `l.resourceName`, the
+// `warnings[]` lines and `result.reason` raw — and for the
+// flexibleServers/administrators leaf that opened #3829, `resourceName` IS
+// `<server>/<objectId>`. Measured at that head, the id reached stderr twice.
+//
+// These are written against the branch structure, because the hole reopens
+// per-branch: one case per status.
+
+const SYNTHETIC_OID = '11111111-2222-3333-4444-555555555555';
+const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+test('FOUND — the leaf resourceName is redacted, and the server name survives', () => {
+  const ops = [
+    {
+      operationId: 'DEADBEEF',
+      properties: {
+        provisioningState: 'Failed',
+        statusCode: 'Conflict',
+        targetResource: {
+          id: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x/providers/Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+          resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+          resourceName: `psql-loom-weave-default-abc123/${SYNTHETIC_OID}`,
+        },
+        statusMessage: {
+          error: { code: 'Conflict', message: 'the administrator could not be written', details: null },
+        },
+      },
+    },
+  ];
+  const r = collectArmLeafErrors({ name: 'x', scope: 'sub', run: () => ({ status: 0, stdout: JSON.stringify(ops), stderr: '' }) });
+  assert.equal(r.status, STATUS.FOUND, 'the fixture must actually produce a leaf');
+  // Non-degenerate: the leaf really carries the id before rendering.
+  assert.match(r.leaves[0].resourceName, GUID_RE, 'the collected leaf must carry the id or this proves nothing');
+
+  const out = renderLeaves(r);
+  assert.doesNotMatch(out, GUID_RE, 'the leaf resourceName published an object id (#3829 round 2)');
+  assert.match(out, /psql-loom-weave-default-abc123\/<guid>/, 'redacted IN PLACE — the server name must survive');
+});
+
+test('UNREADABLE and PARTIAL — a GUID in the DEPLOYMENT NAME is redacted too', () => {
+  // The unreadable/partial branches interpolate `node.name`, and this repo
+  // generates deployment names off `newGuid()` seeds. Round 1 redacted neither
+  // branch.
+  const name = `admin_${SYNTHETIC_OID}`;
+  const refuse = () => ({ status: 1, stdout: '', stderr: 'ERROR: (AuthorizationFailed) read denied' });
+  const r = collectArmLeafErrors({ name, scope: 'sub', run: refuse });
+  assert.equal(r.status, STATUS.UNREADABLE);
+  // Non-degenerate: the reason really embeds the poisoned name.
+  assert.match(r.reason, GUID_RE, 'the reason must carry the id or this proves nothing');
+
+  const out = renderLeaves(r);
+  assert.doesNotMatch(out, GUID_RE, 'the UNREADABLE render published a deployment-name GUID (#3829 round 2)');
+  assert.match(out, /admin_<guid>/, 'redacted in place — and note `_` is a word char, which `\\b` did not stop');
+});
+
 test('errorLeaves walks past the boilerplate wrappers to the real code', () => {
   const err = {
     code: 'DeploymentFailed',

@@ -321,8 +321,31 @@ export function collectArmLeafErrors({
  * The block appended to the text handed to the classifier, and printed for the
  * operator. Every leaf is listed — a deployment can fail for more than one
  * reason at once, and on run 31069329802 it did.
+ *
+ * THIS FUNCTION IS A REDACTION BOUNDARY (#3829 round 2). deploy-retry.mjs writes
+ * this string straight to process.stderr, and on a PUBLIC repo the Actions run
+ * log is a publication surface exactly as an issue body is. The first cut
+ * redacted `l.message` and nothing else, which left FOUR interpolations raw:
+ * `l.resourceName` (`<server>/<objectId>` for the flexibleServers/administrators
+ * leaf that opened #3829, the role-assignment GUID for a roleAssignments leaf),
+ * the `warnings[]` lines, and `result.reason` — the last two of which embed a
+ * deployment NAME, and this repo generates deployment names with `newGuid()`
+ * seeds.
+ *
+ * So the redaction is applied ONCE, to the assembled render, at the single
+ * return. A branch added later cannot reopen the hole, and a field added to a
+ * branch cannot either. redact() is idempotent, so the per-field call on
+ * `l.message` stays as defence in depth.
+ *
+ * SAFE FOR THE CLASSIFIER. This string is also `classifyText`. redact() rewrites
+ * only GUID and `/subscriptions/<id>` substrings, which no taxonomy signal
+ * matches on, and it deliberately does NOT touch an undashed 32-hex run — which
+ * is the form ARM uses for the blocking role-assignment id that
+ * deploy-retry.mjs's planRemediation() reads back to converge the grant (#3439).
+ * Both properties are pinned by tests.
  */
 export function renderLeaves(result) {
+  let out;
   if (result.status === STATUS.FOUND) {
     const head = `ARM leaf failures (${result.leaves.length}) drilled from the failed deployment operations:`;
     const body = result.leaves.map((l) => {
@@ -332,18 +355,18 @@ export function renderLeaves(result) {
       return `  ${l.code ?? 'NoCode'}: ${redact(l.message)}${where}`;
     });
     const warn = result.warnings.map((w) => `  (partial) ${w}`);
-    return [head, ...body, ...warn].join('\n');
-  }
-  if (result.status === STATUS.NONE) {
-    return (
+    out = [head, ...body, ...warn].join('\n');
+  } else if (result.status === STATUS.NONE) {
+    out =
       `ARM leaf failures: none. ${result.operationsSeen} deployment operation(s) were listed and ` +
-      'ARM reported none of them Failed. The cause is therefore NOT in the deployment operations.'
-    );
+      'ARM reported none of them Failed. The cause is therefore NOT in the deployment operations.';
+  } else {
+    out =
+      'ARM leaf failures: UNREADABLE — the deployment operations could not be listed, so nothing ' +
+      `is asserted about the cause. ${result.reason}`;
   }
-  return (
-    'ARM leaf failures: UNREADABLE — the deployment operations could not be listed, so nothing ' +
-    `is asserted about the cause. ${result.reason}`
-  );
+  // THE BOUNDARY. Do not move this back to the individual interpolations.
+  return redact(out);
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────

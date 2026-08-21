@@ -38,6 +38,21 @@ answer — nothing is asserted). `deploy-fiab-commercial.yml` now runs it
 automatically on failure and feeds the leaves to the classifier, so a live run's
 annotation names the cause instead of reporting "could not classify" (#3039).
 
+!!! warning "`--json` output is UNREDACTED — do not paste it into an issue (#3829)"
+    The default (human-readable) render above is redacted: subscription and
+    tenant ids collapse to `<redacted>` and any GUID — including the object id in
+    a `flexibleServers/administrators` leaf name, `<server>/<objectId>` — becomes
+    `<guid>`. Paste it freely.
+
+    `--json` is deliberately **raw**. It exists so the operator keeps the full
+    ARM ids that some remediations in the table below actually need (the
+    `RoleAssignmentExists` row's `az role assignment delete --ids <id>` is the
+    one that matters). That means its output carries subscription ids, tenant
+    ids, full resource ids and Entra object ids. **This repo is public** — treat
+    `--json` output as local-only. If you need to attach evidence to a public
+    issue, attach the default render, or the `deploy-failure.json` artifact,
+    which is redacted at its own boundary.
+
 By hand, the same walk is:
 
 ```bash
@@ -171,8 +186,11 @@ linked empty one is not.
 ## Escalation
 
 If the error doesn't match the table above:
-- Open GitHub issue with label `csa-loom` + `csa-bug` + paste the
-  deployment operation error JSON
+- Open GitHub issue with label `csa-loom` + `csa-bug`. Attach the **redacted**
+  evidence: the default (non-`--json`) `deploy-arm-errors.mjs` render, or the
+  `deploy-failure.json` artifact. **Do not paste raw `az deployment operation
+  … -o json` or `--json` output** — this repo is public and that output carries
+  subscription, tenant and Entra object ids (#3829)
 - An unclassifiable failure is also a gap in the taxonomy — say so in the issue
   so the class gets added
 - Internal Microsoft: `#csa-loom-build` Teams channel

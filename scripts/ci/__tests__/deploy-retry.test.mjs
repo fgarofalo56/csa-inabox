@@ -31,6 +31,7 @@ import {
   planRemediation,
   parseArgs,
   redact,
+  formatAnnotation,
   armDrilldown,
   USAGE_EXIT,
 } from '../deploy-retry.mjs';
@@ -404,25 +405,37 @@ test('redact strips subscription ids and bare GUIDs from anything committed or a
 
 // ── THE PUBLICATION BOUNDARIES (#3829) ───────────────────────────────────────
 //
-// This script publishes to TWO public places on a public repo: the Actions
-// annotation log, and deploy-failure.json — which
-// .github/scripts/deploy-notify-failure.mjs renders into an ISSUE body.
+// This script writes to THREE surfaces, and on a PUBLIC repo all three are
+// publicly readable:
 //
-// On #3817 a raw Entra object id reached that body. `redact()` was applied to
-// `leaf.message` and `evidence.line` at their composition sites, but THREE
+//   1. STDOUT  — the Actions annotation log (`::error::` / `::warning::` /
+//                `::notice::`), redacted in formatAnnotation().
+//   2. deploy-failure.json — which .github/scripts/deploy-notify-failure.mjs
+//                renders into an ISSUE, redacted over the whole serialization.
+//   3. STDERR  — the Actions RUN LOG. Round 1 of this fix missed it, on the
+//                reasoning that the captured stderr FILE stays on the runner.
+//                True of the file; FALSE of the stream. Measured at that head, a
+//                `flexibleServers/administrators` leaf put `<server>/<oid>` on
+//                stderr twice, unredacted, from two COMPOSED lines:
+//                renderLeaves() and the per-leaf classification block.
+//
+// On #3817 a raw Entra object id reached the issue body. `redact()` was applied
+// to `leaf.message` and `evidence.line` at their composition sites, but THREE
 // artifact fields embedded a leaf's `resourceName` untouched — `whyStopped`
 // (= decision.reason), `leafClasses[].resourceName`, and
-// `armDrilldown.leaves[].resourceName`. For a flexibleServers/administrators
-// leaf that name IS `<server>/<objectId>`.
+// `armDrilldown.leaves[].resourceName`.
 //
 // The fix redacts ONCE per boundary, so these are written against the property
-// ("nothing GUID-shaped leaves this process") rather than against the three
-// fields that happened to leak. Every GUID here is obviously synthetic.
+// ("nothing GUID-shaped leaves this process on a published surface") rather than
+// against the fields that happened to leak. Every GUID here is obviously
+// synthetic.
 
 /** The assertion under test — the issue's own pattern, verbatim. */
 const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const SYNTHETIC_OID = '11111111-2222-3333-4444-555555555555';
 const SYNTHETIC_SERVER = 'psql-loom-weave-default-abc123';
+/** What the id must become, in place — never dropped. */
+const REDACTED_LEAF_NAME = `${SYNTHETIC_SERVER}/<guid>`;
 
 /**
  * A fake `az` that prints one failed ARM operation whose targetResource carries
@@ -447,33 +460,70 @@ function fakeAzEmitting(dir, ops) {
   return p;
 }
 
-const LEAKY_OPS = [
-  {
-    operationId: 'DEADBEEF',
-    properties: {
-      provisioningState: 'Failed',
-      statusCode: 'Conflict',
-      targetResource: {
-        id: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x/providers/Microsoft.DBforPostgreSQL/flexibleServers/administrators',
-        resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
-        resourceName: `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`,
-      },
-      statusMessage: {
-        error: {
-          code: 'ResourceDeploymentFailure',
-          message: 'At least one resource deployment operation failed.',
-          details: [
-            {
-              code: 'SomeCodeNobodyHasEverSeen',
-              message: `The administrator ${SYNTHETIC_OID} could not be written to ${SYNTHETIC_SERVER}.`,
-              details: null,
-            },
-          ],
+/** One failed operation on the #3817 leaf shape, with the given leaf detail. */
+function leakyOps({ code, message }) {
+  return [
+    {
+      operationId: 'DEADBEEF',
+      properties: {
+        provisioningState: 'Failed',
+        statusCode: 'Conflict',
+        targetResource: {
+          id: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x/providers/Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+          resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+          resourceName: `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`,
+        },
+        statusMessage: {
+          error: {
+            code: 'ResourceDeploymentFailure',
+            message: 'At least one resource deployment operation failed.',
+            details: [{ code, message, details: null }],
+          },
         },
       },
     },
-  },
-];
+  ];
+}
+
+const LEAKY_OPS = leakyOps({
+  code: 'SomeCodeNobodyHasEverSeen',
+  message: `The administrator ${SYNTHETIC_OID} could not be written to ${SYNTHETIC_SERVER}.`,
+});
+
+/** The same leaf, but with a message the taxonomy DOES name — class `capacity`. */
+const LEAKY_OPS_CLASSIFIED = leakyOps({
+  code: 'CapacityNotAvailable',
+  message: 'Capacity is not available in this region/zone. Please retry after some time.',
+});
+
+/** Drive the real script over a fake-az fixture and hand back every surface. */
+function runWithFakeAz(ops, extraArgs = []) {
+  const dir = scratchDir();
+  const counter = path.join(dir, 'n');
+  fs.writeFileSync(counter, '');
+  const artifact = path.join(dir, 'deploy-failure.json');
+  const az = fakeAzEmitting(dir, ops);
+
+  const r = spawnSync(
+    process.execPath,
+    [
+      SCRIPT,
+      '--class-allow', 'transient',
+      '--max-attempts', '1',
+      '--backoff', '0',
+      '--jitter', '0',
+      '--step', 'az deployment sub create',
+      '--artifact', artifact,
+      '--arm-deployment', 'csa-loom-ci-1',
+      '--arm-scope', 'sub',
+      ...extraArgs,
+      '--',
+      ...alwaysFails(counter, MYSTERY),
+    ],
+    { encoding: 'utf8', env: { ...process.env, LOOM_AZ_BIN: az } },
+  );
+  return { r, artifact, raw: fs.readFileSync(artifact, 'utf8') };
+}
 
 test('POSITIVE CONTROL — the GUID assertion FIRES on the pre-fix leaf composition', () => {
   // A redaction assertion whose fixture contains no GUID passes forever while
@@ -494,58 +544,211 @@ test('POSITIVE CONTROL — the GUID assertion FIRES on the pre-fix leaf composit
   assert.equal(GUID_RE.test(redact(d.reason)), false, 'and redact() removes it — so the matcher can go green too');
 });
 
-test('ACCEPTANCE — no GUID reaches the artifact or the annotation, end to end (#3829)', () => {
-  const dir = scratchDir();
-  const counter = path.join(dir, 'n');
-  fs.writeFileSync(counter, '');
-  const artifact = path.join(dir, 'deploy-failure.json');
-  const az = fakeAzEmitting(dir, LEAKY_OPS);
-
-  const r = spawnSync(
-    process.execPath,
-    [
-      SCRIPT,
-      '--class-allow', 'transient',
-      '--max-attempts', '1',
-      '--backoff', '0',
-      '--jitter', '0',
-      '--step', 'az deployment sub create',
-      '--artifact', artifact,
-      '--arm-deployment', 'csa-loom-ci-1',
-      '--arm-scope', 'sub',
-      '--',
-      ...alwaysFails(counter, MYSTERY),
-    ],
-    { encoding: 'utf8', env: { ...process.env, LOOM_AZ_BIN: az } },
-  );
+test('ACCEPTANCE — no GUID reaches the artifact, the annotations OR stderr, end to end (#3829)', () => {
+  const { r, raw } = runWithFakeAz(LEAKY_OPS);
 
   assert.notEqual(r.status, 0, 'the failure must still be RED — redaction must not swallow the verdict');
 
-  // NON-DEGENERATE: the drill-down really ran and really saw the object id.
-  // Without this the "no GUID" assertions below could pass on an empty walk
-  // (the zero-population shape). The RAW stderr block is the control: it is
-  // deliberately NOT redacted, stays on the runner, and is never published.
+  // NON-DEGENERATE, WITHOUT PINNING THE SECRET. Round 1 keyed this control to
+  // the leaked value itself (`assert.match(r.stderr, GUID_RE)`), so closing the
+  // leak broke the guard — a control must not be keyed to the thing being
+  // removed. It is keyed instead to two things that are NOT the secret: the
+  // drill-down really ran, and the leaf name really reached the output, in its
+  // redacted form. Either one going missing means the walk was empty and the
+  // "no GUID" assertions below would be the zero-population false pass.
   assert.match(r.stderr, /ARM drill-down/, 'the drill-down must have run');
-  assert.match(r.stderr, GUID_RE, 'the raw stderr MUST still carry the id, or this test proves nothing');
+  assert.ok(
+    r.stderr.includes(REDACTED_LEAF_NAME),
+    'the leaf name must reach stderr REDACTED IN PLACE — if it is absent entirely the walk read nothing',
+  );
+  assert.match(r.stderr, /per-leaf classification/, 'the per-leaf block — the second composed stderr site — must have run');
 
   // BOUNDARY 1 — the artifact, which the notifier posts to a PUBLIC issue.
-  const raw = fs.readFileSync(artifact, 'utf8');
   assert.doesNotMatch(raw, GUID_RE, 'deploy-failure.json still carries a GUID (#3829)');
 
   // BOUNDARY 2 — the Actions annotations, which are public on a public repo.
   assert.doesNotMatch(r.stdout, GUID_RE, 'an Actions annotation still carries a GUID (#3829)');
 
+  // BOUNDARY 3 — STDERR, i.e. the Actions RUN LOG. This is the one round 1
+  // missed: `renderLeaves()` interpolated `l.resourceName` verbatim and the
+  // per-leaf classification block interpolated `l.leaf.resourceName` verbatim,
+  // and both are written straight to process.stderr.
+  assert.doesNotMatch(r.stderr, GUID_RE, 'the Actions RUN LOG still carries a GUID on stderr (#3829 round 2)');
+
   // REDACTED, NOT DROPPED. A run that simply lost these fields would also
   // contain no GUID and would be a false pass, while destroying the diagnostic
   // R6 requires. Each must survive with `<guid>` substituted IN PLACE.
   const a = JSON.parse(raw);
-  const placeholder = `${SYNTHETIC_SERVER}/<guid>`;
-  assert.match(a.whyStopped, new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.equal(a.leafClasses[0].resourceName, placeholder, 'the leaf name must be redacted in place, not removed');
-  assert.equal(a.armDrilldown.leaves[0].resourceName, placeholder);
+  assert.match(a.whyStopped, new RegExp(REDACTED_LEAF_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(a.leafClasses[0].resourceName, REDACTED_LEAF_NAME, 'the leaf name must be redacted in place, not removed');
+  assert.equal(a.armDrilldown.leaves[0].resourceName, REDACTED_LEAF_NAME);
   assert.equal(a.armDrilldown.status, 'found');
   assert.equal(a.class, 'unknown', 'the classification is unchanged by redaction');
 });
+
+test('ACCEPTANCE — the artifact is redacted at a NON-`unknown` class too (#3829 round 2)', () => {
+  // The round-1 suite carried exactly one artifact test with a GUID in it, and
+  // its class was `unknown`; the only other artifact test used `transient` and
+  // had no GUID anywhere. So scoping the artifact redaction to
+  // `diagnosis.class === 'unknown'` left the whole suite GREEN (measured: 39/39)
+  // while every permission-, capacity- and config-classified leaf still
+  // published its id. Same leaf, same `<server>/<oid>` name, a message the
+  // taxonomy DOES name — so the class is `capacity`, not `unknown`.
+  const { r, raw } = runWithFakeAz(LEAKY_OPS_CLASSIFIED);
+  const a = JSON.parse(raw);
+
+  // Non-degenerate in the direction that matters: this really is NOT `unknown`,
+  // or the case would be indistinguishable from the test above.
+  assert.notEqual(a.class, 'unknown', 'the fixture must classify to a NAMED class or it does not test the scoping');
+  assert.equal(a.class, 'capacity');
+  assert.equal(a.leafClasses[0].class, 'capacity');
+
+  assert.doesNotMatch(raw, GUID_RE, 'the artifact publishes a GUID whenever the class is not `unknown` (#3829)');
+  assert.doesNotMatch(r.stdout, GUID_RE, 'a non-`unknown` annotation still carries a GUID');
+  assert.doesNotMatch(r.stderr, GUID_RE, 'a non-`unknown` run log still carries a GUID');
+  // …and REDACTED, not dropped.
+  assert.equal(a.leafClasses[0].resourceName, REDACTED_LEAF_NAME);
+  assert.match(a.whyStopped, /capacity/);
+});
+
+// ── formatAnnotation(): every LEVEL, not just `error` ─────────────────────────
+//
+// The annotation redaction is level-blind and must stay so:
+// `ghAnnotate('warning', …drill.rendered)` and the retry-progress notices go to
+// the same public log an `::error::` does. Scoping the redaction to
+// `level === 'error'` left the round-1 suite GREEN at 39/39, because it
+// exercised exactly one level.
+//
+// This is a DIRECT test of the boundary rather than an end-to-end one, and
+// deliberately: upstream composition sites redact as well, so an end-to-end
+// assertion would stay green with this redaction deleted and would therefore be
+// measuring the wrong control (csa_loom_mutation_that_does_not_move_the_verdict).
+
+test('MUTATION-VISIBLE — EVERY annotation level is redacted, not just `error`', () => {
+  const poisoned = `deploy-retry: blocked on '${SYNTHETIC_SERVER}/${SYNTHETIC_OID}'`;
+  // Non-degenerate: the input really carries the id.
+  assert.match(poisoned, GUID_RE, 'the annotation input must carry a GUID or this proves nothing');
+
+  for (const level of ['error', 'warning', 'notice']) {
+    const line = formatAnnotation(level, poisoned);
+    assert.ok(line.startsWith(`::${level}::`), `the ${level} annotation must keep its level prefix`);
+    assert.doesNotMatch(line, GUID_RE, `a ::${level}:: annotation published a GUID (#3829)`);
+    // REDACTED, not dropped — the annotation is still the diagnostic it was.
+    assert.ok(line.includes(REDACTED_LEAF_NAME), `the ::${level}:: annotation lost its subject entirely`);
+  }
+});
+
+test('formatAnnotation keeps its other contracts: one line, and never blank', () => {
+  const multi = formatAnnotation('error', 'line one\nline two\r\nline three');
+  assert.equal(multi.split('\n').length, 2, 'a multi-line message must render as ONE annotation');
+  assert.match(multi, /line one%0Aline two%0Aline three/);
+  // A non-string must not silently become a blank `::error::` — redact() returns
+  // '' for a non-string, which is why String() comes first.
+  assert.match(formatAnnotation('error', { toString: () => 'an object message' }), /an object message/);
+});
+
+// ── redact(): the residuals, measured rather than assumed ────────────────────
+//
+// Round 1 stated the residual as "a GUID glued to word chars on BOTH sides
+// survives `\b`". Measured against the real redact(), that was wrong in the
+// direction that matters: it was EITHER side, and `_` is a word character, so
+// `admin_<guid>` — the shape of an ARM deployment name and of a role-assignment
+// name this repo generates — leaked. The boundary is now hex-adjacency, which is
+// a strict superset of `\b`.
+
+test('redact() strips a GUID glued to word characters on EITHER side (#3829 round 2)', () => {
+  const cases = [
+    ['glued BOTH sides', `x${SYNTHETIC_OID}x`],
+    ['glued LEFT only', `x${SYNTHETIC_OID} end`],
+    ['glued RIGHT only', `start ${SYNTHETIC_OID}x`],
+    ['underscore prefix', `_${SYNTHETIC_OID}`],
+    ['underscore suffix', `${SYNTHETIC_OID}_`],
+    ['ARM deployment-name shape', `admin_${SYNTHETIC_OID}`],
+    ['dash-delimited (already worked)', `deploy-${SYNTHETIC_OID}`],
+    ['slash-delimited (already worked)', `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`],
+  ];
+  for (const [why, input] of cases) {
+    // Non-degenerate per case: the INPUT must trip the matcher.
+    assert.match(input, GUID_RE, `${why}: the fixture does not contain a GUID`);
+    assert.doesNotMatch(redact(input), GUID_RE, `${why}: redact() left the id in place`);
+    assert.match(redact(input), /<guid>/, `${why}: the id must be REPLACED, not deleted`);
+  }
+});
+
+test('redact() does NOT invent matches in legitimate text (no false positives)', () => {
+  // Widening the boundary is only safe if the things it newly matches are still
+  // GUIDs. The guard is negative lookaround on HEX, so the only inputs it can
+  // newly touch are full 8-4-4-4-12 tokens adjacent to a NON-hex character.
+  // Everything below must survive byte-for-byte.
+  const legitimate = [
+    'commit f172a1c0dc3e4b5a9f8e7d6c5b4a39281706f5e4 — a 40-hex git sha',
+    'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+    'csa-inabox 0.99.1 / node v22.14.0 / 2026-08-21T14:03:59Z',
+    'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+    'rg-csa-loom-admin-centralus / psql-loom-ducklake-k6mvh5sm6z7do',
+    'ERROR: (SomeCodeNobodyHasEverSeen) the widget frobnicator declined',
+    'The ID of the existing role assignment is 11112222333344445555666677778888.',
+    'abcdef11111111-2222-3333-4444-555555555555 (a longer hex run, not a GUID token)',
+    '11111111-2222-3333-4444-555555555555abc (trailing hex, not a GUID token)',
+  ];
+  for (const s of legitimate) {
+    assert.equal(redact(s), s, `redact() rewrote legitimate text: ${JSON.stringify(s)}`);
+  }
+});
+
+test('redact() leaves the UNDASHED 32-hex role-assignment id alone — #3439 depends on it', () => {
+  // ARM prints the blocking assignment as 32 undashed hex, and
+  // planRemediation() reads it back out to converge the grant automatically.
+  // Redacting it would disable a working auto-remediation to hide a resource
+  // NAME. This is a deliberate residual, so it is pinned rather than left to
+  // drift.
+  const armText =
+    'RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment ' +
+    'is 11112222333344445555666677778888.';
+  assert.equal(redact(armText), armText);
+  const plan = planRemediation({ signalId: 'config.role-assignment-exists' }, redact(armText));
+  assert.equal(plan.assignmentName, '11112222333344445555666677778888', 'redaction must not break the #3439 converger');
+  assert.ok(Array.isArray(plan.argv), 'the remediation must still be executable after redaction');
+});
+
+test('redact() is IDEMPOTENT — the three layers cannot corrupt each other', () => {
+  // Load-bearing, and now more so than in round 1: a leaf name is redacted at
+  // its composition site, again over the serialized artifact, and a third time
+  // at the issue poster. If a second pass rewrote a `<guid>` placeholder the
+  // stacking would mangle the diagnostic, so pin it rather than assert it in a
+  // comment.
+  const inputs = [
+    `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`,
+    `admin_${SYNTHETIC_OID}`,
+    `/subscriptions/${SYNTHETIC_OID}/resourceGroups/rg-csa-loom-admin-centralus`,
+    `x${SYNTHETIC_OID}x and ${SYNTHETIC_OID}`,
+  ];
+  for (const s of inputs) {
+    const once = redact(s);
+    assert.equal(redact(once), once, `redact() is not idempotent for ${JSON.stringify(s)}`);
+    assert.equal(redact(redact(once)), once, 'a third pass must also be a no-op');
+    assert.doesNotMatch(once, GUID_RE, 'and the first pass must actually have removed the id');
+  }
+});
+
+test('redact() has NO size cap — a big input is redacted exactly like a small one', () => {
+  // Inserting `if (text.length > 1800) return text;` into redact() left BOTH
+  // consuming suites GREEN (39/39 and 22/22), because a typical issue body is
+  // ~386 chars and every fixture is small. A redactor that gives up above N
+  // bytes leaks precisely the inputs most worth redacting — a full ARM
+  // operation dump. Pin the property over >5 KB.
+  const filler = 'x'.repeat(600);
+  const big = Array.from({ length: 10 }, (_, i) => `${filler} leaf ${i} on ${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`).join('\n');
+  assert.ok(big.length > 5 * 1024, `the fixture must exceed 5 KB (got ${big.length})`);
+  // Non-degenerate: the input really carries GUIDs, at both ends of the buffer.
+  assert.match(big.slice(0, 1000), GUID_RE, 'the fixture must carry a GUID early');
+  assert.match(big.slice(-1000), GUID_RE, 'the fixture must carry a GUID late');
+
+  const out = redact(big);
+  assert.doesNotMatch(out, GUID_RE, 'redact() stopped redacting above some size (#3829 round 2)');
+  assert.equal((out.match(/<guid>/g) ?? []).length, 10, 'every occurrence must be replaced, not just the first');
+});
+
 
 test('the artifact stays VALID JSON after the boundary redaction', () => {
   // Redacting the serialized artifact is only safe if it cannot corrupt the

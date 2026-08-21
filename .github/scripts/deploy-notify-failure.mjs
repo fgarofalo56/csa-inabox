@@ -54,11 +54,11 @@
  *   filing blind. Classification is shared with every other consumer in
  *   scripts/ci/run-outcome.mjs — one table, not N predicates.
  *
- * REDACTION LIVES AT THIS BOUNDARY, NOT AT EACH FIELD (#3829)
+ * REDACTION LIVES AT THE POSTER BOUNDARY, NOT AT EACH FIELD (#3829)
  *
  *   This repository is PUBLIC, and this script is the widest-audience publisher
- *   in the deploy lane: what it writes lands in an issue body permanently, edit
- *   history included. A push publishes.
+ *   in the deploy lane: what it writes lands in an issue title and body
+ *   permanently, edit history included. A push publishes.
  *
  *   deploy-retry.mjs redacted `leaf.message` and `evidence.line` at their
  *   composition sites and missed `whyStopped` — which `decideRetryForLeaves`
@@ -68,15 +68,19 @@
  *
  *   Adding `redact()` to that one field would fix the INSTANCE and leave the
  *   CLASS: every future field added to this body would have to remember on its
- *   own, and the evidence of this repo is that one eventually will not. So the
- *   redaction is applied ONCE, to the ASSEMBLED body, at the end of
- *   buildIssueBody(). Every field — present and future, from the artifact or
- *   from the environment — is covered by construction, and a new
- *   `lines.push(...)` cannot reopen the hole.
+ *   own, and the evidence of this repo is that one eventually will not.
+ *
+ *   So the redaction is applied at the POSTER — the last statement before the
+ *   payload leaves the process — in notifyFailure(), over the TITLE and the BODY
+ *   together. The first cut of this fix put it at the end of buildIssueBody()
+ *   instead, which is one level ABOVE the boundary and left two holes: the title
+ *   was never covered (it is derived from the workflow name), and `body` is a
+ *   parameter, so any caller handing notifyFailure() a hand-built string posted
+ *   it verbatim. Both were measured leaking before this was moved.
  *
  *   redact() is idempotent (`<guid>` and `<redacted>` contain nothing it
- *   matches), so the per-site calls upstream in deploy-retry.mjs remain
- *   correct and are kept as defence in depth.
+ *   matches), so buildIssueBody()'s own call and the per-site calls upstream in
+ *   deploy-retry.mjs remain correct and are kept as defence in depth.
  *
  * USAGE (from a workflow `if: failure()` step)
  *   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -171,11 +175,29 @@ export function buildIssueBody({ workflow, runId, runUrl, sha, failure }) {
  * Find the open notice issue, or create it, then comment. `request` is the
  * injectable transport so this is testable without GitHub.
  *
+ * THE POSTER BOUNDARY (#3829 round 2). redact() is applied HERE — the last
+ * statement before the payload leaves the process — over BOTH the title and the
+ * body, for three reasons the buildIssueBody() call site could not cover:
+ *
+ *   1. The TITLE was never redacted at all. It is derived from `--workflow` /
+ *      GITHUB_WORKFLOW, and a workflow name containing a GUID would have put one
+ *      in a public issue title, permanently, in the issue LIST.
+ *   2. `body` is a parameter, not necessarily buildIssueBody()'s return. Any
+ *      caller — present or future — that hands this function a hand-built string
+ *      posted it verbatim.
+ *   3. The SEARCH is matched on the redacted title, so the notice issue is found
+ *      by the same string it was created under. Redacting only at creation would
+ *      open a duplicate issue on every subsequent run.
+ *
+ * redact() is idempotent, so buildIssueBody()'s own call remains correct and is
+ * kept as defence in depth.
+ *
  * Returns `{ issueNumber, created }`. Throws on any API failure — a notifier
  * that cannot notify must fail the step, not swallow.
  */
 export async function notifyFailure({ repo, workflow, body, request }) {
-  const title = buildIssueTitle(workflow);
+  const title = redact(buildIssueTitle(workflow));
+  const safeBody = redact(body);
   const [owner, name] = repo.split('/');
 
   const found = await request('GET', `/repos/${owner}/${name}/issues?state=open&labels=${FAILURE_LABEL}&per_page=100`);
@@ -185,13 +207,13 @@ export async function notifyFailure({ repo, workflow, body, request }) {
   const existing = found.find((i) => i.title === title && !i.pull_request);
 
   if (existing) {
-    await request('POST', `/repos/${owner}/${name}/issues/${existing.number}/comments`, { body });
+    await request('POST', `/repos/${owner}/${name}/issues/${existing.number}/comments`, { body: safeBody });
     return { issueNumber: existing.number, created: false };
   }
 
   const created = await request('POST', `/repos/${owner}/${name}/issues`, {
     title,
-    body,
+    body: safeBody,
     labels: [FAILURE_LABEL],
   });
   if (!created?.number) throw new Error('issue creation returned no number — the notice was not filed');

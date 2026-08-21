@@ -279,6 +279,103 @@ test('the ARM-id and subscription-id forms are stripped from the body too', () =
   assert.match(body, /rg-csa-loom-admin-centralus/, 'the useful last segment must survive');
 });
 
+// ── THE POSTER BOUNDARY, NOT THE BODY BUILDER (#3829 round 2) ────────────────
+//
+// Round 1 put the redaction at the end of buildIssueBody(), one level ABOVE the
+// place the payload actually leaves the process, and titled the PR "redact at
+// the issue-poster boundary". Two holes were measured at that head:
+//
+//   buildIssueTitle('deploy-<guid>')  -> "deploy: deploy-<guid> is failing"  LEAK
+//   notifyFailure({ body: '<hand-built string>' })                          LEAK
+//
+// The title reaches the same public issue — and the issue LIST — and
+// notifyFailure() posts whatever `body` it is handed. The redaction now sits in
+// notifyFailure() over BOTH, which makes the claim literally true.
+
+/** A GUID glued to a word char on ONE side — the residual round 1 got wrong. */
+const GLUED_GUID = 'deploy_11111111-2222-3333-4444-555555555555';
+
+test('POSITIVE CONTROL — the pre-fix TITLE really did carry a GUID', () => {
+  // buildIssueTitle() is unredacted BY DESIGN: it is the pure title shape, and
+  // the redaction is at the poster. Prove the input is genuinely poisoned, so
+  // the assertion below is not passing on an empty string.
+  const raw = buildIssueTitle(GLUED_GUID);
+  assert.match(raw, GUID_RE, 'the title builder must be the thing that carries the id, or the next test is vacuous');
+});
+
+test('ACCEPTANCE — the TITLE is redacted at the poster, on create AND on the search', async () => {
+  const { request, calls } = recorder([
+    [/^GET /, () => []],
+    [/^POST .*\/issues$/, (b) => ({ number: 4243, ...b })],
+  ]);
+  const r = await notifyFailure({ repo: 'o/r', workflow: GLUED_GUID, body: 'x', request });
+  assert.equal(r.created, true);
+
+  const create = calls.find((c) => c.method === 'POST' && c.url.endsWith('/issues'));
+  assert.doesNotMatch(create.body.title, GUID_RE, 'a GUID reached a PUBLIC issue TITLE (#3829)');
+  // REDACTED, not dropped: the title must still identify the workflow.
+  assert.equal(create.body.title, 'deploy: deploy_<guid> is failing');
+});
+
+test('the notice is FOUND by its redacted title — redaction must not open a duplicate every run', async () => {
+  // If the title were redacted only on create, the next run's search would look
+  // for the RAW title, miss, and open a second issue. Feed the search the
+  // redacted title and assert it is matched and commented on.
+  const { request, calls } = recorder([
+    [/^GET /, () => [{ number: 88, title: 'deploy: deploy_<guid> is failing' }]],
+    [/^POST .*\/comments$/, () => ({ id: 1 })],
+  ]);
+  const r = await notifyFailure({ repo: 'o/r', workflow: GLUED_GUID, body: 'x', request });
+  assert.equal(r.created, false, 'the existing notice must be reused, not duplicated');
+  assert.equal(r.issueNumber, 88);
+  assert.equal(calls.filter((c) => c.url.endsWith('/issues')).length, 0, 'no duplicate issue');
+});
+
+test('ACCEPTANCE — a HAND-BUILT body is redacted at the poster too, on both post paths', async () => {
+  // `body` is a parameter. Round 1 redacted inside buildIssueBody(), so any
+  // caller that assembled its own string — the shape every future caller is one
+  // refactor away from — posted it verbatim.
+  const handBuilt = `HAND-BUILT BODY psql-loom-weave-default-abc123/11111111-2222-3333-4444-555555555555`;
+  assert.match(handBuilt, GUID_RE, 'the INPUT must carry a GUID or this test proves nothing');
+
+  // Path 1 — create.
+  const create = recorder([
+    [/^GET /, () => []],
+    [/^POST .*\/issues$/, (b) => ({ number: 1, ...b })],
+  ]);
+  await notifyFailure({ repo: 'o/r', workflow: 'wf', body: handBuilt, request: create.request });
+  const posted = create.calls.find((c) => c.method === 'POST').body.body;
+  assert.doesNotMatch(posted, GUID_RE, 'a hand-built body reached a PUBLIC issue unredacted (#3829)');
+  assert.match(posted, /psql-loom-weave-default-abc123\/<guid>/, 'redacted in place, not dropped');
+
+  // Path 2 — comment on an existing notice. Both writes go through the boundary.
+  const comment = recorder([
+    [/^GET /, () => [{ number: 5, title: buildIssueTitle('wf') }]],
+    [/^POST .*\/comments$/, () => ({ id: 1 })],
+  ]);
+  await notifyFailure({ repo: 'o/r', workflow: 'wf', body: handBuilt, request: comment.request });
+  const commented = comment.calls.find((c) => c.url.includes('/comments')).body.body;
+  assert.doesNotMatch(commented, GUID_RE, 'the COMMENT path bypassed the redaction (#3829)');
+  assert.match(commented, /psql-loom-weave-default-abc123\/<guid>/);
+});
+
+test('the poster redaction covers a GUID glued on EITHER side, not only a delimited one', () => {
+  // Round 1 stated the residual as "glued on BOTH sides survives". Measured, it
+  // was EITHER side — and `_` is a word character, so `admin_<guid>` (an ARM
+  // deployment-name shape) leaked. Assert the property through the real
+  // buildIssueBody(), which is what a workflow actually calls.
+  const body = buildIssueBody({
+    workflow: 'wf',
+    runId: '1',
+    runUrl: 'u',
+    sha: 's',
+    failure: { ...QUOTA_FAILURE, whyStopped: 'blocked on admin_11111111-2222-3333-4444-555555555555 and x11111111-2222-3333-4444-555555555555' },
+  });
+  assert.doesNotMatch(body, GUID_RE, 'a word-char-glued GUID survived into a PUBLIC issue body (#3829 round 2)');
+  assert.match(body, /admin_<guid>/, 'redacted in place');
+  assert.match(body, /x<guid>/, 'redacted in place');
+});
+
 // ── CANCELLED IS NOT FAILED (#3368) ──────────────────────────────────────────
 //
 // The issue's acceptance criterion is explicit that a one-directional test is
