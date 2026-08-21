@@ -13,6 +13,8 @@
  *     row hover, subtle row separators (not heavy table grid lines)
  *   • Empty-state + loading (Spinner) states
  *   • optional onRowClick
+ *   • optional multi-select   (opt-in `selection` prop — leading checkbox column
+ *                              + tri-state select-all header)
  *
  * Typed, generic API — replaces the app's ad-hoc `<table>`/`<Table>` usages.
  *
@@ -44,6 +46,7 @@ import {
   Skeleton,
   SkeletonItem,
   Input,
+  Checkbox,
   Dropdown,
   Option,
   Text,
@@ -130,6 +133,32 @@ export interface LoomRowMenuItem<T> {
   divider?: boolean;
 }
 
+/**
+ * Opt-in multi-select. When supplied, a leading checkbox column is prepended:
+ * a tri-state select-all in the header, one checkbox per row in the body.
+ *
+ * The table owns NO selection state — it renders what `selectedIds` says and
+ * reports intent through the callbacks, so the page stays the single source of
+ * truth (and can persist / act on a selection that outlives a re-sort).
+ *
+ * `onToggleAll` is deliberately scoped to the rows the user can currently SEE
+ * (post-filter, post-search). Selecting rows hidden behind a filter is the
+ * classic bulk-action footgun — the count says 40, the filter shows 3.
+ */
+export interface LoomSelection<T> {
+  /** Currently-selected row ids. */
+  selectedIds: Set<string>;
+  /** Toggle one row by id. */
+  onToggleRow: (id: string) => void;
+  /**
+   * Toggle every currently-visible row. Called with the visible ids so the page
+   * never has to re-derive the table's own filter/sort pipeline.
+   */
+  onToggleAll: (visibleIds: string[]) => void;
+  /** Per-row checkbox aria-label. Defaults to `Select row`. */
+  ariaLabel?: (row: T) => string;
+}
+
 export interface LoomDataTableProps<T> {
   columns: LoomColumn<T>[];
   rows: T[];
@@ -156,6 +185,11 @@ export interface LoomDataTableProps<T> {
   empty?: React.ReactNode;
   /** Row click handler — rows become keyboard-activatable when set. */
   onRowClick?: (row: T) => void;
+  /**
+   * Opt-in multi-select (leading checkbox column + tri-state select-all).
+   * Defaults off, so every existing consumer renders exactly as before.
+   */
+  selection?: LoomSelection<T>;
   /** Disable the per-column filter row entirely. Default false. */
   noFilters?: boolean;
   /** Optional aria-label for the grid. */
@@ -291,6 +325,20 @@ const useStyles = makeStyles({
   clickableRow: {
     cursor: 'pointer',
   },
+  // Selected row tint. Merged AFTER bodyRow so it wins the background, and it
+  // keeps its own :hover so a selected row still responds to the pointer.
+  selectedRow: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Selected,
+    },
+  },
+  // Checkbox cell/header: the control is unlabelled (it carries an aria-label
+  // instead), so just centre it in its narrow fixed column.
+  selectCell: {
+    display: 'flex',
+    alignItems: 'center',
+  },
   // filter row: a tinted band of inputs directly under the header
   filterRow: {
     display: 'flex',
@@ -401,6 +449,23 @@ const NAME_RE = /(^|_|\b)(name|title|displayname|label)(\b|_|$)/i;
 const DATE_RE = /(date|time|created|modified|updated|timestamp|lastrun|expires|expiry|when)/i;
 const SELECT_CARDINALITY_CAP = 40;
 
+/**
+ * The `selectVisibleIds` value for a table with no `selection` prop — a single
+ * frozen module-scope array, NOT a fresh `[]` per render.
+ *
+ * `selectVisibleIds` is a dep of the `fluentColumns` memo, and `filteredRows`
+ * returns the `rows` prop by identity when no column filter is active. A fresh
+ * `[]` therefore broke that memo for EVERY consumer of this primitive that does
+ * not opt into selection — measured 2026-08-20, 155 non-test call sites across
+ * 85 files and exactly ONE of them (/admin/workspaces) passes `selection` — on
+ * any render where `rows` changed identity (an inline `.filter()`/`.map()`) or
+ * a built-in column filter took a keystroke. Measured with a
+ * `createTableColumn` counter and no `selection` prop: 6 rebuilds across 3
+ * re-renders and 6 across 3 filter keystrokes with a fresh `[]`; 0 and 0 with
+ * this constant. Pinned by loom-data-table-memo.test.tsx.
+ */
+const NO_SELECTION_IDS: string[] = [];
+
 function looksDate(v: string): boolean {
   if (!v) return false;
   if (/^\d{4}-\d{2}-\d{2}/.test(v)) return true; // ISO-ish
@@ -484,6 +549,7 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     loading = false,
     empty = 'No items to show.',
     onRowClick,
+    selection,
     noFilters = false,
     ariaLabel,
     skeleton = false,
@@ -587,6 +653,29 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
 
   // Stable columnId for the auto-appended hover-actions column.
   const ACTIONS_COL = '__loom_row_actions__';
+  // Stable columnId for the auto-PREPENDED multi-select checkbox column.
+  const SELECT_COL = '__loom_select__';
+
+  // Consumers pass `getRowId` as an inline arrow, so its identity changes every
+  // render. Mirror it into a ref (same idiom as sortSnapRef above) and keep it
+  // OUT of the memo deps — otherwise every column definition in every one of
+  // this primitive's consumers would be rebuilt on every render.
+  const getRowIdRef = React.useRef(getRowId);
+  getRowIdRef.current = getRowId;
+
+  // Selection is computed over `filteredRows` — every row matching the current
+  // filters, NOT `windowRows` (the painted slice). On a virtualized 1,400-row
+  // table "select all" must mean all 1,400 matches, not the ~30 on screen.
+  const selectVisibleIds = React.useMemo(
+    () => (selection ? filteredRows.map((r) => getRowIdRef.current(r)) : NO_SELECTION_IDS),
+    [selection, filteredRows],
+  );
+  const selectedCount = React.useMemo(
+    () => (selection ? selectVisibleIds.reduce((n, id) => (selection.selectedIds.has(id) ? n + 1 : n), 0) : 0),
+    [selection, selectVisibleIds],
+  );
+  const allVisibleSelected = selectVisibleIds.length > 0 && selectedCount === selectVisibleIds.length;
+  const someVisibleSelected = selectedCount > 0 && !allVisibleSelected;
 
   const fluentColumns: TableColumnDefinition<T>[] = React.useMemo(() => {
     const cols = columns.map((col) => {
@@ -635,9 +724,61 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         }),
       );
     }
+    // Leading multi-select checkbox column (opt-in).
+    if (selection) {
+      cols.unshift(
+        createTableColumn<T>({
+          columnId: SELECT_COL,
+          renderHeaderCell: () => (
+            <div className={styles.selectCell}>
+              <Checkbox
+                checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
+                // Defensive only, and deliberately kept. In THIS Fluent version
+                // (react-table 9.19.15) the select column is not sortable —
+                // `createTableColumn` defaults `compare` to a zero-arity fn and
+                // `isColumnSortable` tests `compare.length > 0` — so its header
+                // cell's onClick short-circuits before `toggleColumnSort` and
+                // renders an inert div rather than an ARIA button. Measured:
+                // aria-sort is [null,"none","none"] before AND after a
+                // select-all click. The guard costs nothing and keeps the
+                // toggle isolated if a future column ever gains a comparator.
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => selection.onToggleAll(selectVisibleIds)}
+                aria-label={allVisibleSelected ? 'Deselect all rows' : 'Select all rows'}
+              />
+            </div>
+          ),
+          renderCell: (row) => {
+            const id = getRowIdRef.current(row);
+            return (
+              <div className={styles.selectCell}>
+                <Checkbox
+                  checked={selection.selectedIds.has(id)}
+                  // Without this a row click handler (open pane / navigate)
+                  // fires on every selection — the checkbox lives INSIDE the row.
+                  onClick={(e) => e.stopPropagation()}
+                  // The keyboard twin of the guard above, and NOT redundant with
+                  // it: the row's own onKeyDown activates on Enter and Space, and
+                  // a keydown from the checkbox bubbles straight into it. Without
+                  // this, selecting a row with the keyboard ALSO fired onRowClick
+                  // (measured: 1 call on Space, 1 on Enter) — on /admin/workspaces
+                  // that opened the settings pane on every keyboard selection.
+                  onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }}
+                  onChange={() => selection.onToggleRow(id)}
+                  aria-label={selection.ariaLabel ? selection.ariaLabel(row) : 'Select row'}
+                />
+              </div>
+            );
+          },
+        }),
+      );
+    }
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columns, sortableKeys, rowActions, styles.rowActions]);
+  }, [
+    columns, sortableKeys, rowActions, styles.rowActions, styles.selectCell,
+    selection, selectVisibleIds, allVisibleSelected, someVisibleSelected,
+  ]);
 
   // resizable column sizing options from declared widths
   const columnSizingOptions: TableColumnSizingOptions = React.useMemo(() => {
@@ -655,9 +796,14 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
       const w = Math.min(220, 44 + maxActions * 34);
       out[ACTIONS_COL] = { minWidth: w, idealWidth: w, defaultWidth: w };
     }
+    if (selection) {
+      // Fixed narrow gutter — just the checkbox. Not user-resizable in practice
+      // because min == ideal == default.
+      out[SELECT_COL] = { minWidth: 44, idealWidth: 44, defaultWidth: 44 };
+    }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columns, rowActions, rows]);
+  }, [columns, rowActions, rows, selection]);
 
   // ── Opt-in row windowing (U10) ────────────────────────────────────────────
   // Above the shared cutoff, only the rows near the viewport are handed to the
@@ -827,6 +973,8 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         focusMode="cell"
         aria-label={ariaLabel ?? 'Data table'}
         aria-rowcount={virtualize ? sortedRows.length + 1 : undefined}
+        // Pairs with the per-row aria-selected the checkbox column sets.
+        aria-multiselectable={selection ? true : undefined}
         className={mergeClasses(styles.grid, density === 'compact' && styles.compactGrid)}
         onSortChange={(_e, newSort) => {
           setSortSnap({
@@ -875,7 +1023,9 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
               className={mergeClasses(
                 styles.bodyRow,
                 onRowClick ? styles.clickableRow : undefined,
+                selection?.selectedIds.has(getRowId(item)) ? styles.selectedRow : undefined,
               )}
+              aria-selected={selection ? selection.selectedIds.has(getRowId(item)) : undefined}
               onClick={onRowClick ? () => onRowClick(item) : undefined}
               onContextMenu={
                 rowMenu
