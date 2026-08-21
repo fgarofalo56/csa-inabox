@@ -402,6 +402,173 @@ test('redact strips subscription ids and bare GUIDs from anything committed or a
   assert.match(out, /rg-csa-loom-admin-centralus/, 'the useful last segment survives');
 });
 
+// ── THE PUBLICATION BOUNDARIES (#3829) ───────────────────────────────────────
+//
+// This script publishes to TWO public places on a public repo: the Actions
+// annotation log, and deploy-failure.json — which
+// .github/scripts/deploy-notify-failure.mjs renders into an ISSUE body.
+//
+// On #3817 a raw Entra object id reached that body. `redact()` was applied to
+// `leaf.message` and `evidence.line` at their composition sites, but THREE
+// artifact fields embedded a leaf's `resourceName` untouched — `whyStopped`
+// (= decision.reason), `leafClasses[].resourceName`, and
+// `armDrilldown.leaves[].resourceName`. For a flexibleServers/administrators
+// leaf that name IS `<server>/<objectId>`.
+//
+// The fix redacts ONCE per boundary, so these are written against the property
+// ("nothing GUID-shaped leaves this process") rather than against the three
+// fields that happened to leak. Every GUID here is obviously synthetic.
+
+/** The assertion under test — the issue's own pattern, verbatim. */
+const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const SYNTHETIC_OID = '11111111-2222-3333-4444-555555555555';
+const SYNTHETIC_SERVER = 'psql-loom-weave-default-abc123';
+
+/**
+ * A fake `az` that prints one failed ARM operation whose targetResource carries
+ * `<server>/<objectId>` — the #3817 leaf class. Injected through LOOM_AZ_BIN,
+ * so the REAL process does the real drill-down, classification, annotation and
+ * artifact write; nothing here models the code under test.
+ *
+ * The target type is NOT microsoft.resources/deployments, so the walk does not
+ * recurse and the shim is called exactly once.
+ */
+function fakeAzEmitting(dir, ops) {
+  const payload = path.join(dir, 'az-ops.json');
+  fs.writeFileSync(payload, JSON.stringify(ops), 'utf8');
+  if (process.platform === 'win32') {
+    const p = path.join(dir, 'fake-az.cmd');
+    fs.writeFileSync(p, `@echo off\r\ntype "${payload}"\r\n`, 'utf8');
+    return p;
+  }
+  const p = path.join(dir, 'fake-az.sh');
+  fs.writeFileSync(p, `#!/bin/sh\ncat '${payload}'\n`, 'utf8');
+  fs.chmodSync(p, 0o755);
+  return p;
+}
+
+const LEAKY_OPS = [
+  {
+    operationId: 'DEADBEEF',
+    properties: {
+      provisioningState: 'Failed',
+      statusCode: 'Conflict',
+      targetResource: {
+        id: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x/providers/Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+        resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+        resourceName: `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`,
+      },
+      statusMessage: {
+        error: {
+          code: 'ResourceDeploymentFailure',
+          message: 'At least one resource deployment operation failed.',
+          details: [
+            {
+              code: 'SomeCodeNobodyHasEverSeen',
+              message: `The administrator ${SYNTHETIC_OID} could not be written to ${SYNTHETIC_SERVER}.`,
+              details: null,
+            },
+          ],
+        },
+      },
+    },
+  },
+];
+
+test('POSITIVE CONTROL — the GUID assertion FIRES on the pre-fix leaf composition', () => {
+  // A redaction assertion whose fixture contains no GUID passes forever while
+  // proving nothing. Prove it CAN fail before trusting it to pass: run the real
+  // decideRetryForLeaves over the leaky leaf and confirm the raw reason — the
+  // exact string that was published as `whyStopped` — trips the matcher.
+  const leafDiagnoses = classifyLeaves([
+    {
+      code: 'SomeCodeNobodyHasEverSeen',
+      message: 'the widget frobnicator declined',
+      resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+      resourceName: `${SYNTHETIC_SERVER}/${SYNTHETIC_OID}`,
+    },
+  ]);
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses });
+  assert.equal(d.retry, false);
+  assert.match(d.reason, GUID_RE, 'the composed reason DOES embed the object id — this is the #3829 source');
+  assert.equal(GUID_RE.test(redact(d.reason)), false, 'and redact() removes it — so the matcher can go green too');
+});
+
+test('ACCEPTANCE — no GUID reaches the artifact or the annotation, end to end (#3829)', () => {
+  const dir = scratchDir();
+  const counter = path.join(dir, 'n');
+  fs.writeFileSync(counter, '');
+  const artifact = path.join(dir, 'deploy-failure.json');
+  const az = fakeAzEmitting(dir, LEAKY_OPS);
+
+  const r = spawnSync(
+    process.execPath,
+    [
+      SCRIPT,
+      '--class-allow', 'transient',
+      '--max-attempts', '1',
+      '--backoff', '0',
+      '--jitter', '0',
+      '--step', 'az deployment sub create',
+      '--artifact', artifact,
+      '--arm-deployment', 'csa-loom-ci-1',
+      '--arm-scope', 'sub',
+      '--',
+      ...alwaysFails(counter, MYSTERY),
+    ],
+    { encoding: 'utf8', env: { ...process.env, LOOM_AZ_BIN: az } },
+  );
+
+  assert.notEqual(r.status, 0, 'the failure must still be RED — redaction must not swallow the verdict');
+
+  // NON-DEGENERATE: the drill-down really ran and really saw the object id.
+  // Without this the "no GUID" assertions below could pass on an empty walk
+  // (the zero-population shape). The RAW stderr block is the control: it is
+  // deliberately NOT redacted, stays on the runner, and is never published.
+  assert.match(r.stderr, /ARM drill-down/, 'the drill-down must have run');
+  assert.match(r.stderr, GUID_RE, 'the raw stderr MUST still carry the id, or this test proves nothing');
+
+  // BOUNDARY 1 — the artifact, which the notifier posts to a PUBLIC issue.
+  const raw = fs.readFileSync(artifact, 'utf8');
+  assert.doesNotMatch(raw, GUID_RE, 'deploy-failure.json still carries a GUID (#3829)');
+
+  // BOUNDARY 2 — the Actions annotations, which are public on a public repo.
+  assert.doesNotMatch(r.stdout, GUID_RE, 'an Actions annotation still carries a GUID (#3829)');
+
+  // REDACTED, NOT DROPPED. A run that simply lost these fields would also
+  // contain no GUID and would be a false pass, while destroying the diagnostic
+  // R6 requires. Each must survive with `<guid>` substituted IN PLACE.
+  const a = JSON.parse(raw);
+  const placeholder = `${SYNTHETIC_SERVER}/<guid>`;
+  assert.match(a.whyStopped, new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(a.leafClasses[0].resourceName, placeholder, 'the leaf name must be redacted in place, not removed');
+  assert.equal(a.armDrilldown.leaves[0].resourceName, placeholder);
+  assert.equal(a.armDrilldown.status, 'found');
+  assert.equal(a.class, 'unknown', 'the classification is unchanged by redaction');
+});
+
+test('the artifact stays VALID JSON after the boundary redaction', () => {
+  // Redacting the serialized artifact is only safe if it cannot corrupt the
+  // encoding: the replacements contain no quote or backslash, so parsing must
+  // still succeed and the structure must be intact.
+  const dir = scratchDir();
+  const counter = path.join(dir, 'n');
+  fs.writeFileSync(counter, '');
+  const artifact = path.join(dir, 'deploy-failure.json');
+
+  const r = runRetry(
+    ['--class-allow', 'transient', '--max-attempts', '2', '--backoff', '0', '--jitter', '0', '--artifact', artifact],
+    alwaysFails(counter, TRANSIENT),
+  );
+  assert.notEqual(r.status, 0);
+  const a = JSON.parse(fs.readFileSync(artifact, 'utf8'));
+  assert.equal(a.schemaVersion, 1);
+  assert.equal(a.class, 'transient');
+  assert.equal(a.attempts.length, 2);
+  assert.ok(a.established.length > 0, 'evidence survives redaction');
+  assert.match(a.whyStopped, /budget exhausted/, 'the reason survives redaction');
+});
+
 // ── ARM DRILL-DOWN WIRING (issue #3039) ──────────────────────────────────────
 //
 // deploy-arm-errors.test.mjs proves the walk itself. These prove the WIRING:

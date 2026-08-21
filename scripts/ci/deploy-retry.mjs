@@ -36,6 +36,16 @@
  *   5. Nothing is asserted that was not established (R7). The final message is
  *      rendered from the taxonomy diagnosis, whose `evidence[]` carries the
  *      literal strings matched. `unknown` says it could not classify.
+ *   6. REDACTION IS AT THE PUBLICATION BOUNDARIES, not at each field (#3829).
+ *      This script publishes to two places, both public on a public repo: the
+ *      GitHub Actions annotation log (ghAnnotate) and deploy-failure.json,
+ *      which .github/scripts/deploy-notify-failure.mjs posts into an issue.
+ *      redact() is applied ONCE at each of those, so no future field has to
+ *      remember. It was the per-field approach that leaked: `leaf.message` and
+ *      `evidence.line` were redacted, `whyStopped` (= decision.reason, which
+ *      embeds a leaf `resourceName` = `<server>/<objectId>`) was not, and a raw
+ *      Entra object id reached issue #3817's body. redact() is idempotent, so
+ *      the per-site calls that remain are harmless defence in depth.
  *
  * USAGE
  *   node scripts/ci/deploy-retry.mjs \
@@ -512,9 +522,23 @@ function runTee(cmd, argv) {
 }
 
 function ghAnnotate(level, message) {
+  // THE ANNOTATION REDACTION BOUNDARY (#3829). Actions logs on a PUBLIC repo
+  // are publicly readable, so an annotation publishes just as an issue body
+  // does. redact() is applied ONCE here rather than at each call site, so a
+  // new annotation cannot reopen the hole `decision.reason` opened: that
+  // string embeds a leaf's `resourceName`, which for a
+  // flexibleServers/administrators leaf is `<server>/<objectId>`.
+  // Idempotent, so the per-site redact() calls below remain correct.
+  //
+  // String() first: redact() returns '' for a non-string, and an annotation
+  // that silently loses its whole message would be a worse failure than the
+  // one it was reporting. Every call site passes a template literal, so this
+  // never fires — it is here so that a future one that does not cannot turn a
+  // classified failure into a blank `::error::`.
+  const safe = redact(String(message));
   // One line, GitHub-annotation form. Newlines are escaped so a multi-line
   // remediation still renders as ONE annotation rather than being truncated.
-  process.stdout.write(`::${level}::${message.replace(/\r?\n/g, '%0A')}\n`);
+  process.stdout.write(`::${level}::${safe.replace(/\r?\n/g, '%0A')}\n`);
 }
 
 async function main() {
@@ -747,7 +771,20 @@ async function main() {
             }
           : {}),
       };
-      if (args.artifact) fs.writeFileSync(args.artifact, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+      // THE ARTIFACT REDACTION BOUNDARY (#3829). The whole serialized artifact
+      // passes through redact() once, so EVERY field is covered by
+      // construction — including `whyStopped`, which is `decision.reason` and
+      // which embeds a leaf's `resourceName` (`<server>/<objectId>` for a
+      // flexibleServers/administrators leaf). This file is read by
+      // .github/scripts/deploy-notify-failure.mjs, which posts it to a PUBLIC
+      // issue. redact() only rewrites GUID / ARM-id substrings inside string
+      // values, so the JSON stays valid and parseable.
+      //
+      // The RAW stderr file written above is deliberately NOT redacted — see
+      // _azure-redact.mjs. It stays on the runner and is never published.
+      if (args.artifact) {
+        fs.writeFileSync(args.artifact, `${redact(JSON.stringify(artifact, null, 2))}\n`, 'utf8');
+      }
 
       // FULL stderr on final failure — never truncated, never suppressed.
       process.stderr.write('\n───── deploy-retry: full captured stderr ─────\n');

@@ -173,6 +173,112 @@ test('the body states R1/R2 so a merge is never mistaken for a fix', () => {
   assert.match(body, /run GREEN/);
 });
 
+// ── THE PUBLIC-REPO REDACTION BOUNDARY (#3829) ───────────────────────────────
+//
+// This repo is PUBLIC and this script is its widest-audience publisher. On
+// #3817 the auto-posted body carried a raw Entra object id: `redact()` was
+// applied to `leaf.message` and `evidence.line` at their composition sites but
+// NOT to `whyStopped`, which `decideRetryForLeaves` builds by embedding a
+// leaf's `resourceName` — `<server>/<objectId>` for a
+// flexibleServers/administrators leaf.
+//
+// The fix redacts the ASSEMBLED body once, so these tests are written against
+// the PROPERTY ("no GUID leaves this function") rather than against the one
+// field that leaked. Every GUID below is obviously synthetic.
+
+/** The assertion under test. Deliberately the issue's own pattern, verbatim. */
+const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** The VERBATIM pre-fix shape, reconstructed from #3817's posted body. */
+const LEAKED_WHY_STOPPED =
+  "not retrying: 1 ARM leaf(s) could not be classified (ResourceDeploymentFailure on " +
+  "'psql-loom-weave-default-abc123/11111111-2222-3333-4444-555555555555' → unknown), so nothing is known " +
+  'about whether retrying could help. Unknown fails closed (deploy-integrity.md R7).';
+
+test('POSITIVE CONTROL — the GUID assertion FIRES on the pre-fix body shape', () => {
+  // A redaction test whose fixture happens to contain no GUID passes forever
+  // while proving nothing (the zero-population shape this repo has been bitten
+  // by). Prove the assertion can fail BEFORE trusting it to pass: run it
+  // against the literal string #3817 published.
+  assert.match(LEAKED_WHY_STOPPED, GUID_RE, 'the GUID matcher must detect the value that actually leaked');
+  assert.equal(
+    GUID_RE.test('psql-loom-weave-default-abc123/<guid>'),
+    false,
+    'and must NOT fire on the redacted form, or it could never go green',
+  );
+});
+
+test('ACCEPTANCE — a GUID in whyStopped does NOT reach the issue body, and the field survives redacted', () => {
+  const failure = { ...QUOTA_FAILURE, whyStopped: LEAKED_WHY_STOPPED };
+
+  // Direction 1 — the fixture is genuinely populated. Without this the "no
+  // GUID in the body" assertion below could be satisfied by an empty input.
+  assert.match(failure.whyStopped, GUID_RE, 'the INPUT must carry a GUID or this test proves nothing');
+
+  const body = buildIssueBody({ workflow: 'wf', runId: '1', runUrl: 'u', sha: 'abc1234', failure });
+
+  // Direction 2 — the guard itself.
+  assert.doesNotMatch(body, GUID_RE, 'a GUID-shaped substring reached a PUBLIC issue body (#3829)');
+
+  // Direction 3 — REDACTED, not DROPPED. A body that silently omitted
+  // whyStopped would also contain no GUID and would be a false pass, while
+  // destroying the diagnostic R6 requires. The surrounding context must
+  // survive with `<guid>` substituted in place.
+  assert.match(body, /stopped because: not retrying/, 'the field must still be reported');
+  assert.match(body, /psql-loom-weave-default-abc123\/<guid>/, 'the id must be REDACTED in place, not removed');
+});
+
+test('BY CONSTRUCTION — no field of the body can carry a GUID, including ones that never leaked', () => {
+  // The point of redacting the assembled body rather than `whyStopped` is that
+  // a field nobody thought about is covered too. Poison EVERY input — the
+  // artifact fields AND the environment-derived ones — and assert the property
+  // holds for all of them at once.
+  const g = (n) => `${n}${n}${n}${n}${n}${n}${n}${n}-1111-2222-3333-444444444444`;
+  const body = buildIssueBody({
+    workflow: `deploy-${g(1)}`,
+    runId: '1',
+    runUrl: `https://example/runs/${g(2)}`,
+    sha: g(3),
+    failure: {
+      class: 'permission',
+      signalId: `permission.${g(4)}`,
+      retryable: false,
+      attempts: [{}],
+      whyStopped: `blocked on ${g(5)}`,
+      established: [{ signal: 'authorizationfailed', line: `principal ${g(6)} lacks access` }],
+      remediationKind: 'operator-action',
+      remediation: `Grant the UAMI ${g(7)} the Contributor role`,
+      grantHint: `az role assignment create --assignee ${g(8)}`,
+      portalPath: `Subscription ${g(9)} > IAM`,
+    },
+  });
+
+  // Non-degenerate: every poisoned value really is GUID-shaped.
+  for (let n = 1; n <= 9; n += 1) assert.match(g(n), GUID_RE, `control value ${n} is not GUID-shaped`);
+  // ALL of them, in one assertion over the whole body.
+  assert.doesNotMatch(body, GUID_RE, 'some field of the assembled body still publishes a GUID (#3829)');
+  // …and the body is still a useful notice, not a redacted husk.
+  assert.match(body, /Classification: permission/);
+  assert.match(body, /Contributor role/);
+});
+
+test('the ARM-id and subscription-id forms are stripped from the body too', () => {
+  const body = buildIssueBody({
+    workflow: 'wf',
+    runId: '1',
+    runUrl: 'u',
+    sha: 's',
+    failure: {
+      ...QUOTA_FAILURE,
+      whyStopped:
+        'scope /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-csa-loom-admin-centralus',
+    },
+  });
+  assert.doesNotMatch(body, GUID_RE);
+  assert.doesNotMatch(body, /\/subscriptions\/[0-9a-f-]{36}/i);
+  assert.match(body, /rg-csa-loom-admin-centralus/, 'the useful last segment must survive');
+});
+
 // ── CANCELLED IS NOT FAILED (#3368) ──────────────────────────────────────────
 //
 // The issue's acceptance criterion is explicit that a one-directional test is

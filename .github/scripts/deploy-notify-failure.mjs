@@ -54,6 +54,30 @@
  *   filing blind. Classification is shared with every other consumer in
  *   scripts/ci/run-outcome.mjs — one table, not N predicates.
  *
+ * REDACTION LIVES AT THIS BOUNDARY, NOT AT EACH FIELD (#3829)
+ *
+ *   This repository is PUBLIC, and this script is the widest-audience publisher
+ *   in the deploy lane: what it writes lands in an issue body permanently, edit
+ *   history included. A push publishes.
+ *
+ *   deploy-retry.mjs redacted `leaf.message` and `evidence.line` at their
+ *   composition sites and missed `whyStopped` — which `decideRetryForLeaves`
+ *   builds by embedding a leaf's `resourceName`, and for a
+ *   `flexibleServers/administrators` leaf that name IS `<server>/<objectId>`.
+ *   So a raw Entra object id reached issue #3817's auto-posted body.
+ *
+ *   Adding `redact()` to that one field would fix the INSTANCE and leave the
+ *   CLASS: every future field added to this body would have to remember on its
+ *   own, and the evidence of this repo is that one eventually will not. So the
+ *   redaction is applied ONCE, to the ASSEMBLED body, at the end of
+ *   buildIssueBody(). Every field — present and future, from the artifact or
+ *   from the environment — is covered by construction, and a new
+ *   `lines.push(...)` cannot reopen the hole.
+ *
+ *   redact() is idempotent (`<guid>` and `<redacted>` contain nothing it
+ *   matches), so the per-site calls upstream in deploy-retry.mjs remain
+ *   correct and are kept as defence in depth.
+ *
  * USAGE (from a workflow `if: failure()` step)
  *   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
  *   node .github/scripts/deploy-notify-failure.mjs \
@@ -68,6 +92,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { classifyOutcome } from '../../scripts/ci/run-outcome.mjs';
+import { redact } from '../../scripts/ci/_azure-redact.mjs';
 
 /** The only label guaranteed to exist in this repo; creating one we do not have would fail the notify. */
 export const FAILURE_LABEL = 'deploy-validation';
@@ -79,6 +104,12 @@ export function buildIssueTitle(workflow) {
 /**
  * The notice body. Says exactly what is known and, when nothing was captured,
  * says THAT rather than implying a cause (deploy-integrity.md R7).
+ *
+ * THE REDACTION BOUNDARY (#3829). Every line assembled below passes through
+ * redact() exactly once, at the return. Nothing that reaches a PUBLIC issue
+ * body may carry a subscription/tenant id, a full ARM resource id, or a bare
+ * GUID — and that property is enforced HERE, for the whole body, rather than
+ * field by field where the next addition would have to remember.
  */
 export function buildIssueBody({ workflow, runId, runUrl, sha, failure }) {
   const lines = [
@@ -131,7 +162,9 @@ export function buildIssueBody({ workflow, runId, runUrl, sha, failure }) {
     'Per `deploy-integrity.md` R1 a broken deploy path is P0 and preempts feature work. ' +
       'Close this issue only once the path has run GREEN — not on a merge (R2).',
   );
-  return lines.join('\n');
+  // THE BOUNDARY. One call, covering every line above and every line a future
+  // change adds (#3829). Do not move this to the individual pushes.
+  return redact(lines.join('\n'));
 }
 
 /**
