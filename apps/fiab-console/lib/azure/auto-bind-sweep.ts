@@ -106,6 +106,41 @@
  * closes the crowding-out limitation this file used to disclose — a caller whose
  * own items sit behind a wall of other tenants' rows now reaches them by
  * re-running, instead of needing `workspaceId` to side-step the page cap.
+ *
+ * ## …and the cursor is SEALED, because its plaintext is a foreign id
+ *
+ * Advancing past dropped rows is what closes the crowding-out limitation, and it
+ * has to stay. But the id it advances TO is, on exactly the page that motivates
+ * it, an item id belonging to a tenant the caller cannot see — and the first cut
+ * of this returned it verbatim. Measured on a fully-foreign truncated page:
+ *
+ *     {"dryRun":true,"scanned":0,"excludedByAccess":2,"excludedByWriteAccess":0,
+ *      "byDisposition":{},"rows":[],"truncated":true,"truncatedBy":"limit",
+ *      "nextCursor":"id-a2"}
+ *
+ * `id-a2` lived in another Entra tenant. That contradicts {@link SweepResult}'s
+ * own stated invariant three fields above it — "a COUNT only: naming them would
+ * be the cross-tenant disclosure the filter exists to prevent" — and at
+ * `limit:1` it is a walkable oracle over every item id in the container, ordered
+ * by `c.id`, with `itemTypes` narrowing each id to a type. Ids and types only,
+ * and the caller must already be a tenant admin; it is still the same class as
+ * #3823/#3824 and it was introduced by the fix for the paging defect.
+ *
+ * So `nextCursor` is now an OPAQUE token: {@link sealCursor} encrypts
+ * `{v,id,tid}` with `encryptAtRest` (AES-256-GCM, `lib/auth/session` — the same
+ * primitive the OBO/user-token stores use, keyed off SESSION_SECRET under its
+ * own HKDF label). No new crypto, no new secret, no new env var: the route is
+ * session-gated, and resolving a session already required SESSION_SECRET, so
+ * any caller that can reach the sweep can necessarily seal and unseal.
+ *
+ * {@link unsealSweepCursor} FAILS CLOSED. A token that fails its GCM tag, does
+ * not decode, or carries a different `tid` throws {@link SweepCursorError} — it
+ * never degrades to "start from the beginning", which would silently turn a
+ * tampered token into a full re-scan the operator did not ask for, and never
+ * falls through to a query with no resume predicate. The binding is to `tid`
+ * rather than `oid` deliberately: the boundary being protected is the TENANT, so
+ * one admin may hand a resume point to another admin in the same tenant, while a
+ * token minted in another tenant is refused outright.
  */
 import type { SqlParameter } from '@azure/cosmos';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -224,10 +259,14 @@ export interface SweepResult {
    * Where the NEXT pass should resume — pass it back as {@link SweepOptions.cursor}.
    * Present only when `truncated`.
    *
-   * It is the id of the last row of the RAW Cosmos page this pass finished with,
-   * NOT the last row it reported. Those differ whenever the access filter drops
-   * rows, and using the reported one would re-read the dropped tail forever (a
-   * page belonging entirely to other tenants would never advance at all).
+   * An OPAQUE, sealed token, never a raw id. The position it encodes is the last
+   * row of the RAW Cosmos page this pass finished with, NOT the last row it
+   * reported. Those differ whenever the access filter drops rows, and using the
+   * reported one would re-read the dropped tail forever (a page belonging
+   * entirely to other tenants would never advance at all) — which is exactly why
+   * the plaintext is routinely an id the caller is NOT entitled to see, and
+   * therefore why it is sealed. See the module docblock; returning it verbatim
+   * was a cross-tenant identifier leak.
    *
    * Absent on a `deadline` truncation that got through nothing at all: there is
    * no progress to record, and the correct next call is the SAME cursor with a
@@ -253,9 +292,11 @@ export interface SweepOptions {
   /** Max items to examine. Default 200, hard cap 1000. */
   limit?: number;
   /**
-   * Resume point — the `nextCursor` of the previous (truncated) pass. Exclusive:
-   * the scan returns rows whose `id` sorts strictly AFTER this value. Omitted →
-   * start at the beginning.
+   * Resume point — the `nextCursor` of the previous (truncated) pass, which is
+   * a SEALED token and not an id. Exclusive: the scan returns rows whose `id`
+   * sorts strictly AFTER the position it encodes. Omitted → start at the
+   * beginning. A token that fails to unseal throws {@link SweepCursorError};
+   * it is never quietly treated as "no cursor".
    */
   cursor?: string;
   /**
@@ -276,6 +317,97 @@ export interface SweepOptions {
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
 const DEFAULT_DEADLINE_MS = 120_000;
+
+/**
+ * Sealed-cursor envelope version. Bumping it invalidates every outstanding
+ * token, which is the correct behaviour for a format change: an old token
+ * decrypts fine and would otherwise be misread under the new shape.
+ */
+const CURSOR_VERSION = 1;
+
+/**
+ * A resume cursor that cannot be trusted — tampered, malformed, or minted for a
+ * different tenant.
+ *
+ * Typed rather than a bare `Error` so the route can answer 400 with the message
+ * verbatim (`apiHonestError`) instead of genericizing it into a 500. The message
+ * is deliberately actionable and deliberately says NOTHING about the position
+ * the token did or did not encode.
+ *
+ * This class is why the failure is CLOSED. The tempting alternative — treat an
+ * unreadable cursor as absent and start from the beginning — is wrong twice
+ * over: it silently re-scans (and, in live mode, re-writes) an estate the
+ * operator believed was half-swept, and it converts a rejected token into a
+ * query with no resume predicate at all.
+ */
+export class SweepCursorError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SweepCursorError';
+  }
+}
+
+/**
+ * Seal a raw Cosmos id into the opaque token that leaves the process.
+ *
+ * `encryptAtRest` is `lib/auth/session`'s existing AES-256-GCM helper — the one
+ * the OBO / SQL / Kusto / Power BI user-token stores already use — keyed by
+ * HKDF off SESSION_SECRET under its own `loom-at-rest-v1` label, so a cursor can
+ * never be replayed as a session cookie or vice versa. Imported dynamically for
+ * the same reason `accessOptsForCaller` imports `isTenantAdmin` that way: this
+ * module keeps its static graph clear of the auth (and therefore `next/headers`)
+ * edge, and a caller that injects `loadItems` and never truncates never loads it.
+ *
+ * The `tid` rides INSIDE the sealed envelope, so it is authenticated by the same
+ * GCM tag as the id — a token cannot be re-pointed at another tenant without
+ * failing the tag.
+ */
+async function sealCursor(rawId: string, session: SessionPayload): Promise<string> {
+  const { encryptAtRest } = await import('@/lib/auth/session');
+  return encryptAtRest(JSON.stringify({ v: CURSOR_VERSION, id: rawId, tid: session.claims.tid ?? null }));
+}
+
+/**
+ * Unseal a token back to the raw Cosmos id, or THROW.
+ *
+ * Exported because the sweep's own specs assert the round trip with the real
+ * implementation rather than a second, hand-rolled decoder — a test that
+ * reimplements the thing it is checking pins the reimplementation.
+ *
+ * Every rejection path throws {@link SweepCursorError}; none returns
+ * `undefined`. The tenant check is a POSITIVE match on `tid` (the shape #3824
+ * settled on for the admin bypass), including the both-absent case, so a token
+ * minted by a caller in another tenant is refused even though it decrypts
+ * perfectly — the key is estate-wide, not per-tenant.
+ */
+export async function unsealSweepCursor(token: string, session: SessionPayload): Promise<string> {
+  const { decryptAtRest } = await import('@/lib/auth/session');
+  const plain = decryptAtRest(token);
+  if (plain === null) {
+    throw new SweepCursorError(
+      'The resume cursor could not be authenticated — it was altered, truncated, or issued by a different '
+      + 'deployment. Re-run the sweep with no cursor to start a fresh pass from the beginning.');
+  }
+  let parsed: { v?: unknown; id?: unknown; tid?: unknown };
+  try {
+    parsed = JSON.parse(plain) as typeof parsed;
+  } catch {
+    throw new SweepCursorError(
+      'The resume cursor decrypted but did not decode. Re-run the sweep with no cursor to start a fresh pass.');
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed.v !== CURSOR_VERSION
+      || typeof parsed.id !== 'string' || !parsed.id) {
+    throw new SweepCursorError(
+      'The resume cursor is from an older, incompatible sweep format. Re-run the sweep with no cursor to '
+      + 'start a fresh pass.');
+  }
+  if ((parsed.tid ?? null) !== (session.claims.tid ?? null)) {
+    throw new SweepCursorError(
+      'The resume cursor was issued to a different Entra tenant and will not be honoured. Re-run the sweep '
+      + 'with no cursor to start a fresh pass in your own tenant.');
+  }
+  return parsed.id;
+}
 
 /**
  * Every item type some registered provider backs, derived from the registry.
@@ -618,11 +750,11 @@ async function repairOne(
  *
  * PAGING. The scan owns a WINDOW of `limit` raw rows per pass and asks Cosmos
  * for one more, purely to learn whether another window exists. A truncated
- * result carries `nextCursor` — the id of the last raw row the window finished
- * with — and passing it back resumes strictly after it. That is what makes the
- * "re-run until `truncated` is false" instruction TRUE; before the cursor
- * existed every pass re-read the same prefix and the tail beyond `limit` was
- * unreachable no matter how many times it was run.
+ * result carries `nextCursor` — a SEALED token for the last raw row the window
+ * finished with — and passing it back resumes strictly after it. That is what
+ * makes the "re-run until `truncated` is false" instruction TRUE; before the
+ * cursor existed every pass re-read the same prefix and the tail beyond `limit`
+ * was unreachable no matter how many times it was run.
  *
  * The cursor comes from the raw window, not from the reported rows, so it
  * advances past rows the access filter dropped. A page belonging entirely to
@@ -630,8 +762,19 @@ async function repairOne(
  * problem this file used to disclose (a caller's own items pushed off page 1 by
  * rows they cannot see, with no way to reach them short of scoping by
  * `workspaceId`) is closed by the same mechanism.
+ *
+ * It is SEALED for exactly that reason: the row it names is, on that very page,
+ * one the caller may not see. The position is carried across the wire without
+ * the identifier. See the module docblock.
  */
 export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
+  // FIRST, and before any query, any early return, and any provider work: an
+  // unusable resume token stops the pass outright rather than degrading into a
+  // scan from the beginning. See {@link SweepCursorError}.
+  const rawCursor = opts.cursor === undefined
+    ? undefined
+    : await unsealSweepCursor(opts.cursor, opts.session);
+
   const providers = opts.providers ?? AUTO_BIND_PROVIDERS;
   const now = opts.now ?? (() => Date.now());
   const limit = Math.min(Math.max(1, opts.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
@@ -657,7 +800,7 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   // exactly-full estate. Reporting a truncated scan as complete is the whole
   // class of defect this repo keeps re-learning.
   const load = opts.loadItems ?? loadSweepItems;
-  const page = await load({ itemTypes, workspaceId: opts.workspaceId, limit: limit + 1, cursor: opts.cursor });
+  const page = await load({ itemTypes, workspaceId: opts.workspaceId, limit: limit + 1, cursor: rawCursor });
 
   // The rows this pass OWNS. The (limit+1)th row, if it came back, is a
   // lookahead and nothing else — it is neither classified nor stepped over, so
@@ -680,8 +823,10 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   let excludedByWriteAccess = 0;
   // The last RAW row this pass finished with. Advanced for dropped rows too —
   // that is precisely what stops a page full of other tenants' items from
-  // pinning the cursor in place forever.
-  let advancedTo: string | undefined = opts.cursor;
+  // pinning the cursor in place forever. Held here as the RAW id (the sealed
+  // form is minted once, at the return) so the deadline case can resume from
+  // the last row actually PROCESSED.
+  let advancedTo: string | undefined = rawCursor;
 
   for (const d of decisions) {
     if (!d.allowed) {
@@ -710,6 +855,13 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
   const byDisposition: Record<string, number> = {};
   for (const r of rows) byDisposition[r.disposition] = (byDisposition[r.disposition] || 0) + 1;
 
+  // Sealed exactly once, on the way out. `advancedTo` is a raw Cosmos id and,
+  // on the very page that motivates advancing past dropped rows, an id from a
+  // tenant the caller cannot see — so the raw value must not reach the caller.
+  const nextCursor = truncated && advancedTo !== undefined
+    ? await sealCursor(advancedTo, opts.session)
+    : undefined;
+
   return {
     dryRun: opts.dryRun,
     scanned: rows.length,
@@ -719,6 +871,6 @@ export async function sweepAutoBind(opts: SweepOptions): Promise<SweepResult> {
     rows,
     truncated,
     truncatedBy,
-    ...(truncated && advancedTo !== undefined ? { nextCursor: advancedTo } : {}),
+    ...(nextCursor === undefined ? {} : { nextCursor }),
   };
 }

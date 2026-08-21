@@ -18,6 +18,8 @@
  *   Response: { ok, dryRun, scanned, excludedByAccess, excludedByWriteAccess,
  *               byDisposition, rows[], truncated, truncatedBy?, nextCursor? }
  *   401 : no session.  403 : caller is not a tenant admin.
+ *   400 : the supplied `cursor` could not be unsealed (tampered, malformed, or
+ *         minted in another tenant) — fails closed, never a silent restart.
  *
  * Both gates come from the route toolkit (`withTenantAdmin` on POST,
  * `withSession` on GET) rather than a hand-rolled `getSession()` prologue —
@@ -53,6 +55,16 @@
  * `cursor` and the next pass resumes strictly AFTER the last row this one
  * finished with.
  *
+ * `nextCursor` IS OPAQUE — a sealed token, not an id, and the route must keep it
+ * that way. The position it encodes is the last row of the RAW Cosmos page,
+ * which on a page the access filter emptied is an item id from ANOTHER tenant;
+ * the first cut of the cursor returned that verbatim, next to an
+ * `excludedByAccess` count whose whole contract is "a COUNT only, naming them
+ * would be the cross-tenant disclosure the filter exists to prevent". At
+ * `limit:1` that made this endpoint a walkable oracle over every item id in the
+ * container. `sweepAutoBind` now seals it; a token that fails to unseal is a 400
+ * with an honest message, never a silent restart from the beginning.
+ *
  * THE CURSOR IS WHAT MAKES THAT TRUE. Until #3808's review it was not: the scan
  * had no `ORDER BY` and no resume predicate, so every pass re-read the same
  * `TOP n` prefix. Measured over five items at `limit:2`, three live passes all
@@ -84,8 +96,8 @@
  */
 import { NextRequest } from 'next/server';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { sweepAutoBind, sweepableItemTypes } from '@/lib/azure/auto-bind-sweep';
-import { apiOk, apiServerError } from '@/lib/api/respond';
+import { SweepCursorError, sweepAutoBind, sweepableItemTypes } from '@/lib/azure/auto-bind-sweep';
+import { apiHonestError, apiOk, apiServerError } from '@/lib/api/respond';
 import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -112,9 +124,11 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
     ? body.itemTypes.filter((t: unknown): t is string => typeof t === 'string')
     : undefined;
   const limit = Number.isFinite(body?.limit) ? Number(body.limit) : undefined;
-  // The resume point from a previous truncated pass. Validated as a non-empty
-  // string: it goes into a PARAMETERIZED predicate (`c.id > @cursor`), so this
-  // is a shape check, not an injection guard.
+  // The resume token from a previous truncated pass. Validated as a non-empty
+  // string only: it is an opaque sealed blob, and `sweepAutoBind` authenticates
+  // it (AES-256-GCM + a tenant match) before its plaintext reaches the
+  // parameterized `c.id > @cursor` predicate. So this is a shape check, not the
+  // trust boundary — that lives in `unsealSweepCursor`.
   const cursor = typeof body?.cursor === 'string' && body.cursor ? body.cursor : undefined;
 
   try {
@@ -131,6 +145,12 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
     });
     return apiOk({ ...result });
   } catch (e) {
+    // An unusable resume token is the CALLER's input, not a server fault, so it
+    // answers 400 with the sweep's own honest message rather than the generic
+    // 500. It must NOT degrade to a fresh pass: silently restarting would turn
+    // a tampered cursor into a full re-scan — and in live mode a full re-write —
+    // that the operator never asked for.
+    if (e instanceof SweepCursorError) return apiHonestError(e, 400);
     return apiServerError(e);
   }
 });

@@ -52,6 +52,34 @@
  * before the fix (see the two describe blocks below, which quote the raw
  * output), and the whole 58-spec suite was green over both.
  *
+ * ── 2026-08-20 ROUND 2 — the SEALED cursor (#3808 review). The cursor round 1
+ *    added was correct about WHERE to resume and wrong about what to hand back:
+ *    it returned the raw Cosmos id, which on the very page that motivates
+ *    advancing past dropped rows is a FOREIGN tenant's item id. Baseline
+ *    59 + 26 = 85 green; all eight below CAUGHT, all eight at 85 executed,
+ *    every restore sha256-verified against the pre-mutation bytes.
+ *
+ *   NEW1 nextCursor returned UNSEALED (the defect itself) → 9 RED (was 0)
+ *   NEW2 an unusable cursor degrades to "no cursor"       → 2 RED (was 0)
+ *   NEW3 the sealed `tid` binding is not checked          → 1 RED (was 0)
+ *   B2a  `scopeToCallerAccess` neutered                   → 10 RED
+ *   N1   `canWrite` dropped from the live bar             → 2 RED
+ *   N4   `ORDER BY c.id` dropped                          → 2 RED
+ *   N3   the `c.id > @cursor` predicate dropped           → 1 RED
+ *   DL   the deadline cut records the row it did NOT
+ *        process, permanently losing it                   → 1 RED
+ *
+ * NEW1's "was 0" is the important one, and it is the reason this round exists.
+ * `leaks no identifier` scored ZERO RED against it: that spec's fixture is a
+ * SINGLE item, so `page.length > limit` is never true, so the page never
+ * truncates, so `nextCursor` — the only field that ever carried a foreign
+ * identifier — was never emitted at all. The suite read as proof of a property
+ * it did not cover. The truncated-page spec added below reproduces the leak
+ * verbatim when NEW1 is applied:
+ *
+ *   expected '{…,"truncated":true,"truncatedBy":"limit","nextCursor":"id-a2"}'
+ *            not to contain 'id-a2'
+ *
  * The earlier set, RE-PROVED after the paging restructure — which moved the
  * access filter from a page-filter to a per-row decision and could have blinded
  * them:
@@ -142,7 +170,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 // fast-path, so the shared-access path is off unless a test arms it.
 vi.mock('@/lib/azure/workspace-roles-client', () => ({ resolveEffectiveRole: vi.fn() }));
 
-import { sweepAutoBind, sweepableItemTypes, type SweepRow } from '@/lib/azure/auto-bind-sweep';
+import { sweepAutoBind, sweepableItemTypes, unsealSweepCursor, SweepCursorError, type SweepRow } from '@/lib/azure/auto-bind-sweep';
 import { readAutoBindRecord, type AutoBindProvider } from '@/lib/azure/auto-bind';
 import { AUTO_BIND_PROVIDERS } from '@/lib/azure/auto-bind-providers';
 import { authoredContent } from '@/lib/azure/auto-bind-seed';
@@ -157,6 +185,24 @@ const CALLER_TID = 'tid-alpha';
 /** A DIFFERENT Entra tenant — the boundary tests' only changed variable. */
 const FOREIGN_TID = 'tid-beta';
 const SESSION = { claims: { oid: CALLER_OID, tid: CALLER_TID }, exp: 4_102_444_800 } as SessionPayload;
+
+// The resume cursor is SEALED with `encryptAtRest`, which derives its key from
+// SESSION_SECRET. Set here rather than mocking `@/lib/auth/session`, because a
+// mocked `encryptAtRest` (the sibling token-store specs use `enc:${s}`) would
+// make every seal assertion below a test of the mock — and the property under
+// test is precisely that the token is UNREADABLE, which a reversible fake
+// cannot demonstrate. Real AES-256-GCM, real tag, real tamper rejection.
+//
+// Not a credential: it is a per-run test key for an in-memory value that never
+// leaves the process.
+process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'auto-bind-sweep-spec-key';
+
+/** Unseal with the REAL implementation — a hand-rolled decoder here would pin
+ * the decoder, not the seal. */
+const unseal = (token: string | undefined, session: SessionPayload = SESSION) => {
+  expect(token).toBeDefined();
+  return unsealSweepCursor(token!, session);
+};
 
 
 // ---------------------------------------------------------------------------
@@ -390,6 +436,162 @@ describe('a workspace in another Entra tenant is out of scope', () => {
     expect(body).not.toContain('Theirs-ETL');
     expect(body).not.toContain('id-theirs');
     expect(body).not.toContain(FOREIGN_WS);
+  });
+
+  // -------------------------------------------------------------------------
+  // …AND THE SAME, WHEN THE PAGE TRUNCATES (#3808 review round 2)
+  //
+  // The spec above passed for a reason that had nothing to do with the property
+  // it claims. Its fixture is ONE item, so `page.length > limit` is never true,
+  // so `truncated` is false, so `nextCursor` is never emitted — the only field
+  // that ever carried a foreign identifier. It read as proof of a property it
+  // did not cover.
+  //
+  // The leak it missed: `advancedTo = d.item.id` correctly advances past rows
+  // the access filter dropped (that is what closes crowding-out and must stay),
+  // and the raw id was then returned VERBATIM. Measured on this exact fixture,
+  // pre-fix:
+  //
+  //   {"dryRun":true,"scanned":0,"excludedByAccess":2,"excludedByWriteAccess":0,
+  //    "byDisposition":{},"rows":[],"truncated":true,"truncatedBy":"limit",
+  //    "nextCursor":"id-a2"}
+  //
+  // `id-a2` lives in `ws-theirs`, tid `tid-beta`. At `limit:1` that is a
+  // walkable oracle over every item id in the container, ordered by `c.id`.
+  // -------------------------------------------------------------------------
+  const FOREIGN_IDENTIFIERS = ['id-a1', 'id-a2', FOREIGN_WS, 'Theirs-ETL'];
+
+  /** Assert a serialized result names NO foreign identifier. Returns the body. */
+  const expectNoForeignIdentifier = (result: unknown): string => {
+    const body = JSON.stringify(result);
+    for (const needle of FOREIGN_IDENTIFIERS) expect(body).not.toContain(needle);
+    return body;
+  };
+
+  /** A page of two foreign rows ahead of one of the caller's own. */
+  const crowdedPage = () => {
+    const theirs = [1, 2].map((n) =>
+      item({ displayName: `Theirs-ETL-${n}`, id: `id-a${n}`, workspaceId: FOREIGN_WS, state: gatedInstallState() }));
+    const ours = item({ displayName: 'Ours', id: 'id-b1', state: gatedInstallState() });
+    const all = [...theirs, ours];
+    register([ours]);
+    return async (o: { limit: number; cursor?: string }) =>
+      [...all].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .filter((i) => (o.cursor ? i.id > o.cursor : true))
+        .slice(0, o.limit).map(clone);
+  };
+
+  it('leaks no identifier on a TRUNCATED, fully-foreign page either — the cursor is sealed', async () => {
+    theirWorkspace(FOREIGN_TID);
+    const loadItems = crowdedPage();
+
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+    });
+
+    // The page MUST have truncated, or this asserts nothing — which is exactly
+    // how the single-item spec above escaped the defect for a whole round.
+    expect(p1.truncated).toBe(true);
+    expect(p1.truncatedBy).toBe('limit');
+    expect(p1.nextCursor).toBeDefined();
+    expect(p1.rows).toEqual([]);
+    expect(p1.excludedByAccess).toBe(2);
+
+    expectNoForeignIdentifier(p1);
+
+    // The OTHER half of the disjoint pair: the position is still carried, so
+    // this cannot be satisfied by dropping the cursor.
+    expect(await unseal(p1.nextCursor)).toBe('id-a2');
+  });
+
+  it('and that scan is CAPABLE of failing — the pre-fix body trips it', () => {
+    // Verbatim, the body measured on the unsealed tree with the fixture above.
+    // Without this control `expectNoForeignIdentifier` could be vacuous and the
+    // spec above would read as proof of a property it never tested — the same
+    // failure the truncation gap already produced once.
+    const preFix = {
+      dryRun: true, scanned: 0, excludedByAccess: 2, excludedByWriteAccess: 0,
+      byDisposition: {}, rows: [], truncated: true, truncatedBy: 'limit', nextCursor: 'id-a2',
+    };
+
+    expect(() => expectNoForeignIdentifier(preFix)).toThrow();
+  });
+
+  it('the sealed cursor still advances the scan — pass 2 reaches the caller\'s own row', async () => {
+    // The crowding-out closure is the REASON the cursor advances past dropped
+    // rows, and sealing must not have cost it. Without this, "seal it" could be
+    // satisfied by a token that resumes nowhere.
+    theirWorkspace(FOREIGN_TID);
+    const loadItems = crowdedPage();
+
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+    });
+    const p2 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems, cursor: p1.nextCursor,
+    });
+
+    expect(p2.rows.map((r) => r.itemId)).toEqual(['id-b1']);
+    expect(p2.truncated).toBe(false);
+  });
+
+  it('a TAMPERED cursor is refused — not silently restarted from the beginning', async () => {
+    theirWorkspace(FOREIGN_TID);
+    const loadItems = crowdedPage();
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+    });
+
+    // Flip one character of the sealed blob — the GCM tag must catch it.
+    const token = p1.nextCursor!;
+    const tampered = token.slice(0, -1) + (token.endsWith('A') ? 'B' : 'A');
+
+    const calls: unknown[] = [];
+    await expect(sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2,
+      loadItems: async (o) => { calls.push(o); return loadItems(o); },
+      cursor: tampered,
+    })).rejects.toThrow(SweepCursorError);
+
+    // FAIL CLOSED. The tempting degradation — treat it as absent — would run an
+    // unfiltered, cursor-less query and silently re-scan (in live mode,
+    // re-write) the whole estate. Nothing was queried at all.
+    expect(calls).toEqual([]);
+  });
+
+  it('a cursor minted in ANOTHER tenant is refused, though it decrypts perfectly', async () => {
+    // The key is estate-wide, so a valid token from another tenant's admin
+    // decrypts; the `tid` sealed INSIDE the envelope is what refuses it.
+    theirWorkspace(FOREIGN_TID);
+    const loadItems = crowdedPage();
+    const foreignSession = { claims: { oid: 'oid-other-admin', tid: FOREIGN_TID }, exp: 4_102_444_800 } as SessionPayload;
+
+    const theirPass = await sweepAutoBind({
+      dryRun: true, session: foreignSession, providers: [seedingProvider()], limit: 2, loadItems,
+    });
+    expect(theirPass.nextCursor).toBeDefined();
+    // It is genuinely well-formed — for its OWN tenant.
+    expect(await unseal(theirPass.nextCursor, foreignSession)).toBe('id-a2');
+
+    await expect(sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+      cursor: theirPass.nextCursor,
+    })).rejects.toThrow(/different Entra tenant/);
+  });
+
+  it('the token is OPAQUE — the raw id is not recoverable without the key', async () => {
+    theirWorkspace(FOREIGN_TID);
+    const loadItems = crowdedPage();
+    const p1 = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems,
+    });
+
+    const token = p1.nextCursor!;
+    // Not the id, and not a trivially reversible encoding of it — the two
+    // shapes a "sealed" cursor most plausibly regresses to.
+    expect(token).not.toContain('id-a2');
+    expect(Buffer.from(token, 'base64url').toString('utf-8')).not.toContain('id-a2');
+    expect(Buffer.from(token, 'base64').toString('utf-8')).not.toContain('id-a2');
   });
 
   it('but the SAME row IS swept when that workspace is in the caller\'s tenant', async () => {
@@ -1090,7 +1292,8 @@ describe('the cursor', () => {
     expect(p1.rows.map((r) => r.itemId)).toEqual(['id-1', 'id-2']);
     expect(p1.truncated).toBe(true);
     expect(p1.truncatedBy).toBe('limit');
-    expect(p1.nextCursor).toBe('id-2');
+    // The token is opaque on the wire; what it ENCODES is still the last raw row.
+    expect(await unseal(p1.nextCursor)).toBe('id-2');
 
     const p2 = await sweepAutoBind({
       dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems, cursor: p1.nextCursor,
@@ -1098,7 +1301,7 @@ describe('the cursor', () => {
 
     // THE ASSERTION THE WHOLE FINDING TURNS ON. Pre-fix this was id-1,id-2.
     expect(p2.rows.map((r) => r.itemId)).toEqual(['id-3', 'id-4']);
-    expect(p2.nextCursor).toBe('id-4');
+    expect(await unseal(p2.nextCursor)).toBe('id-4');
   });
 
   it('walks the WHOLE estate in bounded passes and then stops', async () => {
@@ -1148,7 +1351,12 @@ describe('the cursor', () => {
       expect(p1.truncated).toBe(true);
       // Pre-cursor this was a dead end: nothing to resume from, so `id-b1` was
       // unreachable without scoping the sweep by workspaceId.
-      expect(p1.nextCursor).toBe('id-a2');
+      expect(await unseal(p1.nextCursor)).toBe('id-a2');
+      // …and `id-a2` is a FOREIGN id, which is why the wire form is sealed.
+      // This pair is the disjoint control: the position must survive AND the
+      // plaintext must not appear. Neither the pre-fix behaviour (raw id) nor a
+      // "just drop the cursor" cop-out can satisfy both.
+      expect(JSON.stringify(p1)).not.toContain('id-a2');
 
       const p2 = await sweepAutoBind({
         dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 2, loadItems, cursor: p1.nextCursor,
@@ -1177,8 +1385,9 @@ describe('the cursor', () => {
     expect(p1.truncatedBy).toBe('deadline');
     expect(p1.rows.map((r) => r.itemId)).toEqual(['id-1']);
     // NOT the end of the window (`id-4`) — the rows after the cut were never
-    // looked at, and skipping them would lose them permanently.
-    expect(p1.nextCursor).toBe('id-1');
+    // looked at, and skipping them would lose them permanently. Sealing changed
+    // the wire form and must NOT have changed which row that is.
+    expect(await unseal(p1.nextCursor)).toBe('id-1');
 
     const p2 = await sweepAutoBind({
       dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 4, loadItems, cursor: p1.nextCursor,
@@ -1201,14 +1410,26 @@ describe('the cursor', () => {
       },
     } as never);
 
+    // The caller supplies the SEALED token; only the unsealed plaintext may
+    // reach the predicate. Minted the way the sweep mints it — by running one
+    // truncating pass — so this cannot pass against a hand-built envelope the
+    // production code would reject.
+    const minted = await sweepAutoBind({
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 1,
+      loadItems: async () => [item({ displayName: 'x', id: 'id-42' }), item({ displayName: 'y', id: 'id-43' })],
+    });
+    expect(await unseal(minted.nextCursor)).toBe('id-42');
+
     await sweepAutoBind({
-      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 5, cursor: 'id-42',
+      dryRun: true, session: SESSION, providers: [seedingProvider()], limit: 5, cursor: minted.nextCursor,
     });
 
     expect(spec!.query).toContain('c.id > @cursor');
     // Without a total order the predicate is meaningless — a TOP-n
     // cross-partition query may return any n rows that satisfy it.
     expect(spec!.query).toContain('ORDER BY c.id');
+    // The RAW id, not the token: a sealed blob in the predicate would silently
+    // match nothing and the sweep would report a clean estate it never scanned.
     expect(spec!.parameters).toContainEqual({ name: '@cursor', value: 'id-42' });
   });
 

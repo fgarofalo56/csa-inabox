@@ -36,10 +36,17 @@ vi.mock('@/lib/auth/feature-gate', async () => {
 });
 
 const sweepMock = vi.fn();
-vi.mock('@/lib/azure/auto-bind-sweep', () => ({
+// `importOriginal` rather than a bare factory: the route answers 400 on
+// `e instanceof SweepCursorError`, and a hand-written stand-in would be a
+// DIFFERENT class — `instanceof` would be false and the spec would pass against
+// a route that had lost the branch entirely. Only `sweepAutoBind` is replaced.
+vi.mock('@/lib/azure/auto-bind-sweep', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   sweepAutoBind: (...a: any[]) => sweepMock(...a),
   sweepableItemTypes: () => ['data-pipeline', 'eventstream'],
 }));
+
+import { SweepCursorError } from '@/lib/azure/auto-bind-sweep';
 
 import { GET, POST } from '../route';
 
@@ -224,6 +231,43 @@ describe('POST /api/admin/auto-bind/sweep — the resume cursor', () => {
     await POST(req({ dryRun: false, cursor: first.nextCursor }), CTX);
 
     expect(sweepMock.mock.calls[0][0].cursor).toBe('id-2');
+  });
+
+  // -------------------------------------------------------------------------
+  // A REJECTED CURSOR FAILS CLOSED (#3808 review round 2)
+  //
+  // `nextCursor` is now a sealed token because its plaintext is routinely a
+  // FOREIGN tenant's item id (the raw value used to be returned verbatim next
+  // to an `excludedByAccess` count whose contract is "a COUNT only"). The route
+  // half of that is what it does with a token that will not unseal: 400 with the
+  // sweep's own honest message, never a 500 stack and — the one that matters —
+  // never a silent restart from the beginning, which in live mode would be an
+  // unrequested full re-write of the estate.
+  // -------------------------------------------------------------------------
+  it('answers 400 with the honest message when the cursor will not unseal', async () => {
+    sweepMock.mockRejectedValue(new SweepCursorError(
+      'The resume cursor was issued to a different Entra tenant and will not be honoured.'));
+
+    const res = await POST(req({ cursor: 'forged' }), CTX);
+
+    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    // Honest and actionable, passed through verbatim rather than genericized.
+    expect(j.error).toContain('different Entra tenant');
+    // NOT a success envelope — a restarted scan would have come back ok:true
+    // with a full first page, which is precisely the silent behaviour refused.
+    expect(j.truncated).toBeUndefined();
+    expect(j.rows).toBeUndefined();
+  });
+
+  it('and that 400 is a DIFFERENT class from the generic 500', async () => {
+    // The control: an ordinary throw must still genericize. Without it, "400 on
+    // a bad cursor" could be satisfied by a route that answered 400 for
+    // everything, losing the stack-suppression the sibling spec pins.
+    sweepMock.mockRejectedValue(new Error('ADF said 403 for factory adf-prod'));
+    const res = await POST(req({ cursor: 'forged' }), CTX);
+    expect(res.status).toBe(500);
   });
 });
 
