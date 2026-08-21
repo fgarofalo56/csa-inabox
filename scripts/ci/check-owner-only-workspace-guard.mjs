@@ -180,6 +180,33 @@ const TOUCH_EXEMPT = new Map([
   // drive-by inside a 404 fix.
   ['apps/fiab-console/app/api/items/[type]/[id]/access-mode/route.ts',
    "#3753: the diff is one line (resolveWorkspaceRole's oid parameter removed — a correction in THIS guard's direction); loadItem's baselined owner-only point read is untouched, and migrating it would WIDEN who can change an item's data-access mode — separate PR"],
+  // #3823 tightened `resolveWorkspaceAccessByOid` STEP 6 (the tenant-admin
+  // bypass), which granted `role:'Admin', canWrite:true` whenever the tid
+  // comparison in step 4 decided nothing — i.e. whenever EITHER the workspace
+  // doc or the caller session lacked a `tid`, both documented pre-rel-T11
+  // states. That is a correction in THIS GUARD'S OWN DIRECTION (it narrows a
+  // cross-tenant grant); it does not add an ownership decision.
+  //
+  // MIGRATING THIS FILE IS CIRCULAR, WHICH IS WHY IT NEEDS AN EXEMPTION RATHER
+  // THAN A FIX. `workspace-guard.ts:169` — `authorizeWorkspace`, the canonical
+  // ladder this guard names as the migration target — is itself implemented by
+  // calling `resolveWorkspaceAccessByOid` in this file. There is no ladder above
+  // this one to move to.
+  //
+  // THE SINGLE BASELINED OCCURRENCE IS NOT IN THIS PR'S DIFF — measured with
+  // this guard's own two predicates against the current tree, not assumed. It is
+  // the pair `await ws.item(workspaceId, oid).read<Workspace>()` +
+  // `resource.tenantId === oid`: STEP 1, the OWNER FAST PATH, which the module
+  // header documents as deliberate and which already falls through to the ACL
+  // (step 5) and admin (step 6) resolution below it — the shape-detector hit is
+  // the owner branch of the canonical ladder, not an owner-only guard. Stated by
+  // FUNCTION and not by line number on purpose (the item-crud entry above records
+  // why): it lives at the top of `resolveWorkspaceAccessByOid`, and this PR's
+  // hunks are the module header, the `logSafe` import, the new
+  // `WorkspaceAccessDenial`/`WorkspaceAccessDiagnostics` types, the `diag`
+  // parameter, step 6's body, and the new `tenantUnconfirmedDenial` helper.
+  ['apps/fiab-console/lib/auth/workspace-access.ts',
+   '#3823: narrows the step-6 tenant-admin bypass (a correction in this guard’s direction). The baselined occurrence is step 1, the OWNER FAST PATH of the canonical ladder itself — and `authorizeWorkspace`, the prescribed migration target, is implemented by calling this very function, so there is nothing to migrate to.'],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */

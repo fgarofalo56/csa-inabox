@@ -29,6 +29,22 @@
  *      row if a workspace admin in the owning tenant explicitly added their oid,
  *      and the sharing UI's principal search is tenant-scoped).
  *
+ *      #3823 — THAT LAST SENTENCE IS ONLY TRUE OF THE ACL PATH. Step 4 is
+ *      truthiness-guarded on BOTH sides, so it decides NOTHING whenever either
+ *      tid is absent — and step 6 (the admin-open bypass) has no ACL grant
+ *      underneath it to serve as the boundary. `accessOptsFor*` sets
+ *      `tenantAdmin: isTenantAdmin(session)`, so on any admin-reachable route
+ *      step 6 was true for every caller and step 4 was the only thing in front
+ *      of it. Both absences are DOCUMENTED, SUPPORTED states — a workspace doc
+ *      created before rel-T11 carries no `tid` (`lib/types/workspace.ts`; the
+ *      `scripts/csa-loom/backfill-workspace-tid.mjs` backfill is manual and
+ *      dry-run-by-default), and `UserClaims.tid` is optional by design
+ *      (`lib/auth/msal.ts`, "so sessions minted before rel-T11 still decode";
+ *      `lib/auth/pat.ts` propagates an optional `createdByTid`). So a tenant
+ *      admin whose own tid was missing, or who opened a tid-less workspace, was
+ *      granted `role:'Admin', canWrite:true` on a workspace whose tenant Loom
+ *      had never established. Step 6 now requires a POSITIVE match — see there.
+ *
  *      #2703 — step 4 USED TO BE OPT-IN. `opts` was optional and `callerTid` was
  *      an optional field on it, so EVERY call site that did not hand the resolver
  *      a session silently skipped the boundary: the four `item-crud` calls that
@@ -59,6 +75,7 @@ import { workspacesContainer, workspaceRolesContainer } from '@/lib/azure/cosmos
 import { resolveEffectiveRole } from '@/lib/azure/workspace-roles-client';
 import type { WorkspaceRoleName } from '@/lib/azure/workspace-role-model';
 import type { Workspace } from '@/lib/types/workspace';
+import { logSafe } from '@/lib/util/log-safe';
 
 /**
  * Master switch for the multi-user ACL read path. Default ON. Flip to `off` to
@@ -144,6 +161,49 @@ export type WorkspaceAccessOpts =
       tenantAdmin?: boolean;
       callerTid?: never;
     };
+
+/**
+ * The reason the resolver REFUSED a grant it would otherwise have made.
+ *
+ * #3823 — a denial must not read as "you have nothing". `resolveWorkspaceAccessByOid`
+ * returns `null` for two very different situations: the ordinary "this caller
+ * holds no role here" (no denial is recorded — nothing to explain), and the
+ * tenant-admin bypass being refused because the workspace's tenant could not be
+ * CONFIRMED. The second one is a state the operator can act on, and per
+ * `deploy-integrity.md` R7 the message must state what was actually
+ * established — that the tenancy is unconfirmed — never that the workspace is
+ * missing or that the admin lacks rights.
+ */
+export interface WorkspaceAccessDenial {
+  /** Stable code for routes/UI to branch on. */
+  code: 'tenant_unconfirmed';
+  /** WHAT WAS ESTABLISHED — true as written, no inferred cause (R7). */
+  reason: string;
+  /** The concrete action that resolves it. */
+  remediation: string;
+  /** The workspace whose tenancy could not be confirmed. */
+  workspaceId: string;
+}
+
+/**
+ * OPTIONAL out-channel for {@link resolveWorkspaceAccessByOid}.
+ *
+ * WHY AN OUT-PARAM AND NOT A UNION RETURN. `resolveWorkspaceAccessByOid` has
+ * ~270 call sites reached through `loadOwnedItem` / `listOwnedItems` /
+ * `authorizeWorkspaceList` / `resolveItemAccessByOid`; widening its return type
+ * would touch every one of them for a signal almost none of them surface. A
+ * fourth, optional argument keeps ONE decision path (so the explanation can
+ * never drift from the verdict — there is no second function re-deriving it)
+ * while leaving every existing call site byte-identical. Routes that render a
+ * user-facing refusal pass a `{}` and read `denial` after a null.
+ *
+ * The refusal is ALSO logged server-side, so it is never silent even for the
+ * call sites that pass nothing.
+ */
+export interface WorkspaceAccessDiagnostics {
+  /** Populated ONLY when a grant was refused for a reason worth explaining. */
+  denial?: WorkspaceAccessDenial;
+}
 
 /**
  * Recover the caller's Entra tid from the AMBIENT request session when the call
@@ -232,15 +292,22 @@ export async function ambientAccessOptsFor(oid: string): Promise<WorkspaceAccess
  * /admin/workspaces inventory lists them all, so the open path must not 404 on
  * a workspace the admin neither owns nor is a member of. When set, and the
  * caller is neither owner nor ACL-member, the admin still resolves at role
- * `Admin` (via `'admin'`). Callers compute the flag with `isTenantAdmin(session)`
- * so this module stays free of session/feature-gate imports. The owner and ACL
- * fast-paths still run FIRST, so a non-admin caller is unaffected and an admin
- * who happens to own/member a workspace keeps their real role.
+ * `Admin` (via `'admin'`) — but ONLY when the workspace is POSITIVELY CONFIRMED
+ * to be in the admin's own tenant (#3823; see step 6). Callers compute the flag
+ * with `isTenantAdmin(session)` so this module stays free of session/feature-gate
+ * imports. The owner and ACL fast-paths still run FIRST, so a non-admin caller
+ * is unaffected and an admin who happens to own/member a workspace keeps their
+ * real role — neither of those paths is affected by the #3823 tightening.
+ *
+ * Pass `diag` ({@link WorkspaceAccessDiagnostics}) to receive the REASON for a
+ * refusal the caller should explain to the user rather than render as "not
+ * found". Optional: the refusal is logged server-side either way.
  */
 export async function resolveWorkspaceAccessByOid(
   oid: string,
   workspaceId: string,
   opts: WorkspaceAccessOpts,
+  diag?: WorkspaceAccessDiagnostics,
 ): Promise<WorkspaceAccess | null> {
   const ws = await workspacesContainer();
 
@@ -272,15 +339,101 @@ export async function resolveWorkspaceAccessByOid(
   if (role) return { workspace: wsDoc, role, via: 'acl', canWrite: WRITE_ROLES.has(role) };
 
   // 6) ADMIN-OPEN bypass — no ownership, no ACL role, but the caller is a tenant
-  // admin: grant access so an admin can open every workspace in the tenant. The
-  // tid boundary above already scoped this to the admin's own tenant. Placed
-  // AFTER the ACL lookup so an admin who is also an explicit member keeps that
-  // (possibly higher-fidelity) role; only a pure non-member admin lands here.
+  // admin: grant access so an admin can open every workspace in the tenant.
+  // Placed AFTER the ACL lookup so an admin who is also an explicit member keeps
+  // that (possibly higher-fidelity) role; only a pure non-member admin lands here.
+  //
+  // #3823 — THIS REQUIRES A POSITIVE TENANT MATCH, NOT MERELY A NON-CONTRADICTION.
+  // Step 4 above is the shared boundary and is truthiness-guarded on both sides,
+  // which is correct for the ACL path (an explicit workspace-role row IS the
+  // tenant boundary there — a foreign principal only gets one if an admin in the
+  // owning tenant added their oid). Step 6 has no such grant underneath it: it
+  // manufactures `role:'Admin', canWrite:true` out of the admin flag alone. So a
+  // boundary that decides NOTHING when either tid is absent left this open in
+  // two documented, supported states — a pre-rel-T11 workspace doc with no
+  // `tid`, and a pre-rel-T11 session (or PAT) with no `tid` claim. Both are
+  // reachable today. The admin bypass therefore fires ONLY when Loom can show
+  // the workspace is in the admin's OWN tenant.
   if (opts.tenantAdmin) {
-    return { workspace: wsDoc, role: 'Admin', via: 'admin', canWrite: true };
+    if (callerTid && wsDoc.tid && wsDoc.tid === callerTid) {
+      return { workspace: wsDoc, role: 'Admin', via: 'admin', canWrite: true };
+    }
+    // A refusal, not an absence. Say what was actually established (R7).
+    const denial = tenantUnconfirmedDenial(workspaceId, callerTid, wsDoc.tid);
+    if (diag) diag.denial = denial;
+    console.warn(
+      '[workspace-access] tenant-admin grant REFUSED — workspace tenancy unconfirmed (#3823).',
+      {
+        workspaceId: logSafe(workspaceId),
+        callerTidPresent: Boolean(callerTid),
+        workspaceTidPresent: Boolean(wsDoc.tid),
+        remediation: denial.remediation,
+      },
+    );
+    return null;
   }
 
   return null;
+}
+
+/**
+ * Build the honest explanation for a refused tenant-admin grant.
+ *
+ * Per `deploy-integrity.md` R7 every clause here is something the resolver
+ * ESTABLISHED. It never says the workspace is missing (it was read), never says
+ * the caller lacks admin (they have it), and never asserts the workspace belongs
+ * to another tenant (that is precisely what could not be determined). The two
+ * causes are reported independently because they have different fixes and both
+ * can hold at once.
+ */
+function tenantUnconfirmedDenial(
+  workspaceId: string,
+  callerTid: string | undefined,
+  workspaceTid: string | undefined,
+): WorkspaceAccessDenial {
+  const causes: string[] = [];
+  const fixes: string[] = [];
+  if (!workspaceTid) {
+    causes.push(
+      'this workspace record does not record which Entra tenant it belongs to ' +
+        '(its `tid` field is absent — workspaces created before rel-T11 were not stamped)',
+    );
+    fixes.push(
+      'Stamp the tenant onto the legacy workspace records: run ' +
+        '`node scripts/csa-loom/backfill-workspace-tid.mjs` to see what it would change ' +
+        '(it is DRY-RUN by default), then re-run it with `--apply` to write, and reopen ' +
+        'this workspace.',
+    );
+  }
+  if (!callerTid) {
+    causes.push(
+      'your sign-in session does not carry a tenant (`tid`) claim — sessions minted ' +
+        'before rel-T11, and personal access tokens issued without `createdByTid`, do not have one',
+    );
+    fixes.push(
+      'Sign out and sign in again to mint a session that carries `tid`. If you are ' +
+        'calling with a personal access token, reissue it — tokens created before rel-T11 ' +
+        'carry no tenant.',
+    );
+  }
+  if (causes.length === 0) {
+    // Both tids present but unequal is caught by step 4 and never reaches here.
+    // Keep the branch honest rather than emitting a claim we cannot support.
+    causes.push('the workspace could not be confirmed to belong to your Entra tenant');
+    fixes.push('Report this with the workspace id — the tenant comparison reached an unexpected state.');
+  }
+  return {
+    code: 'tenant_unconfirmed',
+    reason:
+      'Your tenant-admin access to this workspace was refused because Loom could not confirm ' +
+      `the workspace belongs to your Entra tenant: ${causes.join('; and ')}. ` +
+      'This is NOT a statement that the workspace is missing, or that it belongs to someone ' +
+      'else — the tenancy is simply unverified, and Loom will not grant tenant-wide admin on ' +
+      'an unverified tenancy. Owner access and any explicit share (Manage access) on this ' +
+      'workspace are unaffected.',
+    remediation: fixes.join(' '),
+    workspaceId,
+  };
 }
 
 /**
