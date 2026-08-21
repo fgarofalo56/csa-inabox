@@ -15,13 +15,58 @@
  * returns a 404 (same not-found shape as the sibling git route — we do not leak
  * existence of workspaces the caller can't see). Use `requireWorkspace` to fold
  * in the 401 unauthenticated check in one call.
+ *
+ * #3825 — THERE IS EXACTLY ONE IMPLEMENTATION OF "MAY THIS CALLER TOUCH THIS
+ * WORKSPACE", AND IT IS `resolveWorkspaceAccessByOid`. Every guard in this
+ * module delegates the decision to it. Do not re-add a tenant-admin
+ * short-circuit here, in any form.
+ *
+ * What that replaced: `authorizeWorkspace` opened with
+ *
+ *     if (isTenantAdmin(session)) return null;   // null == AUTHORIZED
+ *
+ * — returning BEFORE any Cosmos read, so for a tenant admin there was no
+ * workspace document, no `tid`, and nothing to compare. That is strictly worse
+ * than the hole #3824 closed in the resolver's step 6: that one at least
+ * performed a comparison (which merely skipped itself when a `tid` was absent);
+ * this performed none at all. Measured on the tree WITH #3824 applied, with both
+ * tids present and DIFFERENT — the case the repaired resolver correctly refuses:
+ *
+ *     authorizeWorkspace     -> ALLOWED (null) | resolver consulted = 0
+ *     resolveAdminWorkspace  -> ALLOWED via=admin tid=<the OTHER tenant>
+ *     CONTROL: a NON-admin is refused by both
+ *
+ * `resolveAdminWorkspace` had the same shape one level down (`isTenantAdmin`
+ * then an unfiltered cross-partition `SELECT *` via `loadWorkspaceAdmin`), and
+ * `authorizeWorkspace` never passed `tenantAdmin` into the resolver at all — so
+ * the plumbing that lets the repaired boundary decide was only half-wired.
+ *
+ * WHY DELEGATION AND NOT AN INLINE FAST PATH. Keeping a short-circuit "for
+ * performance" would require the same POSITIVE match inline
+ * (`callerTid && wsDoc.tid && wsDoc.tid === callerTid`), which means loading the
+ * workspace doc — i.e. most of the cost of simply calling the resolver, in
+ * exchange for a second copy of the tenant decision that can drift from the
+ * first. Four copies of this decision is how #3823 and #3825 both happened.
+ *
+ * THE TRADE THIS MAKES, STATED PLAINLY. A tenant admin acting on a LEGACY
+ * `tid`-less workspace doc (or holding a session minted without a `tid` claim)
+ * is now REFUSED where they previously succeeded. That refusal is deliberate,
+ * and it is not silent: the resolver's `diag` channel carries an honest reason +
+ * the `scripts/csa-loom/backfill-workspace-tid.mjs` remediation, which these
+ * guards render as a 409 `tenant_unconfirmed` (see `workspaceDenialResponse`)
+ * instead of a bare 404 that would read as "you have nothing". OWNER and ACL
+ * access are untouched by all of this — neither depends on the tenant bypass,
+ * and both still resolve with no `tid` on either side.
  */
 import { NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
-import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
-import { loadWorkspaceAdmin } from '@/lib/clients/workspaces-client';
+import {
+  resolveWorkspaceAccessByOid,
+  type WorkspaceAccessDiagnostics,
+} from '@/lib/auth/workspace-access';
+import { workspaceDenialResponse } from '@/lib/auth/workspace-denial';
 import { cosmosIdFromLoomId } from '@/app/api/items/_lib/loom-content-id';
 import type { Workspace } from '@/lib/types/workspace';
 
@@ -141,37 +186,83 @@ export async function authorizeItemWorkspace(
     workspaceId = (await workspaceIdOfItem(opts.itemId, opts.itemType)) || '';
     if (!workspaceId) return null; // no such item — nothing of another tenant's to gate
   }
-  const denied = await authorizeWorkspace(session, workspaceId, {
-    allowReadRoles: opts.allowReadRoles,
-  });
+  // #3825 — keep the ROUTE's own 404 wording for an ORDINARY refusal (that is
+  // what the editors already handle), but never flatten a tenancy REFUSAL into
+  // it: "semantic model not found" would be a false statement about a workspace
+  // Loom read and an admin who really is an admin. `diag` distinguishes the two;
+  // it is populated only when the resolver refused a grant worth explaining.
+  const diag: WorkspaceAccessDiagnostics = {};
+  const denied = await authorizeWorkspace(
+    session,
+    workspaceId,
+    { allowReadRoles: opts.allowReadRoles },
+    diag,
+  );
   if (!denied) return null;
-  return NextResponse.json({ ok: false, error: opts.notFound }, { status: 404 });
+  return (
+    workspaceDenialResponse(diag) ??
+    NextResponse.json({ ok: false, error: opts.notFound }, { status: 404 })
+  );
 }
 
 /**
  * Authorize a workspace-scoped request: OWNER (self-service) OR tenant ADMIN
- * (org-wide) OR a shared ACL member (rel-T11). Returns a 404 NextResponse when
- * none holds, else null.
+ * (org-wide) OR a shared ACL member (rel-T11). Returns a response when none
+ * holds, else null.
  *
  * By DEFAULT this gates to WRITE-capable access (Owner/Admin/Member) because the
  * workspace sub-routes it protects are overwhelmingly config MUTATIONS — a
  * read-only Viewer/Contributor must never pass a mutation guard. Read-only
  * surfaces opt in via `{ allowReadRoles: true }`, which admits any workspace
- * role. The owner + tenant-admin fast-paths are unchanged, so the
- * single-operator estate behaves exactly as before.
+ * role. The owner fast-path is unchanged, so the single-operator estate behaves
+ * exactly as before.
+ *
+ * #3825 — THE TENANT-ADMIN VERDICT IS THE RESOLVER'S, NOT THIS FUNCTION'S. The
+ * admin flag is COMPUTED here (`isTenantAdmin`) and PASSED DOWN; it is never
+ * acted on here. That is the whole fix: the module header records what the
+ * short-circuit above this line used to allow.
+ *
+ * Two denial shapes, deliberately different:
+ *   - 404 `workspace not found` — the ordinary "this caller holds no role on
+ *     this workspace" (or holds a read-only one on a write surface). Unchanged,
+ *     and it still does not leak the existence of workspaces the caller can't
+ *     see.
+ *   - 409 `tenant_unconfirmed` — the resolver REFUSED a tenant-admin grant it
+ *     would otherwise have made, because it could not confirm the workspace is
+ *     in the admin's own tenant. Rendering that as a 404 would be a false
+ *     statement (the doc was read, the admin rights are real), which is what
+ *     `deploy-integrity.md` R7 forbids.
+ *
+ * `diag` is an OPTIONAL out-channel for a caller that wants the structured
+ * reason as well as the response — `authorizeItemWorkspace` uses it to keep the
+ * ROUTE's own 404 wording for an ordinary refusal while still surfacing the
+ * honest 409 for a tenancy refusal. Added as a fourth optional parameter so all
+ * existing call sites stay byte-identical (the same reason #3823 gave the
+ * resolver an out-param instead of widening its return type).
  */
 export async function authorizeWorkspace(
   session: SessionPayload,
   workspaceId: string,
   opts: { allowReadRoles?: boolean } = {},
+  diag: WorkspaceAccessDiagnostics = {},
 ): Promise<NextResponse | null> {
-  if (isTenantAdmin(session)) return null;
-  const access = await resolveWorkspaceAccessByOid(session.claims.oid, workspaceId, {
-    groups: session.claims.groups,
-    callerTid: session.claims.tid,
-  });
+  const access = await resolveWorkspaceAccessByOid(
+    session.claims.oid,
+    workspaceId,
+    {
+      groups: session.claims.groups,
+      callerTid: session.claims.tid,
+      // The admin-open bypass. Computed here, DECIDED in the resolver (step 6),
+      // which grants only on a POSITIVE tenant match (#3823).
+      tenantAdmin: isTenantAdmin(session),
+    },
+    diag,
+  );
   if (access && (opts.allowReadRoles || access.canWrite)) return null;
-  return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+  return (
+    workspaceDenialResponse(diag) ??
+    NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 })
+  );
 }
 
 /**
@@ -212,12 +303,30 @@ export async function requireWorkspace(
  *   2. Owner point-read on the caller's partition. Found → `via: 'owner'`. This
  *      is the UNCHANGED path for a non-admin owner acting on their own
  *      workspace, so no existing owner behavior is weakened.
- *   3. Not owned AND isTenantAdmin(session) → cross-partition `loadWorkspaceAdmin`.
- *      Found → `via: 'admin'`. This is the ONLY code path that reads across
- *      partitions, and it is gated on the tenant-admin check FIRST so a
- *      non-admin can never read/patch a workspace they don't own.
- *   4. Otherwise                → 404 (same not-found shape; we do not leak the
- *      existence of workspaces the caller can't see).
+ *   3. Not owned AND isTenantAdmin(session) → the SHARED resolver decides
+ *      (#3825). Found → `via: 'admin'`.
+ *   4. Otherwise                → 404, or the honest 409 when the resolver
+ *      refused a grant because the workspace's tenancy is unconfirmed.
+ *
+ * #3825 — STEP 3 USED TO BE `isTenantAdmin(session)` FOLLOWED BY AN UNFILTERED
+ * CROSS-PARTITION `SELECT *` (`loadWorkspaceAdmin`), with no tenant comparison
+ * anywhere between the flag and the document. Measured, both tids present and
+ * DIFFERENT: `ALLOWED via=admin tid=<the OTHER tenant>`. It now calls
+ * `resolveWorkspaceAccessByOid` — the same chokepoint `authorizeWorkspace` uses
+ * — so the tenant decision has ONE implementation. `loadWorkspaceAdmin` is no
+ * longer reached from this module (the resolver's own `readWorkspaceById` is the
+ * identical query, and its result is now SUBJECTED to the boundary rather than
+ * returned past it).
+ *
+ * THE `isTenantAdmin` GATE STAYS IN FRONT, and that is load-bearing: without it
+ * this function would newly admit a shared-ACL Member to the admin plane
+ * (`/git`, `/cmk`, `/identity`, `/networking`, `/storage-metrics`), which it has
+ * never granted. Inside the gate every non-null verdict is accepted — the caller
+ * is a tenant admin either way, so an admin who ALSO holds an explicit ACL role
+ * keeps resolving exactly as before. Net effect versus the previous code:
+ * strictly TIGHTER (an unconfirmed tenancy is refused), never wider. `via` is
+ * reported as `'admin'` for any non-owner verdict, preserving the
+ * `via === 'owner'` distinction the 13 call sites branch on.
  *
  * Callers that must additionally restrict to admins ONLY (e.g. the networking
  * gate, or a destructive admin DELETE) check `isTenantAdmin(session)` themselves
@@ -255,11 +364,27 @@ export async function resolveAdminWorkspace(
     // 404 → not in the caller's partition; fall through to the admin fallback.
   }
 
-  // 2) Admin-only cross-partition fallback (gated on the tenant-admin check).
+  // 2) Admin-only fallback. The tenant-admin GATE stays here (it decides who may
+  //    reach the admin plane at all); the tenant BOUNDARY is the resolver's.
   if (isTenantAdmin(session)) {
+    const diag: WorkspaceAccessDiagnostics = {};
     try {
-      const ws = await loadWorkspaceAdmin(workspaceId);
-      if (ws) return { session, ws, via: 'admin' };
+      const access = await resolveWorkspaceAccessByOid(
+        session.claims.oid,
+        workspaceId,
+        {
+          groups: session.claims.groups,
+          callerTid: session.claims.tid,
+          tenantAdmin: true,
+        },
+        diag,
+      );
+      // Any non-null verdict: the caller is already known to be a tenant admin,
+      // so accepting an owner/ACL resolution here cannot widen who gets in — it
+      // only avoids refusing an admin who ALSO holds an explicit role.
+      if (access) {
+        return { session, ws: access.workspace, via: access.via === 'owner' ? 'owner' : 'admin' };
+      }
     } catch (e: any) {
       return {
         resp: NextResponse.json(
@@ -268,6 +393,9 @@ export async function resolveAdminWorkspace(
         ),
       };
     }
+    // A tenancy REFUSAL is not an absence — say which it was (R7).
+    const denial = workspaceDenialResponse(diag);
+    if (denial) return { resp: denial };
   }
 
   // 3) Not owned and not an admin (or admin but no such workspace) → 404.
