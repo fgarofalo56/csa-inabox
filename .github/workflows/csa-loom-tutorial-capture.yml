@@ -211,7 +211,7 @@ jobs:
 
       - name: Upload staged tutorial captures (REVIEW before publishing)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: loom-tutorial-captures
           path: temp/azure-screenshots/redacted/loom-tutorials/

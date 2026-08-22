@@ -740,7 +740,7 @@ jobs:
 
       - name: Upload the receipt (redacted — this repo is public)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gov-workspace-identity
           path: |
