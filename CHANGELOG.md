@@ -25,6 +25,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.100.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.100.0...csa-inabox-v0.100.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **auth:** require a POSITIVE tenant match, not merely a non-contradiction ([#3859](https://github.com/fgarofalo56/csa-inabox/issues/3859)) ([bfd67ed](https://github.com/fgarofalo56/csa-inabox/commit/bfd67ed10c03a572e016afd77f65ecf0b83fa839))
+* **ci:** commits whose body the changelog parser cannot read are dropped silently ([#3853](https://github.com/fgarofalo56/csa-inabox/issues/3853)) ([2ea8252](https://github.com/fgarofalo56/csa-inabox/commit/2ea8252ef948a2843b2d488b9f2097c00c8a126b))
+* **ci:** redact at the issue-poster boundary, not field by field ([#3829](https://github.com/fgarofalo56/csa-inabox/issues/3829)) ([#3835](https://github.com/fgarofalo56/csa-inabox/issues/3835)) ([afcf3e6](https://github.com/fgarofalo56/csa-inabox/commit/afcf3e6be240ba5fa675b658aa77c2d6f6395aa0))
+* **ci:** the Gov BFF probe reported OK over a 403/404, and printed raw Gov bodies unredacted ([#3879](https://github.com/fgarofalo56/csa-inabox/issues/3879)) ([997bd4d](https://github.com/fgarofalo56/csa-inabox/commit/997bd4d386a8ebea2635b6d2a0baf97c11b39f84))
+* **console/editors:** a browser-only seed no longer masquerades as saved, with Save greyed out ([#3687](https://github.com/fgarofalo56/csa-inabox/issues/3687)) ([#3864](https://github.com/fgarofalo56/csa-inabox/issues/3864)) ([7ab04a9](https://github.com/fgarofalo56/csa-inabox/commit/7ab04a9e2bca823b27d20aa7e1efb3639307b121))
+* **deploy:** the [#3676](https://github.com/fgarofalo56/csa-inabox/issues/3676) estate gate read RECENCY as "what is serving", and threw away a regression it had already established ([#3860](https://github.com/fgarofalo56/csa-inabox/issues/3860)) ([7167c52](https://github.com/fgarofalo56/csa-inabox/commit/7167c52d11c5af6b6410f35cc5a8b09a211f848a))
+* **deploy:** the GCC-High ADX preflight ran six steps AFTER the what-if it exists to unblock ([#3880](https://github.com/fgarofalo56/csa-inabox/issues/3880)) ([26890f8](https://github.com/fgarofalo56/csa-inabox/commit/26890f87af734d9945149b0f2ad5dcba5aa692ac))
+* **gates:** make validate printed NOT VERIFIED and exited 0; add the missing TypeScript leg ([#3858](https://github.com/fgarofalo56/csa-inabox/issues/3858)) ([6ddcc3f](https://github.com/fgarofalo56/csa-inabox/commit/6ddcc3f7386c55d25d2cc0b55272a77c51e7dd69))
+
 ## [0.100.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.99.1...csa-inabox-v0.100.0) (2026-08-21)
 
 
