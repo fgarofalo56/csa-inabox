@@ -1191,16 +1191,75 @@ for (const fn of ['resolveWorkspaceAccessByOid', 'listAccessibleWorkspaces']) {
   }
 }
 
+/**
+ * WHERE THE RESOLVER MAKES THE TENANT DECISION — by either sanctioned spelling.
+ *
+ * ── #3900 CROSS-LANE: THIS WAS KEYED TO THE UNSAFE PATTERN ──────────────────
+ *
+ * It read, hard-coded:
+ *
+ *     const compareAt = resolverBody.search(/wsDoc\.tid\s*!==\s*callerTid/);
+ *
+ * i.e. it required the resolver to carry the TRUTHINESS-GUARDED comparison —
+ * the exact shape this whole guard exists to delete. Consolidating step 4 onto
+ * `sameTenantConfirmed` therefore made sections 1-4 report "the boundary is
+ * gone" and exit 1: THE GUARD GOES RED BECAUSE THE CODE GOT SAFER. That is the
+ * `csa_loom_guard_keyed_to_the_unsafe_pattern` shape, one level up, inside the
+ * guard that polices it — and it blocks #3900.
+ *
+ * Isolated by measurement rather than reasoning (reported by #3900, re-run
+ * here): clean `main` RC=0 · consolidating `:490` alone RC=0 (section 10's SF3
+ * arm blesses it correctly) · consolidating `:335` RC=1, with ONLY this regex
+ * firing.
+ *
+ * IT IS NOT WIDENED, IT IS RE-KEYED — AND IT IS STRICTER THAN WHAT IT REPLACES.
+ * A regex that accepts both spellings and asks nothing else would be a guard
+ * that has stopped discriminating. The old one asserted PRESENCE and position:
+ * `void (wsDoc.tid !== callerTid);` satisfied it, and so would
+ * `void sameTenantConfirmed(a, b);`. This one additionally requires the
+ * comparison to be in a REFUSING position — a `return null` within the same
+ * statement window — so a decision whose ANSWER IS DISCARDED no longer counts.
+ * Both arms are pinned by the embedded control below, in both directions.
+ *
+ * KNOWN LIMIT, stated rather than implied: this is still a TEXTUAL layer over
+ * masked source. It establishes that a refusing tenant comparison exists and
+ * that it precedes the ACL grant and the admin bypass — the ORDER properties
+ * sections 1-4 are for. It does NOT establish that the comparison is correct;
+ * `__tests__/workspace-access-admin-tid.test.ts` and section 8's ALLOW model are
+ * the backstop for that, exactly as `TID_COMPARISON_PINS`' own reason says of
+ * itself ("read a green section 10 as 'no unreviewed COPY', never as 'the
+ * comparison is correct'").
+ */
+const RESOLVER_TENANT_COMPARISON =
+  /(?:wsDoc\.tid\s*!==\s*callerTid|sameTenantConfirmed\s*\()[\s\S]{0,80}?return\s+null/;
+
+/** The same match WITHOUT the refusal requirement — used only to tell the two
+ *  failure modes apart, so the message can say which one actually happened. */
+const RESOLVER_TENANT_COMPARISON_PRESENCE =
+  /wsDoc\.tid\s*!==\s*callerTid|sameTenantConfirmed\s*\(/;
+
 const resolverBody = functionBody(access, 'resolveWorkspaceAccessByOid');
 if (!resolverBody) {
   fail(`${ACCESS_FILE}: could not read the body of resolveWorkspaceAccessByOid.`);
 } else {
   const tidAt = resolverBody.indexOf('effectiveCallerTid(');
-  const compareAt = resolverBody.search(/wsDoc\.tid\s*!==\s*callerTid/);
+  const compareAt = resolverBody.search(RESOLVER_TENANT_COMPARISON);
   const aclAt = resolverBody.indexOf('resolveEffectiveRole(');
   const adminAt = resolverBody.indexOf('opts.tenantAdmin');
   if (tidAt === -1 || compareAt === -1) {
-    fail(`${ACCESS_FILE}: resolveWorkspaceAccessByOid no longer compares the workspace tid against effectiveCallerTid() — the boundary is gone.`);
+    const present = RESOLVER_TENANT_COMPARISON_PRESENCE.test(resolverBody);
+    fail(
+      `${ACCESS_FILE}: resolveWorkspaceAccessByOid no longer makes a REFUSING tenant comparison ` +
+        `against effectiveCallerTid() — the boundary is gone. ` +
+        (tidAt === -1 ? '`effectiveCallerTid(` is absent. ' : '') +
+        (present
+          ? 'A tenant comparison IS present but nothing refuses on it within the statement — ' +
+            'its answer is DISCARDED, which is presence-read-as-enforcement and not a boundary. '
+          : 'No tenant comparison of either sanctioned spelling was found. ') +
+        'Either spelling is accepted — the truthiness-guarded `wsDoc.tid !== callerTid` or, ' +
+        'preferably, `sameTenantConfirmed(...)` (#3900 consolidates onto the latter) — but it ' +
+        'must be followed by a refusal.',
+    );
   } else {
     if (aclAt !== -1 && compareAt > aclAt) {
       fail(`${ACCESS_FILE}: the tid boundary runs AFTER the ACL grant — a cross-tenant caller would already hold a role by then.`);
@@ -1210,6 +1269,36 @@ if (!resolverBody) {
     }
   }
 }
+
+// ── EMBEDDED CONTROL for the re-keyed comparison (#3900) ────────────────────
+// A guard that accepts two spellings must be shown to still REFUSE the states it
+// exists to catch, or the re-key is just a widening. Six arms, run against the
+// same regex the section above uses.
+const RESOLVER_COMPARISON_PROBES = [
+  ['A the CURRENT truthiness spelling', true,
+    'if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null;'],
+  ['B the CONSOLIDATED spelling (#3900)', true,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) return null;'],
+  ['C the boundary REMOVED entirely', false,
+    'const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['D the comparison present but its ANSWER DISCARDED', false,
+    'void sameTenantConfirmed(callerTid, wsDoc.tid);\n  const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['E the truthiness comparison with its answer DISCARDED', false,
+    'void (wsDoc.tid !== callerTid);\n  const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['F consolidated, refusing across a line break', true,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n    return null;\n  }'],
+];
+let resolverProbesPassed = 0;
+for (const [label, shouldMatch, src] of RESOLVER_COMPARISON_PROBES) {
+  if (RESOLVER_TENANT_COMPARISON.test(src) === shouldMatch) { resolverProbesPassed += 1; continue; }
+  fail(
+    `RESOLVER COMPARISON CONTROL ${label} — expected the section-1..4 tenant-comparison test to ` +
+      `${shouldMatch ? 'MATCH' : 'REFUSE'} it and it did not. Arms C/D/E are what stop the #3900 ` +
+      're-key being a widening: a removed boundary, and a boundary whose answer is thrown away, ' +
+      'must both still read as "the boundary is gone".',
+  );
+}
+
 
 const effBody = functionBody(access, 'effectiveCallerTid');
 if (!effBody) {
