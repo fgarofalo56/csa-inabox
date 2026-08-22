@@ -112,25 +112,21 @@ export function appliesEstateTemplate(text) {
  * Lanes deliberately NOT in WATCHED, each with a predicate that must STILL hold.
  * `stillExcluded(text)` returning FALSE means the reason has expired and the lane
  * must now be registered.
+ *
+ * CURRENTLY EMPTY, AND THAT IS THE INTENDED STATE. It held exactly one entry —
+ * `deploy-fiab-il5.yml` — for the length of one review round. Its predicate was
+ * "the workflow still lacks a DRY-RUN `run-name`", because registering it without
+ * one would have let a default `whatif-only` dispatch clear a drift it had not
+ * closed. That predicate EXPIRED as designed the moment the run-name landed, and
+ * the lane was registered in the same commit; the exclusion was then deleted
+ * rather than reworded, which is the only honest way to retire one.
+ *
+ * The machinery is kept, empty, on purpose. An empty allowlist with live controls
+ * is not dead code — it is the mechanism that makes the NEXT blocked lane a dated
+ * obligation instead of a silent omission, and the two control tests below keep it
+ * from rotting into decoration while unused.
  */
-export const EXCLUSIONS = Object.freeze({
-  'deploy-fiab-il5.yml': {
-    reason:
-      'IL5 SHOULD be watched and is not — this is a KNOWN GAP with a blocking dependency, not a design choice. '
-      + 'Its run_mode DEFAULTS to `whatif-only` and the workflow declares NO `run-name`, so a default dispatch '
-      + 'would succeed having applied nothing and pickLastRealSuccess could not tell it from a real apply — '
-      + 'registering it in that state would let one dry run clear a drift it had not closed, which is precisely '
-      + 'what DRY_RUN_MARKER exists to prevent and precisely the state deploy-fiab-gcch.yml was in when it was '
-      + 'registered. The fix is one `run-name:` line in .github/workflows/deploy-fiab-il5.yml, a file the lane '
-      + 'that found this does not own, so it is routed rather than taken. THIS EXCLUSION EXPIRES BY ITSELF: the '
-      + 'predicate below goes false the moment that line lands, and this suite then fails until IL5 is in WATCHED.',
-    // TRUE while the lane still lacks a dry-run-marked run-name.
-    stillExcluded: (text) => {
-      const runName = text.replace(/\r\n/g, '\n').split('\n').find((l) => /^run-name:/.test(l));
-      return !runName || !runName.includes(DRY_RUN_MARKER);
-    },
-  },
-});
+export const EXCLUSIONS = Object.freeze({});
 
 // ---------------------------------------------------------------------------
 
@@ -230,40 +226,138 @@ test('LIVE CONTROL: the two real what-if lanes are correctly NOT counted as appl
   }
 });
 
-test('EXCLUSIONS auto-expire: each reason is still TRUE, or the lane must be registered', () => {
-  const watched = new Set(WATCHED.map((e) => e.workflow));
-  for (const [wf, entry] of Object.entries(EXCLUSIONS)) {
-    assert.ok(existsSync(path.join(WF_DIR, wf)), `EXCLUSIONS names ${wf}, which does not exist — delete the entry`);
-    assert.ok(
-      typeof entry.reason === 'string' && entry.reason.length > 80,
-      `${wf} must state WHY it is not watched, at length`,
-    );
-    assert.equal(typeof entry.stillExcluded, 'function', `${wf} needs an expiry PREDICATE, not just prose`);
-
-    assert.ok(
-      !watched.has(wf),
-      `${wf} is BOTH in WATCHED and in EXCLUSIONS — delete the exclusion, it has served its purpose`,
-    );
-    assert.ok(
-      entry.stillExcluded(read(wf)),
+/**
+ * Judge ONE exclusion. PURE, and exported so the controls can drive the whole
+ * mechanism from fixtures even when EXCLUSIONS is empty — otherwise an empty
+ * allowlist would silently disable its own enforcement, which is the shape this
+ * whole suite exists to catch.
+ *
+ * @returns {string[]} problems; empty means the exclusion is valid TODAY
+ */
+export function judgeExclusion(wf, entry, { watched, text, exists = true }) {
+  const out = [];
+  if (!exists) return [`EXCLUSIONS names ${wf}, which does not exist — delete the entry`];
+  if (typeof entry?.reason !== 'string' || entry.reason.length <= 80) {
+    out.push(`${wf} must state WHY it is not watched, at length`);
+  }
+  if (typeof entry?.stillExcluded !== 'function') {
+    out.push(`${wf} needs an expiry PREDICATE, not just prose`);
+    return out;
+  }
+  if (watched.has(wf)) {
+    out.push(`${wf} is BOTH in WATCHED and in EXCLUSIONS — delete the exclusion, it has served its purpose`);
+  }
+  if (!entry.stillExcluded(text)) {
+    out.push(
       `${wf}'s exclusion reason NO LONGER HOLDS — the blocking condition is resolved, so register it in WATCHED `
       + 'and delete this exclusion. An exclusion that outlives its reason is a second copy of the problem this suite exists to catch.',
     );
   }
+  return out;
+}
+
+test('EXCLUSIONS auto-expire: each reason is still TRUE, or the lane must be registered', () => {
+  const watched = new Set(WATCHED.map((e) => e.workflow));
+  const problems = [];
+  for (const [wf, entry] of Object.entries(EXCLUSIONS)) {
+    problems.push(...judgeExclusion(wf, entry, {
+      watched,
+      exists: existsSync(path.join(WF_DIR, wf)),
+      text: existsSync(path.join(WF_DIR, wf)) ? read(wf) : '',
+    }));
+  }
+  assert.deepEqual(problems, []);
+  // EXCLUSIONS is currently EMPTY, which makes the loop above vacuous — so the
+  // machinery is proved from fixtures in the next test instead. Stated rather
+  // than left implicit: a green here today means "nothing is excluded", not
+  // "the expiry check works".
 });
 
-test('CONTROL: the IL5 expiry predicate genuinely discriminates', () => {
-  // The predicate is the whole mechanism, so it gets its own two-arm control.
-  // If it returned true unconditionally the exclusion would never expire and the
-  // test above would be decoration.
-  const pred = EXCLUSIONS['deploy-fiab-il5.yml'].stillExcluded;
-  assert.equal(pred('name: x\non:\n  workflow_dispatch:\n'), true, 'no run-name at all must remain excluded');
-  assert.equal(pred('name: x\nrun-name: deploy-fiab-il5\n'), true, 'a run-name without the marker must remain excluded');
-  assert.equal(
-    pred(`name: x\nrun-name: deploy-fiab-il5 — ${DRY_RUN_MARKER} (whatif-only, applies nothing)\n`),
-    false,
-    'a run-name CARRYING the marker must EXPIRE the exclusion — otherwise IL5 stays unwatched forever',
+test('CONTROL: the exclusion machinery works, driven from fixtures (EXCLUSIONS is empty)', () => {
+  // Every branch of judgeExclusion, exercised without needing a live exclusion.
+  // This is what keeps an empty allowlist from rotting into decoration, and it
+  // is the exact mechanism that retired the IL5 entry: its predicate was "the
+  // workflow still lacks a DRY-RUN run-name", and it expired the moment that
+  // line landed.
+  const il5Predicate = (text) => {
+    const runName = text.replace(/\r\n/g, '\n').split('\n').find((l) => /^run-name:/.test(l));
+    return !runName || !runName.includes(DRY_RUN_MARKER);
+  };
+  const REASON = 'x'.repeat(100);
+  const none = new Set();
+
+  // Still-blocked lane: predicate TRUE ⇒ valid exclusion, no problems.
+  assert.deepEqual(
+    judgeExclusion('w.yml', { reason: REASON, stillExcluded: il5Predicate }, { watched: none, text: 'name: w\non:\n' }),
+    [],
   );
-  // And the live file is in the state the exclusion claims.
-  assert.equal(pred(read('deploy-fiab-il5.yml')), true, 'deploy-fiab-il5.yml already has a DRY-RUN run-name — register it');
+  // A run-name WITHOUT the marker is still blocked (gcc's historical state).
+  assert.deepEqual(
+    judgeExclusion('w.yml', { reason: REASON, stillExcluded: il5Predicate }, { watched: none, text: 'name: w\nrun-name: w (whatif-only)\n' }),
+    [],
+  );
+  // THE EXPIRY: a run-name CARRYING the marker ⇒ the exclusion must fail.
+  const expired = judgeExclusion(
+    'w.yml',
+    { reason: REASON, stillExcluded: il5Predicate },
+    { watched: none, text: `name: w\nrun-name: w — ${DRY_RUN_MARKER} (whatif-only, applies nothing)\n` },
+  );
+  assert.equal(expired.length, 1, 'an expired predicate must produce exactly one problem');
+  assert.match(expired[0], /NO LONGER HOLDS/);
+
+  // Prose with no predicate is refused.
+  assert.match(
+    judgeExclusion('w.yml', { reason: REASON }, { watched: none, text: '' }).join(' '),
+    /needs an expiry PREDICATE/,
+  );
+  // A too-thin reason is refused.
+  assert.match(
+    judgeExclusion('w.yml', { reason: 'because', stillExcluded: () => true }, { watched: none, text: '' }).join(' '),
+    /must state WHY/,
+  );
+  // Belt-and-braces on both lists at once.
+  assert.match(
+    judgeExclusion('w.yml', { reason: REASON, stillExcluded: () => true }, { watched: new Set(['w.yml']), text: '' }).join(' '),
+    /BOTH in WATCHED and in EXCLUSIONS/,
+  );
+  // A named file that does not exist is refused.
+  assert.match(
+    judgeExclusion('gone.yml', { reason: REASON, stillExcluded: () => true }, { watched: none, text: '', exists: false }).join(' '),
+    /which does not exist/,
+  );
+});
+
+test('ATOMICITY: IL5 is registered AND its run-name carries the marker — neither half alone', () => {
+  // These two are ONE change split across two lanes' files, and either half alone
+  // reddens main: registering without the run-name fails the DRY_RUN_MARKER
+  // contract in deploy-staleness.test.mjs; the run-name without registration
+  // expires the exclusion predicate above. Pinned together so a future edit
+  // cannot remove one and leave the other.
+  const entry = WATCHED.find((e) => e.workflow === 'deploy-fiab-il5.yml');
+  assert.ok(entry, 'deploy-fiab-il5.yml is not in WATCHED — the DoD boundary is unmeasured again');
+
+  const text = read('deploy-fiab-il5.yml');
+  const runName = text.replace(/\r\n/g, '\n').split('\n').find((l) => /^run-name:/.test(l));
+  assert.ok(runName, 'deploy-fiab-il5.yml lost its run-name while still being WATCHED — a default whatif-only dispatch would now clear its drift');
+  assert.ok(
+    runName.includes(DRY_RUN_MARKER),
+    `deploy-fiab-il5.yml's run-name no longer carries "${DRY_RUN_MARKER}", so pickLastRealSuccess cannot filter a dry run out`,
+  );
+
+  // The entry has to be a real one, not a placeholder: it must declare the
+  // template it applies and the param file that decides what that apply deploys.
+  assert.ok(entry.paths.includes('platform/fiab/bicep/main.bicep'), 'the IL5 entry does not watch the estate template it applies');
+  assert.ok(entry.paths.includes('platform/fiab/bicep/params/il5.bicepparam'), 'the IL5 entry does not watch its param file');
+  assert.ok(typeof entry.maxDays === 'number' && entry.maxDays > 0, 'the IL5 entry needs a maxDays');
+  assert.ok(typeof entry.why === 'string' && entry.why.length > 80, 'the IL5 entry needs a substantive `why`');
+
+  // THE IMPORT EDGE. `_arm-absence.mjs` is imported by ensure-adx-cluster-running
+  // and never argv, so NO execution shape can detect it — not the `.sh` matcher,
+  // not the `node` matcher #3787 added. Hand-listing it is permanent, so it is
+  // asserted here rather than trusted to a coverage guard that structurally
+  // cannot see it.
+  assert.ok(
+    entry.paths.includes('scripts/ci/_arm-absence.mjs'),
+    'the IL5 entry does not watch _arm-absence.mjs — an IMPORTED module no execution shape can ever detect',
+  );
 });

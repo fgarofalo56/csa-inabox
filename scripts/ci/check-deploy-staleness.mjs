@@ -690,6 +690,111 @@ export const WATCHED = [
     ],
     maxDays: 7,
   },
+  // ── IL5: THE LANE NOTHING WAS WATCHING ───────────────────────────────────
+  // Found while routing PR #3888's new deploy sources: adding a source to
+  // deploy-fiab-il5.yml produced NO gap from check-deploy-paths-coverage. Not
+  // because IL5 was covered — because IL5 WAS NOT IN THIS TABLE AT ALL. Fifteen
+  // entries, and the DoD boundary was not one of them, so for that estate
+  // "everything is fine" and "nothing is looking" produced identical output.
+  //
+  // Same shape, and the same argument, as the note above the two sovereign
+  // reconciles: on 2026-08-11 this file printed thirteen rows and not one
+  // sovereign lane while GCC-High had failed six times that day. GCC-High and GCC
+  // were added then; IL5 was missed, and it is the boundary with the least margin
+  // (cloud-parity.md: a capability that works in Commercial and not in a
+  // sovereign boundary is INCOMPLETE, not "Commercial-first"). Every other
+  // IL5-aware control in this repo already enumerates it —
+  // check-tenant-admin-binding.mjs, check-appimagetags-coverage.mjs,
+  // check-teardown-not-on-schedule.mjs, roll-plan.mjs,
+  // __tests__/bicepparam-env-reaches-deploy.test.mjs — so the omission was
+  // inconsistency with an established convention, not a design choice.
+  //
+  // WHY THIS ENTRY AND ITS `run-name:` LANDED IN ONE COMMIT. They are a single
+  // atomic change split across two lanes' files, and either half alone reddens
+  // main. Registering IL5 while the workflow had no run-name fails the
+  // DRY_RUN_MARKER contract (a default `whatif-only` dispatch succeeds having
+  // applied nothing, and would clear a drift it did not close). Adding the
+  // run-name while IL5 stays unregistered expires the completeness suite's
+  // exclusion predicate and fails THAT. Ordering cannot fix a deadlock, so
+  // .github/workflows/deploy-fiab-il5.yml was transferred to this lane for that
+  // ONE line, under the OMNIBUS master's §6 cross-lane procedure. The line is
+  // byte-identical to the one authored on #3888 (transplanted, not retyped — it
+  // carries an em dash, and this repo has an incident where such a needle
+  // silently stopped matching after a cp1252 round-trip).
+  //
+  // THIS ROW READS "NEVER RUN" FROM ITS FIRST DAY, AND THAT IS THE POINT.
+  // deploy-integrity.md R3: a deploy path that has never run is the LOUDEST case
+  // of drift, never a silent pass. Same rationale that registered
+  // loom-dataplane-roll.yml and deploy-fiab-gcc.yml (`disabled_manually`). It
+  // blocks no pull request: deploy-staleness.yml is schedule + dispatch and its
+  // own header states it is deliberately not a required check.
+  //
+  // WHY maxDays: 30 AND NOT 7. The other three reconciles are SCHEDULED DAILY, so
+  // 7 days is not a lag tolerance there — it is the assertion that the cron ran.
+  // IL5 has NO cron at all (workflow_dispatch only) and sits behind an
+  // `il5-deploy` environment approval, so a 7-day bound would assert a cadence
+  // this lane has never claimed to have. The row fails today on NEVER RUN, which
+  // is the true statement; maxDays only governs once a first real run exists.
+  //
+  // THE PATHS ARE THE UNION OF TWO TREE STATES, deliberately. Measured: IL5
+  // executes 11 sources on this branch and 15 once #3888 lands. main has to be
+  // green after EACH merge, so the four #3888 introduces are declared here now —
+  // they are inert until that PR lands and correct the moment it does.
+  {
+    workflow: 'deploy-fiab-il5.yml',
+    why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the DoD IL5 estate, and it was in no watchdog anywhere: not this table, and therefore not the report an operator reads. It has NEVER run. It also carries an `az deployment sub what-if` with adxEnabled=true and, before #3888, no ADX preflight — the identical #3449 shape that failed GCC-High nine consecutive times — so the boundary with the least margin was the one carrying a known unmitigated defect with nothing measuring it (cloud-parity.md).',
+    paths: [
+      '.github/workflows/deploy-fiab-il5.yml',
+      'platform/fiab/bicep/main.bicep',
+      'platform/fiab/bicep/modules/admin-plane/**',
+      // `--parameters` / `--param-file` are not detected deploy shapes, so the
+      // param file is hand-listed — the same reason gcc-high.bicepparam and
+      // gcc.bicepparam are. It decides what the apply deploys into IL5.
+      'platform/fiab/bicep/params/il5.bicepparam',
+      // The orchestration this lane's `full` mode delegates to wholesale.
+      'scripts/csa-loom/redeploy-gov.sh',
+      // The image preflights. On a lane that ADOPTS live federal Container Apps
+      // and re-points them at a tag, refusing is the SAFE outcome, so a change
+      // that flips any of these from refusing to applying changes what reaches
+      // the estate.
+      'scripts/ci/assert-acr-image-tags.sh',
+      'scripts/ci/adopt-image-tags.mjs',
+      'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // The ONLY thing that tags the registry (#3714) — it cannot be declared in
+      // bicep without erasing the firewall-lease mutex mid-apply.
+      'scripts/csa-loom/apply-acr-compliance-tags.sh',
+      // The two adoption resolvers: if either starts returning nothing, the apply
+      // re-mints the internal trust token or blanks sovereign sign-in.
+      'scripts/csa-loom/resolve-internal-token.sh',
+      'scripts/csa-loom/resolve-msal-client-id.sh',
+      // ── Introduced by PR #3888, declared ahead of it (see the note above) ──
+      // The ADX preflight MUTATES the estate (it starts a stopped cluster) and
+      // gates whether the apply proceeds — #3449, ported so IL5 does not carry it
+      // unmitigated. reconcile-policy decides which image tag the apply writes.
+      // discover-dlz-adopt-plan composes LOOM_ADOPT_JSON, which il5.bicepparam
+      // reads at bicep-COMPILE time, so it decides parameter VALUES that reach the
+      // estate; resolve-dlz-coordinates supplies what discovery runs against.
+      'scripts/ci/ensure-adx-cluster-running.mjs',
+      'scripts/ci/reconcile-policy.mjs',
+      'scripts/csa-loom/discover-dlz-adopt-plan.sh',
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
+      // THE IMPORT EDGE. `_arm-absence.mjs` is the shared rule
+      // ensure-adx-cluster-running.mjs imports to tell "definitely absent" from
+      // "I could not read it". It is `import`ed and NEVER argv, so NO execution
+      // shape can see it — not the `.sh` matcher, not the `node` matcher #3787
+      // added. That makes hand-listing it permanent rather than a stopgap, and it
+      // is the one class a coverage guard keyed on execution can never close.
+      // Widening an execution matcher to try would be the wrong fix twice over.
+      'scripts/ci/_arm-absence.mjs',
+      // DELIBERATELY ABSENT, and named so the omission is a decision rather than
+      // an oversight: deploy-classify.mjs, deploy-retry.mjs and
+      // gov-verify-evidence.sh are CI_PLUMBING (see check-deploy-paths-coverage),
+      // and so, transitively, are deploy-retry's own imports _azure-redact.mjs and
+      // deploy-arm-errors.mjs — a module imported by something that cannot change
+      // the estate cannot change it either.
+    ],
+    maxDays: 30,
+  },
   // ── The APP-IMAGE path (the second silently-broken lane) ─────────────────
   // no-vaporware.md names the canonical from-scratch Commercial path as THREE
   // phases: (1) `az deployment sub create` with deployAppsEnabled=false, (2)
