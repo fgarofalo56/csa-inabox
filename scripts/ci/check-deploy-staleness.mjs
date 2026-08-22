@@ -434,6 +434,27 @@ export const WATCHED = [
       'scripts/csa-loom/probe-lake-grant-rights.mjs',
       'scripts/csa-loom/preflight-brownfield-adopt.mjs',
       'scripts/csa-loom/preflight-private-dns-links.mjs',
+      // ── #3786 (routed from PR #3888) — the estate preflights come to COMMERCIAL
+      // #3786 is the finding that Commercial carries the same latent stopped-ADX
+      // and DNS-immutability exposure that broke GCC-High for nine consecutive
+      // runs. PR #3888 ports the three GCC-High controls onto this lane, and they
+      // are the same class already watched there: one MUTATES the estate (starts a
+      // stopped ADX cluster), one decides `dnsResolverInboundStaticIp` — a value
+      // ARM treats as IMMUTABLE — and one REFUSES an apply that would move a live
+      // Container App onto a tag nobody asked for.
+      //
+      // WORTH RECORDING: the routed patch that surfaced #3888's other new sources
+      // did not mention this lane at all, and the guard could not have prompted
+      // anyone — all three are `node`-invoked, so the pre-#3787 extractor saw NONE
+      // of them and reported no GAP for Commercial. Two independent misses of the
+      // same blind spot, in one change.
+      'scripts/ci/ensure-adx-cluster-running.mjs',
+      'scripts/ci/resolve-dns-inbound-allocation.mjs',
+      'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // The shared absence rule the two preflights import. Hand-listed for the
+      // same reason as on the sovereign lanes: an imported module is invisible to
+      // every execution shape, #3787 included.
+      'scripts/ci/_arm-absence.mjs',
     ],
     maxDays: 7,
   },
@@ -596,6 +617,29 @@ export const WATCHED = [
       //                         succeeds while flattening SHA-pinned apps to v0.1.
       'scripts/ci/adopt-image-tags.mjs',
       'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // ── #3380 (routed from PR #3888) — brownfield adopt discovery ──────────
+      // The Batch A change ports adopt-discovery into the sovereign lanes, which
+      // gives this entry three new deploy sources. They are listed HERE, ahead of
+      // that merge, because the file they belong in is owned by this lane and a
+      // shared-file edit has to be sequenced, never parallelised.
+      //
+      // These are deploy sources in the strongest sense: discover-dlz-adopt-plan
+      // composes LOOM_ADOPT_JSON, which gcc-high.bicepparam reads at bicep-COMPILE
+      // time, so it decides parameter VALUES that reach the estate — including
+      // loomStorageAccount, whose emptiness does not leave the running console
+      // alone but REMOVES seven LOOM_*_URL env vars from it (#3701).
+      // resolve-dlz-coordinates supplies the coordinates that discovery runs
+      // against, and reconcile-policy decides which image tag the apply writes.
+      //
+      // MEASURED, and worth recording because only ONE of the three was visible:
+      // check-deploy-paths-coverage flagged discover-dlz-adopt-plan.sh and said
+      // NOTHING about the two `.mjs` files — the #3787 blindness this same PR
+      // fixes. Fixing only what went red would have left two deploy-critical
+      // scripts silently unwatched, which is the vacuous-pass class the guard
+      // exists to catch, one rung down.
+      'scripts/csa-loom/discover-dlz-adopt-plan.sh',
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
+      'scripts/ci/reconcile-policy.mjs',
     ],
     maxDays: 7,
   },
@@ -625,6 +669,24 @@ export const WATCHED = [
       // it should be — exactly the drift this watchdog exists to catch.
       'scripts/csa-loom/apply-acr-compliance-tags.sh',
       'scripts/csa-loom/resolve-internal-token.sh',
+      // ── #3380 / #3449 (routed from PR #3888) ──────────────────────────────
+      // Same adopt-discovery pair as the gcch entry above, for the same reason.
+      'scripts/csa-loom/discover-dlz-adopt-plan.sh',
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
+      // The ADX preflight MUTATES the estate (it starts a stopped cluster) and
+      // gates whether the apply proceeds at all — the #3449 defect, ported to
+      // this lane so GCC does not carry it unmitigated (cloud-parity.md).
+      'scripts/ci/ensure-adx-cluster-running.mjs',
+      // The shared rule it imports to tell "definitely absent" from "I could not
+      // read it". HAND-LISTED, and the distinction matters: it is `import`ed, not
+      // `node`-invoked, so it is NOT a mechanically-detected source even with the
+      // #3787 fix in place. (The routed patch listed it as a #3787 blind spot;
+      // measured, it is a different and narrower gap — an imported module, which
+      // no execution shape can see.) Editing it changes the preflight's verdict
+      // on both lanes at once, which is exactly why it is watched beside them
+      // rather than trusted to ride along — the same argument the gcch entry
+      // already makes for this file.
+      'scripts/ci/_arm-absence.mjs',
     ],
     maxDays: 7,
   },
