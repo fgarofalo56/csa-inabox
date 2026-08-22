@@ -103,7 +103,7 @@ functions = [
 platform = [
     "structlog>=24.1.0,<27.0.0",
     "tenacity>=8.2.0,<10.0.0",
-    "openai>=1.0.0,<3.0.0",
+    "openai>=1.0.0,<4.0.0",
     "azure-identity>=1.17.0,<2.0.0",
     "azure-search-documents>=11.4.0,<13.0.0",
     "requests>=2.31.0,<3.0.0",
@@ -244,7 +244,7 @@ copilot-evals = [
     # ``openai`` is a soft-dep inside ``LLMJudgeScorer`` (try/except
     # ImportError -> 0.5 score).  Bring it in so the CI build exercises
     # the real branch instead of the fallback.
-    "openai>=1.0.0,<3.0.0",
+    "openai>=1.0.0,<4.0.0",
     # CSA-0008 -- ``azure-identity`` is unconditionally imported by
     # ``csa_platform.common.azure_clients`` (re-exported by
     # ``csa_platform.common``), which the eval harness pulls in via
@@ -263,7 +263,7 @@ copilot = [
     # Structured logging (aligns with csa_platform.common.logging).
     "structlog>=24.1.0,<27.0.0",
     # Azure OpenAI + AI Search — reused via csa_platform.ai_integration.rag.
-    "openai>=1.0.0,<3.0.0",
+    "openai>=1.0.0,<4.0.0",
     "azure-identity>=1.17.0,<2.0.0",
     "azure-search-documents>=11.4.0,<13.0.0",
     # CSA-0102 — Confirmation broker signs opaque tokens with HMAC.
