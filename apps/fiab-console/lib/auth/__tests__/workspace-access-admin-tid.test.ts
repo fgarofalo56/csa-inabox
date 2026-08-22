@@ -212,47 +212,135 @@ describe('the refusal is LOUD and TRUE, not a silent empty result (deploy-integr
   });
 
   it('sets NO denial for a non-admin caller — this is not their gate', async () => {
-    wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
+    wsQueryFetchAll.mockResolvedValue([wsDoc(HOME_TENANT)]);
     const diag: WorkspaceAccessDiagnostics = {};
     await resolveAs(PLAIN_OID, { tid: HOME_TENANT }, diag);
+    // Both tids present and EQUAL, so step 4 admits and the admin gate is never
+    // reached. #3840 changed the fixture, not the claim: with the workspace tid
+    // ABSENT this caller is now refused AT STEP 4, and step 4's refusal DOES
+    // record a denial (see the step-4 block below) — so the original fixture
+    // would have proved the opposite of what this spec is named for.
     expect(diag.denial).toBeUndefined();
   });
 });
 
-describe('REGRESSION GUARDS — owner and ACL do not depend on the tenant bypass', () => {
-  it("via:'owner' still resolves with NO tid on either side", async () => {
-    // The single-operator estate, on a legacy doc, with a legacy session.
+describe('#3840 step 4 — the SHARED boundary now requires a POSITIVE match', () => {
+  // WHAT CHANGED AND WHY THIS BLOCK REPLACES FOUR "REGRESSION GUARD" SPECS.
+  //
+  // Until #3840, step 4 read `callerTid && wsDoc.tid && wsDoc.tid !== callerTid`
+  // — a NON-CONTRADICTION test that decided nothing when either side was absent
+  // and fell through to the ACL (step 5) and the admin bypass (step 6). #3823
+  // tightened step 6 only, and the specs this block replaces were written then
+  // to prove that tightening had not disturbed the ACL path. They asserted, as
+  // the CURRENT behaviour, that `via:'acl'` resolves with NO tid on either side.
+  //
+  // That is now a REFUSAL, deliberately. The old argument for leaving the ACL
+  // path lenient was that "an explicit workspace-role row IS the tenant
+  // boundary" — but that is a claim about how rows are usually CREATED, not an
+  // invariant the read path enforces, and #3845 removed its last support by
+  // showing the caller-side absence had a LIVE GENERATOR minting tid-less
+  // sessions on every CI login. A boundary that decides nothing for a
+  // continuously-refilled population is not a boundary.
+  //
+  // THE SPECS BELOW ARE THE INVERSION, NOT A DELETION: every case the old block
+  // asserted is still here, with the opposite expectation and a control beside
+  // it proving the change is a NARROWING and not a blanket deny.
+
+  it("via:'owner' still resolves with NO tid on either side — UNCHANGED", async () => {
+    // The single-operator estate, on a legacy doc, with a legacy session. The
+    // owner fast-path is step 1 and returns before step 4 ever runs, so it needs
+    // no tid at all. This is the spec that proves the change is not a blanket deny.
     wsPointRead.mockResolvedValue({ resource: { id: WS_ID, tenantId: PLAIN_OID, name: 'Mine' } });
     const access = await resolveAs(PLAIN_OID, {});
     expect(access).toMatchObject({ role: 'Owner', via: 'owner', canWrite: true });
   });
 
-  it("via:'owner' still resolves for a tenant ADMIN on their own legacy workspace", async () => {
+  it("via:'owner' still resolves for a tenant ADMIN on their own legacy workspace — UNCHANGED", async () => {
     wsPointRead.mockResolvedValue({ resource: { id: WS_ID, tenantId: ADMIN_OID, name: 'Mine' } });
     const access = await resolveAs(ADMIN_OID, {});
     expect(access).toMatchObject({ role: 'Owner', via: 'owner' });
   });
 
-  it("via:'acl' still resolves with NO tid on either side", async () => {
+  it("via:'acl' is now REFUSED with NO tid on either side (was: resolved Member)", async () => {
     wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
     resolveEffectiveRole.mockResolvedValue('Member');
-    const access = await resolveAs(PLAIN_OID, {});
+    expect(await resolveAs(PLAIN_OID, {})).toBeNull();
+  });
+
+  it("via:'acl' read-only is now REFUSED with NO tid on either side (was: resolved Viewer)", async () => {
+    wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
+    resolveEffectiveRole.mockResolvedValue('Viewer');
+    expect(await resolveAs(PLAIN_OID, {})).toBeNull();
+  });
+
+  it('CONTROL: the SAME ACL grant still resolves when BOTH tids are present and equal', async () => {
+    // The narrowing is about UNCONFIRMED tenancy, not about the ACL path. Once
+    // the workspace is stamped and the session carries a tid, nothing changed.
+    wsQueryFetchAll.mockResolvedValue([wsDoc(HOME_TENANT)]);
+    resolveEffectiveRole.mockResolvedValue('Member');
+    const access = await resolveAs(PLAIN_OID, { tid: HOME_TENANT });
     expect(access).toMatchObject({ role: 'Member', via: 'acl', canWrite: true });
   });
 
-  it("via:'acl' read-only role still resolves with NO tid on either side", async () => {
-    wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
+  it('CONTROL: a read-only ACL grant still resolves read-only when both tids match', async () => {
+    wsQueryFetchAll.mockResolvedValue([wsDoc(HOME_TENANT)]);
     resolveEffectiveRole.mockResolvedValue('Viewer');
-    const access = await resolveAs(PLAIN_OID, {});
+    const access = await resolveAs(PLAIN_OID, { tid: HOME_TENANT });
     expect(access).toMatchObject({ role: 'Viewer', via: 'acl', canWrite: false });
   });
 
-  it("via:'acl' still WINS over the admin bypass for an admin who is also a member", async () => {
-    wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
+  it("via:'acl' still WINS over the admin bypass for an admin who is also a member (both tids present)", async () => {
+    wsQueryFetchAll.mockResolvedValue([wsDoc(HOME_TENANT)]);
     resolveEffectiveRole.mockResolvedValue('Viewer');
-    const access = await resolveAs(ADMIN_OID, {});
-    // Read-only, via the ACL — the tightened step 6 must not silently upgrade
-    // a Viewer admin to a writer, and must not deny them their real grant.
+    const access = await resolveAs(ADMIN_OID, { tid: HOME_TENANT });
+    // Read-only, via the ACL — step 6 must not silently upgrade a Viewer admin
+    // to a writer, and must not deny them their real grant.
     expect(access).toMatchObject({ role: 'Viewer', via: 'acl', canWrite: false });
+  });
+
+  it('EACH ABSENCE INDEPENDENTLY refuses — caller-side missing, workspace stamped', async () => {
+    wsQueryFetchAll.mockResolvedValue([wsDoc(HOME_TENANT)]);
+    resolveEffectiveRole.mockResolvedValue('Member');
+    expect(await resolveAs(PLAIN_OID, {})).toBeNull();
+  });
+
+  it('EACH ABSENCE INDEPENDENTLY refuses — workspace-side missing, caller stamped', async () => {
+    wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
+    resolveEffectiveRole.mockResolvedValue('Member');
+    expect(await resolveAs(PLAIN_OID, { tid: HOME_TENANT })).toBeNull();
+  });
+
+  it('a measured DIFFERENT tenant is still refused, and records NO denial (it is not "unconfirmed")', async () => {
+    // R7: a denial explains an UNCONFIRMED tenancy. A positively measured
+    // foreign tenant is a different event and must not borrow that vocabulary,
+    // nor leak which other tenant owns the record.
+    wsQueryFetchAll.mockResolvedValue([wsDoc('99999999-9999-9999-9999-999999999999')]);
+    resolveEffectiveRole.mockResolvedValue('Member');
+    const diag: WorkspaceAccessDiagnostics = {};
+    expect(await resolveAs(PLAIN_OID, { tid: HOME_TENANT }, diag)).toBeNull();
+    expect(diag.denial).toBeUndefined();
+  });
+
+  it('an UNCONFIRMED refusal at step 4 records a denial FOR A TENANT ADMIN, naming the backfill', async () => {
+    wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
+    resolveEffectiveRole.mockResolvedValue('Member');
+    const diag: WorkspaceAccessDiagnostics = {};
+    expect(await resolveAs(ADMIN_OID, { tid: HOME_TENANT }, diag)).toBeNull();
+    expect(diag.denial?.code).toBe('tenant_unconfirmed');
+    expect(diag.denial?.remediation).toContain('backfill-workspace-tid');
+  });
+
+  it('…and records NOTHING for a non-admin — `tenant_unconfirmed` is an existence oracle', async () => {
+    // The disclosure boundary. `tenant_unconfirmed` says a workspace with this
+    // id EXISTS and is unstamped; over a caller-supplied id that is an oracle
+    // for anyone with no claim on it. Pinned here as well as at
+    // `bulk-delete/__tests__/bulk-delete-tenant-boundary.test.ts`, because the
+    // first draft of the step-4 denial recorded it for EVERY caller and only
+    // the bulk-delete spec noticed.
+    wsQueryFetchAll.mockResolvedValue([wsDoc(undefined)]);
+    resolveEffectiveRole.mockResolvedValue('Member');
+    const diag: WorkspaceAccessDiagnostics = {};
+    expect(await resolveAs(PLAIN_OID, { tid: HOME_TENANT }, diag)).toBeNull();
+    expect(diag.denial).toBeUndefined();
   });
 });
