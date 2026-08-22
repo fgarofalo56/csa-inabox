@@ -423,6 +423,36 @@ module storageLifecycleRbac 'storage-lifecycle-rbac.bicep' = {
 
 // =====================================================================
 // 4b. Synapse Dedicated SQL pool auto-pause (Logic App)
+//
+// KNOWN INERT ON EVERY SHIPPED PARAMS FILE — do not read this declaration as
+// evidence the auto-pause exists (deploy-integrity.md R2/R3).
+//
+// MEASURED 2026-08-22: an Azure Resource Graph query for any workflow whose name
+// contains `autopause`/`auto-pause` returns ZERO matches tenant-wide, while 14
+// other Loom Logic Apps do exist. A DW100c dedicated pool was found Online and
+// had to be paused BY HAND. Two candidate causes were checked and RULED OUT:
+//   - not un-invoked: the module is declared and wired right here;
+//   - not a stale compiled artifact: `node scripts/ci/check-deploy-template-sync.mjs`
+//     passes, and apps/fiab-console/deploy-templates/main.json carries this module
+//     as `synapseAutoPause` with `"condition": "[parameters('loomSynapseEnabled')]"`.
+//
+// THE ACTUAL CAUSE IS ONE LEVEL UP, in platform/fiab/bicep/main.bicep:
+//     var deployLandingZones = effectiveTopology != 'tenant'
+//     var useSingleDlz       = deployLandingZones && effectiveTopology == 'single-sub'
+//     var useMultiDlz        = deployLandingZones && effectiveTopology != 'single-sub'
+// and commercial.bicepparam, commercial-full, gcc, gcc-high and il5 ALL pin
+// `topology = 'tenant'`. Both booleans are therefore false, THIS FILE is never
+// instantiated, and every module below it — including this one — is dead on the
+// shipped deploy path regardless of its own condition. (tenant-dmlz.bicepparam
+// takes the multi-sub branch but with `dlzSubscriptionIds = []`, so its copy loop
+// has zero iterations and lands in the same place.)
+//
+// This is the SAME defect class already recorded for the Weave PG server in
+// modules/admin-plane/main.bicep (#3371/#3372), whose comment measures the exact
+// same premise. The fix there was to make the resource ADMIN-PLANE-SCOPED so it
+// exists under tenant / single-sub / multi-sub alike, matching `consoleCosmos`
+// and `uatResultsStore`. The auto-pause needs the same treatment, which cannot be
+// done from inside modules/landing-zone/.
 // =====================================================================
 module synapseAutoPause 'synapse-auto-pause.bicep' = if (loomSynapseEnabled) {
   name: 'dlz-synapse-autopause'

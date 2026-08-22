@@ -5,6 +5,14 @@
 //
 // Default schedule: pause every day at 04:00 UTC (~midnight ET).
 // Pool resumes on demand from the Loom Dedicated editor.
+//
+// REACHABILITY (measured 2026-08-22): this module has NEVER deployed on any
+// shipped params file. Its own condition is fine and the compiled ARM template
+// carries it; the gate is `deployLandingZones = effectiveTopology != 'tenant'` in
+// platform/fiab/bicep/main.bicep, and every shipped params file pins
+// `topology = 'tenant'`. Full write-up at the `synapseAutoPause` module in
+// modules/landing-zone/main.bicep. Do not treat this file's existence as evidence
+// that anything is being auto-paused (deploy-integrity.md R2).
 
 targetScope = 'resourceGroup'
 
