@@ -171,7 +171,7 @@ jobs:
 
       - name: Upload SARIF to Code Scanning
         if: always() && github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@d97b3428e8eebbb1810cf454d6397886d136b4ba # v3.27.5
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3.27.5
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
@@ -351,7 +351,7 @@ jobs:
 
       - name: Upload SARIF to Code Scanning
         if: always() && github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@d97b3428e8eebbb1810cf454d6397886d136b4ba # v3.27.5
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3.27.5
         with:
           sarif_file: trivy-image-${{ matrix.component }}.sarif
           category: trivy-image-${{ matrix.component }}
@@ -380,7 +380,7 @@ jobs:
 
       - name: Upload config SARIF to Code Scanning
         if: always() && github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@d97b3428e8eebbb1810cf454d6397886d136b4ba # v3.27.5
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3.27.5
         with:
           sarif_file: trivy-config.sarif
           category: trivy-config
