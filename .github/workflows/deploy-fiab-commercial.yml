@@ -118,6 +118,10 @@ permissions:
   # run last actually SHIPPED an image. `contents: read` does not grant that;
   # without this the gate would fail closed on every run and read as a broken
   # deploy path rather than as a missing scope.
+  #
+  # This stays READ. The WRITE the auto-heal dispatch needs (#3799) is declared
+  # on the deploy-validate JOB alone, so the other jobs in this file do not
+  # silently gain run-delete / artifact-delete / cancel.
   actions: read
 
 env:
@@ -151,6 +155,18 @@ jobs:
     name: Deploy + validate CSA Loom in Commercial
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # JOB-SCOPED, so the widening stops here (#3799). A job-level block REPLACES
+    # the workflow-level one, so the two the workflow already grants are
+    # restated: `contents: read` for the checkout, `issues: write` for the
+    # failure-notify step. `actions: write` is the addition — the auto-heal step
+    # POSTs to actions/workflows/loom-roll-and-validate.yml/dispatches to put an
+    # overwritten image back, and `write` includes the `read` the estate gate
+    # needs to list console-rolling runs. Precedent for GITHUB_TOKEN dispatching
+    # a workflow in this repo: release-please.yml, same scope, same reason.
+    permissions:
+      contents: read
+      issues: write
+      actions: write
     # Coordinates exported for the chained post-deploy bootstrap (rel-T34).
     outputs:
       admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
@@ -1843,9 +1859,15 @@ jobs:
           SHOW_ERR="$TMP/console-show.err"
           REVS="$TMP/console-revisions.json"
           REV_ERR="$TMP/console-revisions.err"
+          # WHERE THE AUTO-HEAL STEP LOOKS (#3799). Truncated here, before any
+          # verdict, so a request can only ever describe THIS run — and so the
+          # heal step's "no request" branch is reached by an empty file rather
+          # than by a missing one.
+          HEAL_REQ="$TMP/estate-heal-request.txt"
           : > "$ROLL_ERR"
           : > "$SHOW_ERR"
           : > "$REV_ERR"
+          : > "$HEAL_REQ"
           trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
 
           # A run that wrote no console image cannot have moved the estate, and
@@ -1859,7 +1881,8 @@ jobs:
               --measured-at "${MEASURED_AT:-}" \
               --read-error "not read: this run applied no loom-console image tag" \
               --rolls-error "not read: this run applied no loom-console image tag" \
-              --revisions-error "not read: this run applied no loom-console image tag"
+              --revisions-error "not read: this run applied no loom-console image tag" \
+              --heal-request "$HEAL_REQ"
             exit $?
           fi
 
@@ -1886,9 +1909,21 @@ jobs:
           # Same RBAC as the `show` above, so it adds no permission surface.
           # stdout and stderr stay separate and neither is discarded: an
           # unreadable history is UNKNOWN and fails the step, never a quiet pass.
+          #
+          # THE PROJECTION CARRIES trafficWeight (#3798). Without it the gate
+          # reads "newest revision" as "what is serving", which is true only
+          # because app-deployments.bicep pins `latestRevision: true` on an app
+          # whose activeRevisionsMode is Multiple *so that traffic can be split
+          # imperatively* (console-bluegreen-roll.yml). The day that lane works,
+          # a roll can create a NEWER revision at WEIGHT 0 while the deploy's
+          # revision keeps 100% of the traffic — and recency would report
+          # `ahead`, i.e. "this apply did not leave the estate behind", about an
+          # estate serving the stale image. Measured on this estate 2026-08-21:
+          # 54 revisions, 53 at weight 0 and exactly one at 100, so the field is
+          # populated and the split is readable without a second call.
           set +e
           az containerapp revision list -n loom-console -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-            --query "[].{name:name, createdTime:properties.createdTime, image:properties.template.containers[0].image}" \
+            --query "[].{name:name, createdTime:properties.createdTime, trafficWeight:properties.trafficWeight, image:properties.template.containers[0].image}" \
             -o json > "$REVS" 2> "$REV_ERR"
           REV_RC=$?
           set -e
@@ -1959,19 +1994,196 @@ jobs:
             ROLL_ARGS=(--rolls-error "gh could not read the console-rolling workflow runs: $(trim400 "$ROLL_ERR")")
           fi
 
+          # TWO DIFFERENT FACTS, TWO DIFFERENT SENTENCES (deploy-integrity R7).
+          # This branch used to report `az … exited ${SHOW_RC}` for both, so an
+          # az that SUCCEEDED and returned an empty image was reported as
+          # "exited 0: " — an error string naming a cause it had not
+          # established, which is the exact shape that sent two investigations
+          # the wrong way on 2026-08-05.
+          if [ $SHOW_RC -ne 0 ]; then
+            SHOW_DETAIL="az containerapp show -n loom-console -g ${RG} exited ${SHOW_RC}: $(trim400 "$SHOW_ERR")"
+          else
+            SHOW_DETAIL="az containerapp show -n loom-console -g ${RG} SUCCEEDED (exit 0) and returned an EMPTY image reference, so the running image is unestablished — that is not the same as az failing, and no failure is being claimed. Anything it wrote to stderr: $(trim400 "$SHOW_ERR")"
+          fi
           if [ $SHOW_RC -ne 0 ] || [ -z "$IMAGE" ]; then
             node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
               --applied-tag "${APPLIED_TAG}" \
               --measured-at "${MEASURED_AT:-}" \
-              --read-error "az containerapp show -n loom-console -g ${RG} exited ${SHOW_RC}: $(trim400 "$SHOW_ERR")" \
-              "${ROLL_ARGS[@]}" "${REV_ARGS[@]}"
+              --read-error "$SHOW_DETAIL" \
+              "${ROLL_ARGS[@]}" "${REV_ARGS[@]}" --heal-request "$HEAL_REQ"
             exit $?
           fi
           node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
             --applied-tag "${APPLIED_TAG}" \
             --measured-at "${MEASURED_AT:-}" \
             --estate-image "$IMAGE" \
-            "${ROLL_ARGS[@]}" "${REV_ARGS[@]}"
+            "${ROLL_ARGS[@]}" "${REV_ARGS[@]}" --heal-request "$HEAL_REQ"
+
+      # ── #3799 — DETECTION IS NOT RECOVERY ─────────────────────────────────
+      #
+      # The gate above makes the #3676 race impossible to lose silently. It
+      # does not put the image back. Until this step existed the sequence was:
+      # a roll ships <new-sha>; this deploy's apply writes back the stale tags
+      # it measured before the roll; the estate is now running the old image;
+      # the gate notices and the deploy goes red AFTER the estate is already
+      # wrong; and nothing restores it. On 2026-08-19 the estate healed 73
+      # minutes later, and only incidentally — an unrelated roll happened to
+      # ship a SHA that contained the lost commit. Had nothing else merged it
+      # would have stayed reverted until the next unrelated push.
+      #
+      # At the moment the gate fires it already holds everything needed to fix
+      # it: the overwritten tag (read off the estate's own revision history),
+      # the workflow that applies it, and the token to dispatch it.
+      # auto-bind-by-default.md §5 forbids a remediation the PLATFORM could
+      # have performed, and deploy-integrity R6 requires a failure to retry
+      # what is retryable and hand back a concrete remediation. "A human
+      # dispatches the workflow whose exact inputs we just printed" is neither.
+      #
+      # FOUR PROPERTIES, EACH DELIBERATE:
+      #
+      #  1. IT NEVER TURNS THE RUN GREEN. The gate step has already failed and
+      #     nothing here can un-fail it; healing AND reporting is the point. A
+      #     heal that hid the regression would make this class invisible again,
+      #     which is the whole defect of #3676.
+      #  2. IT ONLY ACTS ON A DEFINITE VERDICT. The request file is written by
+      #     `regression` alone, and only with a 40-hex SHA. `drifted` names no
+      #     target by design (rolling to it could move a HEALTHY estate
+      #     backwards) and `unknown` establishes nothing — both leave the file
+      #     empty and this step dispatches nothing and says so.
+      #  3. ONE ATTEMPT, NO LOOP. One dispatch, then a bounded wait. The roll
+      #     lane does not trigger this workflow (schedule / dispatch only), so
+      #     there is no cycle; and a failed dispatch is reported, never retried
+      #     into a storm.
+      #  4. RECOVERY IS VERIFIED AGAINST THE ESTATE, NOT ASSUMED FROM THE
+      #     DISPATCH. It re-reads the revision history and resolves what is
+      #     SERVING through the same tested code the gate used (serving-tag),
+      #     rather than asking the Actions API whether a run appeared — that
+      #     index is exactly the source whose lag produced the 2026-08-19 miss.
+      #     If recovery is not observed inside the budget it says so and fails.
+      - name: Roll the estate FORWARD to the image this apply overwrote (#3799)
+        id: estate_heal
+        if: always() && steps.estate_behind.conclusion == 'failure'
+        # Hard ceiling on what the verification poll can take out of the job's
+        # shared 90-minute budget. The dispatch happens in the first seconds of
+        # this step, so a timeout here loses the RECEIPT, never the repair.
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          TMP="$RUNNER_TEMP"
+          HEAL_REQ="$TMP/estate-heal-request.txt"
+          DISPATCH_ERR="$TMP/heal-dispatch.err"
+          REVS="$TMP/heal-revisions.json"
+          REV_ERR="$TMP/heal-revisions.err"
+          SERVING="$TMP/heal-serving.txt"
+          ROLL_WF=".github/workflows/loom-roll-and-validate.yml"
+          : > "$DISPATCH_ERR"
+          : > "$REV_ERR"
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+
+          # The gate failed for one of FOUR reasons and only one of them is
+          # actionable. A missing or empty request is the other three.
+          if [ ! -s "$HEAL_REQ" ]; then
+            echo "::notice::auto-heal: the estate gate failed but left NO roll-forward request, so this step dispatches NOTHING. That is the correct outcome for an UNKNOWN (nothing was established) or a DRIFTED verdict (no direction is claimed, and rolling to a guessed SHA could move a healthy estate backwards). Read the gate's own error above for what it did establish."
+            exit 0
+          fi
+          TARGET="$(tr -d '[:space:]' < "$HEAL_REQ")"
+          if ! printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::auto-heal: the roll-forward request contains '${TARGET}', which is not a 40-hex commit SHA. Refusing to dispatch a roll at a tag that does not name a commit — the roll's live-URL gate validates against a build marker and cannot check a floating tag (#2963). This is a defect in the gate that wrote the request, not an estate condition."
+            exit 1
+          fi
+
+          # WHICH ESTATE DOES THE ROLL LANE TARGET? It is hard-pinned to one
+          # resource group; this deploy's region is ADOPTED from whatever hub
+          # exists. Dispatching it while reconciling a different region would
+          # roll an estate this run never touched, so the two are compared
+          # instead of assumed, and read out of the roll lane itself rather
+          # than restated here (a restated literal is a second thing to drift).
+          #
+          # `set +e` around it deliberately: under `pipefail` + `bash -e` a
+          # MISSING workflow file makes awk exit 2, the pipeline exit 2, and the
+          # step die ON THE ASSIGNMENT — so the remediation below (the exact
+          # dispatch a human should run) would never print in the one case that
+          # most needs it. Measured: RC=2 with nothing but awk's "cannot open
+          # file". The rc is captured and branched on instead.
+          set +e
+          ROLL_RG="$(awk '/^  RG_NAME:/ {print $2; exit}' "$ROLL_WF" | tr -d '[:space:]')"
+          ROLL_RG_RC=$?
+          set -e
+          if [ $ROLL_RG_RC -ne 0 ] || [ -z "$ROLL_RG" ]; then
+            echo "::error::auto-heal: could not read RG_NAME out of ${ROLL_WF} (awk exited ${ROLL_RG_RC}, value '${ROLL_RG}'), so the estate that lane would roll is UNKNOWN. Refusing to dispatch it — this says the workflow file could not be read or no longer declares RG_NAME, NOT that the roll lane is wrong. Roll forward by hand: gh workflow run loom-roll-and-validate.yml --ref ${GITHUB_REF_NAME} -f image_tag=${TARGET}."
+            exit 1
+          fi
+          if [ "$ROLL_RG" != "$RG" ]; then
+            echo "::error::auto-heal: ${ROLL_WF} rolls ${ROLL_RG}, but this deploy reconciled ${RG}. Dispatching it would roll an estate this run never applied to. Refusing. Roll ${RG} forward to ${TARGET} with the lane that owns it."
+            exit 1
+          fi
+
+          echo "::notice::auto-heal: dispatching loom-roll-and-validate.yml (ref ${GITHUB_REF_NAME}) with image_tag=${TARGET} — the image this apply overwrote, read off ${RG}'s own revision history. The deploy stays RED regardless; this restores the estate, it does not excuse the regression."
+          set +e
+          gh workflow run loom-roll-and-validate.yml --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" \
+            -f image_tag="${TARGET}" 2> "$DISPATCH_ERR"
+          DISPATCH_RC=$?
+          set -e
+          if [ $DISPATCH_RC -ne 0 ]; then
+            echo "::error::auto-heal: the dispatch FAILED (gh exited ${DISPATCH_RC}): $(trim400 "$DISPATCH_ERR"). The estate is STILL running the overwritten image. Dispatch it by hand: gh workflow run loom-roll-and-validate.yml --ref ${GITHUB_REF_NAME} -f image_tag=${TARGET}."
+            exit 1
+          fi
+
+          # ---- did it actually heal? ASK THE ESTATE. -------------------------
+          # Bounded, and the bound is stated. THE DISPATCH ALREADY HAPPENED
+          # ABOVE — that ordering is the mitigation for the one way this can be
+          # cut short: the job's own `timeout-minutes: 90` is shared with an
+          # apply that has run as long as 75 minutes on a dispatch, so a job
+          # that is already near its budget can be CANCELLED mid-poll. If that
+          # happens the recovery has still been requested; only this verdict is
+          # lost, and the `timeout-minutes` on this step bounds how much of the
+          # remaining budget it can consume. It never delays the repair.
+          #
+          # The knobs exist so the extracted-step tests run this loop in
+          # milliseconds. Nothing in CI sets them (a contract test asserts the
+          # workflow does not), and POLLS is clamped so a stray 0 cannot turn
+          # the verification off.
+          POLLS="${LOOM_HEAL_POLLS:-8}"
+          SLEEP_S="${LOOM_HEAL_SLEEP_SECONDS:-45}"
+          case "$POLLS" in ''|*[!0-9]*) POLLS=8 ;; esac
+          case "$SLEEP_S" in ''|*[!0-9]*) SLEEP_S=45 ;; esac
+          # `[ … ] && X=1` would be the LAST command of a list that returns 1
+          # whenever the test is false, and this body runs under `bash -e` —
+          # i.e. the healthy case would kill the step with no message at all.
+          if [ "$POLLS" -lt 1 ]; then POLLS=1; fi
+          LAST_SEEN=""
+          LAST_WHY=""
+          for i in $(seq 1 "$POLLS"); do
+            sleep "$SLEEP_S"
+            set +e
+            az containerapp revision list -n loom-console -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+              --query "[].{name:name, createdTime:properties.createdTime, trafficWeight:properties.trafficWeight, image:properties.template.containers[0].image}" \
+              -o json > "$REVS" 2> "$REV_ERR"
+            REV_RC=$?
+            set -e
+            if [ $REV_RC -ne 0 ]; then
+              LAST_WHY="az containerapp revision list exited ${REV_RC}: $(trim400 "$REV_ERR")"
+              echo "::warning::auto-heal probe ${i}/${POLLS}: the revision history could not be read, so this probe establishes NOTHING about recovery — ${LAST_WHY}"
+              continue
+            fi
+            set +e
+            node scripts/ci/reconcile-policy.mjs serving-tag --revisions "$REVS" --out "$SERVING"
+            SERVING_RC=$?
+            set -e
+            LAST_SEEN="$(tr -d '[:space:]' < "$SERVING")"
+            if [ $SERVING_RC -eq 0 ] && [ "$LAST_SEEN" = "$TARGET" ]; then
+              echo "::notice::AUTO-HEAL VERIFIED (#3799) — ${RG}/loom-console is serving ${TARGET} again after ${i} probe(s). The deploy still reports FAILURE: the regression happened, and a healed estate does not unmake it."
+              exit 0
+            fi
+            LAST_WHY="serving-tag exited ${SERVING_RC}; serving '${LAST_SEEN:-(not established)}'"
+            echo "auto-heal probe ${i}/${POLLS}: ${RG}/loom-console is serving '${LAST_SEEN:-(not established)}', waiting for ${TARGET}."
+          done
+          echo "::error::AUTO-HEAL NOT VERIFIED (#3799) — loom-roll-and-validate.yml was dispatched with image_tag=${TARGET} and the dispatch itself succeeded, but after ${POLLS} probe(s) over ~$((POLLS * SLEEP_S))s the estate has NOT come back to it. Last observation: ${LAST_WHY}. This says the recovery was not OBSERVED in the budget — a roll that is still gating (vitest, cosign, UAT) looks exactly like this — it does not say the roll failed. Check the loom-roll-and-validate run, and confirm against the container app, not /build-marker.txt."
+          exit 1
 
       - name: Export bootstrap coordinates (for the chained bootstrap)
         id: bootstrap_coords
