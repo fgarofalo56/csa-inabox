@@ -530,9 +530,51 @@ export async function userIsTransitiveGroupMember(userId: string, groupId: strin
 }
 
 /**
+ * Read a JSON body without letting a NON-JSON one become an exception.
+ *
+ * #3834 — `await res.json()` on a body that is not JSON throws a `SyntaxError`
+ * that propagates out of `graphUserInGroup`, past `resolveEffectiveRole`, past
+ * `resolveWorkspaceAccessByOid` and out of the route as a 500. That is not
+ * fail-closed, it is fail-LOUD-in-the-wrong-place: the caller cannot tell an
+ * authorization refusal from a directory that answered in HTML. Returning the
+ * sentinel lets the one place that knows what the body was FOR decide, and every
+ * such decision here is `'unknown'`.
+ *
+ * The condition is not theoretical: it is the same proxy / WAF / captive-portal
+ * / wrong-national-cloud shape as #3381, where something in front of Graph
+ * answers 200 with a sign-in page.
+ */
+const NOT_JSON = Symbol('not-json');
+async function readJsonBody(res: Response): Promise<any | typeof NOT_JSON> {
+  try {
+    return await res.json();
+  } catch {
+    return NOT_JSON;
+  }
+}
+
+/**
  * Transitive membership against Graph. Returns `unknown` — never a bare
- * `false` — whenever the directory could not answer, so the caller's
- * fail-closed decision is distinguishable from a measured "not a member".
+ * `false`, and never a bare `member` — whenever the directory could not answer,
+ * so the caller's fail-closed decision is distinguishable from a measured "not a
+ * member".
+ *
+ * #3834 — A BARE 2xx USED TO BE READ AS MEMBERSHIP. This opened with
+ *
+ *     if (res.ok) return 'member';
+ *
+ * without ever inspecting the body, so ANY 2xx from something sitting in front
+ * of Graph — a proxy, a WAF, a captive portal, or the wrong national-cloud host
+ * (#3381) — GRANTED the group's workspace role. That defeats the entire
+ * `tenant_unconfirmed` refusal `resolveWorkspaceAccessByOid` exists to produce:
+ * the ACL step (5) runs BEFORE the admin step (6), so a forged membership hands
+ * back a real role and the tenant boundary below it is never reached.
+ *
+ * The endpoint is `groups/{id}/transitiveMembers/{userId}` — a directoryObject
+ * point-read — so a genuine positive answers with THAT object. The check is
+ * therefore the only one that means anything: does the returned object identify
+ * the user we asked about? Anything else (not JSON, no `id`, a DIFFERENT `id`)
+ * is a non-answer and resolves `unknown`, which contributes no role.
  */
 async function graphUserInGroup(token: string, groupId: string, userId: string): Promise<GraphMembership> {
   // Microsoft Graph: members/{id} existence check across the transitive closure.
@@ -542,9 +584,31 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
     });
-    if (res.ok) return 'member';
-    if (res.status === 404) return 'not-member';
-    // On 4xx/5xx other than 404 fall back to paged enumeration once.
+    if (res.ok) {
+      // 2xx IS NOT AN ANSWER ON ITS OWN — it must be the directory object for
+      // the user we asked about. A body that is not JSON, carries no `id`, or
+      // carries a different one, means we measured NOTHING.
+      const body = await readJsonBody(res);
+      const returnedId = body !== NOT_JSON && typeof body?.id === 'string' ? body.id : '';
+      if (returnedId && returnedId.toLowerCase() === userId.toLowerCase()) return 'member';
+      console.warn(
+        '[graph-membership] UNKNOWN (not a measured negative): transitiveMembers point-read at ' +
+          `${logSafe(graphBase(), 120)} answered HTTP ${Number(res.status)} with a body that does ` +
+          `not identify the requested principal (${body === NOT_JSON ? 'body was not JSON' : returnedId ? 'a DIFFERENT id was returned' : 'no `id` field'}) — ` +
+          'something in front of Graph may be answering instead of Graph',
+      );
+      // FALL THROUGH to the paged enumeration rather than answering here. An
+      // ambiguous 2xx is not only the proxy/WAF case: a 204, or a `$select`
+      // quirk that returns the object without `id`, is a GENUINE member, and
+      // returning `unknown` immediately would deny them. The walk below settles
+      // it — and for the WAF case it answers `unknown` too (that responder
+      // returns the same non-JSON body to the enumeration), so the property this
+      // check exists for is preserved either way.
+    } else if (res.status === 404) {
+      return 'not-member';
+    }
+    // On 4xx/5xx other than 404, and on an ambiguous 2xx, fall back to paged
+    // enumeration once.
   } catch (e: unknown) {
     // COULD NOT ASK — transport failure. Naming the host makes a
     // wrong-national-cloud call (the #3381 defect) diagnosable from one log
@@ -589,10 +653,27 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
       );
       return 'unknown';
     }
-    const json: any = await res.json();
-    for (const m of json?.value || []) {
+    const json: any = await readJsonBody(res);
+    // #3834 — A MALFORMED PAGE IS A NON-ANSWER, NOT AN EXCEPTION. `res.json()`
+    // used to be awaited raw here, so a 200 carrying HTML threw a `SyntaxError`
+    // out of this function; and `json?.value` was iterated with `for…of`, so a
+    // body whose `value` is not an array threw a `TypeError`. Both escaped past
+    // every caller as a 500 rather than resolving the membership question, and
+    // both are the SAME proxy / WAF / captive-portal condition as the point-read
+    // above. Answer `unknown` — it contributes no role and it is sayable.
+    const page = json !== NOT_JSON && Array.isArray(json?.value) ? (json.value as any[]) : null;
+    if (page === null) {
+      console.warn(
+        '[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ' +
+          `${logSafe(graphBase(), 120)} answered HTTP ${Number(res.status)} with ` +
+          `${json === NOT_JSON ? 'a body that is not JSON' : 'no `value` array'} — ` +
+          'something in front of Graph may be answering instead of Graph',
+      );
+      return 'unknown';
+    }
+    for (const m of page) {
       scanned += 1;
-      if (m?.id === userId) return 'member';
+      if (typeof m?.id === 'string' && m.id.toLowerCase() === userId.toLowerCase()) return 'member';
     }
     if (!json?.['@odata.nextLink']) {
       // Finished cleanly with no match — this IS a measured negative.

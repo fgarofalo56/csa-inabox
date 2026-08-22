@@ -34,8 +34,10 @@
  *     workspaces ≈ 36 serial round-trips, which regularly outran the client's
  *     20s budget; the client then swallowed the failure into `[]` and every
  *     Browse stat card showed 0. Now: ONE `listAccessibleWorkspaces` call
- *     (owned + direct-shared), plus ONE projected all-workspaces query for
- *     tenant admins (the admin-open bypass), plus a bounded-PARALLEL
+ *     (owned + direct-shared), plus ONE TENANT-SCOPED workspaces query for
+ *     tenant admins (the admin-open bypass — `WHERE c.tid = @tid`, so it never
+ *     reads another tenant's document, and it does not run at all for a session
+ *     with no `tid` claim: #3843), plus a bounded-PARALLEL
  *     `authorizeWorkspaceList` fallback only for the group-shared stragglers.
  *   • Optional PAGING so the client can render progressively instead of
  *     all-or-nothing: `?pageSize=N` + request header `x-loom-continuation`
@@ -48,7 +50,9 @@ import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
 import { listAccessibleWorkspaces } from '@/lib/auth/workspace-access';
+import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,9 +74,45 @@ const ACL_CONCURRENCY = 8;
 /**
  * Resolve which workspaces the caller can see, as `workspaceId → { domain }`.
  * ONE batch query for owned + direct-shared (the same resolver /api/workspaces
- * uses), plus ONE projected cross-partition query for tenant admins so the
- * admin-open bypass holds without a per-workspace loop. The tid boundary is
- * enforced on the admin path exactly as `resolveWorkspaceAccessByOid` does.
+ * uses), plus ONE projected query for tenant admins so the admin-open bypass
+ * holds without a per-workspace loop.
+ *
+ * #3843 — THE ADMIN SWEEP IS A CACHE OF THE CANONICAL DECISION, NEVER A SECOND
+ * ONE. This docblock used to assert "the tid boundary is enforced on the admin
+ * path exactly as `resolveWorkspaceAccessByOid` does", and after #3824 repaired
+ * the resolver that sentence was FALSE — a header that overstates an invariant
+ * is worse than none, because the next reader stops looking. What sat here was
+ * the pre-#3824 shape
+ *
+ *     if (s.claims.tid && w.tid && w.tid !== s.claims.tid) continue;
+ *
+ * which is truthiness-guarded on BOTH sides, so it decided NOTHING whenever
+ * either tid was absent — and underneath it is `isTenantAdmin(s)` alone,
+ * manufacturing tenant-wide visibility out of the admin flag. Both absences are
+ * supported states (a pre-rel-T11 workspace doc has no `tid`; `UserClaims.tid`
+ * is optional), so a tenant admin whose session carried no tid, or any legacy
+ * workspace doc in ANY tenant, fell straight through into the admin grant. That
+ * is the #3823 hole one level out, over the whole /browse item population.
+ *
+ * WHAT IS ENFORCED NOW, stated as what the code does:
+ *   1. the sweep requires a POSITIVELY CONFIRMED tenant match, which is the
+ *      repaired resolver's step 6 rule, not its step 4 one. It is applied TWICE
+ *      and both are load-bearing: the Cosmos WHERE clause never returns another
+ *      tenant's document in the first place, and `sameTenantConfirmed` (the one
+ *      implementation of this comparison, `lib/auth/tenant-boundary.ts`) is
+ *      re-applied to every row so a future edit to the query cannot silently
+ *      widen the grant;
+ *   2. an admin whose session carries NO `tid` gets NO sweep at all. Loom cannot
+ *      confirm which tenant they are in, so it grants nothing tenant-wide —
+ *      fail closed, not fall through.
+ *
+ * DROPPING A WORKSPACE HERE COSTS NO ACCESS, which is what makes it safe to be
+ * strictly conservative: this map is an OPTIMISATION over the canonical
+ * decision, and `resolveStragglers` re-resolves every workspace it misses
+ * through `authorizeWorkspaceList` → `resolveWorkspaceAccessByOid`. So a legacy
+ * `tid`-less workspace the sweep no longer covers is still resolved for whoever
+ * genuinely holds owner/ACL access to it; only the unconfirmable TENANT-WIDE
+ * grant is withheld, and the resolver withholds that one too.
  */
 async function resolveVisibleWorkspaces(
   s: NonNullable<ReturnType<typeof getSession>>,
@@ -81,17 +121,34 @@ async function resolveVisibleWorkspaces(
   const accessible = await listAccessibleWorkspaces(s.claims.oid, { callerTid: s.claims.tid });
   for (const w of accessible) visible.set(w.id, { domain: (w as any).domain ?? undefined });
 
-  if (isTenantAdmin(s)) {
+  // The admin-open sweep. Gated on a KNOWN caller tenant: with no `tid` claim
+  // there is nothing to scope the sweep to, and an unscoped sweep is exactly
+  // the cross-tenant grant #3843 was filed for.
+  const callerTid = s.claims.tid;
+  if (isTenantAdmin(s) && callerTid) {
     const ws = await workspacesContainer();
     const { resources } = await ws.items
       .query<{ id: string; domain?: string; tid?: string }>({
-        query: 'SELECT c.id, c.domain, c.tid FROM c',
-        parameters: [],
+        // Scoped IN THE QUERY: a document belonging to another tenant — or one
+        // whose tenancy was never stamped — is not returned at all.
+        //
+        // Cosmos `=` is EXACT and case-sensitive while `sameTenantConfirmed`
+        // trims and lower-cases (Entra ids are GUIDs, whose equality is not
+        // case-sensitive). So a doc whose `tid` differs from the claim only in
+        // case is dropped HERE and then re-resolved one-by-one by
+        // `resolveStragglers` — correct, but on the one path whose docblock
+        // cites a 20s client budget. Entra emits lowercase GUIDs on both sides,
+        // so this is a latency note rather than an observed cost; if it ever
+        // shows up, normalise `tid` on write rather than loosening the predicate.
+        query: 'SELECT c.id, c.domain, c.tid FROM c WHERE c.tid = @tid',
+        parameters: [{ name: '@tid', value: callerTid }],
       })
       .fetchAll();
     for (const w of resources) {
-      // tid boundary: reject cross-tenant docs when both sides record a tid.
-      if (s.claims.tid && w.tid && w.tid !== s.claims.tid) continue;
+      // Re-asserted on the caller side against the SAME shared comparison every
+      // other site uses. `sameTenantConfirmed` is a POSITIVE match — an absent
+      // tid on either side is a refusal, never a fall-through.
+      if (!sameTenantConfirmed(callerTid, w.tid)) continue;
       if (!visible.has(w.id)) visible.set(w.id, { domain: w.domain ?? undefined });
     }
   }
@@ -128,9 +185,7 @@ async function resolveStragglers(
 const b64urlEncode = (s: string) => Buffer.from(s, 'utf-8').toString('base64url');
 const b64urlDecode = (s: string) => Buffer.from(s, 'base64url').toString('utf-8');
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
   const sp = new URL(req.url).searchParams;
   // Accept either repeated `?type=A&type=B` (legacy callers) OR a single
   // comma-separated `?types=A,B`. The comma-separated form is preferred
@@ -231,4 +286,4 @@ export async function GET(req: NextRequest) {
   }
   owned.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
   return NextResponse.json({ ok: true, items: owned, ...(continuation ? { continuation } : {}) });
-}
+});

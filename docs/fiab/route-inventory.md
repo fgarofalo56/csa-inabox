@@ -1091,7 +1091,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `items/[type]/[id]/access-mode/route.ts` | PATCH | owner-scoped |  | Cosmos |
+| `items/[type]/[id]/access-mode/route.ts` | PATCH | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/ai-function/route.ts` | GET POST | session-only | ● | AML, ARM, Azure AI Services, Azure Monitor, Azure OpenAI, Cosmos |
 | `items/[type]/[id]/alerts/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | ARM, Azure Monitor, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/assist/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure OpenAI, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
@@ -2386,7 +2386,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `workspaces/[id]/agent-config/route.ts` | GET PUT | owner-scoped |  | Cosmos |
+| `workspaces/[id]/agent-config/route.ts` | GET PUT | owner-scoped |  | Cosmos, Microsoft Graph |
 | `workspaces/[id]/clone/route.ts` | POST | admin |  | ADX, AI Search, ARM, Azure Cache for Redis, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph |
 | `workspaces/[id]/export/route.ts` | GET | admin |  | Azure Cache for Redis, Azure Monitor, Cosmos, Microsoft Graph |
 | `workspaces/[id]/folders/route.ts` | GET POST PATCH DELETE | admin |  | Cosmos |
@@ -2396,7 +2396,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `workspaces/[id]/items/route.ts` | GET POST | admin |  | ADF, AI Search, Cosmos, Microsoft Graph |
 | `workspaces/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `workspaces/[id]/powerbi-mapping/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Microsoft Graph |
-| `workspaces/[id]/role-assignments/[principalId]/route.ts` | DELETE | admin |  | ARM, Azure RBAC, Cosmos, Fabric |
+| `workspaces/[id]/role-assignments/[principalId]/route.ts` | DELETE | admin |  | ARM, Azure RBAC, Cosmos, Fabric, Microsoft Graph |
 | `workspaces/[id]/role-assignments/route.ts` | GET POST | admin |  | ARM, Azure RBAC, Cosmos, Fabric, Microsoft Graph |
 | `workspaces/[id]/route.ts` | GET PATCH DELETE | admin |  | ADF, ADLS, ADX, AI Search, AML, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `workspaces/[id]/scm/route.ts` | GET POST DELETE | owner-scoped | ● | Cosmos, Key Vault, Microsoft Graph |
