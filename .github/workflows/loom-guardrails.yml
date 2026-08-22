@@ -106,6 +106,9 @@ jobs:
       - name: tid-boundary-chokepoint (the cross-tenant boundary cannot be skipped by omission)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-tid-boundary-chokepoint.mjs
+      - name: tid-boundary-chokepoint SELF-TEST (section 10's stale-pin arm actually fires)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-tid-boundary-chokepoint.selftest.mjs
       - name: loom-content-id-chokepoint (a `loom:` bundle id must not 404 an item that exists — #2830)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-loom-content-id-chokepoint.mjs

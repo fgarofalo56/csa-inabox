@@ -30,6 +30,11 @@ const ALL_ITEMS = [
   { id: 'a2', itemType: 'warehouse', workspaceId: 'ws-A', displayName: 'A warehouse', updatedAt: '2026-01-01' },
   { id: 'b1', itemType: 'notebook', workspaceId: 'ws-B', displayName: 'B notebook', updatedAt: '2026-01-03' },
   { id: 'z1', itemType: 'lakehouse', workspaceId: 'ws-Z', displayName: 'Z lakehouse', updatedAt: '2026-01-04' },
+  // #3843 — a workspace in ANOTHER Entra tenant, and a LEGACY workspace whose
+  // tenancy was never stamped. Both carry items, so if the admin sweep lets
+  // either through it shows up in the response and these specs say so.
+  { id: 'f1', itemType: 'lakehouse', workspaceId: 'ws-FOREIGN', displayName: 'Foreign lakehouse', updatedAt: '2026-01-05' },
+  { id: 'l1', itemType: 'lakehouse', workspaceId: 'ws-LEGACY', displayName: 'Legacy lakehouse', updatedAt: '2026-01-06' },
 ];
 
 /** Simulates the items container incl. WHERE-type filtering + paging. */
@@ -60,16 +65,44 @@ function makeItemsContainer() {
 }
 
 const ALL_WORKSPACE_DOCS = [
-  { id: 'ws-A', domain: 'dom-a' },
-  { id: 'ws-B', domain: 'dom-b' },
-  { id: 'ws-Z', domain: 'dom-z' },
+  { id: 'ws-A', domain: 'dom-a', tid: 'tenant-1' },
+  { id: 'ws-B', domain: 'dom-b', tid: 'tenant-1' },
+  { id: 'ws-Z', domain: 'dom-z', tid: 'tenant-1' },
+  { id: 'ws-FOREIGN', domain: 'dom-f', tid: 'tenant-OTHER' },
+  { id: 'ws-LEGACY', domain: 'dom-l' }, // pre-rel-T11: no `tid` was ever stamped
 ];
+
+/**
+ * The workspaces container, modelling COSMOS rather than the route.
+ *
+ * #3843 — this fixture used to ignore the query entirely and hand back every
+ * document with no `tid` on any of them, so it could not have distinguished a
+ * tenant-scoped sweep from an unscoped one: the old truthiness-guarded filter
+ * and a correct positive match both returned all five. A fixture that models the
+ * CODE cannot fail when the code is wrong, so this one applies the `WHERE`
+ * predicate the route actually sends — `c.tid = @tid` — the way the database
+ * would, and a document with no `tid` matches no equality.
+ */
+/** Every query spec the route sends to the WORKSPACES container, in order. */
+const workspaceQuerySpecs: any[] = [];
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: vi.fn(async () => makeItemsContainer()),
   workspacesContainer: vi.fn(async () => ({
     items: {
-      query: () => ({ fetchAll: async () => ({ resources: ALL_WORKSPACE_DOCS.map((w) => ({ ...w })) }) }),
+      query: (spec: any) => {
+        workspaceQuerySpecs.push(spec);
+        return {
+          fetchAll: async () => {
+            const wantedTid = (spec?.parameters ?? []).find((p: any) => p.name === '@tid')?.value;
+            const scoped = /c\.tid\s*=\s*@tid/.test(spec?.query ?? '');
+            const rows = scoped
+              ? ALL_WORKSPACE_DOCS.filter((w) => (w as { tid?: string }).tid === wantedTid)
+              : ALL_WORKSPACE_DOCS;
+            return { resources: rows.map((w) => ({ ...w })) };
+          },
+        };
+      },
     },
   })),
 }));
@@ -92,6 +125,7 @@ function req(qs: string, headers: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workspaceQuerySpecs.length = 0;
   (getSession as any).mockReturnValue(sess);
   (isTenantAdmin as any).mockReturnValue(false);
   // Caller OWNS ws-A; ws-B is group-shared (resolves via the ACL fallback);
@@ -143,8 +177,75 @@ describe('GET /api/items/by-type — tenant/browse path', () => {
     (isTenantAdmin as any).mockReturnValue(true);
     const j = await (await GET(req('types=all'))).json();
     expect(j.items.map((i: any) => i.id).sort()).toEqual(['a1', 'a2', 'b1', 'z1']);
-    // Admin visibility comes from ONE projected workspaces query, not N authz calls.
-    expect((authorizeWorkspaceList as any).mock.calls.length).toBe(0);
+    // Admin visibility comes from ONE tenant-scoped workspaces query, not N authz
+    // calls: none of the in-tenant workspaces is re-resolved per workspace.
+    const fallbackIds = (authorizeWorkspaceList as any).mock.calls.map((c: any[]) => c[1]);
+    expect(fallbackIds).not.toContain('ws-A');
+    expect(fallbackIds).not.toContain('ws-B');
+    expect(fallbackIds).not.toContain('ws-Z');
+  });
+
+  // ── #3843 — the admin sweep is a CACHE of the canonical decision ──────────
+  //
+  // What it replaced: `if (s.claims.tid && w.tid && w.tid !== s.claims.tid)
+  // continue;` over an UNSCOPED `SELECT c.id, c.domain, c.tid FROM c`. That is a
+  // non-contradiction test, so it decided nothing whenever either side was
+  // absent and fell straight through to `isTenantAdmin(s)` alone.
+  describe('the admin sweep requires a POSITIVE tenant match (#3843)', () => {
+    it('never returns items from a workspace in ANOTHER Entra tenant', async () => {
+      (isTenantAdmin as any).mockReturnValue(true);
+      const j = await (await GET(req('types=all'))).json();
+      expect(j.items.some((i: any) => i.workspaceId === 'ws-FOREIGN')).toBe(false);
+      expect(j.items.some((i: any) => i.id === 'f1')).toBe(false);
+    });
+
+    it('withholds a LEGACY tid-less workspace from the sweep — unconfirmed is not a grant', async () => {
+      (isTenantAdmin as any).mockReturnValue(true);
+      const j = await (await GET(req('types=all'))).json();
+      expect(j.items.some((i: any) => i.id === 'l1')).toBe(false);
+    });
+
+    it('scopes the sweep IN THE QUERY, so another tenant\'s document is never read', async () => {
+      (isTenantAdmin as any).mockReturnValue(true);
+      await GET(req('types=all'));
+      // The boundary is in the WHERE clause, not only in a caller-side filter:
+      // the sweep asks for THIS tenant's documents and no others.
+      expect(workspaceQuerySpecs.length).toBe(1);
+      expect(workspaceQuerySpecs[0].query).toMatch(/c\.tid\s*=\s*@tid/);
+      expect(workspaceQuerySpecs[0].parameters).toEqual([{ name: '@tid', value: 'tenant-1' }]);
+      // …and the workspaces it withheld fall to the canonical resolver, which is
+      // what makes withholding them cost no legitimate access.
+      const fallbackIds = (authorizeWorkspaceList as any).mock.calls.map((c: any[]) => c[1]);
+      expect(fallbackIds).toContain('ws-FOREIGN');
+      expect(fallbackIds).toContain('ws-LEGACY');
+    });
+
+    it('an admin with NO tid claim issues NO workspaces query at all (fail closed)', async () => {
+      (isTenantAdmin as any).mockReturnValue(true);
+      (getSession as any).mockReturnValue({ claims: { oid: 'user-1', tid: undefined, groups: [] } });
+      const j = await (await GET(req('types=all'))).json();
+      expect(workspaceQuerySpecs.length).toBe(0);
+      // Only what `listAccessibleWorkspaces` (owned + direct-shared) and the ACL
+      // fallback grant — ws-Z is admin-only and must disappear.
+      expect(j.items.map((i: any) => i.id).sort()).toEqual(['a1', 'a2', 'b1']);
+      expect(j.items.some((i: any) => i.id === 'z1')).toBe(false);
+    });
+
+    // THE CONTROL. Without this pair the four refusals above could equally be
+    // explained by the sweep being dead. Same fixture, tid present, admin true:
+    // ws-Z is admin-only and it comes back.
+    it('CONTROL — with a tid present the sweep still grants the admin-only workspace', async () => {
+      (isTenantAdmin as any).mockReturnValue(true);
+      const j = await (await GET(req('types=all'))).json();
+      expect(j.items.some((i: any) => i.id === 'z1')).toBe(true);
+    });
+
+    // A non-admin must be unaffected by all of the above.
+    it('a NON-admin is unchanged — owned + ACL only, no sweep', async () => {
+      (isTenantAdmin as any).mockReturnValue(false);
+      const j = await (await GET(req('types=all'))).json();
+      expect(j.items.map((i: any) => i.id).sort()).toEqual(['a1', 'a2', 'b1']);
+    });
   });
 
   it('pages with pageSize + base64url continuation and terminates', async () => {

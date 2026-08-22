@@ -218,15 +218,47 @@ describe('authentication is unchanged', () => {
   });
 });
 
-describe('the KNOWN RESIDUAL is a measured fact, not an assumption', () => {
-  it('a legacy workspace doc with NO recorded tid cannot be tenant-tested, and is allowed', async () => {
-    // Stated in the route and here rather than hidden: failing closed would make
-    // every legacy in-tenant product invisible to ordinary catalog readers, which
-    // is a regression, not a fix. scripts/csa-loom/backfill-workspace-tid.mjs
-    // closes it. This test exists so the gap is VISIBLE and cannot be silently
-    // widened — change the behaviour and this test tells you.
-    workspaces['ws-1'] = {}; // no tid
+describe('the tenant test is a POSITIVE match and fails closed (#3843)', () => {
+  // WHAT THIS REPLACES. This block used to be "the KNOWN RESIDUAL is a measured
+  // fact, not an assumption", and it asserted the OPPOSITE of every case below:
+  // a legacy workspace doc with no `tid` "cannot be tenant-tested, and is
+  // allowed". That fall-through was the defect, not a documented limit — by the
+  // time this test runs, `authorizeWorkspace` has already REFUSED, so the tenant
+  // comparison is the ONLY thing between an arbitrary caller and the ports
+  // model, whose `ref` is an infrastructure address.
+  //
+  // The route now uses `sameTenantConfirmed`, so each of the three ways the old
+  // truthiness-guarded condition evaluated false is a refusal.
+
+  it('a legacy workspace doc with NO recorded tid is REFUSED (was: allowed)', async () => {
+    workspaces['ws-1'] = {}; // pre-rel-T11 doc, tenancy never stamped
+    const res = await GET(req, ctx('dp-published'));
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(await res.json())).not.toContain('abfss://');
+  });
+
+  // THE ABSENCE THE OLD COMMENT NEVER NAMED. `UserClaims.tid` is optional by
+  // design (lib/auth/msal.ts, lib/auth/session.ts) and lib/auth/pat.ts mints
+  // personal access tokens with no `createdByTid`. With the claim absent the old
+  // condition was false for EVERY published product in EVERY tenant.
+  it('a caller whose session carries NO tid claim is REFUSED', async () => {
+    getSession.mockReturnValue({ claims: { oid: 'outsider', tid: undefined } });
+    const res = await GET(req, ctx('dp-published'));
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(await res.json())).not.toContain('abfss://');
+  });
+
+  it('BOTH absent is still a refusal — two unknowns are not a match', async () => {
+    workspaces['ws-1'] = {};
+    getSession.mockReturnValue({ claims: { oid: 'outsider', tid: undefined } });
+    expect((await GET(req, ctx('dp-published'))).status).toBe(404);
+  });
+
+  // CONTROL. Without this the four refusals above would equally be explained by
+  // the discovery path being dead: same fixture, tenancy confirmed, 200.
+  it('CONTROL — a confirmed same-tenant published product is still discoverable', async () => {
     const res = await GET(req, ctx('dp-published'));
     expect(res.status).toBe(200);
+    expect((await res.json()).ports.output[0].ref).toBe(SECRET_REF);
   });
 });
