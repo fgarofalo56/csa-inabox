@@ -331,7 +331,7 @@ jobs:
 
       - name: Upload full what-if JSON
         if: steps.precheck.outputs.configured == 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: whatif-fiab-${{ github.run_id }}
           path: |

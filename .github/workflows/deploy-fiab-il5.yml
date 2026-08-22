@@ -328,7 +328,7 @@ jobs:
             --out "$RUNNER_TEMP/gov-verify-receipt-il5-${{ github.run_id }}.txt" || true
 
       - name: Upload IL5 verification receipt
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gov-verify-receipt-il5-${{ github.run_id }}
           path: ${{ runner.temp }}/gov-verify-receipt-il5-${{ github.run_id }}.txt
