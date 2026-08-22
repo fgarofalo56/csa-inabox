@@ -38,6 +38,7 @@ import { NewItemCreateGate } from '../new-item-gate';
 import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVariable } from '../slate/slate-app-builder';
 import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from '../workshop/workshop-app-builder';
 import { deriveObjectProperties } from '../_palantir-codegen';
+import { hasPersistedItemState } from '../item-state-seed';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import {
   CHECK_TYPE_LIBRARY, CHECK_FAMILY_META, COMPARISON_OPERATORS, AGGREGATIONS,
@@ -227,6 +228,32 @@ export function CodeBlock({ content, ariaLabel }: { content: string; ariaLabel?:
 // ───────────────────────── shared state hook ─────────────────────────
 export interface ItemDoc { id: string; displayName: string; state?: Record<string, unknown>; updatedAt?: string }
 
+/**
+ * The Cosmos-backed editor state hook shared by the palantir-class editors.
+ *
+ * ## Seeding contract — a `fallback` on screen is always UNSAVED (#3687)
+ *
+ * `fallback` renders synchronously, before any server content. When the read
+ * succeeds and the record carries no persisted state, the hook marks the item
+ * **dirty**, which lights up `SaveStrip`'s button and its "unsaved" badge.
+ *
+ * Before this, `dirty` stayed false on that path: the seed looked exactly like
+ * saved content, SaveStrip said "Saved" over a DISABLED button, and nothing the
+ * user could see was actually in Cosmos — so every server-side action operated
+ * on a document that did not contain what was on screen, and the user had no
+ * way to fix it short of making an unrelated edit first.
+ *
+ * The rejected alternative was auto-PATCHing `fallback` during load. A read
+ * must not write: it would issue an unrequested write on every first open, and
+ * a failure of that write would put an error banner on a freshly created item,
+ * which `ux-baseline.md` §6 forbids.
+ *
+ * The mark is applied ONLY after a genuinely successful read. A failed read
+ * returns early and leaves `dirty` false, so Save stays disabled rather than
+ * offering to PATCH `fallback` over a document that was never read (the C19
+ * data-loss shape — see `use-item-doc-state.tsx`). `id === 'new'` is untouched;
+ * `save()` refuses without an id anyway.
+ */
 export function useItemState<T extends Record<string, unknown>>(slug: string, id: string, fallback: T) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -249,11 +276,22 @@ export function useItemState<T extends Record<string, unknown>>(slug: string, id
       const j = await r.json();
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
       const doc = j as ItemDoc;
-      if (doc.state && typeof doc.state === 'object') {
+      if (hasPersistedItemState(doc.state)) {
         suppressDirty.current = true;
         setStateRaw({ ...fallback, ...(doc.state as T) });
         setDirty(false);
         queueMicrotask(() => { suppressDirty.current = false; });
+      } else {
+        // Read SUCCEEDED, record carries nothing yet — so what is on screen is
+        // the browser-only `fallback`. Mark it unsaved (#3687) so SaveStrip's
+        // button is live and its badge tells the truth. Note this branch is
+        // reached with `doc.state === {}`, not `undefined`: the routes send
+        // `state: item.state || {}` (see item-state-seed.ts).
+        //
+        // Only when the seed is NON-EMPTY: an editor whose fallback is `{}`
+        // (e.g. ontology-sdk) has nothing displayed-but-unpersisted, so there
+        // is no divergence to report and "unsaved" would be noise, not truth.
+        if (hasPersistedItemState(fallback)) setDirty(true);
       }
       setSavedAt(doc.updatedAt || null);
     } catch (e: any) { setError(e?.message || String(e)); }

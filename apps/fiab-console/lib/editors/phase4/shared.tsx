@@ -113,6 +113,7 @@ import { useSharedEditorStyles } from '../shared-styles';
 // the OTHER half of the same contract (it owns its own fetch for legacy
 // reasons); both enforce the identical persistability rule from one place.
 import { canPersistItemState, SAVE_REFUSED_UNLOADED, type ItemLoadStatus } from '../use-item-doc-state';
+import { hasPersistedItemState } from '../item-state-seed';
 
 /**
  * Defensive array coercion for persisted Cosmos state. Legacy / hand-edited /
@@ -411,6 +412,40 @@ function useStyles() {
 
 interface ItemDoc { id: string; displayName: string; workspaceId?: string; state?: Record<string, unknown>; updatedAt?: string }
 
+/**
+ * The Cosmos-backed editor state hook shared by the Phase 4 editors.
+ *
+ * ## Seeding contract — a `fallback` on screen is always UNSAVED (#3687)
+ *
+ * `fallback` is rendered synchronously, before (and possibly instead of) any
+ * server content. When the read succeeds and the record turns out to carry no
+ * persisted state, the hook marks the item **dirty**. That is a deliberate
+ * choice between the two options #3687 put on the table:
+ *
+ * - **CHOSEN — mark dirty.** `dirty === true` is simply the TRUTH about a seed
+ *   that exists only in the browser (`deploy-integrity.md` R7). It makes Save
+ *   live and the "unsaved" badge appear, which is the affordance that was
+ *   missing: previously SaveBar rendered "Saved" over a disabled button, so the
+ *   only route to persisting the visible config was to make an unrelated edit
+ *   first. It also fixes the divergence at the moment it actually bites — every
+ *   `if (dirty) await save()` pre-flight in these editors (Run / Ask / Deploy /
+ *   Evaluate / Publish) now persists the seed before the server-side action
+ *   reads Cosmos, which is exactly the "the runtime executed its bundled
+ *   function, not what you see" symptom reported on `user-data-function`.
+ *
+ * - **REJECTED — auto-PATCH the fallback on read.** It would make first open
+ *   perform an unrequested write across ~25 editors, and a 403 on that write
+ *   would paint an error banner on the first open of a brand-new item — the
+ *   exact thing `ux-baseline.md` §6 forbids. A read must not write.
+ *
+ * The mark happens ONLY when the read genuinely succeeded. On `error` the state
+ * is left clean so Save stays disabled: enabling it there would hand the user a
+ * button that PATCHes `fallback` over a document nobody has read, which is the
+ * C19 data-loss bug this hook already guards (`use-item-doc-state.tsx`).
+ *
+ * `id === 'new'` is untouched: nothing exists to diverge from, and `save()`
+ * refuses without an id anyway.
+ */
 function useItemState<T extends Record<string, unknown>>(slug: string, id: string, fallback: T) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -470,7 +505,7 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); setLoad('error'); return; }
       const doc = j as ItemDoc;
       if (doc.workspaceId) setWorkspaceId(doc.workspaceId);
-      if (doc.state && typeof doc.state === 'object') {
+      if (hasPersistedItemState(doc.state)) {
         suppressDirty.current = true;
         setStateRaw({ ...fallback, ...(doc.state as T) });
         setDirty(false);
@@ -483,6 +518,17 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
         // nothing destroys nothing, so this is persistable — this is exactly
         // why "state is empty" can never stand in for "load failed".
         setLoad('absent');
+        // #3687 — the fallback on screen is UNSAVED, so SAY SO. Leaving dirty
+        // false here rendered a seed indistinguishable from persisted content
+        // while SaveBar read "Saved" and its button was disabled — the user
+        // could not persist the config they were looking at without first
+        // making an unrelated edit. See the hook docblock for the full
+        // rationale and the rejected alternative (auto-PATCH on read).
+        //
+        // Only when the seed is NON-EMPTY: an editor whose fallback is `{}`
+        // has nothing displayed-but-unpersisted, so there is no divergence to
+        // report and an "unsaved" badge would be noise, not truth.
+        if (hasPersistedItemState(fallback)) setDirty(true);
       }
       setSavedAt(doc.updatedAt || null);
     } catch (e: any) { setError(e?.message || String(e)); setLoad('error'); }
