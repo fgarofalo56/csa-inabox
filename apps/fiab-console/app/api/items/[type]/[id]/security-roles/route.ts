@@ -71,6 +71,12 @@ function aclBackendEnabled(): boolean {
   return process.env.LOOM_ONELAKE_SECURITY_ACL === 'true';
 }
 
+/** THE ONE refusal wording and the ONE way to build it. Every denial on this
+ *  route — foreign tenant, unconfirmable tenancy, no such item, no role held —
+ *  returns exactly this, so none of them can be told apart. */
+const NOT_FOUND = 'item not found';
+const notFound = () => NextResponse.json({ ok: false, error: NOT_FOUND }, { status: 404 });
+
 /**
  * OWNERSHIP gate — these handlers read role definitions and grant/revoke REAL
  * ADLS Gen2 POSIX ACLs on the shared DLZ storage, so a bare session + the
@@ -105,15 +111,32 @@ function aclBackendEnabled(): boolean {
  *
  *   1. `authorizeItemWorkspace` — the 85-importer item-scoped authorizer. It
  *      resolves the item's OWNING workspace (cross-partition, so a foreign-tenant
- *      item is still FOUND and still judged) and delegates. It is what produces an
- *      HONEST refusal for the tenant-unconfirmed case (`workspaceDenialResponse`,
- *      deploy-integrity R7) instead of asserting "not found" about a workspace
- *      Loom demonstrably read.
+ *      item is still FOUND and still judged) and delegates.
  *   2. `loadOwnedItem` — re-resolves the item through the same ladder and is what
  *      proves the item EXISTS at all. `authorizeItemWorkspace` deliberately
  *      returns null (allow) when no item of that type carries the id, because
  *      then there is no other tenant's resource to gate; on THIS route that state
  *      must still 404, or a POST would mint ACLs for an item that does not exist.
+ *
+ * EVERY REFUSAL IS FLATTENED TO ONE 404, AND THAT COSTS SOMETHING WORTH NAMING.
+ * `authorizeItemWorkspace` returns `workspaceDenialResponse(diag) ?? <404>`, and
+ * that first arm is a **409 `tenant_unconfirmed` carrying the resolved
+ * `workspaceId`** (`lib/auth/workspace-denial.ts`) whenever the workspace doc
+ * records no `tid` or the session carries no `tid` claim. On a workspace-OPEN
+ * surface that 409 is right — it is R7-honest and it names a remediation the
+ * operator can act on. HERE IT IS AN ORACLE. The caller supplies the `itemId`;
+ * a 409 tells them "that GUID names a real item, and it lives in workspace
+ * <GUID>", while a nonexistent id 404s — so the two are distinguishable, in
+ * exactly the tid-less state #3845 proves has a live generator. This route
+ * GRANTS ADLS ACLS, so the oracle outweighs the diagnostic, and every refusal
+ * returns the identical flat 404 body.
+ *
+ * WHAT THAT GIVES UP, stated rather than implied: an admin blocked by an
+ * unstamped workspace doc gets no in-band remediation from THIS route. It is not
+ * lost — `resolveWorkspaceAccessByOid` logs the refusal with its cause and
+ * remediation server-side (`[workspace-access] tenant-admin grant REFUSED`), and
+ * the same 409 is still rendered by the workspace-open surfaces, which are reads
+ * rather than mutations and take a workspace id the caller is entitled to name.
  *
  * NOT A WIDENING FOR ANYONE. Both calls are WRITE-scoped (`allowReadRoles` is not
  * passed, on the GET too), which is exactly what `loadOwnedItem` already required
@@ -123,7 +146,8 @@ function aclBackendEnabled(): boolean {
  *
  * 404, NOT 403, AND BEFORE THE QUERY. A 403 would confirm that the caller-supplied
  * id names a real item in some tenant — a COUNT is an ORACLE when the caller picks
- * the scope. A foreign-tenant id and a nonexistent id are indistinguishable here.
+ * the scope. A foreign-tenant id, an unconfirmable-tenancy id and a nonexistent id
+ * all return the identical body here.
  *
  * THE NARROWING, STATED RATHER THAN IMPLIED. A tenant admin who neither owns the
  * item nor holds a workspace ACL role on it is now REFUSED when the workspace doc
@@ -142,11 +166,14 @@ async function assertItemAccess(
   const denied = await authorizeItemWorkspace(session, {
     itemId,
     itemType,
-    notFound: 'item not found',
+    notFound: NOT_FOUND,
   });
-  if (denied) return denied;
+  // Deliberately NOT `return denied` — see the docblock. Any refusal, including
+  // the 409 `tenant_unconfirmed` that carries a workspaceId, collapses to the one
+  // body, so a caller-supplied id cannot be probed for existence.
+  if (denied) return notFound();
   const owned = await loadOwnedItem(itemId, itemType, session.claims.oid, { session });
-  if (!owned) return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 });
+  if (!owned) return notFound();
   return null;
 }
 

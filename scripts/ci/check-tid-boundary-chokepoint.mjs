@@ -3184,6 +3184,220 @@ for (const p of ADMIN_SHAPE_PROBES) {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// 8j: ADMIN-VERDICT-FREE ROUTES — keyed to the SAFE state, not to a spelling
+// ════════════════════════════════════════════════════════════════════════════
+//
+// WHY THIS EXISTS, AND IT IS NOT A THEORY. Independent review of the #3855 fix
+// applied ONE mutation to the repaired route and put all three defenses back to
+// green over a live cross-tenant ACL DELETION:
+//
+//     const deniedDel = (isTenantAdmin(session) && params.type === 'mirrored-database')
+//       ? null : await assertItemAccess(session, params.id, params.type);
+//
+// Measured: chokepoint RC=0, route-guards RC=0, vitest RC=0 (12 passed). Two
+// independent holes lined up.
+//
+//   1. 8h MODELS AN ADMIN GRANT IN THE AUTHORIZER, NOT IN THE HANDLER. The
+//      bypass is a TERNARY assigned to a local, so `isTenantAdmin` never appears
+//      in the PATH CONDITION of any `return`, and `adminShapeFunctionsIn` does
+//      not see it at all. Even if it did, the handler's params are `(req, ctx)`
+//      — outside the scope net for the same reason #3855 was.
+//   2. THE SPEC'S MULTI-ITEMTYPE LOOP EXERCISED POST ONLY. GET and DELETE were
+//      pinned for `lakehouse` alone, so a bypass narrowed to
+//      `mirrored-database` on DELETE passed a 12-test suite. One itemType in one
+//      verb was the entire margin. (Fixed in the spec; this section is the
+//      structural half, because the next narrow spelling will be a different
+//      one.)
+//
+// SO THIS SECTION DOES NOT CHASE SPELLINGS. Enumerating shapes is how a guard
+// gets keyed to the UNSAFE pattern and goes green on the next rewrite — the
+// ternary above is precisely that lesson. The rule here is the SAFE state:
+//
+//     a route in ADMIN_VERDICT_FREE_ROUTES may not REFERENCE the admin verdict
+//     AT ALL — not the `isTenantAdmin` token, and not the two env vars
+//     `isTenantAdmin` is derived from.
+//
+// A ternary, a `||`, a `??`, an `as any` cast, an aliased import
+// (`import { isTenantAdmin as isAdmin }`), a re-export — every one of them still
+// carries the token. The env-var arm additionally closes the measured
+// re-derivation variant this file names elsewhere
+// (`session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID`), which carries no
+// token at all.
+//
+// THE SECOND ARM IS A POSITIVE REQUIREMENT, because "no admin token" is also
+// true of a route with NO AUTHORIZATION WHATSOEVER. Every exported HTTP handler
+// with a body must reference the file's own gate. An alias export
+// (`export const PUT = POST;`) has no callable body and is skipped — it inherits
+// the gate of what it aliases, which is the point of writing it that way.
+//
+// THE COST, stated: any future need for a genuine tenant-admin decision in one
+// of these files is a red build that must be argued for and removed from this
+// set with a reason. That is intended. These routes delegate the whole tenant
+// question to `resolveWorkspaceAccessByOid`; an admin verdict computed locally
+// is the defect, in whatever spelling.
+const ADMIN_VERDICT_FREE_ROUTES = new Map([
+  [
+    'app/api/items/[type]/[id]/security-roles/route.ts',
+    {
+      gate: 'assertItemAccess',
+      why:
+        '#3855 — POST/PUT/DELETE here grant and revoke REAL ADLS Gen2 POSIX ACLs on the DLZ lake ' +
+        'over a caller-supplied itemId, so an admin verdict computed IN THIS FILE is a ' +
+        'cross-tenant WRITE in whatever spelling it is written. The whole tenant decision ' +
+        'belongs to `assertItemAccess` -> authorizeItemWorkspace / loadOwnedItem -> ' +
+        'resolveWorkspaceAccessByOid, whose step 6 requires a POSITIVE tenant match.',
+    },
+  ],
+]);
+
+/** The HTTP method exports a Next.js route file may declare. */
+const HTTP_HANDLERS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+
+/** The admin verdict, by TOKEN or by the env vars it is derived from. */
+const ADMIN_VERDICT_REFERENCE = /\bisTenantAdmin\b|\bLOOM_TENANT_ADMIN_(?:OID|GROUP_ID)\b/;
+
+/**
+ * Judge ONE admin-verdict-free route. Returns the list of failure strings, so
+ * the tree scan and the embedded control below run the SAME code — a probe that
+ * re-implements the rule proves only that the probe works.
+ */
+function adminVerdictFreeViolations(rel, src, spec) {
+  const out = [];
+  const masked = mask(src);
+  // The token scan runs on MASKED source: a docblock explaining the rule (this
+  // route has a long one) must not trip it, and neither must a string literal.
+  const m = ADMIN_VERDICT_REFERENCE.exec(masked);
+  if (m) {
+    const line = masked.slice(0, m.index).split('\n').length;
+    out.push(
+      `${rel}:${line}: this route references the admin verdict (\`${m[0]}\`), and it is in ` +
+        'ADMIN_VERDICT_FREE_ROUTES precisely because it may not. ' +
+        spec.why +
+        ' This rule is keyed to the SAFE state on purpose: review put all three guards back to ' +
+        'green with a ternary narrowed to ONE itemType on ONE verb, so enumerating unsafe ' +
+        'shapes does not work. If a genuine tenant-admin decision is now needed here, remove ' +
+        'the entry WITH the argument for it — do not rename around this.',
+    );
+  }
+  for (const fn of declaredFunctions(masked)) {
+    if (!HTTP_HANDLERS.has(fn.name)) continue;
+    if (fn.body.includes(`${spec.gate}(`)) continue;
+    const line = masked.slice(0, fn.declAt).split('\n').length;
+    out.push(
+      `${rel}:${line}: exported handler ${fn.name}() does not call \`${spec.gate}(\`. ` +
+        '"No admin token" is also true of a route with no authorization at all, so this arm is ' +
+        'what stops the rule above being satisfied by DELETING the gate.',
+    );
+  }
+  return out;
+}
+
+let adminVerdictFreeChecked = 0;
+for (const [rel, spec] of ADMIN_VERDICT_FREE_ROUTES) {
+  let src;
+  try {
+    src = readFileSync(`${CONSOLE_ROOT}/${rel}`, 'utf8');
+  } catch {
+    fail(
+      `ADMIN_VERDICT_FREE_ROUTES entry \`${rel}\` names a file that does not exist. If the route ` +
+        'moved, move the entry with it in the same commit; if it was deleted, say so in the PR. ' +
+        'A pin that silently matches nothing is the #3877 failure mode.',
+    );
+    continue;
+  }
+  adminVerdictFreeChecked += 1;
+  for (const v of adminVerdictFreeViolations(rel, src, spec)) fail(v);
+}
+
+// ── 8j EMBEDDED CONTROL — review's exact bypass, and three narrower spellings ──
+// Arm 1 is the mutation that defeated all three defenses, character for
+// character. If this section is ever weakened, that is the arm that says so.
+const ADMIN_VERDICT_FREE_PROBES = [
+  {
+    label: "R1 review's exact bypass — ternary, ONE itemType, DELETE only",
+    violates: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+export const DELETE = withSession(async (req, ctx) => {
+  const params = ctx.params;
+  const deniedDel = (isTenantAdmin(session) && params.type === 'mirrored-database')
+    ? null : await assertItemAccess(session, params.id, params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R2 the same, via an ALIASED import (the rename evasion)',
+    violates: true,
+    src: `import { isTenantAdmin as isAdmin } from '@/lib/auth/feature-gate';
+export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = isAdmin(session) ? null : await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R3 the env-oid re-derivation, which carries NO isTenantAdmin token',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  if (session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID) return NextResponse.json({ ok: true });
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R4 the gate DELETED outright (no admin token anywhere)',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R5 CONTROL — the repaired shape, plus an alias export',
+    violates: false,
+    src: `export const POST = withSession(async (req, ctx) => {
+  const denied = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (denied) return denied;
+  return NextResponse.json({ ok: true });
+});
+export const PUT = POST;
+export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R6 CONTROL — the rule is not tripped by the word in a COMMENT',
+    violates: false,
+    src: `// The old code read \`if (isTenantAdmin(session)) return null;\` — see #3855.
+export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+];
+
+let adminVerdictFreeProbesPassed = 0;
+for (const p of ADMIN_VERDICT_FREE_PROBES) {
+  const hits = adminVerdictFreeViolations('probe.ts', p.src, {
+    gate: 'assertItemAccess',
+    why: '(probe)',
+  });
+  if (hits.length > 0 === p.violates) {
+    adminVerdictFreeProbesPassed += 1;
+    continue;
+  }
+  fail(
+    `8j EMBEDDED CONTROL ${p.label} — expected ${p.violates ? 'a VIOLATION' : 'NO violation'} and ` +
+      `got ${hits.length}. Arm R1 is the bypass that put the chokepoint, route-guards AND vitest ` +
+      'all back to green over a live cross-tenant ACL deletion; if it stops firing, this section ' +
+      'is decorative. Fix the section, never the probe.',
+  );
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // 10: NO PRIVATE COPY OF THE TENANT COMPARISON (#3843 / #3840 / #3834)
@@ -3791,6 +4005,26 @@ console.log(`[tid-boundary-chokepoint] repo-wide admin-shape scan: ${adminShapeF
 console.log(`[tid-boundary-chokepoint]   8h embedded controls passed: ${adminProbesPassed}/` +
             `${ADMIN_SHAPE_PROBES.length} — each runs the REAL judgement on a synthetic module, ` +
             'so a re-narrowed scope net goes RED even while the tree scan judges zero functions');
+// THE UNRESOLVED ENTRIES ARE PRINTED, NOT MERELY COMMENTED. Review measured that
+// the previous run's stdout contained neither `folders` nor `UNRESOLVED` — only
+// the aggregate "11 outside lib/auth" — while the PR body claimed the finding was
+// "named on every CI run". It was a source comment at the census, which nobody
+// reads on a green build. An aggregate count is exactly the kind of number this
+// file elsewhere refuses to let stand unqualified, so the ones that are FINDINGS
+// are named here every run, green or red.
+const adminShapeUnresolved = [...ADMIN_SHAPE_UNSCOPED]
+  .filter(([, reason]) => /^UNRESOLVED\b/.test(reason))
+  .map(([k]) => k);
+console.log(`[tid-boundary-chokepoint]   of those ${adminShapeUnscopedSeen.size}, ` +
+            `${adminShapeUnresolved.length} are recorded UNRESOLVED — a FINDING, not a clearance, ` +
+            'and not fixed by this guard:');
+for (const k of adminShapeUnresolved) {
+  console.log(`[tid-boundary-chokepoint]     UNRESOLVED  ${k}`);
+}
+console.log(`[tid-boundary-chokepoint]   8j admin-verdict-free routes: ${adminVerdictFreeChecked} ` +
+            `checked, ${adminVerdictFreeProbesPassed}/${ADMIN_VERDICT_FREE_PROBES.length} embedded ` +
+            "controls passed (R1 is review's exact ternary bypass, which defeated 8h, route-guards " +
+            'and vitest simultaneously)');
 
 // QUALIFIED BY WHAT PRODUCED IT, like every other count here. This is a SYNTACTIC
 // scan over masked source keyed on OPERAND NAMES, so it counts the comparisons it
