@@ -11,30 +11,6 @@ name: deploy-fiab-il5
 # Manual approval gate (il5-deploy environment protection) since this deploys
 # into an IL5 Gov subscription.
 
-# The `Teardown -> redeploy -> smoke` step below is gated `if: inputs.run_mode ==
-# 'full'`, and run_mode DEFAULTS to whatif-only — so the DEFAULT dispatch of this
-# workflow SUCCEEDS having applied nothing to IL5.
-#
-# check-deploy-staleness.mjs clears a WATCHED entry's drift on its newest
-# SUCCESSFUL run, and until this line existed the workflow had no `run-name` at
-# all: every run — apply or not — was titled "deploy-fiab-il5", so ONE default
-# dispatch would have silenced an IL5 deploy gap it did not close. That is the
-# "green on nothing" shape the watchdog exists to catch, and it is why this line
-# has to land BEFORE the IL5 WATCHED entry rather than with it.
-#
-# The marker string is DRY_RUN_MARKER ('DRY RUN') in check-deploy-staleness.mjs,
-# which filters those runs out of the last-success search.
-#
-# WHY THE `workflow_dispatch` TEST IS STILL CORRECT ON A LANE WITH NO CRON. The
-# sibling lanes carry the same expression because a `schedule` run provisions and
-# must therefore NOT be marked. This workflow has no `schedule:` trigger at all,
-# so `github.event_name` is always `workflow_dispatch` here and the left-hand
-# clause is always true — the marker is decided purely by run_mode, which is the
-# intended behaviour. The clause is kept rather than simplified so the four lanes
-# share one auditable literal; it is stated here rather than left to imply that
-# this lane has a cron it does not have (deploy-integrity R7).
-run-name: deploy-fiab-il5${{ (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)' || '' }}
-
 on:
   workflow_dispatch:
     inputs:
