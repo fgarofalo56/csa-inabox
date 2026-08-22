@@ -65,7 +65,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { redact } from './_azure-redact.mjs';
+import { redact, redactedLine, unredactedByDesign } from './_azure-redact.mjs';
 
 export const STATUS = Object.freeze({
   FOUND: 'found',
@@ -321,8 +321,31 @@ export function collectArmLeafErrors({
  * The block appended to the text handed to the classifier, and printed for the
  * operator. Every leaf is listed — a deployment can fail for more than one
  * reason at once, and on run 31069329802 it did.
+ *
+ * THIS FUNCTION IS A REDACTION BOUNDARY (#3829 round 2). deploy-retry.mjs writes
+ * this string straight to process.stderr, and on a PUBLIC repo the Actions run
+ * log is a publication surface exactly as an issue body is. The first cut
+ * redacted `l.message` and nothing else, which left FOUR interpolations raw:
+ * `l.resourceName` (`<server>/<objectId>` for the flexibleServers/administrators
+ * leaf that opened #3829, the role-assignment GUID for a roleAssignments leaf),
+ * the `warnings[]` lines, and `result.reason` — the last two of which embed a
+ * deployment NAME, and this repo generates deployment names with `newGuid()`
+ * seeds.
+ *
+ * So the redaction is applied ONCE, to the assembled render, at the single
+ * return. A branch added later cannot reopen the hole, and a field added to a
+ * branch cannot either. redact() is idempotent, so the per-field call on
+ * `l.message` stays as defence in depth.
+ *
+ * SAFE FOR THE CLASSIFIER. This string is also `classifyText`. redact() rewrites
+ * only GUID and `/subscriptions/<id>` substrings, which no taxonomy signal
+ * matches on, and it deliberately does NOT touch an undashed 32-hex run — which
+ * is the form ARM uses for the blocking role-assignment id that
+ * deploy-retry.mjs's planRemediation() reads back to converge the grant (#3439).
+ * Both properties are pinned by tests.
  */
 export function renderLeaves(result) {
+  let out;
   if (result.status === STATUS.FOUND) {
     const head = `ARM leaf failures (${result.leaves.length}) drilled from the failed deployment operations:`;
     const body = result.leaves.map((l) => {
@@ -332,21 +355,45 @@ export function renderLeaves(result) {
       return `  ${l.code ?? 'NoCode'}: ${redact(l.message)}${where}`;
     });
     const warn = result.warnings.map((w) => `  (partial) ${w}`);
-    return [head, ...body, ...warn].join('\n');
-  }
-  if (result.status === STATUS.NONE) {
-    return (
+    out = [head, ...body, ...warn].join('\n');
+  } else if (result.status === STATUS.NONE) {
+    out =
       `ARM leaf failures: none. ${result.operationsSeen} deployment operation(s) were listed and ` +
-      'ARM reported none of them Failed. The cause is therefore NOT in the deployment operations.'
-    );
+      'ARM reported none of them Failed. The cause is therefore NOT in the deployment operations.';
+  } else {
+    out =
+      'ARM leaf failures: UNREADABLE — the deployment operations could not be listed, so nothing ' +
+      `is asserted about the cause. ${result.reason}`;
   }
-  return (
-    'ARM leaf failures: UNREADABLE — the deployment operations could not be listed, so nothing ' +
-    `is asserted about the cause. ${result.reason}`
-  );
+  // THE BOUNDARY. Do not move this back to the individual interpolations.
+  return redact(out);
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
+
+/**
+ * THE STDOUT AND STDERR BOUNDARIES (#3829 round 5).
+ *
+ * renderLeaves() above is a redaction boundary for the string it BUILDS. It is
+ * not a boundary for this file's process — the CLI also writes four usage
+ * refusals to stderr, two of which interpolate operator-supplied argv
+ * (`unknown argument: ${a}` and `--scope must be sub|group (got ${args.scope})`),
+ * and every one of them lands in a public Actions run log if a workflow ever
+ * calls this script. Rounds 1-4 of #3829 each bounded one surface and left its
+ * neighbour bare; these two exist so that this file has no bare neighbour left.
+ *
+ * Exported and PURE so a pass-through mutation is visible in a DIRECT test:
+ * renderLeaves() redacts as well, so an end-to-end assertion on the default
+ * stdout path cannot say which of the two did the work
+ * (csa_loom_mutation_that_does_not_move_the_verdict).
+ */
+export function formatStdout(text) {
+  return redactedLine(text);
+}
+
+export function formatStderr(text) {
+  return redactedLine(text);
+}
 
 export function parseArgs(argv) {
   const out = {
@@ -375,24 +422,41 @@ function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (e) {
-    process.stderr.write(`deploy-arm-errors: ${e.message}\n`);
+    process.stderr.write(formatStderr(`deploy-arm-errors: ${e.message}\n`));
     process.exit(EXIT.USAGE);
   }
   if (!args.name) {
-    process.stderr.write('deploy-arm-errors: --name <deploymentName> is required.\n');
+    process.stderr.write(formatStderr('deploy-arm-errors: --name <deploymentName> is required.\n'));
     process.exit(EXIT.USAGE);
   }
   if (args.scope !== 'sub' && args.scope !== 'group') {
-    process.stderr.write(`deploy-arm-errors: --scope must be sub|group (got ${args.scope}).\n`);
+    process.stderr.write(formatStderr(`deploy-arm-errors: --scope must be sub|group (got ${args.scope}).\n`));
     process.exit(EXIT.USAGE);
   }
   if (args.scope === 'group' && !args.resourceGroup) {
-    process.stderr.write('deploy-arm-errors: --scope group requires --resource-group.\n');
+    process.stderr.write(formatStderr('deploy-arm-errors: --scope group requires --resource-group.\n'));
     process.exit(EXIT.USAGE);
   }
 
   const result = collectArmLeafErrors(args);
-  process.stdout.write(args.json ? `${JSON.stringify(result, null, 2)}\n` : `${renderLeaves(result)}\n`);
+  if (args.json) {
+    // DISCLOSED EXCEPTION, and the ONLY unredacted publication in this file.
+    // `--json` emits the raw `result`, which carries the full ARM ids — the
+    // subscription id, the resource id, and the object id in a
+    // `flexibleServers/administrators` leaf name. That is deliberate: it exists
+    // so an operator debugging their OWN subscription keeps the ids that the
+    // remediations in docs/fiab/runbooks/deploy-failure.md actually need, and
+    // the runbook says in as many words to treat its output as local-only.
+    //
+    // It is safe ONLY while no CI surface invokes it, because a workflow's
+    // stdout is public on this public repo — so that is not left as a sentence
+    // in a header. `RATCHET — no workflow invokes deploy-arm-errors.mjs with
+    // --json` in the suite fails the day one does, and named rather than
+    // commented so the structural test counts this exception as ONE.
+    process.stdout.write(unredactedByDesign(`${JSON.stringify(result, null, 2)}\n`));
+  } else {
+    process.stdout.write(formatStdout(`${renderLeaves(result)}\n`));
+  }
   process.exit(
     result.status === STATUS.FOUND
       ? EXIT.FOUND
