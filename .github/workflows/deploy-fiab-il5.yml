@@ -612,6 +612,28 @@ jobs:
       # the normal post-teardown state; a preflight here would fail the nightly
       # ring for a non-problem. The dlz-attach branch below targets a brand-new
       # subscription, which is greenfield by definition.
+      # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
+      # Same gate as the gcc-high lane, on the same boundary-parity reasoning.
+      # Having the tag in scope is necessary and NOT sufficient: in scope with
+      # the param default is exactly the state that reverts a pinned app. This
+      # reads what the estate is ACTUALLY running (read-only
+      # `az containerapp list`) and refuses only the state nobody chose — a
+      # default-sourced tag about to overwrite an app running something else.
+      #
+      # SCOPED TO THE RECONCILE PATH. With keep_resources=false this lane TEARS
+      # THE ESTATE DOWN before redeploying, so nothing is adopted and a
+      # different (or missing) running tag is the normal post-teardown state —
+      # gating there would fail the ring for a non-problem, the same reasoning
+      # that keeps the adopted-image preflight inside redeploy-gov.sh's
+      # --skip-teardown branch.
+      - name: Image-tag revert gate — never flatten a pinned app to the default
+        if: inputs.run_mode == 'full' && inputs.keep_resources && inputs.topology != 'dlz-attach'
+        run: |
+          set -euo pipefail
+          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
+            --param-file platform/fiab/bicep/params/il5.bicepparam \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       # ── RE-PIN TO WHAT IS RUNNING RIGHT NOW (#3683, the #3676 re-pin half) ──
       #
       # CLOUD PARITY, MEASURED. `pin-refresh` appeared 5 times in
@@ -644,11 +666,20 @@ jobs:
       # `--read-error` so the policy decides, rather than being read as "no apps
       # are running".
       #
-      # IT RUNS ABOVE THE REVERT GATE, NOT BELOW IT — the same order
-      # deploy-fiab-commercial.yml uses. The gate must judge the tag set the
-      # apply will ACTUALLY write, and this step's $GITHUB_ENV write is the last
-      # thing that changes it. Below the gate, the gate would be judging a tag
-      # set that no longer exists by the time ARM sees it.
+      # IT IS THE LAST STEP BEFORE THE APPLY, AND THAT IS AN INVARIANT, NOT A
+      # PREFERENCE. roll-race.test.mjs asserts ADJACENCY on the Commercial lane —
+      # `Re-pin appImageTags…` must be the step IMMEDIATELY before the apply,
+      # because "a measurement is only as fresh as the last thing that happens
+      # before it is used". The revert gate above therefore sits ABOVE this step
+      # rather than between it and the apply: the gate does its own
+      # `az containerapp list` and registry reads, and its duration would be added
+      # straight onto the staleness of this pin. The ACR lease step caused exactly
+      # that defect on Commercial once, with a bounded wait of EIGHT MINUTES.
+      #
+      # The gate's verdict survives this step. pin-refresh only ever moves a tag
+      # TOWARD what is currently running, so it cannot manufacture the one state
+      # the gate refuses (a param-file DEFAULT about to overwrite a live app
+      # running something else) — it can only make the write more conservative.
       #
       # SCOPED TO THE RECONCILE PATH, like the gate below it. With
       # keep_resources=false this lane TEARS THE ESTATE DOWN before redeploying,
@@ -688,28 +719,6 @@ jobs:
           fi
           node scripts/ci/reconcile-policy.mjs pin-refresh \
             --deploy-apps-enabled true --containers "$CONTAINERS"
-
-      # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
-      # Same gate as the gcc-high lane, on the same boundary-parity reasoning.
-      # Having the tag in scope is necessary and NOT sufficient: in scope with
-      # the param default is exactly the state that reverts a pinned app. This
-      # reads what the estate is ACTUALLY running (read-only
-      # `az containerapp list`) and refuses only the state nobody chose — a
-      # default-sourced tag about to overwrite an app running something else.
-      #
-      # SCOPED TO THE RECONCILE PATH. With keep_resources=false this lane TEARS
-      # THE ESTATE DOWN before redeploying, so nothing is adopted and a
-      # different (or missing) running tag is the normal post-teardown state —
-      # gating there would fail the ring for a non-problem, the same reasoning
-      # that keeps the adopted-image preflight inside redeploy-gov.sh's
-      # --skip-teardown branch.
-      - name: Image-tag revert gate — never flatten a pinned app to the default
-        if: inputs.run_mode == 'full' && inputs.keep_resources && inputs.topology != 'dlz-attach'
-        run: |
-          set -euo pipefail
-          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
-            --param-file platform/fiab/bicep/params/il5.bicepparam \
-            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       - name: Teardown -> redeploy -> smoke (full mode only)
         # `id` added by #3714 so the ACR compliance-tag step below can gate on

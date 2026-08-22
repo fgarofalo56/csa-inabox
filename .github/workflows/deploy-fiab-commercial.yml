@@ -1632,6 +1632,65 @@ jobs:
             ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
           echo "held=true" >> "$GITHUB_OUTPUT"
 
+      # ── SILENT-REVERT GATE (#3460, the Commercial half of #3161) ────────────
+      #
+      # CLOUD PARITY, MEASURED. `assert-no-silent-image-tag-revert` runs on
+      # deploy-fiab-gcch, deploy-fiab-il5 and gov-console-roll — and did NOT run
+      # here, on the one lane that deploys every day. Commercial adopts image
+      # tags (`Resolve reconcile target` reads the running estate) and then
+      # re-pins them, so it performs exactly the write this gate exists to
+      # police, ungated. cloud-parity.md calls a capability present in one
+      # boundary and absent in another INCOMPLETE; here the missing boundary is
+      # the busiest one.
+      #
+      # ADOPTION IS NOT THE SAME GUARANTEE. `Resolve reconcile target` and the
+      # re-pin below both try to carry the running tag forward, and where they
+      # succeed this gate is a no-op that simply prints the table. The population
+      # it exists for is what they CANNOT resolve: a digest-pinned container (an
+      # ACA revision pins the digest it was created with, so a rolled app
+      # frequently reports no tag at all), one repository running at two tags, or
+      # a container-app query that failed. Each of those leaves the key at
+      # params/commercial.bicepparam's OWN default, and a default about to
+      # overwrite a live app running something else is the silent revert. The
+      # script treats all three as UNKNOWN and refuses, because "I could not
+      # look" spent as "there is nothing there" is the collapse R7 forbids.
+      #
+      # ABOVE THE RE-PIN, NOT BETWEEN IT AND THE APPLY. This gate does its own
+      # `az containerapp list` and registry reads, and roll-race.test.mjs asserts
+      # ADJACENCY — `Re-pin appImageTags…` must be the step IMMEDIATELY before
+      # `Provision`, because "a measurement is only as fresh as the last thing
+      # that happens before it is used". Slotting this gate into that gap would
+      # add its whole duration to the staleness of the pin, reopening the exact
+      # #3676 window the re-pin exists to narrow — the same defect the ACR lease
+      # step (bounded wait: EIGHT MINUTES) already caused there once.
+      #
+      # AND THE VERDICT SURVIVES THE RE-PIN THAT FOLLOWS. pin-refresh only ever
+      # moves a tag TOWARD what is currently running, so it cannot manufacture
+      # the one state this gate refuses (a param-file DEFAULT about to overwrite
+      # a live app running something else). A pass here therefore cannot be
+      # invalidated by the step below it; the re-pin can only make the write more
+      # conservative.
+      #
+      # Same trigger as the apply: a whatif-only dispatch writes no image and has
+      # nothing to revert.
+      - name: Image-tag revert gate — never flatten a pinned app to the default (#3460)
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -euo pipefail
+          # dlz-attach provisions a landing zone into a DIFFERENT subscription and
+          # never touches the hub's admin-plane apps, so there is nothing adopted
+          # and nothing to revert.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; no tag can be reverted."
+            exit 0
+          fi
+          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
+            --param-file platform/fiab/bicep/params/commercial.bicepparam \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       # ── I-FRESH — RE-MEASURE THE RUNNING IMAGES, SECONDS BEFORE THE APPLY ──
       #
       # THE INCIDENT (#3676, measured 2026-08-17). `Resolve reconcile target`
@@ -1749,59 +1808,6 @@ jobs:
           fi
           node scripts/ci/reconcile-policy.mjs pin-refresh \
             --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
-
-      # ── SILENT-REVERT GATE (#3460, the Commercial half of #3161) ────────────
-      #
-      # CLOUD PARITY, MEASURED. `assert-no-silent-image-tag-revert` runs on
-      # deploy-fiab-gcch, deploy-fiab-il5 and gov-console-roll — and did NOT run
-      # here, on the one lane that deploys every day. Commercial adopts image
-      # tags (`Resolve reconcile target` reads the running estate) and then
-      # re-pins them (`Re-pin appImageTags…` above), so it performs exactly the
-      # write this gate exists to police, ungated. cloud-parity.md calls a
-      # capability present in one boundary and absent in another INCOMPLETE; here
-      # the missing boundary is the busiest one.
-      #
-      # ADOPTION IS NOT THE SAME GUARANTEE. `Resolve reconcile target` and the
-      # re-pin both try to carry the running tag forward, and where they succeed
-      # this gate is a no-op that simply prints the table. The population it
-      # exists for is what they CANNOT resolve: a digest-pinned container (an ACA
-      # revision pins the digest it was created with, so a rolled app frequently
-      # reports no tag at all), one repository running at two tags, or a
-      # container-app query that failed. Each of those leaves the key at
-      # params/commercial.bicepparam's OWN default, and a default about to
-      # overwrite a live app running something else is the silent revert. The
-      # script treats all three as UNKNOWN and refuses, because "I could not
-      # look" spent as "there is nothing there" is the collapse R7 forbids.
-      #
-      # PLACED AFTER THE RE-PIN, NOT BEFORE. The gate must judge the tag set the
-      # apply will ACTUALLY write, and the re-pin's $GITHUB_ENV write is the last
-      # thing that changes it (commercial.bicepparam resolves
-      # `readEnvironmentVariable('LOOM_CONSOLE_TAG', …)` inside `az deployment sub
-      # create`, not when the args file was composed). Sitting above the re-pin
-      # would gate a tag set that no longer exists by the time ARM sees it.
-      #
-      # It re-reads the estate itself rather than trusting the step above, so a
-      # re-pin that silently failed to resolve a key is still caught here.
-      #
-      # Same trigger as the apply: a whatif-only dispatch writes no image and has
-      # nothing to revert.
-      - name: Image-tag revert gate — never flatten a pinned app to the default (#3460)
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
-        env:
-          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
-        run: |
-          set -euo pipefail
-          # dlz-attach provisions a landing zone into a DIFFERENT subscription and
-          # never touches the hub's admin-plane apps, so there is nothing adopted
-          # and nothing to revert.
-          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
-            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; no tag can be reverted."
-            exit 0
-          fi
-          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
-            --param-file platform/fiab/bicep/params/commercial.bicepparam \
-            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       - name: Provision (idempotent)
         id: provision

@@ -787,6 +787,39 @@ jobs:
             "loom-duckdb:${LOOM_DUCKDB_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
             "loom-unity:${LOOM_UNITY_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}"
 
+      # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
+      # Having the tag in scope is necessary and NOT sufficient. In scope with
+      # the value `v0.1` is precisely the state that flattened this estate: the
+      # static guard passes and the deploy still writes the mutable default over
+      # a SHA-pinned app. Only a live read tells the two apart, so this step
+      # reads what every Container App is ACTUALLY running (read-only
+      # `az containerapp list`) and REFUSES when a tag sourced from the param
+      # file's own default would overwrite an app running something else.
+      #
+      # It cannot fire on an intentional roll forward (a set repo variable reads
+      # as an explicit pin), on a greenfield install (nothing running to
+      # revert), or on Gov's rolled `:v0.1` (running tag equals tag-to-write).
+      # The only state it refuses is the one nobody chose.
+      #
+      # It PRINTS EVERY TAG even when it passes — value, source, running tag,
+      # verdict — to the log and the step summary. #3161 survived the entire
+      # life of this lane because nothing ever stated which tags a deploy was
+      # about to write.
+      - name: Image-tag revert gate — never flatten a pinned app to the default
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        run: |
+          set -euo pipefail
+          # dlz-attach provisions a landing zone into a DIFFERENT subscription
+          # and never touches the hub's admin-plane apps, so there is nothing
+          # adopted and nothing to revert.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; no tag can be reverted."
+            exit 0
+          fi
+          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
+            --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       # ── RE-PIN TO WHAT IS RUNNING RIGHT NOW (#3683, the #3676 re-pin half) ──
       #
       # CLOUD PARITY, MEASURED. `pin-refresh` appeared 5 times in
@@ -818,11 +851,20 @@ jobs:
       # `--read-error` so the policy decides, rather than being read as "no apps
       # are running".
       #
-      # IT RUNS ABOVE THE REVERT GATE, NOT BELOW IT — the same order
-      # deploy-fiab-commercial.yml uses. The gate must judge the tag set the
-      # apply will ACTUALLY write, and this step's $GITHUB_ENV write is the last
-      # thing that changes it. Below the gate, the gate would be judging a tag
-      # set that no longer exists by the time ARM sees it.
+      # IT IS THE LAST STEP BEFORE THE APPLY, AND THAT IS AN INVARIANT, NOT A
+      # PREFERENCE. roll-race.test.mjs asserts ADJACENCY on the Commercial lane —
+      # `Re-pin appImageTags…` must be the step IMMEDIATELY before the apply,
+      # because "a measurement is only as fresh as the last thing that happens
+      # before it is used". The revert gate above therefore sits ABOVE this step
+      # rather than between it and `Provision`: the gate does its own
+      # `az containerapp list` and registry reads, and its duration would be added
+      # straight onto the staleness of this pin. The ACR lease step caused exactly
+      # that defect on Commercial once, with a bounded wait of EIGHT MINUTES.
+      #
+      # The gate's verdict survives this step. pin-refresh only ever moves a tag
+      # TOWARD what is currently running, so it cannot manufacture the one state
+      # the gate refuses (a param-file DEFAULT about to overwrite a live app
+      # running something else) — it can only make the write more conservative.
       #
       # THE OTHER HALF OF #3683 IS NOT HERE, AND THAT IS STATED RATHER THAN
       # IMPLIED. `assert-estate-not-behind-roll` cannot be ported to this lane
@@ -878,39 +920,6 @@ jobs:
           fi
           node scripts/ci/reconcile-policy.mjs pin-refresh \
             --deploy-apps-enabled true --containers "$CONTAINERS"
-
-      # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
-      # Having the tag in scope is necessary and NOT sufficient. In scope with
-      # the value `v0.1` is precisely the state that flattened this estate: the
-      # static guard passes and the deploy still writes the mutable default over
-      # a SHA-pinned app. Only a live read tells the two apart, so this step
-      # reads what every Container App is ACTUALLY running (read-only
-      # `az containerapp list`) and REFUSES when a tag sourced from the param
-      # file's own default would overwrite an app running something else.
-      #
-      # It cannot fire on an intentional roll forward (a set repo variable reads
-      # as an explicit pin), on a greenfield install (nothing running to
-      # revert), or on Gov's rolled `:v0.1` (running tag equals tag-to-write).
-      # The only state it refuses is the one nobody chose.
-      #
-      # It PRINTS EVERY TAG even when it passes — value, source, running tag,
-      # verdict — to the log and the step summary. #3161 survived the entire
-      # life of this lane because nothing ever stated which tags a deploy was
-      # about to write.
-      - name: Image-tag revert gate — never flatten a pinned app to the default
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
-        run: |
-          set -euo pipefail
-          # dlz-attach provisions a landing zone into a DIFFERENT subscription
-          # and never touches the hub's admin-plane apps, so there is nothing
-          # adopted and nothing to revert.
-          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
-            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; no tag can be reverted."
-            exit 0
-          fi
-          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
-            --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
-            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       - name: Provision (with full Gov dispatch)
         id: provision
