@@ -123,6 +123,54 @@
  *             creates it. It is consulted FIRST and is strictly additive — it
  *             can turn an OK into a regression, never a regression into an OK.
  *
+ * …AND THE TWO WAYS I-ESTATE COULD STILL HAVE READ THE WRONG THING (2026-08-21)
+ * ----------------------------------------------------------------------------
+ * Both found in independent review of the change above (#3797, #3798), and both
+ * are about which FACT the comparison rests on rather than about the comparison.
+ *
+ *   I-SERVING  "The live image" is the revision TAKING TRAFFIC, not the newest
+ *              one. selectRevisionOverwrite read recency, which is true on this
+ *              estate only because app-deployments.bicep pins
+ *              `latestRevision: true` on an app running in Multiple mode
+ *              expressly so traffic CAN be split (console-bluegreen-roll.yml).
+ *              A roll landing at weight 0 while the deploy's revision keeps
+ *              100% would have read as `ahead` — a false green in the exact
+ *              class this gate exists to catch. selectServingRevision reads
+ *              `properties.trafficWeight`, which the platform computes from
+ *              whichever split is configured, and a payload that carries no
+ *              weights at all is UNKNOWN rather than a quiet fall back to
+ *              recency (#3798).
+ *
+ *   I-BLAME    'overwritten' is an ATTRIBUTION and is claimed ONLY when THIS
+ *              apply's revision came AFTER the competing one. The first draft
+ *              of I-SERVING dropped that precondition and accused this apply of
+ *              overwriting revisions that landed after it — including, exactly,
+ *              a blue-green green revision deployed at weight 0 and still being
+ *              health-gated. With an auto-dispatch wired to that verdict the
+ *              gate would have promoted an image another lane was validating.
+ *              Later-than-ours is 'drifted': loud, exit 1, no direction, no
+ *              roll-forward target (deploy-integrity R7).
+ *
+ *   I-DEFINITE An unreadable SECOND source must not discard a definite FIRST
+ *              one. `revisionSelection === 'unknown'` used to return before the
+ *              Actions-API comparison was consulted, throwing away an
+ *              ESTABLISHED regression — and with it the roll-forward SHA — on
+ *              the one run where a source that HAD answered could say what to
+ *              do next. Only `regression` survives that path; an `ok` never
+ *              does, so an unreadable estate still cannot be laundered green
+ *              (#3797).
+ *
+ * AND DETECTION IS NOT RECOVERY (#3799)
+ * -------------------------------------
+ * On a definite `regression` carrying a 40-hex SHA the CLI writes that SHA to
+ * the file named by `--heal-request`, and the deploy's auto-heal step dispatches
+ * loom-roll-and-validate at it, then re-reads the estate to see whether the
+ * image actually came back. The run still fails: healing must not convert a
+ * detected regression into a green build, or this class goes invisible again.
+ * Nothing is dispatched for `unknown` (nothing established) or `drifted` (no
+ * direction claimed — rolling to a guessed SHA could move a HEALTHY estate
+ * backwards).
+ *
  * FAIL-CLOSED, AND NOT THE SAME WAY THE OLD BASH FAILED
  * -----------------------------------------------------
  * `deployAppsEnabled` starts at the SAFE value ('false', from
@@ -137,7 +185,7 @@
  *
  * Run: node --test scripts/ci/__tests__/reconcile-policy.test.mjs
  */
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 
 /**
  * Every `appImageTags` key, the container-image REPOSITORY it names, and the
@@ -910,6 +958,127 @@ export function selectLastConsoleRoll(runs) {
 }
 
 /**
+ * WHICH revision is the estate actually SERVING? (#3798)
+ *
+ * ── WHY RECENCY WAS NOT AN ANSWER, ONLY A COINCIDENCE ───────────────────────
+ *
+ * selectRevisionOverwrite used to read "the newest revision in the window" as
+ * "the live image". Measured on the Commercial estate 2026-08-21:
+ *
+ *   activeRevisionsMode : Multiple
+ *   revisions           : 54, every one active
+ *   trafficWeight       : 53 x 0, and exactly ONE at 100 (the newest)
+ *   ingress traffic     : [{ latestRevision: true, weight: 100 }]
+ *
+ * So recency IS serving today — but only because app-deployments.bicep pins
+ * `latestRevision: true` on an app whose mode is Multiple *specifically so that
+ * traffic can be split imperatively* by console-bluegreen-roll.yml. The moment
+ * that lane works, a roll can create revision N+1 carrying the new tag at
+ * WEIGHT 0 while the deploy's revision keeps 100% of the traffic — and the
+ * recency reading would report `ahead` ("this apply did not leave the estate
+ * behind") about an estate that is serving the deploy's stale image. A false
+ * green in the exact class #3676 exists to catch, produced by the gate written
+ * to catch it.
+ *
+ * The platform computes `properties.trafficWeight` per revision from whatever
+ * split is configured — including resolving `latestRevision: true` to an actual
+ * revision — so reading the weights answers "what is serving" under BOTH split
+ * styles, with no second API call and no assumption about the bicep.
+ *
+ * ── UNWEIGHTED IS ITS OWN STATUS, AND EVERY CALLER FAILS CLOSED ON IT ───────
+ *
+ * A payload where NO revision carries a weight is a projection that did not ask
+ * for one. The first draft of this change fell back to RECENCY there and
+ * claimed the fallback was disclosed in the verdict; it was not — on the path
+ * that matters (`rollSelection.status === 'found'` and the estate on the roll's
+ * SHA) the OK message never interpolates the revision reason at all, so the
+ * fallback was silent, and flipping `trafficWeight` to null on an otherwise
+ * identical incident payload turned `regression` + a heal SHA into a green
+ * `ok`. There is also no caller it protected: `assert-estate-not-behind-roll`
+ * has exactly ONE production call site (deploy-fiab-commercial.yml, three
+ * invocations, all projecting `trafficWeight`), and the sovereign lanes do not
+ * call it at all.
+ *
+ * So `unweighted` is reported as its own status and BOTH callers fail closed on
+ * it: selectRevisionOverwrite returns UNKNOWN, and the `serving-tag` CLI exits
+ * 1. Weights present and all ZERO, a digest-pinned serving revision, and
+ * traffic split across two different IMAGES are equally UNKNOWN — the live
+ * image is genuinely not a single comparable value.
+ *
+ * @param {Array<{name?:string, image?:string, trafficWeight?:(number|string|null)}>|null} revisions
+ * @returns {{status:'found'|'unweighted'|'unknown', tag?:string, name?:string,
+ *            weight?:number, reason:string}}
+ */
+export function selectServingRevision(revisions) {
+  if (revisions === null || revisions === undefined || !Array.isArray(revisions)) {
+    return {
+      status: 'unknown',
+      reason:
+        'the revision history is not a readable array, so which revision is taking traffic could not be read from it.',
+    };
+  }
+  /** A weight the platform actually reported. null = this revision reported none. */
+  const weightOf = (r) => {
+    const v = r?.trafficWeight;
+    if (v === null || v === undefined || String(v).trim() === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const weighted = revisions.map((raw) => ({ raw, w: weightOf(raw) })).filter((x) => x.w !== null);
+  if (!weighted.length) {
+    return {
+      status: 'unweighted',
+      reason:
+        `none of the ${revisions.length} revision(s) in this payload carries a trafficWeight, so the traffic ` +
+        'split was NOT read and which revision is serving is NOT established by this data.',
+    };
+  }
+  const serving = weighted.filter((x) => x.w > 0);
+  if (!serving.length) {
+    return {
+      status: 'unknown',
+      reason:
+        `all ${weighted.length} revision(s) that report a traffic weight report 0, so NO revision is taking ` +
+        'traffic and the image the estate serves cannot be derived from the split. That is not "the newest one" — ' +
+        'it is an app that is serving nothing, which this gate will not guess past.',
+    };
+  }
+  const tags = new Set();
+  for (const { raw, w } of serving) {
+    const ref = parseImageRef(String(raw?.image ?? ''));
+    const tag = ref && ref.tag ? ref.tag : null;
+    if (!tag) {
+      return {
+        status: 'unknown',
+        reason:
+          `revision ${JSON.stringify(String(raw?.name ?? ''))} is SERVING (${w}% of traffic) an image ` +
+          `${JSON.stringify(String(raw?.image ?? ''))} that carries no tag this gate can compare ` +
+          `${ref && ref.digest ? '(it is digest-pinned, and a digest does not name a commit)' : '(unparseable)'}.`,
+      };
+    }
+    tags.add(tag);
+  }
+  if (tags.size > 1) {
+    return {
+      status: 'unknown',
+      reason:
+        `traffic is split across ${tags.size} different images (${[...tags].join(', ')}), so "the image the estate ` +
+        'is running" is not a single value this gate can compare against the tag this deploy applied.',
+    };
+  }
+  const top = serving.reduce((a, b) => (b.w > a.w ? b : a));
+  return {
+    status: 'found',
+    tag: [...tags][0],
+    name: String(top.raw?.name ?? ''),
+    weight: top.w,
+    reason:
+      `revision ${String(top.raw?.name ?? '')} is serving loom-console:${[...tags][0]} (${top.w}% of traffic` +
+      `${serving.length > 1 ? `, across ${serving.length} revisions of the same image` : ''}).`,
+  };
+}
+
+/**
  * Did THIS apply overwrite a newer image that landed inside its own window —
  * according to the ESTATE, not according to GitHub?
  *
@@ -945,36 +1114,54 @@ export function selectLastConsoleRoll(runs) {
  *
  * Take every revision created at or after the moment this deploy MEASURED the
  * tags it was going to write (the same `measured_at` the re-pin step records),
- * oldest first. Then:
+ * oldest first. Establish which revision is SERVING from the traffic weights
+ * (selectServingRevision — NOT from recency, #3798). Then:
  *
- *   last revision's tag != the tag we applied
- *       -> the last writer of this field was NOT this apply. Whatever else
- *          happened, this apply did not leave the estate behind. 'ahead'.
- *   last revision's tag == the tag we applied, and an EARLIER revision in the
- *   window carries a different tag
- *       -> another writer moved the estate to that tag inside our window and
- *          our apply put it back. 'overwritten' — this is the incident, and the
- *          roll-forward target is read off the estate rather than inferred.
+ *   the LIVE revision's tag != the tag we applied
+ *       -> the image the estate serves is not the one this apply wrote.
+ *          Whatever else happened, this apply did not leave the estate behind.
+ *          'ahead'.
+ *   the LIVE revision's tag == the tag we applied, and a revision carrying a
+ *   DIFFERENT tag sits EARLIER in the window than our own revision
+ *       -> another writer put that tag on the estate and we wrote after it.
+ *          'overwritten' — this is the incident, and the roll-forward target is
+ *          read off the estate, not inferred.
+ *   the LIVE revision's tag == the tag we applied, and the competing revision
+ *   is LATER than ours (or we wrote nothing in this window at all)
+ *       -> something wrote after this apply and is not taking traffic. This
+ *          apply displaced NOTHING, so 'overwritten' would be an attribution
+ *          the history contradicts. 'drifted' — exit 1, no direction claimed,
+ *          NO roll-forward target, and therefore no auto-dispatch. The
+ *          realistic producer is a blue-green green revision deployed at weight
+ *          0 and still being health-gated (console-bluegreen-roll.yml), which
+ *          promoting would race.
  *   otherwise
  *       -> 'none'. Nothing in this window contradicts what we applied.
  *
- * UNKNOWN IS NOT 'none'. An unreadable list, an unparseable createdTime, or a
- * revision in the window whose image carries no comparable tag (a digest pin)
- * all resolve to 'unknown', which the caller fails closed on. Spending "I could
- * not look" as "nothing happened" is the collapse that produced this issue's
- * green run and the one deploy-integrity R7 forbids.
+ * UNKNOWN IS NOT 'none'. An unreadable list, an unparseable createdTime, a
+ * revision in the window whose image carries no comparable tag (a digest pin),
+ * a payload carrying no traffic weights at all, a traffic split across two
+ * different images, and "every weight is 0" all resolve to 'unknown', which the
+ * caller fails closed on. Spending "I could not look" as "nothing happened" is
+ * the collapse that produced this issue's green run and the one
+ * deploy-integrity R7 forbids.
  *
  * WINDOW BOUND IS INCLUSIVE (`>=`). `measured_at` has second resolution and is
  * recorded BEFORE the read it timestamps, so a revision created in that same
  * second is genuinely ambiguous. Over-inclusion costs one extra comparison;
  * under-inclusion hides the incident.
  *
- * @param {Array<{name?:string, createdTime?:string, image?:string}>|null} revisions
+ * @param {Array<{name?:string, createdTime?:string, image?:string,
+ *                trafficWeight?:(number|string|null)}>|null} revisions
  *        `az containerapp revision list` projection. null/undefined = the query
- *        FAILED, which is deliberately NOT an empty history.
+ *        FAILED, which is deliberately NOT an empty history. `trafficWeight` is
+ *        what makes "live" mean SERVING rather than NEWEST; a payload without it
+ *        is UNKNOWN, never a silent fall back to recency.
  * @param {{measuredAt?:string, appliedTag?:string}} opts
- * @returns {{status:'none'|'ahead'|'overwritten'|'unknown', reason:string,
- *            overwrittenTag?:string, window?:Array<{name:string,createdTime:string,tag:string}>}}
+ * @returns {{status:'none'|'ahead'|'overwritten'|'drifted'|'unknown', reason:string,
+ *            overwrittenTag?:string, liveTag?:string, liveRevision?:string,
+ *            liveFrom?:'traffic',
+ *            window?:Array<{name:string,createdTime:string,tag:string}>}}
  */
 export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag = '' } = {}) {
   const applied = String(appliedTag || '').trim();
@@ -1051,41 +1238,140 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
   }
 
   const render = (rs) => rs.map((r) => `${r.name}@${r.createdTime}=${r.tag}`).join(', ');
-  const newest = tagged[tagged.length - 1];
 
-  if (!applied || newest.tag !== applied) {
+  // ── WHAT IS THE ESTATE SERVING? (#3798) ───────────────────────────────────
+  // The live image is the revision TAKING TRAFFIC. A payload that carries no
+  // traffic data at all cannot answer that, and this gate does not answer it
+  // from recency instead: the one production caller projects `trafficWeight`
+  // (contract-tested), so an unweighted payload means the projection changed
+  // under us, which is UNKNOWN and fails closed.
+  const servingSel = selectServingRevision(revisions);
+  if (servingSel.status !== 'found') {
+    return {
+      status: 'unknown',
+      window: tagged,
+      reason:
+        `${servingSel.reason} Which image the estate SERVES is therefore unestablished, and it is NOT read off ` +
+        `recency instead — "the newest revision" is the live one only while the app's traffic split is ` +
+        '`latestRevision: true`, which this payload did not show (#3798). ' +
+        `Window: ${render(tagged)}.`,
+    };
+  }
+  const live = { tag: servingSel.tag, name: servingSel.name, how: servingSel.reason };
+
+  if (!applied || live.tag !== applied) {
     return {
       status: 'ahead',
       window: tagged,
+      liveTag: live.tag,
+      liveRevision: live.name,
+      liveFrom: 'traffic',
       reason:
-        `the LAST revision created since ${measuredAt} (${newest.name}, ${newest.createdTime}) runs ` +
-        `loom-console:${newest.tag}, which is not the tag this deploy applied` +
-        `${applied ? ` ('${applied}')` : ' (this deploy applied none)'} — so the last writer of this field was not ` +
-        `this apply and this apply did not leave the estate behind. Window: ${render(tagged)}.`,
+        `the live loom-console image is loom-console:${live.tag} (${live.how}), which is not the tag this deploy ` +
+        `applied${applied ? ` ('${applied}')` : ' (this deploy applied none)'} — so the image the estate is serving ` +
+        `is not the one this apply wrote, and this apply did not leave the estate behind. Window: ${render(tagged)}.`,
     };
   }
 
-  const overwritten = tagged.slice(0, -1).reverse().find((r) => r.tag !== applied);
-  if (!overwritten) {
+  // ── THE ESTATE IS SERVING OUR TAG. WHO WROTE LAST? ────────────────────────
+  //
+  // `overwritten` is an ATTRIBUTION — "this run replaced that image" — and it
+  // is only a fact when OUR write came AFTER the other one. The first draft of
+  // the #3798 fix dropped that precondition (it took the newest non-applied
+  // revision in the window unconditionally), which made the gate accuse this
+  // apply of overwriting a revision that landed AFTER it, and then auto-
+  // dispatch a roll on that accusation.
+  //
+  // That is not hypothetical. console-bluegreen-roll.yml deploys its green
+  // revision at WEIGHT 0 and health-gates it for minutes before shifting
+  // traffic. Estate during that window: blue serving 100% on the tag this
+  // deploy applied, and a NEWER green revision at weight 0 carrying the
+  // candidate. The dropped precondition turns that into `regression` +
+  // `rollForwardTo=<green>`, and the auto-heal step then promotes an image
+  // another lane is still validating — racing its traffic shift and its
+  // rollback path. The gate would cause the class of defect it exists to catch.
+  //
+  // So: `overwritten` requires our revision to be LATER in the window than the
+  // competing one. When it is not, this is `drifted` — still exit 1, still
+  // loud, but no direction asserted, no roll-forward target, and therefore no
+  // auto-dispatch. Same reasoning decideEstateRegression already applies to an
+  // unattributable estate tag (deploy-integrity R7).
+  const oursIdx = tagged.map((r) => r.tag).lastIndexOf(applied);
+  const otherIdx = tagged.map((r) => r.tag !== applied).lastIndexOf(true);
+  if (otherIdx === -1) {
     return {
       status: 'none',
       window: tagged,
+      liveTag: live.tag,
+      liveRevision: live.name,
+      liveFrom: 'traffic',
       reason:
         `every loom-console revision created since ${measuredAt} runs the tag this deploy applied ` +
-        `('${applied}'), so no other writer's image was overwritten. Window: ${render(tagged)}.`,
+        `('${applied}'), and that is also the live image (${live.how}), so no other writer's image was ` +
+        `overwritten. Window: ${render(tagged)}.`,
+    };
+  }
+  const other = tagged[otherIdx];
+  if (oursIdx === -1 || otherIdx > oursIdx) {
+    return {
+      status: 'drifted',
+      window: tagged,
+      liveTag: live.tag,
+      liveRevision: live.name,
+      liveFrom: 'traffic',
+      reason:
+        `THE ESTATE IS SERVING THE TAG THIS DEPLOY APPLIED ('${applied}', ${live.how}) WHILE A DIFFERENT IMAGE SITS ` +
+        `IN THIS WINDOW UNSERVED: revision ${other.name} was created at ${other.createdTime} running ` +
+        `loom-console:${other.tag}` +
+        (oursIdx === -1
+          ? ', and NO revision carrying this deploy\'s tag was created in this window at all — so this apply did ' +
+            'not write the live image and cannot have displaced anything.'
+          : ` — AFTER this deploy's own revision ${tagged[oursIdx].name} (${tagged[oursIdx].createdTime}). This ` +
+            'apply therefore did not overwrite it; something wrote afterwards and is not taking traffic.') +
+        ' NO DIRECTION IS BEING CLAIMED and no roll-forward target is named: a revision deployed at weight 0 and ' +
+        'still being health-gated (console-bluegreen-roll.yml does exactly this) looks identical from here, and ' +
+        'promoting it would race the lane that owns it. Read the container app and the in-flight runs before ' +
+        `acting. Window: ${render(tagged)}.`,
     };
   }
 
   return {
     status: 'overwritten',
-    overwrittenTag: overwritten.tag,
+    overwrittenTag: other.tag,
     window: tagged,
+    liveTag: live.tag,
+    liveRevision: live.name,
+    liveFrom: 'traffic',
     reason:
-      `revision ${overwritten.name} was created at ${overwritten.createdTime} running ` +
-      `loom-console:${overwritten.tag} — after this deploy measured the tags it would write (${measuredAt}) — and ` +
-      `revision ${newest.name} then replaced it at ${newest.createdTime} with '${newest.tag}', the tag THIS DEPLOY ` +
-      `applied. Window: ${render(tagged)}.`,
+      `revision ${other.name} was created at ${other.createdTime} running loom-console:${other.tag} — after this ` +
+      `deploy measured the tags it would write (${measuredAt}) — and this deploy's own revision ` +
+      `${tagged[oursIdx].name} then followed it at ${tagged[oursIdx].createdTime}; the estate is SERVING ` +
+      `'${live.tag}', the tag THIS DEPLOY applied (${live.how}). Window: ${render(tagged)}.`,
   };
+}
+
+/**
+ * How to state what the estate is running when the two reads can DISAGREE.
+ *
+ * `az containerapp show` returns the app TEMPLATE's image — the last thing
+ * written to the field — while the traffic split says what is actually being
+ * SERVED. Under the weight-0 roll of #3798 those are two different images, and
+ * a message naming only the template would assert the wrong one as "what the
+ * estate is running" (deploy-integrity R7). When they agree, this reads exactly
+ * as it did before.
+ *
+ * @param {string|null} estateTag        from `az containerapp show`
+ * @param {ReturnType<typeof selectRevisionOverwrite>|null} revisionSelection
+ */
+function describeLive(estateTag, revisionSelection) {
+  const template = String(estateTag ?? '').trim();
+  const live = String(revisionSelection?.liveTag ?? '').trim();
+  if (!live || live === template) return `loom-console is now running '${template}'.`;
+  return (
+    `loom-console is SERVING '${live}' (revision ${revisionSelection?.liveRevision || 'unnamed'}), while the ` +
+    `container app's template names '${template}'. The template is the last WRITE; the traffic split is what the ` +
+    'estate actually serves, and on this run they disagree.'
+  );
 }
 
 /**
@@ -1151,12 +1437,57 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
       verdict: 'regression',
       reason:
         'THE ESTATE WENT BACKWARDS, AND ITS OWN REVISION HISTORY RECORDS IT. ' +
-        `${revisionSelection.reason} loom-console is now running '${estateTag}'. This run overwrote that image. ` +
+        `${revisionSelection.reason} ${describeLive(estateTag, revisionSelection)} This run overwrote that image. ` +
         'Every merge in that window is inert on the live estate until it is rolled again (deploy-integrity R2/R3).',
       rollForwardTo: revisionSelection.overwrittenTag,
     };
   }
+  // A competing revision that landed AFTER ours is NOT something this apply
+  // overwrote, and the estate's own timestamps say so. It fails the run — an
+  // unserved image in our window is a state a human must look at — but it
+  // names no roll-forward target, which is what keeps the auto-heal step from
+  // promoting an image another lane is still health-gating (#3798 review).
+  // This takes precedence over the Actions-API comparison below deliberately:
+  // that comparison would report `regression` with a rollForwardTo on the same
+  // state, and it is reasoning from a run listing while this is reasoning from
+  // the estate's own ordered history. It cannot launder anything green — both
+  // verdicts exit 1.
+  if (revisionSelection && revisionSelection.status === 'drifted') {
+    return {
+      verdict: 'drifted',
+      reason: `${revisionSelection.reason} ${describeLive(estateTag, revisionSelection)}`,
+    };
+  }
   if (revisionSelection && revisionSelection.status === 'unknown') {
+    // ── #3797 — AN UNREADABLE SECOND SOURCE MUST NOT DISCARD A DEFINITE FIRST
+    // ONE. This used to return UNKNOWN here unconditionally, which threw away
+    // an Actions-API `regression` that had already been established — and with
+    // it the roll-forward SHA the operator needs. Both paths exit 1, so nothing
+    // unsafe shipped; what was lost was the next action, on the one run where
+    // it was knowable from a source that HAD answered.
+    //
+    // Re-entering with the revision evidence removed is deliberate: it reuses
+    // the Actions-API comparison below rather than restating it, and ONLY its
+    // `regression` is taken. An 'ok' or a 'drifted' from that path is discarded
+    // and stays UNKNOWN here, so an unreadable estate can never be laundered
+    // green by a quiet Actions API.
+    const actionsOnly = decideEstateRegression({
+      appliedTag,
+      estateTag,
+      estateReadError,
+      rollSelection,
+      revisionSelection: null,
+    });
+    if (actionsOnly.verdict === 'regression') {
+      return {
+        ...actionsOnly,
+        reason:
+          `${actionsOnly.reason} The estate's own revision history — the independent second source, and the one ` +
+          `that caught the 2026-08-19 miss — could NOT be used on this run: ${revisionSelection.reason} The ` +
+          'regression above does not rest on it; it is established by the Actions API and by the tag the estate ' +
+          'is running.',
+      };
+    }
     return {
       verdict: 'unknown',
       reason: `estate is running loom-console:${estateTag}, but ${revisionSelection.reason}`,
@@ -1228,6 +1559,20 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
 //        (--estate-image <ref> | --read-error <text>)
 //        (--rolls <file>       | --rolls-error <text>)
 //        (--revisions <file>   | --revisions-error <text>)
+//        [--heal-request <file>]   where the roll-forward SHA is written when —
+//                                  and ONLY when — the verdict is a definite
+//                                  `regression` carrying a 40-hex SHA (#3799).
+//                                  The auto-heal step reads THIS FILE rather
+//                                  than a step output, so the hand-off does not
+//                                  depend on how the runner treats the outputs
+//                                  of a step that (by design) exits non-zero.
+//   node scripts/ci/reconcile-policy.mjs serving-tag
+//        --revisions <file> --out <file>
+//        Writes the tag the estate is SERVING (traffic-derived, #3798) to
+//        <file> and exits 0; exits 1 having written an empty file when the
+//        serving image is not established. Used by the auto-heal step to VERIFY
+//        recovery with the same logic the gate used to detect the regression,
+//        rather than a second jq re-implementation of it.
 //
 // Exit 0 = proceed / ok, 1 = refuse / regression / unknown, 2 = usage error.
 
@@ -1245,6 +1590,7 @@ function cliHas(argv, name) {
  * @param {string[]} argv        process.argv.slice(2)
  * @param {object} io            injected so the tests drive the real entrypoint
  * @param {(p:string)=>string} io.readFile
+ * @param {(p:string, body:string)=>void} [io.writeFile]
  * @param {(line:string)=>void} io.writeEnv
  * @param {(line:string)=>void} io.writeOutput
  * @param {(s:string)=>void} io.log
@@ -1253,6 +1599,7 @@ function cliHas(argv, name) {
  */
 export function cliMain(argv, io) {
   const { readFile, writeEnv, writeOutput, log, env } = io;
+  const writeFile = io.writeFile || (() => {});
   const cmd = argv[0] || '';
 
   const readJson = (file) => {
@@ -1351,7 +1698,7 @@ export function cliMain(argv, io) {
       const ref = parseImageRef(estateImage);
       estateTag = ref && ref.tag ? ref.tag : null;
       if (!estateTag) {
-        return finishRegression(log, {
+        return finishRegression(log, writeOutput, writeFile, cliArg(argv, 'heal-request'), {
           verdict: 'unknown',
           reason:
             `loom-console's image reference '${estateImage}' carries no tag this gate can compare ` +
@@ -1397,7 +1744,7 @@ export function cliMain(argv, io) {
       if (parseDetail) revisionSelection = { ...revisionSelection, reason: `${revisionSelection.reason}${parseDetail}` };
     }
 
-    return finishRegression(log, decideEstateRegression({
+    return finishRegression(log, writeOutput, writeFile, cliArg(argv, 'heal-request'), decideEstateRegression({
       appliedTag,
       estateTag,
       estateReadError,
@@ -1406,25 +1753,96 @@ export function cliMain(argv, io) {
     }));
   }
 
-  log(`::error::reconcile-policy: unknown subcommand ${JSON.stringify(cmd)}. Expected 'pin-refresh' or 'assert-estate-not-behind-roll'.`);
+  if (cmd === 'serving-tag') {
+    const revisionsFile = cliArg(argv, 'revisions');
+    const outFile = cliArg(argv, 'out');
+    if (!revisionsFile || !outFile) {
+      log('::error::reconcile-policy serving-tag: both --revisions <file> and --out <file> are required.');
+      return 2;
+    }
+    let revs = null;
+    let parseDetail = '';
+    try {
+      revs = readJson(revisionsFile);
+    } catch (e) {
+      parseDetail = ` --revisions ${revisionsFile} could not be read or parsed (${String(e?.message || e).slice(0, 200)}).`;
+      revs = null;
+    }
+    const sel = selectServingRevision(revs);
+    if (sel.status !== 'found') {
+      // The file is ALWAYS written, and written EMPTY here, so a caller that
+      // reads it without checking the exit code gets nothing rather than a
+      // stale value from a previous poll.
+      writeFile(outFile, '');
+      log(`::warning::serving-tag: the image the estate is SERVING is NOT established — ${sel.reason}${parseDetail}`);
+      return 1;
+    }
+    writeFile(outFile, `${sel.tag}\n`);
+    log(`[serving-tag] ${sel.reason}`);
+    return 0;
+  }
+
+  log(`::error::reconcile-policy: unknown subcommand ${JSON.stringify(cmd)}. Expected 'pin-refresh', 'assert-estate-not-behind-roll' or 'serving-tag'.`);
   return 2;
 }
 
-function finishRegression(log, verdict) {
+/**
+ * Print the verdict, publish it, and — on a definite regression — leave the
+ * roll-forward SHA where the auto-heal step can find it (#3799).
+ *
+ * THE HEAL REQUEST IS A FILE, NOT ONLY A STEP OUTPUT. This step exits 1 on the
+ * verdict that produces the request, and "are the outputs of a failed step
+ * readable by a later step" is a property of the runner rather than of this
+ * repo. A file in $RUNNER_TEMP is written by the time the process exits, full
+ * stop, and the extracted-step tests can read exactly what CI would.
+ *
+ * IT IS WRITTEN ONLY FOR A 40-HEX SHA. `drifted` names no target by design,
+ * `unknown` establishes nothing, and a floating tag ('latest', a prefix) would
+ * dispatch a roll at something that is not a commit. Each of those leaves the
+ * request EMPTY, and the heal step dispatches nothing when it is empty.
+ */
+function finishRegression(log, writeOutput, writeFile, healRequestFile, verdict) {
+  // `verdict` / `roll_forward_to` are published for the RUN LOG and for a human
+  // reading `steps.estate_behind.outputs.*` — they are deliberately NOT the
+  // hand-off. Nothing consumes them, and that is stated here rather than left
+  // to be discovered: the auto-heal step reads the request FILE, because
+  // whether a step that exits non-zero still publishes its outputs is a
+  // property of the runner rather than of this repo, and the one channel that
+  // matters must not depend on it.
+  const publish = (name, value) => {
+    if (typeof writeOutput === 'function') writeOutput(`${name}=${value}`);
+  };
+  publish('verdict', verdict.verdict);
+
   if (verdict.verdict === 'ok') {
     log(`::notice::estate-vs-roll: OK — ${verdict.reason}`);
     return 0;
   }
   if (verdict.verdict === 'regression') {
+    const sha = String(verdict.rollForwardTo || '').trim();
+    const dispatchable = SHA_TAG_RE.test(sha);
     // The remediation is printed ONLY here, because this is the only verdict in
     // which the SHA to roll to is established: the estate is running the tag
     // this deploy applied, so the roll's SHA is provably newer. See `drifted`.
     log(
       `::error::ESTATE REGRESSION (#3676) — ${verdict.reason} REMEDIATION: dispatch ` +
-        `loom-roll-and-validate.yml with image_tag=${verdict.rollForwardTo}, then confirm with ` +
+        `loom-roll-and-validate.yml with image_tag=${sha}, then confirm with ` +
         '`az containerapp show -n loom-console -g rg-csa-loom-admin-<region> --query ' +
         '"properties.template.containers[0].image"` — the container app, not /build-marker.txt.',
     );
+    if (dispatchable) {
+      publish('roll_forward_to', sha);
+      if (healRequestFile) {
+        writeFile(healRequestFile, `${sha}\n`);
+        log(`::notice::estate-vs-roll: roll-forward target ${sha} written to ${healRequestFile} — the auto-heal step (#3799) dispatches it.`);
+      }
+    } else {
+      log(
+        `::warning::estate-vs-roll: the overwritten image is '${sha || '(none)'}', which is not a 40-hex commit SHA, ` +
+          'so NO automatic roll-forward is requested. A roll dispatched at a tag that does not name a commit cannot ' +
+          'be validated against a build marker (#2963). Roll it by hand after establishing what that tag is.',
+      );
+    }
     return 1;
   }
   if (verdict.verdict === 'drifted') {
@@ -1442,6 +1860,7 @@ if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('scripts/ci/
   };
   process.exit(cliMain(process.argv.slice(2), {
     readFile: (p) => readFileSync(p, 'utf8'),
+    writeFile: (p, body) => writeFileSync(p, body),
     writeEnv: (line) => append(process.env.GITHUB_ENV, line),
     writeOutput: (line) => append(process.env.GITHUB_OUTPUT, line),
     log: (s) => console.log(s),
