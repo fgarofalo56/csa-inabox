@@ -54,10 +54,16 @@ jobs:
       # or node `fetch`, so nothing needed the repo on disk — until "Resolve
       # automation identity" was added by 416e64a4 (#3395) on 2026-08-13 and
       # invoked `scripts/ci/resolve-automation-oid.mjs` from an empty
-      # workspace. It has failed on `Cannot find module` for 18 consecutive
+      # workspace. It has failed on `Cannot find module` for 22 consecutive
       # runs since 049349a9 (#3745) gave Gov its workflow_run trigger, i.e.
-      # every Gov roll since 2026-08-18. Last green: 2026-07-24, before that
-      # step existed. Not a required context, so nothing surfaced it.
+      # every Gov roll since 2026-08-18. Last green: 3640b36a on 2026-07-24,
+      # before that step existed. Not a required context, so nothing surfaced it.
+      #
+      # The count was re-measured 2026-08-22 (`gh run list --limit 30`): the
+      # streak runs 049349a9 → 6ae714ce and is bounded BELOW by a success, so it
+      # is complete rather than truncated by the page size. An earlier revision
+      # of this comment said 18; that was stale, and a saturated `--limit` is
+      # exactly how such a count goes wrong, hence the bound is stated here.
       #
       # NOTE: actionlint CANNOT catch this class — `main` lints clean with the
       # checkout missing. Only the run log shows it.
@@ -231,9 +237,21 @@ jobs:
           // verdict and its proof cannot drift apart again no matter how long the
           // body grows or where in it the gate marker lands.
           const GATED = /"gate"\s*:\s*(true|\{)|not configured|Set LOOM_(UNITY_URL|PURVIEW_ACCOUNT)/i;
+          // This job holds Gov secrets and prints response bytes to TWO distinct
+          // publication surfaces on a PUBLIC repo — the run log and `::error::`
+          // annotations. Redact before either sees the body. GUIDs cover
+          // subscription / tenant / object ids, which is what a Gov error body
+          // most often carries.
+          const redact = (s) => String(s)
+            .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<guid>')
+            .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._-]+/g, '<jwt>')
+            .replace(/(bearer|access_token|id_token|client_secret)(["'\s:=]+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1$2<redacted>');
+          // Collapse ALL whitespace, not just \n: a body carrying tabs or CRLF
+          // rendered ragged and could push the match off the visible line.
+          const flat = (s) => redact(s).replace(/\s+/g, ' ');
           const around = (s, i, n) => {
             const a = Math.max(0, i - n), b = Math.min(s.length, i + n);
-            return (a > 0 ? '...' : '') + s.slice(a, b).replace(/\n/g, ' ') + (b < s.length ? '...' : '');
+            return (a > 0 ? '...' : '') + flat(s.slice(a, b)) + (b < s.length ? '...' : '');
           };
           (async () => {
             let bad = 0;
@@ -241,14 +259,19 @@ jobs:
               try {
                 const r = await fetch(B + path, { headers: { cookie } });
                 const t = await r.text();
-                const head = t.slice(0, 260).replace(/\n/g, ' ');
-                console.log(`\n=== ${label} — GET ${path} -> ${r.status}\n${head}`);
+                console.log(`\n=== ${label} — GET ${path} -> ${r.status}\n${flat(t.slice(0, 260))}`);
                 const hit = GATED.exec(t);
                 if (r.status >= 500) { console.log(`::error::${label}: HTTP ${r.status}`); bad++; }
-                else if (hit) { console.log(`::error::${label}: still gated — matched ${JSON.stringify(hit[0])} at offset ${hit.index} of ${t.length}: ${around(t, hit.index, 140)}`); bad++; }
+                else if (hit) { console.log(`::error::${label}: still gated — matched ${JSON.stringify(redact(hit[0]))} at offset ${hit.index} of ${t.length}: ${around(t, hit.index, 140)}`); bad++; }
                 else if (r.status === 401) { console.log(`::error::${label}: 401 — minted session rejected`); bad++; }
+                // ANY non-2xx is a failure. The ladder above only caught >=500
+                // and 401, so a 403 / 404 / 3xx fell through to the `OK` arm and
+                // printed `::notice:: OK (404)` — a probe reporting success over
+                // a dead endpoint, which is the one thing this job exists to
+                // catch. `r.ok` is 200-299, so this arm closes the whole gap.
+                else if (!r.ok) { console.log(`::error::${label}: HTTP ${r.status} — expected 2xx`); bad++; }
                 else console.log(`::notice::${label}: OK (${r.status})`);
-              } catch (x) { console.log(`::error::${label}: ${x.message}`); bad++; }
+              } catch (x) { console.log(`::error::${label}: ${redact(x.message)}`); bad++; }
             }
             process.exit(bad ? 1 : 0);
           })();
