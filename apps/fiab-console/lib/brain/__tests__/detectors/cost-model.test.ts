@@ -60,6 +60,45 @@ describe('memoryGiB — an unparseable value is null, never 0', () => {
   });
 });
 
+describe('THE RATE TABLE IS NOT AN ORACLE — a prototype key is not a region', () => {
+  it('CONTROL: a real region still prices, so this guard is not passing on a dead lookup', () => {
+    const priced = estimateAlwaysOnMonthlyCost(
+      node({ armId: BROKER_ARM, name: 'loom-capacity-broker', minReplicas: 2, cpu: 0.5, memory: '1Gi', location: 'centralus' }),
+    );
+    expect(priced.kind).toBe('priced');
+  });
+
+  it.each(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf'])(
+    "location '%s' yields NO figure and a stated reason",
+    (location) => {
+      // MEASURED before the fix: `constructor` and `__proto__` survive
+      // `toLowerCase()` unchanged, read straight off `Object.prototype` through
+      // the object-literal index, return a TRUTHY value that passes `if (!rates)`,
+      // and produce `undefined * n = NaN` — a `kind:'priced'` figure of $NaN which
+      // `severityForMonthlyUsd` renders at severity 'low'. No ARM region is named
+      // any of these, but a NaN presented as a derived dollar figure is precisely
+      // the false claim this module's header forbids.
+      const est = estimateAlwaysOnMonthlyCost(
+        node({ armId: BROKER_ARM, name: 'loom-capacity-broker', minReplicas: 2, cpu: 0.5, memory: '1Gi', location }),
+      );
+      expect(est.kind).toBe('not-priced');
+      if (est.kind === 'not-priced') expect(est.reason).toContain('no retail rate was read for region');
+    },
+  );
+
+  it('NO reachable input produces a NaN dollar figure', () => {
+    for (const location of ['constructor', '__proto__', 'centralus', 'usgovvirginia']) {
+      const est = estimateAlwaysOnMonthlyCost(
+        node({ armId: BROKER_ARM, name: 'loom-capacity-broker', minReplicas: 2, cpu: 0.5, memory: '1Gi', location }),
+      );
+      if (est.kind === 'priced') {
+        expect(Number.isFinite(est.figure.amountUsd)).toBe(true);
+        expect(est.figure.basis).not.toContain('NaN');
+      }
+    }
+  });
+});
+
 describe('estimateAlwaysOnMonthlyCost — the measured founding case', () => {
   it('prices the broker at $23.65/mo idle, reproducibly', () => {
     const broker = node({

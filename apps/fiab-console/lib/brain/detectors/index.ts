@@ -46,6 +46,10 @@ export {
   ownershipCaveat,
   resolvedEdgeCount,
   severityForMonthlyUsd,
+  // `Population.examined` is `graph.nodes.length` for the two EDGE-subject
+  // detectors, so a renderer that prints "examined: N" uniformly across the six
+  // prints the wrong number for `dangling-wire` and `config-drift`. Use this.
+  subjectCount,
   vacuityReason,
   type Ownership,
 } from './detector-kit';

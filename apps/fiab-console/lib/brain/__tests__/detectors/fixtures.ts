@@ -253,3 +253,54 @@ export function buildEdgelessGraph(): BrainGraph {
     ),
   ]);
 }
+
+/**
+ * THE ESTATE-SCALE GRAPH — 63 container apps and NO ownership tag.
+ *
+ * ── WHY THIS FIXTURE EXISTS ────────────────────────────────────────────────
+ * Every other fixture here is 7-9 nodes. The measured estate is 63 container
+ * apps across six subscriptions, of which 19 never scale to zero, and ZERO
+ * resources carry `loom-estate-id`. That gap is not cosmetic: it is the reason
+ * ten separate bypasses keyed to `graph.nodes.length > 20` passed the entire
+ * suite at 261/261 during review of this PR. A guard that only ever runs against
+ * nine nodes cannot see a filter that switches on at twenty.
+ *
+ * So this graph exists to make the PRODUCTION VALUE reachable by the suite. Every
+ * cross-detector invariant in `contract.test.ts` runs against it, which means a
+ * predicate bypass, a lost verdict or an ownership inference that only fires at
+ * estate cardinality now fails here rather than on the operator's estate.
+ *
+ * The shape is deliberately the measured one, not a convenient one:
+ *   - NO `loom-estate-id` anywhere, so the graph holds zero `owns` edges and
+ *     `ownership()` must return `not-established` for all 63. This is the branch
+ *     an `'owned'` bypass would hide in.
+ *   - a spread of always-on / scale-to-zero / scale-not-measured / externally
+ *     ingressed apps, so each disposition branch has a real population.
+ */
+export function buildEstateScaleGraph(): BrainGraph {
+  const filler: ResourceGraphRow[] = [];
+  // 58 filler apps + the 5 named ones above = 63, the measured container-app count.
+  for (let i = 0; i < 58; i += 1) {
+    const name = `loom-app-${String(i).padStart(2, '0')}`;
+    const armId = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/${name}`;
+    const mode = i % 4;
+    filler.push(
+      appRow({
+        armId,
+        name,
+        // 0 -> always-on and unwired (the population this program exists for)
+        // 1 -> scales to zero          2 -> externally ingressed
+        // 3 -> scale NOT MEASURED
+        noScale: mode === 3,
+        minReplicas: mode === 0 || mode === 2 ? 1 : 0,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        external: mode === 2,
+        fqdn: mode === 3 ? undefined : `${name}.internal.${ENV_DOMAIN}`,
+        tags: {},
+      }),
+    );
+  }
+  return buildFixtureGraph({ withoutOwnershipTag: true, extraRows: filler });
+}

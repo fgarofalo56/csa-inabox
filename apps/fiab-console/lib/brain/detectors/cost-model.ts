@@ -24,7 +24,9 @@
  * ── GOV IS NOT COMMERCIAL, AND THE DIFFERENCE IS MATERIAL ──────────────────
  * `cloud-parity.md`: a Commercial-only capability is INCOMPLETE. A cost model
  * that hard-codes Commercial rates does not merely lack Gov support — it reports
- * a CONFIDENTLY WRONG number for Gov, understating vCPU by 20% and memory by 25%:
+ * a CONFIDENTLY WRONG number for Gov. On the IDLE rates this model actually
+ * reports with, a Commercial figure understates Gov by 25% on BOTH vCPU and
+ * memory; on the ACTIVE upper bound it also names, vCPU is understated by 20%:
  *
  *     vCPU active   commercial $0.000024/s   gov $0.000030/s   (+25% gov)
  *     vCPU idle     commercial $0.000003/s   gov $0.000004/s   (+33% gov)
@@ -210,7 +212,19 @@ export function estimateAlwaysOnMonthlyCost(node: AzureResourceNode): CostEstima
       reason: 'the resource carries no `location`, and retail rates are per-region. No region, no rate, no figure.',
     };
   }
-  const rates = CONTAINER_APPS_RETAIL_RATES[region];
+  // `Object.hasOwn`, NOT a bare index. The table is an object literal and
+  // `region` is caller-supplied, so a bare `RATES[region]` also reads
+  // `Object.prototype`. MEASURED in review of this PR: `location: 'constructor'`
+  // survives `toLowerCase()` unchanged, returns the `Object` constructor
+  // (truthy), passes an `if (!rates)` check, and yields `undefined * n = NaN` —
+  // a `kind:'priced'` figure of `$NaN` that `severityForMonthlyUsd` then renders
+  // at severity 'low'. `'__proto__'` does the same. Neither is a real ARM region,
+  // but a NaN presented as a derived dollar figure is exactly the false claim
+  // the module header above forbids, so the lookup is closed rather than argued
+  // about.
+  const rates = Object.hasOwn(CONTAINER_APPS_RETAIL_RATES, region)
+    ? CONTAINER_APPS_RETAIL_RATES[region]
+    : undefined;
   if (!rates) {
     return {
       kind: 'not-priced',

@@ -38,8 +38,7 @@
  *       `REPORTED_REASONS = ['empty-value','missing-resource']`
  *                                         ->  drop empty-value 1    6    5
  *   M5  orphan.ts
- *       `if (parentNode !== undefined) continue;`
- *                                         ->  `=== undefined`  1    6    5
+ *       `if (parentNode !== undefined) {`  ->  `=== undefined`  1    6    5
  *   M6  declared-but-dead.ts
  *       `hasInboundOnly(graph, 'declared', 'configured')`
  *                                         ->  args swapped     1    5    4
@@ -48,6 +47,45 @@
  *   M8  config-drift.ts
  *       `} else if (!isInterpolated(dRaw) && !isInterpolated(cRaw) && ...`
  *                                         ->  guard removed    1    3    2
+ *
+ * ── ROUND 2 — THE REVIEW FIXES, MEASURED THE SAME WAY (2026-08-23) ─────────
+ * Independent review found three bypasses that the eight mutations above could
+ * not see, because every fixture in this suite was 7-9 nodes and the estate is
+ * 63 container apps. The cure was structural — a disposition ledger, three
+ * fail-closed assertions in `finalizeResult`, an ownership post-condition, and
+ * an ESTATE-SCALE fixture so the production cardinality is reachable at all.
+ *
+ * Both arms were measured for each. `pre` is the PR-head tree (19 files, 261
+ * passed clean); `post` is this tree (20 files, 305 passed clean).
+ *
+ *   #    mutation                                              pre   post
+ *   --------------------------------------------------------------------------
+ *   R1   detector-kit `ownership()` returns 'owned' instead of
+ *        'not-established' when `graph.nodes.length > 20`       0     1
+ *        (post: the estate-scale graph resolves 'owned' on a
+ *         graph with ZERO `owns` edges)
+ *   R2   dangling-wire population subject `reported` -> `[]`    0     1
+ *        (post: LOOM BRAIN — BLIND VERDICT, plus 6 contract
+ *         assertions independently, with the runtime guard
+ *         neutered as a control)
+ *   R3   unreachable-service: `continue` after the predicate
+ *        when `graph.nodes.length > 20`                         0     1
+ *        (post: LOOM BRAIN — LOST VERDICT)
+ *   R4   always-on-unused: vacuity gate returns null when
+ *        `graph.nodes.length > 20`                              0     1
+ *        (post: LOOM BRAIN — VACUOUS VERDICT)
+ *   R5   fixtures: the estate-scale graph shrinks 58 -> 5       n/a   1
+ *        (the new fixture's own population assertion)
+ *
+ * Each of the four new guards was ALSO mutated to a no-op and confirmed red via
+ * its embedded control in `detector-kit.test.ts` — a guard that only ever runs
+ * against a healthy estate is indistinguishable from a broken one otherwise.
+ *
+ * M5's needle MOVED in this round: the orphan pass branch now names itself
+ * (`ledger.cleared(...)`), so the predicate is a block rather than a one-liner.
+ * Re-measured after the move: RC=1, 6 raw red, 5 substantive — identical to the
+ * round-1 numbers, which is the check that the relocation preserved the receipt
+ * rather than diluting it.
  *
  * ── THE INSTRUCTIVE PARTS ──────────────────────────────────────────────────
  *
@@ -119,7 +157,7 @@ const MUTATED_NEEDLES: readonly { readonly id: string; readonly file: string; re
   {
     id: 'M5 orphan parent-missing predicate',
     file: 'orphan.ts',
-    needle: '      if (parentNode !== undefined) continue;',
+    needle: '      if (parentNode !== undefined) {',
   },
   {
     id: 'M6 declared-but-dead provenance order',

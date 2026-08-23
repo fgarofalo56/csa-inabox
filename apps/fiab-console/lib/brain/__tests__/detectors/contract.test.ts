@@ -30,6 +30,7 @@
 import { describe, it, expect } from 'vitest';
 import { ALL_DETECTORS, runDetectors } from '../../detectors';
 import { estimateAlwaysOnMonthlyCost } from '../../detectors/cost-model';
+import { subjectCount } from '../../detectors/detector-kit';
 import type { BrainGraphView, Finding } from '../../graph';
 import {
   CONSOLE_ID,
@@ -38,6 +39,7 @@ import {
   SUB,
   appRow,
   buildEdgelessGraph,
+  buildEstateScaleGraph,
   buildFixtureGraph,
 } from './fixtures';
 
@@ -75,8 +77,16 @@ function buildRichGraph() {
 const GRAPHS: readonly { readonly name: string; readonly graph: BrainGraphView }[] = [
   { name: 'rich (every detector fires)', graph: buildRichGraph() },
   { name: 'base estate', graph: buildFixtureGraph() },
+  // 63 container apps, zero ownership tags — the MEASURED shape of the estate.
+  // Every invariant below runs at the production cardinality, so a bypass keyed
+  // to `graph.nodes.length > 20` cannot pass by hiding above the fixtures.
+  { name: 'estate-scale (63 apps, no ownership tag)', graph: buildEstateScaleGraph() },
   { name: 'edgeless (vacuity)', graph: buildEdgelessGraph() },
 ];
+
+/** The graphs where every detector has a real subject set to range over. */
+const NON_VACUOUS: readonly { readonly name: string; readonly graph: BrainGraphView }[] =
+  GRAPHS.filter((g) => !g.name.startsWith('edgeless'));
 
 describe('CONTRACT — the run harness ranges over every detector', () => {
   it('POPULATION: there are six detectors and each produces a result', () => {
@@ -123,6 +133,35 @@ describe.each(GRAPHS)('CONTRACT over the $name graph', ({ graph }) => {
       expect(typeof r.population.examined).toBe('number');
       expect(typeof r.population.blind).toBe('boolean');
       expect(r.population.scope.length).toBeGreaterThan(20);
+    }
+  });
+
+  it('NO detector emits a finding over an EMPTY population', () => {
+    // ── THE ASSERTION THIS SUITE WAS MISSING ─────────────────────────────
+    // The family guard above asserted `typeof examined === 'number'` and
+    // `typeof blind === 'boolean'` — never that the population had anything in
+    // it. Measured in review: setting `dangling-wire`'s population subject to
+    // `[]` while leaving its verdict intact produced
+    // `edgesExamined=0 blind=true` beside a confident HIGH-severity finding,
+    // and 19 files / 261 tests stayed green. That is the green-and-blind
+    // failure this whole program exists to prevent, present in its own code.
+    //
+    // Stated once here rather than in a seventh per-detector file, so it covers
+    // all six and the next detector inherits it.
+    for (const r of run.results) {
+      if (r.findings.length === 0) continue;
+      expect(
+        r.population.blind,
+        `${r.detector} emitted ${r.findings.length} finding(s) over a BLIND population`,
+      ).toBe(false);
+      expect(
+        subjectCount(r.population),
+        `${r.detector} emitted ${r.findings.length} finding(s) having examined 0 ${r.population.subject}`,
+      ).toBeGreaterThan(0);
+      for (const f of r.findings) {
+        expect(f.population.blind).toBe(false);
+        expect(subjectCount(f.population)).toBeGreaterThan(0);
+      }
     }
   });
 
@@ -229,5 +268,59 @@ describe('CONTRACT — zero findings is never reported as a clean estate', () =>
     // healthy estate.
     expect(run.skipped.length).toBeGreaterThan(0);
     expect(run.population.scope).toContain('skipped subject(s)');
+  });
+});
+
+describe.each(NON_VACUOUS)('CONTRACT — populations are non-empty over the $name graph', ({ graph }) => {
+  it('EVERY detector ranged over a non-empty subject set', () => {
+    // Stronger than the finding-conditional check above: on a graph that has
+    // nodes AND edges of every provenance the detectors read, none of the six
+    // has any business reporting `blind`. This is the assertion that fails the
+    // instant a population subject is replaced by `[]`, whether or not that
+    // detector happened to emit a finding on this graph.
+    const run = runDetectors(graph);
+    for (const r of run.results) {
+      expect(r.population.blind, `${r.detector} reported a BLIND population`).toBe(false);
+      expect(
+        subjectCount(r.population),
+        `${r.detector} examined 0 ${r.population.subject}`,
+      ).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('CONTRACT — the suite actually reaches production cardinality', () => {
+  it('POPULATION: the estate-scale graph is the measured shape, not a fixture', () => {
+    // A production-cardinality guard whose "production" graph is nine nodes is a
+    // guard that watches nothing. Assert the numbers that make the bypasses
+    // reachable: >20 nodes (the cardinality every measured bypass keyed on) and
+    // ZERO `owns` edges (the branch an ownership bypass hides in).
+    const graph = buildEstateScaleGraph();
+    const apps = graph.nodes.filter(
+      (n) => n.kind === 'azure-resource' && n.resourceType === 'Microsoft.App/containerApps',
+    );
+    expect(apps.length).toBe(63);
+    expect(graph.nodes.length).toBeGreaterThan(20);
+    expect(graph.edges.filter((e) => e.provenance === 'owns')).toHaveLength(0);
+  });
+
+  it('the estate-scale graph makes unreachable-service produce findings at scale', () => {
+    // Without findings here the invariants above are vacuous on this graph.
+    const run = runDetectors(buildEstateScaleGraph());
+    const unreachable = run.results.find((r) => r.detector === 'unreachable-service')!;
+    expect(unreachable.findings.length).toBeGreaterThan(5);
+    expect(unreachable.population.examined).toBeGreaterThan(20);
+  });
+
+  it('ownership is NOT ESTABLISHED for anything on the estate-scale graph', () => {
+    // The measured state: nothing carries `loom-estate-id`, so no proposal may
+    // read as authorized. A bypass that returns 'owned' at this cardinality is
+    // the single worst output this system could produce.
+    const run = runDetectors(buildEstateScaleGraph());
+    expect(run.findings.length).toBeGreaterThan(0);
+    for (const f of run.findings) {
+      expect(f.remediation.proposedChange).toContain('OWNERSHIP NOT ESTABLISHED');
+      expect(f.remediation.proposedChange).not.toContain('carries the `loom-estate-id` tag');
+    }
   });
 });

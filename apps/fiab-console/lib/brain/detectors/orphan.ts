@@ -54,10 +54,11 @@ import {
   type SkippedSubject,
 } from '../graph';
 import {
-  bySeverity,
   detectorPopulation,
   evidence,
+  finalizeResult,
   findingId,
+  makeLedger,
   ownership,
   scopedProposal,
   skip,
@@ -140,6 +141,7 @@ export function orphanDetector(options: OrphanOptions = {}): Detector {
   return (graph: BrainGraphView): DetectorResult => {
     const skipped: SkippedSubject[] = [];
     const candidates = graph.nodes;
+    const ledger = makeLedger(ORPHAN, candidates.map((n) => n.id));
 
     let established = 0;
     // Findings are drafted WITHOUT their population and stamped with the final
@@ -152,6 +154,7 @@ export function orphanDetector(options: OrphanOptions = {}): Detector {
     for (const node of candidates) {
       const parent = establishParent(node, options);
       if (parent === null) {
+        ledger.skipped(node.id);
         skipped.push(
           skip(
             node.id,
@@ -166,7 +169,11 @@ export function orphanDetector(options: OrphanOptions = {}): Detector {
 
       // THE PREDICATE. The parent is named and it is not in the graph.
       const parentNode = graph.node(parent.parent);
-      if (parentNode !== undefined) continue;
+      if (parentNode !== undefined) {
+        ledger.cleared(node.id, 'the ESTABLISHED parent is present in the graph');
+        continue;
+      }
+      ledger.finding(node.id);
 
       const own = ownership(graph, node.id);
       drafts.push({
@@ -216,11 +223,13 @@ export function orphanDetector(options: OrphanOptions = {}): Detector {
 
     const findings: Finding[] = drafts.map((d) => ({ ...d, population }));
 
-    return {
+    return finalizeResult({
       detector: ORPHAN,
-      findings: [...findings].sort(bySeverity),
+      graph,
+      findings,
       population,
       skipped,
-    };
+      ledger,
+    });
   };
 }

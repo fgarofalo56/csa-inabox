@@ -47,11 +47,12 @@ import {
 } from '../graph';
 import { estimateAlwaysOnMonthlyCost } from './cost-model';
 import {
-  bySeverity,
   detectorPopulation,
   evidence,
+  finalizeResult,
   findingId,
   inbound,
+  makeLedger,
   ownership,
   resolvedEdgeCount,
   scopedProposal,
@@ -67,6 +68,7 @@ const QUERY = "hasInboundOnly(graph, 'declared', 'configured')";
 export const declaredButDead: Detector = (graph: BrainGraphView): DetectorResult => {
   const skipped: SkippedSubject[] = [];
   const candidates = graph.nodes;
+  const ledger = makeLedger(DECLARED_BUT_DEAD, candidates.map((n) => n.id));
 
   const population = detectorPopulation(
     graph,
@@ -81,6 +83,7 @@ export const declaredButDead: Detector = (graph: BrainGraphView): DetectorResult
   const declaredVacuous = vacuityReason(graph, 'declared');
   const configuredVacuous = vacuityReason(graph, 'configured');
   if (declaredVacuous !== null || configuredVacuous !== null) {
+    for (const n of candidates) ledger.skipped(n.id);
     skipped.push(
       skip(
         'ALL NODES',
@@ -88,14 +91,33 @@ export const declaredButDead: Detector = (graph: BrainGraphView): DetectorResult
           [declaredVacuous, configuredVacuous].filter((r): r is string => r !== null).join(' ALSO: '),
       ),
     );
-    return { detector: DECLARED_BUT_DEAD, findings: [], population, skipped };
+    return finalizeResult({
+      detector: DECLARED_BUT_DEAD,
+      graph,
+      findings: [],
+      population,
+      skipped,
+      ledger,
+      requiresResolved: ['declared', 'configured'],
+    });
   }
 
   // THE PREDICATE, as the substrate's own query: inbound 'declared', no inbound 'configured'.
   const dead = hasInboundOnly(graph, 'declared', 'configured');
 
+  const deadIds = new Set(dead.result.map((n) => n.id));
+  for (const n of candidates) {
+    if (!deadIds.has(n.id)) {
+      ledger.cleared(
+        n.id,
+        'no inbound resolved `declared` edge, or the live deployment also carries a `configured` one',
+      );
+    }
+  }
+
   const findings: Finding[] = [];
   for (const node of dead.result) {
+    ledger.finding(node.id);
     const declaredEdges = inbound(graph, node.id, 'declared');
     const own = ownership(graph, node.id);
 
@@ -169,10 +191,13 @@ export const declaredButDead: Detector = (graph: BrainGraphView): DetectorResult
     });
   }
 
-  return {
+  return finalizeResult({
     detector: DECLARED_BUT_DEAD,
-    findings: [...findings].sort(bySeverity),
+    graph,
+    findings,
     population,
     skipped,
-  };
+    ledger,
+    requiresResolved: ['declared', 'configured'],
+  });
 };

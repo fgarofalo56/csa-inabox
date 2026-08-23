@@ -51,12 +51,13 @@ import {
 import { estimateAlwaysOnMonthlyCost } from './cost-model';
 import {
   azureResources,
-  bySeverity,
   danglingFor,
   detectorPopulation,
   evidence,
+  finalizeResult,
   findingId,
   inbound,
+  makeLedger,
   ownership,
   reachabilityConfidence,
   resolvedEdgeCount,
@@ -77,10 +78,17 @@ export const unreachableService: Detector = (graph: BrainGraphView): DetectorRes
   const skipped: SkippedSubject[] = [];
   const azure = azureResources(graph.nodes);
 
+  // EVERY azure resource must be accounted for — flagged, cleared, or skipped
+  // with a reason. See `detector-kit`'s disposition section: a candidate that
+  // falls out of the loop is what a bypass keyed to production cardinality looks
+  // like, and a population count alone cannot see it.
+  const ledger = makeLedger(UNREACHABLE_SERVICE, azure.map((n) => n.id));
+
   // NOT MEASURED is not zero. A node with no scale facts is recorded, never
   // silently treated as scaling to zero.
   const scaleUnknown = azure.filter((n) => n.scale === undefined);
   for (const n of scaleUnknown) {
+    ledger.skipped(n.id);
     skipped.push(
       skip(
         n.id,
@@ -109,6 +117,7 @@ export const unreachableService: Detector = (graph: BrainGraphView): DetectorRes
   // establish (R7).
   const externallyIngressed = scaleMeasured.filter((n) => n.ingress?.external === true);
   for (const n of externallyIngressed) {
+    ledger.skipped(n.id);
     skipped.push(
       skip(
         n.id,
@@ -138,9 +147,18 @@ export const unreachableService: Detector = (graph: BrainGraphView): DetectorRes
   const vacuous = vacuityReason(graph, 'configured');
   if (vacuous !== null) {
     for (const n of candidates) {
+      ledger.skipped(n.id);
       skipped.push(skip(n.id, `not evaluated — ${vacuous}`));
     }
-    return { detector: UNREACHABLE_SERVICE, findings: [], population, skipped };
+    return finalizeResult({
+      detector: UNREACHABLE_SERVICE,
+      graph,
+      findings: [],
+      population,
+      skipped,
+      ledger,
+      requiresResolved: ['configured'],
+    });
   }
 
   const findings: Finding[] = [];
@@ -149,7 +167,14 @@ export const unreachableService: Detector = (graph: BrainGraphView): DetectorRes
     // THE PREDICATE. Always-on, and nothing in the live deployment points at it.
     const isUnreachableAlwaysOn =
       node.scale!.minReplicas > 0 && inbound(graph, node.id, 'configured').length === 0;
-    if (!isUnreachableAlwaysOn) continue;
+    if (!isUnreachableAlwaysOn) {
+      ledger.cleared(
+        node.id,
+        'scales to zero, or a resolved `configured` edge in the live deployment points at it',
+      );
+      continue;
+    }
+    ledger.finding(node.id);
 
     const dangling = danglingFor(graph, node.id);
     const declared = inbound(graph, node.id, 'declared');
@@ -255,10 +280,13 @@ export const unreachableService: Detector = (graph: BrainGraphView): DetectorRes
     });
   }
 
-  return {
+  return finalizeResult({
     detector: UNREACHABLE_SERVICE,
-    findings: [...findings].sort(bySeverity),
+    graph,
+    findings,
     population,
     skipped,
-  };
+    ledger,
+    requiresResolved: ['configured'],
+  });
 };

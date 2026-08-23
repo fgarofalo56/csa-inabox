@@ -3,8 +3,13 @@
  *
  * A detector is a QUERY over the graph (PRP §0), not a bespoke rule. What is
  * shared between them is not the query — it is the DISCIPLINE around the query:
- * the population, the vacuity check, the ownership scoping, and the fact that
- * every remediation is a proposal.
+ * the population, the disposition ledger, the vacuity check, the ownership
+ * scoping, and the fact that every remediation is a proposal.
+ *
+ * Three of those are enforced at RUNTIME by {@link finalizeResult}, which is the
+ * only sanctioned way to return a `DetectorResult`. It throws rather than hand
+ * back a result it cannot vouch for — see the disposition section at the bottom
+ * of this file for the measurements that made that necessary.
  *
  * ── THE VACUITY CHECK IS SHARPER HERE THAN IN THE SUBSTRATE ────────────────
  * `types.ts` documents `population.byProvenance[p] === 0` as the vacuous-truth
@@ -45,6 +50,7 @@ import {
   type BrainNode,
   type Confidence,
   type DanglingEdge,
+  type DetectorResult,
   type EdgeProvenance,
   type EvidenceChain,
   type Finding,
@@ -88,16 +94,58 @@ export function vacuityReason(graph: BrainGraphView, provenance: EdgeProvenance)
 export type Ownership = 'owned' | 'not-owned' | 'not-established';
 
 /**
+ * `'owned'` is the ONE verdict that authorizes acting. It may only ever be
+ * reached with an `owns` edge in hand.
+ *
+ * ── WHY THIS IS A RUNTIME ASSERT AND NOT A COMMENT ─────────────────────────
+ * Measured in review of this PR: a mutation that made {@link ownership} return
+ * `'owned'` instead of `'not-established'` whenever `graph.nodes.length > 20`
+ * passed the entire suite — RC=0, 19 files, 261/261 green — because every
+ * fixture is 7-9 nodes and the estate is 63 container apps. The effect on the
+ * real graph would have been that EVERY proposal reads *"OWNERSHIP: this
+ * resource carries the `loom-estate-id` tag"*, which is the sentence a human
+ * acts on, against an estate where 12 of the 13 container environments are not
+ * Loom's. A fixture cannot catch a bypass keyed to a cardinality no fixture
+ * reaches; a post-condition on the value can, on the first real run.
+ *
+ * Exported separately from {@link ownership} so the guard has an EMBEDDED
+ * CONTROL: `detector-kit.test.ts` calls it with `('owned', 0)` and asserts it
+ * throws, so a guard that stopped firing is distinguishable from an estate that
+ * never violates it.
+ */
+export function assertOwnedImpliesOwnsEdge(
+  verdict: Ownership,
+  ownsEdgeCount: number,
+  id: string,
+): void {
+  if (verdict === 'owned' && ownsEdgeCount === 0) {
+    throw new Error(
+      `LOOM BRAIN — OWNERSHIP FAIL-CLOSED: ownership('${id}') resolved to 'owned' with ZERO inbound ` +
+        "resolved 'owns' edges. 'owned' is the verdict that authorizes acting on a resource. This " +
+        'establishes that the ownership computation is wrong, not that the resource is unowned — ' +
+        'refusing to emit a proposal that would read as authorized.',
+    );
+  }
+}
+
+/**
  * Ownership of a node, from `owns` edges ONLY.
  *
  * `not-established` is returned when the graph holds no resolved `owns` edges at
  * all — which is the state of this estate today. It is NOT the same as
  * `not-owned`, and collapsing them is how a cleanup recommendation ends up
  * pointed at someone else's production.
+ *
+ * The verdict is computed once and then CHECKED against the edge count it
+ * claims to rest on (see {@link assertOwnedImpliesOwnsEdge}), so there is no
+ * branch that can hand back `'owned'` without an `owns` edge.
  */
 export function ownership(graph: BrainGraphView, id: NodeId): Ownership {
-  if (resolvedEdgeCount(graph, 'owns') === 0) return 'not-established';
-  return graph.inboundEdges(id, 'owns').result.length > 0 ? 'owned' : 'not-owned';
+  const owns = graph.inboundEdges(id, 'owns').result.length;
+  const verdict: Ownership =
+    resolvedEdgeCount(graph, 'owns') === 0 ? 'not-established' : owns > 0 ? 'owned' : 'not-owned';
+  assertOwnedImpliesOwnsEdge(verdict, owns, id);
+  return verdict;
 }
 
 /**
@@ -262,4 +310,192 @@ const SEVERITY_ORDER: Readonly<Record<FindingSeverity, number>> = {
 export function bySeverity(a: Finding, b: Finding): number {
   const d = SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity];
   return d !== 0 ? d : a.id.localeCompare(b.id);
+}
+
+// ---------------------------------------------------------------------------
+// DISPOSITION ACCOUNTING — a verdict LOST inside a predicate must be visible
+// ---------------------------------------------------------------------------
+
+/**
+ * ── WHY A POPULATION COUNT IS NOT ENOUGH ───────────────────────────────────
+ * `Population.examined` says how many candidates the detector RANGED OVER. It
+ * says nothing about what happened to each one. Measured in review of this PR:
+ * inserting `if (graph.nodes.length > 20) continue;` immediately AFTER the
+ * predicate — in `unreachable-service`, `declared-but-dead` and `orphan` alike —
+ * left the reported population reading `examined=3, findings=0, skipped=2`,
+ * i.e. *"3 nodes checked, all clean"*, and the whole suite stayed green at
+ * 261/261. A silently dropped candidate was indistinguishable from a candidate
+ * that legitimately passed.
+ *
+ * The cure is not a bigger fixture — it is an explicit disposition. Every
+ * candidate in the detector's declared universe lands in EXACTLY ONE of
+ * `finding` / `cleared` / `skipped`, and {@link finalizeResult} refuses to
+ * return a result when they do not add up. That invariant breaks on the REAL
+ * graph, on the first run, no matter what the fixtures look like.
+ *
+ * `cleared` is deliberately the awkward one: it takes a REASON, so the pass
+ * branch has to be named out loud. A `continue` with nothing attached no longer
+ * compiles into a balanced ledger.
+ */
+export type DispositionKind = 'finding' | 'cleared' | 'skipped';
+
+export interface Ledger {
+  /** This candidate produced a finding. */
+  finding(subject: string): void;
+  /** This candidate was evaluated and PASSED. `why` names the pass branch. */
+  cleared(subject: string, why: string): void;
+  /** This candidate was NOT evaluated. Pair it with a {@link SkippedSubject}. */
+  skipped(subject: string): void;
+  /** Everything still undispositioned. Empty is the only acceptable state. */
+  unaccounted(): readonly string[];
+  counts(): Readonly<Record<DispositionKind, number>> & { readonly universe: number };
+  /** Distinct pass-branch reasons, so a test can assert the branches are named. */
+  clearedReasons(): readonly string[];
+}
+
+/**
+ * A ledger over the candidate ids a detector must account for.
+ *
+ * Both error paths below are hard failures rather than warnings: a candidate
+ * dispositioned twice means one of the two dispositions is a lie about what the
+ * detector did, and a disposition outside the universe means the universe is not
+ * what the population claims it is.
+ */
+export function makeLedger(detector: string, universe: readonly string[]): Ledger {
+  const declared = new Set(universe);
+  const seen = new Map<string, DispositionKind>();
+  const reasons = new Set<string>();
+
+  const put = (subject: string, kind: DispositionKind): void => {
+    if (!declared.has(subject)) {
+      throw new Error(
+        `LOOM BRAIN — LEDGER: '${detector}' dispositioned '${subject}' as '${kind}', and that subject is ` +
+          `not in the ${declared.size}-member universe it declared. The population and the loop disagree ` +
+          'about what was examined.',
+      );
+    }
+    const prev = seen.get(subject);
+    if (prev !== undefined) {
+      throw new Error(
+        `LOOM BRAIN — LEDGER: '${detector}' dispositioned '${subject}' twice ('${prev}' then '${kind}'). ` +
+          'One of those two statements about what the detector did is false.',
+      );
+    }
+    seen.set(subject, kind);
+  };
+
+  return {
+    finding: (s) => put(s, 'finding'),
+    cleared: (s, why) => {
+      put(s, 'cleared');
+      reasons.add(why);
+    },
+    skipped: (s) => put(s, 'skipped'),
+    unaccounted: () => [...declared].filter((s) => !seen.has(s)),
+    counts: () => {
+      let finding = 0;
+      let cleared = 0;
+      let skipped = 0;
+      for (const k of seen.values()) {
+        if (k === 'finding') finding += 1;
+        else if (k === 'cleared') cleared += 1;
+        else skipped += 1;
+      }
+      return { finding, cleared, skipped, universe: declared.size };
+    },
+    clearedReasons: () => [...reasons],
+  };
+}
+
+/** How many members of the subject set a population actually ranged over. */
+export function subjectCount(p: Population): number {
+  return p.subject === 'nodes' ? p.examined : p.edgesExamined;
+}
+
+/**
+ * The three ways a detector result can be a confident lie, checked before it is
+ * allowed out of the function. Exported individually so each has an embedded
+ * control in `detector-kit.test.ts` — a guard with no control is a guard that
+ * cannot be distinguished from a clean estate.
+ */
+export function assertNotGreenAndBlind(
+  detector: string,
+  findings: readonly Finding[],
+  population: Population,
+): void {
+  if (findings.length === 0) return;
+  const n = subjectCount(population);
+  if (population.blind || n === 0) {
+    throw new Error(
+      `LOOM BRAIN — BLIND VERDICT: '${detector}' emitted ${findings.length} finding(s) while reporting a ` +
+        `population of ${n} ${population.subject} (blind=${population.blind}). A verdict over an empty ` +
+        'population establishes nothing, and a confident finding beside one is the exact green-and-blind ' +
+        'failure the population contract exists to prevent.',
+    );
+  }
+}
+
+export function assertLedgerBalances(detector: string, ledger: Ledger): void {
+  const missing = ledger.unaccounted();
+  if (missing.length === 0) return;
+  const c = ledger.counts();
+  throw new Error(
+    `LOOM BRAIN — LOST VERDICT: '${detector}' declared a universe of ${c.universe} candidate(s) and ` +
+      `dispositioned ${c.finding + c.cleared + c.skipped} of them ` +
+      `(finding=${c.finding}, cleared=${c.cleared}, skipped=${c.skipped}). ` +
+      `${missing.length} candidate(s) fell out of the loop with no verdict and no reason, starting with ` +
+      `'${missing[0]}'. A dropped candidate is NOT a candidate that passed.`,
+  );
+}
+
+export function assertNotVacuous(
+  detector: string,
+  graph: BrainGraphView,
+  findings: readonly Finding[],
+  requiresResolved: readonly EdgeProvenance[],
+): void {
+  if (findings.length === 0) return;
+  for (const p of requiresResolved) {
+    if (resolvedEdgeCount(graph, p) === 0) {
+      throw new Error(
+        `LOOM BRAIN — VACUOUS VERDICT: '${detector}' emitted ${findings.length} finding(s) while the graph ` +
+          `holds ZERO RESOLVED '${p}' edges. Its predicate depends on that provenance, so the verdict is ` +
+          'true of every node for an uninteresting reason. This is an extractor gap being reported as a ' +
+          'defect in the estate.',
+      );
+    }
+  }
+}
+
+/**
+ * The only sanctioned way to return a {@link DetectorResult}.
+ *
+ * FAILS CLOSED — it throws rather than returning a result it cannot vouch for.
+ * `runDetectors` deliberately does not catch, so a detector that has lost track
+ * of its own population takes the pass down instead of quietly shrinking it.
+ * That is the intended trade: no output at all is recoverable, a confident
+ * partial one is not.
+ */
+export function finalizeResult(args: {
+  readonly detector: string;
+  readonly graph: BrainGraphView;
+  readonly findings: readonly Finding[];
+  readonly population: Population;
+  readonly skipped: readonly SkippedSubject[];
+  readonly ledger: Ledger;
+  /**
+   * Provenances this detector's verdict DEPENDS on. A finding emitted while one
+   * of them has zero resolved edges is vacuous — see {@link vacuityReason}.
+   */
+  readonly requiresResolved?: readonly EdgeProvenance[];
+}): DetectorResult {
+  assertLedgerBalances(args.detector, args.ledger);
+  assertNotGreenAndBlind(args.detector, args.findings, args.population);
+  assertNotVacuous(args.detector, args.graph, args.findings, args.requiresResolved ?? []);
+  return {
+    detector: args.detector,
+    findings: [...args.findings].sort(bySeverity),
+    population: args.population,
+    skipped: args.skipped,
+  };
 }

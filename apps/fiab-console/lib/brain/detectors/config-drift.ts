@@ -57,10 +57,11 @@ import {
   type SkippedSubject,
 } from '../graph';
 import {
-  bySeverity,
   edgeDetectorPopulation,
   evidence,
+  finalizeResult,
   findingId,
+  makeLedger,
   ownership,
   scopedProposal,
   skip,
@@ -140,6 +141,12 @@ export const configDrift: Detector = (graph: BrainGraphView): DetectorResult => 
 
   // The subject is the set of comparable PAIRS, expressed as the edges involved.
   const pairEdges: BrainEdge[] = pairs.flatMap((p) => [p.declared, p.configured]);
+  // The ledger's universe is the PAIRS — the things the predicate ranges over —
+  // while the population counts the EDGES under comparison. Keyed on the
+  // DECLARED edge id, which is unique per pair; keying on (from, symbol) would
+  // collide if a template ever declared the same symbol twice on one consumer.
+  const pairKey = (p: Pair): string => p.declared.id;
+  const ledger = makeLedger(CONFIG_DRIFT, pairs.map(pairKey));
   const population = edgeDetectorPopulation(
     graph,
     pairEdges,
@@ -164,6 +171,7 @@ export const configDrift: Detector = (graph: BrainGraphView): DetectorResult => 
     if (dEmpty && cEmpty) {
       // Both empty. They AGREE, and both are wrong — that is `dangling-wire`'s
       // finding, not drift. Reporting it here would triple-count it.
+      ledger.cleared(pairKey(pair), 'both sides are empty — they AGREE; the defect is `dangling-wire`\'s');
       continue;
     } else if (dEmpty && !cEmpty) {
       kind = 'declared-empty';
@@ -190,6 +198,7 @@ export const configDrift: Detector = (graph: BrainGraphView): DetectorResult => 
       }
     } else {
       // NOT COMPARABLE, and this is the common case. Say so rather than guessing.
+      ledger.skipped(pairKey(pair));
       skipped.push(
         skip(
           `${pair.from} ${pair.symbol}`,
@@ -203,7 +212,12 @@ export const configDrift: Detector = (graph: BrainGraphView): DetectorResult => 
       continue;
     }
 
-    if (kind === null) continue; // Compared, and they AGREE. No finding.
+    if (kind === null) {
+      // Compared, and they AGREE. No finding.
+      ledger.cleared(pairKey(pair), 'both sides were compared on established values and they AGREE');
+      continue;
+    }
+    ledger.finding(pairKey(pair));
 
     const own = ownership(graph, pair.from);
     const fromName = graph.node(pair.from)?.displayName ?? pair.from;
@@ -261,10 +275,12 @@ export const configDrift: Detector = (graph: BrainGraphView): DetectorResult => 
     });
   }
 
-  return {
+  return finalizeResult({
     detector: CONFIG_DRIFT,
-    findings: [...findings].sort(bySeverity),
+    graph,
+    findings,
     population,
     skipped,
-  };
+    ledger,
+  });
 };

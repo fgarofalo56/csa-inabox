@@ -49,11 +49,12 @@ import {
 import { estimateAlwaysOnMonthlyCost } from './cost-model';
 import {
   azureResources,
-  bySeverity,
   detectorPopulation,
   evidence,
+  finalizeResult,
   findingId,
   inbound,
+  makeLedger,
   ownership,
   resolvedEdgeCount,
   scopedProposal,
@@ -70,8 +71,10 @@ export const alwaysOnUnused: Detector = (graph: BrainGraphView): DetectorResult 
   const skipped: SkippedSubject[] = [];
 
   const azure = azureResources(graph.nodes);
+  const ledger = makeLedger(ALWAYS_ON_UNUSED, azure.map((n) => n.id));
   const unknownScale = scaleUnknownCount(graph);
   for (const n of azure.filter((x) => x.scale === undefined)) {
+    ledger.skipped(n.id);
     skipped.push(
       skip(
         n.id,
@@ -87,6 +90,14 @@ export const alwaysOnUnused: Detector = (graph: BrainGraphView): DetectorResult 
     describe: 'azure-resource nodes',
   });
 
+  // Scale measured and minReplicas 0: evaluated, and it costs nothing when idle.
+  const alwaysOnIds = new Set(alwaysOn.result.map((n) => n.id));
+  for (const n of azure) {
+    if (n.scale !== undefined && !alwaysOnIds.has(n.id)) {
+      ledger.cleared(n.id, 'scales to zero (minReplicas 0) — no always-on floor to justify');
+    }
+  }
+
   const population = detectorPopulation(
     graph,
     alwaysOn.result,
@@ -101,6 +112,7 @@ export const alwaysOnUnused: Detector = (graph: BrainGraphView): DetectorResult 
   const vacuous = vacuityReason(graph, 'observed');
   if (vacuous !== null) {
     for (const n of alwaysOn.result) {
+      ledger.skipped(n.id);
       skipped.push(
         skip(
           n.id,
@@ -109,14 +121,26 @@ export const alwaysOnUnused: Detector = (graph: BrainGraphView): DetectorResult 
         ),
       );
     }
-    return { detector: ALWAYS_ON_UNUSED, findings: [], population, skipped };
+    return finalizeResult({
+      detector: ALWAYS_ON_UNUSED,
+      graph,
+      findings: [],
+      population,
+      skipped,
+      ledger,
+      requiresResolved: ['observed'],
+    });
   }
 
   const findings: Finding[] = [];
   for (const node of alwaysOn.result) {
     // THE PREDICATE. Always-on (already true of this set) and no observed traffic.
     const observed = inbound(graph, node.id, 'observed');
-    if (observed.length !== 0) continue;
+    if (observed.length !== 0) {
+      ledger.cleared(node.id, 'telemetry records inbound calls to it');
+      continue;
+    }
+    ledger.finding(node.id);
 
     const configured = inbound(graph, node.id, 'configured');
     const est = estimateAlwaysOnMonthlyCost(node);
@@ -182,10 +206,13 @@ export const alwaysOnUnused: Detector = (graph: BrainGraphView): DetectorResult 
     });
   }
 
-  return {
+  return finalizeResult({
     detector: ALWAYS_ON_UNUSED,
-    findings: [...findings].sort(bySeverity),
+    graph,
+    findings,
     population,
     skipped,
-  };
+    ledger,
+    requiresResolved: ['observed'],
+  });
 };

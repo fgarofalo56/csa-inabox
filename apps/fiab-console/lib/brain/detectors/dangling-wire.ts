@@ -45,10 +45,11 @@ import {
   type SkippedSubject,
 } from '../graph';
 import {
-  bySeverity,
   edgeDetectorPopulation,
   evidence,
+  finalizeResult,
   findingId,
+  makeLedger,
   ownership,
   scopedProposal,
   skip,
@@ -80,7 +81,16 @@ export const danglingWire: Detector = (graph: BrainGraphView): DetectorResult =>
   // THE PREDICATE. Only the two reasons that name a real defect.
   const reported = all.filter((e) => REPORTED_REASONS.includes(e.danglingReason));
 
+  // Every dangling edge is accounted for: reported (finding) or excluded by
+  // scope (skipped). The aggregate skip below compresses the PRESENTATION of the
+  // exclusions; the ledger keeps the count exact.
+  const ledger = makeLedger(DANGLING_WIRE, all.map((e) => e.id));
+
   const excluded = all.length - reported.length;
+  const reportedIds = new Set(reported.map((e) => e.id));
+  for (const e of all) {
+    if (!reportedIds.has(e.id)) ledger.skipped(e.id);
+  }
   if (excluded > 0) {
     skipped.push(
       skip(
@@ -117,6 +127,7 @@ export const danglingWire: Detector = (graph: BrainGraphView): DetectorResult =>
 
   const findings: Finding[] = [];
   for (const [key, edges] of groups) {
+    for (const e of edges) ledger.finding(e.id);
     const first = edges[0]!;
     const reason = first.danglingReason;
     const from = first.from;
@@ -228,10 +239,12 @@ export const danglingWire: Detector = (graph: BrainGraphView): DetectorResult =>
     });
   }
 
-  return {
+  return finalizeResult({
     detector: DANGLING_WIRE,
-    findings: [...findings].sort(bySeverity),
+    graph,
+    findings,
     population,
     skipped,
-  };
+    ledger,
+  });
 };
