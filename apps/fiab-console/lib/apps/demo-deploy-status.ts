@@ -85,7 +85,11 @@ export function isResolved(s: DemoSubStatus): boolean {
 /** Human label per state — used by the banner and by any CLI reader. */
 export const DEMO_SUB_STATUS_LABEL: Readonly<Record<DemoSubStatus, string>> = {
   pending: 'Queued',
-  accepted: 'Accepted — not started',
+  // "not confirmed", NOT "not started": all the code established is that a
+  // jobId came back. Provisioning may well be under way — asserting it has not
+  // started would be an unmeasured claim in the safe direction, which is still
+  // an unmeasured claim (deploy-integrity.md R7).
+  accepted: 'Accepted — not confirmed',
   installing: 'Installing',
   succeeded: 'Installed',
   partial: 'Installed with gates',
@@ -121,7 +125,10 @@ export interface DemoRollup {
   resolved: number;
   /** True ONLY when every app's install job reached terminal `done`. */
   allSucceeded: boolean;
-  /** 0-100 — share of apps whose state is SETTLED, not a guess at success. */
+  /** 0-100 — share of apps whose state is SETTLED, not a guess at success. An
+   *  `unknown` app IS settled, so an all-unknown run reports 100 here with
+   *  `succeeded: 0`. Never read this as a verdict; `status` / `allSucceeded` /
+   *  `succeeded` are the verdict. */
   percentComplete: number;
   /** Rollup status, constrained to the AppInstallJob union the job doc carries. */
   status: InstallJobStatus;
@@ -181,7 +188,7 @@ function buildHeadline(c: {
   if (c.allSucceeded) return `${c.succeeded}/${c.total} apps installed`;
   const parts = [`${c.succeeded}/${c.total} installed`];
   if (c.installing) parts.push(`${c.installing} installing`);
-  if (c.accepted) parts.push(`${c.accepted} accepted, not started`);
+  if (c.accepted) parts.push(`${c.accepted} accepted, not confirmed`);
   if (c.pending) parts.push(`${c.pending} queued`);
   if (c.partial) parts.push(`${c.partial} installed with gates`);
   if (c.failed) parts.push(`${c.failed} failed`);

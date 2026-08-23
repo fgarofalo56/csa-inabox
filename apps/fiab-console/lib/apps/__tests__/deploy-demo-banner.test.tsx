@@ -65,7 +65,7 @@ describe('DeployDemoBanner — REGRESSION: accepted installs are not installed a
       subJobs: subJobs(allOf('accepted')),
     });
 
-    await waitFor(() => expect(headline()).toContain('accepted, not started'));
+    await waitFor(() => expect(headline()).toContain('accepted, not confirmed'));
     expect(headline()).not.toMatch(/14\/14 apps installed/);
     expect(headline()).not.toMatch(/open the Demo — workspaces to explore/);
     expect(headline()).toContain(`0/${TOTAL} installed`);
@@ -85,7 +85,7 @@ describe('DeployDemoBanner — REGRESSION: accepted installs are not installed a
     // …and it calls the unconfirmed apps out rather than quietly passing.
     const attention = await screen.findByTestId('demo-deploy-attention');
     expect(attention.textContent).toContain(`${TOTAL} apps did not finish as installed`);
-    expect(attention.textContent).toContain('Accepted — not started');
+    expect(attention.textContent).toContain('Accepted — not confirmed');
   });
 
   it('unknown renders AS unknown, with the reason and a way into the workspace', async () => {
@@ -149,6 +149,38 @@ describe('DeployDemoBanner — the real counts, per terminal state', () => {
     expect(attention.textContent).not.toContain(SHOWCASE_APPS[0][1].replace(/^Demo — /, ''));
     // Every app still appears in the per-app grid with its own state.
     expect(screen.getByTestId('demo-deploy-app-grid').children).toHaveLength(TOTAL);
+  });
+});
+
+describe('DeployDemoBanner — the shared rollup is never overridden by a local fallback', () => {
+  // Review probe on #3909, promoted to a spec: with `roll.total === 0` the
+  // banner used to discard the shared module's verdict and substitute its own —
+  // the server-supplied percent and a literal 'Starting the deploy…'. On a
+  // TERMINAL doc with no sub-jobs that rendered a FULL bar and a present-tense
+  // "starting" claim, permanently (polling has stopped), while the server wrote
+  // `status:'failed'` for the same input. Two consumers, two answers — in
+  // exactly the case the shared module exists to prevent.
+  it('a FINISHED job with no sub-jobs renders the module verdict, not "Starting"', async () => {
+    const headline = await deployWith({
+      status: 'done', percentComplete: 100, updatedAt: '2026-08-22T00:00:00.000Z', subJobs: [],
+    });
+
+    await waitFor(() => expect(headline()).toContain('No installs were dispatched'));
+    expect(headline()).not.toContain('Starting the deploy');
+    expect(headline()).not.toMatch(/apps installed/);
+    // …and the bar is empty, not full: nothing settled because nothing ran.
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0');
+  });
+
+  it('still shows "Starting the deploy…" while a job with no sub-jobs is RUNNING', async () => {
+    // The other side of the same ternary: before there are per-app facts the
+    // fallback is legitimate, and the fix must not have killed it.
+    const headline = await deployWith({
+      status: 'running', percentComplete: 25, updatedAt: '2026-08-22T00:00:00.000Z', subJobs: [],
+    });
+
+    await waitFor(() => expect(headline()).toContain('Starting the deploy'));
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0.25');
   });
 });
 

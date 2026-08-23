@@ -80,7 +80,7 @@ describe('summarizeDemoSubJobs — every terminal state', () => {
     expect(r.succeeded).toBe(0);
     expect(r.allSucceeded).toBe(false);
     expect(r.percentComplete).toBe(0);
-    expect(r.headline).toBe('0/14 installed · 14 accepted, not started');
+    expect(r.headline).toBe('0/14 installed · 14 accepted, not confirmed');
   });
 
   it('REGRESSION — all 14 `unknown` is PARTIAL, never done, and unknown is COUNTED', () => {

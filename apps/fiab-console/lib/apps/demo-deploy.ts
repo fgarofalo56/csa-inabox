@@ -216,6 +216,16 @@ export async function runDemoDeploy(opts: {
       // `createdItems` is the count of apps whose install actually SUCCEEDED —
       // not the count of apps we have walked past.
       createdItems: summary.succeeded,
+      // ── READ THIS BEFORE TRUSTING `percentComplete` ON THIS DOC ──────────
+      // It is the SETTLED share, not the success share: an app that ended
+      // `unknown` is settled, so an all-unknown run persists 100 with
+      // `createdItems: 0`. That matches the sibling app-install jobs in this
+      // same container (install/route.ts also writes 100 alongside a
+      // `partial`/`failed` status), so `percentComplete` alone has NEVER been
+      // a verdict here for any job shape. The verdict is `status` +
+      // `demoSummary` + `createdItems`. A doc-level reader that looks only at
+      // `percentComplete` is reading progress and calling it success — the
+      // very substitution this whole change exists to stop.
       percentComplete: summary.percentComplete,
       phase,
       subJobs: sub.map((s) => ({ ...s })),
@@ -273,7 +283,7 @@ export async function runDemoDeploy(opts: {
       }
       if (ij?.jobId) {
         entry.installJobId = String(ij.jobId);
-        entry.status = 'accepted';   // ← #3905: NOT 'done'. Nothing is installed yet.
+        entry.status = 'accepted';   // ← #3905: NOT 'done'. Nothing is CONFIRMED installed.
       } else {
         entry.status = 'failed';
         entry.error = ij?.error || 'install failed';
@@ -296,6 +306,9 @@ export async function runDemoDeploy(opts: {
     status: summary.status,          // 'done' ONLY when every install succeeded
     phase: 'done',
     createdItems: summary.succeeded,
+    // The SETTLED share — see the note in `flush` above. On a finished run this
+    // is 100 whatever the outcome, including all-unknown; it says the deploy
+    // stopped, never that it worked.
     percentComplete: summary.percentComplete,
     subJobs: sub,
     demoSummary: summary,

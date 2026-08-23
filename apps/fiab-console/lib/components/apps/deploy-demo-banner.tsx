@@ -212,7 +212,15 @@ export function DeployDemoBanner(props: { pollIntervalMs?: number; stallTimeoutM
     [job, finished],
   );
   const succeededAll = roll.allSucceeded && finished;
-  const pct = roll.total > 0 ? roll.percentComplete / 100 : (job ? (job.percentComplete || 0) / 100 : 0);
+  // The 'Starting the deploy…' / server-percent fallbacks apply ONLY before the
+  // job has any per-app facts to report. Once it is FINISHED, the shared
+  // module's verdict stands even when it counted nothing — a terminal doc with
+  // no sub-jobs is `failed` / 'No installs were dispatched', and must never
+  // render as a full bar over a present-tense "starting" claim. Keeping the
+  // fallback alive past `finished` is how the two consumers start to disagree.
+  const pct = roll.total > 0
+    ? roll.percentComplete / 100
+    : finished ? 0 : (job?.percentComplete || 0) / 100;
 
   return (
     <Card className={s.card}>
@@ -266,7 +274,7 @@ export function DeployDemoBanner(props: { pollIntervalMs?: number; stallTimeoutM
             color={!finished ? 'brand' : succeededAll ? 'success' : roll.failed > 0 ? 'error' : 'warning'}
           />
           <Caption1 className={s.hint} data-testid="demo-deploy-headline">
-            {roll.total > 0 ? roll.headline : 'Starting the deploy…'}
+            {roll.total > 0 || finished ? roll.headline : 'Starting the deploy…'}
             {succeededAll && ' · open the Demo — workspaces to explore'}
           </Caption1>
 
