@@ -172,10 +172,116 @@ export function splitJobs(src) {
  * the notifier silently sets `issues: none`, the filer 403s, and #3844 is back —
  * with `grantsIssuesWrite()` still green, because that function only ever reads
  * `topLevelPermissions()`. Measured 2026-08-23: that mutation kept BOTH suites
- * green at 8/8 and 38/38.
+ * green with zero failures.
  */
 export function jobDeclaresOwnPermissions(jobText) {
   return /^ {4}permissions:/m.test(jobText);
+}
+
+/**
+ * The `env:` mapping entries declared at exactly `indent` columns in `text`,
+ * as [key, value] pairs with the value's surrounding whitespace trimmed.
+ *
+ * Indent is the whole point. GitHub Actions resolves a step's environment from
+ * three scopes — workflow (`env:` at column 0), job (column 4) and step
+ * (column 8) — and an `env:` block belonging to a DIFFERENT step in the same
+ * job reaches the notifier not at all. A whole-file `grep GH_TOKEN` cannot tell
+ * those apart, which is the entire difference between "the credential reaches
+ * the filer" and "a credential exists somewhere in this YAML".
+ */
+export function envEntries(text, indent) {
+  const pad = ' '.repeat(indent);
+  const childPad = ' '.repeat(indent + 2);
+  const lines = text.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].replace(/[ \t]+$/, '') !== `${pad}env:`) continue;
+    for (let k = i + 1; k < lines.length; k += 1) {
+      const l = lines[k];
+      if (l.trim() === '') break;
+      // Exactly one level deeper — not two, which would be a nested mapping
+      // rather than a scalar env var.
+      if (!l.startsWith(childPad) || l[indent + 2] === ' ') break;
+      const m = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*):[ \t]*(.*?)[ \t]*$/.exec(l);
+      if (!m) break;
+      out.push([m[1], m[2]]);
+    }
+  }
+  return out;
+}
+
+/**
+ * A value that actually carries a credential: a `${{ }}` expression reading
+ * `secrets.*` or `github.token`.
+ *
+ * The VALUE is asserted, not merely the key, for the same reason `--result` is:
+ * `GH_TOKEN: ""` and `GH_TOKEN: ${{ env.GH_TOKEN }}` both satisfy a
+ * key-presence check and both leave `process.env.GH_TOKEN` empty, at which
+ * point deploy-notify-failure.mjs takes its `!token` branch and exits 2 having
+ * filed nothing. That is #3844 with the guard green.
+ */
+export const NOTIFIER_CREDENTIAL_VALUE =
+  /^\$\{\{.*(?:secrets\.[A-Za-z_][A-Za-z0-9_]*|github\.token).*\}\}$/;
+
+/** True when an env entry list binds a credential the notifier can read. */
+export function bindsNotifierCredential(entries) {
+  return entries.some(
+    ([k, v]) => (k === 'GH_TOKEN' || k === 'GITHUB_TOKEN') && NOTIFIER_CREDENTIAL_VALUE.test(v),
+  );
+}
+
+export const NOTIFIER_SCRIPT = '.github/scripts/deploy-notify-failure.mjs';
+
+/**
+ * Every step in `src` that invokes the shared filer, with the SCOPE at which a
+ * usable credential reaches it ('step' | 'job' | 'workflow' | null).
+ *
+ * WHY THIS EXISTS AS A SEPARATE GUARD FROM `filesOnFailure`
+ *
+ *   `filesOnFailure` asserts the invocation: `if: failure()`, the script path,
+ *   `--workflow` with a right boundary, a non-empty `--result`. It asserts
+ *   nothing about the credential — and `GITHUB_TOKEN` is NOT ambient in an
+ *   Actions job, it exists only where a workflow maps it in. So deleting the
+ *   two lines
+ *
+ *       env:
+ *         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+ *
+ *   while leaving the invocation untouched is the entire difference between
+ *   "files an issue" and "files nothing", and it kept this suite AND
+ *   deploy-notify-failure's at RC=0 with zero failures. Measured 2026-08-23
+ *   against the real consumer, not inferred:
+ *
+ *       env -u GH_TOKEN -u GITHUB_TOKEN node .github/scripts/deploy-notify-failure.mjs \
+ *         --workflow gov-console-roll --result failure
+ *       -> RC=2, "deploy-notify-failure: ... Refusing to run"
+ *
+ *   The same run with a (bogus) GH_TOKEN set reached the GitHub API and got a
+ *   401 — so the two arms differ, and the refusal above is genuinely the token
+ *   check rather than some unrelated failure.
+ *
+ *   `issues: write` without the token is inert, which is why the permissions
+ *   assertions elsewhere in this file do not cover this.
+ */
+export function notifierCallSites(src) {
+  const stripped = stripComments(src);
+  const workflowEnv = envEntries(stripped, 0);
+  const sites = [];
+  for (const job of splitJobs(src)) {
+    const jobEnv = envEntries(job.text, 4);
+    for (const step of namedSteps(job.text)) {
+      if (!step.text.includes(NOTIFIER_SCRIPT)) continue;
+      const credentialScope = bindsNotifierCredential(envEntries(step.text, 8))
+        ? 'step'
+        : bindsNotifierCredential(jobEnv)
+          ? 'job'
+          : bindsNotifierCredential(workflowEnv)
+            ? 'workflow'
+            : null;
+      sites.push({ job: job.name, step: step.name, credentialScope, text: step.text });
+    }
+  }
+  return sites;
 }
 
 /**
@@ -202,12 +308,29 @@ export function hasNonEmptyResult(text) {
 }
 
 /**
+ * True when SOME `--result` carries a value that can actually BE an outcome.
+ *
+ * Stricter than `hasNonEmptyResult`, and separate from it so the #3844
+ * self-defence assertions keep testing the predicate they were written for.
+ * The extra rejection is a bare SHELL variable — `--result "$RESULT"`,
+ * `--result ${RESULT}` — which is a non-blank string in the YAML and expands to
+ * nothing at runtime when the variable is unset, landing on exactly the
+ * shouldFile('') -> {file:false, category:'pending'} path an empty literal
+ * does. An Actions `${{ ... }}` expression is NOT a shell variable and is
+ * accepted: `${{ job.status }}` is resolved by the runner before the shell
+ * sees it.
+ */
+export function hasSubstantiveResult(text) {
+  return resultArgs(text).some((v) => v.trim() !== '' && !/^\$\{?[A-Za-z_]/.test(v.trim()));
+}
+
+/**
  * The `workflow_run:` trigger parsed into its three list fields.
  *
  * The trigger EXISTING is not the property that matters. `branches: [main]` ->
  * `[main-disabled]`, or `types: [completed]` -> `[requested]`, each make the
  * chain unreachable while `triggerKeys()` still reports `workflow_run` and the
- * suite stays green at 8/8. "One branch" is the canonical narrow mutation and it
+ * suite stays green with zero failures. "One branch" is the canonical narrow mutation and it
  * walked straight through the first cut of this file.
  *
  * Both YAML list spellings are read (flow `[a, b]` and block `- a`), so
@@ -230,12 +353,144 @@ export function workflowRunTrigger(src) {
 }
 
 /**
+ * The LIVE top-level `concurrency.group` value, or null when there is none.
+ *
+ * WHY THIS IS PARSED RATHER THAN GREPPED. The assertion this replaces was
+ * `assert.match(src, /group: loom-dataplane-roll-\$\{\{ inputs\.boundary \|\|
+ * 'commercial' \}\}/)` against UNSTRIPPED source, while every sibling assertion
+ * in this file reads comment-stripped code. So breaking the live key and
+ * leaving the canonical string in a comment one line above kept the suite at
+ * RC=0 with zero failures — measured 2026-08-23:
+ *
+ *     # canonical: group: loom-dataplane-roll-${{ inputs.boundary || 'commercial' }}
+ *     group: loom-dataplane-roll-${{ inputs.boundary }}
+ *
+ * `stripComments` alone would close that, but only that: it drops WHOLE-line
+ * comments by design, so the same string parked in a TRAILING comment on the
+ * broken line would walk through it. Reading the key's actual value, with a
+ * trailing comment removed, closes both — and it is the value the assertion
+ * cares about anyway.
+ */
+export function concurrencyGroup(src) {
+  const m = /^concurrency:\n((?:[ \t]+.*\n|\n)+)/m.exec(`${stripComments(src)}\n`);
+  if (!m) return null;
+  const g = /^ {2}group:[ \t]*(.+?)[ \t]*$/m.exec(m[1]);
+  if (!g) return null;
+  // A YAML trailing comment is ` #...` on an unquoted scalar. Drop it, so the
+  // canonical string cannot be smuggled back in after the live value is broken.
+  const v = g[1].replace(/[ \t]+#.*$/, '').trim();
+  // Normalise a MATCHED pair of surrounding quotes, so re-quoting the scalar is
+  // not a red build. Only a matched pair: the canonical value itself contains
+  // `'commercial'`, so an unpaired strip would corrupt it.
+  if (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v[v.length - 1] === v[0]) {
+    return v.slice(1, -1);
+  }
+  return v;
+}
+
+/**
+ * Split a shell line on `operators`, IGNORING operators inside quotes.
+ *
+ * Quote-awareness is not fastidiousness, it is required for a correct answer.
+ * The real redactor line in gov-provision-runner-images.yml contains
+ * `String(e&&e.message||e)` INSIDE its double-quoted `node -e` program. A naive
+ * `line.split('&&')` tears that line into fragments, one of which references
+ * `$LOG` and contains no redactor — so the sanctioned line would be reported as
+ * a leak, and the guard would be weakened later to make it pass. The verbatim
+ * line is asserted as a control in the self-defence test below.
+ */
+export function splitOutsideQuotes(line, operators) {
+  const parts = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote && line[i - 1] !== '\\') quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    const op = operators.find((o) => line.startsWith(o, i));
+    if (op) {
+      parts.push(cur);
+      cur = '';
+      i += op.length - 1;
+      continue;
+    }
+    cur += ch;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+/**
+ * True when a line that MENTIONS the redactor genuinely routes the log through
+ * it, rather than merely sitting beside it.
+ *
+ * THE HOLE THIS CLOSES. The previous form of this check was an unconditional
+ * per-line exemption — `if (/_azure-redact\.mjs/.test(line)) continue;` — so
+ * ANY line containing that filename was laundered. Prepending `cat "$LOG" && `
+ * to the redactor line itself therefore published a raw Gov ACR task log, with
+ * subscription and tenant identifiers in it, to a PUBLIC repository's Actions
+ * log, and this suite stayed at RC=0 with zero failures. Measured 2026-08-23.
+ *
+ * The exemption cannot simply be deleted: the sanctioned line legitimately
+ * references the log on the same line as the redactor. So the requirement is
+ * POSITIONAL — every reference to the log must be either
+ *
+ *   an ARGUMENT of the redactor    node -e "...redact..." "$LOG"
+ *   or PIPED INTO it               cat "$LOG" | node -e "...redact..."
+ *
+ * A reference in a command-list segment (`&&`, `||`, `;`) that does not contain
+ * the redactor, or in a pipeline stage DOWNSTREAM of it, is not routed through
+ * the redactor and is reported.
+ */
+export function redactorLineIsSafe(line, ref) {
+  if (!/_azure-redact\.mjs/.test(line)) return false;
+  for (const segment of splitOutsideQuotes(line, ['&&', '||', ';'])) {
+    if (!ref.test(segment)) continue;
+    // Touches the log in a command that is not the redactor at all.
+    if (!/_azure-redact\.mjs/.test(segment)) return false;
+    const stages = splitOutsideQuotes(segment, ['|']);
+    const r = stages.findIndex((s) => /_azure-redact\.mjs/.test(s));
+    for (let i = r + 1; i < stages.length; i += 1) {
+      // Downstream of the redactor: re-reads the raw file, redacted output
+      // upstream notwithstanding.
+      if (ref.test(stages[i])) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The shell variable the fetched ACR task log is written INTO, read off the
+ * `az acr task logs ... > "$VAR"` redirect, or null when there is none.
+ *
+ * WHY THE NAME IS DERIVED AND NOT ASSUMED. `rawLogPublications` takes the
+ * variable name as a parameter defaulting to `LOG`. Calling it with the default
+ * over a step that had renamed its variable would examine ZERO lines and return
+ * an empty array — green, blind, and with a `cat "$TASKLOG"` sitting in the
+ * step. That is the zero-population failure this file's own header warns about,
+ * one parameter default away. Deriving the name from the redirect ties the
+ * guard to the step it is actually reading.
+ */
+export function fetchedLogVariable(stepText) {
+  const m = /az[ \t]+acr[ \t]+task[ \t]+logs\b[^\n]*?>[ \t]*"?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?/.exec(stepText);
+  return m ? m[1] : null;
+}
+
+/**
  * Lines in a step that could publish the CONTENT of a fetched log file.
  *
  * `assert.match(diag.text, /_azure-redact\.mjs/)` asserts the redactor is
  * PRESENT. It does not assert it is the ONLY path to stdout — adding one
  * `cat "$LOG"` beside it republishes the raw Azure log to a public Actions log
- * with the suite green at 8/8. Measured 2026-08-23.
+ * with the suite green. Measured 2026-08-23.
  *
  * So this is an ALLOWLIST, deliberately. Every line referencing the log variable
  * must be one of the shapes that provably cannot leak its content:
@@ -243,7 +498,10 @@ export function workflowRunTrigger(src) {
  *   assignment      LOG=...              names the path
  *   write redirect  ... > "$LOG"         writes INTO it
  *   a `[` test      [ ! -s "$LOG" ]      reads metadata, not bytes
- *   the redactor    ... _azure-redact.mjs ... the one sanctioned print
+ *   the redactor    ... _azure-redact.mjs ... the one sanctioned print, and only
+ *                                        when the log is piped into it or passed
+ *                                        to it as an argument (see
+ *                                        `redactorLineIsSafe`)
  *   a plain echo    echo "... at $LOG"   publishes the PATH, not the content
  *
  * Anything else — `cat`, `head`, `tail`, `tee`, `awk`, a `< "$LOG"` read, an
@@ -263,7 +521,7 @@ export function rawLogPublications(stepText, varName = 'LOG') {
     if (assign.test(line)) continue;
     if (writeInto.test(line)) continue;
     if (/^(?:if[ \t]+|elif[ \t]+)?\[\[?[ \t]/.test(line)) continue;
-    if (/_azure-redact\.mjs/.test(line)) continue;
+    if (redactorLineIsSafe(line, ref)) continue;
     if (/^echo[ \t]/.test(line) && !/\$\(/.test(line) && !/`/.test(line)) continue;
     out.push(line);
   }
@@ -318,7 +576,7 @@ test('#3844 — gov-console-roll grants issues:write AND files on failure', () =
   // "all of those that are not specified are set to `none`"), so four lines
   // inside the job silently revoke `issues: write` while `grantsIssuesWrite()`
   // — which reads only the top-level block — stays green. Measured: that
-  // mutation kept both suites at 8/8 and 38/38.
+  // mutation kept both suites green with zero failures.
   const jobs = splitJobs(src);
   assert.ok(jobs.length > 0, 'no jobs parsed out of gov-console-roll — the job splitter drifted, and the assertion below would be vacuous');
   const notifierJobs = jobs.filter((j) => j.text.includes('.github/scripts/deploy-notify-failure.mjs'));
@@ -341,6 +599,21 @@ test('#3844 — gov-console-roll grants issues:write AND files on failure', () =
     values,
     ['${{ job.status }}'],
     `the notifier's --result must be exactly "\${{ job.status }}"; found ${JSON.stringify(values)}. An empty value makes shouldFile() return {file:false, category:'pending'} and the lane posts nothing (#3844); a value that is not the job outcome cannot tell a failure from a cancellation (#3368)`,
+  );
+
+  // AND THE CREDENTIAL MUST REACH THE STEP. Everything above describes the
+  // INVOCATION; none of it describes the token, and `GITHUB_TOKEN` is not
+  // ambient in an Actions job — it exists only where a workflow maps it in.
+  // Deleting the step's two `env:` lines and changing nothing else leaves every
+  // assertion above green over a lane that files NOTHING, because
+  // deploy-notify-failure.mjs takes its `!token` branch and exits 2. That is
+  // #3844 restored. `issues: write` without the token is inert.
+  const sites = notifierCallSites(src);
+  assert.equal(sites.length, 1, `expected exactly one notifier call site in ${GOV_ROLL}, found ${sites.length} — the scope parser drifted and the assertion below would be vacuous`);
+  assert.notEqual(
+    sites[0].credentialScope,
+    null,
+    `the notifier step '${sites[0].step}' in ${GOV_ROLL} has no GH_TOKEN/GITHUB_TOKEN bound at step, job or workflow scope with a \`\${{ secrets.* }}\` / \`\${{ github.token }}\` value. deploy-notify-failure.mjs reads process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN and exits 2 without it, so the lane reverts Gov and files nothing (#3844)`,
   );
 });
 
@@ -408,6 +681,183 @@ test('#3844 SELF-DEFENCE — both predicates fire on the verbatim before-shape',
   assert.equal(splitJobs(jobSrc(false))[0].name, 'roll', 'and must name it');
   assert.equal(jobDeclaresOwnPermissions(splitJobs(jobSrc(false))[0].text), false, 'a job with no own permissions block must be reported as not declaring one');
   assert.equal(jobDeclaresOwnPermissions(splitJobs(jobSrc(true))[0].text), true, 'and a job that DOES declare one must be caught — Actions replaces rather than merges the grant');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #3844 (family) — the credential and the --result VALUE, for EVERY caller
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The two properties below were each closed for gov-console-roll alone and left
+// open for its five siblings. Both are the same defect class as #3844 itself —
+// a notifier that is present, passes every structural check, and files nothing:
+//
+//   * NO CREDENTIAL. `GITHUB_TOKEN` is not ambient in Actions. Deleting a
+//     step's `env: GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` leaves the invocation
+//     intact and the filer exits 2. Nothing in the repository asserted this for
+//     ANY caller before this test.
+//   * AN EMPTY `--result`. The adoption ratchet in
+//     .github/scripts/__tests__/deploy-notify-failure.test.mjs checks
+//     `/--result\b/` — PRESENCE — which `--result ""` satisfies while
+//     shouldFile('') returns {file:false, category:'pending'}. Only
+//     gov-console-roll had the VALUE pinned; `--result ""` on
+//     loom-dataplane-roll kept both suites at RC=0 with zero failures.
+//
+// Enumerated MECHANICALLY across every workflow, so a seventh caller added
+// later cannot skip either property. Population is asserted before anything
+// else, per this file's own rule: a guard over an empty set is green and blind.
+
+test('#3844 FAMILY RATCHET — every notifier caller binds a credential AND passes a non-empty --result', () => {
+  const callers = workflowNames().filter((f) => stripComments(readWorkflow(f)).includes(NOTIFIER_SCRIPT));
+  const sites = [];
+  for (const f of callers) {
+    const src = readWorkflow(f);
+    const found = notifierCallSites(src);
+    // PER-FILE FLOOR, not just an aggregate one. A file whose steps stop
+    // parsing contributes zero sites and would be silently excused by an
+    // aggregate count that other files still satisfy.
+    assert.ok(
+      found.length >= 1,
+      `${f} invokes ${NOTIFIER_SCRIPT} but no call site parsed out of it — the step/job splitter drifted on that file, so it is UNCHECKED rather than compliant`,
+    );
+    // AND EVERY INVOCATION MUST LAND INSIDE A PARSED STEP. The floor above is
+    // satisfied by ONE parsed site; a second invocation in the same file that
+    // the splitter missed would be invisible, which is the narrow form of the
+    // same blindness.
+    const inFile = stripComments(src).split(NOTIFIER_SCRIPT).length - 1;
+    const inSites = found.reduce((n, s) => n + (s.text.split(NOTIFIER_SCRIPT).length - 1), 0);
+    assert.equal(
+      inSites,
+      inFile,
+      `${f} contains ${inFile} invocation(s) of ${NOTIFIER_SCRIPT} but only ${inSites} landed inside a parsed step — the remainder are UNCHECKED by every assertion below`,
+    );
+    for (const s of found) sites.push({ file: f, ...s });
+  }
+
+  // Measured 2026-08-23: six call sites across six workflows —
+  // deploy-fiab-commercial, deploy-fiab-gcc, deploy-fiab-gcch,
+  // full-app-deploy-commercial, gov-console-roll, loom-dataplane-roll. Nothing
+  // outside .github/workflows invokes the filer (no composite action does),
+  // verified rather than assumed.
+  assert.ok(
+    sites.length >= 6,
+    `expected >=6 deploy-notify-failure call sites, found ${sites.length} — the matcher drifted, it is not that the callers vanished`,
+  );
+
+  const noCredential = sites.filter((s) => s.credentialScope === null).map((s) => `${s.file} :: ${s.step}`);
+  assert.deepEqual(
+    noCredential,
+    [],
+    'a deploy-notify-failure caller has no GH_TOKEN/GITHUB_TOKEN bound at step, job or workflow scope. GITHUB_TOKEN is NOT ambient in Actions, so the filer exits 2 and the failed deploy is recorded nowhere (#3844). Add `env:\\n  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` to the step',
+  );
+
+  const emptyResult = sites.filter((s) => !hasSubstantiveResult(s.text)).map((s) => `${s.file} :: ${s.step}`);
+  assert.deepEqual(
+    emptyResult,
+    [],
+    "a deploy-notify-failure caller passes --result with a value that cannot be an outcome (blank, or a bare shell variable that expands to nothing when unset). The script's own hasArg('result') is satisfied by it and shouldFile('') then returns {file:false, category:'pending'}, so the lane posts nothing — presence of the flag is not the property, the VALUE is (#3844/#3368)",
+  );
+});
+
+test('#3844 FAMILY SELF-DEFENCE — the credential predicate fires on the verbatim before-shape', () => {
+  // The exact step, as it stands in gov-console-roll.yml today.
+  const step = (envLines) =>
+    [
+      'jobs:',
+      '  roll:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - name: Notify on failure (#3844)',
+      '        if: failure()',
+      ...envLines,
+      '        run: |',
+      '          node .github/scripts/deploy-notify-failure.mjs \\',
+      '            --workflow gov-console-roll --result "${{ job.status }}"',
+    ].join('\n');
+
+  const OK = ['        env:', '          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}'];
+  assert.equal(notifierCallSites(step(OK))[0].credentialScope, 'step', 'the compliant shape must be reported as bound at step scope');
+
+  // THE MUTATION THAT SURVIVED: the invocation stays, only the credential goes.
+  assert.equal(notifierCallSites(step([]))[0].credentialScope, null, 'a step with the invocation and NO env block must be reported as unbound — this is the exact two-line deletion that kept both suites green');
+
+  // The narrow spellings a key-presence check would wave through.
+  assert.equal(notifierCallSites(step(['        env:', '          GH_TOKEN: ""']))[0].credentialScope, null, 'an empty-string credential must NOT count — process.env.GH_TOKEN is falsy and the filer exits 2');
+  assert.equal(notifierCallSites(step(['        env:', '          GH_TOKEN: ${{ env.GH_TOKEN }}']))[0].credentialScope, null, 'a self-referential expression must NOT count — it resolves to empty');
+  assert.equal(notifierCallSites(step(['        env:', '          GH_TOKEN_X: ${{ secrets.GITHUB_TOKEN }}']))[0].credentialScope, null, 'a near-miss key name must NOT count — the script reads GH_TOKEN and GITHUB_TOKEN, nothing else');
+  assert.equal(notifierCallSites(step(['        env:', '          GITHUB_TOKEN: ${{ github.token }}']))[0].credentialScope, 'step', 'the GITHUB_TOKEN spelling and the github.token expression are both legitimate');
+  assert.equal(notifierCallSites(step(['        env:', '          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}']))[0].credentialScope, 'step', 'a PAT-with-fallback expression is a real credential and must be accepted');
+
+  // SCOPE IS THE POINT, NOT PRESENCE. An env block on a DIFFERENT step in the
+  // same job never reaches the notifier, and a whole-file grep cannot tell the
+  // difference.
+  const otherStep = [
+    'jobs:',
+    '  roll:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    '      - name: Something else',
+    '        env:',
+    '          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+    '        run: echo hi',
+    '      - name: Notify on failure',
+    '        if: failure()',
+    '        run: |',
+    '          node .github/scripts/deploy-notify-failure.mjs --workflow x --result "${{ job.status }}"',
+  ].join('\n');
+  assert.equal(notifierCallSites(otherStep)[0].credentialScope, null, "a credential on a SIBLING step must NOT count — it is not in the notifier step's environment");
+
+  // Job scope and workflow scope DO reach it, and must be accepted or the guard
+  // fails a legitimate refactor and gets weakened.
+  const jobScope = [
+    'jobs:',
+    '  roll:',
+    '    runs-on: ubuntu-latest',
+    '    env:',
+    '      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+    '    steps:',
+    '      - name: Notify on failure',
+    '        if: failure()',
+    '        run: |',
+    '          node .github/scripts/deploy-notify-failure.mjs --workflow x --result "${{ job.status }}"',
+  ].join('\n');
+  assert.equal(notifierCallSites(jobScope)[0].credentialScope, 'job', 'a job-level env block reaches every step in the job and must be accepted');
+
+  const wfScope = [
+    'env:',
+    '  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+    '',
+    'jobs:',
+    '  roll:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    '      - name: Notify on failure',
+    '        if: failure()',
+    '        run: |',
+    '          node .github/scripts/deploy-notify-failure.mjs --workflow x --result "${{ job.status }}"',
+  ].join('\n');
+  assert.equal(notifierCallSites(wfScope)[0].credentialScope, 'workflow', 'a workflow-level env block reaches every step and must be accepted');
+
+  // The env parser itself, on the indents that distinguish the three scopes.
+  assert.deepEqual(envEntries('env:\n  A: 1\n  B: 2\n', 0), [['A', '1'], ['B', '2']], 'the workflow-scope parser must read a column-0 block');
+  assert.deepEqual(envEntries('    env:\n      A: 1\n', 0), [], 'and must NOT read a job-scope block as a workflow-scope one');
+  assert.deepEqual(envEntries('    env:\n      A: 1\n', 4), [['A', '1']], 'the job-scope parser must read a column-4 block');
+  assert.deepEqual(envEntries('        env:\n          A: 1\n', 8), [['A', '1']], 'and the step-scope parser a column-8 one');
+
+  // And the --result VALUE half, on the sibling that this PR modifies.
+  assert.equal(hasNonEmptyResult('--workflow loom-dataplane-roll --result "${{ job.status }}"'), true, 'the compliant sibling invocation must pass');
+  assert.equal(hasNonEmptyResult('--workflow loom-dataplane-roll --result ""'), false, 'and the empty-value mutation of it must NOT');
+  assert.equal(hasNonEmptyResult('--workflow full-app-deploy-commercial --result failure'), true, 'an unquoted literal value is still a value');
+
+  // `hasSubstantiveResult` is the stricter one the ratchet uses: it additionally
+  // rejects a bare SHELL variable, which is non-blank in the YAML and expands to
+  // nothing at runtime when unset — the same {file:false, category:'pending'}
+  // dead end an empty literal reaches.
+  assert.equal(hasSubstantiveResult('--result "${{ job.status }}"'), true, 'an Actions expression is resolved by the runner and must be accepted');
+  assert.equal(hasSubstantiveResult('--result failure'), true, 'and so must a literal outcome');
+  assert.equal(hasSubstantiveResult('--result ""'), false, 'an empty value must be rejected');
+  assert.equal(hasSubstantiveResult('--result "   "'), false, 'and a whitespace-only one');
+  assert.equal(hasSubstantiveResult('--result "$RESULT"'), false, 'a bare shell variable must be rejected — unset, it expands to nothing and the filer posts nothing');
+  assert.equal(hasSubstantiveResult('--result ${RESULT}'), false, 'and so must its braced spelling');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -524,10 +974,26 @@ test('#3416 — the runner-images lane fetches the ACR task log on failure, befo
   // PRESENT IS NOT SOLE. The line above proves the redactor is in the step; it
   // proves nothing about whether it is the ONLY route from the log file to
   // stdout. Adding one `cat "$LOG"` beside it republishes the raw Azure log with
-  // the suite green at 8/8 — measured 2026-08-23. So every line that touches the
+  // the suite green with zero failures — measured 2026-08-23. So every line that touches the
   // log variable must be one of the shapes that cannot leak its content.
+  //
+  // THE VARIABLE NAME IS DERIVED, NOT DEFAULTED. `rawLogPublications` defaults
+  // to `LOG`; calling it with that default over a step that had renamed its
+  // variable would examine ZERO lines and return [] — green and blind with the
+  // leak in place. So the name comes off the redirect, and the number of lines
+  // the allowlist actually judges is asserted before its verdict is trusted.
+  const logVar = fetchedLogVariable(diag.text);
+  assert.ok(logVar, 'the diagnostic step no longer redirects `az acr task logs` into a shell variable, so the redaction allowlist below has no variable to follow and would examine nothing');
+  const logRefLines = diag.text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => new RegExp(`\\$\\{?${logVar}\\b`).test(l));
+  assert.ok(
+    logRefLines.length >= 3,
+    `the redaction allowlist examined only ${logRefLines.length} line(s) referencing $${logVar} (expected >=3: the redirect, the emptiness test, the redactor). A population this small means the matcher lost the step, not that the step got safer`,
+  );
   assert.deepEqual(
-    rawLogPublications(diag.text),
+    rawLogPublications(diag.text, logVar),
     [],
     'a line in the diagnostic step can publish the CONTENT of the fetched ACR log without passing it through scripts/ci/_azure-redact.mjs. This repository is public and an Actions log is a publication surface — route it through the redactor, or reference only the PATH',
   );
@@ -639,6 +1105,72 @@ test('#3416 SELF-DEFENCE — the redaction allowlist passes the sanctioned shape
   // sitting next to it. This is the exact mutation that survived.
   const both = ['node -e "..._azure-redact.mjs..." "$LOG"', 'cat "$LOG"'].join('\n');
   assert.deepEqual(rawLogPublications(both), ['cat "$LOG"'], 'a raw publication beside the redacted one must still be caught');
+
+  // THE NARROWER MUTATION — a raw read on the SAME LINE as the redactor. The
+  // exemption was per-line and unconditional, so `cat "$LOG" && ` prepended to
+  // the redactor line published a raw Gov ACR task log into a PUBLIC repo's
+  // Actions log with this suite at RC=0, zero failures. Every one of these
+  // routes log bytes to stdout without passing them through the redactor.
+  for (const bad of [
+    'cat "$LOG" && node -e "..._azure-redact.mjs..." "$LOG"',
+    'node -e "..._azure-redact.mjs..." "$LOG"; cat "$LOG"',
+    'head -50 "$LOG" || node -e "..._azure-redact.mjs..." "$LOG"',
+    'node -e "..._azure-redact.mjs..." "$LOG" | cat "$LOG"',
+  ]) {
+    assert.deepEqual(
+      rawLogPublications(bad),
+      [bad],
+      `\`${bad}\` reaches the log content without routing it through the redactor; co-location with the redactor on one line must not launder it`,
+    );
+  }
+
+  // The shapes that DO route it through, which must keep passing — a guard that
+  // rejects the sanctioned form is a guard that gets weakened.
+  for (const good of [
+    'node -e "..._azure-redact.mjs..." "$LOG"',
+    'cat "$LOG" | node -e "..._azure-redact.mjs..."',
+    'cat "$LOG" | node -e "..._azure-redact.mjs..." | tee /tmp/keep',
+  ]) {
+    assert.deepEqual(rawLogPublications(good), [], `\`${good}\` pipes the log into the redactor or passes it as an argument, and must be allowed`);
+  }
+
+  // LIVE CONTROL FOR THE QUOTE-AWARE SPLITTER, read from the tree so it cannot
+  // rot into a fiction. The real redactor line carries `String(e&&e.message||e)`
+  // INSIDE its double-quoted `node -e` program: a naive split on `&&`/`||` tears
+  // the sanctioned line into fragments, one of which references the log and
+  // holds no redactor. That false positive is exactly how a guard gets relaxed.
+  //
+  // The variable name is DERIVED here too. Hard-coding `LOG` made a consistent
+  // rename of the step's variable fail this control — a legitimate refactor
+  // going red, which is the pressure that gets a guard deleted. Measured while
+  // building it, not hypothesised.
+  const liveDiag = namedSteps(readWorkflow(RUNNER_IMAGES)).find((s) => fetchesAcrTaskLog(s.text));
+  assert.ok(liveDiag, `no step in ${RUNNER_IMAGES} invokes the ACR log fetch — this control proves nothing without one`);
+  const liveVar = fetchedLogVariable(liveDiag.text);
+  assert.ok(liveVar, `the diagnostic step in ${RUNNER_IMAGES} no longer redirects the fetch into a variable`);
+  const liveRedactorLine = liveDiag.text
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => /_azure-redact\.mjs/.test(l) && new RegExp(`\\$\\{?${liveVar}\\b`).test(l));
+  assert.ok(liveRedactorLine, `no line in ${RUNNER_IMAGES} both invokes the redactor and names $${liveVar} — this control proves nothing without one`);
+  assert.ok(
+    /&&/.test(liveRedactorLine) && /\|\|/.test(liveRedactorLine),
+    `the live redactor line no longer contains \`&&\`/\`||\` inside its quoted program, so the splitter trap this control exists for is gone — replace the control rather than deleting it`,
+  );
+  assert.deepEqual(rawLogPublications(liveRedactorLine, liveVar), [], 'the LIVE redactor line must be allowed; a quote-blind operator split reports it as a leak');
+
+  // THE VARIABLE-NAME DERIVATION. `rawLogPublications` defaults to `LOG`, so a
+  // step that renamed its variable would be judged over an EMPTY population and
+  // pass with a leak in place. `fetchedLogVariable` is what stops that.
+  const renamed = [
+    'TASKLOG="${RUNNER_TEMP:-/tmp}/acr-task-$ID.log"',
+    'az acr task logs -r "$ACR" --run-id "$ID" > "$TASKLOG"',
+    'cat "$TASKLOG"',
+  ].join('\n');
+  assert.equal(fetchedLogVariable(renamed), 'TASKLOG', 'the variable must be derived from the redirect, not assumed to be LOG');
+  assert.deepEqual(rawLogPublications(renamed), [], 'DEMONSTRATION, not an endorsement: with the default name the allowlist sees no references at all and returns empty over a live leak');
+  assert.deepEqual(rawLogPublications(renamed, fetchedLogVariable(renamed)), ['cat "$TASKLOG"'], 'and with the derived name it catches it — this pair is why the live assertion derives the name');
+  assert.equal(fetchedLogVariable('echo "no fetch here"'), null, 'a step with no `az acr task logs` redirect must report null rather than a wrong name');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -670,11 +1202,15 @@ test('#3346 — loom-dataplane-roll has an automatic trigger and no `if:` reads 
   assert.ok(keys.length > 0, 'the trigger block could not be parsed at all — the matcher drifted');
   assert.ok(hasAutomaticTrigger(src), `loom-dataplane-roll's only triggers are ${JSON.stringify(keys)}; a rebuilt loom-unity / iceberg-catalog / loom-trino tag can therefore only ever land by hand (#3346)`);
   assert.ok(keys.includes('workflow_run'), 'the automatic trigger must be the workflow_run chain off the image producer');
-  assert.match(src, /workflows: \['build-fiab-images-acr-tasks'\]/, 'the producer must be build-fiab-images-acr-tasks — full-app-deploy-commercial is itself dispatch-only, so chaining to it would inherit the defect');
+  // COMMENT-STRIPPED, like every sibling assertion in this file. On raw source
+  // this would pass over a lane whose live `workflows:` had been repointed with
+  // the canonical string left behind in a comment. It is belt-and-braces: the
+  // `wr.workflows` deepEqual below is the structural form of the same check.
+  assert.match(stripComments(src), /workflows: \['build-fiab-images-acr-tasks'\]/, 'the producer must be build-fiab-images-acr-tasks — full-app-deploy-commercial is itself dispatch-only, so chaining to it would inherit the defect');
 
   // THE TRIGGER EXISTING IS NOT THE TRIGGER FIRING. Three one-token changes each
   // make this lane inert again while `keys.includes('workflow_run')` and the
-  // `workflows:` match above both stay green — all three measured green at 8/8
+  // `workflows:` match above both stay green — all three measured green with zero failures
   // on 2026-08-23:
   //   branches: [main] -> [main-disabled]   the workflow_run never matches
   //   types: [completed] -> [requested]     conclusion is null, so the gate below
@@ -713,15 +1249,24 @@ test('#3346 — loom-dataplane-roll has an automatic trigger and no `if:` reads 
   assert.match(jobGate[1], /conclusion == 'success'/, 'the job gate must require the producer run to have SUCCEEDED');
   assert.equal(/conclusion != 'success'/.test(jobGate[1]), false, "the job gate must not be written as `!= 'success'` — that is true for cancelled and skipped (#3368)");
   // The event half of the gate, asserted by VALUE. `event == 'pushh'` is false on
-  // every run, which makes the lane inert again — and it kept the suite at 8/8.
+  // every run, which makes the lane inert again — and it kept the suite green with zero failures.
   assert.match(
     jobGate[1],
     /github\.event\.workflow_run\.event == 'push'/,
     "the job gate must name the producer event as exactly 'push'; any other literal is false on every automatic run and the lane never fires (#3346)",
   );
 
-  // And the serialization key must not collapse on the automatic path.
-  assert.match(src, /group: loom-dataplane-roll-\$\{\{ inputs\.boundary \|\| 'commercial' \}\}/, 'the concurrency group must carry a fallback, or automatic runs form a separate group from dispatched ones and stop serializing against them');
+  // And the serialization key must not collapse on the automatic path. Read as
+  // a PARSED VALUE, not as a substring of raw source: `assert.match(src, ...)`
+  // was satisfied by the canonical string sitting in a comment above a broken
+  // live key, and `stripComments` alone would still be satisfied by it sitting
+  // in a TRAILING comment on that key. `concurrencyGroup` reads what Actions
+  // reads.
+  assert.equal(
+    concurrencyGroup(src),
+    "loom-dataplane-roll-${{ inputs.boundary || 'commercial' }}",
+    "the concurrency group must carry a fallback, or automatic runs form a separate group from dispatched ones and stop serializing against them. On the workflow_run path `inputs.boundary` is empty, so without the fallback the group is the literal 'loom-dataplane-roll-' while dispatched runs use 'loom-dataplane-roll-commercial'",
+  );
 });
 
 test('#3346 SELF-DEFENCE — the predicates fire on the verbatim before-shapes', () => {
@@ -769,4 +1314,29 @@ test('#3346 SELF-DEFENCE — the predicates fire on the verbatim before-shapes',
     'the explanatory comment quoting the old `if: inputs.boundary` line is gone; this control no longer proves the stripper works — restore it or replace the control',
   );
   assert.deepEqual(ifConditionsReadingRawInputs(src), [], 'the comment stripper regressed: a commented-out `if: inputs.` is being counted as live code');
+
+  // The concurrency-group parser, on the live shape and on BOTH comment-shaped
+  // bypasses. The assertion it replaced read raw source, so a canonical string
+  // in a whole-line comment above a broken key satisfied it; routing through
+  // `stripComments` alone would still be satisfied by the same string in a
+  // TRAILING comment, because that stripper drops whole-line comments only —
+  // deliberately, since a `#` inside a shell string on a `run:` line is not a
+  // comment.
+  const CANON = "loom-dataplane-roll-${{ inputs.boundary || 'commercial' }}";
+  const BROKEN = 'loom-dataplane-roll-${{ inputs.boundary }}';
+  const conc = (lines) => ['on:', '  workflow_dispatch:', '', 'concurrency:', ...lines, '  cancel-in-progress: false', '', 'jobs:', '  roll:'].join('\n');
+  assert.equal(concurrencyGroup(conc([`  group: ${CANON}`])), CANON, 'the live group value must parse out exactly');
+  assert.equal(
+    concurrencyGroup(conc([`  # canonical: group: ${CANON}`, `  group: ${BROKEN}`])),
+    BROKEN,
+    'a canonical value parked in a WHOLE-LINE comment above a broken key must not be read as the live value',
+  );
+  assert.equal(
+    concurrencyGroup(conc([`  group: ${BROKEN}  # canonical: group: ${CANON}`])),
+    BROKEN,
+    'and neither must one parked in a TRAILING comment on the broken key itself',
+  );
+  assert.equal(concurrencyGroup('on:\n  push:\n\njobs:\n  roll:\n'), null, 'a workflow with no concurrency block must parse as null rather than as an empty pass');
+  assert.equal(concurrencyGroup(conc([`  group: "${CANON}"`])), CANON, 'a re-quoted scalar must normalise to the same value — a legitimate reformat is not a red build');
+  assert.equal(concurrencyGroup(conc([`  group: ${CANON}`])).includes("'commercial'"), true, "and the value's own inner quotes must survive that normalisation");
 });

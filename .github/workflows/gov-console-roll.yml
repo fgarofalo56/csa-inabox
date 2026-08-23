@@ -751,9 +751,20 @@ jobs:
       #
       # --result is MANDATORY at this chokepoint (#3368). `if: failure()` is
       # already the correct predicate, but the flag is what stops a CANCELLED
-      # run from manufacturing a P0, and the RATCHET in
-      # .github/scripts/__tests__/deploy-notify-failure.test.mjs enumerates every
-      # caller mechanically, so this one cannot quietly drift off it.
+      # run from manufacturing a P0.
+      #
+      # `env: GH_TOKEN` is EQUALLY mandatory and is the half that is easy to
+      # lose: GITHUB_TOKEN is NOT ambient in an Actions job, so without these
+      # two lines deploy-notify-failure.mjs takes its `!token` branch, prints
+      # "Refusing to run" and exits 2 — the invocation is intact, every
+      # structural check is green, and the lane files NOTHING. That is #3844
+      # with the guard on. `issues: write` above is inert without it.
+      #
+      # Two ratchets enumerate the callers mechanically so neither property can
+      # quietly drift:
+      #   .github/scripts/__tests__/deploy-notify-failure.test.mjs   --result PRESENT
+      #   .github/scripts/__tests__/gov-deploy-lanes.test.mjs        the credential,
+      #                                                              and --result's VALUE
       - name: Notify on failure (#3844)
         if: failure()
         env:
