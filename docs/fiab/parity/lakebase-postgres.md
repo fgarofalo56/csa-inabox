@@ -1,3 +1,10 @@
+<!-- parity-doc-meta
+Reviewed-on: 2026-08-23
+Validated-against:
+  - apps/fiab-console/lib/editors/lakebase-editor.tsx
+  - apps/fiab-console/app/api/items/lakebase-postgres
+-->
+
 # lakebase-postgres — parity with the Azure Database for PostgreSQL Flexible Server portal blade
 
 **Source UI:** Azure portal — Azure Database for PostgreSQL Flexible Server
@@ -61,7 +68,46 @@ that deliverable: the portal blade, row by row.
 
 ## Totals
 
-**9 built (4 of them exceeding the portal, 2 Loom-only) · 7 partial · 14 MISSING — 30 rows.**
+**7 built (3 of them exceeding the portal, 2 Loom-only) · 8 partial · 15 MISSING — 30 rows.**
+
+> **Corrected 2026-08-23.** This line previously read *"9 built (4 of them
+> exceeding the portal, 2 Loom-only) · 7 partial · 14 MISSING"*. The row total
+> (30) was right, which is why the error survived — but the split was wrong in
+> three of four cells. Recounted mechanically from the coverage column of the
+> table above: **built** = rows 1, 5, 23, 27, 28, 29, 30; **partial** = rows 3, 6,
+> 8, 9, 10, 12, 13, 16; **MISSING** = rows 2, 4, 7, 11, 14, 15, 17, 18, 19, 20,
+> 21, 22, 24, 25, 26. The "exceeding" count of 4 also disagreed with the
+> Assessment section below, which says **three** — the Assessment was right
+> (rows 5, 27, 29).
+
+## Scope note — why this grades against Azure PostgreSQL, not Databricks Lakebase
+
+Recorded because #3778 proposed re-baselining the whole doc against the
+**Databricks Lakebase GA-on-Azure** surface. That is deliberately not what this
+doc measures, and the reason is a die-hard rule rather than a preference.
+
+`no-fabric-dependency.md` requires the **Azure-native backend to be the default**
+and any vendor backend to be strictly opt-in. For this item the default is Azure
+Database for PostgreSQL Flexible Server; Databricks Lakebase is the opt-in
+alternative, selected by the inline policy pencil in row 30. Grading the surface
+against Lakebase would score Loom against the backend most customers never
+select, and — under `cloud-parity.md` — against one **not available in Azure
+Government at all**, which would make the resulting grade meaningless for
+sovereign boundaries. The portal blade is the correct baseline.
+
+Two things follow, both of which are real work and neither of which is a
+re-baseline:
+
+1. **Lakebase-specific capabilities deserve their own rows**, in a clearly
+   marked opt-in-backend section, graded separately so the default-path grade
+   stays interpretable. Row 30 currently records only that the choice exists.
+2. **The row-9 branching story is already Lakebase-shaped** — snapshot → branch
+   server via PITR — and is called out as exceeding the portal. That is the
+   pattern to extend, and it works on the Azure-native default.
+
+If the operator wants the Lakebase-GA inventory regardless, it should land as a
+sibling doc (`docs/fiab/parity/lakebase-databricks.md`), not as a rewrite of this
+one. **This is a judgement call, flagged for the operator rather than actioned.**
 
 ## ux-baseline §7 spot-check
 
@@ -125,8 +171,12 @@ Cheapest high-value additions: **row 5's 6432 PgBouncer string** (one more
 
 ## Verification
 
-- **V3 (in-browser click-walk): OWED.** `loom-ui-verify` red since 2026-08-04
-  (FINISHLINE C13); GitHub Actions degraded. When recovered:
+- **V3 (in-browser click-walk): OWED — but no longer blocked.** This doc
+  previously recorded `loom-ui-verify` as "red since 2026-08-04 (FINISHLINE C13);
+  GitHub Actions degraded". Measured 2026-08-23, that is no longer true: the
+  workflow produced a **success on 2026-08-15T23:59:20Z** against `main` (its
+  most recent run, 2026-08-17, failed — so it is flaky, not down). The walk is
+  runnable today and simply has not been run for this surface:
   ```bash
   gh workflow run loom-ui-verify.yml --ref main -f target_route=/items/lakebase-postgres/<id>
   ```
