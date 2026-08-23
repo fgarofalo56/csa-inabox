@@ -154,6 +154,67 @@ test('CLEAN — LOOM_AZ_BIN reaches the SPAWN: the spawn error names the OVERRID
 const REL_SPECIFIER = /\b(from|import)(\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\3/g;
 
 /**
+ * Is `target` inside the repo tree?
+ *
+ * `path.relative()`, NOT `startsWith(path.resolve(REPO) + path.sep)`, which is
+ * what this used to be. A prefix test compares strings CASE-SENSITIVELY and
+ * NTFS is case-INSENSITIVE, so `…\scripts\ci` and `…\SCRIPTS\CI` name the same
+ * directory while only one of them trips the prefix. Measured on this file with
+ * the OLD prefix test restored and a poller sampling `scripts/ci` every 3ms:
+ * `mkdtempSync(path.join(CI_DIR.toLowerCase(), 'loom-guard-control-'))` left
+ * the CONTROL test at RC=0, pass=1, fail=0 while the poller OBSERVED
+ * `loom-guard-control-XXXXXX/deploy-fiab-guard.__control__.mjs` inside
+ * `scripts/ci`
+ * — the precise artifact this suite was changed to stop writing, back in the
+ * precise directory, on a green run. `path.win32.relative()` lower-cases both
+ * sides before comparing, so it sees through that; the POSIX build is
+ * unaffected because there the two names really are different directories.
+ *
+ * realpathSync.native() first, so a junction or symlink whose target is inside
+ * the tree is resolved rather than taken at face value. It throws on a path
+ * that does not exist yet, so only the DIRECTORY is canonicalised and the
+ * basename is rejoined — canonicalising `path.resolve(target)` directly would
+ * silently fall back to the uncanonicalised string for every not-yet-written
+ * file, i.e. for every call this function actually gets.
+ */
+function insideRepo(target) {
+  const canon = (p) => {
+    try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
+  };
+  const abs = path.resolve(target);
+  const canonAbs = path.join(canon(path.dirname(abs)), path.basename(abs));
+  const rel = path.relative(canon(REPO), canonAbs);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+/**
+ * Assert `prefix` names a location OUTSIDE the repo tree, then return it.
+ *
+ * Wrapped around the mkdtemp argument rather than checked on the following
+ * line so the check runs BEFORE anything is created: a prefix pointed back at
+ * the tree then never creates a directory there at all. The assertion this
+ * replaces sat AFTER mkdtempSync, so it could only complain about a directory
+ * it had already made — and because it threw before `dir` was returned, the
+ * caller's `finally` never ran and a FIRING guard stranded the very artifact
+ * it exists to keep out of the tree.
+ *
+ * Inline for a second reason: check-temp-artifact-safety.mjs reads LINE BY
+ * LINE, so hoisting the `path.join(os.tmpdir(), …)` onto its own line reads to
+ * that guard as a constant shared-temp path with no mkdtemp — measured, it
+ * turned that guard from RC=0 to RC=1 with five hits. Keeping the join inside
+ * the mkdtempSync call keeps both guards honest instead of trading one for the
+ * other.
+ */
+function outOfTree(prefix) {
+  assert.ok(
+    !insideRepo(`${prefix}probe`),
+    `the scratch root for the mutated copy is inside the repo tree (${prefix}) — a concurrent suite walks `
+      + 'scripts/ci and opens what it lists, so anything transient in there is a race',
+  );
+  return prefix;
+}
+
+/**
  * Write a mutated copy of a `scripts/ci` guard OUTSIDE the repo tree.
  *
  * ── WHY OUT OF TREE ────────────────────────────────────────────────────────
@@ -204,17 +265,106 @@ function writeMutantOutsideTheTree(text, basename) {
 
   // mkdtempSync, not a fixed name: a predictable path in a world-writable root
   // can be pre-created or symlinked by another local user, which is exactly
-  // what check-temp-artifact-safety.mjs flags.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-guard-control-'));
+  // what check-temp-artifact-safety.mjs flags. outOfTree() asserts the prefix
+  // is out of tree BEFORE mkdtemp creates anything.
+  const dir = fs.mkdtempSync(outOfTree(path.join(os.tmpdir(), 'loom-guard-control-')));
   const file = path.join(dir, basename);
-  assert.ok(
-    !path.resolve(file).startsWith(path.resolve(REPO) + path.sep),
-    `the mutated copy must not be written inside the repo tree (${file}) — a concurrent suite walks `
-      + 'scripts/ci and opens what it lists, so anything transient in there is a race',
-  );
+  // Re-checked on the path that was actually created. mkdtempSync could land
+  // somewhere the prefix did not name — a TMPDIR that is a junction into the
+  // tree is the realistic case, and insideRepo() resolves it. Cleaned up BEFORE
+  // failing, so this path cannot strand anything either.
+  if (insideRepo(file)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.fail(
+      `the mutated copy must not be written inside the repo tree (${file}) — a concurrent suite walks `
+        + 'scripts/ci and opens what it lists, so anything transient in there is a race',
+    );
+  }
   fs.writeFileSync(file, rewritten);
   return { dir, file };
 }
+
+/**
+ * Every way an ES module can derive a path from its OWN location.
+ *
+ * Keyed to the SHAPE — the whole `import.meta` property-access family — not to
+ * a list of spellings. The list it replaces was `/import\.meta\.url|__dirname/`,
+ * and `import.meta.dirname` matches NEITHER alternative. Measured, with the old
+ * pattern restored and the CONTROL test run in isolation: a subject given
+ * `const SELF_DIR = import.meta.dirname;` left it at RC=0, pass=1, fail=0 —
+ * fully blind. With this pattern the same mutation is RC=1, pass=0, fail=1, and
+ * so are the `new URL('.', import.meta.url)` and `import.meta.filename`
+ * spellings.
+ *
+ * That spelling is not hypothetical. `import.meta.dirname` / `.filename` appear
+ * 12 times across 4 files under `scripts/ci` — including the production script
+ * `deploy-retry.mjs:328`, whose own comment gives the rationale ("resolved from
+ * this module rather than `process.cwd()`"). It is the idiom of this directory,
+ * so it is the spelling a future edit is MOST likely to reach for.
+ *
+ * Matching `import.meta` wholesale rather than named properties also covers
+ * `import.meta.resolve()` and whatever Node adds to `import.meta` next. No `\b`
+ * anywhere on purpose: over-matching costs a loud, trivially-fixed red, and
+ * under-matching is the failure this pattern exists to stop.
+ */
+const LOCATION_DERIVED = /import\.meta|__dirname|__filename/;
+
+test('EMBEDDED CONTROL — the location-independence pattern sees every spelling', () => {
+  // POPULATION. On a clean tree the assertion in the CONTROL test below is a
+  // doesNotMatch against a subject that contains none of these, so it cannot
+  // move and on its own proves nothing about what the pattern can SEE. These
+  // fixtures are its population.
+  for (const shape of [
+    "const SELF_DIR = new URL('.', import.meta.url).pathname;",
+    'const SELF_DIR = import.meta.dirname;',
+    'const SELF_FILE = import.meta.filename;',
+    "const SIB = import.meta.resolve('./x.mjs');",
+    "const d = require('path').dirname(__filename);",
+    'const here = __dirname;',
+  ]) {
+    assert.match(shape, LOCATION_DERIVED, `the pattern is blind to: ${shape}`);
+  }
+  for (const safe of [
+    'const root = process.cwd();',
+    "const p = path.resolve('a', 'b');",
+    'const importantMetadata = 1;',
+  ]) {
+    assert.doesNotMatch(safe, LOCATION_DERIVED, `the pattern over-matches: ${safe}`);
+  }
+});
+
+test('EMBEDDED CONTROL — the containment check is not fooled by case or a sibling prefix', () => {
+  // POPULATION. writeMutantOutsideTheTree() calls insideRepo() exactly once per
+  // run and, on a clean run, always gets `false` — so that call site can never
+  // exercise the true branch and proves nothing on its own. These fixtures are
+  // the population; three of them are the shapes that defeated the startsWith()
+  // this replaced.
+  assert.equal(insideRepo(path.join(CI_DIR, 'x.__control__.mjs')), true, 'an in-tree path must be seen');
+  // The system temp root itself, with no constructed child: a `path.join` onto
+  // `os.tmpdir()` on this line would read to check-temp-artifact-safety.mjs as
+  // a constant shared-temp artifact path, and this predicate never creates or
+  // writes anything. Non-existent paths are covered by the two cases below.
+  assert.equal(insideRepo(os.tmpdir()), false, 'the system temp root must be allowed');
+
+  // The sibling-directory trap: `startsWith(REPO)` without a separator accepts
+  // `<repo>-other`, which is a different tree.
+  assert.equal(insideRepo(`${REPO}-other${path.sep}x.mjs`), false, 'a sibling of the repo is not inside it');
+
+  // The case dodge. Whether the lower-cased path is the SAME directory is a
+  // property of the filesystem, so it is PROBED rather than assumed: on NTFS it
+  // is the same directory and containment must hold; on a case-sensitive
+  // filesystem it is genuinely a different path and `false` is the correct
+  // answer, not a miss. Probing also stays correct if the repo is checked out
+  // at an already-lower-case path, where the two arms collapse.
+  const loweredDir = CI_DIR.toLowerCase();
+  const sameDirWhenLowered = fs.existsSync(loweredDir);
+  assert.equal(
+    insideRepo(path.join(loweredDir, 'x.__control__.mjs')),
+    sameDirWhenLowered,
+    'a case-folded in-tree path must be judged by whether the filesystem treats it as the same directory — '
+      + 'this is the exact dodge that put deploy-fiab-guard.__control__.mjs back into scripts/ci on a green run',
+  );
+});
 
 test('CONTROL — re-hardcoding the binary makes the measurement MOVE', () => {
   // The exact mutation #3704 filed, applied to a COPY: a suite that rewrites a
@@ -229,7 +379,7 @@ test('CONTROL — re-hardcoding the binary makes the measurement MOVE', () => {
   // identical either way.
   assert.doesNotMatch(
     original,
-    /import\.meta\.url|__dirname/,
+    LOCATION_DERIVED,
     'deploy-fiab-guard.mjs now derives a path from its own location, so a copy running from a temp directory '
       + 'is no longer the same subject and this control would be measuring something else. Give the copy the '
       + 'same root (see check-licenses-cannot-run.test.mjs) — do NOT move it back into scripts/ci, which a '
