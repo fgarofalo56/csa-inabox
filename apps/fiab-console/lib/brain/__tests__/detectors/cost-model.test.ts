@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { formatCostFigure } from '../../graph';
 import {
+  BILLING_DOC,
   CONTAINER_APPS_RETAIL_RATES,
   RATES_READ_AT,
   RATES_SOURCE,
@@ -96,6 +97,24 @@ describe('estimateAlwaysOnMonthlyCost — the measured founding case', () => {
     // …and states what it deliberately does NOT net off.
     expect(b).toContain('free grant');
     expect(b).toContain('cannot be attributed to one app');
+  });
+
+  it('the basis CITES the billing rules rather than asserting them from memory', () => {
+    // The free-grant sizes and the idle-eligibility conditions are facts about
+    // Azure, not about this estate. Stating them unsourced would be exactly the
+    // R7 failure — a claim the code cannot establish, rendered as a receipt.
+    const broker = node({ armId: BROKER_ARM, name: 'b', minReplicas: 2, cpu: 0.5, memory: '1Gi' });
+    const est = estimateAlwaysOnMonthlyCost(broker);
+    if (est.kind !== 'priced') throw new Error('unreachable');
+    expect(est.figure.basis).toContain(BILLING_DOC);
+    // The specific numbers, so a reader can check them against the cited page.
+    expect(est.figure.basis).toContain('180,000 vCPU-s');
+    expect(est.figure.basis).toContain('360,000 GiB-s');
+    // The idle conditions, verbatim enough to verify.
+    expect(est.figure.basis).toContain('0.01 vCPU');
+    expect(est.figure.basis).toContain('1,000 B/s');
+    // …and the caveat that a probed replica does not sit at idle continuously.
+    expect(est.figure.basis).toMatch(/liveness\s+and\s+readiness probes may leave idle briefly/);
   });
 
   it('renders with its provenance always attached', () => {

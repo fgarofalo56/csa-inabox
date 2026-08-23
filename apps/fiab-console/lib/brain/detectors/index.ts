@@ -51,6 +51,7 @@ export {
 } from './detector-kit';
 
 export {
+  BILLING_DOC,
   CONTAINER_APPS_RETAIL_RATES,
   RATES_READ_AT,
   RATES_SOURCE,

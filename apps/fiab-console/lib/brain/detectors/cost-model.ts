@@ -35,19 +35,22 @@
  * unknown region, which is the shape of the bug this paragraph exists to prevent.
  *
  * ── WHY THE IDLE RATE IS THE HEADLINE NUMBER ───────────────────────────────
- * The detectors that attach a cost are reporting a service NOTHING CALLS. A
- * replica that is up and receiving no requests bills at the IDLE rate, so idle is
- * the honest estimate for that claim. The ACTIVE-rate figure is computed too and
- * named in the basis as the upper bound, because a reader deserves the range
- * rather than one number whose regime is unstated.
+ * The detectors that attach a cost are reporting a service NOTHING CALLS, and
+ * `learn.microsoft.com/azure/container-apps/billing` defines the idle regime as
+ * exactly that shape: minReplicas > 0, scaled to that minimum, no HTTP requests
+ * in flight, under 0.01 vCPU, under 1,000 B/s. So idle is not the convenient
+ * rate, it is the documented one for this population. The ACTIVE figure is
+ * computed too and named in the basis as the upper bound, because a probed
+ * replica leaves idle briefly and a reader deserves the range rather than one
+ * number whose regime is unstated.
  *
  * ── WHAT THIS MODEL DELIBERATELY DOES NOT DO ───────────────────────────────
  * It does not net off the per-subscription monthly free grant (180,000 vCPU-s and
- * 360,000 GiB-s). That grant is shared across every Consumption app in the
- * subscription, so attributing it to ONE app requires the subscription's total
- * usage — which this pure module does not have. Subtracting it would flatter the
- * number by an amount the code cannot establish; the basis says so out loud
- * instead.
+ * 360,000 GiB-s, per the billing doc above). That grant is shared across every
+ * Consumption app in the subscription, so attributing it to ONE app requires the
+ * subscription's total usage — which this pure module does not have. Subtracting
+ * it would flatter the number by an amount the code cannot establish; the basis
+ * says so out loud instead.
  */
 
 import { derivedCost, type AzureResourceNode, type CostFigure } from '../graph';
@@ -60,6 +63,24 @@ export const RATES_READ_AT = '2026-08-23';
 
 /** The retail prices endpoint the table was read from. Public, unauthenticated. */
 export const RATES_SOURCE = 'https://prices.azure.com/api/retail/prices';
+
+/**
+ * The billing rules this model implements. Cited in every basis, because the
+ * free-grant sizes and the idle-eligibility conditions are FACTS ABOUT AZURE that
+ * this code must not state from memory (R7).
+ *
+ * Verified 2026-08-23. The page states, verbatim: the first 180,000 vCPU-seconds,
+ * 360,000 GiB-seconds and 2 million HTTP requests are free per subscription per
+ * calendar month; and a replica bills at the reduced IDLE rate when its revision
+ * has a minimum replica count greater than zero, is scaled to that minimum, all
+ * containers are running, it is processing no HTTP requests, it is using less
+ * than 0.01 vCPU cores, and it is receiving less than 1,000 bytes per second.
+ *
+ * That last list is why IDLE is the right headline rate here and not a
+ * convenient one: it is the DEFINITION of a min-replica service nobody calls,
+ * which is precisely the population these detectors report.
+ */
+export const BILLING_DOC = 'https://learn.microsoft.com/azure/container-apps/billing';
 
 /**
  * Consumption (Standard workload profile) rates for one ARM region.
@@ -214,9 +235,14 @@ export function estimateAlwaysOnMonthlyCost(node: AzureResourceNode): CostEstima
     `ACTIVE-rate upper bound $${activeUsd.toFixed(2)}/mo. ` +
     `Azure Container Apps Consumption retail list for '${region}', read ${RATES_READ_AT} from ${RATES_SOURCE}. ` +
     `Scale facts from extractor '${scale.source}'. ` +
-    'EXCLUDES the per-subscription monthly free grant (180,000 vCPU-s / 360,000 GiB-s), which is shared ' +
-    'across every Consumption app in the subscription and cannot be attributed to one app without the ' +
-    "subscription's total usage.";
+    `IDLE is the documented regime for this shape (${BILLING_DOC}): a replica bills at the reduced idle ` +
+    'rate when its revision has minReplicas > 0, is scaled to that minimum, is processing no HTTP ' +
+    'requests, is using under 0.01 vCPU and is receiving under 1,000 B/s. A replica answering liveness ' +
+    'and readiness probes may leave idle briefly, so the true figure sits between this and the ACTIVE ' +
+    'upper bound above. ' +
+    'EXCLUDES the per-subscription monthly free grant (180,000 vCPU-s / 360,000 GiB-s / 2M requests, ' +
+    `per ${BILLING_DOC}), which is shared across every Consumption app in the subscription and cannot ` +
+    "be attributed to one app without the subscription's total usage.";
 
   return {
     kind: 'priced',
