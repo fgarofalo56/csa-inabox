@@ -267,10 +267,27 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     totals: { tokens: 0, usd: 0, turns: 0, over: 0, warning: 0 },
   };
 
+  /**
+   * The shape `/api/workspaces` ACTUALLY returns: `listAccessibleWorkspaces()`
+   * verbatim, typed `Workspace[]`, whose display field is `name` — there is no
+   * `displayName` on `Workspace` (lib/types/workspace.ts; `displayName` lives on
+   * `WorkspaceItem`, a different type). The first cut of this spec fed the
+   * picker `displayName`, so `label: w.displayName || w.name || w.id` could have
+   * its `w.name` operand — the ONLY one production ever evaluates — deleted and
+   * every assertion still passed, while every workspace rendered as a raw GUID
+   * live. That is the exact defect #3742 is about, so the fixture models the
+   * route, not the test. `ws-3` pins the `w.id` tail of the same chain.
+   */
+  const WORKSPACES = [
+    { id: 'ws-1', name: 'Sales analytics' },
+    { id: 'ws-2', name: 'Finance' },
+    { id: 'ws-3' },
+  ];
+
   it('offers the real workspaces instead of a free-text Scope id box', async () => {
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/workspaces': { status: 200, body: [{ id: 'ws-1', displayName: 'Sales analytics' }, { id: 'ws-2', displayName: 'Finance' }] },
+      '/api/workspaces': { status: 200, body: WORKSPACES },
     });
     mount(<TokenBudgetPanel />);
 
@@ -284,12 +301,15 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     await userEvent.click(picker);
     expect(await screen.findByRole('option', { name: 'Sales analytics' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Finance' })).toBeInTheDocument();
+    // A workspace with no name falls back to its id rather than an empty row —
+    // an unlabelled option is unpickable, which is the same dead end.
+    expect(screen.getByRole('option', { name: 'ws-3' })).toBeInTheDocument();
   });
 
   it('switching scope to "agent" offers the agents the ledger has actually attributed', async () => {
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/workspaces': { status: 200, body: [{ id: 'ws-1', displayName: 'Sales analytics' }] },
+      '/api/workspaces': { status: 200, body: [{ id: 'ws-1', name: 'Sales analytics' }] },
     });
     mount(<TokenBudgetPanel />);
 
@@ -302,6 +322,38 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     const picker = await within(dialog).findByRole('combobox', { name: /Agent/i });
     await userEvent.click(picker);
     expect(await screen.findByRole('option', { name: 'SQL helper' })).toBeInTheDocument();
+  });
+
+  it('switching scope DISCARDS the id picked under the previous scope', async () => {
+    // The handler clears `scopeId` on a scope change, and the docblock beside it
+    // says why: a workspace id is never a valid agent id, and enforcement joins
+    // on the exact id — so a budget saved against the other scope's identifier
+    // is accepted, listed as active, and can never match a usage row. Nothing
+    // asserted it, so dropping the `setScopeId('')` statement shipped green.
+    routeMock({
+      '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
+      '/api/workspaces': { status: 200, body: [{ id: 'ws-1', name: 'Sales analytics' }] },
+    });
+    mount(<TokenBudgetPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'New budget' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // Pick a WORKSPACE, so a real id is held.
+    await userEvent.click(await within(dialog).findByRole('combobox', { name: /Workspace/i }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Sales analytics' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled());
+
+    // Now switch the scope. The workspace id must NOT survive into agent scope.
+    await userEvent.click(within(dialog).getByRole('combobox', { name: /^Scope$/ }));
+    await userEvent.click(await screen.findByRole('option', { name: 'agent' }));
+
+    // Save gates on `scopeId`, so a stale id leaves it enabled — that is the
+    // one-click path to the silently-unmatchable budget.
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled());
+    // ...and the stale workspace id is not sitting in the Agent field either.
+    expect(within(dialog).queryByText('ws-1')).toBeNull();
+    expect(within(dialog).queryByDisplayValue('ws-1')).toBeNull();
   });
 
   it('HONEST FALLBACK — when the workspace list cannot be read the dialog is not a dead end', async () => {

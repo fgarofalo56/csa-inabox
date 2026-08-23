@@ -393,6 +393,12 @@ function BudgetDialog({
       const d: unknown = await r.json();
       const raw = Array.isArray(d) ? d : ((d as { workspaces?: unknown[] })?.workspaces || []);
       return (raw as Record<string, string>[])
+        // `/api/workspaces` returns `Workspace[]`, whose display field is
+        // `name` (lib/types/workspace.ts) — so `w.name` is the operand that
+        // actually runs here, and `w.id` is the tail for a nameless doc.
+        // `displayName` is a defensive alias only: this route does not emit it
+        // today, so a test fixture that supplies it exercises none of the live
+        // path and would let `w.name` be deleted with every assertion green.
         .map((w) => ({ id: w.id, label: w.displayName || w.name || w.id }))
         .filter((w) => !!w.id);
     },
