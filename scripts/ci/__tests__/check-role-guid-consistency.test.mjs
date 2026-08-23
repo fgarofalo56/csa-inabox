@@ -84,17 +84,34 @@ const vanished = [];
  *
  * ── WHY IT RETRIES THE SCAN RATHER THAN SKIPPING THE FILE ──────────────────
  * Skipping the unreadable file and continuing is the obvious fix and it is the
- * WRONG one here. The two assertions this scan feeds are population floors —
- * `pairs.length >= 100` and `resolved >= 80` — and they exist precisely so a
- * matcher that silently degrades stays visible. A skip subtracts from exactly
- * the number those floors watch, so "tolerate ENOENT" and "the population may
- * quietly drop" would become one code path, which is the zero-population
- * failure this repo keeps rediscovering.
+ * WRONG one here: a skip silently shrinks the population, which is the
+ * zero-population failure this repo keeps rediscovering. Re-running scan()
+ * cannot do that — the retry re-LISTS the tree, the transient file is no longer
+ * in the listing, and the assertions run against a COMPLETE scan. The tolerance
+ * costs a rescan, not a measurement.
  *
- * Re-running scan() cannot do that. The retry re-LISTS the tree, the transient
- * file is no longer in the listing, and the floors run against a COMPLETE scan.
- * Nothing is ever dropped from the population; the tolerance costs a rescan,
- * not a measurement.
+ * DO NOT ARGUE THAT THE POPULATION FLOORS WOULD CATCH A SKIP. An earlier
+ * revision of this comment said a skip "subtracts from exactly the number those
+ * floors watch", implying `pairs >= 100` / `resolved >= 80` were the safety
+ * net. MEASURED (temp/root-headroom.mjs, dropping one scan root at a time):
+ *
+ *     dropped root          pairs / resolved   verdict
+ *     (none)                    342 / 155       pass
+ *     platform/fiab/bicep       157 /  74       TRIPS
+ *     apps/fiab-console         269 / 115       pass
+ *     scripts                   290 / 130       pass
+ *     .github                   310 / 146       pass
+ *
+ * You have to lose the BICEP tree — 185 of 342 bindings — before the floors say
+ * anything. A partial scan that dropped the whole `scripts` root, i.e. the root
+ * this race actually happens in, passes at 290/130 with `vanished` reporting 0.
+ * The floors are ~3.4x looser than that sentence claimed, and stating a
+ * stronger property than was tested is the R7 error this guard exists to catch.
+ *
+ * So the "retry, never skip" decision does NOT rest on this paragraph. It rests
+ * on the per-root assertion in `the real repo yields a substantial, resolvable
+ * population` below, which goes red under exactly that mutation. Prose is not a
+ * guard; that assertion is.
  *
  * The tolerance is bounded and DISCLOSED either way: every vanished path is
  * recorded, the count is reported and asserted small by the test below, and a
@@ -112,14 +129,36 @@ function scanRepo() {
       scanned = scan();
       return scanned;
     } catch (err) {
-      // ENOENT only. Anything else — EACCES, EISDIR, a malformed read — is a
-      // real fault and must not be retried into silence.
-      if (err?.code !== 'ENOENT') throw err;
-      vanished.push(err.path ?? '<unnamed>');
+      // ENOENT and EPERM are the two faces of THIS race. Anything else —
+      // EACCES, EISDIR, a malformed read — is a real fault and must not be
+      // retried into silence.
+      //
+      // EPERM is the same race on WINDOWS. `unlink()` on a file another handle
+      // still has open can leave the directory entry in place and mark the file
+      // delete-pending; an `open()` inside that window fails with
+      // ERROR_DELETE_PENDING, which surfaces as EPERM — NOT ENOENT. Review of
+      // this PR OBSERVED exactly that under forced churn (one scan in four).
+      // I could NOT reproduce it on my box: current Node deletes with
+      // FILE_DISPOSITION_POSIX_SEMANTICS, which removes the entry immediately
+      // and yields ENOENT, so the EPERM branch here was proven by INJECTING the
+      // error into the real scanRepo() path rather than provoking it from the
+      // OS (temp/eperm-inject.mjs — ENOENT-only rethrows, this absorbs).
+      //
+      // Do not narrow it back to ENOENT because "CI is green":
+      // loom-guardrails.yml:68 is `runs-on: ubuntu-latest`, where unlink→open
+      // is always ENOENT, so an ENOENT-only catch reads correct forever in CI
+      // and rethrows unhandled on the Windows workstation every agent in this
+      // repo actually works on.
+      if (err?.code !== 'ENOENT' && err?.code !== 'EPERM') throw err;
+      // The code is recorded with the path: "vanished" is true of ENOENT and
+      // only approximately true of a delete-pending EPERM, and the diagnostic
+      // must not assert the one when it saw the other.
+      vanished.push(`${err.path ?? '<unnamed>'} (${err.code})`);
       if (vanished.length > VANISH_BUDGET + 1) {
-        err.message = `${err.message}\n  ${vanished.length} file(s) vanished between the directory listing `
-          + `and the read across as many rescans, so this is not a one-off race — something is writing into a `
-          + `scanned tree (${SCAN_ROOTS.join(', ')}) while the tests run:\n    ${vanished.join('\n    ')}`;
+        err.message = `${err.message}\n  ${vanished.length} file(s) went unreadable between the directory `
+          + `listing and the read (gone, or delete-pending on Windows) across as many rescans, so this is not `
+          + `a one-off race — something is writing into a scanned tree (${SCAN_ROOTS.join(', ')}) while the `
+          + `tests run:\n    ${vanished.join('\n    ')}`;
         throw err;
       }
     }
@@ -664,12 +703,39 @@ test('the real repo yields a substantial, resolvable population', () => {
   // The floors in main() are `> 0`; this asserts the tree is genuinely being
   // read, so a matcher that silently degrades to a handful of hits is visible
   // here even while the binary floor still passes.
-  //
-  // These two numbers are also why scanRepo() RETRIES rather than skipping an
-  // unreadable file: a skip would subtract from exactly what they watch.
   const { pairs, resolved } = scanRepo();
   assert.ok(pairs.length >= 100, `only ${pairs.length} bindings harvested`);
   assert.ok(resolved >= 80, `only ${resolved} bindings resolved`);
+
+  // EVERY SCAN ROOT MUST CONTRIBUTE — this is what actually enforces
+  // scanRepo()'s "retry, never skip" decision, and it is here because the two
+  // floors above DO NOT. Measured by dropping one root at a time
+  // (temp/root-headroom.mjs):
+  //
+  //     dropped root          pairs / resolved   the floors above say
+  //     (none)                    342 / 155       pass
+  //     platform/fiab/bicep       157 /  74       TRIPS
+  //     apps/fiab-console         269 / 115       pass
+  //     scripts                   290 / 130       pass   <- where the race is
+  //     .github                   310 / 146       pass
+  //
+  // So a scanRepo() mutated to give up quietly and return a PARTIAL scan —
+  // drop the affected root, never record it in `vanished` — passes 4/4 with
+  // `vanished` reporting 0, at 290/130, with the entire `scripts` tree missing.
+  // Per-root contributions are 185 / 73 / 52 / 32, so none of these is a
+  // zero-population assertion.
+  //
+  // Keyed on `${root}/` and not a bare prefix: `startsWith('scripts')` would
+  // also accept a hypothetical `scripts-other/`, the sibling-directory trap
+  // this repo already pays for elsewhere.
+  for (const root of SCAN_ROOTS) {
+    assert.ok(
+      pairs.some((p) => p.file.startsWith(`${root}/`)),
+      `no bindings harvested from ${root} — the scan is PARTIAL, not clean. The totals above can still pass `
+        + 'with a whole root missing, so this is the assertion that catches it. Something dropped a scan root: '
+        + 'do NOT delete this check, find what stopped reading that tree.',
+    );
+  }
 });
 
 test('the repo is clean — every resolved binding carries its documented id', () => {
@@ -690,15 +756,16 @@ test('the repo scan absorbed at most a couple of vanished files, and names them'
   // so this still measures something when run with --test-name-pattern.
   scanRepo();
   t.diagnostic(
-    `files that vanished between the directory listing and the read: ${vanished.length}`
+    `files that went unreadable between the directory listing and the read: ${vanished.length}`
       + (vanished.length > 0 ? ` — ${vanished.join(', ')}` : ''),
   );
   assert.ok(
     vanished.length <= VANISH_BUDGET,
-    `${vanished.length} file(s) vanished mid-scan, over a budget of ${VANISH_BUDGET}. The EXPECTED value is `
-      + 'ZERO: the two suites that used to write a transient `*.__control__.mjs` into scripts/ci now write it '
-      + 'to a temp directory. More than a couple means something is writing into a scanned tree again — fix '
-      + `that, do NOT raise the budget:\n    ${vanished.join('\n    ')}`,
+    `${vanished.length} file(s) went unreadable mid-scan (gone, or delete-pending on Windows), over a budget `
+      + `of ${VANISH_BUDGET}. The EXPECTED value is ZERO: the two suites that used to write a transient `
+      + '`*.__control__.mjs` into scripts/ci now write it to a temp directory. More than a couple means '
+      + 'something is writing into a scanned tree again — fix that, do NOT raise the budget:'
+      + `\n    ${vanished.join('\n    ')}`,
   );
 });
 
