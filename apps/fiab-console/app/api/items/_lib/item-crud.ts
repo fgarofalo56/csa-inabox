@@ -20,6 +20,7 @@ import {
   upsertGovernanceItem, deleteGovernanceItem, docForGovernanceItem, isCatalogDataType,
 } from '@/lib/azure/governance-catalog-index';
 import { autoOnboardToPurview, offboardFromPurview } from '@/lib/azure/purview-autoonboard';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/thread/thread-edges';
 import { labelRank } from '@/lib/governance/label-propagation';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
@@ -48,6 +49,159 @@ export interface RecycledState {
 
 /** Soft-deleted-items filter fragment — excludes recycle-bin items from a query. */
 const NOT_RECYCLED = '(NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)';
+
+/**
+ * SERVER-OWNED ITEM STATE — keys a REQUEST BODY may never introduce or change
+ * (#3611).
+ *
+ * THE DEFECT THIS CLOSES. The generic item PATCH
+ * (`app/api/items/[type]/[id]/route.ts`) and {@link updateOwnedItem} both
+ * replaced `state` WHOLESALE from the request body, with no field validation.
+ * `state` is a free-form bag, but a handful of its keys are not user data at
+ * all — they NAME a platform resource that a later request DESTROYS or READS
+ * with the Console's own managed identity. Measured sinks on this tree:
+ *
+ *   state.secretRef      → items/lakehouse-shortcut DELETE → deleteShortcutSecret()
+ *                          i.e. a Key Vault SOFT-DELETE of an arbitrary secret.
+ *                          `admin-plane/main.bicep` points LOOM_SHORTCUT_KEYVAULT
+ *                          at the admin-plane vault and no params file overrides
+ *                          it, so that name-space contains the platform's own
+ *                          credentials — `loom-msal-client-secret` included.
+ *                          Deleting it reproduces the 2026-07-19 sign-in outage.
+ *   state.engineObject   → items/lakehouse-shortcut DELETE → dropShortcutObject()
+ *                          which interpolates it into `DROP VIEW ${obj};` /
+ *                          `DROP TABLE IF EXISTS ${obj};`, and POST action=query
+ *                          which interpolates it into `SELECT TOP n * FROM ${obj}`
+ *                          — arbitrary SQL as a Synapse SQL admin.
+ *   state.appRuntime.gitAuth.secretName
+ *                        → items/loom-app-runtime/[id]/git-credential DELETE →
+ *                          deleteKeyVaultSecret(). A SECOND item type, which is
+ *                          why this list is keyed by KEY NAME and applied to
+ *                          every item type rather than to one route.
+ *
+ * None of these needed elevated privilege: a shortcut in the caller's OWN
+ * workspace was enough, because the escalation is state the caller may write
+ * being trusted by a sink the caller may also reach.
+ *
+ * WHY THESE KEYS AND NOT MORE. `engine` is deliberately ABSENT: `code-report`
+ * legitimately changes `state.engine` through {@link updateOwnedItem}
+ * (`items/code-report/[id]/content/route.ts`, allowlist-validated against
+ * CODE_REPORT_ENGINES), and blocking it would break that editor while adding
+ * nothing — BOTH shortcut sinks short-circuit unless `engineObject` is set, so
+ * `engineObject` alone closes them.
+ *
+ * WHY THIS DOES NOT BREAK THE 128 CALLERS OF updateOwnedItem. The rule is
+ * reject-on-CHANGE, not reject-on-presence, and it compares the SET of values
+ * seen per key rather than their positions — so the near-universal
+ * `{ ...item.state, oneField: x }` pattern carries these keys through
+ * unchanged and is unaffected, as is a reordered array. Measured: zero
+ * `updateOwnedItem` call sites write any key in this list. The legitimate
+ * writers all bypass this helper and go straight to `items.item().replace()` /
+ * `items.items.create()` — `saveAppRuntime` (gitAuth.secretName),
+ * `dqSaveConfig` (semantic-model, which policy-checks its own secretRef), and
+ * the lakehouse-shortcut POST (which MINTS secretRef/engineObject).
+ * OMISSION is allowed and is fail-safe: a dropped `secretRef` orphans a vault
+ * secret, it cannot delete one.
+ *
+ * This is defence in depth, NOT the primary control. The primary control is at
+ * the sink, matching the precedent this codebase already set for the identical
+ * class at `lib/azure/loom-apps-runtime-templates.ts` (`assertSecretReadAllowed`
+ * on `env[].secretRef` before it reaches a container). The sink guard holds for
+ * ANY writer — including `createOwnedItem`, which is deliberately NOT covered
+ * here because `items/loom-app-runtime/import` legitimately supplies nested
+ * `env[].secretRef` in a `.loomapp` bundle at create time.
+ */
+export const SERVER_OWNED_STATE_KEYS: readonly string[] = [
+  'secretRef',
+  'secretName',
+  'patSecretRef',
+  'keyVaultSecret',
+  'engineObject',
+  '_recycled',
+];
+const SERVER_OWNED_SET = new Set<string>(SERVER_OWNED_STATE_KEYS);
+
+/** Keys that poison a later object spread / Cosmos round-trip. Never valid state. */
+const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** Bounds recursion over caller-supplied JSON. */
+const MAX_STATE_DEPTH = 12;
+
+/** Thrown when a request body tries to write state the server owns. */
+export class ServerOwnedStateError extends Error {
+  status = 400;
+  constructor(public readonly key: string, detail: string) {
+    super(detail);
+    this.name = 'ServerOwnedStateError';
+  }
+}
+
+/** JSON with sorted keys, so key ORDER never reads as a value change. */
+function stableStringify(v: unknown, depth = 0): string {
+  if (depth > MAX_STATE_DEPTH || v === null || typeof v !== 'object') return JSON.stringify(v ?? null) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map((x) => stableStringify(x, depth + 1)).join(',')}]`;
+  const entries = Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${stableStringify(x, depth + 1)}`).join(',')}}`;
+}
+
+/**
+ * Collect, by KEY NAME, the set of values a state tree carries for every
+ * server-owned key — at any depth, inside arrays included. Keyed by name rather
+ * than by path so moving an entry within an array is not mistaken for a change.
+ */
+function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth = 0): void {
+  if (depth > MAX_STATE_DEPTH || node === null || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const v of node) collectServerOwned(v, out, depth + 1);
+    return;
+  }
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (POLLUTING_KEYS.has(k)) {
+      throw new ServerOwnedStateError(k, `"${k}" is not a valid item-state key.`);
+    }
+    if (SERVER_OWNED_SET.has(k)) {
+      let bucket = out.get(k);
+      if (!bucket) { bucket = new Set<string>(); out.set(k, bucket); }
+      bucket.add(stableStringify(v));
+      // Do NOT descend into a server-owned subtree: its whole value is compared.
+      continue;
+    }
+    collectServerOwned(v, out, depth + 1);
+  }
+}
+
+/**
+ * Throw {@link ServerOwnedStateError} when `nextState` would INTRODUCE or CHANGE
+ * a {@link SERVER_OWNED_STATE_KEYS} value that `currentState` does not already
+ * carry. Omission is permitted (and fail-safe). See the block comment above.
+ */
+export function assertNoServerOwnedStateChange(nextState: unknown, currentState: unknown): void {
+  if (!nextState || typeof nextState !== 'object') return;
+  const next = new Map<string, Set<string>>();
+  collectServerOwned(nextState, next);
+  if (next.size === 0) return;
+  const current = new Map<string, Set<string>>();
+  try {
+    collectServerOwned(currentState, current);
+  } catch {
+    // A polluting key already stored cannot make a WRITE safe — treat the
+    // current tree as carrying nothing, so any incoming value is refused.
+    current.clear();
+  }
+  for (const [key, values] of next) {
+    const allowed = current.get(key);
+    for (const v of values) {
+      if (!allowed || !allowed.has(v)) {
+        throw new ServerOwnedStateError(
+          key,
+          `"${key}" is set by Loom, not by the client: this request would change it. ` +
+            'It names a Key Vault secret or a query-engine object that a later delete or query acts on, ' +
+            'so it can only be written by the surface that mints it.',
+        );
+      }
+    }
+  }
+}
 
 /**
  * Mirror a data-catalog item into the `loom-governance-items` AI Search index
@@ -143,11 +297,26 @@ async function resolveDomainName(tenantId: string, domainId?: string): Promise<s
  * (default `Draft`), and consumer search filters to `Published` — so a Draft
  * product is in the index but invisible to consumers until published.
  */
-async function mirrorDataProduct(item: WorkspaceItem, tenantId: string): Promise<void> {
+async function mirrorDataProduct(item: WorkspaceItem): Promise<void> {
   if (item.itemType !== 'data-product') return;
+  // #3501 — the doc's `tenantId` is the marketplace DISCOVERY BOUNDARY
+  // (`searchDataProducts` always injects `tenantId eq '<caller oid>'`), so it
+  // must carry the OWNER's tenant, never the caller's. Every call site used to
+  // pass the caller (directly as `session.claims.oid`, or as a `tenantId`
+  // parameter each caller populated from it), which is why a collaborator's
+  // save re-homed the product out of the owner's marketplace into their own.
+  // Unknown owner → skip the mirror rather than stamp a wrong boundary; the
+  // index is derived and the next owner-side save re-projects it.
+  //
+  // The domain-name lookup takes the OWNER scope too: per #3753's
+  // `domainScopeFor`, a scope that does not match the ambient session resolves
+  // to null and the doc falls back to the raw domain id — the honest
+  // degradation — rather than reading a collaborator's unrelated domain map.
+  const ownerTenantId = await resolveDataProductDocTenant(item);
+  if (!ownerTenantId) return;
   const domainId = (item.state as Record<string, unknown> | undefined)?.domain;
-  const domainName = await resolveDomainName(tenantId, domainId ? String(domainId) : undefined);
-  await upsertDataProductDoc(docForDataProduct(item, tenantId, domainName));
+  const domainName = await resolveDomainName(ownerTenantId, domainId ? String(domainId) : undefined);
+  await upsertDataProductDoc(docForDataProduct(item, ownerTenantId, domainName));
 }
 
 /**
@@ -616,7 +785,7 @@ export async function createOwnedItem(
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
   // Mirror a data-product into the consumer-discovery index (best-effort; no-throw).
-  void mirrorDataProduct(resource!, session.claims.oid);
+  void mirrorDataProduct(resource!);
   // Mirror into the governance data-catalog index (best-effort; data types only).
   void mirrorGovernanceDoc(resource!, session.claims.oid);
   // Auto-onboard to Microsoft Purview as a catalog asset (best-effort; no-throw;
@@ -643,6 +812,12 @@ export async function updateOwnedItem(
 ): Promise<WorkspaceItem | null> {
   const current = await loadOwnedItem(itemId, itemType, tenantId);
   if (!current) return null;
+  // #3611 — `state` is replaced wholesale below, so refuse a patch that would
+  // introduce or change a key the SERVER owns (a Key Vault secret name, a
+  // query-engine object). Throws ServerOwnedStateError (status 400); callers
+  // that do not catch it surface it as a 500, which is still a refusal — the
+  // write does not happen either way.
+  assertNoServerOwnedStateChange(patch.state, current.state);
   const next: WorkspaceItem = {
     ...current,
     displayName: patch.displayName?.trim() || current.displayName,
@@ -660,7 +835,7 @@ export async function updateOwnedItem(
   // oid — the generic route path carries the display name.
   await recordItemVersion(current, resource ?? next, { oid: tenantId });
   void upsertLoomDoc(docForItem(resource!, tenantId));
-  void mirrorDataProduct(resource!, tenantId);
+  void mirrorDataProduct(resource!);
   void mirrorGovernanceDoc(resource!, tenantId);
   emitLoomEvent({
     type: 'item.updated',
@@ -708,6 +883,44 @@ export async function deleteOwnedItem(
  * owns its parent workspace. Used by the recycle-bin restore/purge paths,
  * which can't use loadOwnedItem (that filter would never see recycled items
  * and also requires the itemType up-front).
+ *
+ * ── #3706 — THIS NARROWNESS IS THE CONTROL. DO NOT "FIX" IT WIDER. ──────────
+ *
+ * The workspace check below is a POINT READ in the CALLER's own partition
+ * (`ws.item(workspaceId, tenantId)`, where `tenantId` is `session.claims.oid`).
+ * That answers "did YOU create this workspace", not "may you write in it" — so
+ * it is strictly narrower than the canonical `authorizeWorkspace` ladder used
+ * elsewhere, and a tenant admin or a shared-workspace member is refused here
+ * even though they can write in the workspace.
+ *
+ * That asymmetry looks like the #2947 defect (an `assertOwner` inlined under
+ * another name, which 404'd legitimate members) and it will keep attracting the
+ * same fix. It is NOT the same, because of what is on the other end:
+ *
+ *   restoreOwnedItem()  → un-deletes an item and re-indexes it
+ *   purgeRecycledItem() → HARD-DELETES the Cosmos document, unrecoverably
+ *
+ * Widening this to workspace-write access would hand every shared-workspace
+ * collaborator an irreversible purge over items they did not delete, and — via
+ * restore — the ability to resurrect an item its owner deliberately removed.
+ * Over-restrictive here is the SAFE direction: the failure mode is "an admin
+ * must ask the owner to restore", not "a collaborator destroyed the only copy".
+ *
+ * If restore/purge genuinely must reach beyond the creator, that is a DESIGN
+ * change, not a guard relaxation: it needs an explicit recycle-bin permission
+ * with its own authorization ladder, restore and purge separated (restore is
+ * recoverable, purge is not), and an audit record of who purged what. It is not
+ * achieved by swapping this point read for a cross-partition query.
+ *
+ * `recycle-bin-tenancy.test.ts` pins both halves of this — the read is
+ * partition-scoped to the caller, and a workspace whose `tenantId` does not
+ * POSITIVELY equal the caller's is refused — so a later widening fails the
+ * suite instead of shipping quietly.
+ *
+ * Note the tenant check is a POSITIVE match (`resource.tenantId !== tenantId`
+ * with `tenantId` always populated), not the `caller && doc && caller !== doc`
+ * shape that lets a claim-less session through by short-circuit. Keep it that
+ * way (cf. commit bfd67ed1).
  */
 export async function loadRecycledItem(itemId: string, tenantId: string): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();
@@ -719,6 +932,11 @@ export async function loadRecycledItem(itemId: string, tenantId: string): Promis
     .fetchAll();
   const current = resources[0];
   if (!current) return null;
+  // A caller-supplied id must never become an existence oracle: every failure
+  // below returns null, which both call sites render as an indistinguishable
+  // 404 ("item not found in recycle bin") — never a 403 that would confirm the
+  // id exists in someone else's tenant.
+  if (!tenantId) return null;
   const ws = await workspacesContainer();
   try {
     const { resource } = await ws.item(current.workspaceId, tenantId).read<Workspace>();
@@ -837,7 +1055,7 @@ export async function restoreOwnedItem(
   const { resource: restored } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
   // Re-index (best-effort; no-throw).
   void upsertLoomDoc(docForItem(restored!, tenantId));
-  void mirrorDataProduct(restored!, tenantId);
+  void mirrorDataProduct(restored!);
   void mirrorGovernanceDoc(restored!, tenantId);
   // Auto-reconcile lineage — un-tombstone every Thread edge this item's
   // soft-delete had hidden, bringing its lineage back (best-effort; no-throw).

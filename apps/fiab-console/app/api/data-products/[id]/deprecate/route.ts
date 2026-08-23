@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import { setLifecycleState, resolveLifecycleState } from '@/lib/dataproducts/lifecycle';
 import type { DeprecationRecord } from '@/lib/dataproducts/versioning';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
@@ -85,7 +86,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         });
       } catch { /* notification is best-effort */ }
     }
-    try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+    try {
+      // #3501 — the OWNER's tenant, not the caller's (see owner-tenant.ts).
+      const ownerTid = await resolveDataProductDocTenant(updated);
+      if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+    } catch { /* derived */ }
 
     return NextResponse.json({
       ok: true,

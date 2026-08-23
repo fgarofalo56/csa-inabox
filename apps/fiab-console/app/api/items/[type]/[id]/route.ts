@@ -5,6 +5,7 @@ import { auditLogContainer, itemsContainer, workspacesContainer } from '@/lib/az
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { recordItemOpen } from '@/lib/items/record-open';
+import { assertNoServerOwnedStateChange, ServerOwnedStateError } from '@/app/api/items/_lib/item-crud';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,11 +70,27 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
+    const nextState = 'state' in body && body.state && typeof body.state === 'object' ? body.state : item.state;
+    // #3611 — this route serves EVERY item type that has no dedicated
+    // `[id]/route.ts`, including `lakehouse-shortcut` (whose own route.ts has
+    // no `[id]` segment, so `/api/items/lakehouse-shortcut/<id>` can only match
+    // this pattern — the two patterns differ in segment count, so no
+    // static-vs-dynamic precedence question arises). `state` is written
+    // wholesale, so without this check any authenticated user could point a
+    // shortcut they own at a platform Key Vault secret and then delete it, or
+    // point `engineObject` at arbitrary SQL. Reject-on-change: a body that
+    // round-trips these keys unchanged, or omits them, is unaffected.
+    try {
+      assertNoServerOwnedStateChange(nextState, item.state);
+    } catch (e: any) {
+      if (e instanceof ServerOwnedStateError) return err(e.message, 400, 'server_owned_state');
+      throw e;
+    }
     const next: WorkspaceItem = {
       ...item,
       displayName: typeof body.displayName === 'string' && body.displayName.trim() ? body.displayName.trim() : item.displayName,
       description: 'description' in body ? (body.description?.trim() || undefined) : item.description,
-      state: 'state' in body && body.state && typeof body.state === 'object' ? body.state : item.state,
+      state: nextState,
       updatedAt: new Date().toISOString(),
     };
     const items = await itemsContainer();

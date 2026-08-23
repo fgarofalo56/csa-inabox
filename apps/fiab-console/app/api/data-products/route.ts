@@ -46,6 +46,7 @@ import {
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import { PUBLISH_STATUSES, type PublishStatus, upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import {
   DATA_PRODUCT_DESCRIPTION_MAX,
   DATA_PRODUCT_AUDIENCE_VALUES,
@@ -272,7 +273,13 @@ export async function POST(req: NextRequest) {
       // AWAIT the discovery-index mirror so it completes within the request
       // (createOwnedItem fires it fire-and-forget, which isn't reliably run on
       // the serverless/container runtime → products never indexed). Best-effort.
-      try { await upsertDataProductDoc(docForDataProduct(res.item!, session.claims.oid)); } catch { /* index is derived */ }
+      try {
+        // #3501 — stamp the OWNER's tenant, never the caller's: this field is
+        // the mandatory marketplace search filter, so the caller's oid would
+        // re-home the product. Unknown owner → skip rather than mis-file it.
+        const ownerTid = await resolveDataProductDocTenant(res.item!);
+        if (ownerTid) await upsertDataProductDoc(docForDataProduct(res.item!, ownerTid));
+      } catch { /* index is derived */ }
       return NextResponse.json({ ok: true, product: res.item });
     } catch (e: any) {
       return apiServerError(e);

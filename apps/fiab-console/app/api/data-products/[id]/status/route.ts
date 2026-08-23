@@ -43,6 +43,7 @@ import {
 } from '@/lib/azure/purview-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import { setLifecycleState, type LifecycleState } from '@/lib/dataproducts/lifecycle';
 import { diffContracts, parseSemver } from '@/lib/dataproducts/versioning';
 import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
@@ -259,7 +260,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // ribbon Publish makes the product discoverable (and Unpublish/Expire removes
     // it from consumer search). AWAITED so it completes within the request;
     // best-effort — the index is derived and never fails the lifecycle write.
-    try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* index is derived */ }
+    try {
+      // #3501 — the OWNER's tenant, not the caller's: this field is the
+      // mandatory marketplace search filter (see owner-tenant.ts).
+      const ownerTid = await resolveDataProductDocTenant(updated);
+      if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+    } catch { /* index is derived */ }
 
     return NextResponse.json({
       ok: true,

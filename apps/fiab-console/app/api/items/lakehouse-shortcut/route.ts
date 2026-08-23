@@ -40,6 +40,7 @@ import {
 import {
   putShortcutSecret, deleteShortcutSecret, shortcutKeyVaultConfigGate,
 } from '@/lib/azure/kv-secrets-client';
+import { assertSecretReadAllowed } from '@/lib/azure/kv-secret-purpose';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import {
@@ -67,6 +68,60 @@ const TABLE_FORMATS: TableFormat[] = ['delta', 'parquet', 'csv', 'json'];
 
 function isGate(x: unknown): x is EngineGate {
   return !!x && typeof x === 'object' && (x as EngineGate).gated === true;
+}
+
+/**
+ * #3611 — is `name` a secret this route is allowed to DESTROY?
+ *
+ * `state.secretRef` is item state, and item state is writable by the caller
+ * (the generic item PATCH replaces `state` wholesale). The vault it names is
+ * the MAIN Loom vault in every shipped deployment — `admin-plane/main.bicep`
+ * sets LOOM_SHORTCUT_KEYVAULT to the admin-plane vault and no params file
+ * overrides it — so an unchecked `secretRef` let any authenticated user with a
+ * shortcut in their OWN workspace soft-delete `loom-msal-client-secret` and
+ * reproduce the 2026-07-19 production sign-in outage.
+ *
+ * The name-space policy is reused verbatim from the READ path
+ * (`getShortcutSecretValue` → `assertSecretReadAllowed`): DELETING a credential
+ * is at least as destructive as reading it, and the set of names this surface
+ * may legitimately touch is identical — the `loom-sc-` / `loom-shortcut-`
+ * names Loom itself mints, and never a platform credential.
+ *
+ * This is the control that holds regardless of HOW `state.secretRef` was
+ * written, which is why it is the primary fix rather than the write-side guard:
+ * it also covers `createOwnedItem` (deliberately unguarded, so the `.loomapp`
+ * import can carry nested `env[].secretRef`) and any route added later.
+ */
+function mayDeleteShortcutSecret(name: unknown): name is string {
+  if (typeof name !== 'string' || !name.trim()) return false;
+  try {
+    assertSecretReadAllowed(name, 'shortcut-credential');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * #3611 — the shape `registerTablesObject` MINTS, and the only shape safe to
+ * interpolate into SQL.
+ *
+ * `state.engineObject` reaches `DROP VIEW ${obj};` / `DROP TABLE IF EXISTS
+ * ${obj};` (dropShortcutObject) and `SELECT TOP n * FROM ${obj};` (POST
+ * action=query) — string interpolation in both, executed as the Console UAMI,
+ * which is a Synapse SQL admin. Since the value is caller-writable item state,
+ * that was arbitrary SQL execution and arbitrary table reads, not merely the
+ * loss of the object the shortcut owns.
+ *
+ * Loom mints `<db>.<schema>.<name>` from `sc_<id8>` / `<id8>_<displayName>`, so
+ * a strict 2- or 3-part identifier check accepts everything the platform
+ * creates and rejects every separator SQL needs to mean anything else (space,
+ * `;`, `'`, `-`, `/`, `(`, `[`). Legacy rows predating the namespacing still
+ * match: they are plain identifiers too.
+ */
+const ENGINE_OBJECT_RE = /^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){1,2}$/;
+function isSafeEngineObject(v: unknown): v is string {
+  return typeof v === 'string' && v.length <= 260 && ENGINE_OBJECT_RE.test(v);
 }
 
 /**
@@ -353,6 +408,16 @@ export async function POST(req: NextRequest) {
       if ((stt.kind || 'files') !== 'tables' || !stt.engineObject) {
         return err('This shortcut is not a queryable Tables shortcut. Create it with kind=tables.', 400, { code: 'not_queryable' });
       }
+      // #3611 — `engineObject` is interpolated into `SELECT TOP n * FROM …` and
+      // runs as the Console UAMI (a Synapse SQL admin), while being writable
+      // caller state. Anything outside the shape Loom mints is refused before
+      // it reaches the engine, so this cannot become an arbitrary-SQL surface.
+      if (!isSafeEngineObject(stt.engineObject)) {
+        return err(
+          "This shortcut's engine object is not a name Loom created. Recreate the shortcut (kind=tables) to re-register it.",
+          400, { code: 'invalid_engine_object' },
+        );
+      }
       if (stt.engine === 'databricks') {
         // The UC external table is queryable from a Databricks SQL editor; the
         // Synapse TDS client cannot read a UC catalog. Return the queryable name
@@ -509,13 +574,19 @@ export async function DELETE(req: NextRequest) {
     try {
       const { resource } = await items.item(id, workspaceId).read<WorkspaceItem>();
       const st = (resource?.state as any) || {};
-      if (st.engine && st.engine !== 'none' && st.engineObject) {
+      // #3611 — `engineObject` is interpolated into DROP; only drop what Loom
+      // could have minted. A value outside that shape was never a real engine
+      // object, so refusing to drop it loses nothing and closes the injection.
+      if (st.engine && st.engine !== 'none' && isSafeEngineObject(st.engineObject)) {
         await dropShortcutObject({ engine: st.engine, engineObject: st.engineObject }).catch(() => { /* already-dropped/missing must not block */ });
         if ((st.sourceType === 's3' || st.sourceType === 'gcs') && st.engine === 'databricks') {
           await dropExternalBinding(`sc_${id.slice(0, 8)}`, `${id.slice(0, 8)}_${resource?.displayName || ''}`).catch(() => { /* best-effort */ });
         }
       }
-      if (st.secretRef) await deleteShortcutSecret(st.secretRef);
+      // #3611 — only ever delete a secret inside the shortcut name-space. A
+      // `secretRef` outside it was not minted by this surface, so deleting it
+      // would be destroying someone else's (or the platform's) credential.
+      if (mayDeleteShortcutSecret(st.secretRef)) await deleteShortcutSecret(st.secretRef);
     } catch { /* proceed to delete the pointer regardless */ }
     await items.item(id, workspaceId).delete();
     return NextResponse.json({ ok: true });
