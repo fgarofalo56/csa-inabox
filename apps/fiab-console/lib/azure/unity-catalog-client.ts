@@ -498,46 +498,37 @@ function transportFailureEvidence(err: {
  * Describe a per-workspace federation failure using ONLY what the code
  * established (#3841 / deploy-integrity R7).
  *
- * THE ORIGINAL DEFECT. The first copy hard-coded the word "unreachable" into
- * every row — for a 403, a 404, a 501 honest gate and a JSON parse failure
- * alike — while interpolating `e.status` right beside it, so a denial rendered
- * as "(workspace X unreachable: 403 …)". That is self-contradictory: an HTTP
- * status IS proof the server was reached and answered. In Gov, where Databricks
- * Unity Catalog does not exist and Loom Unity IS the catalog story
- * (cloud-parity.md), that false claim pointed the next investigator at
- * networking while the container was Healthy with a connected replica.
+ * ORIGINAL DEFECT (#3841): "unreachable" was hard-coded into every row while
+ * `e.status` was interpolated beside it, so a denial read "(workspace X
+ * unreachable: 403 …)" — self-contradictory, because a status IS proof the
+ * server answered. In Gov, where Loom Unity IS the catalog story
+ * (cloud-parity.md), that pointed the next investigator at networking while the
+ * container was Healthy.
  *
- * THE SECOND DEFECT — why this function is shaped the way it is now. The first
- * fix classified purely on the PRESENCE of a number, which silently asserted two
- * things this code had never established:
+ * SECOND DEFECT (#3924 r3) — why the shape below. Classifying purely on the
+ * PRESENCE of a number silently asserted two things never established:
  *
- *   1. that whatever produced the status was THE WORKSPACE. It may not be.
- *      `ossUcAuthHeader()` runs INSIDE `ucFetch`'s try, so a
- *      `UcTokenExchangeError` propagates here from uc-token-exchange.ts — and
- *      two of its throw sites (non-JSON body; body carrying no `access_token`)
- *      sit AFTER `if (!res.ok)`, so they carry a **2xx** status belonging to the
- *      TOKEN-EXCHANGE endpoint. That rendered as "(workspace X responded 200 —
- *      rejected the request)". The workspace rejected nothing; it was never
- *      asked.
- *   2. that the ABSENCE of a status meant the network failed. It may mean no
- *      request was ever attempted. `OssUcAuthNotConfiguredError` carries a
- *      `hint` and NO `status`, so an honest config gate — the default `entra`
- *      posture with LOOM_UNITY_CLIENT_ID / _AUDIENCE / _TOKEN unset — rendered
- *      as "unreachable — no HTTP response", pointing at networking again while
- *      discarding the `bicepModule` / `followUp` that would have fixed it.
+ *   1. that whatever produced the status was THE WORKSPACE. `ossUcAuthHeader()`
+ *      runs INSIDE `ucFetch`'s try, so `UcTokenExchangeError` propagates here
+ *      from uc-token-exchange.ts — and two of its throw sites (non-JSON body;
+ *      no `access_token`) sit AFTER `if (!res.ok)`, carrying a **2xx** from the
+ *      TOKEN-EXCHANGE endpoint. It rendered "(workspace X responded 200 —
+ *      rejected the request)". The workspace rejected nothing; it was never asked.
+ *   2. that the ABSENCE of a status meant the network failed — it may mean no
+ *      request was attempted. `OssUcAuthNotConfiguredError` carries a `hint` and
+ *      NO `status`, so an honest config gate (default `entra` posture with
+ *      LOOM_UNITY_CLIENT_ID / _AUDIENCE / _TOKEN unset) rendered "unreachable —
+ *      no HTTP response", discarding the `bicepModule` / `followUp` that fixes it.
  *
- * Both replacements were MORE misleading than the string they replaced: the
- * original was self-contradictory and therefore self-flagging, while these were
- * confident, plausible and false. Raising a sentence's assertiveness without
- * establishing its provenance is the R7 failure, not a fix for it.
+ * Both were MORE misleading than the string they replaced: the original was
+ * self-flagging, these were confident, plausible and false. Raising a sentence's
+ * assertiveness without establishing its provenance is the R7 failure, not a fix.
  *
- * SO: classify by PROVENANCE first and status second. Every arm states only what
- * its own evidence supports; "unreachable" now requires POSITIVE evidence of a
- * transport failure (our own `FetchTimeoutError`, an abort, or a network errno)
- * instead of being the fallback for "no number found"; and a status outside the
- * error classes is never reported as a rejection. When nothing establishes a
- * cause the copy says exactly that — R7: if the code does not know, the message
- * says it does not know.
+ * SO: classify by PROVENANCE first, status second. "unreachable" requires
+ * POSITIVE transport evidence (`FetchTimeoutError`, an abort, a network errno)
+ * rather than being the fallback for "no number found"; a status outside the
+ * error classes is never a rejection; and when nothing establishes a cause the
+ * copy says so — R7: if the code does not know, the message says it does not.
  *
  * The underlying `e.message` is preserved verbatim in EVERY arm. Callers regex
  * it — `app/api/catalog/metastores/route.ts` tests /account.?admin/i on this
