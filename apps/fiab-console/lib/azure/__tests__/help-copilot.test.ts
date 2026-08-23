@@ -99,6 +99,9 @@ import {
   buildCorpus,
 } from '../loom-docs-index';
 
+import { ARCHIVED_BANNER } from '../loom-docs-corpus';
+import { MAX_CHUNK } from '../docs-chunker';
+
 import { extractProposedChange, PROPOSED_CHANGE_KEY } from '../../copilot/proposed-change';
 
 // ---------- Fixtures ----------
@@ -404,20 +407,84 @@ describe('loom-docs-index', () => {
     }
   }, 30_000);
 
-  it('buildCorpus includes in-flight PRPs (PRPs/active) and parity docs — stale-corpus regression guard', async () => {
+  it('buildCorpus includes in-flight PRPs, archived PRP history, and parity docs — stale-corpus regression guard', async () => {
     // Regression guard for the 2026-07 stale-corpus incident: the corpus only
     // ingested PRPs/completed/**, so shipped-but-active work (foundry-parity
     // AUDIT receipts) was structurally invisible and the Copilot answered from
     // an outdated gap analysis. These paths must stay in the corpus.
+    //
+    // 2026-08-22 — THE SAME CLASS OF LOSS RECURRED, from the other direction.
+    // The omnibus consolidation (57fa48f6 / #3881) moved 22 PRP units from
+    // PRPs/active/ into PRPs/archive/2026-08-22-omnibus-consolidation/. The
+    // walker had no archive root, so PRP corpus membership fell 104 -> 36 files
+    // and 68 markdown files left retrieval silently — including the very
+    // foundry-parity AUDIT.md this guard was written to protect, whose
+    // "RE-VERIFIED 2026-08-06" block is the corrected code-truth for four rows
+    // an earlier static sweep had wrong. Losing that file re-creates the exact
+    // 2026-07 failure: the Copilot answering from a stale gap analysis.
+    //
+    // So the pin below FOLLOWED the document to its new home rather than being
+    // deleted. Re-pointing a guard at a path that is still walked would have
+    // been fine; deleting it because the file moved would have blessed the
+    // regression. The property under test is unchanged and is NOT "this path
+    // exists": it is "these documents are REACHABLE BY RETRIEVAL".
     const chunks = await buildCorpus();
-    // foundry-parity AUDIT.md — the live shipped-receipt register.
-    expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith('PRPs/active/foundry-parity/'))).toBe(true);
-    // Any active-PRP PRP.md / AUDIT.md beyond foundry-parity should also land.
+    const ARCHIVED_PRP_ROOT = 'PRPs/archive/';
+    const FOUNDRY_PARITY = 'PRPs/archive/2026-08-22-omnibus-consolidation/foundry-parity/';
+
+    // foundry-parity AUDIT.md — the shipped-receipt register, at its new home.
+    expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith(FOUNDRY_PARITY))).toBe(true);
+    // Specifically the AUDIT register, not merely some file in that folder.
+    expect(chunks.some((c) => c.kind === 'prp' && c.path === `${FOUNDRY_PARITY}AUDIT.md`)).toBe(true);
+    // The CURRENT program (the omnibus that superseded those units) must be in
+    // the corpus too — this is the half the guard has always asserted.
     expect(chunks.some((c) => c.kind === 'prp' && /^PRPs\/active\//.test(c.path))).toBe(true);
     // docs/fiab/parity/** — per-surface parity receipts, walked via docs/.
     expect(chunks.some((c) => c.kind === 'docs' && c.path.startsWith('docs/fiab/parity/'))).toBe(true);
     // Completed PRPs must remain ingested (no regression the other way).
     expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith('PRPs/completed/csa-loom-pillar/'))).toBe(true);
+
+    // A root that resolves but walks NOTHING is green and empty — the failure
+    // this guard exists to catch. Assert a POPULATION FLOOR, not mere presence.
+    // The consolidation alone archived 79 markdown files; 40 is a deliberately
+    // loose floor that still fails instantly on an empty or mis-joined root.
+    const archivedFiles = new Set(
+      chunks.filter((c) => c.path.startsWith(ARCHIVED_PRP_ROOT)).map((c) => c.path),
+    );
+    expect(archivedFiles.size).toBeGreaterThan(40);
+  }, 60_000);
+
+  it('archived PRP chunks are marked superseded; current ones are not', async () => {
+    // Per the operator standard for this restoration: the Copilot may retrieve
+    // superseded design history, but must never present it as current. The
+    // corpus had no notion of document status, and a new DocChunk FIELD could
+    // not supply one — `loom-docs-index` spreads the whole chunk into the AI
+    // Search indexing action against a fixed INDEX_DEFINITION field list, so an
+    // unknown property fails the upload batch (Cosmos, being schemaless, would
+    // have accepted it — i.e. the field would work on one backend and break the
+    // other). The marker therefore lives in `content`, which both backends
+    // carry verbatim and which is the text the model actually reads.
+    const chunks = await buildCorpus();
+
+    const archived = chunks.filter((c) => c.path.startsWith('PRPs/archive/'));
+    const current = chunks.filter(
+      (c) => c.kind === 'prp' && !c.path.startsWith('PRPs/archive/'),
+    );
+
+    expect(archived.length).toBeGreaterThan(0);
+    expect(current.length).toBeGreaterThan(0);
+
+    // EVERY archived chunk carries the marker — not just the first one.
+    expect(archived.every((c) => c.content.startsWith(ARCHIVED_BANNER))).toBe(true);
+    // NO current chunk does. Without this half the assertion above would still
+    // pass if the banner were stamped onto everything indiscriminately.
+    expect(current.some((c) => c.content.includes(ARCHIVED_BANNER))).toBe(false);
+
+    // The banner must not push a chunk past the size invariant the rest of the
+    // corpus holds to — the body budget is reduced by exactly the banner length.
+    for (const c of archived) {
+      expect(c.content.length).toBeLessThanOrEqual(MAX_CHUNK);
+    }
   }, 60_000);
 
   it('reindex (Cosmos fallback) persists chunks and warns about missing AI Search', async () => {

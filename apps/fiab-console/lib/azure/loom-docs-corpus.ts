@@ -99,6 +99,21 @@ export interface RepoRoots {
   prpRoot: string;
   /** `PRPs/active/` — in-flight PRP folders (AUDIT.md receipts, PRP.md, OPEN-REGISTER) */
   prpActiveRoot: string;
+  /**
+   * `PRPs/archive/` — SUPERSEDED PRP units, retained as design history.
+   *
+   * Added 2026-08-22 after the omnibus consolidation (57fa48f6 / #3881) moved 22
+   * PRP units out of `PRPs/active/` and into
+   * `PRPs/archive/2026-08-22-omnibus-consolidation/`. That commit touched no
+   * console file, so `vitest (node 20)` skipped its `Run vitest` step and
+   * reported success (#3783) — and 68 markdown files left the retrieval corpus
+   * with nothing red anywhere. PRP membership went 104 -> 36.
+   *
+   * Chunks walked from this root are marked with {@link ARCHIVED_BANNER} so the
+   * Copilot can still cite the design history and the shipped-receipt AUDIT
+   * registers WITHOUT presenting a superseded plan as the current one.
+   */
+  prpArchiveRoot: string;
   /** `docs/fiab/adr/` */
   adrRoot: string;
 }
@@ -117,6 +132,7 @@ export function detectRoots(): RepoRoots {
       consoleLibRoot: path.join(bundled, 'lib'),
       prpRoot: path.join(bundled, 'PRPs', 'completed', 'csa-loom-pillar'),
       prpActiveRoot: path.join(bundled, 'PRPs', 'active'),
+      prpArchiveRoot: path.join(bundled, 'PRPs', 'archive'),
       adrRoot: path.join(bundled, 'docs', 'fiab', 'adr'),
     };
   }
@@ -132,6 +148,7 @@ export function detectRoots(): RepoRoots {
     consoleLibRoot: path.join(dir, 'apps', 'fiab-console', 'lib'),
     prpRoot: path.join(dir, 'PRPs', 'completed', 'csa-loom-pillar'),
     prpActiveRoot: path.join(dir, 'PRPs', 'active'),
+    prpArchiveRoot: path.join(dir, 'PRPs', 'archive'),
     adrRoot: path.join(dir, 'docs', 'fiab', 'adr'),
   };
 }
@@ -228,6 +245,58 @@ export interface SourceFileRef {
   abs: string;
   rel: string;
   kind: DocChunk['kind'];
+  /**
+   * This file is SUPERSEDED design history (it came from `PRPs/archive/`).
+   * Required, not optional, so a new md source cannot be added to the walk
+   * without deciding which side of the line it falls on.
+   */
+  superseded: boolean;
+}
+
+/**
+ * Prefix stamped onto every chunk walked from `PRPs/archive/`.
+ *
+ * ── Why the marker lives in `content` and NOT in a new `DocChunk` field ──────
+ *
+ * The corpus had NO notion of document status before this: `DocChunk` carries
+ * `kind` ('docs' | 'repo' | 'prp' | 'adr'), which says what KIND of source a
+ * chunk came from, never whether it is still true. Adding a `status` field is
+ * the obvious move and it is the WRONG one here, for a measured reason:
+ *
+ *   `loom-docs-index.ts` uploads to Azure AI Search by SPREADING the whole
+ *   chunk into the indexing action (`{'@search.action':'mergeOrUpload', ...c}`),
+ *   and `INDEX_DEFINITION` there declares a FIXED field list with no `status`.
+ *   AI Search rejects unknown fields, so a new property would fail the upload
+ *   batch. Cosmos (`items.upsert(chunk)`) is schemaless and would have accepted
+ *   it — so the field would work on one backend and break the other, which is
+ *   worse than not having it. Making it a real field therefore requires an
+ *   `INDEX_DEFINITION` + `select` change in `loom-docs-index.ts`, a file this
+ *   change does not own.
+ *
+ * Putting the marker in `content` is the smallest change that is correct on
+ * BOTH backends and needs no schema migration — and it is strictly stronger for
+ * the actual goal, because `content` is the text the model reads. A filterable
+ * field lets a caller exclude superseded docs; this makes the document itself
+ * say it is superseded, so a chunk that reaches the prompt by ANY retrieval
+ * path (AI Search, Cosmos, BM25 re-rank) carries its own disclaimer.
+ *
+ * Kept short and stable — `chunkMarkdown` is given a budget reduced by exactly
+ * this length so the `content.length <= MAX_CHUNK` invariant still holds.
+ */
+export const ARCHIVED_BANNER =
+  '[ARCHIVED / SUPERSEDED design history — not the current plan. See PRPs/active/ for current work.]\n\n';
+
+/**
+ * Chunk-size budget for a source file.
+ *
+ * An archived chunk is `ARCHIVED_BANNER + body`, so its BODY budget is reduced
+ * by exactly the banner length. Without this the banner would push archived
+ * chunks past `MAX_CHUNK` and quietly break the invariant that every chunk fits
+ * what the indexers expect — the kind of thing that passes a spot check and
+ * fails on the one full-size section in the tree.
+ */
+function chunkBudget(ref: Pick<SourceFileRef, 'superseded'>): number {
+  return ref.superseded ? MAX_CHUNK - ARCHIVED_BANNER.length : MAX_CHUNK;
 }
 
 /**
@@ -240,18 +309,22 @@ export function enumerateSourceFiles(roots: RepoRoots): SourceFileRef[] {
   const refs: SourceFileRef[] = [];
   const seen = new Set<string>();
   const rel = (file: string) => path.relative(roots.repoRoot, file).replace(/\\/g, '/');
-  const mdSources: Array<{ root: string; kind: DocChunk['kind'] }> = [
+  const mdSources: Array<{ root: string; kind: DocChunk['kind']; superseded?: boolean }> = [
     { root: path.join(roots.docsRoot, 'fiab'), kind: 'docs' },
     { root: roots.docsRoot, kind: 'docs' },
     { root: roots.prpRoot, kind: 'prp' },
     { root: roots.prpActiveRoot, kind: 'prp' },
+    // Superseded PRP units. Walked LAST so that if a path were ever reachable
+    // from both an active and an archived root, `seen` keeps the ACTIVE copy
+    // and the document is never marked superseded while it is still current.
+    { root: roots.prpArchiveRoot, kind: 'prp', superseded: true },
     { root: roots.adrRoot, kind: 'adr' },
   ];
   for (const src of mdSources) {
     for (const file of walkMarkdown(src.root)) {
       if (seen.has(file)) continue;
       seen.add(file);
-      refs.push({ abs: file, rel: rel(file), kind: src.kind });
+      refs.push({ abs: file, rel: rel(file), kind: src.kind, superseded: src.superseded === true });
     }
   }
   const repoFiles = [
@@ -262,7 +335,7 @@ export function enumerateSourceFiles(roots: RepoRoots): SourceFileRef[] {
   for (const file of repoFiles) {
     if (seen.has(file)) continue;
     seen.add(file);
-    refs.push({ abs: file, rel: rel(file), kind: 'repo' });
+    refs.push({ abs: file, rel: rel(file), kind: 'repo', superseded: false });
   }
   return refs;
 }
@@ -312,7 +385,7 @@ export function collectSources(): CollectedCorpus {
       continue;
     }
 
-    const blocks = chunkMarkdown(raw);
+    const blocks = chunkMarkdown(raw, chunkBudget(ref));
     if (blocks.length === 0) continue;
     blocks.forEach((b, idx) => {
       chunks.push({
@@ -320,7 +393,7 @@ export function collectSources(): CollectedCorpus {
         kind: ref.kind,
         path: ref.rel,
         heading: b.heading,
-        content: b.content,
+        content: ref.superseded ? ARCHIVED_BANNER + b.content : b.content,
         url: docsUrlForPath(ref.rel),
         touchedAt,
       });
@@ -420,7 +493,12 @@ export function localCorpusStats(): Bm25CorpusStats | null {
         if (summary) acc.add({ content: summary });
         continue;
       }
-      for (const b of chunkMarkdown(raw)) acc.add({ heading: b.heading, content: b.content });
+      for (const b of chunkMarkdown(raw, chunkBudget(ref))) {
+        acc.add({
+          heading: b.heading,
+          content: ref.superseded ? ARCHIVED_BANNER + b.content : b.content,
+        });
+      }
     }
     const stats = acc.finish();
     // A corpus that produced no chunks is not statistics — it is an empty
