@@ -1967,80 +1967,55 @@ jobs:
           fi
 
       - name: Grant MIP+DLP Graph AppRoles (Information Protection + DLP for /admin/security)
+        # THE PLATFORM RUNS THE SHIPPED SCRIPT (#3374, auto-bind-by-default.md §5).
+        #
+        # WHAT WAS HERE, AND WHY IT WAS A DEFECT. This step carried ~75 lines of
+        # inline bash that granted the Console UAMI five Microsoft Graph
+        # application permissions — a SECOND, byte-divergent copy of
+        # scripts/csa-loom/grant-graph-approles.sh, which grants the same five
+        # app-role ids with the same idempotency handling and the same 403
+        # remediation. Measured 2026-08-22: `grep -rl grant-graph-approles
+        # .github/workflows/` returned ZERO files, while the positive controls
+        # grant-identity-graph-approles.sh (2 files) and
+        # grant-shortcut-graph-approles.sh (1 file) returned non-zero — so the
+        # script the product and the docs name was invoked by nothing, and the
+        # work it describes was done by a copy nobody was comparing it against.
+        #
+        # Two copies of a grant list is a drift generator, not redundancy: add a
+        # sixth role to one and the other silently keeps granting five, with the
+        # /admin/security gate the only symptom. One implementation, invoked.
+        #
+        # RESULT IS CAPTURED, NEVER DISCARDED. `bash script.sh` inherits NO `set
+        # -e` from this step (an inline `run:` gets `bash -e {0}`; a spawned
+        # script does not), so a bare invocation here would silently swallow a
+        # failure. The RC is taken on the line IMMEDIATELY after the call and is
+        # branched on below — the same shape the Dataverse step above uses.
+        #
+        # STILL NON-FATAL, deliberately and for the pre-existing reason: a tenant
+        # whose bootstrap principal lacks AppRoleAssignment.ReadWrite.All gets a
+        # 403, and /admin/security renders its honest 503 NotConfigured gate
+        # rather than the whole post-deploy bootstrap failing.
+        #
+        # ONE BEHAVIOUR CHANGE, disclosed: the inline copy SKIPPED with a message
+        # when `az ad sp list` returned an empty Graph SP id; the script runs
+        # under `set -euo pipefail`, so an `az` that FAILS there exits non-zero
+        # and is surfaced as the warning below instead of being indistinguishable
+        # from a clean run. Stricter, and R7-correct.
         run: |
-          # Grant the Console UAMI five Microsoft Graph application
-          # permissions required by /admin/security + /governance DLP:
-          #   - InformationProtectionPolicy.Read.All  (MIP labels + policies)
-          #   - SensitivityLabel.Evaluate              (apply-label action)
-          #   - Policy.Read.All                        (DLP policies + rules)
-          #   - SecurityAlert.Read.All                 (DLP alerts/violations via alerts_v2)
-          #   - SecurityIncident.Read.All              (Graph Security incidents — alerts_v2
-          #                                             403 names this alongside SecurityAlert;
-          #                                             granting both clears the DLP/IP
-          #                                             "Missing application roles" gate)
-          #
-          # Each grant is idempotent — re-runs cleanly. For a MANAGED IDENTITY
-          # the appRoleAssignment POST below IS the grant: it takes effect
-          # immediately, with NO separate "Grant admin consent" click (that is
-          # the app-registration pattern, not the MI pattern). The ONLY
-          # prerequisite is that the bootstrap principal can assign Graph app
-          # roles — i.e. it holds AppRoleAssignment.ReadWrite.All on Microsoft
-          # Graph. If it doesn't, the POST returns 403 and we surface the exact
-          # one-time tenant remediation below (non-fatal — the /admin/security
-          # tabs then render the honest 503 NotConfigured MessageBar).
           set -uo pipefail
-          GRAPH_SP_ID=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
-          FORBIDDEN=0
-          if [ -z "$GRAPH_SP_ID" ]; then
-            echo "  Could not resolve Microsoft Graph SP — skipping AppRole grants"
-          else
-            echo "Microsoft Graph SP object id: $GRAPH_SP_ID"
-            for ROLE in \
-              "InformationProtectionPolicy.Read.All:19da66cb-0fb0-4390-b071-ebc76a349482" \
-              "SensitivityLabel.Evaluate:57f0b71b-a759-45a0-9a0f-cc099fbd9a44" \
-              "Policy.Read.All:246dd0d5-5bd0-4def-940b-0421030a5b68" \
-              "SecurityAlert.Read.All:bf394140-e372-4bf9-a898-299cfc7564e5" \
-              "SecurityIncident.Read.All:45cc0394-e837-488b-a098-1918f48d186c" \
-            ; do
-              NAME="${ROLE%%:*}"
-              APPROLE_ID="${ROLE##*:}"
-              echo "Granting Graph AppRole $NAME ($APPROLE_ID) to Console UAMI..."
-              PAYLOAD=$(printf '{"principalId":"%s","resourceId":"%s","appRoleId":"%s"}' \
-                "$CONSOLE_UAMI_PRINCIPAL" "$GRAPH_SP_ID" "$APPROLE_ID")
-              R=$(curl -sS -w "%{http_code}" -o /tmp/approle.json -X POST \
-                "https://graph.microsoft.com/v1.0/servicePrincipals/$CONSOLE_UAMI_PRINCIPAL/appRoleAssignments" \
-                -H "Authorization: Bearer $(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)" \
-                -H "Content-Type: application/json" \
-                -d "$PAYLOAD")
-              if [[ "$R" == "201" ]]; then
-                echo "  $NAME granted"
-              elif grep -q "Permission being assigned already exists" /tmp/approle.json 2>/dev/null; then
-                echo "  $NAME already granted (idempotent)"
-              elif [[ "$R" == "403" ]]; then
-                FORBIDDEN=1
-                echo "  $NAME grant 403 FORBIDDEN — bootstrap principal cannot assign Graph app roles."
-              else
-                echo "  $NAME grant returned $R: $(cat /tmp/approle.json)"
-              fi
-            done
-            if [[ "$FORBIDDEN" == "1" ]]; then
-              echo "::warning title=MIP/DLP Graph AppRoles not granted (403)::Deploy SP lacks AppRoleAssignment.ReadWrite.All on Microsoft Graph. /admin/security MIP+DLP tabs stay on the honest 503 NotConfigured gate until a Global Admin runs the one-time grant — see docs/fiab/v3-tenant-bootstrap.md (Step: Grant the deploy SP Graph AppRoleAssignment.ReadWrite.All)."
-              echo ""
-              echo "  ===================================================================="
-              echo "  ONE-TIME TENANT ACTION — a Global Administrator runs ONCE:"
-              echo "    DEPLOY_SP_OBJID=<deploy SP service-principal object id>"
-              echo "    GRAPH_SP_ID=\$(az ad sp list --filter \"appId eq '00000003-0000-0000-c000-000000000000'\" --query '[0].id' -o tsv)"
-              echo "    APPROLE_RW=\$(az ad sp show --id \$GRAPH_SP_ID --query \"appRoles[?value=='AppRoleAssignment.ReadWrite.All'].id | [0]\" -o tsv)"
-              echo "    az rest --method POST --url \"https://graph.microsoft.com/v1.0/servicePrincipals/\$DEPLOY_SP_OBJID/appRoleAssignments\" \\"
-              echo "      --headers 'Content-Type=application/json' \\"
-              echo "      --body \"{\\\"principalId\\\":\\\"\$DEPLOY_SP_OBJID\\\",\\\"resourceId\\\":\\\"\$GRAPH_SP_ID\\\",\\\"appRoleId\\\":\\\"\$APPROLE_RW\\\"}\""
-              echo "  Then re-run this job — the grants succeed unattended thereafter."
-              echo "  (Assigning an app role to the Console MI IS the grant — no admin-consent click.)"
-              echo "  ===================================================================="
-            else
-              echo ""
-              echo "  Graph AppRoles assigned to the Console UAMI — effective immediately (MI app-role assignment = grant; no admin-consent click)."
-            fi
+          set +e
+          bash scripts/csa-loom/grant-graph-approles.sh 2>&1 | tee /tmp/graph-approles.log
+          AR_RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$AR_RC" -ne 0 ]; then
+            echo "::warning title=MIP/DLP Graph AppRole grants did not complete (exit $AR_RC)::scripts/csa-loom/grant-graph-approles.sh exited $AR_RC. The Console UAMI may be missing InformationProtectionPolicy.Read.All / SensitivityLabel.Evaluate / Policy.Read.All / SecurityAlert.Read.All / SecurityIncident.Read.All, so /admin/security MIP+DLP stays on its honest 503 NotConfigured gate. The script prints the exact cause above; re-run this job after fixing it."
+          elif grep -q 'grant 403 FORBIDDEN' /tmp/graph-approles.log; then
+            # The script exits 0 on a 403 (the remediation is a one-time TENANT
+            # action, not a deploy defect), so RC alone cannot distinguish it.
+            # This marker is PINNED by scripts/ci/__tests__/deploy-bootstrap-approles.test.mjs
+            # — renaming it in the script turns that suite red rather than making
+            # this branch silently unreachable.
+            echo "::warning title=MIP/DLP Graph AppRoles not granted (403)::The bootstrap principal lacks AppRoleAssignment.ReadWrite.All on Microsoft Graph. /admin/security MIP+DLP tabs stay on the honest 503 NotConfigured gate until a Global Admin runs the one-time grant the script printed above — see docs/fiab/v3-tenant-bootstrap.md (Step: Grant the deploy SP Graph AppRoleAssignment.ReadWrite.All). Assigning an app role to the Console MI IS the grant — there is no admin-consent click."
           fi
 
       - name: Ensure AI Search governance catalog index (loom-governance-items, day-one)

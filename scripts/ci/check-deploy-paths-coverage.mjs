@@ -70,6 +70,17 @@ export const CI_PLUMBING = {
   'scripts/csa-loom/kv-firewall-window.sh': 'Same shape for Key Vault: brackets the bootstrap with an ingress window so the runner can read secrets. It grants the RUNNER temporary access; it deploys nothing and leaves no artifact behind.',
   'scripts/csa-loom/verify-console-runtime.sh': 'A post-deploy ASSERTION over the already-deployed Console. It reads runtime state and fails the job; it changes nothing, so a commit here cannot leave the estate diverged from main.',
   'scripts/csa-loom/gov-verify-evidence.sh': 'The GCC-High/IL5 deploy-verification EVIDENCE harness. It runs pytest/vitest and a read-only endpoint sweep, and with --live adds `redeploy-gov.sh --what-if` — a what-if applies nothing. Its output is a receipt uploaded as an artifact, and deploy-fiab-gcch.yml invokes it with a trailing `|| true`, so it can neither change the estate nor stop the deploy. It is the verify-console-runtime.sh shape exactly: an assertion, not a deploy source. NOTE the boundary this loan does NOT cross — the two image PREFLIGHTS on the same lane (assert-acr-image-tags.sh, preflight-image-tags.sh) CAN refuse the apply, so they are watched in the WATCHED entry and are not plumbing.',
+
+  // ── The `node <path>.mjs` loans (#3787) ─────────────────────────────────
+  // Teaching extractDeploySources() the `node` shape made 34 previously-invisible
+  // sources visible across the watched lanes. Most are genuine deploy sources and
+  // are now listed in their WATCHED entry. These five are not, and each states
+  // the boundary it does not cross rather than claiming a blanket exemption.
+  'scripts/ci/deploy-retry.mjs': 'The shared retry primitive. It re-invokes the SAME argv with the same arguments under a bounded backoff; it cannot change the template, the params, the image or the target, so a successful apply deploys byte-identically whether or not this file changed. check-deploy-staleness.mjs already carried this exact reasoning in prose for the two sovereign entries ("they shape how a failing run behaves, not what a successful run deploys"); this is that position made machine-readable and applied to all lanes at once. THE BOUNDARY: it is plumbing because it fails closed. If it ever gains the ability to treat exhaustion, an unknown class or a wall-clock expiry as success, it stops shaping the run and starts deciding whether a broken apply reports green — remove this loan the moment that is true.',
+  'scripts/ci/deploy-classify.mjs': 'The failure taxonomy consumer. It runs ONLY on an already-failed step, reads stderr and emits a class + an exit code so the caller can branch. It submits nothing to ARM and produces no artifact, so editing it cannot change what a successful run deployed — only how a failed one is described. THE BOUNDARY, stated precisely because the first draft of this loan stated it WRONGLY: the hazard is NOT that `unknown` might become a pass. It is `--assert-signal config.resource-group-not-found`, which IS a pass — deploy-fiab-commercial.yml:1322, deploy-fiab-gcch.yml:625 and deploy-fiab-il5.yml:370 each `exit 0` on it and SKIP the image-tag preflight, and assert-no-silent-image-tag-revert.mjs:311 and adopt-image-tags.mjs:283 both return `{greenfield:true}` on it. A classifier that emitted that signal for a failure which was really an auth denial would turn "I could not read the estate" into "there is no estate", skipping a gate on a LIVE estate. What holds that shut is structural and not this loan: failure-taxonomy.json `classPrecedence` is ["defect","permission","quota","config",…], so `permission` (index 1) outranks `config` (index 3) and a permission-shaped failure cannot be classified down into the greenfield signal. Two independent mutation attempts to flip that verdict during review BOTH failed for exactly that reason. If classPrecedence is ever reordered so `config` outranks `permission`, this loan is void and this file must be watched.',
+  'scripts/ci/run-outcome.mjs': 'Decides what a GitHub job OUTCOME means (success / cancelled / skipped / failure) so a cancellation is not filed as a P0 and a skip is not read as a pass (#3368). It runs after the work, over GitHub metadata, and touches no Azure surface at all — it is reporting, one rung further from the estate than deploy-classify.mjs.',
+  'scripts/ci/resolve-smoke-console-url.mjs': 'Resolves the console URL the POST-DEPLOY smoke test probes, from the ARM outputs the provision step already wrote (#3137). It reads outputs of a completed apply and hands a URL to an assertion; it submits nothing and changes no parameter. Exactly the verify-console-runtime.sh shape: an assertion input, not a deploy source.',
+  'scripts/csa-loom/preflight-policy-restrictions.mjs': 'Azure Policy DISCOVERY, and advisory by construction — deploy-fiab-commercial.yml invokes it with `--advisory`, and its own header states "This is R5 DISCOVERY, not a gate. The enforcing control is ARM/RP". It prints which policy assignments govern the target scope; it emits no template parameter and cannot refuse the apply. THE BOUNDARY: the moment it is given teeth (a non-advisory invocation that can stop a deploy), it becomes a gate that decides whether the apply proceeds — the sibling preflights on the same lane are watched for exactly that reason — and this loan must be deleted.',
 };
 
 /**
@@ -103,6 +114,7 @@ function isInert(line) {
  *
  * Shapes detected (all must be real execution, never a mention):
  *   script   `bash X.sh` / `./X.sh` / `source X.sh`
+ *   node     `node X.mjs` / `node --flag X.cjs` / `node "$GITHUB_WORKSPACE/X.js"`
  *   bicep    `-f X.bicep` / `--template-file X.bicep`   (az deployment)
  *   image    `az acr build --file X/Dockerfile X`       (file AND build context)
  *   asset    `--definition "@platform/.../x.json"`      (literal dir if templated)
@@ -132,6 +144,33 @@ export function extractDeploySources(text) {
     // shell script execution — reuse the sibling's exact discipline
     for (const m of line.matchAll(new RegExp(`${SRC_ROOTS}/[A-Za-z0-9._/-]+\\.sh`, 'g'))) {
       if (isExecution(line, m[0])) add(m[0], 'script');
+    }
+    // NODE script execution (#3787). This shape was MISSING, and its absence was
+    // not a narrow miss: measured over the 15 watched workflows on 2026-08-22,
+    // 34 node-invoked deploy sources were structurally invisible — among them
+    // deploy-fiab-guard.mjs (decides deploy_apps_enabled), reconcile-resolve.mjs
+    // (decides the reconcile REGION), adopt-image-tags.mjs (decides which image
+    // tags GCC-High adopts) and both GCC-High estate preflights. So the guard
+    // that exists to prove the watchdog measures its subject was itself passing
+    // VACUOUSLY on every one of them: `node X.mjs` produced ZERO sources while
+    // `-f X.bicep` and `bash X.sh` on the same line produced two.
+    //
+    // check-deploy-staleness.mjs said so out loud in three separate hand-listing
+    // comments ("extractDeploySources() recognises `bash X.sh` and not `node
+    // X.mjs`, so this one is invisible to the coverage guard") — a disclosed gap
+    // that had to be re-argued at every new call site, and that silently did not
+    // apply to the ones nobody thought to hand-list.
+    //
+    // Deliberately the SAME discipline as the `.sh` shape above: an optional
+    // interpreter flag run, an optional ${GITHUB_WORKSPACE}/ or ./ prefix, and a
+    // path under SRC_ROOTS. `node -e '…'` cannot match (a single-dash flag is not
+    // `--flag`, and the inline program is not a SRC_ROOTS path), and isInert()
+    // has already dropped comments, echoes and ::annotations:: before this runs.
+    for (const m of line.matchAll(new RegExp(
+      `(?:^|[\\s;&|(])node\\s+(?:--[A-Za-z0-9=._-]+\\s+)*["']?(?:\\$\\{?GITHUB_WORKSPACE\\}?/|\\./)?(${SRC_ROOTS}/[A-Za-z0-9._/-]+\\.(?:mjs|cjs|js))`,
+      'g',
+    ))) {
+      add(m[1], 'node');
     }
     // bicep application: -f / --template-file
     for (const m of line.matchAll(new RegExp(`(?:-f|--template-file)\\s+["']?(${SRC_ROOTS}/[A-Za-z0-9._/-]+\\.bicep)`, 'g'))) {
