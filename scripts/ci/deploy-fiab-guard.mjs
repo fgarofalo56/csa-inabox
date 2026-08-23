@@ -37,7 +37,9 @@ import { appendFileSync } from 'node:fs';
 import {
   resolveTopologyGuard,
   resolveFeatureFlags,
+  resolveTargetSubscription,
   parseHubCount,
+  parseSubscriptionId,
   FLAG_INPUT_NAMES,
 } from './deploy-trigger-policy.mjs';
 
@@ -138,6 +140,37 @@ function countExistingHubs(scopeSub) {
   }
 }
 
+/**
+ * Ask the CLI which subscription it is logged in to (refs #3916).
+ *
+ * Returns '' on ANY failure -- UNKNOWN, never a guess. `parseSubscriptionId`
+ * additionally rejects anything that is not a GUID, so an az call that "succeeds"
+ * while printing a warning, a login prompt, or an empty line cannot be mistaken
+ * for a subscription id.
+ *
+ * STDERR IS CAPTURED AND SURFACED, never redirected away, and there is no
+ * shell. The specific failure this repo has already paid for is a permission
+ * denial silenced into an empty string and the empty string re-read as an
+ * absence -- "the tag does not exist" when the truth was "I could not reach the
+ * registry" (deploy-integrity R7). The caller distinguishes the two: a run that
+ * named a subscription never calls this, and a run that did not and cannot read
+ * one REFUSES with a message that says it could not read it.
+ */
+function loginSubscription() {
+  const bin = azBinary();
+  try {
+    const out = execFileSync(bin, ['account', 'show', '--query', 'id', '-o', 'tsv'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return parseSubscriptionId(out);
+  } catch (e) {
+    const detail = String(e?.stderr || e?.message || e).slice(0, 300);
+    console.log(`::warning::could not read the login subscription (az binary: ${bin}): ${detail}`);
+    return '';
+  }
+}
+
 function setOutput(key, value) {
   const file = env.GITHUB_OUTPUT;
   if (!file) {
@@ -217,3 +250,63 @@ if (verdict.decision === 'refuse') {
 
 console.log(`[deploy-guard] PROCEED -- ${verdict.reason}`);
 setOutput('deploy_sub', verdict.deploySub || '');
+
+// ---- the RESOLVED run shape, emitted so consumers stop re-deriving it -------
+//
+// TOPOLOGY (refs #3916). The guard has always resolved `'' -> 'tenant'`
+// internally and never emitted it, so every downstream step re-derived the run
+// shape from `env.CSA_LOOM_TOPOLOGY` -- which is `inputs.topology`, and a
+// `schedule` event carries no inputs. Two steps added by #3888 open with
+//
+//     if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then ... exit 0; fi
+//
+// under a comment stating the branch is taken "from the resolved topology env,
+// never from `inputs.` in an `if:`". It is not: on the trigger that runs daily
+// that variable is the empty string, so the branch is unreachable -- the exact
+// defect #2881 removed, re-introduced by the comment that claims to avoid it.
+// Emitting the resolved value gives those steps something true to read.
+const effectiveTopology = (topology || 'tenant').trim() || 'tenant';
+setOutput('topology', effectiveTopology);
+
+// TARGET SUBSCRIPTION (refs #3916). Distinct from `deploy_sub` on purpose --
+// see resolveTargetSubscription's doc block. `deploy_sub` answers "should I
+// pass --subscription?" and is legitimately empty on every scheduled run;
+// `target_sub` answers "which subscription is this, as a literal id?" and is
+// NEVER empty on a proceed. A step that composes an ARM resource id cannot
+// inherit the CLI's active subscription, so it needs the literal, and until now
+// no output produced one.
+//
+// The login lookup is LAZY: a run that named a subscription resolves without
+// spending an az call, so the dispatch path is byte-identical to today's.
+const explicitTarget = resolveTargetSubscription({
+  topology,
+  targetSubscription,
+  subscriptionOverride,
+});
+const target = explicitTarget.source === 'unresolved'
+  ? resolveTargetSubscription({
+    topology,
+    targetSubscription,
+    subscriptionOverride,
+    loginSubscription: loginSubscription(),
+  })
+  : explicitTarget;
+
+if (target.source === 'unresolved') {
+  // FAIL CLOSED, and say what is actually true (R7). This is NOT "there is no
+  // subscription" -- it is "nothing I can read established which one this is".
+  // Emitting '' here instead would hand every consumer the same empty string
+  // that broke this path in the first place, one step further along.
+  console.log(
+    '::error::could not establish which subscription this deploy targets. ' +
+    'No `subscription` input was supplied (a scheduled run carries none, which is normal), ' +
+    'and `az account show --query id -o tsv` did not return a subscription id -- see the ' +
+    'warning above for what az actually said. This is UNKNOWN, not absent: refusing rather ' +
+    'than composing ARM resource ids against a subscription nobody measured. ' +
+    'Check that the Azure login step succeeded and that its credential has a default subscription.',
+  );
+  process.exit(1);
+}
+
+console.log(`[deploy-guard] target subscription resolved (source: ${target.source}).`);
+setOutput('target_sub', target.targetSub);
