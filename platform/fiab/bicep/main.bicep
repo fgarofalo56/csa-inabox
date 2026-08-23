@@ -1165,6 +1165,31 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
   params: {
     location: location
     boundary: boundary
+    // #3433 — LOOM_CLOUD_TIER: the cloud AUTHORIZATION tier the BFF enforces on.
+    // admin-plane/main.bicep has declared `param loomCloudTier string = ''` and
+    // emitted `{ name: 'LOOM_CLOUD_TIER', value: loomCloudTier }` since the IL5
+    // work landed, but NOTHING EVER PASSED IT. Measured on this tree before the
+    // fix: `grep -c loomCloudTier platform/fiab/bicep/main.bicep` → 0, i.e. the
+    // param sat at its `''` default on every boundary including IL5, so every
+    // consumer's `=== 'IL5'` comparison was false and the IL5 restrictions were
+    // dead code on the one boundary they exist for. The five live consumers:
+    //   app/api/items/ml-model/[id]/predict/route.ts:68     → force Synapse
+    //   app/api/items/notebook/[id]/execute-spark/route.ts:56 → force Synapse Livy
+    //   app/api/notebook/[id]/execute/route.ts:82            → force Synapse Livy
+    //   app/api/notebook/[id]/session/route.ts:100           → force Synapse Livy
+    //   lib/azure/domains-client.ts:536                      → skip the Fabric
+    //       Admin API (NOT FedRAMP IL5 approved) — a compliance control, not a
+    //       preference, which is why this is wired rather than left to an admin.
+    // Sourced from `boundary` (NOT a literal): boundary is already a required
+    // root param and carries exactly 'Commercial' | 'GCC' | 'GCC-High' | 'IL5'
+    // across the shipped params files, and the consumers uppercase-compare, so
+    // il5.bicepparam's `boundary = 'IL5'` lands verbatim. Hard-coding 'IL5' here
+    // would satisfy IL5 and silently mislabel the other four boundaries.
+    // COSTS ZERO ARM PARAMETERS — `loomCloudTier` is already declared in
+    // admin-plane/main.bicep (L96); this populates it. Declared-param count is
+    // unchanged at 239 of the 256 ceiling (verified against the compiled
+    // main.json admin-plane nested template before and after).
+    loomCloudTier: boundary
     loomAzureCloud: loomAzureCloud
     containerPlatform: containerPlatform
     // NOTE: functionsHostSku / capacitySku / openai* are NOT passed to the
@@ -1297,12 +1322,46 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       deDatabricks: loomDatabricksEnabled
       deAdf: loomDataFactoryEnabled
       deShir: loomSelfHostedIrEnabled
-      // Service Bus navigator binding (service-bus-namespace item). Single-sub:
-      // the namespace name is deterministic over the DLZ (matches servicebus.bicep's
-      // sbns-loom-<domain>-<region>, domain 'default'), so the Console binds to the
-      // real namespace. Empty in tenant/multi-sub (no local DLZ) or when Service Bus
-      // is disabled → the editor honest-gates. Carried here (not a scalar param) to
-      // stay under admin-plane's 256-param ceiling.
+      // ── MEASURED REACHABILITY OF EVERY `useSingleDlz` BINDING BELOW ──────────
+      // (#3317, root-caused by #3893. Read this before "fixing" any empty
+      // LOOM_* value in this block by making it non-empty.)
+      //
+      // `useSingleDlz = deployLandingZones && effectiveTopology == 'single-sub'`
+      // and `deployLandingZones = effectiveTopology != 'tenant'`. Measured on
+      // this tree across every shipped params file:
+      //
+      //   commercial / commercial-full / gcc / gcc-high / il5 → topology='tenant'
+      //       ⇒ deployLandingZones = FALSE ⇒ useSingleDlz = FALSE
+      //   tenant-dmlz  → no topology, deploymentMode='multi-sub'
+      //       ⇒ useMultiDlz = TRUE but dlzSubscriptionIds = [] ⇒ 0 iterations
+      //   dlz-attach   → sets NO `topology` at all, and the dlzAttach gate reads
+      //       the RAW `topology`, so that file alone does not take the branch
+      //       either (the Console orchestrator supplies topology=dlz-attach at
+      //       run time; that path IS reachable, the .bicepparam by itself is not)
+      //
+      //   grep -c '^module .*if (.*useSingleDlz' platform/fiab/bicep/main.bicep
+      //       → 33   (of 55 total module invocations in this file)
+      //
+      // So on every shipped params file these expressions evaluate to '' NOT
+      // because the resource exists and we declined to bind it, but because THE
+      // RESOURCE IS NEVER CREATED. Emitting a derived name here would be worse
+      // than empty: it would point the Console at a namespace/account that does
+      // not exist, converting an honest gate into a 404. The empty value is
+      // correct until the backing module is reachable; that relocation is #3893
+      // and is NOT done here.
+      // ─────────────────────────────────────────────────────────────────────────
+      // Service Bus navigator binding (service-bus-namespace item). The name is
+      // deterministic over the DLZ (matches servicebus.bicep's
+      // sbns-loom-<domain>-<region>, domain 'default'). Carried here (not a
+      // scalar param) to stay under admin-plane's 256-param ceiling.
+      // CORRECTED (#3317, R7): this comment previously said "so the Console binds
+      // to the real namespace", which asserted a binding that has never occurred
+      // on a shipped params file. Measured: the ONLY modules that create a Loom
+      // Service Bus namespace are landing-zone/servicebus.bicep (reached solely
+      // through landing-zone/main.bicep) and deploy-planner/service-bus.bicep
+      // (main.bicep:2456+24, gated `useSingleDlz && serviceBusEnabled`) — both
+      // unreachable per the block above. admin-plane/aas.bicep declares a third,
+      // but that one is the AAS namespace and is not what this item binds.
       serviceBusNamespace: (useSingleDlz && deployServiceBus) ? 'sbns-loom-default-${location}' : ''
       // Always-on default AML Compute Instance name (LOOM_AML_DEFAULT_COMPUTE) +
       // its idle TTL (LOOM_AML_COMPUTE_IDLE_TTL). Name is derived the SAME way as
@@ -1312,18 +1371,27 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // byoExisting (not scalar params) to stay under admin-plane's 256-param ceiling.
       amlDefaultCompute: (useSingleDlz && provisionAml) ? take('ci-loom-${uniqueString(singleDlzRg.id)}', 24) : ''
       amlComputeIdleTtl: mlComputeIdleTtl
-      // Azure Batch account (SVC-5) — feed the DEPLOYED dpBatch account name +
-      // its RG into the Console env so LOOM_BATCH_ACCOUNT resolves and the
-      // Data Engineering "Batch pool" item lights up day-one. Previously unset,
-      // so the item honest-gated forever even when the account was deployed
-      // (the deployed name was never wired to the Console). The name is DERIVED
-      // deterministically the SAME way batch.bicep computes it
-      // (take('batchloom${uniqueString(rg.id)}', 24) at singleDlzRg scope) rather
-      // than read from dpBatch.outputs — the module depends on adminPlane's
-      // console principal, so an output reference would form a dependency cycle
-      // (mirrors amlWorkspaceName's deterministic derivation below). Empty in
-      // tenant/multi-sub (no local DLZ) or when Batch is opted out → the editor
-      // honest-gates naming LOOM_BATCH_ACCOUNT. Azure-native — no Fabric.
+      // Azure Batch account (SVC-5) — LOOM_BATCH_ACCOUNT / its RG for the Data
+      // Engineering "Batch pool" item. The name is DERIVED deterministically the
+      // SAME way batch.bicep computes it (take('batchloom${uniqueString(rg.id)}',
+      // 24) at singleDlzRg scope) rather than read from dpBatch.outputs — the
+      // module depends on adminPlane's console principal, so an output reference
+      // would form a dependency cycle (mirrors amlWorkspaceName's deterministic
+      // derivation below). Azure-native — no Fabric.
+      //
+      // CORRECTED (#3317, R7): this comment previously read "feed the DEPLOYED
+      // dpBatch account name … the item honest-gated forever even when the
+      // account was deployed". Both halves asserted a deployment that has never
+      // happened. Measured on this tree:
+      //     grep -rn "Microsoft.Batch/batchAccounts@" platform/fiab/bicep
+      //       → exactly ONE declaration: modules/deploy-planner/batch.bicep:52
+      //     its only invocation, main.bicep `module dpBatch … = if (useSingleDlz
+      //       && batchEnabled)`, scope singleDlzRg
+      // and `useSingleDlz` is FALSE on every shipped params file (see the
+      // reachability block above), while `singleDlzRg` itself is declared
+      // `= if (useSingleDlz)`. There is no Batch account on any shipped
+      // deployment, so "even when the account was deployed" described a state
+      // that does not exist. The gate is honest; what is missing is the deploy.
       batchAccount: (useSingleDlz && batchEnabled) ? take('batchloom${uniqueString(singleDlzRg.id)}', 24) : ''
       batchRg: (useSingleDlz && batchEnabled) ? singleDlzRg.name : ''
       // Slate-app / Workshop-app Publish → Azure Static Web Apps target RG
