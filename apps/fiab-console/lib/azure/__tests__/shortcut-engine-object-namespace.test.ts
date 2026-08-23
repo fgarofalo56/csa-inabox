@@ -33,7 +33,7 @@
  *     against a shape regex (`SQL_REF_RE` in lib/foundry/ontology-binding.ts),
  *     which is the same identifier-shaped check this guard replaced — so
  *     `master.sys.sql_logins` passes it. Different item type, same primitive.
- *     Open, tracked as a follow-up; do not read this file as covering it.
+ *     Open, tracked in #3959; do not read this file as covering it.
  *
  * Each covered site builds `DROP VIEW` / `DROP TABLE` / `SELECT TOP 1 * FROM` /
  * `SELECT * FROM … LIMIT 1` and runs it as the Console UAMI, a Synapse SQL admin.

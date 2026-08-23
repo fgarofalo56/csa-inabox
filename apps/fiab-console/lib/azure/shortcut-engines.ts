@@ -349,7 +349,8 @@ async function ensureServerlessDb(): Promise<void> {
  * accepted — including `loom.information_schema.tables`. The schema part is
  * derived from a caller-independent lakehouse id at mint time, so constraining
  * it needs that id at the sink, which these functions do not receive. Tracked
- * as a follow-up, not closed here.
+ * in #3960 (with the missing item-id scoping, which has the same cause), not
+ * closed here.
  *
  * WHY A NAME-SPACE CHECK AND NOT AN IDENTIFIER CHECK. The previous revision of
  * this guard tested only "is this a well-formed 1–3 part identifier", and the
