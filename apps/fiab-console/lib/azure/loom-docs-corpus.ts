@@ -99,6 +99,30 @@ export interface RepoRoots {
   prpRoot: string;
   /** `PRPs/active/` — in-flight PRP folders (AUDIT.md receipts, PRP.md, OPEN-REGISTER) */
   prpActiveRoot: string;
+  /**
+   * `PRPs/archive/` — SUPERSEDED PRP units, retained as design history.
+   *
+   * Added 2026-08-22 after the omnibus consolidation (57fa48f6 / #3881) moved 22
+   * PRP units out of `PRPs/active/` and into
+   * `PRPs/archive/2026-08-22-omnibus-consolidation/`. That commit touched no
+   * console file, so `vitest (node 20)` skipped its `Run vitest` step and
+   * reported success (#3783) — and 68 markdown files left the retrieval corpus
+   * with nothing red anywhere. PRP membership went 104 -> 36.
+   *
+   * Chunks walked from this root are identified as superseded by their PATH
+   * ({@link isSupersededPath}) — nothing is stamped into their `content`, which
+   * is deliberate: an earlier revision prepended a notice there and it poisoned
+   * BM25 (see {@link SUPERSEDED_NOTICE} for the measurements).
+   *
+   * NOTE — the marker is NOT yet rendered anywhere. {@link SUPERSEDED_NOTICE}
+   * and {@link isSupersededPath} are the seam for applying it at prompt/citation
+   * assembly, but no caller consumes them yet, so archived chunks currently
+   * reach the model WITHOUT a superseded disclaimer. That is a tracked
+   * deferral, not the finished design: the corpus keeps the design history and
+   * the shipped-receipt AUDIT registers retrievable, and the "do not present
+   * this as current" half still has to be wired at the consuming end.
+   */
+  prpArchiveRoot: string;
   /** `docs/fiab/adr/` */
   adrRoot: string;
 }
@@ -117,6 +141,7 @@ export function detectRoots(): RepoRoots {
       consoleLibRoot: path.join(bundled, 'lib'),
       prpRoot: path.join(bundled, 'PRPs', 'completed', 'csa-loom-pillar'),
       prpActiveRoot: path.join(bundled, 'PRPs', 'active'),
+      prpArchiveRoot: path.join(bundled, 'PRPs', 'archive'),
       adrRoot: path.join(bundled, 'docs', 'fiab', 'adr'),
     };
   }
@@ -132,6 +157,7 @@ export function detectRoots(): RepoRoots {
     consoleLibRoot: path.join(dir, 'apps', 'fiab-console', 'lib'),
     prpRoot: path.join(dir, 'PRPs', 'completed', 'csa-loom-pillar'),
     prpActiveRoot: path.join(dir, 'PRPs', 'active'),
+    prpArchiveRoot: path.join(dir, 'PRPs', 'archive'),
     adrRoot: path.join(dir, 'docs', 'fiab', 'adr'),
   };
 }
@@ -231,6 +257,67 @@ export interface SourceFileRef {
 }
 
 /**
+ * The path prefix that marks SUPERSEDED design history.
+ *
+ * `path` is a retrievable field on BOTH backends (an AI Search
+ * `INDEX_DEFINITION` field and a Cosmos document property), so it is the one
+ * signal a chunk carries no matter which retrieval path produced it — which
+ * makes it the right key for marking a document superseded at PROMPT/CITATION
+ * assembly time.
+ */
+export const SUPERSEDED_PATH_PREFIX = 'PRPs/archive/';
+
+/** True when a chunk's repo-relative `path` is superseded design history. */
+export function isSupersededPath(chunkPath: string): boolean {
+  return chunkPath.startsWith(SUPERSEDED_PATH_PREFIX);
+}
+
+/**
+ * The notice to render ALONGSIDE a superseded chunk — at prompt/citation
+ * assembly, keyed off {@link isSupersededPath}. Exported so the wording has one
+ * home instead of being retyped at each call site.
+ *
+ * ── DO NOT PUT THIS IN `DocChunk.content`. IT WAS, AND IT INVERTED THE GOAL ──
+ *
+ * The first version of this change prepended the notice to indexed `content`,
+ * reasoning that `content` is what the model reads and is carried verbatim by
+ * both backends. Both halves of that are true and the conclusion was still
+ * wrong, because `content` is not only READ — it is SCORED and SEARCHED.
+ *
+ * Measured on the staged production corpus (49,481 chunks, archived = 5.10%):
+ *
+ *   query                                   archived in top-10
+ *                                           WITH notice   WITHOUT
+ *   "what is the current plan"                 10/10         1/10
+ *   "what is the active plan for deployment"    9/10         0/10
+ *   "design history"                           10/10         1/10
+ *   "current work in progress"                  6/10         0/10
+ *   "how do I create a lakehouse" (control)     0/10         0/10
+ *
+ * `tokenize()` reduces the notice to
+ * ["archived","superseded","design","history","current","plan","see","prps",
+ * "active","current","work"] — none of them in `RANKER_STOPWORDS`, and
+ * "current" TWICE, giving tf=2 in every archived chunk. So a 5% slice of the
+ * corpus took 90-100% of the top-10 whenever a query shared a notice word, and
+ * the text meant to say "this is NOT the current plan" made archived documents
+ * the top match for "current". It degraded IDF corpus-wide too (df "current"
+ * 1944 -> 4092, ~-23% IDF; "plan" -27%, "active" -29%, "work" -32%), which
+ * hurts queries that should hit ACTIVE docs.
+ *
+ * Stripping it only before BM25 would NOT have been enough: `content` is
+ * `searchable: true` with the `standard.lucene` analyzer in
+ * `loom-docs-index.INDEX_DEFINITION`, so AI Search's own full-text query would
+ * still match the notice and poison the CANDIDATE WINDOW before any re-rank ran.
+ *
+ * This is exactly the pathology #3084 recorded for `docs/fiab/parity-gap/**`:
+ * numerous documents sharing boilerplate that matches almost any question do
+ * not merely add noise, they DISPLACE real answers.
+ */
+export const SUPERSEDED_NOTICE =
+  'ARCHIVED / SUPERSEDED design history — not the current plan. See PRPs/active/ for current work.';
+
+
+/**
  * Enumerate every source file the corpus indexes — markdown docs + repo source
  * summaries — deduped by absolute path, in a deterministic order. Shared by
  * `collectSources` (the builder) and `statFingerprint` (the cheap freshness
@@ -245,6 +332,11 @@ export function enumerateSourceFiles(roots: RepoRoots): SourceFileRef[] {
     { root: roots.docsRoot, kind: 'docs' },
     { root: roots.prpRoot, kind: 'prp' },
     { root: roots.prpActiveRoot, kind: 'prp' },
+    // Superseded PRP units. Walked LAST so that if a path were ever reachable
+    // from both an active and an archived root, `seen` keeps the ACTIVE copy.
+    // Whether a file is superseded is derived from its path at read time
+    // (`isSupersededPath`), never stored — one source of truth.
+    { root: roots.prpArchiveRoot, kind: 'prp' },
     { root: roots.adrRoot, kind: 'adr' },
   ];
   for (const src of mdSources) {
@@ -320,6 +412,10 @@ export function collectSources(): CollectedCorpus {
         kind: ref.kind,
         path: ref.rel,
         heading: b.heading,
+        // NOTHING is prepended here. A superseded chunk is identified by its
+        // `path` (see isSupersededPath) and marked at prompt/citation assembly.
+        // Stamping the notice into indexed content made archived docs the top
+        // hit for "current" — see the SUPERSEDED_NOTICE note.
         content: b.content,
         url: docsUrlForPath(ref.rel),
         touchedAt,
