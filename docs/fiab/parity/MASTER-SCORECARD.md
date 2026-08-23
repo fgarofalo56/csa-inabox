@@ -1,3 +1,10 @@
+<!-- parity-doc-meta
+Reviewed-on: 2026-08-23
+Validated-against:
+  - apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx
+  - apps/fiab-console/app/api/databricks/unity-catalog
+-->
+
 # CSA Loom -> Azure Parity Master Scorecard
 
 > **Synthesized from 12 per-service deep-functional audits (2026-05-31).** Each
@@ -18,6 +25,28 @@
 > capability has no Loom surface at all.
 
 ## Scorecard
+
+> **Scope of this file (recorded 2026-08-23).** This is a synthesis of **12
+> per-service Azure audits**, not an index of every parity doc. `docs/fiab/parity/`
+> holds **486** `.md` files; the vast majority have no row here and are not
+> supposed to. Measured 2026-08-23 **against the file as it stood before this
+> note was added**, `grep -ci` returned **0** for each of `lakebase`, `red-team`
+> and `mirror` — against a passing control (`grep -c "Database"` = 3), so the
+> search worked and the absence was real. None of the three is named in any
+> scorecard table below; that is still true, and it is the check to re-run
+> (excluding this note) if you need to confirm it. Three surfaces audited
+> recently and absent from the tables, with their own docs:
+>
+> | Surface | Its doc | Grade in that doc |
+> |---|---|---|
+> | `lakebase-postgres` | `lakebase-postgres.md` | B for what it does; C against the portal blade (7 built / 8 partial / 15 MISSING) |
+> | `ai-red-team` | `ai-red-team.md` | B− (8 ✅ / 3 ⚠️ / 19 ❌) |
+> | `mirrored-database` | `mirrored-database.md` | B lifecycle, B− with source coverage counted |
+>
+> **Do not read a missing row here as a missing surface.** #3778 was filed partly
+> on the premise of a "Databases row in `MASTER-SCORECARD.md`" that has never
+> existed. Per-slug docs are the source of truth for per-slug grades; this file
+> is the source of truth only for the 12 services it names.
 
 > **Addendum (2026-06-11, audit-T143) — Governance: Data quality + Master data.**
 > Two new A-grade governance surfaces, Azure-native (no Fabric / partner SaaS):
@@ -44,9 +73,19 @@
 > real authenticated session (real index fields; real `2.25 RU` Cosmos
 > data-plane request charge).
 
+> **🛑 SUPERSEDED — read [rev.6](#re-graded-12-service-scorecard-rev6) first
+> (added 2026-08-23).** The table immediately below is the **2026-06-01** state
+> and is the first table in this file, so it is what a reader hits before the
+> current grades nine sections later. Every grade in it has since moved: rev.6
+> (2026-06-10) records **zero C/C+** where this table shows 3 × C+ and 4 × C.
+> Its "top gaps" column is stale in at least one load-bearing place — the
+> Databricks row still lists the Unity Catalog write surface as an open gap when
+> rev.6 records that same gap **cleared**. Kept for history; do not quote it as
+> current.
+
 | Service | Grade (rev.2) | was | Top gaps still open (highest-impact first) |
 |---|:--:|:--:|---|
-| Azure Databricks | **A** | B | Unity Catalog is read-only (no create/GRANT/lineage); DLT/Lakeflow editor; Repos branch ops; cluster Policy + Access-mode (UC gate); Job Repair-run |
+| Azure Databricks | **A** | B | ~~Unity Catalog is read-only (no create/GRANT/lineage)~~ — **CLEARED, see rev.6 (#1073, #1040).** Verified 2026-08-23: `lib/editors/databricks/uc-dialogs.tsx` carries 26 create/GRANT call sites and the UC route tree ships 24 handlers including `grants/`, `lineage/`, `catalogs/`, `schemas/`, `tables/`, `volumes/`, `external-locations/`. Still open: DLT/Lakeflow editor; Repos branch ops; cluster Policy + Access-mode (UC gate); Job Repair-run |
 | Azure AI Search | **B** | C | Indexer scheduling + run history + field/output mappings; semantic-config & vector-profile *designers* (JSON-only today); scoring-profile/analyzer designers; Import-data wizard; service-stats panel; Keys/Identity/Networking/Monitoring admin |
 | Azure Cosmos DB | **B-** | C | Stored-proc/trigger/UDF authoring + execute; account blades (Keys/Geo/Consistency/Backup/Networking); write-path Scale/Settings/Indexing editors; bulk upload; query save/multi-tab |
 | Power BI / Fabric semantic | **B-** | C | Workspace content grid + Lineage view; sensitivity labels (honestly omitted — no public apply REST); Subscriptions; App publishing/capacity; data-source credential sign-in; in-browser report authoring |
@@ -65,8 +104,9 @@ flip was verified by reading the route handler back to a real Azure REST/data-
 plane call), not re-scoring — but **every service still has genuine missing
 breadth**, and no service is yet at the `ui-parity.md` A+ bar (full inventory
 built). The headline gaps that remain are the heavy designers: ADF/Synapse
-Mapping Data Flow + notebook authoring, Databricks Unity Catalog write surface,
-and the per-service admin blades.
+Mapping Data Flow + notebook authoring, ~~Databricks Unity Catalog write
+surface~~ (**cleared at rev.6 — #1073, #1040**), and the per-service admin
+blades.
 
 > The rev.1 capability counts (192 built / 102 partial / 31 gated / 255 missing
 > across 580 inventoried) are preserved below for history but understate the
@@ -423,6 +463,14 @@ existing backends*.
 
 ## Prioritized build backlog (highest impact first, across all services)
 
+> **⚠️ rev.1-era list, not re-baselined (noted 2026-08-23).** This backlog was
+> written against the rev.1/rev.2 grades and has **not** been recomputed against
+> rev.6. The `## Overall honest assessment` section above carries a rev.6 banner;
+> this section is a separate `##` and was never covered by it. Items here may
+> already be built — item 15 is a confirmed example, annotated in place. Treat
+> the ordering as historical intent and re-verify any item against the
+> per-service doc before picking it up.
+
 Ordering weights: operator frequency-of-use, credibility gap (how "fake" the
 surface looks without it), `ui-parity.md` violation severity, and
 effort-to-impact (unwired-backend items are starred ★ as quick wins).
@@ -474,9 +522,12 @@ effort-to-impact (unwired-backend items are starred ★ as quick wins).
     response schemas) + **form-based policy editor** with effective-policy calc.
 14. **Power Platform Environment lifecycle command bar** (New/Edit/Copy/Backup-
     Restore/Reset/Delete/Convert) + **Dataverse table authoring + row CRUD**.
-15. **Databricks Unity Catalog write surface** (create catalog/schema/table/volume,
+15. ~~**Databricks Unity Catalog write surface** (create catalog/schema/table/volume,
     GRANT/REVOKE, lineage, external locations) — entire governance write surface is
-    read-only.
+    read-only.~~ **DONE — #1073, #1040 (cleared at rev.6).** Verified 2026-08-23:
+    `uc-dialogs.tsx` + 24 UC route handlers, `grants/` and `lineage/` among them.
+    Left in place struck through, because this item is the reason the whole
+    section now carries a re-baseline warning.
 16. **Power BI semantic-model settings pane** (gateway binding + datasource
     credentials) — without it refresh fails for any gateway/cloud model; plus
     **per-item ⋯ context menu** (unlocks settings + governance across all item types).
