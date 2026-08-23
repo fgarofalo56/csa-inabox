@@ -16,8 +16,15 @@
  * mounted fine with the wrong URL. The discriminating fact is the SHAPE of the
  * name the editor puts on the wire, so that is what is asserted — every request
  * that carries the name as a path segment is checked against the ROUTE'S OWN
- * regex (`DATAFLOW_NAME_RE`, copied verbatim from `lib/azure/dataflow-debug.ts`,
- * so the test fails if the two ever drift apart in the direction that matters).
+ * regex, `DATAFLOW_NAME_RE`, IMPORTED from `lib/azure/dataflow-debug.ts` rather
+ * than copied. The distinction is load-bearing and was measured: this file
+ * previously carried a local copy of the literal under a comment claiming the
+ * spec "fails if the two ever drift apart". It could not — a copy is by
+ * construction insensitive to a change in its source. Tightening the exported
+ * regex to `{1,20}` left this spec GREEN (RC=0, 7/7) over `df_<32 hex>`, a
+ * 35-character name the four `/api/items/mapping-dataflow/[id]/debug/*` routes
+ * would then answer `400` for. Importing the real constant is what makes the
+ * claim true: the same mutation now turns this spec RED.
  *
  * WHY THE CALL LOG IS NOT ENOUGH ON ITS OWN — the review finding this spec was
  * rewritten to answer. The first version of this file asserted over whatever
@@ -42,10 +49,16 @@
  *
  * THE POPULATION FLOOR. A guard whose population can shrink to zero is green
  * and blind, and "the log no longer contains that request" is exactly how this
- * one would shrink. `SITES` below therefore names each call site individually
- * and asserts it is PRESENT before asserting its name is legal: if a refactor
- * stops firing one of them, this spec goes red rather than quietly narrowing to
- * the sites that remain.
+ * one would shrink. The four `Site` constants below — `MOUNT_SITES` (two),
+ * `SAVE_SITE`, `DEBUG_DOCK_SITE` and `PREVIEW_SITE` — therefore name each call
+ * site individually, and `assertSiteLegal` asserts each is PRESENT before
+ * asserting its name is legal: if a refactor stops firing one of them, this
+ * spec goes red rather than quietly narrowing to the sites that remain.
+ *
+ * ADDING A SIXTH CALL SITE: declare another `Site` here, drive the action that
+ * fires it in one of the two tests below, and pass it to `assertSiteLegal`.
+ * There is no aggregate list to append to — a site that is declared but never
+ * passed to `assertSiteLegal` is covered by nothing.
  *
  * MUTATION CONTROL — every arm measured, both directions:
  *   | reverted to the raw item GUID at… | before | after |
@@ -60,9 +73,11 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MappingDataFlowEditor, resolveFlowName } from '../mapping-dataflow-editor';
 import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
-
-/** Verbatim from lib/azure/dataflow-debug.ts — the regex the ROUTE enforces. */
-const DATAFLOW_NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
+// IMPORTED, never copied — this is the exact constant the four
+// `/api/items/mapping-dataflow/[id]/debug/*` routes and
+// `/api/adf/dataflows/[name]/debug` validate their path segment against, so a
+// tightening of it fails HERE instead of in production. See the header.
+import { DATAFLOW_NAME_RE } from '@/lib/azure/dataflow-debug';
 
 /** A realistic Cosmos item id: `crypto.randomUUID()` shape, hyphens and all. */
 const ITEM_GUID = '7c1f2a90-4d3b-4e51-9a02-6b8e5d0c1f34';

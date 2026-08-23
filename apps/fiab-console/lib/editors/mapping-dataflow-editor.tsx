@@ -38,9 +38,11 @@
  * `POST /api/items/mapping-dataflow/{name}/debug/{session,preview,schema,stats}`
  * — routes that validate the segment against the SAME `DATAFLOW_NAME_RE` and
  * answer `400 invalid data flow name` for a GUID. Any new name-bearing call
- * site must take `flowName`, and must be added to `SITES` in
- * `__tests__/mapping-dataflow-item-binding.test.tsx`, which drives each of them
- * and fails if one stops firing.
+ * site must take `flowName`, and must be declared as a `Site` AND passed to
+ * `assertSiteLegal` in `__tests__/mapping-dataflow-item-binding.test.tsx`,
+ * which drives each of them and fails if one stops firing. (There is no
+ * aggregate list to append to; a `Site` that is never passed to
+ * `assertSiteLegal` is asserted over by nothing.)
  *
  * `new` opens a fresh, unsaved flow; the user names the first transformation
  * and Saves, which PUTs the named flow.
