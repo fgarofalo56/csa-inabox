@@ -53,9 +53,11 @@
  *
  *    and the counts stayed at 1 and 5: RC=0, 36/36 green, with a live
  *    bicep-literal break-out reaching the response. The counting invariant is
- *    retained (it still catches the template shape — measured RC=1) but it is no
- *    longer what carries the claim. {@link unsafeEmissions} does: it classifies
- *    each emission SITE rather than counting one syntax, over three shapes —
+ *    retained (it still catches the template shape — measured RC=1) and it is
+ *    still load-bearing: it is what catches an added `q('` call, and the region
+ *    interpolation count is what catches an added `${…}` in the emitted text.
+ *    {@link unsafeEmissions} widens that — it classifies emission SITES rather
+ *    than counting one syntax, over three shapes —
  *    a `deployParams.<key> =` whose right-hand side is neither a static literal
  *    nor a `q()` call; a `${…}` in the emission region that is not a `q()` call;
  *    and any string concatenation in that region at all. Each of those three is
@@ -278,8 +280,9 @@ describe('POST /api/setup/identity — sink-count invariant', () => {
     //
     // This is a NECESSARY condition, not a sufficient one: it sees template
     // interpolation only, so it is blind to a sink built by concatenation.
-    // `unsafeEmissions` below is what closes that; do not read this assertion
-    // as "no sink can be added silently".
+    // `unsafeEmissions` below closes that WITHIN the emission region; do not
+    // read this assertion as "no sink can be added silently", and do not read
+    // the pair of them that way either (#3955).
     expect(rawSinks.length).toBe(1);
     expect(code).toMatch(/function q\([^)]*\)[^{]*\{[\s\S]*?INERT_VALUE_RE\.test\(value\)[\s\S]*?'\$\{value\}'/);
   });
@@ -337,7 +340,16 @@ describe('POST /api/setup/identity — sink-count invariant', () => {
 // PR defeated those by writing the sixth sink with `+` instead of `${}`. Counts
 // stayed at 1 and 5; RC=0, 36/36; and a bicep-literal break-out landed verbatim
 // in a paste target. Counting ONE syntax cannot support the claim "a sink
-// cannot be added silently" — classifying every SITE can.
+// cannot be added silently".
+//
+// Neither can this classifier, and the boundary is measured rather than
+// assumed: mutating the real route and running this real suite, FOUR shapes
+// stay green at 45/45 — a bare expression as a command-array element; a
+// `deployParams.<key> =` whose RHS only MENTIONS `q(`; a concatenation in the
+// response object (past REGION_END); and an earlier response `return` that
+// relocates REGION_END. What this control DOES carry is the narrow claim:
+// inside the region, for the three shapes below, a sink cannot be added
+// silently. Widening is #3955.
 // ───────────────────────────────────────────────────────────────────────────
 
 /** A single string/template literal with NO interpolation and NO concatenation
@@ -531,9 +543,15 @@ describe('POST /api/setup/identity — emission-site invariant', () => {
     expect(unsafeEmissions(stripComments(mutated))).toEqual([]);
   });
 
-  it('CONTROL — a moved region marker fails CLOSED, it does not go quiet', () => {
-    // A guard over an empty population is green and blind. If the markers ever
-    // stop matching, the classifier must say so rather than find nothing.
+  it('CONTROL — a region marker that VANISHES fails CLOSED, it does not go quiet', () => {
+    // A guard over an empty population is green and blind. If a marker ever
+    // stops matching, the classifier must say so rather than find nothing.
+    //
+    // Scope, measured rather than assumed: this covers a marker that VANISHES.
+    // A marker that MOVES does NOT fail closed — adding an earlier response
+    // `return` relocates REGION_END, shrinking the region while it still clears
+    // the 400-char floor and still holds its two interpolations, and the suite
+    // stays green at 45/45. That is #3955, not something this control catches.
     expect(unsafeEmissions('export const POST = 1;')).toEqual([
       'emission region not found — REGION_START/REGION_END markers moved',
     ]);
@@ -549,7 +567,11 @@ describe('POST /api/setup/identity — emission-site invariant', () => {
     };
 
     // A SIXTH key appearing here goes red whatever syntax produced it — a
-    // source-scan can be out-thought, an emitted key cannot be hidden.
+    // source-scan can be out-thought, and an emitted key cannot be hidden from
+    // a request shape this test actually drives. It CAN be hidden from one this
+    // test does not: a write guarded by a field none of the three bodies below
+    // sends never reaches the emitted set, and stays green. That is the limit
+    // of this detector, and it is part of #3955.
     expect(await keys({})).toEqual(['loomMsalAppReg', 'loomTenantAdminOid']);
     expect(
       await keys({ appRegistration: { mode: 'disable' }, bootstrapAdmin: { mode: 'self' } }),

@@ -80,8 +80,22 @@
  *       measured rather than reasoned: a sixth sink written as
  *       `deployParams.x = "'" + caller + "'"` leaves both counts unchanged and
  *       shipped green (RC=0, 36/36) with a live bicep-literal break-out. Do not
- *       read either count as "a sink cannot be added silently" — the emission-
- *       site classifier is what carries that claim.
+ *       read either count as "a sink cannot be added silently".
+ *
+ *       The emission-site classifier does NOT carry that claim either. Review
+ *       round 3 measured where it stops, by mutating this file on disk and
+ *       running the real 45-test suite. FOUR shapes stay GREEN at RC=0, 45/45:
+ *       a bare expression added as an ELEMENT of the emitted command array; a
+ *       `deployParams.<key> =` whose right-hand side only MENTIONS `q(` (rule 1
+ *       tests for that substring, not for provenance); a concatenation sink in
+ *       the RESPONSE OBJECT, which sits past the region end; and an earlier
+ *       response `return`, which relocates the region end and silently shrinks
+ *       the region while every floor still passes.
+ *
+ *       So the honest statement is the narrow one: BETWEEN the region markers,
+ *       and only for the three shapes rules 1-3 name, a sink cannot be added
+ *       silently. Outside that span nothing here is watching. Widening the
+ *       classifier is tracked in #3955.
  *
  * Route-toolkit: the `withSession` wrapper [R3]. The prologue it replaces was
  * `const session = getSession(); if (!session) return NextResponse.json({ ok:
@@ -190,10 +204,17 @@ export class UnsafeInterpolationError extends Error {
 /**
  * Quote `value` for emission into a shell word or a bicep string literal,
  * asserting first that it cannot escape either. EVERY interpolated value in
- * this route goes through this function; that invariant is enforced by
- * __tests__/identity-injection.test.ts, which classifies every emission SITE in
- * this file (not merely one syntax — see the note on L2 in the module docblock)
- * and additionally pins the emitted `deployParams` key set at runtime.
+ * this route goes through this function today, and that is asserted — but by a
+ * classifier with a MEASURED boundary, not a universal one:
+ * __tests__/identity-injection.test.ts classifies every `deployParams.<key> =`
+ * write file-wide, and every interpolation and concatenation BETWEEN
+ * `const deployParams` and the first response `return`. It does not reach
+ * command-array elements, the response object, or anything above that first
+ * marker; see the note on L2 in the module docblock for the four shapes that
+ * were measured GREEN, and #3955 for the widening. The emitted `deployParams`
+ * key set is additionally pinned at runtime, which catches an added key
+ * whatever syntax produced it — but only for the request shapes the suite
+ * drives.
  */
 function q(field: string, value: string): string {
   if (!INERT_VALUE_RE.test(value)) throw new UnsafeInterpolationError(field);
