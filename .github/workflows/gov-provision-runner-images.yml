@@ -350,10 +350,24 @@ jobs:
       # the POINTER, not the failure — every such build would still need a human
       # inside the boundary to run the command az itself printed.
       #
-      # Measured across the whole tree at the same time:
-      #   `az acr task logs` appears in ZERO workflows (0 files, 0 occurrences),
-      #   while `az acr build ... --no-logs` appears in 11. So this is a class,
-      #   not an instance, and this step is the first member of it.
+      # Measured across the whole tree (123 workflows), 2026-08-23, re-counted
+      # after a review found the earlier figure in this comment was wrong:
+      #   `az acr task logs`      invoked in 1 workflow — THIS one, and only
+      #                           because of this step. It was 0 before it.
+      #   `az acr build --no-logs` in 9 workflows, counting only live YAML.
+      #                           A naive grep that does not strip comments says
+      #                           12: console-bluegreen-roll.yml,
+      #                           gov-console-roll.yml and loom-guardrails.yml
+      #                           only MENTION the flag in prose, and one of
+      #                           those mentions is the sentence saying the
+      #                           opt-out is gone. 9 is the number that means
+      #                           anything; 12 is the artefact of the grep.
+      # (This comment previously said 11, which is neither figure and was
+      # measured by nothing — deploy-integrity R7: a comment asserting a number
+      # it did not establish is the same defect as an error message doing it.
+      # The list of 9 is pinned mechanically in
+      # .github/scripts/__tests__/gov-deploy-lanes.test.mjs.)
+      # So this is a class, not an instance, and this step is the first member.
       #
       # POSITION IS LOAD-BEARING: this sits BEFORE the lease release, so the
       # registry data plane is still open to this runner when the log is
@@ -380,6 +394,24 @@ jobs:
           ART: ${{ github.workspace }}/deploy-failure.json
         run: |
           set -uo pipefail
+
+          # ACR REACHES THIS STEP ONLY VIA $GITHUB_ENV, AND ONLY IF WE GOT THAT
+          # FAR. It is written by "Resolve boundary coordinates (RG / ACR / tags)".
+          # This step is `if: failure()`, so it also runs when the failure was
+          # "Azure Gov Login", "Set Azure cloud to Gov", or that resolve step
+          # itself — in every one of those cases ACR is UNSET. Under `set -u` a
+          # bare "$ACR" aborts the step on `ACR: unbound variable` before any
+          # branch can speak, which would silently contradict the contract stated
+          # above (every branch ends in a ::warning:: naming what could not be
+          # established). Measured: `env -u ACR bash` on this shape exits 1 at the
+          # first reference and prints nothing after it.
+          # The default-empty expansion is the same idiom the lease-release step
+          # below already uses.
+          ACR="${ACR:-}"
+          if [ -z "$ACR" ]; then
+            echo "::warning::No registry name is set on this runner, so this run failed at or before 'Resolve boundary coordinates (RG / ACR / tags)' — i.e. before any ACR build was attempted. There is no task log to fetch and none is claimed to exist. This says WHERE the run stopped, not anything about an image build: the cause is in the failing step above."
+            exit 0
+          fi
 
           RUN_IDS=""
 

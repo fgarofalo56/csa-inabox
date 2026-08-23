@@ -121,6 +121,155 @@ export function triggerKeys(src) {
   return [...m[1].matchAll(/^ {2}([a-z_]+):/gm)].map((x) => x[1]);
 }
 
+/**
+ * The workflow split into its top-level jobs, in file order.
+ *
+ * Needed because GitHub Actions RESOLVES `permissions` per job, not per file —
+ * see `jobDeclaresOwnPermissions` below for why that distinction is the whole
+ * point.
+ */
+export function splitJobs(src) {
+  const lines = stripComments(src).split('\n');
+  const out = [];
+  let inJobs = false;
+  let cur = null;
+  for (const line of lines) {
+    if (/^jobs:\s*$/.test(line)) {
+      inJobs = true;
+      continue;
+    }
+    if (!inJobs) continue;
+    // Any non-indented, non-empty line ends the `jobs:` block.
+    if (/^\S/.test(line)) {
+      inJobs = false;
+      continue;
+    }
+    const j = /^ {2}([A-Za-z0-9_.-]+):\s*$/.exec(line);
+    if (j) {
+      if (cur) out.push(cur);
+      cur = { name: j[1], body: [] };
+      continue;
+    }
+    if (cur) cur.body.push(line);
+  }
+  if (cur) out.push(cur);
+  return out.map((j) => ({ name: j.name, text: j.body.join('\n') }));
+}
+
+/**
+ * True when a JOB declares its own `permissions:` block.
+ *
+ * THIS IS NOT A STYLE CHECK. GitHub Actions REPLACES the workflow-level grant
+ * with the job-level one; it does not merge them. Their syntax reference says it
+ * in two sentences that combine into the defect:
+ *
+ *   "If you specify the access for any of these permissions, all of those that
+ *    are not specified are set to `none`."
+ *   "The permissions are then adjusted ... first at the workflow level and then
+ *    at the job level."
+ *
+ * So adding a four-line `permissions:\n  contents: read` to the job that hosts
+ * the notifier silently sets `issues: none`, the filer 403s, and #3844 is back —
+ * with `grantsIssuesWrite()` still green, because that function only ever reads
+ * `topLevelPermissions()`. Measured 2026-08-23: that mutation kept BOTH suites
+ * green at 8/8 and 38/38.
+ */
+export function jobDeclaresOwnPermissions(jobText) {
+  return /^ {4}permissions:/m.test(jobText);
+}
+
+/**
+ * Every `--result` argument in a block of text, quotes stripped.
+ *
+ * `--result` PRESENCE is not the property that matters; the VALUE is.
+ * `deploy-notify-failure.mjs` gates on `hasArg('result')`, which `--result ""`
+ * satisfies, and then `shouldFile('')` returns `{file:false, category:'pending'}`
+ * — the notifier posts NOTHING, which is precisely the silent revert #3844
+ * exists to stop. Measured 2026-08-23 against the real consumer, not inferred.
+ */
+export function resultArgs(text) {
+  return [...text.matchAll(/--result\s+("[^"]*"|'[^']*'|\S+)/g)].map((m) => {
+    const raw = m[1];
+    const quoted =
+      (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"));
+    return quoted ? raw.slice(1, -1) : raw;
+  });
+}
+
+/** True when SOME `--result` in the text carries a value that is not blank. */
+export function hasNonEmptyResult(text) {
+  return resultArgs(text).some((v) => v.trim() !== '');
+}
+
+/**
+ * The `workflow_run:` trigger parsed into its three list fields.
+ *
+ * The trigger EXISTING is not the property that matters. `branches: [main]` ->
+ * `[main-disabled]`, or `types: [completed]` -> `[requested]`, each make the
+ * chain unreachable while `triggerKeys()` still reports `workflow_run` and the
+ * suite stays green at 8/8. "One branch" is the canonical narrow mutation and it
+ * walked straight through the first cut of this file.
+ *
+ * Both YAML list spellings are read (flow `[a, b]` and block `- a`), so
+ * reformatting the trigger cannot silently empty this guard's population.
+ */
+export function workflowRunTrigger(src) {
+  const code = `${stripComments(src)}\n`;
+  const m = /^ {2}workflow_run:\n((?: {4}.*\n|\n)*)/m.exec(code);
+  if (!m) return null;
+  const body = m[1];
+  const unquote = (s) => s.trim().replace(/^['"]|['"]$/g, '');
+  const list = (key) => {
+    const flow = new RegExp(`^ {4}${key}:[ \\t]*\\[(.*)\\][ \\t]*$`, 'm').exec(body);
+    if (flow) return flow[1].split(',').map(unquote).filter((s) => s.length > 0);
+    const block = new RegExp(`^ {4}${key}:[ \\t]*\\n((?: {6}- .*\\n)+)`, 'm').exec(body);
+    if (block) return [...block[1].matchAll(/^ {6}- (.*)$/gm)].map((x) => unquote(x[1]));
+    return null;
+  };
+  return { workflows: list('workflows'), types: list('types'), branches: list('branches') };
+}
+
+/**
+ * Lines in a step that could publish the CONTENT of a fetched log file.
+ *
+ * `assert.match(diag.text, /_azure-redact\.mjs/)` asserts the redactor is
+ * PRESENT. It does not assert it is the ONLY path to stdout — adding one
+ * `cat "$LOG"` beside it republishes the raw Azure log to a public Actions log
+ * with the suite green at 8/8. Measured 2026-08-23.
+ *
+ * So this is an ALLOWLIST, deliberately. Every line referencing the log variable
+ * must be one of the shapes that provably cannot leak its content:
+ *
+ *   assignment      LOG=...              names the path
+ *   write redirect  ... > "$LOG"         writes INTO it
+ *   a `[` test      [ ! -s "$LOG" ]      reads metadata, not bytes
+ *   the redactor    ... _azure-redact.mjs ... the one sanctioned print
+ *   a plain echo    echo "... at $LOG"   publishes the PATH, not the content
+ *
+ * Anything else — `cat`, `head`, `tail`, `tee`, `awk`, a `< "$LOG"` read, an
+ * `echo "$(...)"` command substitution — is returned and fails the assertion.
+ * Erring restrictive is correct here: a new line touching the log should have to
+ * be justified, because the repository is public and an Actions log is a
+ * publication surface.
+ */
+export function rawLogPublications(stepText, varName = 'LOG') {
+  const ref = new RegExp(`\\$\\{?${varName}\\b`);
+  const assign = new RegExp(`^${varName}=`);
+  const writeInto = new RegExp(`>[ \\t]*"?\\$\\{?${varName}\\}?"?`);
+  const out = [];
+  for (const raw of stepText.split('\n')) {
+    const line = raw.trim();
+    if (!ref.test(line)) continue;
+    if (assign.test(line)) continue;
+    if (writeInto.test(line)) continue;
+    if (/^(?:if[ \t]+|elif[ \t]+)?\[\[?[ \t]/.test(line)) continue;
+    if (/_azure-redact\.mjs/.test(line)) continue;
+    if (/^echo[ \t]/.test(line) && !/\$\(/.test(line) && !/`/.test(line)) continue;
+    out.push(line);
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // #3844 — gov-console-roll must file a notice when it reverts
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,7 +296,12 @@ export function filesOnFailure(src, workflowArg) {
       /^\s+if:\s*failure\(\)\s*$/m.test(s.text) &&
       s.text.includes('.github/scripts/deploy-notify-failure.mjs') &&
       argRe.test(s.text) &&
-      /--result\b/.test(s.text),
+      // NOT `/--result\b/`. The flag being PRESENT is satisfied by
+      // `--result ""`, which the script accepts (`hasArg('result')` is true) and
+      // then declines to act on (`shouldFile('')` -> file:false, 'pending'), so
+      // the lane files nothing and every guard stays green. The VALUE is the
+      // property.
+      hasNonEmptyResult(s.text),
   );
 }
 
@@ -158,6 +312,36 @@ test('#3844 — gov-console-roll grants issues:write AND files on failure', () =
   assert.ok(triggerKeys(src).includes('push'), 'gov-console-roll no longer fires on push — this guard is guarding the wrong lane');
   assert.ok(grantsIssuesWrite(src), 'gov-console-roll has no `issues: write`; the filer would 403 and the revert would stay silent (#3844)');
   assert.ok(filesOnFailure(src, 'gov-console-roll'), 'gov-console-roll has no `if: failure()` step invoking deploy-notify-failure.mjs with --workflow gov-console-roll --result (#3844)');
+
+  // THE GRANT MUST SURVIVE JOB-LEVEL RESOLUTION, NOT MERELY EXIST AT THE TOP.
+  // A job-level `permissions:` block REPLACES the workflow-level one (GitHub:
+  // "all of those that are not specified are set to `none`"), so four lines
+  // inside the job silently revoke `issues: write` while `grantsIssuesWrite()`
+  // — which reads only the top-level block — stays green. Measured: that
+  // mutation kept both suites at 8/8 and 38/38.
+  const jobs = splitJobs(src);
+  assert.ok(jobs.length > 0, 'no jobs parsed out of gov-console-roll — the job splitter drifted, and the assertion below would be vacuous');
+  const notifierJobs = jobs.filter((j) => j.text.includes('.github/scripts/deploy-notify-failure.mjs'));
+  assert.ok(notifierJobs.length > 0, 'no job in gov-console-roll hosts the notifier; the permissions assertion below would be vacuous');
+  for (const j of notifierJobs) {
+    assert.equal(
+      jobDeclaresOwnPermissions(j.text),
+      false,
+      `job '${j.name}' hosts the failure notifier AND declares its own \`permissions:\` block. Actions REPLACES the workflow-level grant rather than merging it, so \`issues: write\` becomes \`issues: none\` and the filer 403s — #3844 restored with every guard green. Delete the job-level block, or add \`issues: write\` to it.`,
+    );
+  }
+
+  // AND THE RESULT MUST BE PINNED TO THE JOB OUTCOME. A non-empty value is not
+  // enough on its own: it has to be the value that actually distinguishes a
+  // failure from a cancellation, which for this single-job lane is job.status.
+  const notifier = namedSteps(src).find((s) => s.text.includes('.github/scripts/deploy-notify-failure.mjs'));
+  assert.ok(notifier, 'no named step invokes deploy-notify-failure.mjs');
+  const values = resultArgs(notifier.text);
+  assert.deepEqual(
+    values,
+    ['${{ job.status }}'],
+    `the notifier's --result must be exactly "\${{ job.status }}"; found ${JSON.stringify(values)}. An empty value makes shouldFile() return {file:false, category:'pending'} and the lane posts nothing (#3844); a value that is not the job outcome cannot tell a failure from a cancellation (#3368)`,
+  );
 });
 
 test('#3844 SELF-DEFENCE — both predicates fire on the verbatim before-shape', () => {
@@ -205,6 +389,25 @@ test('#3844 SELF-DEFENCE — both predicates fire on the verbatim before-shape',
     false,
     'and neither must one with this lane as a suffix',
   );
+
+  // REGRESSION PIN — the EMPTY-VALUE hole a mutation found. `--result ""`
+  // satisfies the script's own `hasArg('result')` check and then produces
+  // shouldFile('') === {file:false, category:'pending'}: the lane posts nothing,
+  // which IS the #3844 defect. A presence-only matcher called that compliant.
+  assert.equal(filesOnFailure(step('failure()', '--result ""'), 'gov-console-roll'), false, 'an EMPTY --result must NOT count — the notifier files nothing on it');
+  assert.equal(filesOnFailure(step('failure()', "--result ''"), 'gov-console-roll'), false, 'and neither must an empty single-quoted value');
+  assert.equal(filesOnFailure(step('failure()', '--result "   "'), 'gov-console-roll'), false, 'and neither must a whitespace-only value');
+  assert.deepEqual(resultArgs('--result "${{ job.status }}"'), ['${{ job.status }}'], 'the extractor must return the value, not the flag');
+  assert.deepEqual(resultArgs('--result ""'), [''], 'and must report an empty value as empty rather than as absent');
+  assert.equal(hasNonEmptyResult('--failure-json f.json'), false, 'no --result at all is not a non-empty --result');
+
+  // The job-level permissions predicate, on both shapes.
+  const jobSrc = (perms) =>
+    ['jobs:', '  roll:', ...(perms ? ['    permissions:', '      contents: read'] : []), '    runs-on: ubuntu-latest', '    steps:', '      - run: echo hi'].join('\n');
+  assert.equal(splitJobs(jobSrc(false)).length, 1, 'the job splitter must find exactly one job');
+  assert.equal(splitJobs(jobSrc(false))[0].name, 'roll', 'and must name it');
+  assert.equal(jobDeclaresOwnPermissions(splitJobs(jobSrc(false))[0].text), false, 'a job with no own permissions block must be reported as not declaring one');
+  assert.equal(jobDeclaresOwnPermissions(splitJobs(jobSrc(true))[0].text), true, 'and a job that DOES declare one must be caught — Actions replaces rather than merges the grant');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +521,16 @@ test('#3416 — the runner-images lane fetches the ACR task log on failure, befo
   }
   // And it must not publish an Azure log to a public run log unredacted.
   assert.match(diag.text, /_azure-redact\.mjs/, 'the fetched ACR log must pass through scripts/ci/_azure-redact.mjs before it is printed — this repository is public');
+  // PRESENT IS NOT SOLE. The line above proves the redactor is in the step; it
+  // proves nothing about whether it is the ONLY route from the log file to
+  // stdout. Adding one `cat "$LOG"` beside it republishes the raw Azure log with
+  // the suite green at 8/8 — measured 2026-08-23. So every line that touches the
+  // log variable must be one of the shapes that cannot leak its content.
+  assert.deepEqual(
+    rawLogPublications(diag.text),
+    [],
+    'a line in the diagnostic step can publish the CONTENT of the fetched ACR log without passing it through scripts/ci/_azure-redact.mjs. This repository is public and an Actions log is a publication surface — route it through the redactor, or reference only the PATH',
+  );
 });
 
 test('#3416 RATCHET — no NEW suppressed-log build lane may ship without a log fetch', () => {
@@ -335,6 +548,16 @@ test('#3416 RATCHET — no NEW suppressed-log build lane may ship without a log 
   assert.deepEqual(stale, [], 'a baseline entry is now covered (or gone) — remove it, so the list keeps shrinking');
 
   assert.equal(NO_LOG_FETCH_BASELINE.includes(RUNNER_IMAGES), false, 'gov-provision-runner-images must never be excused by the baseline; it is the lane this fix covers');
+
+  // A SHRINK-ONLY LIST WITH NO CEILING IS NOT SHRINK-ONLY. Nothing above stops a
+  // PR adding a new suppressed-log lane AND its baseline entry in the same
+  // commit: `unexpected` is empty because the entry exists, `stale` is empty
+  // because the lane matches, and the debt grows silently. The cap is the
+  // mechanical half — it cannot be satisfied by adding a line.
+  assert.ok(
+    NO_LOG_FETCH_BASELINE.length <= 8,
+    `NO_LOG_FETCH_BASELINE has grown to ${NO_LOG_FETCH_BASELINE.length} (cap 8, the measured count on 2026-08-23). This list may only shrink: cover the new lane with an \`az acr task logs\` fetch instead of excusing it`,
+  );
 });
 
 test('#3416 SELF-DEFENCE — the matcher ignores comment-only mentions (live in-tree controls)', () => {
@@ -378,6 +601,46 @@ test('#3416 SELF-DEFENCE — the matcher ignores comment-only mentions (live in-
   assert.equal(fetchesAcrTaskLog('          OUT=$(az acr task logs -r "$ACR" --run-id "$ID")'), true, 'a command-substitution capture counts');
 });
 
+test('#3416 SELF-DEFENCE — the redaction allowlist passes the sanctioned shapes and catches every raw one', () => {
+  // The five shapes the real step uses. None of them can leak the log content.
+  const sanctioned = [
+    'LOG="${RUNNER_TEMP:-/tmp}/acr-task-$ID.log"',
+    'az acr task logs -r "$ACR" --run-id "$ID" > "$LOG"',
+    'if [ ! -s "$LOG" ]; then',
+    'node -e "...import(\'./scripts/ci/_azure-redact.mjs\')..." "$LOG"',
+    'echo "::error::... It is on this runner at $LOG; re-read it with: az acr task logs"',
+  ].join('\n');
+  assert.deepEqual(rawLogPublications(sanctioned), [], 'the shapes the real step uses must all be allowed, or this guard is unusable and will be weakened to make it pass');
+
+  // Every raw-publication shape must be caught. `cat` is the one the reviewer
+  // measured surviving; the rest are the obvious neighbours it would be absurd
+  // to catch one of and not the others.
+  for (const bad of [
+    'cat "$LOG"',
+    'cat $LOG',
+    'head -100 "$LOG"',
+    'tail -n 50 "$LOG"',
+    'tee "$LOG"',
+    'awk \'{print}\' "$LOG"',
+    'sed -n 1,50p "$LOG"',
+    'grep . "$LOG"',
+    'echo "$(cat "$LOG")"',
+    'while read -r l; do echo "$l"; done < "$LOG"',
+    'cat "$LOG" > /dev/stdout',
+  ]) {
+    assert.deepEqual(
+      rawLogPublications(bad),
+      [bad],
+      `\`${bad}\` publishes the fetched log content and must be reported — presence of the redactor elsewhere in the step does not make this line safe`,
+    );
+  }
+
+  // And the whole point: the redactor being PRESENT must not launder a raw line
+  // sitting next to it. This is the exact mutation that survived.
+  const both = ['node -e "..._azure-redact.mjs..." "$LOG"', 'cat "$LOG"'].join('\n');
+  assert.deepEqual(rawLogPublications(both), ['cat "$LOG"'], 'a raw publication beside the redacted one must still be caught');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // #3346 — a roll lane nothing can trigger is not a roll lane
 // ─────────────────────────────────────────────────────────────────────────────
@@ -409,6 +672,28 @@ test('#3346 — loom-dataplane-roll has an automatic trigger and no `if:` reads 
   assert.ok(keys.includes('workflow_run'), 'the automatic trigger must be the workflow_run chain off the image producer');
   assert.match(src, /workflows: \['build-fiab-images-acr-tasks'\]/, 'the producer must be build-fiab-images-acr-tasks — full-app-deploy-commercial is itself dispatch-only, so chaining to it would inherit the defect');
 
+  // THE TRIGGER EXISTING IS NOT THE TRIGGER FIRING. Three one-token changes each
+  // make this lane inert again while `keys.includes('workflow_run')` and the
+  // `workflows:` match above both stay green — all three measured green at 8/8
+  // on 2026-08-23:
+  //   branches: [main] -> [main-disabled]   the workflow_run never matches
+  //   types: [completed] -> [requested]     conclusion is null, so the gate below
+  //                                         is false on every run
+  //   event == 'push'  -> 'pushh'           the gate is false on every run
+  // "One branch" is the canonical narrow mutation. It is asserted here, not
+  // assumed from the key's presence.
+  const wr = workflowRunTrigger(src);
+  assert.ok(wr, 'the workflow_run trigger block could not be parsed — the matcher drifted, and the three assertions below would be vacuous');
+  assert.deepEqual(wr.workflows, ['build-fiab-images-acr-tasks'], `the producer list must be exactly the ACR-tasks lane; found ${JSON.stringify(wr.workflows)}`);
+  assert.ok(
+    Array.isArray(wr.branches) && wr.branches.includes('main'),
+    `the workflow_run trigger must list \`main\` in \`branches:\`; found ${JSON.stringify(wr.branches)}. Any other value and the chain never matches, so the lane is exactly as unreachable as it was before #3346`,
+  );
+  assert.ok(
+    Array.isArray(wr.types) && wr.types.includes('completed'),
+    `the workflow_run trigger must list \`completed\` in \`types:\`; found ${JSON.stringify(wr.types)}. On any other type \`github.event.workflow_run.conclusion\` is null, so the job gate below is false on every run`,
+  );
+
   // THE HALF THAT IS EASY TO FORGET. `inputs.*` is '' on a workflow_run, so
   // `if: inputs.boundary != 'commercial'` is TRUE and an automatic COMMERCIAL
   // roll would authenticate against the sovereign boundary.
@@ -427,6 +712,13 @@ test('#3346 — loom-dataplane-roll has an automatic trigger and no `if:` reads 
   assert.ok(jobGate, 'the job-level gate is missing; a `completed` producer run includes failure and cancelled');
   assert.match(jobGate[1], /conclusion == 'success'/, 'the job gate must require the producer run to have SUCCEEDED');
   assert.equal(/conclusion != 'success'/.test(jobGate[1]), false, "the job gate must not be written as `!= 'success'` — that is true for cancelled and skipped (#3368)");
+  // The event half of the gate, asserted by VALUE. `event == 'pushh'` is false on
+  // every run, which makes the lane inert again — and it kept the suite at 8/8.
+  assert.match(
+    jobGate[1],
+    /github\.event\.workflow_run\.event == 'push'/,
+    "the job gate must name the producer event as exactly 'push'; any other literal is false on every automatic run and the lane never fires (#3346)",
+  );
 
   // And the serialization key must not collapse on the automatic path.
   assert.match(src, /group: loom-dataplane-roll-\$\{\{ inputs\.boundary \|\| 'commercial' \}\}/, 'the concurrency group must carry a fallback, or automatic runs form a separate group from dispatched ones and stop serializing against them');
@@ -439,6 +731,17 @@ test('#3346 SELF-DEFENCE — the predicates fire on the verbatim before-shapes',
   assert.equal(hasAutomaticTrigger(beforeTriggers), false, 'the before-shape must be reported as having NO automatic trigger');
   const afterTriggers = beforeTriggers.replace('\npermissions:', "\n  workflow_run:\n    workflows: ['x']\n\npermissions:");
   assert.equal(hasAutomaticTrigger(afterTriggers), true, 'and the fixed shape must be reported as having one');
+
+  // The workflow_run field parser, on both YAML list spellings and on the
+  // narrowed forms. A parser that silently returns null for a reformatted
+  // trigger would make the three live assertions above vacuous.
+  const flow = ['on:', '  workflow_run:', "    workflows: ['p']", '    types: [completed]', '    branches: [main]', '', 'permissions:'].join('\n');
+  assert.deepEqual(workflowRunTrigger(flow), { workflows: ['p'], types: ['completed'], branches: ['main'] }, 'the flow-sequence spelling must parse');
+  const block = ['on:', '  workflow_run:', '    workflows:', '      - p', '    types:', '      - completed', '    branches:', '      - main', '', 'permissions:'].join('\n');
+  assert.deepEqual(workflowRunTrigger(block), { workflows: ['p'], types: ['completed'], branches: ['main'] }, 'the block-sequence spelling must parse too, or a reformat empties the guard');
+  assert.deepEqual(workflowRunTrigger(flow.replace('[main]', '[main-disabled]')).branches, ['main-disabled'], 'a narrowed branch must be reported as narrowed, not as absent');
+  assert.deepEqual(workflowRunTrigger(flow.replace('[completed]', '[requested]')).types, ['requested'], 'a changed type must be reported as changed');
+  assert.equal(workflowRunTrigger(beforeTriggers), null, 'a workflow with no workflow_run block must parse as null rather than as an empty pass');
 
   // The four `if:` lines that were live at the merge-base.
   const beforeIfs = [
