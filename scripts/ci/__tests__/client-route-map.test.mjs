@@ -96,18 +96,19 @@ function scratch(prefixName) {
  * `scripts/ci/check-role-guid-consistency.mjs`; `lib` is not in its SKIP_DIR
  * and neither filename matches its SKIP_FILE; and the two suites are
  * co-scheduled in the same `node --test` invocation. Measured with a
- * concurrent reader while this suite ran (#3912 review):
+ * concurrent reader while this suite ran, three runs of the pre-rewrite
+ * version:
  *
- *     api-routes.generated.d.ts   3880 raced reads, 158 NOT the committed
- *                                 content  (4.1%),  0 errors
- *     client-fetch.ts             3880 raced reads, 1737 NOT the committed
- *                                 content (44.8%),  0 errors
+ *     api-routes.generated.d.ts   145-247 of 5565-6233 raced reads NOT the
+ *                                 committed content (2.6-4.0%), 0 errors
+ *     client-fetch.ts             2559-2601 of the same (41.1-46.7%), 0 errors
  *
  * ZERO errors is the whole point. The sibling suite's ENOENT/EPERM tolerance
  * never fires, nothing is recorded as vanished, and the scanner silently
  * harvests mutated content. That is the QUIET form of the defect #3912 fixed
- * loudly for the two transient `*.__control__.mjs` writers — and quiet is
- * worse, because nothing goes red.
+ * loudly for the two transient `.__control__.mjs` writers — and quiet is
+ * worse, because nothing goes red. After this rewrite, over 3326 raced reads:
+ * 0 deviations on both files.
  *
  * The comment that used to sit on the second test said: "There is no
  * create/delete window here, so no such race is possible." The first clause is
@@ -244,8 +245,9 @@ test('the drift gate FAILS when the generated map is stale', () => {
   // Against a FIXTURE console tree, not the tracked one. See redirectedScript()
   // for the measured reason: this test used to rewrite
   // apps/fiab-console/lib/api-routes.generated.d.ts in place while a sibling
-  // suite was reading that same tree, and 4.1% of its raced reads saw content
-  // that is not what is committed — with ZERO errors, so nothing went red.
+  // suite was reading that same tree, and 2.6-4.0% of a concurrent reader's
+  // raced reads saw content that is not what is committed — with ZERO errors,
+  // so nothing went red anywhere.
   const fixture = consoleFixture();
   const gen = redirectedScript('generate-client-route-map.mjs', fixture);
   try {
@@ -356,9 +358,10 @@ test('the R17 guard FAILS on a planted bad route (fail-closed)', () => {
   // in place for the duration of the spawn. Its comment argued that was safe
   // because "there is no create/delete window here, so no such race is
   // possible" — the first clause is true, the second does not follow, and
-  // measured (#3912 review) 44.8% of a concurrent reader's 3880 raced reads saw
-  // content that is not what is committed, with ZERO errors. No ENOENT window
-  // is not no race; it is a race that cannot be detected. See redirectedScript().
+  // measured, 41.1-46.7% of a concurrent reader's raced reads across three runs
+  // saw content that is not what is committed, with ZERO errors. No ENOENT
+  // window is not no race; it is a race that cannot be detected. See
+  // redirectedScript().
   //
   // The fixture's map is the REAL generated map, copied in: the guard must
   // resolve against the same route universe the shipped one does, or "this

@@ -114,13 +114,14 @@ const vanished = [];
  * cannot see, because an earlier revision of this comment named only the first
  * and closed with "Prose is not a guard; that assertion is." That sentence was
  * true only of the WHOLE-ROOT mutation its author had defined, and "retry,
- * never skip" is a PER-FILE property. Measured (#3912 review): dropping only
- * `scripts/ci` — 27 bindings, and the directory this race actually happens in —
- * left the suite at RC=0, pass=60, fail=0, because `scripts/csa-loom`'s 25
- * bindings keep `some(startsWith('scripts/'))` true. So did dropping the single
- * raced file. Restating a stronger property than was tested is the R7 error
- * this guard exists to catch, and it had been made in the paragraph lecturing
- * about it.
+ * never skip" is a PER-FILE property. Measured, running that per-root assertion
+ * IN ISOLATION so no other test can mask it: dropping only `scripts/ci` — 27
+ * bindings, and the directory this race actually happens in — left it at RC=0,
+ * pass=1, fail=0, because `scripts/csa-loom`'s 25 bindings keep
+ * `some(startsWith('scripts/'))` true. So did dropping the single file those 27
+ * come from. Only the whole `scripts` root moved it (RC=1). Restating a
+ * stronger property than was tested is the R7 error this guard exists to catch,
+ * and it had been made in the paragraph lecturing about it.
  *
  * What actually enforces the decision, at the granularity each one has:
  *
@@ -161,10 +162,11 @@ function scanRepo() {
  *
  * ── WHY IT IS A PARAMETER RATHER THAN A CLOSURE ────────────────────────────
  * In a clean run NOTHING vanishes, so every shipped assertion about this
- * machinery reads `0 <= 2` and cannot move. Measured (#3912 review), three
- * separate mutations OF THE MACHINERY left the suite at RC=0, pass=60, fail=0:
+ * machinery reads `0 <= 2` and cannot move. Measured, running the disclosure
+ * test IN ISOLATION so no other test can mask it, three separate mutations OF
+ * THE MACHINERY all left it at RC=0, pass=1, fail=0:
  *
- *     deleting the recorder            (vanished.push(...) -> no-op)   RC=0
+ *     deleting the recorder            (sink.push(...) -> no-op)       RC=0
  *     deleting the tolerance           (catch -> always rethrow)       RC=0
  *     VANISH_BUDGET = Infinity         (what the failure text forbids) RC=0
  *
@@ -879,10 +881,10 @@ test('every file that CAN contribute a binding DID — per FILE, not per root', 
   //
   // WHAT THIS ESTABLISHES: that no file which yields harvest output was dropped
   // from, or discarded by, that composition — at PER-FILE granularity. Measured
-  // (#3912 review), the whole-root assertion above stays green (RC=0, pass=60,
+  // with the per-root assertion run in isolation, it stays green (RC=0, pass=1,
   // fail=0) while all 27 of `scripts/ci`'s bindings go missing, because
   // `scripts/csa-loom`'s 25 keep `some(startsWith('scripts/'))` true. Dropping
-  // the ONE file those 27 come from trips this test.
+  // the ONE file those 27 come from trips this test (RC=1, pass=62, fail=1).
   //
   // WHAT IT DOES NOT ESTABLISH, precisely: (1) anything about scanFiles()
   // itself, which both sides share — agreement between two counts that share a
@@ -955,8 +957,9 @@ test('every file that CAN contribute a binding DID — per FILE, not per root', 
 test('EMBEDDED CONTROL — the vanish tolerance records, retries, bounds, and rethrows', () => {
   // POPULATION. On a clean run `vanished` is EMPTY, so the disclosure assertion
   // above reads `0 <= 2` forever and every branch of scanTolerantly() past the
-  // first `return` is unexecuted. Measured (#3912 review), three mutations OF
-  // THAT MACHINERY all left this file at RC=0, pass=60, fail=0 — deleting the
+  // first `return` is unexecuted. Measured with the disclosure test run in
+  // isolation, three mutations OF THAT MACHINERY all left it at RC=0, pass=1,
+  // fail=0 — deleting the
   // recorder, deleting the tolerance so the catch always rethrows, and setting
   // the budget to Infinity. The verdict did not move for any of them. These
   // fabricated events are the population that makes them move.
@@ -1042,9 +1045,10 @@ test('EMBEDDED CONTROL — the vanish tolerance records, retries, bounds, and re
 test('the vanish budget is a small FINITE number', () => {
   // `VANISH_BUDGET = Infinity` makes the disclosure assertion read
   // `0 <= Infinity` and makes scanTolerantly() retry forever on a tree that is
-  // genuinely being churned. Measured (#3912 review), that mutation left this
-  // file at RC=0, pass=60, fail=0 — the disclosure test's own failure text says
-  // "do NOT raise the budget", and nothing enforced it. Prose is not a guard.
+  // genuinely being churned. Measured with the disclosure test run in
+  // isolation, that mutation left it at RC=0, pass=1, fail=0 — its own failure
+  // text says "do NOT raise the budget", and nothing enforced it. Prose is not
+  // a guard.
   assert.ok(
     Number.isInteger(VANISH_BUDGET) && VANISH_BUDGET >= 0 && VANISH_BUDGET <= 3,
     `VANISH_BUDGET is ${VANISH_BUDGET}. It must be a small finite integer (0-3). Raising it does not fix a `
