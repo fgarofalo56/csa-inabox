@@ -918,6 +918,92 @@ jobs:
             --deploy-subscription "${DEPLOY_SUB:-}" \
             --github-output "$GITHUB_OUTPUT"
 
+      # ── IMMUTABLE-PROPERTY DISCOVERY (#3786, the Commercial half of #3754) ──
+      #
+      # `Microsoft.Network/dnsResolvers/inboundEndpoints` treats BOTH
+      # `privateIpAllocationMethod` and `privateIpAddress` as IMMUTABLE. ARM
+      # rejects a deployment naming a method that differs from the live one, and
+      # that rejection kills the whole nested `network` template — taking every
+      # unrelated change in the same `az deployment sub create` with it.
+      #
+      # WHY THIS LANE NEEDS IT EVEN THOUGH IT IS GREEN. network.bicep has been
+      # broken by a hard-coded literal in BOTH directions, and each break was
+      # caused by the fix for the other: `Static` broke COMMERCIAL (#2775 — the
+      # live endpoint was Dynamic), #2881 flipped the literal to `Dynamic` to fix
+      # Commercial, and that flip is what then failed every GCC-High run (#3754,
+      # live endpoint Static). Commercial passes today only because the surviving
+      # literal happens to match one estate. That is a coincidence, not a
+      # property: it inverts the moment this endpoint is recreated, or the moment
+      # somebody flips the literal again to rescue a third boundary — which is
+      # exactly how this defect has already travelled once. Discovering the value
+      # makes the lane correct in both directions instead of correct by luck.
+      #
+      # EMPTY IS A MEASUREMENT, NOT A MISS. The resolver emits ONE value: the
+      # live static address when the method is Static, and the empty string when
+      # it is Dynamic. `${VAR:+…}` below therefore OMITS the parameter on a
+      # Dynamic endpoint, leaving main.bicep's own `param
+      # dnsResolverInboundStaticIp string = ''` — which network.bicep renders as
+      # `privateIpAllocationMethod: 'Dynamic'` (network.bicep:827-834). So a
+      # Dynamic Commercial estate composes byte-identical arguments to today's,
+      # and this step changes nothing until the estate itself differs.
+      #
+      # UNREADABLE REFUSES (R7). The resolver separates "ARM answered a definite
+      # absence" (greenfield → export empty) from "I could not read it" (an RBAC
+      # denial, a throttle, a payload with no allocation method) and exits
+      # non-zero on the latter rather than defaulting. "I could not read it" must
+      # never render as "it is not there".
+      #
+      # ORDERING. It must precede `Compose deployment arguments`, which is the
+      # SINGLE writer of the sha256-locked args file both the what-if and the
+      # apply expand (#3022). Exporting this after composition would be a no-op,
+      # and adding it to the two az commands separately would recreate the drift
+      # #3022 removed.
+      - name: Resolve the hub DNS resolver's IMMUTABLE IP allocation method (#3786)
+        env:
+          # #3916 — `target_sub`, NOT `deploy_sub`. The two answer different
+          # questions and this step needs the second one. `deploy_sub` answers
+          # "should I pass --subscription?" and its documented empty value means
+          # "inherit the login subscription" — legitimate, and the value on EVERY
+          # scheduled run, because it derives from `inputs.subscription` and a
+          # schedule carries no inputs. This step composes a literal ARM resource
+          # id (`/subscriptions/<id>/...`), which cannot inherit anything, so it
+          # read the documented empty string and hard-failed the P0 deploy path
+          # ~3h after #3888 landed. `target_sub` is the guard's RESOLVED literal
+          # and is never empty on a proceed.
+          TARGET_SUB: ${{ steps.topology_guard.outputs.target_sub }}
+          # The guard's RESOLVED topology ('' -> 'tenant'), not `inputs.topology`.
+          RESOLVED_TOPOLOGY: ${{ steps.topology_guard.outputs.topology }}
+        run: |
+          set -euo pipefail
+          # dlz-attach stamps a landing zone into a DIFFERENT subscription and
+          # deploys no admin plane (main.bicep:1114), so there is no hub resolver
+          # inbound endpoint to converge on.
+          #
+          # #3916 — this reads the guard's RESOLVED topology. It previously read
+          # $CSA_LOOM_TOPOLOGY under a comment claiming the branch was decided
+          # "from the resolved topology env, never from `inputs.` in an `if:`".
+          # That variable IS `inputs.topology || ''`, so on a `schedule` — the
+          # trigger that runs daily — it was the empty string and this branch was
+          # UNREACHABLE. The comment described the defect #2881 removed while the
+          # code committed it.
+          if [ "${RESOLVED_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane, so there is no hub DNS resolver inbound endpoint to converge on."
+            exit 0
+          fi
+          # Defence in depth. The guard now REFUSES the run rather than emitting
+          # an empty target_sub, so this should be unreachable — kept because an
+          # unreachable check costs nothing and a step that builds an ARM id out
+          # of an empty string produces a 404 naming a resource that looks
+          # plausible in the log (R7). Retained deliberately, not by oversight.
+          if [ -z "${TARGET_SUB:-}" ]; then
+            echo "::error::No target subscription, so the live DNS resolver inbound endpoint cannot be located. It comes from the topology guard's target_sub output, which the guard refuses to leave empty — so reaching this means the guard's own fail-closed did not run."
+            exit 1
+          fi
+          node scripts/ci/resolve-dns-inbound-allocation.mjs \
+            --subscription "$TARGET_SUB" \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
+            --location "$AZURE_LOCATION"
+
       - name: Compose deployment arguments (ONE source for what-if and apply)
         id: params
         env:
@@ -1157,6 +1243,21 @@ jobs:
           if [ -n "${CSA_LOOM_TOPOLOGY:-}" ]; then
             add --parameters "topology=$CSA_LOOM_TOPOLOGY"
           fi
+          # #3786 — the DISCOVERED allocation method for the hub DNS resolver's
+          # inbound endpoint. Appended only when the resolver measured a STATIC
+          # address; a Dynamic endpoint (today's Commercial estate) resolves to
+          # the empty string and the parameter is OMITTED, leaving main.bicep's
+          # `dnsResolverInboundStaticIp = ''` default, which network.bicep
+          # renders as Dynamic. Written as an `if` block, not `[ -n x ] && …`:
+          # the && form is an SC2015 trap whose exit status leaks into the step
+          # under `set -e`.
+          #
+          # It goes in the ONE composition rather than into the two az commands,
+          # so the preview and the apply provably name the same value and the
+          # sha256 below covers it (#3022).
+          if [ -n "${LOOM_DNS_INBOUND_STATIC_IP:-}" ]; then
+            add --parameters "dnsResolverInboundStaticIp=$LOOM_DNS_INBOUND_STATIC_IP"
+          fi
           if [ -n "${CSA_LOOM_TARGET_SUBSCRIPTION:-}" ]; then
             add --parameters "targetSubscriptionId=$CSA_LOOM_TARGET_SUBSCRIPTION"
             add --parameters "attachDomainName=$CSA_LOOM_DLZ_DOMAIN_NAMES"
@@ -1242,6 +1343,87 @@ jobs:
           DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
           DEPLOY_LANE: .github/workflows/deploy-fiab-commercial.yml
         run: node scripts/ci/bootstrap-admin-principal.mjs
+
+      # ── ADX MUST BE RUNNING BEFORE WHAT-IF **AND** THE APPLY (#3786, #3449) ──
+      # admin-plane/adx-cluster.bicep declares two
+      # `Microsoft.Kusto/clusters/principalAssignments` children (the Console
+      # UAMI's AllDatabasesAdmin and the Activator's AllDatabasesViewer). Those
+      # are ADX DATA-plane roles, so the Kusto RP must reach the engine to write
+      # them — and on a STOPPED cluster it cannot:
+      #
+      #   ClusterNotValidForPrincipals on '<cluster>/console-uami-alldatabasesadmin':
+      #   [BadRequest] Cluster is in state 'Stopped', cannot retrieve list of principals
+      #
+      # THIS LANE CARRIES THE IDENTICAL EXPOSURE, and it is latent rather than
+      # absent. Measured on this tree: main.bicep declares `param adxEnabled bool
+      # = true` (L417) and params/commercial.bicepparam does NOT override it, so
+      # Commercial deploys the cluster and both principal assignments exactly as
+      # GCC-High does; adx-cluster.bicep sets `enableAutoStop: true`
+      # unconditionally (L124), so Azure WILL stop this cluster once it idles.
+      # The only reason Commercial has not hit #3449 is that its cluster has not
+      # yet idled into a Stopped state during a deploy window. #3880 fixed
+      # GCC-High and deliberately left this lane alone — it was the only working
+      # infra-deploy path in the repo and destabilising it to pre-empt a latent
+      # fault would have traded one P0 for a worse one. #3786 is that deferred
+      # work, taken now with the GCC-High shape already proven.
+      #
+      # ORDERING IS THE ENTIRE CONTENT OF #3449. `az deployment sub what-if`
+      # EVALUATES those principalAssignment leaves, so it hits
+      # ClusterNotValidForPrincipals and exits 1 BEFORE any step that merely
+      # precedes the apply. #3779 shipped this remediation for GCC-High placed
+      # just above `Provision`, and deploy-fiab-gcch still failed 6/6 daily
+      # scheduled runs with the script present and wired the whole time, because
+      # the what-if sat six steps above it. A preflight must precede the first
+      # step that READS the resource, not the first that WRITES it. This step
+      # therefore sits immediately above `Bicep what-if (preview)`.
+      #
+      # IT SITS BELOW THE CHEAP REFUSALS ON PURPOSE. Starting a cluster takes
+      # minutes; `Bootstrap admin binding…` above refuses in seconds. Ordering
+      # the cheap gate first costs a stopped estate nothing and saves a doomed
+      # run several minutes.
+      #
+      # WHY START IT RATHER THAN SKIP THE GRANTS. Skipping would turn a loud
+      # failure into a silent one — a green deploy with a Console UAMI holding no
+      # ADX rights, and every Eventhouse / KQL surface failing later with a
+      # permission error nobody could trace back here. auto-bind-by-default.md §5
+      # and deploy-integrity.md R6 both say the platform performs a remediation it
+      # is capable of; starting a cluster it already owns is squarely that.
+      # `enableAutoStop: true` caps the cost — Azure stops it again once it idles.
+      #
+      # It runs on the same trigger as the apply, so a whatif-only DRY RUN — a run
+      # that by definition applies nothing — never mutates the estate. That leaves
+      # the SAME stated residual GCC-High carries: a dry run against a stopped
+      # cluster still fails what-if. That is the correct trade, not an oversight —
+      # starting a cluster is a mutation and a dry run must not mutate.
+      - name: ADX preflight — a stopped cluster cannot take its principal assignments (#3786)
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          # #3916 — the SIBLING of the DNS-resolver defect above, landed by the
+          # same PR (#3888) with the same shape. It never surfaced only because
+          # the run died at the earlier step; on the scheduled lane this one is
+          # reachable (`github.event_name == 'schedule'`) and would have failed
+          # identically the moment the first was fixed alone. See that step for
+          # why target_sub is the right output and deploy_sub is not.
+          TARGET_SUB: ${{ steps.topology_guard.outputs.target_sub }}
+          RESOLVED_TOPOLOGY: ${{ steps.topology_guard.outputs.topology }}
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys no admin plane, so it declares no principal
+          # assignments on the hub cluster and has nothing to start. Reads the
+          # guard's RESOLVED topology — $CSA_LOOM_TOPOLOGY is `inputs.topology`
+          # and is empty on the scheduled trigger, so this branch was dead there.
+          if [ "${RESOLVED_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
+            exit 0
+          fi
+          # Defence in depth — the guard fails closed rather than emitting empty.
+          if [ -z "${TARGET_SUB:-}" ]; then
+            echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the topology guard's target_sub output, which the guard refuses to leave empty — so reaching this means the guard's own fail-closed did not run."
+            exit 1
+          fi
+          node scripts/ci/ensure-adx-cluster-running.mjs \
+            --subscription "$TARGET_SUB" \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       - name: Bicep what-if (preview)
         id: whatif
@@ -1481,6 +1663,65 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR" --no-open \
             ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
           echo "held=true" >> "$GITHUB_OUTPUT"
+
+      # ── SILENT-REVERT GATE (#3460, the Commercial half of #3161) ────────────
+      #
+      # CLOUD PARITY, MEASURED. `assert-no-silent-image-tag-revert` runs on
+      # deploy-fiab-gcch, deploy-fiab-il5 and gov-console-roll — and did NOT run
+      # here, on the one lane that deploys every day. Commercial adopts image
+      # tags (`Resolve reconcile target` reads the running estate) and then
+      # re-pins them, so it performs exactly the write this gate exists to
+      # police, ungated. cloud-parity.md calls a capability present in one
+      # boundary and absent in another INCOMPLETE; here the missing boundary is
+      # the busiest one.
+      #
+      # ADOPTION IS NOT THE SAME GUARANTEE. `Resolve reconcile target` and the
+      # re-pin below both try to carry the running tag forward, and where they
+      # succeed this gate is a no-op that simply prints the table. The population
+      # it exists for is what they CANNOT resolve: a digest-pinned container (an
+      # ACA revision pins the digest it was created with, so a rolled app
+      # frequently reports no tag at all), one repository running at two tags, or
+      # a container-app query that failed. Each of those leaves the key at
+      # params/commercial.bicepparam's OWN default, and a default about to
+      # overwrite a live app running something else is the silent revert. The
+      # script treats all three as UNKNOWN and refuses, because "I could not
+      # look" spent as "there is nothing there" is the collapse R7 forbids.
+      #
+      # ABOVE THE RE-PIN, NOT BETWEEN IT AND THE APPLY. This gate does its own
+      # `az containerapp list` and registry reads, and roll-race.test.mjs asserts
+      # ADJACENCY — `Re-pin appImageTags…` must be the step IMMEDIATELY before
+      # `Provision`, because "a measurement is only as fresh as the last thing
+      # that happens before it is used". Slotting this gate into that gap would
+      # add its whole duration to the staleness of the pin, reopening the exact
+      # #3676 window the re-pin exists to narrow — the same defect the ACR lease
+      # step (bounded wait: EIGHT MINUTES) already caused there once.
+      #
+      # AND THE VERDICT SURVIVES THE RE-PIN THAT FOLLOWS. pin-refresh only ever
+      # moves a tag TOWARD what is currently running, so it cannot manufacture
+      # the one state this gate refuses (a param-file DEFAULT about to overwrite
+      # a live app running something else). A pass here therefore cannot be
+      # invalidated by the step below it; the re-pin can only make the write more
+      # conservative.
+      #
+      # Same trigger as the apply: a whatif-only dispatch writes no image and has
+      # nothing to revert.
+      - name: Image-tag revert gate — never flatten a pinned app to the default (#3460)
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -euo pipefail
+          # dlz-attach provisions a landing zone into a DIFFERENT subscription and
+          # never touches the hub's admin-plane apps, so there is nothing adopted
+          # and nothing to revert.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; no tag can be reverted."
+            exit 0
+          fi
+          node scripts/ci/assert-no-silent-image-tag-revert.mjs \
+            --param-file platform/fiab/bicep/params/commercial.bicepparam \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       # ── I-FRESH — RE-MEASURE THE RUNNING IMAGES, SECONDS BEFORE THE APPLY ──
       #

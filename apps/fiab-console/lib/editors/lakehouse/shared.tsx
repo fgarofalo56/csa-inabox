@@ -18,6 +18,7 @@ import {
 } from '@fluentui/react-icons';
 import { useSharedEditorStyles } from '../shared-styles';
 import { useMemo } from 'react';
+import type { ListFailureKind } from '@/app/api/lakehouse/paths/route';
 
 const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -67,6 +68,23 @@ function useStyles() {
 
 interface ContainerInfo { name: string; url: string }
 interface PathEntry { name: string; isDirectory: boolean; size: number; lastModified?: string; etag?: string; tier?: string }
+
+/**
+ * A failed directory listing, as `/api/lakehouse/paths` classified it (#3904).
+ *
+ * `kind` is the classification, decided ONCE server-side. Surfaces branch on
+ * that token — never on the wording of `error`. Re-deriving the class from the
+ * English message is a second method for one decision, and it mis-fires: a
+ * container or prefix containing the words "not exist" turned a 403 into a
+ * friendly "nothing here yet". `remediation` is the fix to show the user;
+ * `code` is the SDK's short token, bounded server-side, for diagnosis only.
+ */
+interface ListingError {
+  error: string;
+  remediation?: string;
+  code?: string;
+  kind?: ListFailureKind;
+}
 
 /**
  * Reference-Lakehouse federation (F8) — another in-workspace lakehouse added to
@@ -289,6 +307,6 @@ export {
   fileVisual, FileGlyph,
 };
 export type {
-  ContainerInfo, PathEntry, ReferenceLakehouse, RefSelection, PreviewResponse,
+  ContainerInfo, PathEntry, ListingError, ReferenceLakehouse, RefSelection, PreviewResponse,
   HistoryRow, UploadItem, MipLabelOption,
 };
