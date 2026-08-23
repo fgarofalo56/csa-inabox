@@ -15,6 +15,13 @@ interface Params {
   schemasEnabled: boolean;
   setSchemasEnabled: (v: boolean) => void;
   loadPaths: (container: string, prefix: string) => Promise<void>;
+  /**
+   * `<lakehouse root>/Tables` — the REAL directory this lakehouse's tables live
+   * in (#3904). Was hard-coded to the container-relative `'Tables'`, which for
+   * an installed lakehouse (root `lakehouses/<Name>`) is a directory that does
+   * not exist.
+   */
+  tablesPrefix: string;
   confirm: (opts: { title: string; body: string; danger?: boolean; confirmLabel?: string }) => Promise<boolean>;
   itemQ: UseQueryResult<WorkspaceItem>;
   maintainTable: string;
@@ -23,7 +30,7 @@ interface Params {
 
 export function useLakehouseSecondary({
   id, isNewItem, activeContainer, shortcutLakehouseId, schemasEnabled, setSchemasEnabled,
-  loadPaths, confirm, itemQ, maintainTable, tab,
+  loadPaths, confirm, itemQ, maintainTable, tab, tablesPrefix,
 }: Params) {
   // ── History ───────────────────────────────────────────────────────────────
   const [historyTable, setHistoryTable] = useState<string | null>(null);
@@ -185,10 +192,10 @@ export function useLakehouseSecondary({
       const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; data?: { namespace?: string } }>(r, 'Move table');
       if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
       setMoveTableStatus(`Moved to ${moveTableTo.trim()} — queryable as ${j.data?.namespace || `${shortcutLakehouseId}.${moveTableTo.trim()}.${moveTableName.trim()}`}`);
-      if (activeContainer) await loadPaths(activeContainer, 'Tables');
+      if (activeContainer) await loadPaths(activeContainer, tablesPrefix);
     } catch (e: any) { setMoveTableError(e?.message || String(e)); }
     finally { setMoveTableBusy(false); }
-  }, [shortcutLakehouseId, moveTableName, moveTableFrom, moveTableTo, activeContainer, loadPaths]);
+  }, [shortcutLakehouseId, moveTableName, moveTableFrom, moveTableTo, activeContainer, tablesPrefix, loadPaths]);
 
   // ── References ────────────────────────────────────────────────────────────
   const [references, setReferences] = useState<ReferenceLakehouse[] | null>(null);

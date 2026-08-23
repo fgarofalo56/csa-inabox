@@ -15,7 +15,7 @@ export function SettingsDialog() {
   const {
     settingsOpen, setSettingsOpen, settings, setSettings,
     settingsBusy, settingsError, saveSettings, sparkPools,
-    openPrefixes, cacheKey, bundleDeltaTables, activeContainer, schemasEnabled,
+    openPrefixes, cacheKey, bundleDeltaTables, activeContainer, schemasEnabled, tablesPrefix,
     lcTableName, setLcTableName, lcColumns, setLcColumns, lcGate, lcError, lcApplied, lcSql,
     icebergEnabled, setIcebergEnabled, icebergSchema, setIcebergSchema, icebergTable, setIcebergTable,
     icebergEndpoint, icebergGate, icebergError, icebergApplied, icebergSql,
@@ -92,9 +92,9 @@ export function SettingsDialog() {
                 <strong>LOOM_DATABRICKS_HOSTNAME</strong> to be set.
               </MessageBarBody>
             </MessageBar>
-            <Field label="Table to cluster" hint="Delta table under /Tables/ in this container.">
+            <Field label="Table to cluster" hint={`Delta table under /${tablesPrefix}/ in this container.`}>
               {(() => {
-                const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, 'Tables')] : undefined;
+                const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, tablesPrefix)] : undefined;
                 const liveNames = Array.isArray(listing)
                   ? listing.filter((e) => e.isDirectory).map((e) => leafName(e.name))
                   : [];
@@ -183,9 +183,9 @@ export function SettingsDialog() {
                 />
               </Field>
             )}
-            <Field label="Delta table to expose" hint="Delta table under /Tables/ in this container.">
+            <Field label="Delta table to expose" hint={`Delta table under /${tablesPrefix}/ in this container.`}>
               {(() => {
-                const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, 'Tables')] : undefined;
+                const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, tablesPrefix)] : undefined;
                 const liveNames = Array.isArray(listing)
                   ? listing.filter((e) => e.isDirectory).map((e) => leafName(e.name))
                   : [];
