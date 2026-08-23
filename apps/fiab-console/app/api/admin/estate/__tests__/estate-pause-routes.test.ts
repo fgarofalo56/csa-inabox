@@ -91,6 +91,28 @@ function manifestFixture(ids: string[] = [POOL_ID, ADX_ID]) {
     manifest: { estateId: ESTATE, resourceIds: ids },
     entries,
     unresolved: [{ label: 'Azure Analysis Services server', needs: ['LOOM_AAS_SERVER_NAME'] }],
+    // ARMED. The default fixture exercises the working path; the not-armed
+    // fixture below is used explicitly by the gate cases.
+    manifestGated: false,
+    namedByDeploy: ids.length,
+  };
+}
+
+/**
+ * The UNARMED shape — what `resolveDeployManifest` returns on a real console
+ * today: the deploy NAMES the resources, and the manifest grants nothing.
+ */
+function unarmedManifestFixture(ids: string[] = [POOL_ID, ADX_ID]) {
+  const armed = manifestFixture(ids);
+  return {
+    ...armed,
+    manifest: { estateId: ESTATE, resourceIds: [] },
+    manifestGated: true,
+    namedByDeploy: ids.length,
+    gateReason:
+      `The deploy environment NAMES ${ids.length} resource(s) this Loom install is bound to, and `
+      + 'manifest ownership alone would be enough to pause them. That path is held behind '
+      + 'LOOM_ESTATE_PAUSE_ENABLED, which is not set, so nothing can be paused.',
   };
 }
 
@@ -264,12 +286,64 @@ describe('GET /api/admin/estate/state', () => {
   });
 
   it('an untagged, unmanifested estate reports EMPTY and says WHY (#3922)', async () => {
-    resolveDeployManifest.mockReturnValue({ manifest: { estateId: ESTATE, resourceIds: [] }, entries: [], unresolved: [] });
+    resolveDeployManifest.mockReturnValue({
+      manifest: { estateId: ESTATE, resourceIds: [] },
+      entries: [],
+      unresolved: [],
+      manifestGated: false,
+      namedByDeploy: 0,
+    });
     const { GET } = await import('../state/route');
     const j = await (await GET(get(), { params: Promise.resolve({}) } as never)).json();
     expect(j.population.empty).toBe(true);
     expect(j.population.statement).toMatch(/NOTHING would be paused/);
     expect(j.preview.wouldPause).toEqual([]);
+  });
+
+  it('NOT ARMED: reports armed:false and the named count, so the UI can disable Pause', async () => {
+    resolveDeployManifest.mockReturnValue(unarmedManifestFixture());
+    const { GET } = await import('../state/route');
+    const j = await (await GET(get(), { params: Promise.resolve({}) } as never)).json();
+    expect(j.manifestGated).toBe(true);
+    expect(j.population.armed).toBe(false);
+    expect(j.population.namedByDeploy).toBe(2);
+    // The distinction that matters: this is NOT "nothing exists", it is
+    // "2 resources exist and the switch is off".
+    expect(j.population.examined).toBe(2);
+  });
+
+  it('NOT ARMED with the tag stamped: the preview is POPULATED but the estate is still not armed', async () => {
+    // Post-#3922 shape. The tag establishes ownership independently of the
+    // manifest, so the preview fills in — and the arming switch must STILL hold,
+    // because the reasons it exists (no live receipt, R-CAP-2 missing) have not
+    // changed. The UI keys Pause off `armed`, not off the preview length.
+    resolveDeployManifest.mockReturnValue(unarmedManifestFixture());
+    const { GET } = await import('../state/route');
+    const j = await (await GET(get(), { params: Promise.resolve({}) } as never)).json();
+    expect(j.preview.wouldPause.length).toBe(2);      // tag-owned
+    expect(j.population.armed).toBe(false);           // …and still not armed
+  });
+
+  it('reports the CLOUD boundary so an untested one is nameable', async () => {
+    const { GET } = await import('../state/route');
+    const j = await (await GET(get(), { params: Promise.resolve({}) } as never)).json();
+    expect(typeof j.cloud).toBe('string');
+    expect(j.cloud.length).toBeGreaterThan(0);
+  });
+
+  it('reports the LIVE SKU with the resume risk (R-CAP-3), not an empty field', async () => {
+    const { GET } = await import('../state/route');
+    const j = await (await GET(get(), { params: Promise.resolve({}) } as never)).json();
+    expect(j.risks).toHaveLength(2);
+    // The field documented as "the SKU that must be RE-ACQUIRED on resume" is
+    // actually populated, from an authoritative ARM read.
+    expect(j.risks.every((r: { sku?: string }) => r.sku === 'DW100c')).toBe(true);
+    expect(j.risks[0].statement).toContain('DW100c');
+  });
+
+  it('surfaces outOfTier so the Container Apps exclusion reaches the operator', async () => {
+    const j = await (await (await import('../state/route')).GET(get(), { params: Promise.resolve({}) } as never)).json();
+    expect(Array.isArray(j.outOfTier)).toBe(true);
   });
 
   it('an ARM gate is an HONEST 503, never a fabricated RUNNING', async () => {
@@ -455,8 +529,73 @@ describe('POST /api/admin/estate/pause', () => {
     expect(j.population.notLoomOwned).toBe(0);
   });
 
-  it('409s with the population statement when NOTHING is in scope', async () => {
-    resolveDeployManifest.mockReturnValue({ manifest: { estateId: ESTATE, resourceIds: [] }, entries: [], unresolved: [] });
+  it('NOT ARMED: refuses with 409 and names the env var, before the typed confirmation', async () => {
+    // The blocker. On a real console the deploy NAMES these resources, so
+    // without the arming switch this route would pause ~$3,000/mo of compute.
+    // The refusal must come BEFORE the confirm check, so an operator who has
+    // not armed the feature is told THAT rather than "your confirmation was
+    // wrong".
+    resolveDeployManifest.mockReturnValue(unarmedManifestFixture());
+    const fake = fakeActuator();
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const { POST } = await import('../pause/route');
+    const res = await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    expect(j.notArmed).toBe(true);
+    expect(j.requiredEnv).toBe('LOOM_ESTATE_PAUSE_ENABLED');
+    expect(j.namedByDeploy).toBe(2);
+    expect(fake.touched).toEqual([]);
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('NOT ARMED: refuses even with a CORRECT confirmation and a matching token', async () => {
+    resolveDeployManifest.mockReturnValue(unarmedManifestFixture());
+    const fake = fakeActuator();
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const { POST } = await import('../pause/route');
+    const res = await POST(
+      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      { params: Promise.resolve({}) } as never,
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()).notArmed).toBe(true);
+    expect(fake.touched).toEqual([]);
+  });
+
+  it('NOT ARMED: holds even when the TAG establishes ownership (post-#3922 shape)', async () => {
+    // The switch gates ACTUATION, not just the manifest path. Otherwise the
+    // feature would arm itself the instant the first tag is stamped — exactly
+    // when nobody expects it to become live.
+    resolveDeployManifest.mockReturnValue(unarmedManifestFixture());
+    const fake = fakeActuator(); // default readTags returns the loom-estate-id tag
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const { POST } = await import('../pause/route');
+    const res = await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never);
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.notArmed).toBe(true);
+    // Ownership DID resolve — this is not an empty-scope refusal.
+    expect(j.preview.wouldPause).toHaveLength(2);
+    expect(fake.touched).toEqual([]);
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('NOT ARMED: the dry run still WORKS and still shows what would be in scope', async () => {
+    // The gate withholds ownership; it must not blind the operator. They still
+    // get to see what the deploy names and what arming would put in scope.
+    resolveDeployManifest.mockReturnValue(unarmedManifestFixture());
+    createArmActuator.mockResolvedValue(fakeActuator().actuator);
+    const { POST } = await import('../pause/route');
+    const j = await (await POST(post({ dryRun: true }), { params: Promise.resolve({}) } as never)).json();
+    expect(j.dryRun).toBe(true);
+    expect(j.manifestGated).toBe(true);
+    expect(j.population.armed).toBe(false);
+    expect(j.population.namedByDeploy).toBe(2);
+    expect(j.population.examined).toBe(2);
+  });
+
+  it('409s with the population statement when NOTHING is in scope', async () => {    resolveDeployManifest.mockReturnValue({ manifest: { estateId: ESTATE, resourceIds: [] }, entries: [], unresolved: [] });
     const fake = fakeActuator();
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
@@ -564,6 +703,23 @@ describe('POST /api/admin/estate/resume', () => {
     const res = await POST(post({}), { params: Promise.resolve({}) } as never);
     expect(res.status).toBe(409);
     expect(createArmActuator).not.toHaveBeenCalled();
+  });
+
+  it('is deliberately NOT gated by the arming switch — an estate must always be recoverable', async () => {
+    // The pause route refuses when LOOM_ESTATE_PAUSE_ENABLED is unset. Resume
+    // must NOT, or an estate paused while the flag was set becomes unrecoverable
+    // through the product the moment someone unsets it — turning a safety
+    // control into an outage. Resume is transitively gated anyway: it needs a
+    // snapshot, and only a gated pause can create one.
+    resolveDeployManifest.mockReturnValue(unarmedManifestFixture());
+    loadPauseSnapshot.mockResolvedValue(pausedSnapshotFixture());
+    const fake = fakeActuator();
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const { POST } = await import('../resume/route');
+    const res = await POST(post({}), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(202);
+    expect((await res.json()).state).toBe('RESUMING');
+    expect(fake.touched.sort()).toEqual([POOL_ID, ADX_ID].sort());
   });
 
   it('a RESUME_FAILED estate CAN be retried — that is its only legal exit', async () => {

@@ -175,8 +175,14 @@ export interface ResumeRisk {
   resourceId: string;
   name: string;
   resourceType: string;
-  /** The SKU that must be RE-ACQUIRED on resume. */
+  /**
+   * The LIVE SKU that must be RE-ACQUIRED on resume, when the caller supplied
+   * one. The caller reads it from authoritative ARM alongside the power state;
+   * this module never invents it. Absent means "not read", never "none".
+   */
   sku?: string;
+  /** The live power state, when the caller supplied one. */
+  powerState?: string;
   /** True when re-acquiring that capacity can fail. */
   capacityConstrained: boolean;
   /** 'high' when capacity-constrained; 'low' when resume does not contend. */
@@ -187,6 +193,9 @@ export interface ResumeRisk {
   statement: string;
 }
 
+/** Live facts the caller read from ARM, keyed by lower-cased resource id. */
+export type LiveResourceFacts = Readonly<Record<string, { sku?: string; powerState?: string }>>;
+
 /**
  * R-CAP-3 — state the resume risk for every resource, BEFORE the pause.
  *
@@ -194,27 +203,40 @@ export interface ResumeRisk {
  * dedicated SKU, and Azure may not have that SKU free when you want it back.
  * The operator gets to decide with that in front of them, which is the whole
  * difference between an informed pause and the ADX incident.
+ *
+ * `live` is optional and is how the CURRENT SKU reaches the confirm dialog. An
+ * earlier version declared a `sku` field, hard-coded `const sku = undefined`,
+ * and then guarded on it — so the field documented as "the SKU that must be
+ * re-acquired" was never once populated and the dialog stated the risk without
+ * naming the thing at risk. Either populate it from a real read or do not claim
+ * it; this takes the first option.
  */
-export function capacityPreflight(candidates: readonly PauseCandidate[]): ResumeRisk[] {
+export function capacityPreflight(
+  candidates: readonly PauseCandidate[],
+  live: LiveResourceFacts = {},
+): ResumeRisk[] {
   return candidates.map((c) => {
     const constrained = c.spec.capacityConstrained;
-    const sku = undefined; // the live SKU is read at pause time; the spec is type-level.
+    const facts = live[c.resource.resourceId.toLowerCase()] ?? {};
+    const skuNote = facts.sku ? ` Current SKU: ${facts.sku}.` : '';
     return {
       resourceId: c.resource.resourceId,
       name: c.resource.name,
       resourceType: c.resource.resourceType,
-      ...(sku ? { sku } : {}),
+      ...(facts.sku ? { sku: facts.sku } : {}),
+      ...(facts.powerState ? { powerState: facts.powerState } : {}),
       capacityConstrained: constrained,
       risk: constrained ? ('high' as const) : ('low' as const),
       ...(c.fallbackSku ? { fallbackSku: c.fallbackSku } : {}),
       statement: constrained
-        ? `${c.resource.name} (${c.spec.label}) releases a dedicated SKU. Azure does not reserve it `
-          + 'while stopped, so a resume can fail with a capacity error until the region has room. '
+        ? `${c.resource.name} (${c.spec.label}) releases a dedicated SKU.${skuNote} Azure does not `
+          + 'reserve it while stopped, so a resume can fail with a capacity error until the region '
+          + 'has room. '
           + (c.fallbackSku?.name
             ? `Declared fallback: ${c.fallbackSku.name}.`
             : 'No fallback is declared for this type.')
         : `${c.resource.name} (${c.spec.label}) does not hold a dedicated capacity reservation, so a `
-          + 'resume does not contend for regional capacity.',
+          + `resume does not contend for regional capacity.${skuNote}`,
     };
   });
 }

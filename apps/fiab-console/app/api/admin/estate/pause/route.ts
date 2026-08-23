@@ -10,6 +10,13 @@
  *          without a typed confirmation; to report PAUSED on a dispatch.
  *
  * ── THE SAFETY GATES, IN THE ORDER THEY RUN ────────────────────────────────
+ *   0. `LOOM_ESTATE_PAUSE_ENABLED` — THE ARMING SWITCH, unset by default in
+ *      every cloud. The deploy DOES set every env var the manifest is built
+ *      from (`LOOM_SYNAPSE_DEDICATED_POOL`, `LOOM_KUSTO_CLUSTER_NAME`,
+ *      `LOOM_AAS_SERVER_NAME`, …), so without this gate merging would arm a
+ *      one-click pause of ~$3,000/mo on an estate that auto-rolls on every
+ *      merge, with no live receipt that resume works and R-CAP-2 unimplemented.
+ *      See `ESTATE_PAUSE_ENABLED_ENV` for the full reasoning.
  *   1. `withTenantAdmin` — the wrapper, never an inline check. See the note in
  *      `../state/route.ts`: `enforceCapability`/`requireTenantAdmin` return
  *      `NextResponse | null`, so the authorization IS the caller's
@@ -24,7 +31,7 @@
  *      SPECIFIC set of resources; if the resolved set has changed since, we
  *      refuse rather than pause something they never saw.
  *   4. Re-verify per resource, inside the orchestrator, immediately before each
- *      ARM call (R-SCOPE-3).
+ *      ARM call (R-SCOPE-3), and actuate the VERIFIED id (`assertActuationTarget`).
  *
  * Returns 202 with the per-resource dispatch results. The estate is left
  * PAUSING; `GET /api/admin/estate/state` is what confirms it reached PAUSED,
@@ -43,6 +50,7 @@ import {
   armGateMessage,
   createArmActuator,
   discoverFromManifest,
+  ESTATE_PAUSE_ENABLED_ENV,
   loadPauseSnapshot,
   planPause,
   previewToken,
@@ -95,13 +103,26 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
 
   // --- Resolve the set. Per RESOURCE, from the deploy manifest + the estate
   //     ownership tag. Never by subscription, never by resource-group name.
-  const { manifest, entries, unresolved } = resolveDeployManifest();
+  const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
+    resolveDeployManifest();
   const discovered = await discoverFromManifest(entries, actuator.readTags);
   const plan = planPause(discovered, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
+    ...(gateReason ? { gateReason } : {}),
+    namedByDeploy,
   });
-  const risks = capacityPreflight(plan.inventory.pausable);
+
+  // R-CAP-3 — the live SKU, so the risk names the thing at risk.
+  const live: Record<string, { sku?: string; powerState?: string }> = {};
+  for (const c of plan.inventory.pausable) {
+    const power = await actuator.readPower(c.resource);
+    live[c.resource.resourceId.toLowerCase()] = {
+      ...(power.sku?.name ? { sku: power.sku.name } : {}),
+      ...(power.reading ? { powerState: power.reading.powerState } : {}),
+    };
+  }
+  const risks = capacityPreflight(plan.inventory.pausable, live);
   const token = previewToken(plan.dryRun.wouldPause.map((r) => r.resourceId));
 
   if (body.dryRun) {
@@ -112,10 +133,45 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       population: plan.population,
       outOfTier: plan.outOfTier,
       unresolved,
+      manifestGated,
       risks,
       highRisk: highRiskCount(risks),
       confirmToken: token,
     });
+  }
+
+  // --- THE ARMING GATE. Refused BEFORE the typed confirmation, so an operator
+  //     who has not armed the feature is told that, rather than being told
+  //     their confirmation string was wrong.
+  //
+  //     Gated on the SWITCH, not on the evidence source. The review asked for
+  //     the manifest path specifically, because that is what is live today —
+  //     but the reasons the gate exists (no live pause/resume receipt in any
+  //     cloud, R-CAP-2 unimplemented so a capacity-failed resume is manual
+  //     recovery) apply just as much to a tag-owned resource. Holding only the
+  //     manifest would arm the feature the instant #3922 stamps the first tag,
+  //     which is precisely when nobody is expecting it to become live.
+  if (manifestGated) {
+    await audit(tenantId, who, 'estate-pause.not-armed', {
+      estateId: manifest.estateId,
+      namedByDeploy,
+      wouldPause: plan.dryRun.wouldPause.length,
+    });
+    return apiError(
+      gateReason
+        ?? `Estate pause is not armed: ${ESTATE_PAUSE_ENABLED_ENV} is not set on this console. `
+          + 'No pause has ever been run from this code against a live Azure resource, and automatic '
+          + 'fallback-SKU recovery (R-CAP-2) is not implemented, so a capacity-failed resume would be '
+          + 'manual recovery.',
+      409,
+      {
+        notArmed: true,
+        requiredEnv: ESTATE_PAUSE_ENABLED_ENV,
+        namedByDeploy,
+        population: plan.population,
+        preview: plan.dryRun,
+      },
+    );
   }
 
   // --- Gate 2: typed confirmation.

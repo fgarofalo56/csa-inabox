@@ -190,6 +190,14 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
     minWidth: 0,
   },
+  // Same shape as `remediation`, neutral accent — for informational rows that
+  // are NOT failures (resources deliberately held out of the pause tier).
+  remediationNeutral: {
+    borderLeft: `3px solid ${tokens.colorNeutralStroke1}`,
+    paddingLeft: tokens.spacingHorizontalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
 });
 
 async function jsonPost(url: string, body: unknown): Promise<any> {
@@ -336,8 +344,14 @@ function EstatePowerPanel({ styles }: { styles: ReturnType<typeof useStyles> }) 
   const preview: Array<Record<string, any>> = data?.preview?.wouldPause ?? [];
   const progress: EstateProgressRow[] = data?.progress ?? [];
   const risks: Array<Record<string, any>> = data?.risks ?? [];
+  const outOfTier: Array<Record<string, any>> = data?.outOfTier ?? [];
   const estateId: string = data?.estateId ?? '';
-  const canPause = state === 'RUNNING' && !population?.empty && preview.length > 0;
+  // `armed === false` means LOOM_ESTATE_PAUSE_ENABLED is unset while the deploy
+  // DOES name resources. That is a different state from "nothing is in scope",
+  // and conflating them is what made the first version of this PR misreport its
+  // own merge risk.
+  const notArmed = population?.armed === false;
+  const canPause = state === 'RUNNING' && !notArmed && !population?.empty && preview.length > 0;
   const canResume = state === 'PAUSED' || state === 'RESUME_FAILED';
 
   async function doPause() {
@@ -426,6 +440,10 @@ function EstatePowerPanel({ styles }: { styles: ReturnType<typeof useStyles> }) 
               <Badge appearance="tint" color={risk.risk === 'high' ? 'warning' : 'informative'}>
                 {risk.risk === 'high' ? 'Capacity-constrained' : 'No capacity contention'}
               </Badge>
+              {/* The LIVE SKU, read from authoritative ARM — this is the thing
+                  that has to be re-acquired on resume, so the risk names it. */}
+              {risk.sku && <Badge appearance="tint" color="subtle">{risk.sku}</Badge>}
+              {risk.powerState && <Badge appearance="tint" color="subtle">{risk.powerState}</Badge>}
             </div>
             {risk.fallbackSku?.name && (
               <Caption1 className={styles.progressDetail}>Declared fallback: {risk.fallbackSku.name}</Caption1>
@@ -579,7 +597,37 @@ function EstatePowerPanel({ styles }: { styles: ReturnType<typeof useStyles> }) 
 
       {/* THE POPULATION. Always stated; when it is zero, that is the headline. */}
       {!loading && state === 'RUNNING' && population && (
-        population.empty ? (
+        notArmed ? (
+          /*
+            NOT ARMED — distinct from "nothing in scope". The deploy names real
+            resources and manifest ownership alone would be enough to pause
+            them; the arming switch is what stands between this surface and
+            ~$3,000/mo of compute. Say exactly that, and name the env var.
+          */
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Pause is not armed — this is deliberate</MessageBarTitle>
+              {population.statement}
+              <div className={styles.censusRow}>
+                <Badge appearance="tint" color="warning">
+                  named by the deploy: {population.namedByDeploy}
+                </Badge>
+                <Badge appearance="tint" color="brand">
+                  loom-estate-id: {population.tagCensus.loomEstateId}
+                </Badge>
+                <Badge appearance="tint" color="danger">
+                  LOOM_ESTATE_PAUSE_ENABLED: unset
+                </Badge>
+              </div>
+              <Caption1 className={styles.powerSub}>
+                To arm it, set <span className={styles.mono}>LOOM_ESTATE_PAUSE_ENABLED=true</span> on
+                the console container app. Nothing has been paused from this code against a live
+                Azure resource yet, automatic fallback-SKU recovery (R-CAP-2) is not implemented, and
+                a capacity-failed resume is manual recovery today.
+              </Caption1>
+            </MessageBarBody>
+          </MessageBar>
+        ) : population.empty ? (
           <MessageBar intent="warning">
             <MessageBarBody>
               <MessageBarTitle>Nothing is in scope to pause — and that is the safe answer</MessageBarTitle>
@@ -606,17 +654,25 @@ function EstatePowerPanel({ styles }: { styles: ReturnType<typeof useStyles> }) 
                 </Badge>
                 <Badge appearance="tint" color="subtle">no Loom tag: {population.tagCensus.untagged}</Badge>
               </div>
-              <Caption1 className={styles.powerSub}>
-                Tracked as issue #3922. Analysis Services already carries{' '}
-                <span className={styles.mono}>loom-managed</span>, so stamping{' '}
-                <span className={styles.mono}>loom-estate-id</span> there is the highest-value place
-                to start — it unlocks roughly $1,796/mo of natively suspendable spend.
-              </Caption1>
             </MessageBarBody>
           </MessageBar>
         ) : (
           <Caption1 className={styles.powerSub}>{population.statement}</Caption1>
         )
+      )}
+
+      {/* DRIFT — a PAUSED estate with resources back up. Loud, because PRP §5
+          lists four mechanisms that do this unprompted and the reconciler that
+          would correct it does not exist yet. */}
+      {!loading && data?.drifted && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>
+              {data.driftedResources?.length ?? 0} paused resource(s) are RUNNING again
+            </MessageBarTitle>
+            {data.reason}
+          </MessageBarBody>
+        </MessageBar>
       )}
 
       {/* The dry run — what a pause WOULD touch, with the owning tag per row. */}
@@ -639,6 +695,39 @@ function EstatePowerPanel({ styles }: { styles: ReturnType<typeof useStyles> }) 
         <Caption1 className={styles.powerSub}>
           Not covered by this pause because the deployment names no resource for them:{' '}
           {data.unresolved.map((u: any) => u.label).join(', ')}.
+        </Caption1>
+      )}
+
+      {/*
+        HELD OUT OF THIS TIER — Loom-owned, pausable, and deliberately not
+        touched. This was computed from the start but never rendered, so the
+        Container Apps exclusion (the console runs as one; pausing it would
+        remove the surface that resumes the estate) was invisible to the very
+        operator who needs to know why their ACA spend is untouched.
+      */}
+      {!loading && state === 'RUNNING' && outOfTier.length > 0 && (
+        <div className={styles.powerSection}>
+          <Caption1 className={styles.fieldLabel}>
+            Loom-owned, but deliberately NOT paused ({outOfTier.length})
+          </Caption1>
+          {outOfTier.map((r) => (
+            <div key={r.resourceId} className={styles.remediationNeutral}>
+              <Caption1><strong>{r.name}</strong> · {r.resourceType}</Caption1>
+              <Caption1 className={styles.progressDetail}>{r.reason}</Caption1>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Cloud boundary — stated, and stated as UNVERIFIED where it is. */}
+      {!loading && data?.cloud && (
+        <Caption1 className={styles.powerSub}>
+          Boundary: <span className={styles.mono}>{data.cloud}</span>.
+          {data.cloud === 'AzureCloud'
+            ? ' Pause/resume has been exercised against fixtures only — no live Azure receipt exists in any cloud.'
+            : ' Azure Government is UNTESTED for this feature: no Gov deploy and no Gov ARM call have been made.'
+              + ' The ARM path is cloud-aware and would act here, which is why the arming switch is unset by default.'
+              + ' Gov is owned by PRP work item W7.'}
         </Caption1>
       )}
 

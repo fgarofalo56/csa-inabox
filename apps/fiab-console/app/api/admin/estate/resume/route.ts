@@ -27,6 +27,20 @@
  * typed confirmation: resume is the SAFE direction, and per PRP §5 an operator
  * must always be able to bring the estate back with one click.
  *
+ * ── AND IT IS DELIBERATELY *NOT* BEHIND `LOOM_ESTATE_PAUSE_ENABLED` ───────
+ * The pause route is. This one is not, and that asymmetry is the point: the
+ * arming switch exists to stop an unvalidated feature from STOPPING things, not
+ * to stop an operator from starting them again. Gating resume would mean an
+ * estate paused while the flag was set becomes unrecoverable through the
+ * product the moment someone unsets it — turning a safety control into an
+ * outage. Resume is transitively gated anyway: it needs a persisted snapshot,
+ * and only a gated pause can create one.
+ *
+ * ── CLOUD BOUNDARY ─────────────────────────────────────────────────────────
+ * Cloud-agnostic via `armBase()`, but **Azure Government is UNTESTED** — no Gov
+ * deploy, no Gov ARM call. Named as untested per `cloud-parity.md`; PRP work
+ * item W7 owns the Gov path.
+ *
  * Dual audit per §7: `auditLogContainer()` (Cosmos) + `emitAuditEvent()` (SIEM).
  */
 import type { NextRequest } from 'next/server';

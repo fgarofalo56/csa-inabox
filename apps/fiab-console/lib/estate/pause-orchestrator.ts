@@ -269,6 +269,12 @@ export interface EstatePlan {
      *                 there is no code path that consults it. See #3922.
      */
     tagCensus: { loomEstateId: number; loomItemId: number; loomManaged: number; untagged: number };
+    /** False when `LOOM_ESTATE_PAUSE_ENABLED` is unset — the surface is inert. */
+    armed: boolean;
+    /** Present only when NOT armed. Explains the opt-in, verbatim, in the UI. */
+    gateReason?: string;
+    /** How many resources the deploy env NAMES, whether armed or not. */
+    namedByDeploy: number;
     /** Plain-English statement of the above, shown verbatim in the UI. */
     statement: string;
   };
@@ -327,7 +333,15 @@ export function censusTags(discovered: readonly DiscoveredResource[]): {
  */
 export function planPause(
   discovered: readonly DiscoveredResource[],
-  ctx: { scope: PauseScope; manifest?: DeployManifest; now?: string },
+  ctx: {
+    scope: PauseScope;
+    manifest?: DeployManifest;
+    now?: string;
+    /** Set when the deploy names resources but `LOOM_ESTATE_PAUSE_ENABLED` is unset. */
+    gateReason?: string;
+    /** How many resources the deploy env NAMES, armed or not. */
+    namedByDeploy?: number;
+  },
 ): EstatePlan {
   const full = buildPauseInventory(discovered, ctx);
 
@@ -373,6 +387,9 @@ export function planPause(
       notLoomOwned,
       empty,
       tagCensus,
+      armed: !ctx.gateReason,
+      ...(ctx.gateReason ? { gateReason: ctx.gateReason } : {}),
+      namedByDeploy: ctx.namedByDeploy ?? 0,
       statement: populationStatement({
         examined: discovered.length,
         pausable: inTier.length,
@@ -381,6 +398,8 @@ export function planPause(
         notLoomOwned,
         tagCensus,
         outOfTier: outOfTier.length,
+        ...(ctx.gateReason ? { gateReason: ctx.gateReason } : {}),
+        namedByDeploy: ctx.namedByDeploy ?? 0,
       }),
     },
   };
@@ -399,6 +418,9 @@ function populationStatement(p: {
   notLoomOwned: number;
   tagCensus: { loomEstateId: number; loomItemId: number; loomManaged: number; untagged: number };
   outOfTier: number;
+  /** Set when the deploy NAMES resources but the opt-in is unset. */
+  gateReason?: string;
+  namedByDeploy: number;
 }): string {
   const evidence =
     `${p.byEvidence.ownershipTag} by the ${LOOM_ESTATE_TAG_KEY} tag, `
@@ -412,10 +434,19 @@ function populationStatement(p: {
     );
   }
 
-  // The zero case. Say WHY, name every signal that WAS consulted, and say
-  // plainly that pausing requires a tag nothing currently stamps. Until #3922
-  // lands this is the PRIMARY user-visible surface of the feature, so it has to
-  // carry its weight rather than read as a broken page.
+  // ZERO. The reason matters enormously and there are two DIFFERENT ones. The
+  // first version of this function asserted "Neither is stamped by the platform
+  // today", which was true of the tag and FALSE of the manifest — the deploy
+  // sets every env var the manifest is built from. Stating the wrong reason here
+  // is what made the whole PR misreport its own merge risk.
+  if (p.gateReason) {
+    return (
+      `NOTHING would be paused, because the pause path is NOT ARMED. ${p.gateReason} `
+      + `For the record, ${p.tagCensus.loomEstateId} resource(s) carry the '${LOOM_ESTATE_TAG_KEY}' `
+      + `tag; the ${p.namedByDeploy} named by the deploy would otherwise be in scope.`
+    );
+  }
+
   const managedNote =
     p.tagCensus.loomManaged > 0
       ? ` ${p.tagCensus.loomManaged} resource(s) do carry the boolean '${LOOM_MANAGED_TAG_KEY}' tag, but `
@@ -430,10 +461,10 @@ function populationStatement(p: {
 
   return (
     `NOTHING would be paused, and that is the correct fail-safe answer — not a failure. `
-    + `${p.examined} resource(s) were examined. Pause accepts exactly TWO ownership signals: the `
-    + `'${LOOM_ESTATE_TAG_KEY}' tag (found on ${p.tagCensus.loomEstateId}) and a deploy-emitted `
-    + `manifest (resolved ${p.byEvidence.deployManifest}). Neither is stamped by the platform today, `
-    + `so the pause set is empty until the estate is tagged — tracked as #3922.`
+    + `${p.examined} resource(s) were examined and none is positively owned by this estate. Pause `
+    + `accepts exactly TWO ownership signals: the '${LOOM_ESTATE_TAG_KEY}' tag (found on `
+    + `${p.tagCensus.loomEstateId}) and a deploy-emitted manifest (resolved `
+    + `${p.byEvidence.deployManifest}). Tagging the estate is tracked as #3922.`
     + managedNote
     + itemNote
   );
@@ -660,6 +691,10 @@ export interface PausePollResult {
   /** Count of snapshot resources CONFIRMED stopped by a fresh ARM read. */
   confirmed: number;
   total: number;
+  /** True when a PAUSED estate has resources that came back up out of band. */
+  drifted: boolean;
+  /** Which ones. Empty unless `drifted`. */
+  driftedResources: string[];
   reason: string;
 }
 
@@ -675,6 +710,7 @@ export async function pollPause(
   actuator: EstateActuator,
 ): Promise<PausePollResult> {
   const progress: ResourceProgress[] = [];
+  const driftedResources: string[] = [];
   let confirmed = 0;
 
   for (const entry of snapshot.resources) {
@@ -688,6 +724,15 @@ export async function pollPause(
     const settled = wasRunning ? isPausedState(state) : !isRunningState(state);
     if (settled) confirmed += 1;
 
+    // DRIFT — a resource that came back up under a PAUSED estate. PRP §5 lists
+    // four mechanisms that do this unprompted: PostgreSQL auto-restarts after 7
+    // days, Event Hubs auto-inflate never scales down, the Commercial estate
+    // rolls itself on every merge to main, and ANY ARM PUT resumes App
+    // Gateway/Firewall. Detecting it is this slice's job; RE-ASSERTING the
+    // paused state is the reconciler's (W6), which does not exist yet.
+    const drifted = snapshot.state === 'PAUSED' && isRunningState(state);
+    if (drifted) driftedResources.push(entry.resourceId);
+
     progress.push({
       resourceId: entry.resourceId,
       name: entry.name,
@@ -697,7 +742,11 @@ export async function pollPause(
       atExpectedState: settled,
       phase: settled ? 'done' : state === 'Unknown' ? 'unknown' : 'in-flight',
       detail: power.reading
-        ? `ARM reports ${entry.name} is ${state}.`
+        ? drifted
+          ? `ARM reports ${entry.name} is ${state}, but this estate is PAUSED. Something restarted it `
+            + 'out of band. Loom has NOT re-paused it — the invariant reconciler that would (PRP W6) '
+            + 'is not built yet.'
+          : `ARM reports ${entry.name} is ${state}.`
         : `Could not read the ARM power state of ${entry.name}`
           + `${power.error ? `: ${power.error}` : ''}. Whether it stopped was NOT established.`,
     });
@@ -708,15 +757,36 @@ export async function pollPause(
   if (allConfirmed && snapshot.state === 'PAUSING') {
     assertTransition(snapshot.state, 'PAUSED');
   }
+
+  // The reason must match the STATE it is describing. The first version always
+  // said "still PAUSING", which contradicted itself on a PAUSED estate whose
+  // resources had drifted back up — and PAUSED is where drift actually happens.
+  // `LEGAL_TRANSITIONS.PAUSED` is `['RESUMING']`, with no PAUSED -> PAUSING
+  // edge, so drift is deliberately not representable as a state change; it is
+  // reported as a FACT about a PAUSED estate instead.
+  let reason: string;
+  if (allConfirmed) {
+    reason = `All ${total} resource(s) confirmed stopped from authoritative ARM reads.`;
+  } else if (driftedResources.length > 0) {
+    reason =
+      `The estate is PAUSED, but ${driftedResources.length} of ${total} resource(s) are RUNNING `
+      + 'again — they were restarted outside Loom. Nothing has been re-paused: the invariant '
+      + 'reconciler (PRP W6) is not built yet, so this is a report, not a correction. Press Pause '
+      + 'again to re-assert the paused state.';
+  } else {
+    reason =
+      `${confirmed} of ${total} resource(s) confirmed stopped. The estate is still ${snapshot.state} — `
+      + 'a resource whose state could not be read counts as NOT confirmed.';
+  }
+
   return {
     state: allConfirmed ? 'PAUSED' : snapshot.state,
     progress,
     confirmed,
     total,
-    reason: allConfirmed
-      ? `All ${total} resource(s) confirmed stopped from authoritative ARM reads.`
-      : `${confirmed} of ${total} resource(s) confirmed stopped. The estate is still PAUSING — `
-        + 'a resource whose state could not be read counts as NOT confirmed.',
+    drifted: driftedResources.length > 0,
+    driftedResources,
+    reason,
   };
 }
 
@@ -1011,9 +1081,57 @@ export function resolveEstateId(env: NodeJS.ProcessEnv = process.env): string {
   return 'loom:unbound';
 }
 
+/**
+ * THE ARMING SWITCH. Unset by default, in every cloud.
+ *
+ * ── WHY THIS EXISTS (independent review, 2026-08-23) ───────────────────────
+ * The first version of this PR claimed the button was inert on the live estate
+ * because "the `loom-estate-id` tag is stamped by nothing". That was true of the
+ * TAG and FALSE of the whole feature, and the difference is roughly $3,000/mo of
+ * compute.
+ *
+ * `resolveOwnership` grants `loom-owned` from the deploy manifest with **no tag
+ * involved** — correctly, because R-SCOPE-3 sanctions a deploy-emitted manifest
+ * as a membership source and those resources genuinely are this install's. And
+ * `resolveDeployManifest` builds that manifest purely from console env vars,
+ * every one of which the platform bicep DOES set:
+ *
+ *     LOOM_SYNAPSE_DEDICATED_POOL   admin-plane/main.bicep:4138
+ *     LOOM_PURVIEW_SHIR_VMSS_NAME   admin-plane/main.bicep:4374
+ *     LOOM_KUSTO_CLUSTER_NAME       admin-plane/main.bicep:4769
+ *     LOOM_SYNAPSE_WORKSPACE (6 files) · LOOM_AAS_SERVER_NAME (2)
+ *     LOOM_SUBSCRIPTION_ID (5)      · LOOM_DLZ_RG (6)
+ *
+ * `LOOM_ESTATE_ID` is the only one nothing sets — and `resolveEstateId()`
+ * SYNTHESIZES it deterministically from subscription + RG, so the manifest
+ * resolves anyway. So `population.empty` was false, `canPause` was true, and
+ * merging would have armed a one-click pause of the Synapse dedicated pool
+ * (~$1,102/mo), Analysis Services (~$1,796/mo), ADX and possibly the SHIR VMSS
+ * — on an estate that **auto-rolls on every merge to main**, with no live
+ * receipt that resume works, and with R-CAP-2 (automatic fallback SKU) NOT
+ * implemented, so a capacity-failed resume is manual recovery. That is the
+ * precise shape of the ADX incident this PRP exists to prevent.
+ *
+ * This is not a scope-safety hole and the manifest path is not being removed.
+ * It is held behind an explicit opt-in until a live receipt exists, per
+ * `auto-bind-by-default.md`'s narrow allowance for a cost-material opt-in the
+ * operator has deliberately chosen to keep opt-in, and PRP §2 decision 5
+ * (pause Commercial only after Wave 0 validates).
+ *
+ * REMOVE THIS GATE once a live pause + resume receipt exists and R-CAP-2 lands.
+ * It should not become permanent furniture — a gate with no expiry is how a
+ * feature quietly stays off forever.
+ */
+export const ESTATE_PAUSE_ENABLED_ENV = 'LOOM_ESTATE_PAUSE_ENABLED';
+
+/** True only for an explicit, affirmative opt-in. Anything else is OFF. */
+export function estatePauseEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = (env[ESTATE_PAUSE_ENABLED_ENV] || '').trim().toLowerCase();
+  return v === 'true' || v === '1' || v === 'yes';
+}
+
 /** One entry of the deploy-emitted manifest, before any ARM read. */
-export interface ManifestEntry {
-  resourceId: string;
+export interface ManifestEntry {  resourceId: string;
   resourceType: string;
   name: string;
   resourceGroup: string;
@@ -1051,8 +1169,14 @@ export function resolveDeployManifest(env: NodeJS.ProcessEnv = process.env): {
   entries: ManifestEntry[];
   /** Types that could have been in the tier but had no env var naming them. */
   unresolved: Array<{ label: string; needs: string[] }>;
+  /** True when the manifest resolved names but the opt-in is unset. */
+  manifestGated: boolean;
+  /** How many resources the env NAMES, whether or not the gate lets them through. */
+  namedByDeploy: number;
+  gateReason?: string;
 } {
   const estateId = resolveEstateId(env);
+  const gated = !estatePauseEnabled(env);
   const entries: ManifestEntry[] = [];
   const unresolved: Array<{ label: string; needs: string[] }> = [];
   const v = (k: string) => (env[k] || '').trim();
@@ -1141,9 +1265,27 @@ export function resolveDeployManifest(env: NodeJS.ProcessEnv = process.env): {
   }
 
   return {
-    manifest: { estateId, resourceIds: entries.map((e) => e.resourceId) },
+    manifest: {
+      estateId,
+      // THE OPT-IN GATE. See ESTATE_PAUSE_ENABLED_ENV.
+      resourceIds: gated ? [] : entries.map((e) => e.resourceId),
+    },
     entries,
     unresolved,
+    manifestGated: gated,
+    namedByDeploy: entries.length,
+    ...(gated
+      ? {
+          gateReason:
+            `The deploy environment NAMES ${entries.length} resource(s) this Loom install is bound `
+            + `to, and manifest ownership alone would be enough to pause them. That path is held `
+            + `behind ${ESTATE_PAUSE_ENABLED_ENV}, which is not set, so nothing can be paused. `
+            + 'This is a deliberate safety opt-in, not a missing feature: no pause has ever been '
+            + 'run against a live Azure resource from this code, and PRP §2 decision 5 says '
+            + 'Commercial is paused only after Wave 0 validates. Set '
+            + `${ESTATE_PAUSE_ENABLED_ENV}=true on the console to arm it.`,
+        }
+      : {}),
   };
 }
 
@@ -1226,17 +1368,38 @@ export function normalizePowerState(resourceType: string, raw: unknown): EstateP
 }
 
 /**
- * The REAL actuator. Every verb below delegates to a client that already ships:
+ * The REAL actuator. Every verb addresses `resourceId` DIRECTLY through the
+ * shared, cloud-aware ARM transport (`lib/azure/arm-client`):
  *
- *   Synapse pool  ->  synapse-pool-arm.ts   pausePool / resumePool / getPoolState
- *   ADX cluster   ->  kusto-arm-client.ts   stopKustoCluster / startKustoCluster
- *   AAS server    ->  arm-client.ts         armPost .../suspend | .../resume
- *   SHIR VMSS     ->  arm-client.ts         armPatch sku.capacity
+ *   Synapse pool  ->  POST {poolId}/pause      | {poolId}/resume
+ *   ADX cluster   ->  POST {clusterId}/stop    | {clusterId}/start
+ *   AAS server    ->  POST {serverId}/suspend  | {serverId}/resume
+ *   SHIR VMSS     ->  PATCH {vmssId} sku.capacity
  *
- * AAS and VMSS use the shared `armPost` / `armPatch` transport because no typed
- * client in this repo exposes a suspend or a scale-set capacity write — checked,
- * not assumed. They are the same authenticated ARM path every other client uses,
- * not a second transport.
+ * ── WHY NOT THE TYPED CLIENTS FOR SYNAPSE AND ADX ─────────────────────────
+ * `pausePool()`, `resumePool()`, `stopKustoCluster()` and `startKustoCluster()`
+ * take NO ARGUMENTS: they re-derive their target from `process.env` at call
+ * time. Composing them would mean the resource that gets mutated is not the
+ * resource whose ownership `reverifyBeforeAct` just checked — the two coincide
+ * today only because discovery is itself env-derived, and they diverge the
+ * moment #3922 makes the `loom-estate-id` tag the discovery source. Worse,
+ * `synapse-pool-arm.ts` self-heals across a sub/RG mismatch by re-discovering
+ * coordinates through Resource Graph, so it can retarget even after a check.
+ *
+ * The ARM action paths above are byte-identical to the ones those clients build
+ * internally, so nothing is reimplemented; the only thing removed is the
+ * client's ability to pick a different target than the verified one. See
+ * `assertActuationTarget`.
+ *
+ * ── CLOUD BOUNDARY ─────────────────────────────────────────────────────────
+ * `arm-client` resolves its host via `armBase()`, so these calls are correct in
+ * Commercial, GCC, GCC-High and DoD, and this path has no `api.github.com`
+ * dependency. That makes the code cloud-agnostic — it does NOT make it
+ * cloud-VERIFIED. Only Commercial has been exercised, and only against
+ * fixtures; Gov is UNTESTED and is owned by PRP work item W7. The
+ * `LOOM_ESTATE_PAUSE_ENABLED` opt-in below is unset in every boundary,
+ * including Gov, so a sovereign console renders the surface inert until an
+ * operator there deliberately arms it.
  *
  * The imports are lazy so the pure half of this module stays importable in a
  * unit test without constructing an Azure credential chain.
@@ -1290,16 +1453,22 @@ export async function createArmActuator(): Promise<EstateActuator> {
     const { resource } = candidate;
     const type = resource.resourceType.toLowerCase();
     try {
+      // The mutation must land on the id whose ownership was re-verified. See
+      // `assertActuationTarget` for why this is not negotiable.
+      assertActuationTarget(resource);
       switch (type) {
         case 'microsoft.synapse/workspaces/sqlpools': {
-          const { pausePool } = await import('@/lib/azure/synapse-pool-arm');
-          await pausePool();
+          // POST {poolId}/pause — the same path synapse-pool-arm builds in
+          // `actionUrlFor`, but addressed at OUR id rather than re-derived from
+          // process.env (and immune to that client's Resource-Graph self-heal).
+          await armPost(`${resource.resourceId}/pause?api-version=${apiVersion(type)}`);
           return { ok: true, detail: `ARM accepted the pause of dedicated SQL pool ${resource.name}.` };
         }
         case 'microsoft.kusto/clusters': {
-          const { stopKustoCluster } = await import('@/lib/azure/kusto-arm-client');
-          const r = await stopKustoCluster();
-          return { ok: true, detail: `ARM accepted the stop of ADX cluster ${resource.name} (${r.provisioningState}).` };
+          // POST {clusterId}/stop — the same path kusto-arm-client builds in
+          // `stopKustoCluster`, addressed at OUR id.
+          await armPost(`${resource.resourceId}/stop?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the stop of ADX cluster ${resource.name}.` };
         }
         case 'microsoft.analysisservices/servers': {
           await armPost(`${resource.resourceId}/suspend?api-version=${apiVersion(type)}`);
@@ -1325,16 +1494,15 @@ export async function createArmActuator(): Promise<EstateActuator> {
   const resume = async (entry: PausedResourceSnapshot): Promise<ActuatorResult> => {
     const type = entry.resourceType.toLowerCase();
     try {
+      assertActuationTarget(entry);
       switch (type) {
         case 'microsoft.synapse/workspaces/sqlpools': {
-          const { resumePool } = await import('@/lib/azure/synapse-pool-arm');
-          await resumePool();
+          await armPost(`${entry.resourceId}/resume?api-version=${apiVersion(type)}`);
           return { ok: true, detail: `ARM accepted the resume of dedicated SQL pool ${entry.name}.` };
         }
         case 'microsoft.kusto/clusters': {
-          const { startKustoCluster } = await import('@/lib/azure/kusto-arm-client');
-          const r = await startKustoCluster();
-          return { ok: true, detail: `ARM accepted the start of ADX cluster ${entry.name} (${r.provisioningState}).` };
+          await armPost(`${entry.resourceId}/start?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the start of ADX cluster ${entry.name}.` };
         }
         case 'microsoft.analysisservices/servers': {
           await armPost(`${entry.resourceId}/resume?api-version=${apiVersion(type)}`);
@@ -1463,6 +1631,67 @@ export async function savePauseSnapshot(snapshot: EstatePauseSnapshot): Promise<
     updatedAt: new Date().toISOString(),
   };
   await c.items.upsert(doc);
+}
+
+/**
+ * Assert the id we are about to mutate is the one whose ownership was verified,
+ * and that it addresses the TYPE we think it does.
+ *
+ * ── WHY THIS EXISTS (independent review, 2026-08-23) ───────────────────────
+ * The first version of this actuator called the typed clients for Synapse and
+ * ADX with ZERO arguments:
+ *
+ *     const { pausePool } = await import('@/lib/azure/synapse-pool-arm');
+ *     await pausePool();
+ *
+ * `pausePool()` re-derives its target from `process.env`
+ * (`synapse-pool-arm.ts` `configuredCoords()` + `required('LOOM_SYNAPSE_
+ * DEDICATED_POOL')`), and `stopKustoCluster()` does the same via
+ * `readKustoArmConfig()`. The `candidate` was used only to build the message
+ * string. So **the resource that got paused was not the resource whose
+ * ownership had just been re-verified** — R-SCOPE-3 checked
+ * `candidate.resource.resourceId` and the mutation landed on whatever the env
+ * named. AAS and VMSS in the same switch already used the id correctly, and
+ * that inconsistency was the tell.
+ *
+ * Today those two coincide, because discovery is itself env-derived. **They
+ * stop coinciding the moment #3922 lands** and the `loom-estate-id` tag becomes
+ * the discovery source — which is exactly what this feature's empty state tells
+ * the operator to go and do. A tag-discovered pool would be ownership-verified
+ * against its own id and then paused via the env's pool, bypassing every scope
+ * guard in the design.
+ *
+ * Worse, `synapse-pool-arm.ts` `fetchPool()` SELF-HEALS across a sub/RG
+ * mismatch by discovering the workspace's real coordinates through Resource
+ * Graph and caching them — so even asserting "candidate id === env id" would not
+ * have been sufficient; the client can silently retarget after the assertion.
+ *
+ * The fix is therefore not an assertion bolted onto the env path. Every verb
+ * below addresses `resourceId` DIRECTLY through the shared, cloud-aware ARM
+ * transport, exactly as AAS and VMSS already did. The ARM action paths are
+ * byte-identical to what the typed clients build internally
+ * (`{clusterUrl}/stop`, `{poolUrl}/pause`), so nothing is reimplemented — the
+ * only thing removed is the client's ability to choose a different target than
+ * the one we verified.
+ */
+export function assertActuationTarget(
+  target: { resourceId: string; resourceType: string; name: string },
+): void {
+  if (!target.resourceId || !target.resourceId.startsWith('/subscriptions/')) {
+    throw new Error(
+      `Refusing to actuate ${target.name}: '${target.resourceId}' is not a fully-qualified ARM `
+        + 'resource id. A mutation must address the exact resource whose ownership was verified.',
+    );
+  }
+  const derived = armTypeFromId(target.resourceId);
+  const declared = target.resourceType.toLowerCase();
+  if (derived !== declared) {
+    throw new Error(
+      `Refusing to actuate ${target.name}: its recorded type is '${declared}' but its resource id `
+        + `addresses '${derived}'. The two disagree, so which resource would be mutated was NOT `
+        + 'established.',
+    );
+  }
 }
 
 /** `/subscriptions/x/resourceGroups/y/providers/A/b/n[/c/m]` -> `a/b[/c]`. */

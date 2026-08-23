@@ -429,6 +429,50 @@ describe('startPause / pollPause', () => {
     expect(poll.progress.find((p) => p.resourceId === MIXED_LOOM.resourceId)?.detail)
       .toMatch(/NOT established/);
   });
+
+  it('DRIFT: a PAUSED estate with a resource back Online is reported as DRIFT, not as "still PAUSING"', async () => {
+    // PRP §5 lists four mechanisms that restart a paused resource unprompted —
+    // Postgres auto-restart after 7 days, Event Hubs auto-inflate, the
+    // Commercial estate rolling itself on every merge, and any ARM PUT. The
+    // first version always said "still PAUSING", which flatly contradicted the
+    // PAUSED state it was reporting alongside.
+    const plan = planPause(ALL, { scope: SCOPE });
+    const run = await startPause(plan, recorder().actuator, ctx());
+    const paused: EstatePauseSnapshot = { ...run.snapshot, state: 'PAUSED' };
+
+    const drifted = recorder({ power: (id) => (id === MIXED_LOOM.resourceId ? 'Online' : 'Paused') });
+    const poll = await pollPause(paused, drifted.actuator);
+
+    expect(poll.state).toBe('PAUSED');
+    expect(poll.drifted).toBe(true);
+    expect(poll.driftedResources).toEqual([MIXED_LOOM.resourceId]);
+    expect(poll.reason).toMatch(/The estate is PAUSED, but 1 of 2 resource\(s\) are RUNNING again/);
+    // It does NOT claim to have fixed anything — the reconciler (W6) is not built.
+    expect(poll.reason).toMatch(/Nothing has been re-paused/);
+    // And it never says "still PAUSING" over a PAUSED estate.
+    expect(poll.reason).not.toMatch(/still PAUSING/);
+    // The per-resource detail names the drift too.
+    expect(poll.progress.find((p) => p.resourceId === MIXED_LOOM.resourceId)?.detail)
+      .toMatch(/restarted it out of band/);
+  });
+
+  it('a PAUSING estate that has not settled still reports its OWN state, not a hard-coded one', async () => {
+    const plan = planPause(ALL, { scope: SCOPE });
+    const run = await startPause(plan, recorder().actuator, ctx());
+    const poll = await pollPause(run.snapshot, recorder({ power: () => 'Pausing' }).actuator);
+    expect(poll.state).toBe('PAUSING');
+    expect(poll.drifted).toBe(false);
+    expect(poll.driftedResources).toEqual([]);
+    expect(poll.reason).toMatch(/still PAUSING/);
+  });
+
+  it('drift is NOT reported for a PAUSING estate — a resource still up is just in flight', async () => {
+    const plan = planPause(ALL, { scope: SCOPE });
+    const run = await startPause(plan, recorder().actuator, ctx());
+    const poll = await pollPause(run.snapshot, recorder({ power: () => 'Online' }).actuator);
+    expect(poll.state).toBe('PAUSING');
+    expect(poll.drifted).toBe(false);
+  });
 });
 
 // ===========================================================================
@@ -585,7 +629,7 @@ describe('resolveDeployManifest — ownership from the deploy, per RESOURCE', ()
   } as unknown as NodeJS.ProcessEnv;
 
   it('names EXACT resources, never a subscription and never a resource group', () => {
-    const { manifest, entries } = resolveDeployManifest(env);
+    const { manifest, entries } = resolveDeployManifest({ ...env, LOOM_ESTATE_PAUSE_ENABLED: 'true' });
     expect(manifest.estateId).toBe(ESTATE);
     expect(entries).toHaveLength(2);
     for (const id of manifest.resourceIds) {
@@ -611,16 +655,34 @@ describe('resolveDeployManifest — ownership from the deploy, per RESOURCE', ()
     expect(manifest.resourceIds).toEqual([]);
   });
 
-  it('the manifest makes a resource Loom-owned even with NO tag on it', async () => {
-    const { manifest, entries } = resolveDeployManifest(env);
+  it('the manifest makes a resource Loom-owned even with NO tag on it — WHEN ARMED', async () => {
+    const { manifest, entries } = resolveDeployManifest({ ...env, LOOM_ESTATE_PAUSE_ENABLED: 'true' });
     const discovered = await discoverFromManifest(entries, async () => ({}));
     const plan = planPause(discovered, { scope: SCOPE, manifest });
     expect(plan.dryRun.wouldPause).toHaveLength(2);
     expect(plan.dryRun.wouldPause.every((r) => r.ownershipSource === 'deploy-manifest')).toBe(true);
   });
 
+  it('UNARMED, the same manifest grants NOTHING — the arming switch is the whole difference', async () => {
+    // The blocker: the deploy sets every env var this manifest is built from,
+    // so without the gate this path is live on the estate today. Same inputs as
+    // the case above, minus LOOM_ESTATE_PAUSE_ENABLED.
+    const { manifest, entries, gateReason, namedByDeploy } = resolveDeployManifest(env);
+    expect(namedByDeploy).toBe(2);
+    const discovered = await discoverFromManifest(entries, async () => ({}));
+    const plan = planPause(discovered, { scope: SCOPE, manifest, gateReason, namedByDeploy });
+    expect(plan.dryRun.wouldPause).toEqual([]);
+    expect(plan.population.armed).toBe(false);
+    expect(plan.population.namedByDeploy).toBe(2);
+    expect(plan.population.statement).toMatch(/NOT ARMED/);
+    expect(plan.population.statement).toContain('LOOM_ESTATE_PAUSE_ENABLED');
+    // The resources are still EXAMINED and reported — the gate withholds
+    // ownership, it does not hide the estate from the operator.
+    expect(plan.population.examined).toBe(2);
+  });
+
   it('a THROWING tag read yields indeterminate ownership — the resource is left running', async () => {
-    const { manifest, entries } = resolveDeployManifest(env);
+    const { manifest, entries } = resolveDeployManifest({ ...env, LOOM_ESTATE_PAUSE_ENABLED: 'true' });
     const discovered = await discoverFromManifest(entries, async () => {
       throw new Error('ARM 403 Forbidden on the tag read');
     });

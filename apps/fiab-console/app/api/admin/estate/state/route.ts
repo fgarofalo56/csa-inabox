@@ -24,6 +24,17 @@
  * the exact failure shape measured on 2026-08-07, when removing that one line
  * from `app/api/setup/deploy/route.ts` left THREE separate route-guard checkers
  * green over an open route.
+ *
+ * ── CLOUD BOUNDARY: cloud-AGNOSTIC, not cloud-VERIFIED ────────────────────
+ * `arm-client` resolves its host through `armBase()` and this path has no
+ * `api.github.com` dependency, so a Gov console WOULD render this card and
+ * actuate Gov ARM directly. That is a statement about behaviour; it is not a
+ * receipt. **Azure Government is UNTESTED** — no Gov deploy, no Gov ARM call,
+ * no Gov browser walk — and per `cloud-parity.md` an untested boundary is named
+ * as untested rather than implied working. PRP work item **W7** owns the Gov
+ * path. The `LOOM_ESTATE_PAUSE_ENABLED` opt-in is unset in every boundary
+ * including Gov, so the surface is inert there until deliberately armed. The
+ * detected boundary is returned as `cloud` so the UI can say which one it is.
  */
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { apiOk, apiHonestError } from '@/lib/api/respond';
@@ -44,6 +55,7 @@ import {
   type EstateActuator,
 } from '@/lib/estate/pause-orchestrator';
 import { capacityPreflight, highRiskCount, summarizeResume } from '@/lib/estate/capacity-preflight';
+import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
 import { tenantScopeId } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
@@ -52,24 +64,46 @@ export const dynamic = 'force-dynamic';
 /**
  * Build the RUNNING-state payload: the dry run + the population report + the
  * per-resource resume risk. No mutation, no snapshot write.
+ *
+ * The per-candidate `readPower` is an authoritative ARM GET, which is what puts
+ * the LIVE SKU and power state in front of the operator before they confirm. It
+ * is bounded by the pause tier (at most a handful of resources) and mutates
+ * nothing.
  */
 async function runningPayload(actuator: EstateActuator) {
-  const { manifest, entries, unresolved } = resolveDeployManifest();
+  const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
+    resolveDeployManifest();
   const discovered = await discoverFromManifest(entries, actuator.readTags);
   const plan = planPause(discovered, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
+    ...(gateReason ? { gateReason } : {}),
+    namedByDeploy,
   });
-  const risks = capacityPreflight(plan.inventory.pausable);
+
+  // R-CAP-3 — read the live SKU so the confirm dialog names what is at risk.
+  const live: Record<string, { sku?: string; powerState?: string }> = {};
+  for (const c of plan.inventory.pausable) {
+    const power = await actuator.readPower(c.resource);
+    live[c.resource.resourceId.toLowerCase()] = {
+      ...(power.sku?.name ? { sku: power.sku.name } : {}),
+      ...(power.reading ? { powerState: power.reading.powerState } : {}),
+    };
+  }
+  const risks = capacityPreflight(plan.inventory.pausable, live);
 
   return {
     state: 'RUNNING' as const,
     estateId: manifest.estateId,
+    /** Which Azure boundary this console is bound to. See the cloud note below. */
+    cloud: detectLoomCloud(),
     preview: plan.dryRun,
     population: plan.population,
     outOfTier: plan.outOfTier,
     /** Types this tier covers that no env var named — an honest coverage gap. */
     unresolved,
+    /** True when the deploy names resources but the opt-in is unset. */
+    manifestGated,
     risks,
     highRisk: highRiskCount(risks),
     /**
@@ -110,11 +144,14 @@ export const GET = withTenantAdmin(async (_req, { session }) => {
     return apiOk({
       state: poll.state,
       estateId: snapshot.estateId,
+      cloud: detectLoomCloud(),
       snapshotId: snapshot.id,
       pausedAt: snapshot.pausedAt ?? null,
       progress: poll.progress,
       confirmed: poll.confirmed,
       total: poll.total,
+      drifted: poll.drifted,
+      driftedResources: poll.driftedResources,
       reason: poll.reason,
       resources: snapshot.resources,
       typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
@@ -130,6 +167,7 @@ export const GET = withTenantAdmin(async (_req, { session }) => {
   return apiOk({
     state: poll.state,
     estateId: snapshot.estateId,
+    cloud: detectLoomCloud(),
     snapshotId: snapshot.id,
     resumeStartedAt: snapshot.resumeStartedAt ?? null,
     progress: poll.progress,
