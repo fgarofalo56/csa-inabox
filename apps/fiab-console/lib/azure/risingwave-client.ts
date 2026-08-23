@@ -64,14 +64,29 @@ export function isRisingWaveConfigured(): boolean {
   return risingwaveConfigGate() === null;
 }
 
+/**
+ * Which half of the round trip failed.
+ *
+ * These carry DIFFERENT remediations and must never be conflated (#3546):
+ * `connect` means no statement was ever sent (cold start / network path /
+ * stopped replica); `statement` means the engine accepted the session and the
+ * SQL itself failed. Attribution comes from CONTROL-FLOW POSITION — whether we
+ * got past `client.connect()` — never from sniffing the driver's message text,
+ * which is identical for several causes and absent for others.
+ */
+export type RisingWavePhase = 'connect' | 'statement';
+
 export class RisingWaveError extends Error {
   status: number;
   code?: string;
-  constructor(message: string, status: number, code?: string) {
+  /** Set for driver failures; undefined for pure gate/validation errors. */
+  phase?: RisingWavePhase;
+  constructor(message: string, status: number, code?: string, phase?: RisingWavePhase) {
     super(message);
     this.name = 'RisingWaveError';
     this.status = status;
     this.code = code;
+    this.phase = phase;
   }
 }
 
@@ -225,6 +240,46 @@ export interface StreamingSqlResult {
   elapsedMs: number;
 }
 
+/**
+ * CONNECT-phase budget, deliberately BELOW the console client's own per-request
+ * ceiling (`lib/client-fetch.ts` CLIENT_FETCH_TIMEOUT_MS = 20_000).
+ *
+ * It used to be exactly 20_000 — the SAME number — so the two deadlines expired
+ * together and the browser aborted at the very moment this code would have
+ * produced its diagnosis. The operator therefore got the generic client-side
+ * timeout string for EVERY connect failure and never saw which phase failed or
+ * against which host (#3546). A connect budget must fit strictly inside the
+ * caller's budget or the server can never win the race and explain itself.
+ *
+ * 8s is a full TCP + Postgres startup handshake against an in-VNet internal
+ * ingress many times over; it does NOT cap the statement, which keeps its own
+ * far larger `statement_timeout` (60s query / 120s DDL / 30s status).
+ */
+export const RISINGWAVE_CONNECT_TIMEOUT_MS = 8_000;
+
+/**
+ * Describe a CONNECT-phase failure without asserting a cause the code did not
+ * establish (deploy-integrity R7).
+ *
+ * A cold-starting scale-to-zero replica, a blocked VNet path, and a stopped
+ * container are INDISTINGUISHABLE from here — the connect simply produced no
+ * session. So this says exactly that, names what was dialed, and explicitly
+ * records what is NOT established, rather than picking one cause and sending
+ * the operator down it.
+ */
+function connectFailureMessage(target: RisingWaveTarget, e: any, budgetMs: number): string {
+  const where = `${target.host}:${target.port}`;
+  const timedOut = /timeout/i.test(String(e?.message || ''));
+  const head = timedOut
+    ? `No Postgres-wire session was established with the RisingWave frontend at ${where} within ${budgetMs}ms.`
+    : `No Postgres-wire session could be established with the RisingWave frontend at ${where}: `
+      + `${e?.message || String(e)}.`;
+  return `${head} This is the CONNECT phase — no statement was sent, so nothing was executed or `
+    + `partially applied. NOT established by this failure: whether the engine is running. A cold start on a `
+    + `scaled-to-zero Container App, a blocked VNet path, and a stopped replica all present identically here; `
+    + `check the loom-risingwave Container App's replica count and latest revision health.`;
+}
+
 async function connect(target: RisingWaveTarget, statementTimeoutMs: number) {
   // Lazy import so the driver only loads on this path (Node runtime only). The
   // internal-ingress hop is raw TCP inside the VNet (ACA TCP ingress does not
@@ -239,10 +294,21 @@ async function connect(target: RisingWaveTarget, statementTimeoutMs: number) {
     ...(target.password ? { password: target.password } : {}),
     ssl: false,
     statement_timeout: statementTimeoutMs,
-    connectionTimeoutMillis: 20_000,
+    connectionTimeoutMillis: RISINGWAVE_CONNECT_TIMEOUT_MS,
     application_name: 'csa-loom-console',
   });
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (e: any) {
+    // Attribute by POSITION: reaching here means the session never opened.
+    await client.end().catch(() => { /* nothing to close */ });
+    throw new RisingWaveError(
+      connectFailureMessage(target, e, RISINGWAVE_CONNECT_TIMEOUT_MS),
+      driverErrorStatus(e),
+      e?.code,
+      'connect',
+    );
+  }
   return client;
 }
 
@@ -297,7 +363,13 @@ export async function runStreamingQuery(sql: string, opts: { maxRows?: number } 
     const res: any = await client.query(text);
     return shape(res, started);
   } catch (e: any) {
-    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code);
+    // A RisingWaveError arriving here is ALREADY classified — the connect-phase
+    // error raised by `connect()`. Re-wrapping it would relabel a connect
+    // failure as a statement failure and silently drop `phase`, which is the
+    // whole discriminator (#3546). Only an unclassified driver error is a
+    // statement failure, because reaching the query means the session opened.
+    if (e instanceof RisingWaveError) throw e;
+    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code, 'statement');
   } finally {
     if (client) await client.end().catch(() => { /* already closed */ });
   }
@@ -317,7 +389,13 @@ export async function executeStreamingDdl(sql: string): Promise<StreamingSqlResu
     const res: any = await client.query(statement);
     return shape(res, started);
   } catch (e: any) {
-    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code);
+    // A RisingWaveError arriving here is ALREADY classified — the connect-phase
+    // error raised by `connect()`. Re-wrapping it would relabel a connect
+    // failure as a statement failure and silently drop `phase`, which is the
+    // whole discriminator (#3546). Only an unclassified driver error is a
+    // statement failure, because reaching the query means the session opened.
+    if (e instanceof RisingWaveError) throw e;
+    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code, 'statement');
   } finally {
     if (client) await client.end().catch(() => { /* already closed */ });
   }
@@ -429,7 +507,13 @@ export async function readStreamingStatus(): Promise<StreamingStatus> {
 
     return { engine: 'risingwave', version, materializedViews, sourceCount, sinkCount };
   } catch (e: any) {
-    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code);
+    // A RisingWaveError arriving here is ALREADY classified — the connect-phase
+    // error raised by `connect()`. Re-wrapping it would relabel a connect
+    // failure as a statement failure and silently drop `phase`, which is the
+    // whole discriminator (#3546). Only an unclassified driver error is a
+    // statement failure, because reaching the query means the session opened.
+    if (e instanceof RisingWaveError) throw e;
+    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code, 'statement');
   } finally {
     if (client) await client.end().catch(() => { /* already closed */ });
   }

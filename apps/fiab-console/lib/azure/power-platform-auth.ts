@@ -154,6 +154,50 @@ export interface PpFetchOptions {
 }
 
 /**
+ * WHICH service principal a scope's token is minted by. Three states, because
+ * the code genuinely has three — and the remediation copy differs in ALL of
+ * them (#3688):
+ *
+ *  - `dataverse-app`  Dataverse scope AND a confidential SP is configured. The
+ *                     Dataverse app registration is the principal on the wire;
+ *                     it is the one that must be an Application User.
+ *  - `console-uami`   Control-plane scope (BAP / Power Apps / Flow). The Console
+ *                     UAMI is the principal; the allow group + management-app
+ *                     registration are what govern it.
+ *  - `uami-no-dataverse-cred`
+ *                     Dataverse scope but NO confidential SP configured, so the
+ *                     call falls through to the UAMI — which Microsoft never
+ *                     accepts as a Dataverse Application User, under ANY grant.
+ *                     This state is UNFIXABLE by granting anything to the UAMI,
+ *                     and saying "add the Console UAMI SP …" here (as this
+ *                     module did) sends the operator to do exactly that.
+ */
+export type PpSpPrincipal = 'dataverse-app' | 'console-uami' | 'uami-no-dataverse-cred';
+
+/**
+ * The SINGLE credential-selection expression.
+ *
+ * `getPowerPlatformSpToken` (what goes on the wire) and `ppAuthHint` (what the
+ * operator is told) both read THIS — they are not two copies of one policy.
+ * That is the whole point under deploy-integrity R7: a hint that re-derives the
+ * principal from its own regex on the scope string is a second policy, and it
+ * silently disagrees with the transport the moment the Dataverse SP is absent.
+ */
+function spCredentialFor(scope: string): { cred: TokenCredential; principal: PpSpPrincipal } {
+  if (isDataverseScope(scope)) {
+    return dataverseCredential
+      ? { cred: dataverseCredential, principal: 'dataverse-app' }
+      : { cred: uamiCredential, principal: 'uami-no-dataverse-cred' };
+  }
+  return { cred: uamiCredential, principal: 'console-uami' };
+}
+
+/** The principal that WILL mint (or did mint) the SP token for `scope`. */
+export function ppSpPrincipalForScope(scope: string): PpSpPrincipal {
+  return spCredentialFor(scope).principal;
+}
+
+/**
  * Acquire the SERVICE-PRINCIPAL bearer token for a Power Platform REST call.
  *
  * Dataverse-scoped tokens go through the confidential SP when configured;
@@ -162,7 +206,7 @@ export interface PpFetchOptions {
  * organization" — which is actionable, unlike a silent empty result.
  */
 export async function getPowerPlatformSpToken(scope: string, opts: PpFetchOptions): Promise<string> {
-  const cred = (isDataverseScope(scope) && dataverseCredential) ? dataverseCredential : uamiCredential;
+  const { cred } = spCredentialFor(scope);
   const t = await cred.getToken(scope);
   if (!t?.token) throw opts.tokenError(`Failed to acquire AAD token for ${scope}`);
   return t.token;
@@ -206,16 +250,48 @@ export async function powerPlatformFetch(
 }
 
 /**
- * Remediation copy for a 401/403, naming the principal(s) actually refused.
- * `triedUser` comes straight from {@link PpFetchResult}.
+ * Remediation copy for a 401/403, naming the principal(s) ACTUALLY refused.
+ *
+ * `triedUser` comes straight from {@link PpFetchResult}; `scope` is the scope
+ * the call was issued under, and it is what makes the SP half of the sentence
+ * true. Before #3688 this function took only `triedUser`, so every message
+ * named "the Console UAMI SP" — including on Dataverse calls, where the UAMI is
+ * NOT the principal on the wire whenever a Dataverse SP is configured. An
+ * operator following that copy granted the wrong application, the error did not
+ * change, and nothing told them they had gone the wrong way.
+ *
+ * The SP half is derived from {@link ppSpPrincipalForScope}, i.e. from the same
+ * expression the transport mints with — so it cannot drift from reality.
  */
-export function ppAuthHint(triedUser: boolean): string {
-  return triedUser
-    ? 'Both identities were refused: your signed-in account, then the Console service principal. '
-      + 'Confirm your account has a Power Platform licence and a role on this environment, AND that the '
-      + 'Console SP is registered as a Power Platform management application (New-PowerAppManagementApp) '
-      + 'and — for Dataverse — added as an Application User with the System Administrator role.'
-    : 'Confirm the Console UAMI SP is added to the "Service principals can use Power Platform APIs" allow '
-      + 'group in Power Platform admin centre, and (for Dataverse) added as an Application User in the '
-      + 'target environment with the System Administrator role.';
+export function ppAuthHint(triedUser: boolean, scope: string): string {
+  const principal = ppSpPrincipalForScope(scope);
+  const userHalf = triedUser
+    ? 'Both identities were refused: your signed-in account, then the service principal. '
+      + 'Confirm your account has a Power Platform licence and a role on this environment. '
+    : '';
+
+  switch (principal) {
+    case 'dataverse-app':
+      return userHalf
+        + 'This Dataverse call was made by the Dataverse application registration '
+        + '(LOOM_DATAVERSE_CLIENT_ID, or LOOM_MSAL_CLIENT_ID when that is unset) — NOT the Console UAMI. '
+        + 'Add THAT application as an Application User with the System Administrator role on this '
+        + 'environment (Power Platform admin centre -> Environments -> Settings -> Users + permissions -> '
+        + 'Application users -> New app user). The "Service principals can use Power Platform APIs" allow '
+        + 'group does not govern Dataverse, so adding the Console UAMI there will not change this result.';
+    case 'uami-no-dataverse-cred':
+      return userHalf
+        + 'No Dataverse service principal is configured (LOOM_DATAVERSE_CLIENT_ID/_SECRET, falling back to '
+        + 'LOOM_MSAL_CLIENT_ID/_SECRET), so this Dataverse call was made with the Console UAMI — which '
+        + 'Microsoft does not accept as a Dataverse Application User under ANY role or allow-group grant. '
+        + 'Set that client id/secret pair on the Console and register that application as an Application '
+        + 'User with the System Administrator role on this environment. Granting the UAMI will not help.';
+    case 'console-uami':
+    default:
+      return userHalf
+        + 'This control-plane call was made by the Console UAMI SP (LOOM_UAMI_CLIENT_ID). Confirm it is '
+        + 'added to the "Service principals can use Power Platform APIs" allow group in Power Platform '
+        + 'admin centre, is registered as a management application (New-PowerAppManagementApp), and holds '
+        + 'the Power Platform Administrator role required for admin-scope operations.';
+  }
 }

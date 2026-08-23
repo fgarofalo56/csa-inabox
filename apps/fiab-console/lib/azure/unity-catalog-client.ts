@@ -453,6 +453,45 @@ export async function listMetastoresFromWorkspace(host: string): Promise<UCMetas
   }));
 }
 
+/**
+ * Describe a per-workspace federation failure using ONLY what the code
+ * established (#3841 / deploy-integrity R7).
+ *
+ * The previous copy hard-coded the word "unreachable" into every row — for a
+ * 403, a 404, a 501 honest gate and a JSON parse failure alike — while
+ * interpolating `e.status` right beside it, so a denial rendered as
+ * "(workspace X unreachable: 403 …)". That is self-contradictory: an HTTP
+ * status IS proof the server was reached and answered. In Gov, where Databricks
+ * Unity Catalog does not exist and Loom Unity IS the catalog story
+ * (cloud-parity.md), that false claim pointed the next investigator at
+ * networking while the container was Healthy with a connected replica.
+ *
+ * "unreachable" is now reserved for the ONE case that actually earns it: a
+ * throw carrying no HTTP status at all (DNS failure, ECONNREFUSED, TLS abort,
+ * client-side timeout) — i.e. we never got an answer.
+ *
+ * The underlying `e.message` is ALWAYS preserved verbatim. Callers regex it —
+ * `app/api/catalog/metastores/route.ts` tests /account.?admin/i on this string
+ * to raise the account-admin gate — so dropping it would silently disable that
+ * gate.
+ */
+export function describeWorkspaceFailure(host: string, e: unknown): string {
+  const err = e as { status?: number; message?: string; name?: string } | null;
+  const status = Number(err?.status ?? 0);
+  const msg = err?.message ?? 'error';
+  if (!Number.isFinite(status) || status <= 0) {
+    // No status: the request never produced an HTTP response.
+    return `(workspace ${host} unreachable — no HTTP response: ${msg})`;
+  }
+  const verb =
+    status === 401 || status === 403 ? 'denied access'
+      : status === 404 ? 'answered 404 (path or metastore not found)'
+        : status === 501 ? 'reported an unsupported operation'
+          : status >= 500 ? 'returned a server error'
+            : 'rejected the request';
+  return `(workspace ${host} responded ${status} — ${verb}: ${msg})`;
+}
+
 /** Federated metastore list across every workspace the console knows about.
  *  Dedupes by `metastore_id` so a metastore attached to multiple workspaces
  *  is returned once; the `workspace_hostname` field reports the first
@@ -472,7 +511,7 @@ export async function listAllMetastores(): Promise<UCMetastore[]> {
       // 500. The id is namespaced with ERROR_ so callers can branch.
       seen.set(`ERROR_${host}`, {
         metastore_id: `ERROR_${host}`,
-        name: `(workspace ${host} unreachable: ${e?.status ?? '?'} ${e?.message ?? 'error'})`,
+        name: describeWorkspaceFailure(host, e),
         workspace_hostname: host,
       });
     }
