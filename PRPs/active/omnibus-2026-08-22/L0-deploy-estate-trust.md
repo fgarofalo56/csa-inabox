@@ -51,7 +51,8 @@ These are measured, not theoretical. Each one has already cost this repo real ti
 
 - `gh run view --log-failed` returns post-job CLEANUP for some runs, not the error. Pull the full log and grep the step.
 - In a full log, `::error::` lines prefixed with ESC[36;1m are the shell ECHOING script source, not emitted errors. Only unprefixed lines are real.
-- A preflight must precede the first step that READS a resource, not the first that WRITES it — that is exactly how #3449 stayed broken for 6 daily runs with its fix already merged (fixed in PR #3880).
+- A preflight must precede the first step that READS a resource, not the first that WRITES it — that is exactly how #3449 stayed broken for **9** consecutive runs (**not 6** — re-measured 2026-08-22). Its ordering fix is **PR #3880, merged 2026-08-22T20:06:18Z**; #3888 (merged 2026-08-23T03:21:31Z) carried the same preflight onto the remaining lanes. **Both are merged, NOT deployed** — #3449 stays open until a Gov Actions run proves it on an estate (`deploy-integrity.md` R2). Do not restate this as "fixed".
+- **Before acting on any count or lane-state in this document, read `triage/WAVE0-verdicts-2026-08-22.md`.** The Wave 0 triage pass re-measured this lane and corrected several claims here, including the one immediately above (§1), the deploy-lane health table (§2), and the IL5 ADX-preflight recommendation it later withdrew (§7 item 3). It also records **7 stale** and **1 already-fixed** issue in L0's 62 (§3).
 - The compiled ARM template is a SECOND artifact: main.bicep is inert until main.json is rebuilt.
 - Gov evidence comes only from Actions runs. Local `az` is a different tenant.
 
