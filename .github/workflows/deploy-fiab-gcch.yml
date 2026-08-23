@@ -484,6 +484,72 @@ jobs:
       # something it did not establish is deploy-integrity.md R7 applied to the
       # artifact people actually read. `Adopt the image tags…` above is now the
       # single writer that feeds this preview, the preflights and the apply.
+      # ── ADX MUST BE RUNNING BEFORE WHAT-IF **AND** THE APPLY (#3754, #3449) ──
+      # admin-plane/adx-cluster.bicep declares two
+      # `Microsoft.Kusto/clusters/principalAssignments` children (the Console
+      # UAMI's AllDatabasesAdmin and the Activator's AllDatabasesViewer). Those
+      # are ADX DATA-plane roles, so the Kusto RP must reach the engine to write
+      # them — and on a stopped cluster it cannot. Run 32126019475 and every run
+      # since died on exactly that leaf:
+      #
+      #   ClusterNotValidForPrincipals on 'adx-csa-loom-fmezxj/console-uami-alldatabasesadmin':
+      #   [BadRequest] Cluster is in state 'Stopped', cannot retrieve list of principals
+      #
+      # ORDERING — why this sits ABOVE `Bicep what-if` (#3449). This step landed
+      # in #3779 placed just before `Provision`, which is where "the apply" is.
+      # But `az deployment sub what-if` EVALUATES those same principalAssignment
+      # leaves, so it hits ClusterNotValidForPrincipals first and exits 1 — and
+      # this preflight, six steps below it, never ran at all. The remediation was
+      # correct and unreachable: deploy-fiab-gcch failed 6/6 daily scheduled runs
+      # (2026-08-17 → 2026-08-22, latest head 2ea8252e) with the script present
+      # and wired the whole time. Preflight must precede the first thing that
+      # reads the resource, not the first thing that writes it.
+      #
+      # WHY START IT RATHER THAN SKIP THE GRANTS. Skipping would turn a loud
+      # failure into a silent one — a green deploy with a Console UAMI holding no
+      # ADX rights, and every Eventhouse / KQL surface in the boundary failing
+      # later with a permission error nobody could trace back here.
+      # auto-bind-by-default.md §5 and deploy-integrity.md R6 both say the
+      # platform performs a remediation it is capable of; starting a cluster it
+      # already owns is squarely that. gcc-high.bicepparam sets `adxEnabled =
+      # true`, so a stopped cluster is ALSO a live capability gap in this
+      # boundary, independent of the deploy. `enableAutoStop: true` on the
+      # cluster caps the cost: Azure stops it again once it idles.
+      #
+      # It runs on the same trigger as the apply, so a whatif-only DRY RUN — a
+      # run that by definition applies nothing — never mutates the estate. That
+      # condition is deliberately UNCHANGED by the move, and it leaves one known
+      # residual: a dry run against a stopped cluster still fails what-if. That
+      # is the correct trade — starting a cluster is a mutation, and a dry run
+      # must not mutate. Every failing run in #3449 is a `schedule` run, which
+      # this condition covers.
+      #
+      # deploy-fiab-commercial carries the IDENTICAL latent failure with no such
+      # preflight (adxEnabled=true + the same unconditional enableAutoStop), and
+      # is deliberately NOT changed here: it is the only working infra-deploy
+      # path in the repo and destabilising it to pre-empt a latent fault would
+      # trade one P0 for a worse one. Tracked in #3786.
+      - name: ADX preflight — a stopped cluster cannot take its principal assignments
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys no admin plane, so it declares no principal
+          # assignments on the hub cluster and has nothing to start.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret; it is empty."
+            exit 1
+          fi
+          node scripts/ci/ensure-adx-cluster-running.mjs \
+            --subscription "$DEPLOY_SUB" \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       - name: Bicep what-if
         run: |
           az deployment sub what-if \
@@ -619,57 +685,6 @@ jobs:
           fi
           node scripts/ci/assert-no-silent-image-tag-revert.mjs \
             --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
-            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
-
-      # ── ADX MUST BE RUNNING BEFORE THE APPLY (#3754) ──────────────────────
-      # admin-plane/adx-cluster.bicep declares two
-      # `Microsoft.Kusto/clusters/principalAssignments` children (the Console
-      # UAMI's AllDatabasesAdmin and the Activator's AllDatabasesViewer). Those
-      # are ADX DATA-plane roles, so the Kusto RP must reach the engine to write
-      # them — and on a stopped cluster it cannot. Run 32126019475 and every run
-      # since died on exactly that leaf:
-      #
-      #   ClusterNotValidForPrincipals on 'adx-csa-loom-fmezxj/console-uami-alldatabasesadmin':
-      #   [BadRequest] Cluster is in state 'Stopped', cannot retrieve list of principals
-      #
-      # WHY START IT RATHER THAN SKIP THE GRANTS. Skipping would turn a loud
-      # failure into a silent one — a green deploy with a Console UAMI holding no
-      # ADX rights, and every Eventhouse / KQL surface in the boundary failing
-      # later with a permission error nobody could trace back here.
-      # auto-bind-by-default.md §5 and deploy-integrity.md R6 both say the
-      # platform performs a remediation it is capable of; starting a cluster it
-      # already owns is squarely that. gcc-high.bicepparam sets `adxEnabled =
-      # true`, so a stopped cluster is ALSO a live capability gap in this
-      # boundary, independent of the deploy. `enableAutoStop: true` on the
-      # cluster caps the cost: Azure stops it again once it idles.
-      #
-      # It runs on the same trigger as the apply, so a whatif-only DRY RUN — a
-      # run that by definition applies nothing — never mutates the estate.
-      #
-      # deploy-fiab-commercial carries the IDENTICAL latent failure with no such
-      # preflight (adxEnabled=true + the same unconditional enableAutoStop), and
-      # is deliberately NOT changed here: it is the only working infra-deploy
-      # path in the repo and destabilising it to pre-empt a latent fault would
-      # trade one P0 for a worse one. Tracked in #3786.
-      - name: ADX preflight — a stopped cluster cannot take its principal assignments
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
-        env:
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
-        run: |
-          set -euo pipefail
-          # dlz-attach deploys no admin plane, so it declares no principal
-          # assignments on the hub cluster and has nothing to start.
-          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
-            echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
-            exit 0
-          fi
-          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
-          if [ -z "$DEPLOY_SUB" ]; then
-            echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret; it is empty."
-            exit 1
-          fi
-          node scripts/ci/ensure-adx-cluster-running.mjs \
-            --subscription "$DEPLOY_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       - name: Provision (with full Gov dispatch)
