@@ -251,6 +251,19 @@ function outOfTree(prefix) {
  * whole temp "repo" for a guard that IS location-derived.
  */
 function writeMutantOutsideTheTree(text, basename) {
+  // The mutant carries the subject's REAL basename. mkdtemp already guarantees
+  // a fresh directory, so the old `*.__control__.mjs` rename bought nothing and
+  // cost fidelity: a subject that identifies itself by entry-path basename —
+  // `process.argv[1].endsWith('<name>.mjs')`, the shape 109 files in this
+  // directory use — would take a DIFFERENT branch in the mutant than it takes
+  // when it ships, and the two arms would then differ by the rename as well as
+  // by the mutation. Pinned rather than left to the call site, because the call
+  // site is exactly where a helpful-looking `.__control__` suffix comes back.
+  assert.equal(
+    basename,
+    path.basename(SCRIPT),
+    `the mutant must be written under the subject's real basename (${path.basename(SCRIPT)}), not ${basename}`,
+  );
   const rewritten = text.replace(REL_SPECIFIER, (_m, kw, gap, q, spec) => {
     const abs = path.resolve(CI_DIR, spec);
     assert.ok(fs.existsSync(abs), `the control rewrote \`${spec}\` to ${abs}, which does not exist`);
@@ -285,35 +298,61 @@ function writeMutantOutsideTheTree(text, basename) {
 }
 
 /**
- * Every way an ES module can derive a path from its OWN location.
+ * The self-location family: constructs whose value depends on WHERE the module
+ * being executed sits, or on what path it was invoked by.
  *
- * Keyed to the SHAPE — the whole `import.meta` property-access family — not to
- * a list of spellings. The list it replaces was `/import\.meta\.url|__dirname/`,
- * and `import.meta.dirname` matches NEITHER alternative. Measured, with the old
- * pattern restored and the CONTROL test run in isolation: a subject given
- * `const SELF_DIR = import.meta.dirname;` left it at RC=0, pass=1, fail=0 —
- * fully blind. With this pattern the same mutation is RC=1, pass=0, fail=1, and
- * so are the `new URL('.', import.meta.url)` and `import.meta.filename`
- * spellings.
+ * Keyed to SHAPES, not to a list of spellings. The list it replaces was
+ * `/import\.meta\.url|__dirname/`, and `import.meta.dirname` matched NEITHER
+ * alternative. Measured, with that old pattern restored and the CONTROL test run
+ * in isolation: a subject given `const SELF_DIR = import.meta.dirname;` left it
+ * at RC=0, pass=1, fail=0 — fully blind.
  *
- * That spelling is not hypothetical. `import.meta.dirname` / `.filename` appear
- * 12 times across 4 files under `scripts/ci` — including the production script
- * `deploy-retry.mjs:328`, whose own comment gives the rationale ("resolved from
- * this module rather than `process.cwd()`"). It is the idiom of this directory,
- * so it is the spelling a future edit is MOST likely to reach for.
+ * ── WHY `process.argv[1]` IS IN HERE, AND WHAT THAT COST TO LEARN ──────────
+ * An earlier revision of this comment claimed the pattern covered "every way an
+ * ES module can derive a path from its OWN location". It did not, and the claim
+ * was the R7 error this file exists to catch. `process.argv[1]` is the entry
+ * path — it is self-location by another name, it is the DOMINANT idiom in this
+ * directory (measured this session: 109 files under `scripts/ci` contain it,
+ * against 6 containing `import.meta.dirname`/`.filename`), and the old pattern
+ * could not see it. Measured with the same structural insertion into each
+ * subject, differing only in spelling: `import.meta.dirname` -> RC=1, whereas
+ * `process.argv[1]` -> RC=0, 6/6 green.
  *
- * Matching `import.meta` wholesale rather than named properties also covers
- * `import.meta.resolve()` and whatever Node adds to `import.meta` next. No `\b`
- * anywhere on purpose: over-matching costs a loud, trivially-fixed red, and
- * under-matching is the failure this pattern exists to stop.
+ * NOT keyed to `.dirname(process.argv[1])` or any other narrower combination:
+ * the whole point of the miss above is that a shape list written from the uses
+ * one happens to have seen is the thing that goes blind.
  */
-const LOCATION_DERIVED = /import\.meta|__dirname|__filename/;
+const LOCATION_DERIVED = /import\.meta|__dirname|__filename|process\.argv\s*\[\s*1\s*\]/;
+
+/**
+ * Every CODE line of `source` that carries a self-location construct.
+ *
+ * Line-scoped, and whole-line comments are dropped, because a comment cannot
+ * execute: `deploy-fiab-guard.mjs:92` MENTIONS `process.argv[1]` inside a block
+ * comment explaining a resolver, and a whole-file `match()` cannot tell that
+ * from a live read. Matching the file wholesale would have made this assertion
+ * red on a subject that derives nothing — which is how a correct widening gets
+ * reverted.
+ *
+ * Deliberately a line heuristic and not a parser. It errs STRICT in the one
+ * direction that matters: a trailing `// …process.argv[1]…` on a line that also
+ * carries code is still reported, because that line is code. The only thing it
+ * cannot see is a construct spread across lines, which no shape here is.
+ */
+function selfLocationHits(source) {
+  const hits = [];
+  for (const line of source.split(/\r?\n/)) {
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
+    if (LOCATION_DERIVED.test(line)) hits.push(line.trim());
+  }
+  return hits;
+}
 
 test('EMBEDDED CONTROL — the location-independence pattern sees every spelling', () => {
-  // POPULATION. On a clean tree the assertion in the CONTROL test below is a
-  // doesNotMatch against a subject that contains none of these, so it cannot
-  // move and on its own proves nothing about what the pattern can SEE. These
-  // fixtures are its population.
+  // POPULATION. On a clean tree the assertion in the CONTROL test below compares
+  // selfLocationHits() against an EMPTY list, so it cannot move and on its own
+  // proves nothing about what the pattern can SEE. These fixtures are its
+  // population: 7 positive shapes, 3 negatives, 2 comment-placement cases.
   for (const shape of [
     "const SELF_DIR = new URL('.', import.meta.url).pathname;",
     'const SELF_DIR = import.meta.dirname;',
@@ -321,16 +360,31 @@ test('EMBEDDED CONTROL — the location-independence pattern sees every spelling
     "const SIB = import.meta.resolve('./x.mjs');",
     "const d = require('path').dirname(__filename);",
     'const here = __dirname;',
+    // The spelling the old pattern was blind to, in the two forms this
+    // directory actually writes it.
+    "const invoked = process.argv[1] && process.argv[1].endsWith('x.mjs');",
+    'const selfDir = path.dirname(process.argv [ 1 ]);',
   ]) {
-    assert.match(shape, LOCATION_DERIVED, `the pattern is blind to: ${shape}`);
+    assert.deepEqual(selfLocationHits(shape), [shape], `the pattern is blind to: ${shape}`);
   }
   for (const safe of [
     'const root = process.cwd();',
     "const p = path.resolve('a', 'b');",
     'const importantMetadata = 1;',
+    "const flag = process.argv.includes('--check');",
+    'const rest = process.argv[2];',
   ]) {
-    assert.doesNotMatch(safe, LOCATION_DERIVED, `the pattern over-matches: ${safe}`);
+    assert.deepEqual(selfLocationHits(safe), [], `the pattern over-matches: ${safe}`);
   }
+
+  // Comment placement, both directions — this is the half that can silently
+  // turn the whole assertion into a no-op if the line filter is widened.
+  assert.deepEqual(selfLocationHits(' * that mis-resolves `process.argv[1]` would break it'), [],
+    'a whole-line block comment must NOT be reported — that is deploy-fiab-guard.mjs:92');
+  assert.deepEqual(selfLocationHits('// const here = __dirname;'), [],
+    'a whole-line // comment must NOT be reported');
+  assert.deepEqual(selfLocationHits('const here = __dirname; // still code'), ['const here = __dirname; // still code'],
+    'a CODE line with a trailing comment must still be reported — the filter must not read it as a comment line');
 });
 
 test('EMBEDDED CONTROL — the containment check is not fooled by case or a sibling prefix', () => {
@@ -376,14 +430,18 @@ test('CONTROL — re-hardcoding the binary makes the measurement MOVE', () => {
   // arms for a reason that is not the mutation. It derives nothing today; this
   // pins that rather than assuming it. cwd is not in this set on purpose —
   // runGuard() passes `cwd: REPO` to every arm, so a cwd-derived path is
-  // identical either way.
-  assert.doesNotMatch(
-    original,
-    LOCATION_DERIVED,
-    'deploy-fiab-guard.mjs now derives a path from its own location, so a copy running from a temp directory '
-      + 'is no longer the same subject and this control would be measuring something else. Give the copy the '
-      + 'same root (see check-licenses-cannot-run.test.mjs) — do NOT move it back into scripts/ci, which a '
-      + 'concurrent suite scans.',
+  // identical either way. `process.argv[1]` IS in the set: this arm SPAWNS the
+  // mutant, so argv[1] is the temp path here and the tracked path in the
+  // shipped run. The mutant carrying the subject's real BASENAME (asserted in
+  // writeMutantOutsideTheTree) narrows that difference to the directory, but it
+  // does not erase it, so an argv[1] read still has to fail here.
+  assert.deepEqual(
+    selfLocationHits(original),
+    [],
+    'deploy-fiab-guard.mjs now derives a path from its own location (the line(s) reported above), so a copy '
+      + 'running from a temp directory is no longer the same subject and this control would be measuring '
+      + 'something else. Give the copy the same root (see check-licenses-cannot-run.test.mjs) — do NOT move it '
+      + 'back into scripts/ci, which a concurrent suite scans.',
   );
 
   const nl = original.includes('\r\n') ? '\r\n' : '\n';
@@ -392,7 +450,7 @@ test('CONTROL — re-hardcoding the binary makes the measurement MOVE', () => {
   assert.ok(at >= 0, 'the mutation did not apply — the resolver line was not found, so this control proves NOTHING');
   lines[at] = "  return 'az'; // MUTATED BY THE CONTROL";
 
-  const { dir, file } = writeMutantOutsideTheTree(lines.join(nl), 'deploy-fiab-guard.__control__.mjs');
+  const { dir, file } = writeMutantOutsideTheTree(lines.join(nl), 'deploy-fiab-guard.mjs');
   try {
     const r = runGuard({ LOOM_AZ_BIN: FAKE_AZ }, file);
     assert.match(r.out, /hub-count query failed/, `the mutant never attempted a query:\n${r.out}`);

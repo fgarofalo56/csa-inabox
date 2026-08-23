@@ -257,7 +257,34 @@ test('the drift gate FAILS when the generated map is stale', () => {
     let r = run();
     assert.equal(r.status, 0, `the generator failed on the fixture:\n${r.stdout}${r.stderr}`);
     const dts = path.join(fixture, 'lib', 'api-routes.generated.d.ts');
-    assert.ok(fs.existsSync(dts), 'the generator wrote nothing into the fixture — it is still pointed at the real tree');
+
+    //    READ it — do not existsSync() it and write it later.
+    //
+    //    `existsSync(dts)` here plus `writeFileSync(dts, …)` below is a
+    //    check-then-use on one path across two spawns: CodeQL js/file-system-race
+    //    (alert 982, high, on this PR's merge ref), and a HONEST one rather than
+    //    a false positive to dismiss. This suite exists because a sibling suite
+    //    raced a file between a listing and a read; asserting a path exists and
+    //    then acting on it two subprocesses later is that same shape one level
+    //    down, in the file whose header argues the point. Dismissing the alert
+    //    would have been the cheaper move and the wrong one.
+    //
+    //    The read is its own existence proof and carries the same information:
+    //    a generator still pointed at the real tree wrote nothing here, so this
+    //    throws ENOENT — the exact condition the assertion reported — with no
+    //    window between establishing the fact and relying on it. `--check` does
+    //    not write (it process.exit()s at generate-client-route-map.mjs:248,
+    //    before the two writeFileSync calls at :263-264), so reading BEFORE the
+    //    positive control below sees the same bytes step 3 mutates.
+    let original;
+    try {
+      original = fs.readFileSync(dts, 'utf8');
+    } catch (err) {
+      assert.fail(
+        'the generator wrote nothing into the fixture — it is still pointed at the real tree '
+          + `(${err.code} reading ${dts})`,
+      );
+    }
 
     // 2. POSITIVE CONTROL, which the in-place version of this test never had:
     //    --check must be GREEN on what it just wrote. Without it, step 3's red
@@ -275,7 +302,6 @@ test('the drift gate FAILS when the generated map is stale', () => {
     //    the proof was broken — `--check` normalises line endings before
     //    comparing (`norm`), which is exactly why the drift gate itself stayed
     //    green on the same tree.
-    const original = fs.readFileSync(dts, 'utf8');
     const mutated = original.replace(/ {2}\| '\/api\/loom\/probe050'\r?\n/, '');
 
     //    The mutation must be CONFIRMED, not assumed. A mutation-based proof

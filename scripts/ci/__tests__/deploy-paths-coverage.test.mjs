@@ -124,20 +124,14 @@ test('CONTROL: `node -e` and a node path outside the source roots are NOT deploy
 const REL_SPECIFIER = /\b(from|import)(\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\3/g;
 
 /**
- * Every way an ES module can derive a path from its OWN location.
+ * The self-location family: constructs whose value depends on WHERE the module
+ * being executed sits, or on what path it was invoked by.
  *
- * Keyed to the SHAPE — the whole `import.meta` property-access family — not to
- * a list of spellings. The list it replaces was `/import\.meta\.url|__dirname/`,
- * and `import.meta.dirname` matches NEITHER alternative. Measured, with the old
- * pattern restored and the two-arm control run in isolation: a subject given
- * `const SELF_DIR = import.meta.dirname;` left it at RC=0, pass=1, fail=0 —
- * fully blind. With this pattern the same mutation is RC=1, pass=0, fail=1.
- *
- * That spelling is not hypothetical. `import.meta.dirname` / `.filename` appear
- * 12 times across 4 files under `scripts/ci` — including the production script
- * `deploy-retry.mjs:328`, whose own comment gives the rationale ("resolved from
- * this module rather than `process.cwd()`"). It is the idiom of this directory,
- * so it is the spelling a future edit is MOST likely to reach for.
+ * Keyed to SHAPES, not to a list of spellings. The list it replaces was
+ * `/import\.meta\.url|__dirname/`, and `import.meta.dirname` matched NEITHER
+ * alternative. Measured, with that old pattern restored and the two-arm control
+ * run in isolation: a subject given `const SELF_DIR = import.meta.dirname;` left
+ * it at RC=0, pass=1, fail=0 — fully blind.
  *
  * And the blindness was harmful here, not cosmetic: a location-derived flag
  * added to check-deploy-paths-coverage.mjs via `import.meta.dirname` made the
@@ -145,12 +139,64 @@ const REL_SPECIFIER = /\b(from|import)(\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\3/g;
  * in-tree returned one uncovered row, the temp copy returned none — which is
  * precisely the confound this assertion exists to prevent.
  *
- * Matching `import.meta` wholesale rather than named properties also covers
- * `import.meta.resolve()` and whatever Node adds to `import.meta` next. No `\b`
- * anywhere on purpose: over-matching costs a loud, trivially-fixed red, and
- * under-matching is the failure this pattern exists to stop.
+ * ── WHY `process.argv[1]` IS IN HERE, AND WHAT THAT COST TO LEARN ──────────
+ * An earlier revision of this comment claimed the pattern covered "every way an
+ * ES module can derive a path from its OWN location". It did not, and the claim
+ * was the R7 error this file exists to catch. `process.argv[1]` is the entry
+ * path — self-location by another name, and the DOMINANT idiom in this
+ * directory: measured this session, 109 files under `scripts/ci` contain it
+ * against 6 containing `import.meta.dirname`/`.filename`. Worse, the SUBJECT OF
+ * THIS VERY CONTROL is one of the 109 (see SELF_LOCATION_ALLOWED below), so the
+ * old assertion was green over a live counterexample, which is the strongest
+ * possible statement that it was not watching.
+ *
+ * NOT keyed to `.dirname(process.argv[1])` or any other narrower combination:
+ * the whole point of the miss above is that a shape list written from the uses
+ * one happens to have seen is the thing that goes blind.
  */
-const LOCATION_DERIVED = /import\.meta|__dirname|__filename/;
+const LOCATION_DERIVED = /import\.meta|__dirname|__filename|process\.argv\s*\[\s*1\s*\]/;
+
+/**
+ * Every CODE line of `source` that carries a self-location construct.
+ *
+ * Line-scoped, and whole-line comments are dropped, because a comment cannot
+ * execute — `deploy-fiab-guard.mjs:92` MENTIONS `process.argv[1]` inside a block
+ * comment, and a whole-file `match()` cannot tell that from a live read.
+ *
+ * Deliberately a line heuristic and not a parser. It errs STRICT in the one
+ * direction that matters: a trailing `// …` on a line that also carries code is
+ * still reported, because that line is code.
+ */
+function selfLocationHits(source) {
+  const hits = [];
+  for (const line of source.split(/\r?\n/)) {
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
+    if (LOCATION_DERIVED.test(line)) hits.push(line.trim());
+  }
+  return hits;
+}
+
+/**
+ * The ONE self-location read check-deploy-paths-coverage.mjs genuinely makes,
+ * declared by its exact source text rather than tolerated by a loosened pattern.
+ *
+ * WHY IT IS SAFE, stated as the thing that must stay true rather than as a
+ * hope: it is a BASENAME comparison, not a directory derivation, and the mutant
+ * is written under the subject's real basename (asserted in
+ * writeMutantOutsideTheTree). So `endsWith(...)` returns the same answer for
+ * both arms wherever the file sits. It is also inert for this control's
+ * invocation mode — the mutant is `import()`ed, so `process.argv[1]` is the
+ * node:test runner either way and `invokedDirectly` is false in both arms —
+ * but that second reason is NOT the one being relied on, because an arm that
+ * later switches to a spawn would silently lose it.
+ *
+ * Pinned as exact text, so ANY edit to that line — including one that turns the
+ * basename test into a `path.dirname()` — drops out of the allowance and turns
+ * the assertion red rather than being waved through by a substring match.
+ */
+const SELF_LOCATION_ALLOWED = [
+  "const invokedDirectly = process.argv[1] && process.argv[1].endsWith('check-deploy-paths-coverage.mjs');",
+];
 
 /**
  * Is `target` inside the repo tree?
@@ -212,10 +258,11 @@ function outOfTree(prefix) {
 }
 
 test('EMBEDDED CONTROL — the location-independence pattern sees every spelling', () => {
-  // POPULATION. On a clean tree the assertion in the two-arm control below is a
-  // doesNotMatch against a subject that contains none of these, so it cannot
-  // move and on its own proves nothing about what the pattern can SEE. These
-  // fixtures are its population.
+  // POPULATION. On a clean tree the assertion in the two-arm control below
+  // compares selfLocationHits() against a ONE-entry allowance, so it can only
+  // move if that one line changes and proves almost nothing about what the
+  // pattern can SEE. These fixtures are its population: 8 positive shapes, 5
+  // negatives, 3 comment-placement cases.
   for (const shape of [
     "const SELF_DIR = new URL('.', import.meta.url).pathname;",
     'const SELF_DIR = import.meta.dirname;',
@@ -223,16 +270,43 @@ test('EMBEDDED CONTROL — the location-independence pattern sees every spelling
     "const SIB = import.meta.resolve('./x.mjs');",
     "const d = require('path').dirname(__filename);",
     'const here = __dirname;',
+    // The spelling the old pattern was blind to, in the two forms this
+    // directory actually writes it.
+    "const invoked = process.argv[1] && process.argv[1].endsWith('x.mjs');",
+    'const selfDir = path.dirname(process.argv [ 1 ]);',
   ]) {
-    assert.match(shape, LOCATION_DERIVED, `the pattern is blind to: ${shape}`);
+    assert.deepEqual(selfLocationHits(shape), [shape], `the pattern is blind to: ${shape}`);
   }
   for (const safe of [
     'const root = process.cwd();',
     "const p = path.resolve('a', 'b');",
     'const importantMetadata = 1;',
+    "const flag = process.argv.includes('--check');",
+    'const rest = process.argv[2];',
   ]) {
-    assert.doesNotMatch(safe, LOCATION_DERIVED, `the pattern over-matches: ${safe}`);
+    assert.deepEqual(selfLocationHits(safe), [], `the pattern over-matches: ${safe}`);
   }
+
+  // Comment placement, both directions — this is the half that can silently
+  // turn the whole assertion into a no-op if the line filter is widened.
+  assert.deepEqual(selfLocationHits(' * that mis-resolves `process.argv[1]` would break it'), [],
+    'a whole-line block comment must NOT be reported — that is deploy-fiab-guard.mjs:92');
+  assert.deepEqual(selfLocationHits('// const here = __dirname;'), [],
+    'a whole-line // comment must NOT be reported');
+  assert.deepEqual(selfLocationHits('const here = __dirname; // still code'), ['const here = __dirname; // still code'],
+    'a CODE line with a trailing comment must still be reported — the filter must not read it as a comment line');
+
+  // The allowance must stay a BASENAME test. If someone rewrites that line into
+  // a directory derivation, the exact-text pin below drops it out of the
+  // allowance — but pin the property here too, so the reason the allowance
+  // exists is asserted rather than merely written down above it.
+  assert.equal(SELF_LOCATION_ALLOWED.length, 1, 'the allowance is meant to hold exactly one declared line');
+  assert.match(SELF_LOCATION_ALLOWED[0], /\.endsWith\(/, 'the allowed read must be a basename comparison');
+  assert.doesNotMatch(
+    SELF_LOCATION_ALLOWED[0],
+    /dirname|resolve|join|relative/,
+    'the allowed read must NOT build a directory from argv[1] — that would differ between the arms',
+  );
 });
 
 test('EMBEDDED CONTROL — the containment check is not fooled by case or a sibling prefix', () => {
@@ -303,6 +377,20 @@ test('EMBEDDED CONTROL — the containment check is not fooled by case or a sibl
  * per run removes that trap for anyone adding a second mutant here.
  */
 function writeMutantOutsideTheTree(text, basename) {
+  // The mutant carries the subject's REAL basename. mkdtemp already guarantees
+  // a fresh directory, so the old `*.__control__.mjs` rename bought nothing and
+  // cost fidelity — and here it costs it MEASURABLY: the subject's own
+  // `invokedDirectly` line (SELF_LOCATION_ALLOWED) tests
+  // `process.argv[1].endsWith('check-deploy-paths-coverage.mjs')`, which a
+  // renamed mutant would answer differently from the shipped file the moment
+  // this arm switched from import() to a spawn. Pinned rather than left to the
+  // call site, because the call site is exactly where a helpful-looking
+  // `.__control__` suffix comes back.
+  assert.equal(
+    basename,
+    'check-deploy-paths-coverage.mjs',
+    `the mutant must be written under the subject's real basename, not ${basename}`,
+  );
   const rewritten = text.replace(REL_SPECIFIER, (_m, kw, gap, q, spec) => {
     const abs = path.resolve(CI_DIR, spec);
     assert.ok(existsSync(abs), `the control rewrote \`${spec}\` to ${abs}, which does not exist`);
@@ -348,13 +436,19 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
   // so anything this guard derived from its OWN location would differ between
   // the arms for a reason that is not the mutation. `process.cwd()` is not in
   // this set on purpose: an in-process import does not change cwd.
-  assert.doesNotMatch(
-    original,
-    LOCATION_DERIVED,
-    'check-deploy-paths-coverage.mjs now derives a path from its own location, so a copy loaded from a temp '
-      + 'directory is no longer the same subject and this control would be measuring something else. Give the '
-      + 'copy the same root (see check-licenses-cannot-run.test.mjs) — do NOT move it back into scripts/ci, '
-      + 'which a concurrent suite scans.',
+  //
+  // This is an EQUALITY against a declared allowance, not a doesNotMatch: the
+  // subject genuinely makes one self-location read, and the honest handling is
+  // to name it and say why it is safe (SELF_LOCATION_ALLOWED) rather than to
+  // choose a pattern that cannot see it. A SECOND read, or an edit to that one
+  // line, fails here.
+  assert.deepEqual(
+    selfLocationHits(original),
+    SELF_LOCATION_ALLOWED,
+    'check-deploy-paths-coverage.mjs now derives a path from its own location beyond the one declared, safe '
+      + 'basename read, so a copy loaded from a temp directory is no longer the same subject and this control '
+      + 'would be measuring something else. Give the copy the same root (see check-licenses-cannot-run.test.mjs) '
+      + '— do NOT move it back into scripts/ci, which a concurrent suite scans.',
   );
 
   const nl = original.includes('\r\n') ? '\r\n' : '\n';
@@ -366,7 +460,7 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
   assert.ok(at >= 0, "the mutation did not apply — no `add(m[1], 'node')` call found, so this control proves NOTHING");
   lines[at] = '      // MUTATED BY THE CONTROL — node sources dropped on the floor';
 
-  const { dir, file } = writeMutantOutsideTheTree(lines.join(nl), 'check-deploy-paths-coverage.__control__.mjs');
+  const { dir, file } = writeMutantOutsideTheTree(lines.join(nl), 'check-deploy-paths-coverage.mjs');
   try {
     const old = await import(pathToFileURL(file).href);
 

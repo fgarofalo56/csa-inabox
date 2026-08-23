@@ -63,6 +63,61 @@ const VANISH_BUDGET = 2;
 const vanished = [];
 
 /**
+ * The control-artifact FAMILY.
+ *
+ * `__control`, NOT `__control__`. That single missing pair of underscores is why
+ * this PR's own receipt — "0 `__control__` mentions in three full runs" — was
+ * structurally incapable of seeing the writer that is still live:
+ * `deploy-target-subscription.test.mjs` names its copy
+ * `deploy-fiab-guard.__control_${Math.random().toString(36).slice(2)}__.mjs`,
+ * and `'…__control_a8cubozkz6q__.mjs'.includes('__control__')` is FALSE. A
+ * verification that cannot match the thing it is verifying reports a clean run
+ * over a defect. Key on the family; never on one spelling of it.
+ */
+const CONTROL_FAMILY = /__control/;
+
+/**
+ * Transient in-tree artifacts a KNOWN suite writes, declared by exact basename
+ * shape and attributed to the writer.
+ *
+ * This list is an ADMISSION, not an allowance to grow. Every entry is a suite
+ * that still writes into a tree this scan walks, i.e. still the #3459/#3892
+ * class. It exists so that a vanish from a NEW writer fails immediately instead
+ * of being absorbed by VANISH_BUDGET, which the entry below already saturates:
+ * that suite has 2 call sites per run and the budget is 2, so today there is
+ * ZERO headroom for anything else before the budget assertion trips.
+ *
+ * Known rot risk, stated: nothing here forces an entry to be REMOVED once its
+ * writer is fixed. A stale entry silently re-widens the tolerance. Delete the
+ * entry in the same PR that fixes the writer.
+ */
+const DECLARED_TRANSIENT = [
+  {
+    re: /^deploy-fiab-guard\.__control_[a-z0-9]+__\.mjs$/i,
+    by: 'scripts/ci/__tests__/deploy-target-subscription.test.mjs:262 (pre-existing on main; NOT fixed by #3912)',
+  },
+];
+
+/**
+ * Vanished paths that look like a test control artifact and are NOT declared.
+ *
+ * Pure, so it can be driven by fixtures — on a clean run `vanished` is empty and
+ * the assertion that uses this has population ZERO, which is the failure this
+ * repo keeps rediscovering. Entries arrive as `${path} (${CODE})`, so the code
+ * suffix is stripped before the basename is taken.
+ */
+function undeclaredControlArtifacts(paths) {
+  const out = [];
+  for (const entry of paths) {
+    const base = entry.replace(/\s+\([A-Z]+\)$/, '').replace(/^.*[\\/]/, '');
+    if (!CONTROL_FAMILY.test(base)) continue;
+    if (DECLARED_TRANSIENT.some((d) => d.re.test(base))) continue;
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
  * scan() the real repo, tolerating a file that disappeared between the
  * directory listing and the read.
  *
@@ -837,10 +892,61 @@ test('the repo scan absorbed at most a couple of vanished files, and names them'
   assert.ok(
     vanished.length <= VANISH_BUDGET,
     `${vanished.length} file(s) went unreadable mid-scan, over a budget of ${VANISH_BUDGET}. The EXPECTED `
-      + 'value is ZERO: the two suites that used to write a transient `*.__control__.mjs` into scripts/ci now '
-      + 'write it to a temp directory. More than a couple means something is writing into a scanned tree '
-      + 'again — fix that, do NOT raise the budget:'
+      + 'value is ZERO. Two of the three suites that wrote a transient `*.__control__.mjs` into scripts/ci now '
+      + 'write it to a temp directory; the third — deploy-target-subscription.test.mjs — still does not, and '
+      + 'its 2 events/run already saturate this budget. More than that means something ELSE is writing into a '
+      + 'scanned tree — fix that, do NOT raise the budget:'
       + `\n    ${vanished.join('\n    ')}`,
+  );
+
+  // The budget alone would absorb a NEW writer's first two events per run in
+  // silence, which is exactly what it is doing for the declared one. This
+  // separates the two: an artifact that looks like a test control and is not
+  // attributed to a known writer fails on the FIRST event, at any budget.
+  assert.deepEqual(
+    undeclaredControlArtifacts(vanished),
+    [],
+    'a file matching the test-control artifact family vanished mid-scan and is NOT attributed to a declared '
+      + 'writer — a new suite is writing a transient copy into a tree this scan walks. That is the #3459/#3892 '
+      + 'class. Route its copy through a temp directory (see writeMutantOutsideTheTree in '
+      + 'deploy-fiab-guard.test.mjs); do NOT add it to DECLARED_TRANSIENT to make this green.',
+  );
+});
+
+test('EMBEDDED CONTROL — the control-artifact classifier sees the randomised family', () => {
+  // POPULATION. On a clean run `vanished` is EMPTY, so the assertion above reads
+  // `[] deepEqual []` forever and neither CONTROL_FAMILY nor DECLARED_TRANSIENT
+  // is ever evaluated. These fixtures are its population: 4 undeclared, 3
+  // declared-or-ignored.
+  const undeclared = [
+    "scripts/ci/deploy-fiab-guard.__control__.mjs (ENOENT)",
+    'scripts/ci/check-deploy-paths-coverage.__control__.mjs (EPERM)',
+    'scripts/ci/some-new-guard.__control_zzz__.mjs (ENOENT)',
+    // Windows separators, because that is what a real event carries here.
+    'E:\\repo\\scripts\\ci\\another.__control__.mjs (ENOENT)',
+  ];
+  assert.deepEqual(undeclaredControlArtifacts(undeclared), undeclared, 'every undeclared control artifact must be reported');
+
+  // The declared one, in the randomised spelling that defeated the receipt grep.
+  assert.deepEqual(
+    undeclaredControlArtifacts(['scripts/ci/deploy-fiab-guard.__control_a8cubozkz6q__.mjs (ENOENT)']),
+    [],
+    'the DECLARED writer must be absorbed here and left to the budget assertion',
+  );
+  // …and the literal-`__control__` grep that could not see it, pinned as the
+  // negative result it is, so nobody re-derives that receipt.
+  assert.equal(
+    'deploy-fiab-guard.__control_a8cubozkz6q__.mjs'.includes('__control__'),
+    false,
+    'this is why the family pattern is `__control` — a receipt grepping `__control__` is blind to the live writer',
+  );
+
+  // Ordinary vanishes — an atomic-rename save, a build output — are NOT this
+  // class and must stay with the budget rather than failing on sight.
+  assert.deepEqual(
+    undeclaredControlArtifacts(['apps/fiab-console/lib/x.ts (ENOENT)', 'scripts/ci/.tmp-1234 (ENOENT)']),
+    [],
+    'a non-control vanish must not be escalated',
   );
 });
 
@@ -856,9 +962,15 @@ test('every file that CAN contribute a binding DID — per FILE, not per root', 
   // subtree would shrink expectation and result together and neither would
   // notice. These four are the leg that does not share that method: one tracked
   // file per SCAN_ROOT, NAMED rather than derived. Four files wide, not 4863 —
-  // narrow on purpose, and honestly narrow. The scripts/ci entry is deliberate:
-  // that is the directory the #3892 race happens in, and "drop only scripts/ci"
-  // is exactly the mutation the whole-root assertion cannot see.
+  // narrow on purpose, and honestly narrow.
+  //
+  // EXACTLY what the scripts/ci entry does and does not buy, corrected: it
+  // catches a walk that stops DESCENDING into scripts/ci. It does NOT catch
+  // "drop only scripts/ci", which an earlier revision of this comment claimed
+  // it did — `deploy-fiab-guard.mjs` yields ZERO bindings, so pinning it as
+  // listed says nothing about whether the directory was harvested. LEG 4 is the
+  // assertion that covers that, and LEG 3 covers the extension filter these
+  // four cannot span (.bicep/.ts/.mjs/.yml only — no .tsx, no .sh).
   const SENTINELS = [
     'platform/fiab/bicep/main.bicep',
     'apps/fiab-console/lib/client-fetch.ts',
@@ -888,15 +1000,27 @@ test('every file that CAN contribute a binding DID — per FILE, not per root', 
   //
   // WHAT IT DOES NOT ESTABLISH, precisely: (1) anything about scanFiles()
   // itself, which both sides share — agreement between two counts that share a
-  // method confirms the METHOD, and that gap is LEG 1's, four named files wide;
-  // (2) the skipping of a file that yields NO harvest output at all. Measured:
-  // of the 4863 listed files, 158 carry a binding and `scripts/ci` has exactly
-  // ONE contributor (check-docs-hygiene.mjs, all 27 of its bindings), so
-  // dropping e.g. deploy-fiab-guard.mjs — 0 bindings — moves nothing here and
-  // this test stays green. That is deliberate rather than overlooked: a file
-  // that yields no pair, no unparsed entry and no near-miss cannot change the
-  // guard's verdict, and if a later edit gives it one, this oracle re-derives
-  // from the tree on every run and will require it from that moment on.
+  // method confirms the METHOD, and that gap is LEG 1's and LEG 3's;
+  // (2) the skipping of a file that yields NO harvest output at all.
+  //
+  // RE-MEASURED THIS SESSION, because the two numbers that used to be in this
+  // paragraph were both wrong and one of them was wrong in the direction that
+  // flatters the oracle. Of the 4863 listed files, **172** carry a binding — not
+  // the 158 stated here before, which is also what CI itself prints one line
+  // below (`the scan attributed 172`), so the claim was contradicted by the
+  // diagnostic immediately underneath it. And `scripts/ci` has **TWO**
+  // contributors, not "exactly ONE": check-docs-hygiene.mjs (27 pairs AND 1
+  // near-miss — the near-miss was uncounted too) and check-module-existing-
+  // scope.mjs (0 pairs, 3 near-misses). Near-misses are `unharvested`, which
+  // this oracle's expectation set counts, so calling them nothing was wrong
+  // twice over.
+  //
+  // The residual gap is real and unchanged: dropping e.g. deploy-fiab-guard.mjs
+  // — 0 pairs, 0 unparsed, 0 near-misses — moves nothing here and this test
+  // stays green. That is deliberate rather than overlooked: a file that yields
+  // none of the three cannot change the guard's verdict, and if a later edit
+  // gives it one, this oracle re-derives from the tree on every run and will
+  // require it from that moment on.
   const SELF = 'scripts/ci/check-role-guid-consistency.mjs';
   assert.ok(listedRel.has(SELF), `${SELF} is not in the listing, so the exemption below is stale and hides a file`);
 
@@ -928,14 +1052,39 @@ test('every file that CAN contribute a binding DID — per FILE, not per root', 
   // ONE RESIDUAL SENSITIVITY, stated rather than hidden: the two sides read the
   // tree at two different MOMENTS (scan() first, this pass second). A file that
   // is transiently rewritten in between, by a suite co-scheduled in the same
-  // `node --test` invocation, could therefore disagree with itself. Measured on
-  // this tree, the remaining in-tree writer is
-  // `scripts/ci/__tests__/external-origin-urls.test.mjs`, which swaps
-  // `externalOrigin(req.headers)` for `new URL(req.url).origin` in three
-  // tracked routes under `apps/fiab-console/app/api` — none of which adds or
-  // removes a role-name/GUID pair, so it cannot move either set today. If this
-  // assertion ever fires naming a file nobody touched, look there FIRST: it is
-  // the same class #3912 fixed, not a partial scan.
+  // `node --test` invocation, could therefore disagree with itself.
+  //
+  // THE CENSUS, re-measured this session, because the one that used to be here
+  // named a single file and named the wrong one. There are at least THREE
+  // suites under `scripts/ci/__tests__` that still write into a SCAN_ROOT:
+  //
+  //   deploy-target-subscription.test.mjs:262  CREATE+DELETE in `scripts/ci` —
+  //     `deploy-fiab-guard.__control_${Math.random()…}__.mjs`, 2 call sites per
+  //     run. This is the SAME artifact family, the same directory and the same
+  //     create-then-delete-in-`finally` shape that #3912 exists to remove, and
+  //     it is the only one of the three that can produce an ENOENT here. It is
+  //     PRE-EXISTING on main and is NOT fixed by #3912 — see the routing note
+  //     in the PR. Its randomised name is also why a receipt grepping for the
+  //     literal `__control__` cannot see it: `…__control_a8cu…__.mjs` does not
+  //     contain `__control__`. GREP FOR `__control`, NOT `__control__`.
+  //   guard-import-side-effects.test.mjs      IN-PLACE rewrite of
+  //     `scripts/ci/check-azd-provision-param-binding.mjs`, restored in
+  //     `finally`. No create/delete window, so no ENOENT — the QUIET variant.
+  //     Inert for this oracle today: that file yields no pair, no unparsed entry
+  //     and no near-miss, so a torn read of it cannot move either set.
+  //   external-origin-urls.test.mjs           IN-PLACE rewrite of three tracked
+  //     routes under `apps/fiab-console/app/api`. Also quiet, also inert today —
+  //     verified: all three yield pairs=0 unparsed=0 nearmiss=0.
+  //
+  // That census is a STATIC LOWER BOUND and is labelled as one: it was taken by
+  // reading the 110 suites in this directory for a write whose target resolves
+  // into a scanned root, and 2 of the first 3 candidates turned out to be writes
+  // into an mkdtemp fixture that merely CONTAINS a `scripts/ci` path segment. A
+  // dynamically-computed target would evade it entirely. Do not read "three" as
+  // "all".
+  //
+  // If this assertion ever fires naming a file nobody touched, look at the FIRST
+  // entry above: it is the same class #3912 fixed, not a partial scan.
   const missing = [...expected].filter((f) => !got.has(f)).sort();
   const extra = [...got].filter((f) => !expected.has(f)).sort();
   assert.deepEqual(
@@ -949,6 +1098,75 @@ test('every file that CAN contribute a binding DID — per FILE, not per root', 
     [],
     'the scan harvested bindings from files an independent scanFiles()+harvest() pass does not attribute to '
       + 'it — the two disagree about WHICH files were read, so at least one of them is wrong.',
+  );
+
+  // ── LEG 3 — the LISTING's EXTENSION coverage. ─────────────────────────────
+  // scanFiles() filters on `SCAN_EXT.test(name) && !SKIP_FILE.test(name)`,
+  // INSIDE the predicate. That is the blind spot LEG 1 and LEG 2 share and it
+  // is not theoretical — measured on this tree, narrowing SCAN_EXT by a single
+  // extension left the suite at RC=0, 63/63:
+  //
+  //     dropped ext   listed        contributors   suite
+  //     (none)        4863          172            63/63
+  //     tsx           3813 (-1050)  163            63/63  <- invisible
+  //     sh            4718 (-145)   162            63/63  <- invisible
+  //
+  // It is invisible on every other leg by construction: LEG 1's four sentinels
+  // are .bicep/.ts/.mjs/.yml so none of them is the dropped extension; the
+  // `listed >= 1000` floor has ~3800 of headroom; the per-root `some()` survives
+  // because each root keeps another extension; and LEG 2's two sides BOTH derive
+  // from scanFiles(), so expectation and result shrink together — the
+  // "agreement is not independence" failure named three paragraphs up and then
+  // walked into.
+  //
+  // Floors, not exact counts, so ordinary churn does not fight the tree; each is
+  // ~2/3 of today's population, and each is a NUMBER so none of these is a
+  // zero-population assertion. cjs (0 files), js (1) and yaml (8) are in
+  // SCAN_EXT too and are deliberately absent: a floor on a population that small
+  // is noise, and saying so is more honest than pinning `>= 1`.
+  const EXT_FLOORS = { ts: 2000, tsx: 700, mjs: 150, bicep: 120, sh: 90, yml: 90 };
+  const byExt = new Map();
+  for (const abs of listed) {
+    const e = path.extname(abs).slice(1).toLowerCase();
+    byExt.set(e, (byExt.get(e) ?? 0) + 1);
+  }
+  t.diagnostic(`listing by extension: ${[...byExt].sort((a, b) => b[1] - a[1]).map(([e, n]) => `${e}=${n}`).join(' ')}`);
+  for (const [ext, floor] of Object.entries(EXT_FLOORS)) {
+    assert.ok(
+      (byExt.get(ext) ?? 0) >= floor,
+      `scanFiles() listed only ${byExt.get(ext) ?? 0} .${ext} file(s), under a floor of ${floor}. Either the `
+        + 'walk stopped reaching that tree or SCAN_EXT stopped accepting that extension — narrowing SCAN_EXT is '
+        + 'invisible to every other leg of this test, which is why this floor exists. Do NOT lower it to match; '
+        + 'find what stopped being listed.',
+    );
+  }
+
+  // ── LEG 4 — the RACE DIRECTORY still contributes bindings. ────────────────
+  // The other half of the in-predicate blind spot: SKIP_FILE. Measured, adding
+  // ONE token to it (`/(\.test\.|\.spec\.|docs-hygiene)/`) dropped every one of
+  // `scripts/ci`'s 27 pairs and left the suite at RC=0, 63/63, with LEG 2's
+  // oracle reading `expected=171 got=171` — both sides moved together.
+  //
+  // Nothing above catches it. The per-root `some()` is keyed on `scripts/`, and
+  // `scripts/csa-loom`'s 25 pairs keep it true with all of `scripts/ci` gone.
+  // LEG 1 pins `scripts/ci/deploy-fiab-guard.mjs` as LISTED — but that file
+  // yields ZERO bindings, so listing it establishes nothing about whether the
+  // directory was HARVESTED. The comment on LEG 1 claimed this sentinel covered
+  // "drop only scripts/ci"; it does not, and this is the assertion that does.
+  //
+  // `scripts/ci` specifically, and not merely "some directory": it is the
+  // directory the #3892 race happens in, so a scan that silently stops
+  // harvesting it is the failure mode with the most reason to occur here.
+  const ciPairs = pairs.filter((p) => p.file.startsWith('scripts/ci/'));
+  const ciContributors = new Set([...pairs, ...unparsed, ...unharvested]
+    .map((p) => p.file).filter((f) => f.startsWith('scripts/ci/')));
+  t.diagnostic(`scripts/ci: ${ciPairs.length} pair(s) from ${ciContributors.size} contributing file(s)`);
+  assert.ok(
+    ciPairs.length >= 20,
+    `only ${ciPairs.length} binding(s) harvested from scripts/ci, under a floor of 20 (there are 27 today, all `
+      + 'from check-docs-hygiene.mjs). A filter INSIDE scanFiles() — SKIP_FILE or SCAN_EXT — can delete this '
+      + 'whole directory while every other assertion in this file stays green. If check-docs-hygiene.mjs '
+      + 'legitimately lost its bindings, repoint this floor at whatever now carries them; do NOT delete it.',
   );
 });
 
