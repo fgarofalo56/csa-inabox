@@ -93,7 +93,7 @@ const vanished = [];
  * DO NOT ARGUE THAT THE POPULATION FLOORS WOULD CATCH A SKIP. An earlier
  * revision of this comment said a skip "subtracts from exactly the number those
  * floors watch", implying `pairs >= 100` / `resolved >= 80` were the safety
- * net. MEASURED (temp/root-headroom.mjs, dropping one scan root at a time):
+ * net. MEASURED, by dropping one scan root at a time (#3912):
  *
  *     dropped root          pairs / resolved   verdict
  *     (none)                    342 / 155       pass
@@ -129,36 +129,57 @@ function scanRepo() {
       scanned = scan();
       return scanned;
     } catch (err) {
-      // ENOENT and EPERM are the two faces of THIS race. Anything else —
+      // ENOENT and EPERM are BOTH produced by THIS race. Anything else —
       // EACCES, EISDIR, a malformed read — is a real fault and must not be
       // retried into silence.
       //
-      // EPERM is the same race on WINDOWS. `unlink()` on a file another handle
-      // still has open can leave the directory entry in place and mark the file
-      // delete-pending; an `open()` inside that window fails with
-      // ERROR_DELETE_PENDING, which surfaces as EPERM — NOT ENOENT. Review of
-      // this PR OBSERVED exactly that under forced churn (one scan in four).
-      // I could NOT reproduce it on my box: current Node deletes with
-      // FILE_DISPOSITION_POSIX_SEMANTICS, which removes the entry immediately
-      // and yields ENOENT, so the EPERM branch here was proven by INJECTING the
-      // error into the real scanRepo() path rather than provoking it from the
-      // OS (temp/eperm-inject.mjs — ENOENT-only rethrows, this absorbs).
+      // WHAT IS ESTABLISHED (measurements in #3912). On a Windows workstation,
+      // when ANOTHER PROCESS is creating and deleting names in a scanned
+      // directory, a raced read returns EPERM at a substantial rate: ~3,400
+      // EPERM across ~85,000 raced reads — 1.5% under heavy churn, 12% under
+      // light churn — with zero EBUSY anywhere. This branch is genuinely
+      // reachable, and deleting it reintroduces an unhandled crash.
       //
-      // Do not narrow it back to ENOENT because "CI is green":
-      // loom-guardrails.yml:68 is `runs-on: ubuntu-latest`, where unlink→open
-      // is always ENOENT, so an ENOENT-only catch reads correct forever in CI
-      // and rethrows unhandled on the Windows workstation every agent in this
-      // repo actually works on.
+      // WHAT IS NOT ESTABLISHED: WHY Windows returns EPERM here rather than
+      // ENOENT. The obvious hypothesis is delete-pending — unlink with another
+      // handle still open leaves the entry listed, and an open inside that
+      // window fails ERROR_DELETE_PENDING. That hypothesis was TESTED AND
+      // FALSIFIED: the textbook delete-pending setup, cross-process, returned
+      // ENOENT 92,506 times out of 92,506. Also ruled out — the create/truncate
+      // window and interference from the security stack (create-only churn,
+      // no deletes: 17,608 raced reads over ~73,000 writes, zero errors); and
+      // single-process unlink→open (41,184 raced reads, 100% ENOENT), which is
+      // why the first attempt to reproduce this saw nothing. Cross-process is
+      // the variable that matters; the kernel-level cause is unknown.
+      //
+      // An earlier revision of this comment asserted delete-pending AS the
+      // cause and said POSIX-semantics delete made EPERM unreachable. Both were
+      // wrong, and the second is the dangerous kind of wrong — it argues for
+      // narrowing this catch back to ENOENT-only. R7: if the code does not
+      // know, it says it does not know.
+      //
+      // Do not narrow it back because "CI is green": loom-guardrails.yml:68 is
+      // `runs-on: ubuntu-latest`, where unlink→open is always ENOENT, so an
+      // ENOENT-only catch reads correct forever in CI and rethrows unhandled on
+      // the Windows workstation every agent in this repo actually works on.
+      //
+      // And do not narrow it back because you ran the suite under churn and saw
+      // only ENOENT. THIS FUNCTION IS A TERRIBLE INSTRUMENT FOR THAT QUESTION:
+      // the first error aborts the scan, so one run samples ~1-3 raced reads
+      // against the ~85,000 the rate above was measured over. At 1.5-12%,
+      // seeing no EPERM in a handful of samples is the expected outcome and
+      // establishes nothing. Measure it with a dedicated harness or not at all.
       if (err?.code !== 'ENOENT' && err?.code !== 'EPERM') throw err;
-      // The code is recorded with the path: "vanished" is true of ENOENT and
-      // only approximately true of a delete-pending EPERM, and the diagnostic
-      // must not assert the one when it saw the other.
+      // The code is recorded next to the path because the two codes are not the
+      // same event and this suite cannot tell which occurred from the path
+      // alone. The record says what was seen; it does not name a cause.
       vanished.push(`${err.path ?? '<unnamed>'} (${err.code})`);
       if (vanished.length > VANISH_BUDGET + 1) {
         err.message = `${err.message}\n  ${vanished.length} file(s) went unreadable between the directory `
-          + `listing and the read (gone, or delete-pending on Windows) across as many rescans, so this is not `
-          + `a one-off race — something is writing into a scanned tree (${SCAN_ROOTS.join(', ')}) while the `
-          + `tests run:\n    ${vanished.join('\n    ')}`;
+          + `listing and the read across as many rescans, so this is not a one-off race — something is `
+          + `writing into a scanned tree (${SCAN_ROOTS.join(', ')}) while the tests run. Each error code is `
+          + `recorded below; this does NOT establish why Windows returns one rather than the other:`
+          + `\n    ${vanished.join('\n    ')}`;
         throw err;
       }
     }
@@ -709,8 +730,7 @@ test('the real repo yields a substantial, resolvable population', () => {
 
   // EVERY SCAN ROOT MUST CONTRIBUTE — this is what actually enforces
   // scanRepo()'s "retry, never skip" decision, and it is here because the two
-  // floors above DO NOT. Measured by dropping one root at a time
-  // (temp/root-headroom.mjs):
+  // floors above DO NOT. Measured by dropping one root at a time (#3912):
   //
   //     dropped root          pairs / resolved   the floors above say
   //     (none)                    342 / 155       pass
@@ -761,10 +781,10 @@ test('the repo scan absorbed at most a couple of vanished files, and names them'
   );
   assert.ok(
     vanished.length <= VANISH_BUDGET,
-    `${vanished.length} file(s) went unreadable mid-scan (gone, or delete-pending on Windows), over a budget `
-      + `of ${VANISH_BUDGET}. The EXPECTED value is ZERO: the two suites that used to write a transient `
-      + '`*.__control__.mjs` into scripts/ci now write it to a temp directory. More than a couple means '
-      + 'something is writing into a scanned tree again — fix that, do NOT raise the budget:'
+    `${vanished.length} file(s) went unreadable mid-scan, over a budget of ${VANISH_BUDGET}. The EXPECTED `
+      + 'value is ZERO: the two suites that used to write a transient `*.__control__.mjs` into scripts/ci now '
+      + 'write it to a temp directory. More than a couple means something is writing into a scanned tree '
+      + 'again — fix that, do NOT raise the budget:'
       + `\n    ${vanished.join('\n    ')}`,
   );
 });
