@@ -109,9 +109,18 @@ export interface RepoRoots {
    * reported success (#3783) — and 68 markdown files left the retrieval corpus
    * with nothing red anywhere. PRP membership went 104 -> 36.
    *
-   * Chunks walked from this root are marked with {@link ARCHIVED_BANNER} so the
-   * Copilot can still cite the design history and the shipped-receipt AUDIT
-   * registers WITHOUT presenting a superseded plan as the current one.
+   * Chunks walked from this root are identified as superseded by their PATH
+   * ({@link isSupersededPath}) — nothing is stamped into their `content`, which
+   * is deliberate: an earlier revision prepended a notice there and it poisoned
+   * BM25 (see {@link SUPERSEDED_NOTICE} for the measurements).
+   *
+   * NOTE — the marker is NOT yet rendered anywhere. {@link SUPERSEDED_NOTICE}
+   * and {@link isSupersededPath} are the seam for applying it at prompt/citation
+   * assembly, but no caller consumes them yet, so archived chunks currently
+   * reach the model WITHOUT a superseded disclaimer. That is a tracked
+   * deferral, not the finished design: the corpus keeps the design history and
+   * the shipped-receipt AUDIT registers retrievable, and the "do not present
+   * this as current" half still has to be wired at the consuming end.
    */
   prpArchiveRoot: string;
   /** `docs/fiab/adr/` */
