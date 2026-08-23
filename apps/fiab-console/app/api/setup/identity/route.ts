@@ -65,9 +65,23 @@
  *       carries anything outside an inert set — no quote, no whitespace, no
  *       `;`/`|`/`&`/`$`/backtick/newline, nothing bicep would re-parse. A sink
  *       added later without an allow-list fails closed instead of shipping a
- *       hole. `__tests__/identity-injection.test.ts` additionally asserts, by
- *       scanning THIS FILE, that the number of `'${…}'` sinks equals the number
- *       routed through `q()` — so a fifth sink cannot be added silently.
+ *       hole.
+ *
+ *       `q()` only helps at sinks that CALL it, so `__tests__/identity-
+ *       injection.test.ts` additionally classifies this file's emission sites:
+ *       every `deployParams.<key> =` must be a static literal or a `q()` call,
+ *       every `${…}` between `const deployParams` and the `return` must be a
+ *       `q()` call, and string concatenation is not permitted in that region at
+ *       all. The emitted `deployParams` key set is pinned at runtime as a
+ *       second, syntax-independent detector.
+ *
+ *       That test also counts raw `'${…}'` occurrences and `q('` calls. Those
+ *       counts are NECESSARY but NOT SUFFICIENT, and the difference was
+ *       measured rather than reasoned: a sixth sink written as
+ *       `deployParams.x = "'" + caller + "'"` leaves both counts unchanged and
+ *       shipped green (RC=0, 36/36) with a live bicep-literal break-out. Do not
+ *       read either count as "a sink cannot be added silently" — the emission-
+ *       site classifier is what carries that claim.
  *
  * Route-toolkit: the `withSession` wrapper [R3]. The prologue it replaces was
  * `const session = getSession(); if (!session) return NextResponse.json({ ok:
@@ -176,8 +190,10 @@ export class UnsafeInterpolationError extends Error {
 /**
  * Quote `value` for emission into a shell word or a bicep string literal,
  * asserting first that it cannot escape either. EVERY interpolated value in
- * this route goes through this function; that invariant is itself asserted by
- * __tests__/identity-injection.test.ts, which counts the sinks in this file.
+ * this route goes through this function; that invariant is enforced by
+ * __tests__/identity-injection.test.ts, which classifies every emission SITE in
+ * this file (not merely one syntax — see the note on L2 in the module docblock)
+ * and additionally pins the emitted `deployParams` key set at runtime.
  */
 function q(field: string, value: string): string {
   if (!INERT_VALUE_RE.test(value)) throw new UnsafeInterpolationError(field);
