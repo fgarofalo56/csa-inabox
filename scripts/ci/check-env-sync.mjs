@@ -1035,8 +1035,10 @@ export const KNOWN_INERT = new Map([
  * This is deliberately a SEPARATE set from {@link KNOWN_INERT}. Every name in
  * KNOWN_INERT carries a reason someone established. These carry only the
  * measurement, and saying so is the point: deploy-integrity.md R7 forbids
- * asserting a cause that was not established, and writing 31 confident
- * rationales I had not verified would have been exactly that.
+ * asserting a cause that was not established, and writing a confident rationale
+ * for each of the 31 baseline names without having verified them would have been
+ * exactly that. (31 is the 2026-08-14 baseline, not the current size — see the
+ * SHRINK LOG below; the set is 30 as of 2026-08-22.)
  *
  * WHAT IS ACTUALLY KNOWN ABOUT ALL OF THEM: each is bound to an admin-plane
  * `param … string = ''` that NO caller anywhere under platform/fiab/bicep ever
@@ -1048,10 +1050,26 @@ export const KNOWN_INERT = new Map([
  * DevOps organisation (LOOM_SQL_GIT_ADO_ORG), their GitHub host, their MLflow
  * tracking URI — and auto-bind-by-default.md §5 is about infra prerequisites the
  * PLATFORM could deploy, not about external coordinates. Others look genuinely
- * derivable and are probably defects; LOOM_CLOUD_TIER is the clearest, because
- * domains-client.ts:536 uses it to block the Fabric Admin API on IL5 (not
- * FedRAMP IL5 approved) and an always-empty value means that compliance gate has
- * never engaged on any deploy. It is filed separately rather than fixed blind.
+ * derivable and are probably defects, and are filed separately rather than
+ * fixed blind.
+ *
+ * SHRINK LOG — 2026-08-22, LOOM_CLOUD_TIER (#3433, PR #3923). It was the
+ * clearest derivable one: domains-client.ts:536 uses it to block the Fabric
+ * Admin API on IL5 (not FedRAMP IL5 approved), and the always-empty value meant
+ * that compliance gate had never engaged on any deploy. main.bicep now passes
+ * `loomCloudTier: boundary` to the admin-plane module, so the entry is DELETED
+ * here rather than reworded. Deleting it is what restores this layer's teeth:
+ * while the name sat in this set, computeInert()'s
+ * `if (UNTRIAGED_INERT.has(name)) continue;` skipped it — a SKIP, not an
+ * assertion — so REMOVING the new wiring and leaving the entry in place still
+ * exited 0. Measured, four arms (needles asserted to match exactly once; note
+ * main.bicep is LF and this file is CRLF, so the needles differ):
+ *   wiring PRESENT + entry PRESENT  -> RC=0  passes
+ *   wiring REMOVED + entry PRESENT  -> RC=0  GUARD BLIND (the narrow revert)
+ *   wiring REMOVED + entry REMOVED  -> RC=1  classifier is fine
+ *   wiring PRESENT + entry REMOVED  -> RC=0  deleting the entry costs nothing
+ * A fix that leaves its own allowlist entry behind ships with its guard
+ * suppressed; that is why the rule below is not a formality.
  *
  * This set may only SHRINK. Triaging one means deleting it here and either
  * fixing the emission or moving it to KNOWN_INERT with a real reason.
@@ -1060,7 +1078,6 @@ export const UNTRIAGED_INERT = new Set([
   'LOOM_ADO_HOST',
   'LOOM_ASA_TEST_WRITE_URI',
   'LOOM_BAP_BASE',
-  'LOOM_CLOUD_TIER',
   'LOOM_COPILOT_STUDIO_ENVIRONMENT_ID',
   'LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID',
   'LOOM_DATABRICKS_SQL_WAREHOUSE_ID',
