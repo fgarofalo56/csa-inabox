@@ -14,36 +14,44 @@
  * newline for that reason.
  *
  * ── THE RECEIPT ────────────────────────────────────────────────────────────
- *   clean arm      RC=0   10 files, 145 passed
- *   reverted arm   RC=0   10 files, 145 passed
+ *   clean arm      RC=0   11 files, 157 passed
+ *   reverted arm   RC=0   11 files, 157 passed
  *
- *   #   file : needle -> mutation                             RC   tests red
+ * `raw` is every test that turned red. `sub` subtracts ONE, because this file's
+ * own needle check fires on every mutation — it asserts the recorded needle still
+ * matches the source, and a mutated source no longer matches it. That is a
+ * genuine property (the receipt notices when it goes stale) but it is not
+ * independent evidence about the detector, so both numbers are given. The `sub`
+ * column reproduces exactly what was measured on an earlier 145-test run before
+ * this file existed, which is the cross-check that the interpretation is right.
+ *
+ *   #   file : needle -> mutation                             RC   raw  sub
  *   --------------------------------------------------------------------------
  *   M1  unreachable-service.ts
- *       `...'configured').length === 0;`  ->  `... >= 0;`      1   2
+ *       `...'configured').length === 0;`  ->  `... >= 0;`      1    3    2
  *   M2  unreachable-service.ts
- *       `node.scale!.minReplicas > 0 &&`  ->  `... >= 0 &&`    1   1
+ *       `node.scale!.minReplicas > 0 &&`  ->  `... >= 0 &&`    1    2    1
  *   M3  unreachable-service.ts
  *       `const vacuous = vacuityReason(graph, 'configured');`
- *                                         ->  `= null`         1   4
+ *                                         ->  `= null`         1    5    4
  *   M4  dangling-wire.ts
  *       `REPORTED_REASONS = ['empty-value','missing-resource']`
- *                                         ->  drop empty-value 1   5
+ *                                         ->  drop empty-value 1    6    5
  *   M5  orphan.ts
  *       `if (parentNode !== undefined) continue;`
- *                                         ->  `=== undefined`  1   5
+ *                                         ->  `=== undefined`  1    6    5
  *   M6  declared-but-dead.ts
  *       `hasInboundOnly(graph, 'declared', 'configured')`
- *                                         ->  args swapped     1   4
+ *                                         ->  args swapped     1    5    4
  *   M7  always-on-unused.ts
- *       `if (vacuous !== null) {`         ->  `=== null`        1   9
+ *       `if (vacuous !== null) {`         ->  `=== null`        1   10    9
  *   M8  config-drift.ts
  *       `} else if (!isInterpolated(dRaw) && !isInterpolated(cRaw) && ...`
- *                                         ->  guard removed    1   2
+ *                                         ->  guard removed    1    3    2
  *
  * ── THE INSTRUCTIVE PARTS ──────────────────────────────────────────────────
  *
- * **M2 turns exactly ONE test red**, and that test is
+ * **M2 turns exactly ONE substantive test red**, and that test is
  * `"THE CONTROL: a scale-to-zero unreachable app is NOT reported"` in the
  * acceptance suite. So the entire `minReplicas > 0` half of the flagship
  * predicate rests on a single assertion about `loom-scratch`. Delete that one
@@ -60,8 +68,8 @@
  *
  * **M3 and M7 are the two that protect against the failure this repo keeps
  * shipping** — a detector that is green because it is blind. Between them they
- * turn 13 tests red, and none of those tests assert a finding: they all assert
- * that the detector REFUSED to answer and said why.
+ * turn 13 substantive tests red, and none of those tests assert a finding: they
+ * all assert that the detector REFUSED to answer and said why.
  *
  * **M4 removes the RECEIPT while leaving most verdicts intact.** Dropping
  * `empty-value` from the reported reasons does not change whether
