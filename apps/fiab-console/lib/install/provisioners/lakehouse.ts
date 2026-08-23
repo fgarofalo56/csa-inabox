@@ -15,13 +15,26 @@
  *      there using the SAME UAMI + adls-client used by every other editor:
  *        1. Create each LakehouseContent.folders[].path as a real directory.
  *        2. For each deltaTables[] entry, create a Tables/<name>/ directory
- *           and write its sampleRows as a REAL header CSV file
- *           (Tables/<name>/<name>.csv) via ADLS Gen2 PUT — so the lakehouse
- *           is browsable AND seeded the moment the app opens.
+ *           and write its sampleRows as a REAL DELTA TABLE — a Parquet data
+ *           file plus `_delta_log/00000000000000000000.json` whose `add.stats`
+ *           reports a truthful `numRecords` (see `./_seed-lakehouse-adls`).
+ *           The same rows also land as a browsable CSV under Files/_seed/.
  *        3. If LOOM_SYNAPSE_WORKSPACE is set, ALSO register each seeded table
  *           as a Synapse serverless OPENROWSET external VIEW so it is
- *           queryable as `SELECT * FROM <name>` over the freshly written CSV.
- *      Returns status:'created' on Azure-native success.
+ *           queryable as `SELECT * FROM <name>` over the Delta table.
+ *      Returns status:'created' ONLY when every Delta table the bundle
+ *      declared with sample rows actually landed — see the outcome gate below.
+ *      (A non-auth FOLDER failure remains non-fatal, by the decision recorded
+ *      in `lib/install/__tests__/lakehouse-extraction-behaviour.test.ts`, but
+ *      it is now counted and reported on the receipt.)
+ *
+ * #3904 / #3905, both live operator-reported defects, were here:
+ *   - step 2 wrote a plain CSV and called it Delta, so `scanLakehouseTables`
+ *     correctly reported every seeded table `format:'unknown', status:'empty'`
+ *     and `countRows`' FORMAT='DELTA' OPENROWSET threw over it; and
+ *   - this function returned status:'created' unconditionally, so a lakehouse
+ *     that wrote NOTHING still rolled up into `outcome:'all-created'` and a
+ *     job status of `done`.
  *
  * Only honest-gate (status:'remediation') when NEITHER a Fabric workspace
  * NOR the internal DLZ ADLS is available — naming the exact env var to set.
@@ -613,10 +626,17 @@ async function provisionAzureNative(
     return resolveInfraResidual(msg, `Confirm the DLZ ADLS account/container '${container}' exists and grant the Console managed identity (LOOM_UAMI_CLIENT_ID) Storage Blob Data Contributor on it.`, { reason: 'ADLS: could not create the lakehouse root directory.', errorPrefix: 'Create lakehouse root failed: ', link: 'https://learn.microsoft.com/azure/storage/blobs/assign-azure-role-data-access', steps });
   }
 
-  // 2. Folders + delta-table seed CSVs are materialised by the SHARED helper
+  // 2. Folders + delta-table seeds are materialised by the SHARED helper
   //    below (`./_seed-lakehouse-adls`), after the optional Synapse serverless
   //    target is resolved — the per-table view registration hangs off it.
   const externalViews: string[] = [];
+  /**
+   * Table identity → the seed CSV's REAL container-relative path, as reported
+   * by the seeder. Keyed `<schema>.<table>` when schemas are enabled, else
+   * `<table>`. Stamped onto `secondaryIds.seedCsvPaths` so no consumer has to
+   * reconstruct a path from a naming convention. See the hook below.
+   */
+  const seedCsvPaths = new Map<string, string>();
 
   // Synapse serverless target (optional) — only when LOOM_SYNAPSE_WORKSPACE set.
   //
@@ -659,7 +679,7 @@ async function provisionAzureNative(
     }
   }
 
-  // Materialise the bundle's folder tree + per-table seed CSVs. The SHARED
+  // Materialise the bundle's folder tree + per-table Delta tables. The SHARED
   // helper is what the open-time auto-bind seed also calls, so an auto-bound
   // lakehouse gets the identical tree instead of a bare root directory (#3549).
   // The Synapse view registration stays HERE, hung off the per-table hook, so
@@ -668,18 +688,50 @@ async function provisionAzureNative(
     createdFolders,
     seeded,
     emptyTables,
+    failedFolders,
+    failedTables,
+    arityMismatches,
+    expectedSeedTables,
     authGate: seedAuthGate,
   } = await seedLakehouseAdls(container, root, content, steps, async (t) => {
-    // 3. Optionally register a Synapse serverless OPENROWSET external view so
-    //    the seeded CSV is queryable as `SELECT * FROM lakehouse.<view>`.
+    // 3a. RECORD the seed CSV's real path, before anything else in this hook.
+    //
+    //     #3904 moved the seed CSV out of `Tables/<name>/<name>.csv` and into
+    //     `Files/_seed/`. Two consumers RE-DERIVE the old location rather than
+    //     reading it — `app/api/apps/[id]/install/route.ts` (which persists the
+    //     result into every auto-bound report's `dataSource` as an
+    //     `OPENROWSET(… FORMAT='CSV')` URL) and `lib/editors/lakehouse/
+    //     lakehouse-editor-shell.tsx`. Both would point at a blob that no
+    //     longer exists. Worse, their two derivations do not even agree with
+    //     each other or with this module: the install route sanitizes a schema
+    //     with `replace(/[^A-Za-z0-9_]/g, '')` while the seeder uses `'_'`.
+    //
+    //     So the path is RECORDED here and stamped into `secondaryIds` below,
+    //     for consumers to read instead of guessing — the same principle #3911
+    //     applied to the lakehouse binding, and the reason that fix works.
+    //
+    //     THIS MUST STAY ABOVE THE `if (!synapse) return` BELOW. Synapse is
+    //     optional and usually absent on the Azure-native path; recording after
+    //     the early return would make the whole fix inert in exactly the
+    //     configuration the demo deploy runs in.
+    if (t.csvPath) seedCsvPaths.set(t.schema ? `${t.schema}.${t.name}` : t.name, t.csvPath);
+
+    // 3b. Optionally register a Synapse serverless OPENROWSET external view so
+    //    the seeded table is queryable as `SELECT * FROM lakehouse.<view>`.
     //    The view is created in the dedicated USER database [loom_lakehouse]
     //    (NOT master — serverless rejects CREATE VIEW in master), under a
     //    dedicated `lakehouse` schema, built via EXEC('CREATE VIEW …') with
     //    doubled single-quotes inside the EXEC string. The BULK arg is the
     //    https DFS endpoint (Synapse OPENROWSET takes https, not abfss).
     //    Idempotent: DROP-if-exists then CREATE so re-install upserts.
+    //
+    //    FORMAT='DELTA' over the TABLE DIRECTORY, not FORMAT='CSV' over a file:
+    //    the table is a real Delta table now (#3904), and this is the identical
+    //    read `synapse-catalog-client.countRows` performs — so the view and the
+    //    catalog's row count can no longer disagree about what the table is.
+    //    Learn: https://learn.microsoft.com/azure/synapse-analytics/sql/query-delta-lake-format
     if (!synapse) return;
-    const httpsUrl = pathToHttpsUrl(container, t.csvPath);
+    const httpsUrl = pathToHttpsUrl(container, t.tablePath);
     const viewLeaf = `${t.name}`.replace(/[^A-Za-z0-9_]/g, '_');
     // F9 — when schemasEnabled, register the view under the table's schema
     // (so the 4-part name workspace.lakehouse.schema.table resolves);
@@ -692,11 +744,11 @@ async function provisionAzureNative(
       `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA ${viewSchema}');\n` +
       `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
       `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
-      `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE) AS r');`;
+      `FORMAT = ''DELTA'') AS r');`;
     try {
       await synapseExec(synapse, ddl);
       externalViews.push(obj);
-      steps.push(`Table ${t.name}: registered Synapse serverless view ${obj} over the seed CSV.`);
+      steps.push(`Table ${t.name}: registered Synapse serverless view ${obj} over the Delta table.`);
     } catch (e: any) {
       steps.push(`Table ${t.name}: OPENROWSET view register failed: ${e?.message || String(e)}`);
     }
@@ -739,7 +791,7 @@ async function provisionAzureNative(
 
   steps.push(
     `Azure-native lakehouse materialised in ${container}/${root}: ${createdFolders.length} folder(s), ` +
-      `${deltaTables.length} table folder(s) (${seeded.length} seeded, ${emptyTables.length} empty)` +
+      `${deltaTables.length} table folder(s) (${seeded.length}/${expectedSeedTables} seeded, ${emptyTables.length} empty)` +
       `${externalViews.length ? `, ${externalViews.length} Synapse view(s)` : ''}` +
       `${shortcutDecls.length ? `, ${shortcutOutcome.active.length}/${shortcutDecls.length} shortcut(s) active` : ''}.`,
   );
@@ -752,22 +804,91 @@ async function provisionAzureNative(
     steps.push(`Lakehouse ADLS root (abfss): ${abfssRoot} — paired SQL analytics endpoint will target it.`);
   }
 
+  const secondaryIds = {
+    backend: 'azure-native-adls',
+    container,
+    rootPath: root,
+    ...(abfssRoot ? { adlsRoot: abfssRoot } : {}),
+    ...(createdFolders.length ? { folders: createdFolders.join(',') } : {}),
+    ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
+    ...(emptyTables.length ? { emptyTables: emptyTables.join(',') } : {}),
+    // The seed CSVs' REAL paths, recorded rather than re-derivable — a JSON
+    // object mapping `<schema>.<table>` (or `<table>` when schemas are off) to
+    // the container-relative path. Consumers MUST read this instead of
+    // rebuilding a path; see the recording hook above for why.
+    //
+    // JSON, not the `k=v,k=v` shape the sibling keys use, because that encoding
+    // would be AMBIGUOUS here and I checked rather than assumed:
+    // `safeAdlsRelPath` (backing-name.ts) is structural, not charset-based — it
+    // normalises separators and drops `.`/`..`/empty segments and nothing else
+    // — so a `,` or `=` in a table name or display name survives into both the
+    // key and the path. A lakehouse called "Sales, EMEA" is enough to break a
+    // comma-split. (The pre-existing `seededTables` key has that latent flaw;
+    // this change does not add a second one.)
+    ...(seedCsvPaths.size ? { seedCsvPaths: JSON.stringify(Object.fromEntries(seedCsvPaths)) } : {}),
+    ...(failedFolders.length ? { failedFolders: failedFolders.join(',') } : {}),
+    ...(failedTables.length ? { failedTables: failedTables.join(',') } : {}),
+    ...(arityMismatches.length ? { arityMismatchTables: arityMismatches.join(',') } : {}),
+    ...(externalViews.length ? { synapseViews: externalViews.join(',') } : {}),
+    ...(shortcutOutcome.active.length ? { shortcutsActive: shortcutOutcome.active.join(',') } : {}),
+    ...(shortcutOutcome.pending.length ? { shortcutsPending: shortcutOutcome.pending.join(',') } : {}),
+    ...(shortcutOutcome.failed.length ? { shortcutsFailed: shortcutOutcome.failed.join(',') } : {}),
+  };
+
+  // ── OUTCOME GATE (#3905) ────────────────────────────────────────────────
+  //
+  // Until 2026-08-22 this function returned status:'created' here regardless of
+  // what landed. `createdFolders` / `seeded` / `emptyTables` were computed and
+  // then used ONLY to build the log line above — every per-folder and per-table
+  // failure was a `steps.push` and continue, and nothing downstream could see
+  // it. Because `provisioning-engine` sums returned statuses, that made
+  // `outcome:'all-created'` (and a job status of `done`) close to arithmetically
+  // guaranteed no matter what the data plane did.
+  //
+  // The shape below is `kql-db.ts`'s, deliberately: gate on the real counters,
+  // report the total-miss case first because it is the headline, and keep
+  // `resourceId` + `secondaryIds` on the failure so the receipt still names what
+  // WAS made. `expectedSeedTables` comes from the seeder itself rather than a
+  // second count computed here — two counts of the same thing by two methods
+  // agree about the method, not about the outcome.
+  //
+  // SCOPE: the gate is on TABLES, not folders. A non-auth folder-create failure
+  // stays non-fatal — that is a decision already on record, with its rationale,
+  // in `lib/install/__tests__/lakehouse-extraction-behaviour.test.ts` ("409/500-
+  // class failures must NOT short-circuit: … the right answer for anything a
+  // grant would not fix"), and reversing it is not this change's call.
+  // `failedFolders` is still COUNTED and lands in `secondaryIds.failedFolders`,
+  // so the post-provision validation pass #3905 asks for can gate on it without
+  // having to re-derive it. A 401/403 on a folder is unaffected: it short-
+  // circuits into the remediation above, as before.
+  if (expectedSeedTables > 0 && seeded.length === 0) {
+    return {
+      status: 'failed',
+      error:
+        `Lakehouse root ${container}/${root} was created, but all ${expectedSeedTables} declared Delta ` +
+        'table seed(s) failed — no rows landed, so every table in this lakehouse would read empty. See steps.',
+      resourceId: `${container}/${root}`,
+      secondaryIds,
+      steps,
+    };
+  }
+  if (failedTables.length > 0) {
+    return {
+      status: 'failed',
+      error:
+        `Lakehouse ${container}/${root} is INCOMPLETE: ${failedTables.length} Delta table(s) ` +
+        `(${failedTables.join(', ')}) declared by the bundle did not land ` +
+        `(${seeded.length}/${expectedSeedTables} table(s) seeded). See steps for the per-table failure.`,
+      resourceId: `${container}/${root}`,
+      secondaryIds,
+      steps,
+    };
+  }
+
   return {
     status: 'created',
     resourceId: `${container}/${root}`,
-    secondaryIds: {
-      backend: 'azure-native-adls',
-      container,
-      rootPath: root,
-      ...(abfssRoot ? { adlsRoot: abfssRoot } : {}),
-      ...(createdFolders.length ? { folders: createdFolders.join(',') } : {}),
-      ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
-      ...(emptyTables.length ? { emptyTables: emptyTables.join(',') } : {}),
-      ...(externalViews.length ? { synapseViews: externalViews.join(',') } : {}),
-      ...(shortcutOutcome.active.length ? { shortcutsActive: shortcutOutcome.active.join(',') } : {}),
-      ...(shortcutOutcome.pending.length ? { shortcutsPending: shortcutOutcome.pending.join(',') } : {}),
-      ...(shortcutOutcome.failed.length ? { shortcutsFailed: shortcutOutcome.failed.join(',') } : {}),
-    },
+    secondaryIds,
     steps,
   };
 }

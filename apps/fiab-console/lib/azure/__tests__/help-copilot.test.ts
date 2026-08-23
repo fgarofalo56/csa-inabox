@@ -99,6 +99,10 @@ import {
   buildCorpus,
 } from '../loom-docs-index';
 
+import { SUPERSEDED_NOTICE, isSupersededPath } from '../loom-docs-corpus';
+import { MAX_CHUNK } from '../docs-chunker';
+import { tokenize } from '../docs-ranker';
+
 import { extractProposedChange, PROPOSED_CHANGE_KEY } from '../../copilot/proposed-change';
 
 // ---------- Fixtures ----------
@@ -404,20 +408,100 @@ describe('loom-docs-index', () => {
     }
   }, 30_000);
 
-  it('buildCorpus includes in-flight PRPs (PRPs/active) and parity docs — stale-corpus regression guard', async () => {
+  it('buildCorpus includes in-flight PRPs, archived PRP history, and parity docs — stale-corpus regression guard', async () => {
     // Regression guard for the 2026-07 stale-corpus incident: the corpus only
     // ingested PRPs/completed/**, so shipped-but-active work (foundry-parity
     // AUDIT receipts) was structurally invisible and the Copilot answered from
     // an outdated gap analysis. These paths must stay in the corpus.
+    //
+    // 2026-08-22 — THE SAME CLASS OF LOSS RECURRED, from the other direction.
+    // The omnibus consolidation (57fa48f6 / #3881) moved 22 PRP units from
+    // PRPs/active/ into PRPs/archive/2026-08-22-omnibus-consolidation/. The
+    // walker had no archive root, so PRP corpus membership fell 104 -> 36 files
+    // and 68 markdown files left retrieval silently — including the very
+    // foundry-parity AUDIT.md this guard was written to protect, whose
+    // "RE-VERIFIED 2026-08-06" block is the corrected code-truth for four rows
+    // an earlier static sweep had wrong. Losing that file re-creates the exact
+    // 2026-07 failure: the Copilot answering from a stale gap analysis.
+    //
+    // So the pin below FOLLOWED the document to its new home rather than being
+    // deleted. Re-pointing a guard at a path that is still walked would have
+    // been fine; deleting it because the file moved would have blessed the
+    // regression. The property under test is unchanged and is NOT "this path
+    // exists": it is "these documents are REACHABLE BY RETRIEVAL".
     const chunks = await buildCorpus();
-    // foundry-parity AUDIT.md — the live shipped-receipt register.
-    expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith('PRPs/active/foundry-parity/'))).toBe(true);
-    // Any active-PRP PRP.md / AUDIT.md beyond foundry-parity should also land.
+    const ARCHIVED_PRP_ROOT = 'PRPs/archive/';
+    const FOUNDRY_PARITY = 'PRPs/archive/2026-08-22-omnibus-consolidation/foundry-parity/';
+
+    // foundry-parity AUDIT.md — the shipped-receipt register, at its new home.
+    expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith(FOUNDRY_PARITY))).toBe(true);
+    // Specifically the AUDIT register, not merely some file in that folder.
+    expect(chunks.some((c) => c.kind === 'prp' && c.path === `${FOUNDRY_PARITY}AUDIT.md`)).toBe(true);
+    // The CURRENT program (the omnibus that superseded those units) must be in
+    // the corpus too — this is the half the guard has always asserted.
     expect(chunks.some((c) => c.kind === 'prp' && /^PRPs\/active\//.test(c.path))).toBe(true);
     // docs/fiab/parity/** — per-surface parity receipts, walked via docs/.
     expect(chunks.some((c) => c.kind === 'docs' && c.path.startsWith('docs/fiab/parity/'))).toBe(true);
     // Completed PRPs must remain ingested (no regression the other way).
     expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith('PRPs/completed/csa-loom-pillar/'))).toBe(true);
+
+    // A root that resolves but walks NOTHING is green and empty — the failure
+    // this guard exists to catch. Assert a POPULATION FLOOR, not mere presence.
+    // The consolidation alone archived 79 markdown files; 40 is a deliberately
+    // loose floor that still fails instantly on an empty or mis-joined root.
+    const archivedFiles = new Set(
+      chunks.filter((c) => c.path.startsWith(ARCHIVED_PRP_ROOT)).map((c) => c.path),
+    );
+    expect(archivedFiles.size).toBeGreaterThan(40);
+  }, 60_000);
+
+  it('archived PRP chunks are identifiable by path and carry NO injected boilerplate', async () => {
+    // The Copilot may retrieve superseded design history but must never present
+    // it as current. The FIRST version of this change stamped a notice into
+    // indexed `content`, which inverted the goal: `tokenize()` reduced it to
+    // ["archived","superseded","design","history","current","plan","see",
+    // "prps","active","current","work"] — no stopwords among them and
+    // "current" TWICE — so a 5% slice of the corpus took 90-100% of the top-10
+    // for any query sharing a notice word, and archived docs became the top
+    // match for "current". It also cut IDF corpus-wide (df "current"
+    // 1944 -> 4092). Marking now happens at prompt/citation assembly, keyed off
+    // `path`, which is retrievable on both backends.
+    //
+    // This test is the regression fence for that: it asserts the corpus is
+    // marked by PATH and that NO ranking-visible text is injected.
+    const chunks = await buildCorpus();
+
+    const archived = chunks.filter((c) => isSupersededPath(c.path));
+    const current = chunks.filter((c) => c.kind === 'prp' && !isSupersededPath(c.path));
+    expect(archived.length).toBeGreaterThan(0);
+    expect(current.length).toBeGreaterThan(0);
+
+    // 1. The notice must never reach indexed content — on ANY chunk, not just
+    //    archived ones (a blanket stamp would poison the whole corpus).
+    expect(chunks.some((c) => c.content.includes(SUPERSEDED_NOTICE))).toBe(false);
+
+    // 2. Stronger, and independent of the exact wording: no token from the
+    //    notice may be injected into archived chunks. If someone re-adds a
+    //    reworded banner this still fires, because the failure mode is
+    //    tokens-in-content, not one literal string.
+    const noticeTokens = new Set(tokenize(SUPERSEDED_NOTICE));
+    expect(noticeTokens.size).toBeGreaterThan(0); // control: tokenizer works
+    const injected = archived.filter((c) => {
+      const head = tokenize(c.content.slice(0, SUPERSEDED_NOTICE.length + 8));
+      // Every leading token appearing in the notice AND the chunk starting with
+      // notice-shaped text is the signature of a prepended banner.
+      return head.length > 0 && head.every((t) => noticeTokens.has(t));
+    });
+    expect(
+      injected.map((c) => c.path).slice(0, 3),
+      'archived chunks appear to start with injected notice text — that is the ' +
+        'BM25-poisoning regression; mark superseded docs at prompt assembly via ' +
+        'isSupersededPath(), never in DocChunk.content',
+    ).toEqual([]);
+
+    // 3. Archived chunks stay within the ordinary chunk-size invariant (no
+    //    special budget is needed once nothing is prepended).
+    for (const c of archived) expect(c.content.length).toBeLessThanOrEqual(MAX_CHUNK);
   }, 60_000);
 
   it('reindex (Cosmos fallback) persists chunks and warns about missing AI Search', async () => {
