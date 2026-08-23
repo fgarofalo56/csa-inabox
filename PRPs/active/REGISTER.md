@@ -203,10 +203,15 @@ Other collisions to sequence around:
 
 1. **Verify green before every merge** — `MISSING/RED/INCOMPLETE` all zero. A hollow required
    check is only acceptable when it is **path-appropriate for that PR's diff**.
-2. **Audit `closingIssuesReferences` before merging.** Live catch on #3927: a sentence reading
-   *"required to close #3060"* registered as **Closes #3060** — on a PR whose own body said
-   *"Deliberately Refs, never Closes: the close parser is negation-blind."* #3060 needs a
-   **re-roll**, which a merge cannot perform. Reworded; refs now empty.
+2. **Audit `closingIssuesReferences` before merging.** Live catch on #3927: one sentence placed
+   a close-keyword immediately before an issue number, registering a real closing reference — on
+   a PR whose own body said *"Deliberately Refs, never Closes: the close parser is
+   negation-blind."* That issue needs a **re-roll**, which a merge cannot perform. Reworded; refs
+   now empty.
+
+   **This propagates by quotation.** Writing the offending phrase verbatim — even to document the
+   hazard — re-triggers the parser. It happened again on #3953, the PR carrying *this file*.
+   Describe the shape; never reproduce the literal `<keyword> #<number>` adjacency.
 3. **Audit closed issues after every merge** — compare the closed list before and after.
 4. **Never merge onto a red suite**, and verify `main` is green between batches.
 5. **Runner capacity caps the parallel width** (§4a). Read-only review lanes are free; branch
