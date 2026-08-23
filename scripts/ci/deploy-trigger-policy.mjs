@@ -341,6 +341,94 @@ export function resolveTopologyGuard({
 }
 
 /**
+ * Resolve the subscription this deploy ACTUALLY lands in (refs #3916).
+ *
+ * WHY THIS IS A SECOND VALUE AND NOT A CHANGE TO `deploySub`
+ * ---------------------------------------------------------
+ * `deploySub` has a documented contract: the empty string means "the login
+ * subscription", i.e. omit `--subscription` and let the Azure CLI's active
+ * subscription stand. That is not a miss, it is the specified value, and on a
+ * `schedule` event it is empty BY CONSTRUCTION -- `deploy_sub` derives from
+ * `CSA_LOOM_SUBSCRIPTION_OVERRIDE` = `inputs.subscription`, and a schedule
+ * carries no inputs. Sixteen consumers in deploy-fiab-commercial.yml honour
+ * that contract with `${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}` and deploy
+ * correctly with it empty; the passing 2026-08-22 run did exactly that.
+ *
+ * So `deploySub` is NOT broken and must not be "fixed" to be non-empty --
+ * doing so would make sixteen steps start pinning a subscription they
+ * deliberately inherit. What was missing is the OTHER question, which some
+ * steps genuinely need answered: not "should I pass --subscription?" but
+ * "which subscription is this, as a literal id?". A step that builds an ARM
+ * resource id (`/subscriptions/<id>/...`) cannot inherit anything, so it needs
+ * a value, and before #3916 there was no output that gave it one.
+ *
+ * #3888 ported two such steps onto the scheduled lane -- the DNS-resolver
+ * allocation probe and the ADX preflight -- and both read `deploy_sub`, found
+ * the documented empty string, and hard-failed the P0 deploy path. They had
+ * invented a requirement the contract never made.
+ *
+ * `loginSubscription` is what `az account show --query id -o tsv` returned, or
+ * '' if that could not be established. It is only consulted when there is no
+ * explicit subscription, so a run that names one never pays for the call.
+ *
+ * @param {object}  a
+ * @param {string} [a.topology]             'tenant' | 'single-sub' | 'dlz-attach' | ''
+ * @param {string} [a.targetSubscription]   dlz-attach target sub id
+ * @param {string} [a.subscriptionOverride] hub/deploy sub id (inputs.subscription)
+ * @param {string} [a.loginSubscription]    what `az account show` reported; '' = UNKNOWN
+ * @returns {{targetSub:string, source:'target_subscription'|'subscription_input'|'login'|'unresolved'}}
+ *   targetSub is '' ONLY when source==='unresolved' -- i.e. nothing established
+ *   it. The caller fails CLOSED on that; it must never render as a subscription.
+ */
+export function resolveTargetSubscription({
+  topology,
+  targetSubscription = '',
+  subscriptionOverride = '',
+  loginSubscription = '',
+} = {}) {
+  const effectiveTopology = (topology || 'tenant').trim() || 'tenant';
+
+  // dlz-attach stamps into an EXPLICIT subscription; resolveTopologyGuard
+  // already refuses the run when it is absent, so reaching here with it set is
+  // the only possibility. Never fall back to the login sub here -- silently
+  // attaching a landing zone to whatever subscription the CLI happened to be
+  // pointed at is precisely the mis-target that guard exists to prevent.
+  if (effectiveTopology === 'dlz-attach') {
+    const explicit = String(targetSubscription).trim();
+    return explicit
+      ? { targetSub: explicit, source: 'target_subscription' }
+      : { targetSub: '', source: 'unresolved' };
+  }
+
+  const override = String(subscriptionOverride).trim();
+  if (override) return { targetSub: override, source: 'subscription_input' };
+
+  const login = String(loginSubscription).trim();
+  if (login) return { targetSub: login, source: 'login' };
+
+  return { targetSub: '', source: 'unresolved' };
+}
+
+/**
+ * Parse `az account show --query id -o tsv`.
+ *
+ * Returns '' (UNKNOWN) for anything that is not a syntactically valid GUID.
+ * Two reasons it is this strict rather than a `.trim()`:
+ *
+ *   1. az writes a trailing CR on some runners, and a subscription id with a CR
+ *      in it produces an ARM resource id that 404s with a message naming a
+ *      resource that looks correct in the log. The CR is stripped here, once.
+ *   2. A FAILED az call leaves an empty string or an error blob on stdout. If
+ *      that were passed through, "I could not read the subscription" would
+ *      render as a subscription id -- the deploy-integrity R7 shape. Anything
+ *      that is not a GUID is UNKNOWN, and the caller fails closed on UNKNOWN.
+ */
+export function parseSubscriptionId(raw) {
+  const s = String(raw ?? '').replace(/\r/g, '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ? s : '';
+}
+
+/**
  * Parse the `az graph query ... --query "data | length(@)" -o tsv` result.
  * Returns null (UNKNOWN) for anything that is not a clean non-negative integer,
  * including the empty string an errored az call leaves behind.
