@@ -35,6 +35,7 @@ import {
   repoShapeFaults,
   scan,
   scanFiles,
+  SCAN_ROOTS,
   REPO_ROOT,
 } from '../check-role-guid-consistency.mjs';
 
@@ -49,6 +50,81 @@ function run(source, file = 'fixture.ts') {
   return { ...evaluate(pairs), pairs, unparsed };
 }
 const checks = (r, id) => r.findings.filter((f) => f.check === id);
+
+// ── the repo scan: a directory listing is a SNAPSHOT ─────────────────────────
+
+/**
+ * How many vanished-file events ONE repo scan may absorb before this suite
+ * calls it churn rather than a race. "A couple" — the expected value is ZERO.
+ */
+const VANISH_BUDGET = 2;
+/** Every path that was listed by scanFiles() and gone by the time it was read. */
+const vanished = [];
+
+/**
+ * scan() the real repo, tolerating a file that disappeared between the
+ * directory listing and the read.
+ *
+ * ── WHY THIS IS NEEDED ─────────────────────────────────────────────────────
+ * scanFiles() lists a tree and inventory() then opens what it listed. Those are
+ * two moments, and anything can happen in between — an editor's atomic-rename
+ * save, a build cleaning an output, a git operation, or (the case that actually
+ * bit) a CONCURRENT SUITE in this same `node --test` invocation writing a
+ * temporary file into `scripts/ci` and deleting it again. Measured on PR #3892
+ * (run 32613872830), a bicep-only change:
+ *
+ *   not ok 278 - the repo is clean — every resolved binding carries its documented id
+ *     error: "ENOENT: no such file or directory, open
+ *             '…/scripts/ci/deploy-fiab-guard.__control__.mjs'"
+ *
+ * The two harnesses that wrote those files now write them to a temp directory
+ * instead, which removes THAT cause. This removes the CLASS: a snapshot is a
+ * snapshot regardless of who invalidates it, and an unrelated PR going red on a
+ * file that was never in its diff is the failure worth preventing.
+ *
+ * ── WHY IT RETRIES THE SCAN RATHER THAN SKIPPING THE FILE ──────────────────
+ * Skipping the unreadable file and continuing is the obvious fix and it is the
+ * WRONG one here. The two assertions this scan feeds are population floors —
+ * `pairs.length >= 100` and `resolved >= 80` — and they exist precisely so a
+ * matcher that silently degrades stays visible. A skip subtracts from exactly
+ * the number those floors watch, so "tolerate ENOENT" and "the population may
+ * quietly drop" would become one code path, which is the zero-population
+ * failure this repo keeps rediscovering.
+ *
+ * Re-running scan() cannot do that. The retry re-LISTS the tree, the transient
+ * file is no longer in the listing, and the floors run against a COMPLETE scan.
+ * Nothing is ever dropped from the population; the tolerance costs a rescan,
+ * not a measurement.
+ *
+ * The tolerance is bounded and DISCLOSED either way: every vanished path is
+ * recorded, the count is reported and asserted small by the test below, and a
+ * fourth event stops retrying and rethrows with the whole list attached rather
+ * than looping on a tree that is genuinely being churned.
+ *
+ * Memoised because all three repo-anchored tests want the same measurement and
+ * one scan takes ~5s: one scan is cheaper AND is one third of the exposure.
+ */
+let scanned = null;
+function scanRepo() {
+  if (scanned) return scanned;
+  for (;;) {
+    try {
+      scanned = scan();
+      return scanned;
+    } catch (err) {
+      // ENOENT only. Anything else — EACCES, EISDIR, a malformed read — is a
+      // real fault and must not be retried into silence.
+      if (err?.code !== 'ENOENT') throw err;
+      vanished.push(err.path ?? '<unnamed>');
+      if (vanished.length > VANISH_BUDGET + 1) {
+        err.message = `${err.message}\n  ${vanished.length} file(s) vanished between the directory listing `
+          + `and the read across as many rescans, so this is not a one-off race — something is writing into a `
+          + `scanned tree (${SCAN_ROOTS.join(', ')}) while the tests run:\n    ${vanished.join('\n    ')}`;
+        throw err;
+      }
+    }
+  }
+}
 
 // ── the reference table and the embedded controls ───────────────────────────
 
@@ -580,7 +656,7 @@ test('test files are out of scope — their GUIDs are fixtures, not grants', () 
 
 test('the guard does not harvest its own reference table', () => {
   const self = 'scripts/ci/check-role-guid-consistency.mjs';
-  const { pairs } = scan();
+  const { pairs } = scanRepo();
   assert.equal(pairs.filter((p) => p.file === self).length, 0);
 });
 
@@ -588,7 +664,10 @@ test('the real repo yields a substantial, resolvable population', () => {
   // The floors in main() are `> 0`; this asserts the tree is genuinely being
   // read, so a matcher that silently degrades to a handful of hits is visible
   // here even while the binary floor still passes.
-  const { pairs, resolved } = scan();
+  //
+  // These two numbers are also why scanRepo() RETRIES rather than skipping an
+  // unreadable file: a skip would subtract from exactly what they watch.
+  const { pairs, resolved } = scanRepo();
   assert.ok(pairs.length >= 100, `only ${pairs.length} bindings harvested`);
   assert.ok(resolved >= 80, `only ${resolved} bindings resolved`);
 });
@@ -596,8 +675,31 @@ test('the real repo yields a substantial, resolvable population', () => {
 test('the repo is clean — every resolved binding carries its documented id', () => {
   // The baseline half of the mutation proof, pinned so a regression is a test
   // failure and not just a red CI step somebody reruns.
-  const { findings } = scan();
+  const { findings } = scanRepo();
   assert.deepEqual(findings.map((f) => `${f.check} ${f.file}:${f.line}`), []);
+});
+
+test('the repo scan absorbed at most a couple of vanished files, and names them', (t) => {
+  // The disclosure half of scanRepo()'s ENOENT tolerance. Without this, "the
+  // listing can go stale" would be an unbounded, silent licence — and a
+  // scanner that swallows every read error is the zero-population failure this
+  // repo keeps rediscovering, wearing a different hat.
+  //
+  // Declared AFTER the three tests above so it reports on their scan (node:test
+  // runs a file's top-level tests in declaration order); the call is here too
+  // so this still measures something when run with --test-name-pattern.
+  scanRepo();
+  t.diagnostic(
+    `files that vanished between the directory listing and the read: ${vanished.length}`
+      + (vanished.length > 0 ? ` — ${vanished.join(', ')}` : ''),
+  );
+  assert.ok(
+    vanished.length <= VANISH_BUDGET,
+    `${vanished.length} file(s) vanished mid-scan, over a budget of ${VANISH_BUDGET}. The EXPECTED value is `
+      + 'ZERO: the two suites that used to write a transient `*.__control__.mjs` into scripts/ci now write it '
+      + 'to a temp directory. More than a couple means something is writing into a scanned tree again — fix '
+      + `that, do NOT raise the budget:\n    ${vanished.join('\n    ')}`,
+  );
 });
 
 test('every embedded control has a name and both halves are exercised somewhere', () => {

@@ -61,11 +61,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..', '..');
-const SCRIPT = path.join(REPO, 'scripts', 'ci', 'deploy-fiab-guard.mjs');
+const CI_DIR = path.join(REPO, 'scripts', 'ci');
+const SCRIPT = path.join(CI_DIR, 'deploy-fiab-guard.mjs');
 const IS_WIN = process.platform === 'win32';
 
 /**
@@ -144,22 +145,106 @@ test('CLEAN — LOOM_AZ_BIN reaches the SPAWN: the spawn error names the OVERRID
   );
 });
 
+/**
+ * `from './x'` / `import './x'` / `import('./x')` — every RELATIVE specifier.
+ * Deliberately not keyed to the one import this guard has today: a second one
+ * added later must be rewritten too, or the mutant would resolve it against the
+ * temp directory and die with ERR_MODULE_NOT_FOUND instead of measuring.
+ */
+const REL_SPECIFIER = /\b(from|import)(\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\3/g;
+
+/**
+ * Write a mutated copy of a `scripts/ci` guard OUTSIDE the repo tree.
+ *
+ * ── WHY OUT OF TREE ────────────────────────────────────────────────────────
+ * The copy used to be written to `scripts/ci/deploy-fiab-guard.__control__.mjs`
+ * — i.e. INSIDE a directory that another suite in the same `node --test`
+ * invocation walks. check-role-guid-consistency's scan() lists `scripts/ci` and
+ * then opens what it listed; node:test runs suites concurrently; so the listing
+ * could name this transient file and the open could land after the `finally`
+ * below had already removed it:
+ *
+ *   not ok - the repo is clean — every resolved binding carries its documented id
+ *     error: "ENOENT: no such file or directory, open '…/deploy-fiab-guard.__control__.mjs'"
+ *
+ * That reddened PRs which touch no JavaScript at all (#3892, run 32613872830).
+ * Reproduced locally at 1 run in 20. It is the #3459 class: a suite transiently
+ * writing where other tooling reads.
+ *
+ * A unique per-run NAME would NOT have fixed it — the scanner would still list
+ * the file and it would still vanish before the read. The cause is the
+ * LOCATION, so the copy leaves the scanned tree entirely.
+ *
+ * ── WHY THAT IS SAFE FOR THIS SUBJECT (measured, not assumed) ──────────────
+ * deploy-fiab-guard.mjs derives NOTHING from its own location: no
+ * `import.meta.url`, no `__dirname`. Its only location dependency is the
+ * relative specifier `./deploy-trigger-policy.mjs`, rewritten below to an
+ * absolute `file:` URL of the REAL sibling — so the mutant runs against the
+ * same module the in-tree copy did, and the two arms still differ by exactly
+ * the mutation and by nothing else. cwd is not a variable either: runGuard()
+ * pins `cwd: REPO` for every arm. The CONTROL test re-establishes the
+ * location-independence property on every run, so an edit that makes the guard
+ * location-aware fails loudly rather than quietly neutering this arm.
+ *
+ * Precedent in this same directory: check-licenses-cannot-run.test.mjs builds a
+ * whole temp "repo" for a guard that IS location-derived.
+ */
+function writeMutantOutsideTheTree(text, basename) {
+  const rewritten = text.replace(REL_SPECIFIER, (_m, kw, gap, q, spec) => {
+    const abs = path.resolve(CI_DIR, spec);
+    assert.ok(fs.existsSync(abs), `the control rewrote \`${spec}\` to ${abs}, which does not exist`);
+    return `${kw}${gap}${q}${pathToFileURL(abs).href}${q}`;
+  });
+  assert.doesNotMatch(
+    rewritten,
+    new RegExp(REL_SPECIFIER.source),
+    'a relative import survived the rewrite, so the mutant would resolve it against the TEMP directory and '
+      + 'this arm would fail to load instead of measuring anything',
+  );
+
+  // mkdtempSync, not a fixed name: a predictable path in a world-writable root
+  // can be pre-created or symlinked by another local user, which is exactly
+  // what check-temp-artifact-safety.mjs flags.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-guard-control-'));
+  const file = path.join(dir, basename);
+  assert.ok(
+    !path.resolve(file).startsWith(path.resolve(REPO) + path.sep),
+    `the mutated copy must not be written inside the repo tree (${file}) — a concurrent suite walks `
+      + 'scripts/ci and opens what it lists, so anything transient in there is a race',
+  );
+  fs.writeFileSync(file, rewritten);
+  return { dir, file };
+}
+
 test('CONTROL — re-hardcoding the binary makes the measurement MOVE', () => {
   // The exact mutation #3704 filed, applied to a COPY: a suite that rewrites a
   // deploy script in place can leave the tree dirty if it dies mid-test.
   const original = fs.readFileSync(SCRIPT, 'utf8');
+
+  // The mutant runs from a temp directory (see writeMutantOutsideTheTree), so
+  // anything this guard derived from its OWN location would differ between the
+  // arms for a reason that is not the mutation. It derives nothing today; this
+  // pins that rather than assuming it. cwd is not in this set on purpose —
+  // runGuard() passes `cwd: REPO` to every arm, so a cwd-derived path is
+  // identical either way.
+  assert.doesNotMatch(
+    original,
+    /import\.meta\.url|__dirname/,
+    'deploy-fiab-guard.mjs now derives a path from its own location, so a copy running from a temp directory '
+      + 'is no longer the same subject and this control would be measuring something else. Give the copy the '
+      + 'same root (see check-licenses-cannot-run.test.mjs) — do NOT move it back into scripts/ci, which a '
+      + 'concurrent suite scans.',
+  );
+
   const nl = original.includes('\r\n') ? '\r\n' : '\n';
   const lines = original.split(nl);
   const at = lines.findIndex((l) => /^\s*if \(env\.LOOM_AZ_BIN\) return env\.LOOM_AZ_BIN;\s*$/.test(l));
   assert.ok(at >= 0, 'the mutation did not apply — the resolver line was not found, so this control proves NOTHING');
   lines[at] = "  return 'az'; // MUTATED BY THE CONTROL";
 
-  // The copy sits beside the original so its relative import of
-  // ./deploy-trigger-policy.mjs still resolves.
-  const mutant = path.join(REPO, 'scripts', 'ci', 'deploy-fiab-guard.__control__.mjs');
-  fs.writeFileSync(mutant, lines.join(nl));
+  const { dir, file } = writeMutantOutsideTheTree(lines.join(nl), 'deploy-fiab-guard.__control__.mjs');
   try {
-    const r = runGuard({ LOOM_AZ_BIN: FAKE_AZ }, mutant);
+    const r = runGuard({ LOOM_AZ_BIN: FAKE_AZ }, file);
     assert.match(r.out, /hub-count query failed/, `the mutant never attempted a query:\n${r.out}`);
     assert.ok(
       !r.out.includes(FAKE_AZ),
@@ -167,7 +252,9 @@ test('CONTROL — re-hardcoding the binary makes the measurement MOVE', () => {
     );
     assert.match(r.out, /az binary: az(\.cmd)?\)/, `the mutant did not fall back to the hardcoded binary:\n${r.out}`);
   } finally {
-    fs.rmSync(mutant, { force: true });
+    // try/finally, and a whole directory rather than one file: a crash between
+    // mkdtemp and here must not be able to strand an artifact.
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 
   assert.equal(fs.readFileSync(SCRIPT, 'utf8'), original, 'the real guard must be untouched by this control');

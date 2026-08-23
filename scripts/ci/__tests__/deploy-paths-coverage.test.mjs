@@ -30,7 +30,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -44,6 +45,7 @@ import {
 import { WATCHED } from '../check-deploy-staleness.mjs';
 
 const CI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = path.resolve(CI_DIR, '..', '..');
 
 // ---------------------------------------------------------------------------
 // extractDeploySources — only real execution counts, never a mention
@@ -113,6 +115,74 @@ test('CONTROL: `node -e` and a node path outside the source roots are NOT deploy
   assert.equal(extractDeploySources('          FILE=scripts/ci/deploy-retry.mjs\n').size, 0);
 });
 
+/**
+ * `from './x'` / `import './x'` / `import('./x')` — every RELATIVE specifier.
+ * Deliberately not keyed to the one import this guard has today: a second one
+ * added later must be rewritten too, or the mutant would resolve it against the
+ * temp directory and die with ERR_MODULE_NOT_FOUND instead of measuring.
+ */
+const REL_SPECIFIER = /\b(from|import)(\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\3/g;
+
+/**
+ * Write a mutated copy of a `scripts/ci` guard OUTSIDE the repo tree.
+ *
+ * ── WHY OUT OF TREE ────────────────────────────────────────────────────────
+ * The copy used to be written to
+ * `scripts/ci/check-deploy-paths-coverage.__control__.mjs` — i.e. INSIDE a
+ * directory another suite in the same `node --test` invocation walks.
+ * check-role-guid-consistency's scan() lists `scripts/ci` and then opens what
+ * it listed; node:test runs suites concurrently; so the listing could name this
+ * transient file and the open could land after the `finally` below had already
+ * removed it, reddening PRs that touch no JavaScript at all (#3892, run
+ * 32613872830). Reproduced locally at 1 run in 20. It is the #3459 class: a
+ * suite transiently writing where other tooling reads.
+ *
+ * A unique per-run NAME would NOT have fixed it — the scanner would still list
+ * the file and it would still vanish before the read. The cause is the
+ * LOCATION, so the copy leaves the scanned tree entirely.
+ *
+ * ── WHY THAT IS SAFE FOR THIS SUBJECT (measured, not assumed) ──────────────
+ * check-deploy-paths-coverage.mjs derives no path from its own location: no
+ * `import.meta.url`, no `__dirname`. It does read `process.cwd()`, and that is
+ * precisely why moving the FILE changes nothing — the mutant is `import()`ed
+ * in-process, so cwd is this run's cwd either way, and classifyEntry() judges
+ * the `text` it is handed rather than anything it reads from disk. Its only
+ * location dependency is the relative specifier `./check-deploy-staleness.mjs`,
+ * rewritten below to an absolute `file:` URL of the REAL sibling — so both arms
+ * see the same WATCHED list and differ by exactly the mutation. The two-arm
+ * test re-establishes the location-independence property on every run.
+ *
+ * A second, quieter benefit: the ESM loader caches by resolved URL, so the old
+ * fixed path could only ever be imported once per process. A fresh mkdtemp path
+ * per run removes that trap for anyone adding a second mutant here.
+ */
+function writeMutantOutsideTheTree(text, basename) {
+  const rewritten = text.replace(REL_SPECIFIER, (_m, kw, gap, q, spec) => {
+    const abs = path.resolve(CI_DIR, spec);
+    assert.ok(existsSync(abs), `the control rewrote \`${spec}\` to ${abs}, which does not exist`);
+    return `${kw}${gap}${q}${pathToFileURL(abs).href}${q}`;
+  });
+  assert.doesNotMatch(
+    rewritten,
+    new RegExp(REL_SPECIFIER.source),
+    'a relative import survived the rewrite, so the mutant would resolve it against the TEMP directory and '
+      + 'this arm would fail to load instead of measuring anything',
+  );
+
+  // mkdtempSync, not a fixed name: a predictable path in a world-writable root
+  // can be pre-created or symlinked by another local user, which is exactly
+  // what check-temp-artifact-safety.mjs flags.
+  const dir = mkdtempSync(path.join(tmpdir(), 'loom-guard-control-'));
+  const file = path.join(dir, basename);
+  assert.ok(
+    !path.resolve(file).startsWith(path.resolve(REPO_ROOT) + path.sep),
+    `the mutated copy must not be written inside the repo tree (${file}) — a concurrent suite walks `
+      + 'scripts/ci and opens what it lists, so anything transient in there is a race',
+  );
+  writeFileSync(file, rewritten);
+  return { dir, file };
+}
+
 test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one fails', async () => {
   // The mutation is the defect itself: delete the node matcher and re-ask the
   // same question. A guard whose verdict does not MOVE under the mutation it
@@ -120,6 +190,20 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
   // verdict" class).
   const guard = path.join(CI_DIR, 'check-deploy-paths-coverage.mjs');
   const original = readFileSync(guard, 'utf8');
+
+  // The mutant is loaded from a temp directory (see writeMutantOutsideTheTree),
+  // so anything this guard derived from its OWN location would differ between
+  // the arms for a reason that is not the mutation. `process.cwd()` is not in
+  // this set on purpose: an in-process import does not change cwd.
+  assert.doesNotMatch(
+    original,
+    /import\.meta\.url|__dirname/,
+    'check-deploy-paths-coverage.mjs now derives a path from its own location, so a copy loaded from a temp '
+      + 'directory is no longer the same subject and this control would be measuring something else. Give the '
+      + 'copy the same root (see check-licenses-cannot-run.test.mjs) — do NOT move it back into scripts/ci, '
+      + 'which a concurrent suite scans.',
+  );
+
   const nl = original.includes('\r\n') ? '\r\n' : '\n';
   const lines = original.split(nl);
 
@@ -129,12 +213,9 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
   assert.ok(at >= 0, "the mutation did not apply — no `add(m[1], 'node')` call found, so this control proves NOTHING");
   lines[at] = '      // MUTATED BY THE CONTROL — node sources dropped on the floor';
 
-  // The copy sits beside the original so its relative import of
-  // ./check-deploy-staleness.mjs still resolves.
-  const mutant = path.join(CI_DIR, 'check-deploy-paths-coverage.__control__.mjs');
-  writeFileSync(mutant, lines.join(nl));
+  const { dir, file } = writeMutantOutsideTheTree(lines.join(nl), 'check-deploy-paths-coverage.__control__.mjs');
   try {
-    const old = await import(pathToFileURL(mutant).href);
+    const old = await import(pathToFileURL(file).href);
 
     // ONE fixture, both arms. A watched entry that executes a node deploy source
     // and does not declare it.
@@ -155,7 +236,9 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
     assert.deepEqual(nowRow.uncovered, [{ path: 'scripts/ci/deploy-fiab-guard.mjs', how: 'node' }]);
     assert.equal(decide([nowRow]).code, 1, 'the NEW guard must FAIL on an undeclared node deploy source');
   } finally {
-    rmSync(mutant, { force: true });
+    // try/finally, and a whole directory rather than one file: a crash between
+    // mkdtemp and here must not be able to strand an artifact.
+    rmSync(dir, { recursive: true, force: true });
   }
 
   assert.equal(readFileSync(guard, 'utf8'), original, 'the real guard must be untouched by this control');
