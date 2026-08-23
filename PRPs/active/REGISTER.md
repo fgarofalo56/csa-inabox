@@ -158,3 +158,41 @@ before the lanes were trusted to finish.
    11 consecutive attempts over ~35 minutes — which is *why* the design reads from a storage
    export instead.
 5. **Gov is unverified for everything in this register** except `deploy-gov` itself.
+
+---
+
+## 7. Follow-ups filed rather than fixed in place
+
+Each was found inside another PR's remediation and sat **outside that PR's declared file
+ownership**. Reaching across is what CLAUDE.md §8 forbids and is how parallel lanes collide —
+so they were filed instead. This section exists because a deferred finding with no issue is
+indistinguishable from a forgotten one.
+
+| Issue | Finding | Why it matters |
+|---|---|---|
+| **#3940** | `check-env-sync` collects only `LOOM_*`, so **`NEXT_PUBLIC_LOOM_*` is invisible to it** | A **population** defect, not a rule defect — the guard is green because its examined set is smaller than the set it polices. `NEXT_PUBLIC_` is also the prefix that reaches the browser, so an emitted-but-empty one no-ops client-side. |
+| **#3941** | `owner-only-workspace-guard` is **RED and unowned** | While red, the owner-filter property is **not enforced by CI**, so a regression lands silently. A red lane with no owner becomes a permanently accepted failure — there is precedent here for a red lane being disabled rather than fixed. |
+| **#3942** | `reindex-loom-docs` flakes **2/2881 under parallel load**, passes **12/12 isolated** | Load-dependent, so it surfaces intermittently and gets blamed on whatever PR is in the tree. A test whose verdict depends on machine load measures the property *plus the scheduler*. |
+
+## 8. Wave-0 remediation — landed on-branch (2026-08-23)
+
+Three PRs remediated in parallel. Both headline findings were **guards that were green while
+blind**, which is the same class the Loom Brain is being built to detect:
+
+- **#3923** — `LOOM_CLOUD_TIER` sat in `UNTRIAGED_INERT`, consumed by `computeInert()` as a
+  `continue` (a skip, **not** an assertion). Four-arm mutation: wiring REMOVED + allowlist
+  PRESENT returned **RC=0 — the guard was blind**. After the fix that arm returns **RC=1**.
+  Note the arms differ in line endings — `main.bicep` is **LF**, `check-env-sync.mjs` is
+  **CRLF** — so a single LF needle would have matched zero times and read as a passing test.
+- **#3925** — the `engineObject` guard **refused 62% of the objects Loom actually mints**
+  (measured 6,178/10,000; expected 10/16 = 62.5%, because UUID-derived names begin with a
+  digit and the head class was `[A-Za-z_]`). The load-bearing mutation was M3: widening the
+  *head* class opened no hole, while admitting a real separator still goes red.
+- **#3927** — six mutation arms, all RC=0 → RC=1. Also corrected a comment asserting **11**
+  workflows when the real figures are **12 naive / 9 comment-stripped** — 11 was measured by
+  nothing.
+
+**Merge order decision:** #3912 goes first. It fixes a test-isolation race that reddens
+*unrelated* PRs, so landing it reduces spurious failures across the remaining four. Branch
+updated 2026-08-23; its cycle is running.
+
