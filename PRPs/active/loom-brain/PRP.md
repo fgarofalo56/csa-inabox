@@ -28,6 +28,14 @@ a bespoke rule:
 inbound edge*; a vulnerability is *an inbound edge that should not exist*. Both are
 reachability over the same graph — see §3.7.
 
+**AMENDED 2026-08-23, after the thesis was tested against this repo's shipped defects
+(#3939): substantially right, materially incomplete — and it is NOT the highest-value
+part.** See §3.8. In short: the dominant evasion here is not *adding an unguarded edge*, it
+is **falling outside the population being examined** — six measured instances, invisible in
+every artifact except a population count. So the single most valuable thing the Brain builds
+is not the inverted query; it is **every detector emitting `judged / candidates`, with a
+shrinking `judged` treated as P0.**
+
 **This is not hypothetical — it is how the founding finding was made.** `loom-capacity-broker`
 runs `minReplicas: 2` (0.5 vCPU + 1 GiB each, so 1 vCPU / 2 GiB always-on), is healthy,
 has an internal FQDN — and `platform/fiab/bicep/modules/admin-plane/main.bicep:4730`
@@ -196,6 +204,56 @@ mutation**: scoping a bypass to one route, one item type or one cursor passes a 
 **Recommend-only applies here too.** The Brain reports and drafts; it never patches an
 authorization path on its own. A wrong autonomous "fix" to authz is worse than the gap.
 
+### 3.8 Where the reachability thesis FAILS — measured, 2026-08-23
+
+The §3.7 thesis was tested against this repo's shipped defects rather than confirmed by
+construction (`docs/fiab/brain/security-taxonomy.md`, PR #3939). Verdict: **substantially
+right, materially incomplete.** Recording the failures here because W7–W11 build against
+this section, and a design that only documents its successes will reproduce them.
+
+**It holds cleanly** for C1 (unauthorized inbound edge), C2 (aggregate oracle), C6
+(credential forwarded to an unbounded sink) and C8 (injection into a human-executed command).
+
+**It survives C3 only under a redefinition.** The seven route guards return
+`NextResponse | null`, so the authorization edge is `if (gate) return gate;` **in the caller**.
+Deleting that one line on 2026-08-07 defeated authorization on a subscription-scoped ARM
+deploy path while **three merge-blocking controls stayed green**. A call-graph or import-graph
+substrate is blind to this **by construction** — the call is present. The edge must therefore
+be defined as a **consumed verdict**, not a call. State that up front; do not let an
+implementer discover it.
+
+**It fails outright on two classes:**
+
+- **C5 — fail-open.** The edge is present, on-path, and consumed, and it answers **ALLOW** on
+  failure (#3834: fail-open in 2 of 9 measured Graph failure modes). No path query detects
+  this. The property is **verdict totality of a NODE**, not the existence of an edge.
+- **C9 — duplicated decision.** Eleven tenant comparisons across three files, all present and
+  all on-path. **The reachability query is clean, and correct.** The defect is that two of
+  them *disagree*. The property is of a **SET**, not a node or an edge — and this is
+  **currently the repo's most productive defect class** (#3826, #3840, #3843, #3818).
+
+**Consequence for the build:** the graph is necessary and not sufficient. C5 needs
+per-node verdict-totality analysis; C9 needs equivalence-clustering across implementations of
+the same predicate. Neither is a reachability query, and shipping only reachability would miss
+the class that has produced the most real defects here.
+
+**Three classes were found that were not in the original list**, all confirmed:
+C6 (credential-bearing `urlopen` through Python's default opener, which copies `Authorization`
+across a host change — the sink node is chosen at runtime by the remote), C7 (a synthesized
+principal: `oid` is a Cosmos partition key here, so a placeholder oid creates a shadow tenant —
+eight copies of the check, one under test), and C8.
+
+**The population contract has a known blind spot, disclosed by the detector build itself
+(#3946).** Two deliberately-hollow mutation arms disagreed:
+
+    hollow-c1-loop-skip                9 failed | 1 passed  -> BOTH population tests RED
+    hollow-c1-predicate-param-filter   4 failed | 6 passed  -> ALL THREE population tests GREEN
+
+So the contract has teeth against **enumeration-level** narrowing (a `continue` before
+`judged.push` makes the result refuse to construct) but is **blind to a filter inside the
+predicate** — the node still counts as judged while producing no verdict. Only positive
+fixtures catch that. **Do not treat a green population test as proof the population is intact.**
+
 ---
 
 ## 4. Explicitly out of scope for v1
@@ -210,6 +268,10 @@ authorization path on its own. A wrong autonomous "fix" to authz is worse than t
 ## 5. Definition of done
 
 - The graph builds across **all six subscriptions** and its node/edge counts are reported.
+- **Every detector returns `{ findings, population }` — never a bare `Finding[]`.** An empty
+  array cannot distinguish *"examined 0"* from *"examined 4,000 and found nothing"*, and that
+  distinction is the highest-value thing this system produces (§3.8). A **shrinking `judged`
+  count is a P0 regression**, not a quiet improvement.
 - **`loom-capacity-broker` appears as an unreachable always-on node** with its evidence
   chain — that is the acceptance test, because it is the founding measured example.
 - Every detector reports its **examined population**, and a mutation of its subject makes
