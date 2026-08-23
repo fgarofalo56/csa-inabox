@@ -158,6 +158,61 @@ across 3 files, all present, reachability clean **and correct** — the defect i
 
 ---
 
+## 4b. MERGE DRAIN STRATEGY (operator-directed 2026-08-23: "get them all in")
+
+### The mechanical insight that makes this tractable
+
+**`gh pr merge --admin` bypasses BOTH the review requirement AND the up-to-date (`strict`)
+requirement.** So the "every merge invalidates every open PR ⇒ 34 min each" treadmill is **not
+actually binding**. A `BEHIND` PR can merge without re-running CI.
+
+What that trades away is the guarantee that the PR's CI ran against *current* main. So the real
+constraint is **file-disjointness between consecutive merges**, not CI time. Two PRs touching no
+common file can merge back-to-back safely; two that share a file cannot.
+
+### Measured collision map (31 open PRs, 27 files touched by >1 PR)
+
+**The big one:** #3945, #3949, #3951, #3952 each carry **17 identical substrate files** — the
+component agents branched from main *before* the substrate landed. Verified byte-identical:
+`types.ts` is blob `b805bdf322a6` in **all four**. So they merge cleanly **in sequence**, and
+#3945 must go first.
+
+Other collisions to sequence around:
+
+    docs/fiab/route-inventory.md      3890, 3900, 3932, 3950, 3952   (GENERATED - regenerate, never hand-merge)
+    scripts/ci/check-route-guards.mjs 3890, 3928
+    no-freeform-inputs-baseline.json  3928, 3931
+    .github/workflows/gov-console-roll.yml  3875, 3927
+    .github/workflows/trivy.yml            3871, 3875
+    .github/workflows/link-check.yml       3872, 3874
+    deploy-fiab-il5.yml, loom-drift-check.yml  3873, 3874
+    pyproject.toml                    3863, 3869
+
+### Merge order
+
+| Batch | PRs | Gate |
+|---|---|---|
+| **1 — docs** | ~~#3939~~ ✅ ~~#3938~~ ✅ | zero code risk, merged 2026-08-23 |
+| **2 — Brain** | #3945 **first**, then #3946, #3949, #3950, #3951, #3952 | first review in flight; substrate is byte-identical so no conflict |
+| **3 — remediated fixes** | #3927, #3928, #3929, #3930, #3931, #3924, #3923, #3898, #3932 | all green; awaiting round-2/3 verdicts |
+| **4 — security** | #3890, #3900 | both RED and CONFLICTING; fix lane in flight |
+| **5 — dependabot** | 9 PRs | **#3875 only after #3927**; #3873 (`github-script` 7→9) and #3874 (`upload-artifact` 4→7) are MAJOR bumps to workflows that gate everything — review, don't batch |
+| **6 — release** | #3863 | last, and regenerate after everything else lands |
+
+### Standing rules for the drain
+
+1. **Verify green before every merge** — `MISSING/RED/INCOMPLETE` all zero. A hollow required
+   check is only acceptable when it is **path-appropriate for that PR's diff**.
+2. **Audit `closingIssuesReferences` before merging.** Live catch on #3927: a sentence reading
+   *"required to close #3060"* registered as **Closes #3060** — on a PR whose own body said
+   *"Deliberately Refs, never Closes: the close parser is negation-blind."* #3060 needs a
+   **re-roll**, which a merge cannot perform. Reworded; refs now empty.
+3. **Audit closed issues after every merge** — compare the closed list before and after.
+4. **Never merge onto a red suite**, and verify `main` is green between batches.
+5. **Runner capacity caps the parallel width** (§4a). Read-only review lanes are free; branch
+   updates are not.
+
+
 ## 4a. CI runner saturation — measured 2026-08-23 ~21:12Z
 
     completed 38 | queued 15-18 | in_progress 4-5 | pending 2      (24 active)
