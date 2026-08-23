@@ -1,3 +1,10 @@
+<!-- parity-doc-meta
+Reviewed-on: 2026-08-23
+Validated-against:
+  - apps/fiab-console/lib/editors/components/mirror-source-wizard.tsx
+  - apps/fiab-console/lib/azure/mirror-engine.ts
+-->
+
 # mirrored-database-wizard — parity with Fabric "New mirrored database" + multi-source connectors
 
 **Surface:** the CSA Loom **New / Edit mirrored database** wizard
@@ -8,7 +15,8 @@ databases/tables → Connect** onboarding flow, and the Azure portal's
 linked-service + table-selection experience.
 
 Source UI (grounded in Microsoft Learn):
-- Mirroring source picker (Azure SQL DB/MI, SQL Server, Snowflake, Cosmos DB, PostgreSQL, **Google BigQuery**, **Oracle**) — https://learn.microsoft.com/fabric/mirroring/overview
+- **Authoritative source-type list** — the `SourceType` enum in the Fabric REST mirrored-database definition (13 values: `AzureMySql`, `AzurePostgreSql`, `AzureSqlDatabase`, `AzureSqlMI`, `CosmosDb`, `GenericMirror`, `GoogleBigQuery`, `MSSQL`, `Oracle`, `SAP`, `SharePointList`, `Snowflake`, `SqlServer2025`) — https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/mirrored-database-definition#mirroreddatabase
+- Mirroring overview + per-source tutorials — https://learn.microsoft.com/fabric/mirroring/get-started-with-mirroring#set-up-your-mirror
 - Google BigQuery mirroring (project id + dataset) — https://learn.microsoft.com/fabric/mirroring/google-bigquery
 - Oracle mirroring (host + service name + on-prem data gateway + sync user) — https://learn.microsoft.com/fabric/mirroring/oracle
 - Oracle required sync-user permissions (LogMiner, SELECT_CATALOG_ROLE, SELECT ANY TABLE) — https://learn.microsoft.com/fabric/mirroring/oracle-limitations#required-permissions
@@ -18,11 +26,18 @@ Source UI (grounded in Microsoft Learn):
 - ADF Google BigQuery V2 connector (Azure-native default copy) — https://learn.microsoft.com/azure/data-factory/connector-google-bigquery
 - ADF Oracle connector via self-hosted IR (Azure-native default copy) — https://learn.microsoft.com/azure/data-factory/connector-oracle
 
+> **Which sources exist is tracked in ONE place:** the source-type matrix in
+> [`mirrored-database.md`](./mirrored-database.md#mirrored-source-types). This doc
+> grades the *wizard flow*; that one grades *coverage*. Splitting the two is
+> deliberate — the previous arrangement had a partial source list in three docs
+> and they drifted apart, which is how #3762 (BigQuery) and #3763 (Oracle) came
+> to be filed for capabilities that had shipped in #1109 on 2026-06-10.
+
 ## Azure/Fabric feature inventory → Loom coverage
 
 | Capability (Fabric/Azure)                                    | Loom coverage | Backend per control |
 |--------------------------------------------------------------|---------------|---------------------|
-| Pick a source type from a gallery of connectors              | ✅ built (10 source cards incl. Google BigQuery + Oracle) | client state |
+| Pick a source type from a gallery of connectors              | ✅ built (**11** source cards — `MIRROR_SOURCES:49-63`, incl. Google BigQuery + Oracle; the 11th is the `DatabricksUC` card, which carries `external:` and routes to the dedicated `mirrored-databricks` editor) | client state |
 | Create/select a connection (no plaintext creds)              | ✅ built (ConnectionBuilder + dropdown) | `/api/connections` → Key Vault secretRef |
 | Server / database coordinates                                | ✅ built (fields, prefilled from connection) | item state (Cosmos) |
 | **BigQuery project id + dataset fields**                     | ✅ built (source-aware step 2) | `state.projectId` + `state.database` (Cosmos) |
