@@ -3371,13 +3371,58 @@ function adminVerdictFreeViolations(rel, src, spec) {
   }
   for (const fn of declaredFunctions(masked)) {
     if (!HTTP_HANDLERS.has(fn.name)) continue;
-    if (fn.body.includes(`${spec.gate}(`)) continue;
     const line = masked.slice(0, fn.declAt).split('\n').length;
-    out.push(
-      `${rel}:${line}: exported handler ${fn.name}() does not call \`${spec.gate}(\`. ` +
-        '"No admin token" is also true of a route with no authorization at all, so this arm is ' +
-        'what stops the rule above being satisfied by DELETING the gate.',
-    );
+    if (!fn.body.includes(`${spec.gate}(`)) {
+      out.push(
+        `${rel}:${line}: exported handler ${fn.name}() does not call \`${spec.gate}(\`. ` +
+          '"No admin token" is also true of a route with no authorization at all, so this arm is ' +
+          'what stops the rule above being satisfied by DELETING the gate.',
+      );
+      continue;
+    }
+    // ── THIRD ARM: the gate must be called UNCONDITIONALLY and its answer ACTED ON.
+    // Arms 1-2 are jointly satisfied by code that CALLS the gate and then ignores
+    // it, and by code that makes the call the else-branch of a non-admin-flavoured
+    // condition. Both were MEASURED to pass arms 1+2 AND check-route-guards:
+    //
+    //   const deniedDel = await assertItemAccess(...);
+    //   if (false && deniedDel) return deniedDel;              // answer discarded
+    //
+    //   const deniedDel = (session.claims.groups?.includes('x') && p.type === 'y')
+    //     ? null : await assertItemAccess(...);                // no token, no env var
+    //
+    // route-guards does not cover either, because the gate it watches for
+    // consumption is `authorizeItemWorkspace` — which IS consumed, one frame
+    // deeper, inside assertItemAccess. The local wrapper is the blind spot.
+    //
+    // Like arms 1-2 this is keyed to the SAFE state rather than to a list of bad
+    // spellings: the only accepted shape is an unconditional `const x = await
+    // gate(...)` followed by `if (x) return x;`. Any ternary, `&&`, `||`, `??`,
+    // or dropped return fails it without the guard needing to recognise the
+    // particular dodge — including one nobody has thought of yet.
+    const assigned = new RegExp(
+      `(?:const|let)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*await\\s+${spec.gate}\\s*\\(`,
+    ).exec(fn.body);
+    if (!assigned) {
+      out.push(
+        `${rel}:${line}: exported handler ${fn.name}() calls \`${spec.gate}(\` but not as an ` +
+          `unconditional \`const <name> = await ${spec.gate}(...)\`. A gate reached only through a ` +
+          'ternary / `&&` / `||` is skipped for whichever callers the condition selects, which is ' +
+          'exactly how a bypass narrowed to one itemType on one verb stayed green. Call it ' +
+          'unconditionally; if some caller genuinely must skip it, that argument belongs in ' +
+          'ADMIN_VERDICT_FREE_ROUTES, not in a conditional here.',
+      );
+      continue;
+    }
+    const v = assigned[1];
+    if (!new RegExp(`if\\s*\\(\\s*${v}\\s*\\)\\s*return\\s+${v}\\s*;`).test(fn.body)) {
+      out.push(
+        `${rel}:${line}: exported handler ${fn.name}() calls \`${spec.gate}(\` into \`${v}\` but ` +
+          `does not act on it with \`if (${v}) return ${v};\`. A gate whose answer is DISCARDED is ` +
+          'indistinguishable from no gate at all, and satisfies the "must call the gate" arm above ' +
+          'while granting exactly what that arm exists to refuse.',
+      );
+    }
   }
   return out;
 }
@@ -3463,6 +3508,29 @@ export const DELETE = withSession(async (req, ctx) => {
     src: `// The old code read \`if (isTenantAdmin(session)) return null;\` — see #3855.
 export const DELETE = withSession(async (req, ctx) => {
   const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  // R7/R8 were both MEASURED to pass arms 1+2 and check-route-guards before the
+  // third arm existed — i.e. two guards green over a live cross-tenant ACL
+  // deletion, which is the same failure R1 records. They are the controls for
+  // the third arm; if either stops firing, that arm has gone decorative.
+  {
+    label: 'R7 the gate is CALLED but its answer is DISCARDED (arms 1+2 both satisfied)',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (false && deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R8 admin re-derived from the GROUPS claim — no token, no env var, gate present',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = (session.claims.groups?.includes('platform-operators') && ctx.params.type === 'mirrored-database')
+    ? null : await assertItemAccess(session, ctx.params.id, ctx.params.type);
   if (deniedDel) return deniedDel;
   return NextResponse.json({ ok: true });
 });`,
