@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1681 |
 | Public (no session) | 58 |
-| Session-only | 647 |
-| Owner-scoped | 675 |
+| Session-only | 646 |
+| Owner-scoped | 676 |
 | Admin | 301 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -1856,7 +1856,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/load-to-table/route.ts` | POST | session-only | ● | ADLS, ARM, Azure Storage, Resource Graph, Synapse |
 | `lakehouse/maintenance/route.ts` | GET POST | session-only |  | ADLS, Azure Storage, Cosmos, Synapse |
 | `lakehouse/path/route.ts` | POST DELETE | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
-| `lakehouse/paths/route.ts` | GET | session-only |  | AAS, ADLS, ARM, Azure SQL, Azure Storage, Managed Identity, Power BI |
+| `lakehouse/paths/route.ts` | GET | owner-scoped |  | AAS, ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Power BI |
 | `lakehouse/permissions/rls-test/route.ts` | POST | session-only |  | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `lakehouse/permissions/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure RBAC, Azure SQL, Azure Storage, Managed Identity, Microsoft Graph, Resource Graph, Synapse SQL |
 | `lakehouse/preview/route.ts` | GET | session-only |  | ADLS, ARM, Azure SQL, Azure Storage, Managed Identity, Synapse SQL |

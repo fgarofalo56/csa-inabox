@@ -21,7 +21,7 @@ export function TablesPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
   const {
-    activeContainer, schemasEnabled, shortcutLakehouseId,
+    activeContainer, schemasEnabled, shortcutLakehouseId, tablesPrefix,
     liveTables, liveTablesLoading, liveTablesError, liveTablesGate, loadLiveTables,
     seededTableInfo, bundleDeltaTables,
     openPrefixes, cacheKey, loadPaths,
@@ -32,7 +32,7 @@ export function TablesPane() {
     <>
       <div className={s.toolbar}>
         <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
-        <Caption1>Live Delta catalog — real <code>_delta_log</code> scan of <code>/Tables/</code></Caption1>
+        <Caption1>Live Delta catalog — real <code>_delta_log</code> scan of <code>/{tablesPrefix}/</code></Caption1>
         <Button appearance="outline" icon={<ArrowSync20Regular />}
           disabled={!activeContainer || liveTablesLoading}
           onClick={() => loadLiveTables()}>
@@ -71,8 +71,10 @@ export function TablesPane() {
           return (
             <>
               {/* App-install seeded tables — REAL seed CSVs the install
-                  provisioner wrote under a nested lakehouse path the
-                  root `/Tables/` scan doesn't reach. Honest: name +
+                  provisioner wrote under this lakehouse's own root. The live
+                  scan now reads that same root (#3904); these rows remain
+                  because a seed CSV is not yet a Delta table, so the scan
+                  honestly reports the directory as empty. Honest: name +
                   seeded row count + the CSV path. */}
               {seededTableInfo && seededTableInfo.length > 0 && (
                 <>
@@ -80,7 +82,7 @@ export function TablesPane() {
                     <MessageBarBody>
                       <MessageBarTitle>App-seeded tables</MessageBarTitle>
                       This lakehouse was seeded by the installed app. These tables live under{' '}
-                      <code>/{activeContainer}/{seededTableInfo[0].csvPath.replace(/\/Tables\/.*$/, '')}/Tables/</code> as
+                      <code>/{activeContainer}/{tablesPrefix}/</code> as
                       CSV seed data; run the Gold/Silver notebook to materialize them as managed Delta.
                     </MessageBarBody>
                   </MessageBar>
@@ -122,7 +124,7 @@ export function TablesPane() {
                 variant="block"
                 heroIcon={TableSimple20Regular}
                 title="This lakehouse has no tables yet"
-                intro={<>No Delta tables under <strong>/{activeContainer}/Tables/</strong>. Bring in data, then materialize it as a Delta table.</>}
+                intro={<>No Delta tables under <strong>/{activeContainer}/{tablesPrefix}/</strong>. Bring in data, then materialize it as a Delta table.</>}
                 ariaLabel="Get data into this lakehouse"
                 paths={[
                   {
@@ -169,14 +171,14 @@ export function TablesPane() {
                                   <MenuList>
                                     <MenuItem icon={<Play20Regular />}
                                       onClick={() => {
-                                        setSqlText(`-- Read Delta table (once materialized under Tables/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/Tables/${t.name}', FORMAT='DELTA') AS r;`);
+                                        setSqlText(`-- Read Delta table (once materialized under ${tablesPrefix}/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/${tablesPrefix}/${t.name}', FORMAT='DELTA') AS r;`);
                                         setTab('sql');
                                       }}>
                                       Query template
                                     </MenuItem>
                                     <MenuItem icon={<History20Regular />}
                                       disabled={!activeContainer}
-                                      onClick={() => openTableHistory(`Tables/${t.name}`)}>
+                                      onClick={() => openTableHistory(`${tablesPrefix}/${t.name}`)}>
                                       History (time travel)
                                     </MenuItem>
                                     <MenuItem icon={<Wrench20Regular />}
@@ -347,8 +349,19 @@ export function TablesPane() {
                                 disabled={t.format !== 'delta'}
                                 icon={<Eye20Regular />}
                                 title={t.format !== 'delta' ? 'Preview available for Delta tables' : 'Sample 1,000 rows'}
-                                onClick={() => previewTable(t.adlsPath)}>
+                                onClick={() => previewTable(t.relPath ?? '')}>
                                 Preview
+                              </Button>
+                              {/* Time travel was reachable ONLY through the
+                                  explorer tree's hover menu here, while the
+                                  schema-enabled branch below has had a row
+                                  button all along. Same action, same row. */}
+                              <Button size="small" appearance="outline"
+                                icon={<History20Regular />}
+                                disabled={typeof t.latestVersion !== 'number'}
+                                title={typeof t.latestVersion !== 'number' ? 'No Delta commit log to time-travel' : 'Delta version history'}
+                                onClick={() => openTableHistory(t.relPath ?? '')}>
+                                History
                               </Button>
                               <Button size="small" appearance="outline"
                                 disabled={t.format !== 'delta'}
