@@ -438,24 +438,73 @@ export function imperativeFiles(root = REPO_ROOT, roots = IMPERATIVE_ROOTS) {
  * entirely — invisible to the judge, so `probeGates` never even saw it. So the
  * question is now asked about the command the create ACTUALLY sits in:
  *
- *   1. is the create inside a quoted string? then it is an argument to whatever
- *      command opened that quote (`echo "run: az … create"`) — a reference;
- *   2. otherwise, does the command SEGMENT it sits in — everything after the
- *      last `;` `&&` `||` `|` `(` `{` `then` `do` `else` — itself start with
- *      `echo`/`printf`? then it is an unquoted reference.
+ * The question is asked about the command SEGMENT the create actually sits in:
+ * everything after the last `;` `&&` `||` `|` `&` `(` `{` `then` `do` `else`
+ * that stands OUTSIDE quotes. If that segment starts with `echo`/`printf` the
+ * create is a reference; anything else executes.
  *
- * Anything else executes.
+ * Quote state is tracked rather than counted. An earlier version of this fix
+ * rejected any prefix with an ODD number of unescaped quotes, reasoning that an
+ * unclosed quote means the create sits inside a string. The independent
+ * round-2 review of #3928 measured what that actually removed from the
+ * POPULATION — five shapes that `main` had always counted:
+ *
+ *     bash -c "az role assignment create …"      eval "az role assignment create …"
+ *     ssh "$HOST" "az role assignment create …"  sudo bash -c "az role assignment create …"
+ *     az tag create --name "don't" ; az role assignment create …
+ *
+ * The last is the one that would have bitten: an APOSTROPHE anywhere earlier on
+ * the logical line deleted the create from the population entirely. Falling out
+ * of the population is this repo's dominant recorded evasion, so a test that
+ * silently shrinks it is worse than the reference it was catching. Masking gets
+ * both: a `;` inside `echo "step 1; az … create"` still does not open a new
+ * segment, and an apostrophe inside `"don't"` is just a character.
  */
+function maskQuoted(s) {
+  const out = s.split('');
+  // Masked to a WORD character on purpose: `x""then` is the single shell word
+  // `xthen`, and masking the quotes to spaces would manufacture a `\bthen\b`
+  // delimiter the real line does not contain. Delimiters OUTSIDE quotes are
+  // never masked, so none is lost.
+  let quote = null;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (quote !== "'" && ch === '\\') {
+      out[i] = 'x';
+      if (i + 1 < s.length) out[i + 1] = 'x';
+      i += 1;
+      continue;
+    }
+    if (quote) {
+      out[i] = 'x';
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      out[i] = 'x';
+    }
+  }
+  return out.join('');
+}
+
+const SEGMENT_DELIM = /(?:&&|\|\||[;|&]|\bthen\b|\bdo\b|\belse\b|\{|\()/g;
+
 export function isExecuted(text) {
   const at = text.indexOf(CREATE_TOKEN);
   if (at < 0) return false;
   if (/^\s*#/.test(text)) return false;
   const before = text.slice(0, at);
   if (/::(error|warning|notice)/.test(before)) return false;
-  const unescaped = (ch) => (before.match(new RegExp(`(?<!\\\\)${ch}`, 'g')) || []).length;
-  if (unescaped('"') % 2 === 1 || unescaped("'") % 2 === 1) return false;
-  const segment = before.split(/(?:&&|\|\||[;|]|\bthen\b|\bdo\b|\belse\b|\{|\()/).pop();
-  return !/^\s*(?:echo|printf)\s/.test(segment);
+  const masked = maskQuoted(before);
+  let segStart = 0;
+  SEGMENT_DELIM.lastIndex = 0;
+  let m = SEGMENT_DELIM.exec(masked);
+  while (m !== null) {
+    segStart = m.index + m[0].length;
+    m = SEGMENT_DELIM.exec(masked);
+  }
+  return !/^\s*(?:echo|printf)\s/.test(before.slice(segStart));
 }
 
 /** `ACRPULL_ROLE=7f951dda-…` / `ROLE="7f951dda-…"` within the same file. */
@@ -589,18 +638,33 @@ export function blockDelta(text) {
  *            `[ "$N" = 0 ] && az … create` gates; `az … create … || true` does
  *            not, and neither does `[ "$N" = 0 ]; az … create`, where the test's
  *            exit status is discarded by the `;`.
- *        (b) on a PRECEDING line, the condition must additionally either leave a
- *            block open (`if …; then`, with the create inside it) or take an
- *            early exit on the other branch (`[ "$N" != 0 ] || return`).
+ *        (b) on a PRECEDING line, that condition's line must additionally either
+ *            have a POSITIVE NET BLOCK DELTA (more `if`/`case`/`do` than
+ *            `fi`/`esac`/`done` on that one line) or carry an early-exit
+ *            keyword (`exit`/`return`/`continue`/`break`).
  *
- * STATED LIMITS (R7), neither of which this read establishes and neither of
- * which is claimed:
+ * STATED LIMITS (R7). Path (b) is a LINE READ, not a parse, and the round-2
+ * review of #3928 measured exactly how far that falls short. Each of these is a
+ * known FALSE-NEGATIVE — (b) answers `gated: true` and the create is in fact
+ * unconditional. They are recorded here because the guard must not be read as
+ * claiming more than it establishes; they are tracked in #3958, NOT fixed here:
  *   - it does not verify the probe targets the SAME (assignee, scope, role)
  *     triple as the create it guards. That needs the shell variables resolved
  *     across the file; it is reported by `--list` as residue instead.
- *   - for (b) it verifies the conditional leaves a block OPEN, not that the
- *     create sits inside THAT block rather than a sibling `else` arm. Full
- *     block scoping is a parse, not a line read.
+ *   - `blockDelta` is PER LINE and never accumulated across the window, so an
+ *     `if …; then` / `fi` block that OPENS AND CLOSES before the create still
+ *     reads as gating it, for the remaining 12 logical lines.
+ *   - it does not establish that the create sits inside THAT block rather than a
+ *     sibling `else` arm. Full block scoping is a parse, not a line read.
+ *   - `EARLY_EXIT` matches the keyword ANYWHERE on the line, INCLUDING inside a
+ *     quoted string: `echo "will not break here"` and `echo "grant absent,
+ *     continue"` both satisfy it. It is not required to stand in command
+ *     position, nor on the branch that does NOT reach the create.
+ *   - path (b) does not skip COMMENT lines, so a commented-out conditional
+ *     (`# if [ "$N" = "0" ]; then …`) still contributes a positive block delta.
+ *     `isExecuted` skips comments for the create side; this read does not.
+ *   - `conditionRegions` treats `{` as opening a command position, so a `{` in
+ *     an `echo` ARGUMENT (`echo {[ $N ] && …`) can open a condition region.
  */
 export function probeGates(logical, i) {
   const start = Math.max(0, i - PROBE_WINDOW);
@@ -917,6 +981,47 @@ export const D3_CONTROLS = [
       `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
     ],
     expectFindings: 0,
+  },
+
+  // ── POPULATION controls (round-2 review of #3928) ────────────────────────
+  //
+  // An interim version of `isExecuted` rejected any prefix carrying an ODD
+  // number of unescaped quotes. Every shape below is a genuine, unprobed
+  // execution that `main` had always counted and that test silently DELETED
+  // from the population — and a create outside the population can never be
+  // judged, so it is the most complete evasion available. `expectPopulation`
+  // is asserted on each so the hole cannot reopen unnoticed.
+  {
+    why: 'POPULATION: `bash -c "az … create"` EXECUTES — an unbalanced quote must not delete it',
+    lines: [
+      `bash -c "az role assignment create --assignee-object-id \\"$PID\\" --role ${CONTROL_ROLE} --scope \\"$ACR_ID\\""`,
+    ],
+    expectFindings: 1,
+    expectPopulation: 1,
+  },
+  {
+    why: 'POPULATION: `eval "az … create"` EXECUTES',
+    lines: [
+      `eval "az role assignment create --assignee-object-id $PID --role ${CONTROL_ROLE} --scope $ACR_ID"`,
+    ],
+    expectFindings: 1,
+    expectPopulation: 1,
+  },
+  {
+    why: 'POPULATION: an APOSTROPHE earlier on the line (`--name "don\'t"`) must not delete the create',
+    lines: [
+      `az tag create --name "don't" ; az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+    expectPopulation: 1,
+  },
+  {
+    why: 'NEGATIVE control for the above: a DELIMITER INSIDE the quoted string still does not start a new segment',
+    lines: [
+      `echo "step 1; run: az role assignment create --role ${CONTROL_ROLE}"`,
+    ],
+    expectFindings: 0,
+    expectPopulation: 0,
   },
 ];
 
