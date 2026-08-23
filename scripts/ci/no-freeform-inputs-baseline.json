@@ -51,7 +51,6 @@
     "apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx": 7,
     "apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx": 6,
     "apps/fiab-console/lib/editors/ml-model-editor.tsx": 1,
-    "apps/fiab-console/lib/editors/mounted-adf-editor.tsx": 1,
     "apps/fiab-console/lib/editors/palantir/health-check-editor.tsx": 3,
     "apps/fiab-console/lib/editors/palantir/ontology-sdk-editor.tsx": 1,
     "apps/fiab-console/lib/editors/palantir/release-environment-editor.tsx": 1,

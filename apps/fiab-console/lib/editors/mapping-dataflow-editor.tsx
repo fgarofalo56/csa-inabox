@@ -26,8 +26,12 @@
  * Fluent MessageBar (per no-vaporware.md). Data preview rows ALWAYS come from
  * the live debug session — we never fabricate rows.
  *
- * The item `id` is the data flow name. `new` opens a fresh, unsaved flow; the
- * user names the first transformation and Saves, which PUTs the named flow.
+ * The item `id` is a Cosmos GUID, NOT the data-flow name — `resolveFlowName()`
+ * below maps it to the ADF resource name, and everything ADF-facing uses that.
+ * Believing the id WAS the name is what broke every open (#3567).
+ *
+ * `new` opens a fresh, unsaved flow; the user names the first transformation
+ * and Saves, which PUTs the named flow.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -125,9 +129,55 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
   },
   streamField: { minWidth: '240px' },
+  // #3567 — the item → ADF object mapping, shown rather than guessed
+  // (`auto-bind-by-default.md` §2). flexWrap + minWidth:0 per ux-baseline.
+  bindingLine: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap', minWidth: 0, color: tokens.colorNeutralForeground3,
+  },
 });
 
 const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
+
+/**
+ * Resolve the ADF data-flow RESOURCE NAME this Loom item is bound to (#3567).
+ *
+ * THE DEFECT THIS FIXES. A Loom `mapping-dataflow` item id is a Cosmos GUID
+ * (`app/api/cosmos-items/[type]/route.ts` mints `crypto.randomUUID()`), NOT an
+ * ADF data-flow name. ADF names are `/^[A-Za-z0-9_]{1,260}$/` — hyphens are
+ * rejected — so `GET /api/adf/dataflows/<guid>` answered
+ * `400 invalid data flow name` for EVERY existing item, and the editor's 404
+ * branch (which treats "not published yet" as an empty canvas) does not catch a
+ * 400, so every open landed on the red "Couldn't load the data flow" banner.
+ * The item type was 100% blocked. This is the same class of bug
+ * `pipeline-editor-core.tsx` records in its header for pipelines: "a Loom
+ * pipeline item is a Cosmos GUID, NOT an Azure pipeline name".
+ *
+ * THE RESOLUTION IS DETERMINISTIC AND RENAME-STABLE, and it never writes.
+ *   1. A binding already recorded on the item's state wins. Nothing writes this
+ *      today; it is read first so that when the cross-lane bind route lands
+ *      (routed to L6/L4 — see the PR body) the editor honours it with no further
+ *      change here.
+ *   2. Otherwise, if the route id is ITSELF a legal ADF name, use it. That keeps
+ *      any pre-GUID item that genuinely round-tripped by name working exactly as
+ *      before, so this fix cannot regress one.
+ *   3. Otherwise derive from the ITEM ID, not the display name. `auto-bind`
+ *      §2 wants the Azure object to carry the item's name, but a factory's
+ *      data-flow namespace is FLAT and shared by every workspace, so two items
+ *      called "Sales flow" would collide on one ADF object and silently
+ *      overwrite each other. The id is unique, stable across a rename, and needs
+ *      no persisted mapping to stay correct — and the mapping is surfaced in the
+ *      editor (§2 "recorded … so the mapping is inspectable, never guessed")
+ *      rather than left for the user to infer.
+ */
+export function resolveFlowName(id: string, state: Record<string, unknown> | undefined): string {
+  for (const key of ['dataFlowName', 'adfDataFlowName', 'dataflowName']) {
+    const v = state?.[key];
+    if (typeof v === 'string' && NAME_RE.test(v.trim())) return v.trim();
+  }
+  if (NAME_RE.test(id)) return id;
+  return `df_${id.replace(/[^A-Za-z0-9_]/g, '')}`.slice(0, 260);
+}
 
 // Larger timeout for the debug POST: starting / executing a data-flow debug
 // command runs an ARM long-running operation server-side (the route polls it),
@@ -221,9 +271,14 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
   // designer's live graph (draft; published on Save).
   const designerRef = useRef<MappingDataFlowDesignerHandle>(null);
 
-  // For a new flow the user names it before saving; for an existing one the id
-  // IS the data-flow name.
+  // For a new flow the user names it before saving. For an existing one the
+  // route id is a Cosmos GUID, so the ADF resource name is RESOLVED from the
+  // item (#3567) — `id` is NOT a legal data-flow name and sending it 400s.
   const [name, setName] = useState(isNew ? '' : id);
+  // The resolved ADF data-flow resource name for a saved item. `null` while the
+  // item doc is still being read: every ADF call below waits for it rather than
+  // firing against the wrong name.
+  const [flowName, setFlowName] = useState<string | null>(isNew ? null : resolveFlowName(id, undefined));
   const [initial, setInitial] = useState<AdfDataFlow['properties'] | undefined>(undefined);
   const [datasets, setDatasets] = useState<AdfDataset[]>([]);
   const [datasetGate, setDatasetGate] = useState<string | null>(null);
@@ -262,6 +317,32 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
     setPreviewStream((cur) => (cur && streamNames.includes(cur) ? cur : (streamNames[0] || '')));
   }, [streamNames]);
 
+  // Refine the resolved ADF name from the item's own document (#3567). The
+  // derived name above is already correct and stable, so the editor NEVER waits
+  // on this read — it exists so that a binding recorded on the item (by the
+  // cross-lane bind route routed to L6/L4) takes precedence the moment it lands,
+  // which is `auto-bind-by-default.md` §3 self-healing. `/api/cosmos-items` GET
+  // returns the BARE document — no `{ok,item}` envelope — so read `j.state`
+  // directly; reading `j.ok` here is the dead-statement family of #3878.
+  useEffect(() => {
+    if (isNew) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch(
+          `/api/cosmos-items/mapping-dataflow/${encodeURIComponent(id)}`,
+          { cache: 'no-store' },
+        );
+        if (!r.ok) return;
+        const j = await r.json().catch(() => null);
+        if (cancelled || !j) return;
+        const resolved = resolveFlowName(id, j.state as Record<string, unknown> | undefined);
+        setFlowName((cur) => (cur === resolved ? cur : resolved));
+      } catch { /* the derived name already works — never block the editor */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id, isNew]);
+
   // Load source/sink datasets (real GET — honest gate when factory unconfigured).
   const loadDatasets = useCallback(async () => {
     setDatasetGate(null);
@@ -283,10 +364,10 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
 
   // Hydrate an existing flow's definition (real GET /api/adf/dataflows/{name}).
   const loadFlow = useCallback(async () => {
-    if (isNew) { setInitial(undefined); setLoading(false); return; }
+    if (isNew || !flowName) { setInitial(undefined); setLoading(false); return; }
     setLoading(true); setLoadGate(null); setLoadError(null);
     try {
-      const r = await clientFetch(`/api/adf/dataflows/${encodeURIComponent(id)}`, { cache: 'no-store' });
+      const r = await clientFetch(`/api/adf/dataflows/${encodeURIComponent(flowName)}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.status === 503 && j?.code === 'not_configured') {
         setLoadGate(String(j.error || 'Data Factory not configured.'));
@@ -307,7 +388,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
     } finally {
       setLoading(false);
     }
-  }, [id, isNew]);
+  }, [flowName, isNew]);
 
   // Probe whether a live data-flow debug session is available (real GET). A
   // missing route, a 503 gate, or `available:false` all leave the honest gate
@@ -315,12 +396,12 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
   useEffect(() => {
     // Re-probing for a different flow / on refresh — drop any stale preview.
     setPreview(null); setPreviewError(null); setPreviewGate(null);
-    if (isNew) { setDebugAvailable(false); return; }
+    if (isNew || !flowName) { setDebugAvailable(false); return; }
     let cancelled = false;
     (async () => {
       try {
         const r = await clientFetch(
-          `/api/adf/dataflows/${encodeURIComponent(id)}/debug`,
+          `/api/adf/dataflows/${encodeURIComponent(flowName)}/debug`,
           { cache: 'no-store' },
         );
         const j = await r.json().catch(() => ({}));
@@ -331,7 +412,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
       }
     })();
     return () => { cancelled = true; };
-  }, [id, isNew, reloadKey]);
+  }, [flowName, isNew, reloadKey]);
 
   useEffect(() => { loadDatasets(); }, [loadDatasets, reloadKey]);
   useEffect(() => { loadFlow(); }, [loadFlow, reloadKey]);
@@ -341,7 +422,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
   // executeDataFlowDebugCommand(executePreviewQuery) against the live factory.
   // 503 → honest infra-gate; success → render the rows the route returns.
   const startDebugPreview = useCallback(async (streamName?: string) => {
-    if (isNew) {
+    if (isNew || !flowName) {
       setPreviewError('Save the data flow before previewing — a debug session needs a published flow.');
       return;
     }
@@ -354,7 +435,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
     setPreviewGate(null);
     try {
       const r = await clientFetch(
-        `/api/adf/dataflows/${encodeURIComponent(id)}/debug`,
+        `/api/adf/dataflows/${encodeURIComponent(flowName)}/debug`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -389,7 +470,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
     } finally {
       setPreviewLoading(false);
     }
-  }, [id, isNew, previewStream]);
+  }, [flowName, isNew, previewStream]);
 
   const nameValid = NAME_RE.test(name.trim());
 
@@ -432,6 +513,15 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
             />
           </Field>
         </div>
+      )}
+
+      {/* The item → Data Factory object mapping, stated rather than inferred
+          (`auto-bind-by-default.md` §2). Before #3567 the editor sent the Cosmos
+          GUID as this name and nothing on the surface said so. */}
+      {!isNew && flowName && (
+        <Caption1 className={s.bindingLine} data-adf-dataflow-name={flowName}>
+          Data Factory object: <code className={s.gateCode}>{flowName}</code>
+        </Caption1>
       )}
 
       {loadGate && (
@@ -491,8 +581,8 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
 
           <MappingDataFlowDesigner
             ref={designerRef}
-            key={`${reloadKey}:${isNew ? name || 'new' : id}`}
-            name={isNew ? (nameValid ? name.trim() : 'dataflow1') : id}
+            key={`${reloadKey}:${isNew ? name || 'new' : flowName || id}`}
+            name={isNew ? (nameValid ? name.trim() : 'dataflow1') : (flowName || id)}
             initial={initial}
             datasets={datasets}
             datasetGate={datasetGate}
@@ -521,7 +611,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
               debug session; rows only from the live cluster (no-vaporware.md). */}
           {u7DebugPanel && (
             <DataflowDebugPanel
-              name={isNew ? (nameValid ? name.trim() : 'dataflow1') : id}
+              name={isNew ? (nameValid ? name.trim() : 'dataflow1') : (flowName || id)}
               graph={graph}
               debugAvailable={debugAvailable}
               isNew={isNew}

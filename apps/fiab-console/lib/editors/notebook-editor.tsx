@@ -147,7 +147,23 @@ export function NotebookEditor({ item, id }: Props) {
   // /api/notebook/<id>/lsp (server-only env: LOOM_PYLSP_ENABLED, boundary, AML).
   const [lspWsUrl, setLspWsUrl] = useState<string | null>(null);
   const [vscodeWeb, setVscodeWeb] = useState<{ enabled: boolean; url: string | null; reason?: string }>({ enabled: false, url: null });
-  const [cells, setCells] = useState<NotebookCell[]>(starterCells());
+  // #3539 — an app-installed notebook rendered `starterCells()` (a generic
+  // "# New notebook / Double-click to edit…" placeholder) for the whole window
+  // between `notebookId` resolving and `loadDetail` returning, so the user saw
+  // an empty-looking notebook and concluded the app install had produced
+  // nothing.
+  //
+  // The VISIBLE fix is the `cellsFor !== notebookId` render gate further down —
+  // that is what stops the placeholder reaching the screen, and it is the one
+  // the spec's mutation control breaks. Seeding an EXISTING item with no cells
+  // is defence in depth for a second, non-visual reason: the autosave hook is
+  // `enabled: … && cells.length > 0`, so an empty seed also keeps autosave from
+  // arming against seed content during hydration.
+  const [cells, setCells] = useState<NotebookCell[]>(id === 'new' ? starterCells() : []);
+  // Which notebook `cells` were hydrated from. 'new' for an unsaved notebook,
+  // else the notebook id `loadDetail` last completed for (success OR failure —
+  // a failed load must not leave the spinner up forever).
+  const [cellsFor, setCellsFor] = useState<string | null>(id === 'new' ? 'new' : null);
   const [defaultLang, setDefaultLang] = useState<NotebookCellLang>('pyspark');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -710,6 +726,13 @@ export function NotebookEditor({ item, id }: Props) {
           : null,
       );
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
+    finally {
+      // #3539 — mark the cells in hand as belonging to THIS notebook, on both
+      // the success and the failure path, so the loading state always resolves.
+      // Guarded on `currentNbRef` so a load the user has already navigated away
+      // from cannot un-gate a newer notebook's cells.
+      if (currentNbRef.current === nbId) setCellsFor(nbId);
+    }
   }, []);
 
   const loadJobs = useCallback(async (wsId: string, nbId: string) => {
@@ -3157,7 +3180,24 @@ export function NotebookEditor({ item, id }: Props) {
             </div>
           )}
 
-          {notebookId && (
+          {/* #3539 — hold the cell list until the cells in hand are THIS
+              notebook's. Previously the generic starter placeholder rendered
+              here for the duration of the detail fetch, which reads as "the app
+              install produced an empty notebook". */}
+          {notebookId && cellsFor !== notebookId && (
+            <div
+              data-notebook-cells-loading
+              style={{
+                display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+                padding: tokens.spacingVerticalXXL, justifyContent: 'center',
+              }}
+            >
+              <Spinner size="tiny" />
+              <Caption1>Loading notebook…</Caption1>
+            </div>
+          )}
+
+          {notebookId && cellsFor === notebookId && (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
